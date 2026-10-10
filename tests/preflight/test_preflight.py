@@ -701,6 +701,18 @@ class TheReportHooks(Fixture):
         self.assertEqual(hooks.lines(self.tools, ['shadow:lines']), ['repo table'])
         self.assertNotIn('pieces', sys.modules)
 
+    def test_a_hook_writes_no_bytecode_into_the_repo(self):
+        """A terminal without PYTHONDONTWRITEBYTECODE would leave tools/__pycache__ (the hook's
+        and its sibling's .pyc) as untracked files in the repo's tree."""
+        self.module('pyc_sibling', 'WORD = "sib"\n')
+        self.module('pyc_hook', 'import pyc_sibling\n'
+                                'def lines():\n    return [pyc_sibling.WORD]\n')
+        with mock.patch.object(sys, 'dont_write_bytecode', False):
+            self.assertEqual(hooks.lines(self.tools, ['pyc_hook:lines']), ['sib'])
+            self.assertFalse(sys.dont_write_bytecode)          # put back as it was
+        self.assertFalse(os.path.exists(os.path.join(self.tools, '__pycache__')),
+                         os.listdir(self.tools))
+
 
 TASKLIST = ('\nImage Name                     PID Session Name\n'
             '========================= ======== ================\n'
