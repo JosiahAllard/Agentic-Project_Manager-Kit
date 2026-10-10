@@ -238,7 +238,7 @@ class NetChangeGitFailures(OwnerCommitsCase):
     def test_one_failing_target_among_several_fails_the_whole(self):
         found, why = self.net([self.main, '1' * 40])
         self.assertIsNone(found)
-        self.assertTrue(why)
+        self.assertIn('git merge-tree failed', why)
 
     def test_violations_refuses_when_the_net_change_cannot_be_read(self):
         self.fake_git('merge-tree', 128, err='fatal: boom')
@@ -251,6 +251,7 @@ class PushWithOwnerMainCommits(OwnerCommitsCase):
     """docs/guard.md "Owner-only commits", Known limits, "One net change per push"."""
 
     def test_known_over_refusal_an_undone_agent_edit_counts_when_an_owner_commit_shares_the_push(self):
+        # Pins a documented limit: if the over-refusal is ever fixed, update this test; it is not a regression.
         remote_main = self.main
         wt = self.repo.worktree('x')                          # the branch, forked at the remote main
         edit = self.commit_as(AGENT, 'agent edits CLAUDE.md', {'CLAUDE.md': 'agent\n'}, cwd=wt)
