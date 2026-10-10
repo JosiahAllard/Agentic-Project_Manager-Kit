@@ -678,14 +678,18 @@ class PmDataTest(PrePushCase):
 
     def test_a_nested_remote_name_does_not_hide_the_objects(self):
         # --remotes=origin also matches refs/remotes/origin/sub/*, the tracking refs of a remote
-        # named origin/sub: one of them on the data commit must not hide the copy's blob
+        # named origin/sub. One of them on a commit of the pushed branch that copies a data file
+        # would mark that commit's objects as already on origin, which it never got.
         nested = os.path.join(self.repo.base, 'nested.git')
         self.repo.git('init', '-q', '--bare', nested, cwd=self.repo.base)
         # `git remote add` refuses the name (a subset of origin); config written directly holds it
         self.repo.git('config', 'remote.origin/sub.url', nested)
-        self.repo.git('update-ref', 'refs/remotes/origin/sub/x', self.data)
         self.new_branch('kit/x')
-        self.repo.git('cherry-pick', self.data)
+        self.repo.write('notes.md', SECRET)                     # a data file copied by hand
+        copy = self.repo.commit('copy', 'notes.md')
+        self.repo.git('update-ref', 'refs/remotes/origin/sub/x', copy)
+        self.repo.write('b.txt', 'b\n')
+        self.repo.commit('b', 'b.txt')
         self.refused('origin', 'kit/x', why='the PM data branch holds')
         self.assertEqual(self.ls('origin', 'refs/heads/kit/x'), '')
 
