@@ -397,14 +397,14 @@ class TheLinesAfterTheWorktrees(Fixture):
 
     def test_the_config_line_reads_the_home_it_is_given(self):
         """kitlib.preflight.configline over the scratch home: both folders, one key apart."""
-        for name, delegation in ((user.DIR_NAME, 'R-1000'), (migration.OLD_DIR_NAME, 'R-2000')):
+        for name, repos in ((user.DIR_NAME, ['alpha']), (migration.OLD_DIR_NAME, ['beta'])):
             os.makedirs(os.path.join(self.home, name))
             with open(os.path.join(self.home, name, user.FILE_NAME), 'w', encoding='utf-8') as fh:
-                json.dump({'standing_delegation': delegation}, fh)
+                json.dump({'ledger_repos': repos}, fh)
         out = self.run_preflight()[1]
         self.assertEqual(self.line(out, 'config '),
                          'config    WARN both ~/%s/%s (read) and ~/%s/%s (ignored) exist, DIFFERENT (keys: '
-                         'standing_delegation) - retire the old folder (docs/kit-json.md "Moving the machine '
+                         'ledger_repos) - retire the old folder (docs/kit-json.md "Moving the machine '
                          'config folder")' % (user.DIR_NAME, user.FILE_NAME, migration.OLD_DIR_NAME, user.FILE_NAME))
         self.assertLess(out.index('\nconfig '), out.index('\ntraps '))
 
