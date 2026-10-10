@@ -142,12 +142,12 @@ A gate-OK record is written for the merge before the push. When the merge is the
 
 **First switch.** A repo's first switch from the old PM kit is landed by the owner, by hand. Its base `.kit.json` fails to load with the kit loader (old key spellings such as `gate.hook`, `doc_budget.owner_email`/`agent_emails`/`owner_only`/`owner_only_except`, and dropped keys such as `dependency_pin_check` and `python_tests_audit*`). Five sites then refuse: the pre-push hook (kitlib/guard/prepush.py), the guard's git-push-main rule (kitlib/guard/rules.py `git_push`), the land.py preconditions (kitlib/gate/land.py), the trailers check (kitlib/trailerscheck) and review_pack's base read.
 
-1. Rewrite the base `.kit.json` to the kit spelling: rename the old keys, drop the removed ones (docs/kit-json.md).
-2. Check that it loads with the kit loader.
-3. The owner commits and pushes that switch commit himself; `gate.py land`, pre-push and the trailers check refuse until main loads.
+1. Rewrite the base `.kit.json` to the kit spelling: rename the old keys, drop the removed ones (docs/kit-json.md). The renames (kitlib/config/schema.py `SECTIONS`; docs/kit-json.md and docs/doc-tools.md): `gate.hook` becomes the top-level `hook` (its module name is `hook.module`); `doc_budget.owner_email`, `doc_budget.agent_emails`, `doc_budget.owner_only` and `doc_budget.owner_only_except` become `owner.email`, `owner.agent_emails`, `owner.paths` and `owner.paths_except`. `python_tests_audit*` is dropped only as a `gate` key: it is still valid under `hook.options`, which is passed to the hook module unread, when the repo's hook module reads it.
+2. Check that it loads with the kit loader: `python <kit>/tools/preflight.py -C <repo>` (`<repo>` is the checkout, worktree or not, that holds the rewritten `.kit.json`) loads the repo's `.kit.json` and, when it does not load, prints `preflight: refused: kit configuration: <the load error>` and exits 2. (`python -m json.tool` checks syntax only.)
+3. The owner commits and pushes that switch commit. The kit's own pre-push hook refuses this push when it is installed in that repo: it reads the base `.kit.json` from the remote's main (kitlib/guard/prepush.py `_cfg`, `kitlib.config.load_at`), and the old spelling fails to load. Until main loads, pre-push refuses every branch push, not only the switch push. Push before the kit hook is installed in that repo, or push that one switch commit with `--no-verify` from the owner's own terminal (the guard refuses `--no-verify` pushes in agent sessions: rules git-push-main and git-push-pmdata), then install the hook. `gate.py land`, pre-push and the trailers check refuse until main loads.
 4. After that, normal landings work (docs/go-live.md "Landing tool").
 
-Reopen the first-switch item if a repo ever has to switch from the old PM kit.
+Reopen the item KIT-FIRST-SWITCH-LANDING if a repo ever has to switch from the old PM kit.
 
 ### The landing queue
 
