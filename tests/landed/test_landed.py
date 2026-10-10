@@ -178,6 +178,47 @@ class Containment(Fixture):
         self.assertIn('main (UNKNOWN: ', out)
         self.assertIn('contained  UNKNOWN: local main could not be read', out)
 
+    def kill(self, match):
+        real = cmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if match(argv):
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        return mock.patch.object(cmd, '_run', side_effect=run)
+
+    def test_a_killed_remote_lookup_cannot_answer_never_lets_the_local_main_decide(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: any failure of `remote get-url` read as "no remote", so a
+        kill let the local main, which holds an unpushed merge, answer LANDED (exit 0)."""
+        self.land_locally()
+        with self.kill(lambda argv: argv[1:3] == ['remote', 'get-url']):
+            code, out = self.look()
+        self.assertEqual(code, landed.CANNOT, out)
+        self.assertIn('CANNOT ANSWER: whether this clone has the remote `origin` could not be '
+                      'read', out)
+        self.assertNotIn('LANDED', out)
+
+    def test_a_killed_ancestry_read_is_unknown_never_no(self):
+        """refs.is_ancestor's None (a kill) was `bool()`-ed into "contained  no"."""
+        self.land_locally()
+        self.push()
+        with self.kill(lambda argv: argv[1] == 'rev-list'):
+            code, out = self.look()
+        self.assertEqual(code, landed.NOT_YET, out)
+        self.assertNotIn('contained  no', out)
+        self.assertIn('contained  UNKNOWN: whether origin/main holds ', out)
+        self.assertIn('printed nothing', out)
+
+    def test_an_unread_local_main_is_shown_unknown_while_the_remote_decides(self):
+        self.land_locally()
+        self.push()
+        with self.kill(lambda argv: argv[1] == 'rev-parse'
+                       and argv[-1].startswith('refs/heads/main')):
+            code, out = self.look()
+        self.assertEqual(code, landed.LANDED, out)
+        self.assertIn('main (UNKNOWN: ', out)
+        self.assertIn('contained  YES in origin/main', out)
+
     def test_a_killed_read_of_the_ref_says_so(self):
         real = cmd.spawner()
 

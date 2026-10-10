@@ -27,17 +27,22 @@ LOCK_NAME = 'test-landing.lock'
 MASTER_CONFIG = {'repo': {'main_branch': 'master'}, 'landing': {'lock_file': 'git:' + LOCK_NAME}}
 
 
-def kill_reads_of(spec):
+def kill_reads_of(spec, after=0):
     """A patch of cmd._run under which a `rev-parse` whose last argument is `spec` exits 1 having
-    printed nothing (a git ended from outside, kitlib.git.refs.KILLED_SHAPE); every other git runs
-    as before (the fake, or real git)."""
+    printed nothing (a git ended from outside, kitlib.git.refs.KILLED_SHAPE), once `after` such
+    reads have answered; every other git runs as before (the fake, or real git)."""
     real = gitcmd.spawner()
+    seen = []
 
     def run(argv, cwd=None, input=None, timeout=None, env=None):
         if argv[1] == 'rev-parse' and argv[-1] == spec:
-            return 1, b'', b''
+            seen.append(argv)
+            if len(seen) > after:
+                return 1, b'', b''
         return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
-    return mock.patch.object(gitcmd, '_run', side_effect=run)
+    patch = mock.patch.object(gitcmd, '_run', side_effect=run)
+    patch.seen = seen                   # every read of `spec`, answered or killed
+    return patch
 
 
 class WorktreeCase(unittest.TestCase):
@@ -163,6 +168,23 @@ class NewBranchMode(WorktreeCase):
         self.assertIn('refused   %s could not be read (' % self.BASE, out)
         self.assertIn('printed nothing', out)
         self.assertIn('nothing was created', out)
+        self.assertFalse(os.path.exists(self.slug_path('fresh')))
+        self.assertFalse(new.branch_exists(self.repo, 'fix/fresh'))
+
+    def test_a_killed_second_read_of_the_base_is_refused_as_unread(self):
+        """main differs from origin and the lock is free, so choose_base reads both refs again;
+        that second read of main is the one killed (refs() raises _Unread from inside it)."""
+        self.write('b.txt', 'local only\n')
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', 'unpushed')
+        killer = kill_reads_of('%s^{commit}' % self.BASE, after=1)
+        with killer:
+            rc, out = self.tool('fix/fresh')
+        self.assertEqual(len(killer.seen), 2, 'the first read answered, the re-read was killed')
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn('did not resolve', out)
+        self.assertNotIn('not a landing in progress', out)
+        self.assertIn('refused   %s could not be read (' % self.BASE, out)
         self.assertFalse(os.path.exists(self.slug_path('fresh')))
         self.assertFalse(new.branch_exists(self.repo, 'fix/fresh'))
 

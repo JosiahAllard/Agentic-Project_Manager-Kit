@@ -476,6 +476,21 @@ class AKilledGitIsNoAnswer(SyncCase):
         self.assertTrue(os.path.isfile(self.git_path('MERGE_HEAD')),
                         'the merge is left in progress, as the refusal says')
 
+    def test_a_killed_merge_msg_path_read_is_refused_and_the_merge_left_as_is(self):
+        """MERGE_HEAD is there (a merge to commit) but `rev-parse --git-path MERGE_MSG` is killed:
+        merge_msg_path gives '', which open('') would raise on."""
+        target = self.stage_clean()
+        before = self.head()
+        with kill_git(lambda argv: argv[1] == 'rev-parse' and 'MERGE_MSG' in argv):
+            done = self.sync(target)
+        text = self.out(done)
+        self.assertEqual(done.code, syncbase.FAILED, text)
+        self.assertIn('MERGE_MSG', text)
+        self.assertIn('Nothing was committed and the merge is left in progress', text)
+        self.assertNotIn('merged %s' % target[:7], text)
+        self.assertEqual(self.head(), before, 'no commit was made')
+        self.assertTrue(os.path.isfile(self.git_path('MERGE_HEAD')))
+
     def test_a_killed_merge_head_read_while_arming_says_the_trailer_was_not_written(self):
         # Not red-first: the old read gave the same False for a kill. Kept as a guard.
         with kill_git(reads_merge_head):
