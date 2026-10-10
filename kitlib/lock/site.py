@@ -4,7 +4,8 @@
   "daemons": "gates" (default), "stop" or "leave". At the release of a gate run (one booked with
       book(gate=True), as kitlib.gate.runner books every branch and merged gate) that ended
       "done", the Gradle and Kotlin daemons still in its job are stopped with their children,
-      each only when every loopback client of every process in its tree is in the run's job
+      each only when every client on this machine (kitlib.proc.tcp peers: over a loopback
+      address or one of the machine's own) of every process in its tree is in the run's job
       (kitlib.proc.daemons stop); one that serves a client outside it, or whose clients cannot
       be told, is left running and the reason said. MSBuild nodes and the compiler server
       (named pipes, whose client cannot be told) are always left. Any other run leaves them all

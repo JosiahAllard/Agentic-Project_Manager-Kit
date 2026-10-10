@@ -6,9 +6,11 @@ ComfyUI, a game server or any other program a run's command left is never matche
 A daemon is shared: one a run's client started (so it sits in that run's job) is reused by any
 other client on the machine through the build tool's registry (Gradle's, under GRADLE_USER_HOME).
 So stop() ends a daemon only when every process it would end talks over TCP to processes in the
-releasing run's job alone, none of them in the tree of a daemon it leaves running (why_left). Gradle and Kotlin daemons serve their clients over loopback
-TCP, which the connection table shows (kitlib.proc.tcp). MSBuild nodes and the compiler server
-use named pipes, whose client cannot be told from outside, so they are always left.
+releasing run's job alone, none of them in the tree of a daemon it leaves running (why_left).
+Gradle and Kotlin daemons serve their clients over TCP on this machine (a loopback address, or one
+of the machine's own interface addresses), which the connection table shows (kitlib.proc.tcp
+peers). MSBuild nodes and the compiler server use named pipes, whose client cannot be told from
+outside, so they are always left.
 """
 import re
 
@@ -64,7 +66,8 @@ def why_left(pid, tree, conns, in_job, label=None, kept=None):
     it may be stopped: every process that stopping it would end has only peers in the releasing
     run's job. conns: kitlib.proc.tcp.connections(); in_job(pid): "in", "out", "gone" or
     "unknown" (kitlib.proc.job Job.contains). A peer that is gone serves nobody; one whose job
-    cannot be told, or a loopback connection with no peer in the table, leaves the daemon.
+    cannot be told, or a connection on this machine (kitlib.proc.tcp peers) with no peer in
+    the table, leaves the daemon.
     kept: {pid: (daemon pid, label)} of the processes in the trees of daemons this release leaves
     running; a peer among them is in the job yet runs on, so it leaves this daemon too."""
     from . import tcp
@@ -74,7 +77,8 @@ def why_left(pid, tree, conns, in_job, label=None, kept=None):
     mine = {int(pid)} | {int(p) for p in tree}
     for p, peer in tcp.peers(mine, conns):
         if peer is None:
-            return "pid %d has a loopback connection whose other end the table does not show" % p
+            return "pid %d has a connection on this machine whose other end the table does " \
+                "not show" % p
         if peer in mine:
             continue
         if peer in kept:
@@ -88,17 +92,20 @@ def why_left(pid, tree, conns, in_job, label=None, kept=None):
     return None
 
 
-def stop(found, in_job, kill_tree=None, snapshot=None, descendants=None, connections=None):
-    """End each found daemon with its own children (ctime-checked) unless one of them serves a
-    process outside the releasing run's job (why_left, in_job: Job.contains of that job). The
-    process tree and connection table are read once and every daemon is judged on them before
-    any is ended; the tree checked is the tree ended. A daemon left running keeps its tree
-    running, so a daemon in that tree, or serving a process in it (a Kotlin daemon a left Gradle
-    daemon compiles on), is left too. Whatever cannot be read leaves the daemon running.
-    [(pid, label, result)]: terminate_verified's result for the daemon itself, or
-    "left: <why>"."""
+def stop(found, in_job, terminate=None, snapshot=None, descendants=None, connections=None):
+    """End each found daemon with its own children unless one of them serves a process outside
+    the releasing run's job (why_left, in_job: Job.contains of that job). The process tree and
+    connection table are read once and every daemon is judged on them before any is ended; the
+    tree checked is the tree ended: exactly the (pid, ctime) pairs judged are ended, children
+    first, each by terminate_verified, and the tree is never read again. So a judged child that
+    has exited and whose pid a newer process holds is not hit ("reused"), and a process the
+    daemon starts after the read is not ended. A pair two stopped trees share is ended once. A
+    daemon left running keeps its tree running, so a daemon in that tree, or serving a process
+    in it (a Kotlin daemon a left Gradle daemon compiles on), is left too. Whatever cannot be
+    read leaves the daemon running. [(pid, label, result)]: terminate_verified's result for the
+    daemon itself, or "left: <why>"."""
     from . import process, tcp            # Windows only; fakes stand in for each in tests
-    kill_tree = kill_tree or process.kill_tree
+    terminate = terminate or process.terminate_verified
     snapshot = snapshot or process.snapshot
     descendants = descendants or process.descendants
     connections = connections or tcp.connections
@@ -108,13 +115,14 @@ def stop(found, in_job, kill_tree=None, snapshot=None, descendants=None, connect
     except Exception as e:                  # noqa: BLE001 - cannot tell: leave them all
         why = "its connections could not be read (%s)" % e
         return [(pid, label, "left: " + why) for pid, _ct, label in found]
-    trees, why = {}, {}
+    pairs, trees, why = {}, {}, {}          # pairs: the judged tree, parents before children
     for pid, ct, _label in found:
         try:
-            trees[pid] = {int(p) for p, _ct in descendants(pid, ct, snap)} | {int(pid)}
+            pairs[pid] = [(int(pid), ct)] + [(int(p), c) for p, c in descendants(pid, ct, snap)]
         except Exception as e:              # noqa: BLE001
-            trees[pid] = {int(pid)}
+            pairs[pid] = [(int(pid), ct)]
             why[pid] = "its process tree could not be read (%s)" % e
+        trees[pid] = {p for p, _c in pairs[pid]}
     asked = {}
 
     def where(p):                           # one question per peer, however many passes
@@ -148,11 +156,13 @@ def stop(found, in_job, kill_tree=None, snapshot=None, descendants=None, connect
             if w:
                 why[pid] = w
                 changed = True
-    out = []
+    out, ended = [], {}                     # ended: {(pid, ctime): terminate's result}
     for pid, ct, label in found:
         if pid in why:
             out.append((pid, label, "left: " + why[pid]))
             continue
-        res = kill_tree(pid, ct, snap=snap)
-        out.append((pid, label, res.get(pid, "gone") if isinstance(res, dict) else res))
+        for pair in reversed(pairs[pid]):   # children first
+            if pair not in ended:
+                ended[pair] = terminate(*pair)
+        out.append((pid, label, ended[(int(pid), ct)]))
     return out

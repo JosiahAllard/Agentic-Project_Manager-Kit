@@ -1,5 +1,6 @@
 """The machine's established TCP connections, each with the pid that owns it: which local process
-is at the other end of a loopback connection (kitlib.proc.daemons asks it of a build daemon).
+is at the other end of a connection on this machine (kitlib.proc.daemons asks it of a build
+daemon).
 
 An end is (family, address bytes, port): family 4 or 6, the address in network order, the port
 a number. An IPv4-mapped IPv6 address (::ffff:a.b.c.d) is named as the IPv4 end it is, so both
@@ -81,19 +82,23 @@ def connections():
 
 def peers(pids, conns):
     """[(pid, peer)] for each established connection of a process in `pids` whose other end is
-    on this machine: peer is the pid owning that other end, or None when the remote end is a
-    loopback address no row owns (the connection is closing, or the table cannot tell).
-    A connection to another host is not listed."""
+    on this machine: peer is the pid owning that other end, or None when no row owns it (the
+    connection is closing, or the table cannot tell). The other end is on this machine when a
+    row owns it, when its address is a loopback one, or when its address is the local address
+    of any row in `conns` (one of this machine's own interface addresses): a missing row there
+    is None, never another host. Only a connection to an address no row has as its local one
+    is to another host, and it is not listed."""
     pids = set(pids)
-    owner = {}
+    owner, here = {}, set()
     for local, remote, pid in conns:
         owner[(local, remote)] = pid
+        here.add(local[:2])                 # (family, address): this machine's own
     out = []
     for local, remote, pid in conns:
         if pid not in pids:
             continue
         peer = owner.get((remote, local))
-        if peer is None and not is_loopback(remote):
+        if peer is None and not is_loopback(remote) and remote[:2] not in here:
             continue
         out.append((pid, peer))
     return out
