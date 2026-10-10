@@ -40,6 +40,7 @@ import re
 from kitlib import config as kconfig
 from kitlib import pmdata
 from kitlib.git import repo
+from kitlib.lockmcp import claude_tool_prefix
 
 from . import commands as cm
 from . import context
@@ -51,9 +52,10 @@ FILE_TOOLS = {'Edit': 'file_path', 'Write': 'file_path', 'MultiEdit': 'file_path
               'NotebookEdit': 'notebook_path'}
 SHELL_TOOLS = {'Bash': sh.BASH, 'PowerShell': sh.PS}
 
-# The lock MCP's tool-name prefix as the kit plugin would register it. INFERRED, not observed:
-# the kit has no installed plugin yet. ~/.claude-pm-kit/config.json guard_mcp_prefix replaces it.
-MCP_PREFIX = 'mcp__plugin_claude-pm-kit_machine-lock__'
+# The Claude plugin's MCP prefix for the lock MCP's tools (kitlib.lockmcp.claude_tool_prefix, from
+# CLAUDE_PLUGIN_NAME). INFERRED, not observed: the kit has no installed plugin yet. The machine
+# config's guard_mcp_prefix replaces it.
+MCP_PREFIX = claude_tool_prefix()
 # The live machine_lock.py still requires --lock on `run`; ARCHITECTURE.md retires the flag
 # for the kit's own tool. Alternatives carry it until the kit tool is the one installed.
 LOCK_TOOL = '%s/.claude/tools/machine_lock/machine_lock.py'
@@ -354,10 +356,10 @@ def ledger_rule(ctx, target, role, what):
     user = ctx.user()
     broken = user.get('broken')
     if broken and role == 'subagent':
-        return refuse('ledger', role, '%s: the machine config ~/.claude-pm-kit/config.json is broken (%s), so the '
+        return refuse('ledger', role, '%s: the machine config %s is broken (%s), so the '
                       'guard cannot tell where the rulings ledger is and refuses every subagent write. The owner '
-                      'or the PM session fixes it.' % (what, broken),
-                      'python -m json.tool %s' % quote(os.path.join(ctx.home, '.claude-pm-kit', 'config.json')))
+                      'or the PM session fixes it.' % (what, kconfig.user.DISPLAY, broken),
+                      'python -m json.tool %s' % quote(kconfig.user.config_file(ctx.home)))
     ledger = user.get('ledger_path')
     if not ledger or not target or not same_file(target, ledger):
         return None
@@ -474,7 +476,7 @@ def pm_data_unknown(ctx, target, cwd, role, what):
         return None
     return refuse('pm-data', role, '%s: the guard cannot tell which worktree is the PM data worktree (%s), so it '
                   'refuses every subagent write. The owner or the PM session fixes it. To read the machine config:'
-                  % (what, why), 'python -m json.tool %s' % quote(os.path.join(ctx.home, '.claude-pm-kit', 'config.json')))
+                  % (what, why), 'python -m json.tool %s' % quote(kconfig.user.config_file(ctx.home)))
 
 
 def own_worktree(ctx, cwd, main_top=None):

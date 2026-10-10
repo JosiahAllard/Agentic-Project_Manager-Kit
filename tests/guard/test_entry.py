@@ -176,7 +176,8 @@ class Unguarded(unittest.TestCase):
         w = World()
         self.addCleanup(w.cleanup)
         tools = {make(w)['tool_name'] for _n, make, *_rest in ROWS}
-        tools |= {'mcp__plugin_claude-pm-kit_machine-lock__lock_free', 'mcp__other__lock_free'}
+        from kitlib.lockmcp import claude_tool_prefix
+        tools |= {claude_tool_prefix() + 'lock_free', 'mcp__other__lock_free'}
         for tool in tools:
             self.assertTrue(re.fullmatch(mod.MATCHER, tool), tool)
             self.assertFalse(mod.unguarded({'tool_name': tool}), tool)
