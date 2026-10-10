@@ -51,7 +51,7 @@ R_DATA = {
         ['buildscripts/models-container.sh', ['test_pvp_step']],
         ['gradle.properties', ['test_runelite_bump']],
         [{'piece': 'model-sums', 'path': ''}, ['test_deploy_scripts']],
-        [{'piece': 'combat-scripts', 'path': 'src/test/java/'}, ['test_gate']],
+        [{'piece': 'delta-scripts', 'path': 'src/test/java/'}, ['test_gate']],
         [{'piece': 'binding', 'path': 'src/main/java/org/beta/binding/client/CycleProbe.java'},
          ['test_density_report']],
         [{'piece': 'brain-ops', 'path': '/'}, ['test_republish_live']],
@@ -260,8 +260,8 @@ class Selection(Fixture):
 
     def test_a_pinned_path_selects_exactly_its_module(self):
         self.assertEqual(self.select('docs/INDEX.md'), ['test_doc_index', 'test_tool_deps'])
-        # combat-scripts' test sources are also test sources: the literal-scan slice too.
-        self.assertEqual(self.select(OLD.path('combat-scripts', 'src/test/java/org/X.java')),
+        # delta-scripts' test sources are also test sources: the literal-scan slice too.
+        self.assertEqual(self.select(OLD.path('delta-scripts', 'src/test/java/org/X.java')),
                          ['test_gate', 'test_test_reads', 'test_tool_deps'])
 
     def test_a_tools_extra_file_selects_its_readers_dependents(self):
@@ -366,7 +366,7 @@ class PinnedInPieces(unittest.TestCase):
             with self.subTest(path=path):
                 got = self.select(path)
                 self.assertIn('test_test_reads', got)
-                if not path.startswith(self.P('combat-scripts', '')):   # pinned to test_gate on its own
+                if not path.startswith(self.P('delta-scripts', '')):   # pinned to test_gate on its own
                     self.assertNotIn('test_gate', got)
         for path in (self.P('Fleet.Brain', 'Program.cs'), self.P('binding', 'src/main/java/org/X.java')):
             with self.subTest(path=path):

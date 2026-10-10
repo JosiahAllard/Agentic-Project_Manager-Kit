@@ -16,9 +16,9 @@ OLD_PIECES = [
     {'id': 'brain-ops', 'kind': 'asset', 'dir': 'fleet/ops', 'dotnet': True},
     {'id': 'Fleet.Node', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Node', 'dotnet': True},
     {'id': 'Fleet.Node.Tests', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Node.Tests', 'dotnet': True},
-    {'id': 'combat-scripts', 'kind': 'gradle', 'gradle': ':combat-scripts', 'dir': 'combat-scripts'},
+    {'id': 'delta-scripts', 'kind': 'gradle', 'gradle': ':delta-scripts', 'dir': 'delta-scripts'},
     {'id': 'pvp', 'kind': 'builder', 'dir': 'pvp'},
-    {'id': 'model-sums', 'kind': 'file', 'dir': 'combat-scripts/models/SHA256SUMS'},
+    {'id': 'model-sums', 'kind': 'file', 'dir': 'delta-scripts/models/SHA256SUMS'},
 ]
 MOVES = {
     'beta-api': 'shared/beta-api',
@@ -30,7 +30,7 @@ MOVES = {
     'brain-ops': 'brain/ops',
     'Fleet.Node': 'node/Fleet.Node',
     'Fleet.Node.Tests': 'node/Fleet.Node.Tests',
-    'combat-scripts': 'artifacts/scripts/combat-scripts',
+    'delta-scripts': 'artifacts/scripts/delta-scripts',
     'pvp': 'artifacts/models',
     'model-sums': 'artifacts/models/SHA256SUMS',
 }

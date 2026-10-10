@@ -82,7 +82,7 @@ class Answers(unittest.TestCase):
 
     def test_the_longest_dir_wins(self):
         self.assertEqual(self.table.piece_of(self.P('model-sums')), 'model-sums')
-        self.assertEqual(self.table.piece_of(self.P('combat-scripts', 'src/A.java')), 'combat-scripts')
+        self.assertEqual(self.table.piece_of(self.P('delta-scripts', 'src/A.java')), 'delta-scripts')
         self.assertEqual(self.table.piece_of(self.P('node-docs')), 'node-docs')
         self.assertEqual(self.table.piece_of(self.P('brain-docs', 'auth.md')), 'brain-docs')
         self.assertIsNone(self.table.piece_of('docs/INDEX.md'))
@@ -170,7 +170,7 @@ class Repath(unittest.TestCase):
 
     def test_the_longest_was_wins(self):
         self.assertEqual(fx.NEW.repath('fleet/docs/node.md'), fx.NEW.dir('node-docs'))
-        self.assertEqual(fx.NEW.repath('combat-scripts/models/SHA256SUMS'), fx.NEW.dir('model-sums'))
+        self.assertEqual(fx.NEW.repath('delta-scripts/models/SHA256SUMS'), fx.NEW.dir('model-sums'))
 
     def test_root_files_paths_outside_any_piece_and_the_old_table(self):
         self.assertEqual(fx.NEW.repath('fleet/global.json'), 'global.json')

@@ -120,7 +120,7 @@ class APlantedHitFails(PlantedTree):
 
     def test_the_research_tree_and_agent_temp_are_caught(self):
         self.write('notes.md', 'a %s\nb %s\nc tools%sresearch and %%DEV_ROOT%%%sresearch\n'
-                   % ('Z' + ':' + BS + 'research' + BS + 'combat', 'Z' + ':' + BS + BS + 'AgentTemp',
+                   % ('Z' + ':' + BS + 'research' + BS + 'delta', 'Z' + ':' + BS + BS + 'AgentTemp',
                       BS, BS))
         rc, out = self.run_guard()
         self.assertEqual(rc, 1, out)
