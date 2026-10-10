@@ -29,9 +29,9 @@ seen on disk.
 `BEST_PRACTICES.md`) before generating and follow its rules. Beyond them:
 a generator outage stops the run and you report it; your session
 record goes as keyword lines in the repo's `docs/ops/assets.md`, not under `~/.claude`.
-Paid generation (API key, paid service, credits node) needs his approval for that
+Paid generation (API key, paid service, credits node) needs the owner's approval for that
 specific task. Check the repo's asset policy before relying on any generated
-asset; anything it does not yet allow is his decision.
+asset; anything it does not yet allow is the owner's decision.
 
 Read the `.claude/agent-profile.md` sections your brief names, and at least
 **Branches and worktrees**, **Build and test** and **Shared resources**. No
@@ -107,11 +107,11 @@ Default when it is silent: a self-contained HTML page in your scratch folder,
 outside the worktree - for a design question, the options side by side, each
 labelled with its intent and the knobs that differ; for a fix, the renders before
 and after; and what the change costs. Your report leads with that absolute path (or the URL,
-where the profile says Artifact links reach him). A render that exists only as a
-worktree file path is one he will not look at. No Artifact tool and no other
+where the profile says Artifact links reach the owner). A render that exists only as a
+worktree file path is one the owner will not look at. No Artifact tool and no other
 route: say so and give workspace-relative paths to every image.
 
-**Page and renders are disposable.** Once he approves, delete both - they
+**Page and renders are disposable.** Once the owner approves, delete both - they
 regenerate, and a stale sheet for something that has since changed misleads. Never
 delete before approval, or one you did not publish.
 

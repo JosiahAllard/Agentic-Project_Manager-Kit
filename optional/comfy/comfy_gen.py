@@ -6,7 +6,7 @@ never downloads models, installs nodes or calls a paid/API node. Every command
 below `check`/`free`/`stop` starts ComfyUI itself if it is not already up
 (headless where possible, else the Comfy Desktop app the owner uses)
 and, if it is the one who started it, shuts it down again after the job or
-~10 idle minutes. A ComfyUI the owner started himself is left running; agents
+~10 idle minutes. A ComfyUI the owner started by hand is left running; agents
 still reach it only through this tool. If it cannot be reached even after
 trying to start it, or it stops answering mid-run, the command exits 2 with a
 GENERATOR UNAVAILABLE error naming any files it already saved: the run stops there and
@@ -31,7 +31,7 @@ output/agent/<YYYYmmdd-HHMMSS>_<command>_<name>/, and copies each result to
 --out, which must be inside the repository the asset is for (the worktree's
 asset folder), never a scratch folder. ComfyUI's copies are only a cache; the
 owner may clear output/ at any time. A ComfyUI this tool starts puts output/ under
-%AGENT_TEMP%\\comfy when AGENT_TEMP is set; the owner's own ComfyUI keeps its folder.
+%AGENT_TEMP%\\comfy when AGENT_TEMP is set; a local ComfyUI keeps its folder.
 
 Every saved file gets a sidecar <file>.json (tool, model, licence, inputs, seed,
 settings, date, seconds taken) for the repository's ATTRIBUTIONS row.
@@ -43,7 +43,7 @@ generations never overlap; ordering against the repos' engine, network and
 render runs is the machine lock's job, not this file's: every generating
 command (with --force too) runs as a local-ai machine-lock run, and with no
 machine lock tool it refuses (exit 2). When that run's slot ends, a ComfyUI
-this tool started is stopped and the owner's own has its models unloaded if
+this tool started is stopped and a local ComfyUI has its models unloaded if
 idle (the hidden `release` command, the run's --on-release). One
 command is one slice: keep it under ~10 minutes. Pass --force only if you
 already hold this tool's GPU self-lock. Keep images near 1 MP, and never
@@ -154,7 +154,7 @@ class gpu_lock:
 
 
 # ---------------------------------------------------------------- ComfyUI lifecycle 
-# Before that the owner always started ComfyUI himself (a taskbar shortcut to Comfy Desktop);
+# Before that the owner always started ComfyUI by hand (a taskbar shortcut to Comfy Desktop);
 # agents only ever found it up or not. Now `ensure_running()` may start it, headless where
 # possible, and this tool shuts down only what IT started - a ComfyUI the owner started is
 # never touched. Design: one small state file under %TEMP%\comfy_gen\ records the pid, its
@@ -264,7 +264,7 @@ def _wait_for_stats(wait):
 def _agent_output_dir():
     """<AGENT_TEMP>\\comfy when AGENT_TEMP is set (process env, else the user's registry
     environment), else None. A ComfyUI this tool starts writes there, so agent generations land in
-    the agents' temp folder rather than the ComfyUI install . The owner's own ComfyUI
+    the agents' temp folder rather than the ComfyUI install . A local ComfyUI
     keeps its folder."""
     root = os.environ.get("AGENT_TEMP")
     if not root:
@@ -383,7 +383,7 @@ def ensure_running(wait=120):
     """Make sure ComfyUI answers at C.HOST, starting it if needed. Returns True when THIS tool
     owns the running ComfyUI (freshly started, or still the one it started earlier) - the only
     case `stop`/the idle watcher will ever touch it. Returns False when it was already reachable
-    and is not ours: the owner started it himself, and it is left running untouched."""
+    and is not ours: the owner started it by hand, and it is left running untouched."""
     state = read_state()
     if _reachable():
         if _tool_started_and_alive(state or {}):
@@ -947,7 +947,7 @@ def machine_lock_rerun(args, argv):
 
 def cmd_release(args):
     """The local-ai run's --on-release: its slot is ending, so free ComfyUI now. A ComfyUI this tool
-    started is stopped (with its children, ctime-checked); the owner's own is never stopped, only
+    started is stopped (with its children, ctime-checked); a local ComfyUI is never stopped, only
     its models unloaded, and only when its queue is idle (as `free`). Skipped when the run was
     nested in an enclosing run (MACHINE_LOCK_RUN still the enclosing one's): that run still holds
     the slot. Always exits 0; what it did is printed."""

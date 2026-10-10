@@ -4,6 +4,7 @@
   "commit": {"merge_fold": true},
   "doc_index": {"enabled": false},
   "daily_full": {"enabled": true},
+  "worktree_remove": {"build_output": ["__pycache__"]},
   "gate": {
     "steps": [
       {

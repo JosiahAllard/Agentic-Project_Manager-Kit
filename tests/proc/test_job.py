@@ -143,6 +143,33 @@ class Live(unittest.TestCase):
             p.kill()
             p.wait(30)
 
+    def test_contains_tells_a_process_in_the_job_from_one_outside(self):
+        j = job.Job()
+        try:
+            p = j.start([sys.executable, "-c", "import time; time.sleep(30)"])
+            self.addCleanup(p.wait, 30)
+            self.assertEqual(j.contains(p.pid), "in")
+            self.assertEqual(j.contains(os.getpid()), "out")
+            self.assertEqual(j.contains(0), "unknown")
+        finally:
+            j.end(kill=True)
+        self.assertEqual(j.contains(p.pid), "unknown")           # the job is closed
+
+    def test_contains_counts_a_process_in_a_nested_job_as_in(self):
+        outer = job.Job()
+        try:
+            p = outer.start([sys.executable, "-c", "import time; time.sleep(30)"])
+            self.addCleanup(p.wait, 30)
+            inner = job.Job()
+            try:
+                inner.assign(p)                 # p is in outer already: inner nests in outer
+                self.assertEqual(inner.contains(p.pid), "in")
+                self.assertEqual(outer.contains(p.pid), "in", "a nested job's process is out")
+            finally:
+                inner.end(kill=True)
+        finally:
+            outer.end(kill=True)
+
     def test_a_child_that_cannot_join_the_job_is_ended_not_run(self):
         # Nothing runs outside the job. The old machine_lock Job ran it anyway,
         # unpinned ("not in a job"): red there.

@@ -1,0 +1,151 @@
+"""Second-review fixes to the PM data routes (docs/guard.md "Rules" and "Fallback"):
+
+  - `& (<expr>)` is denied for an agent session in any repository, as the fallback denies an
+    unreadable line: a computed program skips the rules that need a literal one (heavy, the
+    write jail, the git rules); only the owner and `plain` read it as any other line;
+  - HOME set by an arithmetic assignment (let, (( )), $(( )), for (( ))) or by select counts;
+  - git-remote-rewrite counts a directory the text cannot tell as git_alias_config does: only
+    when the machine config names pm_data or the command's own directory has a record;
+  - an alias on a call with --config-env is not judged by the guard's own read of the alias."""
+import os
+import unittest
+
+from kitlib import pmdata
+
+from . import world as W
+from .test_pmdata_gaps import COORD, PLAIN, PM, ROOT, Base
+from .world import ps
+
+
+class CallSubexpressionAgents(Base):
+    """Finding: `& (...)` read clean in every session, so in a repository without a PM data
+    record an agent's computed program skipped heavy, the write jail and the git rules."""
+
+    def setUp(self):
+        super().setUp()
+        os.remove(self.record)                  # no PM data anywhere: only the agent check is left
+
+    def lines(self):
+        main = W.fwd(self.w.main)
+        return ('& (Get-Command git) -C "%s" reset --hard' % main,
+                'cd $env:TEMP; & (Get-Command git) -C "%s" push --no-verify origin pmdata' % main,
+                '& (Join-Path $r x.exe) a',
+                "& (Join-Path $r x.exe) a; echo 'x")      # unclean for another reason too
+
+    def test_an_agent_session_is_denied(self):
+        for text in self.lines():
+            with self.subTest(text=text, session='subagent'):
+                self.assert_denied(self.decide(text, sub=True, shell=ps), 'unreadable')
+            for label, env in (('pm', PM), ('coordinator', COORD)):
+                with self.subTest(text=text, session=label):
+                    d = self.decide(text, environ=env, shell=ps)
+                    self.assert_denied(d, 'write-jail')
+                    self.assertIn('Name the program literally', d.reason)
+
+    def test_the_owner_and_plain_pass(self):
+        for text in self.lines()[:3]:
+            with self.subTest(text=text, session='owner'):
+                self.assertIsNone(self.decide(text, shell=ps))
+            with self.subTest(text=text, session='plain'):
+                self.assertIsNone(self.decide(text, environ=PLAIN, shell=ps))
+        self.assertIsNone(self.decide('& (Join-Path $r x.exe) a', cwd=self.w.main, shell=ps))
+
+    def test_a_pm_data_repository_still_names_pm_data(self):
+        pmdata.write(os.path.join(self.w.main, '.git'), 'pmdata', 'private', ROOT)
+        for label, sub, env in self.sessions():
+            with self.subTest(label):
+                self.assert_denied(self.decide('& (Get-Command git) push', sub=sub, environ=env, shell=ps),
+                                   'git-push-pmdata')
+
+
+class HomeByArithmetic(Base):
+    """Finding: let, arithmetic assignment ((( )), $(( )), for (( ))) and select set HOME without
+    commands.bash_var_targets counting it."""
+
+    DENIED = ('let HOME=1; git push private pmdata',
+              'let "HOME = 1"; git push private pmdata',
+              'let x=1 HOME+=1; git push private pmdata',
+              ': $((HOME=1)); git push private pmdata',
+              'echo "$((XDG_CONFIG_HOME+=1))"; git push private pmdata',
+              '(( HOME = 1 )); git push private pmdata',
+              '((x=1,HOME=2)); git push private pmdata',
+              '(( HOME++ )); git push private pmdata',
+              '(( ++USERPROFILE )); git push private pmdata',
+              'for ((i=0; i<1; HOME++)); do git push private pmdata; done',
+              'select HOME in a b; do git push private pmdata; done',
+              'select HOME; do git push private pmdata; done',
+              ': $(($n=1)); git push private pmdata',
+              'let "$n=1"; git push private pmdata')
+
+    def test_a_push_on_a_line_whose_arithmetic_sets_home_is_denied(self):
+        for text in self.DENIED:
+            for label, env in (('pm', PM), ('coordinator', COORD)):
+                with self.subTest(text=text, session=label):
+                    self.assert_denied(self.decide(text, environ=env), 'git-push-pmdata')
+            with self.subTest(text=text, session='owner'):
+                self.assertIsNone(self.decide(text))
+
+    def test_reads_and_other_names_pass(self):
+        for text in ('let x=1; git push private pmdata',
+                     ': $((x+1)); git push private pmdata',
+                     'echo $((HOME)); git push private pmdata',
+                     '(( HOME == 1 )); git push private pmdata',
+                     "echo '$((HOME=1))'; git push private pmdata",
+                     'select x in a; do git push private pmdata; done',
+                     'for ((i=$n; i<2; i++)); do git push private pmdata; done'):
+            with self.subTest(text):
+                self.assertIsNone(self.decide(text, environ=PM))
+
+
+class RemoteRewriteUnknownDirectory(Base):
+    """Finding: git-remote-rewrite counted a directory the text cannot tell as a recorded
+    repository (pmdata_recorded(None)), so `git -C $D remote add` was denied for every session
+    but the owner's, on machines whose config names no pm_data too."""
+
+    TEXTS = ('git -C $D remote add x https://h/x', 'git -C $D config remote.x.url https://h/x')
+
+    def test_no_machine_pm_data_and_no_record_passes(self):
+        os.remove(self.record)
+        # a session the write jail does not hold: for a jailed one write-jail denies git -C $D first
+        for text in self.TEXTS:
+            with self.subTest(text):
+                self.assertIsNone(self.decide(text, environ=PLAIN, cwd=self.w.plain))
+
+    def test_a_record_where_it_runs_or_machine_pm_data_denies(self):
+        for text in self.TEXTS:
+            with self.subTest(text=text, where='record'):
+                self.assert_denied(self.decide(text, environ=PLAIN), 'git-remote-rewrite')
+                self.assertIsNone(self.decide(text))
+        os.remove(self.record)
+        self.machine_pm_data()
+        for text in self.TEXTS:
+            with self.subTest(text=text, where='machine'):
+                self.assert_denied(self.decide(text, environ=PLAIN, cwd=self.w.plain), 'git-remote-rewrite')
+
+
+class AliasConfigEnv(Base):
+    """The --config-env branch of rules._alias_config_moved: git reads the setting from an
+    environment variable, so include.path there may add an alias the guard's read does not see."""
+
+    TEXTS = ('git --config-env=include.path=CFG pu origin pmdata',
+             'git --config-env include.path=CFG pu origin pmdata')
+
+    def test_an_alias_on_a_config_env_call_is_denied(self):
+        for text in self.TEXTS:
+            for label, env in (('pm', PM), ('coordinator', COORD), ('plain', PLAIN)):
+                with self.subTest(text=text, session=label):
+                    d = self.decide(text, environ=env)
+                    self.assert_denied(d, 'git-push-pmdata')
+                    self.assertIn('--config-env (include.path)', d.reason)
+            with self.subTest(text=text, session='owner'):
+                self.assertIsNone(self.decide(text))
+
+    def test_no_record_passes(self):
+        os.remove(self.record)
+        for text in self.TEXTS:
+            with self.subTest(text):
+                self.assertIsNone(self.decide(text, environ=PLAIN))
+
+
+if __name__ == '__main__':
+    unittest.main()
