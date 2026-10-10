@@ -21,7 +21,8 @@ Rules, in the order they are checked:
   root-search      a recursive search from a drive or filesystem root
   heavy            a heavy program run with no lock held (MACHINE_LOCK_RUN verified by nest_check)
   git-*            damaging git in a main checkout; branch -D anywhere; a push to main with no
-                   gate-OK record when the repo sets repo.push_block
+                   gate-OK record when the repo sets repo.push_block; push --no-verify in a
+                   repository with a PM data record, in any session but the owner's own
   git-hooks-path   a change of core.hooksPath (git config, git -c, clone -c, GIT_CONFIG_*), in
                    any session
   owner-identity   the owner's email given to a commit, in any session but the owner's own
@@ -37,6 +38,7 @@ import posixpath
 import re
 
 from kitlib import config as kconfig
+from kitlib import pmdata
 from kitlib.git import repo
 
 from . import commands as cm
@@ -446,19 +448,20 @@ def kit_judged(ctx, where):
     return Judged(ctx, top, cfg, None), None
 
 
-def git_push_pm_data(ctx, gc, role):
+def git_push_pm_data(event, ctx, gc, role):
     """git push from the PM data worktree: every ref but the data branch is judged by the kit's own
-    .kit.json (main checkout's rules), the data branch by the data worktree's own."""
+    .kit.json (main checkout's rules), the data branch by the data worktree's own. Both judgements
+    run the git-push-pmdata checks too (git_push)."""
     kit, why = kit_judged(ctx, gc.dir)
     if kit is None:
         return refuse('git-push-main', role, '`git push` in the PM data worktree, where the kit\'s rules for the shared '
                       'repository cannot be read: %s. To see the worktrees:' % why, 'git -C %s worktree list' % quote(gc.dir))
-    d = git_push(kit, gc, role)
+    d = git_push(event, kit, gc, role)
     if d:
         return d
     cfg = ctx.config(gc.dir)
     cfg = DataBranch(cfg, ctx.pm_data_branch(gc.dir)) if cfg is not None else None
-    return git_push(Judged(ctx, ctx.main_top(gc.dir), cfg, ctx.config_error(gc.dir)), gc, role)
+    return git_push(event, Judged(ctx, ctx.main_top(gc.dir), cfg, ctx.config_error(gc.dir)), gc, role)
 
 
 def pm_data_unknown(ctx, target, cwd, role, what):
@@ -1627,17 +1630,24 @@ def git_alias(cmd, gc, role):
 
 
 def git_rules(event, ctx, cmd, inv, cwd, role):
+    d = git_send_pack_pmdata(event, ctx, inv, role)
+    if d:
+        return d
     gc = cm.git_call(inv)
     if gc is None:
         return None
     if gc.alias:
         return git_alias(cmd, gc, role)
+    if gc.sub_dyn or (gc.sub == '' and gc.inv is not None and gc.inv.via == 'xargs'):
+        d = git_push_pmdata(event, ctx, gc, role)       # a computed subcommand may be push
+        if d:
+            return d
     sub, args = gc.sub, gc.rest
     text = bare(cmd)
     if sub == 'worktree':
         return git_worktree_remove(ctx, gc, role, text)     # from any place: it removes another tree
     if sub == 'push':
-        return git_push(ctx, gc, role)
+        return git_push(event, ctx, gc, role)
     if sub == 'branch':
         d = git_branch_delete(ctx, gc, role)
         if d:
@@ -2004,14 +2014,103 @@ def _branch_of(ref):
     return ref[len('refs/heads/'):] if ref.startswith('refs/heads/') else ref
 
 
-def git_push(ctx, gc, role):
+def pmdata_recorded(ctx, path):
+    """True when the repository `path` is in has a PM data record (kit-pm-data.json in its git
+    common dir, kitlib.pmdata), and when git cannot place `path` (fail closed); False outside git.
+    The file's existence only: it is not parsed, and no git runs beyond the cached place."""
+    if not path:
+        return True
+    place = ctx.place(path)
+    if place.kind == repo.NONE:
+        return False
+    if place.kind not in (repo.MAIN, repo.LINKED) or not place.common:
+        return True
+    return os.path.exists(os.path.join(place.common, pmdata.FILE_NAME))
+
+
+def _no_verify_word(word):
+    t = word.text
+    return t.startswith('--') and 'no-verify' in _canon_long('push', t[2:].partition('=')[0])
+
+
+def git_push_pmdata(event, ctx, gc, role):
+    """`git push --no-verify` (any abbreviation git accepts), and a `git push` with a word computed
+    at run time or arguments xargs appends, or git with a computed subcommand or one xargs
+    supplies (any of them may be --no-verify or push), in a
+    repository with a PM data record, in every session but the owner's own: the pre-push hook is
+    what keeps PM data off public remotes (docs/pm-data-branch.md "Pre-push guard")."""
+    if is_owner_session(event, ctx):
+        return None
+    xargs = gc.inv is not None and gc.inv.via == 'xargs'
+    computed = gc.sub_dyn or xargs or any(w.dyn for w in gc.rest)
+    _short, longs, _pos = _opts('push', gc.rest)
+    if not computed and 'no-verify' not in longs:
+        return None
+    bare_xargs = xargs and gc.sub == ''
+    if bare_xargs and agent_session(event, ctx):
+        return None                         # the write jail denies it for them (git_jail_unknown)
+    # git with no subcommand run by xargs: the input names the repository (-C, --git-dir) and the
+    # command, so no record can be looked up for it: denied whatever the cwd holds (fail closed)
+    where = None if bare_xargs else gc.dir
+    if not pmdata_recorded(ctx, where):     # None: the text cannot place it (recorded, fail closed)
+        return None
+    if bare_xargs:
+        return refuse('git-push-pmdata', role, '`xargs git` takes its subcommand and repository from its input: the '
+                      'guard cannot tell which repository or command xargs will run git with, and a push with '
+                      '--no-verify would skip the pre-push hook that keeps PM data off public remotes. Run git '
+                      'with its subcommand written out:', 'git -C "<checkout>" <subcommand> <arguments>')
+    if computed:
+        what = ('a git subcommand' if gc.sub_dyn else
+                'arguments xargs appends to `git push`' if xargs else 'a `git push` word')
+        return refuse('git-push-pmdata', role, '`git %s %s` has %s computed at run time, and this repository has %s: '
+                      'the guard cannot judge a computed push word with PM data present (it may be --no-verify, '
+                      'which skips the pre-push hook). Write the push literally:'
+                      % (gc.sub, ' '.join(w.text for w in gc.rest), what, pmdata.FILE_NAME),
+                      'git -C %s push <remote> <branch>' % (quote(where) if where else '"<checkout>"'))
+    words, cut = [], False
+    for w in gc.rest:
+        if not cut and w.text == '--':
+            cut = True
+        if cut or not _no_verify_word(w):
+            words.append(w.text)
+    return refuse('git-push-pmdata', role, '`git push %s` skips the pre-push hook, which keeps PM data off public '
+                  'remotes in this repository (it has %s). Push with the hook:'
+                  % (' '.join(w.text for w in gc.rest), pmdata.FILE_NAME),
+                  ('git -C %s push %s' % (quote(gc.dir), ' '.join(words))).rstrip())
+
+
+def git_send_pack_pmdata(event, ctx, inv, role):
+    """`git send-pack`, or the `git-send-pack` program, in a repository with a PM data record (or
+    where the text cannot place it), in every session but the owner's own: it sends refs to a
+    remote without running the pre-push hook (rule git-push-pmdata)."""
+    if inv is None or inv.dyn:
+        return None
+    if inv.name == 'git-send-pack':
+        where, args = inv.cmd.cwd, [w.text for w in inv.args]
+    else:
+        gc = cm.git_call(inv)
+        if gc is None or gc.sub != 'send-pack':
+            return None
+        where, args = (None if gc.unknown else gc.dir), gc.argv
+    if is_owner_session(event, ctx) or not pmdata_recorded(ctx, where):
+        return None
+    return refuse('git-push-pmdata', role, '`git send-pack %s` sends refs without running the pre-push hook, which '
+                  'keeps PM data off public remotes in this repository (it has %s, or the guard cannot tell). '
+                  'Push with git push, which runs the hook:' % (' '.join(args), pmdata.FILE_NAME),
+                  'git -C %s push <remote> <branch>' % (quote(where) if where else '"<checkout>"'))
+
+
+def git_push(event, ctx, gc, role):
     if ctx.is_pm_data(gc.dir):
-        return git_push_pm_data(ctx, gc, role)
+        return git_push_pm_data(event, ctx, gc, role)
     rest = ' '.join(w.text for w in gc.rest)
     if gc.unknown or gc.dir is None:
         return refuse('git-push-main', role, '`git push` runs in a directory the guard cannot tell, so it cannot '
                       'check for a gate-OK record. Name the checkout literally:',
                       ('git -C "<checkout>" push %s' % rest).rstrip())
+    d = git_push_pmdata(event, ctx, gc, role)
+    if d:
+        return d
     cfg = ctx.config(gc.dir)
     if cfg is None:
         err = ctx.config_error(gc.dir)

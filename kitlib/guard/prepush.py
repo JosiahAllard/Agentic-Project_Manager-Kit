@@ -1,8 +1,15 @@
 """The git pre-push check (ARCHITECTURE.md "Guard rules"; docs/guard.md "Pre-push").
 
-check(root, lines) -> (ok, message). `lines` are what git writes to a pre-push hook's stdin, one
-`<local ref> <local sha> <remote ref> <remote sha>` per ref pushed. For a push that updates the
-remote's main branch, whoever pushes (the owner, an agent, a lander):
+check(root, lines, remote=<name or URL>, url=<URL>) -> (ok, message). `lines` are what git writes
+to a pre-push hook's stdin, one `<local ref> <local sha> <remote ref> <remote sha>` per ref pushed.
+
+First, when the repository's git common dir holds kit-pm-data.json (kitlib.pmdata; docs/guard.md
+"Pre-push", "PM data branch"), leak_refusal judges every line whatever its remote ref: the data
+branch, its history and its objects go only to the recorded private remote, and that remote gets
+nothing else. A record that cannot be read, or a recorded root this clone lacks, refuses every push.
+
+Then, for a push that updates the remote's main branch, whoever pushes (the owner, an agent, a
+lander):
 - a push that deletes main is refused;
 - a push that is not a fast-forward of the remote's main is refused whatever push_block
   says. A remote main this clone lacks cannot be an ancestor of the pushed commit, so git
@@ -24,15 +31,277 @@ branch's committed .kit.json: the first of refs/remotes/<remote>/HEAD, <remote>/
 edit cannot switch the check off; no such ref means the defaults. A .kit.json that does not load
 refuses the push (fail closed).
 """
+import hashlib
 import os
+import re
 
 from kitlib import config as kconfig
+from kitlib import pmdata
 from kitlib.config import schema as kschema
-from kitlib.git import refs
+from kitlib.git import cmd, refs
+from kitlib.git import repo as gitrepo
 from kitlib.guard import ownercommits
 
 ZERO = '0' * 40
 MAIN_DEFAULT = kschema.SECTIONS['repo']['main_branch'].default
+
+
+# ---------------------------------------------------------------- PM data branch (leak stage)
+
+_URL_SCHEME = re.compile(r'([A-Za-z][A-Za-z0-9+.-]*)://([^/]*)(.*)\Z', re.S)
+_URL_SCP = re.compile(r'([^/@:]+@)?([^/:]{2,}):(.*)\Z', re.S)    # host:path; `D:` is a drive
+
+
+def _url_path(path):
+    path = path.rstrip('/')
+    if path.lower().endswith('.git'):
+        path = path[:-4]
+    return path.rstrip('/')
+
+
+def _norm_url(url):
+    """A remote URL in the form two are compared in (git's rewriting is not done here: the URLs
+    compared are the ones git already rewrote). Always: a trailing slash, then a trailing `.git`,
+    then a trailing slash dropped. A remote URL (`<scheme>://` other than `file://`, or scp-like
+    `[user@]host:path`) has its scheme and host case folded and keeps its path's case, so two
+    repositories whose paths differ only in case stay two. A local path (a drive path, a UNC
+    path, `file://`, anything else) has backslashes as slashes and is case folded whole, as
+    Windows reads it."""
+    u = str(url or '').strip()
+    m = _URL_SCHEME.match(u)
+    if m and m.group(1).lower() != 'file':
+        scheme, auth, path = m.groups()
+        user, at, host = auth.rpartition('@')
+        return '%s://%s%s%s%s' % (scheme.casefold(), user, at, host.casefold(), _url_path(path))
+    m = _URL_SCP.match(u)
+    if m and not m.group(3).startswith('//'):
+        return '%s%s:%s' % (m.group(1) or '', m.group(2).casefold(), _url_path(m.group(3)))
+    return _url_path(u.replace('\\', '/')).casefold()
+
+
+def _config_env():
+    """This process's environment for a git child without the configuration a `git -c` on the
+    push command line hands its hooks (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT,
+    GIT_CONFIG_KEY_<n>, GIT_CONFIG_VALUE_<n>): `git -c remote.<private>.pushurl=<public> push`
+    must not make the public URL look like the private remote's."""
+    def dropped(k):
+        k = k.upper()
+        return (k in ('GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT')
+                or k.startswith(('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')))
+    return {k: v for k, v in cmd.scrubbed_env().items() if not dropped(k)}
+
+
+def _get_urls(root, name, env, push):
+    """`(set of normalised URLs, None)` from `git remote get-url --all [--push] <name>` (git's own
+    answer: pushurl else url, insteadOf and pushInsteadOf applied), an empty set when git answers
+    "No such remote" (the raw config values still count), or `(None, why)` for any other failure
+    or no answer: a remote whose URLs cannot be read refuses the push."""
+    r = cmd.call(['remote', 'get-url', '--all'] + (['--push'] if push else []) + ['--', name], root, env=env)
+    if r.rc is None:
+        return None, r.err
+    if r.rc != 0:
+        if 'no such remote' in (r.err or '').lower():
+            return set(), None
+        return None, r.err or 'git remote get-url exited %s' % r.rc
+    return {_norm_url(u) for u in cmd.text(r.out).splitlines() if u.strip()}, None
+
+
+def _remote_urls(root):
+    """`({remote name: {'push': its push URLs, 'all': every URL it has}}, None)`, normalised, or
+    `(None, why)`. Read with _config_env(), so only the repository's own configuration counts.
+    'push' is git's answer (`remote get-url --push --all`); 'all' adds the fetch URLs as git
+    rewrites them and the raw `url` and `pushurl` values. No remote is `({}, None)`."""
+    env = _config_env()
+    r = cmd.call(['config', '-z', '--get-regexp', r'^remote\..*\.(url|pushurl)$'], root, env=env)
+    if r.rc == 1 and not r.err:
+        return {}, None
+    if r.rc != 0:
+        return None, r.err or 'git config exited %s' % r.rc
+    raw = {}
+    for entry in cmd.text(r.out).split('\0'):
+        if not entry:
+            continue
+        key, _, value = entry.partition('\n')
+        for suffix in ('.url', '.pushurl'):
+            if key.startswith('remote.') and key.endswith(suffix) and len(key) > len('remote.' + suffix):
+                raw.setdefault(key[len('remote.'):-len(suffix)], set()).add(_norm_url(value))
+                break
+    out = {}
+    for name, urls in raw.items():
+        push, why = _get_urls(root, name, env, True)
+        fetch, why2 = _get_urls(root, name, env, False) if push is not None else (None, None)
+        if push is None or fetch is None:
+            return None, 'git remote get-url %s: %s' % (name, why or why2)
+        out[name] = {'push': push, 'all': push | fetch | urls}
+    return out, None
+
+
+def _private(record, remotes, name, url):
+    """True when the push goes to the recorded private remote, else False (public). `url` is the
+    URL git hands the hook (its second argument, after insteadOf and pushInsteadOf; None: not
+    known); `name` (its first) does not decide. Private needs both: `url` is one of the record's
+    remote's push URLs (_remote_urls 'push'), and no other remote has it among any of its URLs.
+    Anything else, unclear cases included, is public: the stricter side for the data branch."""
+    own = (remotes.get(record.remote) or {}).get('push')
+    if not own or not url:
+        return False
+    target = _norm_url(url)
+    if target not in own:
+        return False
+    for other, urls in remotes.items():
+        if other != record.remote and target in urls['all']:
+            return False
+    return True
+
+
+def _empty_objects(root_sha):
+    """The empty tree and the empty blob in the object format `root_sha` is in: objects any two
+    histories may share, so they never count as PM data."""
+    algo = hashlib.sha256 if len(root_sha) == 64 else hashlib.sha1
+    return {algo(b'tree 0\0').hexdigest(), algo(b'blob 0\0').hexdigest()}
+
+
+def _have(root, sha):
+    return cmd.call(['cat-file', '-e', sha], root).rc == 0
+
+
+def _ref_tip(ref, root):
+    """`(commit, None)` of `ref`, `('', None)` when it does not exist, or `(None, why)` when git
+    cannot say (an error, a timeout): "cannot read" is never "no such ref"."""
+    r = cmd.call(['rev-parse', '--verify', '--quiet', '%s^{commit}' % ref], root)
+    out = cmd.text(r.out).strip() if r.rc == 0 else ''
+    if out:
+        return out, None
+    if r.rc == 1 and not r.err:
+        return '', None
+    return None, r.err or 'git rev-parse exited %s' % r.rc
+
+
+def _data_objects(root, record):
+    """`({object: path or ''}, None)`: every object reachable from the recorded root, the local
+    data branch and the private remote's tracking ref of it (those that exist), less the empty
+    tree and blob; or `(None, why)`, also when one of those refs cannot be read."""
+    starts = [record.root]
+    for ref in ('refs/heads/%s' % record.branch, 'refs/remotes/%s/%s' % (record.remote, record.branch)):
+        sha, why = _ref_tip(ref, root)
+        if sha is None:
+            return None, 'cannot read %s: %s' % (ref, why)
+        if sha and sha not in starts:
+            starts.append(sha)
+    out, why = cmd.run_text(['rev-list', '--objects'] + starts + ['--'], root)
+    if out is None:
+        return None, why
+    empty = _empty_objects(record.root)
+    objects = {}
+    for line in out.splitlines():
+        sha, _, path = line.partition(' ')
+        if refs.is_sha(sha) and sha not in empty:
+            objects[sha] = path
+    return objects, None
+
+
+def _pushed_objects(root, local_sha, remote_sha, name, remotes):
+    """`(set of objects the push may send, None)` or `(None, why)`: reachable from `local_sha`,
+    not from the remote sha it replaces (when this clone has it) nor from the named remote's
+    tracking refs. `--remotes=<name>` is a pattern over refs/remotes/<name>/, so it is left out
+    (nothing subtracted) when another remote's name starts with `<name>/`, whose tracking refs it
+    would match too, or when the name holds a pattern character."""
+    args = ['rev-list', '--objects', '--no-object-names', local_sha, '--not']
+    if remote_sha.strip('0') and _have(root, remote_sha):
+        args.append(remote_sha)
+    nested = any(other.startswith(name + '/') for other in remotes)
+    if name in remotes and not nested and not refs.bad_rev(name) and not set('*?[\\') & set(name):
+        args.append('--remotes=%s' % name)
+    out, why = cmd.run_text(args + ['--'], root)
+    if out is None:
+        return None, why
+    return {s for s in out.split() if refs.is_sha(s)}, None
+
+
+def leak_refusal(root, lines, name, url=None):
+    """Why this push is refused to keep PM data off a public remote, or None. Runs only when the
+    git common dir of `root` holds kit-pm-data.json; no record, no change. `name` is git's first
+    hook argument (the remote's name, or the URL for a push by URL), `url` its second."""
+    common, why = gitrepo.common_dir(root)
+    if common is None:
+        return ('pre-push: refused, cannot find the git directory to look for %s (%s).'
+                % (pmdata.FILE_NAME, why))
+    try:
+        record = pmdata.read(common)
+    except pmdata.PmDataError as e:
+        return ('pre-push: refused, the PM data record cannot be read: %s. Every push is refused '
+                'until it is fixed.' % e)
+    if record is None:
+        return None
+    path = pmdata.record_path(common)
+    if not _have(root, '%s^{commit}' % record.root):
+        return ('pre-push: refused, the PM data root commit %s that %s names is not in this clone, '
+                'so no push can be checked against it. Every push is refused until it is.'
+                % (record.root[:12], path))
+    remotes, why = _remote_urls(root)
+    if remotes is None:
+        return ('pre-push: refused, cannot read the remotes to tell whether %s is the private '
+                'remote %s (%s).' % (name, record.remote, why))
+    private = _private(record, remotes, name, url)
+    data_ref = 'refs/heads/' + record.branch
+    data = []                                       # computed once, for the first line that needs it
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        local_ref, local_sha, remote_ref, remote_sha = parts
+        deleting = not local_sha.strip('0')
+        if private:
+            if deleting:
+                return ('pre-push: refused, this push deletes %s on %s, the private remote for PM '
+                        'data, which is never deleted from.' % (remote_ref, name))
+            if remote_ref != data_ref:
+                return ('pre-push: refused, %s is the private remote for PM data and receives only '
+                        '%s, not %s.' % (name, data_ref, remote_ref))
+            held, why = refs.is_ancestor(record.root, local_sha, root)
+            if held is not True:
+                return ('pre-push: refused, %s (%s) %s the PM data root commit %s, and the private '
+                        'remote %s receives only the data branch\'s history.'
+                        % (local_ref, local_sha[:12],
+                           'does not hold' if held is False else 'cannot be checked for (%s)' % why,
+                           record.root[:12], name))
+            continue
+        if deleting:
+            continue                                # sends nothing; deleting a leaked data branch is cleanup
+        what = '%s (%s)' % (local_ref, local_sha[:12])
+        if data_ref in (local_ref, remote_ref):
+            return ('pre-push: refused, %s pushes the PM data branch %s to %s, which is not its '
+                    'private remote %s. Push it only with: git push %s %s:%s'
+                    % (what, record.branch, name, record.remote, record.remote, data_ref, data_ref))
+        held, why = refs.is_ancestor(record.root, local_sha, root)
+        if held is not False:
+            return ('pre-push: refused, %s %s the PM data root commit %s, and %s is not the private '
+                    'remote %s. Rebuild it without the data branch\'s commits.'
+                    % (what, 'holds' if held else 'cannot be checked for (%s)' % why,
+                       record.root[:12], name, record.remote))
+        pushed, why = _pushed_objects(root, local_sha, remote_sha, name, remotes)
+        if pushed is None:
+            return ('pre-push: refused, cannot list the objects %s pushes to check them against '
+                    'the PM data branch (%s).' % (what, why))
+        if not pushed:
+            continue
+        if not data:
+            objects, why = _data_objects(root, record)
+            if objects is None:
+                return ('pre-push: refused, cannot list the PM data branch\'s objects to check %s '
+                        'against them (%s).' % (what, why))
+            data.append(objects)
+        shared = sorted(pushed & set(data[0]))
+        if shared:
+            named = [s for s in shared if data[0][s]]
+            first = named[0] if named else shared[0]
+            label = '%s %s' % (first[:12], data[0][first]) if data[0][first] else first[:12]
+            return ('pre-push: refused, %s sends %d object(s) the PM data branch holds (%s) to %s, '
+                    'which is not its private remote %s: a data commit copied in (cherry-pick, '
+                    'checkout of its files). A file whose content is identical to a PM data file '
+                    'matches too; change one of them if that is the case.'
+                    % (what, len(shared), label, name, record.remote))
+    return None
 
 
 def _base_rev(root, remote_sha, remote):
@@ -109,8 +378,11 @@ def not_fast_forward(root, local_sha, remote_sha, main):
             'push again; never force-push %s.' % (local_sha[:12], main, remote_sha[:12], main, main))
 
 
-def check(root, lines, gate_ok=None, remote='origin'):
+def check(root, lines, gate_ok=None, remote='origin', url=None):
     gate_ok = gate_ok or verify_record
+    why = leak_refusal(root, lines, remote, url)
+    if why:
+        return False, why
     for line in lines:
         parts = line.split()
         if len(parts) != 4:
@@ -144,8 +416,10 @@ def check(root, lines, gate_ok=None, remote='origin'):
 
 
 def main(argv, stdin, root=None):
-    """The hook body: (exit code, message or None). argv is git's: remote name and URL."""
+    """The hook body: (exit code, message or None). argv is git's: the remote's name (its URL for a
+    push by URL) and the URL."""
     root = root or os.getcwd()
     remote = argv[0] if argv else 'origin'
-    ok, msg = check(root, stdin.read().splitlines(), remote=remote)
+    url = argv[1] if len(argv) > 1 else None
+    ok, msg = check(root, stdin.read().splitlines(), remote=remote, url=url)
     return (0, None) if ok else (1, msg)

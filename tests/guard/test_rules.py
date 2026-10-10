@@ -829,6 +829,194 @@ class PushBlockOff(unittest.TestCase):
         self.assertIn('Instead: python -m json.tool "%s/.kit.json" ' % W.fwd(w.main), d.reason)
 
 
+class PmDataNoVerify(unittest.TestCase):
+    """git-push-pmdata: `git push --no-verify` skips the pre-push leak stage, so it is denied in a
+    repository whose git common dir has kit-pm-data.json, in every session but the owner's own,
+    whatever push_block says (it is off here). The file's existence decides for this rule; the
+    record is a valid one, since the pm-data place rule reads it for linked worktrees."""
+
+    def setUp(self):
+        self.w = W.World(kit={'repo': {'name': 'demo'}})
+        self.addCleanup(self.w.cleanup)
+        common = os.path.join(self.w.main, '.git')
+        os.makedirs(common, exist_ok=True)
+        self.record = pmdata.write(common, 'pmdata', 'private', 'a' * 40) and pmdata.record_path(common)
+        # with a record, the place rule reads a linked worktree's HEAD to tell the data worktree
+        wt_git = os.path.join(common, 'worktrees', 'wt')
+        os.makedirs(wt_git, exist_ok=True)
+        with open(os.path.join(wt_git, 'HEAD'), 'w', encoding='utf-8') as f:
+            f.write('ref: refs/heads/kit/wt\n')
+
+    def decide(self, text, sub=True, environ=None, cwd=None):
+        return decide(bash(text, cwd or self.w.wt, sub=sub), self.w.ctx(environ=environ or {}))
+
+    def assert_denied(self, d, instead=None):
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual((d.kind, d.rule), ('deny', 'git-push-pmdata'), d.reason)
+        if instead is not None:
+            self.assertIn(' Instead: %s [kit guard:' % instead, d.reason)
+
+    def test_a_subagent_and_a_marked_session_are_denied(self):
+        plain = 'git -C "%s" push origin kit/wt' % W.fwd(self.w.wt)
+        self.assert_denied(self.decide('git push --no-verify origin kit/wt'), plain)
+        self.assert_denied(self.decide('git push --no-verify origin kit/wt', sub=False, environ=MARKED), plain)
+        self.assert_denied(self.decide('git push --no-verify origin kit/wt', sub=False,
+                                       environ={context.ROLE_ENV: 'pm'}), plain)
+        self.assert_denied(self.decide('git -C %s push --no-verify private pmdata' % W.fwd(self.w.main)),
+                           'git -C "%s" push private pmdata' % W.fwd(self.w.main))
+
+    def test_an_abbreviation_git_accepts_is_denied(self):
+        for flag in ('--no-verif', '--no-ver', '--no-v'):
+            with self.subTest(flag):
+                self.assert_denied(self.decide('git push %s origin kit/wt' % flag),
+                                   'git -C "%s" push origin kit/wt' % W.fwd(self.w.wt))
+
+    def test_a_place_git_cannot_tell_is_denied(self):
+        self.assert_denied(self.decide('git -C "%s" push --no-verify origin x' % W.fwd(self.w.unknown)))
+
+    def test_the_owner_session_may(self):
+        self.assertIsNone(self.decide('git push --no-verify origin kit/wt', sub=False))
+
+    def test_from_the_pm_data_worktree_too(self):
+        # the PM data place judges a push by two configs (rules.git_push_pm_data); each runs this rule
+        self.w.user_config({'pm_data': {'path': self.w.data}})
+        data_git = self.w.data_git_dir
+        os.makedirs(data_git, exist_ok=True)
+        with open(os.path.join(data_git, 'HEAD'), 'w', encoding='utf-8') as f:
+            f.write('ref: refs/heads/pmdata\n')
+        self.assertTrue(self.w.ctx().is_pm_data(self.w.data))
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in ('git push --no-verify private pmdata', 'git push $F private pmdata'):
+            with self.subTest(text):
+                self.assert_denied(self.decide(text, sub=False, environ=pm, cwd=self.w.data))
+                self.assert_denied(self.decide(text, cwd=self.w.data))
+        self.assertIsNone(self.decide('git push --no-verify private pmdata', sub=False, cwd=self.w.data))
+        self.assertIsNone(self.decide('git push private pmdata', sub=False, environ=pm, cwd=self.w.data))
+
+    def test_without_a_record_or_without_no_verify_it_passes(self):
+        self.assertIsNone(self.decide('git push origin kit/wt'))
+        self.assertIsNone(self.decide('git push --verify origin kit/wt'))
+        os.remove(self.record)
+        self.assertIsNone(self.decide('git push --no-verify origin kit/wt'))
+        self.assertIsNone(self.decide('git push --no-verify origin kit/wt', sub=False, environ=MARKED))
+
+    COMPUTED = ('F=--no-verify; git push $F origin x', 'git push --n$F origin x', 'git $S origin x',
+                'git push `echo --no-verify` origin x', 'git push $(echo --no-verify) origin x')
+
+    def test_a_computed_push_word_is_denied(self):
+        # the guard cannot tell what a computed word expands to, and --no-verify skips the hook
+        pm = {context.ROLE_ENV: 'pm'}             # a session the write jail does not hold
+        for text in self.COMPUTED:
+            with self.subTest(text):
+                d = self.decide(text, sub=False, environ=pm)
+                self.assert_denied(d, 'git -C "%s" push <remote> <branch>' % W.fwd(self.w.wt))
+                self.assertIn('cannot judge a computed push word with PM data present', d.reason)
+                self.assert_denied(self.decide(text))                       # a subagent
+                self.assertIsNone(self.decide(text, sub=False))             # the owner's own
+        d = decide(ps('git push $env:F origin x', self.w.wt), self.w.ctx(environ=pm))
+        self.assert_denied(d)
+        self.assertIsNone(self.decide('git push origin x', sub=False, environ=pm))     # literal
+
+    XARGS = ("printf -- '--no-verify\\n' | xargs git push origin pmdata",
+             'echo --no-verify | xargs -r git -C . push origin pmdata')
+    BARE_XARGS = ('echo push --no-verify origin pmdata | xargs git',)
+
+    def test_git_push_run_by_xargs_is_denied(self):
+        # xargs appends its input to git's arguments: --no-verify, or the subcommand itself
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in self.XARGS + self.BARE_XARGS:
+            with self.subTest(text):
+                d = self.decide(text, sub=False, environ=pm)
+                self.assert_denied(d)
+                self.assertIsNotNone(self.decide(text))                     # a subagent
+                d = self.decide(text, sub=False)                            # the owner's own
+                self.assertNotEqual(d and d.rule, 'git-push-pmdata')
+        # an unreadable line around it is read again
+        d = self.decide("echo 'x ; echo push | xargs git", sub=False, environ=pm)
+        self.assert_denied(d)
+        # xargs running another git subcommand is not a push
+        self.assertIsNone(self.decide('echo a.txt | xargs git add --', sub=False, environ=pm))
+
+    def test_a_bare_xargs_git_is_denied_wherever_it_runs(self):
+        # the input may name another repository (-C, --git-dir) and the subcommand: from a folder
+        # with no record (no checkout at all here) the guard still cannot tell, so it denies
+        pm = {context.ROLE_ENV: 'pm'}
+        main = W.fwd(self.w.main)
+        for text in ("printf '%%s\\n' -C %s push --no-verify origin pmdata | xargs git" % main,
+                     "printf '%%s\\n' --git-dir=%s/.git push --no-verify origin pmdata | xargs git" % main,
+                     'echo push --no-verify origin pmdata | xargs git'):
+            for cwd in (self.w.plain, self.w.wt):
+                with self.subTest(text, cwd=cwd):
+                    d = self.decide(text, sub=False, environ=pm, cwd=cwd)
+                    self.assert_denied(d, 'git -C "<checkout>" <subcommand> <arguments>')
+                    self.assertIn('cannot tell which repository or command xargs will run git with', d.reason)
+                    self.assertIsNotNone(self.decide(text, cwd=cwd))        # a subagent
+                    d = self.decide(text, sub=False, cwd=cwd)                # the owner's own
+                    self.assertNotEqual(d and d.rule, 'git-push-pmdata')
+        os.remove(self.record)                                              # machine-wide
+        self.assert_denied(self.decide(self.BARE_XARGS[0], sub=False, environ=pm, cwd=self.w.plain))
+        self.assert_denied(self.decide("echo 'x ; echo push | xargs git", sub=False, environ=pm, cwd=self.w.plain))
+        self.assertIsNone(self.decide("echo 'x ; echo push | xargs git", sub=False, cwd=self.w.plain))
+        self.assertIsNone(self.decide('echo a.txt | xargs git add --', sub=False, environ=pm, cwd=self.w.plain))
+
+    def test_git_push_run_by_xargs_without_a_record_is_unchanged(self):
+        # with a literal subcommand the record of the repository decides
+        os.remove(self.record)
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in self.XARGS:
+            with self.subTest(text):
+                d = self.decide(text, sub=False, environ=pm)
+                self.assertNotEqual(d and d.rule, 'git-push-pmdata')
+
+    def test_a_computed_push_word_without_a_record_is_unchanged(self):
+        os.remove(self.record)
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in self.COMPUTED:
+            with self.subTest(text):
+                self.assertIsNone(self.decide(text, sub=False, environ=pm))
+                d = self.decide(text)
+                self.assertNotEqual(d and d.rule, 'git-push-pmdata')
+
+    def test_send_pack_is_denied(self):
+        # send-pack pushes without running the pre-push hook, in any form
+        push = 'git -C "%s" push <remote> <branch>' % W.fwd(self.w.wt)
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in ('git send-pack ../public.git refs/heads/pmdata',
+                     'git -c x.y=1 send-pack --all ../public.git',
+                     'git-send-pack ../public.git pmdata',
+                     '"C:/Program Files/Git/mingw64/libexec/git-core/git-send-pack.exe" ../public.git pmdata'):
+            with self.subTest(text):
+                self.assert_denied(self.decide(text), push)
+                self.assert_denied(self.decide(text, sub=False, environ=pm), push)
+                self.assertIsNone(self.decide(text, sub=False))           # the owner's own
+        self.assert_denied(self.decide('git -C "%s" send-pack x pmdata' % W.fwd(self.w.unknown)))
+        os.remove(self.record)
+        self.assertIsNone(self.decide('git send-pack ../public.git pmdata'))
+        self.assertIsNone(self.decide('git-send-pack ../public.git pmdata'))
+
+    def test_send_pack_on_an_unreadable_line_is_read_again(self):
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in ("echo 'x ; git send-pack ../public.git pmdata", "echo 'x ; git-send-pack ../public.git pmdata"):
+            with self.subTest(text):
+                d = self.decide(text, sub=False, environ=pm)
+                self.assert_denied(d)
+                self.assertIn('could not read this command', d.reason)
+                self.assertIsNone(self.decide(text, sub=False))
+        os.remove(self.record)
+        self.assertIsNone(self.decide("echo 'x ; git send-pack ../public.git pmdata", sub=False, environ=pm))
+
+    def test_an_unreadable_line_is_read_again(self):
+        # the unclosed quote hides the push from the parse; the fallback pattern finds it
+        text = "echo 'x ; git push --no-verify origin kit/wt"
+        pm = {context.ROLE_ENV: 'pm'}           # a session the write jail does not hold
+        d = self.decide(text, sub=False, environ=pm)
+        self.assert_denied(d)
+        self.assertIn('could not read this command', d.reason)
+        self.assertIsNone(self.decide(text, sub=False))                  # the owner's own
+        os.remove(self.record)
+        self.assertIsNone(self.decide(text, sub=False, environ=pm))
+
+
 class RolesFromConfig(unittest.TestCase):
     def test_a_lander_role_may_edit_main(self):
         w = W.World(kit={'repo': {'name': 'demo'}, 'roles': {'lander': {'edit_main_checkout': True, 'why': 'test'}}})
