@@ -72,7 +72,7 @@ Every window sets `PM_KIT_ROLE` (docs/guard.md "Session mark") and `PM_KIT_SESSI
 | the PM session `after-reboot` resumes | `pm` |
 | `start --agent <other>` | the agent's own name |
 
-The consultant is not marked `coordinator`: it never dispatches or lands, and the coordinator start hook should not fire for it; under the guard it is held like any non-owner session.
+Only the launcher's PM resume carries the `pm` mark; no settings file sets `PM_KIT_ROLE`, so a PM session opened by hand or in the desktop app is unmarked. The consultant is not marked `coordinator`: it never dispatches or lands, and the coordinator start hook should not fire for it; under the guard it is held like any non-owner session.
 
 ## Start
 
