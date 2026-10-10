@@ -746,13 +746,12 @@ def pulled_by(ctx, rev, branch):
         records, _, why = backlog_store.records_in_tree(ctx.main, rev, backend.rel)
         where = '%s at %s' % (backend.rel, rev[:10])
     else:
-        rc, tip, err = git(ctx.main, 'rev-parse', '--verify', '--quiet',
-                           backend.local_ref + '^{commit}')
-        if rc == 1 and not tip and not err:
+        # refs.ref_commit: a git ended from outside is no answer, never "no store ref".
+        tip, why = refs.ref_commit(backend.local_ref, ctx.main)
+        if tip is None:
+            return None, 'cannot read %s (%s)' % (backend.local_ref, why)
+        if not tip:
             return [], None
-        if rc != 0 or not tip:
-            return None, 'cannot read %s (%s)' % (backend.local_ref, failure(
-                ('rev-parse', backend.local_ref), rc, err))
         records, _, why = backlog_store.records_in_tree(ctx.main, tip, backlog_store.STORE_DIR)
         where = '%s at %s' % (backend.local_ref, tip[:10])
     if records is None:

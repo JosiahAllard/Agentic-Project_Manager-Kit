@@ -87,20 +87,37 @@ def _must(cwd, *args, timeout=cmd.GIT_TIMEOUT):
     return out
 
 
-def _config_regexp(cwd, pattern):
-    """[(key, value)] of the repository's config keys matching `pattern` (git lower-cases the
-    section and variable name, not a subsection); _Refused when git fails."""
-    rc, out, err = _git(cwd, 'config', '-z', '--get-regexp', pattern)
-    if rc == 1:
-        return []
-    if rc != 0:
-        raise _Refused('cannot read git config %s: %s' % (pattern, err or 'exit %s' % rc))
+def _config_list(cwd, *scope):
+    """`([(key, value)], None)`: every config entry git reads (or only those of `scope`, such as
+    '--local'), in git's order, keys as git prints them (section and variable name lower-cased,
+    a subsection as written), a key with no value as ''; or `(None, why)`.
+
+    GOTCHA: KIT-GIT-EXIT1-ANSWERS - `config --get`/`--get-regexp` say "no such key" as exit 1
+    with no output, which is also what a git ended from outside leaves (refs.KILLED_SHAPE), so a
+    kill read as "not set". `config --list` exits 0 whether or not a key is set, so anything but
+    exit 0 is no answer."""
+    r = cmd.call(['config'] + list(scope) + ['--list', '-z'], cwd)
+    if r.rc != 0:
+        if r.rc is None or r.err:
+            return None, r.err or 'git config --list did not run'
+        return None, 'git config --list exited %s and printed nothing%s' % (
+            r.rc, ': ' + refs.KILLED_SHAPE if r.rc == 1 else '')
     pairs = []
-    for item in out.split('\0'):
+    for item in cmd.text(r.out or b'').split('\0'):
         if item:
             key, _, value = item.partition('\n')
             pairs.append((key, value))
-    return pairs
+    return pairs, None
+
+
+def _config_regexp(cwd, pattern):
+    """[(key, value)] of the config keys matching `pattern` (re.search over the key as
+    _config_list gives it, as `config --get-regexp` matches); _Refused when git cannot tell."""
+    pairs, why = _config_list(cwd)
+    if pairs is None:
+        raise _Refused('cannot read git config %s: %s' % (pattern, why))
+    rx = re.compile(pattern)
+    return [(k, v) for k, v in pairs if rx.search(k)]
 
 
 _SCHEME = re.compile(r'^([a-z][a-z0-9+.-]*)://(?:[^@/]*@)?([^/]*)(.*)$', re.I)
@@ -269,13 +286,13 @@ def _check_remote_branch(top, remote, branch, target):
     remote at all) finding it. A remote that cannot be reached is not refused (the push will fail
     and say so); the line returned says it was not checked."""
     ref = 'refs/remotes/%s/%s' % (remote, branch)
-    rc, _out, err = _git(top, 'rev-parse', '--verify', '-q', ref)
-    if rc == 0:
+    tip, why = refs.ref_commit(ref, top)         # a killed git is no answer, never "no ref"
+    if tip is None:
+        raise _Refused('cannot read %s: %s' % (ref, why))
+    if tip:
         raise _Refused('%s exists: the private remote already has a %s branch; fetch it '
                        '(git fetch %s refs/heads/%s:refs/heads/%s) and run init --adopt'
                        % (ref, branch, remote, branch, branch))
-    if rc != 1:
-        raise _Refused('cannot read %s: %s' % (ref, err or 'exit %s' % rc))
     if target is None:
         return None
     rc, out, err = _git(top, 'ls-remote', target, 'refs/heads/%s' % branch,
@@ -320,12 +337,12 @@ def _check_unshared(top, cfg, branch, root):
     """Refuse a data branch whose root the main branch (local or the public remote's) holds."""
     for ref in ('refs/heads/%s' % cfg.main_branch,
                 'refs/remotes/%s/%s' % (cfg.remote, cfg.main_branch)):
-        rc, _out, err = _git(top, 'rev-parse', '--verify', '-q', ref + '^{commit}')
-        if rc == 1:                     # -q: exit 1 and no message when the ref does not exist
+        tip, why = refs.ref_commit(ref, top)     # a killed git is no answer, never "no ref"
+        if tip is None:
+            raise _Refused('cannot read %s: %s' % (ref, why))
+        if not tip:
             continue
-        if rc != 0:
-            raise _Refused('cannot read %s: %s' % (ref, err or 'exit %s' % rc))
-        shared, why = refs.is_ancestor(root, ref, top)
+        shared, why = refs.is_ancestor(root, tip, top)
         if shared:
             raise _Refused('%s shares history with %s (its root %s is there): it is not a '
                            'separate data branch' % (branch, ref, root))
@@ -549,14 +566,15 @@ def _apply(p, lines):
     _write(p, 'config', '--local', 'branch.%s.remote' % b, r)
     _write(p, 'config', '--local', 'branch.%s.pushRemote' % b, r)
     _write(p, 'config', '--local', 'branch.%s.merge' % b, 'refs/heads/%s' % b)
-    rc, cur, err = _git(top, 'config', '--local', '--get', 'push.default')
-    if rc == 1:
+    pairs, why = _config_list(top, '--local')    # a killed git is no answer, never "unset"
+    if pairs is None:
+        raise _Failed('cannot read push.default: %s' % why)
+    cur = [v for k, v in pairs if k == 'push.default']
+    if not cur:
         _write(p, 'config', '--local', 'push.default', 'simple')
         pd = 'push.default=simple set'
-    elif rc == 0:
-        pd = 'push.default=%s kept' % cur
     else:
-        raise _Failed('cannot read push.default: %s' % (err or 'exit %s' % rc))
+        pd = 'push.default=%s kept' % cur[-1]
     lines.append('config    branch.%s.remote and .pushRemote=%s, .merge=refs/heads/%s; %s'
                  % (b, r, b, pd))
     if p.url is not None and not p.remote_exists:

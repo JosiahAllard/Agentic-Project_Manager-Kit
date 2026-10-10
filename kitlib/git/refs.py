@@ -63,15 +63,57 @@ def tree_of(rev, cwd):
 
 
 def current_branch(cwd):
-    """`(branch name, None)`; `('', None)` on a detached HEAD; `(None, why)` when git fails."""
-    r = cmd.call(['symbolic-ref', '--quiet', '--short', 'HEAD'], cwd)
+    """`(branch name, None)`; `('', None)` on a detached HEAD; `(None, why)` when git fails or
+    HEAD points outside refs/heads.
+
+    GOTCHA: KIT-GIT-EXIT1-ANSWERS - `symbolic-ref --quiet` says "detached" as exit 1 with no
+    output, which is also what a git ended from outside leaves (KILLED_SHAPE), so a killed git
+    read as a detached HEAD. `branch --show-current` answers with exit 0 either way (the name,
+    or nothing when detached; an unborn branch still has its name), so anything but exit 0 is no
+    answer."""
+    r = cmd.call(['branch', '--show-current'], cwd)
     if r.rc is None:
         return None, r.err
-    if r.rc == 1:
-        return '', None
+    out = cmd.text(r.out).strip()
     if r.rc != 0:
-        return None, r.err or 'git symbolic-ref exited %d' % r.rc
-    return cmd.text(r.out).strip(), None
+        return None, _failed('branch --show-current', r, out)
+    return out, None
+
+
+def ref_commit(ref, cwd):
+    """`(commit, None)` the full ref `ref` (`refs/...`) points at, peeled to a commit; `('', None)`
+    when there is no such ref; `(None, why)` when git cannot tell or the ref names no commit.
+
+    GOTCHA: KIT-GIT-EXIT1-ANSWERS - `rev-parse --verify --quiet <ref>` says "no such ref" as exit
+    1 with no output, a killed git's shape (KILLED_SHAPE), so a kill read as "no ref". The
+    question is asked as `for-each-ref <ref>`, which exits 0 whether or not the ref exists: no
+    line with exactly that refname is "no ref", and anything but exit 0 is no answer."""
+    why = bad_rev(ref)
+    if why:
+        return None, why
+    if not ref.startswith('refs/'):
+        return None, 'not a full ref name: %r' % ref
+    what = 'for-each-ref %s' % ref
+    r = cmd.call(['for-each-ref', '--format=%(objectname) %(objecttype) %(refname)', ref], cwd)
+    if r.rc is None:
+        return None, r.err
+    out = cmd.text(r.out).strip()
+    if r.rc != 0:
+        return None, _failed(what, r, out)
+    for line in out.splitlines():
+        sha, _, rest = line.partition(' ')
+        kind, _, name = rest.partition(' ')
+        if name != ref:
+            continue                     # a pattern also matches the refs below it
+        if not is_sha(sha):
+            return None, 'git %s printed %r, not a ref line' % (what, line[:80])
+        if kind == 'commit':
+            return sha, None
+        full, why = resolve(sha, cwd)
+        if not full:
+            return None, '%s points at a %s, not a commit: %s' % (ref, kind or 'object', why)
+        return full, None
+    return '', None
 
 
 def branch_tip(name, cwd):
@@ -212,17 +254,61 @@ def is_fast_forward(old, new, cwd):
 
 
 def merge_base(a, b, cwd):
-    """`(the best common ancestor, None)`, `('', None)` when there is none, or `(None, why)`."""
+    """`(the best common ancestor, None)`, `('', None)` when there is none, or `(None, why)`.
+
+    GOTCHA: KIT-GIT-EXIT1-ANSWERS - `merge-base` says "none" as exit 1 with no output, a killed
+    git's shape (KILLED_SHAPE). So that answer is confirmed (_confirm_no_base) before it is
+    given; one that cannot be confirmed is no answer."""
     for rev in (a, b):
         why = bad_rev(rev)
         if why:
             return None, why
+    what = 'merge-base %s %s' % (a, b)
     r = cmd.call(['merge-base', a, b], cwd)
+    if r.rc is None:
+        return None, r.err
+    out = cmd.text(r.out).strip()
+    if r.rc == 0 and is_sha(out):
+        return out, None
     if r.rc == 0:
-        return cmd.text(r.out).strip(), None
-    if r.rc == 1 and not r.err:
-        return '', None
-    return None, r.err or 'git merge-base exited %s' % r.rc
+        return None, 'git %s printed %r, not one commit' % (what, out[:80])
+    if r.rc == 1 and not out and not r.err:
+        return _confirm_no_base(a, b, cwd)
+    return None, _failed(what, r, out)
+
+
+def _roots(rev, cwd):
+    """`(set of the root commits `rev` reaches, None)` or `(None, why)`."""
+    what = 'rev-list --max-parents=0 %s^{commit}' % rev
+    r = cmd.call(['rev-list', '--max-parents=0', '%s^{commit}' % rev, '--'], cwd)
+    if r.rc is None:
+        return None, r.err
+    out = cmd.text(r.out).strip()
+    lines = out.split()
+    if r.rc != 0:
+        return None, _failed(what, r, out)
+    if not lines or not all(is_sha(l) for l in lines):
+        return None, 'git %s printed %r, not root commits' % (what, out[:200])
+    return set(lines), None
+
+
+def _confirm_no_base(a, b, cwd):
+    """merge_base's answer once git said "none": two commits share an ancestor exactly when they
+    share a root commit (a shared ancestor's roots are reached from both; a shared root is a
+    shared ancestor), so disjoint `rev-list --max-parents=0` root sets confirm there is none and
+    anything else is no answer."""
+    sets = []
+    for rev in (a, b):
+        roots, why = _roots(rev, cwd)
+        if roots is None:
+            return None, 'confirming no merge base: %s' % why
+        sets.append(roots)
+    shared = sets[0] & sets[1]
+    if shared:
+        return None, ('confirming no merge base: git merge-base %s %s exited 1 and printed '
+                      'nothing, but both reach the root commit %s: %s'
+                      % (a, b, min(shared)[:10], KILLED_SHAPE))
+    return '', None
 
 
 def merge_in_progress(cwd):

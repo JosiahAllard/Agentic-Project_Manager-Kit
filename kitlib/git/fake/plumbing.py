@@ -346,8 +346,9 @@ def config_cmd(ctx, args):
     # reading
     if opts.get('list'):
         pairs = _read_pairs(ctx, target if reading_file_only else None)
-        for k, v in pairs:
-            ctx.write('%s=%s%s' % (k, v, eol) if v is not None else '%s%s' % (k, eol))
+        for k, v in pairs:          # -z: a newline between key and value, as git prints it
+            ctx.write('%s%s%s%s' % (k, '\n' if z else '=', v, eol) if v is not None
+                      else '%s%s' % (k, eol))
         return 0
     if not pos:
         raise GitExit(129, 'error: wrong number of arguments\n')
@@ -1126,9 +1127,13 @@ def branch(ctx, args):
             raise Unsupported('branch -%s' % k)
     quiet = opts.get('quiet')
     if opts.get('show-current'):
-        b = _revs.current_branch(repo)
-        if b:
-            ctx.write(b + '\n')
+        # git's print_current_branch_name: nothing when detached, dies outside refs/heads (the
+        # text git 2.55.0.windows.5 prints).
+        raw = _refs.read_raw(repo, 'HEAD')
+        if raw and raw[0] == 'sym':
+            if not raw[1].startswith('refs/heads/'):
+                raise die('HEAD not found below refs/heads!')
+            ctx.write(raw[1][len('refs/heads/'):] + '\n')
         return 0
     if opts.get('d') or opts.get('D'):
         force = opts.get('D') or opts.get('force')
