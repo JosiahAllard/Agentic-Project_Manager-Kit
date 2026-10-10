@@ -54,6 +54,7 @@ STEP = Obj({
     'exclude': Field(Strs, None, 'changed paths that never select it'),
     'cmd': Field(Argv, None, 'the argv; {python} {root} {base} {here} {tools} are substituted'),
     'full_cmd': Field(Argv, None, 'the argv a full run (gate.py --full, land --full, daily_full) runs instead of cmd; placeholders as cmd'),
+    'daily_cmd': Field(Argv, None, 'the argv the daily full run (daily_full) runs instead of full_cmd and cmd; placeholders as cmd'),
     'check': Field(Str(pattern=NAME_RE, what='a check name'), None, 'a gate check the repo hook module provides (GATE_CHECKS), run instead of cmd'),
     'cwd': Field(RelPath(), None, 'run directory, repo-relative'),
     'pass': Field(Regexes, None, 'patterns the log must hold'),
