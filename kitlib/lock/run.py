@@ -3,8 +3,9 @@
 book() joins the queue, waits for the run's turn and returns a Slot that holds its cpu and gpu
 slots. The Slot's launcher starts the run's commands in the run's job object (kitlib.proc.job):
 pinned to its cores, measured and, when the run is cancelled, interrupted or errs, ended as a
-tree but for a build daemon shown to serve another job (Slot.end_tree). release() frees what it held and records the run. slot() is book() as a context manager
-that yields the launcher. run_command() is `machine_lock.py run`: book, one command, release.
+tree but for a build daemon shown to serve another job (Slot.end_tree). release() frees what it
+held and records the run. slot() is book() as a context manager that yields the launcher.
+run_command() is `machine_lock.py run`: book, one command, release.
 
 Nothing here prints: progress lines go to store.say, which is the CLI's stderr and
 nowhere by default. A refusal raises LockError with the CLI's exit code.
