@@ -294,9 +294,9 @@ _PACK_LOCK = threading.Lock()
 
 
 def _read_loose(path):
-    """A loose object file's bytes, None when there is none. Windows denies an open while another
-    thread or process holds the file in a way that excludes readers (an object replaced under it,
-    a scanner); that window is retried as refs._read_file retries a ref, and a denial that outlasts
+    """A loose object file's bytes, None when there is none. Windows denies an open
+    (PermissionError) while another holder of the file excludes readers or the file is being
+    replaced; that window is retried as refs._read_file retries a ref, and a denial that outlasts
     it is raised: an object that exists but cannot be read is never taken for a missing one."""
     for attempt in range(51):
         try:

@@ -75,9 +75,10 @@ def peel(repo, oid, want=None):
 
 def tree_entries(repo, tree_oid):
     """[(mode, name, oid)] of a tree; None when the object is not a tree. A tree object that is
-    missing dies as git's fill_tree_descriptor does ("unable to read tree (<oid>)", git 2.55
-    read-tree): taking it for an empty tree would drop every path under it from what is written
-    next. The empty tree needs no object, as in git."""
+    missing dies with git's words ("fatal: unable to read tree (<oid>)", exit 128: git 2.55
+    read-tree with a subtree object removed, probed 2026-10-10): taking it for an empty tree would
+    drop every path under it from what is written next. The empty tree needs no object, as in
+    git."""
     kind, data = read_object(repo, tree_oid)
     if kind is None:
         if tree_oid == EMPTY_TREE.get(repo.algo):
