@@ -127,6 +127,28 @@ class ReviewPack(Case):
         self.assertEqual(code, 0, out)
         self.assertNotIn('doc index', out)
 
+    def test_a_branch_cannot_switch_the_index_check_off(self):
+        # The base keeps the check on; the branch's own .kit.json turning it off must not count.
+        self.repo.git('checkout', '-q', '-b', 'phase/x')
+        self.config(doc_index={'enabled': False})
+        self.commit_unlisted()
+        out = reviewpack.pack(self.root, 'phase/x', base='main')
+        text = '\n'.join(out.lines)
+        self.assertEqual(out.code, 1, text)
+        [line] = [l for l in out.lines if l.startswith('doc index')]
+        self.assertIn('DOC INDEX FAILED', line)
+
+    def test_a_branch_cannot_switch_the_check_back_on_either(self):
+        # The base turns it off: the branch's enabled true runs nothing.
+        self.config(doc_index={'enabled': False})
+        self.repo.git('checkout', '-q', '-b', 'phase/x')
+        self.config(doc_index={'enabled': True})
+        self.commit_unlisted()
+        out = reviewpack.pack(self.root, 'phase/x', base='main')
+        text = '\n'.join(out.lines)
+        self.assertEqual(out.code, 0, text)
+        self.assertNotIn('doc index', text)
+
     def test_a_clean_branch_passes(self):
         self.repo.git('checkout', '-q', '-b', 'phase/x')
         self.repo.write('docs/b.md', '# B\n')
