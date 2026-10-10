@@ -509,22 +509,16 @@ class KilledReadsTest(_Base):
         self.assertIn('cannot read %s' % ref, out.lines[0])
 
     def test_a_killed_insteadof_read_refuses_never_reads_as_no_alias(self):
-        # The second config read is the url rewrites' (the first is the remotes'): killed, the
-        # alias pub: of the public url would go unseen.
+        # Read as "no rewrite rules", the alias pub: of the public url would go unseen by
+        # _check_remote (the url check of ReviewFixTest.test_an_insteadof_alias_...).
         self.repo.git('config', 'url.%s.insteadOf' % self.repo.remote, 'pub:')
-        reads = []
-
-        def answer(argv):
-            if argv[1] == 'config' and ('--get-regexp' in argv or '--list' in argv):
-                reads.append(argv)
-                if len(reads) == 2:
-                    return KILLED
-            return None
-        before = self.refs(), self.config_text()
-        with stub_git(answer):
-            out = self.init(url='pub:')
-        self.assertUnchanged(out, *before)
-        self.assertIn('cannot read git config', out.lines[0])
+        self.assertEqual(pminit._rewrites(self.repo.root)['insteadof'],
+                         [('pub:', self.repo.remote)])           # the premise, unkilled
+        killed = stub_git(lambda argv: KILLED if argv[1] == 'config' and
+                          ('--get-regexp' in argv or '--list' in argv) else None)
+        with killed, self.assertRaises(pminit._Refused) as cm:
+            pminit._rewrites(self.repo.root)
+        self.assertIn('cannot read git config', str(cm.exception))
 
     def test_a_killed_push_default_read_fails_and_keeps_the_value(self):
         self.repo.git('config', 'push.default', 'current')
