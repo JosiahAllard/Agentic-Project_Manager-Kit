@@ -48,7 +48,7 @@ from kitlib import pmdata
 from kitlib.config import ConfigError, load, load_at
 from kitlib.config import user
 from kitlib.config.types import parse_json
-from kitlib.git import cmd
+from kitlib.git import cmd, refs
 from kitlib.git import repo as gitrepo
 
 OK, REFUSED, CONFIG, PUSH_FAILED, PARTIAL = 0, 1, 2, 3, 4
@@ -325,12 +325,12 @@ def _check_unshared(top, cfg, branch, root):
             continue
         if rc != 0:
             raise _Refused('cannot read %s: %s' % (ref, err or 'exit %s' % rc))
-        rc, _out, err = _git(top, 'merge-base', '--is-ancestor', root, ref)
-        if rc == 0:
+        shared, why = refs.is_ancestor(root, ref, top)
+        if shared:
             raise _Refused('%s shares history with %s (its root %s is there): it is not a '
                            'separate data branch' % (branch, ref, root))
-        if rc != 1:
-            raise _Refused('cannot compare %s with %s: %s' % (branch, ref, err or 'exit %s' % rc))
+        if shared is None:
+            raise _Refused('cannot compare %s with %s: %s' % (branch, ref, why))
 
 
 def kit_json_line(branch, remote):

@@ -135,19 +135,70 @@ def ls_remote(remote, ref, cwd, timeout=60):
     return '', None
 
 
+KILLED_SHAPE = ('exit 1 with no output is also what a git ended from outside leaves (a stale '
+                '`taskkill /PID <n> /T /F` that reached a reused pid, kitlib.proc.shield GOTCHA)')
+
+
 def is_ancestor(ancestor, descendant, cwd):
     """`(True/False, None)`: is `ancestor` an ancestor of (or equal to) `descendant`; `(None, why)`
-    when git cannot tell (an unknown rev, a failure)."""
+    when git cannot tell (an unknown rev, a non-commit, a failure, a git ended from outside).
+
+    GOTCHA: KIT-TEST-GRANDCHILD-SHIELD - `merge-base --is-ancestor` says NO as exit 1 with no
+    output, and a git ended from outside (KILLED_SHAPE) exits the same way, so a killed git read as
+    a NO nobody gave. The question is asked as `rev-list -n 1 <descendant>..<ancestor>` instead:
+    exit 0 with no output is YES, exit 0 with one commit is NO, and anything else - a killed git's
+    exit 1 included - is no answer. Both ends are peeled with ^{commit}, so a tree or blob is
+    refused as merge-base refused it (rev-list alone would answer YES for one).
+
+    GOTCHA: rev-list's YES is exact, its NO is not. Its limited walk stops a few commits (SLOP)
+    after only uninteresting ones are left, so with skewed commit dates it can print a commit that
+    `descendant` does reach (measured 2026-10-10: a root dated after 8 commits built on it, no
+    commit-graph). So every NO is confirmed (`_confirm_no`) by `merge-base --independent`, whose
+    walk is exact and which prints at least one commit for any answer: a NO that cannot be
+    confirmed is no answer, never a NO."""
     for rev in (ancestor, descendant):
         why = bad_rev(rev)
         if why:
             return None, why
-    r = cmd.call(['merge-base', '--is-ancestor', ancestor, descendant], cwd)
-    if r.rc == 0:
+    spec = '%s^{commit}..%s^{commit}' % (descendant, ancestor)
+    r = cmd.call(['rev-list', '-n', '1', spec, '--'], cwd)
+    if r.rc is None:
+        return None, r.err
+    out = cmd.text(r.out).strip()
+    if r.rc == 0 and not out:
         return True, None
-    if r.rc == 1:
-        return False, None
-    return None, r.err or 'git merge-base --is-ancestor exited %s' % r.rc
+    if r.rc == 0 and is_sha(out):
+        return _confirm_no(ancestor, descendant, cwd)
+    if r.rc == 0:
+        return None, 'git rev-list -n 1 %s printed %r, not one commit or nothing' % (spec, out[:80])
+    return None, _failed('rev-list -n 1 %s' % spec, r, out)
+
+
+def _failed(what, r, out):
+    if r.err or out:
+        return 'git %s exited %s: %s' % (what, r.rc, r.err or out[:80])
+    return 'git %s exited %s and printed nothing%s' % (
+        what, r.rc, ': ' + KILLED_SHAPE if r.rc == 1 else '')
+
+
+def _confirm_no(ancestor, descendant, cwd):
+    """is_ancestor's answer once rev-list said NO: `merge-base --independent <ancestor's hash>
+    <descendant>` prints the given commits no other given commit reaches, so `ancestor`'s hash is
+    among them exactly when `descendant` does not reach it (NO), and absent when it does (YES)."""
+    full, why = resolve(ancestor, cwd)
+    if not full:
+        return None, 'confirming a NO: %s' % why
+    what = 'merge-base --independent %s %s^{commit}' % (full, descendant)
+    r = cmd.call(['merge-base', '--independent', full, '%s^{commit}' % descendant], cwd)
+    if r.rc is None:
+        return None, 'confirming a NO: %s' % r.err
+    out = cmd.text(r.out).strip()
+    lines = out.split()
+    if r.rc != 0 or not lines or len(lines) > 2 or not all(is_sha(l) for l in lines):
+        why = (_failed(what, r, out) if r.rc != 0 else
+               'git %s printed %r, not one or two commits' % (what, out[:200]))
+        return None, 'confirming a NO: %s' % why
+    return full not in lines, None
 
 
 def is_fast_forward(old, new, cwd):

@@ -323,6 +323,171 @@ class RefsTest(RepoFixture):
     def test_merge_base(self):
         self.assertEqual(git.merge_base('main', 'kit/feature', self.r.root), (self.r.initial, None))
 
+    def test_a_tree_or_blob_is_no_ancestor_answer(self):
+        # rev-list alone answers YES for a tree; the ^{commit} peel refuses it, as merge-base did.
+        for rev in ('%s^{tree}' % self.feature, '%s:' % self.feature):
+            self.assertIsNone(git.is_ancestor(rev, self.feature, self.r.root)[0], rev)
+            self.assertIsNone(git.is_ancestor(self.feature, rev, self.r.root)[0], rev)
+
+
+class AKilledGitIsNoAncestryAnswer(RepoFixture):
+    """KIT-TEST-GRANDCHILD-SHIELD: a git ended from outside (a stale `taskkill /PID <n> /T /F`
+    that reached a reused pid, kitlib.proc.shield's GOTCHA) exits 1 having printed nothing, the
+    shape `merge-base --is-ancestor` gives for NO. refs.is_ancestor must give no answer for it,
+    never a NO git did not say. The pair asked is a real NO (feature is not in initial), so an
+    answer of False could only come from reading the kill as one."""
+
+    def test_exit_1_with_no_output_is_no_answer(self):
+        calls = []
+
+        def killed(argv, cwd=None, input=None, timeout=None, env=None):
+            calls.append(argv)
+            return 1, b'', b''
+        with mock.patch.object(cmd, '_run', side_effect=killed):
+            got, why = refs.is_ancestor(self.feature, self.r.initial, self.r.root)
+        self.assertEqual(len(calls), 1, calls)
+        self.assertIsNone(got, 'a killed git was read as an answer')
+        self.assertIn('printed nothing', why)
+
+
+class ANoIsConfirmed(RepoFixture):
+    """rev-list's NO can be wrong (its walk stops early under skewed commit dates, refs.is_ancestor
+    GOTCHA), so refs.is_ancestor confirms every NO with `merge-base --independent`; a confirmation
+    that fails is no answer, never a NO. git is a stub here, by subcommand; rev-list always says NO."""
+
+    def ask(self, independent, rev_parse=None):
+        a, d = self.feature, self.r.initial
+        calls = []
+
+        def stub(argv, cwd=None, input=None, timeout=None, env=None):
+            calls.append(argv[1])
+            if argv[1] == 'rev-list':
+                return 0, (a + '\n').encode(), b''
+            if argv[1] == 'rev-parse':
+                return rev_parse or (0, (a + '\n').encode(), b'')
+            if argv[1] == 'merge-base':
+                self.assertEqual(argv[2:], ['--independent', a, d + '^{commit}'])
+                return independent
+            raise AssertionError(argv)
+        with mock.patch.object(cmd, '_run', side_effect=stub):
+            got = refs.is_ancestor(a, d, self.r.root)
+        return got, calls
+
+    def test_a_confirmed_no_is_a_no(self):
+        both = (0, ('%s\n%s\n' % (self.feature, self.r.initial)).encode(), b'')
+        self.assertEqual(self.ask(both), ((False, None), ['rev-list', 'rev-parse', 'merge-base']))
+
+    def test_a_no_the_exact_walk_overturns_is_a_yes(self):
+        # Only the descendant is independent: it reaches the ancestor, whatever rev-list printed.
+        self.assertEqual(self.ask((0, (self.r.initial + '\n').encode(), b''))[0], (True, None))
+
+    def test_a_confirmation_that_fails_is_no_answer(self):
+        for independent, rev_parse, words in (
+                ((1, b'', b''), None, 'printed nothing'),                   # killed
+                ((128, b'', b'fatal: boom'), None, 'fatal: boom'),
+                ((0, b'', b''), None, 'not one or two commits'),
+                ((0, b'abc\n', b''), None, 'not one or two commits'),
+                (None, (1, b'', b''), 'does not name a commit')):          # rev-parse killed
+            with self.subTest(words=words):
+                (got, why), _ = self.ask(independent, rev_parse)
+                self.assertIsNone(got)
+                self.assertIn('confirming a NO', why)
+                self.assertIn(words, why)
+
+    def test_a_yes_needs_no_confirmation(self):
+        calls = []
+
+        def stub(argv, cwd=None, input=None, timeout=None, env=None):
+            calls.append(argv[1])
+            return 0, b'', b''
+        with mock.patch.object(cmd, '_run', side_effect=stub):
+            self.assertEqual(refs.is_ancestor(self.r.initial, self.feature, self.r.root),
+                             (True, None))
+        self.assertEqual(calls, ['rev-list'])
+
+
+@real_git('rev-list\'s early stop under skewed commit dates is real git\'s walk; the fake is exact')
+class SkewedDates(unittest.TestCase):
+    """A root dated AFTER the 8 commits built on it: rev-list's limited walk stops before it
+    reaches the root and prints it - a NO that is wrong (measured on real git 2026-10-10, no
+    commit-graph). refs.is_ancestor's confirmation turns it into the right YES."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(gitfixture.rmtree, self.dir)
+        self.git('init', '-q')
+        self.root = self.commit('root', '2000000000 +0000')
+        for n in range(8):
+            self.tip = self.commit('c%d' % n, '1000000000 +0000')
+
+    def git(self, *args, date=None):
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid')
+        if date:
+            env['GIT_AUTHOR_DATE'] = env['GIT_COMMITTER_DATE'] = date
+        r = subprocess.run(['git'] + list(args), cwd=self.dir, env=env, capture_output=True,
+                           text=True, check=True)
+        return r.stdout.strip()
+
+    def commit(self, message, date):
+        self.git('-c', 'commit.gpgSign=false', 'commit', '-q', '--allow-empty', '-m', message,
+                 date=date)
+        return self.git('rev-parse', 'HEAD')
+
+    def test_rev_lists_wrong_no_is_confirmed_away(self):
+        # The premise: rev-list alone says NO here (else this test proves nothing).
+        self.assertEqual(self.git('rev-list', '-n', '1', '%s..%s' % (self.tip, self.root)),
+                         self.root)
+        self.assertEqual(refs.is_ancestor(self.root, self.tip, self.dir), (True, None))
+        self.assertEqual(refs.is_ancestor(self.tip, self.root, self.dir), (False, None))
+
+    def test_unrelated_histories_are_a_confirmed_no(self):
+        # pmdata's case: a data branch's root against main shares no commit. `merge-base` would
+        # exit 1 with no output there (a kill's shape); `--independent` prints both: a NO.
+        orphan = self.git('-c', 'commit.gpgSign=false', 'commit-tree', '-m', 'orphan',
+                          '4b825dc642cb6eb9a060e54bf8d69288fbee4904')
+        self.assertEqual(refs.is_ancestor(orphan, self.tip, self.dir), (False, None))
+        self.assertEqual(refs.is_ancestor(self.tip, orphan, self.dir), (False, None))
+
+
+@real_git('the git process itself: a real git ended by taskkill, and the rev-list form on real git')
+class AKilledRealGitIsNoAncestryAnswer(RepoFixture):
+    """AKilledGitIsNoAncestryAnswer with the real killer on a real git, and the same answers from
+    real git as RefsTest gets from the fake."""
+
+    def test_real_git_answers(self):
+        self.assertEqual(refs.is_ancestor(self.r.initial, self.feature, self.r.root), (True, None))
+        self.assertEqual(refs.is_ancestor(self.feature, self.r.initial, self.r.root), (False, None))
+        self.assertEqual(refs.is_ancestor(self.feature, self.feature, self.r.root), (True, None))
+        for rev in ('f' * 40, '%s^{tree}' % self.feature, '%s:' % self.feature):
+            self.assertIsNone(refs.is_ancestor(rev, self.feature, self.r.root)[0], rev)
+            self.assertIsNone(refs.is_ancestor(self.feature, rev, self.r.root)[0], rev)
+
+    @unittest.skipUnless(os.name == 'nt', 'taskkill is Windows-only')
+    def test_a_git_ended_by_taskkill_is_no_answer(self):
+        # The real killer on a real git: started suspended (it runs nothing), ended by taskkill /F
+        # by its pid while this process holds its handle (so the pid cannot be anyone else's).
+        seen = []
+
+        def killed(argv, cwd=None, input=None, timeout=None, env=None):
+            p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 creationflags=0x00000004)              # CREATE_SUSPENDED
+            try:
+                tk = subprocess.run(['taskkill', '/PID', str(p.pid), '/F'], capture_output=True)
+                out, err = p.communicate(timeout=60)
+            finally:
+                if p.poll() is None:
+                    p.kill()
+                    p.wait()
+            seen.append((tk.returncode, p.returncode, out, err))
+            return p.returncode, out, err
+        with mock.patch.object(cmd, '_run', side_effect=killed):
+            got, why = refs.is_ancestor(self.feature, self.r.initial, self.r.root)
+        self.assertEqual(seen, [(0, 1, b'', b'')])          # killed: exit 1, nothing printed
+        self.assertIsNone(got, 'a git ended by taskkill was read as an answer')
+        self.assertIn('printed nothing', why)
+
 
 class WorkTreeStateTest(unittest.TestCase):
 

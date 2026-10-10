@@ -19,6 +19,8 @@ COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 OLD_MARK = {context.ROLE_ENV: 'conductor'}   # the old name of the coordinator's mark, still held
 PM = {context.ROLE_ENV: 'pm'}
 DEEP = {context.ROLE_ENV: 'deep-worker'}
+CONSULTANT = {context.ROLE_ENV: 'consultant'}
+PLAIN = {context.ROLE_ENV: 'plain'}          # a launcher mark the jail does not hold by default
 
 
 class JailWorld(W.World):
@@ -180,7 +182,8 @@ class Cwd(Base):
 
 class Sessions(Base):
     """Agent sessions are the guard's (docs/guard.md "Session mark"): subagents and the marks in
-    guard_agent_marks. The owner's session and the PM's are not jailed."""
+    guard_agent_marks (default: coordinator, conductor, deep-worker, consultant, pm). The owner's
+    unmarked session and other marks (plain) are not jailed."""
 
     def outside(self, env, sub=False):
         return self.write(os.path.join(self.w.plain, 'x.txt'), env=env, sub=sub)
@@ -192,16 +195,113 @@ class Sessions(Base):
         self.jailed(self.outside(COORDINATOR))
         self.jailed(self.outside(OLD_MARK))
 
-    def test_owner_and_pm_are_exempt(self):
+    def test_the_owner_is_exempt(self):
         self.allowed(self.outside({}))
-        self.allowed(self.outside(PM))
+
+    def test_every_launcher_agent_mark_is_held_by_default(self):
+        for env in (PM, DEEP, CONSULTANT, {context.ROLE_ENV: 'PM'}):
+            with self.subTest(env):
+                self.jailed(self.outside(env))
 
     def test_a_mark_not_listed_is_exempt(self):
-        self.allowed(self.outside(DEEP))
+        self.allowed(self.outside(PLAIN))
+        self.allowed(self.outside({context.ROLE_ENV: 'strong-worker'}))     # start --agent <other>
 
     def test_marks_from_the_machine_config(self):
-        self.w.user_config({'guard_agent_marks': ['coordinator', 'deep-worker']})
-        self.jailed(self.outside(DEEP))
+        # the setting replaces the default list
+        self.w.user_config({'guard_agent_marks': ['coordinator', 'plain']})
+        self.jailed(self.outside(PLAIN))
+        self.allowed(self.outside(PM))
+
+
+class MarkRoots(Base):
+    """The machine config's guard_mark_roots: more write roots for the main sessions of one
+    launcher mark, never for a subagent, never on, over or in the machine config's folder
+    (docs/guard.md "Write jail")."""
+
+    def setUp(self):
+        Base.setUp(self)
+        self.notes = os.path.join(self.w.base, 'pmnotes')
+        os.makedirs(self.notes)
+
+    def roots(self, table):
+        self.w.user_config({'guard_mark_roots': table})
+
+    def test_a_mark_root_opens_a_folder_to_that_mark_only(self):
+        target = os.path.join(self.notes, 'x.md')
+        self.jailed(self.write(target, env=PM, sub=False))
+        self.roots({'pm': [{'path': self.notes, 'mode': 'open', 'why': 'test'}]})
+        self.allowed(self.write(target, env=PM, sub=False))
+        self.allowed(self.write(target, env={context.ROLE_ENV: 'PM'}, sub=False))     # case ignored
+        self.jailed(self.write(target, env=COORDINATOR, sub=False))
+        self.jailed(self.write(target, env=DEEP, sub=False))
+        self.jailed(self.write(target, env=PM, sub=True))       # a subagent of the PM's session
+        self.allowed(self.run_bash('echo x > "%s/y.md"' % W.fwd(self.notes), env=PM, sub=False))
+
+    def test_a_mark_root_keeps_its_mode(self):
+        touch(os.path.join(self.notes, 'old.md'))
+        self.roots({'pm': [{'path': self.notes, 'mode': 'add-only'}]})
+        self.allowed(self.write(os.path.join(self.notes, 'new.md'), env=PM, sub=False))
+        self.jailed(self.write(os.path.join(self.notes, 'old.md'), env=PM, sub=False))
+        d = self.jailed(self.write(os.path.join(self.w.plain, 'x.md'), env=PM, sub=False))
+        self.assertIn('"%s" (mark, add-only)' % W.fwd(self.notes), d.reason)
+
+    def test_a_home_path_reads_from_the_home_folder(self):
+        memory = os.path.join(self.w.home, 'projects', 'p', 'memory')
+        os.makedirs(memory)
+        self.roots({'pm': [{'path': '~/projects/p/memory', 'mode': 'open'}]})
+        self.allowed(self.write(os.path.join(memory, 'MEMORY.md'), env=PM, sub=False))
+        self.jailed(self.write(os.path.join(self.w.home, 'projects', 'other.md'), env=PM, sub=False))
+
+    def test_no_root_on_over_or_in_the_machine_config_folder(self):
+        cfg = kconfig.user.config_dir(self.w.home)
+        name = kconfig.user.DIR_NAME
+        for path in ('~/', '~/' + name, '~/%s/sub' % name, self.w.home, self.w.base):
+            with self.subTest(path):
+                self.roots({'pm': [{'path': path, 'mode': 'open'}]})
+                self.jailed(self.write(os.path.join(cfg, 'config.json'), env=PM, sub=False))
+                self.jailed(self.write(os.path.join(cfg, 'sub', 'x.json'), env=PM, sub=False))
+        # a sibling whose name only starts the same is not the folder
+        self.roots({'pm': [{'path': '~/%s-notes' % name, 'mode': 'open'}]})
+        self.allowed(self.write(os.path.join(self.w.home, name + '-notes', 'x.md'), env=PM, sub=False))
+
+    def test_a_config_the_strict_reader_refuses_gives_no_mark_roots(self):
+        for table in ({'pm': [{'path': self.notes, 'mode': 'open'}, {'path': 'relative', 'mode': 'open'}]},
+                      {'pm': [{'path': self.notes, 'mode': 'write'}]},
+                      {'owner': [], 'pm': [{'path': self.notes, 'mode': 'open'}]}):
+            with self.subTest(table):
+                self.roots(table)
+                self.jailed(self.write(os.path.join(self.notes, 'x.md'), env=PM, sub=False))
+
+    def test_a_mark_root_over_another_checkout_lets_that_mark_run_git_there(self):
+        # the PM's red-merge reset in a repository's main checkout, from its own folder
+        reset = 'git -C "%s" reset --keep %s' % (W.fwd(self.w.main), 'a' * 40)
+        self.jailed(self.run_bash(reset, env=PM, sub=False))
+        self.roots({'pm': [{'path': self.w.main, 'mode': 'open'}]})
+        self.allowed(self.run_bash(reset, env=PM, sub=False))
+        self.jailed(self.run_bash(reset, env=COORDINATOR, sub=False))
+
+    def test_a_junction_into_the_lock_state_under_a_mark_root_is_still_lock_state(self):
+        # the mark root holds the lock state's parent; a junction in the worktree reaches the state
+        # folder by another spelling, so lock-state must judge the resolved path
+        state = os.path.join(self.w.home, '.claude', 'machine-lock')
+        os.makedirs(state)
+        link = os.path.join(self.w.wt, 'lk')
+        try:
+            import _winapi
+            _winapi.CreateJunction(state, link)
+        except (ImportError, AttributeError, OSError) as e:
+            self.skipTest('no junction: %s' % e)
+        self.roots({'pm': [{'path': '~/.claude', 'mode': 'open'}]})
+        self.jailed(self.write(os.path.join(link, 'state.json'), env=PM, sub=False), 'lock-state')
+        self.jailed(self.run_bash('echo {} > "%s/state.json"' % W.fwd(link), env=PM, sub=False), 'lock-state')
+        self.jailed(self.write(os.path.join(link, 'state.json'), env=COORDINATOR, sub=False), 'lock-state')
+
+    def test_the_rules_before_the_jail_still_hold(self):
+        self.roots({'pm': [{'path': self.w.main, 'mode': 'open'}, {'path': '~/.claude', 'mode': 'open'}]})
+        self.jailed(self.write(os.path.join(self.w.main, '.kit.json'), env=PM, sub=False), 'kit-json')
+        self.jailed(self.write(os.path.join(self.w.home, '.claude', 'machine-lock', 'state.json'), env=PM, sub=False),
+                    'lock-state')
 
 
 class DataRoots(Base):
@@ -488,6 +588,109 @@ class LanderMainCheckout(MainGit):
             with self.subTest(text):
                 self.allowed(self.git(text, tool='PowerShell'))
 
+    def test_a_lander_may_fetch_the_whole_remote(self):
+        # land-branch step 2: `git fetch <remote>` writes only remote-tracking refs and FETCH_HEAD
+        m = self.main
+        for text in ('git -C "%s" fetch origin' % m, 'cd "%s" && git fetch origin' % m,
+                     'cd "%s"; git fetch origin' % m):
+            with self.subTest(text):
+                self.allowed(self.git(text))
+        self.allowed(self.git('& git -C "%s" fetch origin' % m, tool='PowerShell'))
+        self.allowed(self.git('Set-Location "%s"; git fetch origin' % m, tool='PowerShell'))
+
+    def test_the_powershell_landing_forms(self):
+        m = self.main
+        for text in ('Set-Location "%s"; git merge --ff-only origin/main' % m,
+                     'Set-Location -Path "%s"; git fetch origin main' % m,
+                     'cd "%s"; & git fetch origin' % m,
+                     'cd "%s" && git fetch origin main' % m,           # PowerShell 7's &&
+                     'pushd "%s"; git merge --ff-only origin/main' % m,
+                     'Push-Location "%s"; git fetch origin' % m):
+            with self.subTest(text):
+                self.allowed(self.git(text, tool='PowerShell'))
+        for text in ('Set-Location "%s"; git fetch origin main; git status' % m,
+                     'Set-Location "%s" *> sl.log; git fetch origin main' % m,
+                     'Set-Location "%s"; git fetch origin main | Out-File f.log' % m):
+            with self.subTest(text):
+                d = self.jailed(self.git(text, tool='PowerShell'))
+                self.assertIn('git is not alone on the line', d.reason)
+        # a piped Set-Location leaves where git runs unknown: refused before the landing tests
+        self.each_denied(['Set-Location "%s" | Out-Null; git fetch origin main' % m], tool='PowerShell')
+        self.jailed(self.git('git -C "%s" fetch origin' % m, 'worker'))
+
+    def test_a_lander_verb_must_be_alone_on_its_line(self):
+        m = self.main
+        for text in ('git -C "%s" fetch origin main && git -C "%s" status' % (m, m),
+                     'git -C "%s" status; git -C "%s" merge --ff-only origin/main' % (m, m),
+                     'echo go && git -C "%s" fetch origin' % m,
+                     'cd "%s" && echo x && git fetch origin main' % m,
+                     'git -C "%s" fetch origin main | tee x.log' % m,
+                     'git -C "%s" fetch origin main || true' % m,
+                     '(git -C "%s" fetch origin main)' % m,
+                     'bash -c \'git -C "%s" fetch origin main\'' % m,
+                     'cd "%s" && git -C "%s" fetch origin main' % (W.fwd(self.w.wt), m),
+                     'cd "%s" && cd . && git fetch origin main' % m,
+                     'cd "%s" > cd.log && git fetch origin main' % m,       # a redirect on the cd
+                     'cd "%s" 2>/dev/null; git fetch origin main' % m):
+            with self.subTest(text):
+                d = self.jailed(self.git(text))
+                self.assertIn('git is not alone on the line', d.reason)
+        self.each_denied(['cd "%s" || git fetch origin main' % m])     # where git runs is unknown
+        self.each_denied(['git -C "%s" fetch origin main; Remove-Item x' % m,
+                          'Set-Location "%s"; git status; git fetch origin main' % m], tool='PowerShell')
+        # the lander's own worktree is its root: a fetch there needs no landing form
+        self.allowed(self.git('cd "%s" && git fetch origin main && git status' % W.fwd(self.w.wt)))
+
+    def test_a_refusal_names_the_test_that_failed(self):
+        m = self.main
+        cases = (('git -C "%s" fetch origin main && echo x' % m, 'write-jail', 'git is not alone on the line',
+                  'git -C "%s" fetch origin main' % m),
+                 ('git -C "%s" fetch --prune origin main' % m, 'write-jail', 'its arguments are not exactly one of',
+                  'git -C "%s" fetch origin main' % m),
+                 ('git -C "%s" merge --no-ff origin/main' % m, 'write-jail', 'its arguments are not exactly one of',
+                  'git -C "%s" merge --ff-only origin/main' % m),
+                 ('git -c x.y=z -C "%s" fetch origin main' % m, 'write-jail', 'a wrapper, an environment assignment',
+                  'git -C "%s" fetch origin main' % m))
+        for text, rule, why, instead in cases:
+            with self.subTest(text):
+                d = self.jailed(self.git(text), rule)
+                self.assertIn(why, d.reason)
+                self.assertIn('A lander may run only git fetch origin, git fetch origin main or git merge --ff-only '
+                              'origin/main there', d.reason)
+                self.assertIn(' Instead: %s [kit guard: rule=%s role=subagent]' % (instead, rule), d.reason)
+        d = self.jailed(self.git('git -C "%s" commit -m x' % m))
+        self.assertNotIn('landing step', d.reason)          # not a landing verb: the jail's own refusal
+
+    def test_the_refusal_names_the_role_setting_when_the_repo_has_none(self):
+        # a repository whose .kit.json does not let the lander write its main checkout: the cause is
+        # roles.lander.edit_main_checkout, and the refusal says so (fetch: the jail; merge: main history)
+        self.w.kit({'repo': {'name': 'demo', 'push_block': True}})
+        kit = 'python -m json.tool "%s/.kit.json"' % self.main
+        for text, rule in (('git -C "%s" fetch origin main' % self.main, 'write-jail'),
+                           ('git -C "%s" fetch origin' % self.main, 'write-jail'),
+                           ('git -C "%s" merge --ff-only origin/main' % self.main, 'git-main-history')):
+            with self.subTest(text):
+                d = self.jailed(self.git(text), rule)
+                self.assertIn('does not set roles.lander.edit_main_checkout to true', d.reason)
+                self.assertIn(' Instead: %s [kit guard:' % kit, d.reason)
+        d = self.jailed(self.git('git -C "%s" merge --ff-only origin/main' % self.main, 'worker'), 'git-main-history')
+        self.assertNotIn('roles.lander', d.reason)          # another role: the rule's own refusal
+
+    def test_without_the_role_a_malformed_landing_step_still_names_the_role(self):
+        # every landing form is refused until the role is set, so the role is named first: a refusal
+        # that named the arguments would offer an Instead that is refused too
+        self.w.kit({'repo': {'name': 'demo', 'push_block': True}})
+        kit = 'python -m json.tool "%s/.kit.json"' % self.main
+        for text, rule in (('git -C "%s" merge feature' % self.main, 'git-main-history'),
+                           ('git -C "%s" merge --no-ff origin/main' % self.main, 'git-main-history'),
+                           ('git -C "%s" fetch --all' % self.main, 'write-jail'),
+                           ('git -C "%s" fetch origin main && echo x' % self.main, 'write-jail'),
+                           ('git -c x.y=z -C "%s" fetch origin' % self.main, 'write-jail')):
+            with self.subTest(text):
+                d = self.jailed(self.git(text), rule)
+                self.assertIn('does not set roles.lander.edit_main_checkout to true', d.reason)
+                self.assertIn(' Instead: %s [kit guard:' % kit, d.reason)
+
     def test_the_remote_and_main_come_from_the_config(self):
         self.w.kit({'repo': {'name': 'demo', 'push_block': True, 'remote': 'upstream', 'main_branch': 'trunk'},
                     'roles': {'lander': {'edit_main_checkout': True, 'why': 'test'}}})
@@ -496,9 +699,9 @@ class LanderMainCheckout(MainGit):
         self.each_denied(['git -C "%s" fetch origin main' % self.main,
                           'git -C "%s" merge --ff-only origin/main' % self.main])
 
-    def test_a_lander_fetches_nothing_but_main_from_the_remote(self):
+    def test_a_lander_fetches_nothing_but_the_remote_or_its_main(self):
         m = self.main
-        self.each_denied(['git -C "%s" fetch' % m, 'git -C "%s" fetch origin' % m, 'git -C "%s" fetch --all' % m,
+        self.each_denied(['git -C "%s" fetch' % m, 'git -C "%s" fetch --all' % m,
                           'git -C "%s" fetch origin other' % m, 'git -C "%s" fetch other main' % m,
                           'git -C "%s" fetch origin main:main' % m, 'git -C "%s" fetch origin +main' % m,
                           'git -C "%s" fetch origin +main:refs/heads/main' % m,
@@ -928,12 +1131,12 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.assertFalse(cm.read(text, sh.BASH if tool == 'Bash' else sh.PS, W.fwd(self.w.wt)).clean, text)
                 self.jailed(self.git(text, 'worker', tool=tool), 'unreadable')
-            for environ in (COORDINATOR, OLD_MARK):
+            for environ in (COORDINATOR, OLD_MARK, PM, DEEP, CONSULTANT):
                 with self.subTest(text, mark=environ[context.ROLE_ENV]):
                     d = self.jailed(self.marked(text, environ, tool))
                     self.assertIn('run the git in its own call', d.reason)
             # the owner's session and the marks the jail does not hold keep the line in a worktree
-            for environ in ({}, {context.ROLE_ENV: 'pm'}, {context.ROLE_ENV: 'deep-worker'}):
+            for environ in ({}, PLAIN):
                 with self.subTest(text, mark=environ.get(context.ROLE_ENV, 'owner')):
                     self.allowed(self.marked(text, environ, tool))
         # an unreadable line with no git word, or only a .git path, is not the jail's

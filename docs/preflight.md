@@ -94,7 +94,7 @@ All of these keys are in docs/kit-json.md.
   - `worktrees_dir`: used in the NOTE.
 - `preflight`:
   - `traps`.
-  - `report_hooks`: `module:function` entries, loaded from `<tools_dir>/<module>.py`. A hook that fails is one `hook NOT CHECKED` line.
+  - `report_hooks`: `module:function` entries, loaded from `<tools_dir>/<module>.py`. A hook that fails is one `hook NOT CHECKED` line. While a hook runs, `<tools_dir>` is first on `sys.path`, so a sibling it imports resolves to the repo's own file even when a kit tool has the same name (`kitlib/preflight/hooks.py`, `_repo_first`); afterwards `sys.path` and `sys.modules` are put back as they were.
   - `engines`: process-name prefixes, matched case-blind.
   - `udp_ports`: `[low, high]`.
   

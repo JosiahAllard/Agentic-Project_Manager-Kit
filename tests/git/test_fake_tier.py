@@ -363,6 +363,97 @@ class FakeRefReadRace(unittest.TestCase):
         self.assertEqual(cmd.run(['rev-parse', 'refs/heads/other'], self.r.root)[0].decode().strip(),
                          self.sha)
 
+    def test_a_ref_update_whose_replace_fails_leaves_no_lock_behind(self):
+        """A lock left behind would fail every later update of the ref ("cannot lock ref")."""
+        from kitlib.git.fake import refs
+
+        def refused(src, dst):
+            raise PermissionError(13, 'Permission denied', dst)
+        with mock.patch.object(refs, '_replace', refused):
+            with self.assertRaises(PermissionError):
+                cmd.call(['update-ref', 'refs/heads/other', self.sha], self.r.root)
+        self.assertFalse(os.path.exists(os.path.join(self.r.root, '.git', 'refs', 'heads',
+                                                     'other.lock')))
+        out, why = cmd.run(['update-ref', 'refs/heads/other', self.sha], self.r.root)
+        self.assertIsNone(why)
+
+
+class FakeUnreadableObjects(unittest.TestCase):
+    """An object that exists but cannot be opened for a moment (Windows denies the open while
+    another holder excludes readers) is waited for, and a tree that is missing ends the command
+    as git's does. Taking either for an empty tree made `read-tree` drop the records under it:
+    the store write built on that index lost every earlier record (backlog test_store
+    CompareAndSwap, KIT-FLAKY-STORE-CAS)."""
+
+    def setUp(self):
+        if not cmd.fake_active():
+            self.skipTest('the run is on real git (kit_tests.py --real-git)')
+        self.r = gitfixture.TempRepo()
+        self.addCleanup(self.r.cleanup)
+        self.r.write('d/a.txt', 'a\n')
+        self.r.write('b.txt', 'b\n')
+        self.r.commit('add', 'd', 'b.txt')
+        self.sub = self.r.git('rev-parse', 'HEAD:d')
+        self.blob = self.r.git('rev-parse', 'HEAD:d/a.txt')
+
+    def loose(self, oid):
+        return os.path.join(self.r.root, '.git', 'objects', oid[:2], oid[2:])
+
+    def read_tree(self):
+        index = os.path.join(self.r.base, 'other-index')
+        r = cmd.call(['read-tree', 'HEAD'], self.r.root,
+                     env=dict(cmd.scrubbed_env(), GIT_INDEX_FILE=index))
+        return r, index
+
+    def test_an_object_read_during_a_replace_waits_for_it(self):
+        from kitlib.git.fake import objects
+        path, real_open, denials = os.path.normcase(self.loose(self.sub)), open, []
+
+        def opener(p, *a, **kw):
+            if os.path.normcase(os.fspath(p)) == path and len(denials) < 3:
+                denials.append(p)
+                raise PermissionError(13, 'Permission denied', p)
+            return real_open(p, *a, **kw)
+        with mock.patch.object(objects, 'open', opener, create=True):
+            r, index = self.read_tree()
+        self.assertEqual((r.rc, r.err), (0, ''))
+        self.assertEqual(len(denials), 3)
+        out, why = cmd.run(['ls-files', '-s'], self.r.root,
+                           env=dict(cmd.scrubbed_env(), GIT_INDEX_FILE=index))
+        self.assertIsNone(why)
+        self.assertIn(('%s 0\td/a.txt' % self.blob), out.decode())
+
+    def test_read_tree_of_a_tree_whose_subtree_is_missing_dies_as_git_does(self):
+        os.chmod(self.loose(self.sub), 0o666)
+        os.remove(self.loose(self.sub))
+        r, index = self.read_tree()
+        # git 2.55: fatal: unable to read tree (<oid>), exit 128, and no index written
+        self.assertEqual((r.rc, r.err), (128, 'fatal: unable to read tree (%s)' % self.sub))
+        self.assertFalse(os.path.exists(index))
+        self.assertFalse(os.path.exists(index + '.lock'))
+
+    def test_a_path_through_a_missing_tree_is_missing_not_fatal(self):
+        """git 2.55 (probed 2026-10-10): `rev-parse --verify -q HEAD:d/a` exits 1 saying nothing,
+        and `cat-file --batch-check` answers "HEAD:d/a missing" and goes on."""
+        os.chmod(self.loose(self.sub), 0o666)
+        os.remove(self.loose(self.sub))
+        r = cmd.call(['rev-parse', '--verify', '-q', 'HEAD:d/a.txt'], self.r.root)
+        self.assertEqual((r.rc, r.out, r.err), (1, b'', ''))
+        r = cmd.call(['cat-file', '--batch-check'], self.r.root, stdin=b'HEAD:d/a.txt\nHEAD:b.txt\n')
+        self.assertEqual(r.rc, 0, r.err)
+        lines = r.out.decode().splitlines()
+        self.assertEqual(lines[0], 'HEAD:d/a.txt missing')
+        self.assertTrue(lines[1].endswith(' blob 2'), lines)
+
+    def test_the_empty_tree_needs_no_object(self):
+        from kitlib.git.fake import objects
+        empty = objects.EMPTY_TREE['sha1']
+        self.assertFalse(os.path.exists(self.loose(empty)))
+        from kitlib.git.fake import repo as frepo, revs
+        repo, _ = frepo.discover(self.r.root, dict(os.environ), [], None)
+        self.assertEqual(revs.tree_entries(repo, empty), [])
+        self.assertEqual(revs.flatten_tree(repo, empty), {})
+
 
 if __name__ == '__main__':
     unittest.main()

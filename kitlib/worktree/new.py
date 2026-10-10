@@ -43,6 +43,7 @@ import re
 
 from kitlib.config import ConfigError, load
 from kitlib.git import cmd
+from kitlib.git import refs as gitrefs
 from kitlib.records import landing
 
 OK, REFUSED, CONFIG = 0, 1, 2
@@ -131,10 +132,10 @@ def choose_base(m, om, held, reread, free_why=''):
 
 def behind_count(cwd, m, om):
     """N when `m` is a strict ancestor of `om` (a pure fast-forward away: N commits behind), else
-    None (equal, ahead, diverged, or git failed)."""
+    None (equal, ahead, diverged, or git failed - kitlib.git.refs.is_ancestor gave no answer)."""
     if not m or not om or m == om:
         return None
-    if git(cwd, 'merge-base', '--is-ancestor', m, om)[0] != 0:
+    if gitrefs.is_ancestor(m, om, cwd)[0] is not True:
         return None
     rc, out, _ = git(cwd, 'rev-list', '--count', '%s..%s' % (m, om))
     return int(out) if rc == 0 and out.isdigit() else None
