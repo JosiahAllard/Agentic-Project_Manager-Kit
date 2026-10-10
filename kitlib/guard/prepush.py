@@ -57,43 +57,76 @@ def _norm_url(url):
     return u.rstrip('/').casefold()
 
 
+def _config_env():
+    """This process's environment for a git child without the configuration a `git -c` on the
+    push command line hands its hooks (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT,
+    GIT_CONFIG_KEY_<n>, GIT_CONFIG_VALUE_<n>): `git -c remote.<private>.pushurl=<public> push`
+    must not make the public URL look like the private remote's."""
+    def dropped(k):
+        k = k.upper()
+        return (k in ('GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT')
+                or k.startswith(('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')))
+    return {k: v for k, v in cmd.scrubbed_env().items() if not dropped(k)}
+
+
+def _get_urls(root, name, env, push):
+    """`(set of normalised URLs, None)` from `git remote get-url --all [--push] <name>` (git's own
+    answer: pushurl else url, insteadOf and pushInsteadOf applied), an empty set when git refuses
+    the name, or `(None, why)` when git did not answer."""
+    r = cmd.call(['remote', 'get-url', '--all'] + (['--push'] if push else []) + ['--', name], root, env=env)
+    if r.rc is None:
+        return None, r.err
+    if r.rc != 0:
+        return set(), None
+    return {_norm_url(u) for u in cmd.text(r.out).splitlines() if u.strip()}, None
+
+
 def _remote_urls(root):
-    """`({remote name: {normalised url and pushurl}}, None)` from the repository's config, or
-    `(None, why)`. One `git config` read; no remote is `({}, None)`."""
-    r = cmd.call(['config', '-z', '--get-regexp', r'^remote\..*\.(url|pushurl)$'], root)
+    """`({remote name: {'push': its push URLs, 'all': every URL it has}}, None)`, normalised, or
+    `(None, why)`. Read with _config_env(), so only the repository's own configuration counts.
+    'push' is git's answer (`remote get-url --push --all`); 'all' adds the fetch URLs as git
+    rewrites them and the raw `url` and `pushurl` values. No remote is `({}, None)`."""
+    env = _config_env()
+    r = cmd.call(['config', '-z', '--get-regexp', r'^remote\..*\.(url|pushurl)$'], root, env=env)
     if r.rc == 1 and not r.err:
         return {}, None
     if r.rc != 0:
         return None, r.err or 'git config exited %s' % r.rc
-    out = {}
+    raw = {}
     for entry in cmd.text(r.out).split('\0'):
         if not entry:
             continue
         key, _, value = entry.partition('\n')
         for suffix in ('.url', '.pushurl'):
             if key.startswith('remote.') and key.endswith(suffix) and len(key) > len('remote.' + suffix):
-                out.setdefault(key[len('remote.'):-len(suffix)], set()).add(_norm_url(value))
+                raw.setdefault(key[len('remote.'):-len(suffix)], set()).add(_norm_url(value))
                 break
+    out = {}
+    for name, urls in raw.items():
+        push, why = _get_urls(root, name, env, True)
+        fetch, why2 = _get_urls(root, name, env, False) if push is not None else (None, None)
+        if push is None or fetch is None:
+            return None, 'git remote get-url %s: %s' % (name, why or why2)
+        out[name] = {'push': push, 'all': push | fetch | urls}
     return out, None
 
 
 def _private(record, remotes, name, url):
-    """True when a push to remote `name` at `url` (git's two hook arguments; `url` None: not
-    known) goes to the recorded private remote, else False (public). Private needs all of: the
-    record's remote is configured; `name` is it, or `url` is one of its URLs; and the URL pushed
-    to (else each of the private remote's own URLs) is no other remote's URL. Anything else,
-    unclear cases included, is public: the stricter side for the data branch."""
-    own = remotes.get(record.remote)
-    if not own:
+    """True when the push goes to the recorded private remote, else False (public). `url` is the
+    URL git hands the hook (its second argument, after insteadOf and pushInsteadOf; None: not
+    known); `name` (its first) does not decide. Private needs both: `url` is one of the record's
+    remote's push URLs (_remote_urls 'push'), and no other remote has it among any of its URLs.
+    Anything else, unclear cases included, is public: the stricter side for the data branch."""
+    own = (remotes.get(record.remote) or {}).get('push')
+    if not own or not url:
         return False
-    target = _norm_url(url) if url else None
-    if name != record.remote and (target is None or target not in own):
+    target = _norm_url(url)
+    if target not in own:
         return False
-    others = set()
     for other, urls in remotes.items():
-        if other != record.remote:
-            others |= urls
-    return not ({target} if target is not None else own) & others
+        if other != record.remote and target in urls['all']:
+            return False
+    return True
 
 
 def _empty_objects(root_sha):

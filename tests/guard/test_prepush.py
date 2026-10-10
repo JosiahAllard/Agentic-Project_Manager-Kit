@@ -643,12 +643,60 @@ class PmDataTest(PrePushCase):
                       prepush.leak_refusal(self.data_wt, [line], 'origin', self.repo.remote))
         self.assertIsNone(prepush.leak_refusal(self.data_wt, [line], 'private', self.private))
 
+    def test_a_push_by_name_to_a_url_it_does_not_have_is_public(self):
+        line = 'refs/heads/pmdata %s refs/heads/pmdata %s' % (self.data, '0' * 40)
+        other = os.path.join(self.repo.base, 'unrelated.git')
+        self.assertIn('pushes the PM data branch', prepush.leak_refusal(self.repo.root, [line], 'private', other))
+        self.assertIn('pushes the PM data branch', prepush.leak_refusal(self.repo.root, [line], 'private', None))
+
+    def test_a_command_line_pushurl_cannot_make_public_private(self):
+        # `git -c remote.private.pushurl=<public>`: git hands the hook the public URL and the
+        # -c in GIT_CONFIG_PARAMETERS; the hook reads the remotes without it. The public place
+        # is no configured remote, so only the private remote's own push URLs can tell.
+        public = os.path.join(self.repo.base, 'public.git').replace('\\', '/')
+        self.repo.git('init', '-q', '--bare', public, cwd=self.repo.base)
+        r = subprocess.run(('git', '-c', 'core.hooksPath=%s' % HOOKS.replace('\\', '/'),
+                            '-c', 'remote.private.pushurl=%s' % public, 'push', 'private', 'pmdata'),
+                           cwd=self.repo.root, capture_output=True, text=True, encoding='utf-8',
+                           errors='replace', env=gitfixture.fixture_env())
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn('pushes the PM data branch pmdata to private, which is not its private remote', r.stderr)
+        self.assertEqual(self.repo.git('ls-remote', public), '')
+        with mock.patch.dict(os.environ, {'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'remote.private.pushurl',
+                                          'GIT_CONFIG_VALUE_0': public}):
+            line = 'refs/heads/pmdata %s refs/heads/pmdata %s' % (self.data, '0' * 40)
+            self.assertIn('pushes the PM data branch', prepush.leak_refusal(self.repo.root, [line], 'private', public))
+            self.assertIsNone(prepush.leak_refusal(self.repo.root, [line], 'private', self.private))
+
+    def test_a_push_url_rewritten_by_git_is_judged_as_git_rewrites_it(self):
+        # pushInsteadOf turns the private remote's push URL into the public one: git pushes there
+        public = self.repo.remote.replace('\\', '/')
+        self.repo.git('config', 'url.%s.pushInsteadOf' % public, self.private.replace('\\', '/'))
+        self.repo.git('config', 'remote.private.url', self.private.replace('\\', '/'))
+        self.refused('private', 'pmdata', why='not its private remote')
+        self.assertEqual(self.ls('origin', 'refs/heads/pmdata'), '')
+
+    def test_remotes_git_cannot_read_refuse(self):
+        line = 'refs/heads/main %s refs/heads/main %s' % (self.with_kit, '0' * 40)
+        real = prepush.cmd.call
+
+        def call(args, *rest, **kw):
+            if args[:1] == ['config']:
+                return prepush.cmd.Result(128, b'', 'fatal: bad config line 1')
+            return real(args, *rest, **kw)
+
+        with mock.patch.object(prepush.cmd, 'call', side_effect=call):
+            why = prepush.leak_refusal(self.repo.root, [line], 'origin', self.repo.remote)
+        self.assertIn('cannot read the remotes to tell whether origin is the private remote', why or '')
+        self.assertIn('bad config line 1', why)
+
 
 class PrivateTest(unittest.TestCase):
     """prepush._private and _norm_url: which remote counts as the private one. Anything unclear
     is public, the stricter side for the data branch."""
     REC = pmdata.Record('pmdata', 'private', 'a' * 40)
-    REMOTES = {'origin': {'https://example.invalid/kit'}, 'private': {'d:/data/private'}}
+    REMOTES = {'origin': {'push': {'https://example.invalid/kit'}, 'all': {'https://example.invalid/kit'}},
+               'private': {'push': {'d:/data/private'}, 'all': {'d:/data/private', 'd:/data/fetch-only'}}}
 
     def private(self, name, url, remotes=None):
         return prepush._private(self.REC, self.REMOTES if remotes is None else remotes, name, url)
@@ -662,10 +710,12 @@ class PrivateTest(unittest.TestCase):
         self.assertNotEqual(n('d:/data/private2'), n('d:/data/private'))
         self.assertEqual(n(None), '')
 
-    def test_by_name(self):
+    def test_by_name_the_url_decides(self):
         self.assertTrue(self.private('private', 'D:\\Data\\Private.git'))
-        self.assertTrue(self.private('private', None))
-        self.assertTrue(self.private('private', 'd:/elsewhere'))         # a pushurl or insteadOf
+        self.assertFalse(self.private('private', None))                  # URL not known
+        self.assertFalse(self.private('private', 'd:/elsewhere'))        # not one of its push URLs
+        self.assertFalse(self.private('private', 'd:/data/fetch-only'))  # a fetch URL only
+        self.assertFalse(self.private('private', 'https://example.invalid/kit'))
         self.assertFalse(self.private('origin', 'https://example.invalid/kit'))
 
     def test_by_url(self):
@@ -674,15 +724,15 @@ class PrivateTest(unittest.TestCase):
         self.assertFalse(self.private('e:/unknown', 'e:/unknown'))
 
     def test_a_url_another_remote_also_has_is_public(self):
-        both = dict(self.REMOTES, mirror={'d:/data/private'})
+        both = dict(self.REMOTES, mirror={'push': set(), 'all': {'d:/data/private'}})
         self.assertFalse(self.private('private', 'd:/data/private', both))
-        self.assertFalse(self.private('private', None, both))
         self.assertFalse(self.private('d:/data/private', 'd:/data/private', both))
-        self.assertFalse(self.private('private', 'https://example.invalid/kit/'))
 
     def test_an_unconfigured_private_remote_is_public(self):
-        self.assertFalse(self.private('private', 'private', {'origin': {'https://example.invalid/kit'}}))
+        origin = {'origin': self.REMOTES['origin']}
+        self.assertFalse(self.private('private', 'private', origin))
         self.assertFalse(self.private('private', 'private', {}))
+        self.assertFalse(self.private('private', 'd:/data/private', {'private': {'push': set(), 'all': set()}}))
 
 
 class EntryTest(unittest.TestCase):
