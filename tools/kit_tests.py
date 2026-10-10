@@ -4,6 +4,7 @@ reach (docs/test-tools.md "kit_tests").
   kit_tests.py [-C DIR] --select [--base B] [--changed PATH ...] [--plan] [--jobs N]
   kit_tests.py [-C DIR] --full [--plan] [--jobs N]
   add --real-git to either: every test on real git, not the fake
+  add --both-tiers to either: the fake-git pass, then the real-git pass (kitlib.tooldeps.tiers)
   add --pid-hold to either: hold pids for the run (opt-in, agent runs only; the gate refuses it;
   docs/test-tools.md "The pid shield")
 
@@ -21,7 +22,9 @@ in the git common dir (kit-tests-times.json), long modules split by class - then
 back to the lock (kitlib.lock.giveback.drainer) when the lock run offers it. --jobs 1 runs the
 one `python -m unittest` process the tool always ran.
 Tests run on the fake git (docs/test-tools.md "Fake git"): the units get KIT_FAKE_GIT=1 unless it
-is set; --real-git gives them 0, so the unit tier also runs on real git.
+is set; --real-git gives them 0, so the unit tier also runs on real git. --both-tiers runs the
+selection twice, KIT_FAKE_GIT 1 then 0, and prints `kit_tests: OK` only when both passed; each
+pass's own lines read `kit_tests [fake git]: ` / `kit_tests [real git]: `.
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls the library, prints, runs, exits.
 Exit codes: the unittest run's (0 passed or nothing selected, 1 failed); 2 USAGE or a refusal
 (git could not list the change, or --select with a malformed table): no test ran; 130 Ctrl+C.
@@ -40,7 +43,7 @@ from kitlib.git import refs as gitrefs                              # noqa: E402
 from kitlib.git import repo as gitrepo                              # noqa: E402
 from kitlib.lock import giveback                                    # noqa: E402
 from kitlib.pytests import runner as unit_runner                    # noqa: E402
-from kitlib.tooldeps import selfrun, selftree                       # noqa: E402
+from kitlib.tooldeps import selfrun, selftree, tiers                # noqa: E402
 
 USAGE = 2
 FULL = ['-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
@@ -69,6 +72,9 @@ def build_parser():
                    help='modules run at once (default: the cores the lock run holds; 1: one process)')
     p.add_argument('--real-git', action='store_true',
                    help='every test on real git, not the fake (KIT_FAKE_GIT=0)')
+    p.add_argument('--both-tiers', action='store_true',
+                   help='run twice: on the fake git, then on real git; OK only when both pass '
+                   '(the daily run\'s daily_cmd)')
     p.add_argument(unit_runner.PID_HOLD_FLAG, dest='pid_hold', action='store_true',
                    help='hold pids for the run (opt-in for agent runs; off by default; the gate '
                    'refuses it)')
@@ -122,6 +128,10 @@ def main(argv=None, out=None):
         parser.error('--changed goes with --select')
     if a.jobs is not None and a.jobs < 1:
         parser.error('--jobs must be at least 1')
+    if a.both_tiers and a.real_git:
+        parser.error('--both-tiers already runs the real-git tier; drop --real-git')
+    if a.both_tiers and a.pid_hold:
+        parser.error('--both-tiers takes no --pid-hold (one hold cannot span two passes)')
     top, why = gitrepo.toplevel(os.path.abspath(a.root))
     if not top:
         say('kit_tests: refused: %s' % why)
@@ -161,24 +171,41 @@ def main(argv=None, out=None):
         # so its published beacon reaches them.
         hold = unit_runner.PidHoldRun()
         say('kit_tests: %s' % hold.start())
-    # The units' environment carries the tier: a pool worker imports tests/__init__.py once, so
-    # its default cannot reach each unit (kitlib/tooldeps/pool_worker.py). This process keeps
-    # its own git real.
-    env = dict(os.environ)
-    if a.real_git:
-        env['KIT_FAKE_GIT'] = '0'
-        say('kit_tests: --real-git: every test on real git')
-    else:
-        env.setdefault('KIT_FAKE_GIT', '1')
-    label = 'full' if args is FULL else 'selected'
     if a.jobs is None:
         jobs, why = selfrun.default_jobs()
         say('kit_tests: jobs %d: %s' % (jobs, why))
     else:
         jobs = a.jobs
+    if a.both_tiers:
+        # The fake pass, then the real-git pass (kitlib.tooldeps.tiers): only the last may give
+        # cpu slots back, and only the fake pass records unit times (the landing tier's).
+        return tiers.run_tiers(
+            lambda fake, stream, last: run_pass(args, top, cfg, jobs, fake, stream, None,
+                                                give_back=last, record_times=fake == '1'), out)
+    # The units' environment carries the tier: a pool worker imports tests/__init__.py once, so
+    # its default cannot reach each unit (kitlib/tooldeps/pool_worker.py). This process keeps
+    # its own git real.
+    if a.real_git:
+        fake = '0'
+        say('kit_tests: --real-git: every test on real git')
+    else:
+        fake = os.environ.get('KIT_FAKE_GIT', '1')
+    return run_pass(args, top, cfg, jobs, fake, out, hold)
+
+
+def run_pass(args, top, cfg, jobs, fake, out, hold, give_back=True, record_times=True):
+    """One run of `args` (FULL or test modules) with the units' KIT_FAKE_GIT set to `fake`,
+    writing to `out`; its exit status."""
+    def say(line):
+        out.write(line + '\n')
+        out.flush()
+    env = dict(os.environ)
+    env['KIT_FAKE_GIT'] = fake
+    label = 'full' if args is FULL else 'selected'
     if jobs == 1:
         start = time.time()
         cmd = args if args is FULL else ['-m', 'unittest'] + args
+        out.flush()
         rc = subprocess.call([sys.executable] + cmd, cwd=top, env=env)
         if hold is not None:
             say('kit_tests: %s' % hold.end())
@@ -186,12 +213,18 @@ def main(argv=None, out=None):
             'OK' if rc == 0 else 'FAILED, exit %d' % rc, time.time() - start, label))
         return 0 if rc == 0 else 1
     modules = selftree.all_test_modules(top) if args is FULL else args
-    common, _why = gitrepo.common_dir(top)
-    times = os.path.join(common, selfrun.TIMES_FILE) if common else None
-    give = giveback.drainer(lambda line: say('kit_tests: ' + line))
-    if give is None:
-        say('kit_tests: give back: no offer (only a run of this kit\'s lock wrapper offers one); '
-            'the run keeps its cpu slots to its end')
+    times = None
+    if record_times:
+        common, _why = gitrepo.common_dir(top)
+        times = os.path.join(common, selfrun.TIMES_FILE) if common else None
+    give = None
+    if give_back:
+        give = giveback.drainer(lambda line: say('kit_tests: ' + line))
+        if give is None:
+            say('kit_tests: give back: no offer (only a run of this kit\'s lock wrapper offers '
+                'one); the run keeps its cpu slots to its end')
+    else:
+        say('kit_tests: give back: off for this pass (a later tier runs on the same slots)')
     rc, _summary = selfrun.run(modules, top, jobs, serial=cfg['serial'], out=out, label=label,
                                times_path=times, hint=cfg.get('long', ()), environ=env,
                                give_back=give, hold=hold)

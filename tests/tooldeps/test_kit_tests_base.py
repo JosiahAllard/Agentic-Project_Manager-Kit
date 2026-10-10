@@ -158,5 +158,59 @@ class GitTierEnvironment(unittest.TestCase):
         self.assertEqual(self.run_full(outer='0'), {'pooled': '0', 'one': '0', 'own': '0'})
 
 
+class BothTiers(unittest.TestCase):
+    """--both-tiers: the pool runs twice, KIT_FAKE_GIT 1 then 0; only the last pass may give cpu
+    slots back and only the fake pass records unit times; exit 0 only when both pass."""
+
+    def run_both(self, rcs, extra=()):
+        calls, out = [], io.StringIO()
+
+        def run(modules, root, jobs, **kw):
+            calls.append((kw['environ'].get('KIT_FAKE_GIT'), kw['give_back'] is not None,
+                          kw['times_path'] is not None))
+            kw['out'].write('kit_tests: %s in 1s (full)\n' % ('OK' if rcs[len(calls) - 1] == 0
+                                                              else 'FAILED, exit 1'))
+            return rcs[len(calls) - 1], ''
+        here = os.path.abspath('.')
+        with mock.patch.dict(os.environ, {'KIT_FAKE_GIT': '1'}), \
+                mock.patch.object(cli.gitrepo, 'toplevel', return_value=(here, None)), \
+                mock.patch.object(cli.gitrepo, 'common_dir', return_value=(here, None)), \
+                mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
+                mock.patch.object(cli.selftree, 'all_test_modules', return_value=['tests.a.test_m']), \
+                mock.patch.object(cli.giveback, 'drainer', return_value=lambda n: None), \
+                mock.patch.object(cli.selfrun, 'run', side_effect=run):
+            rc = cli.main(['--full', '--jobs', '2', '--both-tiers'] + list(extra), out=out)
+        return rc, calls, out.getvalue()
+
+    def test_fake_then_real_and_ok_only_when_both_pass(self):
+        rc, calls, text = self.run_both([0, 0])
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(calls, [('1', False, True), ('0', True, False)])
+        lines = text.splitlines()
+        self.assertEqual(lines[-1], 'kit_tests: OK, both tiers green (fake git, real git)')
+        self.assertEqual([ln for ln in lines if ln.startswith('kit_tests: OK')], lines[-1:])
+        self.assertIn('kit_tests [fake git]: OK in 1s (full)', lines)
+        self.assertIn('kit_tests [real git]: OK in 1s (full)', lines)
+
+    def test_a_red_real_git_pass_fails_the_run_and_prints_no_ok(self):
+        rc, calls, text = self.run_both([0, 1])
+        self.assertEqual(rc, 1, text)
+        self.assertEqual(len(calls), 2)
+        self.assertNotRegex(text, r'(?m)^kit_tests: OK')
+        self.assertIn('kit_tests: FAILED, exit 1: red tier(s): real git', text)
+
+    def test_a_red_fake_pass_still_runs_the_real_pass(self):
+        rc, calls, text = self.run_both([1, 0])
+        self.assertEqual((rc, len(calls)), (1, 2), text)
+        self.assertIn('red tier(s): fake git\n', text)
+
+    def test_with_real_git_or_pid_hold_is_a_usage_error(self):
+        for extra in (['--real-git'], ['--pid-hold']):
+            with self.assertRaises(SystemExit) as cm, \
+                    mock.patch('sys.stderr', io.StringIO()):
+                cli.main(['--full', '--both-tiers'] + extra, out=io.StringIO())
+            self.assertEqual(cm.exception.code, cli.USAGE, extra)
+
+
 if __name__ == '__main__':
     unittest.main()
