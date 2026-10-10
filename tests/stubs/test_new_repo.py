@@ -246,27 +246,63 @@ class NewRepo(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
         self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
 
-    def test_an_unreadable_gate_template_fails_and_never_says_wrote(self):
+    def refused_template(self, template, *args):
+        """Lock a kit copy's `template` (a path under templates) and run: every run, the dry run too,
+        refuses naming it at plan time with nothing written."""
         kit, script = self.kit_copy()
-        self.lock(os.path.join(kit, 'templates', 'stacks', 'python', 'tools', 'gate.json'))
-        code, out = self.ps('-Apply', '-Stack', 'python', script=script)
-        self.assertEqual(code, 1, out)
-        self.assertIn('new-repo: FAILED - cannot read', out)
-        self.assertIn('gate.json', out)
-        self.assertNotIn('wrote    ', out)
-        self.assertNotIn('new-repo: wrote', out)
-        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools', 'gate.json')))
+        path = os.path.join(kit, 'templates', *template)
+        self.lock(path)
+        before = sorted(os.listdir(self.root))
+        for extra in ((), ('-Apply',)):
+            code, out = self.ps(*(extra + args), script=script)
+            self.assertEqual(code, 1, out)
+            self.assertIn('new-repo: REFUSED - cannot read %s' % path, out)
+            self.assertNotIn('new-repo: wrote', out)
+            self.assertNotIn('wrote    ', out)
+            self.assertEqual(sorted(os.listdir(self.root)), before)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'docs')))
 
-    def test_an_unreadable_index_template_fails_and_never_says_wrote(self):
-        kit, script = self.kit_copy()
-        index = os.path.join(kit, 'templates', 'common', 'INDEX.md')
-        self.lock(index)
-        code, out = self.ps('-Apply', script=script)
+    def test_an_unreadable_gate_template_refuses_before_any_write(self):
+        self.refused_template(('stacks', 'python', 'tools', 'gate.json'), '-Stack', 'python')
+
+    def test_an_unreadable_index_template_refuses_before_any_write(self):
+        self.refused_template(('common', 'INDEX.md'))
+
+    def test_an_unreadable_stack_json_refuses_before_any_write(self):
+        self.refused_template(('stacks', 'python', 'stack.json'), '-Stack', 'python')
+
+    def test_an_unreadable_common_gitignore_template_refuses_before_any_write(self):
+        self.refused_template(('common', '.gitignore'))
+
+    def test_an_unreadable_common_gitattributes_template_refuses_before_any_write(self):
+        self.refused_template(('common', 'gitattributes'))
+
+    def test_a_later_failure_does_not_tell_the_user_to_delete_an_appended_file(self):
+        gitignore = os.path.join(self.root, '.gitignore')
+        attrs = os.path.join(self.root, '.gitattributes')
+        self.fx.write('.gitignore', 'build/\n')
+        self.fx.write('.gitattributes', '* text=auto\n')
+        os.chmod(attrs, stat.S_IREAD)
+        self.addCleanup(os.chmod, attrs, stat.S_IWRITE | stat.S_IREAD)
+        code, out = self.ps('-Apply')
         self.assertEqual(code, 1, out)
-        self.assertIn('new-repo: FAILED - cannot read %s' % index, out)
-        self.assertNotIn('new-repo: wrote', out)
-        self.assertNotIn('wrote    %s' % os.path.join(self.root, 'docs', 'INDEX.md'), out)
-        self.assertFalse(os.path.exists(os.path.join(self.root, 'docs', 'INDEX.md')))
+        self.assertIn('new-repo: FAILED - cannot write %s' % attrs, out)
+        self.assertIn('.claude/worktrees/', self.read('.gitignore'))
+        undo = [ln for ln in out.splitlines() if 'already written' in ln]
+        self.assertEqual(len(undo), 1, out)
+        self.assertNotIn(gitignore, undo[0])
+        self.assertIn("appended to %s : remove the '# Added by the kit installer' block to undo" % gitignore, out)
+
+    def test_a_stub_plan_with_no_stub_names_is_refused_not_skipped(self):
+        kit, script = self.kit_copy()
+        with open(os.path.join(kit, 'tools', 'kit_stubs.py'), 'w', encoding='utf-8') as fh:
+            fh.write("print('would write something odd')\n")
+        before = sorted(os.listdir(self.root))
+        code, out = self.ps(script=script)
+        self.assertEqual(code, 1, out)
+        self.assertIn('REFUSED - cannot read the stub plan', out)
+        self.assertEqual(sorted(os.listdir(self.root)), before)
 
     def test_a_non_ascii_md_name_is_listed_as_it_is_not_quoted(self):
         name = 'déjà vu.md'
