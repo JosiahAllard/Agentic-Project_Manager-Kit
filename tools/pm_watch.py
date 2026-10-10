@@ -65,7 +65,12 @@ def parse(argv, cfg, launcher_set=None):
 
 
 def main(argv=None, sleep=time.sleep, launcher_set=None):
-    a = parse(argv, W.load_config(), launcher_set)
+    try:
+        cfg = W.load_config()
+    except kuser.ConfigError as e:
+        print("pm_watch: machine config: %s" % e, file=sys.stderr)
+        return 2
+    a = parse(argv, cfg, launcher_set)
     w = W.Watcher(W.load_state(a.state) or {}, [tuple(b.split("=", 1)) for b in a.branch],
                   lambda: W.usage(a.usage_script), a.alerts_dir, a.sessions,
                   claude_host.newest_finder(), idle_minutes=a.idle_minutes,

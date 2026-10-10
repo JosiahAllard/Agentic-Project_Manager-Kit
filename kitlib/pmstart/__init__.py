@@ -21,8 +21,10 @@ _PS = ("Get-CimInstance Win32_Process | Select-Object Name,CommandLine,Executabl
 
 
 def load_config(path=None):
-    """The "pm_start" dict from the user-profile config, or None when the file or key is missing."""
-    p = os.path.expanduser(path) if path else kuser.config_file()
+    """The "pm_start" dict from the user-profile config, or None when the file or key is missing.
+    With no `path`, a machine config location that cannot be told (kitlib.config.user.locate BAD)
+    raises kitlib.config.ConfigError: never read as "no config"."""
+    p = os.path.expanduser(path) if path else kuser.readable_file()
     try:
         with open(p, encoding="utf-8-sig") as f:
             cfg = json.load(f).get(KEY)

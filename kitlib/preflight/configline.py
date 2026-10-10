@@ -2,6 +2,8 @@
 a machine that has the file in both the new and the retired folder (docs/kit-json.md "Moving the
 machine config folder"). It names files and keys, never a value.
 """
+import json
+
 from kitlib.config import ConfigError
 from kitlib.config import migration, user
 
@@ -16,6 +18,32 @@ def _read(path):
         return e
 
 
+def _fault(path):
+    """Why the strict reader refuses the file at `path`, in words and top-level key names only:
+    its own message quotes the refused values (`not %r`), and this line never shows a value."""
+    text = _read(path)
+    if isinstance(text, Exception):
+        return 'cannot be read (%s)' % type(text).__name__
+    seen = {'twice': False}
+
+    def pairs(items):
+        out = {}
+        for k, v in items:
+            seen['twice'] = seen['twice'] or k in out
+            out[k] = v
+        return out
+    try:
+        data = json.loads(text, object_pairs_hook=pairs)
+    except (ValueError, RecursionError):
+        return 'not valid JSON'
+    if seen['twice']:
+        return 'a key written twice in one object'
+    if not isinstance(data, dict):
+        return 'not a JSON object'
+    keys = user.failing_keys(data)
+    return 'bad key(s): %s' % ', '.join(keys) if keys else 'refused by the strict reader'
+
+
 def line(home=None):
     """The one `config` line for the machine config under `home` (default the user's)."""
     loc = user.locate(home)
@@ -25,8 +53,8 @@ def line(home=None):
         return PREFIX + 'none - no machine config; the kit reads and writes %s' % loc.display(loc.new)
     try:
         user.user_config(home, location=loc)
-    except ConfigError as e:
-        return PREFIX + 'BROKEN %s: %s' % (loc.display(), e)
+    except ConfigError:
+        return PREFIX + 'BROKEN %s: %s' % (loc.display(), _fault(loc.path))
     if loc.state == user.OLD:
         return PREFIX + ('FALLBACK %s is read: %s is absent. Move it (docs/kit-json.md "Moving the '
                          'machine config folder")' % (loc.display(loc.old), loc.display(loc.new)))

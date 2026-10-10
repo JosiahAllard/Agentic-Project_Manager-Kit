@@ -20,7 +20,7 @@ import sys
 import tempfile
 
 from .migration import MOVE_STEPS, OLD_DIR_NAME
-from .types import ConfigError, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, parse_json
+from .types import ConfigError, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, is_note, parse_json
 
 # The machine config's folder in the home folder. The one place the kit names it: code derives
 # the folder from config_dir() and messages from DISPLAY or display(), so a new name changes this
@@ -289,6 +289,16 @@ def config_file(home=None):
     return locate(home).path
 
 
+def readable_file(home=None):
+    """The machine config file a reader opens (locate()). ConfigError when the location is BAD:
+    a reader that opens the file itself (pmstart, pmwatch, backloglint, ...) must not take a new
+    file it cannot examine for an absent one."""
+    loc = locate(home)
+    if loc.error:
+        raise ConfigError(loc.error)
+    return loc.path
+
+
 def display(home=None):
     """The machine config file read, as messages name it: ~/<folder>/config.json."""
     return locate(home).display()
@@ -330,6 +340,25 @@ def user_config(home=None, location=None):
     out = {k: f.default for k, f in SCHEMA.items()}
     out.update({k: v for k, v in data.items() if k in SCHEMA})
     return out
+
+
+def failing_keys(data):
+    """The sorted top-level keys of the machine config object `data` that user_config refuses:
+    unknown, or holding a value its type refuses. Names only: no value is returned, so a caller
+    may print them where the value must not appear (kitlib.preflight.configline)."""
+    out = []
+    for k, v in data.items():
+        if is_note(k):
+            continue
+        f = SCHEMA.get(k)
+        errs = []
+        if f is None:
+            errs.append(k)
+        elif not (v is None and f.default is None):
+            f.type.check(v, k, errs)
+        if errs:
+            out.append(k)
+    return sorted(out)
 
 
 def ledger_path(home=None):

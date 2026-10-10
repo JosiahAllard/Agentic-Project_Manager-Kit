@@ -4,7 +4,8 @@ rules.git_jail turn a verdict into a deny; this module only reads paths and the 
 An agent session writes only inside its roots:
   its checkout     the git top of the folder the session runs in (a linked worktree: that
                    worktree alone; a main checkout: the whole checkout). Outside git, the folder
-                   it runs in, unless that is a drive root or the home folder.
+                   it runs in, unless that is a drive root or the home folder. None when it is
+                   on, over or inside either machine config folder (config_dirs).
   temp             the system temp folder (Ctx.tempdir, and TMP when it differs), and the agents'
                    temp folder AGENT_TEMP names when it is set. The session scratch folder
                    Claude Code makes lives under the system one.
@@ -68,13 +69,25 @@ def fwd(p):
 
 def own_root(ctx, cwd, is_root):
     """The session's own write root: the git top of `cwd`, else `cwd` itself outside git when
-    is_root(cwd) is false (a drive root or the home folder is never one)."""
+    is_root(cwd) is false (a drive root or the home folder is never one). None when that root is
+    on, over or inside either machine config folder (config_dirs): a session run there would
+    otherwise write the machine config, its own guard settings and ledger_path among them."""
     if not cwd:
         return None
     place = ctx.place(cwd)
     if place.kind in (repo.MAIN, repo.LINKED) and place.top:
-        return place.top
-    return None if is_root(cwd) else os.path.normpath(cwd)
+        own = place.top
+    elif is_root(cwd):
+        return None
+    else:
+        own = os.path.normpath(cwd)
+    return None if touches_config(ctx, own) else own
+
+
+def touches_config(ctx, path):
+    """True when `path` is, holds or lies inside either machine config folder (config_dirs)."""
+    p = real(path)
+    return any(inside(p, c) or inside(c, p) for c in (real(d) for d in config_dirs(ctx)))
 
 
 AGENT_TEMP = 'AGENT_TEMP'     # the agents' temp folder (optional/comfy and the temp sweep use it too)
@@ -109,8 +122,9 @@ def data_roots(ctx, cwd):
 def config_dirs(ctx):
     """Both machine config folders under ctx.home, the current (kitlib.config.user.DIR_NAME) and
     the retired one (kitlib.config.migration.OLD_DIR_NAME), whichever kitlib.config.user.locate
-    reads: no mark root may hold or lie in either. A root on the new folder while only the old
-    one has a config would let the session write the file locate then reads instead."""
+    reads: no own root (own_root) or mark root may be on, hold or lie in either. A root on the
+    new folder while only the old one has a config would let the session write the file locate
+    then reads instead."""
     return [os.path.join(ctx.home, kuser.DIR_NAME), os.path.join(ctx.home, OLD_DIR_NAME)]
 
 
@@ -124,7 +138,6 @@ def mark_roots(ctx, mark):
     if not isinstance(table, dict):
         return []
     want = str(mark).strip().lower()
-    cfgs = [real(d) for d in config_dirs(ctx)]
     out = []
     for name, entries in table.items():
         if not isinstance(name, str) or name.strip().lower() != want or not isinstance(entries, list):
@@ -135,8 +148,7 @@ def mark_roots(ctx, mark):
             path = kuser.expand_home(e.get('path'), ctx.home)
             if not isinstance(path, str) or not os.path.isabs(path) or e.get('mode') not in MODES:
                 continue
-            p = real(path)
-            if any(inside(p, cfg) or inside(cfg, p) for cfg in cfgs):
+            if touches_config(ctx, path):
                 continue
             out.append((path, e['mode']))
     return out
