@@ -4,10 +4,12 @@ subagent, Bash and PowerShell, allow and deny, and the exact alternative each de
 Each row: (name, payload builder, expected kind or None for allow, rule, the text after
 "Instead: "). Paths in the expected text are filled from the fake world ({main}, {wt}, ... in
 forward-slash form; {main_bs} keeps backslashes)."""
+import json
 import os
 import unittest
 
 from kitlib import pmdata
+from kitlib.git import repo
 from kitlib.guard import context, decide, rules
 from kitlib.lockmcp import server as lockmcp
 
@@ -318,6 +320,250 @@ class Ledger(unittest.TestCase):
         self.assertIsNone(decide(event('Write', {'file_path': self.w.ledger, 'content': ''}, self.w.plain), self.w.ctx()))
 
 
+class PmDataPlace(unittest.TestCase):
+    """The PM data worktree (docs/pm-data-branch.md "Guard place and commit hooks"): git calls it
+    LINKED; the guard answers it as MAIN, with its own .kit.json."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+        self.common = os.path.join(self.w.main, '.git')
+
+    def configure(self):
+        self.w.user_config({'pm_data': {'path': self.w.data}})
+
+    def head(self, git_dir, branch):
+        os.makedirs(git_dir, exist_ok=True)
+        with open(os.path.join(git_dir, 'HEAD'), 'w', encoding='utf-8') as f:
+            f.write('ref: refs/heads/%s\n' % branch)
+
+    def record(self):
+        os.makedirs(self.common, exist_ok=True)
+        pmdata.write(self.common, 'pmdata', 'private', 'a' * 40)
+
+    def write(self, path, cwd, sub=True):
+        return event('Write', {'file_path': path, 'content': ''}, cwd, sub=sub)
+
+    def test_subagent_edit_under_pm_data_denied(self):
+        self.configure()
+        target = os.path.join(self.w.data, 'rulings', 'LEDGER.md')
+        for cwd in (self.w.data, self.w.wt):
+            with self.subTest(cwd):
+                d = decide(self.write(target, cwd), self.w.ctx())
+                self.assertIsNotNone(d)
+                self.assertEqual(d.rule, 'main-checkout', d.reason)
+                self.assertIn('in the main checkout %s' % self.w.data, d.reason)
+        d = decide(bash('echo x > notes.md', self.w.data, sub=True), self.w.ctx())
+        self.assertEqual(d.rule, 'main-checkout', d and d.reason)
+        # the PM's own session edits it
+        self.assertIsNone(decide(self.write(target, self.w.data, sub=False), self.w.ctx()))
+
+    def test_git_reset_hard_in_pm_data_denied(self):
+        self.configure()
+        for sub in (False, True):
+            d = decide(bash('git reset --hard', self.w.data, sub=sub), self.w.ctx())
+            self.assertEqual(d.rule, 'git-reset-hard', d and d.reason)
+            self.assertIn('Instead: git -C "%s" reset --keep HEAD' % W.fwd(self.w.data), d.reason)
+        for cmd, rule in (('git clean -fdx', 'git-clean'), ('git stash', 'git-stash'), ('git add -A', 'git-bulk-add'),
+                          ('git checkout main', 'git-checkout')):
+            self.assertEqual(decide(bash(cmd, self.w.data, sub=True), self.w.ctx()).rule, rule, cmd)
+
+    def test_pm_data_config_is_its_own(self):
+        self.configure()
+        ctx = self.w.ctx()
+        self.assertEqual(ctx.place(os.path.join(self.w.data, 'x.md')).kind, repo.MAIN)
+        self.assertEqual(ctx.main_top(os.path.join(self.w.data, 'x.md')), self.w.data)
+        self.assertEqual(ctx.config(self.w.data).main_branch, 'pmdata')
+        self.assertEqual(ctx.config(self.w.wt).main_branch, 'main')
+        # without its own .kit.json the defaults hold: a subagent may not edit it
+        os.remove(os.path.join(self.w.data, '.kit.json'))
+        d = decide(self.write(os.path.join(self.w.data, 'x.md'), self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'main-checkout', d and d.reason)
+
+    def test_other_worktree_unchanged_with_pm_data(self):
+        self.configure()
+        ctx = self.w.ctx()
+        self.assertEqual(ctx.place(self.w.wt).kind, repo.LINKED)
+        self.assertFalse(ctx.is_pm_data(self.w.wt))
+        self.assertEqual(ctx.main_top(self.w.wt), self.w.main)
+        self.assertIsNone(decide(self.write(os.path.join(self.w.wt, 'a.py'), self.w.wt), self.w.ctx()))
+        self.assertIsNone(decide(bash('git commit -m x', self.w.wt, sub=True), self.w.ctx()))
+
+    def test_without_pm_data_the_worktree_stays_linked(self):
+        ctx = self.w.ctx()
+        self.assertEqual(ctx.place(self.w.data).kind, repo.LINKED)
+        self.assertFalse(ctx.is_pm_data(self.w.data))
+        self.assertIsNone(decide(self.write(os.path.join(self.w.data, 'x.md'), self.w.data), self.w.ctx()))
+        # a record whose branch the worktree's HEAD is not on changes nothing
+        self.record()
+        self.head(self.w.data_git_dir, 'kit/other')
+        self.assertEqual(self.w.ctx().place(self.w.data).kind, repo.LINKED)
+
+    def test_record_signal_promotes_without_machine_config(self):
+        self.record()
+        self.head(self.w.data_git_dir, 'pmdata')
+        self.head(os.path.join(self.common, 'worktrees', 'wt'), 'kit/wt')
+        ctx = self.w.ctx()
+        self.assertEqual(ctx.place(self.w.data).kind, repo.MAIN)
+        self.assertTrue(ctx.is_pm_data(self.w.data))
+        self.assertEqual(ctx.place(self.w.wt).kind, repo.LINKED)
+        d = decide(self.write(os.path.join(self.w.data, 'x.md'), self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'main-checkout', d and d.reason)
+
+    def test_malformed_pm_data_denies_subagent_writes(self):
+        target = os.path.join(self.w.wt, 'a.py')
+        self.w.user_config({'pm_data': {'path': 'relative/pmdata'}})
+        for ev in (self.write(target, self.w.wt), bash('echo x > notes.txt', self.w.wt, sub=True),
+                   bash('git commit -m x', self.w.wt, sub=True)):
+            d = decide(ev, self.w.ctx())
+            self.assertIsNotNone(d, ev['tool_input'])
+            self.assertEqual(d.rule, 'pm-data', d.reason)
+            self.assertIn('absolute path', d.reason)
+        # the main session and reads stay open
+        self.assertIsNone(decide(self.write(target, self.w.wt, sub=False), self.w.ctx()))
+        self.assertIsNone(decide(bash('git status', self.w.wt, sub=True), self.w.ctx()))
+        # a record that does not read: writes in that repository's worktrees are denied too
+        self.w.user_config({})
+        os.makedirs(self.common, exist_ok=True)
+        with open(pmdata.record_path(self.common), 'w', encoding='utf-8') as f:
+            f.write('{')
+        d = decide(self.write(target, self.w.wt), self.w.ctx())
+        self.assertEqual(d.rule, 'pm-data', d and d.reason)
+        self.assertIn('not valid JSON', d.reason)
+        # a machine config the strict reader refuses for another key, without pm_data, does not
+        self.w.user_config({'a_key_this_kit_does_not_know': {}})
+        os.remove(pmdata.record_path(self.common))
+        self.assertIsNone(decide(self.write(target, self.w.wt), self.w.ctx()))
+
+    def test_no_wt_add_alternative_in_pm_data(self):
+        self.configure()
+        cases = ((self.write(os.path.join(self.w.data, 'x.md'), self.w.data), 'main-checkout'),
+                 (self.write(os.path.join(self.w.data, 'x.md'), self.w.wt), 'main-checkout'),
+                 (bash('git merge kit/wt', self.w.data, sub=True), 'git-main-history'),
+                 (bash('git restore a.md', self.w.data, sub=True), 'git-restore'),
+                 (bash('git checkout main', self.w.data), 'git-checkout'),
+                 (bash('git stash', self.w.data, sub=True), 'git-stash'))
+        for ev, rule in cases:
+            with self.subTest(rule):
+                d = decide(ev, self.w.ctx())
+                self.assertEqual(d.rule, rule, d and d.reason)
+                self.assertIn('Agents do not work in the PM data worktree "%s"' % W.fwd(self.w.data), d.reason)
+                self.assertIn('To see its state: Instead: git -C "%s" status ' % W.fwd(self.w.data), d.reason)
+                self.assertNotIn('worktree add', d.reason)
+        # the kit's own main checkout still offers one
+        d = decide(bash('git stash', self.w.main, sub=True), self.w.ctx())
+        self.assertIn('Instead: git -C "%s" worktree add' % W.fwd(self.w.main), d.reason)
+
+    def test_push_from_pm_data_is_judged_by_the_kit_for_kit_refs(self):
+        self.configure()
+        for cmd in ('git push --no-verify origin main', 'git push --force origin main', 'git push origin +main'):
+            for sub in (False, True):
+                d = decide(bash(cmd, self.w.data, sub=sub), self.w.ctx())
+                self.assertIsNotNone(d, cmd)
+                self.assertEqual(d.rule, 'git-push-main', d.reason)
+                self.assertIn('to origin/main', d.reason)
+        # the data branch: the data worktree's own .kit.json (push_block off) allows it
+        self.assertIsNone(decide(bash('git push --force origin pmdata', self.w.data), self.w.ctx()))
+        with open(os.path.join(self.w.data, '.kit.json'), 'w', encoding='utf-8') as f:
+            json.dump({'repo': {'name': 'data', 'main_branch': 'pmdata', 'push_block': True}}, f)
+        d = decide(bash('git push --force origin pmdata', self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'git-push-main', d and d.reason)
+        self.assertIn('to origin/pmdata', d.reason)
+        # a kit .kit.json that does not load: refused
+        with open(os.path.join(self.w.main, '.kit.json'), 'w', encoding='utf-8') as f:
+            f.write('{')
+        d = decide(bash('git push origin kit/x', self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'git-push-main', d and d.reason)
+        self.assertIn('cannot be read', d.reason)
+
+    def test_every_ref_push_from_pm_data_is_judged_by_the_kit(self):
+        self.configure()
+        cases = (('git push --mirror origin', 'no gate-OK record'),
+                 ('git push --all origin', 'no gate-OK record'),
+                 ('git push --delete origin main', 'main is never deleted'),
+                 ('git push origin :main', 'main is never deleted'),
+                 ('git push --no-verify origin v1:refs/heads/main', 'skips the pre-push hook'))
+        for cmd, why in cases:
+            with self.subTest(cmd):
+                d = decide(bash(cmd, self.w.data), self.w.ctx())
+                self.assertEqual(d.rule, 'git-push-main', d and d.reason)
+                self.assertIn('to origin/main', d.reason)
+                self.assertIn(why, d.reason)
+        # a tag push touches no branch: allowed, as from the kit's main checkout
+        for where in (self.w.data, self.w.main):
+            self.assertIsNone(decide(bash('git push origin refs/tags/v1', where), self.w.ctx()), where)
+
+    def test_unreadable_push_line_from_pm_data_is_read_again(self):
+        self.configure()
+        line = "echo 'x ; git push --no-verify origin main"
+        d = decide(bash(line, self.w.data), self.w.ctx())
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual(d.rule, 'git-push-main', d.reason)
+        self.assertIn('could not read this command', d.reason)
+        self.assertIn('skips the pre-push hook', d.reason)
+        # a kit .kit.json that does not load: the line is still read again, and refused
+        with open(os.path.join(self.w.main, '.kit.json'), 'w', encoding='utf-8') as f:
+            f.write('{')
+        d = decide(bash(line, self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'git-push-main', d and d.reason)
+        self.assertIn('cannot be read', d.reason)
+
+    def test_worktree_remove_from_pm_data_is_judged_by_the_kit(self):
+        self.configure()
+        self.w.git.clean[os.path.normcase(os.path.abspath(self.w.wt))] = True
+        cmd = 'git worktree remove %s' % W.fwd(self.w.wt)
+        d = decide(bash(cmd, self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'git-worktree-remove', d and d.reason)
+        self.assertIn('not merged into main', d.reason)
+        self.w.git.ancestors.add((W.SHA_WT, 'main'))
+        self.assertIsNone(decide(bash(cmd, self.w.data), self.w.ctx()))
+
+    def test_a_bad_unrelated_key_does_not_hide_pm_data(self):
+        self.w.user_config({'pm_data': {'path': self.w.data}, 'a_key_this_kit_does_not_know': 1})
+        ctx = self.w.ctx()
+        self.assertTrue(ctx.is_pm_data(self.w.data))
+        self.assertIsNone(ctx.pm_data_error(self.w.wt))
+        self.assertIsNone(decide(self.write(os.path.join(self.w.wt, 'a.py'), self.w.wt), self.w.ctx()))
+        self.w.user_config({'pm_data': {'path': self.w.data, 'branch': 'a b'}, 'a_key_this_kit_does_not_know': 1})
+        d = decide(self.write(os.path.join(self.w.wt, 'a.py'), self.w.wt), self.w.ctx())
+        self.assertEqual(d.rule, 'pm-data', d and d.reason)
+        self.assertIn("branch must be a branch or remote name, not 'a b'", d.reason)
+
+    def test_machine_config_decides_alone_when_set(self):
+        self.w.user_config({'pm_data': {'path': self.w.plain}})
+        self.record()
+        self.head(self.w.data_git_dir, 'pmdata')
+        ctx = self.w.ctx()
+        self.assertEqual(ctx.place(self.w.data).kind, repo.LINKED)
+        # nor is a bad record read then
+        with open(pmdata.record_path(self.common), 'w', encoding='utf-8') as f:
+            f.write('{')
+        self.assertIsNone(decide(self.write(os.path.join(self.w.wt, 'a.py'), self.w.wt), self.w.ctx()))
+
+    def test_machine_path_matches_case_and_trailing_separator(self):
+        self.w.user_config({'pm_data': {'path': self.w.data.upper() + os.sep}})
+        ctx = self.w.ctx()
+        self.assertEqual(ctx.place(self.w.data).kind, repo.MAIN)
+        self.assertEqual(ctx.pm_data_branch(self.w.data), 'pmdata')
+
+    def test_unreadable_head_denies_subagent_writes(self):
+        self.record()                           # no HEAD file in the data worktree's git dir
+        d = decide(self.write(os.path.join(self.w.data, 'x.md'), self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'pm-data', d and d.reason)
+        self.assertIn('cannot read', d.reason)
+        self.assertIn('HEAD', d.reason)
+
+    def test_bad_record_seen_only_through_the_target(self):
+        os.makedirs(self.common, exist_ok=True)
+        with open(pmdata.record_path(self.common), 'w', encoding='utf-8') as f:
+            f.write('{')
+        d = decide(self.write(os.path.join(self.w.wt, 'a.py'), self.w.plain), self.w.ctx())
+        self.assertEqual(d.rule, 'pm-data', d and d.reason)
+        # a write outside that repository, from outside it, is not this rule's
+        d = decide(self.write(os.path.join(self.w.plain, 'a.py'), self.w.plain), self.w.ctx())
+        self.assertTrue(d is None or d.rule != 'pm-data', d and d.reason)
+
+
 class LockMcp(unittest.TestCase):
     def setUp(self):
         self.w = W.World()
@@ -586,16 +832,20 @@ class PushBlockOff(unittest.TestCase):
 class PmDataNoVerify(unittest.TestCase):
     """git-push-pmdata: `git push --no-verify` skips the pre-push leak stage, so it is denied in a
     repository whose git common dir has kit-pm-data.json, in every session but the owner's own,
-    whatever push_block says (it is off here). The file's existence decides; it is not parsed."""
+    whatever push_block says (it is off here). The file's existence decides for this rule; the
+    record is a valid one, since the pm-data place rule reads it for linked worktrees."""
 
     def setUp(self):
         self.w = W.World(kit={'repo': {'name': 'demo'}})
         self.addCleanup(self.w.cleanup)
         common = os.path.join(self.w.main, '.git')
-        os.makedirs(common)
-        self.record = os.path.join(common, pmdata.FILE_NAME)
-        with open(self.record, 'w', encoding='utf-8') as f:
-            f.write('not even JSON')
+        os.makedirs(common, exist_ok=True)
+        self.record = pmdata.write(common, 'pmdata', 'private', 'a' * 40) and pmdata.record_path(common)
+        # with a record, the place rule reads a linked worktree's HEAD to tell the data worktree
+        wt_git = os.path.join(common, 'worktrees', 'wt')
+        os.makedirs(wt_git, exist_ok=True)
+        with open(os.path.join(wt_git, 'HEAD'), 'w', encoding='utf-8') as f:
+            f.write('ref: refs/heads/kit/wt\n')
 
     def decide(self, text, sub=True, environ=None, cwd=None):
         return decide(bash(text, cwd or self.w.wt, sub=sub), self.w.ctx(environ=environ or {}))
@@ -626,6 +876,22 @@ class PmDataNoVerify(unittest.TestCase):
 
     def test_the_owner_session_may(self):
         self.assertIsNone(self.decide('git push --no-verify origin kit/wt', sub=False))
+
+    def test_from_the_pm_data_worktree_too(self):
+        # the PM data place judges a push by two configs (rules.git_push_pm_data); each runs this rule
+        self.w.user_config({'pm_data': {'path': self.w.data}})
+        data_git = self.w.data_git_dir
+        os.makedirs(data_git, exist_ok=True)
+        with open(os.path.join(data_git, 'HEAD'), 'w', encoding='utf-8') as f:
+            f.write('ref: refs/heads/pmdata\n')
+        self.assertTrue(self.w.ctx().is_pm_data(self.w.data))
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in ('git push --no-verify private pmdata', 'git push $F private pmdata'):
+            with self.subTest(text):
+                self.assert_denied(self.decide(text, sub=False, environ=pm, cwd=self.w.data))
+                self.assert_denied(self.decide(text, cwd=self.w.data))
+        self.assertIsNone(self.decide('git push --no-verify private pmdata', sub=False, cwd=self.w.data))
+        self.assertIsNone(self.decide('git push private pmdata', sub=False, environ=pm, cwd=self.w.data))
 
     def test_without_a_record_or_without_no_verify_it_passes(self):
         self.assertIsNone(self.decide('git push origin kit/wt'))

@@ -51,20 +51,26 @@ class FakeGit(object):
 
 class World(object):
     """base/repo is a main checkout (push_block on), base/repo/.claude/worktrees/wt its linked
-    worktree, base/plain no checkout, base/unknown a place git cannot tell about."""
+    worktree, base/pmdata another linked worktree of it (the PM data worktree when the machine
+    config or a kit-pm-data.json record says so; its own .kit.json names repo "data"),
+    base/plain no checkout, base/unknown a place git cannot tell about."""
 
     def __init__(self, kit=None):
         self.base = tempfile.mkdtemp(prefix='kit-guard-')
         self.main = os.path.join(self.base, 'repo')
         self.wt = os.path.join(self.main, '.claude', 'worktrees', 'wt')
+        self.data = os.path.join(self.base, 'pmdata')
+        self.data_git_dir = os.path.join(self.main, '.git', 'worktrees', 'pmdata')
         self.plain = os.path.join(self.base, 'plain')
         self.unknown = os.path.join(self.base, 'unknown')
         self.home = os.path.join(self.base, 'home')
         self.temp = os.path.join(self.base, 'tmp')
-        for d in (self.wt, self.plain, self.unknown, self.home, self.temp):
+        for d in (self.wt, self.data, self.plain, self.unknown, self.home, self.temp):
             os.makedirs(d)
         with open(os.path.join(self.main, '.kit.json'), 'w', encoding='utf-8') as f:
             json.dump(kit if kit is not None else {'repo': {'name': 'demo', 'push_block': True}}, f)
+        with open(os.path.join(self.data, '.kit.json'), 'w', encoding='utf-8') as f:
+            json.dump({'repo': {'name': 'data', 'main_branch': 'pmdata'}}, f)
         self.ledger = os.path.join(self.base, 'pm', 'rulings', 'LEDGER.md')
         self.git = FakeGit(self)
         self.records = {SHA_GATED}
@@ -86,6 +92,8 @@ class World(object):
         if p.startswith(nc(self.wt)):
             return repo.Place(repo.LINKED, self.wt, '', os.path.join(self.main, '.git', 'worktrees', 'wt'),
                               os.path.join(self.main, '.git'))
+        if p.startswith(nc(self.data)):
+            return repo.Place(repo.LINKED, self.data, '', self.data_git_dir, os.path.join(self.main, '.git'))
         if p.startswith(nc(self.main)):
             git = os.path.join(self.main, '.git')
             return repo.Place(repo.MAIN, self.main, '', git, git)
