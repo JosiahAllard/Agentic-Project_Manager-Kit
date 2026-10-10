@@ -322,7 +322,7 @@ The guard denies these with the command to use before the auto-mode classifier s
 
 1. Settings: the one PreToolUse entry that `python <kit>/claude/hooks/guard.py --settings-entry` prints, in exec form:
    - `command` is the `pythonw.exe` beside the python that ran it and `args` is `[<kit>/claude/hooks/guard.py]`. There is no shell and no console: one process per call, against four for a shell-form `python` command (bash, its conhost, a second bash, python; measured 2026-10-10 for KIT-HOOK-SPAWNS).
-   - Do not write a bare `pythonw`: on this machine PATH finds the WindowsApps alias, one process more.
+   - Do not write a bare `pythonw`: on a Windows install with the Store alias enabled, PATH finds the WindowsApps alias, one process more.
    - The matcher is `Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|mcp__.*`: the tools a rule can refuse. Read, Grep, Glob and the rest start no process.
 2. Every repo: `git config core.hooksPath <kit>/githooks` (the fast-forward rule is for every repo; the gate-OK check needs `push_block`). This also installs `pre-commit`, inert unless the repo's `.kit.json` sets `ledger.pre_commit_check` (docs/ledger.md "Pre-commit check").
 3. Every repo whose landers edit a main checkout, or fetch and fast-forward one from a worktree ("Write jail"): `.kit.json` `roles.lander.edit_main_checkout: true`.

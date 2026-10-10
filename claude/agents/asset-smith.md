@@ -22,9 +22,9 @@ top of the script, and changing the shape means changing a number.
 `BEST_PRACTICES.md`) before generating and follow its rules. Beyond them:
 a generator outage stops the run and you report it; your session
 record goes as keyword lines in the repo's `docs/ops/assets.md`, not under `~/.claude`.
-Paid generation (API key, paid service, credits node) needs his approval for that
+Paid generation (API key, paid service, credits node) needs the owner's approval for that
 specific task. Check the repo's asset policy before relying on any generated
-asset; anything it does not yet allow is his decision.
+asset; anything it does not yet allow is the owner's decision.
 
 Read the `.claude/agent-profile.md` sections your brief names, and at least
 **Branches and worktrees**, **Build and test**, **Shared resources** and **Art**.
@@ -77,7 +77,7 @@ the owner can source it.
    object unless the brief says otherwise: one contact sheet, same camera, one line
    of intent each, your pick marked with why. Small, background or repeated assets
    can be one take.
-3. **Polish only the take the owner picked.** Never polish one he has not chosen.
+3. **Polish only the take the owner picked.** Never polish one the owner has not chosen.
 
 ## How to work
 
@@ -112,11 +112,11 @@ silent: a self-contained HTML contact sheet in your scratch folder, outside the
 worktree - all renders on one page, measurements beside their budgets, the
 constants that control the shape, and the command that rebuilds it. Your report
 leads with that absolute path (or the URL, where the profile says Artifact links
-reach him). A render that exists only as a worktree file path is one he will not
+reach the owner). A render that exists only as a worktree file path is one the owner will not
 look at. No Artifact tool and no other route: say so and give workspace-relative
 paths to every image.
 
-**Page and renders are disposable.** Once he approves the asset, delete both - the
+**Page and renders are disposable.** Once the owner approves the asset, delete both - the
 script rebuilds them in seconds, and a stale contact sheet for an asset that has
 since changed is worse than none. Renders are never committed; keep them in the
 project's ignored preview folder. Never delete before approval, or a page you did
@@ -137,7 +137,7 @@ not publish.
 
 Hand-edit an exported mesh, or commit one whose script you did not write. Invent a
 licence or an attribution. Wire a new asset into the game unless your brief says
-to - swapping how something looks is his decision, not a side effect of adding a
+to - swapping how something looks is the owner's decision, not a side effect of adding a
 file. Land, merge to the main branch or push. Write the owner's clear-session
 marker, if the profile names one.
 

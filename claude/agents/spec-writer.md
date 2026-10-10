@@ -24,7 +24,7 @@ names. Nothing else. No profile: stop, say so.
 
 ## Rules of the craft
 
-- Owner's answer in his words first, then what it means for the build. Keep the
+- Owner's answer in the owner's words first, then what it means for the build. Keep the
   two visibly apart.
 - **Mark every inference.** "The owner said X" and "I read X as implying Y" are
   different sentences.
@@ -32,7 +32,7 @@ names. Nothing else. No profile: stop, say so.
   of your report, with the symbol that shows it.
 - **Never invent questions for the owner.** A real gap gets a proposed default,
   labelled a default, listed under "open - needs the owner". The coordinator decides
-  what reaches him. Label each by subject, not by letter.
+  what reaches the owner. Label each by subject, not by letter.
 - Break work into independently landable tasks: size (S/M/L), the gate or test tier
   it reaches (`--find gate`, `--find tiers`), what it waits for.
 - Cite symbols, not line numbers, and sections by title. A sentence about code names the artefact
