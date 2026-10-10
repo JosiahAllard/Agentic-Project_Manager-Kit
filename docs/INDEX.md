@@ -92,3 +92,17 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/tool_deps.py` | tests a changed file selects (`docs/test-tools.md`) | kw: tool_deps
 - `tools/pytests.py` | test runner (`docs/test-tools.md`) | kw: pytests
 - `tools/forbidden.py` | forbidden-text check (`docs/repo-checks.md`) | kw: forbidden
+- `tools/agent_roster.py` | docs/ROSTER.md against agent file model and effort (`docs/ROSTER.md`) | kw: agent_roster, roster
+- `tools/board.py` | the coordinator's whole board in one call (`docs/preflight.md`) | kw: board
+- `tools/checkout_guard.py` | is a path in the main checkout; strays in it (`docs/preflight.md`) | kw: checkout_guard, stray
+- `tools/kit_stubs.py` | write or check a repo's stubs for the kit tools (`docs/install.md`) | kw: kit_stubs, stubs
+- `tools/kit_tests.py` | run the kit test suite, whole or selected (`docs/test-tools.md`) | kw: kit_tests, tests
+- `tools/ledger_refs.py` | where each ruling id is cited (`docs/ledger.md`) | kw: ledger_refs
+- `tools/machine_paths.py` | refuse a hard-coded machine path (`docs/commit.md`) | kw: machine_paths
+- `tools/machine_setup.py` | switch Claude config folders to this kit (`docs/machine-setup.md`) | kw: machine_setup
+- `tools/pieces.py` | the path-to-piece table (`docs/repo-checks.md`) | kw: pieces
+- `tools/pm_data.py` | make or re-link the PM-data branch (`docs/pm-data-branch.md`) | kw: pm_data
+- `tools/ruling_cites.py` | fail an added ruling citation the ledger cannot back (`docs/repo-checks.md`) | kw: ruling_cites
+- `tools/trailers.py` | fail a commit with no agent trailer (`docs/repo-checks.md`) | kw: trailers
+- `tools/worktree_paths.py` | which path a worktree write may go to (`docs/worktree-paths.md`) | kw: worktree_paths
+- `tools/worktree_sweep_task.py` | nightly worktree sweep scheduled task (`docs/worktree-remove.md`) | kw: worktree_sweep_task, sweep
