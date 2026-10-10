@@ -7,6 +7,7 @@ Ported from the PM kit's test_preflight.py and test_exit_status.py (class Prefli
 """
 import contextlib
 import datetime
+import importlib
 import io
 import json
 import os
@@ -749,6 +750,7 @@ class TheReportHookScope(Fixture):
             __import__(name + '.sub')
             return sys.modules[name], sys.modules[name + '.sub']
         self.module(name, 'WORD = %r\n' % word, self.side)
+        importlib.invalidate_caches()         # a second file in the same mtime tick
         return __import__(name)
 
     def test_a_builtin_of_a_sibling_name_is_not_displaced(self):
@@ -792,29 +794,87 @@ class TheReportHookScope(Fixture):
         self.assertIs(sys.modules['hs_pyw'], kit)
 
     def test_a_pyd_sibling_displaces_the_kits_module(self):
-        kit = self.outside('hs_pyd')
-        with open(os.path.join(self.tools, 'hs_pyd.cp314-win_amd64.pyd'), 'wb') as fh:
-            fh.write(b'')
-        self.module('pyd_hook', 'import sys\nHAD = "hs_pyd" in sys.modules\n'
-                                'def lines():\n    return [HAD]\n')
-        self.assertEqual(hooks.lines(self.tools, ['pyd_hook:lines']), ['False'])
+        """A tagged `x.cp314-win_amd64.pyd` and a plain `x.pyd` both name a sibling."""
+        kit, plain = self.outside('hs_pyd'), self.outside('hs_pyd_plain')
+        for entry in ('hs_pyd.cp314-win_amd64.pyd', 'hs_pyd_plain.pyd'):
+            with open(os.path.join(self.tools, entry), 'wb') as fh:
+                fh.write(b'')
+        self.module('pyd_hook', 'import sys\n'
+                                'HAD = ["hs_pyd" in sys.modules, "hs_pyd_plain" in sys.modules]\n'
+                                'def lines():\n    return HAD\n')
+        self.assertEqual(hooks.lines(self.tools, ['pyd_hook:lines']), ['False', 'False'])
         self.assertIs(sys.modules['hs_pyd'], kit)
+        self.assertIs(sys.modules['hs_pyd_plain'], plain)
+
+    def test_a_module_from_elsewhere_bound_to_a_repo_stdlib_name_is_dropped(self):
+        """tools/json.py shadows the stdlib json; pdb, first imported during the hook, does
+        `import json` and gets the repo's copy. It must not stay loaded bound to it."""
+        import json as std_json
+        self.fresh('pdb')
+        self.module('json', 'WORD = "repo"\n')
+        self.module('json_hook', 'import pdb\ndef lines():\n    return [pdb.json.WORD]\n')
+        self.assertEqual(hooks.lines(self.tools, ['json_hook:lines']), ['repo'])
+        self.assertIs(sys.modules['json'], std_json)
+        bound = [k for k, m in list(sys.modules.items())
+                 if getattr(getattr(m, '__dict__', {}).get('json'), 'WORD', None) == 'repo']
+        self.assertEqual(bound, [])
+
+    def test_a_bytes_file_in_sys_modules_does_not_stop_the_restore(self):
+        kit = self.outside('hs_bfile')
+        self.addCleanup(sys.modules.pop, 'hs_bytes', None)
+        self.module('hs_bfile', 'WORD = "repo"\n')
+        self.module('bytes_hook', 'import sys, types, hs_bfile\n'
+                                  'm = types.ModuleType("hs_bytes")\n'
+                                  'm.__file__ = b"Z:\\\\elsewhere\\\\hs_bytes.py"\n'
+                                  'sys.modules["hs_bytes"] = m\n'
+                                  'def lines():\n    return [hs_bfile.WORD]\n')
+        self.assertEqual(hooks.lines(self.tools, ['bytes_hook:lines']), ['repo'])
+        self.assertIs(sys.modules['hs_bfile'], kit)
+
+    def test_a_namespace_package_on_both_sides_is_restored(self):
+        for key in ('hs_ns', 'hs_ns.other', 'hs_ns.mod'):
+            self.addCleanup(sys.modules.pop, key, None)
+        os.makedirs(os.path.join(self.side, 'hs_ns'))
+        self.module('other', 'WORD = "kit"\n', os.path.join(self.side, 'hs_ns'))
+        __import__('hs_ns.other')
+        kit_ns, kit_other = sys.modules['hs_ns'], sys.modules['hs_ns.other']
+        self.assertIsNone(getattr(kit_ns, '__file__', None))          # a namespace package
+        os.makedirs(os.path.join(self.tools, 'hs_ns'))
+        self.module('mod', 'WORD = "repo"\n', os.path.join(self.tools, 'hs_ns'))
+        self.module('ns_hook', 'import hs_ns.mod\ndef lines():\n    return [hs_ns.mod.WORD]\n')
+        self.assertEqual(hooks.lines(self.tools, ['ns_hook:lines']), ['repo'])
+        self.assertIs(sys.modules['hs_ns'], kit_ns)
+        self.assertIs(sys.modules['hs_ns.other'], kit_other)
+        self.assertNotIn('hs_ns.mod', sys.modules)
+
+    def test_a_namespace_package_only_in_tools_is_dropped(self):
+        for key in ('hs_ns_only', 'hs_ns_only.mod'):
+            self.addCleanup(sys.modules.pop, key, None)
+        os.makedirs(os.path.join(self.tools, 'hs_ns_only'))
+        self.module('mod', 'WORD = "repo"\n', os.path.join(self.tools, 'hs_ns_only'))
+        self.module('ns_only_hook', 'import hs_ns_only.mod\n'
+                                    'def lines():\n    return [hs_ns_only.mod.WORD]\n')
+        self.assertEqual(hooks.lines(self.tools, ['ns_only_hook:lines']), ['repo'])
+        self.assertNotIn('hs_ns_only', sys.modules)
+        self.assertNotIn('hs_ns_only.mod', sys.modules)
 
     def restored_after(self, raising_text, call=None):
         """A hook that loads a repo sibling over a kit copy, pulls in a stdlib module, then runs
-        `raising_text`; afterwards sys.path, the kit copy and the stdlib module are as they should
-        be and the repo's modules are gone."""
+        `raising_text`; afterwards sys.path and sys.modules are exactly as before: the kit copy
+        is back, and since a displaced name was loaded from the tools dir, the stdlib module the
+        hook pulled in is dropped with the repo's modules."""
         kit = self.outside('hs_both')
         self.fresh('colorsys')
         self.module('hs_both', 'WORD = "repo"\n')
         self.module('hs_only', 'WORD = "repo"\n')
         self.module('r_hook', 'import colorsys, hs_both, hs_only\n' + raising_text)
         before = list(sys.path)
+        modules = dict(sys.modules)
         got = (call or (lambda: hooks.lines(self.tools, ['r_hook:lines'])))()
         self.assertEqual(sys.path, before)
         self.assertIs(sys.modules['hs_both'], kit)
-        self.assertNotIn('hs_only', sys.modules)
-        self.assertIn('colorsys', sys.modules)
+        self.assertEqual(set(sys.modules), set(modules))
+        self.assertFalse([k for k in modules if sys.modules[k] is not modules[k]])
         return got
 
     def test_state_is_restored_after_a_hook_that_raises_at_import(self):

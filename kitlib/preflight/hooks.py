@@ -8,7 +8,8 @@ While a hook loads and runs, the repo's tools dir is first on sys.path, so `impo
 hook gets the repo's own pieces.py even when the kit has a tool of that name. Afterwards sys.path
 is put back, the sys.modules entries the hook added from the tools dir are dropped, and any module
 the repo's sibling displaced for the hook is restored, so kit code never sees the repo's module.
-Modules the hook pulled in from elsewhere (the stdlib, kitlib) stay loaded. No bytecode is written
+Modules the hook pulled in from elsewhere (the stdlib, kitlib) stay loaded, unless a tools-dir
+module the hook loaded has a stdlib or displaced name: then all of them go. No bytecode is written
 while a hook loads and runs (kitlib.config.policy.no_bytecode), so no `__pycache__` appears in the
 repo's tools dir.
 
@@ -52,7 +53,7 @@ def _under(path, root):
     try:
         path = os.path.normcase(os.path.abspath(path))
         return os.path.commonpath([path, root]) == root
-    except ValueError:                       # another drive
+    except (ValueError, TypeError):          # another drive; a bytes or odd __file__
         return False
 
 
@@ -69,27 +70,39 @@ def _repo_first(tools_dir):
 
     A sibling name (and its `name.` submodules) is displaced only when the loaded module came
     from outside the tools dir - a kit or stdlib copy; a builtin has no file and stays. Of the
-    modules first imported during the hook, only those from the tools dir are dropped.
+    modules first imported during the hook, only those from the tools dir are dropped - unless
+    a tools-dir module loaded during the hook has a stdlib name or a displaced name: then a
+    module from elsewhere imported meanwhile may be bound to the repo's copy, and every module
+    first imported during the hook is dropped.
 
     Precondition: one thread. The changes are process-global, and an import on another thread
     while the hook runs would resolve against them."""
     root = os.path.normcase(os.path.abspath(tools_dir))
     saved_path = list(sys.path)
     saved_modules = dict(sys.modules)
+    displaced = set()
     try:
         names = _siblings(tools_dir)
         for key, module in list(sys.modules.items()):
             top = key.split('.')[0]
             if top in names and _locations(module) and not _from_tools(module, root):
                 del sys.modules[key]        # a kit or stdlib copy must not answer
+                displaced.add(top)
         sys.path.insert(0, tools_dir)
         yield
     finally:
-        sys.path[:] = saved_path
-        for key, module in list(sys.modules.items()):
-            if key not in saved_modules and _from_tools(module, root):
-                del sys.modules[key]
-        sys.modules.update(saved_modules)
+        try:                                # before sys.path goes back: a namespace package's
+            loaded = [(k, m) for k, m in list(sys.modules.items())  # __path__ follows it
+                      if saved_modules.get(k) is not m]     # new, or over a displaced copy
+            mine = [k for k, m in loaded if _from_tools(m, root)]
+            shadowing = any(k.split('.')[0] in sys.stdlib_module_names
+                            or k.split('.')[0] in displaced for k in mine)
+            for key in ([k for k, _ in loaded] if shadowing else mine):
+                if key not in saved_modules:            # the update below puts the rest back
+                    del sys.modules[key]
+        finally:
+            sys.path[:] = saved_path
+            sys.modules.update(saved_modules)
 
 
 def lines(tools_dir, hooks):
