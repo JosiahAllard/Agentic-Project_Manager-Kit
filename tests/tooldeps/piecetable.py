@@ -1,5 +1,5 @@
 """A stand-in pieces table for the tool_deps tests: the PM kit's _pieces_fixtures.py ran them on
-two real tables of Retribution's (OLD, before its folder move, and NEW, after it) built by its
+two real tables of a repository's (OLD, before its folder move, and NEW, after it) built by its
 pieces library, which is not part of this area. This holds only the pieces those tests name and
 only the table methods kitlib.tooldeps and the tests call (path, solution, get, gradle_pieces,
 pieces), with the same OLD and NEW folders."""
@@ -7,7 +7,7 @@ import copy
 import sys
 
 OLD_PIECES = [
-    {'id': 'retribution-api', 'kind': 'gradle', 'gradle': ':retribution-api', 'dir': 'retribution-api'},
+    {'id': 'beta-api', 'kind': 'gradle', 'gradle': ':beta-api', 'dir': 'beta-api'},
     {'id': 'Fleet.Protocol.Tests', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Protocol.Tests', 'dotnet': True},
     {'id': 'binding', 'kind': 'gradle', 'gradle': ':binding', 'dir': 'binding'},
     {'id': 'runtime', 'kind': 'gradle', 'gradle': ':runtime', 'dir': 'runtime'},
@@ -16,12 +16,12 @@ OLD_PIECES = [
     {'id': 'brain-ops', 'kind': 'asset', 'dir': 'fleet/ops', 'dotnet': True},
     {'id': 'Fleet.Node', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Node', 'dotnet': True},
     {'id': 'Fleet.Node.Tests', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Node.Tests', 'dotnet': True},
-    {'id': 'combat-scripts', 'kind': 'gradle', 'gradle': ':combat-scripts', 'dir': 'combat-scripts'},
+    {'id': 'delta-scripts', 'kind': 'gradle', 'gradle': ':delta-scripts', 'dir': 'delta-scripts'},
     {'id': 'pvp', 'kind': 'builder', 'dir': 'pvp'},
-    {'id': 'model-sums', 'kind': 'file', 'dir': 'combat-scripts/models/SHA256SUMS'},
+    {'id': 'model-sums', 'kind': 'file', 'dir': 'delta-scripts/models/SHA256SUMS'},
 ]
 MOVES = {
-    'retribution-api': 'shared/retribution-api',
+    'beta-api': 'shared/beta-api',
     'Fleet.Protocol.Tests': 'shared/Fleet.Protocol.Tests',
     'binding': 'worker/binding',
     'runtime': 'worker/runtime',
@@ -30,7 +30,7 @@ MOVES = {
     'brain-ops': 'brain/ops',
     'Fleet.Node': 'node/Fleet.Node',
     'Fleet.Node.Tests': 'node/Fleet.Node.Tests',
-    'combat-scripts': 'artifacts/scripts/combat-scripts',
+    'delta-scripts': 'artifacts/scripts/delta-scripts',
     'pvp': 'artifacts/models',
     'model-sums': 'artifacts/models/SHA256SUMS',
 }

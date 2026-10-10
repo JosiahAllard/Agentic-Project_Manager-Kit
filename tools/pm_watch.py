@@ -21,7 +21,7 @@ run only records a baseline.
                            [--idle-minutes 20] [--idle-poll 300] [--sessions <json>]
                            [--notice-dir <dir>] [--state <json>] [--once]
 --usage-script, --sessions, --alerts-dir and --state default to the "pm_watch" keys of
-~/.claude-pm-kit/config.json (usage_script, sessions_file, alerts_dir, state_file). With no usage
+the machine config (usage_script, sessions_file, alerts_dir, state_file). With no usage
 script, usage is read in this process (kitlib.launcher.usage, `launch.py usage`) from the accounts
 of the config's "launcher" key; with neither a script nor that key it exits 2. A script must
 print the same lines, "account 2: five_hour=39% ... seven_day=51% ...". --once polls once,
@@ -36,6 +36,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import pmwatch as W                                     # noqa: E402
+from kitlib.config import user as kuser                            # noqa: E402
 from claude import claude_host                                     # noqa: E402
 
 
@@ -54,11 +55,12 @@ def parse(argv, cfg, launcher_set=None):
     ap.add_argument("--once", action="store_true", help="poll once, print events, exit 0")
     a = ap.parse_args(argv)
     if not a.sessions:
-        ap.error("--sessions not given and pm_watch.sessions_file not in ~/.claude-pm-kit/config.json")
+        ap.error("--sessions not given and pm_watch.sessions_file not in %s" % kuser.DISPLAY)
     if not a.usage_script and not (W.launcher_configured() if launcher_set is None else launcher_set):
         ap.error("no usage source: --usage-script not given, pm_watch.usage_script not set, and "
-                 "~/.claude-pm-kit/config.json has no launcher key naming the accounts (docs/launcher.md "
-                 "\"Settings\"); without one only the default ~/.claude account would be watched")
+                 "%s has no launcher key naming the accounts (docs/launcher.md "
+                 "\"Settings\"); without one only the default ~/.claude account would be watched"
+                 % kuser.DISPLAY)
     return a
 
 

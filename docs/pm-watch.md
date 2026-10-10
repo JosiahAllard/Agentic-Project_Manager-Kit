@@ -4,7 +4,7 @@
 
 ## Config
 
-`~/.claude-pm-kit/config.json`, key `pm_watch`; a flag of the same meaning wins:
+The machine config (docs/kit-json.md "Machine config keys"), key `pm_watch`; a flag of the same meaning wins:
 
 ```json
 {"pm_watch": {

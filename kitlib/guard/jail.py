@@ -106,8 +106,9 @@ def data_roots(ctx, cwd):
 
 
 def config_dir(ctx):
-    """The machine config's folder (<home>/.claude-pm-kit): no mark root may hold or lie in it."""
-    return os.path.join(ctx.home, kuser.DIR_NAME)
+    """The machine config's folder (kitlib.config.user.config_dir under ctx.home): no mark root
+    may hold or lie in it."""
+    return kuser.config_dir(ctx.home)
 
 
 def mark_roots(ctx, mark):

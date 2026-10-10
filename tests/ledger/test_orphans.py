@@ -10,6 +10,7 @@ import unittest
 from kitlib.ledger import orphans, read
 from tests.backlog.helpers import record_text
 from tests.gitfixture import TempRepo
+from kitlib.config import user as kuser
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     'tools', 'ledger.py')
@@ -106,8 +107,8 @@ class CheckToolTest(unittest.TestCase):
         self.ledger = os.path.join(self.home, 'LEDGER.md')
         with open(self.ledger, 'w', encoding='utf-8', newline='\n') as f:
             f.write(LEDGER)
-        os.makedirs(os.path.join(self.home, '.claude-pm-kit'))
-        with open(os.path.join(self.home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+        os.makedirs(kuser.config_dir(self.home))
+        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
             json.dump({'ledger_path': self.ledger, 'ledger_repos': ['alpha', 'beta']}, f)
         self.repo = TempRepo()
         self.addCleanup(self.repo.cleanup)

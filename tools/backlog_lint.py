@@ -2,7 +2,7 @@
 
   backlog_lint.py [--repo NAME] [--config PATH] [--offer SESSION [--cap N | --next-output FILE]]
 
-For each repository in the "backlog_lint" key of ~/.claude-pm-kit/config.json (or --config),
+For each repository in the "backlog_lint" key of the machine config (or --config),
 reads its published records (the store its .kit.json names, or the configured folder on main)
 and prints one line per finding with the fix:
   session  a mapped area's record with no or another `session:`
@@ -23,6 +23,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import backloglint                                     # noqa: E402
+from kitlib.config import user as kuser                            # noqa: E402
 
 
 def run(cfgs, names, offer=None, cap=5, reader=None, out=print, offered_ids=None):
@@ -58,7 +59,7 @@ def run(cfgs, names, offer=None, cap=5, reader=None, out=print, offered_ids=None
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Flag backlog records next offers to a session that cannot take them.")
     ap.add_argument("--repo", action="append", help="lint only this repository (repeatable)")
-    ap.add_argument("--config", help="config file (default ~/.claude-pm-kit/config.json)")
+    ap.add_argument("--config", help="config file (default %s)" % kuser.DISPLAY)
     ap.add_argument("--offer", metavar="SESSION", help='also check what next would offer SESSION ("none" = untagged)')
     ap.add_argument("--cap", type=int, default=5, help="the offer's cap (default %(default)s)")
     ap.add_argument("--next-output", metavar="FILE",

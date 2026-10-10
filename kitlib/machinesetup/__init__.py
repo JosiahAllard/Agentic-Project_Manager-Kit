@@ -14,6 +14,8 @@ Nothing here prints or exits; run() gives the exit code and the lines.
 import datetime
 import os
 
+from kitlib.config import user
+
 from . import extras, links, settings
 from .common import Change, Plan
 
@@ -44,7 +46,7 @@ def default_config_dirs(home):
     except OSError:
         return out
     for n in names:
-        if (n == '.claude' or n.startswith('.claude-')) and n != '.claude-pm-kit' \
+        if (n == '.claude' or n.startswith('.claude-')) and n != user.DIR_NAME \
                 and os.path.isdir(os.path.join(home, n)):
             out.append(os.path.join(home, n))
     return out

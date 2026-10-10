@@ -18,7 +18,7 @@ Exit codes: 0 done; 1 refused or failed (the reason on stderr); 2 a stop refused
 
 ## Settings
 
-`~/.claude-pm-kit/config.json`, key `launcher` (checked by `kitlib/launcher/settings.py`; an unknown key or a relative path is a config error naming the key):
+The machine config (docs/kit-json.md "Machine config keys"), key `launcher` (checked by `kitlib/launcher/settings.py`; an unknown key or a relative path is a config error naming the key):
 
 ```json
 {"launcher": {

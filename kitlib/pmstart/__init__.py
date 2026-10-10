@@ -10,7 +10,9 @@ import os
 import re
 import subprocess
 
-CONFIG_PATH = os.path.join("~", ".claude-pm-kit", "config.json")
+from kitlib.config import user as kuser
+
+CONFIG_PATH = os.path.join("~", kuser.DIR_NAME, kuser.FILE_NAME)
 KEY = "pm_start"
 TIMEOUT = 4
 

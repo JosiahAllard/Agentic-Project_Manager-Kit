@@ -32,7 +32,7 @@ In the example config the gamma and pm rules match by path and text as well as i
 
 ## Config
 
-`~/.claude-pm-kit/config.json`, key `backlog_lint`. Example: `docs/backlog-lint.example.json`.
+The machine config (docs/kit-json.md "Machine config keys"), key `backlog_lint`. Example: `docs/backlog-lint.example.json`.
 
 - `repos.<name>.root` (path, required): the repository folder.
 - `repos.<name>.store` (optional): a folder to read instead of the repo's own store; absent, the store the repo's `.kit.json` names (above), so the lint has no default of its own. `ref` (default `.kit.json` `repo.main_branch`, else main or master): the branch a folder store is read on. A `.kit.json` the store cannot load, or a store not in the clone, is a read error, exit 2.

@@ -16,6 +16,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'optional', 'agenttemp'))
 import agent_temp_sweep as S  # noqa: E402
+from kitlib.config import user as kuser  # noqa: E402
 
 LATER = time.time() + 10 * S.DAY        # every entry made now is 10 days old then
 
@@ -36,7 +37,7 @@ class Case(unittest.TestCase):
         os.makedirs(self.dir)
 
     def config(self, cfg):
-        put(os.path.join(self.home, '.claude-pm-kit', 'config.json'), json.dumps(cfg))
+        put(kuser.config_file(self.home), json.dumps(cfg))
 
     def young(self, path):
         """Makes path written 1 day before LATER."""
@@ -217,6 +218,37 @@ class Cli(Case):
             code, out, _err = self.main('--apply')
         self.assertEqual(code, 1)
         self.assertIn('in-use', out)
+
+    @unittest.skipUnless(os.name == 'nt', 'the installed layout is a Windows junction')
+    def test_it_runs_through_an_installed_junction(self):
+        # machine setup installs <tools>/agenttemp as a junction into the kit; the script finds
+        # kitlib through the junction's real path, not beside the junction.
+        link = os.path.join(self.tmp, 'tools', 'agenttemp')
+        os.makedirs(os.path.dirname(link))
+        real = os.path.join(HERE, '..', '..', '..', 'optional', 'agenttemp')
+        subprocess.run(['cmd', '/c', 'mklink', '/J', link, os.path.abspath(real)], check=True,
+                       capture_output=True)
+        self.addCleanup(os.rmdir, link)          # the junction only, before the folder goes
+        r = self.run_alone(os.path.join(link, 'agent_temp_sweep.py'))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('nothing to sweep', r.stderr)
+
+    def run_alone(self, script):
+        """The script in a child python whose only way to kitlib is the script's own location."""
+        env = dict(os.environ, USERPROFILE=self.home, HOME=self.home)
+        env.pop('PYTHONPATH', None)              # an inherited path must not find kitlib for it
+        return subprocess.run([sys.executable, script], env=env, cwd=self.tmp, capture_output=True,
+                              text=True, timeout=60)
+
+    def test_a_copy_outside_the_kit_refuses_with_exit_2(self):
+        # Exit 1 means a partial sweep; a missing kit library sweeps nothing, so it is a refusal.
+        alone = os.path.join(self.tmp, 'a', 'b', 'c', 'agent_temp_sweep.py')
+        os.makedirs(os.path.dirname(alone))
+        shutil.copyfile(S.__file__, alone)
+        r = self.run_alone(alone)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('the kit library (kitlib) is not in the kit root', r.stderr)
+        self.assertNotIn('Traceback', r.stderr)
 
 
 if __name__ == '__main__':

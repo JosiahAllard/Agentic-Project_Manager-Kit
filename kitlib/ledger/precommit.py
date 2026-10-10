@@ -65,7 +65,7 @@ def targets(home=None):
     config cannot be read or sets no `ledger_path`."""
     path = config.ledger_path(home)
     if not path:
-        raise ConfigError('no ledger_path in ~/.claude-pm-kit/config.json')
+        raise ConfigError('no ledger_path in %s' % config.user.DISPLAY)
     return path, standing.path_beside(path)
 
 

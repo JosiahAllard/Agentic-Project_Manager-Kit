@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 
+from kitlib.config import user
 from kitlib.git import repo
 from kitlib.guard import context
 
@@ -81,7 +82,7 @@ class World(object):
         shutil.rmtree(self.base, True)
 
     def user_config(self, data):
-        d = os.path.join(self.home, '.claude-pm-kit')
+        d = user.config_dir(self.home)
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, 'config.json'), 'w', encoding='utf-8') as f:
             json.dump(data, f)

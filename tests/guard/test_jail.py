@@ -254,15 +254,16 @@ class MarkRoots(Base):
         self.jailed(self.write(os.path.join(self.w.home, 'projects', 'other.md'), env=PM, sub=False))
 
     def test_no_root_on_over_or_in_the_machine_config_folder(self):
-        cfg = os.path.join(self.w.home, '.claude-pm-kit')
-        for path in ('~/', '~/.claude-pm-kit', '~/.claude-pm-kit/sub', self.w.home, self.w.base):
+        cfg = kconfig.user.config_dir(self.w.home)
+        name = kconfig.user.DIR_NAME
+        for path in ('~/', '~/' + name, '~/%s/sub' % name, self.w.home, self.w.base):
             with self.subTest(path):
                 self.roots({'pm': [{'path': path, 'mode': 'open'}]})
                 self.jailed(self.write(os.path.join(cfg, 'config.json'), env=PM, sub=False))
                 self.jailed(self.write(os.path.join(cfg, 'sub', 'x.json'), env=PM, sub=False))
         # a sibling whose name only starts the same is not the folder
-        self.roots({'pm': [{'path': '~/.claude-pm-kit-notes', 'mode': 'open'}]})
-        self.allowed(self.write(os.path.join(self.w.home, '.claude-pm-kit-notes', 'x.md'), env=PM, sub=False))
+        self.roots({'pm': [{'path': '~/%s-notes' % name, 'mode': 'open'}]})
+        self.allowed(self.write(os.path.join(self.w.home, name + '-notes', 'x.md'), env=PM, sub=False))
 
     def test_a_config_the_strict_reader_refuses_gives_no_mark_roots(self):
         for table in ({'pm': [{'path': self.notes, 'mode': 'open'}, {'path': 'relative', 'mode': 'open'}]},

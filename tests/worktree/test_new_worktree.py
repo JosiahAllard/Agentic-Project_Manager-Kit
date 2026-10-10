@@ -334,7 +334,7 @@ class BranchExistsProbeIsExact(WorktreeCase):
 
 
 class MasterRepo(WorktreeCase):
-    """Retribution's values: main branch `master`, the landing lock named in the git common dir."""
+    """A repository's values: main branch `master`, the landing lock named in the git common dir."""
 
     BASE = 'master'
     CONFIG = MASTER_CONFIG

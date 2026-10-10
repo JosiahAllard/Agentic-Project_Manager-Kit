@@ -1,5 +1,5 @@
-"""kitlib.tooldeps and tools/tool_deps.py: the scan, both selection modes ("path", Retribution's;
-"tokens", GriffBall's py_select), every `.kit.json` "tool_tests" key, and the audit a repository
+"""kitlib.tooldeps and tools/tool_deps.py: the scan, both selection modes ("path", one repository's;
+"tokens", another's py_select), every `.kit.json` "tool_tests" key, and the audit a repository
 runs on its own tools. Ported from the PM kit's test_tool_deps.py: the
 configuration and the checkout root are passed explicitly (the PM kit cleared KIT_CONFIG and
 patched tool_deps.ROOT), and the pieces tables are tests/tooldeps/piecetable.py's stand-ins.
@@ -30,7 +30,7 @@ _spec.loader.exec_module(cli)
 
 TESTCASE = 'import unittest\n\nclass T(unittest.TestCase):\n    def test_x(self):\n        pass\n'
 
-# Retribution's "tool_tests" section (its TOOLS_EXTRA, TOOLS_PINNED_ROOT + PINNED_IN_PIECES + the
+# A repository's "tool_tests" section (its TOOLS_EXTRA, TOOLS_PINNED_ROOT + PINNED_IN_PIECES + the
 # solution pin, BUILD_GRAPH / TEST_SOURCE, WHOLE_TREE, UNTESTED at 8bae70b33): the selection tests
 # below are its own tests, run against its own values.
 BUILD_GRAPH = (r'(?:^|/)(?:build\.gradle\.kts|settings\.gradle\.kts|[^/]+\.csproj|'
@@ -51,8 +51,8 @@ R_DATA = {
         ['buildscripts/models-container.sh', ['test_pvp_step']],
         ['gradle.properties', ['test_runelite_bump']],
         [{'piece': 'model-sums', 'path': ''}, ['test_deploy_scripts']],
-        [{'piece': 'combat-scripts', 'path': 'src/test/java/'}, ['test_gate']],
-        [{'piece': 'binding', 'path': 'src/main/java/org/retribution/binding/client/CycleProbe.java'},
+        [{'piece': 'delta-scripts', 'path': 'src/test/java/'}, ['test_gate']],
+        [{'piece': 'binding', 'path': 'src/main/java/org/beta/binding/client/CycleProbe.java'},
          ['test_density_report']],
         [{'piece': 'brain-ops', 'path': '/'}, ['test_republish_live']],
         [{'piece': 'pvp', 'path': 'env/'}, ['test_pvp_step']],
@@ -64,7 +64,7 @@ R_DATA = {
     'whole_tree': {'test_gate.BuildGraphOracle': 'the scope covers every input; tree-shape'},
     'untested': ['cacheregions', 'check', 'codemap'],
 }
-# GriffBall's (py_select.py FULL_TRIGGERS, PS1_SCANNER/KILL_SCANNER, gate.DOC_SCAN_TESTS,
+# Another repository's (py_select.py FULL_TRIGGERS, PS1_SCANNER/KILL_SCANNER, gate.DOC_SCAN_TESTS,
 # tool_files/is_source/relevant at bd5620a3).
 DOC_SCANS = ['test_machine_paths']
 G_DATA = {
@@ -112,7 +112,7 @@ class Fixture(unittest.TestCase):
 
 
 class Selection(Fixture):
-    """Retribution's selection tests ("path" mode), on its own table values."""
+    """The "path" repository's selection tests ("path" mode), on its own table values."""
 
     def setUp(self):
         super().setUp()
@@ -260,8 +260,8 @@ class Selection(Fixture):
 
     def test_a_pinned_path_selects_exactly_its_module(self):
         self.assertEqual(self.select('docs/INDEX.md'), ['test_doc_index', 'test_tool_deps'])
-        # combat-scripts' test sources are also test sources: the literal-scan slice too.
-        self.assertEqual(self.select(OLD.path('combat-scripts', 'src/test/java/org/X.java')),
+        # delta-scripts' test sources are also test sources: the literal-scan slice too.
+        self.assertEqual(self.select(OLD.path('delta-scripts', 'src/test/java/org/X.java')),
                          ['test_gate', 'test_test_reads', 'test_tool_deps'])
 
     def test_a_tools_extra_file_selects_its_readers_dependents(self):
@@ -314,7 +314,7 @@ class Selection(Fixture):
 
 @both_tables
 class PinnedInPieces(unittest.TestCase):
-    """Retribution's in-piece pinned entries resolve through the pieces table: the same modules
+    """The "path" repository's in-piece pinned entries resolve through the pieces table: the same modules
     are selected before and after its folder move, each at its piece's path."""
 
     @classmethod
@@ -359,14 +359,14 @@ class PinnedInPieces(unittest.TestCase):
     def test_a_test_source_change_selects_the_literal_scan_slice_only(self):
         # GATE-SCOPED re-review: a new runtime read in test code is checked on its own branch.
         paths = [self.P(m, 'src/test/java/org/X.java') for m, _ in self.table.gradle_pieces()]
-        paths += [self.P('retribution-api', 'src/testFixtures/java/org/F.java'),
+        paths += [self.P('beta-api', 'src/testFixtures/java/org/F.java'),
                   self.P('Fleet.Brain.Tests', 'Backup/New.cs'), self.P('Fleet.Node.Tests', 'New.cs'),
                   self.P('Fleet.Protocol.Tests', 'New.cs')]
         for path in paths:
             with self.subTest(path=path):
                 got = self.select(path)
                 self.assertIn('test_test_reads', got)
-                if not path.startswith(self.P('combat-scripts', '')):   # pinned to test_gate on its own
+                if not path.startswith(self.P('delta-scripts', '')):   # pinned to test_gate on its own
                     self.assertNotIn('test_gate', got)
         for path in (self.P('Fleet.Brain', 'Program.cs'), self.P('binding', 'src/main/java/org/X.java')):
             with self.subTest(path=path):
@@ -388,7 +388,7 @@ class PinnedInPieces(unittest.TestCase):
 
 
 class Tokens(unittest.TestCase):
-    """GriffBall's py_select tests ("tokens" mode), on its own values. Its fixture test modules
+    """The "tokens" repository's py_select tests ("tokens" mode), on its own values. Its fixture test modules
     carry a TestCase here: the kit counts a test module by its TestCase, not by its name."""
 
     FILES = {
@@ -660,7 +660,7 @@ class Config(Fixture):
 
 
 class Audit(Fixture):
-    """`audit` (`--check`): the honesty checks Retribution ran as TheRealTools, on a fixture."""
+    """`audit` (`--check`): the honesty checks a repository ran as TheRealTools, on a fixture."""
     DATA = {'extra': {'data.json': ['a']}, 'pinned': [['docs/x.md', ['test_a']]],
             'untested': ['lonely'], 'whole_tree': {'test_a.T': 'reads the whole tree'}}
 
@@ -709,7 +709,7 @@ class Audit(Fixture):
         self.assertEqual(self.audit(dynamic_imports={'loader': [['a'], 'plugins']}), [])
 
     def test_every_test_module_the_scan_finds_is_one_discover_loads(self):
-        # Retribution's test_all_is_what_discover_loads, on a fixture: a TestCase-less test*.py
+        # A repository's test_all_is_what_discover_loads, on a fixture: a TestCase-less test*.py
         # is a tool to both.
         self.write('test_zz_tooldeps_fixture.py', TESTCASE)
         self.write('test_zz_tooldeps_report.py', 'def main():\n    pass\n')

@@ -7,6 +7,7 @@ import unittest
 
 from kitlib.config.types import ConfigError
 from kitlib.launcher import settings as S
+from kitlib.config import user as kuser
 
 
 class Check(unittest.TestCase):
@@ -71,8 +72,8 @@ class Defaults(unittest.TestCase):
     def test_load_reads_the_launcher_object_of_the_machine_config(self):
         state = os.path.join(self.home, 'state')
         repo = os.path.join(self.home, 'r')
-        os.makedirs(os.path.join(self.home, '.claude-pm-kit'))
-        with open(os.path.join(self.home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+        os.makedirs(kuser.config_dir(self.home))
+        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
             json.dump({'launcher': {'state_dir': state, 'repos': {'r': repo}, 'coordinator_agent': 'conductor'}}, f)
         s = S.load(self.home)
         self.assertEqual(s.state_dir(), state)

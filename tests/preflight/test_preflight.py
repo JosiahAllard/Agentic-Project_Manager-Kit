@@ -309,7 +309,7 @@ class TheDocsLine(Fixture):
 
 class TheLinesAfterTheWorktrees(Fixture):
     def test_the_stray_check_gets_the_checkout_not_the_cwd(self):
-        """Retribution's PreflightChecksFromItsOwnRoot: an agent shell's cwd is often another tree
+        """A repository's PreflightChecksFromItsOwnRoot: an agent shell's cwd is often another tree
         than the one preflight reports on."""
         elsewhere = os.path.join(self.repo.base, 'elsewhere')
         os.makedirs(elsewhere)
@@ -443,7 +443,7 @@ class TheLeftoversLine(Fixture):
 
 
 class TheNextBlock(Fixture):
-    """Retribution TOOLS-ADOPTION (moved): the `next` block prints the kit commands with
+    """A repository's TOOLS-ADOPTION (moved): the `next` block prints the kit commands with
     this session's values, so agents run the kit tools instead of improvising."""
 
     def worktree(self, base_ahead):
@@ -688,7 +688,7 @@ NETSTAT = ('\nActive Connections\n\n  Proto  Local Address          Foreign Addr
 
 
 class TheEngineAndPortLines(unittest.TestCase):
-    """GriffBall's (and Retribution's Godot-only) engines and ports lines, driven by config."""
+    """A Godot repository's (and a mixed one's Godot-only) engines and ports lines, driven by config."""
 
     def readings(self, cfg, answers, board=False):
         s = dict({'engines': [], 'udp_ports': None}, **cfg)

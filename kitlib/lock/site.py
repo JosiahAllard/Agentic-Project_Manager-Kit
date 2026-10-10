@@ -1,4 +1,4 @@
-"""This machine's lock settings: the "machine_lock" object of ~/.claude-pm-kit/config.json
+"""This machine's lock settings: the "machine_lock" object of the machine config
 (kitlib.config.user). Every key is optional; an absent file or key is the defaults below.
 
   "daemons": "gates" (default), "stop" or "leave". At the release of a gate run (one booked with

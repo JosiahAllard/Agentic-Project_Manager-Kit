@@ -1,7 +1,7 @@
 """kitlib.coordinatorstart: the coordinator session-start context: standing rules, then live checks.
 
 Pure functions that return data; the hook (claude/hooks/coordinator_session_start.py) prints it. The text
-comes from the "coordinator_start" key of ~/.claude-pm-kit/config.json and is emitted only when the
+comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
 filing and pricing-pass lines (each switched on in the config), then five live checks,
 run as in kitlib.pmstart: each is a pure function over fakeable inputs (process list, file reads,
@@ -22,7 +22,7 @@ from kitlib import pmstart
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
 
-CONFIG_PATH = os.path.join("~", ".claude-pm-kit", "config.json")
+CONFIG_PATH = os.path.join("~", kuser.DIR_NAME, kuser.FILE_NAME)
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
 ROLE = "coordinator"
@@ -328,7 +328,7 @@ def render(env=None, path=None, **kw):
     try:
         cfg = load_config(path)
         if cfg is None:
-            return "Coordinator session start: no coordinator_start config in ~/.claude-pm-kit/config.json; skipped."
+            return "Coordinator session start: no coordinator_start config in %s; skipped." % kuser.DISPLAY
         return context(cfg, env=env, **kw)
     except Exception as e:
         return "Coordinator session start: could not check config: %s: %s" % (type(e).__name__, e)

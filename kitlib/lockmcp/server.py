@@ -15,8 +15,8 @@ import traceback
 
 from kitlib.lock import api
 from kitlib.lock.store import ID_RE
+from kitlib.lockmcp import SERVER_NAME
 
-SERVER_NAME = "machine-lock"
 SERVER_VERSION = "0.1.0"
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")    # newest first
 WAIT_MAX_S = 60.0

@@ -1,4 +1,4 @@
-"""The launcher's machine settings: the `launcher` object of ~/.claude-pm-kit/config.json
+"""The launcher's machine settings: the `launcher` object of the machine config
 (docs/launcher.md "Settings"). Nothing here names a machine path, an account folder or a repo:
 each comes from this object, and a missing one is an error that says which key to set.
 

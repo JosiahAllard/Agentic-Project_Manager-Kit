@@ -16,6 +16,7 @@ from unittest import mock
 
 from kitlib import machinesetup as M
 from kitlib.machinesetup import common, extras, settings
+from kitlib.config import user as kuser
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'machine_setup.py')
@@ -145,7 +146,7 @@ class Base(unittest.TestCase):
         touch(os.path.join(self.c2, 'tools', 'comfy', 'local-notes.txt'), 'keep me\n')
         junction(os.path.join(self.c2, 'tools', 'oldthing'), os.path.join(self.old, 'tools', 'usage'))
         junction(os.path.join(self.c2, 'skills'), os.path.join(self.c1, 'skills'))
-        os.makedirs(os.path.join(self.home, '.claude-pm-kit'))
+        os.makedirs(kuser.config_dir(self.home))
         self.s1 = os.path.join(self.c1, 'settings.json')
         self.s2 = os.path.join(self.c2, 'settings.json')
         self.write_settings(self.s1, self.settings_doc(), crlf=True)
@@ -480,7 +481,7 @@ class Parts(unittest.TestCase):
     def test_default_config_dirs_skip_the_kit_machine_folder_and_files(self):
         root = tempfile.mkdtemp(prefix='machinesetup-')
         self.addCleanup(shutil.rmtree, root, True)
-        for n in ('.claude', '.claude-two', '.claude-pm-kit', 'other'):
+        for n in ('.claude', '.claude-two', kuser.DIR_NAME, 'other'):
             os.makedirs(os.path.join(root, n))
         touch(os.path.join(root, '.claude-file'))
         self.assertEqual([os.path.basename(d) for d in M.default_config_dirs(root)], ['.claude', '.claude-two'])

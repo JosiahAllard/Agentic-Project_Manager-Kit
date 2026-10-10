@@ -14,6 +14,7 @@ from tests.launcher.fakes import FakeHost, Home, role_of, session
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), 'tools'))
 import launch                                                       # noqa: E402
+from kitlib.config import user as kuser                             # noqa: E402
 
 ALPHA = {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord', 'state': 's.md', 'account': 1,
          'name': 'alpha-coord-a1'}
@@ -134,8 +135,8 @@ class UserEnv(unittest.TestCase):
 class Cli(unittest.TestCase):
     def setUp(self):
         self.h = Home(self)
-        os.makedirs(os.path.join(self.h.root, '.claude-pm-kit'))
-        with open(os.path.join(self.h.root, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+        os.makedirs(kuser.config_dir(self.h.root))
+        with open(kuser.config_file(self.h.root), 'w', encoding='utf-8') as f:
             json.dump({'launcher': self.h.obj}, f)
 
     def main(self, argv, procs=(), host=None):
@@ -179,7 +180,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(len(out.splitlines()), 3)
 
     def test_a_bad_config_exits_1(self):
-        with open(os.path.join(self.h.root, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+        with open(kuser.config_file(self.h.root), 'w', encoding='utf-8') as f:
             json.dump({'launcher': {'state_dir': 'relative'}}, f)
         code, _, err, _ = self.main(['usage'])
         self.assertEqual(code, 1)

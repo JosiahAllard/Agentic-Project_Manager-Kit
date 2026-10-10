@@ -35,7 +35,7 @@ a constructor argument, and the defaults read this machine.
                      variable alone is never proof.
   gate_ok(root, sha) kitlib.gate.runner.verify_record: the record must name a config_rev in
                      sha's history and hash the gate config that commit holds
-  user()             ~/.claude-pm-kit/config.json (ledger_path and the guard_* keys), read
+  user()             the machine config (ledger_path and the guard_* keys), read
                      tolerantly: a file the strict reader refuses only for keys this kit does not
                      know still yields its absolute ledger_path and its string or string-list
                      values. A file that cannot be read, is

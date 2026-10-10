@@ -9,6 +9,7 @@ from . import offer as omod
 from . import record as rmod
 from . import scope as smod
 from .store import dangling_items
+from kitlib.config import user as kuser
 
 PREEMPTIONS = 'pre-emptions'
 PULL_RECORDS = 'pull records'
@@ -125,7 +126,7 @@ def _check_rulings(snap, ledger, name, key, kinds, skip=None):
                 and not (skip is not None and skip(r))]
     if not ledger.configured:
         return CheckResult(name, len(subjects), (), unit='ruled records',
-                           skipped='no ledger configured (~/.claude-pm-kit/config.json ledger_path)')
+                           skipped='no ledger configured (%s ledger_path)' % kuser.DISPLAY)
     found, warned = [], []
     if subjects:
         entries, why = ledger.entries()
