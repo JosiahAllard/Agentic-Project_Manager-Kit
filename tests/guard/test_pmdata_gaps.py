@@ -222,6 +222,48 @@ class ConfigFileEnv(Base):
         self.assert_denied(d, 'git-push-main')
 
 
+class HomeConfig(Base):
+    """KIT-GUARD-HOME-GITCONFIG: a line that sets HOME, XDG_CONFIG_HOME, USERPROFILE, HOMEDRIVE or
+    HOMEPATH (git for Windows finds the user config through each) with a git push makes git read
+    another user config, whose url.*.pushInsteadOf the pre-push hook would read too."""
+
+    BASH = ('HOME=/tmp/h git push private pmdata',
+            'XDG_CONFIG_HOME=/tmp/x git push private pmdata',
+            'USERPROFILE=C:/x git push private pmdata',
+            'HOMEDRIVE=C: HOMEPATH=/x git push private pmdata',
+            'env HOME=/tmp/h git push private pmdata',
+            'export HOME=/tmp/h; git push private pmdata',
+            'HOME=/tmp/h git -C "{main}" push private pmdata')
+    PS = ('$env:HOME = "C:/h"; git push private pmdata',
+          '$env:USERPROFILE = "C:/h"; git push private pmdata',
+          'Set-Item env:XDG_CONFIG_HOME C:/x; git push private pmdata')
+
+    def texts(self):
+        main = W.fwd(self.w.main)
+        return [(t.replace('{main}', main), bash) for t in self.BASH] + [(t, ps) for t in self.PS]
+
+    def test_a_push_with_a_home_variable_is_denied(self):
+        for text, shell in self.texts():
+            for label, sub, env in self.sessions():
+                with self.subTest(text=text, session=label):
+                    self.assert_denied(self.decide(text, sub=sub, environ=env, shell=shell), 'git-push-pmdata')
+
+    def test_an_alias_for_push_too(self):
+        self.read.aliases = {'pu': 'push'}
+        self.assert_denied(self.decide('HOME=/tmp/h git pu private pmdata', environ=PM), 'git-push-pmdata')
+
+    def test_owner_other_commands_and_no_record_pass(self):
+        for text, shell in self.texts():
+            with self.subTest(text=text):
+                self.assertIsNone(self.decide(text, shell=shell))
+        self.assertIsNone(self.decide('HOME=/tmp/h git status', environ=PM))
+        self.assertIsNone(self.decide('git push private pmdata', environ=PM))
+        os.remove(self.record)
+        for text, shell in self.texts():
+            with self.subTest(text=text, record=False):
+                self.assertIsNone(self.decide(text, environ=PM, shell=shell))
+
+
 class ComputedProgram(Base):
     """A program the text does not name, on a line in a repository with a PM data record: it may
     be git push --no-verify. Denied for sessions the write jail does not hold, from a linked
