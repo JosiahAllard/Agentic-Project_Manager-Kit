@@ -98,7 +98,7 @@ It reads tracked and untracked-but-not-ignored files (`git ls-files -co --exclud
 
 - **The `-C` hand-off** (`chdir_main`, `KIT_CALLER_CWD`, `OWN_COPY`) and `_repo_guard.check_same_repo`. There is one kit copy, so `-C` is a plain path.
 - **`KIT_REPO_ROOT`, `KIT_CONFIG` and every env override**. codemap's `KIT_REPO_ROOT` test went with it.
-- **`tools/doc_budget.json`** and its keys `owner_only`, `owner_only_except`, `owner_email` and `agent_emails`. They are now `.kit.json` `doc_budget` and `owner` (docs/kit-json.md), and no old spelling is read.
+- **`tools/doc_budget.json`** and its keys `owner_only`, `owner_only_except`, `owner_email` and `agent_emails`. They are now `.kit.json` `owner.paths`, `owner.paths_except`, `owner.email` and `owner.agent_emails`; `doc_budget` keeps its other keys (docs/kit-json.md). No old spelling is read.
 - **The legacy config reader** and its tests (`cfgs_at`, `KIT_JSON`, `DuplicateKey`, the one-git-process config read). Config reads belong to `kitlib.config.load` and `load_at`. A key written twice is their `ConfigError`.
 - **trace2 git process counts.** `tests/docs/test_budget.py` counts `budget.git` calls instead.
 - **The unparseable `cat-file` reply test.** `kitlib.git.batch` tests its own parsing.
