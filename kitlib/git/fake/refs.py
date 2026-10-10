@@ -236,17 +236,23 @@ class RefLock:
                 time.sleep(0.01)
 
     def commit(self, data):
+        """Write `data` and move the lock onto the ref. On any failure the lock file is removed,
+        as git rolls back its lockfile: a lock left behind fails every later update of the ref
+        ("cannot lock ref") until someone deletes it by hand."""
         try:
-            os.write(self.fd, data)
-        finally:
-            os.close(self.fd)
-            self.fd = None
-        if os.path.isdir(self.path):
+            try:
+                os.write(self.fd, data)
+            finally:
+                os.close(self.fd)
+                self.fd = None
+            if os.path.isdir(self.path):
+                raise GitExit(128, "fatal: cannot lock ref '%s': there is a non-empty directory "
+                                   "'%s' blocking reference '%s'\n"
+                              % (self.name, self.path.replace('\\', '/'), self.name))
+            _replace(self.lock, self.path)
+        except BaseException:
             self.rollback()
-            raise GitExit(128, "fatal: cannot lock ref '%s': there is a non-empty directory '%s' "
-                               "blocking reference '%s'\n" % (self.name, self.path.replace('\\', '/'),
-                                                             self.name))
-        _replace(self.lock, self.path)
+            raise
 
     def rollback(self):
         if self.fd is not None:

@@ -12,7 +12,7 @@ import re
 
 from . import refs as _refs
 from .errors import GitExit, Unsupported, die
-from .objects import Commit, Tag, parse_tree
+from .objects import EMPTY_TREE, Commit, Tag, parse_tree
 
 _HEX = re.compile(r'^[0-9a-f]+$')
 
@@ -74,7 +74,15 @@ def peel(repo, oid, want=None):
 
 
 def tree_entries(repo, tree_oid):
+    """[(mode, name, oid)] of a tree; None when the object is not a tree. A tree object that is
+    missing dies as git's fill_tree_descriptor does ("unable to read tree (<oid>)", git 2.55
+    read-tree): taking it for an empty tree would drop every path under it from what is written
+    next. The empty tree needs no object, as in git."""
     kind, data = read_object(repo, tree_oid)
+    if kind is None:
+        if tree_oid == EMPTY_TREE.get(repo.algo):
+            return []
+        raise die('unable to read tree (%s)' % tree_oid)
     if kind != 'tree':
         return None
     return parse_tree(data, repo.hexlen)
