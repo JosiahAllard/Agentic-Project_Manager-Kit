@@ -194,7 +194,14 @@ def rev_parse(ctx, args):
             if quiet:
                 return 1
             raise die('Needed a single revision')
-        oid = resolve(ctx, revs[0])
+        try:
+            oid = resolve(ctx, revs[0])
+        except _refs.BrokenRef as e:
+            if quiet:
+                raise
+            # git 2.55 (observed, tests/git/test_git.py _Parity): the warning, then the fatal
+            ctx.warn('warning: ignoring broken ref %s\n' % e.name)
+            raise die('Needed a single revision')
         if oid is None:
             if quiet:
                 return 1
@@ -1135,12 +1142,22 @@ def branch(ctx, args):
     quiet = opts.get('quiet')
     if opts.get('show-current'):
         # git's print_current_branch_name: nothing when detached, dies outside refs/heads (the
-        # text git 2.55.0.windows.5 prints).
+        # text git 2.55.0.windows.5 prints). Like git's refs_resolve_ref_unsafe it follows a chain
+        # of symrefs to its last name (which need not exist: an unborn branch).
         raw = _refs.read_raw(repo, 'HEAD')
-        if raw and raw[0] == 'sym':
-            if not raw[1].startswith('refs/heads/'):
-                raise die('HEAD not found below refs/heads!')
-            ctx.write(raw[1][len('refs/heads/'):] + '\n')
+        if not raw or raw[0] != 'sym':
+            return 0
+        name = raw[1]
+        for _ in range(5):                      # git's SYMREF_MAXDEPTH
+            nxt = _refs.read_raw(repo, name)
+            if not nxt or nxt[0] != 'sym':
+                break
+            name = nxt[1]
+        else:
+            raise Unsupported('branch --show-current through more than 5 symrefs')
+        if not name.startswith('refs/heads/'):
+            raise die('HEAD not found below refs/heads!')
+        ctx.write(name[len('refs/heads/'):] + '\n')
         return 0
     if opts.get('d') or opts.get('D'):
         force = opts.get('D') or opts.get('force')

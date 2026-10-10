@@ -4,7 +4,7 @@ Updates lock `<ref>.lock` exclusively as git does, so a fake and a real git (or 
 repository exclude each other, and they fail with git's own words ("cannot lock ref"). No reflog
 is written; a deleted ref's reflog is removed with it, as git does. A reflog read is Unsupported,
 and so is reading a broken loose ref (one holding neither an object name nor "ref:": BrokenRef),
-except where a caller of list_refs collects them (for-each-ref warns and skips one, as git does).
+except in for-each-ref and `rev-parse --verify`, which warn "ignoring broken ref" as git does.
 """
 import os
 import re
@@ -23,8 +23,13 @@ _HEXRE = re.compile(r'^[0-9a-f]{40}([0-9a-f]{24})?$')
 
 class BrokenRef(Unsupported):
     """A loose ref file holding neither an object name nor "ref:". git warns "ignoring broken
-    ref" at some readers and not others, so only a reader that collects them (list_refs with
-    `broken`) imitates one; to every other reader the fake does not model it."""
+    ref" at some readers and not others, so only the readers that catch it imitate one
+    (for-each-ref through list_refs' `broken`, and `rev-parse --verify` without --quiet); to every
+    other reader the fake does not model it."""
+
+    def __init__(self, name):
+        super().__init__('a broken ref (%s)' % name)
+        self.name = name
 
 
 def is_pseudo(name):
@@ -125,7 +130,7 @@ def read_raw(repo, name):
         if _HEXRE.match(t[:repo.hexlen]) and len(t) >= repo.hexlen:
             return ('oid', t[:repo.hexlen])
         if name != 'FETCH_HEAD':
-            raise BrokenRef('a broken ref (%s)' % name)
+            raise BrokenRef(name)
         return None
     if not is_per_worktree(name):
         p = packed(repo).get(name)

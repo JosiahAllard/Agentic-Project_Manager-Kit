@@ -24,7 +24,14 @@ def is_sha(text):
     return isinstance(text, str) and bool(SHA_RE.fullmatch(text))
 
 
-NO_SUCH_REV = 'fatal: Needed a single revision'      # `rev-parse --verify`'s whole stderr for one
+NO_SUCH_REV = 'fatal: Needed a single revision'      # `rev-parse --verify`'s last stderr line for one
+_WORDS = re.compile(r'''[\s'"`:,()]+''')
+
+
+def _names(err, *names):
+    """True when a line of git's stderr `err` has one of `names` as a whole word (a warning about
+    that very ref, such as "ignoring broken ref <ref>", not a stray one about something else)."""
+    return any(n in _WORDS.split(line) for line in (err or '').splitlines() for n in names)
 
 
 def resolve(rev, cwd, peel='commit', known=False):
@@ -37,8 +44,10 @@ def resolve(rev, cwd, peel='commit', known=False):
 
     GOTCHA: KIT-GIT-EXIT1-ANSWERS - `rev-parse --verify --quiet` said "no such rev" as exit 1 with
     no output, a killed git's shape (KILLED_SHAPE), so a kill read as "no such rev". The question
-    is asked without --quiet: "no such rev" is exit 128 with NO_SUCH_REV alone on stderr, and
-    anything else that is not exit 0 with a hash is no answer.
+    is asked without --quiet: "no such rev" is exit 128 with NO_SUCH_REV as the last stderr line,
+    and anything else that is not exit 0 with a hash is no answer. A stray line before it (a
+    config deprecation warning, "warning: unable to access ...", GIT_TRACE) does not change the
+    answer; a line that names the rev itself (a broken ref's warning) does: no answer.
 
     In a test process (kitlib.git.cache.enable) a full hash's answer is kept: an object never
     changes what it is. Only a found answer of the same length is kept (a 40-digit name in a sha256
@@ -62,7 +71,9 @@ def resolve(rev, cwd, peel='commit', known=False):
         if len(out) == len(rev):
             cache.put(key, gen, out)
         return out, None
-    if r.rc == 128 and not out and r.err == NO_SUCH_REV:
+    lines = r.err.splitlines()
+    if (r.rc == 128 and not out and lines and lines[-1].strip() == NO_SUCH_REV
+            and not _names('\n'.join(lines[:-1]), rev, spec)):
         return ('', None) if known else (None, '%s does not name a %s' % (rev, peel or 'object'))
     return None, _failed('rev-parse --verify %s' % spec, r, out)
 
@@ -106,7 +117,14 @@ def ref_commit(ref, cwd):
 
     GOTCHA: for-each-ref skips a broken loose ref (a file holding garbage) with exit 0, no line and
     "warning: ignoring broken ref <ref>" on stderr, the shape of "no ref"; `rev-parse --verify`
-    failed on one instead. So no line plus anything on stderr is no answer, never "no ref"."""
+    failed on one instead. So no line plus a stderr line naming `ref` is no answer. Other stderr
+    (a config deprecation warning, GIT_TRACE) is not about `ref`: "no ref" then stands only once
+    resolve(known=True) confirms it.
+
+    GOTCHA: the match is exact, and a loose ref's file name is not: on a case-insensitive file
+    system `rev-parse refs/heads/Main` opens refs/heads/main, but for-each-ref lists it only as
+    refs/heads/main. A ref whose name differs from `ref` only in case is refused (no answer), as
+    kitlib/worktree/remove.py local_branch refuses one, never read as "no ref"."""
     why = bad_rev(ref)
     if why:
         return None, why
@@ -132,9 +150,37 @@ def ref_commit(ref, cwd):
         if not full:
             return None, '%s points at a %s, not a commit: %s' % (ref, kind or 'object', why)
         return full, None
-    if r.err:
+    if _names(r.err, ref):
         return None, 'git %s printed no line for it and said: %s' % (what, r.err[:200])
+    near, why = _case_variants(ref, cwd)
+    if near is None:
+        return None, 'no line from git %s, and %s' % (what, why)
+    if near:
+        return None, ('git has %s, whose name and %s differ only in case (one ref on a '
+                      'case-insensitive file system); name the ref exactly as git lists it'
+                      % (', '.join(near), ref))
+    if r.err:
+        got, why = resolve(ref, cwd, known=True)
+        if got is None:
+            return None, ('git %s printed no line for it and said: %s; confirming no ref: %s'
+                          % (what, r.err[:200], why))
+        if got:
+            return None, ('git %s printed no line for it, but git rev-parse finds %s at %s'
+                          % (what, ref, got[:10]))
     return '', None
+
+
+def _case_variants(ref, cwd):
+    """`(names, None)`: the refs whose names equal `ref` only when case is ignored; `(None, why)`."""
+    what = 'for-each-ref refs/'
+    r = cmd.call(['for-each-ref', '--format=%(refname)', 'refs/'], cwd)
+    if r.rc is None:
+        return None, r.err
+    out = cmd.text(r.out).strip()
+    if r.rc != 0:
+        return None, _failed(what, r, out)
+    want = ref.casefold()
+    return [n for n in out.splitlines() if n != ref and n.casefold() == want], None
 
 
 def branch_tip(name, cwd):
@@ -317,7 +363,16 @@ def _confirm_no_base(a, b, cwd):
     """merge_base's answer once git said "none": two commits share an ancestor exactly when they
     share a root commit (a shared ancestor's roots are reached from both; a shared root is a
     shared ancestor), so disjoint `rev-list --max-parents=0` root sets confirm there is none and
-    anything else is no answer."""
+    anything else is no answer.
+
+    GOTCHA: in a shallow clone the cut-off commits have no parents here, so they read as roots and
+    disjoint "roots" prove nothing: a shallow repository's "none" is no answer."""
+    out, why = cmd.run_text(['rev-parse', '--path-format=absolute', '--git-path', 'shallow'], cwd)
+    if not out:
+        return None, 'confirming no merge base: %s' % (why or 'git rev-parse --git-path printed nothing')
+    if os.path.isfile(os.path.normpath(out)):
+        return None, ('confirming no merge base: %s is a shallow clone, so git merge-base %s %s '
+                      'finding none says nothing about the full history' % (cwd, a, b))
     sets = []
     for rev in (a, b):
         roots, why = _roots(rev, cwd)
