@@ -387,7 +387,9 @@ class ANoIsConfirmed(RepoFixture):
                 ((128, b'', b'fatal: boom'), None, 'fatal: boom'),
                 ((0, b'', b''), None, 'not one or two commits'),
                 ((0, b'abc\n', b''), None, 'not one or two commits'),
-                (None, (1, b'', b''), 'does not name a commit')):          # rev-parse killed
+                # rev-parse killed: no answer, no longer "does not name a commit" (refs.resolve)
+                (None, (1, b'', b''), 'rev-parse --verify %s^{commit} exited 1 and printed nothing'
+                 % self.feature)):
             with self.subTest(words=words):
                 (got, why), _ = self.ask(independent, rev_parse)
                 self.assertIsNone(got)
@@ -560,6 +562,17 @@ class PositiveForms(RepoFixture):
         self.assertIsNone(got, 'a broken ref git skipped with a warning was read as "no such ref"')
         self.assertIn('ignoring broken ref', why)
 
+    def test_a_killed_resolve_is_no_answer_not_no_such_rev(self):
+        with kill_git(lambda argv: True):
+            got, why = refs.resolve('refs/heads/kit/feature', self.r.root)
+        self.assertIsNone(got)
+        self.assertNotIn('does not name', why, 'a killed git was read as "no such rev"')
+        self.assertIn('printed nothing', why)
+        with kill_git(lambda argv: True):
+            got, why = refs.resolve('refs/heads/kit/feature', self.r.root, known=True)
+        self.assertIsNone(got, 'a killed git was read as "no such rev"')
+        self.assertIn('printed nothing', why)
+
 
 class _Parity(object):
     """What the fake prints for the positive forms is what real git prints (each check runs on
@@ -604,13 +617,20 @@ class _Parity(object):
         self.assertIn('ignoring broken ref refs/heads/broken', why)      # git's own warning
         self.assertEqual(refs.ref_commit('refs/heads/main', self.r.root), (self.r.initial, None))
 
+    def test_resolve_tells_no_such_rev_from_no_answer(self):
+        # rev-parse --verify without --quiet: "no such rev" is exit 128 and refs.NO_SUCH_REV.
+        self.assertEqual(refs.resolve('refs/heads/no-such', self.r.root, known=True), ('', None))
+        self.assertEqual(refs.resolve('refs/heads/no-such', self.r.root),
+                         (None, 'refs/heads/no-such does not name a commit'))
+        self.assertEqual(refs.resolve('main', self.r.root, known=True), (self.r.initial, None))
+
 
 class FakeParity(_Parity, unittest.TestCase):
     pass
 
 
-@real_git('parity: the fake\'s `config --list -z`, `branch --show-current` and for-each-ref\'s '
-          'broken-ref warning against real git')
+@real_git('parity: the fake\'s `config --list -z`, `branch --show-current`, for-each-ref\'s '
+          'broken-ref warning and `rev-parse --verify`\'s "no such rev" against real git')
 class RealGitParity(_Parity, unittest.TestCase):
     pass
 

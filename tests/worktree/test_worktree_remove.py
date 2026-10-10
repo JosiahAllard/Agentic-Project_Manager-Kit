@@ -10,9 +10,11 @@ import os
 import subprocess
 import sys
 import time
+import types
 import unittest
 from unittest import mock
 
+from kitlib.git import cmd
 from kitlib.worktree import holders, remove
 from tests import gitfixture
 from tests.realgit import real_git
@@ -423,6 +425,50 @@ class AbandonNextFree(RemoveCase):
         rc, out = self.run_verb('abandon', 'nf', 'retry')
         self.assertEqual(rc, 0, out)
         self.assertIn('tagged    archive/nf-2 ->', out)
+
+
+def kill_reads_of(prefix):
+    """A patch of cmd._run under which a `rev-parse` whose last argument starts with `prefix`
+    exits 1 having printed nothing (a git ended from outside, refs.KILLED_SHAPE); every other git
+    runs as before (the fake, or real git)."""
+    real = cmd.spawner()
+
+    def run(argv, cwd=None, input=None, timeout=None, env=None):
+        if argv[1] == 'rev-parse' and argv[-1].startswith(prefix):
+            return 1, b'', b''
+        return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+    return mock.patch.object(cmd, '_run', side_effect=run)
+
+
+class KilledTagAndBranchReads(RemoveCase):
+    """KIT-GIT-EXIT1-ANSWERS: tag_tip and branch_tip asked `rev-parse -q --verify`, whose "no such
+    ref" is exit 1 with no output, the shape a git ended from outside leaves. A killed read is no
+    answer, never a free tag name or a branch that is gone."""
+
+    CONFIG = {'worktree_remove': {'archive_next_free': True}}
+
+    def test_a_killed_tag_read_is_never_a_free_tag_name(self):
+        self.workstream('nf')
+        self.git('tag', 'archive/nf', 'main')
+        with kill_reads_of('refs/tags/archive/nf'):
+            rc, out = self.run_verb('abandon', 'nf', 'retry')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('cannot read tag archive/nf', out)
+        self.assertIn('printed nothing', out)
+        self.assertEqual(self.git('tag', '-l', 'archive/*').split(), ['archive/nf'])
+        self.assertIn('kit/nf', self.branches())
+
+    def test_a_killed_branch_read_is_never_reported_as_no_branch(self):
+        tip = self.orphan('kept')
+        self.git('tag', 'archive/kept', tip)
+        said = []
+        ctx = types.SimpleNamespace(main=self.repo, say=lambda *lines: said.extend(lines))
+        with kill_reads_of('refs/heads/kit/kept'):
+            remove.left_after(ctx, None, 'kit/kept', 'archive/kept')
+        out = '\n'.join(said)
+        self.assertNotIn('kept at (none)', out, 'a killed git was read as "no branch"')
+        self.assertIn('branch kit/kept kept at (unknown: git could not tell', out)
+        self.assertIn('tag archive/kept holds %s' % tip[:10], out)
 
 
 class AbandonPulled(RemoveCase):
