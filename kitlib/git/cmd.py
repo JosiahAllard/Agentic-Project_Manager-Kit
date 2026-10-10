@@ -22,6 +22,10 @@
   GIT_SSH and ssh config handling, which this module cannot see), and GIT_HTTP_LOW_SPEED_LIMIT/TIME (git's http.lowSpeedLimit/Time),
   so a transfer stalled below 1000 bytes/s for 60 seconds fails instead of hanging until the
   call's timeout (or forever, under timeout=None). A push keeps the user's own credential prompts.
+- From a parent with no console (the guard hook under pythonw.exe, a scheduled task), git starts
+  with CREATE_NO_WINDOW (kitlib.proc.job.no_window_flags), so a git or ssh console prompt goes to
+  a hidden console and waits until the call's timeout. A caller that can prompt must run from a
+  console; none does today.
 - Output stays bytes. `text()` is the one decoding: UTF-8 with errors replaced, CRLF and lone CR
   read as LF. The locale's code page is never used.
 - A failure is `(None, why)`, never an empty answer: "git said nothing" and "git did not run" are
