@@ -2,8 +2,8 @@
 
 book() joins the queue, waits for the run's turn and returns a Slot that holds its cpu and gpu
 slots. The Slot's launcher starts the run's commands in the run's job object (kitlib.proc.job):
-pinned to its cores, measured and, when the run is cancelled or interrupted, ended as a
-tree. release() frees what it held and records the run. slot() is book() as a context manager
+pinned to its cores, measured and, when the run is cancelled, interrupted or errs, ended as a
+tree but for a build daemon shown to serve another job (Slot.end_tree). release() frees what it held and records the run. slot() is book() as a context manager
 that yields the launcher. run_command() is `machine_lock.py run`: book, one command, release.
 
 Nothing here prints: progress lines go to store.say, which is the CLI's stderr and
@@ -50,6 +50,9 @@ GPUS_ENV = "MACHINE_LOCK_GPUS"          # the gpu cards the run holds, by adapte
 END_ENV = "MACHINE_LOCK_END"            # how the run ended, for --on-release
 XLA_FRACTION_ENV, XLA_DEFAULT_FRACTION = "XLA_PYTHON_CLIENT_MEM_FRACTION", "0.3"
 KILL_HOW = ("interrupted", "cancelled", "error")
+# Slot.end_tree, when it spares a shared daemon: how many passes it ends the job's other
+# processes in, and how long it waits after each for them to leave the job.
+END_PASSES, END_PASS_S = 10, 0.1
 # What a `docker exec` run holding no gpu slot gets, so the process in the container keeps
 # off the gpus the lock gave other runs (the job cannot reach into the container).
 DOCKER_CPU_ENV = (("CUDA_VISIBLE_DEVICES", ""), ("JAX_PLATFORMS", "cpu"))
@@ -589,7 +592,8 @@ class Launcher:
     """What slot() yields: starts commands in the run's job. start(cmd, **popen_kw) ->
     Popen (env defaults to the run's: MACHINE_LOCK_RUN, the cpuset, the gpus); run(cmd, **kw) ->
     its exit code, waited for with the run's use sampled and a stop honoured; wait(p) -> exit
-    code; pids(); usage() -> the run's use so far; kill() ends every process in the job. id,
+    code; pids(); usage() -> the run's use so far; kill() ends every process in the job but a
+    build daemon another job's client uses, with its tree (Slot.end_tree). id,
     cores (cpu slots), gpus (gpu slots), mask (the global thread mask, or None) and env read the
     run."""
 
@@ -619,7 +623,7 @@ class Launcher:
 
     def kill(self):
         if self._slot.job is not None:
-            self._slot.job.terminate(1)
+            self._slot.end_tree()
 
 
 class Slot:
@@ -635,6 +639,8 @@ class Slot:
         self.cores = list(parent["cores"] if self.nested else run.rec["cores"])
         self.gpus = list(parent["gpus"] if self.nested else run.rec["gpus"])
         self.code, self.how, self.released, self.started, self.ended = 0, "done", False, False, None
+        # end_tree: the tree was ended since the last start; it spared a shared daemon's tree.
+        self.tree_ended, self.spared = False, False
         self.warn_s = kind_entry["warn_min"] * 60 * store.settings.warn_scale
         self.kind = kind_entry
         self.usage = run.usage if run else Usage(L["cpu_slot_threads"], store.settings.usage_sample_s)
@@ -693,7 +699,7 @@ class Slot:
             kw.setdefault("env", self.env)
         pin = self.job.pin
         p = self.job.start(docker_cpu_env(cmd, bool(self.gpus)), **kw)
-        self.started = True
+        self.started, self.tree_ended = True, False
         if self.job.pin != pin and self.run is not None:
             with contextlib.suppress(OSError):
                 self.run.save(**pin_fields(self.job))
@@ -704,8 +710,8 @@ class Slot:
 
     def wait(self, p):
         """(exit code, how) of child p: its use sampled every settings.child_poll_s into the
-        record; a stop ends the job's tree ("cancelled", 1); past the kind's warn_min a warning,
-        never a kill."""
+        record; a stop ends the job's tree ("cancelled", 1; end_tree); past the kind's warn_min a
+        warning, never a kill."""
         t0, warned = time.monotonic(), False
         while True:
             try:
@@ -720,8 +726,11 @@ class Slot:
                 self.serve_give_back()
             if self.stop_asked():
                 self.store.say("run %s was cancelled by stop; its process tree is ended" % self.id)
-                self.job.terminate(1)
-                p.wait()
+                self.end_tree()
+                try:                        # the command itself may be a daemon it spared
+                    p.wait(10 if self.spared else None)
+                except subprocess.TimeoutExpired:
+                    pass
                 code, how = 1, "cancelled"
                 break
             if not warned and time.monotonic() - t0 > self.warn_s:
@@ -817,6 +826,10 @@ class Slot:
         except Exception as e:
             self.store.say("WARNING: run %s: build daemons not checked: %s" % (self.id, e))
             return
+        self.tell_daemons(done)
+
+    def tell_daemons(self, done):
+        """Says each of daemons.stop's results and lists them in the record's `daemons`."""
         for pid, label, res in done:
             if res.startswith("left: "):
                 self.store.say("run %s: left the %s (pid %d) running: %s"
@@ -828,9 +841,90 @@ class Slot:
             self.run.rec["daemons"] = [{"pid": pid, "what": label, "result": res}
                                        for pid, label, res in done]
 
+    def end_tree(self):
+        """The kill path (a cancel, Ctrl+C, an error, Launcher.kill): ends every process in the
+        run's job but a build daemon another job's client uses, with that daemon's tree. A
+        daemon is shared: one this run's client started sits in this job, yet any client on the
+        machine may be building on it, and TerminateJobObject would end it under that client.
+        Windows cannot take a process out of a job, so the daemons are judged first
+        (kitlib.proc.daemons stop, as stop_daemons does, whatever machine_lock.daemons says: one
+        serving only this job is ended, as the kill always did) and the rest are ended one by one.
+
+        Nothing found, or nothing left: TerminateJobObject, as before. The job's processes or
+        the daemons unreadable: TerminateJobObject (fail closed: the run's tree surely ends). A
+        daemon whose judgement raised is spared. Otherwise, in up to END_PASSES passes, every
+        job process outside the spared trees (each left daemon, at its creation time, with its
+        descendants, read again each pass so a worker it starts is spared too) is ended by
+        terminate_verified, oldest first so a parent cannot start more. One still there after
+        the last pass is said, and runs on once release unpins the job. Sets self.spared;
+        release then closes the job without killing it. Never raises."""
+        job, self.tree_ended, self.spared = self.job, True, False
+        if job is None or job.h is None:
+            return
+        try:
+            found = daemons.find(job.pids())
+        except Exception as e:              # noqa: BLE001 - cannot tell: the kill goes ahead
+            self.store.say("WARNING: run %s: build daemons not checked before its tree was "
+                           "ended: %s" % (self.id, e))
+            found = []
+        if not found:
+            job.terminate(1)
+            return
+        try:
+            done = daemons.stop(found, job.contains)
+        except Exception as e:              # noqa: BLE001 - cannot judge: spare them all
+            done = [(pid, label, "left: it could not be judged (%s: %s)" % (type(e).__name__, e))
+                    for pid, _ct, label in found]
+        self.tell_daemons(done)
+        left = {pid for pid, _label, res in done if res.startswith("left: ")}
+        kept = [(pid, ct) for pid, ct, _label in found if pid in left]
+        if not kept:
+            job.terminate(1)
+            return
+        self.spared = True
+        try:
+            rest = self._end_others(kept)
+        except Exception as e:              # noqa: BLE001 - the job cannot be read: end it all
+            self.spared = False
+            job.terminate(1)
+            self.store.say("WARNING: run %s: its job could not be read while its tree was ended "
+                           "(%s); the whole job was ended, the daemons it had left among them"
+                           % (self.id, e))
+            return
+        for pid in rest:
+            self.store.say("WARNING: run %s: pid %d in its job could not be ended; it runs on, "
+                           "unpinned" % (self.id, pid))
+
+    def _end_others(self, kept):
+        """end_tree's passes: the pids still in the job outside the trees of `kept` [(pid,
+        ctime)] after the last one. Raises OSError when the job or the process table cannot be
+        read."""
+        own = os.getpid()
+        for n in range(END_PASSES + 1):
+            snap = process.snapshot()
+            pids = self.job.pids()
+            spared = {own}
+            for pid, ct in kept:
+                if process.proc_ctime(pid) == ct:
+                    spared.add(pid)
+                    spared.update(p for p, _c in process.descendants(pid, ct, snap))
+            targets = [p for p in pids if p not in spared]
+            if not targets or n == END_PASSES:
+                return targets
+            aged = []
+            for pid in targets:
+                ct = process.proc_ctime(pid)
+                if ct is not None:
+                    aged.append((ct, pid))
+            for ct, pid in sorted(aged):        # oldest first: a parent before its children
+                process.terminate_verified(pid, ct)
+            time.sleep(END_PASS_S)
+        return []
+
     def release(self, code=None, how=None):
-        """Ends the run: its job (the tree killed when interrupted, cancelled or an error; else
-        its build daemons stopped when it is a gate (stop_daemons) and what else it left runs on,
+        """Ends the run: its job (the tree killed when interrupted, cancelled or an error, but for
+        a build daemon another job's client uses (end_tree), which runs on, unpinned; else its
+        build daemons stopped when it is a gate (stop_daemons) and what else it left runs on,
         unpinned), its --on-release command, then its queue entry and record (settle). Returns
         the ended record (None for a nested slot). Once."""
         if self.released:
@@ -851,7 +945,11 @@ class Slot:
                         self.run.rec.update(self.usage.fields())
                 if self.started and (self.run is not None or self.gate) and how not in KILL_HOW:
                     self.stop_daemons()
-                self.job.end(kill=how in KILL_HOW)
+                if how in KILL_HOW and not self.tree_ended:
+                    self.end_tree()
+                # A spared daemon's tree is still in the job: closing it with kill-on-close set,
+                # or TerminateJobObject, would end it.
+                self.job.end(kill=how in KILL_HOW and not self.spared)
                 if self.started:
                     on_release(self.store, self.on_release_cmd, self.env, how, self.run)
         finally:
