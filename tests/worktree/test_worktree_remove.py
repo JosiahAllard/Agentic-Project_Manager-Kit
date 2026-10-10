@@ -722,6 +722,29 @@ class Globs(unittest.TestCase):
         self.assertFalse(holders.is_build_output('out/notes.txt', ['out/*.o']))
 
 
+class KeepersInBuildOutput(unittest.TestCase):
+
+    def keepers(self, *names):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            for name in names:
+                full = os.path.join(root, 'bin', *name.split('/'))
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                with open(full, 'w', encoding='utf-8') as f:
+                    f.write('x\n')
+            return holders.keepers_in(root, 'bin/', list(remove.KEEPERS))
+
+    def test_a_framework_dll_with_a_capital_Local_is_not_a_keeper(self):
+        self.assertEqual(self.keepers('Debug/net10.0/refs/System.Transactions.Local.dll'), [])
+
+    def test_lowercase_dot_local_files_still_are_keepers(self):
+        hits = self.keepers('state.local.md', 'Debug/settings.local.json')
+        self.assertEqual(len(hits), 2, hits)
+
+    def test_the_other_keeper_patterns_stay_case_insensitive(self):
+        self.assertEqual(len(self.keepers('App.DB', 'Server.PEM')), 2)
+
+
 class Cli(RemoveCase):
 
     def cli(self, *args, cwd=None):

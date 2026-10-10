@@ -46,7 +46,7 @@ Outcome = collections.namedtuple('Outcome', 'code lines')
 TOOL = 'worktree_remove'
 ARCHIVE = 'archive/'
 # Files that refuse a removal even inside build output (a dev database under bin/, SQLite's
-# journals, keys, model weights, *.local.*). `"worktree_remove".keepers` adds to these.
+# journals, keys, model weights, lowercase *.local.*). `"worktree_remove".keepers` adds to these.
 KEEPERS = ('*.db', '*.db-wal', '*.db-shm', '*.sqlite', '*.key', '*.key.*', '*.pem', '*.pfx',
            '*.npz', '*.pt', '*.ckpt', '*.safetensors', '*.onnx', '*.local.*')
 # --no-optional-locks: a status may otherwise rewrite the worktree's index (a write by a read),

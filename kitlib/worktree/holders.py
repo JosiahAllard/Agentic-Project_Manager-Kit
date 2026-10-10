@@ -322,12 +322,17 @@ def link_reason(path):
     return None
 
 
+CASE_SENSITIVE_KEEPER = '*.local.*'
+
+
 def keepers_in(root, rel, keepers, budget=None):
     """The keepers inside the build-output entry `rel` of the tree at `root`, as `!! ` lines: each
-    file whose own name, or path from `root`, matches a `keepers` glob (case-insensitive). A walk
+    file whose own name, or path from `root`, matches a `keepers` glob (case-insensitive, except `*.local.*`). A walk
     error, or a walk past `budget[0]` entries (shared across one tree), is a line too: what could
     not be read in full is not known to be safe."""
-    patterns = [path_glob(g, re.IGNORECASE) for g in keepers]
+    # `*.local.*` is the one case-sensitive glob: a .NET framework DLL such as System.Transactions.Local.dll
+    # is not a user's local-settings file. Every other glob keeps matching case-insensitively.
+    patterns = [path_glob(g, 0 if g == CASE_SENSITIVE_KEEPER else re.IGNORECASE) for g in keepers]
     hits = []
     budget = [WALK_MAX] if budget is None else budget
 
