@@ -1,6 +1,6 @@
 # PM data on a private branch of the kit repo
 
-Status: tasks 1-8 built; task 9 (the go-live switch) pending. Not live until the kit's go-live review (docs/go-live.md).
+Status: tasks 1-8 built; task 9 (the go-live switch) pending. Not live until `pm_data.py init` runs on the PM's data repository (docs/go-live.md).
 
 One git repository holds the public kit and one user's private PM data (rulings ledger, backlog, refusals log, handoffs, state). The data lives on an orphan branch, `pmdata`, that shares no history with `main`, is never merged, and is pushed only to a second, private remote. Other users who clone the kit get `main` only.
 
@@ -107,17 +107,17 @@ Throwaway repositories (`tests/gitfixture.py`) with bare scratch remotes; no net
 
 Each lands independently on its own branch; sizes are S/M/L.
 
-| # | Task | Size | Gate and risk | Waits for |
-|---|---|---|---|---|
-| 1 | `kitlib/pmdata`: `pm_data` schema key, `kit-pm-data.json` read/write, `locate()`; docs/kit-json.md line | S | kit suite | - |
-| 2 | `tools/pm_data.py init/--adopt` and its tests | M | kit suite | 1 |
-| 3 | Pre-push leak stage and `ancestry_refusal` root; guard `--no-verify` row; docs/guard.md | M | kit suite; High risk (`kitlib/guard`), fresh reviewer | 1 |
-| 4 | Guard place: `pm_data.path` as MAIN-like with its own config | S | kit suite; High risk, fresh reviewer | 1 |
-| 5 | `ledger/vcs.py` uses `repo.remote` | S | kit suite | - |
-| 6 | `kitlib/pmstart` `kit_sync` check; docs/pm-start.md | M | kit suite | 1 |
-| 7 | `githooks/pre-commit` (ledger check on the ledger file) | S | kit suite; High risk (hooks) | 1 |
-| 8 | `new-repo.ps1 -PmData/-PrivateRemote`; docs/install.md | S | kit suite plus the installer's dry run | 2 |
-| 9 | Go-live: switch row in docs/go-live.md, then the migration in the PM's own data repository | S | joint review | 2-8 |
+| # | Task | Size | Gate and risk | Waits for | State |
+|---|---|---|---|---|---|
+| 1 | `kitlib/pmdata`: `pm_data` schema key, `kit-pm-data.json` read/write, `locate()`; docs/kit-json.md line | S | kit suite | - | done |
+| 2 | `tools/pm_data.py init/--adopt` and its tests | M | kit suite | 1 | done |
+| 3 | Pre-push leak stage and `ancestry_refusal` root; guard `--no-verify` row; docs/guard.md | M | kit suite; High risk (`kitlib/guard`), fresh reviewer | 1 | done |
+| 4 | Guard place: `pm_data.path` as MAIN-like with its own config | S | kit suite; High risk, fresh reviewer | 1 | done |
+| 5 | `ledger/vcs.py` uses `repo.remote` | S | kit suite | - | done |
+| 6 | `kitlib/pmstart` `kit_sync` check; docs/pm-start.md | M | kit suite | 1 | done |
+| 7 | `githooks/pre-commit` (ledger check on the ledger file) | S | kit suite; High risk (hooks) | 1 | done |
+| 8 | `new-repo.ps1 -PmData/-PrivateRemote`; docs/install.md | S | kit suite plus the installer's dry run | 2 | done |
+| 9 | Go-live: switch row in docs/go-live.md, then the migration in the PM's own data repository | S | joint review | 2-8 | pending |
 
 ## Open - needs the owner
 
