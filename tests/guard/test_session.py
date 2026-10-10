@@ -17,6 +17,7 @@ from .world import bash, event, ps
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 PM = {context.ROLE_ENV: 'pm'}
+PLAIN = {context.ROLE_ENV: 'plain'}          # a launcher mark no agent-session rule holds by default
 OWNER_EMAIL = 'owner@example.com'
 
 
@@ -120,7 +121,8 @@ class LockMcpByMark(unittest.TestCase):
 
 class AgentSessions(unittest.TestCase):
     """kill-by-name and lock-state hold subagents and the marks in guard_agent_marks (default:
-    coordinator); the owner's session and other marks (a PM) are exempt."""
+    coordinator, conductor, deep-worker, consultant, pm); the owner's session and other marks
+    (plain) are exempt."""
 
     def setUp(self):
         self.w = W.World()
@@ -140,7 +142,9 @@ class AgentSessions(unittest.TestCase):
                 d = check(COORDINATOR)
                 self.assertEqual(d.kind, 'deny')
                 self.assertTrue(d.reason.endswith(rules.tag(d.rule, 'main')), d.reason)
-                self.assertIsNone(check(PM))
+                for mark in ('pm', 'deep-worker', 'consultant'):
+                    self.assertEqual(check({context.ROLE_ENV: mark}).kind, 'deny', mark)
+                self.assertIsNone(check(PLAIN))
                 self.assertIsNone(check({}))
 
     def test_old_conductor_mark_is_still_held(self):
@@ -164,17 +168,18 @@ class AgentSessions(unittest.TestCase):
         self.assertEqual((d.kind, d.rule), ('deny', 'write-jail'))
 
     def test_marks_from_the_machine_config(self):
-        self.w.user_config({'guard_agent_marks': ['coordinator', 'deep-worker']})
-        deep = {context.ROLE_ENV: 'deep-worker'}
-        self.assertEqual(self.kill(deep).rule, 'kill-by-name')
-        self.assertEqual(self.edit_state(deep).rule, 'lock-state')
+        # the setting replaces the default list
+        self.w.user_config({'guard_agent_marks': ['coordinator', 'plain']})
+        self.assertEqual(self.kill(PLAIN).rule, 'kill-by-name')
+        self.assertEqual(self.edit_state(PLAIN).rule, 'lock-state')
         self.assertIsNone(self.kill(PM))
 
     def test_marks_compare_case_ignored(self):
         self.assertEqual(self.kill({context.ROLE_ENV: 'Coordinator'}).rule, 'kill-by-name')
-        self.w.user_config({'guard_agent_marks': ['Deep-Worker']})
-        self.assertEqual(self.kill({context.ROLE_ENV: 'deep-worker'}).rule, 'kill-by-name')
-        self.assertIsNone(self.kill({context.ROLE_ENV: 'PM'}))
+        self.assertEqual(self.kill({context.ROLE_ENV: 'PM'}).rule, 'kill-by-name')
+        self.w.user_config({'guard_agent_marks': ['Plain']})
+        self.assertEqual(self.kill(PLAIN).rule, 'kill-by-name')
+        self.assertIsNone(self.kill({context.ROLE_ENV: 'Coordinator'}))
 
 
 class OwnerIdentity(unittest.TestCase):

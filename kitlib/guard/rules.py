@@ -180,8 +180,9 @@ def is_owner_session(event, ctx):
 
 
 def agent_session(event, ctx):
-    """True for a subagent, or a session whose mark is one of guard_agent_marks (default:
-    coordinator), case ignored. The rules only agents are held to (kill by name, lock state,
+    """True for a subagent, or a session whose mark is one of guard_agent_marks (default
+    AGENT_MARKS: coordinator, its old name conductor, deep-worker, consultant and pm), case
+    ignored; a guard_agent_marks value replaces the default list. The rules only agents are held to (kill by name, lock state,
     kit-json, the write jail) use it."""
     if (event or {}).get('agent_id'):
         return True
@@ -189,7 +190,9 @@ def agent_session(event, ctx):
     return str(ctx.session_role(event) or '').lower() in {str(m).lower() for m in marks}
 
 
-AGENT_MARKS = ('coordinator', 'conductor')  # 'conductor' is the old mark, until the launcher is renamed
+# every session kind the kit launcher marks but `plain` and other agents' names; 'conductor' is the
+# coordinator's old mark, until the launcher is renamed
+AGENT_MARKS = ('coordinator', 'conductor', 'deep-worker', 'consultant', 'pm')
 
 
 # ---------------------------------------------------------------- owner lock tools
@@ -377,9 +380,10 @@ def lock_state(event, ctx, target, role, what):
     writes it, under its own mutex."""
     if not target or not agent_session(event, ctx):
         return None
-    top = os.path.normcase(os.path.abspath(lock_state_dir(ctx)))
-    here_ = os.path.normcase(os.path.abspath(target))
-    if here_ != top and not here_.startswith(top.rstrip('\\/') + os.sep):
+    # resolved paths (jail.real: links, junctions and 8.3 names followed), so a write that reaches the
+    # state folder through a junction is still this rule's, whatever root the jail would open
+    top, here_ = jail.real(lock_state_dir(ctx)), jail.real(target)
+    if not jail.inside(here_, top):
         return None
     return refuse('lock-state', role, '%s edits the machine lock\'s state, which only the lock tool writes, under its own '
                   'mutex. Ask the owner (through the PM) when the state looks wrong. To see it:' % what,
@@ -548,8 +552,17 @@ def kit_json(event, ctx, target, role, what):
                   'python -m json.tool %s' % quote(target))
 
 
-def jail_roots(ctx, cwd):
-    return jail.roots(ctx, cwd, lambda p: is_root(p, None, ctx))
+def session_mark(event, ctx):
+    """The launcher mark of a main session (guard_mark_roots looks it up), or None for a subagent
+    and the owner's unmarked session."""
+    if (event or {}).get('agent_id'):
+        return None
+    who = ctx.session_role(event)
+    return None if who in (context.OWNER, context.SUBAGENT) else who
+
+
+def jail_roots(event, ctx, cwd):
+    return jail.roots(ctx, cwd, lambda p: is_root(p, None, ctx), session_mark(event, ctx))
 
 
 JAIL_ASK = 'Ask the coordinator (a coordinator asks the PM) when the work needs a folder outside them.'
@@ -560,7 +573,7 @@ def write_jail(event, ctx, target, cwd, role, what, rewrite=None, run=None):
     the .kit.json data roots, judged by the resolved path."""
     if not target or not agent_session(event, ctx):
         return None
-    rs = jail_roots(ctx, cwd)
+    rs = jail_roots(event, ctx, cwd)
     verdict, root = jail.judge(target, rs)
     if verdict is None:
         return None
@@ -1663,6 +1676,9 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     if writes_main(sub, short, longs):
         cfg = ctx.config(place.top or gc.dir)
         if not kconfig.permissions(event, kconfig.roles(cfg)).get('edit_main_checkout'):
+            why = lander_check(event, ctx, cmd, inv, gc)[1] if place.kind == repo.MAIN else None
+            if why is not None:
+                return lander_refusal(ctx, cmd, gc, 'git-main-history', role, why)
             how, instead = git_in_worktree(ctx, cmd, gc, top, cwd)
             return refuse('git-main-history', role, '`%s` writes history or files in %s; this role may not change a '
                           'main checkout. %s' % (text, where, how), instead)
@@ -1838,32 +1854,99 @@ def git_targets(gc):
 LANDER = 'lander'
 
 
-def lander_main_git(event, ctx, cmd, inv, gc):
-    """True only for the lander role's `git fetch <remote> <main>` or `git merge --ff-only
-    <remote>/<main>` (remote and main from the main checkout's .kit.json repo section) in a main
-    checkout whose .kit.json lets that role edit one (roles.lander.edit_main_checkout): the one
-    main-checkout write the jail leaves a lander that runs from a worktree. git may be called as
-    git, git.exe or PowerShell's `& git`, with at most `-C <main checkout>` before the verb. Any
-    other role, verb, option, ref, folder, git option (-c, --git-dir, ...), environment
-    assignment or wrapper: False."""
-    if gc.unknown or gc.sub not in ('fetch', 'merge') or inv.via is not None or inv.dyn:
+LANDER_VERBS = ('fetch', 'merge')
+# the tests lander_check runs, in order; a refusal names the first that failed
+LANDER_NO_CONFIG = 'the main checkout\'s .kit.json does not load'
+LANDER_NO_ROLE = ('the main checkout\'s .kit.json does not set roles.lander.edit_main_checkout to true, so no lander '
+                  'may write it; the owner sets it (docs/guard.md "Go-live", step 3)')
+LANDER_NOT_ALONE = ('git is not alone on the line (at most one literal cd, Set-Location or pushd to that checkout '
+                    'may come before it, joined by && or ;)')
+LANDER_WRAPPED = ('a wrapper, an environment assignment, a git option other than -C <checkout>, or a word that is '
+                  'not literal comes with it')
+LANDER_ARGS = 'its arguments are not exactly one of the landing forms'
+
+
+def lander_forms(cfg):
+    """The landing verbs a lander may run in a main checkout, as git argument lists."""
+    remote, main = cfg.remote, cfg.main_branch
+    return {'fetch': ([remote], [remote, main]), 'merge': (['--ff-only', '%s/%s' % (remote, main)],)}
+
+
+def lander_alone(event, cmd, gc):
+    """True when `cmd` (git) is the whole command line of `event`, or follows one literal cd,
+    Set-Location or pushd into the checkout git runs in, joined by && or ;. The line is read again
+    from the event; an unclean parse, a pipe, a group, a nested shell or any third command is not
+    alone."""
+    ti = (event or {}).get('tool_input') or {}
+    shell = SHELL_TOOLS.get((event or {}).get('tool_name'))
+    text, cwd = ti.get('command'), (event or {}).get('cwd')
+    if shell is None or not isinstance(text, str) or cmd.depth or cmd.nested_in is not None:
         return False
-    if [w.text for w in cmd.words[:inv.index]] not in ([], ['&']):
-        return False                            # an assignment or a wrapper before git
-    pre = inv.args[:len(inv.args) - len(gc.rest) - 1]
-    if [w.text for w in pre[:1]] not in ([], ['-C']) or len(pre) not in (0, 2) or any(w.dyn for w in pre):
+    parsed = cm.read(text, shell, cwd)
+    cmds = parsed.commands
+    if not parsed.clean or not cmds or len(cmds) > 2 or cmds[-1].start != cmd.start or cmds[-1].end != cmd.end:
         return False
-    if any(w.dyn for w in gc.rest) or ctx.place(gc.dir).kind != repo.MAIN:
+    if any(c.depth or c.groups or c.piped_in or c.piped_out or c.nested_in is not None for c in cmds):
         return False
+    if len(cmds) == 1:
+        return True
+    is_cd, where = sh.cd_target(cmds[0], cwd)
+    if not is_cd or where is None or cmds[1].prev_op not in ('&&', ';') or cmds[0].redirects:
+        return False
+    return jail.real(where) == jail.real(gc.dir)
+
+
+def lander_check(event, ctx, cmd, inv, gc):
+    """(allowed, why) for a lander subagent's `git fetch` or `git merge` in a main checkout:
+    (True, None) for one of the landing forms (lander_forms: `fetch <remote>`, `fetch <remote>
+    <main>`, `merge --ff-only <remote>/<main>`, remote and main from that checkout's .kit.json repo
+    section), alone on its line (lander_alone), with at most `-C <main checkout>` before the verb
+    (git, git.exe or PowerShell's `& git`), in a checkout whose .kit.json sets
+    roles.lander.edit_main_checkout: the one main-checkout write the jail leaves a lander that runs
+    from a worktree. (False, <the first test that failed>) when one fails. (False, None) for any
+    other session, verb or place: the other rules judge it as before."""
+    ev = event or {}
+    if not ev.get('agent_id') or ev.get('agent_type') != LANDER:
+        return False, None
+    if gc.unknown or gc.sub not in LANDER_VERBS or not gc.dir or ctx.place(gc.dir).kind != repo.MAIN:
+        return False, None
+    # the repository's own settings first: while they refuse every landing form, a refusal that
+    # named the command would offer an Instead that is refused too
     cfg = ctx.config(gc.dir)
     if cfg is None:
-        return False
+        return False, LANDER_NO_CONFIG
     table = kconfig.roles(cfg)
     if kconfig.role_name(event, table) != LANDER or not table[LANDER].get('edit_main_checkout'):
-        return False
-    remote, main = cfg.remote, cfg.main_branch
-    want = [remote, main] if gc.sub == 'fetch' else ['--ff-only', '%s/%s' % (remote, main)]
-    return [w.text for w in gc.rest] == want
+        return False, LANDER_NO_ROLE
+    if not lander_alone(event, cmd, gc):
+        return False, LANDER_NOT_ALONE
+    pre = inv.args[:len(inv.args) - len(gc.rest) - 1]
+    if inv.via is not None or inv.dyn or [w.text for w in cmd.words[:inv.index]] not in ([], ['&']) or \
+            [w.text for w in pre[:1]] not in ([], ['-C']) or len(pre) not in (0, 2) or \
+            any(w.dyn for w in pre) or any(w.dyn for w in gc.rest):
+        return False, LANDER_WRAPPED
+    if [w.text for w in gc.rest] not in lander_forms(cfg)[gc.sub]:
+        return False, LANDER_ARGS
+    return True, None
+
+
+def lander_refusal(ctx, cmd, gc, rule, role, why):
+    """The refusal for a lander's landing step that failed lander_check's test `why`: it names the
+    test, the forms a lander may run, and the command to use (the config read when the config is
+    the cause)."""
+    top = ctx.place(gc.dir).top or gc.dir
+    kit = os.path.join(top, KIT_JSON)
+    cfg = ctx.config(gc.dir)
+    if cfg is None or why == LANDER_NO_ROLE:
+        forms = 'the landing forms'
+        instead, end = 'python -m json.tool %s' % quote(kit), 'Ask the coordinator to take it to the owner. To read the file:'
+    else:
+        remote, main = cfg.remote, cfg.main_branch
+        forms = 'git fetch %s, git fetch %s %s or git merge --ff-only %s/%s' % (remote, remote, main, remote, main)
+        want = '%s %s' % (remote, main) if gc.sub == 'fetch' else '--ff-only %s/%s' % (remote, main)
+        instead, end = 'git -C %s %s %s' % (quote(top), gc.sub, want), 'Run it alone, as:'
+    return refuse(rule, role, '`%s` is refused as a lander\'s landing step in the main checkout %s: %s. A lander may '
+                  'run only %s there, each alone on its line. %s' % (bare(cmd), fwd(top), why, forms, end), instead)
 
 
 def git_jail_unknown(ctx, cmd, gc, cwd, role):
@@ -1905,21 +1988,26 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
         target = sh.resolve_path(w.text, gc.dir)
         if not target:
             continue
-        rs = rs or jail_roots(ctx, cwd)
+        rs = rs or jail_roots(event, ctx, cwd)
         verdict, root = jail.judge(target, rs)
         if verdict is not None:
             what = '`%s` makes %s' % (bare(cmd), w.text)
             return jail_refusal(role, rs, verdict, root, what, target,
                                 rewrite=lambda path, w=w: retarget(cmd, w, path))
-    if git_reads(gc) or lander_main_git(event, ctx, cmd, inv, gc):
+    if git_reads(gc):
+        return None
+    landed, why = lander_check(event, ctx, cmd, inv, gc)
+    if landed:
         return None
     d = pm_data_unknown(ctx, gc.dir, cwd, role, '`%s`' % bare(cmd))
     if d:
         return d
-    rs = rs or jail_roots(ctx, cwd)
+    rs = rs or jail_roots(event, ctx, cwd)
     verdict, root = jail.judge(gc.dir, rs)
     if verdict is None:
         return None
+    if why is not None:
+        return lander_refusal(ctx, cmd, gc, 'write-jail', role, why)
     what = '`%s` changes the checkout %s' % (bare(cmd), fwd(gc.dir))
     dest = jail.destination(rs)
     if verdict != jail.OUTSIDE or dest is None:
