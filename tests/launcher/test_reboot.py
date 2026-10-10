@@ -182,6 +182,16 @@ class ResumePm(unittest.TestCase):
         self.assertIn("Set-Location %s" % window.q(self.h.root), text)
         self.assertEqual(self.lines, ['started pm-session'])
 
+    def test_the_pm_window_sets_agent_temp_and_points_temp_and_tmp_at_it(self):
+        temp = os.path.join(self.h.root, 'agent-temp')
+        host = FakeHost(self.h.root, env={'AGENT_TEMP': temp})
+        reboot.resume_pm(self.h.settings, host, self.cfg(), self.lines.append)
+        text, = host.opened
+        self.assertEqual(role_of(text), 'pm')
+        for var in ('AGENT_TEMP', 'TEMP', 'TMP'):
+            self.assertIn('$env:%s = %s' % (var, window.q(temp)), text)
+        self.assertLess(text.index('$env:TMP'), text.index('claude --resume'))
+
     def test_the_default_account_folder_leaves_config_dir_unset(self):
         default = os.path.join(self.h.root, '.claude')
         os.makedirs(default)

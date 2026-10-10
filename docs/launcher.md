@@ -59,7 +59,7 @@ A launched session is a `claude.exe` that is not the Store app (under `WindowsAp
 
 ## The window
 
-`kitlib/launcher/window.py` `script()` writes the window's PowerShell: the title (the session name), the user's registry environment (but Path, TEMP, TMP), every inherited `CLAUDE*`/`ANTHROPIC*` variable cleared, then `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`, the session mark, `CLAUDE_CONFIG_DIR`, TEMP/TMP from `AGENT_TEMP` when set, the folder, and the `claude` command with `--permission-mode auto --remote-control '<name>' -n '<name>'`. It opens minimized and unfocused through `conhost.exe powershell.exe -NoExit -EncodedCommand`.
+`kitlib/launcher/window.py` `script()` writes the window's PowerShell: the title (the session name), the user's registry environment (but Path, TEMP, TMP), every inherited `CLAUDE*`/`ANTHROPIC*` variable cleared, then `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`, the session mark, `CLAUDE_CONFIG_DIR`, when the launcher sees `AGENT_TEMP`, that variable set again with TEMP/TMP pointed at it (the PM resume too), the folder, and the `claude` command with `--permission-mode auto --remote-control '<name>' -n '<name>'`. It opens minimized and unfocused through `conhost.exe powershell.exe -NoExit -EncodedCommand`.
 
 Every window sets `PM_KIT_ROLE` (docs/guard.md "Session mark") and `PM_KIT_SESSION_NAME`; `script()` refuses an empty role, since an unmarked session counts as the owner's.
 
