@@ -194,7 +194,14 @@ def rev_parse(ctx, args):
             if quiet:
                 return 1
             raise die('Needed a single revision')
-        oid = resolve(ctx, revs[0])
+        try:
+            oid = resolve(ctx, revs[0])
+        except _refs.BrokenRef as e:
+            if quiet:
+                raise
+            # git 2.55 (observed, tests/git/test_git.py _Parity): the warning, then the fatal
+            ctx.warn('warning: ignoring broken ref %s\n' % e.name)
+            raise die('Needed a single revision')
         if oid is None:
             if quiet:
                 return 1
@@ -346,8 +353,9 @@ def config_cmd(ctx, args):
     # reading
     if opts.get('list'):
         pairs = _read_pairs(ctx, target if reading_file_only else None)
-        for k, v in pairs:
-            ctx.write('%s=%s%s' % (k, v, eol) if v is not None else '%s%s' % (k, eol))
+        for k, v in pairs:          # -z: a newline between key and value, as git prints it
+            ctx.write('%s%s%s%s' % (k, '\n' if z else '=', v, eol) if v is not None
+                      else '%s%s' % (k, eol))
         return 0
     if not pos:
         raise GitExit(129, 'error: wrong number of arguments\n')
@@ -537,26 +545,33 @@ def for_each_ref(ctx, args):
             raise Unsupported('for-each-ref --%s' % k)
     repo = ctx.need_repo()
     fmt = opts.get('format', '%(objectname) %(objecttype)\t%(refname)')
-    for name, oid in _matching_refs(repo, pos):
+    broken = []
+    for name, oid in _matching_refs(repo, pos, broken):
         ctx.write(format_ref(repo, fmt, name, oid) + '\n')
+    for name in broken:
+        if _ref_matches(name, pos):
+            # git's ref-filter skips a broken ref with this warning and still exits 0. Real git
+            # warns for every broken ref its walk passes, which may be more than the patterns match.
+            ctx.warn('warning: ignoring broken ref %s\n' % name)
     return 0
 
 
-def _matching_refs(repo, patterns):
-    allrefs = _refs.list_refs(repo, 'refs/')
+def _matching_refs(repo, patterns, broken=None):
+    """[(name, oid)] of the refs `patterns` match (all when none); a broken one is appended to
+    `broken` when that is a list (refs.list_refs)."""
+    return [(n, oid) for n, oid in _refs.list_refs(repo, 'refs/', broken) if _ref_matches(n, patterns)]
+
+
+def _ref_matches(name, patterns):
     if not patterns:
-        return allrefs
-    out = []
+        return True
     from .ignore import wildmatch
-    for name, oid in allrefs:
-        for p in patterns:
-            if name == p or (name.startswith(p) and (p.endswith('/') or name[len(p)] == '/')):
-                out.append((name, oid))
-                break
-            if any(c in p for c in '*?[') and wildmatch(p, name, pathname=True):
-                out.append((name, oid))
-                break
-    return out
+    for p in patterns:
+        if name == p or (name.startswith(p) and (p.endswith('/') or name[len(p)] == '/')):
+            return True
+        if any(c in p for c in '*?[') and wildmatch(p, name, pathname=True):
+            return True
+    return False
 
 
 _ATOM = re.compile(r'%\(([^)]*)\)|%([0-9a-fA-F]{2})|%%')
@@ -1126,9 +1141,23 @@ def branch(ctx, args):
             raise Unsupported('branch -%s' % k)
     quiet = opts.get('quiet')
     if opts.get('show-current'):
-        b = _revs.current_branch(repo)
-        if b:
-            ctx.write(b + '\n')
+        # git's print_current_branch_name: nothing when detached, dies outside refs/heads (the
+        # text git 2.55.0.windows.5 prints). Like git's refs_resolve_ref_unsafe it follows a chain
+        # of symrefs to its last name (which need not exist: an unborn branch).
+        raw = _refs.read_raw(repo, 'HEAD')
+        if not raw or raw[0] != 'sym':
+            return 0
+        name = raw[1]
+        for _ in range(5):                      # git's SYMREF_MAXDEPTH
+            nxt = _refs.read_raw(repo, name)
+            if not nxt or nxt[0] != 'sym':
+                break
+            name = nxt[1]
+        else:
+            raise Unsupported('branch --show-current through more than 5 symrefs')
+        if not name.startswith('refs/heads/'):
+            raise die('HEAD not found below refs/heads!')
+        ctx.write(name[len('refs/heads/'):] + '\n')
         return 0
     if opts.get('d') or opts.get('D'):
         force = opts.get('D') or opts.get('force')

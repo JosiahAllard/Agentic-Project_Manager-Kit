@@ -419,8 +419,8 @@ class PushFailures(StoreCase):
         return str(cm.exception)
 
     def test_an_unreadable_tip_after_the_verification_fetch_says_the_write_may_have_landed(self):
-        tip = smod.STORE_REF + '^{commit}'
-        said = self.failed_push_then(lambda a: a[0] == 'rev-parse' and a[-1] == tip,
+        # The store ref's read (RefBackend._local_tip, through refs.ref_commit).
+        said = self.failed_push_then(lambda a: a[0] == 'for-each-ref' and a[-1] == smod.STORE_REF,
                                      cmd.Result(128, b'', 'fatal: bad object'))
         self.assertIn('the store cannot be fetched', said)
         self.assertIn('may have landed', said)
@@ -659,6 +659,57 @@ class NoRemote(StoreCase):
         self.verb('set', 'FOO', [('effort', ['s'])])
         self.assertEqual(attempts, [0, 1])
         self.assertEqual(self.get('FOO').get('effort'), 's')
+
+
+def kill_store_reads(when=lambda: True):
+    """A patch of cmd._run under which every read of the store ref (`rev-parse` or `for-each-ref`
+    naming it) exits 1 having printed nothing, a git ended from outside (refs.KILLED_SHAPE), while
+    `when()` holds; every other git runs as before."""
+    real = cmd.spawner()
+
+    def run(argv, cwd=None, input=None, timeout=None, env=None):
+        if (argv[1] in ('rev-parse', 'for-each-ref') and any(smod.STORE_REF in a for a in argv)
+                and when()):
+            return 1, b'', b''
+        return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+    return mock.patch.object(cmd, '_run', side_effect=run)
+
+
+class AKilledStoreReadIsNoAnswer(StoreCase):
+    """KIT-GIT-EXIT1-ANSWERS: `rev-parse --verify --quiet` says "no such ref" as exit 1 with no
+    output, which a git ended from outside also leaves; the store must not read a kill as an
+    empty store."""
+    remote = False
+
+    def test_a_killed_store_read_is_a_failure_not_an_empty_store(self):
+        self.seed(priced('FOO'))
+        with kill_store_reads(), self.assertRaises(Failure) as cm:
+            self.store.load()
+        self.assertIn('cannot read %s' % smod.STORE_REF, str(cm.exception))
+
+    def test_at_landing_reads_a_killed_store_read_as_no_answer(self):
+        from kitlib.backlog import at_landing
+        self.seed(priced('FOO'))
+        with kill_store_reads():
+            got, why = at_landing._local_tip(smod.STORE_REF, self.repo.root)
+        self.assertIsNone(got, 'a killed git was read as "no store ref"')
+        self.assertTrue(why)
+
+    def test_a_failed_update_ref_whose_reread_is_killed_may_have_landed(self):
+        tip = self.seed(priced('FOO'))
+        moved = []
+
+        def on(args, real):
+            if args[0] == 'update-ref':
+                moved.append(1)
+                return cmd.Result(1, b'', 'fatal: boom')
+            return None
+        wrap_git(self, on)
+        with kill_store_reads(lambda: bool(moved)), self.assertRaises(Failure) as cm:
+            self.verb('set', 'FOO', [('effort', ['s'])])
+        self.assertIn('the write may have landed', str(cm.exception))
+        self.assertEqual(moved, [1])
+        self.assertEqual(self.repo.git('rev-parse', smod.STORE_REF), tip)
 
 
 class TheRefAndTheCheckout(StoreCase):

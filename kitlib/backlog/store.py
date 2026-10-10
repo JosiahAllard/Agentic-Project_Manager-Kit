@@ -294,12 +294,12 @@ class RefBackend(object):
         raise Failure('cannot fetch the backlog store from %s: %s' % (self.remote, why))
 
     def _local_tip(self):
-        r = cmd.call(['rev-parse', '--verify', '--quiet', self.local_ref + '^{commit}'], self.root)
-        if r.rc == 0:
-            return cmd.text(r.out).strip()
-        if r.rc == 1 and not r.err:
-            return None
-        raise Failure('cannot read %s: %s' % (self.local_ref, r.err or 'rc %s' % r.rc))
+        """`local_ref`'s commit, None when the ref does not exist; Failure when git cannot tell
+        (a git ended from outside included: refs.ref_commit)."""
+        tip, why = refs.ref_commit(self.local_ref, self.root)
+        if tip is None:
+            raise Failure('cannot read %s: %s' % (self.local_ref, why))
+        return tip or None
 
     def load(self, rules):
         tip = None
@@ -366,7 +366,12 @@ class RefBackend(object):
                          self.root)
             if r.rc == 0:
                 return new
-            now = self._local_tip()
+            try:
+                now = self._local_tip()
+            except Failure as exc:
+                raise Failure('git update-ref %s failed (%s) and %s: the write may have landed - '
+                              'read the store (`backlog.py check`) before retrying'
+                              % (self.local_ref, r.err or 'exit %s' % r.rc, exc))
             if now == new:                       # rc None: timed out or killed after the move
                 return new
             # A held lock (another writer mid-update) or a moved ref: the store is busy.
