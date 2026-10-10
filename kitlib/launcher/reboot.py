@@ -11,8 +11,9 @@ missing or bad, the PM account not signed in) are logged FAILED too, never raise
 Skipped: a "_" key, an entry without a stem, "autostart": false, and an entry whose stem is
 already running under any account or recycle. The PM resume is skipped when pm-session or the PM
 session id is running, when the Claude desktop app is running (resuming there too would fork the
-conversation), and, more than 15 minutes after boot, when the PM transcript was written in the
-last 15 minutes. --test starts only a throwaway "autostart-test" session.
+conversation) unless launcher.pm_resume_beside_desktop is true, and, more than 15 minutes after
+boot, when the PM transcript was written in the last 15 minutes. --test starts only a throwaway
+"autostart-test" session.
 """
 import glob
 import os
@@ -153,8 +154,10 @@ def resume_pm(settings, host, cfg, log):
         log('pm-session already running, skipped')
         return []
     if desktop_app_running(procs):
-        log('desktop app running, pm-session skipped')
-        return []
+        if not settings.pm_resume_beside_desktop:
+            log('desktop app running, pm-session skipped')
+            return []
+        log('desktop app running, pm-session resumed anyway (launcher.pm_resume_beside_desktop)')
     m = newest_transcript_mtime(settings, sid)
     if host.uptime_minutes() > FRESH_MINUTES and m is not None and host.now().timestamp() - m < FRESH_MINUTES * 60:
         log('pm transcript active, pm-session skipped')

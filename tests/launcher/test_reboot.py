@@ -13,6 +13,9 @@ BETA = {'repo': 'alpha', 'agent': True, 'stem': 'beta-coord', 'state': 's.md', '
 HELPER = {'repo': 'alpha', 'agent': False, 'stem': 'alpha-help', 'state': 's.md', 'brief': 'b.md', 'account': 1,
           'name': 'alpha-help-a1'}
 PM = {'pm_session_id': 'pm-sid-1', 'pm_folder': None, 'pm_account': 2}
+STORE = {'Name': 'claude.exe', 'ProcessId': 5, 'ExecutablePath': 'C:' + chr(92) + 'Program Files' + chr(92)
+         + 'WindowsApps' + chr(92) + 'claude.exe', 'CommandLine': 'claude'}
+UNNAMED = {'Name': 'claude.exe', 'ProcessId': 6, 'ExecutablePath': r'C:\bin\claude.exe', 'CommandLine': 'claude'}
 
 
 class FailingHost(FakeHost):
@@ -121,12 +124,33 @@ class ResumePm(unittest.TestCase):
         self.assertEqual(self.lines, ['pm-session already running, skipped'] * 2)
 
     def test_the_desktop_app_or_an_unnamed_session_skips_it(self):
-        store = {'Name': 'claude.exe', 'ProcessId': 5, 'ExecutablePath': 'C:' + chr(92) + 'Program Files' + chr(92)
-                 + 'WindowsApps' + chr(92) + 'claude.exe', 'CommandLine': 'claude'}
-        unnamed = {'Name': 'claude.exe', 'ProcessId': 6, 'ExecutablePath': r'C:\bin\claude.exe', 'CommandLine': 'claude'}
-        for p in (store, unnamed):
+        self.assertFalse(self.h.settings.pm_resume_beside_desktop)          # the default
+        for p in (STORE, UNNAMED):
             self.assertEqual(self.resume(self.cfg(), [p]).opened, [])
         self.assertEqual(self.lines, ['desktop app running, pm-session skipped'] * 2)
+
+    def beside(self):
+        return S.Settings(dict(self.h.obj, pm_resume_beside_desktop=True), self.h.root)
+
+    def test_the_key_resumes_the_pm_beside_the_desktop_app_or_an_unnamed_session(self):
+        for p in (STORE, UNNAMED):
+            text, = self.resume(self.cfg(), [p], settings=self.beside()).opened
+            self.assertEqual(role_of(text), 'pm')
+            self.assertIn("claude --resume 'pm-sid-1' --remote-control 'pm-session' -n 'pm-session'", text)
+        self.assertEqual(self.lines, ['desktop app running, pm-session resumed anyway '
+                                      '(launcher.pm_resume_beside_desktop)', 'started pm-session'] * 2)
+
+    def test_the_key_still_refuses_a_running_pm_session(self):
+        for procs in ([session(7, 'pm-session'), STORE],
+                      [dict(session(8, 'x'), CommandLine="claude --resume 'pm-sid-1' --remote-control 'x' -n 'x'"),
+                       UNNAMED]):
+            self.assertEqual(self.resume(self.cfg(), procs, settings=self.beside()).opened, [])
+        self.assertEqual(self.lines, ['pm-session already running, skipped'] * 2)
+
+    def test_the_key_keeps_the_fresh_transcript_rule(self):
+        self.transcript(minutes_ago=3)
+        self.assertEqual(self.resume(self.cfg(), [STORE], uptime=60, settings=self.beside()).opened, [])
+        self.assertEqual(self.lines[-1], 'pm transcript active, pm-session skipped')
 
     def test_a_fresh_transcript_skips_it_only_after_the_boot_window(self):
         self.transcript(minutes_ago=3)
