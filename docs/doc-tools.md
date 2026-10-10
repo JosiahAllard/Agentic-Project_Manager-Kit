@@ -55,8 +55,10 @@ With `capped` set, only the listed docs may carry a cap, each needs an integer o
 ## doc_index
 
 ```
-python tools/doc_index.py [-C DIR] [--find WORD... | --section HEADING [--doc PATH] | --tools | --stale | --role ROLE] [--head REF] [--days N]
+python tools/doc_index.py [-C DIR] [--find WORD... | --section HEADING [--doc PATH] | --tools | --stale | --role ROLE] [--head REF] [--days N] [--config-ref REF]
 ```
+
+`--config-ref REF` reads `.kit.json` as commit REF holds it instead of the working tree's: the whole `doc_index` section, `doc_budget.shard_indexes`, and whether a `.kit.json` exists at all (`kitlib.docs.index.run`, `config_ref`).
 
 `kitlib.docs.index.run` behaves as follows:
 
@@ -69,7 +71,7 @@ python tools/doc_index.py [-C DIR] [--find WORD... | --section HEADING [--doc PA
 
 The index file is `doc_index.index` (default `docs/INDEX.md`). `--find` and `--tools` read it from the working tree.
 
-The no-mode check is run by preflight (`kitlib/preflight/report.py`), commit (`kitlib.commit.doc_index_check`, after a commit holding a `.md` or an owner-only file) and review_pack (`kitlib.reviewpack.index_line`, with `--head <branch>`) as `[sys.executable, <kit>/tools/doc_index.py, -C, <repo>]`, beside doc_budget and judged the same way (`kitlib.docs.callers.line`: exit 0, a `DOC INDEX OK` line, no `DOC INDEX FAILED`). It prints as a `doc index` line; a failure is a failing line in preflight, the follow-up-commit notice in commit, and a failed pack in review_pack. `doc_index.enabled` false runs nothing and prints nothing (review_pack reads it from the base's `.kit.json`); a kit with no `tools/doc_index.py` prints NOT CHECKED. `tests/docs/test_index_callers.py` pins each caller.
+The no-mode check is run by preflight (`kitlib/preflight/report.py`), commit (`kitlib.commit.doc_index_check`, after a commit holding a `.md` or an owner-only file) and review_pack (`kitlib.reviewpack.index_line`, with `--head <branch> --config-ref <base>`) as `[sys.executable, <kit>/tools/doc_index.py, -C, <repo>]`, beside doc_budget and judged the same way (`kitlib.docs.callers.line`: exit 0, a `DOC INDEX OK` line, no `DOC INDEX FAILED`). It prints as a `doc index` line; a failure is a failing line in preflight, the follow-up-commit notice in commit, and a failed pack in review_pack. `doc_index.enabled` false runs nothing and prints nothing (review_pack reads it, and every other doc index setting, from the base's `.kit.json`, so a branch can neither switch its own check off nor rename the index it is checked against; preflight and commit read the working tree's, being advisory); a kit with no `tools/doc_index.py` prints NOT CHECKED. `tests/docs/test_index_callers.py` pins each caller.
 
 Exit codes:
 

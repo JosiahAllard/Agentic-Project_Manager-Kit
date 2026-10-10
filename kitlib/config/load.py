@@ -110,11 +110,14 @@ def _gate_rules(gate, errs):
 
 class Config(object):
     """A repository's checked kit configuration. `section(name)` is the section over its defaults
-    (every schema key present, notes dropped); `raw(name)` is the section as written."""
+    (every schema key present, notes dropped); `raw(name)` is the section as written. `found` is
+    False only when the reader answered that no `.kit.json` exists (a read that failed raised
+    ConfigError instead), so it is the same read the sections came from."""
 
-    def __init__(self, root, where, raw, files):
+    def __init__(self, root, where, raw, files, found=True):
         self.root = root
         self.where = where
+        self.found = found
         self._raw = raw          # name -> dict as written (absent sections are {})
         self._files = files      # name -> repo-relative file it came from, or None (inline/absent)
 
@@ -227,7 +230,7 @@ def _build(root, where, reader):
                         % ', '.join(checks))
     if errs:
         raise ConfigError('%s: %s' % (where, '; '.join(errs)))
-    return Config(root, where, raw, files)
+    return Config(root, where, raw, files, found=text is not None)
 
 
 def config_path(root):

@@ -34,8 +34,9 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 
 1. **A new repository** must be a git checkout with an `origin` remote and a first commit:
    `git init -b main`, `git remote add origin <url>`, a commit, `git push -u origin main`.
-   `tools/new_worktree.py` and `tools/preflight.py` fetch `origin` and refuse without it; the
-   installer warns, and prints the commands, when it finds none.
+   `tools/new_worktree.py` fetches `origin` (it refuses if the fetch fails), and `tools/preflight.py` does only with `--fetch`
+   (it never refuses for a missing remote); the installer warns, and prints the commands, when
+   it finds none.
 2. **Dry run** `installer/new-repo.ps1` from the kit checkout:
 
    ```
@@ -53,10 +54,14 @@ down the longer the machine stays up: docs/windows-token-leak.md.
      `gitattributes` lists. A file already there is never overwritten: only the lines it lacks
      are appended, and the dry run lists them.
    - `docs/INDEX.md` is written only when absent. The doc index check (run by preflight, commit
-     and review_pack) needs the file, and every tracked `.md` named on an entry line of it.
+     and review_pack) needs the file, and every tracked `.md` named on an entry line of it. The starter names only itself: when it is
+     written, the dry run and `-Apply` list the target's tracked `.md` files it does not name
+     (under "add these to docs/INDEX.md"; advice only, never a refusal), for you to add.
    - `-Stack dotnet|godot|java|python` copies `templates/stacks/<stack>/tools/gate.json` to
      `tools/gate.json` (refused if one is there) and adds `"gate": "tools/gate.json"` to
-     `.kit.json`. Edit its globs and test command to the project. The python gate runs
+     `.kit.json`, and copies the stack's other `tools/` files (only Godot has one, `tools/godot.cmd`),
+     keeping any that is there already. Edit the gate's globs and test command to the project.
+     The python gate runs
      `unittest discover -s tests` and needs one test: its pass check wants a `Ran N tests` line
      with N of 1 or more, so a run of none fails on every Python version. It runs without
      `-t .`, so test modules import as top-level names: a `tests/__init__.py` layout with
@@ -68,7 +73,9 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    `tools/gate.json` are owner-only paths: commit them under the owner's identity, the rest
    (stubs, `.gitignore`, `.gitattributes`, `docs/INDEX.md`) as usual. It refuses before writing
    anything when `.kit.json` or `tools/gate.json` exists, or when a file that is not a stub sits
-   where a stub goes. Exit codes: 0 done or dry run; 1 refused; 2 usage. Tests:
+   where a stub goes. A write that fails (a read-only file, a full disk) stops it with
+   `new-repo: FAILED`, the files already written, and exit 1. Exit codes: 0 done or dry run;
+   1 refused or a write failed; 2 usage. Tests:
    `tests/stubs/test_new_repo.py`, against a throwaway repository only.
    - **PM data on a private branch** (optional; docs/pm-data-branch.md): add
      `-PmData <folder> [-PrivateRemote <url>]`. After the files above are written, the script
@@ -104,7 +111,8 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 ### What the script does not install
 
 - The stack's other files: `.github/workflows/{quick,full}.yml` (owner-only paths; copy them by
-  hand), and for Godot `tools/godot.cmd` and the render-check skill.
+  hand), and for Godot the render-check skill (`.claude/skills/godot-render-check/SKILL.md`).
+  `tools/godot.cmd` is installed.
 - `templates/common/CLAUDE.md` and the two profile templates (`agent-profile.TEMPLATE.md`,
   `coordinator-profile.TEMPLATE.md`): the repository's rules file and profiles are drafted from
   them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates").
@@ -116,8 +124,8 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 ### Tools without a stub
 
 The stubs cover the tools a repository's agents run from their own checkout (`kitlib.stubs.SHARED`),
-including `land.py` and `ledger.py`. These run by the kit's path, `python <kit>/tools/<name>.py`,
-and get no stub:
+including `land.py` and `ledger.py`. The tools in the list below run by the kit's path,
+`python <kit>/tools/<name>.py`, and get no stub:
 
 - `machine_lock.py`: one lock per machine, so it runs from the machine's lock install, never a
   repository's. `run` needs `--repo <name> --slug <slug>` (and `--kind`); `status` needs nothing.
@@ -178,5 +186,5 @@ paths must allow it (`machine_paths.allow`, docs/kit-json.md).
   libraries are `kitlib` modules); the warnings those modes needed. The old tool had no tests.
 - new-repo.ps1: copying `kit\tools\**`, `templates\common` and `templates\stacks\<Stack>`
   wholesale, with placeholder substitution (a repository holds stubs only; `-Stack` installs
-  only the stack's `tools/gate.json` and its ignore lines); writing the identities
+  only the stack's `tools/` files (`gate.json`, and Godot's `godot.cmd`) and its ignore lines); writing the identities
   into `tools\doc_budget.json` (they go to `.kit.json` "owner").
