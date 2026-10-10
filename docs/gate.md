@@ -6,7 +6,7 @@ The universal gate: `tools/gate.py` (entry) over `kitlib/gate` (library). ARCHIT
 
 | Command | Does |
 |---|---|
-| `gate.py [-C DIR] [--base REV] [--full \| --only STEP ...] [--plan] [--slug S] [--log-dir D]` | Gates the checkout under `book(<gate.kind>)` (default `engine-test`), booked as a gate run: the build daemons it leaves are stopped at its end (`kitlib/lock/site.py`). The base is the default base (Default base); the merge base with HEAD is what is compared. |
+| `gate.py [-C DIR] [--base REV] [--full \| --only STEP ...] [--plan] [--slug S] [--log-dir D]` | Gates the checkout under `book(<gate.kind>)` (default `engine-test`), booked as a gate run: the build daemons it leaves that serve nothing outside its job are stopped at its end (Build daemons). The base is the default base (Default base); the merge base with HEAD is what is compared. |
 | `land.py BRANCH [BRANCH ...] --expect-main SHA --expect-tip SHA [--expect-tip SHA ...] [-C DIR] [--lane L] [--summary T] [--full] [--fresh] [--wait S] [--log-dir D] [--keep-branch]` | The landing tool (tools/land.py): lands BRANCH, or a batch, from the main checkout (see Landing). One `--expect-tip` per branch, in the same order. `--wait` defaults to `"landing".wait_s`. Landed, each branch is cleaned up unless `--keep-branch` (see Branch cleanup). |
 | `land.py --sweep-landed [--apply] [-C DIR]` | The branch cleanup for every branch main already contains (`kitlib.gate.cleanup.sweep`; see Branch cleanup). Without `--apply` a dry run: it changes nothing and names what would go. |
 | `land.py --queue [-C DIR]` | Read-only: the landing lock's holder, then the landing queue in turn order (`kitlib.gate.land.queue`). |
@@ -49,6 +49,16 @@ kitlib/gate/steps.py. A step has a `cmd` (argv with `{python} {root} {base} {her
 - **Judging.** A step passes only when its exit code is in `ok_exits`, every `pass` pattern matches, no `fail` pattern matches, a cmd step's log is not empty, and it did not run zero tests (`Ran 0 tests` or a `zero_tests` pattern). The `errors` policy must also find no unexplained line. A `warn` step that fails, or a `warn_lines` hit, is WARN. A FAIL stops the rest unless the step has `continue`. A `requires` entry is a command name (looked up on PATH) or an argv probe that must exit 0 within 60 s (`PROBE_TIMEOUT`; on timeout its whole process tree is ended). One that is missing is SKIP, or FAIL with `requires_strict`. A gate whose selected steps were all skipped did not run anything, so it is REFUSED, not OK.
 - **Reuse.** A cmd step with `reuse` (`true`, or a group name: a group is reused whole or not at all) may be counted as passed in a landing without running (see Gate reuse). A check step never is.
 - **Check contract.** `GATE_CHECKS[name](ctx)`; ctx has `root base merged changed options name log run`. `run(argv, cwd=None)` runs in the slot's job and returns the exit code. A check returns 0/True to pass. Raising fails the check, and the traceback goes in the log. Calling `sys.exit` (any code, 0 included) also fails it, and the code goes in the log. Ctrl+C is not caught: it stops the gate.
+
+## Build daemons
+
+At the release of a gate run that ended "done", `kitlib/lock/run.py` `Slot.stop_daemons` stops the build daemons the gate's commands left in its job (policy: `machine_lock.daemons`, default `gates`, in `kitlib/lock/site.py`). A daemon is shared: any build on the machine may reuse one this gate started, so `kitlib/proc/daemons.py` `stop` ends one only when it is shown to serve the gate's job alone:
+
+- MSBuild nodes and the C#/VB compiler server (VBCSCompiler) are always left running. Their clients reach them over named pipes, and which process holds the other end of a pipe cannot be read from outside.
+- A Gradle or Kotlin daemon is stopped, with its children, only when the other end of every established loopback TCP connection of every process in its tree is in the gate's job (a job nested in it counts as in), in that same tree, or a process that has gone. `kitlib/proc/tcp.py` reads the connection table and `kitlib/proc/job.py` `Job.contains` asks Windows (`IsProcessInJob`).
+- Anything else leaves it running, never killed: a client outside the job, a client whose job Windows will not tell, a loopback connection whose other end the table does not show, a connection table or process tree that cannot be read. A daemon in the tree of a daemon left running, or serving a process in that tree, is left too.
+
+Each daemon is said, as `run <id>: stopped the <label> (pid N) it left: <result>` or `run <id>: left the <label> (pid N) running: <why>`, and listed in the run's ended record under `daemons` (`pid`, `what`, `result`; a left one's result is `left: <why>`). A gate nested in another run says them and records none. The tree and the table are read once, before any daemon is ended, so a client that connects between that read and the kill is not seen. Tests: tests/proc/test_daemons.py, tests/proc/test_tcp.py, tests/lock/test_release_daemons.py.
 
 ## Gate-OK record
 

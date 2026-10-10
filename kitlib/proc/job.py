@@ -235,6 +235,25 @@ class Job:
     def pids(self):
         return pid_list(self.h)
 
+    def contains(self, pid):
+        """Is process `pid` in this job (in a job nested in it counts as in)? "in", "out",
+        "gone" (no such process) or "unknown" (it cannot be opened, pid 0 or 4 among them, or
+        Windows will not say). Asked on an open handle, so the answer is about one process."""
+        pid = int(pid)
+        if self.h is None or pid in (0, 4):
+            return "unknown"
+        h = K32.OpenProcess(win32.QUERY_LIMITED, False, pid)
+        if not h:
+            return "gone" if ctypes.get_last_error() == win32.ERROR_INVALID_PARAMETER \
+                else "unknown"
+        try:
+            got = win32.BOOL(0)
+            if not K32.IsProcessInJob(h, self.h, ctypes.byref(got)):
+                return "unknown"
+            return "in" if got.value else "out"
+        finally:
+            K32.CloseHandle(h)
+
     def usage(self):
         """(CPU seconds so far, the job's peak committed memory, its process tree's working set
         now) in seconds and bytes, or None (ended). The working set is at
