@@ -25,6 +25,7 @@ os.path.normcase.
 import os
 
 from kitlib.config import user as kuser
+from kitlib.config.migration import OLD_DIR_NAME
 from kitlib.git import repo
 
 OPEN, ADD_ONLY, READ_ONLY = 'open', 'add-only', 'read-only'
@@ -105,23 +106,25 @@ def data_roots(ctx, cwd):
     return [(e['path'], e['mode']) for e in cfg.section('guard').get('data_roots') or []]
 
 
-def config_dir(ctx):
-    """The machine config's folder (kitlib.config.user.config_dir under ctx.home): no mark root
-    may hold or lie in it."""
-    return kuser.config_dir(ctx.home)
+def config_dirs(ctx):
+    """Both machine config folders under ctx.home, the current (kitlib.config.user.DIR_NAME) and
+    the retired one (kitlib.config.migration.OLD_DIR_NAME), whichever kitlib.config.user.locate
+    reads: no mark root may hold or lie in either. A root on the new folder while only the old
+    one has a config would let the session write the file locate then reads instead."""
+    return [os.path.join(ctx.home, kuser.DIR_NAME), os.path.join(ctx.home, OLD_DIR_NAME)]
 
 
 def mark_roots(ctx, mark):
     """[(path, mode)] from the machine config's guard_mark_roots for the session mark `mark`
-    (case ignored; None: none). `~/` reads as ctx.home. A root that is the machine config's folder,
-    holds it or lies inside it is dropped, so no session can be given its own guard settings. A
+    (case ignored; None: none). `~/` reads as ctx.home. A root that is either machine config
+    folder (config_dirs), holds it or lies inside it is dropped, so no session can be given its own guard settings. A
     config the strict reader refuses has no mark roots (Ctx.user reads it tolerantly, and a map
     is not kept)."""
     table = ctx.user().get('guard_mark_roots') if mark else None
     if not isinstance(table, dict):
         return []
     want = str(mark).strip().lower()
-    cfg = real(config_dir(ctx))
+    cfgs = [real(d) for d in config_dirs(ctx)]
     out = []
     for name, entries in table.items():
         if not isinstance(name, str) or name.strip().lower() != want or not isinstance(entries, list):
@@ -133,7 +136,7 @@ def mark_roots(ctx, mark):
             if not isinstance(path, str) or not os.path.isabs(path) or e.get('mode') not in MODES:
                 continue
             p = real(path)
-            if inside(p, cfg) or inside(cfg, p):
+            if any(inside(p, cfg) or inside(cfg, p) for cfg in cfgs):
                 continue
             out.append((path, e['mode']))
     return out
