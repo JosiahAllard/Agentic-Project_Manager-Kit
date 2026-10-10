@@ -20,6 +20,12 @@ a constructor argument, and the defaults read this machine.
                      the machine config's pm_data does not read (any path), or path's place is a
                      linked worktree whose repository's record or HEAD does not; else None. The
                      rules then deny the subagent write (fail closed).
+  pm_data_named()    the machine config names pm_data (or cannot be read)
+  pm_data_path()     the machine config's pm_data.path, or None
+  pm_root()          the root commit in the record of the machine config's pm_data repository
+                     ((None, None) when it names none or that repository has no record;
+                     (None, why) when either cannot be read)
+  gitread            kitlib.guard.gitread (alias, has_commit, is_shallow), or a test's fake
   config(path)       the .kit.json of the main checkout `path` belongs to (never a worktree's own:
                      an agent cannot loosen the rules from its branch; the PM data worktree,
                      answered as MAIN, is the one worktree whose own .kit.json is read); None
@@ -55,6 +61,7 @@ from kitlib import pmdata
 from kitlib import sessionmark
 from kitlib.config import user as kuser
 from kitlib.git import refs, repo
+from kitlib.guard import gitread as fsgitread
 from kitlib.guard import place as fsplace
 
 ROLE_ENV = sessionmark.ENV
@@ -115,7 +122,7 @@ def _same_dir(a, b):
 class Ctx(object):
     def __init__(self, environ=None, home=None, store=None, classify=None, load=None,
                  gate_ok=None, git=None, lock_held=None, role_resolver=None, tempdir=None,
-                 pm_data=None):
+                 pm_data=None, gitread=None):
         self.environ = dict(os.environ if environ is None else environ)
         self.home = home or kuser.home_dir()
         self.store = store
@@ -123,6 +130,7 @@ class Ctx(object):
         self._load = load or kconfig.load
         self._gate_ok = gate_ok
         self.git = git or refs
+        self.gitread = gitread or fsgitread
         self._lock_held = lock_held
         self._role = role_resolver or default_session_role
         self.tempdir = tempdir or self.environ.get('TEMP') or tempfile.gettempdir()
@@ -182,6 +190,38 @@ class Ctx(object):
             return None
         self.place(path)
         return self._pm_place_errors.get(os.path.normcase(os.path.abspath(path)))
+
+    def pm_data_named(self):
+        """True when the machine config names pm_data, or cannot be read (fail closed)."""
+        settings, why = self._pm_machine()
+        return bool(settings) or bool(why)
+
+    def pm_data_path(self):
+        """The machine config's pm_data.path, or None (none named, or it cannot be read)."""
+        settings, _why = self._pm_machine()
+        return settings['path'] if settings else None
+
+    def pm_root(self):
+        """The machine's PM data record as (root sha, None); (None, None) when the machine config
+        names no pm_data or its repository has no record; (None, why) when the machine config or
+        the record cannot be read, or pm_data.path is no checkout git can place. The record is the
+        one in the git common dir of pm_data.path."""
+        settings, why = self._pm_machine()
+        if why:
+            return None, why
+        if not settings:
+            return None, None
+        p = self.place(settings['path'])
+        if p.kind not in (repo.MAIN, repo.LINKED) or not p.common:
+            return None, 'the PM data worktree %s is not a checkout git can place (%s)' % (
+                settings['path'], p.detail or p.kind)
+        try:
+            record = pmdata.read(p.common)
+        except pmdata.PmDataError as e:
+            return None, str(e)
+        if record is None:
+            return None, None                   # no record yet: no data branch to guard
+        return record.root, None
 
     def _pm_machine(self):
         if self._pm_settings is None:
