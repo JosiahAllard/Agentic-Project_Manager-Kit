@@ -322,7 +322,15 @@ def sync(path, target, model, model_source='--model', base=None):
     if merging:
         # A real merge commit is needed (not a fast-forward): --no-commit stopped short of
         # making it so the message can carry the Co-Authored-By trailer.
-        with open(merge_msg_path(top), 'r', encoding='utf-8', errors='replace') as f:
+        path = merge_msg_path(top)
+        if not path:
+            # '' is no answer from `rev-parse --git-path` (a git ended from outside included):
+            # opening it would raise. The merge stands uncommitted; say so.
+            return done(FAILED, 'refused: git merge --no-commit %s left a merge to commit, but '
+                                'where git keeps its message (MERGE_MSG) could not be read. '
+                                'Nothing was committed and the merge is left in progress: '
+                                '`git status` shows it. Tell the coordinator.' % full[:7])
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
             merge_msg = f.read().rstrip('\n')
         msg = merge_msg + '\n\n' + trailer(model) + '\n'
         rc, out, err = _git(top, 'commit', '-q', '-F', '-',
