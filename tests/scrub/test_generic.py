@@ -1,7 +1,8 @@
-"""The kit is generic: no absolute drive path and none of this install's own names in a tracked file.
+"""The kit is generic: no absolute drive path, none of this install's own names and none of the
+kit's own names in a tracked file.
 
-Every file `git ls-files` lists is read, except under tests/ (fixtures there use invented paths
-and names on purpose).
+Every file `git ls-files` lists is read; the drive-path check skips tests/ (fixtures there use
+invented paths on purpose), the two name checks read tests/ too.
 
 - Drive paths: a drive letter, a colon and a slash or backslash (`X:\\`, `X:/`) fails, with
   file:line, unless the line matches an entry of DRIVE_ALLOWED: a genuine example or a default the
@@ -11,6 +12,10 @@ and names on purpose).
   PM knows (kitlib/pmstart known_repos, the kit's own left out), the launched session names in
   pm_start.sessions_file, the coordinator_start.cap repository keys and the hub artifact id at the
   end of pm_start.hub_url. A machine with none of these skips the check with a printed note.
+- Kit names: the kit's repository name (`.kit.json` repo.name), the Claude plugin's name
+  (.claude-plugin/plugin.json) and the machine config folder's name (kitlib.config.user.DIR_NAME),
+  read from those files at test time, so this file names none of them. Each may stand only on a
+  line of KIT_NAMES_ALLOWED; everywhere else code derives it and text says what it is.
 
 An allow entry that matches nothing is printed as stale, not failed: the line it allowed is gone.
 """
@@ -47,6 +52,17 @@ DRIVE_ALLOWED = (
      '(GIT_PS_EXE overrides them)'),
 )
 NAMES_ALLOWED = ()
+# (file glob, text the line contains, why a kit name may stand there). `{kit}` is the kit's
+# repository name. An empty text allows every line of the file.
+KIT_NAMES_ALLOWED = (
+    ('.kit.json', '"repo": {"name": ', "the kit's own name lives in its .kit.json, repo.name"),
+    ('README.md', '# {kit}', "the project page keeps the project's title (an owner ruling)"),
+    ('.claude-plugin/*', '', 'the Claude plugin carries its own name, Claude-specific (an owner '
+     'ruling); kitlib.lockmcp holds the one constant'),
+    ('kitlib/lockmcp/__init__.py', "CLAUDE_PLUGIN_NAME = '", 'the one Claude-plugin name constant'),
+    # Goes when KIT-CONFIG-DIR-RENAME gives the machine config folder a neutral name.
+    ('kitlib/config/user.py', "DIR_NAME = '", 'the one name of the machine config folder'),
+)
 
 
 def _allowed(rel, line, allowed, used):
@@ -57,12 +73,12 @@ def _allowed(rel, line, allowed, used):
     return False
 
 
-def scan(files, read, patterns, allowed):
+def scan(files, read, patterns, allowed, excluded=EXCLUDED):
     """(['path:line: hit (what)'], [stale allow entries]) for every pattern match in the files
-    outside EXCLUDED whose line no allow entry covers. patterns: [(compiled regex, what)]."""
+    outside `excluded` whose line no allow entry covers. patterns: [(compiled regex, what)]."""
     found, used = [], set()
     for rel in files:
-        if rel.startswith(EXCLUDED):
+        if excluded and rel.startswith(excluded):
             continue
         text = read(rel)
         if text is None:
@@ -109,7 +125,7 @@ def install_names(home=None, kit_dir=ROOT, toplevel=None):
             for n in pmstart.known_repos(pm, kit_dir=kit_dir,
                                          toplevel=lambda d: None if _norm(d) == kit else toplevel(d)):
                 add(n, 'pm_start known repository')
-            with open(sf, encoding='utf-8') as f:
+            with open(sf, encoding='utf-8-sig') as f:       # a file written with a BOM reads too
                 for e in json.load(f).values():
                     if isinstance(e, dict):
                         add(e.get('name'), 'pm_start.sessions_file session name')
@@ -124,6 +140,46 @@ def install_names(home=None, kit_dir=ROOT, toplevel=None):
         add(repo, 'coordinator_start.cap key')
     pats += [(name_pattern(n), src) for n, src in sorted(named.values())]
     return pats, notes
+
+
+def kit_names(root=ROOT):
+    """(name of the kit's repository or None, [(regex, source)]) for the kit's own names, read
+    from its files under root: `.kit.json` repo.name, .claude-plugin/plugin.json's name and
+    kitlib.config.user.DIR_NAME without its leading dot. Names equal but for case share one
+    pattern; a missing file adds nothing."""
+    from kitlib.config import user
+    named = {}
+
+    def add(name, source):
+        if isinstance(name, str) and len(name) >= 3:
+            named.setdefault(name.lower(), (name, source))
+
+    def read(*parts):
+        try:
+            with open(os.path.join(root, *parts), encoding='utf-8-sig') as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    kit = (read('.kit.json').get('repo') or {}).get('name')
+    add(kit, '.kit.json repo.name')
+    add(read('.claude-plugin', 'plugin.json').get('name'), 'the Claude plugin name')
+    add(user.DIR_NAME.lstrip('.'), 'the machine config folder')
+    return (kit if isinstance(kit, str) else None,
+            [(name_pattern(n), src) for n, src in sorted(named.values())])
+
+
+def kit_allowed(kit):
+    """KIT_NAMES_ALLOWED with `{kit}` filled in (an entry that needs a name it lacks is dropped)."""
+    out = []
+    for glob, text, why in KIT_NAMES_ALLOWED:
+        if '{kit}' in text:
+            if not kit:
+                continue
+            text = text.replace('{kit}', kit)
+        out.append((glob, text, why))
+    return tuple(out)
 
 
 DRIVE_PATTERNS = [(DRIVE, 'drive path')]
@@ -147,14 +203,25 @@ class Generic(unittest.TestCase):
         for n in notes:
             print('scrub: %s' % n)
         if not pats:
+            from kitlib.config import user
             print('scrub: no install names configured; set "scrub_patterns" in the machine config '
-                  '(~/.claude-pm-kit/config.json) to a list of case-insensitive patterns for the '
+                  '(%s) to a list of case-insensitive patterns for the ' % user.DISPLAY +
                   "install's own names (repositories, owner, accounts)")
             self.skipTest('no install names configured')
-        found, stale = scan(tracked_files(), read_text, pats, NAMES_ALLOWED)
+        found, stale = scan(tracked_files(), read_text, pats, NAMES_ALLOWED, excluded=())
         _report(stale)
         self.assertEqual(found, [], "this install's own names in tracked files (write them "
                          'generically):\n' + '\n'.join(found))
+
+    def test_no_kit_name_in_a_tracked_file(self):
+        kit, pats = kit_names()
+        self.assertTrue(pats, 'no kit names read from .kit.json, the plugin manifest or DIR_NAME')
+        found, stale = scan(tracked_files(), read_text, pats, kit_allowed(kit), excluded=())
+        _report(stale)
+        self.assertEqual(found, [], "the kit's own names in tracked files (derive them: "
+                         'kitlib.config.user for the machine config, kitlib.lockmcp for the Claude '
+                         'plugin, `.kit.json` repo.name for the repository; in text, say what it is; '
+                         'or add a KIT_NAMES_ALLOWED entry with its reason):\n' + '\n'.join(found))
 
 
 class TheChecks(unittest.TestCase):
@@ -188,20 +255,65 @@ class TheChecks(unittest.TestCase):
         found, _ = scan(list(files), files.get, [(name_pattern('alpha'), 'k')], ())
         self.assertEqual(found, ['docs/a.md:1: Alpha (k)', 'docs/a.md:3: alpha (k)'])
 
-    def _home(self, cfg, sessions=None):
+    def _home(self, cfg, sessions=None, sessions_encoding='utf-8'):
         import tempfile
+        from kitlib.config import user
         home = tempfile.mkdtemp(prefix='scrub-home-')
         self.addCleanup(__import__('shutil').rmtree, home, True)
-        os.makedirs(os.path.join(home, '.claude-pm-kit'))
+        os.makedirs(user.config_dir(home))
         if sessions is not None:
             sf = os.path.join(home, 'pm', 'launcher', 'sessions.json')
             os.makedirs(os.path.dirname(sf))
-            with open(sf, 'w', encoding='utf-8') as f:
+            with open(sf, 'w', encoding=sessions_encoding) as f:
                 json.dump(sessions, f)
             cfg.setdefault('pm_start', {})['sessions_file'] = sf
-        with open(os.path.join(home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+        with open(user.config_file(home), 'w', encoding='utf-8') as f:
             json.dump(cfg, f)
         return home
+
+    def test_a_sessions_file_with_a_bom_is_read(self):
+        home = self._home({}, sessions={'k': {'name': 'beta-coordinator-a1'}},
+                          sessions_encoding='utf-8-sig')
+        pats, notes = install_names(home, kit_dir=ROOT, toplevel=lambda d: None)
+        self.assertEqual(notes, ['scrub_patterns is not set'])
+        self.assertEqual([src for _, src in pats], ['pm_start.sessions_file session name'])
+
+    def _kit(self, kit_json, plugin_json):
+        import tempfile
+        root = tempfile.mkdtemp(prefix='scrub-kit-')
+        self.addCleanup(__import__('shutil').rmtree, root, True)
+        for parts, data in ((('.kit.json',), kit_json),(('.claude-plugin', 'plugin.json'), plugin_json)):
+            if data is not None:
+                path = os.path.join(root, *parts)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(data)
+        return root
+
+    def test_kit_names_come_from_the_kits_own_files(self):
+        root = self._kit('{"repo": {"name": "Kit-Alpha"}}', '{"name": "host-kit"}')
+        kit, pats = kit_names(root)
+        self.assertEqual(kit, 'Kit-Alpha')
+        self.assertEqual(sorted(src for _, src in pats),
+                         ['.kit.json repo.name', 'the Claude plugin name', 'the machine config folder'])
+        files = {'tests/x.py': "name = 'kit-alpha'\n",          # tests/ is read too
+                 'docs/a.md': 'prefix mcp__plugin_host-kit_lock__\n',
+                 '.claude-plugin/plugin.json': '"name": "host-kit"\n',
+                 '.kit.json': '"repo": {"name": "Kit-Alpha"}\n',
+                 'README.md': '# Kit-Alpha\nthe Kit-Alpha way\n'}
+        found, stale = scan(sorted(files), files.get, pats, kit_allowed(kit), excluded=())
+        self.assertEqual(found, ['README.md:2: Kit-Alpha (.kit.json repo.name)',
+                                 'docs/a.md:1: host-kit (the Claude plugin name)',
+                                 "tests/x.py:1: kit-alpha (.kit.json repo.name)"])
+        self.assertEqual(sorted(g for g, _, _ in stale),
+                         ['kitlib/config/user.py', 'kitlib/lockmcp/__init__.py'])
+
+    def test_kit_names_without_the_files_are_the_config_folder_only(self):
+        from kitlib.config import user
+        kit, pats = kit_names(self._kit(None, None))
+        self.assertIsNone(kit)
+        self.assertEqual([rx.pattern for rx, _ in pats], [name_pattern(user.DIR_NAME.lstrip('.')).pattern])
+        self.assertNotIn('README.md', [g for g, _, _ in kit_allowed(None)])
 
     def test_names_come_from_the_machine_config(self):
         home = self._home({'scrub_patterns': ['\\bowner\\b'],
