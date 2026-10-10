@@ -98,7 +98,7 @@ def own_copy_refusal(cwd, kit_root, rel=None, classify=repo.classify):
     The refusal names the command for the tree the caller meant, that tree's own gate.py with an
     absolute -C: a relative -C names it (the resolved tree). With no -C it is ambiguous (the
     gate.py's path names one checkout, the directory another), so both commands are given, each
-    labelled with the tree it gates."""
+    labelled by intent (advice())."""
     mine = classify(cwd)
     if mine.kind not in (repo.MAIN, repo.LINKED):
         return None                 # the gate itself refuses a tree git cannot place
@@ -114,26 +114,42 @@ def own_copy_refusal(cwd, kit_root, rel=None, classify=repo.classify):
         return G.Outcome(G.REFUSED, [
             'REFUSED: cannot tell which checkout %s is in: %s; it nests with the gated tree %s or '
             'its main checkout, so they may be two checkouts of one repository; nothing ran. Name '
-            'the tree with an absolute -C, using its own gate.py:' % (gate, kit.detail, mine.top),
-            command(mine.top)])
+            'the tree with an absolute -C, using its own gate.py:' % (gate, kit.detail, mine.top)]
+            + advice(mine.top, kit_root, rel))
     if kit.common != mine.common or kit.git_dir == mine.git_dir:
         return None
     named = ('given the relative -C %s (%s)' % (rel, cwd) if rel
              else 'run from %s' % cwd)
-    lines = [
+    return G.Outcome(G.REFUSED, [
         'REFUSED: %s is in the checkout %s, and it was %s, in the checkout %s of the same '
         'repository: with no -C or a relative one it would gate %s with the code of %s; nothing '
         'ran. Name the tree with an absolute -C, using its own gate.py:' % (
-            gate, kit.top, named, mine.top, mine.top, kit.top),
-        command(mine.top)]
-    if not rel:
-        lines.append(command(kit.top))
-    return G.Outcome(G.REFUSED, lines)
+            gate, kit.top, named, mine.top, mine.top, kit.top)]
+        + advice(mine.top, kit.top, rel))
 
 
-def command(top):
-    """The line naming the one documented command that gates the checkout `top`."""
-    return '  to gate %s: python %s -C %s' % (top, os.path.join(top, 'tools', 'gate.py'), top)
+RAN_FROM = 'if you meant the directory you ran from'
+THIS_GATE = 'if you meant the checkout this gate.py is in'
+
+
+def advice(mine, kit, rel):
+    """The refusal's command lines. A relative -C names the tree meant (`mine`): its command
+    alone. With no -C the tree meant is ambiguous: both, each labelled by intent."""
+    if rel:
+        return [command(mine)]
+    return [command(mine, RAN_FROM), command(kit, THIS_GATE)]
+
+
+def quote(path):
+    """`path` as one shell word: in double quotes when it holds a space."""
+    return '"%s"' % path if ' ' in path else path
+
+
+def command(top, intent=None):
+    """The line naming the one documented command that gates the checkout `top`, headed by
+    `intent`, or by the tree it gates when none."""
+    return '  %s: python %s -C %s' % (intent or 'to gate %s' % top,
+                                      quote(os.path.join(top, 'tools', 'gate.py')), quote(top))
 
 
 def nested(path, root):
