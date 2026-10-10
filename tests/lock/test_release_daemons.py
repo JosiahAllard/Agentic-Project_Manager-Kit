@@ -1,8 +1,9 @@
 """A gate run (book(gate=True), as kitlib.gate.runner books) that ends "done" stops the build
 daemons it left in its job (kitlib.proc.daemons), with their children; any other leftover runs
 on, unpinned. Any other run leaves them. machine_lock.daemons "stop" stops them after every run,
-"leave" after none. The daemon here is a python child whose command line names Gradle's daemon
-class; every process is the test's own."""
+"leave" after none. A daemon serving a client outside the run's job (another gate building on
+it) is left running (ReleaseLeavesASharedDaemon). The daemon here is a python child whose command
+line names Gradle's daemon class; every process is the test's own."""
 import os
 import sys
 import time
@@ -26,7 +27,7 @@ LEAVE = "\n".join([
     "open(sys.argv[1], 'w').write('%d %d' % (d.pid, p.pid))"])
 
 
-class ReleaseStopsDaemons(StoreCase):
+class ReleaseCase(StoreCase):
     def setUp(self):
         super().setUp()
         self.said = []
@@ -66,6 +67,8 @@ class ReleaseStopsDaemons(StoreCase):
         self.assertTrue(self.wait_gone(daemon, None), "the gradle daemon outlived the run")
         self.assertIsNotNone(self.own(plain), "a plain leftover was ended too")
 
+
+class ReleaseStopsDaemons(ReleaseCase):
     def test_a_done_gate_run_stops_the_daemon_and_leaves_the_rest(self):
         daemon, plain = self.run_leaving(gate=True)
         plain_ct = self.own(plain)
@@ -131,6 +134,113 @@ class ReleaseStopsDaemons(StoreCase):
                         self.said)
         self.assertFalse(os.listdir(self.store.path("ended")) if os.path.isdir(
             self.store.path("ended")) else [], "a nested slot wrote a record")
+
+
+# A fake Gradle daemon: listens on a loopback port 0 (written to argv[1]) and holds every
+# connection it accepts, as a daemon serving a build does.
+DAEMON = "\n".join([
+    "import os, socket, sys, time",
+    "s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen(8); s.settimeout(0.5)",
+    "open(sys.argv[1] + '.tmp', 'w').write(str(s.getsockname()[1]))",
+    "os.replace(sys.argv[1] + '.tmp', sys.argv[1])",
+    "held, end = [], time.time() + 120",
+    "while time.time() < end:",
+    "    try: held.append(s.accept()[0])",
+    "    except socket.timeout: pass"])
+
+# A build client: waits for the daemon's port, connects, says so in argv[2], and stays connected.
+CLIENT = "\n".join([
+    "import os, socket, sys, time",
+    "end = time.time() + 30",
+    "while not os.path.exists(sys.argv[1]) and time.time() < end: time.sleep(0.05)",
+    "c = socket.create_connection(('127.0.0.1', int(open(sys.argv[1]).read())), timeout=10)",
+    "open(sys.argv[2], 'w').close()",
+    "time.sleep(120)"])
+
+# The run's command: starts the daemon; "inside" also starts a client as its own child, "nested"
+# starts one in a job of its own nested in the run's (kitlib.proc.job), "outside" leaves the
+# client to the test. Waits until a client is connected, writes "<daemon pid> <client pid or 0>"
+# and exits, leaving both in the run's job.
+SHARED = "\n".join([
+    "import os, subprocess, sys, time",
+    "port, connected, out, mode, root, daemon, client = sys.argv[1:8]",
+    "d = subprocess.Popen([sys.executable, '-c', daemon, port,",
+    "                      'org.gradle.launcher.daemon.bootstrap.GradleDaemon'])",
+    "c = None",
+    "if mode == 'inside':",
+    "    c = subprocess.Popen([sys.executable, '-c', client, port, connected])",
+    "elif mode == 'nested':",
+    "    sys.path.insert(0, root)",
+    "    from kitlib.proc import job",
+    "    c = job.Job(kill_on_close=False).start([sys.executable, '-c', client, port, connected])",
+    "end = time.time() + 30",
+    "while not os.path.exists(connected) and time.time() < end: time.sleep(0.05)",
+    "open(out, 'w').write('%d %d' % (d.pid, c.pid if c else 0))"])
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+class ReleaseLeavesASharedDaemon(ReleaseCase):
+    """A Gradle daemon a gate's client started sits in that gate's job, yet any client on the
+    machine may be building on it. The gate's release stops it only when every client it serves
+    is in the gate's own job (a job nested in it counts as in). The daemon policy is set here,
+    never read from the machine config."""
+
+    def setUp(self):
+        super().setUp()
+        self.store.site = {"daemons": "gates"}
+
+    def run_shared(self, mode):
+        port = os.path.join(self.tmp, "port.txt")
+        connected = os.path.join(self.tmp, "connected")
+        out = os.path.join(self.tmp, "shared.txt")
+        code = rm.run_command([sys.executable, "-c", SHARED, port, connected, out, mode, ROOT,
+                               DAEMON, CLIENT], "engine-test", "kit", "daemon", cores=1,
+                              store=self.store, env=clean_env(), gate=True)
+        with open(out) as f:
+            pids = [int(x) for x in f.read().split()]
+        self.cts = {p: self.own(p) for p in pids if p}    # whatever the run left, ended at cleanup
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.exists(connected), "no client connected to the daemon")
+        return pids
+
+    def results(self):
+        return [(d["pid"], d["what"], d["result"]) for d in self.ended().get("daemons", ())]
+
+    def test_a_daemon_serving_a_client_in_another_job_is_left_running(self):
+        from kitlib.proc import job
+        other = job.Job()                   # another gate's job: not the run's, nor nested in it
+        try:
+            c = other.start([sys.executable, "-c", CLIENT, os.path.join(self.tmp, "port.txt"),
+                             os.path.join(self.tmp, "connected")])
+        except BaseException:
+            other.end(True)
+            raise
+
+        def end_client():                   # the test's own job: only its own client is in it
+            other.end(True)
+            c.wait(30)
+        self.addCleanup(end_client)
+        daemon, _ = self.run_shared("outside")
+        ct = self.cts[daemon]
+        self.assertTrue(ct is not None and process.alive(daemon, ct),
+                        "the daemon another job's client uses was stopped")
+        why = "left: pid %d serves pid %d, which is outside the run's job" % (daemon, c.pid)
+        self.assertEqual(self.results(), [(daemon, "gradle-daemon", why)])
+        self.assertTrue(any("left the gradle-daemon (pid %d) running" % daemon in s
+                            for s in self.said), self.said)
+
+    def test_a_daemon_serving_only_the_runs_own_client_is_stopped(self):
+        daemon, client = self.run_shared("inside")
+        self.assertNotEqual(client, 0)
+        self.assertEqual(self.results(), [(daemon, "gradle-daemon", "killed")])
+        self.assertTrue(self.wait_gone(daemon, None), "the gradle daemon outlived the run")
+
+    def test_a_client_in_a_job_nested_in_the_runs_counts_as_inside(self):
+        daemon, client = self.run_shared("nested")
+        self.assertNotEqual(client, 0)
+        self.assertEqual(self.results(), [(daemon, "gradle-daemon", "killed")])
+        self.assertTrue(self.wait_gone(daemon, None), "the gradle daemon outlived the run")
 
 
 @unittest.skipUnless(os.name == "nt", "the lock is Windows only")

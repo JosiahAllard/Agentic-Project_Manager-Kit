@@ -45,12 +45,150 @@ class FindAndStop(unittest.TestCase):
     def test_stop_ends_each_tree_by_ctime(self):
         calls = []
 
-        def kill_tree(pid, ct):
-            calls.append((pid, ct))
+        def kill_tree(pid, ct, snap=None):
+            calls.append((pid, ct, snap))
             return {pid: "killed", pid + 1: "killed"}
-        out = daemons.stop([(10, 100, "gradle-daemon")], kill_tree=kill_tree)
-        self.assertEqual(calls, [(10, 100)])
+        out = daemons.stop([(10, 100, "gradle-daemon")], lambda p: "in", kill_tree=kill_tree,
+                           snapshot=lambda: "SNAP", descendants=lambda p, ct, snap: [],
+                           connections=lambda: [])
+        self.assertEqual(calls, [(10, 100, "SNAP")], "the tree checked is not the tree ended")
         self.assertEqual(out, [(10, "gradle-daemon", "killed")])
+
+
+LO = b"\x7f\0\0\x01"
+
+
+def link(a_pid, a_port, b_pid, b_port, addr=LO):
+    """The two table rows of one established loopback connection between a_pid and b_pid."""
+    a, b = (4, addr, a_port), (4, addr, b_port)
+    return [(a, b, a_pid), (b, a, b_pid)]
+
+
+class StopsOnlyWhatServesTheRun(unittest.TestCase):
+    """The releasing run's job holds 10 (a Gradle daemon), its child 11, 12 (a Kotlin daemon)
+    and 20 (a client of the run's); 30 is a client in another run's job; 40's job cannot be
+    read; 50 is gone; 60's answer is none in_job gives."""
+    JOB = {10: "in", 11: "in", 12: "in", 20: "in", 30: "out", 40: "unknown", 50: "gone"}
+
+    def stop(self, conns, found=((10, 100, "gradle-daemon"),), tree=(), trees=None):
+        """tree: the descendants of every daemon; trees: {daemon pid: descendants} instead."""
+        self.killed = []
+
+        def kill_tree(pid, ct, snap=None):
+            self.killed.append(pid)
+            return {pid: "killed"}
+
+        def descendants(p, ct, snap):
+            return list(trees.get(p, ())) if trees is not None else list(tree)
+        return daemons.stop(list(found), self.JOB.get, kill_tree=kill_tree,
+                            snapshot=lambda: [], descendants=descendants,
+                            connections=lambda: conns)
+
+    def test_a_daemon_with_a_client_in_another_runs_job_is_not_stopped(self):
+        out = self.stop(link(10, 5000, 30, 6000))
+        self.assertEqual(self.killed, [], "a daemon serving another run's client was stopped")
+        self.assertEqual(out[0][:2], (10, "gradle-daemon"))
+        self.assertTrue(out[0][2].startswith("left: "), out)
+        self.assertIn("pid 30", out[0][2])
+
+    def test_a_daemon_serving_only_the_releasing_run_is_stopped(self):
+        out = self.stop(link(10, 5000, 20, 6000))
+        self.assertEqual(self.killed, [10])
+        self.assertEqual(out, [(10, "gradle-daemon", "killed")])
+
+    def test_an_idle_daemon_is_stopped(self):
+        self.assertEqual(self.stop([]), [(10, "gradle-daemon", "killed")])
+
+    def test_a_child_serving_another_run_keeps_its_parent(self):
+        """Stopping the daemon ends its tree: a Kotlin daemon it started that another run's
+        Gradle daemon uses would die with it."""
+        out = self.stop(link(11, 5000, 30, 6000), tree=[(11, 101)])
+        self.assertEqual(self.killed, [])
+        self.assertIn("pid 11 serves pid 30", out[0][2])
+
+    def test_a_peer_whose_job_cannot_be_told_leaves_it(self):
+        self.stop(link(10, 5000, 40, 6000))
+        self.assertEqual(self.killed, [])
+
+    def test_a_peer_that_is_gone_serves_nobody(self):
+        self.stop(link(10, 5000, 50, 6000))
+        self.assertEqual(self.killed, [10])
+
+    def test_a_loopback_connection_without_its_other_row_leaves_it(self):
+        self.stop(link(10, 5000, 30, 6000)[:1])
+        self.assertEqual(self.killed, [])
+
+    def test_a_connection_to_another_host_is_not_a_client(self):
+        far = (4, b"\x0a\0\0\x05", 443)
+        self.stop([((4, b"\x0a\0\0\x02", 5000), far, 10)])
+        self.assertEqual(self.killed, [10])
+
+    def test_a_connection_inside_its_own_tree_is_its_own(self):
+        self.stop(link(10, 5000, 11, 6000), tree=[(11, 101)])
+        self.assertEqual(self.killed, [10])
+
+    def test_an_unreadable_table_leaves_it(self):
+        def broken():
+            raise OSError("no table")
+        out = daemons.stop([(10, 100, "gradle-daemon")], self.JOB.get,
+                           kill_tree=lambda *a, **k: self.fail("stopped"), snapshot=lambda: [],
+                           descendants=lambda p, ct, snap: [], connections=broken)
+        self.assertIn("could not be read", out[0][2])
+
+    def test_pipe_daemons_are_always_left(self):
+        out = self.stop([], found=[(10, 100, "msbuild-node"), (12, 120, "compiler-server")])
+        self.assertEqual(self.killed, [])
+        self.assertTrue(all("named pipes" in r for _p, _l, r in out), out)
+
+    def test_a_peer_with_an_answer_in_job_never_gives_leaves_it(self):
+        self.stop(link(10, 5000, 60, 6000))
+        self.assertEqual(self.killed, [], "an unexpected in_job answer counted as inside")
+
+    def test_a_daemon_serving_a_left_daemon_is_left_whatever_the_order(self):
+        """Another run builds on the run's Gradle daemon 10, which compiles on the run's Kotlin
+        daemon 12: 12's only client is in the job, yet ending it breaks the build 10 serves."""
+        conns = link(10, 5000, 30, 6000) + link(10, 5001, 12, 7000)
+        gradle, kotlin = (10, 100, "gradle-daemon"), (12, 120, "kotlin-daemon")
+        for found in ((gradle, kotlin), (kotlin, gradle)):
+            out = dict((p, r) for p, _l, r in self.stop(conns, found=found))
+            self.assertEqual(self.killed, [], "the daemon a left daemon uses was stopped")
+            self.assertIn("serves pid 30", out[10])
+            self.assertEqual(out[12], "left: pid 12 serves pid 10 of the gradle-daemon (pid 10), "
+                                      "which is left running")
+
+    def test_a_daemon_in_a_left_daemons_tree_is_left(self):
+        conns = link(10, 5000, 30, 6000)
+        out = self.stop(conns, found=[(12, 120, "kotlin-daemon"), (10, 100, "gradle-daemon")],
+                        trees={10: [(12, 120)]})
+        self.assertEqual(self.killed, [])
+        self.assertEqual(out[0], (12, "kotlin-daemon", "left: it runs in the tree of the "
+                                  "gradle-daemon (pid 10), which is left running"))
+
+    def test_a_daemon_with_a_left_daemon_in_its_tree_is_left(self):
+        """12 is a pipe daemon (always left) that the Gradle daemon 10 started: ending 10's
+        tree would end it."""
+        out = self.stop([], found=[(10, 100, "gradle-daemon"), (12, 120, "compiler-server")],
+                        trees={10: [(12, 120)]})
+        self.assertEqual(self.killed, [])
+        self.assertEqual(out[0], (10, "gradle-daemon", "left: ending its tree would end pid 12 "
+                                  "of the compiler-server (pid 12), which is left running"))
+
+    def test_an_unreadable_tree_leaves_it(self):
+        def broken(p, ct, snap):
+            raise OSError("no snapshot")
+        out = daemons.stop([(10, 100, "gradle-daemon")], self.JOB.get,
+                           kill_tree=lambda *a, **k: self.fail("stopped"), snapshot=lambda: [],
+                           descendants=broken, connections=lambda: [])
+        self.assertIn("tree could not be read", out[0][2])
+
+    def test_a_stopped_daemon_and_the_daemon_it_ended_too(self):
+        """Both judged on one table before either is ended; the Kotlin daemon in the stopped
+        Gradle daemon's tree is ended with it and reports what its own kill found."""
+        out = self.stop(link(10, 5000, 12, 7000), found=[(10, 100, "gradle-daemon"),
+                                                         (12, 120, "kotlin-daemon")],
+                        trees={10: [(12, 120)]})
+        self.assertEqual(self.killed, [10, 12])
+        self.assertEqual([r for _p, _l, r in out], ["killed", "killed"])
 
 
 if __name__ == "__main__":
