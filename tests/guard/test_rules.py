@@ -634,6 +634,34 @@ class PmDataNoVerify(unittest.TestCase):
         self.assertIsNone(self.decide('git push --no-verify origin kit/wt'))
         self.assertIsNone(self.decide('git push --no-verify origin kit/wt', sub=False, environ=MARKED))
 
+    def test_send_pack_is_denied(self):
+        # send-pack pushes without running the pre-push hook, in any form
+        push = 'git -C "%s" push <remote> <branch>' % W.fwd(self.w.wt)
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in ('git send-pack ../public.git refs/heads/pmdata',
+                     'git -c x.y=1 send-pack --all ../public.git',
+                     'git-send-pack ../public.git pmdata',
+                     '"C:/Program Files/Git/mingw64/libexec/git-core/git-send-pack.exe" ../public.git pmdata'):
+            with self.subTest(text):
+                self.assert_denied(self.decide(text), push)
+                self.assert_denied(self.decide(text, sub=False, environ=pm), push)
+                self.assertIsNone(self.decide(text, sub=False))           # the owner's own
+        self.assert_denied(self.decide('git -C "%s" send-pack x pmdata' % W.fwd(self.w.unknown)))
+        os.remove(self.record)
+        self.assertIsNone(self.decide('git send-pack ../public.git pmdata'))
+        self.assertIsNone(self.decide('git-send-pack ../public.git pmdata'))
+
+    def test_send_pack_on_an_unreadable_line_is_read_again(self):
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in ("echo 'x ; git send-pack ../public.git pmdata", "echo 'x ; git-send-pack ../public.git pmdata"):
+            with self.subTest(text):
+                d = self.decide(text, sub=False, environ=pm)
+                self.assert_denied(d)
+                self.assertIn('could not read this command', d.reason)
+                self.assertIsNone(self.decide(text, sub=False))
+        os.remove(self.record)
+        self.assertIsNone(self.decide("echo 'x ; git send-pack ../public.git pmdata", sub=False, environ=pm))
+
     def test_an_unreadable_line_is_read_again(self):
         # the unclosed quote hides the push from the parse; the fallback pattern finds it
         text = "echo 'x ; git push --no-verify origin kit/wt"

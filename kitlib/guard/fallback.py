@@ -59,6 +59,8 @@ ANYWHERE = (
     ('git-worktree-remove', G + r'worktree\s+remove\b'),
     ('git-push-main', G + r'push\b[^|;&]*(\s|:|/)(?:main|master)\b'),
     ('git-push-pmdata', G + r'push\b[^|;&]*\s--no(?:-v|-?(?![\w-]))'),
+    ('git-push-pmdata', G + r'send-pack\b'),
+    ('git-push-pmdata', r'(?i)(?<![\w.-])git-send-pack(?:\.exe)?\b'),
     ('wrapped-gate', r'(?:\bgate\.py|\bmachine_lock\.py\s+run)\b[^;&]*?(?<!\|)\|(?!\|)'),
     ('root-search', r'\bfind\s+(?:-[HLP]\s+)*(?:/|/[a-zA-Z]/?|[A-Za-z]:[\\/]?)(?=\s|$|["\'])'),
     ('root-search', r'(?i)\b(?:get-childitem|gci|ls|dir)\b[^|;&]*\s["\']?[A-Za-z]:[\\/]?["\']?(?=\s|$)[^|;&]*\s-r'),

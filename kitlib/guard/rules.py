@@ -1540,6 +1540,9 @@ def git_alias(cmd, gc, role):
 
 
 def git_rules(event, ctx, cmd, inv, cwd, role):
+    d = git_send_pack_pmdata(event, ctx, inv, role)
+    if d:
+        return d
     gc = cm.git_call(inv)
     if gc is None:
         return None
@@ -1941,6 +1944,27 @@ def git_push_pmdata(event, ctx, gc, role):
                   'remotes in this repository (it has %s). Push with the hook:'
                   % (' '.join(w.text for w in gc.rest), pmdata.FILE_NAME),
                   ('git -C %s push %s' % (quote(gc.dir), ' '.join(words))).rstrip())
+
+
+def git_send_pack_pmdata(event, ctx, inv, role):
+    """`git send-pack`, or the `git-send-pack` program, in a repository with a PM data record (or
+    where the text cannot place it), in every session but the owner's own: it sends refs to a
+    remote without running the pre-push hook (rule git-push-pmdata)."""
+    if inv is None or inv.dyn:
+        return None
+    if inv.name == 'git-send-pack':
+        where, args = inv.cmd.cwd, [w.text for w in inv.args]
+    else:
+        gc = cm.git_call(inv)
+        if gc is None or gc.sub != 'send-pack':
+            return None
+        where, args = (None if gc.unknown else gc.dir), gc.argv
+    if is_owner_session(event, ctx) or not pmdata_recorded(ctx, where):
+        return None
+    return refuse('git-push-pmdata', role, '`git send-pack %s` sends refs without running the pre-push hook, which '
+                  'keeps PM data off public remotes in this repository (it has %s, or the guard cannot tell). '
+                  'Push with git push, which runs the hook:' % (' '.join(args), pmdata.FILE_NAME),
+                  'git -C %s push <remote> <branch>' % (quote(where) if where else '"<checkout>"'))
 
 
 def git_push(event, ctx, gc, role):
