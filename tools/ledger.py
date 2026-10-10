@@ -5,14 +5,15 @@
                 [--branch-ok] [--model NAME]
       append one entry, print its id. --repo is `all` or one of the machine config's
       `ledger_repos` (unset: any lower-case name). --commit commits the ledger file alone as
-      `ledger: R-nnnn <title>`; --push also pushes the current branch to origin.
+      `ledger: R-nnnn <title>`; --push also pushes the current branch to `repo.remote`
+      (origin by default).
   ledger.py retire R-nnnn --class spent|superseded|duplicate --why WHY [--by R-nnnn] [--ruling R-nnnn]
       turn an entry into its tombstone in place, print its id.
   ledger.py show R-nnnn          print one entry.
   ledger.py grep TEXT            print the header of every entry holding TEXT (any case).
   ledger.py check [--base REV] [--root DIR]
-      validate the ledger and check it only grew since REV (default origin/<main branch> of the
-      ledger's repository), and that the standing digest (STANDING.md beside the ledger) cites
+      validate the ledger and check it only grew since REV (default <repo.remote>/<main branch> of the
+      ledger's repository; origin unless set), and that the standing digest (STANDING.md beside the ledger) cites
       only live entries; then WARN (never fail) on each live entry for the repository at DIR
       (default: the current directory) whose Items names a record open nowhere.
   ledger.py list --prov PROV --since YYYY-MM-DD
@@ -61,7 +62,7 @@ def parser():
     ad.add_argument('--items', help='comma-separated backlog record ids this ruling names')
     ad.add_argument('--when', help="UTC 'YYYY-MM-DD HH:MMZ' (default: now); for backfill")
     ad.add_argument('--commit', action='store_true', help='commit only the ledger file after the add')
-    ad.add_argument('--push', action='store_true', help='implies --commit, then push the branch to origin')
+    ad.add_argument('--push', action='store_true', help='implies --commit, then push the branch to repo.remote (origin by default)')
     ad.add_argument('--title', help='commit subject summary (default: the start of --decides)')
     ad.add_argument('--branch-ok', action='store_true', help='allow --commit off the main branch')
     ad.add_argument('--model', help='the model named in the Co-Authored-By trailer (default: $%s)'
@@ -77,7 +78,7 @@ def parser():
     gr = sub.add_parser('grep', help='headers of the entries holding a text')
     gr.add_argument('text')
     ck = sub.add_parser('check', help='validate, and check the ledger only grew since a revision')
-    ck.add_argument('--base', help='revision to compare with (default origin/<main branch>)')
+    ck.add_argument('--base', help='revision to compare with (default <repo.remote>/<main branch>; origin unless set)')
     ck.add_argument('--root', help='repository whose backlog the orphan scan reads (default: the current directory)')
     st = sub.add_parser('standing', help="the standing digest's rule lines for a topic word")
     st.add_argument('word')
