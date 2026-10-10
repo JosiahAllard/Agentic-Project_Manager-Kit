@@ -10,6 +10,15 @@ Pinning past 64 logical processors: a mask whose threads are all in processor gr
 set as the job's affinity limit, as before; any other mask (global ids, kitlib.proc.cpu) is set
 as JobObjectGroupInformationEx, one GROUP_AFFINITY per group. The second path has no test on real
 multi-group hardware (this machine has one group); its buffers are unit-tested.
+
+No console window from a parent without a console: Job.start passes its flags through
+no_window_flags. A console program started by a process with no console at all (the guard hook
+under pythonw.exe) gets a new console, and Windows shows a window for it; CREATE_NO_WINDOW gives it
+a console with no window. A parent that has a console, shown or hidden, keeps its children on that
+console as before. The test is "attached to a console" (GetConsoleProcessList), not
+GetConsoleWindow: measured 2026-10-10, a python started with CREATE_NO_WINDOW, and an agent's
+shell, have a console whose GetConsoleWindow() is 0. A caller that wants a visible window passes
+CREATE_NEW_CONSOLE.
 """
 import ctypes
 import subprocess
@@ -19,6 +28,25 @@ from .process import process_working_set
 from .win32 import K32
 
 ERROR_MORE_DATA = win32.ERROR_MORE_DATA
+CONSOLE_CHOICE = win32.CREATE_NEW_CONSOLE | win32.DETACHED_PROCESS | win32.CREATE_NO_WINDOW
+
+
+def has_console():
+    """True when this process is attached to a console, with a window or without one."""
+    one = (win32.DW * 1)()
+    return K32.GetConsoleProcessList(one, 1) != 0
+
+
+def no_window_flags(flags, console=None):
+    """Popen creationflags for a child of this process: `flags` plus CREATE_NO_WINDOW when this
+    process has no console (`console` False; None asks has_console()) and `flags` makes no console
+    choice of its own (CREATE_NEW_CONSOLE, DETACHED_PROCESS or CREATE_NO_WINDOW). Otherwise
+    `flags` unchanged, so a child of a console parent shares that console as before."""
+    if flags & CONSOLE_CHOICE:
+        return flags
+    if console is None:
+        console = has_console()
+    return flags if console else flags | win32.CREATE_NO_WINDOW
 
 
 def resume(proc_or_handle):
@@ -183,9 +211,10 @@ class Job:
         or unpinned. before_resume(p), if given, runs while it is still suspended (a pid shield,
         say). Raises OSError when the command cannot start, and JobError (the child ended) when it
         cannot be put in the job or resumed. A bare leading bash runs Git Bash, never WSL's
-        (kitlib.proc.bash; BareBashError, an OSError, when there is none)."""
+        (kitlib.proc.bash; BareBashError, an OSError, when there is none). `creationflags` go
+        through no_window_flags: from a parent with no console, no console window."""
         cmd = bash.resolve(cmd, kw.get("shell", False), kw.get("env"))
-        flags = kw.pop("creationflags", 0) | win32.CREATE_SUSPENDED
+        flags = no_window_flags(kw.pop("creationflags", 0)) | win32.CREATE_SUSPENDED
         p = subprocess.Popen(cmd, creationflags=flags, **kw)
         try:
             self.assign(p)

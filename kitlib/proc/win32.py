@@ -29,6 +29,8 @@ SYNCHRONIZE = 0x00100000
 MUTEX_MODIFY_STATE = 0x0001
 CREATE_SUSPENDED = 0x4
 CREATE_NO_WINDOW = 0x08000000
+CREATE_NEW_CONSOLE = 0x10
+DETACHED_PROCESS = 0x8
 TH32CS_SNAPPROCESS = 0x2
 INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 WAIT_OBJECT_0, WAIT_ABANDONED_0, WAIT_TIMEOUT, INFINITE = 0, 0x80, 0x102, 0xFFFFFFFF
@@ -147,6 +149,7 @@ for _n, _r, _a in (
         ("GetLogicalProcessorInformationEx", BOOL, (ctypes.c_int, wintypes.LPVOID,
                                                     ctypes.POINTER(DW))),
         ("GlobalMemoryStatusEx", BOOL, (wintypes.LPVOID,)),
+        ("GetConsoleProcessList", DW, (ctypes.POINTER(DW), DW)),
         ("K32GetProcessMemoryInfo", BOOL, (H, wintypes.LPVOID, DW)),
         ("GetSystemCpuSetInformation", BOOL, (wintypes.LPVOID, wintypes.ULONG,
                                               ctypes.POINTER(wintypes.ULONG), H, wintypes.ULONG)),
