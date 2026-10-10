@@ -50,6 +50,18 @@ class Parse(unittest.TestCase):
         far = (4, b"\x0a\0\0\x05", 443)
         self.assertEqual(tcp.peers({10}, [(a, far, 10)]), [])
 
+    def test_a_local_interface_address_with_no_peer_row_is_this_machine(self):
+        """A remote end at one of this machine's own non-loopback addresses (the local end of a
+        row in the table) with no row owning it is None, never another host."""
+        lan, lan2, far = b"\x0a\0\0\x02", b"\x0a\0\0\x07", b"\x0a\0\0\x05"
+        a = (4, lan, 5000)
+        self.assertEqual(tcp.peers({10}, [(a, (4, lan, 6000), 10)]), [(10, None)])
+        seen = ((4, lan2, 7000), (4, far, 443), 70)     # lan2 is local: some row holds it
+        self.assertEqual(tcp.peers({10}, [(a, (4, lan2, 6000), 10), seen]), [(10, None)])
+        v6 = b"\xfe\x80" + b"\0" * 13 + b"\x02"
+        self.assertEqual(tcp.peers({10}, [((6, v6, 5000), (6, v6, 6000), 10)]), [(10, None)])
+        self.assertEqual(tcp.peers({10}, [(a, (4, far, 443), 10)]), [], "another host")
+
 
 @unittest.skipUnless(os.name == "nt", "the connection table is Windows only")
 class RealTable(unittest.TestCase):

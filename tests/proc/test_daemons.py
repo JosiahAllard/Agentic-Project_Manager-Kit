@@ -42,16 +42,46 @@ class FindAndStop(unittest.TestCase):
                            ctime_of=ctimes.get)
         self.assertEqual(got, [(10, 100, "gradle-daemon")])
 
-    def test_stop_ends_each_tree_by_ctime(self):
-        calls = []
+    def test_stop_ends_each_tree_by_ctime_children_first(self):
+        calls, read = [], []
 
-        def kill_tree(pid, ct, snap=None):
-            calls.append((pid, ct, snap))
-            return {pid: "killed", pid + 1: "killed"}
-        out = daemons.stop([(10, 100, "gradle-daemon")], lambda p: "in", kill_tree=kill_tree,
-                           snapshot=lambda: "SNAP", descendants=lambda p, ct, snap: [],
+        def descendants(pid, ct, snap):
+            read.append((pid, ct, snap))
+            return [(11, 110), (12, 120)]       # 11's child 12: parents before children
+
+        def terminate(pid, ct):
+            calls.append((pid, ct))
+            return "killed"
+        out = daemons.stop([(10, 100, "gradle-daemon")], lambda p: "in", terminate=terminate,
+                           snapshot=lambda: "SNAP", descendants=descendants,
                            connections=lambda: [])
-        self.assertEqual(calls, [(10, 100, "SNAP")], "the tree checked is not the tree ended")
+        self.assertEqual(read, [(10, 100, "SNAP")])
+        self.assertEqual(calls, [(12, 120), (11, 110), (10, 100)])
+        self.assertEqual(out, [(10, "gradle-daemon", "killed")])
+
+    def test_the_tree_ended_is_the_tree_judged(self):
+        """Between the judging and the kill, child 11 exits, a newer process takes pid 11 and
+        the daemon starts 13: a tree read again would hold (11, 999) and (13, 130). Exactly the
+        judged pairs are ended, so the newer pid 11 is never named with a ctime it has. The
+        Windows defaults are patched, so a stop that re-reads the tree through
+        process.kill_tree is caught too."""
+        from unittest import mock
+        from kitlib.proc import process
+        reads, calls = [], []
+
+        def descendants(pid, ct, snap=None):
+            reads.append(pid)
+            return [(11, 110)] if len(reads) == 1 else [(11, 999), (13, 130)]
+
+        def terminate(pid, ct, code=1):
+            calls.append((pid, ct))
+            return "killed"
+        with mock.patch.object(process, "descendants", descendants), \
+                mock.patch.object(process, "terminate_verified", terminate):
+            out = daemons.stop([(10, 100, "gradle-daemon")], lambda p: "in",
+                               snapshot=lambda: [], connections=lambda: [])
+        self.assertEqual(calls, [(11, 110), (10, 100)], "the tree was read again to end it")
+        self.assertEqual(reads, [10])
         self.assertEqual(out, [(10, "gradle-daemon", "killed")])
 
 
@@ -74,13 +104,13 @@ class StopsOnlyWhatServesTheRun(unittest.TestCase):
         """tree: the descendants of every daemon; trees: {daemon pid: descendants} instead."""
         self.killed = []
 
-        def kill_tree(pid, ct, snap=None):
+        def terminate(pid, ct):
             self.killed.append(pid)
-            return {pid: "killed"}
+            return "killed"
 
         def descendants(p, ct, snap):
             return list(trees.get(p, ())) if trees is not None else list(tree)
-        return daemons.stop(list(found), self.JOB.get, kill_tree=kill_tree,
+        return daemons.stop(list(found), self.JOB.get, terminate=terminate,
                             snapshot=lambda: [], descendants=descendants,
                             connections=lambda: conns)
 
@@ -118,6 +148,16 @@ class StopsOnlyWhatServesTheRun(unittest.TestCase):
         self.stop(link(10, 5000, 30, 6000)[:1])
         self.assertEqual(self.killed, [])
 
+    def test_a_connection_to_this_machines_own_address_without_its_other_row_leaves_it(self):
+        """The remote end is a non-loopback address of this machine (the local end of a row in
+        the table): with no row owning it, it is not another host, so the daemon is left."""
+        here, lan = (4, b"\x0a\0\0\x02", 5000), (4, b"\x0a\0\0\x07", 6000)
+        other = ((4, b"\x0a\0\0\x07", 7000), (4, b"\x0a\0\0\x05", 443), 70)
+        for conns in ([(here, (4, here[1], 6000), 10)], [(here, lan, 10), other]):
+            out = self.stop(conns)
+            self.assertEqual(self.killed, [], conns)
+            self.assertIn("other end the table does not show", out[0][2])
+
     def test_a_connection_to_another_host_is_not_a_client(self):
         far = (4, b"\x0a\0\0\x05", 443)
         self.stop([((4, b"\x0a\0\0\x02", 5000), far, 10)])
@@ -125,13 +165,13 @@ class StopsOnlyWhatServesTheRun(unittest.TestCase):
 
     def test_a_connection_inside_its_own_tree_is_its_own(self):
         self.stop(link(10, 5000, 11, 6000), tree=[(11, 101)])
-        self.assertEqual(self.killed, [10])
+        self.assertEqual(self.killed, [11, 10])
 
     def test_an_unreadable_table_leaves_it(self):
         def broken():
             raise OSError("no table")
         out = daemons.stop([(10, 100, "gradle-daemon")], self.JOB.get,
-                           kill_tree=lambda *a, **k: self.fail("stopped"), snapshot=lambda: [],
+                           terminate=lambda *a: self.fail("stopped"), snapshot=lambda: [],
                            descendants=lambda p, ct, snap: [], connections=broken)
         self.assertIn("could not be read", out[0][2])
 
@@ -177,17 +217,18 @@ class StopsOnlyWhatServesTheRun(unittest.TestCase):
         def broken(p, ct, snap):
             raise OSError("no snapshot")
         out = daemons.stop([(10, 100, "gradle-daemon")], self.JOB.get,
-                           kill_tree=lambda *a, **k: self.fail("stopped"), snapshot=lambda: [],
+                           terminate=lambda *a: self.fail("stopped"), snapshot=lambda: [],
                            descendants=broken, connections=lambda: [])
         self.assertIn("tree could not be read", out[0][2])
 
     def test_a_stopped_daemon_and_the_daemon_it_ended_too(self):
         """Both judged on one table before either is ended; the Kotlin daemon in the stopped
-        Gradle daemon's tree is ended with it and reports what its own kill found."""
+        Gradle daemon's tree is ended with it, child first, once, and reports what that kill
+        found."""
         out = self.stop(link(10, 5000, 12, 7000), found=[(10, 100, "gradle-daemon"),
                                                          (12, 120, "kotlin-daemon")],
                         trees={10: [(12, 120)]})
-        self.assertEqual(self.killed, [10, 12])
+        self.assertEqual(self.killed, [12, 10])
         self.assertEqual([r for _p, _l, r in out], ["killed", "killed"])
 
 
