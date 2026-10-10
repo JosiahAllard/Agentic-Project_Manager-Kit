@@ -1,5 +1,7 @@
 """kitlib.tooldeps.tiers: kit_tests --both-tiers' pass loop and its verdict lines."""
 import io
+import threading
+import time
 import unittest
 
 from kitlib.tooldeps import tiers
@@ -15,6 +17,41 @@ class TierOutTest(unittest.TestCase):
         s.flush()
         self.assertEqual(out.getvalue(), 'kit_tests [real git]: OK in 3s\nRan 4 tests\n'
                                          'kit_tests [real git]: jobs 2\nkit_tests [real git]: tail')
+
+
+class YieldingOut(object):
+    """A stream that gives up the thread on every write, as a console write can."""
+
+    def __init__(self):
+        self.parts = []
+
+    def write(self, text):
+        time.sleep(0)
+        self.parts.append(text)
+
+    def flush(self):
+        pass
+
+
+class TierOutThreadsTest(unittest.TestCase):
+    def test_lines_written_from_many_threads_each_come_out_once_and_whole(self):
+        out = YieldingOut()
+        s = tiers.TierOut(out, 'real git')
+        threads, per = 8, 200
+
+        def hammer(t):
+            for j in range(per):
+                s.write('kit_tests: t%d line %d\n' % (t, j))
+        workers = [threading.Thread(target=hammer, args=(t,)) for t in range(threads)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join()
+        s.flush()
+        got = sorted(''.join(out.parts).splitlines())
+        want = sorted('kit_tests [real git]: t%d line %d' % (t, j)
+                      for t in range(threads) for j in range(per))
+        self.assertEqual(got, want)
 
 
 class RunTiersTest(unittest.TestCase):

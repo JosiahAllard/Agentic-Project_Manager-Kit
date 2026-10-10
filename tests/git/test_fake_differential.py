@@ -18,6 +18,7 @@ import os
 import subprocess
 import unittest
 
+from kitlib.git import cmd as gitcmd
 from kitlib.git import fake
 from kitlib.git.fake.errors import Unsupported
 from tests import gitfixture
@@ -37,7 +38,9 @@ class Side(object):
     def __init__(self, use_fake):
         self.use_fake = use_fake
         self.repo = gitfixture.TempRepo(bare_remote=True)
-        self.env = gitfixture.fixture_env(DATES)
+        # English messages on both sides, as kitlib.git.cmd gives every git it starts: the
+        # fatal:/error: comparison and any message text must not depend on the machine's locale.
+        self.env = gitfixture.fixture_env(dict(DATES, **gitcmd.LOCALE_ENV))
 
     def cleanup(self):
         self.repo.cleanup()
@@ -206,9 +209,11 @@ END_STATE = [
 class FakeAgainstRealGit(unittest.TestCase):
 
     def run_script(self, script):
-        sides = Side(True), Side(False)
-        for s in sides:
+        sides = []
+        for use_fake in (True, False):          # each cleanup registered as soon as it exists
+            s = Side(use_fake)
             self.addCleanup(s.cleanup)
+            sides.append(s)
         a, b = sides
         self.assertEqual(a.repo.head(), b.repo.head())
         diffs = []

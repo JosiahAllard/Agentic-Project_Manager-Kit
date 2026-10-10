@@ -213,10 +213,8 @@ def run_pass(args, top, cfg, jobs, fake, out, hold, give_back=True, record_times
             'OK' if rc == 0 else 'FAILED, exit %d' % rc, time.time() - start, label))
         return 0 if rc == 0 else 1
     modules = selftree.all_test_modules(top) if args is FULL else args
-    times = None
-    if record_times:
-        common, _why = gitrepo.common_dir(top)
-        times = os.path.join(common, selfrun.TIMES_FILE) if common else None
+    common, _why = gitrepo.common_dir(top)
+    times = os.path.join(common, selfrun.TIMES_FILE) if common else None
     give = None
     if give_back:
         give = giveback.drainer(lambda line: say('kit_tests: ' + line))
@@ -227,7 +225,7 @@ def run_pass(args, top, cfg, jobs, fake, out, hold, give_back=True, record_times
         say('kit_tests: give back: off for this pass (a later tier runs on the same slots)')
     rc, _summary = selfrun.run(modules, top, jobs, serial=cfg['serial'], out=out, label=label,
                                times_path=times, hint=cfg.get('long', ()), environ=env,
-                               give_back=give, hold=hold)
+                               give_back=give, hold=hold, record_times=record_times)
     return rc
 
 

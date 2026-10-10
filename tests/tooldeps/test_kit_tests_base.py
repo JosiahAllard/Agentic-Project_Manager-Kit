@@ -167,7 +167,7 @@ class BothTiers(unittest.TestCase):
 
         def run(modules, root, jobs, **kw):
             calls.append((kw['environ'].get('KIT_FAKE_GIT'), kw['give_back'] is not None,
-                          kw['times_path'] is not None))
+                          kw['times_path'], kw.get('record_times', True)))
             kw['out'].write('kit_tests: %s in 1s (full)\n' % ('OK' if rcs[len(calls) - 1] == 0
                                                               else 'FAILED, exit 1'))
             return rcs[len(calls) - 1], ''
@@ -185,7 +185,9 @@ class BothTiers(unittest.TestCase):
     def test_fake_then_real_and_ok_only_when_both_pass(self):
         rc, calls, text = self.run_both([0, 0])
         self.assertEqual(rc, 0, text)
-        self.assertEqual(calls, [('1', False, True), ('0', True, False)])
+        # Both passes read the recorded times (ordering, splitting); only the fake pass records.
+        times = os.path.join(os.path.abspath('.'), cli.selfrun.TIMES_FILE)
+        self.assertEqual(calls, [('1', False, times, True), ('0', True, times, False)])
         lines = text.splitlines()
         self.assertEqual(lines[-1], 'kit_tests: OK, both tiers green (fake git, real git)')
         self.assertEqual([ln for ln in lines if ln.startswith('kit_tests: OK')], lines[-1:])

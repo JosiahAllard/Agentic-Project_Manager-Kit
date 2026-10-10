@@ -14,6 +14,8 @@ exit 1: red tier(s): ...`. A pass that is interrupted (exit 130) stops the run w
 
 Nothing here starts a process or reads the environment.
 """
+import threading
+
 PREFIX = 'kit_tests: '
 TIERS = (('fake git', '1'), ('real git', '0'))
 INTERRUPTED = 130
@@ -22,12 +24,14 @@ INTERRUPTED = 130
 class TierOut(object):
     """A text stream over `out` that writes each line starting `kit_tests: ` as
     `kit_tests [<tier>]: `; other lines pass unchanged. Lines are rewritten whole: a partial line
-    waits for its end (or flush)."""
+    waits for its end (or flush). Thread-safe: the pool's threads and the main thread (its
+    give-back lines) write to one pass's stream at once, so the buffer is held under a lock."""
 
     def __init__(self, out, tier):
         self.out = out
         self.tier = tier
         self._pending = ''
+        self._lock = threading.Lock()
 
     def _line(self, line):
         if line.startswith(PREFIX):
@@ -35,20 +39,22 @@ class TierOut(object):
         self.out.write(line)
 
     def write(self, text):
-        self._pending += text
-        while True:
-            i = self._pending.find('\n')
-            if i < 0:
-                break
-            self._line(self._pending[:i + 1])
-            self._pending = self._pending[i + 1:]
+        with self._lock:
+            self._pending += text
+            while True:
+                i = self._pending.find('\n')
+                if i < 0:
+                    break
+                self._line(self._pending[:i + 1])
+                self._pending = self._pending[i + 1:]
         return len(text)
 
     def flush(self):
-        if self._pending:
-            self._line(self._pending)
-            self._pending = ''
-        self.out.flush()
+        with self._lock:
+            if self._pending:
+                self._line(self._pending)
+                self._pending = ''
+            self.out.flush()
 
 
 def run_tiers(run_one, out):
