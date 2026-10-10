@@ -36,8 +36,6 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `backlog.phases` (list of string, default []): phase names in order
 - `backlog.id_grammar` (upper|mixed, default "upper"): item id spelling
 - `backlog.ledger_repo` (string): the ledger repo column; default the repo name
-- `backlog.retired_docs` (list of repo path, default []): docs the backlog replaced
-- `backlog.rename_script` (string, may be empty, default ""): priority rename helper
 - `board.state_file` (repo path): the board state file
 - `checkout_guard.rule_pointer` (string): where a refusal points for the rule
 - `commit.merge_fold` (bool, default false): commit.py folds a merge commit

@@ -215,6 +215,8 @@ def _build(root, where, reader):
             files[name] = rel
         else:
             continue
+        if isinstance(value, dict) and name in schema.RETIRED:
+            value = {k: v for k, v in value.items() if k not in schema.RETIRED[name]}
         schema.section_type(name).check(value, '"%s"' % name, errs)
         raw[name] = value
     hook = raw.get('hook')
