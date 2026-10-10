@@ -24,7 +24,7 @@ from kitlib.git import cmd as gitcmd
 from kitlib.guard import gitread, rules
 
 from . import world as W
-from .test_pmdata_gaps import COORD, PM, PUBLIC, ROOT, Base
+from .test_pmdata_gaps import COORD, PLAIN, PM, PUBLIC, ROOT, Base
 from .world import bash, ps
 
 
@@ -310,13 +310,14 @@ class UnknownDirectory(Base):
 
     def test_no_machine_pm_data_and_no_record_passes(self):
         os.remove(self.record)
-        self.assertIsNone(self.decide(self.TEXT, environ=PM, cwd=self.w.plain))
+        # a session the write jail does not hold: for a jailed one write-jail denies git -C $D first
+        self.assertIsNone(self.decide(self.TEXT, environ=PLAIN, cwd=self.w.plain))
 
     def test_a_record_where_it_runs_or_machine_pm_data_denies(self):
-        self.assert_denied(self.decide(self.TEXT, environ=PM), 'git-push-pmdata')
+        self.assert_denied(self.decide(self.TEXT, environ=PLAIN), 'git-push-pmdata')
         os.remove(self.record)
         self.machine_pm_data()
-        self.assert_denied(self.decide(self.TEXT, environ=PM, cwd=self.w.plain), 'git-push-pmdata')
+        self.assert_denied(self.decide(self.TEXT, environ=PLAIN, cwd=self.w.plain), 'git-push-pmdata')
 
 
 if __name__ == '__main__':

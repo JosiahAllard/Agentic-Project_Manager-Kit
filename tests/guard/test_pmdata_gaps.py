@@ -23,6 +23,7 @@ from .world import bash, ps
 
 PM = {context.ROLE_ENV: 'pm'}
 COORD = {context.ROLE_ENV: 'coordinator'}
+PLAIN = {context.ROLE_ENV: 'plain'}             # a marked session the write jail does not hold
 ROOT = 'a' * 40
 PUBLIC = 'https://github.com/o/kit'
 
@@ -261,7 +262,8 @@ class HomeConfig(Base):
         os.remove(self.record)
         for text, shell in self.texts():
             with self.subTest(text=text, record=False):
-                self.assertIsNone(self.decide(text, environ=PM, shell=shell))
+                # the jailed pm session may not run git in a main checkout (write-jail): an unjailed mark
+                self.assertIsNone(self.decide(text, environ=PLAIN, shell=shell))
 
 
 class ComputedProgram(Base):
