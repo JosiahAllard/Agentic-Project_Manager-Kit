@@ -214,15 +214,48 @@ class PmData(unittest.TestCase):
                 sorted(os.listdir(self.target_root)))
 
     def test_the_dry_run_prints_the_command_and_changes_nothing(self):
-        self.data = os.path.join(os.path.dirname(self.data), 'pm data')
+        self.data = os.path.join(os.path.dirname(self.data), "pm data's")
         before = self.state()
         code, out = self.ps('-PmData', self.data, '-PrivateRemote', self.private)
         self.assertEqual(code, 0, out)
-        self.assertIn('would run after the files above:  python %s -C %s init --path "%s" --url %s'
+        # PowerShell single quotes around what is not plain, a ' doubled: it pastes as one argument.
+        self.assertIn("would run after the files above:  python %s -C %s init --path '%s' --url %s"
                       % (os.path.join(self.kit_root, 'tools', 'pm_data.py'), self.kit_root,
-                         self.data, self.private), out)
+                         self.data.replace("'", "''"), self.private), out)
         self.assertNotIn('PM data: python', out)
         self.assertEqual(self.state(), before)
+
+    def test_a_drive_root_pm_data_stays_a_root(self):
+        root = os.path.splitdrive(self.data)[0] + '\\'
+        code, out = self.ps('-PmData', root)
+        self.assertEqual(code, 0, out)
+        line = [l for l in out.splitlines() if 'would run after the files above' in l]
+        self.assertEqual(len(line), 1, out)
+        self.assertTrue(line[0].endswith(' init --path %s' % root), line[0])
+
+    def test_a_relative_pm_data_is_taken_from_the_powershell_location(self):
+        # -Command with Set-Location: the PowerShell location differs from the process folder.
+        base = os.path.dirname(self.data)
+        script = os.path.join(self.kit_root, 'installer', 'new-repo.ps1')
+        command = ("Set-Location -LiteralPath '%s'; & '%s' -Target '%s' -OwnerEmail %s "
+                   "-AgentEmail %s -PmData rel; exit $LASTEXITCODE"
+                   % (base, script, self.target_root, OWNER, AGENT))
+        env = gitfixture.fixture_env({'USERPROFILE': self.home, 'HOME': self.home})
+        done = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', command],
+                              capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              env=env, timeout=300, cwd=self.target_root)
+        out = (done.stdout or '') + (done.stderr or '')
+        self.assertEqual(done.returncode, 0, out)
+        self.assertIn(' init --path %s' % os.path.join(base, 'rel'), out)
+
+    def test_a_private_remote_path_with_a_space_and_a_trailing_backslash(self):
+        spaced = os.path.join(os.path.dirname(self.data), 'pri vate.git')
+        self.kit.git('init', '-q', '--bare', spaced, cwd=os.path.dirname(spaced))
+        code, out = self.ps('-Apply', '-PmData', self.data, '-PrivateRemote', spaced + '\\')
+        self.assertEqual(code, 0, out)
+        self.assertIn("--url '%s'" % spaced, out)
+        root = self.kit.git('rev-parse', 'refs/heads/pmdata')
+        self.assertEqual(self.kit.git('--git-dir', spaced, 'rev-parse', 'refs/heads/pmdata'), root)
 
     def test_apply_makes_the_data_branch_in_the_kit_after_the_setup(self):
         code, out = self.ps('-Apply', '-PmData', self.data, '-PrivateRemote', self.private)

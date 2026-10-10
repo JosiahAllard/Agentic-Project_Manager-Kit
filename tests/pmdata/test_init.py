@@ -604,6 +604,17 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args[1], os.path.abspath('d'))
         self.assertEqual(args[2:], ('pmdata', 'private', None, True))
 
+    def test_a_path_the_code_page_cannot_spell_prints_replaced_not_a_crash(self):
+        raw = io.BytesIO()
+        out = io.TextIOWrapper(raw, encoding='cp1252', errors='strict')
+        done = self.tool.pminit.Outcome(0, ['worktree  C:\\\u6570\u636e on pmdata, locked'])
+        with mock.patch.object(self.tool.pminit, 'init', return_value=done), \
+                mock.patch('sys.stdout', out):
+            code = self.tool.main(['-C', self.dir, 'init', '--path', 'd'])
+            out.flush()
+        self.assertEqual(code, 0)
+        self.assertIn(b'worktree  C:\\?? on pmdata, locked', raw.getvalue())
+
     def test_an_escaping_error_exits_5_and_says_crashed(self):
         with mock.patch.object(self.tool.pminit, 'init', side_effect=ValueError('boom')),                 mock.patch('sys.stdout', new_callable=io.StringIO) as out:
             code = self.tool.main(['-C', self.dir, 'init', '--path', 'd'])

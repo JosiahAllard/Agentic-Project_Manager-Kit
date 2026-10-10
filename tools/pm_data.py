@@ -58,18 +58,28 @@ def main(argv=None):
             p.error('--%s needs a value' % name)
     if not os.path.isdir(a.root):
         p.error('-C: %s is not a folder' % a.root)
+    safe_stdout()
     try:
         outcome = pminit.init(os.path.abspath(a.root), os.path.abspath(a.path), a.branch,
                               a.remote, a.url, a.adopt)
+        for line in outcome.lines:
+            print(line, flush=True)
     except KeyboardInterrupt:
         return 130
     except Exception as e:      # never a bare traceback whose exit 1 reads as REFUSED
         print('crashed: %s: %s; what was made before the error is not known; run init --adopt '
               'to check' % (type(e).__name__, e), flush=True)
         return CRASHED
-    for line in outcome.lines:
-        print(line, flush=True)
     return outcome.code
+
+
+def safe_stdout():
+    """A path the console code page cannot spell (a cp1252 redirect) prints replaced, not raises
+    after init has made everything (as tools/machine_setup.py)."""
+    try:
+        sys.stdout.reconfigure(errors='replace')
+    except (AttributeError, ValueError):
+        pass
 
 
 if __name__ == '__main__':

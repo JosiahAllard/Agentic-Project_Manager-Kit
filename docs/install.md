@@ -82,7 +82,11 @@ down the longer the machine stays up: docs/windows-token-leak.md.
      (rerun with `--adopt`); 5 crashed (what it made is not known; rerun with `--adopt` to
      check); 130 Ctrl+C. A Python traceback (exit 1) is also reported as a crash, not as a
      refusal. On a non-zero code the target's files stay written and the script prints the
-     command to run again on its own. A repository already installed (its `.kit.json` makes the
+     command to run again on its own, quoted to paste into PowerShell. Its lines are shown as
+     they come, but Ctrl+C may end the installer before its summary: then run
+     `pm_data.py init --adopt` with the same `--path` to check what was made. A relative
+     `-PmData` is taken from the PowerShell location; a trailing `\` on `-PmData` or
+     `-PrivateRemote` is dropped (a drive root is kept), and a `"` in either is a usage error. A repository already installed (its `.kit.json` makes the
      script refuse) runs that command directly.
 4. **An existing repository with its own copies of the tools** skips the installer. It needs a
    `.kit.json` with the same keys (docs/kit-json.md), then

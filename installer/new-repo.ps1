@@ -65,9 +65,24 @@ if ($MainBranch -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$') { Fail "-MainBranch '
 $PmData = $PmData.Trim(); $PrivateRemote = $PrivateRemote.Trim()
 if ($PrivateRemote -and -not $PmData) { Fail "-PrivateRemote needs -PmData <folder>" 2 }
 if ($PrivateRemote.StartsWith('-')) { Fail "-PrivateRemote '$PrivateRemote' is not a url" 2 }
+# Windows PowerShell 5.1 passes a native argument with a space inside plain double quotes, without
+# escaping: an embedded `"` or a trailing `\` (read as `\"`) would split or join arguments. No
+# path holds `"`, so one in a url is refused; a trailing `\` is trimmed (a drive root is kept).
+if ($PrivateRemote.Contains('"') -or $PmData.Contains('"')) { Fail "-PmData and -PrivateRemote cannot contain a double quote" 2 }
+function Trim-Slash([string]$p) {
+    $t = $p.TrimEnd('\')
+    if ($t -match '^[A-Za-z]:$') { return $t + '\' }
+    if ($t) { return $t } else { return $p }
+}
+$PrivateRemote = Trim-Slash $PrivateRemote
+# A relative path is taken from the PowerShell location, not the process folder (they differ once
+# a session has used Set-Location).
+function Full-Path([string]$p) {
+    [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($p))
+}
 $pmTool = Join-Path $kit 'tools\pm_data.py'
 
-$targetFull = [IO.Path]::GetFullPath($Target).TrimEnd('\')
+$targetFull = (Full-Path $Target).TrimEnd('\')
 $kitFull = [IO.Path]::GetFullPath($kit).TrimEnd('\') + '\'
 if (($targetFull + '\').StartsWith($kitFull, [StringComparison]::OrdinalIgnoreCase)) {
     Fail "the target $targetFull is inside the kit itself"
@@ -86,10 +101,14 @@ $pmArgs = @()
 $pmLine = ''
 if ($PmData) {
     if (-not (Test-Path -LiteralPath $pmTool)) { Fail "the kit at $kit has no tools\pm_data.py" 2 }
-    $pmPath = [IO.Path]::GetFullPath($PmData).TrimEnd('\')
+    $pmPath = Trim-Slash (Full-Path $PmData)
     $pmArgs = @($pmTool, '-C', $kitFull.TrimEnd('\'), 'init', '--path', $pmPath)
     if ($PrivateRemote) { $pmArgs += @('--url', $PrivateRemote) }
-    $pmLine = 'python ' + (($pmArgs | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ } }) -join ' ')
+    # The printed command pastes into PowerShell: single quotes (a `'` doubled) around any argument
+    # that is not plain.
+    $pmLine = 'python ' + (($pmArgs | ForEach-Object {
+        if ($_ -match '^[A-Za-z0-9_./:\\-]+$') { $_ } else { "'" + ($_ -replace "'", "''") + "'" }
+    }) -join ' ')
 }
 
 $kitJson = Join-Path $targetFull '.kit.json'
@@ -241,9 +260,10 @@ $pmCode = 0
 if ($PmData) {
     Write-Host ""
     Write-Host "PM data: $pmLine"
-    $pmOut = & python @pmArgs 2>&1
+    # Each line is shown as it comes (so a Ctrl+C that ends this script leaves what was made on
+    # screen) and kept for the checks below.
+    $pmOut = @(& python @pmArgs 2>&1 | ForEach-Object { $l = "$_"; Write-Host "  $l"; $l })
     $pmCode = $LASTEXITCODE
-    foreach ($line in @($pmOut)) { Write-Host "  $line" }
     if ($pmCode -eq 0) { Write-Host "PM data: pm_data.py init exited 0 (done)" }
     else {
         $why = @{ 1 = 'refused, it changed nothing'; 2 = 'usage or a configuration it cannot read';
