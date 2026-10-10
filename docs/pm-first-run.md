@@ -38,13 +38,21 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    (docs/guard.md "Go-live (after the joint review)").
    Success: a Bash search from a drive root is denied with `rule=root-search`.
 
-7. **Turn on the PM checklist.** Create the files it reads: a sessions file holding `{}`, a
-   reminders file holding `[]`, and a memory folder for handoff notes. Put the sessions file inside
-   the PM repository (`claude/hub/hub_backlog.py` finds the repository from its folder and fails
-   outside a git repo). Fill `pm_start` in the user
-   config with their paths, and `pm_watch_cmd` (docs/pm-start.md, docs/pm-watch.md). `pm_watch`
-   needs `usage_script` (flag or key) or it exits 2. Then, as a hand step, the owner adds the SessionStart hook from docs/pm-start.md to the settings only the
-   PM session loads.
+   Steps 3, 6 and 7's hook are hand steps on a fresh machine: `installer/machine-setup.ps1`
+   needs an old kit to switch from and does not install them (docs/machine-setup.md "Not done
+   here").
+
+7. **Turn on the PM checklist.** Create the files it reads: a sessions file, a reminders file
+   holding `[]`, and a memory folder for handoff notes. The sessions file is `sessions.json` in
+   `launcher.state_dir` (docs/launcher.md "State files"): start it from
+   `docs/launcher.sessions.example.json`, or from `{}` until step 11. Put that folder inside the PM
+   repository (`claude/hub/hub_backlog.py` finds the repository from the sessions file's folder
+   and fails outside a git repo). Fill `pm_start` in the user config with their paths, and
+   `pm_watch_cmd` (docs/pm-start.md "Config"); set `pm_watch.sessions_file` to the same file
+   (docs/pm-watch.md "Config"). `usage_script` is optional: without it `pm_watch.py` reads usage
+   in-process from the machine config's `launcher` key, and exits 2 only when neither is set.
+   Then, as a hand step, the owner adds the SessionStart hook from docs/pm-start.md to the
+   settings only the PM session loads.
    Success: the next PM session starts with "PM session start checklist", not "no pm_start
    config ... checklist skipped".
 
