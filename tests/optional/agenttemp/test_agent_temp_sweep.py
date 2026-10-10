@@ -229,11 +229,26 @@ class Cli(Case):
         subprocess.run(['cmd', '/c', 'mklink', '/J', link, os.path.abspath(real)], check=True,
                        capture_output=True)
         self.addCleanup(os.rmdir, link)          # the junction only, before the folder goes
-        env = dict(os.environ, USERPROFILE=self.home, HOME=self.home)
-        r = subprocess.run([sys.executable, os.path.join(link, 'agent_temp_sweep.py')], env=env,
-                           cwd=self.tmp, capture_output=True, text=True, timeout=60)
+        r = self.run_alone(os.path.join(link, 'agent_temp_sweep.py'))
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn('nothing to sweep', r.stderr)
+
+    def run_alone(self, script):
+        """The script in a child python whose only way to kitlib is the script's own location."""
+        env = dict(os.environ, USERPROFILE=self.home, HOME=self.home)
+        env.pop('PYTHONPATH', None)              # an inherited path must not find kitlib for it
+        return subprocess.run([sys.executable, script], env=env, cwd=self.tmp, capture_output=True,
+                              text=True, timeout=60)
+
+    def test_a_copy_outside_the_kit_refuses_with_exit_2(self):
+        # Exit 1 means a partial sweep; a missing kit library sweeps nothing, so it is a refusal.
+        alone = os.path.join(self.tmp, 'a', 'b', 'c', 'agent_temp_sweep.py')
+        os.makedirs(os.path.dirname(alone))
+        shutil.copyfile(S.__file__, alone)
+        r = self.run_alone(alone)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('the kit library (kitlib) is not in the kit root', r.stderr)
+        self.assertNotIn('Traceback', r.stderr)
 
 
 if __name__ == '__main__':

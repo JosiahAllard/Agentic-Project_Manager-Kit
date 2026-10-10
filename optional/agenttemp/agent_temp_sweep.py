@@ -29,8 +29,14 @@ import time
 
 # The machine config's place comes from the kit library (kitlib.config.user), found at the kit's
 # root through the real path: an installed junction (~/.claude/tools/agenttemp) resolves into the kit.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))))
-from kitlib.config import user as kuser                             # noqa: E402
+# Without it nothing is swept: load() refuses (exit 2), never a traceback (exit 1 means a partial sweep).
+KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+sys.path.insert(0, KIT_ROOT)
+try:
+    from kitlib.config import user as kuser                         # noqa: E402
+    KITLIB_ERROR = None
+except ImportError as e:
+    kuser, KITLIB_ERROR = None, e
 
 KEY = "agent_temp_sweep"
 DEFAULT_MAX_AGE_DAYS = 3
@@ -59,6 +65,10 @@ def check(cfg):
 def load(home=None):
     """(dir, max_age_days) from the machine config, or None when it has no "agent_temp_sweep".
     A bad value or an unreadable config raises SweepConfigError."""
+    if kuser is None:
+        raise SweepConfigError("the kit library (kitlib) is not in the kit root %s (%s), so the machine "
+                               "config cannot be found; run the copy inside the kit or its installed "
+                               "junction" % (KIT_ROOT, KITLIB_ERROR))
     path = kuser.config_file(home)
     try:
         with open(path, encoding="utf-8-sig") as f:
