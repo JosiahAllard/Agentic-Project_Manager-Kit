@@ -5,6 +5,7 @@ index setting at the base (doc_index.py --config-ref), so a branch's .kit.json c
 A kit with no tools/doc_index.py prints NOT CHECKED (never OK, never failed); a run that does not
 finish is FAILED. Each case runs the kit's own tools/ over a real throwaway repository."""
 import contextlib
+import importlib
 import io
 import json
 import os
@@ -21,6 +22,8 @@ from tests.gitfixture import fixture_env
 from tests.preflight.test_preflight import free_reader
 from tools import preflight
 
+# The module, not the function kitlib.config re-exports under the same name.
+config_load = importlib.import_module('kitlib.config.load')
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 UNLISTED = 'docs/unlisted.md'
 
@@ -204,6 +207,44 @@ class ConfigRef(Case):
         code, out = self.check()
         self.assertEqual(code, 1, out)
         self.assertIn('docs/MAP.md', out)
+
+    def failing_git(self, rc, words=('show',)):
+        """kitlib.config's git seam answering every git call starting with `words` with exit `rc`
+        (None: git did not run) and passing every other call through."""
+        real = config_load.gitcmd.call
+
+        def call(args, cwd, *a, **k):
+            if tuple(args)[:len(words)] == tuple(words):
+                return config_load.gitcmd.Result(rc, b'', 'fatal: injected read failure')
+            return real(args, cwd, *a, **k)
+        return mock.patch.object(config_load.gitcmd, 'call', call)
+
+    def test_a_git_failure_reading_the_ref_refuses_never_skips(self):
+        base = self.repo.git('rev-parse', 'HEAD').strip()
+        self.commit_unlisted()
+        for rc in (128, None):
+            with self.subTest(rc=rc), self.failing_git(rc):
+                code, out = self.check(config_ref=base)
+                self.assertEqual(code, 2, out)
+                self.assertIn('doc_index: refused: kit configuration:', out)
+                self.assertNotIn('DOC INDEX OK', out)
+
+    def test_no_second_existence_probe_can_skip_the_listing(self):
+        # Whether .kit.json exists at the ref comes from the read the settings came from: a
+        # separate `git cat-file -e` that failed once read as "no .kit.json" and skipped the check.
+        base = self.repo.git('rev-parse', 'HEAD').strip()
+        self.commit_unlisted()
+        for rc in (128, None):
+            with self.subTest(rc=rc), self.failing_git(rc, ('cat-file', '-e')):
+                code, out = self.check(config_ref=base)
+                self.assertEqual(code, 1, out)
+                self.assertIn('DOC INDEX FAILED', out)
+
+    def test_an_unknown_ref_refuses(self):
+        code, out = self.check(config_ref='no-such-ref')
+        self.assertEqual(code, 2, out)
+        self.assertIn('doc_index: refused: kit configuration:', out)
+        self.assertNotIn('DOC INDEX OK', out)
 
     def test_the_cli_passes_config_ref(self):
         base = self.repo.git('rev-parse', 'HEAD').strip()

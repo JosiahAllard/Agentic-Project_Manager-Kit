@@ -58,7 +58,7 @@ import os
 import re
 import time
 
-from kitlib.config import ConfigError, config_path, load, load_at
+from kitlib.config import ConfigError, load, load_at
 from kitlib.git import batch, cmd
 
 INDEX = 'docs/INDEX.md'          # the schema default of "doc_index".index
@@ -521,21 +521,14 @@ def refuse(error, out):
     return 2
 
 
-def has_config(root, config_ref=None):
-    """True when the configuration that counts exists: the working tree's `.kit.json`, or the one
-    revision `config_ref` holds."""
-    if config_ref is None:
-        return os.path.isfile(config_path(root))
-    return git(root, 'cat-file', '-e', '%s:%s' % (config_ref, os.path.basename(config_path(root)))
-               ).returncode == 0
-
-
 def run(root, out, section=None, find=None, tools=False, stale=False, role=None, doc=None,
         head='HEAD', days=None, config_ref=None):
     """One doc_index mode over the checkout `root`; the exit status. `find` is the query string.
     `config_ref` set: the whole configuration ("doc_index", "doc_budget" with its shard_indexes)
     is the one that revision holds, never the working tree's, so a landing check run on a branch
-    reads the base's and the branch cannot switch its own check off.
+    reads the base's and the branch cannot switch its own check off. A git failure reading it is
+    a refusal (2), never "no .kit.json". find and tools still read the index FILE from the working
+    tree, and section/role read docs at `head`; only the settings come from `config_ref`.
     0 pass, 1 a miss (index check, find, role topic), 2 refused (config, unread index, listing,
     unknown role)."""
     try:
@@ -581,7 +574,9 @@ def run(root, out, section=None, find=None, tools=False, stale=False, role=None,
         return 1
     bad = index_checks(files, cfg, text, index)
     # A repo that turned the index off, or has no .kit.json (it has not opted in), needs none.
-    if di['enabled'] and has_config(root, config_ref):
+    # Config.found comes from the read the settings came from: a git failure at the ref was a
+    # ConfigError (exit 2) above, never "no .kit.json, skip the listing".
+    if di['enabled'] and conf.found:
         bad = listing_misses(files, cfg, text(index), index) + bad
     died = reader_died(root)
     if died:
