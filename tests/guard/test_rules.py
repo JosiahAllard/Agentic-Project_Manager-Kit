@@ -634,6 +634,32 @@ class PmDataNoVerify(unittest.TestCase):
         self.assertIsNone(self.decide('git push --no-verify origin kit/wt'))
         self.assertIsNone(self.decide('git push --no-verify origin kit/wt', sub=False, environ=MARKED))
 
+    COMPUTED = ('F=--no-verify; git push $F origin x', 'git push --n$F origin x', 'git $S origin x',
+                'git push `echo --no-verify` origin x', 'git push $(echo --no-verify) origin x')
+
+    def test_a_computed_push_word_is_denied(self):
+        # the guard cannot tell what a computed word expands to, and --no-verify skips the hook
+        pm = {context.ROLE_ENV: 'pm'}             # a session the write jail does not hold
+        for text in self.COMPUTED:
+            with self.subTest(text):
+                d = self.decide(text, sub=False, environ=pm)
+                self.assert_denied(d, 'git -C "%s" push <remote> <branch>' % W.fwd(self.w.wt))
+                self.assertIn('cannot judge a computed push word with PM data present', d.reason)
+                self.assert_denied(self.decide(text))                       # a subagent
+                self.assertIsNone(self.decide(text, sub=False))             # the owner's own
+        d = decide(ps('git push $env:F origin x', self.w.wt), self.w.ctx(environ=pm))
+        self.assert_denied(d)
+        self.assertIsNone(self.decide('git push origin x', sub=False, environ=pm))     # literal
+
+    def test_a_computed_push_word_without_a_record_is_unchanged(self):
+        os.remove(self.record)
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in self.COMPUTED:
+            with self.subTest(text):
+                self.assertIsNone(self.decide(text, sub=False, environ=pm))
+                d = self.decide(text)
+                self.assertNotEqual(d and d.rule, 'git-push-pmdata')
+
     def test_send_pack_is_denied(self):
         # send-pack pushes without running the pre-push hook, in any form
         push = 'git -C "%s" push <remote> <branch>' % W.fwd(self.w.wt)

@@ -60,6 +60,8 @@ ANYWHERE = (
     ('git-push-main', G + r'push\b[^|;&]*(\s|:|/)(?:main|master)\b'),
     ('git-push-pmdata', G + r'push\b[^|;&]*\s--no(?:-v|-?(?![\w-]))'),
     ('git-push-pmdata', G + r'send-pack\b'),
+    # a computed push word or subcommand ($X, `...`, $(...), %X%, @(...)): may be --no-verify or push
+    ('git-push-pmdata', G + r'(?:push\b[^|;&\n]*)?(?:\$|`|%[A-Za-z_]\w*%|@\()'),
     ('git-push-pmdata', r'(?i)(?<![\w.-])git-send-pack(?:\.exe)?\b'),
     ('wrapped-gate', r'(?:\bgate\.py|\bmachine_lock\.py\s+run)\b[^;&]*?(?<!\|)\|(?!\|)'),
     ('root-search', r'\bfind\s+(?:-[HLP]\s+)*(?:/|/[a-zA-Z]/?|[A-Za-z]:[\\/]?)(?=\s|$|["\'])'),
