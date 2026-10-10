@@ -33,7 +33,9 @@ Exit codes: OK 0; REFUSED 1 (nothing changed); CONFIG 2 (a kit or machine config
 cannot be read); PUSH_FAILED 3 (all made locally, the push was tried and failed; the lines say
 how to recover); PARTIAL 4 (stopped part-way: the lines name what was made, and `--adopt`
 finishes it; a failure before anything was changed is REFUSED); INTERRUPTED 130 (Ctrl+C, with
-the lines made so far).
+the lines made so far). An unexpected error (not a git failure this module names) in the writes or
+the push is caught like a failed write: PARTIAL once a write started, else REFUSED with its text;
+one raised by the checks escapes (`tools/pm_data.py` exits 5 for it).
 """
 import collections
 import json
@@ -603,8 +605,11 @@ def init(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
               'branch against the recorded root')
     try:
         _apply(p, lines)
-    except _Failed as e:
-        lines.append('FAILED: %s' % e)
+    except Exception as e:      # _Failed, or an error nothing here expected: never a traceback
+        if isinstance(e, _Failed):
+            lines.append('FAILED: %s' % e)
+        else:
+            lines.append('FAILED: unexpected %s: %s' % (type(e).__name__, e))
         if not p.wrote:
             lines.append('nothing was changed')
             return Outcome(REFUSED, lines)
@@ -624,6 +629,11 @@ def init(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
     except KeyboardInterrupt:
         lines.append('INTERRUPTED during git push %s %s; everything else is made' % (p.remote, spec))
         return Outcome(INTERRUPTED, lines)
+    except Exception as e:      # everything else is made; whether the push went is not known
+        lines.append('FAILED: unexpected %s during git push %s %s: %s; everything else is made'
+                     % (type(e).__name__, p.remote, spec, e))
+        lines.append('stopped part-way; ' + finish)
+        return Outcome(PARTIAL, lines)
     if rc != 0:
         lines.append('push      NOT DONE: git push %s %s failed: %s; the local branch is kept'
                      % (p.remote, spec, err or 'exit %s' % rc))

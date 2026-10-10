@@ -1,5 +1,6 @@
 """kitlib.pmdata.init (`tools/pm_data.py init` and `init --adopt`; docs/pm-data-branch.md "Making
 the branch" and "Tests"): throwaway repositories with bare scratch remotes, no network."""
+import io
 import json
 import os
 import shutil
@@ -396,6 +397,35 @@ class ReviewFixTest(_Base):
             out = self.init()
         self.assertEqual(out.code, pminit.PARTIAL, out.lines)
 
+    def test_an_unexpected_error_before_any_write_is_refused_with_its_text(self):
+        with mock.patch.object(pminit, '_empty_tree', side_effect=ValueError('odd tree')):
+            out = self.init()
+        self.assertEqual(out.code, pminit.REFUSED, out.lines)
+        self.assertIn('FAILED: unexpected ValueError: odd tree', out.lines)
+        self.assertIn('nothing was changed', out.lines)
+        self.assertFalse(os.path.exists(self.data))
+
+    def test_an_unexpected_error_after_a_write_is_partial(self):
+        with mock.patch.object(pminit, 'write_machine', side_effect=ValueError('odd home')):
+            out = self.init()
+        self.assertEqual(out.code, pminit.PARTIAL, out.lines)
+        self.assertIn('FAILED: unexpected ValueError: odd home', out.lines)
+        self.assertNotIn('nothing was changed', out.lines)
+        self.assertIn('--adopt', out.lines[-1])
+
+    def test_an_unexpected_error_during_the_push_is_partial(self):
+        real = pminit._git
+
+        def git(cwd, *args, **kw):
+            if args[:1] == ('push',):
+                raise ValueError('odd push')
+            return real(cwd, *args, **kw)
+        with mock.patch.object(pminit, '_git', git):
+            out = self.init(url=self.private)
+        self.assertEqual(out.code, pminit.PARTIAL, out.lines)
+        self.assertTrue(any('unexpected ValueError during git push' in l for l in out.lines),
+                        out.lines)
+
     def test_every_matching_insteadof_rule_is_compared(self):
         """Re-review 1: two rules with the same prefix; the second names the public remote."""
         harmless = os.path.join(self.repo.base, 'elsewhere.git')
@@ -494,6 +524,20 @@ class BarePushTest(_Base):
                                        cwd=self.repo.base), before)
 
 
+@real_git('worktree add of a folder name with a space; the fake refuses one git would sanitize')
+class SpacedPathTest(_Base):
+
+    def test_init_takes_a_path_with_a_space(self):
+        spaced = os.path.join(self.repo.base, 'pm data')
+        out = self.init(path=spaced, url=self.private)
+        self.assertEqual(out.code, pminit.OK, out.lines)
+        self.assertEqual(self.repo.git('rev-parse', '--abbrev-ref', 'HEAD', cwd=spaced), 'pmdata')
+        wts = self.repo.git('worktree', 'list', '--porcelain').replace('\\', '/')
+        block = wts.split('worktree %s' % spaced.replace('\\', '/'))[1]
+        self.assertIn('locked PM data', block)
+        self.assertEqual(pmdata.machine_settings(self.home)['path'], spaced)
+
+
 @real_git('git worktree remove of a missing folder and a failed push to a missing remote')
 class RealGitAdoptTest(_Base):
 
@@ -559,6 +603,24 @@ class CliTest(unittest.TestCase):
         args = m.call_args[0]
         self.assertEqual(args[1], os.path.abspath('d'))
         self.assertEqual(args[2:], ('pmdata', 'private', None, True))
+
+    def test_a_path_the_code_page_cannot_spell_prints_replaced_not_a_crash(self):
+        raw = io.BytesIO()
+        out = io.TextIOWrapper(raw, encoding='cp1252', errors='strict')
+        done = self.tool.pminit.Outcome(0, ['worktree  C:\\\u6570\u636e on pmdata, locked'])
+        with mock.patch.object(self.tool.pminit, 'init', return_value=done), \
+                mock.patch('sys.stdout', out):
+            code = self.tool.main(['-C', self.dir, 'init', '--path', 'd'])
+            out.flush()
+        self.assertEqual(code, 0)
+        self.assertIn(b'worktree  C:\\?? on pmdata, locked', raw.getvalue())
+
+    def test_an_escaping_error_exits_5_and_says_crashed(self):
+        with mock.patch.object(self.tool.pminit, 'init', side_effect=ValueError('boom')),                 mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+            code = self.tool.main(['-C', self.dir, 'init', '--path', 'd'])
+        self.assertEqual(code, 5)
+        self.assertIn('crashed: ValueError: boom; what was made before the error is not known; '
+                      'run init --adopt to check', out.getvalue())
 
 
 if __name__ == '__main__':

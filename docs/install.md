@@ -70,6 +70,24 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    anything when `.kit.json` or `tools/gate.json` exists, or when a file that is not a stub sits
    where a stub goes. Exit codes: 0 done or dry run; 1 refused; 2 usage. Tests:
    `tests/stubs/test_new_repo.py`, against a throwaway repository only.
+   - **PM data on a private branch** (optional; docs/pm-data-branch.md): add
+     `-PmData <folder> [-PrivateRemote <url>]`. After the files above are written, the script
+     runs `python <kit>/tools/pm_data.py -C <kit> init --path <folder> [--url <url>]`: the data
+     branch, its locked worktree at `<folder>` and the private remote belong to the kit's own
+     repository, not the target's, and `<kit>` must be the kit's main checkout (`init` refuses a
+     linked worktree). The dry run prints that command and runs nothing. `-PrivateRemote`
+     without `-PmData` is a usage error (2). The script prints `pm_data.py`'s lines and exits
+     with its code: 0 done; 1 refused (nothing changed in the kit); 2 a configuration it cannot
+     read; 3 made locally, the push failed (its lines say how to recover); 4 stopped part-way
+     (rerun with `--adopt`); 5 crashed (what it made is not known; rerun with `--adopt` to
+     check); 130 Ctrl+C. A Python traceback (exit 1) is also reported as a crash, not as a
+     refusal. On a non-zero code the target's files stay written and the script prints the
+     command to run again on its own, quoted to paste into PowerShell. Its lines are shown as
+     they come, but Ctrl+C may end the installer before its summary: then run
+     `pm_data.py init --adopt` with the same `--path` to check what was made. A relative
+     `-PmData` is taken from the PowerShell location; a trailing `\` on `-PmData` or
+     `-PrivateRemote` is dropped (a drive root is kept), and a `"` in either is a usage error. A repository already installed (its `.kit.json` makes the
+     script refuse) runs that command directly.
 4. **An existing repository with its own copies of the tools** skips the installer. It needs a
    `.kit.json` with the same keys (docs/kit-json.md), then
    `python <kit>/tools/kit_stubs.py write -C <repo> --replace`, then a commit.

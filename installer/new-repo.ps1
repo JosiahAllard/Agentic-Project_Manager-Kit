@@ -1,7 +1,8 @@
 # Bootstraps a repository onto the kit (docs/install.md; ported from the PM kit's new-repo.ps1).
 #
 #   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner>
-#                                -AgentEmail <agents> [-MainBranch main] [-Stack python] [-Apply]
+#                                -AgentEmail <agents> [-MainBranch main] [-Stack python]
+#                                [-PmData <folder> [-PrivateRemote <url>]] [-Apply]
 #
 # The target is an existing git checkout (`git init -b main` first for a new one); the folder -Target
 # names must be its top level. It writes these and nothing else (a repository holds stubs only,
@@ -26,13 +27,23 @@
 # anything is written. A missing `origin` remote (new_worktree and preflight need it) is a warning
 # that says what to run.
 #
-# Exit: 0 dry run printed or files written, 1 refused, 2 usage.
+# -PmData <folder> (docs/pm-data-branch.md "Other users"): after the setup above, run the kit's
+# `tools\pm_data.py -C <kit> init --path <folder> [--url <PrivateRemote>]`, which makes the PM-data
+# branch of the KIT's repository (not the target's), its locked worktree at <folder>, and the
+# private remote when -PrivateRemote is given. The dry run prints that command and runs nothing.
+# Its result is reported as pm_data.py gives it: its lines, then its exit code as this script's.
+#
+# Exit: 0 dry run printed or files written, 1 refused, 2 usage; with -PmData and -Apply, a non-zero
+# exit of pm_data.py init (1 refused, 2 configuration, 3 made locally but the push failed, 4 stopped
+# part-way, 5 crashed, 130 Ctrl+C) after the target's files were written.
 param(
     [Parameter(Mandatory = $true)][string]$Target,
     [Parameter(Mandatory = $true)][string]$OwnerEmail,
     [Parameter(Mandatory = $true)][string]$AgentEmail,
     [string]$MainBranch = 'main',
     [string]$Stack = '',
+    [string]$PmData = '',
+    [string]$PrivateRemote = '',
     [switch]$Apply
 )
 
@@ -51,8 +62,27 @@ if ($OwnerEmail -ieq $AgentEmail) {
     Fail "-OwnerEmail and -AgentEmail are the same; agents need their own identity or their commits pass as the owner's" 2
 }
 if ($MainBranch -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$') { Fail "-MainBranch '$MainBranch' is not a branch name" 2 }
+$PmData = $PmData.Trim(); $PrivateRemote = $PrivateRemote.Trim()
+if ($PrivateRemote -and -not $PmData) { Fail "-PrivateRemote needs -PmData <folder>" 2 }
+if ($PrivateRemote.StartsWith('-')) { Fail "-PrivateRemote '$PrivateRemote' is not a url" 2 }
+# Windows PowerShell 5.1 passes a native argument with a space inside plain double quotes, without
+# escaping: an embedded `"` or a trailing `\` (read as `\"`) would split or join arguments. No
+# path holds `"`, so one in a url is refused; a trailing `\` is trimmed (a drive root is kept).
+if ($PrivateRemote.Contains('"') -or $PmData.Contains('"')) { Fail "-PmData and -PrivateRemote cannot contain a double quote" 2 }
+function Trim-Slash([string]$p) {
+    $t = $p.TrimEnd('\')
+    if ($t -match '^[A-Za-z]:$') { return $t + '\' }
+    if ($t) { return $t } else { return $p }
+}
+$PrivateRemote = Trim-Slash $PrivateRemote
+# A relative path is taken from the PowerShell location, not the process folder (they differ once
+# a session has used Set-Location).
+function Full-Path([string]$p) {
+    [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($p))
+}
+$pmTool = Join-Path $kit 'tools\pm_data.py'
 
-$targetFull = [IO.Path]::GetFullPath($Target).TrimEnd('\')
+$targetFull = (Full-Path $Target).TrimEnd('\')
 $kitFull = [IO.Path]::GetFullPath($kit).TrimEnd('\') + '\'
 if (($targetFull + '\').StartsWith($kitFull, [StringComparison]::OrdinalIgnoreCase)) {
     Fail "the target $targetFull is inside the kit itself"
@@ -66,6 +96,20 @@ if ($LASTEXITCODE -ne 0 -or -not $top) { Fail "$targetFull is not a git checkout
 $topFull = [IO.Path]::GetFullPath(($top | Select-Object -First 1).Trim()).TrimEnd('\')
 if ($topFull -ine $targetFull) { Fail "$targetFull is inside the checkout $topFull; name its top level" }
 if (-not (Test-Path -LiteralPath $stubTool)) { Fail "the kit at $kit has no tools\kit_stubs.py" 2 }
+# The PM-data command: argv for the call, and the same quoted for the printed line.
+$pmArgs = @()
+$pmLine = ''
+if ($PmData) {
+    if (-not (Test-Path -LiteralPath $pmTool)) { Fail "the kit at $kit has no tools\pm_data.py" 2 }
+    $pmPath = Trim-Slash (Full-Path $PmData)
+    $pmArgs = @($pmTool, '-C', $kitFull.TrimEnd('\'), 'init', '--path', $pmPath)
+    if ($PrivateRemote) { $pmArgs += @('--url', $PrivateRemote) }
+    # The printed command pastes into PowerShell: single quotes (a `'` doubled) around any argument
+    # that is not plain.
+    $pmLine = 'python ' + (($pmArgs | ForEach-Object {
+        if ($_ -match '^[A-Za-z0-9_./:\\-]+$') { $_ } else { "'" + ($_ -replace "'", "''") + "'" }
+    }) -join ' ')
+}
 
 $kitJson = Join-Path $targetFull '.kit.json'
 if (Test-Path -LiteralPath $kitJson) { Fail "$kitJson exists already; nothing was written" }
@@ -160,6 +204,12 @@ else {
     Write-Host "WARNING:  no remote named origin. new_worktree.py and preflight.py fetch it and refuse without it."
     Write-Host "          git -C `"$targetFull`" remote add origin <url>   then   git -C `"$targetFull`" push -u origin $MainBranch"
 }
+if ($PmData) {
+    Write-Host ""
+    Write-Host "PM data (the kit's own repository, docs/pm-data-branch.md):"
+    $when = if ($Apply) { 'runs' } else { 'would run' }
+    Write-Host "  $when after the files above:  $pmLine"
+}
 if ($planCode -ne 0) { Fail "kit_stubs.py refused the stubs above (exit $planCode); nothing was written" }
 if (-not $Apply) { exit 0 }
 
@@ -206,6 +256,31 @@ if ($indexNew) {
 }
 Write-Host ""
 Write-Host "new-repo: wrote .kit.json, the stubs and the starter files in $targetFull"
+$pmCode = 0
+if ($PmData) {
+    Write-Host ""
+    Write-Host "PM data: $pmLine"
+    # Each line is shown as it comes (so a Ctrl+C that ends this script leaves what was made on
+    # screen) and kept for the checks below.
+    $pmOut = @(& python @pmArgs 2>&1 | ForEach-Object { $l = "$_"; Write-Host "  $l"; $l })
+    $pmCode = $LASTEXITCODE
+    if ($pmCode -eq 0) { Write-Host "PM data: pm_data.py init exited 0 (done)" }
+    else {
+        $why = @{ 1 = 'refused, it changed nothing'; 2 = 'usage or a configuration it cannot read';
+                  3 = 'made locally, the push to the private remote failed; its lines above say how to recover';
+                  4 = 'stopped part-way; run it again with --adopt to finish';
+                  5 = 'it crashed; what it made before the error is not known, run it again with --adopt to check';
+                  130 = 'interrupted (Ctrl+C); the lines above are what it made' }[$pmCode]
+        if (-not $why) { $why = 'an exit code pm_data.py does not document' }
+        # Fallback for a pm_data.py that still lets a Python error escape (exit 1, a traceback):
+        # never call that a refusal that changed nothing.
+        if (@($pmOut | Where-Object { "$_" -match '^Traceback \(most recent call last\):' }).Count) {
+            $why = 'it crashed; what it made before the error is not known, check the kit repository'
+        }
+        Write-Host "new-repo: STOPPED - the files above were written in $targetFull; pm_data.py init exited $pmCode ($why)."
+        Write-Host "  Fix what its lines name, then run the PM-data step alone:  $pmLine"
+    }
+}
 Write-Host "Next:"
 Write-Host "  1. review .kit.json (docs/kit-json.md names every key). Commit .kit.json and tools/gate.json under the"
 Write-Host "     owner's identity (owner-only paths: tools/commit.py refuses an agent's); commit the stubs, .gitignore,"
@@ -223,4 +298,4 @@ Write-Host "  4. git -C `"$targetFull`" config core.hooksPath `"$kit\githooks`" 
 if (-not $hasOrigin) {
     Write-Host "  5. the remote: git -C `"$targetFull`" remote add origin <url>, then push $MainBranch (no origin yet)"
 }
-exit 0
+exit $pmCode
