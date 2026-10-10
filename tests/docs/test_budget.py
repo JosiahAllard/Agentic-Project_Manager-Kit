@@ -919,7 +919,8 @@ class Refusals(KitRepo):
                                return_value=cmd.Result(None, b'', 'could not run git: git missing')):
             code, out = self.run_budget()
         self.assertEqual(code, 2, out)
-        self.assertIn('could not run: could not run git: git missing', out)
+        # The first git is now the base read (refs.resolve), so its refusal names the base.
+        self.assertIn('could not read base ref master (could not run git: git missing)', out)
 
 
 class UncappedDirs(KitRepo):
@@ -1248,18 +1249,24 @@ class FailedGitReads(BudgetRepo):
         self.assertEqual(code, 2, out)
         self.assertIn('git exit 0, but it listed no file', out)
 
-    def test_base_ref_exit_one_is_absent_and_any_other_exit_is_a_failed_read(self):
+    def test_a_base_ref_read_with_no_answer_is_a_failed_read_never_absent(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: exit 1 having printed nothing was read as "no such commit"
+        (`rev-parse --verify --quiet`), and a git ended from outside leaves that shape too
+        (kitlib.git.refs.KILLED_SHAPE). It, and any other failure, is a failed read."""
         self.size(GOTCHAS, 100)
-        verify = lambda a: a[:3] == ('rev-parse', '--verify', '--quiet')
-        with self.failing(verify, code=1, stderr=''):
-            code, out = self.run_budget('--worktree')
-        self.assertEqual(code, 2, out)
-        self.assertIn('base ref master does not exist here', out)
-        with self.failing(verify):
-            code, out = self.run_budget('--worktree')
-        self.assertEqual(code, 2, out)
-        self.assertIn('could not read base ref master (git exit 128: fatal: injected failure)', out)
-        self.assertNotIn('does not exist', out)
+        real = cmd.spawner()
+        for answer, words in (((1, b'', b''), 'printed nothing'),
+                              ((128, b'', b'fatal: injected failure'), 'fatal: injected failure')):
+            def run(argv, cwd=None, input=None, timeout=None, env=None, answer=answer):
+                if argv[1] == 'rev-parse' and argv[-1] == 'master^{commit}':
+                    return answer
+                return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+            with self.subTest(words=words), mock.patch.object(cmd, '_run', side_effect=run):
+                code, out = self.run_budget('--worktree')
+                self.assertEqual(code, 2, out)
+                self.assertIn('could not read base ref master (', out)
+                self.assertIn(words, out)
+                self.assertNotIn('does not exist', out)
 
 
 class FailedDiffsNameTheCause(StaleRepo):

@@ -27,6 +27,19 @@ LOCK_NAME = 'test-landing.lock'
 MASTER_CONFIG = {'repo': {'main_branch': 'master'}, 'landing': {'lock_file': 'git:' + LOCK_NAME}}
 
 
+def kill_reads_of(spec):
+    """A patch of cmd._run under which a `rev-parse` whose last argument is `spec` exits 1 having
+    printed nothing (a git ended from outside, kitlib.git.refs.KILLED_SHAPE); every other git runs
+    as before (the fake, or real git)."""
+    real = gitcmd.spawner()
+
+    def run(argv, cwd=None, input=None, timeout=None, env=None):
+        if argv[1] == 'rev-parse' and argv[-1] == spec:
+            return 1, b'', b''
+        return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+    return mock.patch.object(gitcmd, '_run', side_effect=run)
+
+
 class WorktreeCase(unittest.TestCase):
     """A throwaway repo: bare origin, a BASE branch equal to it, CONFIG (when set) committed as
     `.kit.json` and pushed."""
@@ -139,6 +152,19 @@ class NewBranchMode(WorktreeCase):
         self.assertEqual(rc, 1, out)
         self.assertIn('tell the coordinator', out)
         self.assertFalse(os.path.exists(self.slug_path('fresh')))
+
+    def test_a_killed_read_of_the_base_is_refused_as_unread_not_unresolved(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no such ref" as exit 1 with
+        no output, which a git ended from outside also leaves."""
+        with kill_reads_of('%s^{commit}' % self.BASE):
+            rc, out = self.tool('fix/fresh')
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn('did not resolve', out)
+        self.assertIn('refused   %s could not be read (' % self.BASE, out)
+        self.assertIn('printed nothing', out)
+        self.assertIn('nothing was created', out)
+        self.assertFalse(os.path.exists(self.slug_path('fresh')))
+        self.assertFalse(new.branch_exists(self.repo, 'fix/fresh'))
 
     def test_another_worktree_of_the_same_repository_may_call_it(self):
         rc, out = self.tool('fix/first')
@@ -549,6 +575,17 @@ class ALandingInProgressBasesOnOrigin(LandingCase):
         self.assertIn('landing   in progress', out)
         self.assertIn("unpushed  master's commit(s) %s, not counted below" % merge[:7], out)
         self.assertIn('of pushed origin/master not in it', out)
+
+    def test_held_and_a_killed_read_of_origin_is_refused_as_unread(self):
+        self.land('one')
+        self.hold()
+        with kill_reads_of('refs/remotes/origin/master^{commit}'):
+            rc, out = self.tool('fix/fresh')
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn('did not resolve', out)
+        self.assertIn('refused   refs/remotes/origin/master could not be read (', out)
+        self.assertFalse(os.path.exists(self.slug_path('fresh')), out)
+        self.assertFalse(new.branch_exists(self.repo, 'fix/fresh'), out)
 
     def test_held_but_origin_does_not_resolve_refuses(self):
         """The one refusal under a held lock: no pushed commit to base on."""

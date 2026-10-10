@@ -16,6 +16,7 @@ from unittest import mock
 import kitlib.landed as landed
 from kitlib.config import load
 from kitlib.config import user as kuser
+from kitlib.git import cmd
 from kitlib.records import gate_ok, landing
 from tests import gitfixture
 
@@ -159,6 +160,36 @@ class Containment(Fixture):
         code, out = self.look('no-such-branch')
         self.assertEqual(code, landed.CANNOT, out)
         self.assertIn('CANNOT ANSWER', out)
+
+    def test_a_killed_read_of_the_local_main_is_unknown_not_no_such_branch(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: a git ended from outside exits 1 having printed nothing, the
+        shape `rev-parse --verify --quiet` gave for "no such ref"."""
+        self.git('remote', 'remove', 'origin')
+        real = cmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] == 'rev-parse' and argv[-1].startswith('refs/heads/main'):
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(cmd, '_run', side_effect=run):
+            code, out = self.look()
+        self.assertEqual(code, landed.NOT_YET, out)
+        self.assertNotIn('no such branch here', out)
+        self.assertIn('main (UNKNOWN: ', out)
+        self.assertIn('contained  UNKNOWN: local main could not be read', out)
+
+    def test_a_killed_read_of_the_ref_says_so(self):
+        real = cmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] == 'rev-parse' and argv[-1].startswith(self.BRANCH):
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(cmd, '_run', side_effect=run):
+            code, out = self.look()
+        self.assertEqual(code, landed.CANNOT, out)
+        self.assertIn('`topic` could not be read', out)
+        self.assertNotIn('does not resolve', out)
 
     def test_it_only_reads(self):
         self.land_locally()

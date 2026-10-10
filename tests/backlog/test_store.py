@@ -695,6 +695,24 @@ class AKilledStoreReadIsNoAnswer(StoreCase):
         self.assertIsNone(got, 'a killed git was read as "no store ref"')
         self.assertTrue(why)
 
+    def test_landable_reads_a_killed_branch_read_as_no_answer_not_no_branch(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet refs/heads/<b>` said "no such
+        branch" as exit 1 with no output, the shape a kill leaves."""
+        from kitlib.backlog import landable as L
+        snap = self.store.load()
+        self.repo.git('branch', 'tools/held', 'main')
+        real = cmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] == 'rev-parse' and argv[-1].startswith('refs/heads/tools/held'):
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(cmd, '_run', side_effect=run):
+            got = L.check(self.backend, snap, self.repo.root, ['tools/held'])
+        self.assertEqual([v.verdict for v in got], [L.CANNOT_TELL])
+        self.assertNotIn('no local branch', got[0].detail)
+        self.assertIn('cannot read refs/heads/tools/held', got[0].detail)
+
     def test_a_failed_update_ref_whose_reread_is_killed_may_have_landed(self):
         tip = self.seed(priced('FOO'))
         moved = []
