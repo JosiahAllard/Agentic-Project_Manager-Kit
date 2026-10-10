@@ -9,6 +9,17 @@ running, the newest handoff file, reminders due, and coordinators not running (n
 with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/lookup.py`); each such line names the
 `launch.py start --session <key>` that starts it (docs/launcher.md).
 
+## Kit currency (`kit_sync`)
+
+When the machine config sets `pm_data` (docs/pm-data-branch.md), the `kit_sync` check keeps the
+kit's main checkout current: it fetches `origin`'s `main` (explicit refspec, 3 second limit) and
+fast-forwards local `main` ("kit updated to <short sha>"). It prints nothing when `main` already
+contains `origin/main`. It leaves the checkout alone, with one "kit not updated: ..." line, when it
+is not on `main`, has a merge in progress or uncommitted changes, when the landing lock is held, or
+when the fetch fails (offline, timed out); a diverged `main` is reported, never merged. It changes
+no git config and never rebases, resets or forces. Code: `kitlib/pmstart` `kit_sync`; tests:
+`tests/pmstart/test_kitsync.py`.
+
 ## Config
 
 `~/.claude-pm-kit/config.json`, key `pm_start`; without it the checklist says it is skipped.

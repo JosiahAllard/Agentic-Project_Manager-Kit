@@ -14,6 +14,17 @@ CFG = {"hub_url": "https://claude.ai/artifact/X", "hub_source": "claude/hub/acti
        "reminders_file": "r.json", "sessions_file": "s.json"}
 
 
+def setUpModule():
+    """The checklist must not read this machine's pm_data setting (kit_sync has its own tests)."""
+    global _orig_settings
+    _orig_settings = pmstart.pm_data_settings
+    pmstart.pm_data_settings = lambda: None
+
+
+def tearDownModule():
+    pmstart.pm_data_settings = _orig_settings
+
+
 def proc(name, cmd, exe=""):
     return {"Name": name, "CommandLine": cmd, "ExecutablePath": exe}
 
