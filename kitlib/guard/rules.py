@@ -385,6 +385,93 @@ def lock_state(event, ctx, target, role, what):
 
 
 WT_ADD = 'git -C %s worktree add .claude/worktrees/<slug> -b <branch>'
+PM_DATA_WHY = ('Agents do not work in the PM data worktree %s (a worktree made from it would read the kit\'s own '
+               '.kit.json, not its rules); the PM changes it, so ask the coordinator to take the change to the PM. '
+               'To see its state:')
+
+
+def new_worktree(ctx, top):
+    """(sentence or None, command): the worktree to make of the main checkout `top`; for the PM
+    data worktree no worktree is offered (ctx.is_pm_data): a sentence saying so, and a read."""
+    if top and ctx.is_pm_data(top):
+        return PM_DATA_WHY % quote(top), 'git -C %s status' % quote(top)
+    return None, WT_ADD % (quote(top) if top else '"<main checkout>"')
+
+
+class Judged(object):
+    """`ctx` as one judgement of the shared repository sees it from the PM data worktree: config,
+    config_error and main_top answer `top`'s .kit.json (`cfg`, or None and `err`), and no place
+    is the PM data worktree again."""
+
+    def __init__(self, ctx, top, cfg, err):
+        self._ctx, self._top, self._cfg, self._err = ctx, top, cfg, err
+
+    def __getattr__(self, name):
+        return getattr(self._ctx, name)
+
+    def config(self, path):
+        return self._cfg
+
+    def config_error(self, path):
+        return self._err
+
+    def main_top(self, path):
+        return self._top
+
+    def is_pm_data(self, path):
+        return False
+
+
+class DataBranch(object):
+    """The PM data worktree's own Config, with its data branch as the branch a push is judged for."""
+
+    def __init__(self, cfg, branch):
+        self._cfg, self.main_branch = cfg, branch
+
+    def __getattr__(self, name):
+        return getattr(self._cfg, name)
+
+
+def kit_judged(ctx, where):
+    """(Judged by the kit's own .kit.json, None) for git run in the PM data worktree `where`, which
+    acts on refs and worktrees of the repository it shares with the kit; (None, why) when that
+    .kit.json cannot be read, and the caller refuses."""
+    top = ctx.repo_main_top(where)
+    if not top:
+        return None, 'the main checkout of the repository %s belongs to cannot be found' % where
+    cfg = ctx.config_at(top)
+    err = ctx.config_error_at(top)
+    if cfg is None:
+        return None, 'its .kit.json in %s does not load (%s)' % (top, err or 'no .kit.json')
+    return Judged(ctx, top, cfg, None), None
+
+
+def git_push_pm_data(ctx, gc, role):
+    """git push from the PM data worktree: every ref but the data branch is judged by the kit's own
+    .kit.json (main checkout's rules), the data branch by the data worktree's own."""
+    kit, why = kit_judged(ctx, gc.dir)
+    if kit is None:
+        return refuse('git-push-main', role, '`git push` in the PM data worktree, where the kit\'s rules for the shared '
+                      'repository cannot be read: %s. To see the worktrees:' % why, 'git -C %s worktree list' % quote(gc.dir))
+    d = git_push(kit, gc, role)
+    if d:
+        return d
+    cfg = ctx.config(gc.dir)
+    cfg = DataBranch(cfg, ctx.pm_data_branch(gc.dir)) if cfg is not None else None
+    return git_push(Judged(ctx, ctx.main_top(gc.dir), cfg, ctx.config_error(gc.dir)), gc, role)
+
+
+def pm_data_unknown(ctx, target, cwd, role, what):
+    """A subagent write while the guard cannot tell the PM data worktree (ctx.pm_data_error):
+    denied, as for a broken machine config (fail closed)."""
+    if role != 'subagent':
+        return None
+    why = ctx.pm_data_error(target) or ctx.pm_data_error(cwd)
+    if not why:
+        return None
+    return refuse('pm-data', role, '%s: the guard cannot tell which worktree is the PM data worktree (%s), so it '
+                  'refuses every subagent write. The owner or the PM session fixes it. To read the machine config:'
+                  % (what, why), 'python -m json.tool %s' % quote(os.path.join(ctx.home, '.claude-pm-kit', 'config.json')))
 
 
 def own_worktree(ctx, cwd, main_top=None):
@@ -404,8 +491,8 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     may not edit one, and an agent session's write outside its roots (write_jail). `rewrite(path)`
     gives the same edit aimed at `path` (the alternative); `run` the command to rerun from the
     worktree when it writes into the directory it runs in."""
-    d = ledger_rule(ctx, target, role, what) or lock_state(event, ctx, target, role, what) or \
-        kit_json(event, ctx, target, role, what)
+    d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
+        lock_state(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what)
     if d:
         return d
     return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run) or \
@@ -418,7 +505,7 @@ def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite
     if perms.get('edit_main_checkout'):
         return None
     main_top = ctx.main_top(cwd) if cwd else None
-    new_wt = WT_ADD % (quote(main_top) if main_top else '"<main checkout>"')
+    new_wt = new_worktree(ctx, main_top)[1]
     if target is None:
         mine = own_worktree(ctx, cwd)
         instead = rewrite(fwd(mine) + '/<file>') if mine and rewrite is not None else new_wt
@@ -513,8 +600,10 @@ def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None):
             return 'Make the change in your worktree:', rewrite(fwd(os.path.join(mine, rel)))
         if run is not None:
             return 'Run it with %s as the working directory:' % quote(os.path.join(mine, rel)), run
-    return ('Make the change in a worktree of it (%s there); the lander brings it to main:' % fwd(rel),
-            WT_ADD % quote(main_top))
+    no_wt, instead = new_worktree(ctx, main_top)
+    if no_wt:
+        return no_wt, instead
+    return 'Make the change in a worktree of it (%s there); the lander brings it to main:' % fwd(rel), instead
 
 
 # ---------------------------------------------------------------- shell writes
@@ -1567,17 +1656,20 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
             how, instead = git_in_worktree(ctx, cmd, gc, top, cwd)
             return refuse('git-main-history', role, '`%s` writes history or files in %s; this role may not change a '
                           'main checkout. %s' % (text, where, how), instead)
+    no_wt, wt = new_worktree(ctx, place.top)
     if sub == 'restore':
         staged = 'S' in short or 'staged' in longs
         worktree = 'W' in short or 'worktree' in longs
         if not staged or worktree:
             return refuse('git-restore', role, '`%s` overwrites working files in %s, where landers work. To undo a '
                           'change, make it in a worktree (%s). To unstage only:' % (text, where, WT_ADD % quote(top)),
-                          'git -C %s restore --staged -- <path>' % quote(top))
+                          'git -C %s restore --staged -- <path>' % quote(top)) if not no_wt else \
+                refuse('git-restore', role, '`%s` overwrites working files in %s. %s' % (text, where, no_wt), wt)
     if sub in ('checkout', 'switch'):
         return refuse('git-checkout', role, '`%s` changes files in %s, where landers work. Read a file with git -C %s '
                       'show <rev>:<path>, or check the branch out in a worktree:' % (text, where, quote(top)),
-                      'git -C %s worktree add .claude/worktrees/<slug> <branch>' % quote(top))
+                      'git -C %s worktree add .claude/worktrees/<slug> <branch>' % quote(top)) if not no_wt else \
+            refuse('git-checkout', role, '`%s` changes files in %s. %s' % (text, where, no_wt), wt)
     if sub == 'reset' and 'hard' in longs:
         rev = ' '.join(w.text for w in pos) or 'HEAD'
         return refuse('git-reset-hard', role, '`%s` discards work in %s. Reset --keep refuses to drop uncommitted '
@@ -1591,8 +1683,8 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
         verb = pos[:1]
         if verb and verb[0].text in ('list', 'show'):
             return None
-        return refuse('git-stash', role, '`%s` moves work in %s into a stash every worktree shares. Commit the change '
-                      'by explicit path on a branch in a worktree:' % (text, where), WT_ADD % quote(top))
+        return refuse('git-stash', role, '`%s` moves work in %s into a stash every worktree shares. %s' % (
+            text, where, no_wt or 'Commit the change by explicit path on a branch in a worktree:'), wt)
     if sub in ('add', 'stage'):
         bulk = {'A', 'u'} & short or {'all', 'update'} & longs or \
             any(w.text in ('.', ':/', '*') for w in pos)
@@ -1811,6 +1903,9 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
                                 rewrite=lambda path, w=w: retarget(cmd, w, path))
     if git_reads(gc) or lander_main_git(event, ctx, cmd, inv, gc):
         return None
+    d = pm_data_unknown(ctx, gc.dir, cwd, role, '`%s`' % bare(cmd))
+    if d:
+        return d
     rs = rs or jail_roots(ctx, cwd)
     verdict, root = jail.judge(gc.dir, rs)
     if verdict is None:
@@ -1835,8 +1930,10 @@ def git_in_worktree(ctx, cmd, gc, main_top, cwd):
     mine = own_worktree(ctx, cwd, main_top)
     if mine:
         return 'Run it in your worktree:', ('git -C %s %s %s' % (quote(mine), gc.sub, rest)).rstrip()
-    return ('Work in a worktree and run git %s there; the lander brings it to main:' % gc.sub,
-            WT_ADD % quote(main_top))
+    no_wt, instead = new_worktree(ctx, main_top)
+    if no_wt:
+        return no_wt, instead
+    return 'Work in a worktree and run git %s there; the lander brings it to main:' % gc.sub, instead
 
 
 def git_unplaced(ctx, cmd, gc, cwd):
@@ -1864,6 +1961,12 @@ def git_worktree_remove(ctx, gc, role, text):
     args = gc.rest
     if not args or args[0].text != 'remove':
         return None
+    if ctx.is_pm_data(gc.dir):
+        ctx, why = kit_judged(ctx, gc.dir)
+        if ctx is None:
+            return refuse('git-worktree-remove', role, '`%s` from the PM data worktree, where the kit\'s rules for the '
+                          'shared repository cannot be read: %s. To see the worktrees:' % (text, why),
+                          'git -C %s worktree list' % quote(gc.dir))
     pos = _pos(args[1:])
     if not pos or pos[0].dyn or gc.dir is None:
         target = None
@@ -1902,6 +2005,8 @@ def _branch_of(ref):
 
 
 def git_push(ctx, gc, role):
+    if ctx.is_pm_data(gc.dir):
+        return git_push_pm_data(ctx, gc, role)
     rest = ' '.join(w.text for w in gc.rest)
     if gc.unknown or gc.dir is None:
         return refuse('git-push-main', role, '`git push` runs in a directory the guard cannot tell, so it cannot '
