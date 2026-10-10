@@ -137,14 +137,14 @@ class UserConfigTest(unittest.TestCase):
                 self.assertIn(why, str(cm.exception))
 
     def test_the_default_home_is_the_user_profile(self):
-        self.assertEqual(user.config_file(), os.path.join(os.path.expanduser('~'), '.claude-pm-kit',
+        self.assertEqual(user.config_file(), os.path.join(os.path.expanduser('~'), user.DIR_NAME,
                                                           'config.json'))
 
     def test_home_follows_userprofile_on_windows_and_home_elsewhere(self):
         var = 'USERPROFILE' if os.name == 'nt' else 'HOME'
         self.write({'ledger_path': self.ledger})
         with mock.patch.dict(os.environ, {var: self.home}):
-            self.assertEqual(user.config_file(), os.path.join(self.home, '.claude-pm-kit', 'config.json'))
+            self.assertEqual(user.config_file(), os.path.join(self.home, user.DIR_NAME, 'config.json'))
             self.assertEqual(user.ledger_path(), self.ledger)
 
 
@@ -167,7 +167,7 @@ class DocTest(unittest.TestCase):
         self.assertEqual(self.field_lines().get('`.kit.json` keys'), schema.doc_lines())
 
     def test_the_machine_config_section_is_its_schema(self):
-        self.assertEqual(self.field_lines().get('`~/.claude-pm-kit/config.json` keys'), user.doc_lines())
+        self.assertEqual(self.field_lines().get('Machine config keys'), user.doc_lines())
 
     def test_every_schema_section_is_documented(self):
         lines = '\n'.join(schema.doc_lines())

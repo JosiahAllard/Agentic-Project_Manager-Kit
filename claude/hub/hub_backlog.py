@@ -22,8 +22,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from kitlib import hubbacklog, pmstart                             # noqa: E402
+from kitlib.config import user                                     # noqa: E402
 
-STATE = "~/.claude-pm-kit/hub_backlog_state.json"
+STATE = "~/%s/hub_backlog_state.json" % user.DIR_NAME
 
 
 def plan(names, roots, state, now, snap=hubbacklog.snapshot, force=False):

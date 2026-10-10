@@ -11,7 +11,7 @@
   launch.py install-autostart [--what-if]
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.launcher, prints and exits.
-Settings come from the `launcher` object of ~/.claude-pm-kit/config.json. Every launched session
+Settings come from the `launcher` object of the machine config. Every launched session
 gets a PM_KIT_ROLE mark. Exit codes: 0 done; 1 refused or failed; 2 a stop refused (REFUSED:) or
 usage; 130 Ctrl+C.
 """

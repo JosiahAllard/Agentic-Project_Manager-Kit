@@ -46,7 +46,7 @@ file for ruling ids, repository names, user paths and the owner's name.
   (`;`-separated regexes).
 - `usage`: usage reports and the statusline (`statusline-usage.ps1`, `write-usage-status.ps1`).
 - `agenttemp`: `agent_temp_sweep.py` clears old entries from the agents' shared temp folder,
-  set by `agent_temp_sweep` in `~/.claude-pm-kit/config.json` (docs/kit-json.md).
+  set by `agent_temp_sweep` in the machine config (docs/kit-json.md).
 
 ## Knowledge (`knowledge/asset-generation`)
 

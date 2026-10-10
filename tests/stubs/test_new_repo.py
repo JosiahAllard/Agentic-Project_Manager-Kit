@@ -334,7 +334,7 @@ class PmData(unittest.TestCase):
         self.assertEqual(self.kit.git('--git-dir', self.private, 'rev-parse', 'refs/heads/pmdata'),
                          root)
         self.assertEqual(self.kit.git('rev-parse', '--abbrev-ref', 'HEAD', cwd=self.data), 'pmdata')
-        self.assertTrue(os.path.isfile(os.path.join(self.home, '.claude-pm-kit', 'config.json')))
+        self.assertTrue(os.path.isfile(user.config_file(self.home)))
         # The target got no data branch: the branch is the kit's.
         self.assertEqual(self.target.git('branch', '--list', 'pmdata'), '')
 

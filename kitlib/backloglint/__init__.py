@@ -2,7 +2,7 @@
 
 Read-only. Records come through a reader (any object with `records()` returning Record); GitReader
 reads the published records of the store a repository's `.kit.json` names, or a folder. The area
-map comes from the "backlog_lint" key of ~/.claude-pm-kit/config.json; see docs/backlog-lint.md.
+map comes from the "backlog_lint" key of the machine config; see docs/backlog-lint.md.
 
 Findings:
 - session: a record in a mapped area whose `session:` is missing or names another session;
@@ -16,7 +16,9 @@ import json
 import os
 import re
 
-CONFIG_PATH = os.path.join("~", ".claude-pm-kit", "config.json")
+from kitlib.config import user as kuser
+
+CONFIG_PATH = os.path.join("~", kuser.DIR_NAME, kuser.FILE_NAME)
 KEY = "backlog_lint"
 
 SESSION, HOLD = "session", "hold"

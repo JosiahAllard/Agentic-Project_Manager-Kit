@@ -8,7 +8,8 @@ import json
 import os
 import unittest
 
-from kitlib import pmdata
+from kitlib import lockmcp as lockmcp_names, pmdata
+from kitlib.config import user as kuser
 from kitlib.git import repo
 from kitlib.guard import context, decide, rules
 from kitlib.lockmcp import server as lockmcp
@@ -282,7 +283,7 @@ class Ledger(unittest.TestCase):
         self.assertIn('error', self.w.ctx().user())
 
     def write_config(self, raw):
-        d = os.path.join(self.w.home, '.claude-pm-kit')
+        d = kuser.config_dir(self.w.home)
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, 'config.json'), 'wb') as f:
             f.write(raw)
@@ -300,8 +301,8 @@ class Ledger(unittest.TestCase):
                     d = decide(ev, self.w.ctx())
                     self.assertIsNotNone(d, ev['tool_name'])
                     self.assertEqual(d.rule, 'ledger', d.reason)
-                    self.assertIn('The owner or the PM session fixes it. Instead: python -m json.tool "%s/.claude-pm-kit/config.json" '
-                                  % W.fwd(self.w.home), d.reason)
+                    self.assertIn('The owner or the PM session fixes it. Instead: python -m json.tool "%s/%s/config.json" '
+                                  % (W.fwd(self.w.home), kuser.DIR_NAME), d.reason)
                     self.assertIn(why, d.reason)
                 # the main session and reads stay open
                 self.assertIsNone(decide(event('Write', {'file_path': target, 'content': ''}, self.w.wt), self.w.ctx()))
@@ -597,6 +598,7 @@ class LockMcp(unittest.TestCase):
         self.w.user_config({'guard_mcp_prefix': 'mcp__lockx__'})
         self.assertEqual(rules.mcp_prefix(self.w.ctx()), 'mcp__lockx__')
         self.assertEqual(rules.mcp_prefix(W.World().ctx()), rules.MCP_PREFIX)
+        self.assertEqual(rules.MCP_PREFIX, lockmcp_names.claude_tool_prefix())
 
     def test_the_role_resolver_is_pluggable(self):
         ctx = self.w.ctx(role_resolver=lambda ev, env: 'owner-verified-by-test')

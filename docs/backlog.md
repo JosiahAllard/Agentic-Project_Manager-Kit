@@ -41,7 +41,7 @@ Exit codes (kitlib/backlog/errors.py): 0 OK; 1 `NOT FOUND:`, `ERROR:`, a RED che
 
 ## Owner gates
 
-An owner price (`--priority-by owner|pm`), an owner hold (`blocked_on: owner`, `priority: -1`), and closing or retiring such a record take `--ruling R-nnnn`; for a retirement the ruling alone satisfies the owner check (an owner kind, never a delegated one) and nothing of the owner's is written into the record. The ledger entry is read only when `ledger_path` in `~/.claude-pm-kit/config.json` names an existing file. Without one, only the ruling's shape is checked and `check` skips the ruling checks. A release, a close and a retirement also need the entry's `Items:` line to name the record. `unpark`'s ruling is checked as a hold release's (an owner or delegated entry) without the `Items:` line (`plan_unpark`).
+An owner price (`--priority-by owner|pm`), an owner hold (`blocked_on: owner`, `priority: -1`), and closing or retiring such a record take `--ruling R-nnnn`; for a retirement the ruling alone satisfies the owner check (an owner kind, never a delegated one) and nothing of the owner's is written into the record. The ledger entry is read only when `ledger_path` in the machine config names an existing file. Without one, only the ruling's shape is checked and `check` skips the ruling checks. A release, a close and a retirement also need the entry's `Items:` line to name the record. `unpark`'s ruling is checked as a hold release's (an owner or delegated entry) without the `Items:` line (`plan_unpark`).
 
 ## Records
 

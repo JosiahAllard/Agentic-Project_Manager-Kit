@@ -44,8 +44,8 @@ class CanonRepo(unittest.TestCase):
 
     def test_the_page_names_no_alias(self):
         self.assertNotRegex(page(), r"\{\s*pm\s*:")
-        self.assertNotIn("combat", page())
-        self.assertNotIn("project-manager", page())
+        # A repository's own name or alias in the page is the scrub's to catch (tests/scrub/
+        # test_generic.py, the install names), so this test names none.
 
 
 if __name__ == "__main__":

@@ -228,7 +228,7 @@ class KitBudgetFor(unittest.TestCase):
 
     def test_a_glob_budget_caps_every_file_under_a_shard_dir(self):
         cfg = self.cfg(budgets={'docs/decisions/*.md': 4096})
-        self.assertEqual(budget.budget_for(cfg, 'docs/decisions/griffball.md'), 4096)
+        self.assertEqual(budget.budget_for(cfg, 'docs/decisions/gamma.md'), 4096)
         self.assertEqual(budget.budget_for(cfg, 'docs/decisions/netcode.md'), 4096)
 
     def test_a_literal_entry_still_wins_over_a_glob_budget(self):

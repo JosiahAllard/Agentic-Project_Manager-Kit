@@ -56,7 +56,7 @@ class Tree(unittest.TestCase):
 
 
 class TestNames(Tree):
-    """Retribution's repath TestNames, unchanged but for the module."""
+    """A repository's repath TestNames, unchanged but for the module."""
 
     def test_load_reports_each_names_status_when_asked(self):
         statuses = {}

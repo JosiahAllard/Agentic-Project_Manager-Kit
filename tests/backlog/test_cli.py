@@ -10,6 +10,7 @@ import unittest
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from tests.gitfixture import TempRepo, fixture_env, rmtree
+from kitlib.config import user as kuser
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     'tools', 'backlog.py')
@@ -95,7 +96,7 @@ class Cli(unittest.TestCase):
     def test_standing_delegation_comes_from_the_machine_config(self):
         price = ('set', 'FOO', '--priority', '1', '--priority-by', 'owner', '--ruling', 'R-9008')
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
-        cfg = os.path.join(self.home, '.claude-pm-kit', 'config.json')
+        cfg = kuser.config_file(self.home)
         os.makedirs(os.path.dirname(cfg))
         with open(cfg, 'w', encoding='utf-8') as f:
             json.dump({'standing_delegation': 'R-9008'}, f)
@@ -193,8 +194,8 @@ class StandingDelegation(unittest.TestCase):
         self.repo.git('commit', '-q', '-m', 'kit config')
 
     def configure(self, **extra):
-        os.makedirs(os.path.join(self.home, '.claude-pm-kit'), exist_ok=True)
-        with open(os.path.join(self.home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+        os.makedirs(kuser.config_dir(self.home), exist_ok=True)
+        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
             json.dump(dict(ledger_path=self.ledger, **extra), f)
 
     def price(self):

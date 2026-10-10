@@ -1,6 +1,6 @@
 """Two path-to-piece tables for tests: OLD, the layout before the restructure, and NEW,
 the layout after it. A pure test of a tool that reads a pieces table runs under BOTH (`TABLES`,
-`both_tables`), naming paths as `self.P('combat-scripts', 'src/test/...')`; so moving a folder
+`both_tables`), naming paths as `self.P('delta-scripts', 'src/test/...')`; so moving a folder
 edits the real json and no test.
 
 OLD is frozen: it is a pieces table as phase 1 wrote it, and must never follow the real file.
@@ -19,8 +19,8 @@ OLD_DATA = {
                'root_files': ['fleet/Fleet.slnx', 'fleet/global.json', 'fleet/Directory.Build.props',
                               'fleet/.gitignore']},
     'pieces': [
-        {'id': 'retribution-api', 'group': 'shared', 'kind': 'gradle', 'gradle': ':retribution-api',
-         'dir': 'retribution-api'},
+        {'id': 'beta-api', 'group': 'shared', 'kind': 'gradle', 'gradle': ':beta-api',
+         'dir': 'beta-api'},
         {'id': 'protocol', 'group': 'shared', 'kind': 'spec', 'dir': 'protocol', 'wire': True,
          'forces': ['worker']},
         {'id': 'Fleet.Protocol', 'group': 'shared', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Protocol', 'dotnet': True},
@@ -56,11 +56,11 @@ OLD_DATA = {
          'gradle': ':worldgraph', 'dir': 'worldgraph'},
         {'id': 'scripts', 'group': 'artifacts', 'artifact': 'scripts', 'kind': 'gradle', 'gradle': ':scripts',
          'dir': 'scripts', 'outputs': {'libs': 'build/libs'}},
-        {'id': 'combat-scripts', 'group': 'artifacts', 'artifact': 'scripts', 'kind': 'gradle',
-         'gradle': ':combat-scripts', 'dir': 'combat-scripts', 'outputs': {'libs': 'build/libs'}},
+        {'id': 'delta-scripts', 'group': 'artifacts', 'artifact': 'scripts', 'kind': 'gradle',
+         'gradle': ':delta-scripts', 'dir': 'delta-scripts', 'outputs': {'libs': 'build/libs'}},
         {'id': 'pvp', 'group': 'artifacts', 'artifact': 'models', 'kind': 'builder', 'dir': 'pvp'},
         {'id': 'model-sums', 'group': 'artifacts', 'artifact': 'models', 'kind': 'file',
-         'dir': 'combat-scripts/models/SHA256SUMS'},
+         'dir': 'delta-scripts/models/SHA256SUMS'},
         {'id': 'plans', 'group': 'artifacts', 'artifact': 'plans', 'kind': 'asset', 'dir': 'artifacts/plans', 'dotnet': True},
     ],
 }
@@ -68,7 +68,7 @@ OLD_DATA = {
 # The owner's placements (answering the move plan's questions 1-7); the move
 # applied them. Change a line here and every both_tables test follows.
 MOVES = {
-    'retribution-api': 'shared/retribution-api',
+    'beta-api': 'shared/beta-api',
     'protocol': 'shared/protocol',
     'Fleet.Protocol': 'shared/Fleet.Protocol',
     'Fleet.Protocol.Tests': 'shared/Fleet.Protocol.Tests',
@@ -93,7 +93,7 @@ MOVES = {
     'node-docs': 'node/docs/node.md',                # Q6
     'worldgraph': 'artifacts/worldmap',              # Q2
     'scripts': 'artifacts/scripts/scripts',          # Q4
-    'combat-scripts': 'artifacts/scripts/combat-scripts',   # Q4
+    'delta-scripts': 'artifacts/scripts/delta-scripts',   # Q4
     'pvp': 'artifacts/models',                       # Q3
     'model-sums': 'artifacts/models/SHA256SUMS',     # Q3
 }
