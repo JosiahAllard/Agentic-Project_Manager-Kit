@@ -618,6 +618,24 @@ class PmDataTest(PrePushCase):
         self.assertIsNone(prepush.leak_refusal(self.repo.root, [public], 'origin', self.repo.remote))
         self.assertIsNone(prepush.leak_refusal(self.repo.root, [private], 'private', self.private))
 
+    def test_a_data_ref_git_cannot_read_refuses(self):
+        # the cherry-picked copy shares only the data commit's blob: without the data branch's
+        # objects the push would pass, so a ref git fails to read is a refusal, never "no ref"
+        self.new_branch('kit/x')
+        self.repo.git('cherry-pick', self.data)
+        line = 'refs/heads/kit/x %s refs/heads/kit/x %s' % (self.repo.head(), '0' * 40)
+        real = prepush.cmd.call
+
+        def call(args, *rest, **kw):
+            if args[:1] == ['rev-parse'] and any('refs/heads/pmdata' in a for a in args):
+                return prepush.cmd.Result(None, b'', 'git rev-parse timed out after 30 seconds')
+            return real(args, *rest, **kw)
+
+        with mock.patch.object(prepush.cmd, 'call', side_effect=call):
+            why = prepush.leak_refusal(self.repo.root, [line], 'origin', self.repo.remote)
+        self.assertIn("cannot list the PM data branch's objects", why or '')
+        self.assertIn('cannot read refs/heads/pmdata: git rev-parse timed out', why)
+
     def test_the_data_worktree_finds_the_record(self):
         # the hook's cwd is the top of the work tree pushed from: the record is in the common dir
         line = 'refs/heads/pmdata %s refs/heads/pmdata %s' % (self.data, '0' * 40)

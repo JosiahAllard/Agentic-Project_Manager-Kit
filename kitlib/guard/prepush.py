@@ -107,13 +107,27 @@ def _have(root, sha):
     return cmd.call(['cat-file', '-e', sha], root).rc == 0
 
 
+def _ref_tip(ref, root):
+    """`(commit, None)` of `ref`, `('', None)` when it does not exist, or `(None, why)` when git
+    cannot say (an error, a timeout): "cannot read" is never "no such ref"."""
+    r = cmd.call(['rev-parse', '--verify', '--quiet', '%s^{commit}' % ref], root)
+    out = cmd.text(r.out).strip() if r.rc == 0 else ''
+    if out:
+        return out, None
+    if r.rc == 1 and not r.err:
+        return '', None
+    return None, r.err or 'git rev-parse exited %s' % r.rc
+
+
 def _data_objects(root, record):
     """`({object: path or ''}, None)`: every object reachable from the recorded root, the local
     data branch and the private remote's tracking ref of it (those that exist), less the empty
-    tree and blob; or `(None, why)`."""
+    tree and blob; or `(None, why)`, also when one of those refs cannot be read."""
     starts = [record.root]
     for ref in ('refs/heads/%s' % record.branch, 'refs/remotes/%s/%s' % (record.remote, record.branch)):
-        sha, _why = refs.resolve(ref, root)
+        sha, why = _ref_tip(ref, root)
+        if sha is None:
+            return None, 'cannot read %s: %s' % (ref, why)
         if sha and sha not in starts:
             starts.append(sha)
     out, why = cmd.run_text(['rev-list', '--objects'] + starts + ['--'], root)
