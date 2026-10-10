@@ -258,6 +258,11 @@ def load_gate_tool():
     return mod
 
 
+def advice(top):
+    """The refusal's line naming the documented command that gates the checkout `top`."""
+    return '  to gate %s: python %s -C %s' % (top, os.path.join(top, 'tools', 'gate.py'), top)
+
+
 def linked(top, main_top):
     """The Place of a linked worktree at `top` of the repository whose main checkout is
     `main_top`: its own git dir, the main checkout's common dir."""
@@ -275,32 +280,45 @@ class OwnCopy(unittest.TestCase):
         self.other = os.path.abspath('kit-release')
         self.out = os.path.abspath('no-repo')
         self.lost = os.path.abspath('lost')
+        self.lost_in = os.path.abspath(os.path.join('main-co', '.claude', 'lost'))
+        self.lost_out = os.path.abspath('lost-outer')
+        self.inner = os.path.abspath(os.path.join('lost-outer', 'inner'))
         self.classify = fake_classify({
             repo.norm(self.main): place(repo.MAIN, self.main),
             repo.norm(self.wt): linked(self.wt, self.main),
             repo.norm(self.other): place(repo.MAIN, self.other),
             repo.norm(self.out): place(repo.NONE),
             repo.norm(self.lost): place(repo.UNKNOWN),
+            repo.norm(self.lost_in): place(repo.UNKNOWN),
+            repo.norm(self.lost_out): place(repo.UNKNOWN),
+            repo.norm(self.inner): place(repo.MAIN, self.inner),
         })
 
     def refusal(self, cwd, kit_root):
         return caller.own_copy_refusal(cwd, kit_root, classify=self.classify)
 
     def test_another_checkout_of_the_same_repository_is_refused(self):
+        """With no -C the tree meant is ambiguous: the gate.py's path names one checkout, the
+        directory another. Both commands are given, each labelled with the tree it gates."""
         for cwd, kit in ((self.main, self.wt), (self.wt, self.main)):
             with self.subTest(cwd=cwd, kit=kit):
                 out = self.refusal(cwd, kit)
                 self.assertEqual(out.code, G.REFUSED)
                 text = '\n'.join(out.lines)
                 self.assertTrue(text.startswith('REFUSED: '), text)
-                self.assertIn('-C %s' % kit, text)      # the command to use instead
-                self.assertIn(os.path.join(kit, 'tools', 'gate.py'), text)
+                for top in (cwd, kit):
+                    self.assertIn(advice(top), out.lines)
 
     def test_a_relative_minus_c_is_named_in_the_refusal(self):
-        out = caller.own_copy_refusal(self.main, self.wt, rel='.', classify=self.classify)
-        self.assertEqual(out.code, G.REFUSED)
-        self.assertIn('given the relative -C . (%s)' % self.main, out.lines[0])
-        self.assertIn('-C %s' % self.wt, out.lines[0])
+        """A relative -C names the tree meant: only its command is given, never the gate.py's
+        own checkout's (pasting that would gate another tree)."""
+        for cwd, kit in ((self.main, self.wt), (self.wt, self.main)):
+            with self.subTest(cwd=cwd, kit=kit):
+                out = caller.own_copy_refusal(cwd, kit, rel='.', classify=self.classify)
+                self.assertEqual(out.code, G.REFUSED)
+                self.assertIn('given the relative -C . (%s)' % cwd, out.lines[0])
+                self.assertEqual(out.lines[1:], [advice(cwd)])
+                self.assertNotIn(advice(kit), out.lines)
 
     def test_the_same_checkout_passes(self):
         self.assertIsNone(self.refusal(self.wt, self.wt))
@@ -318,10 +336,20 @@ class OwnCopy(unittest.TestCase):
     def test_a_kit_in_no_repository_passes(self):
         self.assertIsNone(self.refusal(self.main, self.out))
 
-    def test_a_kit_git_cannot_place_is_refused(self):
-        out = self.refusal(self.main, self.lost)
-        self.assertEqual(out.code, G.REFUSED)
-        self.assertIn('cannot tell', out.lines[0])
+    def test_a_kit_git_cannot_place_passes_when_apart(self):
+        """A consumer repository's gate with a kit checkout git cannot place (dubious ownership,
+        a git timeout): the two paths do not nest, so they cannot be one repository's checkouts."""
+        self.assertIsNone(self.refusal(self.main, self.lost))
+        self.assertIsNone(self.refusal(self.wt, self.lost))
+
+    def test_a_kit_git_cannot_place_is_refused_when_nested(self):
+        for cwd, kit in ((self.main, self.lost_in), (self.wt, self.lost_in),
+                         (self.inner, self.lost_out)):
+            with self.subTest(cwd=cwd, kit=kit):
+                out = self.refusal(cwd, kit)
+                self.assertEqual(out.code, G.REFUSED)
+                self.assertIn('cannot tell', out.lines[0])
+                self.assertEqual(out.lines[1:], [advice(cwd)])
 
 
 class LogDir(unittest.TestCase):
@@ -402,8 +430,9 @@ class RunByPath(unittest.TestCase):
             with self.subTest(cwd=cwd, kit=kit):
                 code, out = self.gate(cwd, kit)
                 self.assertEqual(code, G.REFUSED, out)
-                self.assertIn('Name the tree with an absolute -C: python %s -C %s' % (
-                    os.path.join(kit, 'tools', 'gate.py'), kit), out)
+                # ambiguous with no -C: both commands, each labelled with the tree it gates
+                for top in (cwd, kit):
+                    self.assertIn(advice(top).lower(), out.lower())
                 self.assertNotIn('RUN   unit', out)
 
     def test_an_absolute_minus_c_from_the_main_checkout_gates_the_worktree(self):
@@ -439,14 +468,38 @@ class RunByPath(unittest.TestCase):
         with the worktree's code, as no -C did; so did main's gate.py with a relative -C naming
         the worktree."""
         rel_wt = os.path.join('.claude', 'worktrees', 'x')
-        for cwd, kit, rel in ((self.main, self.wt, '.'), (self.wt, self.main, '.'),
-                              (self.main, self.main, rel_wt)):
+        # (cwd, the gate.py's checkout, -C, the tree the caller asked for)
+        for cwd, kit, rel, meant in ((self.main, self.wt, '.', self.main),
+                                     (self.wt, self.main, '.', self.wt),
+                                     (self.main, self.main, rel_wt, self.wt)):
             with self.subTest(cwd=cwd, kit=kit, rel=rel):
                 code, out = self.gate(cwd, kit, '-C', rel)
                 self.assertEqual(code, G.REFUSED, out)
                 self.assertIn('given the relative -C %s' % rel, out)
-                self.assertIn('Name the tree with an absolute -C: python %s -C %s' % (
-                    os.path.join(kit, 'tools', 'gate.py'), kit), out)
+                # the advice gates the tree asked for, never the gate.py's own checkout
+                self.assertIn(advice(meant).lower(), out.lower())
+                self.assertNotIn('to gate %s:' % kit.lower(), out.lower())
+                self.assertNotIn('RUN   unit', out)
+
+    def test_a_kit_git_cannot_place(self):
+        """Real git: a gate.py whose checkout git cannot place (a .git file it cannot read) passes
+        when it is apart from the gated repository, as a consumer repository's gate is, and is
+        refused when it is inside the gated checkout."""
+        apart = os.path.join(self.repo.base, 'lost-kit')
+        inside = os.path.join(self.main, '.claude', 'lost-kit')     # .claude/ is ignored
+        for d in (apart, inside):
+            os.makedirs(d)
+            with open(os.path.join(d, '.git'), 'w', encoding='utf-8') as f:
+                f.write('not a gitfile\n')
+        code, out = self.gate(self.main, apart)
+        self.assertEqual(code, 0, out)
+        self.assertIn('RUN   unit (always)', out)
+        for cwd in (self.main, self.wt):
+            with self.subTest(cwd=cwd):
+                code, out = self.gate(cwd, inside)
+                self.assertEqual(code, G.REFUSED, out)
+                self.assertIn('REFUSED: cannot tell which checkout', out)
+                self.assertIn(advice(cwd).lower(), out.lower())
                 self.assertNotIn('RUN   unit', out)
 
     def test_a_relative_minus_c_naming_its_own_checkout_passes(self):
