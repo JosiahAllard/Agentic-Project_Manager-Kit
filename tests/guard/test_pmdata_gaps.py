@@ -294,7 +294,7 @@ class ComputedProgram(Base):
 
     def test_call_operator_on_a_subexpression_is_a_computed_program(self):
         text = '& (Get-Command git) push --no-verify origin pmdata'
-        self.assert_denied(self.decide(text, sub=True, shell=ps), 'unreadable')
+        self.assert_denied(self.decide(text, sub=True, shell=ps), 'git-push-pmdata')
         self.assert_denied(self.decide(text, environ=PM, shell=ps), 'git-push-pmdata')
         self.assert_denied(self.decide('& (gcm git) push --no-verify origin pmdata', environ=PM, shell=ps),
                            'git-push-pmdata')
