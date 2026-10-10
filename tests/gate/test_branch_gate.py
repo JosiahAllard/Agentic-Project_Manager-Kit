@@ -3,6 +3,7 @@ rule that the gate-OK record is written only for the commit whose clean tree pas
 import os
 import sys
 import unittest
+from unittest import mock
 
 from kitlib import gate as G
 import kitlib.config as kconfig
@@ -161,6 +162,34 @@ class BranchGate(fixtures.GateRepoCase):
         self.assertEqual(out.record, gate_ok.record_path(wt, tip))
         with open(out.results[0]['log'], encoding='utf-8') as f:
             self.assertIn('checked .kit.json,tools/kit_hooks.py', f.read())
+
+    def test_loading_the_hook_module_writes_no_bytecode_into_the_tree(self):
+        """In a terminal without PYTHONDONTWRITEBYTECODE, importing the hook module (and a sibling
+        it imports) would leave tools/__pycache__ in the work tree: an untracked change, so the
+        gate would write no record. The fixture has no .gitignore, as a client repo may not."""
+        wt = self.repo.worktree('feature')
+        self.repo.write('tools/hook_sibling.py', 'WORD = "sib"\n', root=wt)
+        self.repo.write('tools/kit_hooks.py', (
+            'import os, sys\n'
+            'sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n'
+            'import hook_sibling\n'
+            'sys.path.pop(0)\n'
+            'def ok(ctx):\n'
+            '    return ctx["run"]([sys.executable, "-c", "print(1)"])\n'
+            'GATE_CHECKS = {"ok": ok}\n'), root=wt)
+        self.addCleanup(sys.modules.pop, 'hook_sibling', None)
+        self.repo.write('.kit.json', '{"hook": {"module": "kit_hooks"}, "gate": {"steps": '
+                        '[{"name": "c", "always": true, "check": "ok"}]}}\n', root=wt)
+        tip = self.repo.commit('check', 'tools/kit_hooks.py', 'tools/hook_sibling.py',
+                               '.kit.json', cwd=wt)
+        with mock.patch.object(sys, 'dont_write_bytecode', False):
+            out = self.gate(wt)
+            self.assertFalse(sys.dont_write_bytecode)          # put back as it was
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertIsNone(out.no_record, out.lines)
+        self.assertEqual(out.record, gate_ok.record_path(wt, tip))
+        self.assertFalse(os.path.exists(os.path.join(wt, 'tools', '__pycache__')),
+                         os.listdir(os.path.join(wt, 'tools')))
 
 
 def mode_step(word):

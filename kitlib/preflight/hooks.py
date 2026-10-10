@@ -6,12 +6,26 @@ daily_full:summary_lines). Whatever goes wrong - no file, an import error, a rai
 While a hook loads and runs, the repo's tools dir is first on sys.path, so `import pieces` in a
 hook gets the repo's own pieces.py even when the kit has a tool of that name. Afterwards sys.path
 is put back, the sys.modules entries the hook added are dropped, and any kit module the repo's
-sibling displaced for the hook is restored, so kit code never sees the repo's module.
+sibling displaced for the hook is restored, so kit code never sees the repo's module. No bytecode
+is written while a hook loads and runs (sys.dont_write_bytecode), so no `__pycache__` appears in
+the repo's tools dir.
 """
 import contextlib
 import importlib.util
 import os
 import sys
+
+
+@contextlib.contextmanager
+def _no_bytecode():
+    """sys.dont_write_bytecode set, then put back: a hook and the siblings it imports are files
+    in the repo's work tree, and a `__pycache__/*.pyc` written there is an untracked file in it."""
+    saved = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        yield
+    finally:
+        sys.dont_write_bytecode = saved
 
 
 @contextlib.contextmanager
@@ -42,7 +56,7 @@ def lines(tools_dir, hooks):
         try:
             if not os.path.isfile(path):
                 raise FileNotFoundError('no %s' % path)
-            with _repo_first(tools_dir):
+            with _repo_first(tools_dir), _no_bytecode():
                 spec = importlib.util.spec_from_file_location('preflight_hook_' + name, path)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
