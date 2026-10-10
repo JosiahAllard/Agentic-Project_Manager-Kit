@@ -4,6 +4,30 @@ Everything below lives only in the kit. Claude accounts and repositories point a
 never copy it. `tests/skills`, `tests/templates` and `tests/knowledge` scrub every shipped text
 file for ruling ids, repository names, user paths and the owner's name.
 
+## The built-in scrub
+
+`tests/scrub/test_builtin.py` reads every file `git ls-files` lists, tests/ included, with the
+classes in `kitlib/scrub` (CLASSES). It needs no machine config, so a clean clone runs it too;
+the install's own names stay with `tests/scrub/test_generic.py` and `scrub_patterns`
+(docs/kit-json.md).
+
+- `gender`: a gendered pronoun; the kit writes "the owner".
+- `record-id`: a backlog record id. STOP_IDS lists the acronyms and markers that only look like
+  one, and an invented id in a fixture starts with `EX-` (MADE_UP_ID_PREFIX).
+- `provenance`: a pointer at the earlier kit or its files.
+- `pinned-hash`: a commit hash, outside tests/ only; git's empty tree and the hex alphabet pass
+  (NOT_HASHES).
+- `hardware`: a GPU model, a CPU family or chiplet, or a total core or thread count of two digits
+  or more.
+- `name`: a salted digest in NAME_STORE, hashed the way `kitlib/forbidden` hashes (docs/repo-checks.md,
+  "forbidden"), so the names are never written down. The shipped store is empty; filling it is the
+  owner's call.
+
+A permanent exception is an ALLOWED entry (path glob, class, line text, reason) in the test file.
+Hits that later work removes wait in its PENDING_* blocks, a baseline per (class, file): more hits
+than the baseline fails, a file with no baseline fails on its first hit, and fewer hits prints
+"lower the baseline" without failing. Each block is done when it is empty.
+
 ## The Claude Code plugin (`.claude-plugin/plugin.json`)
 
 - **Agents** (`claude/agents/`): the agent definitions; docs/ROSTER.md says which model and
