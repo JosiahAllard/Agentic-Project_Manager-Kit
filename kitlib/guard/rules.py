@@ -2085,6 +2085,22 @@ def git_push_pmdata(event, ctx, gc, role):
                   ('git -C %s push %s' % (quote(gc.dir), ' '.join(words))).rstrip())
 
 
+def home_config(event, ctx, gc, role):
+    """git push on a line that sets HOME, XDG_CONFIG_HOME, USERPROFILE, HOMEDRIVE or HOMEPATH
+    (commands.HOME_ENV_NAMES, Command.home_env), in a repository with a PM data record, in every
+    session but the owner's own (rule git-push-pmdata): git would read another user config, whose
+    url.<base>.pushInsteadOf can send the push to a public remote while the pre-push hook, reading
+    the same config, takes it for the private one (KIT-GUARD-HOME-GITCONFIG)."""
+    name = gc.inv.cmd.home_env if gc.inv is not None else False
+    if not name or is_owner_session(event, ctx) or not pmdata_recorded(ctx, gc.dir):
+        return None
+    return refuse('git-push-pmdata', role, '`git push %s` runs on a line that sets %s, and this repository has %s: git '
+                  'would read the user config of another folder, whose url.<base>.pushInsteadOf can send the push '
+                  'to a public remote while the pre-push hook, reading the same config, takes it for the private '
+                  'one. Push without setting %s:' % (' '.join(w.text for w in gc.rest), name, pmdata.FILE_NAME, name),
+                  ('git -C %s push %s' % (quote(gc.dir), ' '.join(w.text for w in gc.rest))).rstrip())
+
+
 def hookless_sub(sub):
     """True for a git subcommand that talks to a remote without running the pre-push hook:
     send-pack, http-push, and a remote helper run by hand (remote-https, remote-ext, remote-fd,
@@ -2417,7 +2433,7 @@ def git_push(event, ctx, gc, role):
         return refuse('git-push-main', role, '`git push` runs in a directory the guard cannot tell, so it cannot '
                       'check for a gate-OK record. Name the checkout literally:',
                       ('git -C "<checkout>" push %s' % rest).rstrip())
-    d = git_push_pmdata(event, ctx, gc, role)
+    d = git_push_pmdata(event, ctx, gc, role) or home_config(event, ctx, gc, role)
     if d:
         return d
     if not pmdata_recorded(ctx, gc.dir):

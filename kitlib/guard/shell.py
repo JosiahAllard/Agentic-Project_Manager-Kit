@@ -72,7 +72,7 @@ class Redirect(object):
 class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
-                 'pipe_from', 'git_env')
+                 'pipe_from', 'git_env', 'home_env')
 
     def __init__(self, source, shell, depth):
         self.words, self.redirects, self.subs = [], [], []
@@ -85,6 +85,7 @@ class Command(object):
         self.pipe_from = None       # the Command piping into this one
         self.nested_in = None       # the Command whose word held this one ($(), a nested shell)
         self.git_env = False        # the GIT_DIR-like variable some command of the line sets (commands.mark_git_env), else False
+        self.home_env = False       # the variable naming git's user config folder the line sets (HOME, ...), else False
 
     @property
     def grouped(self):

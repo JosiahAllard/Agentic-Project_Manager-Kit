@@ -1225,14 +1225,22 @@ def mark_git_env(parsed):
     ('`set -a`'), else False. The whole line, not the commands after the setter: expand appends
     nested text (eval, bash -c, Invoke-Expression, a sourced here-string) after the line's own
     commands, so order says nothing about which runs first. A line with no git is not
-    affected."""
+    affected. c.home_env is the first of HOME_ENV_NAMES the line sets literally (line_env_names),
+    else False: git then reads another user config (rules.home_config judges a push with it)."""
     cmds = parsed.commands
+    sets = line_env_names(cmds)
     name = next((n for n in map(git_env_set, cmds) if n), None)
     if name is None:
-        sets = line_env_names(cmds)
         name = next((why for why in (git_env_unsafe(c, sets) for c in cmds) if why), None)
+    home = next((n for n in HOME_ENV_NAMES if n in sets), None)
     for c in cmds:
         c.git_env = name or False
+        c.home_env = home or False
+
+
+# The variables git for Windows finds the user config through: $XDG_CONFIG_HOME/git/config, and
+# ~/.gitconfig with ~ from HOME, else HOMEDRIVE+HOMEPATH, else USERPROFILE (observed with git 2.55)
+HOME_ENV_NAMES = ('HOME', 'XDG_CONFIG_HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH')
 
 
 FIND_EXEC = ('-exec', '-execdir', '-ok', '-okdir')
