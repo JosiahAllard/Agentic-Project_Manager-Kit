@@ -43,3 +43,47 @@ class MarkRootsBothFolders(Base):
             with self.subTest(name):
                 self.config(self.old_dir, [{'path': '~/%s-notes' % name, 'mode': 'open'}])
                 self.allowed(self.write(os.path.join(self.w.home, name + '-notes', 'x.md'), env=PM, sub=False))
+
+
+class OwnRootNotAConfigFolder(Base):
+    """A session run outside git in either config folder (or in one inside or over it) has no
+    own root there: it cannot write config.json, the file that names its guard settings and the
+    ledger the guard protects. The old-only machine is the case that matters most: a new file
+    written there would replace the old one for every reader."""
+
+    def setUp(self):
+        Base.setUp(self)
+        self.new_dir = os.path.join(self.w.home, user.DIR_NAME)
+        self.old_dir = os.path.join(self.w.home, migration.OLD_DIR_NAME)
+        for d in (self.new_dir, self.old_dir):
+            os.makedirs(os.path.join(d, 'sub'))
+        with open(os.path.join(self.old_dir, user.FILE_NAME), 'w', encoding='utf-8') as f:
+            json.dump({'ledger_path': os.path.join(self.w.base, 'ledger.md')}, f)
+        self.assertEqual(user.locate(self.w.home).state, user.OLD)
+
+    def each_session(self):
+        return (('marked', dict(env=PM, sub=False)), ('subagent', dict(sub=True)))
+
+    def test_a_session_in_the_new_folder_cannot_write_its_config_file(self):
+        for cwd in (self.new_dir, os.path.join(self.new_dir, 'sub')):
+            for who, kw in self.each_session():
+                with self.subTest(cwd=cwd, who=who):
+                    self.jailed(self.write(os.path.join(self.new_dir, user.FILE_NAME), cwd=cwd, **kw))
+                    self.assertFalse(os.path.exists(os.path.join(self.new_dir, user.FILE_NAME)))
+
+    def test_a_session_in_the_old_folder_cannot_write_its_config_file(self):
+        for cwd in (self.old_dir, os.path.join(self.old_dir, 'sub')):
+            for who, kw in self.each_session():
+                with self.subTest(cwd=cwd, who=who):
+                    self.jailed(self.write(os.path.join(self.old_dir, user.FILE_NAME), cwd=cwd, **kw))
+
+    def test_a_session_over_the_home_folder_has_no_own_root(self):
+        # base holds home, so a root there would hold both config folders
+        for who, kw in self.each_session():
+            with self.subTest(who):
+                self.jailed(self.write(os.path.join(self.new_dir, user.FILE_NAME), cwd=self.w.base, **kw))
+
+    def test_a_plain_folder_beside_them_is_still_its_own_root(self):
+        notes = os.path.join(self.w.home, user.DIR_NAME + '-notes')
+        os.makedirs(notes)
+        self.allowed(self.write(os.path.join(notes, 'x.md'), cwd=notes, env=PM, sub=False))

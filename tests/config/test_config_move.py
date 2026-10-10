@@ -6,6 +6,7 @@ scratch home folder, never the user's."""
 import json
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -14,6 +15,9 @@ from kitlib import backloglint, coordinatorstart, pmstart, pmwatch
 from kitlib.config import ConfigError, migration, user
 from kitlib.machinesetup import default_config_dirs
 from kitlib.pmdata import init as pminit
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'optional', 'agenttemp'))
+import agent_temp_sweep as sweep                                   # noqa: E402
 
 
 class _Home(unittest.TestCase):
@@ -201,6 +205,72 @@ class ReadersTest(_Home):
         self.put(self.new, {'pm_start': {'hub_url': 'new'}})
         with self.env():
             self.assertEqual(pmstart.load_config(), {'hub_url': 'new'})
+
+    def test_each_reader_takes_a_bad_location_for_a_config_error_never_no_config(self):
+        # the old file holds every key, so a reader that fell back or read "absent" would answer
+        self.put(self.old, {'pm_start': {'hub_url': 'u'}, 'coordinator_start': {'k': 1},
+                            'pm_watch': {'w': 1}, 'machine_lock': {'notice': {'dir': self.home}},
+                            'backlog_lint': {'repos': {}}, 'agent_temp_sweep': {'dir': self.home}})
+        for bad in ('folder is a file', 'config is a folder'):
+            with self.subTest(bad):
+                shutil.rmtree(self.new_dir, True)
+                if os.path.isfile(self.new_dir):
+                    os.remove(self.new_dir)
+                if bad == 'folder is a file':
+                    self.put(self.new_dir, 'not a folder')
+                else:
+                    os.makedirs(self.new)
+                self.assertEqual(user.locate(self.home).state, user.BAD)
+                with self.env():
+                    for name, read, error in (
+                            ('pmstart', pmstart.load_config, ConfigError),
+                            ('coordinatorstart', coordinatorstart.load_config, ConfigError),
+                            ('pmwatch', pmwatch.load_config, ConfigError),
+                            ('pmwatch notice dir', pmwatch.configured_notice_dir, ConfigError),
+                            ('backloglint', backloglint.load_config, backloglint.LintConfigError),
+                            ('agent_temp_sweep', sweep.load, sweep.SweepConfigError)):
+                        with self.subTest(name):
+                            with self.assertRaises(error) as cm:
+                                read()
+                            self.assertIn(self.new_dir, str(cm.exception))
+
+    def test_the_coordinator_start_says_it_could_not_check_the_config(self):
+        self.put(self.new_dir, 'not a folder')
+        with self.env():
+            text = coordinatorstart.render(env={coordinatorstart.ROLE_VAR: coordinatorstart.ROLE})
+        self.assertIn('could not check config: ConfigError', text)
+
+
+class BadLocationCliTest(_Home):
+    """The entry points over those readers say the machine config cannot be read and exit 2."""
+
+    def run_main(self, main, argv):
+        import contextlib
+        import io
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home}), \
+                contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = main(argv)
+        return code, err.getvalue()
+
+    def test_each_says_machine_config_and_exits_2(self):
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        for d in (os.path.join(root, 'tools'), os.path.join(root, 'claude', 'hub')):
+            if d not in sys.path:
+                sys.path.append(d)
+        import hub_notices
+        import hub_repos
+        import pm_watch
+        self.put(self.new_dir, 'not a folder')
+        self.put(self.old, {'pm_start': {'sessions_file': 's.json'},
+                            'machine_lock': {'notice': {'dir': self.home}}})
+        for name, main in (('pm_watch', pm_watch.main), ('hub_repos', hub_repos.main),
+                           ('hub_notices', hub_notices.main)):
+            with self.subTest(name):
+                code, err = self.run_main(main, [])
+                self.assertEqual(code, 2, err)
+                self.assertIn('machine config', err)
+                self.assertIn('not a folder', err)
 
 
 class MachineSetupTest(_Home):

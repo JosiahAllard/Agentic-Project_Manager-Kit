@@ -71,6 +71,28 @@ class ConfigLineTest(unittest.TestCase):
         out = self.line()
         self.assertIn('BROKEN', out)
 
+    def test_a_bad_value_is_named_by_its_key_never_shown(self):
+        # the strict reader's own message quotes the value (`not %r`); the line must not
+        for body, bad in (({'ledger_path': 'relative/%s.md' % SECRET}, 'ledger_path'),
+                          ({'ledger_path': self.home, 'pending_path': 'relative-%s' % SECRET}, 'pending_path'),
+                          ({'ledger_repos': [SECRET + ' Upper Case']}, 'ledger_repos')):
+            with self.subTest(bad):
+                self.put(user.DIR_NAME, body)
+                self.assertEqual(self.line(), 'config    BROKEN %s: bad key(s): %s' % (self.new_name, bad))
+
+    def test_an_unknown_key_and_a_bad_value_are_both_named(self):
+        self.put(user.DIR_NAME, {'a_key_this_kit_does_not_know': SECRET, 'temp_dir': 'rel-' + SECRET})
+        self.assertEqual(self.line(), 'config    BROKEN %s: bad key(s): a_key_this_kit_does_not_know, temp_dir'
+                         % self.new_name)
+
+    def test_a_file_that_is_not_json_or_writes_a_key_twice_shows_no_text(self):
+        for body, why in (('{"ledger_path": "%s"' % SECRET, 'not valid JSON'),
+                          ('{"ledger_path": "a", "ledger_path": "%s"}' % SECRET, 'a key written twice in one object'),
+                          ('["%s"]' % SECRET, 'not a JSON object')):
+            with self.subTest(why):
+                self.put(user.DIR_NAME, body)
+                self.assertEqual(self.line(), 'config    BROKEN %s: %s' % (self.new_name, why))
+
     def test_a_new_folder_that_is_a_file(self):
         with open(os.path.join(self.home, user.DIR_NAME), 'w', encoding='utf-8') as f:
             f.write('x')
