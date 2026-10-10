@@ -135,19 +135,39 @@ def ls_remote(remote, ref, cwd, timeout=60):
     return '', None
 
 
+KILLED_SHAPE = ('exit 1 with no output is also what a git ended from outside leaves (a stale '
+                '`taskkill /PID <n> /T /F` that reached a reused pid, kitlib.proc.shield GOTCHA)')
+
+
 def is_ancestor(ancestor, descendant, cwd):
     """`(True/False, None)`: is `ancestor` an ancestor of (or equal to) `descendant`; `(None, why)`
-    when git cannot tell (an unknown rev, a failure)."""
+    when git cannot tell (an unknown rev, a non-commit, a failure, a git ended from outside).
+
+    GOTCHA: KIT-TEST-GRANDCHILD-SHIELD - `merge-base --is-ancestor` says NO as exit 1 with no
+    output, and a git ended from outside (KILLED_SHAPE) exits the same way, so a killed git read as
+    a NO nobody gave. The question is asked as `rev-list -n 1 <descendant>..<ancestor>` instead:
+    exit 0 with no output is YES, exit 0 with one commit is NO, and anything else - a killed git's
+    exit 1 included - is no answer. Both ends are peeled with ^{commit}, so a tree or blob is
+    refused as merge-base refused it (rev-list alone would answer YES for one)."""
     for rev in (ancestor, descendant):
         why = bad_rev(rev)
         if why:
             return None, why
-    r = cmd.call(['merge-base', '--is-ancestor', ancestor, descendant], cwd)
-    if r.rc == 0:
+    spec = '%s^{commit}..%s^{commit}' % (descendant, ancestor)
+    r = cmd.call(['rev-list', '-n', '1', spec, '--'], cwd)
+    if r.rc is None:
+        return None, r.err
+    out = cmd.text(r.out).strip()
+    if r.rc == 0 and not out:
         return True, None
-    if r.rc == 1:
+    if r.rc == 0 and is_sha(out):
         return False, None
-    return None, r.err or 'git merge-base --is-ancestor exited %s' % r.rc
+    if r.rc == 0:
+        return None, 'git rev-list -n 1 %s printed %r, not one commit or nothing' % (spec, out[:80])
+    if r.err or out:
+        return None, 'git rev-list -n 1 %s exited %s: %s' % (spec, r.rc, r.err or out[:80])
+    return None, 'git rev-list -n 1 %s exited %s and printed nothing%s' % (
+        spec, r.rc, ': ' + KILLED_SHAPE if r.rc == 1 else '')
 
 
 def is_fast_forward(old, new, cwd):
