@@ -215,6 +215,7 @@ def _glob_regex(rule):
 
 
 _GLOBS = {}
+_RANK = {'Low': 1, 'Medium': 2, 'High': 3}
 
 
 def _matches(path, rule):
@@ -226,8 +227,6 @@ def _matches(path, rule):
         return bool(rx.match(path)), len(re.sub(r'[*?{},]', '', rule))
     if path.startswith(rule):
         return True, len(rule)
-    if '/' not in rule and '.' in rule and path.rsplit('/', 1)[-1] == rule:
-        return True, len(rule)  # a bare file name names that file at any depth
     return False, 0
 
 
@@ -237,7 +236,9 @@ def level(path, levels):
     best, best_len = 'unlisted (= High)', 0
     for lv, rule in levels:
         hit, size = _matches(path, rule)
-        if hit and size > best_len:
+        # equally specific rules: the higher risk level wins, whatever the line order
+        if hit and (size > best_len or (size == best_len and
+                                        _RANK.get(lv, 0) > _RANK.get(best, 0))):
             best, best_len = lv, size
     if path.endswith('.md') and best_len == 0:
         return 'Low'

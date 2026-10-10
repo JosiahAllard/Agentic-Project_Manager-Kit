@@ -48,9 +48,18 @@ class Matching(unittest.TestCase):
         self.assertEqual(lv('x.tscn', ('Medium', '**/*.tscn')), 'Medium')
         self.assertEqual(lv('a/b/c.py', ('Low', 'a/**')), 'Low')
 
-    def test_a_bare_name_or_glob_matches_at_any_depth(self):
-        self.assertEqual(lv('deep/er/project.godot', ('High', 'project.godot')), 'High')
+    def test_equally_specific_rules_resolve_to_the_higher_level_in_either_order(self):
+        for order in ([('Low', 'a/b.py'), ('High', 'a/b.py')],
+                      [('High', 'a/b.py'), ('Low', 'a/b.py')]):
+            self.assertEqual(lv('a/b.py', *order), 'High')
+
+    def test_a_plain_bare_name_is_a_root_prefix_only(self):
         self.assertEqual(lv('project.godot', ('High', 'project.godot')), 'High')
+        self.assertEqual(lv('deep/project.godot', ('Low', 'project.godot')),
+                         'unlisted (= High)')
+        self.assertEqual(lv('net/config.json', ('High', 'net/'), ('Low', 'config.json')), 'High')
+
+    def test_a_bare_glob_matches_at_any_depth(self):
         self.assertEqual(lv('a/b/x.gdshader', ('Medium', '*.gdshader')), 'Medium')
         self.assertEqual(lv('a/b/x.gd', ('Medium', '*.gdshader')), 'unlisted (= High)')
 
