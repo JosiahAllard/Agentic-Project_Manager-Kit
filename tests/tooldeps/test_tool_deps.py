@@ -142,7 +142,7 @@ class Selection(Fixture):
         self.assertIn('test_dash_c', self.select('tools/c.py'))
 
     def test_a_docstring_or_assert_message_saying_import_is_not_an_edge(self):
-        # EX-DEPS-PROSE-IMPORT: prose is not a `python -c` child, so it neither selects the test
+        # Prose is not a `python -c` child, so it neither selects the test
         # nor makes c count as tested.
         os.remove(os.path.join(self.dir, 'test_c.py'))
         self.write('test_prose.py', '"""Checks that `import c` still works."""\n'
@@ -180,7 +180,7 @@ class Selection(Fixture):
                 self.assertIn('c', self.graph().tested())
 
     def test_a_test_naming_a_tool_only_by_file_name_does_not_count_as_testing_it(self):
-        # EX-DEPS-TESTED-EDGES: the literal still selects the test, but it does not make the
+        # The literal still selects the test, but it does not make the
         # untested audit count c as tested (c's own test_c is removed, so nothing imports it).
         os.remove(os.path.join(self.dir, 'test_c.py'))
         self.write('test_run.py', "import subprocess\nCMD = ['python', 'tools/c.py']\n" + TESTCASE)
@@ -341,7 +341,7 @@ class PinnedInPieces(unittest.TestCase):
         self.assertIn('test_pieces', self.select(self.table.solution()))
 
     def test_every_build_graph_file_selects_test_gate(self):
-        # EX-GATE-SCOPED review: BuildGraphOracle (in test_gate) must run on the branch that adds a
+        # BuildGraphOracle (in test_gate) must run on the branch that adds a
         # dependency edge, so every file it parses selects test_gate, a new module's included.
         paths = ['settings.gradle.kts', 'Directory.Build.props', 'Directory.Packages.props',
                  self.table.solution(), 'brand-new/build.gradle.kts', 'brand/New.Thing/New.Thing.csproj']
@@ -357,7 +357,7 @@ class PinnedInPieces(unittest.TestCase):
                 self.assertNotIn('test_gate', self.select(path))
 
     def test_a_test_source_change_selects_the_literal_scan_slice_only(self):
-        # EX-GATE-SCOPED re-review: a new runtime read in test code is checked on its own branch.
+        # A new runtime read in test code is checked on its own branch.
         paths = [self.P(m, 'src/test/java/org/X.java') for m, _ in self.table.gradle_pieces()]
         paths += [self.P('core-api', 'src/testFixtures/java/org/F.java'),
                   self.P('Mesh.Control.Tests', 'Backup/New.cs'), self.P('Mesh.Node.Tests', 'New.cs'),
@@ -371,7 +371,7 @@ class PinnedInPieces(unittest.TestCase):
         for path in (self.P('Mesh.Control', 'Program.cs'), self.P('link', 'src/main/java/org/X.java')):
             with self.subTest(path=path):
                 self.assertNotIn('test_test_reads', self.select(path))
-        # EX-GATE-SELECT-SLNX review: a build-graph file can make a project a test project, so it
+        # A build-graph file can make a project a test project, so it
         # runs the slice's TEST_SOURCE naming guard too (a new non-*Tests* test project's .csproj).
         for path in (self.P('Mesh.Control.Tests', 'Mesh.Control.Tests.csproj'), 'brand/New.Checks/New.Checks.csproj',
                      'settings.gradle.kts', 'brand-new/build.gradle.kts'):

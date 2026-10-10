@@ -477,7 +477,7 @@ class AMachinePathInTheMessageIsRefused(LinkedCase):
 
 
 class AStagedMachinePathIsRefused(LinkedCase):
-    LINE = 'root = "D:' +'\\\\' + 'GitHub' + '\\\\' + 'kit"\n'
+    LINE = 'root = "D:' + '\\\\' + 'GitHub' + '\\\\' + 'kit"\n'
 
     def test_a_staged_hit_is_refused_and_this_calls_additions_are_unstaged(self):
         self.put('ok.py', 'x\n')

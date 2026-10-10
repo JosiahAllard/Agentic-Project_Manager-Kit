@@ -19,7 +19,7 @@ class ScopeGrammar(unittest.TestCase):
         self.assertIsNotNone(sc.scope_member_error(member), '%r was accepted' % (member,))
 
     def test_the_three_legal_shapes(self):
-        for m in ('none', 'routegraph/src/graph/PathSearch.java', 'mesh/Mesh.Control', 'binding/**'):
+        for m in ('none', 'routegraph/src/graph/PathSearch.java', 'mesh/Mesh.Control', 'link/**'):
             self.ok(m)
 
     def test_general_globs_are_parse_errors(self):
@@ -28,11 +28,11 @@ class ScopeGrammar(unittest.TestCase):
             self.bad(m)
 
     def test_a_comma_separated_list_is_a_parse_error(self):
-        self.bad('routegraph/**, binding/**')
+        self.bad('routegraph/**, link/**')
 
     def test_paths_are_repo_root_relative_forward_slash(self):
-        for m in ('/binding/**', 'C:/src/x/binding/**', 'binding\\src', '../binding/**',
-                  'binding/../worker/**', 'binding//src', 'binding/', ' binding/**', 'binding/** ',
+        for m in ('/link/**', 'C:/src/x/link/**', 'link\\src', '../link/**',
+                  'link/../worker/**', 'link//src', 'link/', ' link/**', 'link/** ',
                   ''):
             self.bad(m)
 
@@ -55,19 +55,19 @@ class ScopeIntersection(unittest.TestCase):
         self.assertTrue(sc.members_collide('mesh/Mesh.Control', 'mesh/Mesh.Control/Program.cs'))
 
     def test_siblings_and_string_prefixes_are_clear(self):
-        self.assertFalse(sc.members_collide('binding/**', 'worker/**'))
+        self.assertFalse(sc.members_collide('link/**', 'worker/**'))
         self.assertFalse(sc.members_collide('Foo.java', 'Foobar.java'))
-        self.assertFalse(sc.members_collide('binding/**', 'binding-tools/**'))
+        self.assertFalse(sc.members_collide('link/**', 'link-tools/**'))
 
     def test_none_collides_with_nothing_including_itself(self):
-        self.assertFalse(sc.members_collide('none', 'binding/**'))
+        self.assertFalse(sc.members_collide('none', 'link/**'))
         self.assertFalse(sc.members_collide('none', 'none'))
 
     def test_case_is_folded(self):
-        self.assertTrue(sc.members_collide('Binding/**', 'binding/**'))
+        self.assertTrue(sc.members_collide('Link/**', 'link/**'))
 
     def test_collision_is_symmetric_and_reflexive(self):
-        ms = ['binding/**', 'worker/**', 'mesh/**', 'mesh/Mesh.Control/**', self.SEARCH, 'Foo.java',
+        ms = ['link/**', 'worker/**', 'mesh/**', 'mesh/Mesh.Control/**', self.SEARCH, 'Foo.java',
               'Foobar.java', 'none', 'tools/**']
         for a in ms:
             if a != 'none':
@@ -79,16 +79,16 @@ class ScopeIntersection(unittest.TestCase):
         a, b = ['docs/**', 'routegraph/**'], ['worker/**', 'docs/ops/gotchas.md']
         self.assertTrue(sc.scopes_collide(a, b))
         self.assertEqual(sc.colliding_pairs(a, b), [('docs/**', 'docs/ops/gotchas.md')])
-        self.assertFalse(sc.scopes_collide(['none'], ['binding/**']))
+        self.assertFalse(sc.scopes_collide(['none'], ['link/**']))
 
 
 class UncertaintyCollides(unittest.TestCase):
-    UNDECIDABLE = ('*.java', '**/Foo.java', 'a/{b,c}', '', '/binding/**', 'binding\\src',
-                   '../binding/**', 'routegraph/**, binding/**', '**')
+    UNDECIDABLE = ('*.java', '**/Foo.java', 'a/{b,c}', '', '/link/**', 'link\\src',
+                   '../link/**', 'routegraph/**, link/**', '**')
 
     def test_no_undecidable_input_is_ever_reported_clear(self):
         for m in self.UNDECIDABLE:
-            for other in ('binding/**', 'none', m):
+            for other in ('link/**', 'none', m):
                 with self.assertRaises(sc.UndecidableScope, msg=(m, other)):
                     sc.members_collide(m, other)
                 with self.assertRaises(sc.UndecidableScope, msg=(other, m)):
@@ -96,7 +96,7 @@ class UncertaintyCollides(unittest.TestCase):
 
     def test_a_bad_member_raises_even_after_a_hit(self):
         with self.assertRaises(sc.UndecidableScope):
-            sc.scopes_collide(['binding/**', '*.java'], ['binding/**'])
+            sc.scopes_collide(['link/**', '*.java'], ['link/**'])
 
     def test_an_empty_scope_set_raises(self):
         for a, b in (([], ['x/**']), (['x/**'], []), ([], [])):

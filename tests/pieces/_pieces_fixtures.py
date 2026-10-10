@@ -97,7 +97,7 @@ MOVES = {
     'trainer': 'artifacts/models',
     'model-sums': 'artifacts/models/SHA256SUMS',
 }
-# Move phase 5b (EX-SPLIT): one old piece became two. The moved folder keeps its `was` under
+# Split case: one old piece became two. The moved folder keeps its `was` under
 # the new id (the map builder, artifacts/routemap); the routing library took the old id to a new
 # folder and has no `was` - one old folder cannot repath to two. OLD_ID maps a new id back.
 SPLITS = {'routegraph': {'id': 'routemap', 'gradle': ':routemap',

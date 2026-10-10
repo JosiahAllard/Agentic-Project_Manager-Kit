@@ -224,8 +224,8 @@ class OfferTest(unittest.TestCase):
         self.assertEqual([ln.split()[1] for ln in lines[2:]], ["EX-SIM-1", "EX-SIM-9"])
 
 
-NEXT_PRINTOUT = """BACKLOG d84be6ce8 | 367 records | 255 pullable | 104 held
-held 104: 6 owner, 44 item
+NEXT_PRINTOUT = """BACKLOG a1b2c3d4e | 120 records | 90 pullable | 30 held
+held 30: 6 owner, 24 item
 
   rank 59  priority 3  EX-LINK-PRESENCE-LIVECHECK one worker run (owner's go) confirms ...
       scope: worker/link/src/main/java/org/example/link/PresenceConfig.java

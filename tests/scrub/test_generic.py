@@ -60,7 +60,7 @@ KIT_NAMES_ALLOWED = (
     ('.claude-plugin/*', r'.*', 'the Claude plugin carries its own name, Claude-specific (an owner '
      'ruling); kitlib.lockmcp holds the one constant'),
     ('kitlib/lockmcp/__init__.py', r"CLAUDE_PLUGIN_NAME = '[^']*'", 'the one Claude-plugin name constant'),
-    # Goes when KIT-CONFIG-DIR-RENAME gives the machine config folder a neutral name.
+    # Goes when the machine config folder is given a neutral name.
     ('kitlib/config/user.py', r"DIR_NAME = '[^']*'", 'the one name of the machine config folder'),
 )
 
@@ -268,7 +268,7 @@ class TheChecks(unittest.TestCase):
 
     def test_a_drive_path_in_parentheses_is_found(self):
         old = re.compile(r'(?<![A-Za-z0-9_?(%$])[A-Za-z]:(?:\|/)')
-        line = '(' + 'Z:' + '/GitHub/x)'
+        line = '(' + 'Q:' + '/Projects/demo)'
         self.assertIsNone(old.search(line))
         self.assertIsNotNone(DRIVE.search(line))
         self.assertIsNone(DRIVE.search('(?i:/x)'))
