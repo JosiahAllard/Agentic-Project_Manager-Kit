@@ -858,6 +858,62 @@ class TheReportHookScope(Fixture):
         self.assertNotIn('hs_ns_only', sys.modules)
         self.assertNotIn('hs_ns_only.mod', sys.modules)
 
+    def test_with_nothing_shadowed_only_the_tools_dir_modules_go(self):
+        """The narrow rule: no kit copy set aside, no stdlib name in the tools dir, so the
+        stdlib module the hook pulled in stays and the repo's module goes."""
+        self.fresh('colorsys')
+        self.addCleanup(sys.modules.pop, 'hs_narrow', None)
+        self.module('hs_narrow', 'WORD = "repo"\n')
+        self.module('narrow_hook', 'import colorsys, hs_narrow\n'
+                                   'def lines():\n    return [hs_narrow.WORD]\n')
+        self.assertEqual(hooks.lines(self.tools, ['narrow_hook:lines']), ['repo'])
+        self.assertIn('colorsys', sys.modules)
+        self.assertNotIn('hs_narrow', sys.modules)
+
+    def test_a_repo_module_with_a_stdlib_name_not_loaded_before_drops_everything_new(self):
+        """tools/colorsys.py with the stdlib colorsys not loaded: nothing is set aside, yet the
+        repo's colorsys has a stdlib name, so a module from elsewhere imported meanwhile goes."""
+        self.fresh('colorsys')
+        self.addCleanup(sys.modules.pop, 'hs_elsewhere', None)
+        self.module('hs_elsewhere', 'WORD = "kit"\n', self.side)        # not imported before
+        importlib.invalidate_caches()
+        self.module('colorsys', 'WORD = "repo"\n')
+        self.module('stdname_hook', 'import colorsys, hs_elsewhere\n'
+                                    'def lines():\n    return [colorsys.WORD]\n')
+        self.assertEqual(hooks.lines(self.tools, ['stdname_hook:lines']), ['repo'])
+        self.assertNotIn('hs_elsewhere', sys.modules)
+        self.assertNotIn('colorsys', sys.modules)
+
+    def test_a_raise_while_dropping_still_restores_path_and_modules(self):
+        kit = self.outside('hs_fin')
+        self.module('hs_fin', 'WORD = "repo"\n')
+        self.module('fin_hook', 'import hs_fin\ndef lines():\n    return [hs_fin.WORD]\n')
+        real = hooks._from_tools
+
+        def from_tools(module, root):          # raises only in the drop step, where the
+            if sys.path and sys.path[0] == self.tools:      # tools dir is still first
+                raise RuntimeError('simulated')
+            return real(module, root)
+        before = list(sys.path)
+        with mock.patch.object(hooks, '_from_tools', from_tools):
+            got = hooks.lines(self.tools, ['fin_hook:lines'])
+        self.assertEqual(got, ['repo', 'hook      NOT CHECKED - fin_hook:lines: RuntimeError: '
+                                       'simulated'])
+        self.assertEqual(sys.path, before)
+        self.assertIs(sys.modules['hs_fin'], kit)
+
+    def test_a_none_entry_the_hook_adds_is_dropped_when_everything_new_goes(self):
+        """`sys.modules[name] = None` (an import blocker) is new too: with a kit copy set aside,
+        everything new goes, that entry included."""
+        kit = self.outside('hs_nonekit')
+        self.addCleanup(sys.modules.pop, 'hs_none', None)
+        self.module('hs_nonekit', 'WORD = "repo"\n')
+        self.module('none_hook', 'import sys, hs_nonekit\nsys.modules["hs_none"] = None\n'
+                                 'def lines():\n    return [hs_nonekit.WORD]\n')
+        self.assertEqual(hooks.lines(self.tools, ['none_hook:lines']), ['repo'])
+        self.assertIs(sys.modules['hs_nonekit'], kit)
+        self.assertNotIn('hs_none', sys.modules)
+
     def restored_after(self, raising_text, call=None):
         """A hook that loads a repo sibling over a kit copy, pulls in a stdlib module, then runs
         `raising_text`; afterwards sys.path and sys.modules are exactly as before: the kit copy

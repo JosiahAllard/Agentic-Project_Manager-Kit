@@ -24,6 +24,7 @@ import sys
 from kitlib.config.policy import no_bytecode
 
 _MODULE_SUFFIXES = ('.py', '.pyw', '.pyd')
+_MISSING = object()                     # a sys.modules key absent before (None is a value)
 
 
 def _siblings(tools_dir):
@@ -93,7 +94,7 @@ def _repo_first(tools_dir):
     finally:
         try:                                # before sys.path goes back: a namespace package's
             loaded = [(k, m) for k, m in list(sys.modules.items())  # __path__ follows it
-                      if saved_modules.get(k) is not m]     # new, or over a displaced copy
+                      if saved_modules.get(k, _MISSING) is not m]   # new, or over a displaced copy
             mine = [k for k, m in loaded if _from_tools(m, root)]
             shadowing = any(k.split('.')[0] in sys.stdlib_module_names
                             or k.split('.')[0] in displaced for k in mine)
