@@ -150,7 +150,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(rc, 0, out)
 
     def test_migrate_dry_run_then_copy_then_refuse(self):
-        self.repo.write('docs/backlog/FOO.md', 'id: FOO\narea: wg\npriority: 2\npriority_by: agent\n'
+        self.repo.write('docs/backlog/FOO.md', 'id: FOO\narea: xx\npriority: 2\npriority_by: agent\n'
                         'effort: s\nstate: open\nblocked_on: -\nscope: tools/x.py\n'
                         'summary: a thing to do\nmigrated: 12\n')
         self.repo.write('docs/backlog/OLD.md', 'id: OLD\nsummary: done\nclosed: 2026-09-24\n')

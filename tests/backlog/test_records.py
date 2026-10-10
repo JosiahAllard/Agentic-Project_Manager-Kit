@@ -19,7 +19,7 @@ class ScopeGrammar(unittest.TestCase):
         self.assertIsNotNone(sc.scope_member_error(member), '%r was accepted' % (member,))
 
     def test_the_three_legal_shapes(self):
-        for m in ('none', 'worldgraph/src/graph/HpaSearch.java', 'fleet/Fleet.Brain', 'binding/**'):
+        for m in ('none', 'routegraph/src/graph/PathSearch.java', 'mesh/Mesh.Control', 'binding/**'):
             self.ok(m)
 
     def test_general_globs_are_parse_errors(self):
@@ -28,7 +28,7 @@ class ScopeGrammar(unittest.TestCase):
             self.bad(m)
 
     def test_a_comma_separated_list_is_a_parse_error(self):
-        self.bad('worldgraph/**, binding/**')
+        self.bad('routegraph/**, binding/**')
 
     def test_paths_are_repo_root_relative_forward_slash(self):
         for m in ('/binding/**', 'C:/src/x/binding/**', 'binding\\src', '../binding/**',
@@ -44,15 +44,15 @@ class ScopeGrammar(unittest.TestCase):
 
 
 class ScopeIntersection(unittest.TestCase):
-    HPA = 'worldgraph/src/main/java/graph/HpaSearch.java'
+    SEARCH = 'routegraph/src/main/java/graph/PathSearch.java'
 
     def test_glob_over_a_file_beneath_it_collides(self):
-        self.assertTrue(sc.members_collide('worldgraph/**', self.HPA))
-        self.assertTrue(sc.members_collide(self.HPA, 'worldgraph/**'))
+        self.assertTrue(sc.members_collide('routegraph/**', self.SEARCH))
+        self.assertTrue(sc.members_collide(self.SEARCH, 'routegraph/**'))
 
     def test_nested_globs_and_a_directory_over_a_file_collide(self):
         self.assertTrue(sc.members_collide('a/**', 'a/b/**'))
-        self.assertTrue(sc.members_collide('fleet/Fleet.Brain', 'fleet/Fleet.Brain/Program.cs'))
+        self.assertTrue(sc.members_collide('mesh/Mesh.Control', 'mesh/Mesh.Control/Program.cs'))
 
     def test_siblings_and_string_prefixes_are_clear(self):
         self.assertFalse(sc.members_collide('binding/**', 'worker/**'))
@@ -67,7 +67,7 @@ class ScopeIntersection(unittest.TestCase):
         self.assertTrue(sc.members_collide('Binding/**', 'binding/**'))
 
     def test_collision_is_symmetric_and_reflexive(self):
-        ms = ['binding/**', 'worker/**', 'fleet/**', 'fleet/Fleet.Brain/**', self.HPA, 'Foo.java',
+        ms = ['binding/**', 'worker/**', 'mesh/**', 'mesh/Mesh.Control/**', self.SEARCH, 'Foo.java',
               'Foobar.java', 'none', 'tools/**']
         for a in ms:
             if a != 'none':
@@ -76,7 +76,7 @@ class ScopeIntersection(unittest.TestCase):
                 self.assertEqual(sc.members_collide(a, b), sc.members_collide(b, a), (a, b))
 
     def test_an_item_collides_if_any_member_pair_does(self):
-        a, b = ['docs/**', 'worldgraph/**'], ['worker/**', 'docs/ops/gotchas.md']
+        a, b = ['docs/**', 'routegraph/**'], ['worker/**', 'docs/ops/gotchas.md']
         self.assertTrue(sc.scopes_collide(a, b))
         self.assertEqual(sc.colliding_pairs(a, b), [('docs/**', 'docs/ops/gotchas.md')])
         self.assertFalse(sc.scopes_collide(['none'], ['binding/**']))
@@ -84,7 +84,7 @@ class ScopeIntersection(unittest.TestCase):
 
 class UncertaintyCollides(unittest.TestCase):
     UNDECIDABLE = ('*.java', '**/Foo.java', 'a/{b,c}', '', '/binding/**', 'binding\\src',
-                   '../binding/**', 'worldgraph/**, binding/**', '**')
+                   '../binding/**', 'routegraph/**, binding/**', '**')
 
     def test_no_undecidable_input_is_ever_reported_clear(self):
         for m in self.UNDECIDABLE:
@@ -149,7 +149,7 @@ class Schema(unittest.TestCase):
         self.assertFalse(smod.parse_blob('FOO', b'\xff\xfe', 'backlog/FOO.md').readable)
 
 
-REPO_RECORD = '''id: SCRIPT-API-T15-STORE-STEP
+REPO_RECORD = '''id: EX-STORE-STEP
 area: artifacts
 priority: 1
 priority_by: owner
@@ -157,26 +157,26 @@ priority_ruling: R-9001
 priority_per: R-9002
 effort: s
 state: blocked
-blocked_on: item:SCRIPT-API-T07-OBTAIN
+blocked_on: item:EX-OBTAIN
 blocked_on: live-client
-scope: artifacts/plans/definitions/SKILL-WC-FLETCH/**
-scope: artifacts/scripts/scripts/src/main/java/org/alpha/scripts/shop/**
+scope: artifacts/plans/definitions/EX-STORE-PLAN/**
+scope: artifacts/scripts/scripts/src/main/java/org/example/scripts/shop/**
 files: artifacts/scripts/Shop.java
 files_at: 0123456789abcdef
-requires: item:SCRIPT-API-T07-OBTAIN
-requires: the tutorial lands first
+requires: item:EX-OBTAIN
+requires: the intro step lands first
 pin: 7
 session: gamma
-ref: PM R-9001, R-9002; docs/reference/SCRIPT_CALLS.md section 7
-summary: onboarding store step as obtain(coins) + buy(knife) + pickUp(onion) (PM R-9002)
+ref: PM R-9001, R-9002; docs/reference/API_CALLS.md section 7
+summary: setup store step as obtain(coins) + buy(tool) + pickUp(item) (PM R-9002)
 
 ## Why this is here
 
-Task 15 of docs/reference/SCRIPT_CALLS.md section 7 (PM R-9001).
+Task 15 of docs/reference/API_CALLS.md section 7 (PM R-9001).
 
 ## The step
 
-- A store-kit plan step before Fletcher.
+- A store plan step before the crafting step.
 '''
 
 
@@ -184,21 +184,21 @@ class RepoFormat(unittest.TestCase):
 
     def test_a_repo_record_parses_validates_and_round_trips(self):
         rules = rmod.Rules('upper', ('L0', 'L1'))
-        rec = smod.parse_blob('SCRIPT-API-T15-STORE-STEP', REPO_RECORD.encode('utf-8'),
-                              'backlog/SCRIPT-API-T15-STORE-STEP.md')
+        rec = smod.parse_blob('EX-STORE-STEP', REPO_RECORD.encode('utf-8'),
+                              'backlog/EX-STORE-STEP.md')
         self.assertTrue(rec.readable)
         self.assertEqual(rmod.validate(rec, rules), [])
-        self.assertEqual(rec.all('blocked_on'), ['item:SCRIPT-API-T07-OBTAIN', 'live-client'])
+        self.assertEqual(rec.all('blocked_on'), ['item:EX-OBTAIN', 'live-client'])
         self.assertEqual(rmod.render(rec.pairs(), rec.body), REPO_RECORD)
 
     def test_crlf_and_a_bom_still_parse(self):
         data = b'\xef\xbb\xbf' + REPO_RECORD.replace('\n', '\r\n').encode('utf-8')
-        rec = smod.parse_blob('SCRIPT-API-T15-STORE-STEP', data, 'x')
+        rec = smod.parse_blob('EX-STORE-STEP', data, 'x')
         self.assertTrue(rec.readable, rec.structural)
-        self.assertEqual(rec.get('id'), 'SCRIPT-API-T15-STORE-STEP')
+        self.assertEqual(rec.get('id'), 'EX-STORE-STEP')
 
     def test_header_order_is_kept_on_a_change(self):
-        rec = parse(summary='first', area='wg')
+        rec = parse(summary='first', area='xx')
         pairs = rmod.apply_changes(rec.pairs(), [('effort', ['m']), ('pin', ['2'])])
         keys = [k for k, _ in pairs]
         self.assertEqual(keys[:5], ['id', 'area', 'priority', 'priority_by', 'effort'])
