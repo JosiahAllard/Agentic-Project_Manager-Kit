@@ -30,8 +30,8 @@ GITHUB_DOUBLED = DRIVE + BS + BS + 'GitHub' + BS + BS + 'some-repo'
 GITHUB_FORWARD = DRIVE + '/GitHub/some-repo'
 PROFILE = DRIVE + BS + 'Users' + BS + 'someone' + BS + 'AppData' + BS + 'Local'
 
-# A repository's allow-list as configuration (Retribution's, restated).
-RETRIBUTION = {
+# A repository's allow-list as configuration (a real one's, restated).
+REPO_CONFIG = {
     'allow': [
         {'glob': 'tools/backlog.py', 'line': '^RULINGS_LEDGER = ',
          'why': 'rulings-ledger read: hard-coded on purpose (a security exception)'},
@@ -103,7 +103,7 @@ class APlantedHitFails(PlantedTree):
 
     def test_placeholders_and_variables_are_not_paths(self):
         self.write('notes.md', '%s%sUsers%s<name>%sAppData and %%USERPROFILE%%%sDocuments and '
-                   '%%RETRIBUTION_DATA%%%slive\n' % (DRIVE, BS, BS, BS, BS, BS))
+                   '%%BETA_DATA%%%slive\n' % (DRIVE, BS, BS, BS, BS, BS))
         rc, out = self.run_guard()
         self.assertEqual(rc, 0, out)
 
@@ -173,8 +173,8 @@ class KnownBinary(PlantedTree):
         self.assertIn('WARNING: gradle/wrapper/gradle-wrapper.jar was not searched: binary', out)
 
     def test_a_known_binary_is_not_warned_about(self):
-        self.set_config(RETRIBUTION)
-        rel = next(iter(RETRIBUTION['known_binary']))
+        self.set_config(REPO_CONFIG)
+        rel = next(iter(REPO_CONFIG['known_binary']))
         self.plant_jar(rel)
         rc, out = self.run_guard()
         self.assertEqual(rc, 0, out)
@@ -214,7 +214,7 @@ class TheTreeIsListedByOneGitProcess(PlantedTree):
 
 
 class TheAllowListIsLineScoped(PlantedTree):
-    config = RETRIBUTION
+    config = REPO_CONFIG
 
     def test_the_ledger_constant_passes_and_another_line_in_that_file_does_not(self):
         ledger_line = "RULINGS_LEDGER = r'%s%sLEDGER.md'\n" % (GITHUB, BS)
@@ -229,13 +229,13 @@ class TheAllowListIsLineScoped(PlantedTree):
 
     def test_the_ledger_constant_passes_on_the_moved_drive(self):
         # The entry follows the line, not the drive.
-        moved = BS.join(('Z' + ':', 'GitHub', 'project-manager', 'rulings', 'LEDGER.md'))
+        moved = BS.join(('Z' + ':', 'GitHub', 'pm-repo', 'rulings', 'LEDGER.md'))
         self.write('tools/backlog.py', "RULINGS_LEDGER = r'%s'\n" % moved)
         rc, out = self.run_guard()
         self.assertEqual(rc, 0, out)
 
     def test_the_settings_entry_follows_the_hook_not_the_root(self):
-        for root in (DRIVE + '/GitHub/retribution', 'Z' + ':/GitHub/retribution'):
+        for root in (DRIVE + '/GitHub/beta', 'Z' + ':/GitHub/beta'):
             self.write('.claude/settings.json',
                        '"command": "python \\"hooks/worktree_guard.py\\" \\"%s\\""\n' % root)
             rc, out = self.run_guard()
@@ -340,7 +340,7 @@ class FallbackVars(PlantedTree):
     D = DRIVE
 
     def py(self, var):
-        return "ROOT = os.environ.get('%s', r'%s%sGitHub%sproject-manager')\n" % (var, self.D, BS, BS)
+        return "ROOT = os.environ.get('%s', r'%s%sGitHub%spm-repo')\n" % (var, self.D, BS, BS)
 
     def test_default_a_fallback_line_is_a_hit(self):
         self.write('tools/x.py', self.py('PM_ROOT'))
@@ -348,8 +348,8 @@ class FallbackVars(PlantedTree):
         self.assertEqual(rc, 1, out)
 
     def test_a_fallback_beside_its_variable_is_allowed(self):
-        self.set_config({'fallback_vars': ['PM_ROOT', 'GRIFFBALL_REPO']})
-        ps = "$repo = if ($env:GRIFFBALL_REPO) { $env:GRIFFBALL_REPO } else { '%s%sGitHub' }\n" % (self.D, BS)
+        self.set_config({'fallback_vars': ['PM_ROOT', 'GAMMA_REPO']})
+        ps = "$repo = if ($env:GAMMA_REPO) { $env:GAMMA_REPO } else { '%s%sGitHub' }\n" % (self.D, BS)
         self.write('tools/x.py', self.py('PM_ROOT'))
         self.write('tools/x.ps1', ps)
         rc, out = self.run_guard()
@@ -381,7 +381,7 @@ class PieceFixtures(PlantedTree):
         self.assertIn('pieces table', out)
 
     def test_no_piece_fixtures_needs_no_table(self):
-        self.set_config(RETRIBUTION)
+        self.set_config(REPO_CONFIG)
         cfg = M.load_config(self.root)
         self.assertTrue(cfg.allow)
 
@@ -419,18 +419,18 @@ class TheConfigRefusesWhatItCannotUse(PlantedTree):
 
 
 class FindNeedsNoConfig(unittest.TestCase):
-    """`find` is what other tools call on one string; GriffBall's spellings, through it."""
+    """`find` is what other tools call on one string; a repository's spellings, through it."""
 
     def test_every_spelling_is_caught(self):
         D = DRIVE
-        for s in (D + '\\GitHub\\GriffBall', D + '\\\\GitHub\\\\GriffBall', 'c:' + '/github/x',
+        for s in (D + '\\GitHub\\Gamma', D + '\\\\GitHub\\\\Gamma', 'c:' + '/github/x',
                   D + '\\Users\\someone\\AppData', D + '\\\\Users\\\\someone', 'Z:' + '\\AgentTemp\\x',
                   'z:' + '/GitHub'):
             self.assertTrue(M.find(s), s)
 
     def test_variables_are_not_caught(self):
-        for s in ('%GRIFFBALL_REPO%\\.claude', '$env:LOCALAPPDATA', '%PM_ROOT%\\reviews',
-                  '/home/someone/GriffBall', 'c--GitHub-GriffBall', DRIVE + '\\Users\\<USER>\\x'):
+        for s in ('%GAMMA_REPO%\\.claude', '$env:LOCALAPPDATA', '%PM_ROOT%\\reviews',
+                  '/home/someone/Gamma', 'c--GitHub-Gamma', DRIVE + '\\Users\\<USER>\\x'):
             self.assertEqual(M.find(s), [], s)
 
     def test_import_and_find_read_no_configuration(self):

@@ -23,10 +23,10 @@ import ruling_cites as cli  # noqa: E402
 from kitlib.config import user as kuser  # noqa: E402
 
 LEDGER = ('# Rulings ledger (test fixture)\n\n'
-          '## R-9001 | 2026-09-25 08:00Z | retribution | typed\nQ: q\nA: a\n\n'
+          '## R-9001 | 2026-09-25 08:00Z | beta | typed\nQ: q\nA: a\n\n'
           '## R-9002 | 2026-09-25 08:01Z | all | selected\nRetired: superseded - by one (see R-9001)\n\n'
-          '## R-9003 | 2026-09-25 08:02Z | griffball | typed\nQ: q\nA: a\n\n'
-          '## R-9004 | 2026-09-25 08:03Z | retribution | typed\nRetired: spent - done (see -)\n\n'
+          '## R-9003 | 2026-09-25 08:02Z | gamma | typed\nQ: q\nA: a\n\n'
+          '## R-9004 | 2026-09-25 08:03Z | beta | typed\nRetired: spent - done (see -)\n\n'
           '## R-9005 | 2026-09-25 08:04Z | all | typed\nRetired: duplicate - of two (see R-9002)\n\n'
           '## R-9006 | 2026-09-25 08:05Z | pm | typed\nQ: q\nA: a\n')
 
@@ -35,7 +35,7 @@ class Fixture(unittest.TestCase):
     """A git repository in a folder named FOLDER on branch MAIN, with `topic` checked out; a ledger
     and a temp home whose machine config names it. No tests of its own."""
 
-    FOLDER = 'retribution'
+    FOLDER = 'beta'
     MAIN = 'main'
 
     def setUp(self):
@@ -108,7 +108,7 @@ class Fixture(unittest.TestCase):
 
 
 class RulingCites(Fixture):
-    """The fixture folder is `retribution`: with no `.kit.json`, its ledger name is its folder
+    """The fixture folder is `beta`: with no `.kit.json`, its ledger name is its folder
     name."""
 
     def test_an_untouched_retired_citation_warns_and_passes(self):
@@ -146,7 +146,7 @@ class RulingCites(Fixture):
         self.write('docs/b.md', 'PM R-9003\n')
         code, out = self.run_tool()
         self.assertEqual(code, 1, out)
-        self.assertIn('is a ruling for `griffball`, not for retribution or all', out)
+        self.assertIn('is a ruling for `gamma`, not for beta or all', out)
 
     def test_every_id_in_a_run_is_read(self):
         self.write('docs/b.md', 'per PM R-9001/R-9004 and more\nPM R-9001, R-9099\n')
@@ -188,7 +188,7 @@ class RulingCites(Fixture):
     def test_the_ledger_is_the_machine_configs(self):
         other = os.path.join(self.tmp, 'OTHER.md')
         with open(other, 'w', encoding='utf-8', newline='\n') as fh:
-            fh.write(LEDGER.replace('| griffball |', '| retribution |'))
+            fh.write(LEDGER.replace('| gamma |', '| beta |'))
         self.machine_config({'ledger_path': other})
         self.write('docs/b.md', 'PM R-9003\n')
         code, out = self.run_tool()
@@ -278,17 +278,17 @@ class TheLedgerNameComesFromConfig(RulingCites):
     """`.kit.json` "ruling_cites".repo: the PM checkout's folder is not its ledger name (`pm`).
     Every RulingCites case runs again with the folder renamed and the name configured."""
 
-    FOLDER = 'project-manager-checkout'
+    FOLDER = 'pm-repo-checkout'
 
     def setUp(self):
         super().setUp()
-        self.set_config(ruling_cites={'repo': 'Retribution'})   # lower-cased when read
+        self.set_config(ruling_cites={'repo': 'Beta'})   # lower-cased when read
 
 
 class TheConfiguredNameIsTheOneJudged(Fixture):
     """`.kit.json` "ruling_cites".repo names the ledger repo, whatever the folder is called."""
 
-    FOLDER = 'project-manager-checkout'
+    FOLDER = 'pm-repo-checkout'
 
     def test_the_configured_name_is_the_one_judged(self):
         self.set_config(ruling_cites={'repo': 'pm'})
@@ -296,7 +296,7 @@ class TheConfiguredNameIsTheOneJudged(Fixture):
         code, out = self.run_tool()
         self.assertEqual(code, 1, out)
         self.assertNotIn('`PM R-9006`', out)
-        self.assertIn('docs/b.md:2: `PM R-9001` is a ruling for `retribution`, not for pm or all',
+        self.assertIn('docs/b.md:2: `PM R-9001` is a ruling for `beta`, not for pm or all',
                       out)
 
 
@@ -306,12 +306,12 @@ class TheDefaultLedgerNameIsTheRepoName(Fixture):
     FOLDER = 'some-folder'
 
     def test_the_repo_name_wins_over_the_folder(self):
-        self.set_config(repo={'name': 'GriffBall'})
+        self.set_config(repo={'name': 'Gamma'})
         self.write('docs/b.md', 'PM R-9003\nPM R-9001\n')
         code, out = self.run_tool()
         self.assertEqual(code, 1, out)
         self.assertNotIn('`PM R-9003`', out)
-        self.assertIn('`PM R-9001` is a ruling for `retribution`, not for griffball or all', out)
+        self.assertIn('`PM R-9001` is a ruling for `beta`, not for gamma or all', out)
 
     def test_the_folder_name_without_config(self):
         self.write('docs/b.md', 'PM R-9001\n')

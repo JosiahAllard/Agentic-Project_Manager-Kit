@@ -1,6 +1,6 @@
 """kitlib.pieces and tools/pieces.py (docs/repo-checks.md): the path-to-piece table.
 
-The parser and its answers, under the layout before and after Retribution's move
+The parser and its answers, under the layout before and after a repository's move
 (`_pieces_fixtures`); the fixtures themselves; the CLI on a fixture repository; and a repository
 with no table. A repository's audit of its OWN table against its tree is repository data and
 stays in that repository.

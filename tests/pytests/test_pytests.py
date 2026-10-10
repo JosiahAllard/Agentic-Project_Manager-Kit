@@ -169,7 +169,7 @@ class Verdicts(Fakes):
                               r'at all: no test ran')
 
     def test_a_unit_that_runs_no_test_fails_named(self):
-        # GriffBall's py_select rule: an empty unit proves nothing.
+        # a repository's py_select rule: an empty unit proves nothing.
         self.write('test_p1', PASSING)
         self.write('test_empty', 'import unittest\n')
         code, out = self.run_modules(['test_p1', 'test_empty'])
@@ -690,7 +690,7 @@ class ThePidHold(Fakes):
         self.assertEqual(steps.PID_HOLD_FLAG, runner.PID_HOLD_FLAG)
 
 
-# The fixture checkout the audit reads: its tables are what the Retribution tables held for the
+# The fixture checkout the audit reads: its tables are what a repository's tables held for the
 # same cases (a pinned doc, a README read by backlog's tests, a whole-tree class).
 AUDIT_TABLES = {
     'pinned': [['docs/reference/BACKLOG_STORE.md', ['test_backlog']]],
@@ -1010,7 +1010,7 @@ def ok_runner(log=None, ran=1, status='OK'):
 
 
 class Summary(unittest.TestCase):
-    """The lines a gate step reads at the end of a run (GriffBall's pysel summary, merged)."""
+    """The lines a gate step reads at the end of a run (a repository's pysel summary, merged)."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix='pytests_floor_')
@@ -1116,7 +1116,7 @@ class ChangedPaths(Repo):
         return str(cm.exception)
 
     def test_a_git_failure_refuses_naming_the_command(self):
-        # GriffBall gate-git-fail-refuse: py_select used to return None and run every module, a
+        # A repository's gate-git-fail-refuse: py_select used to return None and run every module, a
         # silent degrade (py-select-git-fail).
         msg = self.refusal(git_run({'merge-base': (0, 'abc123\n', ''),
                                     'diff': (128, '', 'hint: x\nfatal: bad revision\n')}))
@@ -1318,7 +1318,7 @@ class Usage(unittest.TestCase):
                          [2, 2, 2, 3, 6, 6])
 
     def test_jobs_max_and_divisor_set_the_default(self):
-        # GriffBall's py_select: min(8, max(2, cpus // 2)).
+        # a repository's py_select: min(8, max(2, cpus // 2)).
         c = cfg(jobs_max=8, jobs_divisor=2)
         self.assertEqual([runner.default_jobs(n, c, environ={}) for n in (1, 4, 8, 12, 24, 64)],
                          [2, 2, 4, 6, 8, 8])

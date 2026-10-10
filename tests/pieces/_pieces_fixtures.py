@@ -19,8 +19,8 @@ OLD_DATA = {
                'root_files': ['fleet/Fleet.slnx', 'fleet/global.json', 'fleet/Directory.Build.props',
                               'fleet/.gitignore']},
     'pieces': [
-        {'id': 'retribution-api', 'group': 'shared', 'kind': 'gradle', 'gradle': ':retribution-api',
-         'dir': 'retribution-api'},
+        {'id': 'beta-api', 'group': 'shared', 'kind': 'gradle', 'gradle': ':beta-api',
+         'dir': 'beta-api'},
         {'id': 'protocol', 'group': 'shared', 'kind': 'spec', 'dir': 'protocol', 'wire': True,
          'forces': ['worker']},
         {'id': 'Fleet.Protocol', 'group': 'shared', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Protocol', 'dotnet': True},
@@ -68,7 +68,7 @@ OLD_DATA = {
 # The owner's placements (answering the move plan's questions 1-7); the move
 # applied them. Change a line here and every both_tables test follows.
 MOVES = {
-    'retribution-api': 'shared/retribution-api',
+    'beta-api': 'shared/beta-api',
     'protocol': 'shared/protocol',
     'Fleet.Protocol': 'shared/Fleet.Protocol',
     'Fleet.Protocol.Tests': 'shared/Fleet.Protocol.Tests',
