@@ -132,7 +132,7 @@ class Rule:
         self.text = [re.compile(p, re.I) for p in text]
 
     def match(self, rec, fields=TEXT_FIELDS):
-        """What made rec match (e.g. "id PVM-*"), or None. `text` regexes search `fields`."""
+        """What made rec match (e.g. "id EX-SIM-*"), or None. `text` regexes search `fields`."""
         for pat in self.ids:
             if fnmatch.fnmatchcase(rec.id, pat):
                 return "id %s" % pat

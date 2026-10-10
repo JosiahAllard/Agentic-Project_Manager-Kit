@@ -17,8 +17,8 @@ sys.path.append(os.path.join(KIT, "tools"))   # last: tools/gate.py must not sha
 import backlog_lint                                                 # noqa: E402
 
 EXAMPLE = os.path.join(KIT, "docs", "backlog-lint.example.json")
-INCIDENT = ["PVM-COL-BATCH-PROCESS-STATE", "PVM-ZULRAH-ANTIVENOM-DURATION", "TOOLS-NEWWT-LANDING-INFLIGHT",
-            "BIND-HOPCYCLE", "BIND-DISCORD-LIVECHECK"]
+INCIDENT = ["EX-SIM-BATCH-STATE", "EX-SIM-BUFF-DURATION", "EX-TOOLS-LANDING-INFLIGHT",
+            "EX-LINK-CYCLECOST", "EX-LINK-PRESENCE-LIVECHECK"]
 
 
 def fixtures():
@@ -44,7 +44,7 @@ def cfg(rules=(), **kw):
     return bl.parse_repo("r", dict({"root": "R", "rules": list(rules)}, **kw))
 
 
-GAMMA = {"name": "gamma", "session": "gamma", "ids": ["PVM-*"], "paths": ["research/gamma/"]}
+GAMMA = {"name": "gamma", "session": "gamma", "ids": ["EX-SIM-*"], "paths": ["research/gamma/"]}
 
 
 class IncidentTest(unittest.TestCase):
@@ -60,17 +60,17 @@ class IncidentTest(unittest.TestCase):
     def test_every_incident_item_has_its_fix(self):
         by = {f.id: f for f in bl.lint(self.records, self.cfg)}
         self.assertEqual(sorted(by), sorted(INCIDENT))
-        self.assertEqual(by["PVM-COL-BATCH-PROCESS-STATE"].kind, "session")
-        self.assertEqual(by["PVM-COL-BATCH-PROCESS-STATE"].fix,
-                         "python tools/backlog.py -C <worktree> set PVM-COL-BATCH-PROCESS-STATE --session gamma")
-        self.assertIn("--session gamma", by["PVM-ZULRAH-ANTIVENOM-DURATION"].fix)
-        self.assertIn("--session pm", by["TOOLS-NEWWT-LANDING-INFLIGHT"].fix)
-        self.assertIn("scope under tools/new_worktree.py", by["TOOLS-NEWWT-LANDING-INFLIGHT"].why)
-        self.assertEqual(by["BIND-HOPCYCLE"].kind, "hold")
-        self.assertIn("--on live-client", by["BIND-HOPCYCLE"].fix)
-        self.assertEqual(by["BIND-DISCORD-LIVECHECK"].kind, "hold")
-        self.assertIn("--on owner", by["BIND-DISCORD-LIVECHECK"].fix)
-        self.assertIn("owner's go", by["BIND-DISCORD-LIVECHECK"].why)
+        self.assertEqual(by["EX-SIM-BATCH-STATE"].kind, "session")
+        self.assertEqual(by["EX-SIM-BATCH-STATE"].fix,
+                         "python tools/backlog.py -C <worktree> set EX-SIM-BATCH-STATE --session gamma")
+        self.assertIn("--session gamma", by["EX-SIM-BUFF-DURATION"].fix)
+        self.assertIn("--session pm", by["EX-TOOLS-LANDING-INFLIGHT"].fix)
+        self.assertIn("scope under tools/new_worktree.py", by["EX-TOOLS-LANDING-INFLIGHT"].why)
+        self.assertEqual(by["EX-LINK-CYCLECOST"].kind, "hold")
+        self.assertIn("--on live-client", by["EX-LINK-CYCLECOST"].fix)
+        self.assertEqual(by["EX-LINK-PRESENCE-LIVECHECK"].kind, "hold")
+        self.assertIn("--on owner", by["EX-LINK-PRESENCE-LIVECHECK"].fix)
+        self.assertIn("owner's go", by["EX-LINK-PRESENCE-LIVECHECK"].why)
 
     def test_offer_to_the_untagged_session_lists_all_five(self):
         offered, found = bl.offer_findings(self.records, self.cfg, "none", cap=5)
@@ -81,9 +81,9 @@ class IncidentTest(unittest.TestCase):
     def test_offer_to_gamma_is_empty_until_tagged(self):
         self.assertEqual(bl.offer_findings(self.records, self.cfg, "gamma")[0], [])
 
-    def test_hopcycle_needs_a_rule_its_text_names_no_live_client(self):
+    def test_cyclecost_needs_a_rule_its_text_names_no_live_client(self):
         no_rule = cfg([GAMMA])
-        self.assertNotIn("BIND-HOPCYCLE", [f.id for f in bl.lint(self.records, no_rule)])
+        self.assertNotIn("EX-LINK-CYCLECOST", [f.id for f in bl.lint(self.records, no_rule)])
 
     def test_cli_exit_and_lines(self):
         lines = []
@@ -92,7 +92,7 @@ class IncidentTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("would offer (approx.)", lines[0])
         self.assertEqual(lines[1], "alpha: 5 records, 5 findings; 5 offer")
-        self.assertEqual(sum(1 for ln in lines if "BIND-HOPCYCLE" in ln and "->" in ln), 1)
+        self.assertEqual(sum(1 for ln in lines if "EX-LINK-CYCLECOST" in ln and "->" in ln), 1)
 
 
 class _Fixed:
@@ -105,10 +105,10 @@ class _Fixed:
 
 class SessionTest(unittest.TestCase):
     def test_tagged_right_is_clean(self):
-        self.assertEqual(bl.lint([rec("PVM-A", session="gamma")], cfg([GAMMA])), [])
+        self.assertEqual(bl.lint([rec("EX-SIM-A", session="gamma")], cfg([GAMMA])), [])
 
     def test_other_session_is_named(self):
-        f, = bl.lint([rec("PVM-A", session="alpha")], cfg([GAMMA]))
+        f, = bl.lint([rec("EX-SIM-A", session="alpha")], cfg([GAMMA]))
         self.assertIn("session alpha", f.why)
         self.assertIn("--session gamma", f.fix)
 
@@ -122,34 +122,34 @@ class SessionTest(unittest.TestCase):
         self.assertIn("area gamma", f.why)
 
     def test_first_rule_wins(self):
-        rules = [{"session": "pm", "ids": ["PVM-X*"]}, GAMMA]
-        f, = bl.lint([rec("PVM-XY")], cfg(rules))
+        rules = [{"session": "pm", "ids": ["EX-SIM-X*"]}, GAMMA]
+        f, = bl.lint([rec("EX-SIM-XY")], cfg(rules))
         self.assertIn("--session pm", f.fix)
 
     def test_unmapped_and_finished_records_are_skipped(self):
-        recs = [rec("OTHER-1"), rec("PVM-P", state="pulled"), rec("PVM-C", closed="2026-10-01")]
+        recs = [rec("EX-OTHER-1"), rec("EX-SIM-P", state="pulled"), rec("EX-SIM-C", closed="2026-10-01")]
         self.assertEqual(bl.lint(recs, cfg([GAMMA])), [])
 
     def test_example_pm_rule_catches_a_new_id_by_path(self):
         c = bl.load_config(EXAMPLE)["alpha"]
-        f, = bl.lint([rec("TOOLS-SYNCBASE-NEW", scope="tools/sync_base.py")], c)
+        f, = bl.lint([rec("EX-TOOLS-SYNC-NEW", scope="tools/sync_base.py")], c)
         self.assertIn("scope under tools/sync_base.py", f.why)
-        self.assertIn("set TOOLS-SYNCBASE-NEW --session pm", f.fix)
+        self.assertIn("set EX-TOOLS-SYNC-NEW --session pm", f.fix)
 
     def test_example_pm_rule_catches_by_text(self):
         c = bl.load_config(EXAMPLE)["alpha"]
-        f, = bl.lint([rec("GATE-X", scope="tools/gate_hook.py", summary="a kit tool fix; the PM takes it")], c)
+        f, = bl.lint([rec("EX-GATE-X", scope="tools/gate_hook.py", summary="a kit tool fix; the PM takes it")], c)
         self.assertIn('text "', f.why)
         self.assertIn("--session pm", f.fix)
 
     def test_example_gamma_rule_catches_a_non_pvm_id_by_path(self):
         c = bl.load_config(EXAMPLE)["alpha"]
-        f, = bl.lint([rec("NH-NEW-THING", scope=["artifacts/models/env/nh.py", "research/gamma/nh/**"])], c)
+        f, = bl.lint([rec("EX-NEW-THING", scope=["artifacts/models/env/nh.py", "research/gamma/nh/**"])], c)
         self.assertIn("scope under artifacts/models/, research/gamma/", f.why)
         self.assertIn("--session gamma", f.fix)
 
     def test_blocked_record_still_gets_its_session(self):
-        f, = bl.lint([rec("PVM-B", state="blocked", blocked_on="owner")], cfg([GAMMA]))
+        f, = bl.lint([rec("EX-SIM-B", state="blocked", blocked_on="owner")], cfg([GAMMA]))
         self.assertEqual(f.kind, "session")
 
 
@@ -183,7 +183,7 @@ class HoldTest(unittest.TestCase):
         self.assertIn("--on owner", f.fix)
 
     def test_hold_rule(self):
-        f, = bl.lint([rec("BIND-H")], cfg([{"hold": "live-client", "ids": ["BIND-H"]}]))
+        f, = bl.lint([rec("EX-LINK-H")], cfg([{"hold": "live-client", "ids": ["EX-LINK-H"]}]))
         self.assertIn("--on live-client", f.fix)
 
     def test_worst_first(self):
@@ -201,14 +201,14 @@ class OfferTest(unittest.TestCase):
         self.assertEqual([r.id for r in bl.approx_offer(recs, "gamma")], ["D"])
 
     def test_only_offered_items_are_reported(self):
-        recs = [rec("PVM-1", priority="1"), rec("OK", priority="2"), rec("PVM-9", priority="5")]
+        recs = [rec("EX-SIM-1", priority="1"), rec("OK", priority="2"), rec("EX-SIM-9", priority="5")]
         offered, found = bl.offer_findings(recs, cfg([GAMMA]), "none", cap=2)
-        self.assertEqual([r.id for r in offered], ["PVM-1", "OK"])
-        self.assertEqual([f.id for f in found], ["PVM-1"])
+        self.assertEqual([r.id for r in offered], ["EX-SIM-1", "OK"])
+        self.assertEqual([f.id for f in found], ["EX-SIM-1"])
         self.assertTrue(found[0].why.startswith("session: "))
 
     def test_one_offer_line_per_record_with_every_reason(self):
-        recs = [rec("PVM-1", priority="1", summary="needs the live client")]
+        recs = [rec("EX-SIM-1", priority="1", summary="needs the live client")]
         _, found = bl.offer_findings(recs, cfg([GAMMA]), "none")
         f, = found
         self.assertTrue(f.why.startswith("session: ") and "; hold: " in f.why, f.why)
@@ -216,40 +216,40 @@ class OfferTest(unittest.TestCase):
         self.assertIn("--on live-client", f.fix)
 
     def test_cli_drops_the_lint_line_an_offer_line_repeats(self):
-        recs = [rec("PVM-1", priority="1"), rec("PVM-9", priority="5")]
+        recs = [rec("EX-SIM-1", priority="1"), rec("EX-SIM-9", priority="5")]
         lines = []
         backlog_lint.run({"r": cfg([GAMMA])}, ["r"], offer="none", cap=1, reader=lambda c: _Fixed(recs),
                          out=lines.append)
         self.assertEqual(lines[1], "r: 2 records, 2 findings; 1 offer; 1 session")
-        self.assertEqual([ln.split()[1] for ln in lines[2:]], ["PVM-1", "PVM-9"])
+        self.assertEqual([ln.split()[1] for ln in lines[2:]], ["EX-SIM-1", "EX-SIM-9"])
 
 
 NEXT_PRINTOUT = """BACKLOG d84be6ce8 | 367 records | 255 pullable | 104 held
 held 104: 6 owner, 44 item
 
-  rank 59  priority 3  BIND-DISCORD-LIVECHECK one worker run (owner's go) confirms ...
-      scope: worker/binding/src/main/java/org/alpha/binding/runelite/RuneLiteRuntimeConfig.java
-  rank 67  priority 3  PVM-COL-BATCH-PROCESS-STATE Colosseum ColBatch keeps process-wide state
-      scope: artifacts/models/env/col.py, artifacts/models/env/col_shim.c
-  rank 74  priority 3  PVM-ZULRAH-ANTIVENOM-DURATION Zulrah sim anti-venom lasts 300 ticks
-  rank 80  priority 3  TOOLS-NEWWT-LANDING-INFLIGHT new_worktree/sync_base cut from pushed origin/master
-  rank 83  priority 3  BIND-HOPCYCLE      a marshalled member costs an engine cycle
-  rank 96  priority 3  NOT-IN-FIXTURES    skipped
+  rank 59  priority 3  EX-LINK-PRESENCE-LIVECHECK one worker run (owner's go) confirms ...
+      scope: worker/link/src/main/java/org/example/link/PresenceConfig.java
+  rank 67  priority 3  EX-SIM-BATCH-STATE SimBatch keeps process-wide state
+      scope: artifacts/models/env/batch.py, artifacts/models/env/batch_shim.c
+  rank 74  priority 3  EX-SIM-BUFF-DURATION Sim buff lasts 300 ticks
+  rank 80  priority 3  EX-TOOLS-LANDING-INFLIGHT new_worktree/sync_base cut from pushed origin/master
+  rank 83  priority 3  EX-LINK-CYCLECOST      a marshalled member costs an engine cycle
+  rank 96  priority 3  EX-NOT-IN-FIXTURES    skipped
 
 ON LIVE BRANCHES (12) - not offered, not counted against the cap:
-  SCRIPT-API-T03-TABLES closed on api/errand-tables, waiting to land, claimed 0 days ago
+  EX-API-TABLES closed on api/errand-tables, waiting to land, claimed 0 days ago
 PASSED OVER (1) - rank is a printed column and is never rewritten:
-  rank 12  PVM-OTHER          scope x collides with y already taken
+  rank 12  EX-SIM-OTHER          scope x collides with y already taken
 """
 
 
 class NextOutputTest(unittest.TestCase):
-    """The real 10-07 `next --cap 8` (head of it): the incident's five lead the offer."""
+    """A `next --cap 8` printout (head of it): the incident's five lead the offer."""
 
     def test_parse(self):
         self.assertEqual(bl.parse_next_output(NEXT_PRINTOUT), [
-            "BIND-DISCORD-LIVECHECK", "PVM-COL-BATCH-PROCESS-STATE", "PVM-ZULRAH-ANTIVENOM-DURATION",
-            "TOOLS-NEWWT-LANDING-INFLIGHT", "BIND-HOPCYCLE", "NOT-IN-FIXTURES"])
+            "EX-LINK-PRESENCE-LIVECHECK", "EX-SIM-BATCH-STATE", "EX-SIM-BUFF-DURATION",
+            "EX-TOOLS-LANDING-INFLIGHT", "EX-LINK-CYCLECOST", "EX-NOT-IN-FIXTURES"])
 
     def test_real_offer_flags_the_five(self):
         c = bl.load_config(EXAMPLE)["alpha"]
@@ -274,7 +274,7 @@ class NextOutputTest(unittest.TestCase):
 
     def test_decode_utf16_and_bom(self):
         for data in (NEXT_PRINTOUT.encode("utf-16"), NEXT_PRINTOUT.encode("utf-8-sig"), NEXT_PRINTOUT.encode()):
-            self.assertEqual(bl.parse_next_output(bl.decode_next_output(data))[0], "BIND-DISCORD-LIVECHECK")
+            self.assertEqual(bl.parse_next_output(bl.decode_next_output(data))[0], "EX-LINK-PRESENCE-LIVECHECK")
 
 
 def git_store(root, files):
@@ -405,9 +405,9 @@ class GitReaderTest(unittest.TestCase):
             git("config", "user.email", "t@example.invalid")
             git("config", "user.name", "t")
             os.makedirs(os.path.join(root, "docs", "backlog"))
-            p = os.path.join(root, "docs", "backlog", "PVM-A.md")
+            p = os.path.join(root, "docs", "backlog", "EX-SIM-A.md")
             with open(p, "w", encoding="utf-8", newline="\n") as f:
-                f.write("id: PVM-A\nstate: open\nblocked_on: -\npriority: 2\nsummary: s\n")
+                f.write("id: EX-SIM-A\nstate: open\nblocked_on: -\npriority: 2\nsummary: s\n")
             git("add", "-A")
             git("commit", "-q", "-m", "a")
             with open(p, "a", encoding="utf-8") as f:
@@ -415,7 +415,7 @@ class GitReaderTest(unittest.TestCase):
             with open(os.path.join(root, ".kit.json"), "w", encoding="utf-8") as f:
                 f.write('{"backlog": {"store": "main"}}')               # the folder store
             recs = bl.GitReader(root).records()
-            self.assertEqual([r.id for r in recs], ["PVM-A"])
+            self.assertEqual([r.id for r in recs], ["EX-SIM-A"])
             self.assertIsNone(recs[0].session)
 
 
@@ -426,7 +426,7 @@ class StoreResolutionTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = self.tmp.name
-        git_store(self.root, {"ON-MAIN": "id: ON-MAIN\nstate: open\nblocked_on: -\nsummary: not the store\n"})
+        git_store(self.root, {"EX-ON-MAIN": "id: EX-ON-MAIN\nstate: open\nblocked_on: -\nsummary: not the store\n"})
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -440,8 +440,8 @@ class StoreResolutionTest(unittest.TestCase):
         self.assertIsNone(cfg().store)
 
     def test_the_default_is_the_ref_store(self):
-        self.publish({"PVM-A": "id: PVM-A\nstate: open\nblocked_on: -\npriority: 2\nsummary: s\n"})
-        self.assertEqual([r.id for r in bl.GitReader(self.root).records()], ["PVM-A"])
+        self.publish({"EX-SIM-A": "id: EX-SIM-A\nstate: open\nblocked_on: -\npriority: 2\nsummary: s\n"})
+        self.assertEqual([r.id for r in bl.GitReader(self.root).records()], ["EX-SIM-A"])
         lines = []
         rc = backlog_lint.run({"r": cfg(root=self.root)}, ["r"], out=lines.append)
         self.assertEqual((rc, lines[0]), (0, "r: 1 records, 0 findings"))
@@ -457,8 +457,8 @@ class StoreResolutionTest(unittest.TestCase):
         self.assertEqual(lines, ["r: could not read records: %s" % cm.exception])
 
     def test_an_explicit_store_folder_is_still_read_on_main(self):
-        self.publish({"PVM-A": "id: PVM-A\nstate: open\nblocked_on: -\nsummary: s\n"})
-        self.assertEqual([r.id for r in bl.GitReader(self.root, "docs/backlog").records()], ["ON-MAIN"])
+        self.publish({"EX-SIM-A": "id: EX-SIM-A\nstate: open\nblocked_on: -\nsummary: s\n"})
+        self.assertEqual([r.id for r in bl.GitReader(self.root, "docs/backlog").records()], ["EX-ON-MAIN"])
 
     def test_an_invalid_kit_json_is_a_read_error(self):
         with open(os.path.join(self.root, ".kit.json"), "w", encoding="utf-8") as f:
