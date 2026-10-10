@@ -43,7 +43,10 @@ The pid hold (`PidHoldRun`, kitlib.proc.shield.PidHold), opt-in only (PID_HOLD_F
 off by default; kitlib.gate.steps refuses it in a gate step). The shield cannot cover what a unit
 starts: a test's git, made a moment after a shell died, can be given that shell's pid, and the
 second stale taskkill then ends it with exit 1 and no output - the same shape as `merge-base
---is-ancestor`'s NO (KIT-TEST-GRANDCHILD-SHIELD; kitlib.reviewpack.tips' GOTCHA). Opted in, `run`
+--is-ancestor`'s NO (KIT-TEST-GRANDCHILD-SHIELD; kitlib.reviewpack.tips' GOTCHA). Unheld, the
+ancestry answer at least is no longer misread: kitlib.git.refs.is_ancestor asks `rev-list -n 1`,
+whose YES and NO both exit 0, and gives no answer for a killed git; other exit-1 answers (a missing
+ref under `--quiet`, `merge-base` finding none) still look like a kill. Opted in, `run`
 (and tools/kit_tests.py) keeps this process's hold - warmed for WARM seconds, then published -
 before the first unit starts and for the rest of its life: no pid of this user's processes is
 reused until 3 s after its process exits, so the stale kill names an exited process and ends
