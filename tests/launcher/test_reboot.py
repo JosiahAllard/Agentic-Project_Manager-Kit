@@ -79,6 +79,19 @@ class Briefs(unittest.TestCase):
         self.assertEqual(start.entry_start_args(None, 'alpha', dict(ALPHA, brief='c.md'), '2', 'go')['brief'], 'c.md')
         self.assertNotIn('brief', start.entry_start_args(None, 'alpha', ALPHA, '2', 'go', any_brief=True))
 
+    def test_dry_run_says_the_pm_decision_and_opens_and_logs_nothing(self):
+        for key, said in ((False, 'desktop app running, pm-session skipped'),
+                          (True, 'would resume pm-session (session pm-sid-1, account 2) in ')):
+            h = Home(self, extra={'pm_resume_beside_desktop': key})
+            h.write_state('sessions.json', {'helper': dict(HELPER)})
+            h.write_state('conductors.json', dict(PM, pm_folder=h.root))
+            host = FakeHost(h.root, [STORE])
+            out = reboot.run(h.settings, host, dry_run=True)
+            self.assertTrue(any(line.startswith(said) for line in out), out)
+            self.assertEqual(host.opened, [])
+            self.assertFalse(os.path.exists(os.path.join(h.state, reboot.LOG)))
+            self.assertEqual(h.read_state('sessions.json'), {'helper': HELPER})
+
     def test_dry_run_says_the_brief(self):
         h = Home(self)
         h.write_state('sessions.json', {'helper': dict(HELPER)})
@@ -137,7 +150,7 @@ class ResumePm(unittest.TestCase):
             text, = self.resume(self.cfg(), [p], settings=self.beside()).opened
             self.assertEqual(role_of(text), 'pm')
             self.assertIn("claude --resume 'pm-sid-1' --remote-control 'pm-session' -n 'pm-session'", text)
-        self.assertEqual(self.lines, ['desktop app running, pm-session resumed anyway '
+        self.assertEqual(self.lines, ['desktop app running, pm-session not skipped '
                                       '(launcher.pm_resume_beside_desktop)', 'started pm-session'] * 2)
 
     def test_the_key_still_refuses_a_running_pm_session(self):
