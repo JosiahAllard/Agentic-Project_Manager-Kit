@@ -258,9 +258,15 @@ def load_gate_tool():
     return mod
 
 
-def advice(top):
-    """The refusal's line naming the documented command that gates the checkout `top`."""
-    return '  to gate %s: python %s -C %s' % (top, os.path.join(top, 'tools', 'gate.py'), top)
+RAN_FROM = 'if you meant the directory you ran from'
+THIS_GATE = 'if you meant the checkout this gate.py is in'
+
+
+def advice(top, intent=None):
+    """The refusal's line naming the documented command that gates the checkout `top`, headed by
+    `intent` (no -C) or by the tree it gates (a relative -C). Paths with no space are bare."""
+    return '  %s: python %s -C %s' % (intent or 'to gate %s' % top,
+                                      os.path.join(top, 'tools', 'gate.py'), top)
 
 
 def linked(top, main_top):
@@ -283,7 +289,11 @@ class OwnCopy(unittest.TestCase):
         self.lost_in = os.path.abspath(os.path.join('main-co', '.claude', 'lost'))
         self.lost_out = os.path.abspath('lost-outer')
         self.inner = os.path.abspath(os.path.join('lost-outer', 'inner'))
+        self.sibling = os.path.abspath('main-co-x')
+        self.outer_x = os.path.abspath('lost-outer-x')
         self.classify = fake_classify({
+            repo.norm(self.sibling): place(repo.UNKNOWN),
+            repo.norm(self.outer_x): place(repo.MAIN, self.outer_x),
             repo.norm(self.main): place(repo.MAIN, self.main),
             repo.norm(self.wt): linked(self.wt, self.main),
             repo.norm(self.other): place(repo.MAIN, self.other),
@@ -299,15 +309,14 @@ class OwnCopy(unittest.TestCase):
 
     def test_another_checkout_of_the_same_repository_is_refused(self):
         """With no -C the tree meant is ambiguous: the gate.py's path names one checkout, the
-        directory another. Both commands are given, each labelled with the tree it gates."""
+        directory another. Both commands are given, each labelled by intent."""
         for cwd, kit in ((self.main, self.wt), (self.wt, self.main)):
             with self.subTest(cwd=cwd, kit=kit):
                 out = self.refusal(cwd, kit)
                 self.assertEqual(out.code, G.REFUSED)
                 text = '\n'.join(out.lines)
                 self.assertTrue(text.startswith('REFUSED: '), text)
-                for top in (cwd, kit):
-                    self.assertIn(advice(top), out.lines)
+                self.assertEqual(out.lines[1:], [advice(cwd, RAN_FROM), advice(kit, THIS_GATE)])
 
     def test_a_relative_minus_c_is_named_in_the_refusal(self):
         """A relative -C names the tree meant: only its command is given, never the gate.py's
@@ -343,13 +352,38 @@ class OwnCopy(unittest.TestCase):
         self.assertIsNone(self.refusal(self.wt, self.lost))
 
     def test_a_kit_git_cannot_place_is_refused_when_nested(self):
+        """With no -C both trees are offered, labelled by intent; a relative -C names the tree
+        meant, so only its command."""
         for cwd, kit in ((self.main, self.lost_in), (self.wt, self.lost_in),
                          (self.inner, self.lost_out)):
             with self.subTest(cwd=cwd, kit=kit):
                 out = self.refusal(cwd, kit)
                 self.assertEqual(out.code, G.REFUSED)
                 self.assertIn('cannot tell', out.lines[0])
+                self.assertEqual(out.lines[1:], [advice(cwd, RAN_FROM), advice(kit, THIS_GATE)])
+                out = caller.own_copy_refusal(cwd, kit, rel='.', classify=self.classify)
+                self.assertEqual(out.code, G.REFUSED)
                 self.assertEqual(out.lines[1:], [advice(cwd)])
+
+    def test_a_sibling_sharing_a_name_prefix_is_apart(self):
+        """`main-co-x` beside `main-co` does not nest with it: a spelling prefix is not a
+        folder."""
+        self.assertIsNone(self.refusal(self.main, self.sibling))
+        self.assertIsNone(self.refusal(self.wt, self.sibling))
+        self.assertIsNone(self.refusal(self.outer_x, self.lost_out))
+
+    def test_paths_with_a_space_are_quoted_in_the_advice(self):
+        main = os.path.abspath('main co')
+        wt = os.path.join(main, '.claude', 'worktrees', 'x')
+        classify = fake_classify({repo.norm(main): place(repo.MAIN, main),
+                                  repo.norm(wt): linked(wt, main)})
+        out = caller.own_copy_refusal(main, wt, classify=classify)
+        self.assertEqual(out.lines[1:], [
+            '  %s: python "%s" -C "%s"' % (RAN_FROM, os.path.join(main, 'tools', 'gate.py'), main),
+            '  %s: python "%s" -C "%s"' % (THIS_GATE, os.path.join(wt, 'tools', 'gate.py'), wt)])
+        out = caller.own_copy_refusal(main, wt, rel='.', classify=classify)
+        self.assertEqual(out.lines[1:], ['  to gate %s: python "%s" -C "%s"' % (
+            main, os.path.join(main, 'tools', 'gate.py'), main)])
 
 
 class LogDir(unittest.TestCase):
@@ -430,9 +464,9 @@ class RunByPath(unittest.TestCase):
             with self.subTest(cwd=cwd, kit=kit):
                 code, out = self.gate(cwd, kit)
                 self.assertEqual(code, G.REFUSED, out)
-                # ambiguous with no -C: both commands, each labelled with the tree it gates
-                for top in (cwd, kit):
-                    self.assertIn(advice(top).lower(), out.lower())
+                # ambiguous with no -C: both commands, each labelled by intent
+                self.assertIn(advice(cwd, RAN_FROM).lower(), out.lower())
+                self.assertIn(advice(kit, THIS_GATE).lower(), out.lower())
                 self.assertNotIn('RUN   unit', out)
 
     def test_an_absolute_minus_c_from_the_main_checkout_gates_the_worktree(self):
@@ -499,7 +533,8 @@ class RunByPath(unittest.TestCase):
                 code, out = self.gate(cwd, inside)
                 self.assertEqual(code, G.REFUSED, out)
                 self.assertIn('REFUSED: cannot tell which checkout', out)
-                self.assertIn(advice(cwd).lower(), out.lower())
+                self.assertIn(advice(cwd, RAN_FROM).lower(), out.lower())
+                self.assertIn(advice(inside, THIS_GATE).lower(), out.lower())
                 self.assertNotIn('RUN   unit', out)
 
     def test_a_relative_minus_c_naming_its_own_checkout_passes(self):
