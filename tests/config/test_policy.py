@@ -167,6 +167,20 @@ class KindsTableTest(unittest.TestCase):
             with self.assertRaises(config.ConfigError):
                 policy.kinds_aliases(self.write({'kinds': {'b': {}}, 'aliases': bad}))
 
+    def test_an_alias_that_is_a_kind_or_names_no_kind_refuses(self):
+        kinds = {'a': {}, 'b': {}}
+        for aliases in ({'a': {'to': 'b', 'why': 'w'}},          # the alias is a kind
+                        {'x': {'to': 'nope', 'why': 'w'}},       # to is not a kind
+                        {'x': {'to': 'y', 'why': 'w'}, 'y': {'to': 'a', 'why': 'w'}}):   # chain
+            with self.assertRaises(config.ConfigError):
+                policy.kinds_aliases(self.write({'kinds': kinds, 'aliases': aliases}))
+
+    def test_aliases_is_never_a_kind_in_the_flat_form(self):
+        flat = {'engine-test': {'cpu': 1}, 'aliases': {'old': {'to': 'engine-test', 'why': 'w'}}}
+        path = self.write(flat)
+        self.assertEqual(sorted(policy.kinds_table(path)), ['engine-test'])
+        self.assertEqual(policy.kinds_aliases(path), {'old': 'engine-test'})
+
     def test_the_kits_table_aliases_worldgraph_to_graph_build(self):
         self.assertEqual(policy.kinds_aliases().get('worldgraph'), 'graph-build')
 

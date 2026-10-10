@@ -34,8 +34,9 @@ ALIASES = ("medium", "heavy")
 def resolve(kind, table, path=None):
     """The canonical kind name for `kind`: itself when `table` has it, else what the `aliases`
     object of kinds.json maps it to (a retired name some caller still passes), else itself.
-    New lock records name the canonical kind. KindsError when the aliases cannot be read."""
-    if kind in table:
+    New lock records name the canonical kind. KindsError when the aliases cannot be read. A
+    `kind` that is not text comes back unchanged (the caller's own check refuses it)."""
+    if not isinstance(kind, str) or kind in table:
         return kind
     try:
         to = policy.kinds_aliases(path or KINDS_FILE).get(kind)
@@ -80,6 +81,10 @@ def load(path=None, agent_cap=None):
                      "warn_min": warn}
     if not out:
         raise KindsError("the kinds table %s names no kinds" % path)
+    try:                            # the aliases are checked with the table (fail closed)
+        policy.kinds_aliases(path)
+    except ConfigError as e:
+        raise KindsError(str(e))
     if agent_cap is not None:
         check_cap(out, agent_cap)
     return out
