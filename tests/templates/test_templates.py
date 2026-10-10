@@ -40,6 +40,7 @@ class TemplateFilesTest(unittest.TestCase):
         common = TEMPLATES / "common"
         lines = (common / ".gitignore").read_text(encoding="utf-8").splitlines()
         self.assertIn(".claude/worktrees/", lines)
+        self.assertIn(".codex/worktrees/", lines)
         self.assertTrue((common / "gitattributes").is_file())
         self.assertFalse((common / ".gitattributes").exists())
         self.assertIn("kw:", (common / "INDEX.md").read_text(encoding="utf-8"))

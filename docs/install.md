@@ -47,8 +47,8 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    `.gitattributes`, a starter `docs/INDEX.md`, and with `-Stack` the stack's `tools/gate.json`.
    The target must be a checkout's top level. Both emails are required and must differ, or an
    agent's commit could pass as the owner's.
-   - `.gitignore` and `.gitattributes` start from `templates/common` (`.claude/worktrees/` is the
-     line that matters: without it the first agent worktree dirties the main checkout and a
+   - `.gitignore` and `.gitattributes` start from `templates/common` (`.claude/worktrees/` and `.codex/worktrees/`
+     are the lines that matter: without them the first agent worktree dirties the main checkout and a
      landing refuses "main checkout is not clean") plus the stack's `gitignore` and
      `gitattributes` lists. A file already there is never overwritten: only the lines it lacks
      are appended, and the dry run lists them.
