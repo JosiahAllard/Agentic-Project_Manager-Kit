@@ -714,6 +714,136 @@ class TheReportHooks(Fixture):
                          os.listdir(self.tools))
 
 
+class TheReportHookScope(Fixture):
+    """What _repo_first displaces for a hook and what it drops afterwards: only copies from
+    outside the tools dir are displaced, only modules from the tools dir are dropped."""
+
+    module = TheReportHooks.module
+
+    def setUp(self):
+        super().setUp()
+        self.tools = os.path.join(self.root, 'tools')
+        os.makedirs(self.tools)
+        path = list(sys.path)
+        self.addCleanup(setattr, sys, 'path', path)
+        self.side = os.path.join(self.root, 'kit_side')     # stands in for the kit's tools dir
+        os.makedirs(self.side)
+        sys.path.insert(0, self.side)
+
+    def fresh(self, name):
+        """`name` not loaded for the test, and put back as it was after it."""
+        saved = sys.modules.pop(name, None)
+        self.addCleanup(lambda: sys.modules.__setitem__(name, saved) if saved is not None
+                        else sys.modules.pop(name, None))
+
+    def outside(self, name, word='kit', package=False):
+        """A module (or package with a `sub` module) of `name` loaded from outside the tools dir."""
+        for key in [k for k in sys.modules if k == name or k.startswith(name + '.')]:
+            del sys.modules[key]
+        self.addCleanup(lambda: [sys.modules.pop(k) for k in list(sys.modules)
+                                 if k == name or k.startswith(name + '.')])
+        if package:
+            os.makedirs(os.path.join(self.side, name))
+            self.module('__init__', '', os.path.join(self.side, name))
+            self.module('sub', 'WORD = %r\n' % word, os.path.join(self.side, name))
+            __import__(name + '.sub')
+            return sys.modules[name], sys.modules[name + '.sub']
+        self.module(name, 'WORD = %r\n' % word, self.side)
+        return __import__(name)
+
+    def test_a_builtin_of_a_sibling_name_is_not_displaced(self):
+        import time
+        self.assertIn('time', sys.builtin_module_names)
+        self.module('time', 'X = 1\n')
+        self.module('builtin_hook', 'import sys\nHAD = sys.modules.get("time")\n'
+                                    'def lines():\n    return [id(HAD)]\n')
+        self.assertEqual(hooks.lines(self.tools, ['builtin_hook:lines']), [str(id(time))])
+        self.assertIs(sys.modules['time'], time)
+
+    def test_a_loaded_module_from_the_tools_dir_is_not_displaced(self):
+        mine = self.outside('hs_mine')
+        mine.__file__ = os.path.join(self.tools, 'hs_mine.py')       # as if loaded from there
+        self.module('hs_mine', 'WORD = "reloaded"\n')
+        self.module('mine_hook', 'import hs_mine\ndef lines():\n    return [hs_mine.WORD]\n')
+        self.assertEqual(hooks.lines(self.tools, ['mine_hook:lines']), ['kit'])
+
+    def test_a_module_the_hook_imports_from_elsewhere_stays_loaded(self):
+        self.fresh('colorsys')
+        self.module('std_hook', 'import colorsys\ndef lines():\n    return ["ok"]\n')
+        self.assertEqual(hooks.lines(self.tools, ['std_hook:lines']), ['ok'])
+        self.assertIn('colorsys', sys.modules)          # stdlib the hook pulled in is kept
+
+    def test_a_displaced_packages_submodules_go_too(self):
+        kit_pkg, kit_sub = self.outside('hs_pkg', package=True)
+        os.makedirs(os.path.join(self.tools, 'hs_pkg'))
+        self.module('__init__', '', os.path.join(self.tools, 'hs_pkg'))
+        self.module('sub', 'WORD = "repo"\n', os.path.join(self.tools, 'hs_pkg'))
+        self.module('pkg_hook', 'import hs_pkg.sub\ndef lines():\n    return [hs_pkg.sub.WORD]\n')
+        self.assertEqual(hooks.lines(self.tools, ['pkg_hook:lines']), ['repo'])
+        self.assertIs(sys.modules['hs_pkg'], kit_pkg)
+        self.assertIs(sys.modules['hs_pkg.sub'], kit_sub)
+
+    def test_a_pyw_sibling_displaces_the_kits_module(self):
+        kit = self.outside('hs_pyw')
+        with open(os.path.join(self.tools, 'hs_pyw.pyw'), 'w', encoding='utf-8') as fh:
+            fh.write('WORD = "repo"\n')
+        self.module('pyw_hook', 'import hs_pyw\ndef lines():\n    return [hs_pyw.WORD]\n')
+        self.assertEqual(hooks.lines(self.tools, ['pyw_hook:lines']), ['repo'])
+        self.assertIs(sys.modules['hs_pyw'], kit)
+
+    def test_a_pyd_sibling_displaces_the_kits_module(self):
+        kit = self.outside('hs_pyd')
+        with open(os.path.join(self.tools, 'hs_pyd.cp314-win_amd64.pyd'), 'wb') as fh:
+            fh.write(b'')
+        self.module('pyd_hook', 'import sys\nHAD = "hs_pyd" in sys.modules\n'
+                                'def lines():\n    return [HAD]\n')
+        self.assertEqual(hooks.lines(self.tools, ['pyd_hook:lines']), ['False'])
+        self.assertIs(sys.modules['hs_pyd'], kit)
+
+    def restored_after(self, raising_text, call=None):
+        """A hook that loads a repo sibling over a kit copy, pulls in a stdlib module, then runs
+        `raising_text`; afterwards sys.path, the kit copy and the stdlib module are as they should
+        be and the repo's modules are gone."""
+        kit = self.outside('hs_both')
+        self.fresh('colorsys')
+        self.module('hs_both', 'WORD = "repo"\n')
+        self.module('hs_only', 'WORD = "repo"\n')
+        self.module('r_hook', 'import colorsys, hs_both, hs_only\n' + raising_text)
+        before = list(sys.path)
+        got = (call or (lambda: hooks.lines(self.tools, ['r_hook:lines'])))()
+        self.assertEqual(sys.path, before)
+        self.assertIs(sys.modules['hs_both'], kit)
+        self.assertNotIn('hs_only', sys.modules)
+        self.assertIn('colorsys', sys.modules)
+        return got
+
+    def test_state_is_restored_after_a_hook_that_raises_at_import(self):
+        [line] = self.restored_after('raise ValueError("at import")\n')
+        self.assertEqual(line, 'hook      NOT CHECKED - r_hook:lines: ValueError: at import')
+
+    def test_state_is_restored_after_a_hook_that_raises_at_call(self):
+        [line] = self.restored_after('def lines():\n    raise ValueError("at call")\n')
+        self.assertEqual(line, 'hook      NOT CHECKED - r_hook:lines: ValueError: at call')
+
+    def test_state_is_restored_after_a_keyboard_interrupt_which_is_not_caught(self):
+        def call():
+            with self.assertRaises(KeyboardInterrupt):
+                hooks.lines(self.tools, ['r_hook:lines'])
+        self.restored_after('def lines():\n    raise KeyboardInterrupt\n', call)
+
+    def test_a_system_exit_is_one_not_checked_line(self):
+        self.module('exits', 'raise SystemExit(3)\n')
+        self.module('argv_sib', 'import argparse\n'
+                                'argparse.ArgumentParser().parse_args(["--no-such-flag"])\n')
+        self.module('argv_hook', 'import argv_sib\ndef lines():\n    return []\n')
+        self.module('fine', 'def lines():\n    return ["still ran"]\n')
+        with contextlib.redirect_stderr(io.StringIO()):
+            got = hooks.lines(self.tools, ['exits:lines', 'argv_hook:lines', 'fine:lines'])
+        self.assertEqual(got, ['hook      NOT CHECKED - exits:lines: SystemExit: 3',
+                               'hook      NOT CHECKED - argv_hook:lines: SystemExit: 2',
+                               'still ran'])
+
+
 TASKLIST = ('\nImage Name                     PID Session Name\n'
             '========================= ======== ================\n'
             'Godot_v4.3-stable.exe         4242 Console\n'
