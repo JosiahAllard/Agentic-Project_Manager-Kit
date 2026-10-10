@@ -153,6 +153,7 @@ class HomeByBuiltin(Base):
               'printf -v HOME %s C:/h; git push private pmdata',
               'printf -vUSERPROFILE %s C:/h; git push private pmdata',
               'for HOME in C:/h; do git push private pmdata; done',
+              'for HOME; do git push private pmdata; done',
               'mapfile -t HOME < f; git push private pmdata',
               'readarray -n 1 HOME < f; git push private pmdata',
               'getopts ab HOME; git push private pmdata',
@@ -169,6 +170,7 @@ class HomeByBuiltin(Base):
     def test_other_names_pass(self):
         for text in ('read X; git push private pmdata', 'printf -v Y %s z; git push private pmdata',
                      'for i in 1 2; do git push private pmdata; done', 'getopts ab opt; git push private pmdata',
+                     'for ((i=$n; i<2; i++)); do git push private pmdata; done',
                      'printf %s HOME; git push private pmdata'):
             with self.subTest(text):
                 self.assertIsNone(self.decide(text, environ=PM))

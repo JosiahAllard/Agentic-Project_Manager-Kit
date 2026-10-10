@@ -873,12 +873,16 @@ VAR_BUILTINS = {'read': ('adinNptu', 'a'), 'printf': ('v', 'v'), 'mapfile': ('dn
 def bash_var_targets(c):
     """The upper-case names a bash command assigns from its arguments rather than NAME=value:
     `read [options] NAME...` (and read -a NAME), `printf -v NAME`, `mapfile`/`readarray
-    [options] NAME`, `getopts OPTSTRING NAME`, `for NAME in ...`. A target the shell computes
+    [options] NAME`, `getopts OPTSTRING NAME`, `for NAME in ...` (and `for NAME; do`, which
+    loops over the positional parameters). A target the shell computes
     (read $n) is COMPUTED_NAME: it may be any variable."""
     words = c.words
     if c.shell != sh.BASH or not words:
         return []
-    if not quoted(c, words[0]) and words[0].text == 'for' and len(words) > 2 and words[2].text == 'in':
+    if not quoted(c, words[0]) and words[0].text == 'for' and len(words) > 1:
+        # for NAME in ...; for NAME; do; for NAME do (the last two loop over "$@"); not for ((...))
+        if words[1].text.startswith('(') or (len(words) > 2 and words[2].text not in ('in', 'do')):
+            return []
         return _var_target(c, words[1])
     inv = invocation(c)
     if inv is None:
