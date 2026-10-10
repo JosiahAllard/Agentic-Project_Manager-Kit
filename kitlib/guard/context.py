@@ -3,10 +3,21 @@ check). Ctx gathers it behind one object so tests hand the rules a fake machine:
 a constructor argument, and the defaults read this machine.
 
   place(path)        kitlib.guard.place.classify (repo.classify's answer, read from the filesystem
-                     where it can be; git otherwise), cached per path
+                     where it can be; git otherwise), cached per path. The one change to it: the
+                     PM data worktree (docs/pm-data-branch.md "Guard place and commit hooks"),
+                     which git calls LINKED, is answered as MAIN, so the main-checkout rules
+                     apply there. It is that worktree when the machine config's pm_data.path
+                     names its top (kitlib.pmdata.machine_settings), or when its HEAD is
+                     `ref: refs/heads/<branch>` of the kit-pm-data.json record in its common dir
+                     (kitlib.pmdata.read). A MAIN place is never changed.
+  is_pm_data(path)   True when place(path) is the PM data worktree
+  pm_data_error(path) why the guard cannot tell whether path's place (or any place, for a
+                     machine config whose pm_data does not read) is the PM data worktree, or
+                     None. The rules then deny every subagent write (fail closed).
   config(path)       the .kit.json of the main checkout `path` belongs to (never a worktree's own:
-                     an agent cannot loosen the rules from its branch); None when there is none
-                     or it does not load (config_error(path) says why)
+                     an agent cannot loosen the rules from its branch; the PM data worktree,
+                     answered as MAIN, is the one worktree whose own .kit.json is read); None
+                     when there is none or it does not load (config_error(path) says why)
   lock_held()        (True, None) only when MACHINE_LOCK_RUN names a run nest_check accepts:
                      the named wrapper is an ancestor of this process, alive, and holding. The
                      variable alone is never proof.
@@ -22,12 +33,16 @@ a constructor argument, and the defaults read this machine.
   session_role(ev)   who runs the session (kitlib.sessionmark): 'subagent' when the payload has
                      agent_id, else the launcher's mark (PM_KIT_ROLE), else 'owner': a session
                      nothing marks is the owner's own. Replaceable (role_resolver).
+
+The pm_data argument replaces the machine-config read (a callable returning
+kitlib.pmdata.machine_settings's answer, or raising its errors).
 """
 import json
 import os
 import tempfile
 
 from kitlib import config as kconfig
+from kitlib import pmdata
 from kitlib import sessionmark
 from kitlib.config import user as kuser
 from kitlib.git import refs, repo
@@ -62,9 +77,31 @@ def _default_lock_held(environ, store):
     return (True, None) if parent else (False, why)
 
 
+def _machine_pm_data(home):
+    """kitlib.pmdata.machine_settings(home). When the strict reader refuses the machine config
+    for another reason, a file that parses as an object without a pm_data key is still "no PM
+    data worktree" (None); anything else raises, and the guard fails closed."""
+    try:
+        return pmdata.machine_settings(home)
+    except kconfig.ConfigError:
+        try:
+            with open(kuser.config_file(home), encoding='utf-8-sig') as f:
+                data = json.load(f)
+        except (OSError, UnicodeDecodeError, ValueError, RecursionError):
+            data = None
+        if isinstance(data, dict) and pmdata.KEY not in data:
+            return None
+        raise
+
+
+def _same_dir(a, b):
+    return repo.real(a) == repo.real(b) or repo.same_path(a, b)
+
+
 class Ctx(object):
     def __init__(self, environ=None, home=None, store=None, classify=None, load=None,
-                 gate_ok=None, git=None, lock_held=None, role_resolver=None, tempdir=None):
+                 gate_ok=None, git=None, lock_held=None, role_resolver=None, tempdir=None,
+                 pm_data=None):
         self.environ = dict(os.environ if environ is None else environ)
         self.home = home or kuser.home_dir()
         self.store = store
@@ -77,6 +114,11 @@ class Ctx(object):
         self.tempdir = tempdir or self.environ.get('TEMP') or tempfile.gettempdir()
         self._places, self._configs, self._config_errors = {}, {}, {}
         self._user = None
+        self._pm_data = pm_data or (lambda: _machine_pm_data(self.home))
+        self._pm_settings = None                 # (settings or None, error or None), read once
+        self._pm_records = {}                    # normcase(common) -> (Record or None, error or None)
+        self._pm_places = set()                  # keys of places answered as the PM data worktree
+        self._pm_place_errors = {}               # key -> why the place could not be told
 
     # ------------------------------------------------------------ places and config
 
@@ -85,8 +127,69 @@ class Ctx(object):
             return repo.Place(repo.UNKNOWN, None, 'no path', None, None)
         key = os.path.normcase(os.path.abspath(path))
         if key not in self._places:
-            self._places[key] = self._classify(path)
+            p = self._classify(path)
+            if p.kind == repo.LINKED and p.top and self._pm_data_top(key, p):
+                self._pm_places.add(key)
+                p = repo.Place(repo.MAIN, p.top, '', p.git_dir, p.common)
+            self._places[key] = p
         return self._places[key]
+
+    def is_pm_data(self, path):
+        """True when place(path) is the PM data worktree (answered as MAIN)."""
+        if not path:
+            return False
+        self.place(path)
+        return os.path.normcase(os.path.abspath(path)) in self._pm_places
+
+    def pm_data_error(self, path=None):
+        """Why the guard cannot tell the PM data worktree: the machine config's pm_data does not
+        read (any path), or `path`'s place is a linked worktree whose repository's record or HEAD
+        does not read. None when it can tell."""
+        settings, why = self._pm_machine()
+        if why:
+            return why
+        if not path:
+            return None
+        self.place(path)
+        return self._pm_place_errors.get(os.path.normcase(os.path.abspath(path)))
+
+    def _pm_machine(self):
+        if self._pm_settings is None:
+            try:
+                self._pm_settings = (self._pm_data(), None)
+            except (pmdata.PmDataError, kconfig.ConfigError) as e:
+                self._pm_settings = (None, 'the machine config\'s %s cannot be read: %s' % (pmdata.KEY, e))
+        return self._pm_settings
+
+    def _pm_data_top(self, key, p):
+        """True when the linked worktree `p` is the PM data worktree (see place); an error that
+        stops the record signal from answering is kept for pm_data_error."""
+        settings, _ = self._pm_machine()
+        if settings and _same_dir(p.top, settings['path']):
+            return True
+        if not p.common or not p.git_dir:
+            return False
+        ck = os.path.normcase(p.common)
+        if ck not in self._pm_records:
+            try:
+                self._pm_records[ck] = (pmdata.read(p.common), None)
+            except pmdata.PmDataError as e:
+                self._pm_records[ck] = (None, str(e))
+        record, why = self._pm_records[ck]
+        if why:
+            self._pm_place_errors[key] = 'the PM data record cannot be read: %s' % why
+            return False
+        if record is None:
+            return False
+        head = os.path.join(p.git_dir, 'HEAD')
+        try:
+            with open(head, encoding='utf-8') as f:
+                text = f.read().strip()
+        except (OSError, UnicodeDecodeError) as e:
+            self._pm_place_errors[key] = 'cannot read %s to compare it with the PM data branch %s: %s' % (
+                head, record.branch, e)
+            return False
+        return text == 'ref: refs/heads/%s' % record.branch
 
     def main_top(self, path):
         """The main checkout's work tree root for `path` (a worktree answers its main checkout),

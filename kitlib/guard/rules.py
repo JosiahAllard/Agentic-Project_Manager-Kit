@@ -385,6 +385,30 @@ def lock_state(event, ctx, target, role, what):
 
 
 WT_ADD = 'git -C %s worktree add .claude/worktrees/<slug> -b <branch>'
+PM_DATA_ASK = 'ask the coordinator to take the change to the PM'
+PM_DATA_WHY = ('Agents do not work in the PM data worktree %s (a worktree made from it would read the kit\'s own '
+               '.kit.json, not its rules); the PM changes it.')
+
+
+def new_worktree(ctx, top):
+    """(sentence or None, command): the worktree to make of the main checkout `top`; for the PM
+    data worktree no worktree is offered (ctx.is_pm_data), a sentence saying so instead."""
+    if top and ctx.is_pm_data(top):
+        return PM_DATA_WHY % quote(top), PM_DATA_ASK
+    return None, WT_ADD % (quote(top) if top else '"<main checkout>"')
+
+
+def pm_data_unknown(ctx, target, cwd, role, what):
+    """A subagent write while the guard cannot tell the PM data worktree (ctx.pm_data_error):
+    denied, as for a broken machine config (fail closed)."""
+    if role != 'subagent':
+        return None
+    why = ctx.pm_data_error(target) or ctx.pm_data_error(cwd)
+    if not why:
+        return None
+    return refuse('pm-data', role, '%s: the guard cannot tell which worktree is the PM data worktree (%s), so it '
+                  'refuses every subagent write. The owner or the PM session fixes it. To read the machine config:'
+                  % (what, why), 'python -m json.tool %s' % quote(os.path.join(ctx.home, '.claude-pm-kit', 'config.json')))
 
 
 def own_worktree(ctx, cwd, main_top=None):
@@ -404,8 +428,8 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     may not edit one, and an agent session's write outside its roots (write_jail). `rewrite(path)`
     gives the same edit aimed at `path` (the alternative); `run` the command to rerun from the
     worktree when it writes into the directory it runs in."""
-    d = ledger_rule(ctx, target, role, what) or lock_state(event, ctx, target, role, what) or \
-        kit_json(event, ctx, target, role, what)
+    d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
+        lock_state(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what)
     if d:
         return d
     return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run) or \
@@ -418,7 +442,7 @@ def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite
     if perms.get('edit_main_checkout'):
         return None
     main_top = ctx.main_top(cwd) if cwd else None
-    new_wt = WT_ADD % (quote(main_top) if main_top else '"<main checkout>"')
+    new_wt = new_worktree(ctx, main_top)[1]
     if target is None:
         mine = own_worktree(ctx, cwd)
         instead = rewrite(fwd(mine) + '/<file>') if mine and rewrite is not None else new_wt
@@ -513,8 +537,10 @@ def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None):
             return 'Make the change in your worktree:', rewrite(fwd(os.path.join(mine, rel)))
         if run is not None:
             return 'Run it with %s as the working directory:' % quote(os.path.join(mine, rel)), run
-    return ('Make the change in a worktree of it (%s there); the lander brings it to main:' % fwd(rel),
-            WT_ADD % quote(main_top))
+    no_wt, instead = new_worktree(ctx, main_top)
+    if no_wt:
+        return no_wt, instead
+    return 'Make the change in a worktree of it (%s there); the lander brings it to main:' % fwd(rel), instead
 
 
 # ---------------------------------------------------------------- shell writes
@@ -1811,6 +1837,9 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
                                 rewrite=lambda path, w=w: retarget(cmd, w, path))
     if git_reads(gc) or lander_main_git(event, ctx, cmd, inv, gc):
         return None
+    d = pm_data_unknown(ctx, gc.dir, cwd, role, '`%s`' % bare(cmd))
+    if d:
+        return d
     rs = rs or jail_roots(ctx, cwd)
     verdict, root = jail.judge(gc.dir, rs)
     if verdict is None:
@@ -1835,8 +1864,10 @@ def git_in_worktree(ctx, cmd, gc, main_top, cwd):
     mine = own_worktree(ctx, cwd, main_top)
     if mine:
         return 'Run it in your worktree:', ('git -C %s %s %s' % (quote(mine), gc.sub, rest)).rstrip()
-    return ('Work in a worktree and run git %s there; the lander brings it to main:' % gc.sub,
-            WT_ADD % quote(main_top))
+    no_wt, instead = new_worktree(ctx, main_top)
+    if no_wt:
+        return no_wt, instead
+    return 'Work in a worktree and run git %s there; the lander brings it to main:' % gc.sub, instead
 
 
 def git_unplaced(ctx, cmd, gc, cwd):
