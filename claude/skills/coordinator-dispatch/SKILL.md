@@ -105,5 +105,5 @@ the cheap/strong split, the coding ladder, model and effort rules, `deep-worker`
   state -> `docs/ops/state.local.md`. `.claude/worktrees/` is unaffected: create and remove
   worktrees as the profile says.
 - **Grow the tool set.** Weekly, run the repetition report on the repo (the kit's
-  `optional/usage/repetition_report.py`, installed under `~/.claude/tools/usage/`): repeated shell shapes, or a scratch script written twice, become lines in the repo's
+  `${CLAUDE_PLUGIN_ROOT}/optional/usage/repetition_report.py`, installed under `~/.claude/tools/usage/`): repeated shell shapes, or a scratch script written twice, become lines in the repo's
   `docs/ops/tool-requests.md`; build the top one as ordinary work (`tools/` is High risk).

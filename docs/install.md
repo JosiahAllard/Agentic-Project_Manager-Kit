@@ -136,6 +136,17 @@ including `land.py` and `ledger.py`. The tools in the list below run by the kit'
   against a repository named by `-C` (docs/test-tools.md, docs/redfirst.md, docs/lock-release.md,
   docs/daily-full.md, docs/backlog-lint.md, docs/ROSTER.md).
 
+### Plugin install (local marketplace)
+
+`.claude-plugin/marketplace.json` lists the plugin with `"source": "./"`, so a kit checkout is a
+marketplace of its own. Add it by path and install from it: `claude plugin marketplace add <kit>`,
+then `claude plugin install claude-pm-kit@pm-kit`. A relative-path plugin of a local marketplace
+loads in place, so `${CLAUDE_PLUGIN_ROOT}` is the checkout the stubs run: the skills and agents write
+every kit-only path (the tools above, `kitlib/`, `optional/`, the kit's docs) as
+`${CLAUDE_PLUGIN_ROOT}/<path>` (tests/skills checks it), and only stub tools repo-relative. Source:
+https://code.claude.com/docs/en/plugin-marketplaces. `claude plugin validate` still reports the
+plugin name as reserved (a `claude-` prefix); the name is unchanged and installs.
+
 `tools/backlog.py add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md).
 

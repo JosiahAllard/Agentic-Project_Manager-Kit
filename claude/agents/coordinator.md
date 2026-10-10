@@ -30,7 +30,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 1. `ListAgents`; another coordinator live -> stop, tell the owner. One at a time.
 2. Read both profiles. None -> read repo instructions, README, CI config, scripts; draft both
-   **in your scratch folder** (from the kit checkout's `templates/common/coordinator-profile.TEMPLATE.md`
+   **in your scratch folder** (from `${CLAUDE_PLUGIN_ROOT}/templates/common/coordinator-profile.TEMPLATE.md`
    and `templates/common/agent-profile.TEMPLATE.md`); mark every inference; ask the owner to approve. Writing
    into `.claude/` is owner-only; anything that builds, tests or lands waits for that approval.
 3. Check in with the project manager at once: `ListAgents`, find the "Project Manager" session

@@ -56,7 +56,7 @@ Missing any: say what you need, do nothing.
 5. Run the landing tool from the main checkout, with output to a log file in your
    scratch folder:
    `python tools/land.py <branch> --expect-main <sha> --expect-tip <tip> [--lane <lane>] [--summary <text>]`
-   (the repo's stub; the kit checkout's `tools/land.py` where the repo has none).
+   (the repo's stub; `${CLAUDE_PLUGIN_ROOT}/tools/land.py` where the repo has none).
    It waits for its turn in the repo's landing queue (`"landing".wait_s`, or
    `--wait <s>`), merges with `--no-ff`, gates the merged tree, pushes, verifies
    with `ls-remote`, and undoes the merge on red; `python tools/land.py --queue`

@@ -1,6 +1,7 @@
 import re
 import unittest
 
+from kitlib.stubs import SHARED
 from tests.shipped import ROOT, frontmatter, violations
 
 SKILLS = ROOT / "claude" / "skills"
@@ -13,6 +14,18 @@ EXTRA_FILES = {"coordinator-dispatch": ["roster.md"]}
 # one repo's own: never shipped in the plugin (docs/shipping.md, "Stays repo-local")
 REPO_LOCAL = {"worktree-start"}
 REPO_LOCAL_SUFFIX = "-train-eval"     # the training-and-evaluation workflow skill
+
+
+# kit-only paths, written for the plugin's root (substituted at load); and repo-relative kit paths
+PLUGIN_RX = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([\w./-]*[\w-])")
+REPO_RX = re.compile(r"(?<![\w/}.~-])((?:tools|kitlib|optional)/[\w./-]+?\.(?:py|json))")
+# files a repo supplies itself, not the kit (the skills say so beside each)
+REPO_FILES = {"tools/gate.json"}
+
+
+def _shipped_text_files():
+    return (list(SKILLS.glob("*/*.md")) + list(GODOT_SKILL.glob("*/SKILL.md"))
+            + list((ROOT / "claude" / "agents").glob("*.md")))
 
 
 class SkillFilesTest(unittest.TestCase):
@@ -40,15 +53,19 @@ class SkillFilesTest(unittest.TestCase):
         self.assertEqual(violations(GODOT_SKILL), [])
 
     def test_kit_tools_named_exist(self):
-        """A skill names a kit tool by path: every `tools/<name>.py`, `optional/..` and kitlib path must exist."""
-        rx = re.compile(r"((?:tools|kitlib|optional)/[\w./-]+?\.(?:py|json))")
-        # files a repo supplies itself, not the kit (the skills say so beside each)
-        repo_files = {"tools/doc_index.py", "tools/doc_budget.py", "tools/gate.json"}
-        for p in list(SKILLS.glob("*/SKILL.md")) + list(GODOT_SKILL.glob("*/SKILL.md")):
-            for rel in rx.findall(p.read_text(encoding="utf-8")):
-                if rel in repo_files:
+        """Kit-only paths are written `${CLAUDE_PLUGIN_ROOT}/<path>` and exist in the kit; a repo-relative
+        `tools/<name>.py` is one a repo has through a stub (kitlib.stubs.SHARED) or supplies itself."""
+        for p in _shipped_text_files():
+            text = p.read_text(encoding="utf-8")
+            for rel in PLUGIN_RX.findall(text):
+                self.assertTrue((ROOT / rel).exists(), f"{p.name} names ${{CLAUDE_PLUGIN_ROOT}}/{rel}")
+            for rel in REPO_RX.findall(text):
+                if GODOT_SKILL in p.parents:     # a repo-local template, not loaded as a plugin: no root variable
+                    self.assertTrue(rel in REPO_FILES or (ROOT / rel).exists(), f"{p.parent.name} names {rel}")
                     continue
-                self.assertTrue((ROOT / rel).exists(), f"{p.parent.name} names {rel}")
+                self.assertTrue(rel in REPO_FILES or (rel.startswith("tools/") and
+                                                      rel[len("tools/"):-len(".py")] in SHARED),
+                                f"{p.parent.name}/{p.name} names {rel}: not a stub tool; write ${{CLAUDE_PLUGIN_ROOT}}/{rel}")
 
 
 if __name__ == "__main__":

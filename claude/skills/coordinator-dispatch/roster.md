@@ -35,7 +35,7 @@ Read from skill `coordinator-dispatch`, "Which agent, which model". A repo's own
   failed at or plainly cannot do). opus-worker not installed ->
   `worker` + `model: opus`. Never `general-purpose` for code. An escalation = reassign upward
   with its findings, not a failure.
-- Model and effort per agent are pinned in each agent file's frontmatter (the kit sets them in its docs/ROSTER.md).
+- Model and effort per agent are pinned in each agent file's frontmatter (the kit sets them in its `${CLAUDE_PLUGIN_ROOT}/docs/ROSTER.md`).
   Built-ins pin nothing -> pass `model` every dispatch. Override only upward for risk, and say so
   in status. **Never `fable`** for any agent, reviews included, unless the owner asks on that task:
   `opus` is the ceiling, `deep-worker` the step up.
