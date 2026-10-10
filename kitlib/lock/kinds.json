@@ -4,7 +4,7 @@
   "engine-test": {"cpu": "medium", "gpu": 0, "warn_min": 30},
   "engine-run": {"cpu": "medium", "gpu": 0, "warn_min": 30},
   "build": {"cpu": "medium", "gpu": 0, "warn_min": 60},
-  "worldgraph": {"cpu": "heavy", "gpu": 0, "warn_min": 120},
+  "graph-build": {"cpu": "heavy", "gpu": 0, "warn_min": 120},
   "daily-full": {"cpu": "heavy", "gpu": 0, "warn_min": 120},
   "cpu-eval": {"cpu": "heavy", "gpu": 0, "warn_min": 120},
   "local-ai": {"cpu": "medium", "gpu": "pool", "share": true, "warn_min": 30},
