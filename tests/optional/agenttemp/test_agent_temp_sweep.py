@@ -16,6 +16,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'optional', 'agenttemp'))
 import agent_temp_sweep as S  # noqa: E402
+from kitlib.config import user as kuser  # noqa: E402
 
 LATER = time.time() + 10 * S.DAY        # every entry made now is 10 days old then
 
@@ -36,7 +37,7 @@ class Case(unittest.TestCase):
         os.makedirs(self.dir)
 
     def config(self, cfg):
-        put(os.path.join(self.home, '.claude-pm-kit', 'config.json'), json.dumps(cfg))
+        put(kuser.config_file(self.home), json.dumps(cfg))
 
     def young(self, path):
         """Makes path written 1 day before LATER."""
@@ -75,8 +76,7 @@ class Config(Case):
 
     def test_its_config_folder_is_the_kits(self):
         # The script ships alone, so it keeps its own copy of the folder name.
-        from kitlib.config import user
-        self.assertEqual(S.CONFIG_DIR, user.DIR_NAME)
+        self.assertEqual(S.CONFIG_DIR, kuser.DIR_NAME)
 
     def test_unsafe_dirs_are_refused(self):
         root = os.path.abspath(os.sep)

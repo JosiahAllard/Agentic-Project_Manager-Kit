@@ -20,6 +20,7 @@ from tests.gitfixture import EMAIL, NAME, built_copy, fixture_env
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(KIT_ROOT, 'tools'))
 import ruling_cites as cli  # noqa: E402
+from kitlib.config import user as kuser  # noqa: E402
 
 LEDGER = ('# Rulings ledger (test fixture)\n\n'
           '## R-9001 | 2026-09-25 08:00Z | retribution | typed\nQ: q\nA: a\n\n'
@@ -72,7 +73,7 @@ class Fixture(unittest.TestCase):
         git('switch', '-q', '-c', 'topic')
 
     def machine_config(self, data):
-        folder = os.path.join(self.home, '.claude-pm-kit')
+        folder = kuser.config_dir(self.home)
         os.makedirs(folder, exist_ok=True)
         with open(os.path.join(folder, 'config.json'), 'w', encoding='utf-8') as fh:
             json.dump(data, fh)

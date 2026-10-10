@@ -13,6 +13,7 @@ from claude import claude_host as H
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "tools"))
 import pm_watch as cli                                              # noqa: E402
+from kitlib.config import user as kuser                             # noqa: E402
 
 
 class UsageEvents(unittest.TestCase):
@@ -271,8 +272,8 @@ class Cli(unittest.TestCase):
     def test_launcher_configured_reads_the_machine_config(self):
         with tempfile.TemporaryDirectory() as home:
             self.assertFalse(W.launcher_configured(home))
-            os.makedirs(os.path.join(home, ".claude-pm-kit"))
-            with open(os.path.join(home, ".claude-pm-kit", "config.json"), "w", encoding="utf-8") as f:
+            os.makedirs(kuser.config_dir(home))
+            with open(kuser.config_file(home), "w", encoding="utf-8") as f:
                 json.dump({"launcher": {"accounts": {"1": ["~/.claude"]}}}, f)
             self.assertTrue(W.launcher_configured(home))
 

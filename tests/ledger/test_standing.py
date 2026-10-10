@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 from kitlib.ledger import standing
+from kitlib.config import user as kuser
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     'tools', 'ledger.py')
@@ -77,8 +78,8 @@ class CliTest(unittest.TestCase):
         self.ledger = os.path.join(folder, 'LEDGER.md')
         self.digest = os.path.join(folder, 'STANDING.md')
         self.put(self.ledger, LEDGER)
-        os.makedirs(os.path.join(self.home, '.claude-pm-kit'))
-        self.put(os.path.join(self.home, '.claude-pm-kit', 'config.json'),
+        os.makedirs(kuser.config_dir(self.home))
+        self.put(kuser.config_file(self.home),
                  json.dumps({'ledger_path': self.ledger}))
 
     def put(self, path, text):

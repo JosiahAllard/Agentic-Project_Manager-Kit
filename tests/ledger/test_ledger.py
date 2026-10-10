@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from kitlib import ledger
+from kitlib.config import user as kuser
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     'tools', 'ledger.py')
@@ -78,8 +79,8 @@ class CliTest(unittest.TestCase):
     def run_tool(self, args, config):
         with tempfile.TemporaryDirectory() as d:
             if config is not None:
-                os.makedirs(os.path.join(d, '.claude-pm-kit'))
-                with open(os.path.join(d, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+                os.makedirs(kuser.config_dir(d))
+                with open(kuser.config_file(d), 'w', encoding='utf-8') as f:
                     f.write(config(d))
             env = dict(os.environ, USERPROFILE=d, HOME=d)
             return subprocess.run([sys.executable, TOOL] + args, capture_output=True, text=True, env=env, timeout=30)

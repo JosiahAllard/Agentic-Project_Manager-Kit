@@ -107,14 +107,14 @@ class UserConfigTest(unittest.TestCase):
             self.assertIn(why, str(cm.exception))
 
     def test_the_default_home_is_the_user_profile(self):
-        self.assertEqual(user.config_file(), os.path.join(os.path.expanduser('~'), '.claude-pm-kit',
+        self.assertEqual(user.config_file(), os.path.join(os.path.expanduser('~'), user.DIR_NAME,
                                                           'config.json'))
 
     def test_home_follows_userprofile_on_windows_and_home_elsewhere(self):
         var = 'USERPROFILE' if os.name == 'nt' else 'HOME'
         self.write({'ledger_path': self.ledger})
         with mock.patch.dict(os.environ, {var: self.home}):
-            self.assertEqual(user.config_file(), os.path.join(self.home, '.claude-pm-kit', 'config.json'))
+            self.assertEqual(user.config_file(), os.path.join(self.home, user.DIR_NAME, 'config.json'))
             self.assertEqual(user.ledger_path(), self.ledger)
 
 

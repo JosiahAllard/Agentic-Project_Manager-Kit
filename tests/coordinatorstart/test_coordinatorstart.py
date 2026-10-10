@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from kitlib import coordinatorstart
+from kitlib.config import user as kuser
 
 HOOK = os.path.join(os.path.dirname(__file__), "..", "..", "claude", "hooks", "coordinator_session_start.py")
 COND = {"PM_KIT_ROLE": "coordinator"}
@@ -329,8 +330,8 @@ class ContextTest(unittest.TestCase):
 class HookTest(unittest.TestCase):
     def run_hook(self, role, config):
         with tempfile.TemporaryDirectory() as d:
-            os.makedirs(os.path.join(d, ".claude-pm-kit"))
-            write(os.path.join(d, ".claude-pm-kit", "config.json"), config)
+            os.makedirs(kuser.config_dir(d))
+            write(kuser.config_file(d), config)
             env = {k: v for k, v in os.environ.items() if k != "PM_KIT_ROLE"}
             env.update(USERPROFILE=d, HOME=d)
             if role:
