@@ -200,11 +200,14 @@ def _data_objects(root, record):
 def _pushed_objects(root, local_sha, remote_sha, name, remotes):
     """`(set of objects the push may send, None)` or `(None, why)`: reachable from `local_sha`,
     not from the remote sha it replaces (when this clone has it) nor from the named remote's
-    tracking refs."""
+    tracking refs. `--remotes=<name>` is a pattern over refs/remotes/<name>/, so it is left out
+    (nothing subtracted) when another remote's name starts with `<name>/`, whose tracking refs it
+    would match too, or when the name holds a pattern character."""
     args = ['rev-list', '--objects', '--no-object-names', local_sha, '--not']
     if remote_sha.strip('0') and _have(root, remote_sha):
         args.append(remote_sha)
-    if name in remotes and not refs.bad_rev(name):
+    nested = any(other.startswith(name + '/') for other in remotes)
+    if name in remotes and not nested and not refs.bad_rev(name) and not set('*?[\\') & set(name):
         args.append('--remotes=%s' % name)
     out, why = cmd.run_text(args + ['--'], root)
     if out is None:

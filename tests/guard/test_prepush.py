@@ -676,6 +676,39 @@ class PmDataTest(PrePushCase):
         self.refused('private', 'pmdata', why='not its private remote')
         self.assertEqual(self.ls('origin', 'refs/heads/pmdata'), '')
 
+    def test_a_nested_remote_name_does_not_hide_the_objects(self):
+        # --remotes=origin also matches refs/remotes/origin/sub/*, the tracking refs of a remote
+        # named origin/sub: one of them on the data commit must not hide the copy's blob
+        nested = os.path.join(self.repo.base, 'nested.git')
+        self.repo.git('init', '-q', '--bare', nested, cwd=self.repo.base)
+        # `git remote add` refuses the name (a subset of origin); config written directly holds it
+        self.repo.git('config', 'remote.origin/sub.url', nested)
+        self.repo.git('update-ref', 'refs/remotes/origin/sub/x', self.data)
+        self.new_branch('kit/x')
+        self.repo.git('cherry-pick', self.data)
+        self.refused('origin', 'kit/x', why='the PM data branch holds')
+        self.assertEqual(self.ls('origin', 'refs/heads/kit/x'), '')
+
+    def test_objects_git_cannot_list_refuse(self):
+        line = 'refs/heads/kit/x %s refs/heads/kit/x %s' % (self.with_kit, '0' * 40)
+        real = prepush.cmd.run_text
+
+        def run_text(args, *rest, **kw):
+            if args[:1] == ['rev-list'] and '--no-object-names' in args:
+                return None, 'boom'
+            return real(args, *rest, **kw)
+
+        with mock.patch.object(prepush.cmd, 'run_text', side_effect=run_text):
+            why = prepush.leak_refusal(self.repo.root, [line], 'origin', self.repo.remote)
+        self.assertIn('cannot list the objects refs/heads/kit/x', why or '')
+        self.assertIn('boom', why)
+
+    def test_a_git_directory_git_cannot_name_refuses(self):
+        line = 'refs/heads/main %s refs/heads/main %s' % (self.with_kit, '0' * 40)
+        with mock.patch.object(prepush.gitrepo, 'common_dir', return_value=(None, 'git timed out')):
+            why = prepush.leak_refusal(self.repo.root, [line], 'origin', self.repo.remote)
+        self.assertIn('cannot find the git directory to look for kit-pm-data.json (git timed out)', why or '')
+
     def test_remotes_git_cannot_read_refuse(self):
         line = 'refs/heads/main %s refs/heads/main %s' % (self.with_kit, '0' * 40)
         real = prepush.cmd.call
