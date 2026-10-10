@@ -180,8 +180,9 @@ def is_owner_session(event, ctx):
 
 
 def agent_session(event, ctx):
-    """True for a subagent, or a session whose mark is one of guard_agent_marks (default:
-    coordinator), case ignored. The rules only agents are held to (kill by name, lock state,
+    """True for a subagent, or a session whose mark is one of guard_agent_marks (default
+    AGENT_MARKS: coordinator, its old name conductor, deep-worker, consultant and pm), case
+    ignored; a guard_agent_marks value replaces the default list. The rules only agents are held to (kill by name, lock state,
     kit-json, the write jail) use it."""
     if (event or {}).get('agent_id'):
         return True
@@ -189,7 +190,9 @@ def agent_session(event, ctx):
     return str(ctx.session_role(event) or '').lower() in {str(m).lower() for m in marks}
 
 
-AGENT_MARKS = ('coordinator', 'conductor')  # 'conductor' is the old mark, until the launcher is renamed
+# every session kind the kit launcher marks but `plain` and other agents' names; 'conductor' is the
+# coordinator's old mark, until the launcher is renamed
+AGENT_MARKS = ('coordinator', 'conductor', 'deep-worker', 'consultant', 'pm')
 
 
 # ---------------------------------------------------------------- owner lock tools

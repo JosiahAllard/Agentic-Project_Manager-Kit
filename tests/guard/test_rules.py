@@ -612,6 +612,7 @@ UI_WIN = 'C:\\tools\\lock\\reserve_ui.pyw'
 UI_REL = 'tools/machine_lock/reserve_ui.pyw'
 OWNER_ONLY = 'owner-only lock tools are run by the owner, not agents'
 MARKED = {context.ROLE_ENV: 'coordinator'}         # a main session the launcher marked: not the owner's
+UNHELD = {context.ROLE_ENV: 'plain'}             # a marked session the write jail does not hold
 
 
 class OwnerLockTools(unittest.TestCase):
@@ -905,17 +906,17 @@ class PmDataNoVerify(unittest.TestCase):
 
     def test_a_computed_push_word_is_denied(self):
         # the guard cannot tell what a computed word expands to, and --no-verify skips the hook
-        pm = {context.ROLE_ENV: 'pm'}             # a session the write jail does not hold
+        unheld = UNHELD
         for text in self.COMPUTED:
             with self.subTest(text):
-                d = self.decide(text, sub=False, environ=pm)
+                d = self.decide(text, sub=False, environ=unheld)
                 self.assert_denied(d, 'git -C "%s" push <remote> <branch>' % W.fwd(self.w.wt))
                 self.assertIn('cannot judge a computed push word with PM data present', d.reason)
                 self.assert_denied(self.decide(text))                       # a subagent
                 self.assertIsNone(self.decide(text, sub=False))             # the owner's own
-        d = decide(ps('git push $env:F origin x', self.w.wt), self.w.ctx(environ=pm))
+        d = decide(ps('git push $env:F origin x', self.w.wt), self.w.ctx(environ=unheld))
         self.assert_denied(d)
-        self.assertIsNone(self.decide('git push origin x', sub=False, environ=pm))     # literal
+        self.assertIsNone(self.decide('git push origin x', sub=False, environ=unheld))     # literal
 
     XARGS = ("printf -- '--no-verify\\n' | xargs git push origin pmdata",
              'echo --no-verify | xargs -r git -C . push origin pmdata')
@@ -923,71 +924,71 @@ class PmDataNoVerify(unittest.TestCase):
 
     def test_git_push_run_by_xargs_is_denied(self):
         # xargs appends its input to git's arguments: --no-verify, or the subcommand itself
-        pm = {context.ROLE_ENV: 'pm'}
+        unheld = UNHELD
         for text in self.XARGS + self.BARE_XARGS:
             with self.subTest(text):
-                d = self.decide(text, sub=False, environ=pm)
+                d = self.decide(text, sub=False, environ=unheld)
                 self.assert_denied(d)
                 self.assertIsNotNone(self.decide(text))                     # a subagent
                 d = self.decide(text, sub=False)                            # the owner's own
                 self.assertNotEqual(d and d.rule, 'git-push-pmdata')
         # an unreadable line around it is read again
-        d = self.decide("echo 'x ; echo push | xargs git", sub=False, environ=pm)
+        d = self.decide("echo 'x ; echo push | xargs git", sub=False, environ=unheld)
         self.assert_denied(d)
         # xargs running another git subcommand is not a push
-        self.assertIsNone(self.decide('echo a.txt | xargs git add --', sub=False, environ=pm))
+        self.assertIsNone(self.decide('echo a.txt | xargs git add --', sub=False, environ=unheld))
 
     def test_a_bare_xargs_git_is_denied_wherever_it_runs(self):
         # the input may name another repository (-C, --git-dir) and the subcommand: from a folder
         # with no record (no checkout at all here) the guard still cannot tell, so it denies
-        pm = {context.ROLE_ENV: 'pm'}
+        unheld = UNHELD
         main = W.fwd(self.w.main)
         for text in ("printf '%%s\\n' -C %s push --no-verify origin pmdata | xargs git" % main,
                      "printf '%%s\\n' --git-dir=%s/.git push --no-verify origin pmdata | xargs git" % main,
                      'echo push --no-verify origin pmdata | xargs git'):
             for cwd in (self.w.plain, self.w.wt):
                 with self.subTest(text, cwd=cwd):
-                    d = self.decide(text, sub=False, environ=pm, cwd=cwd)
+                    d = self.decide(text, sub=False, environ=unheld, cwd=cwd)
                     self.assert_denied(d, 'git -C "<checkout>" <subcommand> <arguments>')
                     self.assertIn('cannot tell which repository or command xargs will run git with', d.reason)
                     self.assertIsNotNone(self.decide(text, cwd=cwd))        # a subagent
                     d = self.decide(text, sub=False, cwd=cwd)                # the owner's own
                     self.assertNotEqual(d and d.rule, 'git-push-pmdata')
         os.remove(self.record)                                              # machine-wide
-        self.assert_denied(self.decide(self.BARE_XARGS[0], sub=False, environ=pm, cwd=self.w.plain))
-        self.assert_denied(self.decide("echo 'x ; echo push | xargs git", sub=False, environ=pm, cwd=self.w.plain))
+        self.assert_denied(self.decide(self.BARE_XARGS[0], sub=False, environ=unheld, cwd=self.w.plain))
+        self.assert_denied(self.decide("echo 'x ; echo push | xargs git", sub=False, environ=unheld, cwd=self.w.plain))
         self.assertIsNone(self.decide("echo 'x ; echo push | xargs git", sub=False, cwd=self.w.plain))
-        self.assertIsNone(self.decide('echo a.txt | xargs git add --', sub=False, environ=pm, cwd=self.w.plain))
+        self.assertIsNone(self.decide('echo a.txt | xargs git add --', sub=False, environ=unheld, cwd=self.w.plain))
 
     def test_git_push_run_by_xargs_without_a_record_is_unchanged(self):
         # with a literal subcommand the record of the repository decides
         os.remove(self.record)
-        pm = {context.ROLE_ENV: 'pm'}
+        unheld = UNHELD
         for text in self.XARGS:
             with self.subTest(text):
-                d = self.decide(text, sub=False, environ=pm)
+                d = self.decide(text, sub=False, environ=unheld)
                 self.assertNotEqual(d and d.rule, 'git-push-pmdata')
 
     def test_a_computed_push_word_without_a_record_is_unchanged(self):
         os.remove(self.record)
-        pm = {context.ROLE_ENV: 'pm'}
+        unheld = UNHELD
         for text in self.COMPUTED:
             with self.subTest(text):
-                self.assertIsNone(self.decide(text, sub=False, environ=pm))
+                self.assertIsNone(self.decide(text, sub=False, environ=unheld))
                 d = self.decide(text)
                 self.assertNotEqual(d and d.rule, 'git-push-pmdata')
 
     def test_send_pack_is_denied(self):
         # send-pack pushes without running the pre-push hook, in any form
         push = 'git -C "%s" push <remote> <branch>' % W.fwd(self.w.wt)
-        pm = {context.ROLE_ENV: 'pm'}
+        unheld = UNHELD
         for text in ('git send-pack ../public.git refs/heads/pmdata',
                      'git -c x.y=1 send-pack --all ../public.git',
                      'git-send-pack ../public.git pmdata',
                      '"C:/Program Files/Git/mingw64/libexec/git-core/git-send-pack.exe" ../public.git pmdata'):
             with self.subTest(text):
                 self.assert_denied(self.decide(text), push)
-                self.assert_denied(self.decide(text, sub=False, environ=pm), push)
+                self.assert_denied(self.decide(text, sub=False, environ=unheld), push)
                 self.assertIsNone(self.decide(text, sub=False))           # the owner's own
         self.assert_denied(self.decide('git -C "%s" send-pack x pmdata' % W.fwd(self.w.unknown)))
         os.remove(self.record)
@@ -995,26 +996,26 @@ class PmDataNoVerify(unittest.TestCase):
         self.assertIsNone(self.decide('git-send-pack ../public.git pmdata'))
 
     def test_send_pack_on_an_unreadable_line_is_read_again(self):
-        pm = {context.ROLE_ENV: 'pm'}
+        unheld = UNHELD
         for text in ("echo 'x ; git send-pack ../public.git pmdata", "echo 'x ; git-send-pack ../public.git pmdata"):
             with self.subTest(text):
-                d = self.decide(text, sub=False, environ=pm)
+                d = self.decide(text, sub=False, environ=unheld)
                 self.assert_denied(d)
                 self.assertIn('could not read this command', d.reason)
                 self.assertIsNone(self.decide(text, sub=False))
         os.remove(self.record)
-        self.assertIsNone(self.decide("echo 'x ; git send-pack ../public.git pmdata", sub=False, environ=pm))
+        self.assertIsNone(self.decide("echo 'x ; git send-pack ../public.git pmdata", sub=False, environ=unheld))
 
     def test_an_unreadable_line_is_read_again(self):
         # the unclosed quote hides the push from the parse; the fallback pattern finds it
         text = "echo 'x ; git push --no-verify origin kit/wt"
-        pm = {context.ROLE_ENV: 'pm'}           # a session the write jail does not hold
-        d = self.decide(text, sub=False, environ=pm)
+        unheld = UNHELD
+        d = self.decide(text, sub=False, environ=unheld)
         self.assert_denied(d)
         self.assertIn('could not read this command', d.reason)
         self.assertIsNone(self.decide(text, sub=False))                  # the owner's own
         os.remove(self.record)
-        self.assertIsNone(self.decide(text, sub=False, environ=pm))
+        self.assertIsNone(self.decide(text, sub=False, environ=unheld))
 
 
 class RolesFromConfig(unittest.TestCase):

@@ -19,6 +19,8 @@ COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 OLD_MARK = {context.ROLE_ENV: 'conductor'}   # the old name of the coordinator's mark, still held
 PM = {context.ROLE_ENV: 'pm'}
 DEEP = {context.ROLE_ENV: 'deep-worker'}
+CONSULTANT = {context.ROLE_ENV: 'consultant'}
+PLAIN = {context.ROLE_ENV: 'plain'}          # a launcher mark the jail does not hold by default
 
 
 class JailWorld(W.World):
@@ -180,7 +182,8 @@ class Cwd(Base):
 
 class Sessions(Base):
     """Agent sessions are the guard's (docs/guard.md "Session mark"): subagents and the marks in
-    guard_agent_marks. The owner's session and the PM's are not jailed."""
+    guard_agent_marks (default: coordinator, conductor, deep-worker, consultant, pm). The owner's
+    unmarked session and other marks (plain) are not jailed."""
 
     def outside(self, env, sub=False):
         return self.write(os.path.join(self.w.plain, 'x.txt'), env=env, sub=sub)
@@ -192,16 +195,23 @@ class Sessions(Base):
         self.jailed(self.outside(COORDINATOR))
         self.jailed(self.outside(OLD_MARK))
 
-    def test_owner_and_pm_are_exempt(self):
+    def test_the_owner_is_exempt(self):
         self.allowed(self.outside({}))
-        self.allowed(self.outside(PM))
+
+    def test_every_launcher_agent_mark_is_held_by_default(self):
+        for env in (PM, DEEP, CONSULTANT, {context.ROLE_ENV: 'PM'}):
+            with self.subTest(env):
+                self.jailed(self.outside(env))
 
     def test_a_mark_not_listed_is_exempt(self):
-        self.allowed(self.outside(DEEP))
+        self.allowed(self.outside(PLAIN))
+        self.allowed(self.outside({context.ROLE_ENV: 'strong-worker'}))     # start --agent <other>
 
     def test_marks_from_the_machine_config(self):
-        self.w.user_config({'guard_agent_marks': ['coordinator', 'deep-worker']})
-        self.jailed(self.outside(DEEP))
+        # the setting replaces the default list
+        self.w.user_config({'guard_agent_marks': ['coordinator', 'plain']})
+        self.jailed(self.outside(PLAIN))
+        self.allowed(self.outside(PM))
 
 
 class DataRoots(Base):
@@ -995,12 +1005,12 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.assertFalse(cm.read(text, sh.BASH if tool == 'Bash' else sh.PS, W.fwd(self.w.wt)).clean, text)
                 self.jailed(self.git(text, 'worker', tool=tool), 'unreadable')
-            for environ in (COORDINATOR, OLD_MARK):
+            for environ in (COORDINATOR, OLD_MARK, PM, DEEP, CONSULTANT):
                 with self.subTest(text, mark=environ[context.ROLE_ENV]):
                     d = self.jailed(self.marked(text, environ, tool))
                     self.assertIn('run the git in its own call', d.reason)
             # the owner's session and the marks the jail does not hold keep the line in a worktree
-            for environ in ({}, {context.ROLE_ENV: 'pm'}, {context.ROLE_ENV: 'deep-worker'}):
+            for environ in ({}, PLAIN):
                 with self.subTest(text, mark=environ.get(context.ROLE_ENV, 'owner')):
                     self.allowed(self.marked(text, environ, tool))
         # an unreadable line with no git word, or only a .git path, is not the jail's
