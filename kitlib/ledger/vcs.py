@@ -6,8 +6,8 @@ detached HEAD, a branch other than that repository's main branch (unless branch_
 changes to the ledger file (another edit would be swept in). `finish` then commits the ledger file
 alone (`git commit -- <file>`, never -a: other staged files stay staged and out of the commit) as
 `ledger: R-nnnn <title>` with the kit's Co-Authored-By trailer (kitlib.commit.coauthor), and with
-push sends the current branch to that repository's `repo.remote` (`origin` by default). A failure after the write leaves the entry written and
-says what was not done. Nothing here prints or exits.
+push sends the current branch to that repository's `repo.remote` (`origin` by default). A failure
+after the write leaves the entry written and says what was not done. Nothing here prints or exits.
 
 `prepare(..., noun=)` and `commit_one` serve any one file a kit tool writes and then commits alone
 (tools/pending.py too); `noun` names it in the refusals.
