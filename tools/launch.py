@@ -143,7 +143,8 @@ def run(a, settings, host):
         return start.consultant(settings, host, a.repo_path, a.repo, a.account, a.autocompact, a.model, a.effort,
                                 a.notes_path, a.force, a.replace, a.plan)
     if a.cmd == 'stop':
-        return stop.stop(settings, host, a.name, a.successor, a.pid, a.dry_run)
+        return stop.stop(settings, host, a.name, a.successor, a.pid, a.dry_run,
+                         warn=lambda msg: print('launch.py stop: %s' % msg, file=sys.stderr))
     if a.cmd == 'handoff':
         return handoff.handoff(settings, host, a.session, a.account, a.all, a.recycle, a.what_if)
     if a.cmd == 'pick-account':
