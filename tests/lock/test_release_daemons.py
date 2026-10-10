@@ -177,6 +177,8 @@ CLIENT = "\n".join([
 # client to the test. Each child's "<pid> <ctime>" is added to argv[8] as soon as it is started:
 # this process holds the child's handle, so the pid is still that child's when its ctime is read,
 # and the test's cleanup ends exactly those processes, never a later holder of a reused pid.
+# Its own command line carries this source, so it spells the daemon's class in two parts: else
+# kitlib.proc.daemons would take it for a Gradle daemon while it runs ("stay").
 # Waits until a client is connected, writes "<daemon pid> <client pid or 0> <plain pid or 0>" and
 # exits, leaving them in the run's job. Words after argv[9]: "worker" has the daemon start a
 # worker child (its "<pid> <ctime>" in argv[8] + ".worker"), "plain" starts a plain leftover
@@ -191,7 +193,7 @@ SHARED = "\n".join([
     "    with open(ids, 'a') as f: f.write('%d %d ' % (p.pid, process.proc_ctime(p.pid)))",
     "more = [ids + '.worker', root] if 'worker' in extra else []",
     "d = subprocess.Popen([sys.executable, '-c', daemon, port, stop,",
-    "                      'org.gradle.launcher.daemon.bootstrap.GradleDaemon'] + more)",
+    "                      'org.gradle.launcher.daemon.bootstrap.Gradle' + 'Daemon'] + more)",
     "note(d)",
     "c = pl = None",
     "if mode == 'inside':",
