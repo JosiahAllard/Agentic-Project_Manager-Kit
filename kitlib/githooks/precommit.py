@@ -3,7 +3,9 @@
 githooks/pre-commit.py calls `main` and nothing else. `main` runs `CHECKS` in order against one
 `Commit` and stops at the first that refuses. Today `CHECKS` holds only the ledger check
 (kitlib.ledger.precommit.check). Another step, a repository's own hook for example, is one more
-entry in `CHECKS`; nothing here looks for one.
+entry in `CHECKS`; nothing here looks for one. githooks/pre-commit (the sh front end) starts
+python only when `.kit.json` names `pre_commit_check`, so a step that must run in a repository
+that has not opted in also needs one condition there, beside that test, and nowhere else.
 
 A check is `check(commit) -> (exit code, message or None)`. A check that raises refuses the
 commit (fails closed): a hook that cannot judge must not wave a commit through.

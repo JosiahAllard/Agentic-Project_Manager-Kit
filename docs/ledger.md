@@ -116,17 +116,18 @@ Unset, only the ledger is counted. A repository git cannot search, or a missing 
 
 Hook `githooks/pre-commit`; dispatch `kitlib/githooks/precommit.py`; ledger step `kitlib/ledger/precommit.py`; tests `tests/ledger/test_precommit.py` and `tests/githooks/test_precommit.py`.
 
-Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then judges each commit that adds, changes or deletes the ledger file the machine config's `ledger_path` names, or the standing digest beside it: it runs `tools/ledger.py check --base HEAD --root <repo>` and refuses the commit when that fails. Any other commit passes after one `git diff --cached` (the index the commit is built from, so `commit -a` and `commit -- <paths>` count). The check reads the working files, so a commit whose ledger or digest also has unstaged changes is refused before it runs.
+Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then judges each commit that adds, changes or deletes the ledger file the machine config's `ledger_path` names, or the standing digest beside it: it runs `tools/ledger.py check --base HEAD --root <repo>` and refuses the commit when that fails. Any other commit passes after one `git diff --cached` (the index the commit is built from, so `commit -a` and `commit -- <paths>` count). The check reads the working files of both, so such a commit is refused before it runs when either the ledger or the digest has unstaged changes, whichever of them is staged.
 
 `githooks/pre-commit.py` makes one call, `kitlib.githooks.precommit.main`, which runs the kit's checks (`CHECKS`, today the ledger step only) in order and stops at the first refusal. Nothing there runs a repository's own `hooks/pre-commit`; a later step would be one more entry in `CHECKS` (docs/pm-data-branch.md "Decided by the owner").
 
 | Case | Result |
 |---|---|
-| Not opted in, or `.kit.json` absent | pass; no python started (below) |
+| `.kit.json` absent, or its text never names `pre_commit_check` | pass; no python started (below) |
+| `.kit.json` sets `"pre_commit_check": false` | pass; python starts, loads the config, no check |
 | Opted in, ledger and digest not in the commit | pass; no check |
 | Ledger or digest in the commit, check passes | pass |
 | Ledger or digest in the commit, check fails | refused |
-| Ledger or digest in the commit with unstaged changes | refused |
+| Ledger or digest in the commit, and either of them has unstaged changes | refused |
 | `.kit.json` names `pre_commit_check` but cannot be loaded | refused |
 | `.kit.json` cannot be loaded and does not name it | pass with a note |
 | Opted in, machine config unreadable or no `ledger_path` | refused |

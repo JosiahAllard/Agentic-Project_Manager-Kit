@@ -166,6 +166,35 @@ class PreCommitTest(unittest.TestCase):
         self.assertIn('commit refused', out)
         self.assertEqual(self.last(), 'kit')
 
+    def test_opted_in_a_staged_digest_with_an_unstaged_ledger_change_is_refused(self):
+        """The check reads the working ledger too, so it must be what the commit holds."""
+        self.opt_in()
+        self.repo.write('rulings/STANDING.md', '# Standing\n\n- see %s\n' % rid(1))
+        self.repo.git('add', '--', 'rulings/STANDING.md')
+        self.append_entry()                           # working ledger only, not staged
+        rc, out = self.hook_commit('-m', 'digest')
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('unstaged changes', out)
+        self.assertIn('rulings/LEDGER.md', out)
+        self.assertIn('commit refused', out)
+        self.assertNotIn(CHECK_RAN, out)
+        self.assertEqual(self.last(), 'kit')
+
+    def test_opted_in_a_staged_ledger_with_an_unstaged_digest_change_is_refused(self):
+        self.opt_in()
+        self.repo.write('rulings/STANDING.md', '# Standing\n\n- see %s\n' % rid(1))
+        self.repo.commit('digest', 'rulings/STANDING.md')
+        self.append_entry()
+        self.repo.git('add', '--', 'rulings/LEDGER.md')
+        self.repo.write('rulings/STANDING.md', '# Standing\n\n- see %s\n' % rid(2))
+        rc, out = self.hook_commit('-m', 'append')
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('unstaged changes', out)
+        self.assertIn('rulings/STANDING.md', out)
+        self.assertIn('commit refused', out)
+        self.assertNotIn(CHECK_RAN, out)
+        self.assertEqual(self.last(), 'digest')
+
     def test_opted_in_no_ledger_path_refuses(self):
         self.opt_in()
         self.machine_config({})
@@ -246,6 +275,31 @@ class TargetsTest(unittest.TestCase):
         ledger = os.path.join(self.root, 'rulings', 'LEDGER.md')
         self.assertEqual(precommit.staged_targets(self.root, ['Rulings/ledger.MD'], (ledger,)),
                          ['Rulings/ledger.MD'])
+
+    def test_both_targets_under_the_root_are_pathspecs(self):
+        ledger = os.path.join(self.root, 'rulings', 'LEDGER.md')
+        paths = (ledger, os.path.join(self.root, 'rulings', 'STANDING.md'))
+        self.assertEqual(precommit.under_root(self.root, paths),
+                         ['rulings/LEDGER.md', 'rulings/STANDING.md'])
+        self.assertEqual(precommit.under_root(self.root, (os.path.join(self.tmp, 'LEDGER.md'),)), [])
+
+    def test_realpath_is_tried_only_for_a_target_file_name(self):
+        ledger = os.path.join(self.root, 'rulings', 'LEDGER.md')
+        real = os.path.realpath
+        calls = []
+
+        def spy(p):
+            calls.append(p)
+            return real(p)
+        with mock.patch.object(precommit.os.path, 'realpath', side_effect=spy):
+            paths = (ledger,)
+            before = len(calls)
+            self.assertEqual(precommit.staged_targets(self.root, ['a.txt', 'b/c.md', 'rulings/LEDGER.md'],
+                                                      paths), ['rulings/LEDGER.md'])
+            self.assertEqual(len(calls) - before, 1)      # the targets, once; no staged path resolved
+            calls.clear()
+            self.assertEqual(precommit.staged_targets(self.root, ['other/LEDGER.md'], paths), [])
+            self.assertEqual(len(calls), 2)               # the target, and the one same-named path
 
     def test_a_ledger_outside_the_repository_is_never_staged_here(self):
         self.ledger_at(os.path.join(self.tmp, 'elsewhere', 'LEDGER.md'))

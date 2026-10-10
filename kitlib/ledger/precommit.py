@@ -7,9 +7,9 @@ itself (the front end reads no section file); otherwise nothing runs.
 
 Opted in, the check judges only a commit that changes the ledger file the machine config's
 `ledger_path` names, or the standing digest beside it (kitlib.ledger.standing.path_beside): any
-other commit passes after one `git diff --cached`. Such a commit is refused when the ledger or
-digest also has unstaged changes (`tools/ledger.py check` reads the working files, so they must be
-what is committed), and otherwise runs `tools/ledger.py check --base HEAD` (well formed,
+other commit passes after one `git diff --cached`. Such a commit is refused when either the ledger
+or the digest (whichever was staged) has unstaged changes (`tools/ledger.py check` reads the working
+files of both, so both must be what the commit holds), and otherwise runs `tools/ledger.py check --base HEAD` (well formed,
 append-only, standing digest); a failure refuses the commit.
 
 Fails closed, opted in: a `.kit.json` the kit cannot load whose text names `pre_commit_check`, a
@@ -68,15 +68,45 @@ def targets(home=None):
     return path, standing.path_beside(path)
 
 
-def _same(a, b):
-    if os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b)):
-        return True
-    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+def _key(path):
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _real(path):
+    return os.path.normcase(os.path.realpath(path))
 
 
 def staged_targets(root, staged, paths):
-    """The entries of `staged` (paths relative to `root`) that are one of `paths`."""
-    return [rel for rel in staged if any(_same(os.path.join(root, rel), p) for p in paths)]
+    """The entries of `staged` (paths relative to `root`) that are one of `paths`. The targets are
+    resolved once; a staged path is compared by its absolute path, and resolved (realpath) only
+    when that misses and its file name is a target's."""
+    keys = {_key(p) for p in paths}
+    reals = {_real(p) for p in paths}
+    names = {os.path.normcase(os.path.basename(p)) for p in paths}
+    out = []
+    for rel in staged:
+        full = os.path.join(root, rel)
+        if _key(full) in keys or (os.path.normcase(os.path.basename(rel)) in names
+                                  and _real(full) in reals):
+            out.append(rel)
+    return out
+
+
+def under_root(root, paths):
+    """`paths` that lie in the work tree at `root`, relative to it with `/` (git pathspecs); each
+    is tried as given, then resolved (realpath) against the resolved root."""
+    out = []
+    for p in paths:
+        for full, base in ((os.path.abspath(p), os.path.abspath(root)),
+                           (os.path.realpath(p), os.path.realpath(root))):
+            try:
+                rel = os.path.relpath(full, base)
+            except ValueError:                       # another drive
+                continue
+            if rel != os.curdir and rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+                out.append(rel.replace(os.sep, '/'))
+                break
+    return out
 
 
 def unstaged(root, rels):
@@ -105,7 +135,8 @@ def check(commit, home=None):
     hit = staged_targets(root, commit.staged(), paths)
     if not hit:
         return 0, None
-    dirty = unstaged(root, hit)
+    # The check reads the working ledger AND digest, so neither may differ from the index.
+    dirty = unstaged(root, under_root(root, paths) or hit)
     if dirty:
         return 1, ('pre-commit: %s has unstaged changes and the ledger check reads the working file: '
                    'stage them (git add) or set them aside, then commit again%s'
