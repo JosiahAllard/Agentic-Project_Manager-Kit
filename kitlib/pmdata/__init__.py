@@ -14,6 +14,7 @@ as absent.
 import json
 import os
 import re
+import tempfile
 
 from kitlib.git import repo as gitrepo
 
@@ -51,6 +52,8 @@ class Record:
 
 
 def _name_errors(value, what):
+    """A cheap pre-check of a branch or remote name, not git's rules: a caller that creates a ref
+    still runs `git check-ref-format`."""
     if not isinstance(value, str) or not _NAME.match(value) or '..' in value or value.endswith(('/', '.lock')):
         return ['%s must be a branch or remote name, not %r' % (what, value)]
     return []
@@ -82,6 +85,8 @@ def read(common_dir):
         raise PmDataError('cannot read %s: %s' % (path, e))
     try:
         data = json.loads(text)
+    except RecursionError:
+        raise PmDataError('%s is nested too deeply to read' % path)
     except ValueError as e:
         raise PmDataError('%s is not valid JSON: %s' % (path, e))
     if not isinstance(data, dict):
@@ -104,20 +109,37 @@ def write(common_dir, branch, remote, root):
         raise PmDataError('not writing %s: %s' % (record_path(common_dir), '; '.join(errs)))
     rec = Record(branch, remote, root, common_dir)
     path = record_path(common_dir)
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(json.dumps(rec.as_dict(), indent=2) + '\n')
-    os.replace(tmp, path)
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=FILE_NAME + '.', suffix='.tmp', dir=common_dir)
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(json.dumps(rec.as_dict(), indent=2) + '\n')
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        tmp = None
+    except OSError as e:
+        raise PmDataError('cannot write %s: %s' % (path, e))
+    finally:
+        if tmp is not None:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
     return rec
 
 
 def locate(path):
     """The Record of the repository `path` is in (a main checkout or any linked worktree), or None
-    when `path` is not in a git repository or its common dir has no kit-pm-data.json. PmDataError
-    when the record is there but malformed, so a guard can fail closed."""
-    common, _why = gitrepo.common_dir(path)
+    when git says `path` is not in a repository or its common dir has no kit-pm-data.json.
+    PmDataError when the record is there but malformed, and when git itself fails for any other
+    reason (git missing, a timeout, dubious ownership): "cannot ask" is not "no record", so a guard
+    fails closed."""
+    common, why = gitrepo.common_dir(path)
     if common is None:
-        return None
+        if 'not a git repository' in (why or '').lower():
+            return None
+        raise PmDataError('cannot find the git directory of %s: %s' % (path, why))
     return read(common)
 
 
@@ -142,4 +164,4 @@ def machine_settings(home=None):
     errs = _name_errors(branch, 'branch') + _name_errors(remote, 'remote')
     if errs:
         raise PmDataError('%s: %s' % (where, '; '.join(errs)))
-    return {'path': p, 'branch': branch, 'remote': remote}
+    return {'path': os.path.normpath(p), 'branch': branch, 'remote': remote}

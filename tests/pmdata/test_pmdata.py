@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib import config, pmdata
 from kitlib.config import user
@@ -70,6 +71,20 @@ class RecordTest(unittest.TestCase):
             pmdata.read(self.dir)
 
 
+    def test_a_deeply_nested_record_raises_pmdata_error(self):
+        self.put('[' * 100000)
+        with self.assertRaises(pmdata.PmDataError):
+            pmdata.read(self.dir)
+
+    def test_a_failed_write_leaves_no_temp_file_and_raises_pmdata_error(self):
+        os.mkdir(pmdata.record_path(self.dir))          # os.replace onto a folder fails
+        with self.assertRaises(pmdata.PmDataError):
+            pmdata.write(self.dir, 'pmdata', 'private', ROOT)
+        self.assertEqual(os.listdir(self.dir), [pmdata.FILE_NAME])
+        with self.assertRaises(pmdata.PmDataError):
+            pmdata.write(os.path.join(self.dir, 'missing'), 'pmdata', 'private', ROOT)
+
+
 class LocateTest(unittest.TestCase):
 
     def setUp(self):
@@ -99,6 +114,19 @@ class LocateTest(unittest.TestCase):
         self.assertIsNone(pmdata.locate(folder))
 
 
+    def test_a_git_failure_other_than_not_a_repository_raises(self):
+        for why in ('git rev-parse timed out after 30 seconds', 'could not run git in x: nope',
+                    "fatal: detected dubious ownership in repository at 'x'", None):
+            with mock.patch.object(pmdata.gitrepo, 'common_dir', return_value=(None, why)):
+                with self.assertRaises(pmdata.PmDataError, msg=why):
+                    pmdata.locate(self.repo.root)
+
+    def test_git_saying_not_a_repository_is_none(self):
+        why = 'fatal: not a git repository (or any of the parent directories): .git'
+        with mock.patch.object(pmdata.gitrepo, 'common_dir', return_value=(None, why)):
+            self.assertIsNone(pmdata.locate(self.repo.root))
+
+
 class MachineConfigTest(unittest.TestCase):
 
     def setUp(self):
@@ -124,6 +152,10 @@ class MachineConfigTest(unittest.TestCase):
         self.write({'pm_data': {'path': self.data, 'branch': 'd', 'remote': 'vault'}})
         self.assertEqual(pmdata.machine_settings(self.home),
                          {'path': self.data, 'branch': 'd', 'remote': 'vault'})
+
+    def test_the_path_is_normalised(self):
+        self.write({'pm_data': {'path': self.data + os.sep + 'a' + os.sep + '..'}})
+        self.assertEqual(pmdata.machine_settings(self.home)['path'], self.data)
 
     def test_a_pm_data_that_is_not_an_object_is_a_config_error(self):
         self.write({'pm_data': 'x'})
