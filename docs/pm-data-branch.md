@@ -118,4 +118,8 @@ Each lands independently on its own branch; sizes are S/M/L.
 
 ## Open - needs the owner
 
-- **Pre-commit dispatch.** Default: the kit's `githooks/pre-commit` runs only the ledger check (task 7); a repo-local hook is not supported because `core.hooksPath` is repository-wide.
+Nothing open.
+
+## Decided by the owner
+
+- **Pre-commit dispatch.** The kit's `githooks/pre-commit` runs only the kit's own checks; it does not chain to a repository-local hook (`core.hooksPath` is repository-wide, so such a hook never runs). Repository hooks may be wanted later, so the hook has one dispatch point where a chain step could slot in without rework: `kitlib/githooks/precommit.py` `CHECKS`, today the ledger check only (task 7; docs/ledger.md "Pre-commit check"). No chaining code is built now.

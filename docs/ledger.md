@@ -114,13 +114,26 @@ Unset, only the ledger is counted. A repository git cannot search, or a missing 
 
 ## Pre-commit check
 
-Hook `githooks/pre-commit`; logic `kitlib/ledger/precommit.py`; tests `tests/ledger/test_precommit.py`.
+Hook `githooks/pre-commit`; dispatch `kitlib/githooks/precommit.py`; ledger step `kitlib/ledger/precommit.py`; tests `tests/ledger/test_precommit.py` and `tests/githooks/test_precommit.py`.
 
-Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then runs `tools/ledger.py check --base HEAD --root <repo>` before each commit and refuses the commit when it fails. It checks the configured ledger's working file, not the index.
+Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then judges each commit that adds, changes or deletes the ledger file the machine config's `ledger_path` names, or the standing digest beside it: it runs `tools/ledger.py check --base HEAD --root <repo>` and refuses the commit when that fails. Any other commit passes after one `git diff --cached` (the index the commit is built from, so `commit -a` and `commit -- <paths>` count). The check reads the working files, so a commit whose ledger or digest also has unstaged changes is refused before it runs.
+
+`githooks/pre-commit.py` makes one call, `kitlib.githooks.precommit.main`, which runs the kit's checks (`CHECKS`, today the ledger step only) in order and stops at the first refusal. Nothing there runs a repository's own `hooks/pre-commit`; a later step would be one more entry in `CHECKS` (docs/pm-data-branch.md "Decided by the owner").
+
+| Case | Result |
+|---|---|
+| Not opted in, or `.kit.json` absent | pass; no python started (below) |
+| Opted in, ledger and digest not in the commit | pass; no check |
+| Ledger or digest in the commit, check passes | pass |
+| Ledger or digest in the commit, check fails | refused |
+| Ledger or digest in the commit with unstaged changes | refused |
+| `.kit.json` names `pre_commit_check` but cannot be loaded | refused |
+| `.kit.json` cannot be loaded and does not name it | pass with a note |
+| Opted in, machine config unreadable or no `ledger_path` | refused |
+| Git cannot list the staged files, the check cannot start, a step raises, or the kit code cannot be imported | refused |
+| No python on PATH | pass with a note (the front end cannot tell what the commit holds) |
 
 - **Cost when not opted in:** `githooks/pre-commit` is a `sh` front end using builtins only. With no `.kit.json`, or one whose text never names `pre_commit_check`, it exits 0 and starts no other process. Otherwise it runs `githooks/pre-commit.py`.
-- **Broken config:** a `.kit.json` the kit cannot load refuses the commit when its text names `pre_commit_check` (fails closed). When it does not, the hook prints a note and skips the check.
-- **No python on PATH:** the front end prints a note and skips the check.
 
 ## Not ported
 
