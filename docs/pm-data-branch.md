@@ -27,6 +27,8 @@ The data worktree's `.kit.json` (on `pmdata`) sets `repo.main_branch: "pmdata"` 
 5. If a private URL was given: `git remote add <name> <url>` with git's default fetch refspec, then `git push <name> refs/heads/pmdata:refs/heads/pmdata`.
 6. Write `kit-pm-data.json` and the machine config key; print the one line the user adds to `.kit.json` of the data worktree if it has none.
 
+Built as `tools/pm_data.py init --path <dir> [--branch] [--remote] [--url] [--adopt]` over `kitlib/pmdata/init.py`, whose docstring is the detail. Every check runs before the first write, so a refusal (exit 1) changes nothing. Where it goes beyond the steps above: the empty tree is written by `git write-tree` of an empty index (the same id as the literal); `kit-pm-data.json` is written right after the branch, before anything is pushed; the private url is compared with the url and pushurl of every other remote, in every form it reaches (every matching `url.<base>.insteadOf` and `pushInsteadOf` rule applied; host/path for https, ssh and `host:path`; a path for `file://`, a UNC path for `file://server/share`), and a public remote with no url refuses; the name `pm`, a name with `/`, the prefix of an existing branch and a case twin of one are refused, names compared without case; a new branch is refused when the private remote (a remote-tracking ref, or `git ls-remote` when the remote answers) already has one; `--adopt` takes a branch with one root that no main-branch history holds, refuses a recorded root that differs, and refuses a `.kit.json` on the branch whose `repo.main_branch` or `repo.remote` is not the data branch and private remote or whose `backlog.store` is `ref`, the default included. Exit 3 means all was made locally and the push failed; the lines say how to recover, and, when the private remote already holds a different data branch, list the steps for the owner to run (the tool runs none): unlock and remove the data worktree, delete the local branch and `kit-pm-data.json`, fetch the remote's branch, then `init --adopt`; exit 4 means it stopped part-way and `--adopt` finishes it; 130 is Ctrl+C, with the lines made so far.
+
 A bare `git push` in the data worktree goes to the upstream, the private remote; with no upstream it fails ("no upstream") rather than guessing. The pre-push check below is the enforcement; the config is only the default path.
 
 ## Never configure a refspec
@@ -49,7 +51,7 @@ The private remote is judged by the URL git hands the hook (its second argument)
 ## Guard place and commit hooks
 
 - `kitlib.git.repo.classify` calls the data worktree LINKED, so the guard would let a subagent edit PM data and would read the kit's `.kit.json` for it. Add the configured `pm_data.path` as a MAIN-like place: the main-checkout rules (subagent edits, `checkout`, `reset --hard`, `clean`, `stash`, bulk add) apply to it, and its config is its own `.kit.json` (an exception to "a worktree's own `.kit.json` is never read": only this one path, which agents cannot edit).
-- `core.hooksPath` is one setting for the whole repository, so the kit's `githooks/` runs for the data worktree too. A repository-local `hooks/pre-commit` there (for example the ledger check) would never run. Add `githooks/pre-commit`: it runs `tools/ledger.py check --base HEAD` when the commit changes the configured ledger file, and nothing else.
+- `core.hooksPath` is one setting for the whole repository, so the kit's `githooks/` runs for the data worktree too. A repository-local `hooks/pre-commit` there (for example the ledger check) would never run. The existing opt-in `githooks/pre-commit` gains the ledger-staged condition: it runs `tools/ledger.py check --base HEAD` only when the commit changes the configured ledger file (or the standing digest beside it), and nothing else (docs/ledger.md "Pre-commit check").
 
 ## Session start: keep the kit current
 
@@ -119,4 +121,8 @@ Each lands independently on its own branch; sizes are S/M/L.
 
 ## Open - needs the owner
 
-- **Pre-commit dispatch.** Default: the kit's `githooks/pre-commit` runs only the ledger check (task 7); a repo-local hook is not supported because `core.hooksPath` is repository-wide.
+Nothing open.
+
+## Decided by the owner
+
+- **Pre-commit dispatch.** The kit's `githooks/pre-commit` runs only the kit's own checks; it does not chain to a repository-local hook (`core.hooksPath` is repository-wide, so such a hook never runs). Repository hooks may be wanted later, so the hook has one dispatch point where a chain step could slot in without rework: `kitlib/githooks/precommit.py` `CHECKS`, today the ledger check only (task 7; docs/ledger.md "Pre-commit check"). The `sh` front end `githooks/pre-commit` starts python only when `.kit.json` names `pre_commit_check`, so a step that must run in a repository that has not opted in also needs one condition there, beside that test. No chaining code is built now.

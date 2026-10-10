@@ -2,8 +2,9 @@
 # The kit's git pre-commit hook (docs/ledger.md "Pre-commit check"). Inert unless the repository's
 # .kit.json sets ledger.pre_commit_check. This front end uses shell builtins only, so a repository
 # that has not opted in starts no other process per commit: no .kit.json, or one whose text never
-# names pre_commit_check, exits 0 here. Otherwise githooks/pre-commit.py loads the config and runs
-# the check. Git runs the hook at the work-tree root.
+# names pre_commit_check, exits 0 here. Otherwise githooks/pre-commit.py runs the kit's pre-commit
+# checks (kitlib.githooks.precommit). A check added there that must run without that key also needs
+# its own condition here. Git runs the hook at the work-tree root.
 [ -f .kit.json ] || exit 0
 named=
 while IFS= read -r line || [ -n "$line" ]; do
