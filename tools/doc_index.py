@@ -1,7 +1,7 @@
 """doc_index.py: find docs through the doc index (kitlib.docs.index; docs/doc-tools.md "doc_index").
 
   doc_index.py [-C DIR] [--find WORD... | --section HEADING [--doc PATH] | --tools | --stale | --role ROLE]
-               [--head REF] [--days N]
+               [--head REF] [--days N] [--config-ref REF]
 
 With no mode it checks the index (.kit.json "doc_index".index, default docs/INDEX.md) against the
 tracked docs. --find prints the index entries for a topic, --section one doc section by heading,
@@ -39,6 +39,9 @@ def main(argv=None):
     ap.add_argument('--doc', help='with --section: restrict to this file')
     ap.add_argument('--head', default='HEAD', help='the commit whose tracked docs count (default: HEAD)')
     ap.add_argument('--days', type=int, help='with --stale: the age in days')
+    ap.add_argument('--config-ref', metavar='REF',
+                    help='read .kit.json as this commit holds it, not the working tree '
+                         '(review_pack passes the base, so a branch cannot switch its own check off)')
     a = ap.parse_args(argv)
     root, why = repo.toplevel(a.dir)
     if root is None:
@@ -46,7 +49,7 @@ def main(argv=None):
         return 2
     return index.run(root, lambda line: print(line, flush=True), section=a.section,
                      find=' '.join(a.find) if a.find else None, tools=a.tools, stale=a.stale,
-                     role=a.role, doc=a.doc, head=a.head, days=a.days)
+                     role=a.role, doc=a.doc, head=a.head, days=a.days, config_ref=a.config_ref)
 
 
 if __name__ == '__main__':
