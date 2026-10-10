@@ -5,7 +5,9 @@ on, unpinned. Any other run leaves them. machine_lock.daemons "stop" stops them 
 it) is left running (ReleaseLeavesASharedDaemon), on the kill path too (a gate that errored or
 was cancelled: its other processes are ended, the shared daemon's tree is not). The daemon here is a python child whose command
 line names Gradle's daemon class; every process is the test's own."""
+import contextlib
 import os
+import subprocess
 import sys
 import time
 import unittest
@@ -145,19 +147,27 @@ SLEEPER = ("import os, sys, time; "
 # connection it accepts, as a daemon serving a build does. It ends itself within half a second
 # of the stop file argv[2] appearing, or after 120 s. Given argv[4] and argv[5] (the kit's root),
 # it first starts a worker child (a SLEEPER, as a Gradle daemon starts test executors) and writes
-# the worker's "<pid> <ctime>" to argv[4] while it holds the worker's handle.
+# the worker's "<pid> <ctime>" to argv[4] while it holds the worker's handle. Then, once the file
+# argv[4] + ".spawn" appears, it starts a second worker, written the same way to argv[4] + "2".
 DAEMON = "\n".join([
     "import os, socket, subprocess, sys, time",
-    "s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen(8); s.settimeout(0.5)",
+    "s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen(8); s.settimeout(0.1)",
+    "spawn = None",
+    "def worker(path):",
+    "    w = subprocess.Popen([sys.executable, '-c', %r, sys.argv[2]])" % SLEEPER,
+    "    open(path + '.tmp', 'w').write('%d %d' % (w.pid, process.proc_ctime(w.pid)))",
+    "    os.replace(path + '.tmp', path)",
     "if len(sys.argv) > 5:",
     "    sys.path.insert(0, sys.argv[5])",
     "    from kitlib.proc import process",
-    "    w = subprocess.Popen([sys.executable, '-c', %r, sys.argv[2]])" % SLEEPER,
-    "    open(sys.argv[4], 'w').write('%d %d' % (w.pid, process.proc_ctime(w.pid)))",
+    "    worker(sys.argv[4])",
+    "    spawn = sys.argv[4] + '.spawn'",
     "open(sys.argv[1] + '.tmp', 'w').write(str(s.getsockname()[1]))",
     "os.replace(sys.argv[1] + '.tmp', sys.argv[1])",
     "held, end = [], time.time() + 120",
     "while time.time() < end and not os.path.exists(sys.argv[2]):",
+    "    if spawn and os.path.exists(spawn) and not os.path.exists(sys.argv[4] + '2'):",
+    "        worker(sys.argv[4] + '2')",
     "    try: held.append(s.accept()[0])",
     "    except socket.timeout: pass"])
 
@@ -242,7 +252,7 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
         """{pid: ctime} of each child the run's command, or its daemon, recorded while it was
         alive."""
         words = []
-        for path in (self.ids, self.ids + ".worker"):
+        for path in (self.ids, self.ids + ".worker", self.ids + ".worker2"):
             try:
                 with open(path) as f:
                     words += [int(x) for x in f.read().split()]
@@ -326,18 +336,19 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
                 s.wait(p)
                 raise RuntimeError("a gate step raised")
 
-    def spared(self, daemon, plain, client):
-        """The kill path left the daemon another job's client uses, and its worker child,
-        running, and ended the run's other leftover."""
+    def spared(self, daemon, plain, client, workers=1):
+        """The kill path left the daemon another job's client uses, and its `workers` worker
+        children, running, and ended the run's other leftover."""
         cts = self.recorded()
         # The leftover is waited for first, so a daemon ended by the same kill has had time to go.
         self.assertTrue(self.wait_gone(plain, cts[plain]), "a plain leftover outlived the kill")
         self.assertTrue(process.alive(daemon, cts[daemon]),
                         "the kill path ended the daemon another job's client uses")
-        workers = [p for p in cts if p not in (daemon, plain)]
-        self.assertEqual(len(workers), 1, cts)
-        self.assertTrue(process.alive(workers[0], cts[workers[0]]),
-                        "the kill path ended a child of the daemon it left running")
+        kids = [p for p in cts if p not in (daemon, plain)]
+        self.assertEqual(len(kids), workers, cts)
+        for p in kids:
+            self.assertTrue(process.alive(p, cts[p]),
+                            "the kill path ended a child of the daemon it left running")
         why = "left: pid %d serves pid %d, which is outside the run's job" % (daemon, client)
         self.assertEqual(self.results(), [(daemon, "gradle-daemon", why)])
         self.assertTrue(any("left the gradle-daemon (pid %d) running" % daemon in s
@@ -361,6 +372,86 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
         self.assertEqual((code, how), (1, "cancelled"))
         self.assertIsNotNone(p.poll(), "the cancelled command outlived the kill")
         self.assertEqual(self.ended()["how"], "cancelled")
+        self.spared(daemon, plain, c.pid)
+
+    def judged(self):
+        """True once the release said it leaves the daemon: the kill path's passes come next."""
+        return any("left the gradle-daemon" in s for s in self.said)
+
+    def test_a_second_ctrl_c_during_the_kill_still_ends_the_rest(self):
+        """Ctrl+C while the cancel's passes end the job's processes: the KeyboardInterrupt goes
+        up, and the release that follows (130, "interrupted", as run_command's) ends what the
+        passes had not reached, sparing the shared daemon again."""
+        c = self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain", "stay")
+        daemon, _, plain = self.shared_pids()
+        real, calls = process.terminate_verified, []
+
+        def interrupted(pid, ct, code=1):   # the second process the passes end: Ctrl+C
+            calls.append(pid)
+            if len(calls) == 2:
+                raise KeyboardInterrupt
+            return real(pid, ct, code)
+        self.assertTrue(rm.request_stop(self.store, s.id, "test"))
+        with mock.patch.object(process, "terminate_verified", interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                s.wait(p)
+        self.assertEqual(calls, [p.pid, plain], "the passes did not end the command, then the "
+                                                "leftover")
+        s.release(130, "interrupted")
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            p.wait(10)
+        self.assertIsNotNone(p.poll(), "the command outlived the kill")
+        self.spared(daemon, plain, c.pid)
+
+    def test_a_worker_the_daemon_starts_between_the_reads_is_spared(self):
+        """A worker the left daemon starts after the process table is read is in the job's pid
+        list read after it, yet not in that table: the job is read first, so it is ended only if
+        it was already in the job when the table was read."""
+        c = self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain")
+        real = process.snapshot
+        spawn, made = self.ids + ".worker.spawn", self.ids + ".worker2"
+
+        def then_a_worker():                # the table as read, then the daemon starts a worker
+            snap = real()
+            if self.judged() and not os.path.exists(spawn):
+                open(spawn, "w").close()
+                end = time.time() + 10
+                while not os.path.exists(made) and time.time() < end:
+                    time.sleep(0.05)
+                self.assertTrue(os.path.exists(made), "the daemon started no second worker")
+            return snap
+        with mock.patch.object(process, "snapshot", then_a_worker):
+            self.errored(s, p)
+        self.assertTrue(os.path.exists(spawn), "the passes never read the process table")
+        daemon, _, plain = self.shared_pids()
+        self.spared(daemon, plain, c.pid, workers=2)
+
+    def test_a_target_created_after_the_job_was_read_is_not_ended(self):
+        """A pid in the job's list whose process now was created after the list was read is
+        another process (the listed one ended and its pid was reused): the pass leaves it."""
+        c = self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain")
+        daemon, _, plain = self.shared_pids()
+        real_ct, real_end, later, ended = process.proc_ctime, process.terminate_verified, {}, []
+
+        def reused(pid):                    # once, after the judgement: the leftover's pid now
+            ct = real_ct(pid)               # names a process created 100 s on
+            if pid == plain and ct is not None and not later and self.judged():
+                later[pid] = ct + 10 ** 9
+                return later[pid]
+            return ct
+
+        def spy(pid, ct, code=1):
+            ended.append((pid, ct))
+            return real_end(pid, ct, code)
+        with mock.patch.object(process, "proc_ctime", reused), \
+                mock.patch.object(process, "terminate_verified", spy):
+            self.errored(s, p)
+        self.assertIn(plain, later, "the passes never read the leftover's creation time")
+        self.assertNotIn((plain, later[plain]), ended,
+                         "a pass ended a process created after it read the job")
         self.spared(daemon, plain, c.pid)
 
     def test_an_errored_gate_ends_a_daemon_only_its_own_client_uses(self):
