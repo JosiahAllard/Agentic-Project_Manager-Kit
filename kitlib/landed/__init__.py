@@ -4,8 +4,9 @@ tools/landed.py; docs/landed.md). tools/landed.py is the entry point.
 `look(root, ref)` -> Outcome(code, lines). It never loops, sleeps, fetches or writes.
 
 LANDED: the tip is an ancestor of the main branch (`.kit.json` "repo".main_branch) ON THE REMOTE
-("repo".remote, read with `git ls-remote`) when the clone has that remote, else of the local main
-branch. A remote that cannot be reached falls back to the last fetched `refs/remotes/<remote>/<main>`
+("repo".remote, read with `git ls-remote`) when the clone has that remote, else, in a clone with
+no remote at all, of the local main branch (that remote missing beside others: CANNOT ANSWER). A
+remote that cannot be reached falls back to the last fetched `refs/remotes/<remote>/<main>`
 and says so. A remote sha this clone has never fetched cannot be judged: not yet, with a hint.
 
 Not landed, it reports:
@@ -66,14 +67,26 @@ class NoAnswer(Exception):
 
 def remote_main(root, remote, main):
     """`(sha or None, how)`: the remote's main branch ('' when it has none), or None when this
-    clone has no such remote. NoAnswer when git cannot say whether it has the remote.
+    clone has no remote at all. NoAnswer when git cannot say whether it has the remote, or when
+    `remote` is missing but other remotes exist.
 
     GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - any failure of `remote get-url` read as "no remote", so a
     git ended from outside (exit 1, no output: refs.KILLED_SHAPE) let the LOCAL main decide and
     could answer LANDED for a branch the remote does not have. Only git's own "No such remote"
-    exit (2) means no remote; any other failure is no answer."""
+    exit (2) means no remote; any other failure is no answer.
+
+    GOTCHA: a remote missing while others exist is a misnamed one (`.kit.json` "repo".remote), and
+    the local main must not decide then either: NoAnswer naming the remotes there are, the rule of
+    kitlib/backlog/store.py find_remote. Only a clone with no remote at all falls back."""
     r = cmd.call(['remote', 'get-url', remote], root, timeout=GIT_TIMEOUT)
     if r.rc == NO_SUCH_REMOTE:
+        names, why = cmd.run_text(['remote'], root, timeout=GIT_TIMEOUT)
+        if names is None:
+            raise NoAnswer('there is no remote `%s`, and the remotes there are could not be '
+                           'listed: %s' % (remote, why))
+        if names:
+            raise NoAnswer('there is no remote `%s`, but this clone has %s: set .kit.json '
+                           '"repo".remote' % (remote, ', '.join(names.split())))
         return None, 'no remote `%s`' % remote
     if r.rc != 0:
         raise NoAnswer('whether this clone has the remote `%s` could not be read: git remote '
