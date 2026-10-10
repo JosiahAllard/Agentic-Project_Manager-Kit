@@ -3,7 +3,8 @@ called by kitlib.gate.land). Only a `ref` or `branch` store takes part; a main s
 travel with the branch, so a landing leaves them alone.
 
   ancestry_refusal  before any merge: why the branch may not land when its history holds the
-                    store's root commit (a store never merges into main), else None
+                    store's root commit (a store never merges into main), or the PM data
+                    branch's recorded root (pmdata_refusal; docs/pm-data-branch.md), else None
   close_landed      after the push is verified: close every record the landed branch still holds
                     pulled, one commit each ("closes <ID>: landed <merge sha>"); what cannot be
                     closed is a WARNING line naming the command, and the landing stands
@@ -13,7 +14,9 @@ ancestry_refusal moves no ref: it fetches the store's objects with an empty --re
 """
 import os
 
+from kitlib import pmdata
 from kitlib.git import cmd, refs
+from kitlib.git import repo as gitrepo
 
 from . import ledger as lmod
 from . import plan as pmod
@@ -58,9 +61,41 @@ def _local_tip(ref, root):
     return None, r.err or 'git rev-parse exited %s' % r.rc
 
 
+def pmdata_refusal(root, tip):
+    """None when the repository has no PM data record (kit-pm-data.json in its git common dir,
+    kitlib.pmdata) or `tip`'s history does not hold the recorded root; else why `tip` may not
+    land. A record that cannot be read, a root this clone lacks, or an ancestry git cannot tell
+    refuses (fail closed)."""
+    common, why = gitrepo.common_dir(root)
+    if common is None:
+        return 'cannot find the git directory to look for the PM data record: %s' % why
+    try:
+        record = pmdata.read(common)
+    except pmdata.PmDataError as exc:
+        return 'cannot read the PM data record to check the branch\'s history: %s' % exc
+    if record is None:
+        return None
+    if not _has_commit(root, record.root):
+        return ('the PM data root commit %s that %s names is not in this clone, so the branch\'s '
+                'history cannot be checked against it' % (record.root[:10], pmdata.record_path(common)))
+    held, why = refs.is_ancestor(record.root, tip, root)
+    if held is None:
+        return ('cannot tell whether the branch holds the PM data root commit %s: %s'
+                % (record.root[:10], why))
+    if held:
+        return ('the branch\'s history holds the PM data root commit %s (branch %s, private remote '
+                '%s): PM data never merges into main - rebuild the branch without the data '
+                'branch\'s commits' % (record.root[:10], record.branch, record.remote))
+    return None
+
+
 def ancestry_refusal(root, cfg, tip, env=None):
-    """None when `tip` may land; else why not: its history holds a root commit of the backlog
-    store (read from the remote, and the local copy too), or the store cannot be read to tell."""
+    """None when `tip` may land; else why not: its history holds the PM data branch's recorded
+    root (pmdata_refusal) or a root commit of the backlog store (read from the remote, and the
+    local copy too), or either cannot be read to tell."""
+    why = pmdata_refusal(root, tip)
+    if why:
+        return why
     try:
         backend = ref_store(root, cfg)
     except Refusal as exc:

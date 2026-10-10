@@ -8,6 +8,7 @@ from unittest import mock
 
 import kitlib.config as kconfig
 from kitlib import gate as G
+from kitlib import pmdata
 from kitlib.backlog import at_landing
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
@@ -237,6 +238,68 @@ class AncestryRefusalBranchStore(AncestryRefusal):
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertIn(root[:10], out.lines[0])
         self.assert_untouched(out, G.REFUSED)
+
+
+class PmDataAncestry(StoreLandCase):
+    """ancestry_refusal also refuses a branch whose history holds the PM data branch's recorded
+    root (kit-pm-data.json in the git common dir; docs/pm-data-branch.md "Pre-push guard"),
+    checked before the backlog store, so a store that takes no part refuses it too."""
+
+    def setUp(self):
+        StoreLandCase.setUp(self)
+        # an orphan root (pm_data.py init uses the empty tree, which the fake git does not know)
+        tree = self.repo.git('rev-parse', self.main + '^{tree}')
+        self.root = self.repo.git('commit-tree', tree, '-m', 'PM data root')
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.root)
+
+    def merged_root_branch(self):
+        wt = self.repo.worktree('feature')
+        self.repo.write('a.py', 'x = 1\n', root=wt)
+        self.repo.commit('work', 'a.py', cwd=wt)
+        self.repo.git('merge', '-q', '--allow-unrelated-histories', '--no-edit', self.root, cwd=wt)
+        return self.repo.git('rev-parse', 'HEAD', cwd=wt)
+
+    def test_ancestry_refusal_refuses_a_branch_holding_the_pmdata_root(self):
+        tip = self.merged_root_branch()
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(len(out.lines), 1, out.lines)
+        self.assertIn('PM data root commit %s' % self.root[:10], out.lines[0])
+        self.assertIn('nothing was merged', out.lines[0])
+        self.assert_untouched(out, G.REFUSED)
+
+    def test_a_branch_without_the_root_lands(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+
+    def test_an_unreadable_record_or_a_missing_root_refuses(self):
+        cfg = kconfig.load_at(self.repo.root, self.main)
+        path = pmdata.record_path(self.repo.common_dir())
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('{"branch": "pmdata"}')
+        why = at_landing.ancestry_refusal(self.repo.root, cfg, self.main)
+        self.assertIn('cannot read the PM data record', why)
+        self.assertIn(pmdata.FILE_NAME, why)
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', '1' * 40)
+        why = at_landing.ancestry_refusal(self.repo.root, cfg, self.main)
+        self.assertIn('PM data root commit 1111111111 that', why)
+        self.assertIn('is not in this clone', why)
+
+    def test_an_undecidable_ancestry_refuses(self):
+        cfg = kconfig.load_at(self.repo.root, self.main)
+        with mock.patch.object(refs, 'is_ancestor', return_value=(None, 'boom')):
+            why = at_landing.ancestry_refusal(self.repo.root, cfg, self.main)
+        self.assertIn('cannot tell whether the branch holds the PM data root commit', why)
+        self.assertIn('boom', why)
+
+
+class PmDataAncestryFolderStore(PmDataAncestry):
+    """The same with a folder store, whose backend takes no part in ancestry_refusal."""
+    KIT = dict(test_land.LandCase.KIT, backlog={'store': 'docs/tasks'})
+
+    def test_the_folder_store_has_no_backend_here(self):
+        cfg = kconfig.load_at(self.repo.root, self.main)
+        self.assertIsNone(at_landing.ref_store(self.repo.root, cfg))
 
 
 class CloseEdges(StoreLandCase):

@@ -7,6 +7,7 @@ forward-slash form; {main_bs} keeps backslashes)."""
 import os
 import unittest
 
+from kitlib import pmdata
 from kitlib.guard import context, decide, rules
 from kitlib.lockmcp import server as lockmcp
 
@@ -580,6 +581,69 @@ class PushBlockOff(unittest.TestCase):
         self.assertEqual(d.rule, 'git-push-main')
         self.assertIn('does not load', d.reason)
         self.assertIn('Instead: python -m json.tool "%s/.kit.json" ' % W.fwd(w.main), d.reason)
+
+
+class PmDataNoVerify(unittest.TestCase):
+    """git-push-pmdata: `git push --no-verify` skips the pre-push leak stage, so it is denied in a
+    repository whose git common dir has kit-pm-data.json, in every session but the owner's own,
+    whatever push_block says (it is off here). The file's existence decides; it is not parsed."""
+
+    def setUp(self):
+        self.w = W.World(kit={'repo': {'name': 'demo'}})
+        self.addCleanup(self.w.cleanup)
+        common = os.path.join(self.w.main, '.git')
+        os.makedirs(common)
+        self.record = os.path.join(common, pmdata.FILE_NAME)
+        with open(self.record, 'w', encoding='utf-8') as f:
+            f.write('not even JSON')
+
+    def decide(self, text, sub=True, environ=None, cwd=None):
+        return decide(bash(text, cwd or self.w.wt, sub=sub), self.w.ctx(environ=environ or {}))
+
+    def assert_denied(self, d, instead=None):
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual((d.kind, d.rule), ('deny', 'git-push-pmdata'), d.reason)
+        if instead is not None:
+            self.assertIn(' Instead: %s [kit guard:' % instead, d.reason)
+
+    def test_a_subagent_and_a_marked_session_are_denied(self):
+        plain = 'git -C "%s" push origin kit/wt' % W.fwd(self.w.wt)
+        self.assert_denied(self.decide('git push --no-verify origin kit/wt'), plain)
+        self.assert_denied(self.decide('git push --no-verify origin kit/wt', sub=False, environ=MARKED), plain)
+        self.assert_denied(self.decide('git push --no-verify origin kit/wt', sub=False,
+                                       environ={context.ROLE_ENV: 'pm'}), plain)
+        self.assert_denied(self.decide('git -C %s push --no-verify private pmdata' % W.fwd(self.w.main)),
+                           'git -C "%s" push private pmdata' % W.fwd(self.w.main))
+
+    def test_an_abbreviation_git_accepts_is_denied(self):
+        for flag in ('--no-verif', '--no-ver', '--no-v'):
+            with self.subTest(flag):
+                self.assert_denied(self.decide('git push %s origin kit/wt' % flag),
+                                   'git -C "%s" push origin kit/wt' % W.fwd(self.w.wt))
+
+    def test_a_place_git_cannot_tell_is_denied(self):
+        self.assert_denied(self.decide('git -C "%s" push --no-verify origin x' % W.fwd(self.w.unknown)))
+
+    def test_the_owner_session_may(self):
+        self.assertIsNone(self.decide('git push --no-verify origin kit/wt', sub=False))
+
+    def test_without_a_record_or_without_no_verify_it_passes(self):
+        self.assertIsNone(self.decide('git push origin kit/wt'))
+        self.assertIsNone(self.decide('git push --verify origin kit/wt'))
+        os.remove(self.record)
+        self.assertIsNone(self.decide('git push --no-verify origin kit/wt'))
+        self.assertIsNone(self.decide('git push --no-verify origin kit/wt', sub=False, environ=MARKED))
+
+    def test_an_unreadable_line_is_read_again(self):
+        # the unclosed quote hides the push from the parse; the fallback pattern finds it
+        text = "echo 'x ; git push --no-verify origin kit/wt"
+        pm = {context.ROLE_ENV: 'pm'}           # a session the write jail does not hold
+        d = self.decide(text, sub=False, environ=pm)
+        self.assert_denied(d)
+        self.assertIn('could not read this command', d.reason)
+        self.assertIsNone(self.decide(text, sub=False))                  # the owner's own
+        os.remove(self.record)
+        self.assertIsNone(self.decide(text, sub=False, environ=pm))
 
 
 class RolesFromConfig(unittest.TestCase):

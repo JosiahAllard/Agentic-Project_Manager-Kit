@@ -21,7 +21,8 @@ Rules, in the order they are checked:
   root-search      a recursive search from a drive or filesystem root
   heavy            a heavy program run with no lock held (MACHINE_LOCK_RUN verified by nest_check)
   git-*            damaging git in a main checkout; branch -D anywhere; a push to main with no
-                   gate-OK record when the repo sets repo.push_block
+                   gate-OK record when the repo sets repo.push_block; push --no-verify in a
+                   repository with a PM data record, in any session but the owner's own
   git-hooks-path   a change of core.hooksPath (git config, git -c, clone -c, GIT_CONFIG_*), in
                    any session
   owner-identity   the owner's email given to a commit, in any session but the owner's own
@@ -37,6 +38,7 @@ import posixpath
 import re
 
 from kitlib import config as kconfig
+from kitlib import pmdata
 from kitlib.git import repo
 
 from . import commands as cm
@@ -1548,7 +1550,7 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     if sub == 'worktree':
         return git_worktree_remove(ctx, gc, role, text)     # from any place: it removes another tree
     if sub == 'push':
-        return git_push(ctx, gc, role)
+        return git_push(event, ctx, gc, role)
     if sub == 'branch':
         d = git_branch_delete(ctx, gc, role)
         if d:
@@ -1901,12 +1903,55 @@ def _branch_of(ref):
     return ref[len('refs/heads/'):] if ref.startswith('refs/heads/') else ref
 
 
-def git_push(ctx, gc, role):
+def pmdata_recorded(ctx, path):
+    """True when the repository `path` is in has a PM data record (kit-pm-data.json in its git
+    common dir, kitlib.pmdata), and when git cannot place `path` (fail closed); False outside git.
+    The file's existence only: it is not parsed, and no git runs beyond the cached place."""
+    if not path:
+        return True
+    place = ctx.place(path)
+    if place.kind == repo.NONE:
+        return False
+    if place.kind not in (repo.MAIN, repo.LINKED) or not place.common:
+        return True
+    return os.path.exists(os.path.join(place.common, pmdata.FILE_NAME))
+
+
+def _no_verify_word(word):
+    t = word.text
+    return t.startswith('--') and 'no-verify' in _canon_long('push', t[2:].partition('=')[0])
+
+
+def git_push_pmdata(event, ctx, gc, role):
+    """`git push --no-verify` (any abbreviation git accepts) in a repository with a PM data record,
+    in every session but the owner's own: the pre-push hook is what keeps PM data off public
+    remotes (docs/pm-data-branch.md "Pre-push guard")."""
+    if is_owner_session(event, ctx):
+        return None
+    _short, longs, _pos = _opts('push', gc.rest)
+    if 'no-verify' not in longs or not pmdata_recorded(ctx, gc.dir):
+        return None
+    words, cut = [], False
+    for w in gc.rest:
+        if not cut and w.text == '--':
+            cut = True
+        if cut or not _no_verify_word(w):
+            words.append(w.text)
+    return refuse('git-push-pmdata', role, '`git push %s` skips the pre-push hook, which keeps PM data off public '
+                  'remotes in this repository (it has %s). Push with the hook:'
+                  % (' '.join(w.text for w in gc.rest), pmdata.FILE_NAME),
+                  ('git -C %s push %s' % (quote(gc.dir), ' '.join(words))).rstrip())
+
+
+def git_push(event, ctx, gc, role):
     rest = ' '.join(w.text for w in gc.rest)
     if gc.unknown or gc.dir is None:
         return refuse('git-push-main', role, '`git push` runs in a directory the guard cannot tell, so it cannot '
                       'check for a gate-OK record. Name the checkout literally:',
                       ('git -C "<checkout>" push %s' % rest).rstrip())
+    d = git_push_pmdata(event, ctx, gc, role)
+    if d:
+        return d
     cfg = ctx.config(gc.dir)
     if cfg is None:
         err = ctx.config_error(gc.dir)
