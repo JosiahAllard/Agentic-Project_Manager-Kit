@@ -202,9 +202,10 @@ A stub run from outside its checkout runs the kit tool in the stub's checkout (d
 - An absolute `-C` names the tree, so it runs. A relative `-C` resolves against the stub's checkout, not the caller's directory, so the rule applies to it. Without a stub the gate runs in the caller's directory and this rule never applies (the no-stub rule below does).
 - A value whose stub checkout is not the gate's own directory was inherited from a stub further up, not set for this process: it is dropped and the gate runs. The two are compared as one directory (os.path.samefile), so a junction, symlink or 8.3 short name for the checkout still counts as its own.
 
-With no stub there is a second hazard, in the kit's own repository: every checkout has a real `tools/gate.py`, so `python <worktree>/tools/gate.py` run from the main checkout with no `-C` would gate the main checkout with the worktree's code. For a branch gate run with no stub and no `-C`, `tools/gate.py` applies kitlib/gate/caller.py `own_copy_refusal` to the directory it was run from and its own checkout (`KIT` in tools/gate.py):
+With no stub there is a second hazard, in the kit's own repository: every checkout has a real `tools/gate.py`, so `python <worktree>/tools/gate.py` run from the main checkout with no `-C`, or with a relative one such as `-C .`, would gate the main checkout with the worktree's code. For a branch gate run with no stub and no `-C` or a relative one, `tools/gate.py` applies kitlib/gate/caller.py `own_copy_refusal` to the tree it would gate (the directory it was run from, or where the relative `-C` resolves) and its own checkout (`KIT` in tools/gate.py, the same directory as kitlib/gate/steps.py `KIT_ROOT`):
 
 - The two are different checkouts of one repository (the same git common dir, different git dirs): `REFUSED: <gate.py> is in the checkout ...`, exit 4, nothing run, naming the command to use instead.
+- An absolute `-C` names the tree on purpose and is not checked: main's gate.py with an absolute `-C <worktree>` runs main's code on the worktree.
 - They are the same checkout, the gate.py is in another repository (a repository's stubs run the kit checkout written into them, kitlib/stubs `KIT_ROOT`), or either is in no repository: it runs.
 - git cannot place the gate.py's checkout: REFUSED (fail closed). A directory git cannot place is left to the gate itself.
 
