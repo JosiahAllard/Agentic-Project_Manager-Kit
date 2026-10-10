@@ -54,7 +54,9 @@ down the longer the machine stays up: docs/windows-token-leak.md.
      `gitattributes` lists. A file already there is never overwritten: only the lines it lacks
      are appended, and the dry run lists them.
    - `docs/INDEX.md` is written only when absent. The doc index check (run by preflight, commit
-     and review_pack) needs the file, and every tracked `.md` named on an entry line of it.
+     and review_pack) needs the file, and every tracked `.md` named on an entry line of it. The starter names only itself: when it is
+     written, the dry run and `-Apply` list the target's tracked `.md` files it does not name
+     (under "add these to docs/INDEX.md"; advice only, never a refusal), for you to add.
    - `-Stack dotnet|godot|java|python` copies `templates/stacks/<stack>/tools/gate.json` to
      `tools/gate.json` (refused if one is there) and adds `"gate": "tools/gate.json"` to
      `.kit.json`, and copies the stack's other `tools/` files (only Godot has one, `tools/godot.cmd`),

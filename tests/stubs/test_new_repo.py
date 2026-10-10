@@ -197,6 +197,39 @@ class NewRepo(unittest.TestCase):
         self.assertNotIn('appended %s' % path, out)
         self.assertFalse(os.path.exists(os.path.join(self.root, 'docs', 'INDEX.md')))
 
+    def test_a_locked_file_that_cannot_be_read_stops_before_the_append(self):
+        import ctypes
+        from ctypes import wintypes
+        path = os.path.join(self.root, '.gitignore')
+        self.fx.write('.gitignore', 'build/\n')
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                    wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        handle = k32.CreateFileW(path, 0xC0000000, 0, None, 3, 0x80, None)  # read+write, share none
+        self.assertNotEqual(handle, wintypes.HANDLE(-1).value, 'could not lock the file')
+        self.addCleanup(k32.CloseHandle, wintypes.HANDLE(handle))
+        code, out = self.ps('-Apply')
+        self.assertEqual(code, 1, out)
+        self.assertIn('new-repo: FAILED - cannot read %s' % path, out)
+        self.assertNotIn('new-repo: wrote', out)
+
+    def test_tracked_md_files_the_starter_index_misses_are_listed_not_refused(self):
+        self.fx.write('README.md', '# r\n')
+        self.fx.write('docs/guide.md', '# g\n')
+        self.fx.git('add', '--', 'README.md', 'docs/guide.md')
+        code, out = self.ps()
+        self.assertEqual(code, 0, out)
+        self.assertIn('add these to docs/INDEX.md', out)
+        self.assertIn('    README.md', out)
+        self.assertIn('    docs/guide.md', out)
+        code, out = self.ps('-Apply')
+        self.assertEqual(code, 0, out)
+        self.assertIn('add these to docs/INDEX.md', out)
+        os.remove(os.path.join(self.root, '.kit.json'))
+        code, out = self.ps()
+        self.assertNotIn('add these', out)  # the index exists now: it is the owner's to keep
+
     def test_the_stubs_cover_the_tools_a_repository_runs(self):
         code, out = self.ps('-Apply')
         self.assertEqual(code, 0, out)

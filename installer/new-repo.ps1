@@ -63,8 +63,8 @@ function Fail([string]$msg, [int]$code = 1) { Write-Host "new-repo: REFUSED - $m
 # call only prints an error and the script goes on to say "wrote". Here a failure stops it, with the
 # files already written named so they can be undone.
 $written = New-Object System.Collections.Generic.List[string]
-function Stop-Write([string]$path, $err) {
-    Write-Host "new-repo: FAILED - cannot write $path - $($err.Exception.Message)"
+function Stop-Write([string]$path, $err, [string]$verb = 'write') {
+    Write-Host "new-repo: FAILED - cannot $verb $path - $($err.Exception.Message)"
     if ($written.Count) { Write-Host "  already written (delete them to undo): $($written -join ' , ')" }
     else { Write-Host "  nothing had been written before it" }
     exit 1
@@ -203,6 +203,13 @@ $lineFiles = @((Plan-LineFile '.gitignore' $stackLines.gitignore), (Plan-LineFil
 $indexDst = Join-Path $targetFull 'docs\INDEX.md'
 $indexSrc = Join-Path $kit 'templates\common\INDEX.md'
 $indexNew = -not (Test-Path -LiteralPath $indexDst)
+# Advisory: the tracked .md files the starter index does not name (the doc index check wants every
+# one named on an entry line). Only when the starter is what gets written; never a refusal.
+$unindexed = @()
+if ($indexNew) {
+    $named = @([regex]::Matches((Get-Content -LiteralPath $indexSrc -Raw -Encoding UTF8), '`([^`]+)`') | ForEach-Object { $_.Groups[1].Value })
+    $unindexed = @(& git -C $targetFull ls-files -- '*.md' 2>$null | Where-Object { $_ -and ($named -notcontains $_) })
+}
 
 # The stubs the kit would write, from kit_stubs itself (it reads the target's .kit.json, which is
 # not there yet: the default tools_dir and tool list apply, as they will after -Apply).
@@ -232,6 +239,10 @@ foreach ($f in $lineFiles) {
     else { Write-Host "  unchanged     $($f.Path)   (has every line already)" }
 }
 if ($indexNew) { Write-Host "  would create  $indexDst   (starter doc index)" } else { Write-Host "  kept          $indexDst   (exists)" }
+if ($unindexed.Count) {
+    Write-Host "  add these to docs/INDEX.md ($($unindexed.Count) tracked .md the starter index does not name; the doc index check lists them until you do):"
+    foreach ($u in $unindexed) { Write-Host "    $u" }
+}
 if ($Stack) { Write-Host "  would create  $gateDst   (from templates\stacks\$Stack\tools\gate.json)" }
 else { Write-Host "  no gate section (no -Stack): see Next, step 3" }
 foreach ($t in $toolFiles) {
@@ -280,13 +291,13 @@ if ($code -ne 0) {
     Write-Host "  The .gitignore, .gitattributes and docs/INDEX.md were not touched. To undo: delete $wrote and the stubs listed, then run again."
     exit 1
 }
-$written.Add('the stubs listed above')
+$written.Add('(and the stubs listed above)')
 foreach ($f in $lineFiles) {
     if (-not $f.Body.Count) { continue }
     $chunk = ($f.Body -join "`n") + "`n"
     if ($f.New) { Put-File $f.Path $chunk; Write-Host "  wrote    $($f.Path)" }
     else {
-        $old = [IO.File]::ReadAllText($f.Path)
+        try { $old = [IO.File]::ReadAllText($f.Path) } catch { Stop-Write $f.Path $_ 'read' }
         # Append in the file's own line ending (CRLF when it has any).
         $nl = if ($old.Contains("`r`n")) { "`r`n" } else { "`n" }
         $chunk = ($f.Body -join $nl) + $nl
