@@ -6,8 +6,8 @@ detached HEAD, a branch other than that repository's main branch (unless branch_
 changes to the ledger file (another edit would be swept in). `finish` then commits the ledger file
 alone (`git commit -- <file>`, never -a: other staged files stay staged and out of the commit) as
 `ledger: R-nnnn <title>` with the kit's Co-Authored-By trailer (kitlib.commit.coauthor), and with
-push sends the current branch to origin. A failure after the write leaves the entry written and
-says what was not done. Nothing here prints or exits.
+push sends the current branch to that repository's `repo.remote` (`origin` by default). A failure
+after the write leaves the entry written and says what was not done. Nothing here prints or exits.
 
 `prepare(..., noun=)` and `commit_one` serve any one file a kit tool writes and then commits alone
 (tools/pending.py too); `noun` names it in the refusals.
@@ -25,6 +25,7 @@ from .errors import Refused, Usage
 MODEL_ENV = kcommit.MODEL_ENV
 TITLE_LIMIT = 60
 PUSH_TIMEOUT = 120      # seconds
+DEFAULT_REMOTE = 'origin'   # the schema default of repo.remote, for a config that cannot be read
 
 Plan = collections.namedtuple('Plan', 'root rel trailer env')
 
@@ -102,22 +103,37 @@ def commit_one(plan, subject, what, push=False):
     lines = ['commit %s' % sha]
     if push:
         branch, why = refs.current_branch(plan.root)
+        remote = DEFAULT_REMOTE
         if branch:
-            _, why = cmd.run(['push', '-q', 'origin', branch], plan.root, timeout=PUSH_TIMEOUT, env=plan.env)
+            try:
+                remote = _remote(plan.root)
+            except Refused as e:
+                why = str(e)
+                branch = None
+        if branch:
+            _, why = cmd.run(['push', '-q', remote, branch], plan.root, timeout=PUSH_TIMEOUT, env=plan.env)
         if not branch or why is not None:
             raise Refused('git push failed: %s\n%s is written and committed (%s) but NOT pushed.'
                           % (why or 'no branch', what, sha))
-        lines.append('pushed origin/%s' % branch)
+        lines.append('pushed %s/%s' % (remote, branch))
     return lines
 
 
+def _remote(root):
+    """`repo.remote` of the repository at root (`origin` unless its `.kit.json` says otherwise)."""
+    try:
+        return kconfig.load(root).remote
+    except kconfig.ConfigError as e:
+        raise Refused('the repository\'s .kit.json: %s' % e)
+
+
 def default_base(path):
-    """`origin/<main branch>` of the ledger's repository (`origin/main` when that cannot be read)."""
+    """`<repo.remote>/<main branch>` of the ledger's repository (`origin/main` when that cannot be read)."""
     try:
         root, _ = locate(path)
-        return 'origin/%s' % _settings(root)['main_branch']
+        return '%s/%s' % (_remote(root), _settings(root)['main_branch'])
     except Refused:
-        return 'origin/main'
+        return DEFAULT_REMOTE + '/main'
 
 
 def base_text(path, base, env=None):

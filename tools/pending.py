@@ -9,9 +9,9 @@
 
   COMMIT: [--commit | --push] [--branch-ok] [--model NAME]
       --commit commits the file alone as `pending: <added|done|edited> N`; --push also pushes the
-      current branch to origin. Both refuse, before writing, when the file has uncommitted changes
-      or the branch is not its repository's main branch (unless --branch-ok). The trailer names
-      --model, else $CLAUDE_AGENT_MODEL.
+      current branch to the repository's `repo.remote` (origin by default). Both refuse, before
+      writing, when the file has uncommitted changes or the branch is not its repository's main
+      branch (unless --branch-ok). The trailer names --model, else $CLAUDE_AGENT_MODEL.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.pending, prints and exits.
 Exit codes: 0 ok; 1 no file configured or unreadable, a refused change, a file that cannot be
@@ -47,7 +47,7 @@ def parser():
 
     def commit_flags(sp):
         sp.add_argument('--commit', action='store_true', help='commit only the pending file after the change')
-        sp.add_argument('--push', action='store_true', help='implies --commit, then push the branch to origin')
+        sp.add_argument('--push', action='store_true', help='implies --commit, then push the branch to repo.remote (origin by default)')
         sp.add_argument('--branch-ok', action='store_true', help='allow --commit off the main branch')
         sp.add_argument('--model', help='the model named in the Co-Authored-By trailer (default: $%s)'
                         % vcs.MODEL_ENV)
