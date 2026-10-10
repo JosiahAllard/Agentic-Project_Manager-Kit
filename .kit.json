@@ -1,4 +1,5 @@
 {
+  "roles": {"lander": {"edit_main_checkout": true, "why": "landers fetch and fast-forward main from their worktree"}},
   "repo": {"name": "Agentic-Project_Manager-Kit"},
   "commit": {"merge_fold": true},
   "doc_index": {"enabled": false},
