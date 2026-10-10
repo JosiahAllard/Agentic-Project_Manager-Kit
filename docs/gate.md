@@ -130,6 +130,15 @@ Anything after the merge that cannot be undone safely gives STUCK: an undo that 
 
 A gate-OK record is written for the merge before the push. When the merge is then undone (a push that did not land, cleared by hand from STUCK), the record for that merge commit stays in `<git common dir>/kit-gate-ok/`. It is stale but harmless: records are keyed by commit (`gate_ok.record_path`), that commit is no longer on main, and a reader verifying any other commit never reads it. Only a later push of that same merge commit would find it. Delete it by hand when clearing such a STUCK.
 
+**First switch.** A repo's first switch from the old PM kit is landed by the owner, by hand. Its base `.kit.json` fails to load with the kit loader (old key spellings such as `gate.hook`, `doc_budget.owner_email`/`agent_emails`/`owner_only`/`owner_only_except`, and dropped keys such as `dependency_pin_check` and `python_tests_audit*`). Five sites then refuse: the pre-push hook (kitlib/guard/prepush.py), the guard's git-push-main rule (kitlib/guard/rules.py `git_push`), the land.py preconditions (kitlib/gate/land.py), the trailers check (kitlib/trailerscheck) and review_pack's base read.
+
+1. Rewrite the base `.kit.json` to the kit spelling: rename the old keys, drop the removed ones (docs/kit-json.md).
+2. Check that it loads with the kit loader.
+3. The owner commits and pushes that switch commit himself; `gate.py land`, pre-push and the trailers check refuse until main loads.
+4. After that, normal landings work (docs/go-live.md "Landing tool").
+
+Reopen the first-switch item if a repo ever has to switch from the old PM kit.
+
 ### The landing queue
 
 Landings into one repository take turns through the machine lock's store: the queue is the exclusive resource `landing:<git common dir>` in `resources.json` (kitlib/lock/resource.py; docs/lock-api.md "Exclusive resources"), so every checkout of a repository shares one queue. A landing joins at the back. Only the first entry has the turn, and no later landing goes ahead of an earlier one, however often it looks (`Lander.poll_s`, 5 s). No landing is ever pre-empted. At its turn the landing takes the lock file:
