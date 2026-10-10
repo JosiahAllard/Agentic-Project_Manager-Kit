@@ -488,6 +488,73 @@ class LanderMainCheckout(MainGit):
             with self.subTest(text):
                 self.allowed(self.git(text, tool='PowerShell'))
 
+    def test_a_lander_may_fetch_the_whole_remote(self):
+        # land-branch step 2: `git fetch <remote>` writes only remote-tracking refs and FETCH_HEAD
+        m = self.main
+        for text in ('git -C "%s" fetch origin' % m, 'cd "%s" && git fetch origin' % m,
+                     'cd "%s"; git fetch origin' % m):
+            with self.subTest(text):
+                self.allowed(self.git(text))
+        self.allowed(self.git('& git -C "%s" fetch origin' % m, tool='PowerShell'))
+        self.allowed(self.git('Set-Location "%s"; git fetch origin' % m, tool='PowerShell'))
+        self.jailed(self.git('git -C "%s" fetch origin' % m, 'worker'))
+
+    def test_a_lander_verb_must_be_alone_on_its_line(self):
+        m = self.main
+        for text in ('git -C "%s" fetch origin main && git -C "%s" status' % (m, m),
+                     'git -C "%s" status; git -C "%s" merge --ff-only origin/main' % (m, m),
+                     'echo go && git -C "%s" fetch origin' % m,
+                     'cd "%s" && echo x && git fetch origin main' % m,
+                     'git -C "%s" fetch origin main | tee x.log' % m,
+                     'git -C "%s" fetch origin main || true' % m,
+                     '(git -C "%s" fetch origin main)' % m,
+                     'bash -c \'git -C "%s" fetch origin main\'' % m,
+                     'cd "%s" && git -C "%s" fetch origin main' % (W.fwd(self.w.wt), m),
+                     'cd "%s" && cd . && git fetch origin main' % m):
+            with self.subTest(text):
+                d = self.jailed(self.git(text))
+                self.assertIn('git is not alone on the line', d.reason)
+        self.each_denied(['cd "%s" || git fetch origin main' % m])     # where git runs is unknown
+        self.each_denied(['git -C "%s" fetch origin main; Remove-Item x' % m,
+                          'Set-Location "%s"; git status; git fetch origin main' % m], tool='PowerShell')
+        # the lander's own worktree is its root: a fetch there needs no landing form
+        self.allowed(self.git('cd "%s" && git fetch origin main && git status' % W.fwd(self.w.wt)))
+
+    def test_a_refusal_names_the_test_that_failed(self):
+        m = self.main
+        cases = (('git -C "%s" fetch origin main && echo x' % m, 'write-jail', 'git is not alone on the line',
+                  'git -C "%s" fetch origin main' % m),
+                 ('git -C "%s" fetch --prune origin main' % m, 'write-jail', 'its arguments are not exactly one of',
+                  'git -C "%s" fetch origin main' % m),
+                 ('git -C "%s" merge --no-ff origin/main' % m, 'write-jail', 'its arguments are not exactly one of',
+                  'git -C "%s" merge --ff-only origin/main' % m),
+                 ('git -c x.y=z -C "%s" fetch origin main' % m, 'write-jail', 'a wrapper, an environment assignment',
+                  'git -C "%s" fetch origin main' % m))
+        for text, rule, why, instead in cases:
+            with self.subTest(text):
+                d = self.jailed(self.git(text), rule)
+                self.assertIn(why, d.reason)
+                self.assertIn('A lander may run only git fetch origin, git fetch origin main or git merge --ff-only '
+                              'origin/main there', d.reason)
+                self.assertIn(' Instead: %s [kit guard: rule=%s role=subagent]' % (instead, rule), d.reason)
+        d = self.jailed(self.git('git -C "%s" commit -m x' % m))
+        self.assertNotIn('landing step', d.reason)          # not a landing verb: the jail's own refusal
+
+    def test_the_refusal_names_the_role_setting_when_the_repo_has_none(self):
+        # a repository whose .kit.json does not let the lander write its main checkout: the cause is
+        # roles.lander.edit_main_checkout, and the refusal says so (fetch: the jail; merge: main history)
+        self.w.kit({'repo': {'name': 'demo', 'push_block': True}})
+        kit = 'python -m json.tool "%s/.kit.json"' % self.main
+        for text, rule in (('git -C "%s" fetch origin main' % self.main, 'write-jail'),
+                           ('git -C "%s" fetch origin' % self.main, 'write-jail'),
+                           ('git -C "%s" merge --ff-only origin/main' % self.main, 'git-main-history')):
+            with self.subTest(text):
+                d = self.jailed(self.git(text), rule)
+                self.assertIn('does not set roles.lander.edit_main_checkout to true', d.reason)
+                self.assertIn(' Instead: %s [kit guard:' % kit, d.reason)
+        d = self.jailed(self.git('git -C "%s" merge --ff-only origin/main' % self.main, 'worker'), 'git-main-history')
+        self.assertNotIn('roles.lander', d.reason)          # another role: the rule's own refusal
+
     def test_the_remote_and_main_come_from_the_config(self):
         self.w.kit({'repo': {'name': 'demo', 'push_block': True, 'remote': 'upstream', 'main_branch': 'trunk'},
                     'roles': {'lander': {'edit_main_checkout': True, 'why': 'test'}}})
@@ -496,9 +563,9 @@ class LanderMainCheckout(MainGit):
         self.each_denied(['git -C "%s" fetch origin main' % self.main,
                           'git -C "%s" merge --ff-only origin/main' % self.main])
 
-    def test_a_lander_fetches_nothing_but_main_from_the_remote(self):
+    def test_a_lander_fetches_nothing_but_the_remote_or_its_main(self):
         m = self.main
-        self.each_denied(['git -C "%s" fetch' % m, 'git -C "%s" fetch origin' % m, 'git -C "%s" fetch --all' % m,
+        self.each_denied(['git -C "%s" fetch' % m, 'git -C "%s" fetch --all' % m,
                           'git -C "%s" fetch origin other' % m, 'git -C "%s" fetch other main' % m,
                           'git -C "%s" fetch origin main:main' % m, 'git -C "%s" fetch origin +main' % m,
                           'git -C "%s" fetch origin +main:refs/heads/main' % m,
