@@ -205,7 +205,7 @@ SECTIONS = {
         'reuse_never': Field(Strs, [], 'globs of paths whose change makes a landing reuse no step'),
     },
     'ledger': {
-        'pre_commit_check': Field(Bool(), False, 'githooks/pre-commit runs tools/ledger.py check --base HEAD before each commit (opt-in; docs/ledger.md "Pre-commit check")'),
+        'pre_commit_check': Field(Bool(), False, 'githooks/pre-commit runs tools/ledger.py check --base HEAD before each commit that changes the ledger file or its standing digest (opt-in; docs/ledger.md "Pre-commit check")'),
     },
     'machine_paths': {
         'allow': Field(ListOf(Obj({'glob': Field(Str(), None, 'files'),

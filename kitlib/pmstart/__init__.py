@@ -193,6 +193,87 @@ def known_repos(cfg, read=None, toplevel=_toplevel, kit_dir=None):
     return sorted(folded.values(), key=str.lower)
 
 
+FETCH_TIMEOUT = 3     # seconds: the kit_sync fetch must not hold the session start up
+REMOTE, MAIN = "origin", "main"
+
+
+def pm_data_settings():
+    """The machine config's pm_data settings dict, or None when unset (kitlib.pmdata.machine_settings)."""
+    from kitlib import pmdata
+    return pmdata.machine_settings()
+
+
+# git's markers of an operation in progress besides a merge, with the phrase for the refusal line.
+_OPERATIONS = (("CHERRY_PICK_HEAD", "a cherry-pick is in progress"),
+               ("REVERT_HEAD", "a revert is in progress"),
+               ("rebase-merge", "a rebase is in progress"),
+               ("rebase-apply", "a rebase or am is in progress"))
+
+
+def kit_sync(settings):
+    """Lines for the kit-currency check (docs/pm-data-branch.md "Session start: keep the kit current").
+
+    `settings` is the pm_data dict; None gives no line. The kit checkout is the main checkout of the
+    repository holding settings["path"]. It is left alone, with one line saying why, when it is not
+    on main, has a merge, cherry-pick, revert or rebase in progress, is not clean or the landing lock is held. Otherwise origin's
+    main is fetched (explicit refspec, FETCH_TIMEOUT) and local main is fast-forwarded when it is
+    behind; a diverged main is reported, never merged. No config, rebase, reset or force."""
+    if not settings:
+        return []
+    from kitlib.git import cmd as gitcmd, refs, repo
+    from kitlib.records import landing
+    kit = repo.main_checkout_toplevel(settings["path"])
+    if not kit:
+        return ["kit not updated: no git checkout found for %s" % settings["path"]]
+    branch, why = refs.current_branch(kit)
+    if branch is None:
+        return ["kit not updated: cannot read the kit's branch: %s" % why]
+    if branch != MAIN:
+        return ["kit not updated: the kit checkout is on %s, not %s" % (branch or "a detached HEAD", MAIN)]
+    merging, why = refs.merge_in_progress(kit)
+    if merging is None:
+        return ["kit not updated: cannot tell whether a merge is in progress: %s" % why]
+    if merging:
+        return ["kit not updated: a merge is in progress in the kit checkout"]
+    for name, what in _OPERATIONS:
+        path, why = repo.git_path(kit, name)
+        if path is None:
+            return ["kit not updated: cannot look for %s: %s" % (what, why)]
+        if os.path.exists(path):
+            return ["kit not updated: %s in the kit checkout" % what]
+    clean, why = refs.is_clean(kit)
+    if clean is None:
+        return ["kit not updated: cannot read the kit's status: %s" % why]
+    if not clean:
+        return ["kit not updated: the kit checkout has uncommitted changes"]
+    try:
+        held = landing.LandingLock(kit).read()
+    except landing.LockError as e:
+        return ["kit not updated: the landing lock cannot be read: %s" % e]
+    if held:
+        return ["kit not updated: the landing lock is held (%s)" % landing.describe(held)]
+    tracking = "refs/remotes/%s/%s" % (REMOTE, MAIN)
+    _out, why = gitcmd.run(["fetch", "--no-tags", REMOTE, "refs/heads/%s:%s" % (MAIN, tracking)], kit,
+                           timeout=FETCH_TIMEOUT)
+    if _out is None:
+        return ["kit not updated: %s" % why]
+    current, why = refs.is_ancestor(tracking, "refs/heads/%s" % MAIN, kit)
+    if current is None:
+        return ["kit not updated: %s" % why]
+    if current:
+        return []
+    behind, why = refs.is_ancestor("refs/heads/%s" % MAIN, tracking, kit)
+    if behind is None:
+        return ["kit not updated: %s" % why]
+    if not behind:
+        return ["kit main has diverged from %s/%s; not merged" % (REMOTE, MAIN)]
+    _out, why = gitcmd.run(["merge", "--ff-only", tracking], kit)
+    if _out is None:
+        return ["kit not updated: %s" % why]
+    sha, why = refs.resolve("refs/heads/%s" % MAIN, kit)
+    return ["kit updated to %s" % (sha or "?")[:9]]
+
+
 def checklist(cfg, now=None, procs=None, **fakes):
     """The full session-start text. A failed check is one "could not check X: reason" line."""
     today = (now or datetime.datetime.now()).date()
@@ -212,6 +293,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("handoff", lambda: handoff(cfg, **fakes.get("handoff", {}))),
         ("reminders", lambda: reminders(cfg, today, **fakes.get("reminders", {}))),
         ("liveness", lambda: liveness(cfg, procs_once(), **fakes.get("liveness", {}))),
+        ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
     ]
     for name, fn in checks:
         try:
