@@ -93,13 +93,16 @@ def _config_env():
 
 def _get_urls(root, name, env, push):
     """`(set of normalised URLs, None)` from `git remote get-url --all [--push] <name>` (git's own
-    answer: pushurl else url, insteadOf and pushInsteadOf applied), an empty set when git refuses
-    the name, or `(None, why)` when git did not answer."""
+    answer: pushurl else url, insteadOf and pushInsteadOf applied), an empty set when git answers
+    "No such remote" (the raw config values still count), or `(None, why)` for any other failure
+    or no answer: a remote whose URLs cannot be read refuses the push."""
     r = cmd.call(['remote', 'get-url', '--all'] + (['--push'] if push else []) + ['--', name], root, env=env)
     if r.rc is None:
         return None, r.err
     if r.rc != 0:
-        return set(), None
+        if 'no such remote' in (r.err or '').lower():
+            return set(), None
+        return None, r.err or 'git remote get-url exited %s' % r.rc
     return {_norm_url(u) for u in cmd.text(r.out).splitlines() if u.strip()}, None
 
 

@@ -713,6 +713,29 @@ class PmDataTest(PrePushCase):
             why = prepush.leak_refusal(self.repo.root, [line], 'origin', self.repo.remote)
         self.assertIn('cannot find the git directory to look for kit-pm-data.json (git timed out)', why or '')
 
+    def test_a_remote_url_git_cannot_read_refuses(self):
+        # another remote's get-url failing for any reason but "No such remote" is not "no URLs"
+        line = 'refs/heads/pmdata %s refs/heads/pmdata %s' % (self.data, '0' * 40)
+        real = prepush.cmd.call
+
+        def call(args, *rest, **kw):
+            if args[:2] == ['remote', 'get-url'] and args[-1] == 'origin':
+                return prepush.cmd.Result(128, b'', 'fatal: bad config line 7')
+            return real(args, *rest, **kw)
+
+        with mock.patch.object(prepush.cmd, 'call', side_effect=call):
+            why = prepush.leak_refusal(self.repo.root, [line], 'private', self.private)
+        self.assertIn('cannot read the remotes to tell whether private is the private remote', why or '')
+        self.assertIn('git remote get-url origin: fatal: bad config line 7', why)
+
+        def gone(args, *rest, **kw):
+            if args[:2] == ['remote', 'get-url'] and args[-1] == 'origin':
+                return prepush.cmd.Result(2, b'', "error: No such remote 'origin'")
+            return real(args, *rest, **kw)
+
+        with mock.patch.object(prepush.cmd, 'call', side_effect=gone):
+            self.assertIsNone(prepush.leak_refusal(self.repo.root, [line], 'private', self.private))
+
     def test_remotes_git_cannot_read_refuse(self):
         line = 'refs/heads/main %s refs/heads/main %s' % (self.with_kit, '0' * 40)
         real = prepush.cmd.call
