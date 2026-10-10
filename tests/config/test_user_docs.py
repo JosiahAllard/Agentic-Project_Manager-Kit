@@ -137,8 +137,10 @@ class UserConfigTest(unittest.TestCase):
                 self.assertIn(why, str(cm.exception))
 
     def test_the_default_home_is_the_user_profile(self):
-        self.assertEqual(user.config_file(), os.path.join(os.path.expanduser('~'), user.DIR_NAME,
-                                                          'config.json'))
+        # a scratch profile: the real one may still hold the old folder (locate's fallback)
+        with mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home}):
+            self.assertEqual(user.config_file(), os.path.join(os.path.expanduser('~'), user.DIR_NAME,
+                                                              'config.json'))
 
     def test_home_follows_userprofile_on_windows_and_home_elsewhere(self):
         var = 'USERPROFILE' if os.name == 'nt' else 'HOME'

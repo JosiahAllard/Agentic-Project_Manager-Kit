@@ -69,7 +69,10 @@ def load(home=None):
         raise SweepConfigError("the kit library (kitlib) is not in the kit root %s (%s), so the machine "
                                "config cannot be found; run the copy inside the kit or its installed "
                                "junction" % (KIT_ROOT, KITLIB_ERROR))
-    path = kuser.config_file(home)
+    try:
+        path = kuser.readable_file(home)       # a BAD location is never "no config"
+    except kuser.ConfigError as e:
+        raise SweepConfigError(str(e))
     try:
         with open(path, encoding="utf-8-sig") as f:
             data = json.load(f)

@@ -342,7 +342,7 @@ def layout_key(L):
 
 def slot_key(L):
     """The run record's `layout`: the slot numbering every tool sharing the store must agree on
-    (threads, gpus, cpu slots and their threads, gpu slots). The installed PM-kit machine_lock.py
+    (threads, gpus, cpu slots and their threads, gpu slots). The older kit's installed machine_lock.py
     refuses a run while a live record holds another string, so this keeps its format and hash
     inputs. Choices that renumber no slot (half, agent_cap, medium_cores) are left out, as there;
     layout_key, layout.json's adoption key, covers them."""

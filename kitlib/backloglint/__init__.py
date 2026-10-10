@@ -18,7 +18,6 @@ import re
 
 from kitlib.config import user as kuser
 
-CONFIG_PATH = os.path.join("~", kuser.DIR_NAME, kuser.FILE_NAME)
 KEY = "backlog_lint"
 
 SESSION, HOLD = "session", "hold"
@@ -233,8 +232,15 @@ def parse_repo(name, d):
 
 def load_config(path=None):
     """{repo name: RepoConfig} from the "backlog_lint" key, or None when the file or key is missing.
-    A present key that is malformed raises LintConfigError."""
-    p = os.path.expanduser(path or CONFIG_PATH)
+    A present key that is malformed, or a machine config location that cannot be told
+    (kitlib.config.user.locate BAD), raises LintConfigError."""
+    if path:
+        p = os.path.expanduser(path)
+    else:
+        try:
+            p = kuser.readable_file()
+        except kuser.ConfigError as e:
+            raise LintConfigError(str(e))
     try:
         with open(p, encoding="utf-8-sig") as f:
             data = json.load(f)

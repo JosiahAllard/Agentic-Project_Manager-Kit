@@ -113,7 +113,7 @@ def main(argv=None):
     except ConfigError as e:
         return fail(str(e))
     if not path:
-        return fail('no pending_path in %s' % user.DISPLAY)
+        return fail('no pending_path in %s' % user.display())
     try:
         return run(a, path)
     except Usage as e:

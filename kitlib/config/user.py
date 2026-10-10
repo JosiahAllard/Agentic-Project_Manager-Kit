@@ -6,19 +6,36 @@ and no command-line flag sets it, so a repository cannot point the ledger somewh
 os.path.expanduser's: USERPROFILE on Windows, HOME elsewhere, so an environment that changes that
 variable changes which machine config is read. An absent file is an empty config; a present file that cannot be read, or that
 holds an unknown key or a bad value, is a ConfigError (never silently "no ledger").
+
+The folder moved (docs/kit-json.md "Moving the machine config folder"): locate() picks the file
+read. It is DIR_NAME's file when that exists, else the retired folder's
+(kitlib.config.migration.OLD_DIR_NAME) while that one exists; the two are never merged. A new
+folder or file that cannot be told apart from absent is BAD, a ConfigError, never a fallback.
+Writers write DIR_NAME's file only (writable_file).
 """
+import collections
 import os
+import stat
 import sys
 import tempfile
 
-from .types import ConfigError, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, parse_json
+from .migration import MOVE_STEPS, OLD_DIR_NAME
+from .types import ConfigError, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, is_note, parse_json
 
 # The machine config's folder in the home folder. The one place the kit names it: code derives
-# the folder from config_dir() and messages from DISPLAY, so a new name changes this line only.
-DIR_NAME = '.claude-pm-kit'
+# the folder from config_dir() and messages from DISPLAY or display(), so a new name changes this
+# line only.
+DIR_NAME = '.pm-kit'
 FILE_NAME = 'config.json'
-# How messages and help text name the machine config file.
+# How help text names the machine config file; display() names the file actually read.
 DISPLAY = '~/%s/%s' % (DIR_NAME, FILE_NAME)
+
+# locate() states: which file is read.
+NEW = 'new'      # DIR_NAME's file; the old folder has none
+OLD = 'old'      # the old folder's file: DIR_NAME has none (the fallback)
+BOTH = 'both'    # both have one: DIR_NAME's is read, the old one ignored
+NONE = 'none'    # neither: an empty config, named at DIR_NAME
+BAD = 'bad'      # DIR_NAME's folder or file cannot be read as present or absent: a ConfigError
 # The kit's temp folder at the root of a checkout's drive (work_temp).
 TEMP_DIR_NAME = 'AgentTemp'
 
@@ -119,7 +136,7 @@ SCHEMA = {
     'guard_mcp_prefix': Field(Str(), None, 'the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")'),
     'guard_mcp_tools': Field(ListOf(Str()), None, 'more full tool names the guard treats as the lock MCP\'s owner-only tools, as a PreToolUse payload names them (docs/guard.md "Lock MCP")'),
     'guard_agent_marks': Field(ListOf(Str()), None, 'the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json and write-jail rules; it replaces the default list, so it names every mark it holds; unset: coordinator, conductor, deep-worker, consultant and pm (docs/guard.md "Session mark")'),
-    'guard_mark_roots': Field(MarkMap(ListOf(MARK_ROOT), what='mark'), None, 'more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside this config\'s own folder is ignored (docs/guard.md "Write jail")'),
+    'guard_mark_roots': Field(MarkMap(ListOf(MARK_ROOT), what='mark'), None, 'more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside either machine config folder, the current or the retired one, is ignored unless it is read-only (docs/guard.md "Write jail")'),
     'pm_data': Field(Owned('kitlib.pmdata'), None, 'the worktree of the PM data branch: {path, branch, remote} (docs/pm-data-branch.md "Layout")'),
     'pm_start': Field(Owned('kitlib.pmstart'), None, 'the PM session-start checklist settings'),
     'coordinator_start': Field(Owned('kitlib.coordinatorstart'), None, 'the coordinator session-start settings'),
@@ -203,18 +220,109 @@ def make_temp(near, prefix, home=None):
             folder, parent or 'the kit temp folder', e)
 
 
+class Location(collections.namedtuple('Location', 'state path new old error home')):
+    """Which machine config file is read (locate): `state` one of NEW, OLD, BOTH, NONE, BAD;
+    `path` the file read (DIR_NAME's for NONE and BAD); `new` and `old` the two candidate files;
+    `error` why a BAD location cannot be read, else None; `home` the home folder."""
+
+    def display(self, path=None):
+        """`path` (default the file read) as ~/<folder>/<file>."""
+        p = path or self.path
+        return '~/%s/%s' % (os.path.basename(os.path.dirname(p)), os.path.basename(p))
+
+
+def _kind(path):
+    """'absent', 'dir', 'file' or 'other' (a dangling link, a device) for `path`, links followed.
+    An OSError other than not-found propagates: a path that cannot be examined is not absent."""
+    try:
+        st = os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        try:
+            os.lstat(path)
+        except (FileNotFoundError, NotADirectoryError):
+            return 'absent'
+        return 'other'
+    if stat.S_ISDIR(st.st_mode):
+        return 'dir'
+    return 'file' if stat.S_ISREG(st.st_mode) else 'other'
+
+
+def locate(home=None):
+    """The Location of the machine config under `home` (default the user's). It decides on
+    DIR_NAME's config file, never on its folder alone, so another writer making the folder first
+    does not hide the old file. It reads nothing but the file system's answers and never raises."""
+    h = home or home_dir()
+    new_dir, old_dir = os.path.join(h, DIR_NAME), os.path.join(h, OLD_DIR_NAME)
+    new, old = os.path.join(new_dir, FILE_NAME), os.path.join(old_dir, FILE_NAME)
+
+    def bad(why):
+        return Location(BAD, new, new, old, why, h)
+    try:
+        d = _kind(new_dir)
+        if d not in ('absent', 'dir'):
+            return bad('%s is not a folder: the machine config cannot be read' % new_dir)
+        n = _kind(new) if d == 'dir' else 'absent'
+    except OSError as e:
+        return bad('cannot tell whether the machine config %s exists: %s' % (new, e))
+    if n not in ('absent', 'file'):
+        return bad('%s is not a file: the machine config cannot be read' % new)
+    try:
+        o = _kind(old)
+    except OSError as e:
+        if n == 'file':
+            return Location(NEW, new, new, old, None, h)
+        return bad('cannot tell whether the machine config %s exists: %s' % (old, e))
+    if n == 'file':
+        return Location(NEW if o == 'absent' else BOTH, new, new, old, None, h)
+    if o == 'absent':
+        return Location(NONE, new, new, old, None, h)
+    return Location(OLD, old, new, old, None, h)
+
+
 def config_dir(home=None):
-    """The machine config's folder under `home` (default the user's)."""
-    return os.path.join(home or home_dir(), DIR_NAME)
+    """The folder of the machine config file read under `home` (default the user's): locate()."""
+    return os.path.dirname(locate(home).path)
 
 
 def config_file(home=None):
-    return os.path.join(config_dir(home), FILE_NAME)
+    """The machine config file read (locate()); for a BAD location the new file. Never raises."""
+    return locate(home).path
 
 
-def user_config(home=None):
-    """The checked machine config, every schema key present (None where unset)."""
-    path = config_file(home)
+def readable_file(home=None):
+    """The machine config file a reader opens (locate()). ConfigError when the location is BAD:
+    a reader that opens the file itself (pmstart, pmwatch, backloglint, ...) must not take a new
+    file it cannot examine for an absent one."""
+    loc = locate(home)
+    if loc.error:
+        raise ConfigError(loc.error)
+    return loc.path
+
+
+def display(home=None):
+    """The machine config file read, as messages name it: ~/<folder>/config.json."""
+    return locate(home).display()
+
+
+def writable_file(home=None):
+    """The file a writer of the machine config writes: DIR_NAME's, always. ConfigError when the
+    location is BAD, or when only the old folder has a config (OLD): a new file holding one key
+    would hide every other key, so the owner moves the file first (migration.MOVE_STEPS)."""
+    loc = locate(home)
+    if loc.error:
+        raise ConfigError(loc.error)
+    if loc.state == OLD:
+        raise ConfigError(MOVE_STEPS % (loc.old, loc.new))
+    return loc.new
+
+
+def user_config(home=None, location=None):
+    """The checked machine config, every schema key present (None where unset). `location` is a
+    Location already taken (the guard takes one per call), else locate(home)."""
+    loc = location or locate(home)
+    if loc.error:
+        raise ConfigError(loc.error)
+    path = loc.path
     try:
         with open(path, encoding='utf-8-sig') as f:
             text = f.read()
@@ -232,6 +340,25 @@ def user_config(home=None):
     out = {k: f.default for k, f in SCHEMA.items()}
     out.update({k: v for k, v in data.items() if k in SCHEMA})
     return out
+
+
+def failing_keys(data):
+    """The sorted top-level keys of the machine config object `data` that user_config refuses:
+    unknown, or holding a value its type refuses. Names only: no value is returned, so a caller
+    may print them where the value must not appear (kitlib.preflight.configline)."""
+    out = []
+    for k, v in data.items():
+        if is_note(k):
+            continue
+        f = SCHEMA.get(k)
+        errs = []
+        if f is None:
+            errs.append(k)
+        elif not (v is None and f.default is None):
+            f.type.check(v, k, errs)
+        if errs:
+            out.append(k)
+    return sorted(out)
 
 
 def ledger_path(home=None):

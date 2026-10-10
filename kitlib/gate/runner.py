@@ -396,8 +396,8 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
     """Runs `chosen` in a slot of `kind`: `(results, None)`, or `(None, Outcome)` when the hook
     module or the booking refuses. The hook module's checks come from the work tree, or from
     commit `checks_rev` when given (a landing: --expect-main). `chosen` is never empty. The slot
-    is booked as a gate run, so the build daemons the gate leaves are stopped at its end
-    (kitlib.lock.site, machine_lock.daemons)."""
+    is booked as a gate run, so the build daemons the gate leaves that serve nothing outside its
+    job are stopped at its end (kitlib.lock.site, machine_lock.daemons; kitlib.proc.daemons)."""
     checks, options = {}, {}
     if any(s.check for s in chosen):
         try:

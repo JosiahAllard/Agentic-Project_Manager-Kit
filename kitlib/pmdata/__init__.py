@@ -143,13 +143,15 @@ def locate(path):
     return read(common)
 
 
-def machine_settings(home=None):
+def machine_settings(home=None, location=None):
     """The machine config's `pm_data` as {"path", "branch", "remote"} (branch and remote defaulted
     to DEFAULT_BRANCH and DEFAULT_REMOTE), or None when the key is unset. PmDataError for a missing
     or relative path or an invalid name; a machine config that cannot be read is the config
-    package's ConfigError, unchanged."""
+    package's ConfigError, unchanged. `location`: a kitlib.config.user.locate answer already
+    taken, else one is taken here."""
     from kitlib.config import user
-    return check_settings(user.user_config(home)[KEY], '%s key %s' % (user.config_file(home), KEY))
+    loc = location or user.locate(home)
+    return check_settings(user.user_config(home, location=loc)[KEY], '%s key %s' % (loc.path, KEY))
 
 
 def check_settings(cfg, where):
