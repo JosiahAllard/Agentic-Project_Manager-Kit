@@ -203,12 +203,19 @@ def pm_data_settings():
     return pmdata.machine_settings()
 
 
+# git's markers of an operation in progress besides a merge, with the phrase for the refusal line.
+_OPERATIONS = (("CHERRY_PICK_HEAD", "a cherry-pick is in progress"),
+               ("REVERT_HEAD", "a revert is in progress"),
+               ("rebase-merge", "a rebase is in progress"),
+               ("rebase-apply", "a rebase or am is in progress"))
+
+
 def kit_sync(settings):
     """Lines for the kit-currency check (docs/pm-data-branch.md "Session start: keep the kit current").
 
     `settings` is the pm_data dict; None gives no line. The kit checkout is the main checkout of the
     repository holding settings["path"]. It is left alone, with one line saying why, when it is not
-    on main, has a merge in progress, is not clean or the landing lock is held. Otherwise origin's
+    on main, has a merge, cherry-pick, revert or rebase in progress, is not clean or the landing lock is held. Otherwise origin's
     main is fetched (explicit refspec, FETCH_TIMEOUT) and local main is fast-forwarded when it is
     behind; a diverged main is reported, never merged. No config, rebase, reset or force."""
     if not settings:
@@ -228,6 +235,12 @@ def kit_sync(settings):
         return ["kit not updated: cannot tell whether a merge is in progress: %s" % why]
     if merging:
         return ["kit not updated: a merge is in progress in the kit checkout"]
+    for name, what in _OPERATIONS:
+        path, why = repo.git_path(kit, name)
+        if path is None:
+            return ["kit not updated: cannot look for %s: %s" % (what, why)]
+        if os.path.exists(path):
+            return ["kit not updated: %s in the kit checkout" % what]
     clean, why = refs.is_clean(kit)
     if clean is None:
         return ["kit not updated: cannot read the kit's status: %s" % why]
@@ -240,7 +253,7 @@ def kit_sync(settings):
     if held:
         return ["kit not updated: the landing lock is held (%s)" % landing.describe(held)]
     tracking = "refs/remotes/%s/%s" % (REMOTE, MAIN)
-    _out, why = gitcmd.run(["fetch", REMOTE, "refs/heads/%s:%s" % (MAIN, tracking)], kit,
+    _out, why = gitcmd.run(["fetch", "--no-tags", REMOTE, "refs/heads/%s:%s" % (MAIN, tracking)], kit,
                            timeout=FETCH_TIMEOUT)
     if _out is None:
         return ["kit not updated: %s" % why]

@@ -1,14 +1,18 @@
 """kitlib.pmstart.kit_sync (docs/pm-data-branch.md "Session start: keep the kit current") on scratch
 repositories with a bare remote; no network."""
+import datetime
 import os
 import unittest
+from unittest import mock
 
 from kitlib import pmstart
+from kitlib.git import cmd as gitcmd
 from kitlib.records import landing
 from tests import gitfixture
+from tests.realgit import real_git
 
 
-class KitSyncTest(unittest.TestCase):
+class Base(unittest.TestCase):
     def setUp(self):
         self.repo = gitfixture.TempRepo(bare_remote=True)
         self.addCleanup(self.repo.cleanup)
@@ -23,6 +27,8 @@ class KitSyncTest(unittest.TestCase):
         self.repo.write('remote.txt', 'r\n', root=side)
         sha = self.repo.commit('remote work', 'remote.txt', cwd=side)
         self.repo.git('push', '-q', 'origin', '%s:main' % os.path.basename(side), cwd=side)
+        # the push also moved refs/remotes/origin/main here; put it back so the check must fetch
+        self.repo.git('update-ref', 'refs/remotes/origin/main', self.repo.initial)
         return sha
 
     def config(self):
@@ -40,6 +46,31 @@ class KitSyncTest(unittest.TestCase):
         self.assertIn(text, out[0])
         self.assertTrue(out[0].startswith('kit not updated') or 'diverged' in out[0], out)
 
+    def spy(self, fail=None):
+        """Patch kitlib.git.cmd.run: record (args, timeout) of each call and pass it on; a call whose
+        subcommand is `fail` answers (None, 'boom')."""
+        calls = []
+        real = gitcmd.run
+
+        def run(args, cwd, **kw):
+            calls.append((list(args), kw.get('timeout')))
+            if fail and gitcmd.subcommand(args) == fail:
+                return None, 'boom'
+            return real(args, cwd, **kw)
+        patcher = mock.patch.object(gitcmd, 'run', run)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def main_tip(self):
+        return self.repo.git('rev-parse', 'refs/heads/main')
+
+    def refs(self):
+        return self.repo.git('for-each-ref', '--format=%(refname) %(objectname)')
+
+
+
+class KitSyncTest(Base):
     def test_unset_gives_nothing(self):
         self.assertEqual(pmstart.kit_sync(None), [])
 
@@ -80,7 +111,57 @@ class KitSyncTest(unittest.TestCase):
 
     def test_offline_warns(self):
         self.repo.git('remote', 'set-url', 'origin', os.path.join(self.repo.base, 'missing.git'))
-        self.assertLeft(self.run_check(), '')
+        calls = self.spy()
+        out = self.run_check()
+        self.assertLeft(out, 'kit not updated: ')
+        self.assertEqual([c for c, _t in calls if c[0] == 'fetch'][0][:2], ['fetch', '--no-tags'])
+        self.assertNotIn('uncommitted', out[0])
+        self.assertNotIn('in progress', out[0])
+
+    def test_fetch_failure_wording_and_timeout(self):
+        self.remote_ahead()
+        calls = self.spy(fail='fetch')
+        self.assertEqual(self.run_check(), ['kit not updated: boom'])
+        fetches = [(c, t) for c, t in calls if c[0] == 'fetch']
+        self.assertEqual(fetches, [(['fetch', '--no-tags', 'origin',
+                                     'refs/heads/main:refs/remotes/origin/main'],
+                                    pmstart.FETCH_TIMEOUT)])
+        self.assertEqual(pmstart.FETCH_TIMEOUT, 3)
+        self.assertEqual(self.main_tip(), self.repo.initial)
+
+    def test_ff_only_failure_reported(self):
+        self.remote_ahead()
+        self.spy(fail='merge')
+        self.assertEqual(self.run_check(), ['kit not updated: boom'])
+        self.assertEqual(self.main_tip(), self.repo.initial)
+
+    def test_unreadable_landing_lock_counts_as_held(self):
+        self.remote_ahead()
+        with open(os.path.join(self.repo.common_dir(), landing.LOCK_NAME), 'w') as f:
+            f.write('not json')
+        self.assertLeft(self.run_check(), 'landing lock cannot be read')
+        self.assertEqual(self.main_tip(), self.repo.initial)
+
+    def test_cherry_pick_revert_rebase_left_alone(self):
+        self.remote_ahead()
+        gd = self.repo.common_dir()
+        for name, text, is_dir in (('CHERRY_PICK_HEAD', 'cherry-pick', False),
+                                   ('REVERT_HEAD', 'revert', False),
+                                   ('rebase-merge', 'rebase', True),
+                                   ('rebase-apply', 'rebase', True)):
+            path = os.path.join(gd, name)
+            if is_dir:
+                os.mkdir(path)
+            else:
+                with open(path, 'w') as f:
+                    f.write(self.repo.initial + '\n')
+            with self.subTest(name):
+                self.assertLeft(self.run_check(), text)
+                self.assertEqual(self.main_tip(), self.repo.initial)
+            if is_dir:
+                os.rmdir(path)
+            else:
+                os.remove(path)
 
     def test_diverged_not_merged(self):
         self.remote_ahead()
@@ -92,7 +173,6 @@ class KitSyncTest(unittest.TestCase):
     def test_in_checklist_and_failure_isolated(self):
         fakes = dict(handoff={'globber': lambda p: []}, reminders={'read': lambda p: '[]'},
                      liveness={'read': lambda p: '{}'})
-        import datetime
         now = datetime.datetime(2026, 10, 6, 9, 0)
         sha = self.remote_ahead()
         txt = pmstart.checklist({'standing': ['x']}, now, procs=[], pm_data=lambda: self.settings,
@@ -104,6 +184,23 @@ class KitSyncTest(unittest.TestCase):
         txt = pmstart.checklist({'standing': ['x']}, now, procs=[], pm_data=boom, **fakes)
         self.assertIn('could not check kit_sync: RuntimeError: no config', txt)
         self.assertIn('standing rule: x', txt)
+
+
+@real_git('fetch and merge --ff-only against a real bare remote: which refs and files really change')
+class RealKitSyncTest(Base):
+    def test_fast_forward_moves_only_the_tracking_ref_and_main(self):
+        sha = self.remote_ahead()
+        # a tag on the remote that a default fetch would follow into refs/tags
+        self.repo.git('tag', 'remote-tag', sha)
+        self.repo.git('push', '-q', 'origin', 'remote-tag')
+        self.repo.git('tag', '-d', 'remote-tag')
+        before = dict(l.split(' ') for l in self.refs().splitlines())
+        out = self.run_check()          # also asserts .git/config is byte-identical
+        self.assertEqual(out, ['kit updated to %s' % sha[:9]])
+        after = dict(l.split(' ') for l in self.refs().splitlines())
+        moved = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
+        self.assertEqual(moved, {'refs/remotes/origin/main', 'refs/heads/main'})
+        self.assertEqual([k for k in after if k.startswith('refs/tags/')], [])
 
 
 if __name__ == '__main__':

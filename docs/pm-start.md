@@ -12,12 +12,12 @@ with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/look
 ## Kit currency (`kit_sync`)
 
 When the machine config sets `pm_data` (docs/pm-data-branch.md), the `kit_sync` check keeps the
-kit's main checkout current: it fetches `origin`'s `main` (explicit refspec, 3 second limit) and
+kit's main checkout current: it fetches `origin`'s `main` (`git fetch --no-tags`, explicit refspec, 3 second limit) and
 fast-forwards local `main` ("kit updated to <short sha>"). It prints nothing when `main` already
 contains `origin/main`. It leaves the checkout alone, with one "kit not updated: ..." line, when it
-is not on `main`, has a merge in progress or uncommitted changes, when the landing lock is held, or
+is not on `main`, has a merge, cherry-pick, revert or rebase in progress or uncommitted changes, when the landing lock is held, or
 when the fetch fails (offline, timed out); a diverged `main` is reported, never merged. It changes
-no git config and never rebases, resets or forces. Code: `kitlib/pmstart` `kit_sync`; tests:
+no git config and never rebases, resets or forces. The checks are a point in time (the landing lock is only read); `git merge --ff-only` bounds a race with a landing, since it refuses anything that is not a fast-forward. Code: `kitlib/pmstart` `kit_sync`; tests:
 `tests/pmstart/test_kitsync.py`.
 
 ## Config
