@@ -253,6 +253,23 @@ class CoreRequests(StoreCase):
         self.assertEqual(self.code(kind="three", cores=2, no_wait=True), 11)
         self.assertEqual(self.ended_need(), 2)
 
+    def test_an_aliased_kind_books_the_canonical_kinds_slots_and_is_recorded_as_it(self):
+        # `worldgraph` is a retired name kinds.json maps to graph-build (an `aliases` entry).
+        self.use_kinds({"kinds": {"graph-build": {"cpu": 3, "gpu": 0, "warn_min": 120}},
+                        "aliases": {"worldgraph": {"to": "graph-build", "why": "retired name"}}})
+        self.everything_held()
+        self.assertEqual(self.code(kind="worldgraph", no_wait=True), 11)
+        self.assertEqual(self.ended_need(), 3)
+        self.assertEqual(self.ended()[0]["kind"], "graph-build")
+        self.assertEqual(self.code(kind="no-such-kind", no_wait=True), 2)
+
+    def test_the_kits_worldgraph_alias_resolves_to_graph_build(self):
+        from kitlib.lock import kinds
+        table = kinds.load()
+        self.assertEqual(kinds.resolve("worldgraph", table), "graph-build")
+        self.assertEqual(kinds.resolve("graph-build", table), "graph-build")
+        self.assertEqual(kinds.resolve("nope", table), "nope")
+
     def test_the_kinds_full_size_may_be_asked_for(self):
         self.everything_held()
         self.assertEqual(self.code(kind="cpu-eval", cores=6, no_wait=True), 11)

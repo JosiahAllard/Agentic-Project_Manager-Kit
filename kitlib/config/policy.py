@@ -152,6 +152,35 @@ def kinds_table(path=None):
     return out
 
 
+def kinds_aliases(path=None):
+    """{alias: canonical kind} from the `aliases` object of the kinds table ({"alias": {"to": kind,
+    "why": text}}); {} when the file is missing or names none. ConfigError when the file cannot
+    be read, or an alias is not an object with a `to` kind and a `why`."""
+    path = path or KINDS_FILE
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        raise ConfigError('cannot read the kinds table %s: %s' % (path, e))
+    aliases = data.get('aliases') if isinstance(data, dict) else None
+    if aliases is None:
+        return {}
+    if not isinstance(aliases, dict):
+        raise ConfigError('the kinds table %s: aliases must be an object' % path)
+    out = {}
+    for name, a in aliases.items():
+        if is_note(name):
+            continue
+        if not (isinstance(a, dict) and isinstance(a.get('to'), str) and a['to']
+                and isinstance(a.get('why'), str) and a['why']):
+            raise ConfigError('the kinds table %s: alias %s needs a "to" kind and a "why"'
+                              % (path, name))
+        out[name] = a['to']
+    return out
+
+
 # ---------------------------------------------------------------- repo hook module
 
 def hook_path(cfg):

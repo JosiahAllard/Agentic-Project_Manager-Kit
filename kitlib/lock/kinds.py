@@ -31,6 +31,19 @@ def _read(path):
 ALIASES = ("medium", "heavy")
 
 
+def resolve(kind, table, path=None):
+    """The canonical kind name for `kind`: itself when `table` has it, else what the `aliases`
+    object of kinds.json maps it to (a retired name some caller still passes), else itself.
+    New lock records name the canonical kind. KindsError when the aliases cannot be read."""
+    if kind in table:
+        return kind
+    try:
+        to = policy.kinds_aliases(path or KINDS_FILE).get(kind)
+    except ConfigError as e:
+        raise KindsError(str(e))
+    return to if to in table else kind
+
+
 def is_size(cpu):
     """True for a whole number of cores of at least one (a bool is not one)."""
     return type(cpu) is int and cpu >= 1

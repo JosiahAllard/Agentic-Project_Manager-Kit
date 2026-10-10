@@ -10,5 +10,8 @@
   "local-ai": {"cpu": "medium", "gpu": "pool", "share": true, "warn_min": 30},
   "render": {"cpu": "medium", "gpu": "pool", "share": true, "warn_min": 30},
   "measure": {"cpu": "heavy", "gpu": "pool", "share": false, "warn_min": 180}
+ },
+ "aliases": {
+  "worldgraph": {"to": "graph-build", "why": "a retired name some callers still pass; removed once the last caller has switched to graph-build"}
  }
 }
