@@ -611,6 +611,14 @@ class PositiveForms(RepoFixture):
         self.assertIsNone(got, 'a broken ref was read as "no such rev"')
         self.assertIn('ignoring broken ref', why)
 
+    def test_a_warning_that_names_a_short_rev_by_its_full_ref_is_no_answer(self):
+        # Asked as `main`, git's warning names refs/heads/main.
+        said = b'warning: ignoring broken ref refs/heads/main\nfatal: Needed a single revision'
+        with mock.patch.object(cmd, '_run', return_value=(128, b'', said)):
+            got, why = refs.resolve('main', self.r.root, known=True)
+        self.assertIsNone(got, 'a broken refs/heads/main was read as "no such rev" for main')
+        self.assertIn('ignoring broken ref refs/heads/main', why)
+
     def test_a_ref_that_differs_only_in_case_is_no_answer(self):
         # rev-parse opens a loose refs/heads/KIT/feature as kit/feature's file on a
         # case-insensitive file system; for-each-ref lists only the name git wrote.
