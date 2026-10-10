@@ -144,7 +144,11 @@ def kinds_table(path=None):
         raise ConfigError('cannot read the kinds table %s: %s' % (path, e))
     if not isinstance(data, dict):
         raise ConfigError('the kinds table %s must hold a JSON object' % path)
-    table = data.get('kinds', data) if isinstance(data.get('kinds'), dict) else data
+    wrapped = isinstance(data.get('kinds'), dict)
+    table = data['kinds'] if wrapped else data
+    if wrapped and 'aliases' in table:
+        raise ConfigError('the kinds table %s: aliases belongs at the top level, beside kinds, '
+                          'not inside it' % path)
     out = {k: v for k, v in table.items() if not is_note(k) and k != 'aliases'}   # a reserved key
     bad = sorted(k for k, v in out.items() if not isinstance(v, dict))
     if bad:

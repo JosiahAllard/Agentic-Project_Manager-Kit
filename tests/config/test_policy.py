@@ -181,6 +181,11 @@ class KindsTableTest(unittest.TestCase):
         self.assertEqual(sorted(policy.kinds_table(path)), ['engine-test'])
         self.assertEqual(policy.kinds_aliases(path), {'old': 'engine-test'})
 
+    def test_aliases_inside_the_kinds_object_refuses(self):
+        path = self.write({'kinds': {'a': {}, 'aliases': {'x': {'to': 'a', 'why': 'w'}}}})
+        with self.assertRaisesRegex(config.ConfigError, 'aliases belongs at the top level'):
+            policy.kinds_table(path)
+
     def test_the_kits_table_aliases_worldgraph_to_graph_build(self):
         self.assertEqual(policy.kinds_aliases().get('worldgraph'), 'graph-build')
 
