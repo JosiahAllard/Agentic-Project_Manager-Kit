@@ -7,8 +7,9 @@
 -C names the main checkout (default: here). A relative --path is taken from the current folder.
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.pmdata.init, prints and
 exits. Exit codes: 0 done; 1 refused (nothing changed); 2 usage, or a configuration that cannot be
-read; 3 made locally, the push failed; 4 stopped part-way (run again with --adopt); 130 Ctrl+C
-(the lines made so far are printed).
+read; 3 made locally, the push failed; 4 stopped part-way (run again with --adopt); 5 crashed
+(an error escaped kitlib.pmdata.init: what was made is not known); 130 Ctrl+C (the lines made so
+far are printed).
 """
 import argparse
 import os
@@ -20,6 +21,7 @@ from kitlib import pmdata                                           # noqa: E402
 from kitlib.pmdata import init as pminit                            # noqa: E402
 
 USAGE = 2
+CRASHED = 5
 
 
 class Parser(argparse.ArgumentParser):
@@ -56,14 +58,28 @@ def main(argv=None):
             p.error('--%s needs a value' % name)
     if not os.path.isdir(a.root):
         p.error('-C: %s is not a folder' % a.root)
+    safe_stdout()
     try:
         outcome = pminit.init(os.path.abspath(a.root), os.path.abspath(a.path), a.branch,
                               a.remote, a.url, a.adopt)
+        for line in outcome.lines:
+            print(line, flush=True)
     except KeyboardInterrupt:
         return 130
-    for line in outcome.lines:
-        print(line, flush=True)
+    except Exception as e:      # never a bare traceback whose exit 1 reads as REFUSED
+        print('crashed: %s: %s; what was made before the error is not known; run init --adopt '
+              'to check' % (type(e).__name__, e), flush=True)
+        return CRASHED
     return outcome.code
+
+
+def safe_stdout():
+    """A path the console code page cannot spell (a cp1252 redirect) prints replaced, not raises
+    after init has made everything (as tools/machine_setup.py)."""
+    try:
+        sys.stdout.reconfigure(errors='replace')
+    except (AttributeError, ValueError):
+        pass
 
 
 if __name__ == '__main__':
