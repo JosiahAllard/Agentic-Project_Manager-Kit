@@ -140,7 +140,7 @@ including `land.py` and `ledger.py`. The tools in the list below run by the kit'
 
 `.claude-plugin/marketplace.json` lists the plugin with `"source": "./"`, so a kit checkout is a
 marketplace of its own. Add it by path and install from it: `claude plugin marketplace add <kit>`,
-then `claude plugin install claude-pm-kit@pm-kit`. A relative-path plugin of a local marketplace
+then `claude plugin install <plugin name in .claude-plugin/plugin.json>@pm-kit`. A relative-path plugin of a local marketplace
 loads in place, so `${CLAUDE_PLUGIN_ROOT}` is the checkout the stubs run: the skills and agents write
 every kit-only path (the tools above, `kitlib/`, `optional/`, the kit's docs) as
 `${CLAUDE_PLUGIN_ROOT}/<path>` (tests/skills checks it), and only stub tools repo-relative. Source:
