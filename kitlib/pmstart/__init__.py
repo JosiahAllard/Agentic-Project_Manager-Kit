@@ -12,7 +12,6 @@ import subprocess
 
 from kitlib.config import user as kuser
 
-CONFIG_PATH = os.path.join("~", kuser.DIR_NAME, kuser.FILE_NAME)
 KEY = "pm_start"
 TIMEOUT = 4
 
@@ -23,7 +22,7 @@ _PS = ("Get-CimInstance Win32_Process | Select-Object Name,CommandLine,Executabl
 
 def load_config(path=None):
     """The "pm_start" dict from the user-profile config, or None when the file or key is missing."""
-    p = os.path.expanduser(path or CONFIG_PATH)
+    p = os.path.expanduser(path) if path else kuser.config_file()
     try:
         with open(p, encoding="utf-8-sig") as f:
             cfg = json.load(f).get(KEY)

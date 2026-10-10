@@ -22,7 +22,6 @@ from kitlib import pmstart
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
 
-CONFIG_PATH = os.path.join("~", kuser.DIR_NAME, kuser.FILE_NAME)
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
 ROLE = "coordinator"
@@ -59,7 +58,7 @@ def is_coordinator(env=None):
 
 def load_config(path=None):
     """The "coordinator_start" dict, or None when the file or key is missing. Bad JSON raises ValueError."""
-    p = os.path.expanduser(path or CONFIG_PATH)
+    p = os.path.expanduser(path) if path else kuser.config_file()
     try:
         with open(p, encoding="utf-8-sig") as f:
             data = json.load(f)

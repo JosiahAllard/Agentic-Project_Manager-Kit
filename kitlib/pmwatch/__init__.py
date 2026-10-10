@@ -13,7 +13,6 @@ import time
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
 
-CONFIG_PATH = os.path.join("~", kuser.DIR_NAME, kuser.FILE_NAME)
 KEY = "pm_watch"
 WEEK_BANDS = (95, 98, 99)
 FIVE_BANDS = (95, 98, 99)         # 95 no new work, 98 landings only; no PM headroom
@@ -22,7 +21,7 @@ LINE = re.compile(r"account (\d+|codex): five_hour=(reset|\d+)%?.*?seven_day=(re
 
 def load_config(path=None):
     """The "pm_watch" dict from the user-profile config; {} when the file or key is missing."""
-    p = os.path.expanduser(path or CONFIG_PATH)
+    p = os.path.expanduser(path) if path else kuser.config_file()
     try:
         with open(p, encoding="utf-8-sig") as f:
             cfg = json.load(f).get(KEY)
@@ -147,7 +146,7 @@ POSTED = "posted"
 
 def configured_notice_dir(path=None):
     """machine_lock.notice.dir of the user-profile config, or None."""
-    p = os.path.expanduser(path or CONFIG_PATH)
+    p = os.path.expanduser(path) if path else kuser.config_file()
     try:
         with open(p, encoding="utf-8-sig") as f:
             d = json.load(f)["machine_lock"]["notice"]["dir"]
