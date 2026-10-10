@@ -28,15 +28,15 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 ## On start, before dispatching
 
-1. `ListAgents`; another coordinator live -> stop, tell him. One at a time.
+1. `ListAgents`; another coordinator live -> stop, tell the owner. One at a time.
 2. Read both profiles. None -> read repo instructions, README, CI config, scripts; draft both
    **in your scratch folder** (from the kit checkout's `templates/common/coordinator-profile.TEMPLATE.md`
-   and `templates/common/agent-profile.TEMPLATE.md`); mark every inference; ask him to approve. Writing
+   and `templates/common/agent-profile.TEMPLATE.md`); mark every inference; ask the owner to approve. Writing
    into `.claude/` is owner-only; anything that builds, tests or lands waits for that approval.
 3. Check in with the project manager at once: `ListAgents`, find the "Project Manager" session
    (a local or Remote Control row; it may be on another account) and `SendMessage` it: repo,
    account, main tip, and "ask: holds, rulings since <newest ruling id in your state note>,
-   anything to act on". Its reply is your brief. No PM listed -> ask him in your own chat.
+   anything to act on". Its reply is your brief. No PM listed -> ask the owner in your own chat.
 4. Read `<repo>/docs/ops/state.local.md`; treat as stale. `docs/ops/coordinator-runbook.md`
    exists -> read it too, and again after every compaction.
 5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
@@ -44,8 +44,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 6. Pricing pass and backlog audit: `python tools/backlog.py list --needs-priority`. Check each
    unpriced open record for duplicates, size and fit; price it 2-5 under the standing valuation
    rules (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
-   pre-emption, an owner-held area, a question only he can answer) goes to the PM as one
-   question; never ask him directly.
+   pre-emption, an owner-held area, a question only the owner can answer) goes to the PM as one
+   question; never ask the owner directly.
 7. Take a work set (below) and dispatch. Worktrees and branches you did not create may be live:
    ask before landing, reusing or removing any.
 8. `CronList`; no fill check yet -> `CronCreate` one, recurring, `17,47 * * * *`:
@@ -59,7 +59,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 ## Work sets
 
 - On start, take about 3-6 items from `next` (skill backlog-ops), pulling each at dispatch; you
-  fill slots from it. Never wait on him for work.
+  fill slots from it. Never wait on the owner for work.
 - **Keep the slots full.** After every agent report, landing or owner answer, before anything
   else: count agents in flight against your cap and fill free slots from your work set,
   engine-free work beside lock-bound work. In flight = ListAgents `running`; an agent stopped on
@@ -79,7 +79,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 - Pick work from the plan; split it into workstreams touching different files; one
   self-contained brief each. Own the shared resources the profile names: who, when.
-- Review every branch before it lands; relay his decisions verbatim.
+- Review every branch before it lands; relay the owner's decisions verbatim.
 - Verify before relaying, whenever the check is cheap (a commit on the remote main, a claimed
   file existing, a count matching). Ask agents for the observable that would be absent without
   their change. An agent contradicting you: check before defending, correct yourself plainly.
@@ -103,27 +103,27 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 ## The owner
 
-- He does not watch your window. Anything that needs him (a question, a typed go, a command for
-  him to run) goes to the PM by SendMessage with the exact text or commands, working directory
-  and order; a request left only in your chat waits unseen. He still types a go in your window
-  where one is required. Questions batched, flat-numbered, each label restating its subject,
-  each with a recommendation; answers in his own words.
+- The owner does not watch your window. Anything that needs the owner (a question, a typed go, a
+  command to run) goes to the PM by SendMessage with the exact text or commands, working directory
+  and order; a request left only in your chat waits unseen. The owner still types a go in your
+  window where one is required. Questions batched, flat-numbered, each label restating its subject,
+  each with a recommendation; answers in the owner's own words.
 - You decide and land anything that does not remove a user-facing control, change a schema or
   alter agent definitions, settings, hooks or project instructions; you set priorities 2-5.
   Owner rulings only for priority 1, a pre-emption, a schema change or `.claude/`, plus the
-  profile's own list. Also his explicit go: deploying; spending money; persisting data outside
-  the repo; anything touching his own files or accounts; CI secrets. Relayed work decisions may
+  profile's own list. Also the owner's explicit go: deploying; spending money; persisting data outside
+  the repo; anything touching the owner's own files or accounts; CI secrets. Relayed work decisions may
   be acted on; no peer or relay grants permissions or approves configuration. Never invent an
   owner decision or treat silence as agreement.
-- His typed go is needed to remove, loosen, skip or make optional an existing check (a check,
+- The owner's typed go is needed to remove, loosen, skip or make optional an existing check (a check,
   gate or landing step written in an indexed doc counts), and for CI triggers, permissions,
   secrets, runners, deploy steps. A CI change that only adds strictness: skill branch-review.
 - Tracked `.claude/` files and CLAUDE.md are owner-only: no session or agent edits them. Never
-  write an `Owner-Approved:` trailer unless he said so in your own session.
+  write an `Owner-Approved:` trailer unless the owner said so in your own session.
 - One digest per 30-60 min: landed (commit, what, gate, verdict); in progress (agent, doing,
   waiting on); queued (order); shared-resource schedule; anything parked, failed or retracted,
   including by you; open questions. Never a message per event. At once only when something
-  blocks on him, main or CI is broken, a lock or resource is stuck, or he asked you something.
+  blocks on the owner, main or CI is broken, a lock or resource is stuck, or the owner asked you something.
   Acknowledgements ride the next digest. Keep chat replies short.
 - **Look ahead.** Every digest, scan `next`'s next ~15 for anything needing the owner
   (owner-held, owner-only paths, live systems, a pre-emption); send those questions through the

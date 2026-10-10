@@ -150,8 +150,8 @@ def _r_conhost(p, ctx):
 
 
 # Groups --kill may end even while the parent (the agent's tool shell) is alive, past this age: a search from a
-# drive root is never legitimate, and one with a live shell leaked ~9 GB of paged pool on 2026-09-24 while
-# procwatch only reported it (17:48-19:45).
+# drive root is never legitimate, and a drive-root search with a live shell can leak GB of paged pool
+# (observed 2026-09-24).
 LIVE_PARENT_KILL = {"root-search": 10 * MIN}
 
 

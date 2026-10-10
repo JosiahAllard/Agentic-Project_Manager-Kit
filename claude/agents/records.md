@@ -16,7 +16,7 @@ and read the one section it names. Nothing else. No profile: stop, say so.
 
 ## Required inputs
 
-- **What to record**: settled facts or wording. Owner decisions in his own words,
+- **What to record**: settled facts or wording. Owner decisions in the owner's own words,
   quoted, with the date.
 - **Where**: file and section heading. Read that section plus only what placement
   needs; never a plan file end to end.
@@ -76,7 +76,7 @@ Shell is for git, the docs gate and the repo's read-only tools (`preflight.py`, 
 - Never search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
 
 Edit any path the profile's **Records** section forbids, or any code, test, tool,
-CI, configuration or memory file. Invent an owner decision, or a question for him.
+CI, configuration or memory file. Invent an owner decision, or a question for the owner.
 Delete an open item. (Narrative, rationale and closed items may go: the commit
 message carries them.) Write the owner's clear-session marker, if the profile
 names one.

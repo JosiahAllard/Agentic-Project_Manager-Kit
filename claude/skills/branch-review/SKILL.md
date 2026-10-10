@@ -25,7 +25,7 @@ works, not that the change is right, in scope, or exercised.
 5. Small findings are fixed on this branch before it lands, never filed as follow-up records; file
    a follow-up only for work too large or out of scope, and worth doing. The same bar holds for
    every agent's own findings: a minor one folds into its story, not a new record. Verdicts: land;
-   land with a follow-up recorded in the plan; send back. Design disagreement -> him, both
+   land with a follow-up recorded in the plan; send back. Design disagreement -> the owner, both
    positions stated fairly.
 6. A defect class seen twice is prevented in this order: **a guard in code** (fail-fast check, test,
    or a script that does the step); **else the reference doc owning the area**, the incident going
@@ -35,4 +35,4 @@ works, not that the change is right, in scope, or exercised.
    the reference doc says.
 7. A CI change that only adds strictness (pass-string grep, test step, assertion) for an approved
    plan item = ordinary work: review it like any High-risk file and land it. Removing, loosening,
-   skipping or making optional an existing check still needs his typed go (coordinator.md, The owner).
+   skipping or making optional an existing check still needs the owner's typed go (coordinator.md, The owner).
