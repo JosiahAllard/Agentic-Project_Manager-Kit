@@ -29,9 +29,14 @@ _WORDS = re.compile(r'''[\s'"`:,()]+''')
 
 
 def _names(err, *names):
-    """True when a line of git's stderr `err` has one of `names` as a whole word (a warning about
-    that very ref, such as "ignoring broken ref <ref>", not a stray one about something else)."""
-    return any(n in _WORDS.split(line) for line in (err or '').splitlines() for n in names)
+    """True when a line of git's stderr `err` has one of `names` as a whole word, or a word ending
+    in '/' + one of them (asked as `main`, git's warning names refs/heads/main): a warning about
+    that very ref, such as "ignoring broken ref <ref>", not a stray one about something else."""
+    for line in (err or '').splitlines():
+        words = _WORDS.split(line)
+        if any(w == n or w.endswith('/' + n) for w in words for n in names):
+            return True
+    return False
 
 
 def resolve(rev, cwd, peel='commit', known=False):
@@ -46,8 +51,9 @@ def resolve(rev, cwd, peel='commit', known=False):
     no output, a killed git's shape (KILLED_SHAPE), so a kill read as "no such rev". The question
     is asked without --quiet: "no such rev" is exit 128 with NO_SUCH_REV as the last stderr line,
     and anything else that is not exit 0 with a hash is no answer. A stray line before it (a
-    config deprecation warning, "warning: unable to access ...", GIT_TRACE) does not change the
-    answer; a line that names the rev itself (a broken ref's warning) does: no answer.
+    config deprecation warning, "warning: unable to access ...") does not change the answer; a
+    line that names the rev itself (a broken ref's warning) does: no answer. GIT_TRACE output
+    names the rev in the command line it traces, so under GIT_TRACE the answer is no answer.
 
     In a test process (kitlib.git.cache.enable) a full hash's answer is kept: an object never
     changes what it is. Only a found answer of the same length is kept (a 40-digit name in a sha256
@@ -118,8 +124,9 @@ def ref_commit(ref, cwd):
     GOTCHA: for-each-ref skips a broken loose ref (a file holding garbage) with exit 0, no line and
     "warning: ignoring broken ref <ref>" on stderr, the shape of "no ref"; `rev-parse --verify`
     failed on one instead. So no line plus a stderr line naming `ref` is no answer. Other stderr
-    (a config deprecation warning, GIT_TRACE) is not about `ref`: "no ref" then stands only once
-    resolve(known=True) confirms it.
+    (a config deprecation warning) is not about `ref`: "no ref" then stands only once
+    resolve(known=True) confirms it. GIT_TRACE output names `ref` in the command line it traces,
+    so under GIT_TRACE the answer is no answer.
 
     GOTCHA: the match is exact, and a loose ref's file name is not: on a case-insensitive file
     system `rev-parse refs/heads/Main` opens refs/heads/main, but for-each-ref lists it only as
