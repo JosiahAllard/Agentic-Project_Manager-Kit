@@ -102,7 +102,7 @@ def _config_regexp(cwd, pattern):
 
 
 _SCHEME = re.compile(r'^([a-z][a-z0-9+.-]*)://(?:[^@/]*@)?([^/]*)(.*)$', re.I)
-# `[user@]host:path`; a host of two or more characters, so `C:/x` stays a path.
+# `[user@]host:path`; a host of two or more characters, so a path on a one-letter drive stays a path.
 _SCP = re.compile(r'^(?:[^@/]+@)?([^:/@]{2,}):(.*)$')
 
 
