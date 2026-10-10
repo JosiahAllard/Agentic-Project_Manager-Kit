@@ -2,6 +2,8 @@
 on a real temporary repository with a bare remote (tests/gitfixture.py)."""
 import os
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -80,6 +82,47 @@ LEDGER_TEXT = ('# Rulings ledger (test fixture)\n\n'
                '## R-9007 | 2026-09-25 08:06Z | kit | typed\n\n'
                'Retired: superseded - replaced (see R-9001)\n\n'
                '## R-9008 | 2026-09-25 08:08Z | all | selected\n\nstand-in text\n' + LEDGER_ITEMS)
+
+
+def race(case, writers, write, hook=None, deadline=120):
+    """Run `write(store, name)` for every `(name, store)` in `writers`, each on its own thread,
+    every one planning its first attempt against the same store (a barrier in before_publish,
+    after the plan) before any publishes. `hook(name, attempt)`, when given, runs after it.
+
+    Returns (errors, attempts): `errors` names each writer that raised anything, BaseException
+    included (the fake git's Unsupported is one: a writer it kills must not pass for a write the
+    store lost); `attempts` {name: [attempt, ...]}. Every thread shares one `deadline` (seconds),
+    and a writer still running when it passes fails the test: it has not written yet, which a
+    later read would otherwise report as a lost update."""
+    names = [n for n, _ in writers]
+    errors, attempts, passed = [], {n: [] for n in names}, set()
+    gate = threading.Barrier(len(writers), timeout=deadline)
+
+    def run(store, name):
+        def planned(attempt):
+            attempts[name].append(attempt)
+            if attempt == 0:
+                gate.wait()
+                passed.add(name)
+            if hook is not None:
+                hook(name, attempt)
+        store.before_publish = planned
+        try:
+            write(store, name)
+        except BaseException as exc:          # reported by the caller; a thread cannot fail a test
+            errors.append('%s: %r' % (name, exc))
+            if name not in passed:            # one that died before the barrier frees the rest
+                gate.abort()
+    threads = [threading.Thread(target=run, args=(s, n), name='race-%s' % n) for n, s in writers]
+    end = time.monotonic() + deadline
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(max(0.0, end - time.monotonic()))
+    alive = [n for n, t in zip(names, threads) if t.is_alive()]
+    case.assertEqual(alive, [], 'writers still running %ss after the start: %r'
+                     % (deadline, attempts))
+    return errors, attempts
 
 
 def _branch(repo):
