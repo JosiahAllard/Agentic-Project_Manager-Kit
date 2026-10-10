@@ -88,8 +88,17 @@ def own_copy_refusal(cwd, kit_root, rel=None, classify=repo.classify):
     when the two are different checkouts of one repository (same git common dir, different git
     dir): the kit's own repository, where the code under test and the tree gated would come from
     two checkouts. A kit in another repository (a repository's stubs run the kit checkout written
-    into them), the same checkout, or a `cwd` in no repository passes; a gate.py whose checkout
-    git cannot place is refused."""
+    into them), the same checkout, or a `cwd` in no repository passes.
+
+    A gate.py whose checkout git cannot place (dubious ownership, a git timeout) is refused only
+    when its path nests (one inside the other) with the gated checkout or with the folder that
+    checkout's git common dir is in, so the same repository could be involved; otherwise it
+    passes, as a consumer repository's gate did before this check.
+
+    The refusal names the command for the tree the caller meant, that tree's own gate.py with an
+    absolute -C: a relative -C names it (the resolved tree). With no -C it is ambiguous (the
+    gate.py's path names one checkout, the directory another), so both commands are given, each
+    labelled with the tree it gates."""
     mine = classify(cwd)
     if mine.kind not in (repo.MAIN, repo.LINKED):
         return None                 # the gate itself refuses a tree git cannot place
@@ -98,18 +107,42 @@ def own_copy_refusal(cwd, kit_root, rel=None, classify=repo.classify):
         return None
     gate = os.path.join(kit_root, 'tools', 'gate.py')
     if kit.kind not in (repo.MAIN, repo.LINKED):
+        # The gated checkout and the folder its git common dir is in (the main checkout's top).
+        tops = (mine.top, os.path.dirname(mine.common))
+        if not any(nested(t, kit_root) or nested(kit_root, t) for t in tops):
+            return None
         return G.Outcome(G.REFUSED, [
-            'REFUSED: cannot tell which checkout %s is in: %s; nothing ran. Name the tree with an '
-            'absolute -C' % (gate, kit.detail)])
+            'REFUSED: cannot tell which checkout %s is in: %s; it nests with the gated tree %s or '
+            'its main checkout, so they may be two checkouts of one repository; nothing ran. Name '
+            'the tree with an absolute -C, using its own gate.py:' % (gate, kit.detail, mine.top),
+            command(mine.top)])
     if kit.common != mine.common or kit.git_dir == mine.git_dir:
         return None
     named = ('given the relative -C %s (%s)' % (rel, cwd) if rel
              else 'run from %s' % cwd)
-    return G.Outcome(G.REFUSED, [
+    lines = [
         'REFUSED: %s is in the checkout %s, and it was %s, in the checkout %s of the same '
         'repository: with no -C or a relative one it would gate %s with the code of %s; nothing '
-        'ran. Name the tree with an absolute -C: python %s -C %s' % (
-            gate, kit.top, named, mine.top, mine.top, kit.top, gate, kit.top)])
+        'ran. Name the tree with an absolute -C, using its own gate.py:' % (
+            gate, kit.top, named, mine.top, mine.top, kit.top),
+        command(mine.top)]
+    if not rel:
+        lines.append(command(kit.top))
+    return G.Outcome(G.REFUSED, lines)
+
+
+def command(top):
+    """The line naming the one documented command that gates the checkout `top`."""
+    return '  to gate %s: python %s -C %s' % (top, os.path.join(top, 'tools', 'gate.py'), top)
+
+
+def nested(path, root):
+    """True when `path` is `root` or below it, compared where both really are."""
+    try:
+        p, r = repo.real(path), repo.real(root)
+    except (OSError, ValueError):
+        return False
+    return p == r or p.startswith(r.rstrip(os.sep) + os.sep)
 
 
 def log_dir_refusal(log_dir, root, cwd, classify=repo.classify):
