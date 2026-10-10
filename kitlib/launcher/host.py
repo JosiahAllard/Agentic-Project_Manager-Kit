@@ -52,10 +52,13 @@ class Host(object):
         window.open_window(text)
 
     def git_ignored(self, repo, path):
-        """True (ignored), False (not), or None (git could not say)."""
+        """True (ignored), False (not), or None (git could not say). Run console-less (a scheduled
+        task), git gets no console window (kitlib.proc.job.no_window_flags)."""
+        from kitlib.proc import job
         try:
             r = subprocess.run(['git', '-C', repo, 'check-ignore', '-q', path],
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True, timeout=30,
+                               creationflags=job.no_window_flags(0))
         except (OSError, subprocess.SubprocessError):
             return None
         return {0: True, 1: False}.get(r.returncode)
