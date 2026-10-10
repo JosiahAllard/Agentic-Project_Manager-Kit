@@ -12,6 +12,9 @@ A repository's folder is pm_start.repo_paths[<name>] or the PM repository's sibl
 The state file remembers each document's digest and store version as of the last batch, and pins
 every write to that version. If a batch was never sent, or a write is refused for its version, read
 the collection, fix the versions in the state file, and rerun with --force.
+The state file is hub_backlog_state.json in the machine config folder (user.DIR_NAME); while that
+folder has none, the retired folder's is read and the new one written (docs/kit-json.md "Moving
+the machine config folder").
 """
 import argparse
 import datetime
@@ -22,9 +25,20 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from kitlib import hubbacklog, pmstart                             # noqa: E402
-from kitlib.config import user                                     # noqa: E402
+from kitlib.config import ConfigError, migration, user             # noqa: E402
 
-STATE = "~/%s/hub_backlog_state.json" % user.DIR_NAME
+STATE_NAME = "hub_backlog_state.json"
+STATE = "~/%s/%s" % (user.DIR_NAME, STATE_NAME)
+
+
+def state_paths(given, home=None):
+    """(read, write) for the state file: --state for both when given; else the machine config
+    folder's, read from the retired folder while the new one has none (kitlib.config.migration
+    .state_paths), so the first run after the folder's move keeps every pinned version."""
+    if given:
+        p = os.path.expanduser(given)
+        return p, p
+    return migration.state_paths(STATE_NAME, home)
 
 
 def plan(names, roots, state, now, snap=hubbacklog.snapshot, force=False):
@@ -61,9 +75,14 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Fill the Action Hub backlog tabs.")
     ap.add_argument("--out", required=True, help="write the ArtifactData batch here")
     ap.add_argument("--force", action="store_true", help="write every document, changed or not")
-    ap.add_argument("--state", default=STATE, help="last-written digests (default %(default)s)")
+    ap.add_argument("--state", help="last-written digests (default %s; read from the retired "
+                                    "folder's while that one is absent)" % STATE)
     a = ap.parse_args(argv)
-    cfg = pmstart.load_config()
+    try:
+        cfg = pmstart.load_config()
+    except ConfigError as e:
+        print("machine config: %s" % e, file=sys.stderr)
+        return 2
     if cfg is None:
         print("no pm_start config", file=sys.stderr)
         return 2
@@ -71,9 +90,9 @@ def main(argv=None):
                              "rev-parse", "--show-toplevel").decode("utf-8").strip()
     names = pmstart.known_repos(cfg)
     roots = {n: hubbacklog.repo_root(n, pm_root, cfg.get("repo_paths")) for n in names}
-    state_path = os.path.expanduser(a.state)
+    read_path, state_path = state_paths(a.state)
     try:
-        with open(state_path, encoding="utf-8") as f:
+        with open(read_path, encoding="utf-8") as f:
             state = json.load(f)
     except (OSError, ValueError):
         state = {}

@@ -35,7 +35,10 @@ a constructor argument, and the defaults read this machine.
                      values. A file that cannot be read, is
                      not a JSON object, or whose ledger_path is not an absolute path string sets
                      'broken' (why), and the ledger rule then denies every subagent write. A
-                     missing file is an empty config, not a broken one.
+                     missing file is an empty config, not a broken one. The file is the one
+                     config_location() names; a BAD location sets 'broken' too (fail closed).
+  config_location()  kitlib.config.user.locate(home), taken once per Ctx, so every read of
+                     the machine config in one hook call reads the same file.
   session_role(ev)   who runs the session (kitlib.sessionmark): 'subagent' when the payload has
                      agent_id, else the launcher's mark (PM_KIT_ROLE), else 'owner': a session
                      nothing marks is the owner's own. Replaceable (role_resolver).
@@ -83,15 +86,18 @@ def _default_lock_held(environ, store):
     return (True, None) if parent else (False, why)
 
 
-def _machine_pm_data(home):
+def _machine_pm_data(home, location=None):
     """kitlib.pmdata.machine_settings(home). When the strict reader refuses the machine config,
     its pm_data key alone is read and checked with the same rules, so another key's fault does
-    not hide the PM data worktree; a file that cannot be read or parsed raises, and the guard
-    fails closed."""
+    not hide the PM data worktree; a file that cannot be read or parsed, or a BAD `location`
+    (kitlib.config.user.locate), raises, and the guard fails closed."""
+    loc = location or kuser.locate(home)
     try:
-        return pmdata.machine_settings(home)
+        return pmdata.machine_settings(home, location=loc)
     except kconfig.ConfigError as e:
-        path = kuser.config_file(home)
+        if loc.error:
+            raise
+        path = loc.path
         try:
             with open(path, encoding='utf-8-sig') as f:
                 data = json.load(f)
@@ -122,7 +128,8 @@ class Ctx(object):
         self.tempdir = tempdir or self.environ.get('TEMP') or tempfile.gettempdir()
         self._places, self._configs, self._config_errors = {}, {}, {}
         self._user = None
-        self._pm_data = pm_data or (lambda: _machine_pm_data(self.home))
+        self._location = None
+        self._pm_data = pm_data or (lambda: _machine_pm_data(self.home, self.config_location()))
         self._pm_settings = None                 # (settings or None, error or None), read once
         self._pm_records = {}                    # normcase(common) -> (Record or None, error or None)
         self._pm_places = {}                     # key of a place answered as the PM data worktree -> its branch
@@ -265,10 +272,15 @@ class Ctx(object):
 
     # ------------------------------------------------------------ the machine config
 
+    def config_location(self):
+        if self._location is None:
+            self._location = kuser.locate(self.home)
+        return self._location
+
     def user(self):
         if self._user is None:
             try:
-                self._user = kuser.user_config(self.home)
+                self._user = kuser.user_config(self.home, location=self.config_location())
             except kconfig.ConfigError as e:
                 self._user = self._tolerant(str(e))
         return self._user
@@ -276,7 +288,11 @@ class Ctx(object):
     def _tolerant(self, why):
         out = {k: None for k in kuser.SCHEMA}
         out['error'] = why
-        path = kuser.config_file(self.home)
+        loc = self.config_location()
+        if loc.error:
+            out['broken'] = loc.error
+            return out
+        path = loc.path
         try:
             with open(path, encoding='utf-8-sig') as f:
                 text = f.read()

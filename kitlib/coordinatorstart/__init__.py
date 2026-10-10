@@ -22,7 +22,6 @@ from kitlib import pmstart
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
 
-CONFIG_PATH = os.path.join("~", kuser.DIR_NAME, kuser.FILE_NAME)
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
 ROLE = "coordinator"
@@ -58,8 +57,10 @@ def is_coordinator(env=None):
 
 
 def load_config(path=None):
-    """The "coordinator_start" dict, or None when the file or key is missing. Bad JSON raises ValueError."""
-    p = os.path.expanduser(path or CONFIG_PATH)
+    """The "coordinator_start" dict, or None when the file or key is missing. Bad JSON raises
+    ValueError; with no `path`, a machine config location that cannot be told
+    (kitlib.config.user.locate BAD) raises kitlib.config.ConfigError."""
+    p = os.path.expanduser(path) if path else kuser.readable_file()
     try:
         with open(p, encoding="utf-8-sig") as f:
             data = json.load(f)
@@ -328,7 +329,7 @@ def render(env=None, path=None, **kw):
     try:
         cfg = load_config(path)
         if cfg is None:
-            return "Coordinator session start: no coordinator_start config in %s; skipped." % kuser.DISPLAY
+            return "Coordinator session start: no coordinator_start config in %s; skipped." % (path or kuser.display())
         return context(cfg, env=env, **kw)
     except Exception as e:
         return "Coordinator session start: could not check config: %s: %s" % (type(e).__name__, e)

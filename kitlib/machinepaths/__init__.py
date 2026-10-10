@@ -24,7 +24,7 @@ What a repository allows is `.kit.json` "machine_paths" (load_config, docs/commi
   fallback_vars  [names] - a hit on a line that reads one of these variables
                  (`environ.get('NAME'`, `getenv('NAME'`, `$env:NAME`) is the sanctioned fallback.
 There is no built-in allow entry: the PM kit's (`_paths.py` fallbacks, the `test_paths.py` table,
-kit stubs, backlog.py's ledger) named PM-kit files and one drive, and are not ported.
+kit stubs, backlog.py's ledger) named the older kit's files and one drive, and are not ported.
 
 A hit is refused unless an entry allows it. An entry names its file (a glob; `fnmatch`'s `*`
 crosses `/`), the line kind it covers (a regex over the line), optionally the exact path it allows
