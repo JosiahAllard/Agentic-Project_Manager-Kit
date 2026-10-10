@@ -3,6 +3,7 @@ its dry run, -Apply, and its refusals. Fake identities only (example.invalid).""
 import json
 import os
 import shutil
+import stat
 import subprocess
 import unittest
 from unittest import mock
@@ -164,6 +165,37 @@ class NewRepo(unittest.TestCase):
         self.assertIn('gate.json exists already', out)
         self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
         self.assertEqual(self.read('tools/gate.json'), '{}\n')
+
+    def test_godot_copies_its_tools_files_keeps_an_existing_one_and_names_its_pass_string(self):
+        self.fx.write('tools/godot.cmd', 'rem mine\n')
+        code, out = self.ps('-Apply', '-Stack', 'godot')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.read('tools/godot.cmd'), 'rem mine\n')
+        self.assertIn('kept', out)
+        self.assertIn('UNIT TESTS OK', out)
+        self.assertNotIn('Ran N tests', out)
+        os.remove(os.path.join(self.root, 'tools', 'godot.cmd'))
+        os.remove(os.path.join(self.root, '.kit.json'))
+        os.remove(os.path.join(self.root, 'tools', 'gate.json'))
+        code, out = self.ps('-Apply', '-Stack', 'godot')
+        self.assertEqual(code, 0, out)
+        src = os.path.join(stubs.KIT_ROOT, 'templates', 'stacks', 'godot', 'tools', 'godot.cmd')
+        with open(src, 'rb') as a, open(os.path.join(self.root, 'tools', 'godot.cmd'), 'rb') as b:
+            self.assertEqual(a.read(), b.read())
+        self.assertIn('wrote    %s' % os.path.join(self.root, 'tools', 'godot.cmd'), out)
+
+    def test_a_failed_write_stops_with_exit_1_and_never_says_wrote(self):
+        path = os.path.join(self.root, '.gitignore')
+        self.fx.write('.gitignore', 'build/\n')
+        os.chmod(path, stat.S_IREAD)
+        self.addCleanup(os.chmod, path, stat.S_IWRITE | stat.S_IREAD)
+        code, out = self.ps('-Apply')
+        self.assertEqual(code, 1, out)
+        self.assertIn('new-repo: FAILED - cannot write %s' % path, out)
+        self.assertIn('already written', out)
+        self.assertNotIn('new-repo: wrote', out)
+        self.assertNotIn('appended %s' % path, out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'docs', 'INDEX.md')))
 
     def test_the_stubs_cover_the_tools_a_repository_runs(self):
         code, out = self.ps('-Apply')
