@@ -408,6 +408,26 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
         self.assertIsNotNone(p.poll(), "the command outlived the kill")
         self.spared(daemon, plain, c.pid)
 
+    def test_ctrl_c_during_the_releases_own_kill_ends_the_whole_job(self):
+        """Ctrl+C inside the end_tree release itself calls (an errored gate; wait ended no tree):
+        release ends the whole job, as the kill did before end_tree, and the KeyboardInterrupt
+        goes up."""
+        self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain")
+        self.assertEqual(s.wait(p), (0, "done"))
+        daemon, _, plain = self.shared_pids()
+        calls = []
+
+        def interrupted(pid, ct, code=1):   # the first process release's passes end: Ctrl+C
+            calls.append(pid)
+            raise KeyboardInterrupt
+        with mock.patch.object(process, "terminate_verified", interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                s.release(1, "error")
+        self.assertEqual(calls, [plain], "release's passes did not reach the leftover")
+        self.assertTrue(self.wait_gone(plain, self.recorded()[plain]),
+                        "the leftover outlived an interrupted release")
+
     def test_a_worker_the_daemon_starts_between_the_reads_is_spared(self):
         """A worker the left daemon starts after the process table is read is in the job's pid
         list read after it, yet not in that table: the job is read first, so it is ended only if

@@ -66,7 +66,7 @@ The kill path spares a shared daemon too. A run that is cancelled by `stop`, int
 - The job's processes or the daemons cannot be read: TerminateJobObject (the run's tree surely ends).
 - `stop` raised: it may have ended some daemons first, so each daemon found is recorded and said as `not judged (<error>)`, never as left, and each one still running at its creation time is spared with its tree.
 - Otherwise every process in the job outside the spared trees is ended by `terminate_verified`, oldest first so a parent cannot start more, in up to `END_PASSES` (10) passes `END_PASS_S` (0.1 s) apart (`Slot._end_others`). Each pass takes a stamp of the system time (`filetime_now`), reads the job's pids, then the process table, and builds the spared trees from that table (each left daemon at its creation time, with its descendants). Reading the job first means a worker the daemon started before the pid list is in the table too, so it is spared. A target whose process was created at or after the stamp may hold a reused pid, so that pass does not end it; a new process in the job is seen again by the next pass. One still in the job after the last pass is said (`WARNING: run <id>: pid N in its job could not be ended; it runs on, unpinned`). The job is then closed without a kill and unpinned, and the spared daemons run on. A job that cannot be read part way is ended whole, the spared daemons with it, and that is said.
-- A second Ctrl+C during the passes goes up as KeyboardInterrupt with the kill marked not done, so the release that follows judges and ends the tree again. One that interrupts the release's own `end_tree` ends the whole job, the spared daemons with it.
+- An interrupt anywhere inside `end_tree` (a second Ctrl+C, or any other exception that is not an `Exception`), during the daemon judgement or the passes, goes up with the kill marked not done, so the release that follows judges and ends the tree again. One that interrupts the release's own `end_tree` ends the whole job, the spared daemons with it, and goes up.
 
 Known limits:
 
@@ -76,7 +76,7 @@ Known limits:
 - A process started after the last pass by one being ended runs on, unpinned.
 - The stamp test rests on Windows stamping a process's creation time from the same system clock `GetSystemTimeAsFileTime` reads (inferred from the documented clocks, not measured); a clock set back during the passes voids it.
 
-Tests: tests/lock/test_release_daemons.py (`ReleaseLeavesASharedDaemon`: the errored and cancelled gates, a second Ctrl+C mid-kill, a worker started between the reads, a reused pid, a judgement that raised, and the two kill-path controls).
+Tests: tests/lock/test_release_daemons.py (`ReleaseLeavesASharedDaemon`: the errored and cancelled gates, a second Ctrl+C mid-kill in wait and in release, a worker started between the reads, a reused pid, a judgement that raised, and the two kill-path controls).
 
 ## Gate-OK record
 
