@@ -73,6 +73,11 @@ class Config(Case):
         with self.assertRaises(S.SweepConfigError):
             S.load(self.home)
 
+    def test_its_config_folder_is_the_kits(self):
+        # The script ships alone, so it keeps its own copy of the folder name.
+        from kitlib.config import user
+        self.assertEqual(S.CONFIG_DIR, user.DIR_NAME)
+
     def test_unsafe_dirs_are_refused(self):
         root = os.path.abspath(os.sep)
         for d in (root, self.home, self.tmp, os.path.join(self.tmp, 'missing')):

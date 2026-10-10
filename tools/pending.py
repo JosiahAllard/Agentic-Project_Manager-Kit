@@ -1,4 +1,4 @@
-"""pending.py: the owner's pending-steps file named by ~/.claude-pm-kit/config.json `pending_path`
+"""pending.py: the owner's pending-steps file named by the machine config's `pending_path`
 (docs/pending.md).
 
   pending.py list                      the open items, `N. text` (first line each).
@@ -113,7 +113,7 @@ def main(argv=None):
     except ConfigError as e:
         return fail(str(e))
     if not path:
-        return fail('no pending_path in ~/.claude-pm-kit/config.json')
+        return fail('no pending_path in %s' % user.DISPLAY)
     try:
         return run(a, path)
     except Usage as e:

@@ -10,9 +10,10 @@ import re
 import subprocess
 import time
 
+from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
 
-CONFIG_PATH = os.path.join("~", ".claude-pm-kit", "config.json")
+CONFIG_PATH = os.path.join("~", kuser.DIR_NAME, kuser.FILE_NAME)
 KEY = "pm_watch"
 WEEK_BANDS = (95, 98, 99)
 FIVE_BANDS = (95, 98, 99)         # 95 no new work, 98 landings only; no PM headroom

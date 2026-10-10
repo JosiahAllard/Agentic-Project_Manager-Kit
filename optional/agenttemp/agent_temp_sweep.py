@@ -3,7 +3,7 @@
   agent_temp_sweep.py [--apply]
 
 Without --apply it only lists what it would remove (a dry run); with it, it removes. The folder and
-the age come from the "agent_temp_sweep" key of ~/.claude-pm-kit/config.json, never from code or
+the age come from the "agent_temp_sweep" key of the machine config, never from code or
 the command line: {"dir": <absolute folder>, "max_age_days": <number, default 3>}. An entry (a
 top-level file or folder of dir) is removed only when all of these hold:
 - the newest time anywhere in it (written or created, links not followed) is older than the age;
@@ -27,6 +27,9 @@ import stat
 import sys
 import time
 
+# The machine config's folder. This script ships alone, so it holds its own copy of
+# kitlib.config.user.DIR_NAME; tests/optional/agenttemp checks the two are equal.
+CONFIG_DIR = ".claude-pm-kit"
 KEY = "agent_temp_sweep"
 DEFAULT_MAX_AGE_DAYS = 3
 CLAIM = ".sweeping-"            # the name an entry is renamed to while it is removed: <name>.sweeping-<pid>
@@ -54,7 +57,7 @@ def check(cfg):
 def load(home=None):
     """(dir, max_age_days) from the machine config, or None when it has no "agent_temp_sweep".
     A bad value or an unreadable config raises SweepConfigError."""
-    path = os.path.join(home or os.path.expanduser("~"), ".claude-pm-kit", "config.json")
+    path = os.path.join(home or os.path.expanduser("~"), CONFIG_DIR, "config.json")
     try:
         with open(path, encoding="utf-8-sig") as f:
             data = json.load(f)

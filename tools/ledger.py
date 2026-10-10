@@ -1,4 +1,4 @@
-"""ledger.py: the rulings ledger named by ~/.claude-pm-kit/config.json `ledger_path` (docs/ledger.md).
+"""ledger.py: the rulings ledger named by the machine config's `ledger_path` (docs/ledger.md).
 
   ledger.py add --repo REPO --prov PROV --q Q --a A --decides D --source S [--supersedes R-nnnn]
                 [--items A,B] [--when 'YYYY-MM-DD HH:MMZ'] [--commit | --push] [--title T]
@@ -169,7 +169,7 @@ def main(argv=None):
     except ConfigError as e:
         return fail(str(e))
     if not path:
-        return fail('no ledger_path in ~/.claude-pm-kit/config.json')
+        return fail('no ledger_path in %s' % user.DISPLAY)
     try:
         return run(a, p, path, repos)
     except Usage as e:

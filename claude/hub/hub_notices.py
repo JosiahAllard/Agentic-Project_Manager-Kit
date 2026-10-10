@@ -8,7 +8,7 @@
       after the batch at PATH was applied: move the notices it set into DIR/posted/, so neither
       this tool nor the PM watcher shows them again
 
---dir defaults to machine_lock.notice.dir of ~/.claude-pm-kit/config.json; neither: exit 2.
+--dir defaults to machine_lock.notice.dir of the machine config; neither: exit 2.
 A thin entry point: kitlib.pmwatch does the work.
 """
 import argparse

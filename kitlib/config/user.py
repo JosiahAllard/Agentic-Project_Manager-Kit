@@ -1,4 +1,5 @@
-"""The machine's own kit settings: `~/.claude-pm-kit/config.json`.
+"""The machine's own kit settings: the machine config, FILE_NAME in the folder DIR_NAME of the
+home folder (config_file).
 
 The ledger path is read from this file only: no `.kit.json` key, no ledger environment variable
 and no command-line flag sets it, so a repository cannot point the ledger somewhere else. `~` is
@@ -12,8 +13,12 @@ import tempfile
 
 from .types import ConfigError, Field, ListOf, MapOf, Obj, Regex, Str, T, parse_json
 
+# The machine config's folder in the home folder. The one place the kit names it: code derives
+# the folder from config_dir() and messages from DISPLAY, so a new name changes this line only.
 DIR_NAME = '.claude-pm-kit'
 FILE_NAME = 'config.json'
+# How messages and help text name the machine config file.
+DISPLAY = '~/%s/%s' % (DIR_NAME, FILE_NAME)
 # The kit's temp folder at the root of a checkout's drive (work_temp).
 TEMP_DIR_NAME = 'AgentTemp'
 
@@ -148,8 +153,13 @@ def make_temp(near, prefix, home=None):
             folder, parent or 'the kit temp folder', e)
 
 
+def config_dir(home=None):
+    """The machine config's folder under `home` (default the user's)."""
+    return os.path.join(home or home_dir(), DIR_NAME)
+
+
 def config_file(home=None):
-    return os.path.join(home or home_dir(), DIR_NAME, FILE_NAME)
+    return os.path.join(config_dir(home), FILE_NAME)
 
 
 def user_config(home=None):
