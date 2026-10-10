@@ -41,7 +41,7 @@ python tools/ledger_refs.py R-nnnn [R-nnnn ...] | --from-json FILE [FILE ...]
 - **`add`** appends one entry and prints its id. It validates the whole ledger before and after writing, and writes the file atomically with LF line ends. A Decides over 400 characters (`fmt.DECIDES_NUDGE`) draws a warning on stderr; the entry is still written. `--when` backfills a time.
 - **`retire`** turns an entry into its tombstone in place and prints its id. It is refused while a live entry's Decides or Items still names the entry. `--ruling` names the live entry whose Decides orders this retirement, and that entry's mention does not count.
 - **`show`** prints one entry; `grep` prints the header of every entry holding the text, ignoring case. Either exits 1 when nothing is found.
-- **`check`** validates the ledger and compares it with the ledger at `--base`: every older entry must be unchanged, or have become its own tombstone. The default base is `origin/<main branch>` of the ledger's repository. A base that cannot be read prints `append-only NOT CHECKED` and validates only. It also fails on each standing-digest line that cites a retired or missing entry ("Standing digest").
+- **`check`** validates the ledger and compares it with the ledger at `--base`: every older entry must be unchanged, or have become its own tombstone. The default base is `<repo.remote>/<main branch>` of the ledger's repository (`origin` unless its `.kit.json` sets `repo.remote`). A base that cannot be read prints `append-only NOT CHECKED` and validates only. It also fails on each standing-digest line that cites a retired or missing entry ("Standing digest").
 
   After the validation it runs the ruling-orphan scan (`kitlib/ledger/orphans.py`, wired by `kitlib.backlog.ledger.orphan_report`) over the repository at `--root` (default: the current directory). A live entry whose repo column is that repository's ledger name (`.kit.json` "backlog".ledger_repo, else "repo".name) or `all`, and whose `Items:` last line names a record that is open in the backlog store now and that no store commit closed or retired, prints `WARN R-nnnn: Items: ...`. A tombstone, a missing Items line and a malformed one name nobody and are not read. A WARN never changes the exit code. The scan prints `ruling orphans   SKIPPED - <why>` and the check goes on when `--root` is in no repository, its `.kit.json` or store cannot be read, the store does not exist, or the ledger holds no entry. The scan line is `ruling orphans   N Items line(s) read, M WARN`.
 - **`list`** is the read-only digest feed (docs/engineering-rulings.md "Kit pieces").
@@ -72,7 +72,7 @@ Logic: `kitlib/ledger/vcs.py`.
 
 - **Subject:** `ledger: R-nnnn <title>`. The title defaults to the start of Decides, cut to 60 characters.
 - **Trailer:** the kit's Co-Authored-By trailer (`kitlib.commit.coauthor`) for `--model`, else `CLAUDE_AGENT_MODEL`. Neither set is a usage error, and nothing is written.
-- **`--push`** also pushes the current branch to origin.
+- **`--push`** also pushes the current branch to the ledger repository's `repo.remote` (`origin` by default).
 
 Before writing, `add --commit` refuses in any of these cases:
 

@@ -121,6 +121,26 @@ class VcsTest(unittest.TestCase):
     def test_default_base_is_origin_and_the_main_branch(self):
         self.assertEqual(vcs.default_base(self.path), 'origin/main')
 
+    def use_private_remote(self):
+        """The bare remote is named `private`; `origin` points nowhere; repo.remote says `private`."""
+        self.repo.git('remote', 'rename', 'origin', 'private')
+        self.repo.git('remote', 'add', 'origin', os.path.join(self.repo.base, 'missing.git'))
+        self.repo.write('.kit.json', '{"repo": {"remote": "private"}}\n')
+        self.repo.commit('kit', '.kit.json')
+
+    def test_push_goes_to_repo_remote_not_origin(self):
+        self.use_private_remote()
+        plan = self.prepare()
+        got = self.add()
+        lines = vcs.finish(plan, got.id, None, 'x', push=True)
+        self.assertEqual(lines[-1], 'pushed private/main')
+        self.assertEqual(self.repo.git('rev-parse', 'HEAD'),
+                         self.repo.git('rev-parse', 'main', cwd=self.repo.remote))
+
+    def test_default_base_follows_repo_remote(self):
+        self.use_private_remote()
+        self.assertEqual(vcs.default_base(self.path), 'private/main')
+
 
 if __name__ == '__main__':
     unittest.main()
