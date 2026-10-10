@@ -1,7 +1,9 @@
 """githooks/pre-commit and kitlib.ledger.precommit: inert unless .kit.json ledger.pre_commit_check
-opts in; opted in, `tools/ledger.py check --base HEAD` failing refuses the commit
-(docs/ledger.md "Pre-commit check"). Real git in a throwaway repository (tests/gitfixture.py) with
-core.hooksPath set to the kit's githooks for the one commit. Ids are built by rid(n) (tests/scrub)."""
+opts in; opted in, a commit that changes the configured ledger file (or the standing digest beside
+it) runs `tools/ledger.py check --base HEAD`, and a failure refuses the commit; any other commit
+passes without the check (docs/ledger.md "Pre-commit check"). Real git in a throwaway repository
+(tests/gitfixture.py) with core.hooksPath set to the kit's githooks for the one commit. Ids are
+built by rid(n) (tests/scrub)."""
 import json
 import os
 import shutil
@@ -11,6 +13,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from kitlib.githooks import precommit as dispatch
 from kitlib.ledger import precommit
 from tests import gitfixture
 from tests.realgit import real_git
@@ -19,6 +22,7 @@ KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 HOOKS = os.path.join(KIT_ROOT, 'githooks')
 SH = shutil.which('sh')
 FAKE_PYTHON = '#!/bin/sh\necho ran > "$KIT_TEST_MARK"\n'
+CHECK_RAN = 'ledger: '          # the summary line tools/ledger.py check always prints
 
 
 def rid(n):
@@ -27,6 +31,16 @@ def rid(n):
 
 ENTRY = ('## %s | 2026-10-06 08:00Z | all | selected\nQ: q\nA: a\nDecides: %s\nSource: s\n'
          'Supersedes: -\n\n')
+HEADER = '# Rulings ledger\n\n'
+
+
+class FakeCommit:
+    def __init__(self, root, staged=()):
+        self.root = root
+        self._staged = tuple(staged)
+
+    def staged(self):
+        return self._staged
 
 
 @real_git('hooks: the fake runs no hooks')
@@ -34,83 +48,239 @@ class PreCommitTest(unittest.TestCase):
     def setUp(self):
         self.repo = gitfixture.TempRepo()
         self.addCleanup(self.repo.cleanup)
-        self.ledger = self.repo.write('rulings/LEDGER.md', '# Rulings ledger\n\n' + ENTRY % (rid(1), 'Keep.'))
+        self.ledger = self.repo.write('rulings/LEDGER.md', HEADER + ENTRY % (rid(1), 'Keep.'))
         self.repo.commit('ledger', 'rulings/LEDGER.md')
         self.home = os.path.join(self.repo.base, 'home')
         os.makedirs(os.path.join(self.home, '.claude-pm-kit'))
+        self.machine_config({'ledger_path': self.ledger})
+
+    def machine_config(self, obj):
         with open(os.path.join(self.home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
-            json.dump({'ledger_path': self.ledger}, f)
+            json.dump(obj, f)
 
     def opt_in(self, value=True):
         self.repo.write('.kit.json', json.dumps({'ledger': {'pre_commit_check': value}}))
         self.repo.commit('kit', '.kit.json')
 
-    def rewrite_entry(self):
+    def write_ledger(self, *entries):
         with open(self.ledger, 'w', encoding='utf-8', newline='\n') as f:
-            f.write('# Rulings ledger\n\n' + ENTRY % (rid(1), 'Changed.'))
+            f.write(HEADER + ''.join(entries))
+
+    def rewrite_entry(self):
+        self.write_ledger(ENTRY % (rid(1), 'Changed.'))
+
+    def append_entry(self):
+        self.write_ledger(ENTRY % (rid(1), 'Keep.'), ENTRY % (rid(2), 'More.'))
+
+    def hook_commit(self, *args):
+        """`git commit <args>` with the kit's hooks: (exit code, stdout and stderr)."""
+        env = gitfixture.fixture_env({'USERPROFILE': self.home, 'HOME': self.home})
+        r = subprocess.run(['git', '-c', 'core.hooksPath=%s' % HOOKS.replace(os.sep, '/'), 'commit', '-q']
+                           + list(args), cwd=self.repo.root, capture_output=True, text=True,
+                           encoding='utf-8', errors='replace', env=env, timeout=120)
+        return r.returncode, r.stdout + r.stderr
 
     def commit_other(self):
-        """Commit an unrelated file with the kit's hooks: (exit code, stderr)."""
+        """Commit an unrelated file with the kit's hooks."""
         self.repo.write('other.txt', 'x\n')
         self.repo.git('add', '--', 'other.txt')
-        env = gitfixture.fixture_env({'USERPROFILE': self.home, 'HOME': self.home})
-        r = subprocess.run(['git', '-c', 'core.hooksPath=%s' % HOOKS.replace(os.sep, '/'), 'commit', '-q',
-                            '-m', 'other', '--', 'other.txt'], cwd=self.repo.root, capture_output=True,
-                           text=True, encoding='utf-8', errors='replace', env=env, timeout=120)
-        return r.returncode, r.stdout + r.stderr
+        return self.hook_commit('-m', 'other', '--', 'other.txt')
+
+    def last(self):
+        return self.repo.git('log', '-1', '--format=%s')
 
     def test_not_opted_in_the_hook_lets_a_broken_ledger_through(self):
         self.opt_in(False)
         self.assertEqual(precommit.enabled(self.repo.root), (False, None))
         self.rewrite_entry()
-        rc, out = self.commit_other()
+        rc, out = self.hook_commit('-m', 'bad', '--', 'rulings/LEDGER.md')
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self.repo.git('log', '-1', '--format=%s'), 'other')
+        self.assertNotIn(CHECK_RAN, out)
+        self.assertEqual(self.last(), 'bad')
 
-    def test_opted_in_a_rewritten_entry_refuses_the_commit(self):
+    def test_opted_in_a_staged_rewritten_entry_refuses_the_commit(self):
         self.opt_in()
         self.assertEqual(precommit.enabled(self.repo.root), (True, None))
-        rc, out = self.commit_other()
-        self.assertEqual(rc, 0, out)
         self.rewrite_entry()
-        rc, out = self.commit_other()
+        self.repo.git('add', '--', 'rulings/LEDGER.md')
+        rc, out = self.hook_commit('-m', 'bad')
         self.assertNotEqual(rc, 0, out)
         self.assertIn('FAIL', out)
         self.assertIn('commit refused', out)
-        self.assertEqual(self.repo.git('log', '-1', '--format=%s'), 'other')
+        self.assertEqual(self.last(), 'kit')
         self.assertEqual(precommit.command(self.repo.root)[2:5], ['check', '--base', 'HEAD'])
+
+    def test_opted_in_commit_of_the_ledger_by_path_is_checked(self):
+        self.opt_in()
+        self.rewrite_entry()
+        rc, out = self.hook_commit('-m', 'bad', '--', 'rulings/LEDGER.md')
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('commit refused', out)
+        self.assertEqual(self.last(), 'kit')
+
+    def test_opted_in_commit_all_is_checked(self):
+        self.opt_in()
+        self.rewrite_entry()
+        rc, out = self.hook_commit('-a', '-m', 'bad')
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('commit refused', out)
+        self.assertEqual(self.last(), 'kit')
+
+    def test_opted_in_an_appended_entry_is_checked_and_commits(self):
+        self.opt_in()
+        self.append_entry()
+        rc, out = self.hook_commit('-m', 'append', '--', 'rulings/LEDGER.md')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('ledger: 2 entries, OK', out)
+        self.assertEqual(self.last(), 'append')
+
+    def test_opted_in_a_commit_not_touching_the_ledger_skips_the_check(self):
+        self.opt_in()
+        self.rewrite_entry()                          # broken, but not in this commit
+        rc, out = self.commit_other()
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn(CHECK_RAN, out)
+        self.assertEqual(self.last(), 'other')
+
+    def test_opted_in_a_staged_bad_ledger_with_a_good_working_file_is_refused(self):
+        """The check reads the working file: staged and working copies must agree, or a bad
+        staged ledger would be judged by a good working one."""
+        self.opt_in()
+        self.rewrite_entry()
+        self.repo.git('add', '--', 'rulings/LEDGER.md')
+        self.write_ledger(ENTRY % (rid(1), 'Keep.'))
+        rc, out = self.hook_commit('-m', 'bad')
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('unstaged changes', out)
+        self.assertIn('commit refused', out)
+        self.assertNotIn(CHECK_RAN, out)
+        self.assertEqual(self.last(), 'kit')
+
+    def test_opted_in_a_staged_standing_digest_is_checked(self):
+        self.opt_in()
+        self.repo.write('rulings/STANDING.md', '# Standing\n\n- see %s\n' % rid(9))
+        self.repo.git('add', '--', 'rulings/STANDING.md')
+        rc, out = self.hook_commit('-m', 'digest')
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn(rid(9), out)
+        self.assertIn('commit refused', out)
+        self.assertEqual(self.last(), 'kit')
+
+    def test_opted_in_no_ledger_path_refuses(self):
+        self.opt_in()
+        self.machine_config({})
+        rc, out = self.commit_other()
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('no ledger_path', out)
+        self.assertIn('commit refused', out)
+        self.assertEqual(self.last(), 'kit')
 
     def test_a_kit_json_the_kit_cannot_load_fails_open_with_a_note(self):
         self.repo.write('.kit.json', json.dumps({'ledger': {'no_such_key': True}}))
         on, why = precommit.enabled(self.repo.root)
         self.assertFalse(on)
         self.assertIn('no_such_key', why)
-        code, message = precommit.main(self.repo.root)
+        code, message = precommit.check(FakeCommit(self.repo.root), self.home)
         self.assertEqual(code, 0)
         self.assertIn('ledger check skipped', message)
 
-    def test_no_kit_json_is_no_check(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(precommit.main(tmp), (0, None))
-
     def test_opted_in_a_kit_json_the_kit_cannot_load_refuses_the_commit(self):
         self.repo.write('.kit.json', json.dumps({'ledger': {'pre_commit_check': 'yes'}}))
-        code, message = precommit.main(self.repo.root)
+        code, message = precommit.check(FakeCommit(self.repo.root), self.home)
         self.assertEqual(code, 1)
         self.assertIn('cannot be loaded', message)
         rc, out = self.commit_other()
         self.assertNotEqual(rc, 0, out)
         self.assertIn('commit refused', out)
-        self.assertEqual(self.repo.git('log', '-1', '--format=%s'), 'ledger')
+        self.assertEqual(self.last(), 'ledger')
 
     def test_any_load_failure_is_handled_like_a_config_error(self):
         with mock.patch.object(precommit.config, 'load', side_effect=ValueError('boom')):
             self.assertEqual(precommit.enabled(self.repo.root), (False, 'boom'))
-            self.assertEqual(precommit.main(self.repo.root)[0], 0)
+            self.assertEqual(precommit.check(FakeCommit(self.repo.root), self.home)[0], 0)
             self.repo.write('.kit.json', json.dumps({'ledger': {'pre_commit_check': True}}))
-            code, message = precommit.main(self.repo.root)
+            code, message = precommit.check(FakeCommit(self.repo.root), self.home)
         self.assertEqual(code, 1)
         self.assertIn('boom', message)
+
+    def test_a_check_that_cannot_start_refuses(self):
+        self.opt_in()
+        self.append_entry()
+        self.repo.git('add', '--', 'rulings/LEDGER.md')
+        with mock.patch.object(precommit.subprocess, 'call', side_effect=OSError('no python')):
+            code, message = dispatch.main(self.repo.root, checks=(
+                lambda c: precommit.check(c, self.home),))
+        self.assertEqual(code, 1)
+        self.assertIn('no python', message)
+        self.assertIn('commit refused', message)
+
+
+class TargetsTest(unittest.TestCase):
+    """Which staged paths are the ledger: no git, no hook."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(gitfixture.rmtree, self.tmp)
+        self.root = os.path.join(self.tmp, 'repo')
+        self.home = os.path.join(self.tmp, 'home')
+        os.makedirs(os.path.join(self.home, '.claude-pm-kit'))
+        os.makedirs(self.root)
+        with open(os.path.join(self.root, '.kit.json'), 'w', encoding='utf-8') as f:
+            json.dump({'ledger': {'pre_commit_check': True}}, f)
+
+    def ledger_at(self, path):
+        with open(os.path.join(self.home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+            json.dump({'ledger_path': path}, f)
+
+    def test_the_ledger_and_its_digest_are_targets(self):
+        ledger = os.path.join(self.root, 'rulings', 'LEDGER.md')
+        self.ledger_at(ledger)
+        paths = precommit.targets(self.home)
+        self.assertEqual(paths, (ledger, os.path.join(self.root, 'rulings', 'STANDING.md')))
+        staged = ['a.txt', 'rulings/LEDGER.md', 'rulings/STANDING.md', 'rulings/other.md']
+        self.assertEqual(precommit.staged_targets(self.root, staged, paths),
+                         ['rulings/LEDGER.md', 'rulings/STANDING.md'])
+
+    @unittest.skipUnless(os.name == 'nt', 'case-insensitive paths are a Windows matter')
+    def test_case_and_separators_do_not_hide_the_ledger(self):
+        ledger = os.path.join(self.root, 'rulings', 'LEDGER.md')
+        self.assertEqual(precommit.staged_targets(self.root, ['Rulings/ledger.MD'], (ledger,)),
+                         ['Rulings/ledger.MD'])
+
+    def test_a_ledger_outside_the_repository_is_never_staged_here(self):
+        self.ledger_at(os.path.join(self.tmp, 'elsewhere', 'LEDGER.md'))
+        commit = FakeCommit(self.root, ['LEDGER.md', 'rulings/LEDGER.md'])
+        with mock.patch.object(precommit.subprocess, 'call') as run:
+            self.assertEqual(precommit.check(commit, self.home), (0, None))
+        run.assert_not_called()
+
+    def test_not_staged_runs_no_check_and_no_further_git(self):
+        self.ledger_at(os.path.join(self.root, 'LEDGER.md'))
+        with mock.patch.object(precommit.subprocess, 'call') as run, \
+                mock.patch.object(precommit, 'unstaged') as diff:
+            self.assertEqual(precommit.check(FakeCommit(self.root, ['a.txt']), self.home), (0, None))
+        run.assert_not_called()
+        diff.assert_not_called()
+
+    def test_not_opted_in_reads_neither_machine_config_nor_staged_files(self):
+        with open(os.path.join(self.root, '.kit.json'), 'w', encoding='utf-8') as f:
+            json.dump({'ledger': {'pre_commit_check': False}}, f)
+        commit = mock.Mock(root=self.root)
+        with mock.patch.object(precommit, 'targets') as targets:
+            self.assertEqual(precommit.check(commit, self.home), (0, None))
+        targets.assert_not_called()
+        commit.staged.assert_not_called()
+
+    def test_no_kit_json_is_no_check(self):
+        os.remove(os.path.join(self.root, '.kit.json'))
+        self.assertEqual(precommit.check(mock.Mock(root=self.root), self.home), (0, None))
+
+    def test_an_unreadable_machine_config_refuses(self):
+        with open(os.path.join(self.home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+            f.write('{')
+        code, message = precommit.check(FakeCommit(self.root, ['a.txt']), self.home)
+        self.assertEqual(code, 1)
+        self.assertIn('commit refused', message)
 
 
 @unittest.skipUnless(SH, 'no sh on PATH')
