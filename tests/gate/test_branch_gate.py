@@ -191,6 +191,32 @@ class BranchGate(fixtures.GateRepoCase):
         self.assertFalse(os.path.exists(os.path.join(wt, 'tools', '__pycache__')),
                          os.listdir(os.path.join(wt, 'tools')))
 
+    def test_a_cmd_step_python_writes_no_bytecode_into_the_tree(self):
+        """A step's child Python does not inherit sys.dont_write_bytecode: the gate gives it
+        PYTHONDONTWRITEBYTECODE=1, even when the environment it was started from has none, so a
+        script importing a sibling leaves no tools/__pycache__ (the fixture has no .gitignore)."""
+        wt = self.repo.worktree('feature')
+        self.repo.write('tools/step_sibling.py', 'WORD = "sib"\n', root=wt)
+        self.repo.write('tools/step_main.py', 'import step_sibling\nprint("step", step_sibling.WORD)\n',
+                        root=wt)
+        self.repo.write('.kit.json', '{"gate": {"steps": [{"name": "s", "always": true, '
+                        '"cmd": ["{python}", "tools/step_main.py"], "pass": "^step sib"}]}}\n',
+                        root=wt)
+        tip = self.repo.commit('cmd step', 'tools/step_main.py', 'tools/step_sibling.py',
+                               '.kit.json', cwd=wt)
+        self.book_kw['env'].pop('PYTHONDONTWRITEBYTECODE', None)
+        with mock.patch.dict(os.environ):
+            os.environ.pop('PYTHONDONTWRITEBYTECODE', None)
+            out = self.gate(wt)
+        self.assertEqual(out.code, G.OK, out.lines)
+        with open(out.results[0]['log'], encoding='utf-8') as f:
+            self.assertIn('step sib', f.read())              # the script and its import ran
+        self.assertIsNone(out.no_record, out.lines)
+        self.assertEqual(out.record, gate_ok.record_path(wt, tip))
+        self.assertFalse(os.path.exists(os.path.join(wt, 'tools', '__pycache__')),
+                         os.listdir(os.path.join(wt, 'tools')))
+        self.assertNotIn('PYTHONDONTWRITEBYTECODE', self.book_kw['env'])   # merged, not mutated
+
     def test_a_check_that_imports_a_sibling_lazily_writes_no_bytecode_into_the_tree(self):
         """The check runs after the module loaded: its own import of a sibling is guarded too."""
         wt = self.repo.worktree('feature')
