@@ -1,4 +1,4 @@
-# Agentic-Project_Manager-Kit
+# PM kit
 
 - Contract: ARCHITECTURE.md.
 - Python standard library only. Windows only.
