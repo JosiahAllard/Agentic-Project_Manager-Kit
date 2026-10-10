@@ -1,7 +1,7 @@
 # Go-live list
 
-Held for the joint review with the owner. Nothing here happens before it.
-The code is on kit main except the lines marked unbuilt; each line is a switch that makes it live, a decision, or something unbuilt.
+The kit is live and the go-live holds are released. What remains is each switch still to make, each decision still open and each fix still to land.
+The code is on kit main except the lines marked unbuilt.
 
 ## Switches
 
@@ -17,13 +17,13 @@ The code is on kit main except the lines marked unbuilt; each line is a switch t
 - Action Hub To PM: republish claude/hub/action-hub.html to the live artifact (the `to_pm` collection needs no new capability; restate `parked` rules if the db rules are declared again), then teach the PM session start to list `to_pm` docs with status `sent`.
 - Hub repo aliases: before republishing the hub, set `aliases` on the hub's repos/ docs for every short tag the old map covered; the page no longer carries that map in canonRepo.
 - Retirements: heavy_run, test-runner wrappers. The global reserve_ui.pyw is replaced by the kit window `reserve_ui.pyw` at the kit root, which stays.
-- PM data branch (docs/pm-data-branch.md): live when `tools/pm_data.py init` (or `--adopt` for an existing branch) runs on the PM's data repository, jointly with the owner, with a private remote that is not the public one ("Making the branch"). Needs tasks 2-8 on kit main ("Tasks"); the guard rule `git-push-pmdata` and the pre-push leak stage guard it once `kit-pm-data.json` exists ("Pre-push guard"); the data worktree's `.kit.json` must set the data branch, private remote and a non-`ref` backlog store ("Layout").
 - Backlog store per repo: `backlog.py migrate`, then the switch-over branch (docs/backlog-store.md "Migration"). Until a repo's remote has a store, the landing close writes nothing and the ancestry check passes; the check still asks the remote (`ls-remote`) and refuses the landing when it cannot. `backlog.py` refuses two repos' current `.kit.json`: they still use the old PM-kit spellings, refused on purpose (tests/config/test_load.py `test_the_old_hook_and_owner_spellings_refuse`). The new spellings are in docs/kit-json.md and docs/doc-tools.md. The PM kit cannot load them, so each repo runs `backlog.py migrate` first, then makes the key move on its switch-over branch.
 - Switch-over command: `installer/machine-setup.ps1 -OldKit <old kit clone>` makes the per-account re-point below and the links, statusline, shortcut, temp ACL and comfy steps in one reviewed run (dry run first, then `-Apply`; docs/machine-setup.md).
 - Per-account settings re-point (owner runs these; PM drafts the commands):
   - Remove the old kit's PreToolUse hooks (no_root_search.py, main_checkout_redirect_guard.py) from settings.json in every account's config folder.
   - Add guard.py's PreToolUse entry as `python <kit>/claude/hooks/guard.py --settings-entry` prints it (docs/guard.md "Go-live (after the joint review)").
   - Re-point each account's ~/.claude/tools link (the live lock tool), where it has one, from the old kit to the kit checkout.
+- PM data branch (docs/pm-data-branch.md), after the repo switch-overs and the guard entry above: live when `tools/pm_data.py init` (or `--adopt` for an existing branch) runs on the PM's data repository, jointly with the owner, with a private remote that is not the public one ("Making the branch"). Tasks 1-8 are on kit main ("Tasks"); the guard rule `git-push-pmdata` and the pre-push leak stage guard it once `kit-pm-data.json` exists ("Pre-push guard"); the data worktree's `.kit.json` must set the data branch, private remote and a non-`ref` backlog store ("Layout").
 
 ## Machine config keys from the generic pass
 
