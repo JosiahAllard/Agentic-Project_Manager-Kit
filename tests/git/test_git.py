@@ -552,6 +552,14 @@ class PositiveForms(RepoFixture):
         self.assertIsNone(got, 'a killed git was read as "no such ref"')
         self.assertIn('printed nothing', why)
 
+    def test_no_line_with_a_warning_is_no_answer_not_no_ref(self):
+        # for-each-ref skips a broken loose ref with exit 0, no line and a warning on stderr.
+        said = b'warning: ignoring broken ref refs/backlog/main'
+        with mock.patch.object(cmd, '_run', return_value=(0, b'', said)):
+            got, why = refs.ref_commit('refs/backlog/main', self.r.root)
+        self.assertIsNone(got, 'a broken ref git skipped with a warning was read as "no such ref"')
+        self.assertIn('ignoring broken ref', why)
+
 
 class _Parity(object):
     """What the fake prints for the positive forms is what real git prints (each check runs on
@@ -587,12 +595,22 @@ class _Parity(object):
         self.r.git('tag', '-a', '-m', 'v', 'v1')
         self.assertEqual(refs.ref_commit('refs/tags/v1', self.r.root), (self.r.initial, None))
 
+    def test_a_broken_loose_ref_is_no_answer_and_its_siblings_still_answer(self):
+        with open(os.path.join(self.r.common_dir(), 'refs', 'heads', 'broken'), 'w') as f:
+            f.write('garbage\n')
+        got, why = refs.ref_commit('refs/heads/broken', self.r.root)
+        self.assertIsNone(got, 'a broken ref was read as "no such ref"')
+        self.assertIn('printed no line', why)              # exit 0: the shape of "no such ref"
+        self.assertIn('ignoring broken ref refs/heads/broken', why)      # git's own warning
+        self.assertEqual(refs.ref_commit('refs/heads/main', self.r.root), (self.r.initial, None))
+
 
 class FakeParity(_Parity, unittest.TestCase):
     pass
 
 
-@real_git('parity: the fake\'s `config --list -z` and `branch --show-current` against real git')
+@real_git('parity: the fake\'s `config --list -z`, `branch --show-current` and for-each-ref\'s '
+          'broken-ref warning against real git')
 class RealGitParity(_Parity, unittest.TestCase):
     pass
 
