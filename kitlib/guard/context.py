@@ -3,10 +3,27 @@ check). Ctx gathers it behind one object so tests hand the rules a fake machine:
 a constructor argument, and the defaults read this machine.
 
   place(path)        kitlib.guard.place.classify (repo.classify's answer, read from the filesystem
-                     where it can be; git otherwise), cached per path
+                     where it can be; git otherwise), cached per path. The one change to it: the
+                     PM data worktree (docs/pm-data-branch.md "Guard place and commit hooks"),
+                     which git calls LINKED, is answered as MAIN, so the main-checkout rules
+                     apply there. It is that worktree when the machine config's pm_data.path
+                     names its top (kitlib.pmdata.machine_settings), or, only when the machine
+                     config names no pm_data, when its HEAD is `ref: refs/heads/<branch>` of the
+                     kit-pm-data.json record in its common dir (kitlib.pmdata.read). A MAIN
+                     place is never changed.
+  is_pm_data(path), pm_data_branch(path)
+                     whether place(path) is the PM data worktree, and its data branch
+  repo_main_top(path) main_top, except for the PM data worktree: the kit's main checkout it
+                     shares a repository with (push and worktree remove judge that repository's
+                     refs by its .kit.json; config_at(top) reads one)
+  pm_data_error(path) why the guard cannot tell whether path's place is the PM data worktree:
+                     the machine config's pm_data does not read (any path), or path's place is a
+                     linked worktree whose repository's record or HEAD does not; else None. The
+                     rules then deny the subagent write (fail closed).
   config(path)       the .kit.json of the main checkout `path` belongs to (never a worktree's own:
-                     an agent cannot loosen the rules from its branch); None when there is none
-                     or it does not load (config_error(path) says why)
+                     an agent cannot loosen the rules from its branch; the PM data worktree,
+                     answered as MAIN, is the one worktree whose own .kit.json is read); None
+                     when there is none or it does not load (config_error(path) says why)
   lock_held()        (True, None) only when MACHINE_LOCK_RUN names a run nest_check accepts:
                      the named wrapper is an ancestor of this process, alive, and holding. The
                      variable alone is never proof.
@@ -22,12 +39,16 @@ a constructor argument, and the defaults read this machine.
   session_role(ev)   who runs the session (kitlib.sessionmark): 'subagent' when the payload has
                      agent_id, else the launcher's mark (PM_KIT_ROLE), else 'owner': a session
                      nothing marks is the owner's own. Replaceable (role_resolver).
+
+The pm_data argument replaces the machine-config read (a callable returning
+kitlib.pmdata.machine_settings's answer, or raising its errors).
 """
 import json
 import os
 import tempfile
 
 from kitlib import config as kconfig
+from kitlib import pmdata
 from kitlib import sessionmark
 from kitlib.config import user as kuser
 from kitlib.git import refs, repo
@@ -62,9 +83,33 @@ def _default_lock_held(environ, store):
     return (True, None) if parent else (False, why)
 
 
+def _machine_pm_data(home):
+    """kitlib.pmdata.machine_settings(home). When the strict reader refuses the machine config,
+    its pm_data key alone is read and checked with the same rules, so another key's fault does
+    not hide the PM data worktree; a file that cannot be read or parsed raises, and the guard
+    fails closed."""
+    try:
+        return pmdata.machine_settings(home)
+    except kconfig.ConfigError as e:
+        path = kuser.config_file(home)
+        try:
+            with open(path, encoding='utf-8-sig') as f:
+                data = json.load(f)
+        except (OSError, UnicodeDecodeError, ValueError, RecursionError):
+            raise e
+        if not isinstance(data, dict):
+            raise e
+        return pmdata.check_settings(data.get(pmdata.KEY), '%s key %s' % (path, pmdata.KEY))
+
+
+def _same_dir(a, b):
+    return repo.real(a) == repo.real(b) or repo.same_path(a, b)
+
+
 class Ctx(object):
     def __init__(self, environ=None, home=None, store=None, classify=None, load=None,
-                 gate_ok=None, git=None, lock_held=None, role_resolver=None, tempdir=None):
+                 gate_ok=None, git=None, lock_held=None, role_resolver=None, tempdir=None,
+                 pm_data=None):
         self.environ = dict(os.environ if environ is None else environ)
         self.home = home or kuser.home_dir()
         self.store = store
@@ -77,6 +122,11 @@ class Ctx(object):
         self.tempdir = tempdir or self.environ.get('TEMP') or tempfile.gettempdir()
         self._places, self._configs, self._config_errors = {}, {}, {}
         self._user = None
+        self._pm_data = pm_data or (lambda: _machine_pm_data(self.home))
+        self._pm_settings = None                 # (settings or None, error or None), read once
+        self._pm_records = {}                    # normcase(common) -> (Record or None, error or None)
+        self._pm_places = {}                     # key of a place answered as the PM data worktree -> its branch
+        self._pm_place_errors = {}               # key -> why the place could not be told
 
     # ------------------------------------------------------------ places and config
 
@@ -85,8 +135,85 @@ class Ctx(object):
             return repo.Place(repo.UNKNOWN, None, 'no path', None, None)
         key = os.path.normcase(os.path.abspath(path))
         if key not in self._places:
-            self._places[key] = self._classify(path)
+            p = self._classify(path)
+            branch = self._pm_data_top(key, p) if p.kind == repo.LINKED and p.top else None
+            if branch:
+                self._pm_places[key] = branch
+                p = repo.Place(repo.MAIN, p.top, '', p.git_dir, p.common)
+            self._places[key] = p
         return self._places[key]
+
+    def is_pm_data(self, path):
+        """True when place(path) is the PM data worktree (answered as MAIN)."""
+        return self.pm_data_branch(path) is not None
+
+    def pm_data_branch(self, path):
+        """The data branch when place(path) is the PM data worktree, else None."""
+        if not path:
+            return None
+        self.place(path)
+        return self._pm_places.get(os.path.normcase(os.path.abspath(path)))
+
+    def repo_main_top(self, path):
+        """The main worktree of the repository `path` is in: main_top, except that for the PM
+        data worktree it is the kit's main checkout the data worktree belongs to (or None)."""
+        p = self.place(path)
+        if not self.is_pm_data(path):
+            return self.main_top(path)
+        if p.common and os.path.basename(p.common).lower() == '.git':
+            return os.path.dirname(p.common)
+        return None
+
+    def pm_data_error(self, path=None):
+        """Why the guard cannot tell the PM data worktree: the machine config's pm_data does not
+        read (any path), or `path`'s place is a linked worktree whose repository's record or HEAD
+        does not read. None when it can tell."""
+        settings, why = self._pm_machine()
+        if why:
+            return why
+        if not path:
+            return None
+        self.place(path)
+        return self._pm_place_errors.get(os.path.normcase(os.path.abspath(path)))
+
+    def _pm_machine(self):
+        if self._pm_settings is None:
+            try:
+                self._pm_settings = (self._pm_data(), None)
+            except (pmdata.PmDataError, kconfig.ConfigError) as e:
+                self._pm_settings = (None, 'the machine config\'s %s cannot be read: %s' % (pmdata.KEY, e))
+        return self._pm_settings
+
+    def _pm_data_top(self, key, p):
+        """The data branch when the linked worktree `p` is the PM data worktree (see place), else
+        None. A machine config that names pm_data decides alone; the record signal answers only
+        when it names none. An error that stops the record signal is kept for pm_data_error."""
+        settings, why = self._pm_machine()
+        if settings:
+            return settings['branch'] if _same_dir(p.top, settings['path']) else None
+        if why or not p.common or not p.git_dir:
+            return None
+        ck = os.path.normcase(p.common)
+        if ck not in self._pm_records:
+            try:
+                self._pm_records[ck] = (pmdata.read(p.common), None)
+            except pmdata.PmDataError as e:
+                self._pm_records[ck] = (None, str(e))
+        record, why = self._pm_records[ck]
+        if why:
+            self._pm_place_errors[key] = 'the PM data record cannot be read: %s' % why
+            return None
+        if record is None:
+            return None
+        head = os.path.join(p.git_dir, 'HEAD')
+        try:
+            with open(head, encoding='utf-8') as f:
+                text = f.read().strip()
+        except (OSError, UnicodeDecodeError) as e:
+            self._pm_place_errors[key] = 'cannot read %s to compare it with the PM data branch %s: %s' % (
+                head, record.branch, e)
+            return None
+        return record.branch if text == 'ref: refs/heads/%s' % record.branch else None
 
     def main_top(self, path):
         """The main checkout's work tree root for `path` (a worktree answers its main checkout),
@@ -99,7 +226,10 @@ class Ctx(object):
         return None
 
     def config(self, path):
-        top = self.main_top(path)
+        return self.config_at(self.main_top(path))
+
+    def config_at(self, top):
+        """The .kit.json of the main checkout `top` (cached), or None (config_error_at says why)."""
         if not top:
             return None
         key = os.path.normcase(top)
@@ -112,7 +242,9 @@ class Ctx(object):
         return self._configs[key]
 
     def config_error(self, path):
-        top = self.main_top(path)
+        return self.config_error_at(self.main_top(path))
+
+    def config_error_at(self, top):
         return self._config_errors.get(os.path.normcase(top)) if top else None
 
     # ------------------------------------------------------------ lock, records
