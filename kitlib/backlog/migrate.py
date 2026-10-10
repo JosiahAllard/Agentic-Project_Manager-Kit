@@ -216,7 +216,12 @@ def _refuse_existing(backend):
             raise Refusal('the backlog store already exists (%s on %s at %s): migrate only starts '
                           'a new store; nothing was written'
                           % (backend.remote_ref, backend.remote, tip[:10]))
-    local, _ = refs.resolve(backend.local_ref, backend.root)
+    # refs.ref_commit: a git ended from outside is no answer, never "no store here"
+    # (KIT-GIT-EXIT1-ANSWERS-2: a kill skipped this refusal).
+    local, why = refs.ref_commit(backend.local_ref, backend.root)
+    if local is None:
+        raise Failure('cannot read %s, so whether the backlog store already exists here cannot be '
+                      'told (%s); nothing was written' % (backend.local_ref, why))
     if local:
         raise Refusal('the backlog store already exists locally (%s at %s): migrate only starts '
                       'a new store; nothing was written' % (backend.local_ref, local[:10]))

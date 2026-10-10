@@ -92,6 +92,19 @@ def _delete_remote(root, remote, branch, sha, git_env):
         'it unreadable (%s)' % why if now is None else 'it at %s' % now[:10])
 
 
+def _left(ctx, branch):
+    """After a delete: `(tip, None)` when the local branch is still there, `('', None)` when it is
+    gone, `(None, why kept)` when git cannot tell.
+
+    GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - a git ended from outside exits 1 having printed nothing
+    (refs.KILLED_SHAPE), and a resolve without known=True read that as "gone": DELETED was reported
+    for a branch nobody had seen go. A branch that cannot be read is reported kept, with why."""
+    now, why = refs.resolve('refs/heads/%s' % branch, ctx.main, known=True)
+    if now is None:
+        return None, 'whether it is gone could not be read (%s)' % why
+    return now, None
+
+
 def clean_branch(ctx, branch, landed, apply=True, git_env=None):
     """One branch: `(entry, lines)`. `ctx` is kitlib.worktree.remove's (the main checkout and its
     settings); `landed(sha)` is `(True, None)` when main contains `sha`, else `(False, why)` or
@@ -120,8 +133,8 @@ def clean_branch(ctx, branch, landed, apply=True, git_env=None):
             if why:
                 keep('remote branch', why)
 
-    tip, why = refs.resolve('refs/heads/%s' % branch, ctx.main)
-    if tip is None and not why.endswith('does not name a commit'):
+    tip, why = refs.resolve('refs/heads/%s' % branch, ctx.main, known=True)
+    if tip is None:
         e['local_branch'] = KEPT
         keep('local branch', 'it could not be read (%s)' % why)
     trees = _worktrees(ctx, branch) if tip else []
@@ -155,9 +168,11 @@ def clean_branch(ctx, branch, landed, apply=True, git_env=None):
                 why = _first_refusal(said)
                 keep('worktree %s' % path, why)
                 lines.extend('           ' + l.strip() for l in said if why not in l)
-            now, _ = refs.resolve('refs/heads/%s' % branch, ctx.main)
-            e['local_branch'] = DELETED if not now else KEPT
-            if now and gone:
+            now, why = _left(ctx, branch)
+            e['local_branch'] = DELETED if now == '' else KEPT
+            if now is None:
+                keep('local branch', why)
+            elif now and gone:
                 keep('local branch', _first_refusal([l for l in said if 'branch -d' in l]
                                                     or said))
             elif now:
@@ -166,9 +181,11 @@ def clean_branch(ctx, branch, landed, apply=True, git_env=None):
             ctx.out = []
             remove.delete_branch(ctx, branch, False)
             said, ctx.out = list(ctx.out), []
-            now, _ = refs.resolve('refs/heads/%s' % branch, ctx.main)
-            e['local_branch'] = DELETED if not now else KEPT
-            if now:
+            now, why = _left(ctx, branch)
+            e['local_branch'] = DELETED if now == '' else KEPT
+            if now is None:
+                keep('local branch', why)
+            elif now:
                 keep('local branch', _first_refusal(said))
                 lines.extend('           ' + l.strip() for l in said[1:] if l.strip())
 

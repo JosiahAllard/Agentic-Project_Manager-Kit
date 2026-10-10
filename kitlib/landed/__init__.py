@@ -26,7 +26,8 @@ A failed verdict older than the tip commit is stale (the branch moved on) and no
 
 Exit codes: LANDED 0; NOT_YET 1 (no verdict, a passing one, a landing holding the lock, or the
 remote sha unknown here); FAILED 2 (the newest verdict failed and the lock is free), and 2 too when
-it cannot answer (CANNOT ANSWER: the ref does not resolve; or the configuration was refused).
+it cannot answer (CANNOT ANSWER: the ref does not resolve, or git gives no answer for it; or the
+configuration was refused).
 """
 import collections
 import os
@@ -172,23 +173,31 @@ def look(root, ref):
     except (ConfigError, landing.LockError) as e:
         return Outcome(CANNOT, ['landed: refused: kit configuration: %s' % e])
     main_branch, remote = cfg.main_branch, cfg.remote
-    tip, _why = refs.resolve(ref, root)
+    tip, why = refs.resolve(ref, root, known=True)
     if tip is None:
+        return Outcome(CANNOT, ['landed: CANNOT ANSWER: `%s` could not be read in %s: %s'
+                                % (ref, root, why)])
+    if not tip:
         return Outcome(CANNOT, ['landed: CANNOT ANSWER: `%s` does not resolve to a commit in %s'
                                 % (ref, root)])
     out = []
-    local, _ = refs.branch_tip(main_branch, root)
+    # known=True: a git ended from outside is no answer, never "no such branch"
+    # (KIT-GIT-EXIT1-ANSWERS-2). An unread local main is shown as such and measures nothing.
+    local, why = refs.resolve('refs/heads/%s' % main_branch, root, known=True)
     out.append('tip        %s  %s' % (tip[:12], ref))
     out.append('local      %s  %s%s' % ((local or '-')[:12], main_branch,
-                                        '' if local else ' (no such branch here)'))
+                                        '' if local else ' (no such branch here)' if local == ''
+                                        else ' (UNKNOWN: %s)' % why))
     target, how = remote_main(root, remote, main_branch)
     if target is None:
         target, where = local, 'local %s (%s)' % (main_branch, how)
     else:
         out.append('remote     %s  %s/%s  (%s)' % ((target or '-')[:12], remote, main_branch, how))
         where = '%s/%s' % (remote, main_branch)
-    landed = contains(root, tip, target) if target else False
-    if landed is None:
+    landed = contains(root, tip, target) if target else (None if target is None else False)
+    if target is None:
+        out.append('contained  UNKNOWN: local %s could not be read' % main_branch)
+    elif landed is None:
         out.append('contained  UNKNOWN: %s is not in this clone - `git fetch %s`, then re-run'
                    % (target[:12], remote))
     else:
