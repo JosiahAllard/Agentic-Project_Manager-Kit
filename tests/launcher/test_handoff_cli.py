@@ -116,7 +116,7 @@ class Autostart(unittest.TestCase):
             raise AssertionError('a refused install ran PowerShell')
         sep = chr(92)
         for path in ('/kit/.claude/worktrees/x/tools/launch.py',
-                     sep.join(['Z:', 'kit', '.Claude', 'Worktrees', 'x', 'tools', 'launch.py'])):
+                     sep.join(['D:', 'kit', '.Claude', 'Worktrees', 'x', 'tools', 'launch.py'])):
             with self.assertRaisesRegex(autostart.LaunchError, 'main kit checkout, not a worktree'):
                 autostart.install(path, python='/py/python.exe', run=run)
         self.assertFalse(autostart.in_worktree('/kit/tools/launch.py'))
