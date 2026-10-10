@@ -19,9 +19,10 @@ Repo hook module: `<root>/<tools_dir>/<module>.py`, named by `.kit.json` "hook".
   `GATE_CHECKS` is a dict of check name -> callable; a gate step `{"check": name}` runs one.
   Repo grammar (a Gradle pin check, dotnet result regexes, the py-drops list) lives there, with
   its settings in "hook".options. How a check is called and what it returns is gate.py's contract.
-  It loads with sys.dont_write_bytecode set (exec_without_bytecode): no `__pycache__` is written
-  into the repo's tree.
+  It loads, and its checks run, with sys.dont_write_bytecode set (no_bytecode): no
+  `__pycache__` is written into the repo's tree.
 """
+import contextlib
 import copy
 import fnmatch
 import hashlib
@@ -164,17 +165,26 @@ def hook_path(cfg):
     return os.path.join(cfg.root, cfg.tools_dir, h['module'] + '.py'), h['options']
 
 
-def exec_without_bytecode(spec, module):
-    """`spec.loader.exec_module(module)` with sys.dont_write_bytecode set, put back afterwards.
-    The module is a repo's file in the work tree being gated: a `__pycache__/*.pyc` written
-    beside it (or beside a sibling it imports while it loads) is an untracked file in that tree,
-    and a gate that sees the tree change writes no gate-OK record (kitlib/gate/runner.py)."""
+@contextlib.contextmanager
+def no_bytecode():
+    """sys.dont_write_bytecode set while the repo's code runs, put back afterwards. The hook
+    module and the siblings it imports are files in the work tree being gated: a
+    `__pycache__/*.pyc` written beside them is an untracked file in that tree, and a gate that
+    sees the tree change writes no gate-OK record (kitlib/gate/runner.py). Used to load the
+    module (exec_without_bytecode) and to run its GATE_CHECKS (runner._run_check), where a
+    check may import a sibling lazily."""
     saved = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
     try:
-        spec.loader.exec_module(module)
+        yield
     finally:
         sys.dont_write_bytecode = saved
+
+
+def exec_without_bytecode(spec, module):
+    """`spec.loader.exec_module(module)` under no_bytecode()."""
+    with no_bytecode():
+        spec.loader.exec_module(module)
 
 
 def load_hook_module(cfg):

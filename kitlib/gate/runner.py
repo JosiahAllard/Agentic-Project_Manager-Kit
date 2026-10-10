@@ -268,7 +268,8 @@ def _run_check(step, launcher, log_path, ctx, checks):
                                stdout=log, stderr=subprocess.STDOUT)
             return launcher.wait(p)
         try:
-            got = fn(dict(ctx, name=step.name, log=log, run=run))
+            with policy.no_bytecode():   # a lazy sibling import writes no __pycache__ in the tree
+                got = fn(dict(ctx, name=step.name, log=log, run=run))
         except KeyboardInterrupt:
             raise
         except SystemExit as e:     # a check never ends the gate, whatever code it exits with

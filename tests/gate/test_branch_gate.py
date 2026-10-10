@@ -191,6 +191,37 @@ class BranchGate(fixtures.GateRepoCase):
         self.assertFalse(os.path.exists(os.path.join(wt, 'tools', '__pycache__')),
                          os.listdir(os.path.join(wt, 'tools')))
 
+    def test_a_check_that_imports_a_sibling_lazily_writes_no_bytecode_into_the_tree(self):
+        """The check runs after the module loaded: its own import of a sibling is guarded too."""
+        wt = self.repo.worktree('feature')
+        self.repo.write('tools/lazy_sibling.py', 'WORD = "lazy"\n', root=wt)
+        self.repo.write('tools/kit_hooks.py', (
+            'import os, sys\n'
+            'def ok(ctx):\n'
+            '    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n'
+            '    try:\n'
+            '        import lazy_sibling\n'
+            '    finally:\n'
+            '        sys.path.pop(0)\n'
+            '    ctx["log"].write("sibling %s\\n" % lazy_sibling.WORD)\n'
+            '    return 0\n'
+            'GATE_CHECKS = {"ok": ok}\n'), root=wt)
+        self.addCleanup(sys.modules.pop, 'lazy_sibling', None)
+        self.repo.write('.kit.json', '{"hook": {"module": "kit_hooks"}, "gate": {"steps": '
+                        '[{"name": "c", "always": true, "check": "ok"}]}}\n', root=wt)
+        tip = self.repo.commit('lazy check', 'tools/kit_hooks.py', 'tools/lazy_sibling.py',
+                               '.kit.json', cwd=wt)
+        with mock.patch.object(sys, 'dont_write_bytecode', False):
+            out = self.gate(wt)
+            self.assertFalse(sys.dont_write_bytecode)          # put back as it was
+        self.assertEqual(out.code, G.OK, out.lines)
+        with open(out.results[0]['log'], encoding='utf-8') as f:
+            self.assertIn('sibling lazy', f.read())          # the lazy import did run
+        self.assertIsNone(out.no_record, out.lines)
+        self.assertEqual(out.record, gate_ok.record_path(wt, tip))
+        self.assertFalse(os.path.exists(os.path.join(wt, 'tools', '__pycache__')),
+                         os.listdir(os.path.join(wt, 'tools')))
+
 
 def mode_step(word):
     return ['{python}', '-c', 'print("mode %s")' % word]
