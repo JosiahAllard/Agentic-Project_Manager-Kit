@@ -35,7 +35,7 @@
 #
 # Exit: 0 dry run printed or files written, 1 refused, 2 usage; with -PmData and -Apply, a non-zero
 # exit of pm_data.py init (1 refused, 2 configuration, 3 made locally but the push failed, 4 stopped
-# part-way, 130 Ctrl+C) after the target's files were written.
+# part-way, 5 crashed, 130 Ctrl+C) after the target's files were written.
 param(
     [Parameter(Mandatory = $true)][string]$Target,
     [Parameter(Mandatory = $true)][string]$OwnerEmail,
@@ -249,9 +249,11 @@ if ($PmData) {
         $why = @{ 1 = 'refused, it changed nothing'; 2 = 'usage or a configuration it cannot read';
                   3 = 'made locally, the push to the private remote failed; its lines above say how to recover';
                   4 = 'stopped part-way; run it again with --adopt to finish';
+                  5 = 'it crashed; what it made before the error is not known, run it again with --adopt to check';
                   130 = 'interrupted (Ctrl+C); the lines above are what it made' }[$pmCode]
         if (-not $why) { $why = 'an exit code pm_data.py does not document' }
-        # An uncaught Python error also exits 1: never call that a refusal that changed nothing.
+        # Fallback for a pm_data.py that still lets a Python error escape (exit 1, a traceback):
+        # never call that a refusal that changed nothing.
         if (@($pmOut | Where-Object { "$_" -match '^Traceback \(most recent call last\):' }).Count) {
             $why = 'it crashed; what it made before the error is not known, check the kit repository'
         }

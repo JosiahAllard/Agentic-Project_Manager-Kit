@@ -79,7 +79,8 @@ down the longer the machine stays up: docs/windows-token-leak.md.
      without `-PmData` is a usage error (2). The script prints `pm_data.py`'s lines and exits
      with its code: 0 done; 1 refused (nothing changed in the kit); 2 a configuration it cannot
      read; 3 made locally, the push failed (its lines say how to recover); 4 stopped part-way
-     (rerun with `--adopt`); 130 Ctrl+C. A Python traceback is reported as a crash, not as a
+     (rerun with `--adopt`); 5 crashed (what it made is not known; rerun with `--adopt` to
+     check); 130 Ctrl+C. A Python traceback (exit 1) is also reported as a crash, not as a
      refusal. On a non-zero code the target's files stay written and the script prints the
      command to run again on its own. A repository already installed (its `.kit.json` makes the
      script refuse) runs that command directly.

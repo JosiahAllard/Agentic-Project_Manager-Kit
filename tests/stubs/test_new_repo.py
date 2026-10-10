@@ -264,6 +264,14 @@ class PmData(unittest.TestCase):
         self.assertIn('pm_data.py init exited 1 (it crashed;', out)
         self.assertNotIn('changed nothing', out)
 
+    def test_exit_5_of_pm_data_is_reported_as_a_crash(self):
+        with open(os.path.join(self.kit_root, 'tools', 'pm_data.py'), 'w', encoding='utf-8') as fh:
+            fh.write("import sys\nprint('crashed: ValueError: x')\nsys.exit(5)\n")
+        code, out = self.ps('-Apply', '-PmData', self.data)
+        self.assertEqual(code, 5, out)
+        self.assertIn('  crashed: ValueError: x', out)
+        self.assertIn('pm_data.py init exited 5 (it crashed;', out)
+
     def test_private_remote_without_pm_data_is_usage(self):
         before = self.state()
         code, out = self.ps('-Apply', '-PrivateRemote', self.private)
