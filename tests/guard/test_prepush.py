@@ -607,6 +607,17 @@ class PmDataTest(PrePushCase):
         self.assertFalse(ok)
         self.assertIn('has no gate-OK record', msg)
 
+    def test_an_ancestry_git_cannot_tell_refuses(self):
+        public = 'refs/heads/kit/x %s refs/heads/kit/x %s' % (self.with_kit, '0' * 40)
+        private = 'refs/heads/pmdata %s refs/heads/pmdata %s' % (self.data, '0' * 40)
+        with mock.patch.object(prepush.refs, 'is_ancestor', return_value=(None, 'boom')):
+            why = prepush.leak_refusal(self.repo.root, [public], 'origin', self.repo.remote)
+            self.assertIn('cannot be checked for (boom)', why)
+            why = prepush.leak_refusal(self.repo.root, [private], 'private', self.private)
+            self.assertIn('cannot be checked for (boom)', why)
+        self.assertIsNone(prepush.leak_refusal(self.repo.root, [public], 'origin', self.repo.remote))
+        self.assertIsNone(prepush.leak_refusal(self.repo.root, [private], 'private', self.private))
+
     def test_the_data_worktree_finds_the_record(self):
         # the hook's cwd is the top of the work tree pushed from: the record is in the common dir
         line = 'refs/heads/pmdata %s refs/heads/pmdata %s' % (self.data, '0' * 40)
