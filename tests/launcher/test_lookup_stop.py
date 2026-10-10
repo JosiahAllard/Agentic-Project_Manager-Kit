@@ -133,6 +133,14 @@ class Stop(unittest.TestCase):
         host = self.host(procs)
         stop.stop(self.h.settings, host, 'x-a1', dry_run=True)
 
+    def test_a_pm_session_id_that_is_not_a_string_counts_as_unset(self):
+        for value in (None, 12345, ['sid-1']):
+            self.h.write_state('conductors.json', {'pm_session_id': value})
+            host = self.host(windowed('x-a1'))
+            out = stop.stop(self.h.settings, host, 'x-a1')
+            self.assertEqual(host.killed, [(10, 1010), (20, 1020), (30, 1030)], value)
+            self.assertTrue(out[0].startswith("stopped 'x-a1'"), out)
+
 
 if __name__ == '__main__':
     unittest.main()

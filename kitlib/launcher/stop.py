@@ -118,8 +118,8 @@ def stop(settings, host, name, successor=None, pid=0, dry_run=False, procs=None,
     except LaunchError:
         conductors = None
     pm_id = (conductors or {}).get('pm_session_id') if isinstance(conductors, dict) else None
-    if pm_id and pm_id.startswith('<'):
-        pm_id = None                                # the example file's placeholder
+    if not isinstance(pm_id, str) or pm_id.startswith('<'):
+        pm_id = None                                # unset, not a string, or the example file's placeholder
     rows = host.processes() if procs is None else procs
     target, win, con, succ, (what, wtext) = plan(rows, name, successor, pid, host.own_pid(), pm_id)
     if dry_run:
