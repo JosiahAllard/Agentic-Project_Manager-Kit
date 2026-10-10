@@ -87,7 +87,11 @@ def ref_commit(ref, cwd):
     GOTCHA: KIT-GIT-EXIT1-ANSWERS - `rev-parse --verify --quiet <ref>` says "no such ref" as exit
     1 with no output, a killed git's shape (KILLED_SHAPE), so a kill read as "no ref". The
     question is asked as `for-each-ref <ref>`, which exits 0 whether or not the ref exists: no
-    line with exactly that refname is "no ref", and anything but exit 0 is no answer."""
+    line with exactly that refname is "no ref", and anything but exit 0 is no answer.
+
+    GOTCHA: for-each-ref skips a broken loose ref (a file holding garbage) with exit 0, no line and
+    "warning: ignoring broken ref <ref>" on stderr, the shape of "no ref"; `rev-parse --verify`
+    failed on one instead. So no line plus anything on stderr is no answer, never "no ref"."""
     why = bad_rev(ref)
     if why:
         return None, why
@@ -113,6 +117,8 @@ def ref_commit(ref, cwd):
         if not full:
             return None, '%s points at a %s, not a commit: %s' % (ref, kind or 'object', why)
         return full, None
+    if r.err:
+        return None, 'git %s printed no line for it and said: %s' % (what, r.err[:200])
     return '', None
 
 

@@ -538,26 +538,33 @@ def for_each_ref(ctx, args):
             raise Unsupported('for-each-ref --%s' % k)
     repo = ctx.need_repo()
     fmt = opts.get('format', '%(objectname) %(objecttype)\t%(refname)')
-    for name, oid in _matching_refs(repo, pos):
+    broken = []
+    for name, oid in _matching_refs(repo, pos, broken):
         ctx.write(format_ref(repo, fmt, name, oid) + '\n')
+    for name in broken:
+        if _ref_matches(name, pos):
+            # git's ref-filter skips a broken ref with this warning and still exits 0. Real git
+            # warns for every broken ref its walk passes, which may be more than the patterns match.
+            ctx.warn('warning: ignoring broken ref %s\n' % name)
     return 0
 
 
-def _matching_refs(repo, patterns):
-    allrefs = _refs.list_refs(repo, 'refs/')
+def _matching_refs(repo, patterns, broken=None):
+    """[(name, oid)] of the refs `patterns` match (all when none); a broken one is appended to
+    `broken` when that is a list (refs.list_refs)."""
+    return [(n, oid) for n, oid in _refs.list_refs(repo, 'refs/', broken) if _ref_matches(n, patterns)]
+
+
+def _ref_matches(name, patterns):
     if not patterns:
-        return allrefs
-    out = []
+        return True
     from .ignore import wildmatch
-    for name, oid in allrefs:
-        for p in patterns:
-            if name == p or (name.startswith(p) and (p.endswith('/') or name[len(p)] == '/')):
-                out.append((name, oid))
-                break
-            if any(c in p for c in '*?[') and wildmatch(p, name, pathname=True):
-                out.append((name, oid))
-                break
-    return out
+    for p in patterns:
+        if name == p or (name.startswith(p) and (p.endswith('/') or name[len(p)] == '/')):
+            return True
+        if any(c in p for c in '*?[') and wildmatch(p, name, pathname=True):
+            return True
+    return False
 
 
 _ATOM = re.compile(r'%\(([^)]*)\)|%([0-9a-fA-F]{2})|%%')

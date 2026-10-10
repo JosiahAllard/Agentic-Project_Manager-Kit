@@ -426,7 +426,8 @@ class AncestryFailsClosed(AncestryCase):
         self.assertIn('cannot tell whether the branch holds', why)
 
 
-@real_git('a broken loose ref: git warns "ignoring broken ref"; the fake does not imitate it')
+@real_git('a broken loose ref: git warns "ignoring broken ref"; the fake imitates that only in '
+          'for-each-ref (kitlib/git/fake/refs.py BrokenRef)')
 class BrokenLocalStoreRef(AncestryCase):
     """AncestryFailsClosed, for a local store ref holding garbage."""
 

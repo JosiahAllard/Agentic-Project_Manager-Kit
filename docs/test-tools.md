@@ -186,7 +186,7 @@ Without the hold, the ancestry question is still read safely. kitlib/git/refs.py
 
 Other reads whose "no" was exit 1 with no output now ask in a form that exits 0 either way (KIT-GIT-EXIT1-ANSWERS):
 
-- kitlib/git/refs.py `ref_commit` asks `for-each-ref <ref>`, so a missing ref is exit 0 with no line. The backlog store (kitlib/backlog/store.py, at_landing.py), kitlib/pmdata/init.py and kitlib/worktree/remove.py `pulled_by` read refs this way.
+- kitlib/git/refs.py `ref_commit` asks `for-each-ref <ref>`, so a missing ref is exit 0 with no line. A broken loose ref (a file holding garbage) is also exit 0 with no line, but git warns "ignoring broken ref <ref>" on stderr, so no line with anything on stderr is no answer (tests/git/test_git.py `_Parity.test_a_broken_loose_ref_is_no_answer_and_its_siblings_still_answer`). The fake git imitates that warning in for-each-ref only (kitlib/git/fake/refs.py `BrokenRef`). The backlog store (kitlib/backlog/store.py, at_landing.py), kitlib/pmdata/init.py and kitlib/worktree/remove.py `pulled_by` read refs this way.
 - `refs.current_branch` asks `branch --show-current`, which prints nothing on a detached HEAD.
 - `refs.merge_base` confirms a "no common commit" by comparing the root commits each side reaches (`rev-list --max-parents=0`).
 - kitlib/pmdata/init.py reads config with `config --list -z` and filters it in Python.
