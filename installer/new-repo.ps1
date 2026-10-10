@@ -10,8 +10,8 @@
 #   <Target>\.kit.json            "repo".main_branch, "owner".email, "owner".agent_emails, and with
 #                                -Stack "gate": "tools/gate.json"
 #   <Target>\<tools_dir>\<n>.py   the kit tool stubs, by `tools\kit_stubs.py write -C <Target>`
-#   <Target>\.gitignore, .gitattributes   templates\common's lines (.claude/worktrees/ keeps the
-#                                agents' worktrees out of the main checkout's status) plus the
+#   <Target>\.gitignore, .gitattributes   templates\common's lines (.claude/worktrees/ and .codex/worktrees/
+#                                keep the agents' worktrees out of the main checkout's status) plus the
 #                                stack's gitignore/gitattributes lists. An existing file is never
 #                                overwritten: only the lines it lacks are appended.
 #   <Target>\docs\INDEX.md        a starter doc index (templates\common\INDEX.md), only if absent

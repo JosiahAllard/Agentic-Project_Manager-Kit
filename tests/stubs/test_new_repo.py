@@ -91,6 +91,7 @@ class NewRepo(unittest.TestCase):
         code, out = self.ps('-Apply')
         self.assertEqual(code, 0, out)
         self.assertIn('.claude/worktrees/', self.read('.gitignore').splitlines())
+        self.assertIn('.codex/worktrees/', self.read('.gitignore').splitlines())
         self.assertIn('* text=auto', self.read('.gitattributes').splitlines())
         self.assertIn('docs/INDEX.md', self.read('docs/INDEX.md'))
         for text in ('core.hooksPath', 'no gate step selected', 'gate.steps'):
@@ -104,6 +105,7 @@ class NewRepo(unittest.TestCase):
         lines = self.read('.gitignore').splitlines()
         self.assertEqual(lines[:2], ['build/', '.claude/worktrees/'])
         self.assertEqual(lines.count('.claude/worktrees/'), 1)
+        self.assertEqual(lines.count('.codex/worktrees/'), 1)
         self.assertIn('.claude/settings.local.json', lines)
         self.assertEqual(self.read('.gitattributes'), '*   text=auto\n*.sh text eol=lf\n')
         self.assertIn('unchanged', out)

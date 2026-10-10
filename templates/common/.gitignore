@@ -1,4 +1,5 @@
 # Agents work in worktrees under the main checkout; without this line the first one dirties
 # main and a landing refuses ("main checkout is not clean").
 .claude/worktrees/
+.codex/worktrees/
 .claude/settings.local.json
