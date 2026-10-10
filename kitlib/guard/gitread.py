@@ -17,12 +17,20 @@ def alias(cwd, name):
 
 
 def has_commit(cwd, sha):
-    """(True or False, None): whether the repository at `cwd` holds commit `sha`; (None, why) when
-    git does not start or answer."""
-    r = cmd.call(['cat-file', '-e', '%s^{commit}' % sha], cwd)
+    """(True or False, None): whether the repository at `cwd` holds commit `sha`, asked with
+    `git rev-parse --verify --quiet <sha>^{commit}` and GIT_NO_LAZY_FETCH=1 (a partial clone does
+    not fetch it to answer): exit 0 holds it, exit 1 does not. (None, why) for any other answer
+    (128, a timeout, git not started): the rules fail closed on it."""
+    env = cmd.scrubbed_env()
+    env['GIT_NO_LAZY_FETCH'] = '1'
+    r = cmd.call(['rev-parse', '--verify', '--quiet', '%s^{commit}' % sha], cwd, env=env)
+    if r.rc == 0:
+        return True, None
+    if r.rc == 1:
+        return False, None
     if r.rc is None:
         return None, r.err
-    return r.rc == 0, None
+    return None, r.err or 'git rev-parse --verify %s^{commit} exited %s' % (sha, r.rc)
 
 
 def is_shallow(cwd):

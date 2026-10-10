@@ -233,8 +233,15 @@ def check(event, ctx, text, cwd, role, parsed):
                             'cannot place; run the git in its own call.%s' % (why, PLAIN), plain(parsed, text))
     owner = rules.is_owner_session(event, ctx)
     for c in parsed.commands:
-        hidden = runs_hidden(cm.invocation(c))
+        inv = cm.invocation(c)
+        hidden = runs_hidden(inv)
         if not hidden:
+            continue
+        if cm.call_subexpr(inv):
+            # `& (...)`: judged only where PM data is (rules.call_subexpr_pmdata), never unreadable
+            d = rules.call_subexpr_pmdata(event, ctx, c, inv, cwd, role)
+            if d:
+                return rules.Decision(d.kind, d.rule, '%s %s' % (why, d.reason))
             continue
         if main_like(ctx, c.cwd):
             return rules.refuse('unreadable', role, '%s It runs %s in a main checkout or a place git cannot '

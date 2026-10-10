@@ -21,6 +21,7 @@ a constructor argument, and the defaults read this machine.
                      linked worktree whose repository's record or HEAD does not; else None. The
                      rules then deny the subagent write (fail closed).
   pm_data_named()    the machine config names pm_data (or cannot be read)
+  pm_data_path()     the machine config's pm_data.path, or None
   pm_root()          the root commit in the record of the machine config's pm_data repository
                      ((None, None) when it names none or that repository has no record;
                      (None, why) when either cannot be read)
@@ -187,6 +188,11 @@ class Ctx(object):
         """True when the machine config names pm_data, or cannot be read (fail closed)."""
         settings, why = self._pm_machine()
         return bool(settings) or bool(why)
+
+    def pm_data_path(self):
+        """The machine config's pm_data.path, or None (none named, or it cannot be read)."""
+        settings, _why = self._pm_machine()
+        return settings['path'] if settings else None
 
     def pm_root(self):
         """The machine's PM data record as (root sha, None); (None, None) when the machine config

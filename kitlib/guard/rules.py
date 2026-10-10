@@ -1633,7 +1633,7 @@ def git_alias(cmd, gc, role):
 
 
 def git_rules(event, ctx, cmd, inv, cwd, role):
-    d = git_send_pack_pmdata(event, ctx, inv, role)
+    d = git_send_pack_pmdata(event, ctx, inv, role) or call_subexpr_pmdata(event, ctx, cmd, inv, cwd, role)
     if d:
         return d
     gc = cm.git_call(inv)
@@ -2034,6 +2034,30 @@ def pmdata_recorded(ctx, path):
     return os.path.exists(os.path.join(place.common, pmdata.FILE_NAME))
 
 
+def pmdata_possible(ctx, path):
+    """pmdata_recorded, except that a directory the text cannot tell (None) counts only when the
+    machine config names pm_data (or cannot be read): with none named, an unknown directory is
+    no ground to deny a command that is not a push."""
+    return pmdata_recorded(ctx, path) if path else ctx.pm_data_named()
+
+
+def call_subexpr_pmdata(event, ctx, cmd, inv, cwd, role):
+    """PowerShell's call operator on a ( ) subexpression (`& (Get-Command git) push`,
+    commands.call_subexpr) in a repository with a PM data record, in every session but the
+    owner's own (rule git-push-pmdata): the program is what the ( ) computes, which may be git
+    push --no-verify. Elsewhere the line is read as any other (not unreadable)."""
+    if not cm.call_subexpr(inv) or is_owner_session(event, ctx):
+        return None
+    where = cmd.cwd
+    if not pmdata_possible(ctx, where):
+        return None
+    return refuse('git-push-pmdata', role, '`& %s` runs the program a PowerShell subexpression computes, and this '
+                  'repository has %s (or the guard cannot tell): it may be git push --no-verify, which skips the '
+                  'pre-push hook that keeps PM data off public remotes. Name the program literally:'
+                  % (inv.path, pmdata.FILE_NAME),
+                  ('& <program> %s' % ' '.join(w.text for w in inv.args)).rstrip())
+
+
 def _no_verify_word(word):
     t = word.text
     return t.startswith('--') and 'no-verify' in _canon_long('push', t[2:].partition('=')[0])
@@ -2145,7 +2169,9 @@ def data_copy(event, ctx, where, role, what):
     is shallow (it may hold data commits without their root), when the machine config names
     pm_data, in every session but the owner's own: no pre-push leak stage judges it, as the
     record is not there and core.hooksPath is set per repository (docs/pm-data-branch.md
-    "Failure modes"). A check git cannot answer denies too (fail closed)."""
+    "Failure modes"). A check git cannot answer denies too (fail closed), and so does a machine
+    record the guard cannot read: while the data worktree folder is deleted, every such push is
+    denied until pm_data.py init --adopt re-adds it."""
     if is_owner_session(event, ctx) or not where:
         return None
     if ctx.place(where).kind not in (repo.MAIN, repo.LINKED):
@@ -2153,11 +2179,17 @@ def data_copy(event, ctx, where, role, what):
     root, why = ctx.pm_root()
     if root is None and why is None:
         return None                             # the machine config names no pm_data
+    if root is None:
+        path = ctx.pm_data_path()
+        return refuse('git-push-pmdata', role, '%s: the repository %s has no %s of its own, and the guard cannot read '
+                      'the machine\'s PM data record to tell whether it holds PM data (%s), so it fails closed. When '
+                      'the data worktree folder was deleted (docs/pm-data-branch.md "Failure modes"), pm_data.py init '
+                      '--adopt re-adds it; run from the kit checkout:' % (what, fwd(where), pmdata.FILE_NAME, why),
+                      'python tools/pm_data.py init --adopt --path %s' % (quote(path) if path else '"<pm_data.path>"'))
     found = None
-    if why is None:
-        held, why = ctx.gitread.has_commit(where, root)
-        if why is None and held:
-            found = 'holds the PM data root commit %s' % root[:12]
+    held, why = ctx.gitread.has_commit(where, root)
+    if why is None and held:
+        found = 'holds the PM data root commit %s' % root[:12]
     if why is None and found is None:
         shallow, why = ctx.gitread.is_shallow(where)
         if why is None and shallow:
@@ -2198,14 +2230,21 @@ GIT_BUILTINS = frozenset((
 ALIAS_DEPTH = 10
 
 
+# the characters alias words are split by: git 2.55 splits a quoted alias value at a space, tab or
+# CR (observed: "rev-parse<c>--git-dir" runs for those, and is "not a git command" for VT and FF).
+# VT and FF are split here too: a word holding one is no git command or option git accepts, so
+# splitting it can only make the guard judge more, never less
+ALIAS_BLANKS = ' \t\n\v\f\r'
+
+
 def split_alias(text):
-    """The words of an alias value as git splits them (split_cmdline): blanks separate, '...' and
-    "..." group, a backslash outside '...' takes the next character as it is. None for an
-    unclosed quote or a trailing backslash."""
+    """The words of an alias value as git splits them (split_cmdline): ALIAS_BLANKS separate,
+    '...' and "..." group, a backslash outside '...' takes the next character as it is. None for
+    an unclosed quote or a trailing backslash."""
     words, cur, have, q, i = [], [], False, None, 0
     while i < len(text):
         c = text[i]
-        if q is None and c in ' \t\n':
+        if q is None and c in ALIAS_BLANKS:
             if have:
                 words.append(''.join(cur))
                 cur, have = [], False
@@ -2231,19 +2270,44 @@ def split_alias(text):
 
 
 def git_alias_config(event, ctx, gc, role):
-    """A git subcommand that is not a git builtin, in a repository with a PM data record (or one
-    the text cannot place), in every session but the owner's own: git runs the alias its config
-    gives the name (alias.<name>), so the expansion is judged as the command it runs (a push, a
-    hook-skipping transport, a remote rewrite, another alias). A shell alias (!...), one that
-    starts with an option or cannot be split, a chain deeper than ALIAS_DEPTH, and a config git
-    cannot read are denied (git-push-pmdata): the guard cannot judge them. A name with no alias
-    is left to git (its own error, or a git-<name> program)."""
+    """A git subcommand that is not a git builtin, in a repository with a PM data record, or in
+    any repository when the machine config names pm_data (a copy of the data has no record: its
+    push is judged by data_copy), in every session but the owner's own: git runs the alias its
+    config gives the name (alias.<name>), so the expansion is judged as the command it runs (a
+    push, a hook-skipping transport, a remote rewrite, a core.hooksPath change, another alias).
+    The guard reads the alias with its own environment, so a line that sets a HOME_ENV_NAMES
+    variable, or a call with -c or --config-env (include.path may add any alias), is not
+    judged by that read. Those, a shell alias (!...), one that starts with an option or cannot be
+    split, a chain deeper than ALIAS_DEPTH, a config git cannot read, and a directory the text
+    cannot tell are denied (git-push-pmdata): the guard cannot judge them. In a repository
+    without a record, those count only when data_copy would deny its push. A directory the text
+    cannot tell counts only when the machine config names pm_data or the call's own directory
+    has a record. A name with no alias is left to git (its own error, or a git-<name> program)."""
     if gc.sub_dyn or not gc.sub or gc.sub in GIT_BUILTINS or hookless_sub(gc.sub) or is_owner_session(event, ctx):
         return None
     where = None if gc.unknown else gc.dir
-    if not pmdata_recorded(ctx, where):
+    if where is None:
+        here = gc.inv.cmd.cwd if gc.inv is not None else None
+        if not (ctx.pm_data_named() or (here and pmdata_recorded(ctx, here))):
+            return None
+    elif not (pmdata_recorded(ctx, where) or ctx.pm_data_named()):
         return None
+    moved = _alias_config_moved(gc)
+    if moved:
+        return _alias_unjudged(event, ctx, gc, role, where, [], moved)
     return _alias_judged(event, ctx, gc, role, where, [])
+
+
+def _alias_config_moved(gc):
+    """Why git may read alias.<gc.sub> from config the guard's own read does not see, or None."""
+    home = gc.inv.cmd.home_env if gc.inv is not None else False
+    if home:
+        return 'the line sets %s, so git reads the user config of another folder, which the guard does not' % home
+    configs = git_prefix_configs(gc) if gc.inv is not None else []
+    if configs:
+        return ('the call passes -c or --config-env (%s), which can add config (include.path) the guard does not '
+                'read' % ', '.join(k for k, _v, _f, _l in configs))
+    return None
 
 
 def _alias_refusal(gc, role, where, chain, why):
@@ -2253,23 +2317,32 @@ def _alias_refusal(gc, role, where, chain, why):
                   'git -C %s <subcommand> <arguments>' % (quote(where) if where else '"<checkout>"'))
 
 
+def _alias_unjudged(event, ctx, gc, role, where, chain, why):
+    """An alias the guard cannot judge: denied in a repository with a PM data record (or one the
+    text cannot tell); in one without, only when data_copy would deny its push."""
+    if where is not None and not pmdata_recorded(ctx, where):
+        return data_copy(event, ctx, where, role, '`git %s` runs a git alias the guard cannot judge (%s)' % (gc.sub, why))
+    return _alias_refusal(gc, role, where, chain, why)
+
+
 def _alias_judged(event, ctx, gc, role, where, chain):
     if where is None:
-        return _alias_refusal(gc, role, where, chain, 'the guard cannot tell the repository whose config holds it')
+        return _alias_unjudged(event, ctx, gc, role, where, chain,
+                               'the guard cannot tell the repository whose config holds it')
     val, why = ctx.gitread.alias(where, gc.sub)
     if why:
-        return _alias_refusal(gc, role, where, chain, 'its config cannot be read (%s)' % why)
+        return _alias_unjudged(event, ctx, gc, role, where, chain, 'its config cannot be read (%s)' % why)
     if val is None:
         return None                             # no alias: git's own error, or a git-<name> program
     chain = chain + ['alias.%s=%s' % (gc.sub, val)]
     if len(chain) > ALIAS_DEPTH:
-        return _alias_refusal(gc, role, where, chain[:2], 'the aliases nest deeper than %d' % ALIAS_DEPTH)
+        return _alias_unjudged(event, ctx, gc, role, where, chain[:2], 'the aliases nest deeper than %d' % ALIAS_DEPTH)
     if val.startswith('!'):
-        return _alias_refusal(gc, role, where, chain, 'it runs a shell command')
+        return _alias_unjudged(event, ctx, gc, role, where, chain, 'it runs a shell command')
     words = split_alias(val)
     if not words or words[0].startswith('-'):
-        return _alias_refusal(gc, role, where, chain, 'it starts with an option or cannot be split' if words else
-                              'it cannot be split')
+        return _alias_unjudged(event, ctx, gc, role, where, chain, 'it starts with an option or cannot be split'
+                               if words else 'it cannot be split')
     rest = [sh.Word(t, False, None, None) for t in words[1:]] + list(gc.rest)
     sub = cm.GitCall(gc.dir, words[0], rest, gc.inv, gc.unknown, None, False, gc.blind)
     if hookless_sub(sub.sub):
@@ -2278,6 +2351,8 @@ def _alias_judged(event, ctx, gc, role, where, chain):
         d = git_push(event, ctx, sub, role)
     elif sub.sub in ('remote', 'config'):
         d = git_remote_rewrite(event, ctx, sub, role)
+        if d is None and sub.sub == 'config':
+            d = hooks_config_write(ctx, sub, role, 'git config %s' % ' '.join(sub.argv))
     elif sub.sub not in GIT_BUILTINS:
         d = _alias_judged(event, ctx, sub, role, where, chain)
     else:
@@ -2290,8 +2365,6 @@ def _alias_judged(event, ctx, gc, role, where, chain):
 # ---------------------------------------------------------------- remotes repointed
 
 REMOTE_REWRITE_VERBS = ('set-url', 'add', 'rename', 'remove', 'rm')
-CONFIG_SECTION_OPTS = ('--remove-section', '--rename-section')
-CONFIG_EDIT_OPTS = ('--edit', '-e')
 
 
 def remote_rewrite_key(name):
@@ -2304,33 +2377,18 @@ def remote_rewrite_key(name):
 
 def config_rewrite(gc):
     """(what, files, scope_all) when a `git config` call writes a key or section
-    remote_rewrite_key names (a computed one counts) or opens a config in an editor, else None.
+    remote_rewrite_key names, opens a config in an editor, or has a positional word computed at
+    run time (git config $K, PowerShell's git config @a: it may be any write), else None.
+    Options are read as git reads them (config_args: --glo, --fil <path>, -f<path>, --ed).
     `files`: the Words of its -f/--file paths; `scope_all`: --global or --system."""
-    opts, pos, files = [], [], []
-    args = gc.rest
-    k = 0
-    while k < len(args):
-        w = args[k]
-        t = w.text
-        if t == '--':
-            pos.extend(args[k + 1:])
-            break
-        if t.startswith('-') and len(t) > 1 and not w.dyn:
-            name, eq, val = t.partition('=')
-            opts.append(name)
-            if name in CONFIG_FILE_OPTS:
-                if eq:
-                    files.append(sh.Word(val, w.dyn, w.start, w.end))
-                elif k + 1 < len(args):
-                    files.append(args[k + 1])
-            k += 2 if (name in CONFIG_VALUE_OPTS and not eq) else 1
-            continue
-        pos.append(w)
-        k += 1
-    scope_all = any(o in ('--global', '--system') for o in opts)
-    if any(o in CONFIG_EDIT_OPTS for o in opts) or (pos and not pos[0].dyn and pos[0].text == 'edit'):
+    names, sure, pos, files = config_args(gc)
+    scope_all = bool({'global', 'system'} & names)
+    if 'edit' in names or (pos and not pos[0].dyn and pos[0].text == 'edit'):
         return 'opens a config file in an editor, where any remote can be changed', files, scope_all
-    if any(o in CONFIG_READ_OPTS for o in opts) or not pos:
+    computed = next((w for w in pos if w.dyn), None)
+    if computed is not None:
+        return 'has a word computed at run time (%s), which may write any key' % computed.text, files, scope_all
+    if sure & CONFIG_READS or not pos:
         return None
     verb = pos[0].text
     if verb in ('get', 'list'):
@@ -2339,14 +2397,14 @@ def config_rewrite(gc):
         keys = pos[1:2]
     elif verb in ('rename-section', 'remove-section'):
         keys = pos[1:3]
-    elif any(o in CONFIG_SECTION_OPTS for o in opts):
+    elif names & CONFIG_SECTIONS:
         keys = pos[:2]
-    elif any(o in CONFIG_WRITE_OPTS for o in opts) or len(pos) > 1:
+    elif names & CONFIG_WRITES or len(pos) > 1:
         keys = pos[:1]
     else:
         return None
     for w in keys:
-        if w.dyn or remote_rewrite_key(w.text):
+        if remote_rewrite_key(w.text):
             return 'writes %s' % w.text, files, scope_all
     return None
 
@@ -2376,10 +2434,11 @@ def machine_pm_data(ctx):
 
 
 def _remote_verb(gc):
-    """The git remote verb that repoints a remote (REMOTE_REWRITE_VERBS), a computed one too,
-    or None."""
+    """The git remote verb that repoints a remote (REMOTE_REWRITE_VERBS), a computed one too (a
+    PowerShell splat @a among them), or None."""
+    ps = gc.inv is not None and gc.inv.cmd.shell == sh.PS
     for w in gc.rest:
-        if w.dyn:
+        if w.dyn or (ps and w.start is not None and cm.PS_SPLAT_RE.match(w.text) and not cm.quoted(gc.inv.cmd, w)):
             return w.text
         if w.text.startswith('-'):
             continue
@@ -2841,9 +2900,6 @@ env_assignments = cm.env_assignments
 # ---------------------------------------------------------------- core.hooksPath
 
 HOOKS_KEY = 'core.hookspath'
-CONFIG_VALUE_OPTS = ('--file', '-f', '--blob', '--type', '--default', '--value', '--comment')
-CONFIG_FILE_OPTS = ('--file', '-f')
-CONFIG_WRITE_OPTS = ('--unset', '--unset-all', '--replace-all', '--add')
 CONFIG_READ_OPTS = ('--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool',
                     '-l', '--list')
 # the only options config may carry where a strict read is wanted (strict_read_opts)
@@ -2875,28 +2931,107 @@ def repo_config_file(text):
     return '.git' in parts[:-1] or (len(parts) >= 3 and parts[-3:-1] == ['.config', 'git'])
 
 
-def git_config_call(gc):
-    """(key, value Word or None, writes) of a `git config` call on a config git reads, or None (no
-    key, --blob, or --file names a file git does not read). A --file the text does not name (a
-    variable, a substitution) counts as one git reads: fail closed."""
-    opts, pos = [], []
+# git config's long options (git 2.55, the legacy form's and its subcommands' together), so an
+# abbreviation git accepts (--glo, --fil, --ed) is read as git reads it; those that take a value;
+# its short options by the long one each stands for (-f and -t take a value)
+CONFIG_LONGS = ('global', 'system', 'local', 'worktree', 'file', 'blob', 'get', 'get-all', 'get-regexp',
+                'get-urlmatch', 'replace-all', 'add', 'unset', 'unset-all', 'rename-section', 'remove-section',
+                'list', 'fixed-value', 'edit', 'get-color', 'get-colorbool', 'type', 'no-type', 'bool', 'int',
+                'bool-or-int', 'bool-or-str', 'path', 'expiry-date', 'null', 'name-only', 'includes', 'show-origin',
+                'show-scope', 'show-names', 'default', 'comment', 'all', 'regexp', 'value', 'url', 'append')
+CONFIG_LONG_VALUES = ('file', 'blob', 'type', 'default', 'comment', 'value', 'url')
+CONFIG_SHORTS = {'f': 'file', 't': 'type', 'l': 'list', 'e': 'edit', 'z': 'null'}
+CONFIG_READS = frozenset(('get', 'get-all', 'get-regexp', 'get-urlmatch', 'get-color', 'get-colorbool', 'list'))
+CONFIG_WRITES = frozenset(('unset', 'unset-all', 'replace-all', 'add'))
+CONFIG_SECTIONS = frozenset(('remove-section', 'rename-section'))
+
+
+def _config_long(body):
+    """The git config long options `--body` selects: itself when exact or unknown, the one it
+    abbreviates (a --no-<name> negation too, as no-<name>), or every one it could abbreviate (git
+    refuses an ambiguous prefix)."""
+    if body in CONFIG_LONGS or len(body) < 1:
+        return [body]
+    hits = [n for n in CONFIG_LONGS if n.startswith(body)]
+    if body.startswith('no-'):
+        hits += ['no-' + n for n in CONFIG_LONGS if n.startswith(body[3:])]
+    out = []
+    for n in hits:
+        if n not in out:
+            out.append(n)
+    return out or [body]
+
+
+def config_args(gc, dyn_opts=False):
+    """(names, sure, pos, files) of a `git config` call's arguments, read as git reads them:
+    `names` every long option name a word may select (an abbreviation as the option it
+    abbreviates, an ambiguous one as each, a short one by its long name, -f<path> split), `sure`
+    the names a word selects alone, `pos` the positional Words, `files` the Words its -f/--file
+    options name. A computed word (a PowerShell splat @a too, which may stand for any words) is
+    positional, unless `dyn_opts` and it starts with '-' (then an option whose name is unknown)."""
+    names, sure, pos, files = set(), set(), [], []
     args = gc.rest
+    ps = gc.inv is not None and gc.inv.cmd.shell == sh.PS
     k = 0
     while k < len(args):
-        t = args[k].text
-        if t.startswith('-'):
-            name = t.split('=', 1)[0]
-            opts.append(name)
-            if name in CONFIG_FILE_OPTS:
-                w = args[k] if '=' in t else (args[k + 1] if k + 1 < len(args) else None)
-                path = t.split('=', 1)[1] if '=' in t else (w.text if w is not None else '')
-                if not (w is not None and w.dyn) and not repo_config_file(path):
-                    return None                  # a file git does not read
-            k += 2 if t in CONFIG_VALUE_OPTS else 1
-            continue
-        pos.append(args[k])
+        w = args[k]
+        t = w.text
+        if ps and not w.dyn and w.start is not None and cm.PS_SPLAT_RE.match(t) and not cm.quoted(gc.inv.cmd, w):
+            w = sh.Word(t, True, w.start, w.end)
+        if t == '--':
+            pos.extend(args[k + 1:])
+            break
         k += 1
-    if not pos or '--blob' in opts:
+        if not t.startswith('-') or len(t) < 2 or (w.dyn and not dyn_opts):
+            pos.append(w)
+            continue
+        if w.dyn:
+            names.add(t)
+            continue
+        if t.startswith('--'):
+            body, eq, val = t[2:].partition('=')
+            hits = _config_long(body)
+            names.update(hits)
+            if len(hits) != 1:
+                continue
+            sure.add(hits[0])
+            if hits[0] not in CONFIG_LONG_VALUES:
+                continue
+            if eq:
+                value = sh.Word(val, w.dyn, w.start, w.end)
+            else:
+                value = args[k] if k < len(args) else None
+                k += 1
+            if hits[0] == 'file' and value is not None:
+                files.append(value)
+            continue
+        body = t[1:]
+        for j, c in enumerate(body):
+            name = CONFIG_SHORTS.get(c, '-' + c)
+            names.add(name)
+            sure.add(name)
+            if c not in 'ft':
+                continue
+            if body[j + 1:]:
+                value = sh.Word(body[j + 1:], w.dyn, w.start, w.end)
+            else:
+                value = args[k] if k < len(args) else None
+                k += 1
+            if c == 'f' and value is not None:
+                files.append(value)
+            break
+    return names, sure, pos, files
+
+
+def git_config_call(gc):
+    """(key, value Word or None, writes) of a `git config` call on a config git reads, or None (no
+    key, --blob, or --file names a file git does not read). Options are read as git reads them
+    (config_args: --fil <path>, -f<path>, --glo). A --file the text does not name (a variable, a
+    substitution) counts as one git reads: fail closed."""
+    names, sure, pos, files = config_args(gc, dyn_opts=True)
+    if any(not f.dyn and not repo_config_file(f.text) for f in files):
+        return None                             # a file git does not read
+    if not pos or 'blob' in sure:
         return None
     verb = pos[0].text
     if verb in ('get', 'list'):
@@ -2905,9 +3040,9 @@ def git_config_call(gc):
         if len(pos) < 2:
             return None
         return pos[1].text.lower(), (pos[2] if len(pos) > 2 else None), True
-    if any(o in CONFIG_READ_OPTS for o in opts):
+    if sure & CONFIG_READS:
         return verb.lower(), None, False
-    writes = any(o in CONFIG_WRITE_OPTS for o in opts) or len(pos) > 1
+    writes = bool(names & CONFIG_WRITES) or len(pos) > 1
     return verb.lower(), (pos[1] if len(pos) > 1 else None), writes
 
 
@@ -2972,19 +3107,23 @@ def clone_configs(gc):
 
 
 def _config_files(gc):
-    """The paths a `git config` call names with -f/--file."""
-    a, out = gc.rest, []
-    for k, w in enumerate(a):
-        if w.text in CONFIG_FILE_OPTS and k + 1 < len(a):
-            out.append(a[k + 1].text)
-        elif w.text.startswith('--file='):
-            out.append(w.text.split('=', 1)[1])
-    return out
+    """The paths a `git config` call names with -f/--file (config_args: --fil, -f<path> too)."""
+    return [w.text for w in config_args(gc, dyn_opts=True)[3]]
+
+
+def _config_scope_all(gc):
+    """True when a git call names --global or --system; for `git config`, in any spelling git
+    accepts (config_args: --glo, --sys)."""
+    if gc.sub == 'config':
+        return bool({'global', 'system'} & config_args(gc, dyn_opts=True)[0])
+    return any(w.text in ('--global', '--system') for w in gc.rest)
 
 
 # The variables git reads config settings from: GIT_CONFIG_PARAMETERS ('key'='value' ...) and
 # GIT_CONFIG_KEY_<n> (with GIT_CONFIG_VALUE_<n>).
 HOOKS_ENV = r'GIT_CONFIG_PARAMETERS|GIT_CONFIG_KEY_\d+'
+HOOKS_WHY = ('core.hooksPath picks the folder git runs hooks from, the kit\'s pre-push checks among them; the owner '
+             'sets it at install.')
 
 
 def git_hooks_path(event, ctx, cmd, inv, cwd, role):
@@ -2992,9 +3131,9 @@ def git_hooks_path(event, ctx, cmd, inv, cwd, role):
     git -c, git --config-env, git clone -c; GIT_CONFIG_PARAMETERS or GIT_CONFIG_KEY_<n>), in any
     session: it switches the repository's hooks off or elsewhere. Setting it to the kit's own
     githooks (the install step), and repositories under the temp folder (not --global or
-    --system), are left alone."""
-    why = ('core.hooksPath picks the folder git runs hooks from, the kit\'s pre-push checks among them; the owner '
-           'sets it at install.')
+    --system), are left alone. A git alias that runs `config` is judged the same way where
+    git_alias_config expands it (hooks_config_write)."""
+    why = HOOKS_WHY
     for name, val in env_assignments(cmd, HOOKS_ENV):
         if HOOKS_KEY in val.lower():
             where = quote(cmd.cwd or cwd) if (cmd.cwd or cwd) else '"<checkout>"'
@@ -3004,8 +3143,7 @@ def git_hooks_path(event, ctx, cmd, inv, cwd, role):
     gc = cm.git_call(inv)
     if gc is None:
         return None
-    scope_all = any(w.text in ('--global', '--system') for w in gc.rest)
-    if _under_temp(ctx, gc.dir) and not scope_all:
+    if _under_temp(ctx, gc.dir) and not _config_scope_all(gc):
         return None
     configs = git_prefix_configs(gc) + (clone_configs(gc) if gc.sub == 'clone' else [])
     for key, val, first, last in configs:
@@ -3014,6 +3152,15 @@ def git_hooks_path(event, ctx, cmd, inv, cwd, role):
                           'repository\'s hooks. %s Run it without the setting:' %
                           (bare(cmd), val, why), _without(cmd, first, last))
     if gc.sub != 'config':
+        return None
+    return hooks_config_write(ctx, gc, role, bare(cmd))
+
+
+def hooks_config_write(ctx, gc, role, shown):
+    """git_hooks_path's judgement of a `git config` call `gc` (shown as `shown`): a write of
+    core.hooksPath to a config git reads, other than the kit's own githooks; a repository under
+    the temp folder (not --global or --system), and -f on a config under it, are left alone."""
+    if _under_temp(ctx, gc.dir) and not _config_scope_all(gc):
         return None
     if any(_under_temp(ctx, os.path.dirname(sh.resolve_path(f, gc.dir) or '')) for f in _config_files(gc)):
         return None                              # -f on a scratch repository's config under temp
@@ -3027,7 +3174,7 @@ def git_hooks_path(event, ctx, cmd, inv, cwd, role):
         return None
     where = quote(gc.dir) if gc.dir else '"<checkout>"'
     return refuse('git-hooks-path', role, '`%s` changes core.hooksPath. %s Ask the owner (through the PM) when it '
-                  'needs to change. To see it:' % (bare(cmd), why), 'git -C %s config --get core.hooksPath' % where)
+                  'needs to change. To see it:' % (shown, HOOKS_WHY), 'git -C %s config --get core.hooksPath' % where)
 
 
 # ---------------------------------------------------------------- kill by process name
