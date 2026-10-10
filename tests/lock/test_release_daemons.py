@@ -323,10 +323,14 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
         """(daemon, client or 0, plain or 0) SHARED wrote once a client connected."""
         out = os.path.join(self.tmp, "shared.txt")
         end = time.time() + timeout
-        while not os.path.exists(out) and time.time() < end:
-            time.sleep(0.05)
-        with open(out) as f:
-            return tuple(int(x) for x in f.read().split())
+        while True:
+            try:                            # mid-rename, Windows may refuse the open for a moment
+                with open(out) as f:
+                    return tuple(int(x) for x in f.read().split())
+            except (FileNotFoundError, PermissionError):
+                if time.time() >= end:
+                    raise
+                time.sleep(0.05)
 
     def errored(self, s, p):
         """The gate's block raises once its command exits, as a gate whose step raised: the slot
@@ -453,6 +457,20 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
         self.assertNotIn((plain, later[plain]), ended,
                          "a pass ended a process created after it read the job")
         self.spared(daemon, plain, c.pid)
+
+    def test_a_daemon_whose_judgement_raised_is_spared_and_not_called_left(self):
+        """daemons.stop raised (it may have ended some daemons first): each daemon found is
+        recorded "not judged", never "left", and spared while it runs; the rest is ended."""
+        self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain")
+        with mock.patch.object(rm.daemons, "stop", side_effect=RuntimeError("boom")):
+            self.errored(s, p)
+        daemon, _, plain = self.shared_pids()
+        cts = self.recorded()
+        self.assertTrue(self.wait_gone(plain, cts[plain]), "a plain leftover outlived the kill")
+        self.assertTrue(process.alive(daemon, cts[daemon]), "the unjudged daemon was ended")
+        self.assertEqual(self.results(),
+                         [(daemon, "gradle-daemon", "not judged (RuntimeError: boom)")])
 
     def test_an_errored_gate_ends_a_daemon_only_its_own_client_uses(self):
         """Control: a daemon serving the run's own client dies on the kill path as it always

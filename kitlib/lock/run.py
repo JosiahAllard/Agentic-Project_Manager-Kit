@@ -18,6 +18,7 @@ for it. A run that inherits everything takes no queue place; its commands run in
 in its parent's (still measured and ended as a tree).
 """
 import contextlib
+import ctypes
 import datetime
 import json
 import math
@@ -38,7 +39,7 @@ from kitlib.lock import site
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_TIMEOUT,
                                EXIT_USAGE, SESSION_ENV, LockError, Store, caller, iso, local_text,
                                new_id, parse_iso, read_json, remove, tree_role, utc_now, write_json)
-from kitlib.proc import bash, cpu, daemons, process
+from kitlib.proc import bash, cpu, daemons, process, win32
 from kitlib.proc.job import Job, JobError, cores_text
 
 POOLS, PICK = lay.POOLS, qm.PICK
@@ -54,6 +55,8 @@ KILL_HOW = ("interrupted", "cancelled", "error")
 # Slot.end_tree, when it spares a shared daemon: how many passes it ends the job's other
 # processes in, and how long it waits after each for them to leave the job.
 END_PASSES, END_PASS_S = 10, 0.1
+# Slot.end_tree's result for a daemon when daemons.stop raised (it may have ended some first).
+NOT_JUDGED = "not judged "
 # What a `docker exec` run holding no gpu slot gets, so the process in the container keeps
 # off the gpus the lock gave other runs (the job cannot reach into the container).
 DOCKER_CPU_ENV = (("CUDA_VISIBLE_DEVICES", ""), ("JAX_PLATFORMS", "cpu"))
@@ -68,6 +71,17 @@ def wait_text(wait_s):
 
 def child_code(code):
     return code - (1 << 32) if code > 0x7FFFFFFF else code     # NTSTATUS exit codes
+
+
+def filetime_now():
+    """The system time now as a FILETIME count (100 ns units since 1601), as
+    GetSystemTimeAsFileTime reads it. Slot._end_others compares process creation times
+    (kitlib.proc.process times) with it. That a process created after this call never has an
+    earlier creation time rests on Windows stamping creation times from this same system clock:
+    inferred from the documented clocks, not measured, and void if the clock is set back."""
+    ft = win32.FILETIME()
+    win32.K32.GetSystemTimeAsFileTime(ctypes.byref(ft))
+    return ft.value()
 
 
 # ------------------------------------------------------------------ nesting
@@ -835,6 +849,9 @@ class Slot:
             if res.startswith("left: "):
                 self.store.say("run %s: left the %s (pid %d) running: %s"
                                % (self.id, label, pid, res[len("left: "):]))
+            elif res.startswith(NOT_JUDGED):
+                self.store.say("WARNING: run %s: the %s (pid %d) was %s; its tree is spared if it "
+                               "still runs" % (self.id, label, pid, res))
             else:
                 self.store.say("run %s: stopped the %s (pid %d) it left: %s"
                                % (self.id, label, pid, res))
@@ -852,13 +869,25 @@ class Slot:
         serving only this job is ended, as the kill always did) and the rest are ended one by one.
 
         Nothing found, or nothing left: TerminateJobObject, as before. The job's processes or
-        the daemons unreadable: TerminateJobObject (fail closed: the run's tree surely ends). A
-        daemon whose judgement raised is spared. Otherwise, in up to END_PASSES passes, every
-        job process outside the spared trees (each left daemon, at its creation time, with its
-        descendants, read again each pass so a worker it starts is spared too) is ended by
-        terminate_verified, oldest first so a parent cannot start more. One still there after
-        the last pass is said, and runs on once release unpins the job. Sets self.spared;
-        release then closes the job without killing it. Never raises."""
+        the daemons unreadable: TerminateJobObject (fail closed: the run's tree surely ends).
+        When daemons.stop raises, every daemon found is "not judged" (stop may have ended some)
+        and each one still running at its creation time is spared. Otherwise, in up to
+        END_PASSES passes (_end_others), every job process outside the spared trees (each left
+        daemon, at its creation time, with its descendants, read again each pass so a worker it
+        starts is spared too) is ended by terminate_verified, oldest first so a parent cannot
+        start more. One still there after the last pass is said, and runs on once release
+        unpins the job. Sets self.spared; release then closes the job without killing it.
+
+        Raises nothing but what is not an Exception: a KeyboardInterrupt (a second Ctrl+C) goes
+        up with tree_ended and spared cleared, so the release that follows ends the tree again,
+        and a release whose own end_tree it interrupts ends the whole job."""
+        try:
+            self._end_tree()
+        except BaseException:               # a second Ctrl+C: release ends the tree again
+            self.tree_ended = self.spared = False
+            raise
+
+    def _end_tree(self):
         job, self.tree_ended, self.spared = self.job, True, False
         if job is None or job.h is None:
             return
@@ -873,11 +902,12 @@ class Slot:
             return
         try:
             done = daemons.stop(found, job.contains)
-        except Exception as e:              # noqa: BLE001 - cannot judge: spare them all
-            done = [(pid, label, "left: it could not be judged (%s: %s)" % (type(e).__name__, e))
+        except Exception as e:              # noqa: BLE001 - cannot judge: spare what still runs
+            # stop may have ended some before it raised: none is said to be left running.
+            done = [(pid, label, "%s(%s: %s)" % (NOT_JUDGED, type(e).__name__, e))
                     for pid, _ct, label in found]
         self.tell_daemons(done)
-        left = {pid for pid, _label, res in done if res.startswith("left: ")}
+        left = {pid for pid, _label, res in done if res.startswith(("left: ", NOT_JUDGED))}
         kept = [(pid, ct) for pid, ct, _label in found if pid in left]
         if not kept:
             job.terminate(1)
@@ -898,12 +928,22 @@ class Slot:
 
     def _end_others(self, kept):
         """end_tree's passes: the pids still in the job outside the trees of `kept` [(pid,
-        ctime)] after the last one. Raises OSError when the job or the process table cannot be
-        read."""
+        ctime)] after the last one. Each pass takes a stamp (filetime_now), reads the job's pids,
+        then the process table, and ends only targets created before the stamp, each by
+        terminate_verified at the creation time it read. Raises OSError when the job or the
+        process table cannot be read."""
         own = os.getpid()
         for n in range(END_PASSES + 1):
-            snap = process.snapshot()
+            # The job first, then the table: a listed process that still runs was running when
+            # the table was read, so a worker a spared daemon started before the list shows in
+            # the daemon's tree; one started after the list waits for the next pass.
+            # The stamp before the list: a process at a listed pid created before it was alive
+            # at the list, so it is the one listed (two live processes never share a pid). One
+            # created at or after it may hold a reused pid: it is not ended in this pass (a new
+            # job process is seen again by the next).
+            stamp = filetime_now()
             pids = self.job.pids()
+            snap = process.snapshot()
             spared = {own}
             for pid, ct in kept:
                 if process.proc_ctime(pid) == ct:
@@ -915,7 +955,7 @@ class Slot:
             aged = []
             for pid in targets:
                 ct = process.proc_ctime(pid)
-                if ct is not None:
+                if ct is not None and ct < stamp:
                     aged.append((ct, pid))
             for ct, pid in sorted(aged):        # oldest first: a parent before its children
                 process.terminate_verified(pid, ct)
@@ -947,7 +987,11 @@ class Slot:
                 if self.started and (self.run is not None or self.gate) and how not in KILL_HOW:
                     self.stop_daemons()
                 if how in KILL_HOW and not self.tree_ended:
-                    self.end_tree()
+                    try:
+                        self.end_tree()
+                    except BaseException:   # Ctrl+C again mid-kill: the whole job, as before
+                        self.job.end(kill=True)
+                        raise
                 # A spared daemon's tree is still in the job: closing it with kill-on-close set,
                 # or TerminateJobObject, would end it.
                 self.job.end(kill=how in KILL_HOW and not self.spared)
