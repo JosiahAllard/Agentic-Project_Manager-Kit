@@ -52,22 +52,25 @@ DRIVE_ALLOWED = (
      '(GIT_PS_EXE overrides them)'),
 )
 NAMES_ALLOWED = ()
-# (file glob, text the line contains, why a kit name may stand there). `{kit}` is the kit's
-# repository name. An empty text allows every line of the file.
+# (file glob, the whole line as a regex, why a kit name may stand there). `{kit}` is the kit's
+# repository name, escaped; `.*` allows every line of the file. kit_allowed compiles them.
 KIT_NAMES_ALLOWED = (
-    ('.kit.json', '"repo": {"name": ', "the kit's own name lives in its .kit.json, repo.name"),
-    ('README.md', '# {kit}', "the project page keeps the project's title (an owner ruling)"),
-    ('.claude-plugin/*', '', 'the Claude plugin carries its own name, Claude-specific (an owner '
+    ('.kit.json', r'\s*"repo": \{"name": "{kit}"\},?', "the kit's own name lives in its .kit.json, repo.name"),
+    ('README.md', r'# {kit}', "the project page keeps the project's title (an owner ruling)"),
+    ('.claude-plugin/*', r'.*', 'the Claude plugin carries its own name, Claude-specific (an owner '
      'ruling); kitlib.lockmcp holds the one constant'),
-    ('kitlib/lockmcp/__init__.py', "CLAUDE_PLUGIN_NAME = '", 'the one Claude-plugin name constant'),
+    ('kitlib/lockmcp/__init__.py', r"CLAUDE_PLUGIN_NAME = '[^']*'", 'the one Claude-plugin name constant'),
     # Goes when KIT-CONFIG-DIR-RENAME gives the machine config folder a neutral name.
-    ('kitlib/config/user.py', "DIR_NAME = '", 'the one name of the machine config folder'),
+    ('kitlib/config/user.py', r"DIR_NAME = '[^']*'", 'the one name of the machine config folder'),
 )
 
 
 def _allowed(rel, line, allowed, used):
+    """An entry's text is a substring of the line, or a compiled regex the whole line matches."""
     for i, (glob, text, _why) in enumerate(allowed):
-        if fnmatch.fnmatchcase(rel, glob) and text in line:
+        if not fnmatch.fnmatchcase(rel, glob):
+            continue
+        if text.fullmatch(line) if isinstance(text, re.Pattern) else text in line:
             used.add(i)
             return True
     return False
@@ -93,6 +96,17 @@ def scan(files, read, patterns, allowed, excluded=EXCLUDED):
 def name_pattern(name):
     """A whole-name, case-insensitive pattern: `alpha` matches `Alpha/` but not `alphabet`."""
     return re.compile(r'(?<![A-Za-z0-9])%s(?![A-Za-z0-9])' % re.escape(name), re.I)
+
+
+_SEP = r'[-_ ]'
+
+
+def kit_name_pattern(name):
+    """name_pattern with `-`, `_`, a space or nothing between the name's words, any case:
+    `kit-alpha-beta` also matches `kit_alpha_beta`, `Kit Alpha Beta` and `kitalphabeta`."""
+    words = [w for w in re.split(_SEP + '+', name) if w]
+    return re.compile(r'(?<![A-Za-z0-9])%s(?![A-Za-z0-9])'
+                      % (_SEP + '?').join(re.escape(w) for w in words), re.I)
 
 
 def _norm(p):
@@ -142,43 +156,55 @@ def install_names(home=None, kit_dir=ROOT, toplevel=None):
     return pats, notes
 
 
-def kit_names(root=ROOT):
+def kit_names(root=ROOT, strict=False):
     """(name of the kit's repository or None, [(regex, source)]) for the kit's own names, read
     from its files under root: `.kit.json` repo.name, .claude-plugin/plugin.json's name and
-    kitlib.config.user.DIR_NAME without its leading dot. Names equal but for case share one
-    pattern; a missing file adds nothing."""
+    kitlib.config.user.DIR_NAME without its leading dot (kit_name_pattern). Names equal but for
+    case and separators share one pattern. A missing file or name adds nothing, unless strict:
+    then it raises ValueError naming the source, so the live check cannot pass on fewer names."""
     from kitlib.config import user
     named = {}
 
     def add(name, source):
         if isinstance(name, str) and len(name) >= 3:
-            named.setdefault(name.lower(), (name, source))
+            named.setdefault(re.sub(_SEP, '', name.lower()), (name, source))
+        elif strict:
+            raise ValueError('%s: no name of 3 or more characters (got %r)' % (source, name))
 
     def read(*parts):
+        path = os.path.join(root, *parts)
         try:
-            with open(os.path.join(root, *parts), encoding='utf-8-sig') as f:
+            with open(path, encoding='utf-8-sig') as f:
                 data = json.load(f)
         except FileNotFoundError:
+            if strict:
+                raise ValueError('%s is missing' % path)
             return {}
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            if strict:
+                raise ValueError('%s is not a JSON object' % path)
+            return {}
+        return data
 
-    kit = (read('.kit.json').get('repo') or {}).get('name')
+    repo = read('.kit.json').get('repo')
+    kit = repo.get('name') if isinstance(repo, dict) else None
     add(kit, '.kit.json repo.name')
     add(read('.claude-plugin', 'plugin.json').get('name'), 'the Claude plugin name')
     add(user.DIR_NAME.lstrip('.'), 'the machine config folder')
     return (kit if isinstance(kit, str) else None,
-            [(name_pattern(n), src) for n, src in sorted(named.values())])
+            [(kit_name_pattern(n), src) for n, src in sorted(named.values())])
 
 
 def kit_allowed(kit):
-    """KIT_NAMES_ALLOWED with `{kit}` filled in (an entry that needs a name it lacks is dropped)."""
+    """KIT_NAMES_ALLOWED compiled, `{kit}` filled in (an entry that needs a name it lacks is
+    dropped)."""
     out = []
     for glob, text, why in KIT_NAMES_ALLOWED:
         if '{kit}' in text:
             if not kit:
                 continue
-            text = text.replace('{kit}', kit)
-        out.append((glob, text, why))
+            text = text.replace('{kit}', re.escape(kit))
+        out.append((glob, re.compile(text), why))
     return tuple(out)
 
 
@@ -187,7 +213,8 @@ DRIVE_PATTERNS = [(DRIVE, 'drive path')]
 
 def _report(stale):
     for glob, text, why in stale:
-        print('scrub: stale allow entry (nothing matches; remove it): %s %r (%s)' % (glob, text, why))
+        print('scrub: stale allow entry (nothing matches; remove it): %s %r (%s)'
+              % (glob, getattr(text, 'pattern', text), why))
 
 
 class Generic(unittest.TestCase):
@@ -214,8 +241,10 @@ class Generic(unittest.TestCase):
                          'generically):\n' + '\n'.join(found))
 
     def test_no_kit_name_in_a_tracked_file(self):
-        kit, pats = kit_names()
-        self.assertTrue(pats, 'no kit names read from .kit.json, the plugin manifest or DIR_NAME')
+        try:
+            kit, pats = kit_names(strict=True)       # all three sources, or a failure naming one
+        except ValueError as e:
+            self.fail('a kit name source cannot be read: %s' % e)
         found, stale = scan(tracked_files(), read_text, pats, kit_allowed(kit), excluded=())
         _report(stale)
         self.assertEqual(found, [], "the kit's own names in tracked files (derive them: "
@@ -312,8 +341,45 @@ class TheChecks(unittest.TestCase):
         from kitlib.config import user
         kit, pats = kit_names(self._kit(None, None))
         self.assertIsNone(kit)
-        self.assertEqual([rx.pattern for rx, _ in pats], [name_pattern(user.DIR_NAME.lstrip('.')).pattern])
+        self.assertEqual([rx.pattern for rx, _ in pats],
+                         [kit_name_pattern(user.DIR_NAME.lstrip('.')).pattern])
         self.assertNotIn('README.md', [g for g, _, _ in kit_allowed(None)])
+
+    def test_strict_kit_names_refuse_a_missing_source(self):
+        for kit_json, plugin_json, says in ((None, '{"name": "host-kit"}', '.kit.json is missing'),
+                                            ('{"repo": {}}', '{"name": "host-kit"}', '.kit.json repo.name'),
+                                            ('{"repo": {"name": "Kit-Alpha"}}', None, 'plugin.json is missing'),
+                                            ('{"repo": {"name": "Kit-Alpha"}}', '{}', 'the Claude plugin name'),
+                                            ('{"repo": {"name": "Kit-Alpha"}}', '[]', 'not a JSON object')):
+            with self.subTest(says):
+                root = self._kit(kit_json, plugin_json)
+                with self.assertRaises(ValueError) as cm:
+                    kit_names(root, strict=True)
+                self.assertIn(says, str(cm.exception))
+                kit_names(root)                              # the lenient form still answers
+        root = self._kit('{"repo": {"name": "Kit-Alpha"}}', '{"name": "host-kit"}')
+        self.assertEqual(kit_names(root, strict=True), kit_names(root))
+
+    def test_kit_names_match_any_separator_and_case(self):
+        rx = kit_name_pattern('Kit-Alpha_Beta')
+        for s in ('Kit-Alpha_Beta', 'kit_alpha_beta', 'KIT ALPHA BETA', 'kitalphabeta', 'Kit-Alpha Beta',
+                  'mcp__plugin_kit-alpha-beta_x', '.kit_alpha-beta/'):
+            self.assertTrue(rx.search(s), s)
+        for s in ('kit-alpha', 'kit--alpha-beta', 'xkit-alpha-beta', 'kit-alpha-betas'):
+            self.assertFalse(rx.search(s), s)
+
+    def test_kit_allow_entries_cover_whole_lines_only(self):
+        root = self._kit('{"repo": {"name": "Kit-Alpha"}}', '{"name": "host-kit"}')
+        kit, pats = kit_names(root)
+        files = {'README.md': '# Kit-Alpha\n# Kit-Alpha notes\n',
+                 '.kit.json': '  "repo": {"name": "Kit-Alpha"},\n  "x": "Kit-Alpha"\n',
+                 'kitlib/lockmcp/__init__.py': "CLAUDE_PLUGIN_NAME = 'host-kit'\nX = 'host-kit'\n",
+                 'kitlib/config/user.py': "TEMP_DIR_NAME = 'host-kit'\n"}
+        found, _ = scan(sorted(files), files.get, pats, kit_allowed(kit), excluded=())
+        self.assertEqual(found, ['.kit.json:2: Kit-Alpha (.kit.json repo.name)',
+                                 'README.md:2: Kit-Alpha (.kit.json repo.name)',
+                                 'kitlib/config/user.py:1: host-kit (the Claude plugin name)',
+                                 "kitlib/lockmcp/__init__.py:2: host-kit (the Claude plugin name)"])
 
     def test_names_come_from_the_machine_config(self):
         home = self._home({'scrub_patterns': ['\\bowner\\b'],
