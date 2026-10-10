@@ -476,6 +476,38 @@ class PmDataPlace(unittest.TestCase):
         self.assertEqual(d.rule, 'git-push-main', d and d.reason)
         self.assertIn('cannot be read', d.reason)
 
+    def test_every_ref_push_from_pm_data_is_judged_by_the_kit(self):
+        self.configure()
+        cases = (('git push --mirror origin', 'no gate-OK record'),
+                 ('git push --all origin', 'no gate-OK record'),
+                 ('git push --delete origin main', 'main is never deleted'),
+                 ('git push origin :main', 'main is never deleted'),
+                 ('git push --no-verify origin v1:refs/heads/main', 'skips the pre-push hook'))
+        for cmd, why in cases:
+            with self.subTest(cmd):
+                d = decide(bash(cmd, self.w.data), self.w.ctx())
+                self.assertEqual(d.rule, 'git-push-main', d and d.reason)
+                self.assertIn('to origin/main', d.reason)
+                self.assertIn(why, d.reason)
+        # a tag push touches no branch: allowed, as from the kit's main checkout
+        for where in (self.w.data, self.w.main):
+            self.assertIsNone(decide(bash('git push origin refs/tags/v1', where), self.w.ctx()), where)
+
+    def test_unreadable_push_line_from_pm_data_is_read_again(self):
+        self.configure()
+        line = "echo 'x ; git push --no-verify origin main"
+        d = decide(bash(line, self.w.data), self.w.ctx())
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual(d.rule, 'git-push-main', d.reason)
+        self.assertIn('could not read this command', d.reason)
+        self.assertIn('skips the pre-push hook', d.reason)
+        # a kit .kit.json that does not load: the line is still read again, and refused
+        with open(os.path.join(self.w.main, '.kit.json'), 'w', encoding='utf-8') as f:
+            f.write('{')
+        d = decide(bash(line, self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'git-push-main', d and d.reason)
+        self.assertIn('cannot be read', d.reason)
+
     def test_worktree_remove_from_pm_data_is_judged_by_the_kit(self):
         self.configure()
         self.w.git.clean[os.path.normcase(os.path.abspath(self.w.wt))] = True

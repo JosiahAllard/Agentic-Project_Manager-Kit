@@ -149,10 +149,16 @@ def machine_settings(home=None):
     or relative path or an invalid name; a machine config that cannot be read is the config
     package's ConfigError, unchanged."""
     from kitlib.config import user
-    cfg = user.user_config(home)[KEY]
+    return check_settings(user.user_config(home)[KEY], '%s key %s' % (user.config_file(home), KEY))
+
+
+def check_settings(cfg, where):
+    """A `pm_data` value `cfg` checked as machine_settings checks it and normalised, or None when it
+    is None. PmDataError, naming `where`, when it is not an object or fails a check."""
     if cfg is None:
         return None
-    where = '%s key %s' % (user.config_file(home), KEY)
+    if not isinstance(cfg, dict):
+        raise PmDataError('%s must be an object' % where)
     extra = set(cfg) - {'path', 'branch', 'remote'}
     if extra:
         raise PmDataError('%s: unknown key(s) %s' % (where, ', '.join(sorted(extra))))

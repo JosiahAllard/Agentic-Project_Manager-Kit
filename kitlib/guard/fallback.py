@@ -173,6 +173,9 @@ def check(event, ctx, text, cwd, role, parsed):
     for rule, pat in list(ANYWHERE) + list(MAIN_ONLY) + list(SUBAGENT_MAIN):
         if rule == 'git-push-main':
             cfg = ctx.config(cwd) if cwd else None
+            if cwd and ctx.is_pm_data(cwd):      # the kit's .kit.json decides; unloadable: read it again
+                kit, _why = rules.kit_judged(ctx, cwd)
+                cfg = kit.config(cwd) if kit is not None else None
             if cfg is not None and not cfg.push_block:
                 continue
         m = re.search(pat, text)

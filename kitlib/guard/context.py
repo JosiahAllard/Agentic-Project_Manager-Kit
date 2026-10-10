@@ -99,27 +99,7 @@ def _machine_pm_data(home):
             raise e
         if not isinstance(data, dict):
             raise e
-        return _check_pm_data(data.get(pmdata.KEY), '%s key %s' % (path, pmdata.KEY))
-
-
-def _check_pm_data(cfg, where):
-    """kitlib.pmdata.machine_settings's checks of a pm_data value read on its own."""
-    if cfg is None:
-        return None
-    if not isinstance(cfg, dict):
-        raise pmdata.PmDataError('%s must be an object' % where)
-    extra = set(cfg) - {'path', 'branch', 'remote'}
-    if extra:
-        raise pmdata.PmDataError('%s: unknown key(s) %s' % (where, ', '.join(sorted(extra))))
-    p = cfg.get('path')
-    if not isinstance(p, str) or not p.strip() or not os.path.isabs(p):
-        raise pmdata.PmDataError('%s: path must be an absolute path, not %r' % (where, p))
-    branch = cfg.get('branch', pmdata.DEFAULT_BRANCH)
-    remote = cfg.get('remote', pmdata.DEFAULT_REMOTE)
-    errs = pmdata.check_fields(branch, remote, '0' * 40)       # a valid root: only the names are checked
-    if errs:
-        raise pmdata.PmDataError('%s: %s' % (where, '; '.join(errs)))
-    return {'path': os.path.normpath(p), 'branch': branch, 'remote': remote}
+        return pmdata.check_settings(data.get(pmdata.KEY), '%s key %s' % (path, pmdata.KEY))
 
 
 def _same_dir(a, b):
