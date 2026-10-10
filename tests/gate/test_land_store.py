@@ -292,6 +292,12 @@ class PmDataAncestry(StoreLandCase):
         self.assertIn('cannot tell whether the branch holds the PM data root commit', why)
         self.assertIn('boom', why)
 
+    def test_a_git_directory_git_cannot_name_refuses(self):
+        cfg = kconfig.load_at(self.repo.root, self.main)
+        with mock.patch.object(at_landing.gitrepo, 'common_dir', return_value=(None, 'git timed out')):
+            why = at_landing.ancestry_refusal(self.repo.root, cfg, self.main)
+        self.assertEqual(why, 'cannot find the git directory to look for the PM data record: git timed out')
+
 
 class PmDataAncestryFolderStore(PmDataAncestry):
     """The same with a folder store, whose backend takes no part in ancestry_refusal."""
