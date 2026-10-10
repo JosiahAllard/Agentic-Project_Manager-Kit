@@ -35,7 +35,7 @@ import re
 from kitlib.backlog import store as backlog_store
 from kitlib.backlog.errors import Failure as BacklogFailure
 from kitlib.config import ConfigError, load
-from kitlib.git import cmd
+from kitlib.git import cmd, refs
 
 from . import holders
 from .holders import canon
@@ -222,13 +222,13 @@ def merge_check(ctx, key, registered_path):
     if base is None:
         return ['refused   %s: cannot read %s (%s), so whether %s has landed is'
                 ' unknown; nothing was removed' % (registered_path, up, why, name)]
-    rc, _, err = git(main, 'merge-base', '--is-ancestor', tip, base)
-    if rc == 0:
+    merged, why = refs.is_ancestor(tip, base, main)
+    if merged:
         ctx.say('merged    %s is in %s %s' % (name, up, base[:10]))
         return None
-    if rc != 1:
-        return ['refused   %s: the merge check failed (git merge-base exited %s: %s); nothing was'
-                ' removed' % (registered_path, rc, err or '?')]
+    if merged is None:
+        return ['refused   %s: the merge check failed (%s); nothing was removed'
+                % (registered_path, why)]
     rc, count, err = git(main, 'rev-list', '--count', '%s..%s' % (base, tip))
     count = count if rc == 0 and count else 'an unknown number of'
     slug = os.path.basename(registered_path)
@@ -636,8 +636,8 @@ def _remove_branch(ctx, branch):
         ctx.say('refused   %s: cannot read %s (%s), so whether it has landed is unknown; nothing'
                 ' was deleted' % (branch, up, err))
         return REFUSED
-    rc, _, err = git(main, 'merge-base', '--is-ancestor', tip, base)
-    if rc == 1:
+    merged, why = refs.is_ancestor(tip, base, main)
+    if merged is False:
         rc, count, _ = git(main, 'rev-list', '--count', '%s..%s' % (base, tip))
         ctx.say('refused   branch %s holds UNLANDED work: %s commit(s) not in %s %s; nothing was'
                 ' deleted' % (branch, count if rc == 0 and count else 'an unknown number of',
@@ -647,9 +647,8 @@ def _remove_branch(ctx, branch):
                 '  note     %s was read as it stands, not fetched: if the branch has landed'
                 ' since, `git fetch %s` and run this again.' % (up, s['remote']))
         return REFUSED
-    if rc != 0:
-        ctx.say('refused   %s: the merge check failed (git merge-base exited %s: %s); nothing was'
-                ' deleted' % (branch, rc, err or '?'))
+    if merged is None:
+        ctx.say('refused   %s: the merge check failed (%s); nothing was deleted' % (branch, why))
         return REFUSED
     ctx.say('merged    %s is in %s %s' % (branch, up, base[:10]))
     ids, why = pulled_by(ctx, base, branch)
@@ -842,15 +841,15 @@ def _abandon(ctx, argument, why, keep_branch, today):
     if base is None:
         ctx.say('refused   %s: cannot read %s (%s); nothing was tagged or removed' % (path, up, err))
         return REFUSED
-    rc, _, err = git(main, 'merge-base', '--is-ancestor', tip, base)
-    if rc == 0:
+    merged, why_not = refs.is_ancestor(tip, base, main)
+    if merged:
         ctx.say('refused   %s: %s is already in %s %s - nothing to abandon. Remove it'
                 ' with `%s %s`; nothing was tagged or removed'
                 % (path, name, up, base[:10], s['tool'], slug))
         return REFUSED
-    if rc != 1:
-        ctx.say('refused   %s: the merge check failed (git merge-base exited %s: %s); nothing was'
-                ' tagged or removed' % (path, rc, err or '?'))
+    if merged is None:
+        ctx.say('refused   %s: the merge check failed (%s); nothing was tagged or removed'
+                % (path, why_not))
         return REFUSED
     rerun = '%s %s --abandon "<why>"%s' % (s['tool'], slug, ' --keep-branch' if keep_branch else '')
     if dirty_refusal(ctx, path, 'nothing was tagged or removed', rerun):
@@ -947,15 +946,15 @@ def _abandon_branch(ctx, branch, why, today):
         ctx.say('refused   %s: cannot read %s (%s); nothing was tagged or deleted'
                 % (branch, up, err))
         return REFUSED
-    rc, _, err = git(main, 'merge-base', '--is-ancestor', tip, base)
-    if rc == 0:
+    merged, why_not = refs.is_ancestor(tip, base, main)
+    if merged:
         ctx.say('refused   %s is already in %s %s - nothing to abandon. Delete it with `%s %s'
                 ' --branch` (or the landing cleanup, land.py --sweep-landed); nothing was tagged'
                 ' or deleted' % (branch, up, base[:10], s['tool'], branch))
         return REFUSED
-    if rc != 1:
-        ctx.say('refused   %s: the merge check failed (git merge-base exited %s: %s); nothing was'
-                ' tagged or deleted' % (branch, rc, err or '?'))
+    if merged is None:
+        ctx.say('refused   %s: the merge check failed (%s); nothing was tagged or deleted'
+                % (branch, why_not))
         return REFUSED
     tag, existing = pick_tag(ctx, branch_slug(ctx, branch), tip)
     if existing and existing != tip:

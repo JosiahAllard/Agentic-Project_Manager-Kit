@@ -426,7 +426,8 @@ class PushFailures(StoreCase):
         self.assertIn('may have landed', said)
 
     def test_an_ancestry_git_cannot_tell_says_the_write_may_have_landed(self):
-        said = self.failed_push_then(lambda a: a[:2] == ['merge-base', '--is-ancestor'],
+        # kitlib.git.refs.is_ancestor's one git: `rev-list -n 1 <descendant>..<ancestor>`.
+        said = self.failed_push_then(lambda a: a[:3] == ['rev-list', '-n', '1'],
                                      cmd.Result(128, b'', 'fatal: not a valid commit'))
         self.assertIn('whether it landed cannot be told', said)
         self.assertIn('may have landed', said)

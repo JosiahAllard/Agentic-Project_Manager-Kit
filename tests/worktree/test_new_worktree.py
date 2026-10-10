@@ -718,9 +718,10 @@ class TheDefaultLock(LandingCase):
 class BehindCountOnAKilledGit(unittest.TestCase):
     def test_a_killed_ancestor_check_is_not_behind(self):
         from kitlib.git import cmd
-        killed = cmd.Result(None, b'', 'git merge-base timed out after 30 seconds')
-        with mock.patch.object(cmd, 'call', return_value=killed):
-            self.assertIsNone(new.behind_count('.', 'aaa', 'bbb'))
+        for killed in (cmd.Result(None, b'', 'git rev-list timed out after 30 seconds'),
+                       cmd.Result(1, b'', '')):     # ended from outside: exit 1, nothing printed
+            with mock.patch.object(cmd, 'call', return_value=killed):
+                self.assertIsNone(new.behind_count('.', 'aaa', 'bbb'), killed)
 
     def test_equal_or_missing_refs_are_not_behind(self):
         self.assertIsNone(new.behind_count('.', 'aaa', 'aaa'))
