@@ -16,8 +16,10 @@ An agent session writes only inside its roots:
                      read-only  no write
   mark roots       the machine config's guard_mark_roots for a main session's launcher mark
                    ({mark: [{path, mode, why}]}, `~/` read as the home folder); a subagent gets
-                   none, and a root on, over or inside the machine config's folder is dropped
-A root's mode holds wherever it nests: a target inside a read-only data root is denied though
+                   none
+A root of any kind on, over or inside either machine config folder is dropped unless it is
+read-only (roots, touches_config): a data root, TMP or AGENT_TEMP at the home folder would
+otherwise open the machine config. A root's mode holds wherever it nests: a target inside a read-only data root is denied though
 it also lies in the checkout or temp, and one inside an add-only root may only be new.
 
 Paths compare after os.path.realpath (symlinks and junctions resolved, `..` folded) and
@@ -122,7 +124,7 @@ def data_roots(ctx, cwd):
 def config_dirs(ctx):
     """Both machine config folders under ctx.home, the current (kitlib.config.user.DIR_NAME) and
     the retired one (kitlib.config.migration.OLD_DIR_NAME), whichever kitlib.config.user.locate
-    reads: no own root (own_root) or mark root may be on, hold or lie in either. A root on the
+    reads: no root that may write (roots) may be on, hold or lie in either. A root on the
     new folder while only the old one has a config would let the session write the file locate
     then reads instead."""
     return [os.path.join(ctx.home, kuser.DIR_NAME), os.path.join(ctx.home, OLD_DIR_NAME)]
@@ -130,10 +132,10 @@ def config_dirs(ctx):
 
 def mark_roots(ctx, mark):
     """[(path, mode)] from the machine config's guard_mark_roots for the session mark `mark`
-    (case ignored; None: none). `~/` reads as ctx.home. A root that is either machine config
-    folder (config_dirs), holds it or lies inside it is dropped, so no session can be given its own guard settings. A
-    config the strict reader refuses has no mark roots (Ctx.user reads it tolerantly, and a map
-    is not kept)."""
+    (case ignored; None: none). `~/` reads as ctx.home. roots drops one that is either machine
+    config folder (config_dirs), holds it or lies inside it, unless it is read-only, so no session
+    can be given its own guard settings. A config the strict reader refuses has no mark roots
+    (Ctx.user reads it tolerantly, and a map is not kept)."""
     table = ctx.user().get('guard_mark_roots') if mark else None
     if not isinstance(table, dict):
         return []
@@ -148,15 +150,16 @@ def mark_roots(ctx, mark):
             path = kuser.expand_home(e.get('path'), ctx.home)
             if not isinstance(path, str) or not os.path.isabs(path) or e.get('mode') not in MODES:
                 continue
-            if touches_config(ctx, path):
-                continue
             out.append((path, e['mode']))
     return out
 
 
 def roots(ctx, cwd, is_root, mark=None):
     """[Root] for a session running in `cwd`, its own checkout first; `mark` (a main session's
-    launcher mark, None for a subagent) adds its guard_mark_roots."""
+    launcher mark, None for a subagent) adds its guard_mark_roots. A root of any kind that is on,
+    holds or lies inside either machine config folder (touches_config) is dropped unless it is
+    read-only: a data root, TMP or AGENT_TEMP at the home folder or above would otherwise let the
+    session write the machine config. A read-only root only denies, so it is kept."""
     out = []
     own = own_root(ctx, cwd, is_root)
     if own:
@@ -164,7 +167,7 @@ def roots(ctx, cwd, is_root, mark=None):
     out.extend(Root(p, TEMP) for p in temp_roots(ctx))
     out.extend(Root(p, DATA, mode) for p, mode in data_roots(ctx, cwd))
     out.extend(Root(p, MARK, mode) for p, mode in mark_roots(ctx, mark))
-    return out
+    return [r for r in out if r.mode == READ_ONLY or not touches_config(ctx, r.path)]
 
 
 def judge(target, rs):

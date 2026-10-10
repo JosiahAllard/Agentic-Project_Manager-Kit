@@ -160,3 +160,13 @@ class NoRootOfAnyKindOnAConfigFolder(Base):
                 d = self.jailed(self.write(os.path.join(agents, 'x.txt'), **kw))
                 self.assertIn('read-only', d.reason)
                 self.jailed(self.write(self.targets()[0], **kw))
+
+    def test_a_read_only_mark_root_over_the_home_folder_still_denies(self):
+        agents = os.path.join(self.w.home, 'agenttemp')
+        os.makedirs(agents)
+        with open(os.path.join(self.new_dir, user.FILE_NAME), 'w', encoding='utf-8') as f:
+            json.dump({'guard_mark_roots': {'pm': [{'path': self.w.home, 'mode': 'read-only'}]}}, f)
+        env = dict(PM, AGENT_TEMP=agents)
+        d = self.jailed(self.write(os.path.join(agents, 'x.txt'), env=env, sub=False))
+        self.assertIn('read-only', d.reason)
+        self.allowed(self.write(os.path.join(agents, 'x.txt'), env={'AGENT_TEMP': agents}))
