@@ -280,6 +280,22 @@ class MarkRoots(Base):
         self.allowed(self.run_bash(reset, env=PM, sub=False))
         self.jailed(self.run_bash(reset, env=COORDINATOR, sub=False))
 
+    def test_a_junction_into_the_lock_state_under_a_mark_root_is_still_lock_state(self):
+        # the mark root holds the lock state's parent; a junction in the worktree reaches the state
+        # folder by another spelling, so lock-state must judge the resolved path
+        state = os.path.join(self.w.home, '.claude', 'machine-lock')
+        os.makedirs(state)
+        link = os.path.join(self.w.wt, 'lk')
+        try:
+            import _winapi
+            _winapi.CreateJunction(state, link)
+        except (ImportError, AttributeError, OSError) as e:
+            self.skipTest('no junction: %s' % e)
+        self.roots({'pm': [{'path': '~/.claude', 'mode': 'open'}]})
+        self.jailed(self.write(os.path.join(link, 'state.json'), env=PM, sub=False), 'lock-state')
+        self.jailed(self.run_bash('echo {} > "%s/state.json"' % W.fwd(link), env=PM, sub=False), 'lock-state')
+        self.jailed(self.write(os.path.join(link, 'state.json'), env=COORDINATOR, sub=False), 'lock-state')
+
     def test_the_rules_before_the_jail_still_hold(self):
         self.roots({'pm': [{'path': self.w.main, 'mode': 'open'}, {'path': '~/.claude', 'mode': 'open'}]})
         self.jailed(self.write(os.path.join(self.w.main, '.kit.json'), env=PM, sub=False), 'kit-json')
@@ -580,6 +596,25 @@ class LanderMainCheckout(MainGit):
                 self.allowed(self.git(text))
         self.allowed(self.git('& git -C "%s" fetch origin' % m, tool='PowerShell'))
         self.allowed(self.git('Set-Location "%s"; git fetch origin' % m, tool='PowerShell'))
+
+    def test_the_powershell_landing_forms(self):
+        m = self.main
+        for text in ('Set-Location "%s"; git merge --ff-only origin/main' % m,
+                     'Set-Location -Path "%s"; git fetch origin main' % m,
+                     'cd "%s"; & git fetch origin' % m,
+                     'cd "%s" && git fetch origin main' % m,           # PowerShell 7's &&
+                     'pushd "%s"; git merge --ff-only origin/main' % m,
+                     'Push-Location "%s"; git fetch origin' % m):
+            with self.subTest(text):
+                self.allowed(self.git(text, tool='PowerShell'))
+        for text in ('Set-Location "%s"; git fetch origin main; git status' % m,
+                     'Set-Location "%s" *> sl.log; git fetch origin main' % m,
+                     'Set-Location "%s"; git fetch origin main | Out-File f.log' % m):
+            with self.subTest(text):
+                d = self.jailed(self.git(text, tool='PowerShell'))
+                self.assertIn('git is not alone on the line', d.reason)
+        # a piped Set-Location leaves where git runs unknown: refused before the landing tests
+        self.each_denied(['Set-Location "%s" | Out-Null; git fetch origin main' % m], tool='PowerShell')
         self.jailed(self.git('git -C "%s" fetch origin' % m, 'worker'))
 
     def test_a_lander_verb_must_be_alone_on_its_line(self):
@@ -593,7 +628,9 @@ class LanderMainCheckout(MainGit):
                      '(git -C "%s" fetch origin main)' % m,
                      'bash -c \'git -C "%s" fetch origin main\'' % m,
                      'cd "%s" && git -C "%s" fetch origin main' % (W.fwd(self.w.wt), m),
-                     'cd "%s" && cd . && git fetch origin main' % m):
+                     'cd "%s" && cd . && git fetch origin main' % m,
+                     'cd "%s" > cd.log && git fetch origin main' % m,       # a redirect on the cd
+                     'cd "%s" 2>/dev/null; git fetch origin main' % m):
             with self.subTest(text):
                 d = self.jailed(self.git(text))
                 self.assertIn('git is not alone on the line', d.reason)
@@ -637,6 +674,21 @@ class LanderMainCheckout(MainGit):
                 self.assertIn(' Instead: %s [kit guard:' % kit, d.reason)
         d = self.jailed(self.git('git -C "%s" merge --ff-only origin/main' % self.main, 'worker'), 'git-main-history')
         self.assertNotIn('roles.lander', d.reason)          # another role: the rule's own refusal
+
+    def test_without_the_role_a_malformed_landing_step_still_names_the_role(self):
+        # every landing form is refused until the role is set, so the role is named first: a refusal
+        # that named the arguments would offer an Instead that is refused too
+        self.w.kit({'repo': {'name': 'demo', 'push_block': True}})
+        kit = 'python -m json.tool "%s/.kit.json"' % self.main
+        for text, rule in (('git -C "%s" merge feature' % self.main, 'git-main-history'),
+                           ('git -C "%s" merge --no-ff origin/main' % self.main, 'git-main-history'),
+                           ('git -C "%s" fetch --all' % self.main, 'write-jail'),
+                           ('git -C "%s" fetch origin main && echo x' % self.main, 'write-jail'),
+                           ('git -c x.y=z -C "%s" fetch origin' % self.main, 'write-jail')):
+            with self.subTest(text):
+                d = self.jailed(self.git(text), rule)
+                self.assertIn('does not set roles.lander.edit_main_checkout to true', d.reason)
+                self.assertIn(' Instead: %s [kit guard:' % kit, d.reason)
 
     def test_the_remote_and_main_come_from_the_config(self):
         self.w.kit({'repo': {'name': 'demo', 'push_block': True, 'remote': 'upstream', 'main_branch': 'trunk'},

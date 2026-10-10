@@ -380,9 +380,10 @@ def lock_state(event, ctx, target, role, what):
     writes it, under its own mutex."""
     if not target or not agent_session(event, ctx):
         return None
-    top = os.path.normcase(os.path.abspath(lock_state_dir(ctx)))
-    here_ = os.path.normcase(os.path.abspath(target))
-    if here_ != top and not here_.startswith(top.rstrip('\\/') + os.sep):
+    # resolved paths (jail.real: links, junctions and 8.3 names followed), so a write that reaches the
+    # state folder through a junction is still this rule's, whatever root the jail would open
+    top, here_ = jail.real(lock_state_dir(ctx)), jail.real(target)
+    if not jail.inside(here_, top):
         return None
     return refuse('lock-state', role, '%s edits the machine lock\'s state, which only the lock tool writes, under its own '
                   'mutex. Ask the owner (through the PM) when the state looks wrong. To see it:' % what,
@@ -1855,14 +1856,14 @@ LANDER = 'lander'
 
 LANDER_VERBS = ('fetch', 'merge')
 # the tests lander_check runs, in order; a refusal names the first that failed
+LANDER_NO_CONFIG = 'the main checkout\'s .kit.json does not load'
+LANDER_NO_ROLE = ('the main checkout\'s .kit.json does not set roles.lander.edit_main_checkout to true, so no lander '
+                  'may write it; the owner sets it (docs/guard.md "Go-live", step 3)')
 LANDER_NOT_ALONE = ('git is not alone on the line (at most one literal cd, Set-Location or pushd to that checkout '
                     'may come before it, joined by && or ;)')
 LANDER_WRAPPED = ('a wrapper, an environment assignment, a git option other than -C <checkout>, or a word that is '
                   'not literal comes with it')
 LANDER_ARGS = 'its arguments are not exactly one of the landing forms'
-LANDER_NO_CONFIG = 'the main checkout\'s .kit.json does not load'
-LANDER_NO_ROLE = ('the main checkout\'s .kit.json does not set roles.lander.edit_main_checkout to true, so no lander '
-                  'may write it; the owner sets it (docs/guard.md "Go-live", step 3)')
 
 
 def lander_forms(cfg):
@@ -1909,6 +1910,14 @@ def lander_check(event, ctx, cmd, inv, gc):
         return False, None
     if gc.unknown or gc.sub not in LANDER_VERBS or not gc.dir or ctx.place(gc.dir).kind != repo.MAIN:
         return False, None
+    # the repository's own settings first: while they refuse every landing form, a refusal that
+    # named the command would offer an Instead that is refused too
+    cfg = ctx.config(gc.dir)
+    if cfg is None:
+        return False, LANDER_NO_CONFIG
+    table = kconfig.roles(cfg)
+    if kconfig.role_name(event, table) != LANDER or not table[LANDER].get('edit_main_checkout'):
+        return False, LANDER_NO_ROLE
     if not lander_alone(event, cmd, gc):
         return False, LANDER_NOT_ALONE
     pre = inv.args[:len(inv.args) - len(gc.rest) - 1]
@@ -1916,14 +1925,8 @@ def lander_check(event, ctx, cmd, inv, gc):
             [w.text for w in pre[:1]] not in ([], ['-C']) or len(pre) not in (0, 2) or \
             any(w.dyn for w in pre) or any(w.dyn for w in gc.rest):
         return False, LANDER_WRAPPED
-    cfg = ctx.config(gc.dir)
-    if cfg is None:
-        return False, LANDER_NO_CONFIG
     if [w.text for w in gc.rest] not in lander_forms(cfg)[gc.sub]:
         return False, LANDER_ARGS
-    table = kconfig.roles(cfg)
-    if kconfig.role_name(event, table) != LANDER or not table[LANDER].get('edit_main_checkout'):
-        return False, LANDER_NO_ROLE
     return True, None
 
 
