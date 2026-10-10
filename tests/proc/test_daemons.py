@@ -150,10 +150,15 @@ class StopsOnlyWhatServesTheRun(unittest.TestCase):
 
     def test_a_connection_to_this_machines_own_address_without_its_other_row_leaves_it(self):
         """The remote end is a non-loopback address of this machine (the local end of a row in
-        the table): with no row owning it, it is not another host, so the daemon is left."""
+        the table): with no row owning it, it is not another host, so the daemon is left.
+        why_left, the judge, is asked before stop: its signature predates stop's terminate=, so
+        without the fix this test fails on the judgement, not on a keyword stop lacks."""
         here, lan = (4, b"\x0a\0\0\x02", 5000), (4, b"\x0a\0\0\x07", 6000)
         other = ((4, b"\x0a\0\0\x07", 7000), (4, b"\x0a\0\0\x05", 443), 70)
         for conns in ([(here, (4, here[1], 6000), 10)], [(here, lan, 10), other]):
+            why = daemons.why_left(10, [], conns, self.JOB.get)
+            self.assertIsNotNone(why, "a connection to this machine read as one to another host")
+            self.assertIn("other end the table does not show", why)
             out = self.stop(conns)
             self.assertEqual(self.killed, [], conns)
             self.assertIn("other end the table does not show", out[0][2])
