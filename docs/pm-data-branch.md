@@ -49,7 +49,7 @@ A bare `git push` in the data worktree goes to the upstream, the private remote;
 ## Guard place and commit hooks
 
 - `kitlib.git.repo.classify` calls the data worktree LINKED, so the guard would let a subagent edit PM data and would read the kit's `.kit.json` for it. Add the configured `pm_data.path` as a MAIN-like place: the main-checkout rules (subagent edits, `checkout`, `reset --hard`, `clean`, `stash`, bulk add) apply to it, and its config is its own `.kit.json` (an exception to "a worktree's own `.kit.json` is never read": only this one path, which agents cannot edit).
-- `core.hooksPath` is one setting for the whole repository, so the kit's `githooks/` runs for the data worktree too. A repository-local `hooks/pre-commit` there (for example the ledger check) would never run. Add `githooks/pre-commit`: it runs `tools/ledger.py check --base HEAD` when the commit changes the configured ledger file, and nothing else.
+- `core.hooksPath` is one setting for the whole repository, so the kit's `githooks/` runs for the data worktree too. A repository-local `hooks/pre-commit` there (for example the ledger check) would never run. The existing opt-in `githooks/pre-commit` gains the ledger-staged condition: it runs `tools/ledger.py check --base HEAD` only when the commit changes the configured ledger file (or the standing digest beside it), and nothing else (docs/ledger.md "Pre-commit check").
 
 ## Session start: keep the kit current
 
@@ -118,4 +118,8 @@ Each lands independently on its own branch; sizes are S/M/L.
 
 ## Open - needs the owner
 
-- **Pre-commit dispatch.** Default: the kit's `githooks/pre-commit` runs only the ledger check (task 7); a repo-local hook is not supported because `core.hooksPath` is repository-wide.
+Nothing open.
+
+## Decided by the owner
+
+- **Pre-commit dispatch.** The kit's `githooks/pre-commit` runs only the kit's own checks; it does not chain to a repository-local hook (`core.hooksPath` is repository-wide, so such a hook never runs). Repository hooks may be wanted later, so the hook has one dispatch point where a chain step could slot in without rework: `kitlib/githooks/precommit.py` `CHECKS`, today the ledger check only (task 7; docs/ledger.md "Pre-commit check"). The `sh` front end `githooks/pre-commit` starts python only when `.kit.json` names `pre_commit_check`, so a step that must run in a repository that has not opted in also needs one condition there, beside that test. No chaining code is built now.

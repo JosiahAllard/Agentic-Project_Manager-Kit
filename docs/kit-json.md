@@ -84,7 +84,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `landing.batch_max` (int from 1 to 20, default 3): most branches one tools/land.py landing merges and gates together
 - `landing.reuse_max_age_h` (int from 0 to 168, default 24): hours a branch gate-OK record serves a landing's gate reuse; 0: never reused
 - `landing.reuse_never` (list of string, default []): globs of paths whose change makes a landing reuse no step
-- `ledger.pre_commit_check` (bool, default false): githooks/pre-commit runs tools/ledger.py check --base HEAD before each commit (opt-in; docs/ledger.md "Pre-commit check")
+- `ledger.pre_commit_check` (bool, default false): githooks/pre-commit runs tools/ledger.py check --base HEAD before each commit that changes the ledger file or its standing digest (opt-in; docs/ledger.md "Pre-commit check")
 - `machine_paths.allow` (list of {glob, line, hit, why, temporary}, default []): machine-path hits allowed
 - `machine_paths.fixtures` (list of {glob, hits, line, why}, default []): test fixtures that name machine paths
 - `machine_paths.piece_fixtures` (list of {piece, path, hits, why}, default []): fixtures named by piece; machine_paths.py refuses a non-empty list until it resolves pieces
