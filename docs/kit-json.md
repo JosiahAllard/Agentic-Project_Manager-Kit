@@ -1,0 +1,161 @@
+# `.kit.json`
+
+A repository's kit configuration, read and checked whole by `kitlib.config.load` (`load_at` reads it at a revision: a landing reads the base branch's). The schema is `kitlib/config/schema.py`; tests/config/test_user_docs.py keeps the lists below equal to it.
+
+- A section is an object or, except `repo`, `owner` and `hook`, a string naming a repo-relative JSON file that holds it.
+- A section is read only from `.kit.json` or the file it names: no `tools/*.json` is read because it exists.
+- An unknown section or key refuses, and so does a key written twice in one object. One error names every problem. A key starting `_`, or `comment`, is a note, allowed in every object.
+- A key whose default is unset may be `null`. Unset means the tool that reads it decides.
+- No environment variable overrides the file or the repository root.
+- A `gate.steps` entry runs either `cmd` or `check`, a gate check the repo hook module provides in `GATE_CHECKS`; repo-specific gate settings go in `hook.options`. The step keys are `STEP` in `kitlib/config/schema.py`.
+- `gate.kind` names the kind a gate run books; the lock books that kind's size (kitlib/lock/kinds.json). A size is a whole number of cpu slots 1..the layout's agent_cap (`medium` and `heavy` remain as aliases), set only by `gate.py --measure` and a reviewed commit. No `.kit.json` key sets a gate's core count.
+- A `landing.lanes` entry is keyed by the lane name and has four keys (`LANE` in `kitlib/config/schema.py`): `branch_prefix` (list of string; a branch on the lane starts with one), `paths` (list of glob; every path the branch changes matches one), `why` (string; the ruling that made the lane) and `merged_args` (list of string; added to every step command of the lane's merged-tree gate, after the step's own `merged_args`, with the same `{root}`-style substitutions). `tools/land.py` reads `main_branch` and `remote` from `repo`, the lanes, `wait_s` and `batch_max` from `landing`, and the gate steps from `gate` (docs/gate.md, Landing).
+- No old spelling is read: the hook module is the top-level `hook` (not `gate.hook`), and owner settings are `owner` (not `doc_budget` keys).
+- A repo lists its own heavy programs in `heavy.programs`; the kit defaults are general tools only (godot, blender, dotnet, gradle). For example `{"program": "run_tests.bat", "kind": "engine-test", "why": "runs the engine test suite"}`, `{"program": "graph_build*", "kind": "worldgraph", "why": "rebuilds the world graph"}` and `{"program": "local_model*", "kind": "local-ai", "unless_args": ["--help"], "why": "loads a model onto the gpu"}`.
+
+## `.kit.json` keys
+
+- `repo.name` (string, may be empty, default ""): repository name for reports and the ledger
+- `repo.main_branch` (string, default "main"): the branch landings target
+- `repo.remote` (string, default "origin"): the remote main is pushed to
+- `repo.worktrees_dir` (repo path, default ".claude/worktrees"): where agent worktrees live
+- `repo.tools_dir` (repo path, default "tools"): where repo tools, stubs and the hook module live
+- `repo.push_block` (bool, default false): pre-push refuses a push to main without a gate-OK record
+- `owner.email` (email): author email of the owner's own commits; unset: no owner commit is provable
+- `owner.agent_emails` (list of email, default []): author emails known to be agents', never the owner's
+- `owner.paths` (list of string, default ["CLAUDE.md", ".claude/", ".github/workflows/", ".kit.json", "tools/gate.json"]): owner-only paths; an entry ending / locks a directory; replaces the default
+- `owner.paths_except` (list of string, default [".claude/worktrees/"]): what under a locked directory is not locked
+- `owner.trailer` (a trailer key, default "Owner-Approved"): the trailer key approving an owner-only change
+- `hook.module` (a module name): the one repo hook module, <tools_dir>/<module>.py
+- `hook.options` (map key -> any JSON value, default {}): passed to the hook unread
+- `heavy.programs` (list of {program, kind, when_args, unless_args, why}, default []): repo heavy programs, added to the kit defaults
+- `roles` (map role -> {edit_main_checkout, why}): agent type (or main, subagent) -> permissions, over the kit defaults
+- `roles.<role>.edit_main_checkout` (bool): may edit files in a main checkout; unset: the base role (main: true, any other: false)
+- `roles.<role>.why` (string): the ruling that grants it
+- `backlog.store` (ref|branch|main or repo path, default "ref"): the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md)
+- `backlog.phases` (list of string, default []): phase names in order
+- `backlog.id_grammar` (upper|mixed, default "upper"): item id spelling
+- `backlog.ledger_repo` (string): the ledger repo column; default the repo name
+- `backlog.retired_docs` (list of repo path, default []): docs the backlog replaced
+- `backlog.rename_script` (string, may be empty, default ""): priority rename helper
+- `board.state_file` (repo path): the board state file
+- `checkout_guard.rule_pointer` (string): where a refusal points for the rule
+- `commit.merge_fold` (bool, default false): commit.py folds a merge commit
+- `commit.coauthor_families` (list of string, default []): accepted Co-Authored-By families beyond Claude
+- `daily_full.enabled` (bool, default false): daily_full.py runs at all (opt-in; it is never scheduled by the kit)
+- `daily_full.ref` (string): the ref it tests; default <remote>/<main branch>
+- `daily_full.worktree` (repo path): its detached worktree; default <worktrees_dir>/daily-full
+- `daily_full.kind` (a kind name, default "daily-full"): the kinds-table kind the run books
+- `daily_full.max_wait` (int >= 0, default 7200): seconds it waits for its lock slot before it skips
+- `daily_full.stale_hours` (int >= 1, default 36): hours after which --summary calls the last result stale
+- `doc_budget.default` (int >= 0): byte cap for a capped doc with no budget
+- `doc_budget.budgets` (map path -> int >= 0 or null, default {}): doc path or glob -> byte cap; null: uncapped
+- `doc_budget.uncapped_dirs` (list of repo path, default []): folders never capped
+- `doc_budget.capped` (list of repo path, default []): docs that must stay under budget
+- `doc_budget.retired_paths` (list of repo path, default []): paths that must not come back
+- `doc_budget.shard_indexes` (map folder -> repo path, default {}): shard folder -> its index doc
+- `doc_budget.state_docs` (list of repo path, default []): docs checked for staleness
+- `doc_budget.stale_days` (int >= 1): days before a state doc is stale
+- `doc_index.enabled` (bool, default true): false: doc_index does not require every .md on an index entry line, nor the index file (a repo with no .kit.json skips it too)
+- `doc_index.index` (repo path, default "docs/INDEX.md"): the doc index both doc tools read
+- `doc_index.find_match` (keywords|text, default "keywords"): how --find matches
+- `doc_index.roles` (map role -> list of string): role -> lookup topics
+- `doc_index.roles_doc` (repo path): doc holding the role map instead
+- `doc_index.roles_marker` (string): line before the role bullets in roles_doc
+- `doc_index.role_lines` (int >= 1, default 80): lines printed per role section
+- `forbidden`: a table the kit passes through unchecked (a file path or an object)
+- `gate.steps` (list of step object, default []): the repo gate steps
+- `gate.setup` (list of string): argv run before the steps
+- `gate.python_tests` (discover|pytests, default "discover"): how the Python tests run
+- `gate.python_tests_floor` (int >= 0): fewest tests a full run may report
+- `gate.trailers` (bool): check commit trailers
+- `gate.worktree_guard` (bool): refuse to gate in a main checkout
+- `gate.warn_untracked` (bool): warn about untracked files
+- `gate.fail` (regex or list of regex): log patterns that fail every step
+- `gate.warn_lines` (regex or list of regex): log patterns that warn
+- `gate.zero_tests` (regex or list of regex): log patterns meaning no test ran
+- `gate.errors` ({match, excuse, expect}): error-line policy
+- `gate.kind` (a kind name, default "engine-test"): the kinds-table kind a gate run books (gate.py and gate.py land)
+- `guard.data_roots` (list of {path, mode, why}, default []): folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")
+- `landing.lock_file` (string): legacy landing lock: git:<name>, a file in the git common dir; any other value refuses
+- `landing.log_dir` (repo path): where gate logs live
+- `landing.lanes` (map lane -> {branch_prefix, paths, why, merged_args}, default {}): lanes besides full that gate.py land --lane takes
+- `landing.wait_s` (int from 0 to 86400, default 3600): seconds tools/land.py waits for its turn at the landing lock unless --wait says otherwise
+- `landing.batch_max` (int from 1 to 20, default 3): most branches one tools/land.py landing merges and gates together
+- `landing.reuse_max_age_h` (int from 0 to 168, default 24): hours a branch gate-OK record serves a landing's gate reuse; 0: never reused
+- `landing.reuse_never` (list of string, default []): globs of paths whose change makes a landing reuse no step
+- `ledger.pre_commit_check` (bool, default false): githooks/pre-commit runs tools/ledger.py check --base HEAD before each commit (opt-in; docs/ledger.md "Pre-commit check")
+- `machine_paths.allow` (list of {glob, line, hit, why, temporary}, default []): machine-path hits allowed
+- `machine_paths.fixtures` (list of {glob, hits, line, why}, default []): test fixtures that name machine paths
+- `machine_paths.piece_fixtures` (list of {piece, path, hits, why}, default []): fixtures named by piece; machine_paths.py refuses a non-empty list until it resolves pieces
+- `machine_paths.known_binary` (map path -> string, default {}): binary file -> why it may hold paths
+- `machine_paths.scan` (list of string, default ["*"]): globs scanned
+- `machine_paths.fallback_vars` (list of string, default []): environment variables a machine path may fall back to
+- `new_worktree`: no keys
+- `pieces`: a table the kit passes through unchecked (a file path or an object)
+- `preflight.engines` (list of string, default []): process-name prefixes listed as running engines
+- `preflight.report_hooks` (list of "module:function", default []): module:function report hooks
+- `preflight.traps` (string): where the traps are written down
+- `preflight.udp_ports` (list of 2 int from 0 to 65535): [low, high] ports checked free
+- `redfirst.runners` (list of {glob, kind, pythonpath, dir, project, csproj, args}, default [{"glob": "tests/*test_*.py", "kind": "python"}]): which runner takes a test file, first match wins
+- `redfirst.hold_wait` (int >= 0, default 60): seconds a held throwaway tree is re-checked before it is left
+- `review_pack.coauthor` (bool, default false): list the branch's commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks
+- `ruling_cites.repo` (string): the ledger repo column cited
+- `ruling_cites.skip` (list of string): globs of paths not checked; unset: <tools_dir>/test_*.py and <tools_dir>/fixtures/*
+- `stubs.tools` (list of string): kit tools stubbed into the repo
+- `testlist.junit` (list of string, default ["**/build/test-results/**/*.xml"]): JUnit result globs
+- `testlist.trx` (list of string, default ["**/*.trx"]): .NET result globs
+- `tool_tests.mentions` (path|tokens, default "path"): how a tool mention is found
+- `tool_tests.selector_files` (list of string, default ["tool_deps.py", "pytests.py"]): changes that select every test
+- `tool_tests.extra` (map file -> list of string, default {}): file -> test modules it selects
+- `tool_tests.pinned` (list of [path, [modules]], default []): path -> modules pins
+- `tool_tests.patterns` (list of {regex, modules}, default []): path regex -> modules
+- `tool_tests.whole_tree` (map test class -> string, default {}): classes reading the whole tree -> why
+- `tool_tests.untested` (list of string, default []): modules with no test, each listed
+- `tool_tests.dynamic_imports` (map module -> [modules, why], default {}): computed imports allowed
+- `tool_tests.guard_tests` (list of string, default ["test_tool_deps"]): tests guarding the table
+- `tool_tests.unmapped_tool` (guard|all, default "guard"): what an unmapped tool change selects
+- `tool_tests.always_run` (list of string, default []): tests every run includes
+- `tool_tests.sources` (list of string, default []): token mode: source globs
+- `tool_tests.skip_dirs` (list of string, default ["__pycache__"]): folders never scanned
+- `tool_tests.ignore` (list of string, default []): changes that select nothing
+- `tool_tests.shards` (map module -> int >= 1, default {}): pytests: module -> shard count
+- `tool_tests.serial` (list of string, default []): pytests: modules or classes run alone
+- `tool_tests.split_classes` (bool, default false): pytests: one unit per class
+- `tool_tests.jobs_max` (int >= 1, default 6): pytests: most parallel jobs
+- `tool_tests.jobs_divisor` (int >= 1, default 4): pytests: cores per job
+- `tool_tests.jobs_env` (string): pytests: env var overriding the job count
+- `tool_tests.unit_timeout` (int >= 1, default 3600): pytests: seconds per unit
+- `worktree_remove.exempt` (map folder -> string, default {}): worktree folder -> the ruling exempting it
+- `worktree_remove.disposable_untracked` (list of string, default []): untracked file globs removal may discard
+- `worktree_remove.build_output` (list of string, default []): build output path globs
+- `worktree_remove.keepers` (list of string, default []): file globs that refuse a removal, added to the kit list
+- `worktree_remove.archive_next_free` (bool, default false): archive under the next free name
+- `worktree_remove.branch_template` (a branch name holding {slug} once): branch name for a slug
+
+## `~/.claude-pm-kit/config.json` keys
+
+The machine's own settings, read by `kitlib.config.user`. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config.
+
+- `ledger_path` (absolute path): the rulings ledger file; set here only
+- `ledger_repos` (list of a lower-case repo name): the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)
+- `pending_path` (absolute path): the owner's pending-steps file tools/pending.py edits (docs/pending.md)
+- `ledger_refs` (object {repos: map name -> {path, ref}, folders: map name -> absolute path}): where tools/ledger_refs.py looks for citations of a ruling id; unset: the ledger file only (docs/ledger.md "ledger_refs")
+- `standing_delegation` (a ruling id R-nnnn): the ledger entry that delegates in general; the backlog refuses it as the ruling behind any one change. Unset: no id is refused for that
+- `scrub_patterns` (list of regex): case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse
+- `guard_mcp_prefix` (string): the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")
+- `guard_mcp_tools` (list of string): more full tool names the guard treats as the lock MCP's owner-only tools, as a PreToolUse payload names them (docs/guard.md "Lock MCP")
+- `guard_agent_marks` (list of string): the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json and write-jail rules; unset: coordinator and conductor (docs/guard.md "Session mark")
+- `pm_start` (object, checked by kitlib.pmstart): the PM session-start checklist settings
+- `coordinator_start` (object, checked by kitlib.coordinatorstart): the coordinator session-start settings
+- `conductor_start` (object, checked by kitlib.coordinatorstart): the old name of coordinator_start, read when coordinator_start is absent
+  Its install values (`kitlib.coordinatorstart`; nothing in the code supplies them):
+  - `repos_root` (path): the folder whose top-level folders are the repositories; the session's cwd picks the repo under it. Unset: every check that needs the coordinator's repo prints "could not check ...: repos_root not configured".
+  - `ledger` (path): the rulings ledger the "rulings newer than" check reads; unset: the machine `ledger_path`; neither: "could not check rulings: ledger not configured".
+  - `landing_lock` ({repo: file name}): the landing lock's file in that repo's git common dir, shown as the landing-lock line. A repo not named here, or an unset key, gets no landing-lock line, and nothing says it was dropped.
+- `pm_watch` (object, checked by kitlib.pmwatch): the PM watcher settings
+- `launcher` (object, checked by kitlib.launcher): the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")
+- `backlog_lint` (object, checked by kitlib.backloglint): the backlog lint repositories
+- `machine_lock` (object, checked by kitlib.lock.site): the machine lock settings: build daemons at release, lock-window notices
+- `temp_dir` (absolute path): the folder the kit's own temp files go in (test run folders, gate logs); unset: `AgentTemp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md "Temp folders"); older kit copies reject the key
+- `agent_temp_sweep` (object, checked by optional/agenttemp/agent_temp_sweep.py): the agents' temp folder to sweep and the age past which an unused entry goes

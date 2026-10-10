@@ -1,0 +1,30 @@
+{
+    "_note": "Copy to <launcher.state_dir>/sessions.json (machine state, not in git). launch.py handoff and after-reboot rewrite account and name. agent: true runs launcher.coordinator_agent, a string runs that agent, false is a plain session. repo is a name in launcher.repos. brief is named in the first message. handoff --recycle names the successor <stem>-a<N>-r<k>. autostart false: after-reboot skips the entry. docs/launcher.md 'State files'.",
+    "app": {
+        "repo": "app",
+        "agent": true,
+        "stem": "app-coordinator",
+        "state": "<app repo>/docs/ops/state.local.md",
+        "account": 1,
+        "name": "app-coordinator-a1"
+    },
+    "app-lane": {
+        "repo": "app",
+        "agent": true,
+        "stem": "lane-coordinator",
+        "state": "<app repo>/docs/ops/state.lane.local.md",
+        "brief": "<app repo>/<standing brief of the lane coordinator>.md",
+        "account": 1,
+        "name": "lane-coordinator-a1",
+        "autostart": false
+    },
+    "research": {
+        "repo": "app",
+        "agent": false,
+        "stem": "research",
+        "state": "<research folder>/QUEUE.md",
+        "brief": "<pm repo>/<research brief>.md",
+        "account": 2,
+        "name": "research-a2"
+    }
+}

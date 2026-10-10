@@ -1,0 +1,19 @@
+#!/usr/bin/env python
+"""The kit's git pre-push hook (docs/guard.md "Pre-push"): refuses, whoever
+pushes, a push to main that is not a fast-forward or deletes it, and, when the repository sets
+repo.push_block, a push to main with no gate-OK record for the pushed commit or that adds a
+commit changing an owner-only path not authored by the owner (docs/guard.md "Owner-only commits").
+Logic: kitlib.guard.prepush. Install per repository with
+`git config core.hooksPath <kit>/githooks`."""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from kitlib.guard import prepush                                   # noqa: E402
+
+if __name__ == '__main__':
+    code, message = prepush.main(sys.argv[1:], sys.stdin)
+    if message:
+        sys.stderr.write(message + '\n')
+    sys.exit(code)

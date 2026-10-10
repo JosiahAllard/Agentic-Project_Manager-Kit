@@ -1,0 +1,138 @@
+"""kitlib.worktree.task (tools/worktree_sweep_task.py): the registration line, the owner's guard
+and where the task may point. PowerShell is a fake runner: nothing is ever registered here.
+"""
+import io
+import os
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
+
+from kitlib.worktree import task
+from tests import gitfixture
+from tests.worktree.test_worktree_remove import KIT, RemoveCase
+
+ENTRY = os.path.join(KIT, 'tools', 'worktree_sweep_task.py')
+
+
+class Runner(object):
+    def __init__(self, rc=0):
+        self.rc, self.calls = rc, []
+
+    def __call__(self, args):
+        self.calls.append(args)
+        return self.rc
+
+
+class TaskCase(RemoveCase):
+
+    def setUp(self):
+        super().setUp()
+        # The kit the task points at: its own main checkout with a tools/worktree_remove.py.
+        self.kit = gitfixture.TempRepo()
+        self.addCleanup(self.kit.cleanup)
+        self.tool = self.kit.write(os.path.join('tools', 'worktree_remove.py'), '# tool\n')
+
+    def run_task(self, *argv, runner=None, root=None, tool=None):
+        runner = runner or Runner()
+        got = task.run(list(argv), runner, root or self.repo, tool or self.tool)
+        return got.code, '\n'.join(got.lines), runner
+
+
+class Task(TaskCase):
+
+    def test_print_only_registers_nothing(self):
+        rc, out, runner = self.run_task()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(runner.calls, [])
+        self.assertIn("Register-ScheduledTask -TaskName '%s-worktree-sweep'"
+                      % os.path.basename(self.repo), out)
+        self.assertIn('-C "%s" --sweep-merged --apply' % self.repo, out)
+        self.assertIn('"%s"' % os.path.normpath(self.tool), out)
+        self.assertIn(task.NOT_THE_STORE_ALIAS, out)
+        self.assertIn('-At 03:00', out)
+        self.assertIn('printed   nothing was registered', out)
+
+    def test_bare_register_is_refused_first(self):
+        rc, out, runner = self.run_task('--register', root=os.path.join(self.fx.base, 'nowhere'))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("refused   --register is the owner's act", out)
+        self.assertEqual(runner.calls, [])
+
+    def test_owner_confirmed_runs_powershell_once(self):
+        rc, out, runner = self.run_task('--register', '--owner-confirmed')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(runner.calls[0][:4], ['powershell', '-NoProfile', '-NonInteractive',
+                                               '-Command'])
+        self.assertIn('registered  powershell exited 0', out)
+
+    def test_a_powershell_failure_is_exit_1(self):
+        rc, out, _ = self.run_task('--register', '--owner-confirmed', runner=Runner(1))
+        self.assertEqual(rc, 1, out)
+        self.assertIn('failed     powershell exited 1', out)
+
+    def test_usage(self):
+        for argv in (['--owner-confirmed'], ['--register', '--register'], ['-C'], ['--repo', 'x'],
+                     ['-C', 'a', '-C', 'b'], ['extra']):
+            rc, out, runner = self.run_task(*argv)
+            self.assertEqual(rc, task.USAGE, argv)
+            self.assertEqual(runner.calls, [])
+
+    def test_a_linked_worktree_is_not_the_main_checkout(self):
+        path = self.workstream('wt', commits=0)
+        rc, out, _ = self.run_task('-C', path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('is not the main checkout', out)
+
+    def test_a_tool_in_a_branch_worktree_is_refused(self):
+        other = os.path.realpath(self.kit.worktree('copy'))
+        tool = os.path.join(other, 'tools', 'worktree_remove.py')
+        os.makedirs(os.path.dirname(tool), exist_ok=True)
+        with open(tool, 'w', encoding='utf-8') as f:
+            f.write('# a branch copy\n')
+        rc, out, _ = self.run_task(tool=tool)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('is not in a main checkout', out)
+
+    def test_a_missing_tool_is_refused(self):
+        rc, out, _ = self.run_task(tool=os.path.join(self.fx.base, 'none.py'))
+        self.assertEqual(rc, 1, out)
+        self.assertIn('the sweep tool is not at', out)
+
+    def test_the_configured_name_is_used(self):
+        self.configure({'repo': {'name': "it's"}})
+        rc, out, _ = self.run_task()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("-TaskName 'it''s-worktree-sweep'", out)
+
+
+class Quoting(unittest.TestCase):
+
+    def test_every_single_quote_is_doubled(self):
+        for q in task.SINGLE_QUOTES:
+            self.assertEqual(task.quoted('a%sb' % q), "'a%s%sb'" % (q, q))
+
+
+class Entry(TaskCase):
+
+    def test_the_entry_point_prints_usage_to_stderr(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('worktree_sweep_task_entry', ENTRY)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = mod.main(['--owner-confirmed'], runner=mock.Mock(), root=self.repo, tool=self.tool)
+        self.assertEqual(rc, 2)
+        self.assertIn('usage:', err.getvalue())
+        out, err = io.StringIO(), io.StringIO()
+        runner = Runner()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = mod.main([], runner=runner, root=self.repo, tool=self.tool)
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertIn('Register-ScheduledTask', out.getvalue())
+        self.assertEqual(runner.calls, [])
+
+
+if __name__ == '__main__':
+    unittest.main()

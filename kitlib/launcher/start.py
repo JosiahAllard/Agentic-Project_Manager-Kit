@@ -1,0 +1,292 @@
+"""Starting a session in its own window (docs/launcher.md "Start").
+
+  start       a coordinator (the default agent), any other agent, or a plain session (no agent)
+  start_entry a sessions.json entry by key: its repo, agent, stem and brief
+  deep        a deep-worker: the 1M-context model, effort xhigh, a brief, a requester to report to
+  consultant  one long-lived consultant per repo that answers engineering questions
+
+Every function returns the lines it says; a refusal is a LaunchError (nothing started, nothing
+written). None of them stops a running session: a hand-off starts the successor and the PM stops
+the old one with stop.py once the successor has checked in.
+"""
+import os
+import re
+import sys
+
+from kitlib.launcher import accounts as A
+from kitlib.launcher import lookup, state, window
+from kitlib.launcher.settings import LaunchError
+
+PM_NAME = 'Project Manager'      # the PM session's name, as every first message names it
+DEFAULT_PROMPT = ('Start up now: run your start-up routine, read docs/ops/state.local.md, check in with the PM '
+                  '(the session named %s), then continue the queue in the state note.' % PM_NAME)
+AUTOCOMPACT = (100000, 1000000)  # the CLI's range for --autocompact
+SLUG = re.compile(r'^[a-z0-9][a-z0-9-]{1,40}\Z')
+DEFAULT_AUTOCOMPACT = 170000   # a coordinator, another agent or a plain session; deep and consultant set their own
+DEEP_AUTOCOMPACT = 500000
+CONSULTANT_AUTOCOMPACT = (100000, 500000)
+CONSULTANT_DEFAULT_AUTOCOMPACT = 350000
+ROLE_AUTOCOMPACT = {'consultant': CONSULTANT_DEFAULT_AUTOCOMPACT, 'deep-worker': DEEP_AUTOCOMPACT}  # a sessions.json entry of that agent
+LONG_MODEL = 'opus[1m]'
+NOTES_DEFAULT = 'docs/ops/consultant-notes.local.md'
+DIGEST = os.path.join('docs', 'conventions-digest.md')
+
+
+def cli(*args):
+    """A launch.py command line for the owner or the PM to run."""
+    kit = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return 'python "%s" %s' % (os.path.join(kit, 'tools', 'launch.py'), ' '.join(args))
+
+
+def stop_cmd(name, successor=None, pid=None):
+    parts = ['stop', '--name', window.q(name)]
+    if successor:
+        parts += ['--successor', window.q(successor)]
+    if pid:
+        parts += ['--pid', str(pid)]
+    return cli(*parts)
+
+
+def predecessor_text(old):
+    return ("You succeed %s, which has checkpointed and starts nothing new. After a work-set wind-down it is "
+            "still landing its own branches: leave those branches and the landing slot to it until it hands them "
+            "over; otherwise don't wait on it. " % old)
+
+
+def _check_common(model, effort, autocompact, lo_hi=AUTOCOMPACT):
+    if model and not window.MODEL.match(model):
+        raise LaunchError("--model '%s' is not a model alias or name." % model)
+    if effort and effort not in window.EFFORTS:
+        raise LaunchError('--effort must be one of %s, not %r.' % (', '.join(window.EFFORTS), effort))
+    if autocompact and not lo_hi[0] <= int(autocompact) <= lo_hi[1]:
+        raise LaunchError('--autocompact must be %d..%d tokens, not %s.' % (lo_hi[0], lo_hi[1], autocompact))
+
+
+def account_folder(settings, account=None, org=None):
+    """(config folder for CLAUDE_CONFIG_DIR or None for the default folder, label 'account N'/'org N', tag)."""
+    if bool(account) == bool(org):
+        raise LaunchError('Give --account N or --org N, one of them.')
+    if org:
+        d = A.org_launch_dir(settings, org)
+        return d, 'org %s' % org, 'o%s' % org
+    d = A.launch_dir(settings, account)
+    return (None if settings.is_default(d) else d), 'account %s' % account, 'a%s' % account
+
+
+def window_text(settings, host, name, role, folder, command, config_dir):
+    return window.script(name, role, folder, command, config_dir, host.env('AGENT_TEMP'))
+
+
+def start(settings, host, repo=None, repo_path=None, account=None, org=None, prompt=None, brief=None,
+          default_prompt=DEFAULT_PROMPT, name=None, predecessor=None, no_agent=False, agent=None,
+          model=None, effort=None, autocompact=None, whatif=False):
+    """Open a session's window; the lines it says. The repo folder is --repo-path, or the
+    launcher.repos entry for --repo. autocompact None is DEFAULT_AUTOCOMPACT; 0 passes no
+    --autocompact (the CLI's own window)."""
+    if autocompact is None:
+        autocompact = DEFAULT_AUTOCOMPACT
+    if bool(repo) == bool(repo_path):
+        raise LaunchError('Give --repo <name in launcher.repos> or --repo-path <folder>, one of them.')
+    agent = None if no_agent else (agent or settings.coordinator_agent)
+    if agent and not window.AGENT.match(agent):
+        raise LaunchError("--agent '%s' is not an agent name." % agent)
+    _check_common(model, effort, autocompact)
+    folder = repo_path or settings.repo_path(repo)
+    if not os.path.isdir(folder):
+        raise LaunchError('No repo at %s' % folder)
+    config_dir, label, tag = account_folder(settings, account, org)
+    if not prompt:
+        prompt = ('Start up now: read your standing brief %s first, then run your start-up routine, check in '
+                  'with the PM (the session named %s), and begin.' % (brief, PM_NAME)) if brief else default_prompt
+    elif brief:
+        prompt = 'Read your standing brief %s first. ' % brief + prompt
+    if predecessor:
+        prompt = predecessor_text(predecessor) + prompt
+    repo_label = repo or os.path.basename(os.path.normpath(folder))
+    name = name or '%s-%s-%s' % (repo_label.lower(), agent or 'session', tag)
+    role = window.role_for(agent, settings.coordinator_agent)
+    command = window.claude_command(name, prompt, agent, model, effort, autocompact)
+    text = window_text(settings, host, name, role, folder, command, config_dir)
+    if whatif:
+        return ['Would open a new window running:', '  powershell -NoExit -Command "%s"' % text]
+    host.open_window(text)
+    return ['Started %s (%s) in a new minimized window. Remote Control name: %s' % (name, label, name)]
+
+
+def entry_start_args(settings, key, entry, account, prompt, predecessor=None, name=None, any_brief=False):
+    """start() keyword arguments for a sessions.json entry: its repo, its stem as the name, its
+    brief, and no agent for a plain entry. The brief goes to an agent entry only (a hand-off: a
+    plain entry's prompt names its brief already), or to any entry with one when any_brief (after
+    a reboot, as after-reboot.ps1 passed -Brief)."""
+    args = dict(repo=entry.get('repo'), account=account, name=name or '%s-a%s' % (entry['stem'], account),
+                prompt=prompt, predecessor=predecessor)
+    if entry.get('agent'):
+        if isinstance(entry['agent'], str):
+            args['agent'] = entry['agent']
+            if entry['agent'] in ROLE_AUTOCOMPACT:
+                args['autocompact'] = ROLE_AUTOCOMPACT[entry['agent']]
+    else:
+        args['no_agent'] = True
+    if entry.get('brief') and (entry.get('agent') or any_brief):
+        args['brief'] = entry['brief']
+    return args
+
+
+def start_entry(settings, host, key, account=None, prompt=None, whatif=False):
+    """Start the sessions.json entry `key`. On the entry's own account it keeps the entry's recorded
+    name (a recycle's <stem>-a<N>-r<M> included), so liveness, which checks that name, sees it come
+    back; on another account it is <stem>-a<N>. Refused while any session of its stem runs."""
+    sessions = state.read_sessions(settings)
+    entry = sessions.get(key)
+    if not isinstance(entry, dict) or not entry.get('stem'):
+        raise LaunchError('sessions.json has no entry %r with a stem.' % key)
+    if lookup.running_stem(host.processes(), entry['stem']):
+        raise LaunchError("A session of '%s' (stem %s) is already running; stop it first or use handoff."
+                          % (key, entry['stem']))
+    same = not account or str(account) == str(entry.get('account'))
+    account = account or entry.get('account')
+    if prompt is None and entry.get('state'):
+        prompt = ('Start up now: run your start-up routine, read %s, check in with the PM (the session named '
+                  '%s), then continue the queue in the state note.' % (entry['state'], PM_NAME))
+    name = entry.get('name') if same and entry.get('name') else None
+    return start(settings, host, whatif=whatif,
+                 **entry_start_args(settings, key, entry, str(account), prompt, name=name))
+
+
+def _pick_or(settings, host, account, out, limit=A.HEADROOM_LIMIT):
+    if account in (None, '', 'auto'):
+        n, _ = A.pick(settings, host.now(), limit)
+        out.append('auto picked account %s' % n)
+        return n
+    return str(account)
+
+
+def _refuse_live(host, name, why):
+    live = lookup.find_exact(lookup.claude_sessions(host.processes()), name)
+    if live:
+        raise LaunchError("A session named '%s' is already running (PID %s): %s" % (name, lookup.pids(live), why))
+
+
+def deep(settings, host, repo_path, requester, slug, brief=None, brief_text=None, account='auto',
+         autocompact=DEEP_AUTOCOMPACT, model=LONG_MODEL, effort='xhigh', force=False, plan=False, brief_dir=None):
+    """A deep-worker session named deep-<slug>. Every check runs before anything is written; a
+    --brief-text file is removed again when the launch fails."""
+    out = []
+    if not SLUG.match(slug or ''):
+        raise LaunchError("--slug '%s' must be 2-41 characters of a-z, 0-9 and '-', starting with a letter or digit." % slug)
+    if not (requester or '').strip() or re.search(r'[\r\n]', requester):
+        raise LaunchError("--requester must be the requesting session's name, on one line.")
+    if bool(brief) == bool(brief_text):
+        raise LaunchError('Give --brief <file> or --brief-text <text>, one of them.')
+    if not autocompact:
+        raise LaunchError('--autocompact must be %d..%d tokens, not 0.' % AUTOCOMPACT)
+    _check_common(model, effort, autocompact)
+    if not os.path.isdir(repo_path):
+        raise LaunchError('No folder at %s' % repo_path)
+    repo_path = os.path.abspath(repo_path)
+    name = 'deep-' + slug
+    if brief:
+        brief_path = brief if os.path.isabs(brief) else os.path.join(repo_path, brief)
+        if not os.path.isfile(brief_path):
+            raise LaunchError('No brief file at %s' % brief_path)
+        brief_path = os.path.abspath(brief_path)
+    acct = _pick_or(settings, host, account, out)
+    A.launch_dir(settings, acct)
+    A.check_headroom(settings, acct, host.now(), force, out)
+    _refuse_live(host, name, 'stop it first or pick another --slug.')
+    if brief_text:
+        brief_dir = brief_dir or os.path.join(host.env('AGENT_TEMP') or host.env('TEMP') or host.home, 'deep-briefs')
+        brief_path = os.path.join(brief_dir, '%s-%s.md' % (name, host.now().strftime('%Y%m%dT%H%M%S')))
+    prompt = ("You are %s, a deep-worker session started for the session named '%s'. Read your brief %s first and "
+              "work only from it. Before changing anything, make your own git worktree and branch with the repo's "
+              "worktree tool (EnterWorktree if it has none); never edit the main checkout, and never merge, land or "
+              "push. When the work is done, or you are blocked on something only the requester can settle, "
+              "SendMessage your report to '%s' (ListAgents finds it; if it is gone, send it to the session named "
+              "%s), then stay idle: the requester or the PM closes this window."
+              % (name, requester, brief_path, requester, PM_NAME))
+    wrote = False
+    if brief_text:
+        if plan:
+            out.append('Would write the brief text (%d characters) to %s' % (len(brief_text), brief_path))
+        else:
+            os.makedirs(brief_dir, exist_ok=True)
+            with open(brief_path, 'w', encoding='utf-8', newline='') as f:
+                f.write(brief_text)
+            wrote = True
+            out.append('Wrote the brief to %s' % brief_path)
+    try:
+        out += start(settings, host, repo_path=repo_path, account=acct, name=name, agent='deep-worker',
+                     model=model, effort=effort, autocompact=autocompact, prompt=prompt, whatif=plan)
+    except Exception:
+        if wrote:
+            try:
+                os.remove(brief_path)
+            except OSError:
+                pass
+            out.append('Launch failed; removed %s' % brief_path)
+        raise _with_lines(out)
+    out.append('After its report is in, stop it: %s' % stop_cmd(name))
+    return out
+
+
+def _with_lines(out):
+    """The exception being handled, as a LaunchError carrying the lines said before it."""
+    e = sys.exc_info()[1]
+    if isinstance(e, LaunchError):
+        e.lines = out + e.lines
+        return e
+    return LaunchError('%s: %s' % (type(e).__name__, e), out)
+
+
+def consultant(settings, host, repo_path, repo=None, account='auto', autocompact=CONSULTANT_DEFAULT_AUTOCOMPACT,
+               model=LONG_MODEL, effort='high', notes_path=NOTES_DEFAULT, force=False, replace=False, plan=False):
+    """The consultant session consultant-<repo>; one per repo unless --replace (an account hand-off)."""
+    out = []
+    if not os.path.isdir(repo_path):
+        raise LaunchError('No folder at %s' % repo_path)
+    repo_path = os.path.abspath(repo_path)
+    repo = repo or os.path.basename(os.path.normpath(repo_path)).lower()
+    if not SLUG.match(repo):
+        raise LaunchError("--repo '%s' must be 2-41 characters of a-z, 0-9 and '-', starting with a letter or digit." % repo)
+    if not autocompact or not CONSULTANT_AUTOCOMPACT[0] <= int(autocompact) <= CONSULTANT_AUTOCOMPACT[1]:
+        raise LaunchError('--autocompact must be %d..%d tokens (never above 500k), not %s.'
+                          % (CONSULTANT_AUTOCOMPACT + (autocompact,)))
+    _check_common(model, effort, None)
+    if not (notes_path or '').strip() or re.search(r"[\r\n']", notes_path):
+        raise LaunchError('--notes-path must be a file path on one line, without quotes.')
+    name = 'consultant-' + repo
+    notes = os.path.abspath(notes_path if os.path.isabs(notes_path) else os.path.join(repo_path, notes_path))
+    if os.path.isdir(notes):
+        raise LaunchError('--notes-path %s is a folder, not a file.' % notes)
+    acct = _pick_or(settings, host, account, out)
+    A.launch_dir(settings, acct)
+    A.check_headroom(settings, acct, host.now(), force, out)
+    live = lookup.find_exact(lookup.claude_sessions(host.processes()), name)
+    if live:
+        if not replace:
+            raise LaunchError("A session named '%s' is already running (PID %s): one consultant per repo. Ask it, "
+                              "stop it first, or pass --replace for a hand-off." % (name, lookup.pids(live)), out)
+        out.append("--replace: a session named '%s' is already running (PID %s). After the new one says ready, "
+                   "stop the old one:" % (name, lookup.pids(live)))
+        out += ['  ' + stop_cmd(name, pid=p.get('ProcessId')) for p in live]
+    digest = os.path.join(repo_path, DIGEST)
+    if not os.path.isfile(digest):
+        out.append('Warning: no conventions digest at %s; the consultant will say so when it starts.' % digest)
+    if os.path.normcase(notes).startswith(os.path.normcase(repo_path.rstrip('\\/') + os.sep)):
+        if host.git_ignored(repo_path, notes) is False:
+            out.append("Warning: git does not ignore %s; add it to the repo's .gitignore before the consultant's "
+                       'first call.' % notes)
+    prompt = ("You are %s, a consultant session for the repository at %s. Read its conventions digest "
+              "docs/conventions-digest.md, then your notes file %s (create it on your first call if it is missing), "
+              "reply 'ready', and stay idle until asked: no crons, monitors, wake-ups or polling. Answer engineering "
+              "questions by SendMessage to whoever asked; record every call and durable fact in your notes file, and "
+              "SendMessage each call to the session named %s as 'engineering call for delegated logging' with the "
+              "question, answer and reason. Never edit code, commit, land or dispatch builds. After a compaction, "
+              "reread the digest and the notes file." % (name, repo_path, notes, PM_NAME))
+    try:
+        out += start(settings, host, repo_path=repo_path, account=acct, name=name, agent='consultant', model=model,
+                     effort=effort, autocompact=autocompact, prompt=prompt, whatif=plan)
+    except Exception:
+        raise _with_lines(out)
+    out.append('To stop it: %s' % stop_cmd(name))
+    return out

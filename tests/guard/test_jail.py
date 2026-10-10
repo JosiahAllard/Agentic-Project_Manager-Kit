@@ -1,0 +1,1153 @@
+"""The write jail (docs/guard.md "Write jail"): an agent session writes only inside its own
+checkout, the temp folder and the .kit.json "guard" data_roots; the kit-json rule keeps an agent
+off the file that sets those roots. Real folders throughout, so symlinks, junctions and `..` are
+resolved the way the guard resolves them."""
+import json
+import os
+import unittest
+
+from kitlib import config as kconfig
+from kitlib.git import repo
+from kitlib.guard import commands as cm
+from kitlib.guard import context, decide, rules
+from kitlib.guard import shell as sh
+
+from . import world as W
+from .world import bash, event, ps
+
+COORDINATOR = {context.ROLE_ENV: 'coordinator'}
+OLD_MARK = {context.ROLE_ENV: 'conductor'}   # the old name of the coordinator's mark, still held
+PM = {context.ROLE_ENV: 'pm'}
+DEEP = {context.ROLE_ENV: 'deep-worker'}
+
+
+class JailWorld(W.World):
+    """World plus a sibling worktree of the same main checkout and three data folders."""
+
+    def __init__(self, data_roots=None):
+        base_kit = {'repo': {'name': 'demo', 'push_block': True}}
+        W.World.__init__(self, kit=base_kit)
+        self.sib = os.path.join(self.main, '.claude', 'worktrees', 'sib')
+        self.add = os.path.join(self.base, 'data', 'add')
+        self.ro = os.path.join(self.base, 'data', 'ro')
+        self.open = os.path.join(self.base, 'data', 'open')
+        for d in (self.sib, self.add, self.ro, self.open):
+            os.makedirs(d)
+        roots = data_roots if data_roots is not None else [
+            {'path': self.add, 'mode': 'add-only'},
+            {'path': self.ro, 'mode': 'read-only'},
+            {'path': self.open, 'mode': 'open'}]
+        self.kit({'repo': {'name': 'demo', 'push_block': True}, 'guard': {'data_roots': roots}})
+
+    def kit(self, data):
+        with open(os.path.join(self.main, '.kit.json'), 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+
+    def classify(self, path):
+        p = os.path.normcase(os.path.abspath(path))
+        if p.startswith(os.path.normcase(self.sib)):
+            return repo.Place(repo.LINKED, self.sib, '', os.path.join(self.main, '.git', 'worktrees', 'sib'),
+                              os.path.join(self.main, '.git'))
+        return W.World.classify(self, path)
+
+
+def touch(path, text='x'):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text)
+
+
+def other_drive(path):
+    here = os.path.splitdrive(path)[0].upper()
+    return 'Q:\\' if here != 'Q:' else 'R:\\'
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self.w = JailWorld()
+        self.addCleanup(self.w.cleanup)
+
+    def write(self, target, cwd=None, sub=True, env=None, tool='Write'):
+        key = 'notebook_path' if tool == 'NotebookEdit' else 'file_path'
+        ev = event(tool, {key: target, 'content': 'x', 'old_string': 'a', 'new_string': 'b'},
+                   cwd or self.w.wt, sub)
+        return decide(ev, self.w.ctx(environ=env or {}))
+
+    def run_bash(self, text, cwd=None, sub=True, env=None):
+        return decide(bash(text, cwd or self.w.wt, sub), self.w.ctx(environ=env or {}))
+
+    def run_ps(self, text, cwd=None, sub=True, env=None):
+        return decide(ps(text, cwd or self.w.wt, sub), self.w.ctx(environ=env or {}))
+
+    def allowed(self, d):
+        self.assertIsNone(d, d and d.reason)
+
+    def jailed(self, d, rule='write-jail'):
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual((d.kind, d.rule), ('deny', rule), d.reason)
+        return d
+
+
+class Roots(Base):
+    """Each root is open to an agent session; everything else is not."""
+
+    def test_own_worktree(self):
+        self.allowed(self.write(os.path.join(self.w.wt, 'src', 'a.py')))
+
+    def test_temp_folder(self):
+        self.allowed(self.write(os.path.join(self.w.temp, 'gate.log')))
+
+    def test_scratch_folder_under_temp(self):
+        self.allowed(self.write(os.path.join(self.w.temp, 'claude', 'proj', 'session', 'scratchpad', 'note.md')))
+
+    def test_agents_temp_folder_when_named(self):
+        agents = os.path.join(self.w.base, 'agenttemp')
+        os.makedirs(agents)
+        self.allowed(self.write(os.path.join(agents, 'x.txt'), env={'AGENT_TEMP': agents}))
+        self.jailed(self.write(os.path.join(agents, 'x.txt')))
+
+    def test_open_data_root(self):
+        touch(os.path.join(self.w.open, 'old.bin'))
+        self.allowed(self.write(os.path.join(self.w.open, 'old.bin')))
+
+    def test_sibling_worktree(self):
+        self.jailed(self.write(os.path.join(self.w.sib, 'a.py')))
+
+    def test_main_checkout_for_a_session_that_may_edit_one(self):
+        # a coordinator may edit a main checkout, but from its worktree the main checkout is outside
+        self.jailed(self.write(os.path.join(self.w.main, 'README.md'), env=COORDINATOR, sub=False))
+
+    def test_main_checkout_for_a_subagent_keeps_the_main_checkout_rule(self):
+        self.jailed(self.write(os.path.join(self.w.main, 'README.md')), rule='main-checkout')
+
+    def test_home_folder(self):
+        self.jailed(self.write(os.path.join(self.w.home, 'notes.txt')))
+
+    def test_other_drive(self):
+        self.jailed(self.write(os.path.join(other_drive(self.w.base), 'elsewhere', 'x.txt')))
+
+    def test_a_folder_outside_git(self):
+        self.jailed(self.write(os.path.join(self.w.plain, 'x.txt')))
+
+    def test_dotdot_is_normalised(self):
+        escape = os.path.join(self.w.wt, 'src', '..', '..', '..', '..', '..', 'plain', 'x.txt')
+        self.jailed(self.write(escape))
+        self.allowed(self.write(os.path.join(self.w.wt, 'src', '..', 'docs', 'x.md')))
+
+    def test_junction_escape(self):
+        try:
+            import _winapi
+            _winapi.CreateJunction(self.w.plain, os.path.join(self.w.wt, 'link'))
+        except (ImportError, AttributeError, OSError) as e:
+            self.skipTest('no junction: %s' % e)
+        self.jailed(self.write(os.path.join(self.w.wt, 'link', 'x.txt')))
+
+    def test_symlink_escape(self):
+        try:
+            os.symlink(self.w.plain, os.path.join(self.w.wt, 'sym'), target_is_directory=True)
+        except (OSError, NotImplementedError) as e:
+            self.skipTest('no symlink: %s' % e)
+        self.jailed(self.write(os.path.join(self.w.wt, 'sym', 'x.txt')))
+
+    def test_every_file_tool(self):
+        for tool in ('Edit', 'MultiEdit', 'NotebookEdit'):
+            with self.subTest(tool):
+                self.jailed(self.write(os.path.join(self.w.plain, 'x.ipynb'), tool=tool))
+
+    def test_the_message_names_the_roots_and_the_coordinator(self):
+        d = self.jailed(self.write(os.path.join(self.w.plain, 'x.txt')))
+        for root in (self.w.wt, self.w.temp, self.w.add, self.w.open):
+            self.assertIn(W.fwd(root), d.reason)
+        self.assertIn('ask the coordinator', d.reason.lower())
+        self.assertTrue(d.reason.endswith(rules.tag('write-jail', 'subagent')), d.reason)
+        self.assertIn('Instead: Write(file_path="%s/x.txt")' % W.fwd(self.w.wt), d.reason)
+
+
+class Cwd(Base):
+    """The session's own root comes from where it runs."""
+
+    def test_a_session_in_the_main_checkout_has_the_whole_checkout(self):
+        self.allowed(self.write(os.path.join(self.w.wt, 'a.py'), cwd=self.w.main))
+        self.allowed(self.write(os.path.join(self.w.main, 'README.md'), cwd=self.w.main, env=COORDINATOR, sub=False))
+
+    def test_outside_git_the_folder_it_runs_in(self):
+        self.allowed(self.write(os.path.join(self.w.plain, 'x.txt'), cwd=self.w.plain))
+        self.jailed(self.write(os.path.join(self.w.home, 'x.txt'), cwd=self.w.plain))
+
+    def test_the_home_folder_is_never_a_root(self):
+        self.jailed(self.write(os.path.join(self.w.home, 'x.txt'), cwd=self.w.home))
+
+
+class Sessions(Base):
+    """Agent sessions are the guard's (docs/guard.md "Session mark"): subagents and the marks in
+    guard_agent_marks. The owner's session and the PM's are not jailed."""
+
+    def outside(self, env, sub=False):
+        return self.write(os.path.join(self.w.plain, 'x.txt'), env=env, sub=sub)
+
+    def test_subagent(self):
+        self.jailed(self.outside({}, sub=True))
+
+    def test_coordinator(self):
+        self.jailed(self.outside(COORDINATOR))
+        self.jailed(self.outside(OLD_MARK))
+
+    def test_owner_and_pm_are_exempt(self):
+        self.allowed(self.outside({}))
+        self.allowed(self.outside(PM))
+
+    def test_a_mark_not_listed_is_exempt(self):
+        self.allowed(self.outside(DEEP))
+
+    def test_marks_from_the_machine_config(self):
+        self.w.user_config({'guard_agent_marks': ['coordinator', 'deep-worker']})
+        self.jailed(self.outside(DEEP))
+
+
+class DataRoots(Base):
+    def test_add_only_takes_a_new_file(self):
+        self.allowed(self.write(os.path.join(self.w.add, 'model-2.bin')))
+        self.allowed(self.run_bash('cp out/model.bin "%s/model-3.bin"' % W.fwd(self.w.add)))
+        self.allowed(self.run_bash('echo x > "%s/new.txt"' % W.fwd(self.w.add)))
+
+    def test_add_only_takes_a_copy_into_the_folder(self):
+        # a copy or move whose destination is the existing folder writes <folder>/<the source's name>
+        add = W.fwd(self.w.add)
+        for text in ('cp out/model.bin "%s/"' % add, 'cp out/model.bin "%s"' % add, 'cp -t "%s" out/model.bin' % add,
+                     'mv out/model.bin "%s/"' % add, 'cp -r out/run7 "%s/"' % add):
+            with self.subTest(text):
+                self.allowed(self.run_bash(text))
+        for text in ('Copy-Item out/model.bin "%s"' % add, 'Move-Item -Path out/model.bin -Destination "%s"' % add):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
+    def test_add_only_copy_into_the_folder_never_overwrites(self):
+        touch(os.path.join(self.w.add, 'model-1.bin'))
+        add = W.fwd(self.w.add)
+        self.jailed(self.run_bash('cp out/model-1.bin "%s/"' % add))
+        self.jailed(self.run_bash('cp out/new.bin out/model-1.bin "%s"' % add))
+        self.jailed(self.run_ps('Copy-Item out/model-1.bin "%s"' % add))
+        self.jailed(self.run_bash('cp -T out/run7 "%s"' % add))      # -T: the folder itself is the target
+        self.jailed(self.run_bash('cp "$F" "%s/"' % add))              # a source it cannot name: the folder
+        self.jailed(self.run_bash('cp out/*.bin "%s/"' % add))         # a wildcard: the folder
+        self.jailed(self.run_bash('robocopy out "%s" new.bin' % add))  # docs/guard.md "Known limits"
+        self.jailed(self.run_bash('cp out/new.bin "%s/"' % W.fwd(self.w.ro)))   # read-only stays read-only
+        self.jailed(self.run_bash('cp other/.kit.json "%s/"' % W.fwd(self.w.wt)), rule='kit-json')
+
+    def test_add_only_takes_a_link_or_an_install_into_the_folder(self):
+        add = W.fwd(self.w.add)
+        for text in ('ln -s out/new.bin "%s/"' % add, 'ln out/new.bin "%s"' % add, 'ln -st "%s" out/new.bin' % add,
+                     'install out/new.bin "%s/"' % add, 'install -m 644 out/new.bin "%s"' % add,
+                     'install -t "%s" out/new.bin' % add, 'cp -rt "%s" out/run7' % add,
+                     'cp --target-dir="%s" out/new.bin' % add, 'cd "%s" && ln -s ../x/new.bin' % add):
+            with self.subTest(text):
+                self.allowed(self.run_bash(text))
+
+    def test_add_only_target_directory_forms_never_overwrite(self):
+        # -t in a cluster, -tDIR, --target-directory=DIR and its abbreviations name the folder
+        touch(os.path.join(self.w.add, 'model-1.bin'))
+        add = W.fwd(self.w.add)
+        for text in ('cp -rt "%s" out/model-1.bin' % add, 'cp -at "%s" out/model-1.bin' % add,
+                     'cp -t"%s" out/model-1.bin' % add, 'cp --target-directory="%s" out/model-1.bin' % add,
+                     'cp --target-dir="%s" out/model-1.bin' % add, 'cp --target-d "%s" out/model-1.bin' % add,
+                     'mv -vt "%s" out/model-1.bin' % add, 'ln -st "%s" out/model-1.bin' % add,
+                     'ln --target-directory="%s" out/model-1.bin' % add, 'install -vt "%s" out/model-1.bin' % add,
+                     'install -t"%s" out/model-1.bin' % add, 'ln -s out/model-1.bin "%s/"' % add,
+                     'install out/model-1.bin "%s/"' % add, 'cd "%s" && ln -s ../x/model-1.bin' % add):
+            with self.subTest(text):
+                self.jailed(self.run_bash(text))
+
+    def test_add_only_copy_options_off_the_list_judge_the_folder(self):
+        # an option that can change what lands in the folder (--parents writes <add>/out/sub/x, a
+        # backup renames the old file, an abbreviation of --no-target-directory) judges the folder
+        add = W.fwd(self.w.add)
+        for text in ('cp --parents out/sub/x "%s/"' % add, 'cp --par out/sub/x "%s/"' % add,
+                     'cp --no-ta out/run7 "%s"' % add, 'cp --no-target-dir out/run7 "%s"' % add,
+                     'mv --no-target out/run7 "%s"' % add, 'cp -b out/new.bin "%s/"' % add,
+                     'cp --backup=numbered out/new.bin "%s/"' % add, 'cp -S .old out/new.bin "%s/"' % add,
+                     'cp -f out/new.bin "%s/"' % add, 'cp -u out/new.bin "%s/"' % add,
+                     'cp --bogus out/new.bin "%s/"' % add, 'cp --no out/new.bin "%s/"' % add,
+                     'cp $OPT out/new.bin "%s/"' % add, 'cp -t "%s" -t "%s" out/new.bin' % (add, add),
+                     'ln -sf out/new.bin "%s/"' % add,
+                     'install -D out/new.bin "%s/"' % add, 'cp -- out/D:new.bin "%s/"' % add):
+            with self.subTest(text):
+                self.jailed(self.run_bash(text))
+
+    def test_add_only_cmd_copy_and_move(self):
+        touch(os.path.join(self.w.wt, 'out', 'new.bin'))
+        touch(os.path.join(self.w.wt, 'out', 'model-1.bin'))
+        touch(os.path.join(self.w.wt, 'out', 'run7', 'a.bin'))
+        touch(os.path.join(self.w.add, 'model-1.bin'))
+        add = self.w.add
+        self.allowed(self.run_ps('cmd /c copy out\\new.bin "%s"' % add))
+        self.allowed(self.run_ps('cmd /c move /y out\\new.bin "%s\\"' % add))
+        self.jailed(self.run_ps('cmd /c copy out\\model-1.bin "%s"' % add))
+        self.jailed(self.run_ps('cmd /c move out\\model-1.bin "%s"' % add))
+        self.jailed(self.run_ps('cmd /c copy out\\run7 "%s"' % add))       # cmd copies the folder's files
+
+    def test_add_only_never_overwrites_moves_or_deletes(self):
+        old = os.path.join(self.w.add, 'model-1.bin')
+        touch(old)
+        fold = W.fwd(old)
+        self.jailed(self.write(old))
+        self.jailed(self.write(old, tool='Edit'))
+        self.jailed(self.run_bash('rm "%s"' % fold))
+        self.jailed(self.run_bash('mv "%s" "%s/model-9.bin"' % (fold, W.fwd(self.w.add))))
+        self.jailed(self.run_bash('echo x >> "%s"' % fold))
+        self.jailed(self.run_ps('Remove-Item -Recurse "%s"' % W.fwd(self.w.add)))
+        self.jailed(self.run_ps('Set-Content -Path "%s" -Value x' % fold))
+
+    def test_read_only(self):
+        self.jailed(self.write(os.path.join(self.w.ro, 'new.txt')))
+        self.jailed(self.run_bash('touch "%s/new.txt"' % W.fwd(self.w.ro)))
+
+    def test_read_only_wins_inside_another_root(self):
+        inner = os.path.join(self.w.temp, 'frozen')
+        os.makedirs(inner)
+        self.w.kit({'repo': {'name': 'demo'}, 'guard': {'data_roots': [{'path': inner, 'mode': 'read-only'}]}})
+        self.jailed(self.write(os.path.join(inner, 'x.txt')))
+        self.allowed(self.write(os.path.join(self.w.temp, 'x.txt')))
+
+    def test_a_worktree_kit_json_names_no_root(self):
+        touch(os.path.join(self.w.wt, '.kit.json'),
+              json.dumps({'guard': {'data_roots': [{'path': self.w.plain, 'mode': 'open'}]}}))
+        self.jailed(self.write(os.path.join(self.w.plain, 'x.txt')))
+
+    def test_exempt_sessions_ignore_modes(self):
+        old = os.path.join(self.w.add, 'model-1.bin')
+        touch(old)
+        self.allowed(self.write(old, sub=False))
+
+
+class Config(unittest.TestCase):
+    """guard.data_roots in .kit.json: entries {path, mode}, path absolute, an inline object only."""
+
+    def load(self, guard):
+        w = W.World(kit={'repo': {'name': 'demo'}, 'guard': guard})
+        self.addCleanup(w.cleanup)
+        return kconfig.load(w.main)
+
+    def test_default_is_empty(self):
+        w = W.World()
+        self.addCleanup(w.cleanup)
+        self.assertEqual(kconfig.load(w.main).section('guard')['data_roots'], [])
+
+    def test_entries(self):
+        roots = [{'path': 'D:\\data\\models', 'mode': 'add-only'}, {'path': '//host/share/x', 'mode': 'read-only'},
+                 {'path': 'E:/scratch', 'mode': 'open', 'why': 'test'}]
+        self.assertEqual(self.load({'data_roots': roots}).section('guard')['data_roots'], roots)
+
+    def test_bad_entries_refuse(self):
+        for bad in ([{'path': 'D:/x', 'mode': 'append'}], [{'path': 'data/models', 'mode': 'open'}],
+                    [{'mode': 'open'}], [{'path': 'D:/x'}], [{'path': 'D:/x', 'mode': 'open', 'extra': 1}]):
+            with self.subTest(bad):
+                with self.assertRaises(kconfig.ConfigError):
+                    self.load({'data_roots': bad})
+
+    def test_not_a_section_file(self):
+        with self.assertRaises(kconfig.ConfigError):
+            self.load('tools/guard.json')
+
+
+class ShellForms(Base):
+    """The parsed write targets the jail judges (docs/guard.md "Shell writes")."""
+
+    def out(self, name='x.txt'):
+        return W.fwd(os.path.join(self.w.plain, name))
+
+    def test_bash_writers(self):
+        for text in ('echo hi > "%s"' % self.out(), 'rm -rf "%s"' % self.out('d'), 'mv a.txt "%s"' % self.out(),
+                     'cp a.txt "%s"' % self.out(), 'sed -i s/a/b/ "%s"' % self.out(), 'touch "%s"' % self.out(),
+                     'cd "%s" && rm x.txt' % W.fwd(self.w.plain)):
+            with self.subTest(text):
+                self.jailed(self.run_bash(text))
+
+    def test_copy_target_directory_forms_judge_the_directory(self):
+        # the directory a -t cluster, -tDIR or --target-directory[=] (or an abbreviation) names is
+        # what cp, mv, ln and install write, not the source
+        d = W.fwd(self.w.plain)
+        for text in ('cp -rt "%s" a.txt' % d, 'cp -at "%s" a.txt' % d, 'cp -t"%s" a.txt' % d, 'cp -t "%s" a.txt' % d,
+                     'cp --target-directory="%s" a.txt' % d, 'cp --target-directory "%s" a.txt' % d,
+                     'cp --target-dir="%s" a.txt' % d, 'cp --target "%s" a.txt' % d, 'mv -ft "%s" a.txt' % d,
+                     'mv --target-d="%s" a.txt' % d, 'ln -sft "%s" a.txt' % d, 'ln -t"%s" a.txt' % d,
+                     'ln --target-directory="%s" a.txt' % d, 'install -Dt "%s" a.txt' % d,
+                     'install -m644 -t"%s" a.txt' % d, 'install --target-directory="%s" a.txt' % d,
+                     'cp --bogus "%s" a.txt' % d):
+            with self.subTest(text):
+                self.jailed(self.run_bash(text))
+        self.allowed(self.run_bash('cp -rt out a.txt'))
+        self.allowed(self.run_bash('cp -S "%s" a.txt b.txt' % d))         # -S takes a suffix: b.txt is written
+
+    def test_copy_end_of_options_and_a_trailing_target_option(self):
+        # after `--` a word that looks like -tDIR is an operand, so the last operand is written;
+        # -t or --target-directory with no word after it names no directory
+        d = W.fwd(self.w.plain)
+        for text in ('cp -- -tout "%s/x.txt"' % d, 'mv -- -tout "%s/x.txt"' % d, 'ln -s -- -tout "%s/x"' % d,
+                     'cp a.txt "%s/x.txt" -t' % d, 'ln -s a.txt "%s/x" --target-directory' % d):
+            with self.subTest(text):
+                self.jailed(self.run_bash(text))
+        self.allowed(self.run_bash('cp -t out -- "%s/a.txt"' % d))
+        self.allowed(self.run_bash('cp -- out/new.bin "%s/"' % W.fwd(self.w.add)))   # `--` is no option
+
+    def test_powershell_writers(self):
+        for text in ('Remove-Item -Recurse -Force "%s"' % self.out('d'), 'Set-Content -Path "%s" -Value x' % self.out(),
+                     '"x" | Out-File "%s"' % self.out(), 'Copy-Item a.txt "%s"' % self.out()):
+            with self.subTest(text):
+                self.jailed(self.run_ps(text))
+
+    def test_git_dash_c(self):
+        for text in ('git -C "%s" commit -m x' % W.fwd(self.w.plain), 'git -C "%s" reset --keep HEAD~1' % W.fwd(self.w.sib),
+                     'git -C "%s" checkout -b x' % W.fwd(self.w.sib), 'git -C "%s" add a.py' % W.fwd(self.w.sib),
+                     'cd "%s" && git commit -m x' % W.fwd(self.w.sib)):
+            with self.subTest(text):
+                self.jailed(self.run_bash(text))
+
+    def test_git_judged_by_the_folder_it_makes(self):
+        self.jailed(self.run_bash('git worktree add "%s" -b x' % W.fwd(os.path.join(self.w.plain, 'wt2'))))
+        self.jailed(self.run_bash('git clone https://example.invalid/r.git "%s"' % W.fwd(os.path.join(self.w.plain, 'r'))))
+        self.allowed(self.run_bash('git worktree add "%s" -b x' % W.fwd(os.path.join(self.w.temp, 'wt2'))))
+        self.allowed(self.run_bash('git clone https://example.invalid/r.git "%s"' % W.fwd(os.path.join(self.w.temp, 'r'))))
+
+    def test_git_reads_anywhere(self):
+        for text in ('git -C "%s" status' % W.fwd(self.w.sib), 'git -C "%s" log --oneline -3' % W.fwd(self.w.plain),
+                     'git -C "%s" diff main' % W.fwd(self.w.sib), 'git -C "%s" worktree list' % W.fwd(self.w.sib),
+                     'git -C "%s" branch -a' % W.fwd(self.w.sib), 'git -C "%s" stash list' % W.fwd(self.w.sib)):
+            with self.subTest(text):
+                self.allowed(self.run_bash(text))
+
+    def test_git_in_own_worktree(self):
+        self.allowed(self.run_bash('git commit -m x'))
+        self.allowed(self.run_bash('git -C "%s" add a.py' % W.fwd(self.w.wt)))
+
+    def test_writes_inside_the_roots(self):
+        for text in ('echo hi > out.txt', 'rm -rf build', 'mkdir -p "%s/run"' % W.fwd(self.w.temp),
+                     'echo x > /tmp/kit-x.log', 'python tools/x.py > "%s/x.log" 2>&1' % W.fwd(self.w.temp)):
+            with self.subTest(text):
+                self.allowed(self.run_bash(text))
+        self.allowed(self.run_ps('Set-Content -Path out.txt -Value x'))
+
+    def test_bash_tmp_is_the_agents_temp_folder_when_named(self):
+        # /tmp stands for AGENT_TEMP when it is set, so a junction there out of the roots is judged
+        agents = os.path.join(self.w.base, 'agenttemp')
+        os.makedirs(agents)
+        try:
+            import _winapi
+            _winapi.CreateJunction(self.w.plain, os.path.join(agents, 'esc'))
+        except (ImportError, AttributeError, OSError) as e:
+            self.skipTest('no junction: %s' % e)
+        env = {'AGENT_TEMP': agents}
+        self.allowed(self.run_bash('echo x > /tmp/kit-x.log', env=env))
+        self.jailed(self.run_bash('echo x > /tmp/esc/x.log', env=env))
+
+    def test_the_alternative_is_the_same_command_in_the_worktree(self):
+        d = self.jailed(self.run_bash('echo hi > "%s"' % self.out()))
+        self.assertIn('Instead: echo hi > "%s/x.txt"' % W.fwd(self.w.wt), d.reason)
+        d = self.jailed(self.run_bash('git -C "%s" commit -m x' % W.fwd(self.w.plain)))
+        self.assertIn('Instead: git -C "%s" commit -m x' % W.fwd(self.w.wt), d.reason)
+
+
+class MainGit(Base):
+    """A repo whose .kit.json lets the lander role edit a main checkout; git run as a role."""
+
+    def setUp(self):
+        Base.setUp(self)
+        self.roles({'lander': {'edit_main_checkout': True, 'why': 'test'}})
+        self.main = W.fwd(self.w.main)
+
+    def roles(self, table):
+        self.w.kit({'repo': {'name': 'demo', 'push_block': True}, 'roles': table})
+
+    def git(self, text, agent_type='lander', tool='Bash'):
+        ev = event(tool, {'command': text, 'description': 'test'}, self.w.wt, True, agent_type)
+        return decide(ev, self.w.ctx(environ={}))
+
+    def denied(self, d):
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual(d.kind, 'deny', d.reason)
+
+    def each_denied(self, texts, tool='Bash'):
+        for text in texts:
+            with self.subTest(text):
+                self.denied(self.git(text, tool=tool))
+
+
+class LanderMainCheckout(MainGit):
+    """The lander role, and no other, may run exactly `git fetch <remote> <main>` and `git merge
+    --ff-only <remote>/<main>` in the main checkout from its worktree; nothing else it writes
+    there passes (docs/guard.md "Write jail")."""
+
+    def test_a_lander_may_fetch_and_merge_main_from_its_worktree(self):
+        m = self.main
+        for text in ('git -C "%s" fetch origin main' % m, 'git -C "%s" merge --ff-only origin/main' % m,
+                     'cd "%s" && git fetch origin main' % m, 'cd "%s" && git merge --ff-only origin/main' % m,
+                     'git.exe -C "%s" fetch origin main' % m):
+            with self.subTest(text):
+                self.allowed(self.git(text))
+        for text in ('git -C "%s" fetch origin main' % m, '& git -C "%s" merge --ff-only origin/main' % m,
+                     '& git.exe -C "%s" fetch origin main' % m, 'git.exe -C "%s" merge --ff-only origin/main' % m):
+            with self.subTest(text):
+                self.allowed(self.git(text, tool='PowerShell'))
+
+    def test_the_remote_and_main_come_from_the_config(self):
+        self.w.kit({'repo': {'name': 'demo', 'push_block': True, 'remote': 'upstream', 'main_branch': 'trunk'},
+                    'roles': {'lander': {'edit_main_checkout': True, 'why': 'test'}}})
+        self.allowed(self.git('git -C "%s" fetch upstream trunk' % self.main))
+        self.allowed(self.git('git -C "%s" merge --ff-only upstream/trunk' % self.main))
+        self.each_denied(['git -C "%s" fetch origin main' % self.main,
+                          'git -C "%s" merge --ff-only origin/main' % self.main])
+
+    def test_a_lander_fetches_nothing_but_main_from_the_remote(self):
+        m = self.main
+        self.each_denied(['git -C "%s" fetch' % m, 'git -C "%s" fetch origin' % m, 'git -C "%s" fetch --all' % m,
+                          'git -C "%s" fetch origin other' % m, 'git -C "%s" fetch other main' % m,
+                          'git -C "%s" fetch origin main:main' % m, 'git -C "%s" fetch origin +main' % m,
+                          'git -C "%s" fetch origin +main:refs/heads/main' % m,
+                          'git -C "%s" fetch origin main other' % m, 'git -C "%s" fetch --prune origin main' % m,
+                          'git -C "%s" fetch origin main --prune' % m,
+                          'git -C "%s" fetch --upload-pack=x origin main' % m,
+                          'git -C "%s" fetch --update-head-ok origin main' % m,
+                          'git -C "%s" fetch origin "$B"' % m])
+        self.each_denied(['git -C "%s" fetch' % m, '& git -C "%s" fetch origin main:main' % m,
+                          'git.exe -C "%s" fetch --prune origin main' % m], tool='PowerShell')
+
+    def test_a_lander_merges_nothing_but_a_fast_forward_to_the_remote_main(self):
+        m = self.main
+        self.each_denied(['git -C "%s" merge origin/main' % m, 'git -C "%s" merge --no-ff origin/main' % m,
+                          'git -C "%s" merge --ff-only -s ours origin/main' % m,
+                          'git -C "%s" merge --ff-only -X theirs origin/main' % m,
+                          'git -C "%s" merge --squash origin/main' % m, 'git -C "%s" merge --ff-only origin/other' % m,
+                          'git -C "%s" merge --ff-only main' % m, 'git -C "%s" merge --ff-only FETCH_HEAD' % m,
+                          'git -C "%s" merge --ff-only origin/main other' % m,
+                          'git -C "%s" merge --ff-only --no-verify origin/main' % m])
+        self.each_denied(['& git -C "%s" merge --no-ff origin/main' % m,
+                          'git.exe -C "%s" merge -s ours origin/main' % m], tool='PowerShell')
+
+    def test_a_lander_main_git_takes_no_git_option_or_environment(self):
+        m = self.main
+        self.each_denied(['git -c x.y=z -C "%s" fetch origin main' % m,
+                          'git -C "%s" -c core.hooksPath=h merge --ff-only origin/main' % m,
+                          'git --config-env=x.y=V -C "%s" fetch origin main' % m,
+                          'git --no-pager -C "%s" fetch origin main' % m,
+                          'git -C "%s" -C . fetch origin main' % m,
+                          'git --git-dir="%s/.git" fetch origin main' % m,
+                          'git --git-dir="%s/.git" --work-tree="%s" merge --ff-only origin/main' % (m, m),
+                          'GIT_DIR="%s/.git" git fetch origin main' % m,
+                          'GIT_DIR="%s/.git" GIT_WORK_TREE="%s" git merge --ff-only origin/main' % (m, m),
+                          'export GIT_DIR="%s/.git"; git fetch origin main' % m,
+                          'env FOO=1 git -C "%s" fetch origin main' % m,
+                          'FOO=1 git -C "%s" fetch origin main' % m,
+                          'git -C "$M" fetch origin main'])
+        self.each_denied(['& git -c x.y=z -C "%s" fetch origin main' % m,
+                          'git.exe --git-dir="%s/.git" fetch origin main' % m,
+                          '$env:GIT_DIR = "%s/.git"; git fetch origin main' % m,
+                          '$env:GIT_WORK_TREE = "%s"; & git merge --ff-only origin/main' % m], tool='PowerShell')
+
+    def test_a_lander_writes_nothing_else_in_main(self):
+        for text in ('git -C "%s" commit -m x' % self.main, 'git -C "%s" reset --keep HEAD~1' % self.main,
+                     'git -C "%s" pull' % self.main, 'git -C "%s" cherry-pick abc123' % self.main):
+            with self.subTest(text):
+                self.jailed(self.git(text))
+        self.denied(self.git('git -C "%s" checkout -b x' % self.main))
+        ev = event('Write', {'file_path': os.path.join(self.w.main, 'README.md'), 'content': 'x'}, self.w.wt, True,
+                   'lander')
+        self.jailed(decide(ev, self.w.ctx(environ={})))
+        self.jailed(self.git('echo x > "%s/out.txt"' % self.main))
+
+    def test_a_lander_fetches_only_in_a_main_checkout(self):
+        self.jailed(self.git('git -C "%s" fetch origin main' % W.fwd(self.w.sib)))
+        self.jailed(self.git('git -C "%s" merge --ff-only origin/main' % W.fwd(self.w.sib)))
+
+    def test_no_other_role_may_fetch_or_merge_main(self):
+        fetch, merge = 'git -C "%s" fetch origin main' % self.main, 'git -C "%s" merge --ff-only origin/main' % self.main
+        for agent_type in ('worker', 'opus-worker'):
+            with self.subTest(agent_type):
+                self.jailed(self.git(fetch, agent_type))
+                self.denied(self.git(merge, agent_type))
+        # a role the repo lets edit a main checkout still gains nothing from the jail
+        self.roles({'lander': {'edit_main_checkout': True, 'why': 'test'},
+                    'worker': {'edit_main_checkout': True, 'why': 'test'}})
+        self.jailed(self.git(fetch, 'worker'))
+        self.jailed(self.git(merge, 'worker'))
+        self.jailed(self.git('GIT_DIR="%s/.git" git fetch origin main' % self.main, 'worker'))
+        d = decide(bash(fetch, self.w.wt), self.w.ctx(environ=COORDINATOR))
+        self.jailed(d)
+
+    def test_a_lander_the_repo_keeps_out_of_main_may_not(self):
+        self.roles({'lander': {'edit_main_checkout': False, 'why': 'test'}})
+        self.jailed(self.git('git -C "%s" fetch origin main' % self.main))
+        self.denied(self.git('git -C "%s" merge --ff-only origin/main' % self.main))
+
+    def test_a_lander_commits_nowhere_through_a_computed_dash_c(self):
+        # the main-checkout history rule refuses the commit first; the jail refuses the rest
+        self.each_denied(['git -C "$M" commit -m x', 'git -C "$(git rev-parse --show-toplevel)" commit -m x'])
+        self.each_denied(['git -C "$M" commit -m x'], tool='PowerShell')
+        for text in ('git -C "$M" symbolic-ref HEAD refs/heads/x', 'git -C "$M" branch -m main old',
+                     'GIT_DIR="%s/.git" git tag v9' % self.main):
+            with self.subTest(text):
+                self.jailed(self.git(text))
+
+
+class UnplacedGit(MainGit):
+    """A git write whose checkout the text cannot place (GIT_DIR, GIT_WORK_TREE, --git-dir,
+    --work-tree, core.worktree, a computed -C) is refused for every agent role: it may be a main
+    checkout, where re-pointing HEAD or renaming main sends the next lander's merge to the wrong
+    branch (docs/guard.md "Write jail")."""
+
+    def test_a_worker_may_not_repoint_main_through_git_dir(self):
+        m = self.main
+        for text in ('git --git-dir="%s/.git" symbolic-ref HEAD refs/heads/x' % m,
+                     'git --git-dir="%s/.git" branch -m main old' % m,
+                     'GIT_DIR="%s/.git" git symbolic-ref HEAD refs/heads/x' % m,
+                     'GIT_DIR="%s/.git" git branch -m main old' % m):
+            with self.subTest(text):
+                self.jailed(self.git(text, 'worker'))
+        self.jailed(self.git('$env:GIT_DIR = "%s/.git"; git branch -m main old' % m, 'worker', tool='PowerShell'))
+
+    def test_a_worker_writes_no_checkout_it_cannot_place(self):
+        m = self.main
+        for text in ('git --git-dir="%s/.git" tag v9' % m, 'git --git-dir="%s/.git" config user.name x' % m,
+                     'git --git-dir="%s/.git" --work-tree="%s" update-index --assume-unchanged a.py' % (m, m),
+                     'git --git-dir="%s/.git" --work-tree="%s" add a.py' % (m, m), 'git --git-dir="%s/.git" gc' % m,
+                     'git --git-dir="%s/.git" fetch origin x:refs/heads/y' % m,
+                     'GIT_WORK_TREE="%s" git add a.py' % m, 'git -c core.worktree="%s" add a.py' % m,
+                     'git -C "$M" tag v9'):
+            with self.subTest(text):
+                self.jailed(self.git(text, 'worker'))
+
+    def worker_denied(self, texts, rule='write-jail', tool='Bash'):
+        for text in texts:
+            with self.subTest(text):
+                self.jailed(self.git(text, 'worker', tool=tool), rule)
+
+    def test_a_later_dash_c_never_places_an_unplaceable_git(self):
+        # -C after --git-dir, --work-tree, core.worktree or GIT_DIR names the cwd, not the git dir
+        m, wt = self.main, W.fwd(self.w.wt)
+        for text in ('git --git-dir="%s/.git" -C "%s" symbolic-ref HEAD refs/heads/x' % (m, wt),
+                     'git -C "%s" --git-dir="%s/.git" symbolic-ref HEAD refs/heads/x' % (wt, m),
+                     'GIT_DIR="%s/.git" git -C "%s" branch -m main old' % (m, wt),
+                     'git -c core.worktree="%s" -C "%s" add a.py' % (m, wt),
+                     'git --work-tree="%s" -C "%s" add a.py' % (m, wt)):
+            with self.subTest(text):
+                self.jailed(self.git(text, 'worker'))
+        self.worker_denied(['git --git-dir="%s/.git" -C "%s" commit -m x' % (m, wt),
+                            'git --git-dir="%s/.git" -C "%s" merge kit/x' % (m, wt),
+                            'git --git-dir="%s/.git" -C "%s" rebase main' % (m, wt)], 'git-main-history')
+        self.worker_denied(['$env:GIT_DIR = "%s/.git"; git -C "%s" branch -m main old' % (m, wt)], tool='PowerShell')
+        for text in ('git --git-dir="%s/.git" -C "%s" log --oneline -3' % (m, wt),
+                     'GIT_DIR="%s/.git" git -C "%s" status' % (m, wt)):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+
+    def test_more_git_environment_is_unplaceable(self):
+        for var in ('GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0',
+                    'GIT_CONFIG_PARAMETERS'):
+            self.worker_denied(['%s=x git add a.py' % var, 'env %s=x git add a.py' % var,
+                                'export %s=x; git add a.py' % var])
+            self.worker_denied(['$env:%s = "x"; git add a.py' % var, 'Set-Item env:%s x; git add a.py' % var],
+                               tool='PowerShell')
+            with self.subTest(var):
+                self.allowed(self.git('%s=x git log -3' % var, 'worker'))
+        self.worker_denied(['git --config-env=user.name=V add a.py', 'git --config-env user.name=V add a.py'])
+        self.worker_denied(['git --config-env=core.hooksPath=V commit -m x'], 'git-main-history')
+
+    def test_an_unplaceable_git_reads_only_what_is_plainly_a_read(self):
+        m = self.main
+        for text in ('git --git-dir="%s/.git" branch --unset-up' % m, 'git --git-dir="%s/.git" branch --set-up=o/x' % m,
+                     'git --git-dir="%s/.git" tag --del v1' % m, 'git --git-dir="%s/.git" config --unset x.y' % m,
+                     'git --git-dir="%s/.git" log --output=x.txt' % m, 'git --git-dir="%s/.git" show --output x.txt' % m,
+                     'git --git-dir="%s/.git" diff --outp=x.txt' % m, 'git --git-dir="%s/.git" log "$R"' % m):
+            with self.subTest(text):
+                self.jailed(self.git(text, 'worker'))
+        for text in ('git --git-dir="%s/.git" branch --list' % m, 'git --git-dir="%s/.git" branch -a' % m,
+                     'git --git-dir="%s/.git" tag -l' % m, 'git --git-dir="%s/.git" config --get user.name' % m,
+                     'git --git-dir="%s/.git" log --oneline -3' % m):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+
+    def test_every_spelling_of_a_git_environment_assignment_is_unplaceable(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.worker_denied(['$env:GIT_DIR="%s/.git"; %s' % (m, g), '$Env:Git_Dir="%s/.git"; %s' % (m, g),
+                            '${env:GIT_DIR} = "%s/.git"; %s' % (m, g), '${env:GIT_DIR}="%s/.git"; %s' % (m, g),
+                            '${env:GIT_DIR} += "x"; %s' % g,
+                            'Set-Content env:GIT_DIR "%s/.git"; %s' % (m, g),
+                            'Set-Content -Path env:GIT_DIR -Value "%s/.git"; %s' % (m, g),
+                            'sc env:GIT_DIR "%s/.git"; %s' % (m, g), 'Add-Content env:GIT_DIR "x"; %s' % g,
+                            'New-Item -Path env: -Name GIT_DIR -Value "%s/.git"; %s' % (m, g),
+                            'New-Item -Name:GIT_DIR -Path:env: -Value "%s/.git"; %s' % (m, g),
+                            'ni -Path env:\\ -Name GIT_DIR -Value "%s/.git"; %s' % (m, g),
+                            'Rename-Item env:MY_DIR -NewName GIT_DIR; %s' % g,
+                            'Copy-Item env:MY_DIR env:GIT_DIR; %s' % g], tool='PowerShell')
+        self.worker_denied(['GIT_DIR+="%s/.git" %s' % (m, g), 'GIT_DIR+="%s/.git"; %s' % (m, g),
+                            'export GIT_DIR+=x; %s' % g, 'read GIT_DIR <<< "%s/.git"; export GIT_DIR; %s' % (m, g)])
+        # naming a variable is not setting it
+        for text in ('Write-Output $env:GIT_DIR; %s' % g, 'Get-Content env:GIT_DIR; %s' % g):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker', tool='PowerShell'))
+
+    def test_git_environment_set_anywhere_in_the_line_leaves_all_its_git_unplaceable(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.worker_denied(['eval "export GIT_DIR=%s/.git"; %s' % (m, g),
+                            '. /dev/stdin <<< "export GIT_DIR=%s/.git"; %s' % (m, g),
+                            'source /dev/stdin <<EOF\nexport GIT_DIR=%s/.git\nEOF\n%s' % (m, g),
+                            'env -S "GIT_DIR=%s/.git true"; %s' % (m, g),
+                            'bash -c "export GIT_DIR=%s/.git"; %s' % (m, g),
+                            '%s; export GIT_DIR=%s/.git' % (g, m)])
+        self.worker_denied(['Invoke-Expression \'$env:GIT_DIR = "%s/.git"\'; %s' % (m, g),
+                            'iex \'$env:GIT_DIR = "%s/.git"\'; %s' % (m, g)], tool='PowerShell')
+        self.allowed(self.git('eval "export GIT_DIR=%s/.git"; git -C "%s" status' % (m, wt), 'worker'))
+
+    def test_a_sourced_here_string_is_read_like_eval(self):
+        self.worker_denied(['. /dev/stdin <<< "git -C %s commit -m x"' % self.main,
+                            'source /dev/stdin <<EOF\ngit -C "%s" commit -m x\nEOF' % self.main], 'git-main-history')
+
+    def test_a_plus_equals_assignment_is_not_the_program(self):
+        m = self.main
+        self.worker_denied(['X+=1 git -C "%s" branch -m main old' % m, 'env X+=1 git -C "%s" branch -m main old' % m])
+        self.worker_denied(['X+=1 git -C "%s" commit -m x' % m], 'git-main-history')
+        self.worker_denied(['X+=1 taskkill /IM node.exe', 'A=1 X+=1 pkill node'], 'kill-by-name')
+
+    def test_a_backslash_in_the_variable_name_hides_nothing(self):
+        # bash drops the backslash: export and env are handed GIT_DIR=...
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.worker_denied(['export GIT_D\\IR="%s/.git"; %s' % (m, g), 'declare -x GIT_D\\IR="%s/.git"; %s' % (m, g),
+                            'export GIT_DIR\\="%s/.git"; %s' % (m, g), 'export GIT\\_DIR="%s/.git"; %s' % (m, g),
+                            'export GIT_D\\IR; %s' % g,
+                            'env GIT_D\\IR="%s/.git" %s' % (m, g), 'env GIT_D\\IR=%s/.git %s' % (m, g)])
+
+    def test_allexport_makes_every_assignment_of_the_line_a_git_environment(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.worker_denied(['set -a; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
+                            'set -a; printf -v GIT_DIR "%%s" "%s/.git"; %s' % (m, g),
+                            'set -a; for GIT_DIR in "%s/.git"; do %s; done' % (m, g),
+                            'set -o allexport; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
+                            'set -ea; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
+                            'set -eo allexport; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
+                            '%s; set -a' % g])
+        for text in ('set -e; read X <<< y; %s' % g, 'set -euo pipefail; %s' % g, 'set +a; %s' % g):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+
+    def test_a_computed_variable_name_leaves_git_unplaceable(self):
+        # the name may be GIT_DIR: the line's git cannot be placed, so a subagent's git write is
+        # refused wherever it runs; the parse stays clean, and the main role is not refused by it
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        cases = [('Bash', 'V=GIT_DIR; export $V="%s/.git"; %s' % (m, g)),
+                 ('Bash', 'V=GIT_DIR; declare -x "$V=%s/.git"; %s' % (m, g)),
+                 ('Bash', 'V=GIT_DIR; export "$V"; %s' % g),
+                 ('PowerShell', "$n='GIT_DIR'; Set-Item \"env:$n\" x; %s" % g),
+                 ('PowerShell', "$n='GIT_DIR'; New-Item -Path env: -Name $n -Value x; %s" % g),
+                 ('PowerShell', "[Environment]::SetEnvironmentVariable($n, 'x'); %s" % g),
+                 ('PowerShell', "[Environment]::SetEnvironmentVariable(\"GIT_$n\", 'x'); %s" % g)]
+        for tool, text in cases:
+            for where in (self.w.wt, self.w.main):
+                with self.subTest(text, where=where):
+                    p = cm.read(text, sh.BASH if tool == 'Bash' else sh.PS, W.fwd(where))
+                    self.assertTrue(p.clean, text)
+                    d = decide(event(tool, {'command': text, 'description': 'test'}, where, True, 'worker'),
+                               self.w.ctx(environ={}))
+                    # in the main checkout the main-checkout rule reads New-Item's env: as a folder
+                    # there and refuses first
+                    main_item = where == self.w.main and 'New-Item' in text
+                    self.jailed(d, 'main-checkout' if main_item else 'write-jail')
+            with self.subTest(text, role='main'):
+                self.allowed(decide(event(tool, {'command': text, 'description': 'test'}, self.w.wt),
+                                    self.w.ctx(environ={})))
+        # a computed value under a literal name is read
+        for tool, text in (('Bash', 'export FOO=$x; %s' % g), ('Bash', 'set -- "$@"; %s' % g)):
+            with self.subTest(text):
+                self.assertTrue(cm.read(text, sh.BASH if tool == 'Bash' else sh.PS, W.fwd(self.w.wt)).clean, text)
+                self.allowed(self.git(text, 'worker', tool=tool))
+        # [Environment]:: is read only as a literal-name GetEnvironmentVariable, and Set-Content
+        # writes env: items too, so a computed item path may be one
+        self.fail_closed(["[Environment]::SetEnvironmentVariable('FOO', $v); %s" % g,
+                          "[Environment]::SetEnvironmentVariable('FOO', 'x'); %s" % g,
+                          'Set-Content $f x; %s' % g], tool='PowerShell')
+
+    def fail_closed(self, texts, tool='Bash'):
+        """Each line runs a git write after something that may change the environment unread:
+        its git is unplaceable (write-jail for a worker) though the line parses clean."""
+        for text in texts:
+            with self.subTest(text):
+                self.assertTrue(cm.read(text, sh.BASH if tool == 'Bash' else sh.PS, W.fwd(self.w.wt)).clean, text)
+                self.jailed(self.git(text, 'worker', tool=tool))
+
+    def test_bash_env_changers_the_guard_cannot_read_leave_git_unplaceable(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.fail_closed([
+            # a leading backslash: bash hands export and env GIT_DIR=...
+            'export \\GIT_DIR="%s/.git"; %s' % (m, g),
+            'env \\GIT_DIR="%s/.git" %s' % (m, g),
+            # allexport in a nested shell, in any place of set, through shopt and SHELLOPTS
+            "bash -a -c 'read GIT_DIR <<< \"%s/.git\"; %s'" % (m, g),
+            "bash -ac 'read GIT_DIR <<< \"%s/.git\"; %s'" % (m, g),
+            "bash -o allexport -c 'read GIT_DIR <<< \"%s/.git\"; %s'" % (m, g),
+            'set +e -a; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
+            'shopt -so allexport; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
+            "env SHELLOPTS=allexport bash -c 'read GIT_DIR <<< \"%s/.git\"; %s'" % (m, g),
+            'export SHELLOPTS; %s' % g,
+            # a name reference and a computed name under -x
+            'declare -n r=GIT_DIR; export r="%s/.git"; %s' % (m, g),
+            'f() { local -x $1="%s/.git"; %s; }; f GIT_DIR' % (m, g),
+            # a GIT_* name outside the identity names, a sourced file, an alias
+            'export GIT_EXEC_PATH=/x; %s' % g,
+            '. ./.env; %s' % g,
+            'source ./.env; %s' % g,
+            'set -a; . ./.env; set +a; %s' % g,
+            'export $(cat .env | xargs); %s' % g])
+        # cmd's set with a name it expands
+        self.fail_closed(['cmd /c "set %%V%%=%s/.git & %s"' % (m, g), 'cmd /c "set !V!=%s/.git & %s"' % (m, g)],
+                         tool='PowerShell')
+
+    def test_powershell_env_changers_the_guard_cannot_read_leave_git_unplaceable(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.fail_closed([
+            "$p='env:GIT_DIR'; Set-Item -Path $p '%s/.git'; %s" % (m, g),
+            "Set-Item \"${e}:GIT_DIR\" '%s/.git'; %s" % (m, g),
+            "Set-Item -Path (\"env:GIT_\"+\"DIR\") '%s/.git'; %s" % (m, g),
+            "New-Item -Path $p -Name GIT_DIR -Value '%s/.git'; %s" % (m, g),
+            "Set-Location env:; Set-Item GIT_DIR '%s/.git'; %s" % (m, g),
+            "[Environment]::$m('GIT_DIR', '%s/.git'); %s" % (m, g),
+            # assignments the one-target reading missed
+            "$env:A, $env:GIT_DIR = 1, '%s/.git'; %s" % (m, g),
+            "$a = $env:GIT_DIR = '%s/.git'; %s" % (m, g),
+            # $env:TEMP in a path is a read only while the line leaves TEMP alone
+            "$env:TEMP = 'env:'; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
+            # an item from a pipe, a script run in this process
+            "'env:GIT_DIR' | Set-Item -Value '%s/.git'; %s" % (m, g),
+            '. .\\setenv.ps1; %s' % g], tool='PowerShell')
+
+    def test_an_env_read_in_a_path_is_not_an_env_write(self):
+        g = 'git -C "%s" branch -m main old' % W.fwd(self.w.wt)
+        for text in ('Set-Content "$env:TEMP\\x.txt" hi', 'New-Item -ItemType Directory -Path "$env:TEMP\\x"',
+                     'Copy-Item a.txt $env:TEMP', 'Set-Item env:PATH "$env:PATH;C:\\tools"',
+                     "[Environment]::GetEnvironmentVariable('FOO')"):
+            for line in (text, '%s; %s' % (text, g)):
+                with self.subTest(line):
+                    self.assertTrue(cm.read(line, sh.PS, W.fwd(self.w.wt)).clean, line)
+                    self.allowed(self.git(line, 'worker', tool='PowerShell'))
+
+    def test_env_changers_on_a_line_with_no_git_write_stay_allowed(self):
+        wt = W.fwd(self.w.wt)
+        for text in ('set -a; . ./.env; set +a', 'export $(cat .env | xargs)', 'for v in A B; do export $v=1; done',
+                     'export $(cat .env | xargs); git -C "%s" status' % wt,
+                     'GIT_AUTHOR_DATE=x git -C "%s" branch -m main old' % wt,
+                     'export FOO=1 PATH="$PATH:/x"; git -C "%s" branch -m main old' % wt):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+        self.allowed(self.git('cmd /c "set FOO=1 & git -C "%s" branch -m main old"' % wt, 'worker', tool='PowerShell'))
+
+    def test_the_hint_names_what_leaves_git_unplaceable(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        for text, cause, instead in (
+                ('GIT_DIR="%s/.git" git branch -m main old' % m, 'GIT_DIR', 'git -C "%s" branch -m main old' % wt),
+                ('git --git-dir="%s/.git" tag v9' % m, '--git-dir', 'git -C "%s" tag v9' % wt),
+                ('git --work-tree="%s" add a.py' % m, '--work-tree', 'git -C "%s" add a.py' % wt),
+                ('git -c core.worktree="%s" add a.py' % m, 'core.worktree', 'git -C "%s" add a.py' % wt),
+                ('git --config-env=user.name=V add a.py', '--config-env', 'git -C "%s" add a.py' % wt),
+                ('git -C "$M" tag v9', 'computed -C', 'git -C "<checkout>" tag v9')):
+            with self.subTest(text):
+                d = self.jailed(self.git(text, 'worker'))
+                self.assertIn(cause, d.reason)
+                self.assertIn('Instead: %s [' % instead, d.reason)
+        for text, cause in (('GIT_DIR="%s/.git" git commit -m x' % m, 'GIT_DIR'),
+                            ('git --git-dir="%s/.git" commit -m x' % m, '--git-dir')):
+            with self.subTest(text):
+                d = self.jailed(self.git(text, 'worker'), 'git-main-history')
+                self.assertIn(cause, d.reason)
+                self.assertIn('Instead: git -C "%s" commit -m x [' % wt, d.reason)
+
+    def test_an_unplaceable_git_grep_opens_no_pager(self):
+        m = self.main
+        for text in ('git --git-dir="%s/.git" grep -O x' % m, 'git --git-dir="%s/.git" grep -Ovim x' % m,
+                     'git --git-dir="%s/.git" grep -nO x' % m,
+                     'git --git-dir="%s/.git" grep --open-files-in-pager=vim x' % m,
+                     'git --git-dir="%s/.git" grep --open x' % m):
+            with self.subTest(text):
+                self.jailed(self.git(text, 'worker'))
+        for text in ('git --git-dir="%s/.git" grep x' % m, 'git --git-dir="%s/.git" grep -n --or x' % m):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+
+    def test_a_later_dash_c_never_places_a_config_from_the_environment_or_a_computed_one(self):
+        wt = W.fwd(self.w.wt)
+        self.worker_denied(['git --config-env=core.worktree=V -C "%s" branch -m main old' % wt,
+                            'git --config-env core.worktree=V -C "%s" add a.py' % wt,
+                            'git -c "$x" -C "%s" branch -m main old' % wt, 'git -c"$x" -C "%s" add a.py' % wt])
+
+    def test_the_strict_listing_forms_still_read(self):
+        m = self.main
+        for text in ('git --git-dir="%s/.git" branch -vv' % m, 'git --git-dir="%s/.git" tag -n5' % m,
+                     'git --git-dir="%s/.git" config --file x.cfg --get a.b' % m,
+                     'git --git-dir="%s/.git" config -f x.cfg --get a.b' % m):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+        for text in ('git --git-dir="%s/.git" branch -vv new' % m, 'git --git-dir="%s/.git" config -f x.cfg a.b c' % m,
+                     'git --git-dir="%s/.git" config --file x.cfg a.b c' % m):
+            with self.subTest(text):
+                self.jailed(self.git(text, 'worker'))
+
+    def test_a_worker_still_reads_a_checkout_it_cannot_place(self):
+        m = self.main
+        for text in ('git --git-dir="%s/.git" log --oneline -3' % m, 'GIT_DIR="%s/.git" git rev-parse HEAD' % m,
+                     'git -C "$M" status', 'git --git-dir="%s/.git" branch --show-current' % m):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+
+    # ---------------------------------------------------------------- every jailed role, not only a worker
+
+    def marked(self, text, environ, tool='Bash'):
+        """The decision for a session with this launcher mark (no agent_id), run in its worktree."""
+        return decide(event(tool, {'command': text, 'description': 'test'}, self.w.wt), self.w.ctx(environ=environ))
+
+    def held_everywhere(self, texts, tool='Bash'):
+        """fail_closed for a worker, and write-jail for the coordinator's mark and its old name."""
+        self.fail_closed(texts, tool)
+        for text in texts:
+            for environ in (COORDINATOR, OLD_MARK):
+                with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                    self.jailed(self.marked(text, environ, tool))
+
+    def test_a_jailed_mark_gets_no_git_on_a_line_the_guard_cannot_read(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        cases = [('Bash', 'eval "$c"; %s' % g),
+                 ('Bash', "V='GIT_DIR=%s/.git'; env $V %s" % (m, g)),
+                 ('Bash', 'bash -c "$x"; %s' % g),
+                 ('Bash', 'eval "$c"; git -C "%s" status' % wt),
+                 ('PowerShell', 'iex $x; %s' % g),
+                 ('PowerShell', '& $x; %s' % g),
+                 ('PowerShell', 'cmd /c "for %%i in (a) do set GIT_DIR=%s/.git & %s"' % (m, g))]
+        for tool, text in cases:
+            with self.subTest(text):
+                self.assertFalse(cm.read(text, sh.BASH if tool == 'Bash' else sh.PS, W.fwd(self.w.wt)).clean, text)
+                self.jailed(self.git(text, 'worker', tool=tool), 'unreadable')
+            for environ in (COORDINATOR, OLD_MARK):
+                with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                    d = self.jailed(self.marked(text, environ, tool))
+                    self.assertIn('run the git in its own call', d.reason)
+            # the owner's session and the marks the jail does not hold keep the line in a worktree
+            for environ in ({}, {context.ROLE_ENV: 'pm'}, {context.ROLE_ENV: 'deep-worker'}):
+                with self.subTest(text, mark=environ.get(context.ROLE_ENV, 'owner')):
+                    self.allowed(self.marked(text, environ, tool))
+        # an unreadable line with no git word, or only a .git path, is not the jail's
+        for text in ('eval "$c"; ls', 'eval "$c"; ls .git', 'eval "$c"; echo "$GIT_DIR"'):
+            with self.subTest(text):
+                self.allowed(self.marked(text, COORDINATOR))
+
+    def test_a_trap_or_mapfile_callback_that_runs_before_git_leaves_it_unplaceable(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.held_everywhere(["trap 'export GIT_DIR=%s/.git' DEBUG; %s" % (m, g),
+                              "trap 'export GIT_DIR=%s/.git' ERR; %s" % (m, g),
+                              "trap 'export GIT_DIR=%s/.git' RETURN; %s" % (m, g),
+                              "trap 'export GIT_DIR=%s/.git' SIGDEBUG; %s" % (m, g),
+                              "trap x $s; %s" % g,
+                              "mapfile -C 'export GIT_DIR=%s/.git #' -c 1 a < f; %s" % (m, g),
+                              "readarray -C f -c 1 a < f; %s" % g,
+                              "mapfile -tC f a < f; %s" % g])
+        for text in ('trap - DEBUG; %s' % g, "trap '' ERR; %s" % g, "trap 'rm -f x' EXIT; %s" % g,
+                     'trap -p DEBUG; %s' % g, 'mapfile -t a < f; %s' % g):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+                self.allowed(self.marked(text, COORDINATOR))
+
+    def test_xargs_that_fills_in_words_or_git_options_leaves_git_unplaceable(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.held_everywhere(['echo GIT_DIR=%s/.git | xargs -I{} env {} %s' % (m, g),
+                              'echo GIT_DIR=x | xargs -I {} env {} %s' % g,
+                              'echo x | xargs -i env {} %s' % g,
+                              'echo x | xargs -0 -iQ env Q %s' % g,
+                              'echo x | xargs --replace=Q env Q %s' % g,
+                              'echo x | xargs --rep env {} %s' % g,
+                              # with no subcommand, the input may hold --git-dir before it
+                              'echo branch -m main old | xargs git -C "%s"' % wt])
+        # the input in a branch option reads as a computed word, so the line is unclean; held all the same
+        text = 'echo old | xargs -I{} git -C "%s" branch -m main {}' % wt
+        self.assertFalse(cm.read(text, sh.BASH, wt).clean, text)
+        self.jailed(self.git(text, 'worker'))
+        self.jailed(self.marked(text, COORDINATOR))
+        for text in ('echo x | xargs -n1 echo; %s' % g, 'ls | xargs git -C "%s" add' % wt,
+                     'echo x | xargs -I{} git -C "%s" status' % wt):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+                self.allowed(self.marked(text, COORDINATOR))
+
+    def test_powershell_splats_script_text_and_renamed_env_items_leave_git_unplaceable(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.held_everywhere([
+            "$h=@{Path='env:GIT_DIR';Value='%s/.git'}; Set-Item @h; %s" % (m, g),
+            "$h=@{Path='env:'}; Set-Location @h; %s" % g,
+            "$ExecutionContext.InvokeCommand.InvokeScript('$env:GIT_DIR=1'); %s" % g,
+            "$ExecutionContext.InvokeCommand.NewScriptBlock($s).Invoke(); %s" % g,
+            "[scriptblock]::Create($s).Invoke(); %s" % g,
+            "[System.Management.Automation.ScriptBlock]::Create($s).Invoke(); %s" % g,
+            # a name an env: item is renamed, copied or moved to may then hold env:
+            "Rename-Item env:FOO TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
+            "Rename-Item env:FOO -NewName TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
+            "Copy-Item env:FOO env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
+            "Move-Item env:FOO -Destination env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
+            # = at the start of the value's word
+            '$env:GIT_EXEC_PATH ="x"; %s' % g,
+            '$env:BASH_ENV ="x"; %s' % g,
+            '$env:GIT_DIR +="x"; %s' % g], tool='PowerShell')
+        for text in ('$env:FOO ="x"; %s' % g, "Rename-Item env:FOO BAR; Set-Content \"$env:TEMP\\x.txt\" hi; %s" % g):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker', tool='PowerShell'))
+
+    def test_text_piped_into_set_content_or_add_content_is_its_value(self):
+        wt = W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        for text in ("'text' | Set-Content notes.md; %s" % g, "'text' | Add-Content -Path notes.md; %s" % g,
+                     "'text' | Set-Content notes.md; git -C \"%s\" add notes.md" % wt):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker', tool='PowerShell'))
+                self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
+        # with no path in the text, the piped object may name the item
+        self.held_everywhere(["$o | Set-Content -Value x; %s" % g, "'env:GIT_DIR' | Set-Item -Value x; %s" % g],
+                             tool='PowerShell')
+
+    def test_each_env_changer_held_for_every_jailed_role(self):
+        """Branches the rows above reach only together: each on its own, for every jailed role."""
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.held_everywhere(['alias git="git --git-dir=%s/.git"; %s' % (m, g),
+                              'export BASH_ENV=./x.sh; bash -c \'%s\'' % g,
+                              'BASH_ENV=./x.sh %s' % g,
+                              'export BASHOPTS=x; %s' % g,
+                              'ENV=./x.sh %s' % g,
+                              'env "$n"=x %s' % g])
+        self.held_everywhere(['Set-Alias git x; %s' % g,
+                              'New-Alias g x; %s' % g,
+                              'New-PSDrive -Name Q -PSProvider Environment -Root \\; %s' % g,
+                              'Import-Module x; %s' % g,
+                              'Get-Item x -OutVariable env:GIT_DIR; %s' % g,
+                              'Get-Item x -ov:env:GIT_DIR; %s' % g,
+                              "Start-Process git -Environment @{GIT_DIR='%s/.git'} "
+                              "-ArgumentList '-C','%s','branch','-m','main','old'" % (m, wt),
+                              'cmd /c "call x.bat & %s"' % g,
+                              'cmd /c "x.bat & %s"' % g,
+                              'cmd /c "setx GIT_DIR x & %s"' % g], tool='PowerShell')
+
+    def denied_for_every_jailed_role(self, texts, tool='Bash'):
+        """Each line is refused for a worker and for the coordinator's mark and its old name, by
+        whichever rule reaches it first (the parse may be unclean)."""
+        for text in texts:
+            with self.subTest(text):
+                self.denied(self.git(text, 'worker', tool=tool))
+            for environ in (COORDINATOR, OLD_MARK):
+                with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                    self.denied(self.marked(text, environ, tool))
+
+    def test_xargs_fills_its_replace_string_into_any_later_word(self):
+        # the program word and a nested shell's text are filled in as much as git's own words
+        m, wt = self.main, W.fwd(self.w.wt)
+        self.denied_for_every_jailed_role([
+            "printf '%%s\\n' --git-dir=%s/.git | xargs -I{} sh -c 'git {} symbolic-ref HEAD refs/heads/x'" % m,
+            "printf '%%s\\n' --git-dir=%s/.git | xargs -I{} env -S 'git {} symbolic-ref HEAD refs/heads/x'" % m,
+            "printf '%%s\\n' --git-dir=%s/.git | xargs -I{} bash -c 'git {} branch -m main old'" % m,
+            'echo git | xargs -I{} {} -C %s symbolic-ref HEAD refs/heads/x' % m,
+            'echo git | xargs -IQ Q -C %s symbolic-ref HEAD refs/heads/x' % m])
+        for text in ('ls | xargs -I{} wc -l {}', 'echo x | xargs -I{} git -C "%s" status' % wt):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+                self.allowed(self.marked(text, COORDINATOR))
+
+    def test_a_trap_on_any_signal_but_exit_leaves_git_unplaceable(self):
+        # a handler on a signal the line may raise (kill, a child ending) runs before the git
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.held_everywhere(["trap 'export GIT_DIR=%s/.git' USR1; kill -USR1 $$; %s" % (m, g),
+                              "trap 'export GIT_DIR=%s/.git' CHLD; sleep 0 & %s" % (m, g),
+                              "trap 'export GIT_DIR=%s/.git' SIGINT; %s" % (m, g),
+                              "trap 'export GIT_DIR=%s/.git' EXIT USR1; %s" % (m, g),
+                              "trap 1 USR1; %s" % g])
+        for text in ("trap 'rm -f x' EXIT; %s" % g, "trap 'rm -f x' 0; %s" % g, "trap 'rm -f x' EXIT 0; %s" % g,
+                     'trap - USR1; %s' % g, "trap '' USR1; %s" % g, 'trap USR1; %s' % g):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+                self.allowed(self.marked(text, COORDINATOR))
+
+    def test_the_git_a_trap_or_mapfile_callback_runs_is_read(self):
+        # the handler is text this shell runs later, wherever it then is: its git cannot be placed
+        m, wt = self.main, W.fwd(self.w.wt)
+        self.denied_for_every_jailed_role([
+            "trap 'git -C %s symbolic-ref HEAD refs/heads/x' EXIT; true" % m,
+            "trap 'git symbolic-ref HEAD refs/heads/x' EXIT; cd %s" % m,
+            "mapfile -C 'git -C %s symbolic-ref HEAD refs/heads/x #' -c 1 a < f" % m])
+        # a handler the text does not spell is text the guard cannot read, as eval "$c" is
+        for text in ('trap "$h" EXIT; git status', 'trap -- "$h" DEBUG; git -C "%s" branch -m main old' % wt):
+            with self.subTest(text):
+                self.assertFalse(cm.read(text, sh.BASH, wt).clean, text)
+        self.denied_for_every_jailed_role(['trap "$h" EXIT; git status',
+                                           'trap -- "$h" DEBUG; git -C "%s" branch -m main old' % wt])
+
+    def test_powershell_script_text_in_every_spelling_leaves_git_unplaceable(self):
+        wt = W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.held_everywhere([
+            "[Management.Automation.ScriptBlock]::Create($s).Invoke(); %s" % g,
+            "[ScriptBlock]::Create($s).Invoke(); %s" % g,
+            "([type]'scriptblock')::Create($s).Invoke(); %s" % g,
+            "[powershell]::Create().AddScript($s).Invoke(); %s" % g,
+            "[System.Management.Automation.PowerShell]::Create().AddScript($s).Invoke(); %s" % g,
+            "$ExecutionContext.InvokeCommand.ExpandString($s); %s" % g,
+            "$ExecutionContext.InvokeCommand.GetScriptBlock($s).Invoke(); %s" % g], tool='PowerShell')
+
+    def test_script_text_named_in_a_quoted_string_is_not_run(self):
+        wt = W.fwd(self.w.wt)
+        for text in ('git -C "%s" commit -m "Handle InvokeScript in the guard"' % wt,
+                     "git -C \"%s\" commit -m 'Read [scriptblock]::Create and NewScriptBlock'" % wt,
+                     'git -C "%s" commit -m "Read [Environment]::SetEnvironmentVariable and InvokeProvider"' % wt):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker', tool='PowerShell'))
+                self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
+        # a string that runs a subexpression still counts
+        text = 'git -C "%s" commit -m "$([scriptblock]::Create($s).Invoke())"; git -C "%s" branch -m main old' % (wt, wt)
+        self.assertTrue(cm.read(text, sh.PS, wt).commands[0].git_env, text)
+        self.denied_for_every_jailed_role([text], tool='PowerShell')
+
+    def test_find_execdir_and_a_filled_in_exec_word_leave_git_unplaceable(self):
+        # -execdir runs in each found file's folder; {} under -exec is the found path
+        m, wt = self.main, W.fwd(self.w.wt)
+        self.denied_for_every_jailed_role([
+            "find %s -maxdepth 1 -name README.md -execdir git symbolic-ref HEAD refs/heads/x ';'" % m,
+            "find %s -maxdepth 1 -name README.md -okdir git branch -m main old ';'" % m,
+            "find %s -maxdepth 0 -exec git -C {} symbolic-ref HEAD refs/heads/x ';'" % m,
+            "find %s -maxdepth 0 -exec git --git-dir={}/.git branch -m main old ';'" % m,
+            "find %s -maxdepth 1 -name git -exec {} -C %s symbolic-ref HEAD refs/heads/x ';'" % (m, m)])
+        for text in ("find . -name '*.py' -exec wc -l {} +", "find . -name '*.py' -execdir wc -l {} +",
+                     'find "%s" -maxdepth 0 -exec git -C "%s" status \';\'' % (wt, wt)):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+                self.allowed(self.marked(text, COORDINATOR))
+
+
+class KitJson(Base):
+    """An agent session may not edit a .kit.json in a checkout: it names the session's own roots."""
+
+    def test_agent_edits_refused(self):
+        d = self.jailed(self.write(os.path.join(self.w.wt, '.kit.json'), tool='Edit'), rule='kit-json')
+        self.assertIn('Ask the coordinator to take the change to the owner', d.reason)
+        self.jailed(self.write(os.path.join(self.w.main, '.kit.json'), cwd=self.w.main, env=COORDINATOR, sub=False),
+                    rule='kit-json')
+        self.jailed(self.run_bash('echo {} > .kit.json'), rule='kit-json')
+        self.jailed(self.run_ps('Remove-Item .kit.json'), rule='kit-json')
+
+    def test_owner_may(self):
+        self.allowed(self.write(os.path.join(self.w.main, '.kit.json'), cwd=self.w.main, sub=False))
+
+    def test_outside_a_checkout_it_is_only_a_file(self):
+        self.allowed(self.write(os.path.join(self.w.temp, 'fixture', '.kit.json')))
+
+
+if __name__ == '__main__':
+    unittest.main()

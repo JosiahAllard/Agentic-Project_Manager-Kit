@@ -1,0 +1,44 @@
+# Agent profile: <repo>
+
+Read by the kit's agents section by section; they find their sections by these headings, so keep
+every heading (write "Not applicable." under one that does not apply). Owner-only: the coordinator
+drafts it, marks every inference, and the owner approves and commits it. Point to the repository's
+own docs and tools rather than copying them; keep machine values in config, not here.
+
+## Branches and worktrees
+Branch naming, where worktrees go and how they are made, how to commit, and which worktrees an
+agent may remove (only its own).
+
+## Build and test
+The gate command and what it covers, faster commands for one area, and how red-first is done.
+
+### Known flakes
+Tests that fail without a code cause, and how to tell a flake from a failure.
+
+## Test runner
+The tiers, the pass string to look for, and what a report should contain.
+
+## Landing
+Whether landing is standing owner-approved work, who gives the go, the landing command, its
+success line and exit code, how to verify the push, what to do on each failure verdict, and
+whether batches are allowed.
+
+## Shared resources that must be serialised
+Locks, ports, devices, accounts and anything else two agents must not use at once, and how each
+is taken and released. Never pre-empt a holder.
+
+## Risk map
+High-risk paths (a change there gets a stronger worker and a fresh reviewer) and low-risk ones.
+
+## Moves and renames
+How to move or rename without changing behaviour.
+
+## Records
+Where the backlog and decisions live, which agent writes which records, and what tracked files
+must never contain.
+
+## Art
+What visual work exists, how a change is shown to the owner, or "Not applicable."
+
+## Audio
+What audio work exists and how it is judged, or "Not applicable."

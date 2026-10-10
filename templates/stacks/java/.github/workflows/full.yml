@@ -1,0 +1,56 @@
+name: full
+
+# The full suite. Not on a push to main (that gets quick.yml): it runs on manual
+# dispatch (the coordinator starts one per batch of landings), on a pushed v* tag,
+# and on pull requests. Path filters are not evaluated for tags or dispatch.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - LICENSE
+      - .gitignore
+      - .gitattributes
+      - '.claude/**'
+      - 'tools/hooks/**'
+      - 'tools/**.ps1'
+      - 'tools/**.py'
+      - 'tools/*.json'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# No artifact upload here (test reports included). If one is ever added, never on a
+# push to main, and with retention-days: 1.
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Make the Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Build
+        run: |
+          <BUILD_COMMAND>
+
+      # A cache hit ("BUILD SUCCESSFUL in 2s", every task UP-TO-DATE) is not
+      # evidence; a fresh runner has no local build cache, so this really runs.
+      - name: Full test suite
+        run: |
+          <TEST_COMMAND>

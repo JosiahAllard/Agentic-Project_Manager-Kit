@@ -1,0 +1,52 @@
+name: quick
+
+# Per-landing check. A push to main runs only this: build + fast tests, a few
+# minutes. The full suite is full.yml (manual dispatch once per batch of landings,
+# tags, pull requests). The local gate already ran before the push, so this is the
+# final gate, not the first run. Its green does NOT cover the slow tests.
+#
+# paths-ignore: a push touching only these starts no run at all (a docs-only push
+# costs nothing). No job here reads them: repository tooling under tools/ is gated
+# locally by tools/gate.py.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - LICENSE
+      - .gitignore
+      - .gitattributes
+      - '.claude/**'
+      - 'tools/hooks/**'
+      - 'tools/**.ps1'
+      - 'tools/**.py'
+      - 'tools/*.json'
+
+# A newer run of the same event on the same ref cancels the older one still in
+# progress, so a superseded commit gets no result of its own. The event name is in
+# the group so a push never cancels a dispatched run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build
+        run: |
+          <BUILD_COMMAND>
+
+      - name: Fast tests
+        run: |
+          <FAST_TEST_COMMAND>

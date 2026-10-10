@@ -1,0 +1,12 @@
+{
+  "comment": "Python stack, the \"gate\" section of .kit.json (point it here with \"gate\": \"tools/gate.json\"; keys: docs/kit-json.md). The globs and the test command are defaults to edit: point the globs at the project's source and test folders, and the tests are found under tests/ with no tests/__init__.py needed (the repository root is on the path), but the modules import as top-level names, so relative imports between test modules do not work (use absolute ones: `from tests import helper`); the pass line requires at least one test to have run; swap the command for [\"{python}\", \"-m\", \"pytest\", \"-q\"] if the project uses pytest (then pass on its summary line instead of the unittest Ran N tests and OK).",
+  "steps": [
+    {
+      "name": "unit-tests",
+      "globs": ["src/*", "tests/*", "*.py", "pyproject.toml", "setup.cfg", "setup.py", "requirements*.txt"],
+      "exclude": ["*.md", "tools/*", "docs/*"],
+      "cmd": ["{python}", "-m", "unittest", "discover", "-s", "tests"],
+      "pass": ["(?m)^Ran [1-9][0-9]* tests? in", "(?m)^OK\\b"]
+    }
+  ]
+}

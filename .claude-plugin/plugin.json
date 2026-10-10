@@ -1,0 +1,29 @@
+{
+  "name": "claude-pm-kit",
+  "version": "0.1.0",
+  "description": "The PM kit as a Claude Code plugin (ARCHITECTURE.md, Packaging). The machine lock MCP server and the generic skills (agents and skills live in claude/); templates, optional tools and knowledge ship beside them (docs/shipping.md).",
+  "agents": [
+    "./claude/agents/asset-smith.md",
+    "./claude/agents/coordinator.md",
+    "./claude/agents/consultant.md",
+    "./claude/agents/deep-worker.md",
+    "./claude/agents/lander.md",
+    "./claude/agents/opus-worker.md",
+    "./claude/agents/records.md",
+    "./claude/agents/researcher.md",
+    "./claude/agents/reviewer.md",
+    "./claude/agents/sound-smith.md",
+    "./claude/agents/spec-writer.md",
+    "./claude/agents/strong-worker.md",
+    "./claude/agents/tech-artist.md",
+    "./claude/agents/test-runner.md",
+    "./claude/agents/worker.md"
+  ],
+  "skills": ["./claude/skills/"],
+  "mcpServers": {
+    "machine-lock": {
+      "command": "python",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/lock_server.py"]
+    }
+  }
+}

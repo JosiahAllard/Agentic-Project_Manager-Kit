@@ -1,0 +1,1065 @@
+"""One branch landed on main (docs/gate.md "Landing"; ported from an earlier per-repository
+tools/land.py).
+
+`land()` runs in the repository's MAIN checkout, on its main branch:
+
+  1  usage       --expect-main and every --expect-tip are full hashes, one tip per branch, the
+                 branches distinct; the lane is `full` or one `.kit.json` "landing".lanes
+                 declares (read from --expect-main's config)
+  2  refusals    not the main checkout, HEAD not on main, no such branch, a branch is main, the
+                 lane's branch prefix does not match, more branches than "landing".batch_max:
+                 REFUSED, nothing changed
+  3  fetch       <remote>
+  4  lock        a turn in the repository's landing queue, then the landing lock
+                 (kitlib.records.landing): at once, or waited for up to --wait seconds; not had
+                 in that time: BUSY ("The queue" below). Landings into one repository take
+                 turns; branch gates and other repositories' landings never wait for it
+  5  fetch       again under the lock, then the locked checks: main == <remote>/main ==
+                 --expect-main, the branch tip == --expect-tip, a clean main checkout, no merge
+                 in progress, the branch not already in main, (a lane) every changed path in
+                 the lane's globs, every branch commit that changes an owner-only path the
+                 landing would change authored by the owner (kitlib.guard.ownercommits; rules of
+                 --expect-main merged with the tip's), and the branch's history free of the backlog store's root
+                 commit (`ref` and `branch` stores; kitlib.backlog.at_landing). Any miss:
+                 REFUSED, the lock released, nothing merged. A landing that waited (its first
+                 look found the turn or the lock taken) whose main moved forward (main ==
+                 <remote>/main, descending from --expect-main: a landing ahead of it landed)
+                 follows it: the new main is its base from here on (its config, the checks, the
+                 merge, the gate, the records, an undo). Main moved any other way: REFUSED.
+                 A landing that took its turn at once keeps the exact check: main must be
+                 --expect-main
+  6  merge       `git merge --no-ff <tip>`; a conflict is aborted (main back at --expect-main),
+                 the lock released: FAILED
+  7  gate        the merged tree gated under the machine lock (kitlib.gate.runner.merged_gate)
+                 with the config of --expect-main; a step that passed in the branch gate of
+                 exactly this tree may count without running (kitlib.gate.reuse; never with
+                 --fresh, --full or a batch). Red, or a gate where nothing ran: the merge
+                 is undone with `git reset --keep <expect-main>` when HEAD is on main,
+                 main is exactly one merge ahead and no tracked file changed (untracked files a
+                 step left are kept and named), the lock released: FAILED / REFUSED
+  7b unchanged   green: HEAD on main at the merge, no tracked change, no untracked file; else
+                 undone as on red and nothing pushed (the pushed commit is the gated one)
+  8  record      green: the gate-OK record for the merge commit (pre-push reads it), its
+                 config_rev --expect-main
+  9  push        `git push <remote> <merge>:refs/heads/<main>`, never forced
+  10 verify      `git ls-remote` must show the merge on <remote>/<main>; then the tracking ref
+                 is fetched, the lock released: OK (LANDED)
+  11 close       after the lock: every record the `ref` or `branch` store still holds pulled by
+                 the branch is closed with reason `landed <merge>`, one store commit each
+                 (kitlib.backlog.at_landing). A close that fails, or an exception or Ctrl+C here,
+                 is a WARNING naming the command to finish it; the landing stands
+  12 cleanup     then each landed branch goes (kitlib.gate.cleanup; docs/gate.md "Branch
+                 cleanup"): its remote branch, its worktree (kitlib.worktree.remove, never
+                 forced) and its local branch (`git branch -d`). What main does not contain, a
+                 worktree with work in it or in use, and anything git refuses are kept and named;
+                 an exception or Ctrl+C here is a WARNING naming `land.py --sweep-landed`. The
+                 landing stands whatever is kept. --keep-branch (keep_branch) skips it
+
+An exception or Ctrl+C under the lock (recover): before the merge the lock is released; after it
+the merge is undone and the lock released, and KeyboardInterrupt is raised again (exit 130); one
+that ends STUCK is returned as STUCK (exit 3) whatever raised it. After the push is verified
+(phase pushed) the landing is LANDED whatever stops it: a lock release that fails, or an
+exception or Ctrl+C there, is LANDED with a WARNING (exit 0).
+
+A landing's verdict is its exit code and its LANDED / NOT LANDED / STUCK line; a `GATE OK` line
+appears only in a landing that LANDED (a green merged gate that is not landed is reworded).
+
+Anything that goes wrong after the merge and cannot be undone safely (an undo that does not
+verify, a push interrupted, refused or unverified, git failing) is STUCK: the landing lock stays
+held at phase `stuck` so no other landing starts on top of it, and the message says what is left
+and the commands that clear it.
+
+The queue: before the landing lock, a landing joins the repository's landing queue, the resource
+`landing:<git common dir>` in the machine lock's store (kitlib.lock.resource, resources.json).
+One landing has the turn; the others wait in the order they joined, and none goes ahead of an
+earlier one. At its turn a landing takes the lock file: free, it is taken; held at phase stuck,
+BUSY at once; held by a process that is surely gone, the lock is broken (LandingLock.break_lock)
+and taken, unless something is unpushed (main != <remote>/<main>, or MERGE_HEAD): then BUSY at
+once with the break command, never broken (main only behind <remote>/<main>: BUSY at once with
+the fast-forward command, after which the next landing breaks it); held by a live process or a token holder (a tool
+outside the queue), waited for. One --wait covers the queue and the file. The turn is given up
+with the lock, and whenever the landing ends (STUCK included: the stuck lock file keeps the next
+landing out).
+
+A batch (several branches, one --expect-tip each, merged in the order given): every branch passes
+the locked checks, and no tip may contain another; the branches are merged one after another with
+--no-ff, the merged tree is gated once against --expect-main, and the last merge is pushed. A
+conflict on any branch aborts that merge and undoes the earlier ones; a red gate undoes them all.
+Each branch gets its own result record.
+"""
+import itertools
+import os
+import time
+
+from kitlib import gate as G
+from kitlib.backlog import at_landing
+import kitlib.config as kconfig
+from kitlib.config.types import ConfigError
+from kitlib.gate import cleanup, result, reuse, runner
+from kitlib.gate import steps as S
+from kitlib.git import cmd, refs, repo
+from kitlib.guard import ownercommits
+from kitlib.lock import resource as lockres
+from kitlib.lock.store import Store
+from kitlib.records import gate_ok
+from kitlib.records import landing
+
+PUSH_TIMEOUT = 600      # seconds
+FETCH_TIMEOUT = 300
+MERGE_TIMEOUT = 300
+POLL_S = 5.0
+STEP_CMD = '    $ '      # a STUCK clear step's command line starts with this
+
+
+class _Stuck(Exception):
+    pass
+
+
+def _paths(entries):
+    return ', '.join('%s %s' % (xy.strip(), p) for xy, p in entries[:10]) or 'none'
+
+
+def _leftover_lines(root, untracked):
+    if not untracked:
+        return []
+    return ['the main checkout needs cleaning: the gate left untracked file(s) %s in %s; they block '
+            'the next landing until removed' % (', '.join(untracked[:10]), root)]
+
+
+def _as_list(x):
+    """A branch or tip given alone, or several (a batch), as a list."""
+    return [x] if x is None or isinstance(x, str) else list(x)
+
+
+def _what(e):
+    """An exception as a report says it: `Ctrl+C`, or `Type: message` on one line."""
+    if isinstance(e, KeyboardInterrupt):
+        return 'Ctrl+C'
+    return ' '.join(('%s: %s' % (type(e).__name__, e)).split())
+
+
+def queue_key(common):
+    """The landing queue's resource name for a repository: its git common dir, so every checkout
+    of one repository shares one queue."""
+    return 'landing:' + os.path.normcase(os.path.abspath(common))
+
+
+def _not_landed(lines):
+    """A green merged gate's lines in a landing that is not landed: its `GATE OK` verdict line is
+    reworded, so a reader keying on `^GATE (OK|FAILED)` never takes a NOT LANDED for a pass."""
+    return ['merged gate passed' + l[len('GATE OK'):] if l.startswith('GATE OK') else l
+            for l in lines]
+
+
+class Lander(object):
+    """One landing of a branch, or a batch: `branch` and `expect_tip` are each a string or a list
+    of the same length. `merged_gate(lander) -> Outcome` replaces the merged-tree gate (tests);
+    `git_env` is the environment git's writes get (None: this process's, scrubbed); `book_kw`
+    goes to kitlib.lock.run.book, and its `store` holds the landing queue (default the machine
+    store); `lock_kw` to LandingLock (tests pass process probes). `wait_s` None: the config's
+    "landing".wait_s. `keep_branch` True: no branch cleanup after the landing (step 12).
+    `fresh` True: the merged gate runs every step, reusing none (kitlib.gate.reuse)."""
+
+    def __init__(self, root, branch, expect_main, expect_tip, lane=landing.FULL, summary=None,
+                 full=False, wait_s=0, say=None, book_kw=None, git_env=None, lock_kw=None,
+                 merged_gate=None, log_dir=None, poll_s=POLL_S, pid=None, keep_branch=False,
+                 fresh=False):
+        self.root, self.lane = root, lane
+        self.branches, self.tips = _as_list(branch), _as_list(expect_tip)
+        self.branch = ', '.join(str(b) for b in self.branches)     # how the landing is named
+        self.expect_main = expect_main      # the base merged onto: --expect-main, or the main a
+        self.expect_main_given = expect_main    # waiter follows to (locked_checks)
+        self.may_follow = False             # set by take(): this landing waited for its turn
+        self.summary, self.full, self.wait_s, self.poll_s = summary, full, wait_s, poll_s
+        self.say = say or (lambda line: None)
+        self.book_kw, self.git_env, self.lock_kw = book_kw, git_env, dict(lock_kw or {})
+        self.merged_gate_fn, self.log_dir = merged_gate, log_dir
+        self.pid = os.getpid() if pid is None else pid
+        self.lock = self.token = self.cfg = self.merge = self.turn = None
+        self.merges = []            # the merge commits made, in order; self.merge is the last
+        self.phase = 'before'
+        self.gate_logs = None       # the merged gate's log folder, once it ran
+        self.gate_out = None        # the merged gate's Outcome, once it ran
+        self.result_runs = []       # kitlib.gate.result.Run per branch, once the locked checks passed
+        self.keep_branch = keep_branch  # True: no branch cleanup after the landing
+        self.cleaned = False        # the branch cleanup ran (clean_up)
+        self.cleanup = None         # its facts: {branch: kitlib.gate.cleanup entry, or None}
+        self.fresh = fresh          # True: the merged gate reuses no branch-gate step
+        self.prior = None           # result records naming the tips, read before this landing
+                                    # writes its own (_locked); None: reuse nothing
+
+    @property
+    def pairs(self):
+        return list(zip(self.branches, self.tips))
+
+    # ---------------------------------------------------------------- git
+
+    def git(self, *args, timeout=cmd.GIT_TIMEOUT):
+        r = cmd.call(list(args), self.root, timeout=timeout, env=self.git_env)
+        return r
+
+    def ref(self, name):
+        sha, _ = refs.resolve(name, self.root)
+        return sha
+
+    @property
+    def main_ref(self):
+        return 'refs/heads/%s' % self.cfg.main_branch
+
+    @property
+    def origin_ref(self):
+        return 'refs/remotes/%s/%s' % (self.cfg.remote, self.cfg.main_branch)
+
+    def fetch(self):
+        r = self.git('fetch', '--quiet', '--no-tags', self.cfg.remote, timeout=FETCH_TIMEOUT)
+        if r.rc != 0:
+            return 'git fetch %s failed: %s' % (self.cfg.remote, r.err or 'exit %s' % r.rc)
+        return None
+
+    # ---------------------------------------------------------------- steps
+
+    def usage(self):
+        if len(self.tips) != len(self.branches):
+            return 'one --expect-tip per branch: %d branch(es), %d tip(s)' % (
+                len(self.branches), len(self.tips))
+        for flag, sha in [('--expect-main', self.expect_main)] + [('--expect-tip', t)
+                                                                  for t in self.tips]:
+            if not (isinstance(sha, str) and refs.SHA_RE.fullmatch(sha)):
+                return '%s must be a full commit hash, not %r' % (flag, sha)
+        for b in self.branches:
+            if not b or not isinstance(b, str) or refs.bad_rev(b):
+                return 'the branch to land must be a branch name, not %r' % (b,)
+        if len(set(self.branches)) != len(self.branches) or len(set(self.tips)) != len(self.tips):
+            return 'a batch names each branch and each tip once'
+        return None
+
+    def preconditions(self):
+        place = repo.classify(self.root)
+        if place.kind != repo.MAIN:
+            return ('%s is not a main checkout (%s): a landing runs in the main checkout, on its '
+                    'main branch' % (self.root, place.kind))
+        self.root = place.top
+        try:
+            self.cfg = kconfig.load_at(self.root, self.expect_main)
+        except ConfigError as e:
+            return 'the config of --expect-main %s: %s' % (self.expect_main[:10], e)
+        return self.config_refusal()
+
+    def config_refusal(self):
+        """The refusals self.cfg decides (lane, main branch checked out, batch_max, the branches
+        and their prefixes): None, a refusal, or 'USAGE: ...' for a lane the config lacks."""
+        lanes = self.cfg.section('landing')['lanes']
+        if self.lane != landing.FULL and self.lane not in lanes:
+            return 'USAGE: no lane %r (lanes: %s)' % (self.lane, ', '.join(
+                [landing.FULL] + sorted(lanes)))
+        current, why = refs.current_branch(self.root)
+        if current != self.cfg.main_branch:
+            return 'the main checkout is on %s, not %s' % (current or why or '(detached HEAD)',
+                                                         self.cfg.main_branch)
+        most = self.cfg.section('landing')['batch_max']
+        if len(self.branches) > most:
+            return 'a batch of %d branches is more than "landing".batch_max (%d)' % (
+                len(self.branches), most)
+        prefixes = (lanes.get(self.lane) or {}).get('branch_prefix') or []
+        for b in self.branches:
+            if b == self.cfg.main_branch:
+                return 'the branch to land is %s itself' % b
+            if not self.ref('refs/heads/%s' % b):
+                return 'no branch %s in this repository' % b
+            if self.lane != landing.FULL and prefixes and not any(b.startswith(p) for p in prefixes):
+                return 'lane %s lands branches starting %s; %s does not' % (
+                    self.lane, ' or '.join(prefixes), b)
+        return None
+
+    def queue_store(self):
+        return (self.book_kw or {}).get('store') or Store()
+
+    def take(self):
+        """None when this landing holds its queue turn and the landing lock; else why not (BUSY).
+        Raises landing.LockError, ConfigError or lockres.ResourceError (REFUSED)."""
+        lanes = sorted(self.cfg.section('landing')['lanes'])
+        self.lock = landing.LandingLock.for_config(self.root, self.cfg, lanes, **self.lock_kw)
+        wait_s = self.wait_s if self.wait_s is not None else self.cfg.section('landing')['wait_s']
+        wait_s = max(0, wait_s or 0)
+        self.may_follow = False     # set once a look fails and the landing waits: only a
+        # landing that waited follows main forward
+        self.turn = lockres.join(self.queue_store(), queue_key(self.lock.common), '%s %s: %s' % (
+            runner.repo_name(self.cfg, self.root), self.lane, self.branch))
+        # wait_s runs from the first look that failed, not from before the join: a join or first
+        # look slowed by a loaded machine never uses the budget up before the landing says it waits
+        deadline = None
+        while True:
+            why, final = self.try_take()
+            if why is None:
+                return None
+            now = time.monotonic()
+            if deadline is None:
+                deadline = now + wait_s
+                if not final and wait_s > 0:
+                    self.say('waiting up to %d s for the landing lock: %s' % (wait_s, why))
+            left = deadline - now
+            if final or left <= 0:
+                self.leave_queue()
+                return why
+            self.may_follow = True
+            time.sleep(max(0.01, min(self.poll_s, left)))
+
+    def try_take(self):
+        """One look: `(None, False)` taken, `(why, final)` not; final: waiting cannot help."""
+        ahead = self.turn.try_take()
+        if ahead:
+            try:
+                rec = self.lock.read()
+            except landing.LockError as e:
+                rec = {'lane': '?', 'phase': '?', 'error': str(e)}
+            return '%slanding queue: %d ahead: %s' % (
+                landing.describe(rec) + '; ' if rec else '', len(ahead),
+                '; '.join(lockres.text(e) for e in ahead)), False
+        try:
+            rec = self.lock.take(self.lane, self.branches, pid=self.pid)
+        except landing.Busy as e:
+            return self.held_by(e.record)
+        self.token = rec['token']
+        return None, False
+
+    def held_by(self, rec):
+        """`(None, False)` when a gone holder's lock was broken and taken; else `(why, final)`."""
+        if rec.get('phase') == 'stuck':
+            return ('%s: a stuck landing is cleared by hand, as its STUCK report says'
+                    % landing.describe(rec)), True
+        if rec.get('lane') == '?' or self.lock.holder_state(rec) != 'dead':
+            return landing.describe(rec), False         # alive, a token holder, or unreadable
+        why = self.lock.unpushed()
+        hint = self.behind_hint(self.ref(self.main_ref), self.ref(self.origin_ref)) if why else ''
+        if hint and not os.path.exists(os.path.join(self.lock.common, 'MERGE_HEAD')):
+            return ('%s, and its holder is gone: not broken, because %s. The next landing breaks '
+                    'it itself once main has caught up, or break it with: %s' % (
+                        landing.describe(rec), hint[2:], self.break_command())), True
+        if why:
+            return ('%s, and its holder is gone: not broken, because %s. Settle that by hand, '
+                    'then break it with: %s' % (landing.describe(rec), why,
+                                                self.break_command())), True
+        broken, got = self.lock.break_lock()
+        if not broken:
+            return '%s (not broken: %s)' % (landing.describe(rec), got), False
+        self.say('broke the landing lock of a holder that is gone, with nothing unpushed: %s'
+                 % landing.describe(got))
+        try:
+            rec = self.lock.take(self.lane, self.branches, pid=self.pid)
+        except landing.Busy as e:
+            return landing.describe(e.record), False
+        self.token = rec['token']
+        return None, False
+
+    def leave_queue(self):
+        if self.turn is not None:
+            self.turn.leave()
+            self.turn = None
+
+    def locked_checks(self):
+        why = self.fetch()
+        if why:
+            return why
+        main, origin = self.ref(self.main_ref), self.ref(self.origin_ref)
+        if self.may_follow and (main != self.expect_main or origin != self.expect_main):
+            why = self.follow(main, origin)
+            if why:
+                return why
+        if main != self.expect_main:
+            return '%s is at %s, and the caller expects %s' % (
+                self.cfg.main_branch, (main or '?')[:10], self.expect_main[:10])
+        if origin != self.expect_main:
+            return '%s/%s is at %s, and the caller expects %s: main moved on the remote' % (
+                self.cfg.remote, self.cfg.main_branch, (origin or '?')[:10], self.expect_main[:10])
+        for b, t in self.pairs:
+            tip = self.ref('refs/heads/%s' % b)
+            if tip != t:
+                return '%s is at %s, and the caller expects %s' % (b, (tip or '?')[:10], t[:10])
+        entries, why = refs.status(self.root)
+        if entries is None:
+            return 'git status failed: %s' % why
+        if entries:
+            return 'the main checkout is not clean: %s' % ', '.join(
+                '%s %s' % (xy.strip(), p) for xy, p in entries[:10])
+        merging, why = refs.merge_in_progress(self.root)
+        if merging is not False:
+            return why or 'a merge is in progress in the main checkout'
+        for b, t in self.pairs:
+            landed, why = refs.is_ancestor(t, self.expect_main, self.root)
+            if landed is not False:
+                return why or '%s (%s) is already in %s: nothing to land' % (
+                    b, t[:10], self.cfg.main_branch)
+        for (b, t), (b2, t2) in itertools.permutations(self.pairs, 2):
+            inside, why = refs.is_ancestor(t, t2, self.root)
+            if inside is not False:
+                return why or '%s (%s) is already in %s (%s), in the same batch: land %s alone' % (
+                    b, t[:10], b2, t2[:10], b2)
+        if self.lane != landing.FULL:
+            globs = self.cfg.section('landing')['lanes'][self.lane].get('paths') or []
+            for b, t in self.pairs:
+                who = 'the branch' if len(self.pairs) == 1 else b
+                mb, why = refs.merge_base(self.expect_main, t, self.root)
+                changed, why2 = runner.changed_between(self.root, mb, t) if mb else (None, why)
+                if changed is None:
+                    return 'git cannot list the paths of %s: %s' % (who, why2 or why)
+                outside = [p for p in changed if not S._match(p, globs)]
+                if outside:
+                    return 'lane %s takes only %s; %s changes %s' % (
+                        self.lane, ', '.join(globs) or 'nothing', who, ', '.join(outside[:10]))
+        for t in self.tips:
+            why = self.owner_refusal(t)
+            if why:
+                return why
+        for t in self.tips:
+            why = at_landing.ancestry_refusal(self.root, self.cfg, t, env=self.git_env)
+            if why:
+                return why
+        return None
+
+    def follow(self, main, origin):
+        """A landing that waited for its turn, under the lock, finds main moved from --expect-main
+        (a landing ahead of it in the queue landed). None when it may merge onto the new main
+        instead: <main> == <remote>/<main>, it descends from --expect-main, and its config names
+        the same main branch, remote and landing lock and still takes this landing; then
+        self.expect_main and self.cfg are the new main's, so the locked checks, the merged gate,
+        the records and an undo all use it. Else why not (REFUSED, nothing merged)."""
+        given, main_b, remote = self.expect_main, self.cfg.main_branch, self.cfg.remote
+        if not main or main != origin:
+            return ('%s is at %s and %s/%s at %s, and the caller expects %s: a waiting landing '
+                    'follows main forward only when the two agree%s' % (
+                        main_b, (main or '?')[:10], remote, main_b, (origin or '?')[:10],
+                        given[:10], self.behind_hint(main, origin)))
+        ahead, why = refs.is_ancestor(given, main, self.root)
+        if ahead is None:
+            return 'git cannot tell whether %s descends from --expect-main %s: %s' % (
+                main[:10], given[:10], why)
+        if not ahead:
+            return ('%s and %s/%s are at %s, which does not descend from --expect-main %s: main '
+                    'moved another way (rewritten or reset), not forward' % (
+                        main_b, remote, main_b, main[:10], given[:10]))
+        try:
+            cfg = kconfig.load_at(self.root, main)
+            same = (cfg.main_branch, cfg.remote, landing.lock_name(cfg)) == (
+                main_b, remote, landing.lock_name(self.cfg))
+        except (ConfigError, landing.LockError) as e:
+            return 'main moved on from --expect-main %s to %s, and the config there: %s' % (
+                given[:10], main[:10], e)
+        if not same:
+            return ('main moved on from --expect-main %s to %s, and the config there names another '
+                    'main branch, remote or landing lock: land again with --expect-main %s' % (
+                        given[:10], main[:10], main))
+        old = self.cfg
+        self.cfg, self.expect_main = cfg, main
+        why = self.config_refusal()
+        if why:
+            self.cfg, self.expect_main = old, given
+            return 'main moved on from --expect-main %s to %s, and by its config: %s' % (
+                given[:10], main[:10], why[len('USAGE: '):] if why.startswith('USAGE: ') else why)
+        self.say('main moved on from --expect-main %s to %s, which descends from it: merging '
+                 'onto %s' % (given[:10], main[:10], main[:10]))
+        return None
+
+    def behind_hint(self, main, origin):
+        """'; <main> is only behind ...: fast-forward it with: <command>' when the local main is
+        an ancestor of the tracking ref (nothing unpushed, main just not caught up), else ''."""
+        if not main or not origin or main == origin:
+            return ''
+        behind, _ = refs.is_ancestor(main, origin, self.root)
+        if behind is not True:
+            return ''
+        return ('; %s is only behind %s/%s, with nothing unpushed: fast-forward it with: '
+                'git -C "%s" merge --ff-only %s/%s' % (
+                    self.cfg.main_branch, self.cfg.remote, self.cfg.main_branch, self.root,
+                    self.cfg.remote, self.cfg.main_branch))
+
+    def owner_refusal(self, tip):
+        """None when every branch commit that changes an owner-only path is the owner's (by author
+        email), counting only the paths that landing `tip` on --expect-main would change; else why
+        not (kitlib.guard.ownercommits). The rules are --expect-main's merged
+        with the tip's (kitlib.config.owner.merge): the branch cannot unlock a path or name its own
+        owner; a tip config that does not load adds the default paths."""
+        try:
+            work = kconfig.load_at(self.root, tip).owner_rules()
+        except ConfigError:
+            work = kconfig.OwnerRules()
+        rules = kconfig.merge_owner_rules(work, self.cfg.owner_rules())
+        bad, why = ownercommits.violations(self.root, rules, tip, [self.expect_main],
+                                           env=self.git_env)
+        if bad is None:
+            return 'git cannot list the commits of the branch to check owner-only paths: %s' % why
+        return ownercommits.describe(rules, bad) if bad else None
+
+    def do_merge(self):
+        """Merge each branch in turn with --no-ff: `(None, [])` when all merged (self.merges), or
+        `(why, untracked left)` when one does not merge cleanly: that merge aborted and the earlier
+        ones undone, main back at --expect-main. Raises _Stuck when that cannot be verified."""
+        self.lock.set_phase(self.token, 'merge')
+        self.phase = 'merge'
+        for b, t in self.pairs:
+            prev = self.merges[-1] if self.merges else self.expect_main
+            title = 'Merge %s%s' % (b, ': %s' % self.summary if self.summary else '')
+            r = self.git('merge', '--no-ff', '--no-edit', '-m', title, t, timeout=MERGE_TIMEOUT)
+            if r.rc == 0:
+                head = self.ref('HEAD')
+                first, _ = cmd.run_text(['rev-parse', 'HEAD^1'], self.root)
+                second, _ = cmd.run_text(['rev-parse', 'HEAD^2'], self.root)
+                if not head or first != prev or second != t:
+                    raise _Stuck('the merge of %s reported success, and HEAD (%s) is not a merge '
+                                 'of %s onto %s' % (b, (head or '?')[:10], t[:10], prev[:10]))
+                self.merges.append(head)
+                self.merge = head
+                continue
+            conflict = r.err or cmd.text(r.out).strip() or 'exit %s' % r.rc
+            merging, _ = refs.merge_in_progress(self.root)
+            if merging:
+                a = self.git('merge', '--abort')
+                if a.rc != 0:
+                    raise _Stuck('the merge of %s failed (%s) and `git merge --abort` failed too: '
+                                 '%s' % (b, conflict, a.err))
+            if self.ref(self.main_ref) != prev or refs.status(self.root)[0] != []:
+                raise _Stuck('the merge of %s failed (%s) and main is not back at %s with a clean '
+                             'tree' % (b, conflict, prev[:10]))
+            why = '%s does not merge cleanly into %s: %s; the merge was aborted' % (
+                b, self.cfg.main_branch, conflict)
+            if not self.merges:
+                return why, []
+            done = ', '.join(self.branches[:len(self.merges)])
+            left = self.undo('the merge of %s failed' % b)
+            return ('%s, and the merge of %s before it was undone (%s is back at %s)' % (
+                why, done, self.cfg.main_branch, self.expect_main[:10])), left
+        return None, []
+
+    def tracked_and_untracked(self):
+        """`(tracked entries, untracked paths)` of the main checkout's status; None, None when git
+        cannot say."""
+        entries, _ = refs.status(self.root)
+        if entries is None:
+            return None, None
+        return ([(xy, p) for xy, p in entries if xy != '??'],
+                [p for xy, p in entries if xy == '??'])
+
+    def undo(self, why):
+        """Undo the merges: main back to --expect-main with `git reset --keep`, which keeps
+        untracked files. Returns the untracked paths left in the main checkout (they block a landing
+        until cleaned, and are reported, never deleted); raises _Stuck when it cannot verify. Safe
+        only while HEAD is on main, main's first-parent line beyond --expect-main is exactly this
+        landing's merges and no tracked file changed."""
+        self.lock.set_phase(self.token, 'undo')
+        self.phase = 'undo'
+        tracked, untracked = self.tracked_and_untracked()
+        current, _ = refs.current_branch(self.root)
+        main = self.ref(self.main_ref)
+        if current == self.cfg.main_branch and main == self.expect_main and tracked == []:
+            return untracked                             # already undone (a retry)
+        out, err = cmd.run_text(['rev-list', '--first-parent', '%s..%s' % (self.expect_main, self.main_ref)],
+                                self.root)
+        ahead = out.split() if out else []
+        if (out is None or not self.merges or ahead != list(reversed(self.merges)) or tracked != [] or
+                current != self.cfg.main_branch):
+            raise _Stuck('%s, and the merge cannot be undone safely (HEAD on %s; main is %s ahead of '
+                         '%s; tracked changes: %s)' % (
+                             why, current or 'no branch', ', '.join(c[:10] for c in ahead) or err or '?',
+                             self.expect_main[:10], _paths(tracked) if tracked is not None else
+                             'git status failed'))
+        r = self.git('reset', '--quiet', '--keep', self.expect_main, timeout=MERGE_TIMEOUT)
+        tracked, untracked = self.tracked_and_untracked()
+        if r.rc != 0 or self.ref(self.main_ref) != self.expect_main or tracked != []:
+            raise _Stuck('%s, and `git reset --keep %s` did not put main back: %s' % (
+                why, self.expect_main[:10], r.err or 'main is %s' % (self.ref(self.main_ref) or '?')[:10]))
+        return untracked
+
+    def unchanged(self):
+        """None when the main checkout is exactly the merge the gate passed (HEAD on main, main
+        at the merge, no tracked change, no untracked file), else why not."""
+        problems = []
+        current, _ = refs.current_branch(self.root)
+        head, main = self.ref('HEAD'), self.ref(self.main_ref)
+        if current != self.cfg.main_branch or head != self.merge or main != self.merge:
+            problems.append('HEAD moved while the merged gate ran (HEAD %s on %s, main %s; the '
+                            'gated merge is %s)' % ((head or '?')[:10], current or 'no branch',
+                                                     (main or '?')[:10], self.merge[:10]))
+        tracked, untracked = self.tracked_and_untracked()
+        if tracked is None:
+            problems.append('git status failed')
+        else:
+            if tracked:
+                problems.append('a step changed tracked files: %s' % _paths(tracked))
+            if untracked:
+                problems.append('a step left untracked files: %s' % ', '.join(untracked[:10]))
+        return '; '.join(problems) or None
+
+    def gate(self):
+        self.lock.set_phase(self.token, 'gate')
+        self.phase = 'gate'
+        refusal = self.lock.gate_refusal(self.lane)
+        if refusal:
+            return G.Outcome(G.REFUSED, ['REFUSED: %s' % refusal])
+        if self.merged_gate_fn is not None:
+            return self.merged_gate_fn(self)
+        lane_args = None
+        if self.lane != landing.FULL:
+            lane_args = self.cfg.section('landing')['lanes'][self.lane].get('merged_args')
+        plan = reuse.planner(self.root, self.cfg, self.branches[0], self.tips[0], self.expect_main,
+                             self.merge, self.prior, fresh=self.fresh, full=self.full,
+                             batch=len(self.branches))
+        out = runner.merged_gate(self.root, self.cfg, self.expect_main, full=self.full,
+                                 slug='+'.join(self.branches), log_dir=self.log_dir, say=self.say,
+                                 book_kw=self.book_kw, lane_args=lane_args, reuse=plan)
+        self.gate_logs = out.facts.get('log_dir')
+        return out
+
+    def push(self, started, results):
+        try:
+            path, _ = gate_ok.record_pass(self.root, self.merge, runner.gate_config(self.cfg),
+                                          runner.kit_identity(), runner.repo_name(self.cfg, self.root),
+                                          started, runner.record_steps(results or []),
+                                          base=self.expect_main, config_rev=self.expect_main)
+        except gate_ok.RecordError as e:
+            left = self.undo('the merged gate passed and its gate-OK record could not be written '
+                             '(%s)' % e)
+            return '; '.join(['the gate-OK record could not be written: %s; the merge was undone'
+                              % e] + _leftover_lines(self.root, left))
+        self.say('gate-OK record: %s' % path)
+        self.lock.set_phase(self.token, 'push')
+        self.phase = 'push'
+        r = self.git('push', '--quiet', self.cfg.remote,
+                     '%s:refs/heads/%s' % (self.merge, self.cfg.main_branch), timeout=PUSH_TIMEOUT)
+        remote, why = refs.ls_remote(self.cfg.remote, 'refs/heads/%s' % self.cfg.main_branch,
+                                     self.root)
+        if remote != self.merge:
+            raise _Stuck('the push %s, and %s/%s is %s, not the merge %s' % (
+                'exited 0' if r.rc == 0 else 'failed (%s)' % (r.err or 'exit %s' % r.rc),
+                self.cfg.remote, self.cfg.main_branch,
+                'unreadable (%s)' % why if remote is None else (remote or 'absent')[:10],
+                self.merge[:10]))
+        self.phase = 'pushed'       # verified on the remote: landed, whatever stops it from here
+        if self.fetch() or self.ref(self.origin_ref) != self.merge:
+            self.git('update-ref', self.origin_ref, self.merge)
+        return None
+
+    # ---------------------------------------------------------------- the landing
+
+    def run(self):
+        """_run(), and the landing's result records (kitlib.gate.result, kind "land"), one per
+        branch at its --expect-tip: `running` once the locked checks pass, just before the merge
+        (_locked), then the outcome's, or `error` when an exception or Ctrl+C escapes _run (raised
+        again, unchanged). A landing that ends before that (USAGE, REFUSED before the merge, BUSY:
+        a retry or a duplicate) writes no record, so it never replaces a real result. The record
+        lines are said as progress: the verdict stays the outcome's last line. The queue turn is
+        given up however _run ends. facts['result_record']: the path (one branch), the list of
+        paths (a batch), or None."""
+        try:
+            try:
+                out = self._run()
+            except BaseException as e:
+                for rr in self.result_runs:
+                    try:
+                        self.say(rr.error(e)[1])
+                    except Exception:   # noqa: BLE001 - never replace the exception being raised
+                        pass
+                raise
+        finally:
+            self.leave_queue()
+        paths = []
+        for rr in self.result_runs:
+            path, line = rr.finish(out, base=self.expect_main, log=self.gate_logs)
+            self.say(line)
+            paths.append(path)
+        out.facts['result_record'] = (paths[0] if len(self.branches) == 1 else paths) if paths else None
+        return out
+
+    def _run(self):
+        why = self.usage()
+        if why:
+            return G.Outcome(G.USAGE, ['USAGE: %s' % why])
+        why = self.preconditions()
+        if why:
+            if why.startswith('USAGE: '):
+                return G.Outcome(G.USAGE, [why])
+            return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed' % why])
+        why = self.fetch()
+        if why:
+            return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed' % why])
+        try:
+            why = self.take()
+        except (landing.LockError, ConfigError, lockres.ResourceError) as e:
+            return G.Outcome(G.REFUSED, ['REFUSED: the landing lock: %s; nothing was changed' % e])
+        if why:
+            return G.Outcome(G.BUSY, ['BUSY: %s; nothing was changed' % why])
+        try:
+            return self._locked()
+        except _Stuck as e:
+            return self.stuck(str(e))
+        except BaseException as e:  # after the lock is taken nothing may leave it silently
+            out = self.recover(e)
+            if out.code in (G.STUCK, G.OK):  # Ctrl+C included: STUCK is exit 3, with what is
+                return out                   # left; OK: stopped after the verified push, landed
+            if isinstance(e, ConfigError) and out.code == G.REFUSED:
+                return out
+            if isinstance(e, KeyboardInterrupt) or (isinstance(e, Exception) and
+                                                    self.phase == 'before'):
+                for line in out.lines:  # Ctrl+C undone and released (exit 130), or a bug
+                    self.say(line)      # before the merge: raised again
+                raise
+            return out                  # an exception or SystemExit after the merge: undone
+
+    def recover(self, e):
+        """After an exception `e` under the lock: release it before the merge, undo the merge
+        after it (or STUCK when that cannot be done safely). An Outcome saying what happened."""
+        what = 'Ctrl+C' if isinstance(e, KeyboardInterrupt) else '%s: %s' % (type(e).__name__, e)
+        try:
+            if self.phase == 'before':
+                self.release()
+                if isinstance(e, ConfigError):
+                    return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed' % e])
+                return G.Outcome(G.FAILED, ['NOT LANDED: %s before the merge; the landing lock was '
+                                            'released; nothing was changed' % what])
+            if self.phase in ('pushed', 'landed'):
+                return self.landed_anyway(what)
+            if self.phase == 'push':
+                raise _Stuck('%s during the push: the merge may be on %s' % (what, self.cfg.remote))
+            if self.phase == 'merge':
+                self.half_merge(what)
+                if not self.merges:
+                    self.release()
+                    return G.Outcome(G.FAILED, ['NOT LANDED: %s during the merge; it was aborted, '
+                                                'and %s is back at %s' % (
+                                                    what, self.cfg.main_branch,
+                                                    self.expect_main[:10])], undone=True)
+            left = self.undo('%s in phase %s' % (what, self.phase))
+            self.release()
+            return G.Outcome(G.FAILED, ['NOT LANDED: %s in phase %s; the merge of %s was undone, '
+                                        'and %s is back at %s' % (
+                                            what, self.phase, self.branch, self.cfg.main_branch,
+                                            self.expect_main[:10])]
+                             + _leftover_lines(self.root, left), undone=True)
+        except _Stuck as s:
+            return self.stuck(str(s))
+        except BaseException as s:  # a second failure while recovering: leave the lock held
+            return self.stuck('%s, and then %s: %s while recovering' % (what, type(s).__name__, s))
+
+    def landed_anyway(self, what):
+        """`what` stopped the landing after its push was verified (phase pushed): it is landed.
+        Release the lock (a failure is a WARNING with the break command) and say what was skipped:
+        an OK Outcome, never STUCK. Each step is guarded against BaseException, so a second
+        Ctrl+C or failure here is one more WARNING, never a STUCK for a landed merge."""
+        lines = list(self.gate_out.lines) if self.gate_out is not None else []
+        lines.append('LANDED %s on %s at %s (pushed and verified on %s)' % (
+            self.branch, self.cfg.main_branch, self.merge, self.cfg.remote))
+        lines.append('WARNING: %s after the verified push; the landing stands' % what)
+        try:                        # ls-remote showed the merge, so the tracking ref may say so
+            if self.ref(self.origin_ref) != self.merge:
+                self.git('update-ref', self.origin_ref, self.merge)
+        except BaseException:       # noqa: BLE001 - the next landing's fetch puts it right
+            pass
+        released = None
+        try:
+            self.release()
+        except BaseException as e:  # noqa: BLE001 - landed: only the lock file is left
+            released = _what(e)
+        if self.token:
+            lines.append('WARNING: the landing lock was not released (%s); check that no landing '
+                         'is running, then break it with: %s' % (
+                             released or 'still held', self.break_command()))
+        elif released is not None:
+            lines.append('WARNING: the landing lock was released, and leaving the landing queue '
+                         'stopped (%s); the entry goes once this process ends' % released)
+        try:
+            store = at_landing.ref_store(self.root, self.cfg) is not None
+        except BaseException:       # noqa: BLE001 - cannot tell: name the command anyway
+            store = True
+        for b in self.branches if store else ():
+            try:
+                how = at_landing.backlog_command(self.root, 'landable', b)
+            except BaseException:   # noqa: BLE001
+                how = 'the backlog tool'
+            lines.append('WARNING: the records %s holds pulled in the backlog store were not '
+                         'closed; see what is left with: %s' % (b, how))
+        if not self.cleaned and not self.keep_branch:
+            lines.append('WARNING: the branch cleanup did not run; once no landing is running, '
+                         'clean up with: %s' % cleanup.sweep_command(self.root))
+        verdict = self.gate_out.facts.get('verdict') if self.gate_out is not None else None
+        return G.Outcome(G.OK, lines, merge=self.merge, verdict=verdict)
+
+    def half_merge(self, what):
+        """Merging stopped part way (phase merge): abort a merge in progress; when main is exactly
+        the merge of the next tip onto the last recorded merge (or --expect-main), record it in
+        self.merges. Returns when main is at the last recorded merge with a clean tree; else
+        _Stuck."""
+        merging, _ = refs.merge_in_progress(self.root)
+        if merging:
+            a = self.git('merge', '--abort', timeout=MERGE_TIMEOUT)
+            if a.rc != 0:
+                raise _Stuck('%s during the merge, and `git merge --abort` failed: %s' % (what, a.err))
+        prev = self.merges[-1] if self.merges else self.expect_main
+        nxt = self.tips[len(self.merges)] if len(self.merges) < len(self.tips) else None
+        main = self.ref(self.main_ref)
+        tracked, _ = self.tracked_and_untracked()
+        if main == prev and tracked == []:
+            return
+        first, _ = cmd.run_text(['rev-parse', '%s^1' % self.main_ref], self.root)
+        second, _ = cmd.run_text(['rev-parse', '%s^2' % self.main_ref], self.root)
+        if main and nxt and first == prev and second == nxt and tracked == []:
+            self.merges.append(main)
+            self.merge = main
+            return
+        raise _Stuck('%s during the merge, and main (%s) is neither %s nor the merge of %s' % (
+            what, (main or '?')[:10], prev[:10], (nxt or '?')[:10]))
+
+    def _locked(self):
+        why = self.locked_checks()
+        if why:
+            self.release()
+            return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was merged' % why])
+        if not self.fresh:          # before this landing's own records replace them
+            self.prior = reuse.prior_records(self.root, self.tips)
+        for b, t in self.pairs:
+            rr = result.Run.maybe(self.root, 'land', b, t, self.expect_main)
+            if rr is not None:
+                self.result_runs.append(rr)
+                self.say(rr.start()[1])
+        started = gate_ok.utc()
+        conflict, left = self.do_merge()
+        if conflict:
+            self.release()
+            return G.Outcome(G.FAILED, ['NOT LANDED: %s' % conflict]
+                             + _leftover_lines(self.root, left), undone=bool(self.merges))
+        self.say('merged %s at %s; gating the merged tree' % (self.branch, self.merge[:10]))
+        out = self.gate_out = self.gate()
+        if out.code == G.OK:
+            changed = self.unchanged()      # the commit pushed must be the commit gated
+            if changed:
+                left = self.undo('the merged gate passed, and %s' % changed)
+                self.release()
+                return G.Outcome(G.FAILED, _not_landed(out.lines) + [
+                    'NOT LANDED: the merged gate passed, and %s; nothing was pushed, and the merge '
+                    'of %s was undone (%s is back at %s)' % (
+                        changed, self.branch, self.cfg.main_branch, self.expect_main[:10])]
+                    + _leftover_lines(self.root, left),
+                    verdict=out.facts.get('verdict'), undone=True)
+        if out.code != G.OK:
+            left = self.undo('the merged gate did not pass')
+            self.release()
+            return G.Outcome(out.code,
+                             out.lines + ['NOT LANDED: the merge of %s was undone; %s is back at %s'
+                                          % (self.branch, self.cfg.main_branch,
+                                             self.expect_main[:10])]
+                             + _leftover_lines(self.root, left),
+                             verdict=out.facts.get('verdict'), undone=True)
+        why = self.push(started, out.facts.get('results'))
+        if why:
+            self.release()
+            return G.Outcome(G.FAILED, _not_landed(out.lines) + ['NOT LANDED: %s' % why])
+        landed = ['LANDED %s on %s at %s (pushed and verified on %s)' % (
+            self.branch, self.cfg.main_branch, self.merge, self.cfg.remote)]
+        try:
+            self.release()
+        except landing.LockError as e:  # the landing is done; only the lock file is left
+            landed.append('WARNING: the landing lock could not be released: %s; check that no '
+                          'landing is running, then break it with: %s' % (e, self.break_command()))
+        landed.extend(self.close_pulled())
+        tidy = self.clean_up()
+        return G.Outcome(G.OK, out.lines + tidy + landed, merge=self.merge,
+                         verdict=out.facts.get('verdict'), cleanup=self.cleanup)
+
+    def close_pulled(self):
+        """After the verified push and the release: close what the branch holds pulled in the
+        backlog store (kitlib.backlog.at_landing). The landing stands whatever happens here, so
+        every failure, Ctrl+C included, is a WARNING line and never reaches recover()."""
+        self.phase = 'landed'
+        lines = []
+        for b in self.branches:
+            try:
+                lines.extend(at_landing.close_landed(self.root, self.cfg, b, self.merge))
+            except BaseException as e:
+                what = 'Ctrl+C' if isinstance(e, KeyboardInterrupt) else '%s: %s' % (
+                    type(e).__name__, e)
+                lines.append('WARNING: %s landed, and closing the records it holds pulled in the '
+                             'backlog store stopped (%s); see what is left with: %s' % (
+                                 b, ' '.join(what.split()),
+                                 at_landing.backlog_command(self.root, 'landable', b)))
+        return lines
+
+    def clean_up(self):
+        """After close_pulled: the branch cleanup (kitlib.gate.cleanup.after_landing); its lines,
+        which go before the LANDED line, and self.cleanup. The landing stands whatever happens
+        here, so an exception or Ctrl+C is a WARNING naming the sweep and never reaches recover()."""
+        self.cleaned = True
+        try:
+            self.cleanup, lines = cleanup.after_landing(self.root, self.branches, self.merge,
+                                                        keep_branch=self.keep_branch,
+                                                        git_env=self.git_env)
+        except BaseException as e:
+            self.cleanup = {b: None for b in self.branches}
+            lines = ['WARNING: %s landed, and its branch cleanup stopped (%s); finish it with: %s'
+                     % (self.branch, ' '.join(_what(e).split()),
+                        cleanup.sweep_command(self.root))]
+        return lines
+
+    def release(self):
+        """Release the landing lock, then give up the queue turn (even when the release fails)."""
+        try:
+            if self.token:
+                self.lock.release(self.token)
+                self.token = None
+        finally:
+            self.leave_queue()
+
+    def break_command(self):
+        return ('python -c "import sys; sys.path.insert(0, r\'%s\'); from kitlib.records.landing '
+                'import LandingLock as L; print(L(r\'%s\', \'%s\', \'%s\', name=\'%s\')'
+                '.break_lock())"' % (S.KIT_ROOT, self.root, self.cfg.main_branch, self.cfg.remote,
+                                     os.path.basename(self.lock.path)))
+
+    def stuck(self, why):
+        state = 'the landing lock could not be marked stuck'
+        try:
+            if self.token:
+                self.lock.set_phase(self.token, 'stuck')
+                state = 'the landing lock is left held at phase stuck (%s)' % self.lock.path
+        except landing.LockError as e:
+            state = '%s: %s' % (state, e)
+        lines = ['STUCK: landing %s stopped in phase %s: %s' % (self.branch, self.phase, why)]
+        if self.cfg is None or self.lock is None:
+            main_b = self.cfg.main_branch if self.cfg else 'main'
+            remote = self.cfg.remote if self.cfg else 'origin'
+            lines.append('%s. Check %s against %s/%s (git log --first-parent), finish or undo by '
+                         'hand, then break the lock.' % (state, main_b, remote, main_b))
+            return G.Outcome(G.STUCK, lines, merge=self.merge)
+        lines.append('%s. To clear it, in this order (each command on a "$" line):' % state)
+        try:
+            left = self.leftovers()
+        except Exception as e:      # the report must not fail
+            left = None
+            lines.append('left: unknown (%s: %s); check %s against %s/%s by hand' % (
+                type(e).__name__, e, self.cfg.main_branch, self.cfg.remote, self.cfg.main_branch))
+        if left is not None:
+            lines.append(self.left_line(left))
+            steps = self.clear_steps(left)
+        else:
+            steps = []
+        steps.append(('break the landing lock (it refuses while the holder is alive, or while %s '
+                      'differs from %s/%s)' % (self.cfg.main_branch, self.cfg.remote,
+                                               self.cfg.main_branch), [self.break_command()]))
+        for n, (text, commands) in enumerate(steps, 1):
+            lines.append('%d. %s' % (n, text))
+            lines.extend(STEP_CMD + c for c in commands)
+        return G.Outcome(G.STUCK, lines, merge=self.merge)
+
+    def leftovers(self):
+        """What a STUCK landing leaves, as a dict: the branch HEAD is on, main, the remote's main
+        (None when ls-remote cannot read it, and why), the tracking ref, tracked changes,
+        untracked files, and the commits on main beyond the merge (and the branch it merged)."""
+        current, _ = refs.current_branch(self.root)
+        main = self.ref(self.main_ref)
+        tracked, untracked = self.tracked_and_untracked()
+        pushed, pushed_why = refs.ls_remote(self.cfg.remote, 'refs/heads/%s' % self.cfg.main_branch,
+                                            self.root)
+        extra = []
+        if main and main != self.expect_main:
+            known = [self.expect_main] + self.tips + self.merges
+            out, _ = cmd.run_text(['log', '--format=%H %s', main, '--not'] + known, self.root)
+            extra = [l for l in (out or '').splitlines() if l.strip()]
+        return {'current': current, 'main': main, 'tracked': tracked, 'untracked': untracked,
+                'pushed': pushed, 'pushed_why': pushed_why, 'tracking': self.ref(self.origin_ref),
+                'extra': extra}
+
+    def left_line(self, left):
+        main_b, remote = self.cfg.main_branch, self.cfg.remote
+        tracked = left['tracked']
+        return ('left: HEAD on %s; %s at %s, %s/%s at %s (tracking ref %s; --expect-main %s, merge '
+                '%s); tracked changes: %s; untracked: %s' % (
+                    left['current'] or 'no branch (detached)', main_b, (left['main'] or '?')[:10],
+                    remote, main_b,
+                    'unreadable' if left['pushed'] is None else (left['pushed'] or 'absent')[:10],
+                    (left['tracking'] or '?')[:10], self.base_text(),
+                    (self.merge or 'none')[:10],
+                    _paths(tracked) if tracked is not None else '?',
+                    ', '.join((left['untracked'] or [])[:10]) or 'none'))
+
+    def base_text(self):
+        """--expect-main, short, and the main it followed to when they differ (follow)."""
+        if self.expect_main == self.expect_main_given:
+            return self.expect_main[:10]
+        return '%s, followed to %s' % (self.expect_main_given[:10], self.expect_main[:10])
+
+    def clear_steps(self, left):
+        """`[(what, [commands])]` that fit what is left: never a reset that moves a branch other
+        than main, drops commits nobody else holds, or runs before an unknown push is checked."""
+        main_b, remote = self.cfg.main_branch, self.cfg.remote
+        g = 'git -C "%s"' % self.root
+        tracking = 'refs/remotes/%s/%s' % (remote, main_b)
+        steps = []
+        pushed = left['pushed']
+        if pushed is None:
+            steps.append(('the push may have landed: %s/%s could not be read (%s). Fetch, then '
+                          'check what %s/%s is, before any reset' % (
+                              remote, main_b, left['pushed_why'] or 'ls-remote failed', remote,
+                              main_b), ['%s fetch %s' % (g, remote), '%s rev-parse %s' % (
+                                  g, tracking)]))
+            steps.append(('if that printed the merge %s, the landing is done: skip to the last '
+                          'step, no reset. If it printed %s, the push did not land: go on' % (
+                              self.merge or '(none)', self.expect_main), []))
+        elif self.merge and pushed == self.merge:
+            if left['tracking'] != self.merge:
+                steps.append(('the push reached %s, and the tracking ref %s/%s is stale (%s): fetch '
+                              'it, or break_lock refuses' % (remote, remote, main_b,
+                                                             (left['tracking'] or '?')[:10]),
+                              ['%s fetch %s' % (g, remote)]))
+            if left['main'] != self.merge:
+                steps.append(('%s is at %s, not the pushed merge %s: bring it to %s/%s by hand '
+                              '(it is landed; nothing is to be undone)' % (
+                                  main_b, (left['main'] or '?')[:10], self.merge[:10], remote,
+                                  main_b), []))
+            return steps
+        elif pushed != self.expect_main:
+            steps.append(('%s/%s is at %s, neither the base (--expect-main %s) nor the merge: '
+                          'someone else pushed. Settle %s with them by hand; the steps below only '
+                          'undo this landing' % (remote, main_b, (pushed or 'absent')[:10],
+                                                 self.base_text(), main_b), []))
+        if left['current'] != main_b:
+            steps.append(('HEAD is on %s, not %s: switch back to %s first (a reset now would move '
+                          '%s, not %s)%s' % (
+                              left['current'] or 'no branch (detached)', main_b, main_b,
+                              left['current'] or 'HEAD', main_b,
+                              '; keep or drop its tracked changes first' if left['tracked'] else ''),
+                          ['%s switch %s' % (g, main_b)]))
+        if left['tracked']:
+            steps.append(('keep or drop the tracked changes by hand (%s): reset --keep refuses to '
+                          'overwrite them' % _paths(left['tracked']), []))
+        if left['main'] and left['main'] != self.expect_main:
+            if left['extra']:
+                keep = 'kit-stuck-%s' % left['main'][:8]
+                steps.append(('%s has %d commit(s) beyond the merge that the reset would drop: %s. '
+                              'Keep them on a branch first, and re-apply them (git cherry-pick) '
+                              'once the lock is broken' % (
+                                  main_b, len(left['extra']),
+                                  '; '.join(l[:10] + l[40:] for l in left['extra'][:10])),
+                              ['%s branch %s %s' % (g, keep, left['main'])]))
+            steps.append(('put %s back at its base (--expect-main %s)' % (main_b, self.base_text()),
+                          ['%s reset --keep %s' % (g, self.expect_main)]))
+        return steps
+
+
+def land(root, branch, expect_main, expect_tip, **kw):
+    """Land `branch` (or a batch: a list, with a list of tips) from the main checkout `root`: an
+    Outcome (OK, FAILED, USAGE, STUCK, REFUSED, BUSY, or a machine lock code when the booking was
+    refused and the merge undone)."""
+    return Lander(root, branch, expect_main, expect_tip, **kw).run()
+
+
+def queue(root, store=None):
+    """Read-only: the repository's landing lock and landing queue, as an OK Outcome (one line for
+    the lock, one per queue entry in turn order); REFUSED when either cannot be read."""
+    try:
+        cfg = kconfig.load(root)
+        lock = landing.LandingLock.for_config(root, cfg, sorted(cfg.section('landing')['lanes']))
+        rec = lock.read()
+        entries = lockres.entries(store or Store(), queue_key(lock.common))
+    except (ConfigError, landing.LockError, lockres.ResourceError) as e:
+        return G.Outcome(G.REFUSED, ['REFUSED: the landing queue of %s cannot be read: %s' % (
+            root, e)])
+    lines = [landing.describe(rec), 'landing queue: %s' % (
+        '%d waiting or holding' % len(entries) if entries else 'empty')]
+    lines.extend('  %d. %s %s' % (n, e['state'], lockres.text(e)) for n, e in enumerate(entries, 1))
+    return G.Outcome(G.OK, lines)

@@ -1,0 +1,50 @@
+name: full
+
+# The full suite. Not on a push to main (that gets quick.yml): it runs on manual
+# dispatch (the coordinator starts one per batch of landings), on a pushed v* tag,
+# and on pull requests. Path filters are not evaluated for tags or dispatch.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - LICENSE
+      - .gitignore
+      - .gitattributes
+      - '.claude/**'
+      - 'tools/hooks/**'
+      - 'tools/**.ps1'
+      - 'tools/**.py'
+      - 'tools/*.json'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# No artifact upload here. If one is ever added, never on a push to main, and with
+# retention-days: 1.
+jobs:
+  full:
+    # See quick.yml for when to switch to windows-latest.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build
+        run: |
+          dotnet --version
+          <BUILD_COMMAND>
+
+      - name: Full test suite
+        run: |
+          <TEST_COMMAND>

@@ -1,0 +1,380 @@
+import datetime
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+from kitlib import coordinatorstart
+
+HOOK = os.path.join(os.path.dirname(__file__), "..", "..", "claude", "hooks", "coordinator_session_start.py")
+COND = {"PM_KIT_ROLE": "coordinator"}
+
+
+def write(path, text):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return path
+
+
+class RenderTest(unittest.TestCase):
+    def test_role_unset_prints_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": {"standing": ["a"]}}))
+            self.assertIsNone(coordinatorstart.render(env={}, path=p))
+            self.assertIsNone(coordinatorstart.render(env={"PM_KIT_ROLE": "pm"}, path=p))
+
+    def test_role_set_lists_lines(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": {"standing": ["one", "two"]}}))
+            out = coordinatorstart.render(env=COND, path=p, live=False)
+        self.assertEqual(out, "Coordinator session start:\n- one\n- two")
+
+    def test_pricing_pass_line_names_the_needs_priority_listing(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": {"pricing_pass": True}}))
+            out = coordinatorstart.render(env=COND, path=p, live=False)
+        line = out.splitlines()[1]
+        self.assertTrue(line.startswith("- Pricing pass and backlog audit"), line)
+        for want in ("python tools/backlog.py list --needs-priority", "--priority-by agent",
+                     "goes to the PM", "never ask him directly"):
+            self.assertIn(want, line)
+
+    def test_pricing_pass_line_is_off_unless_the_config_switches_it_on(self):
+        with tempfile.TemporaryDirectory() as d:
+            for cfg in ({"standing": ["x"]}, {"pricing_pass": False}, {"pricing_pass": "yes"}):
+                p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": cfg}))
+                self.assertNotIn("Pricing pass", coordinatorstart.render(env=COND, path=p, live=False))
+
+    def test_missing_key_or_file_skipped(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = write(os.path.join(d, "c.json"), "{}")
+            self.assertIn("skipped", coordinatorstart.render(env=COND, path=p, live=False))
+            self.assertIn("skipped", coordinatorstart.render(env=COND, path=os.path.join(d, "none.json"), live=False))
+
+    def test_bad_json_is_one_could_not_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = write(os.path.join(d, "c.json"), "{not json")
+            out = coordinatorstart.render(env=COND, path=p, live=False)
+        self.assertIn("could not check config:", out)
+        self.assertEqual(len(out.splitlines()), 1)
+
+
+NOW = datetime.datetime(2026, 10, 6, 18, 30, tzinfo=datetime.timezone.utc)
+TODAY = NOW.date()
+ROOT = "D:/src"
+ENTRY = {"repo": "alpha", "agent": True, "stem": "alpha-coordinator",
+         "state": "STATE.md", "name": "alpha-coordinator-a2-n6"}
+LEDGER_TEXT = """# Rulings ledger
+
+## R-9010 | 2026-10-05 10:00Z | all | typed
+Q: q
+Decides: old one
+
+## R-9016 | 2026-10-06 18:21Z | all | typed
+Q: q
+Decides: %s
+
+## R-9017 | 2026-10-06 18:30Z | beta | typed
+Decides: not for alpha
+
+## R-9018 | 2026-10-06 18:31Z | Alpha | typed
+Retired: spent
+"""
+
+
+def reader(files):
+    def read(p):
+        if p not in files:
+            raise FileNotFoundError(p)
+        return files[p]
+    return read
+
+
+def proc(pid, ppid, name, cmd, exe="C:/tools/claude.exe", created="2026-10-06T10:00:00"):
+    return {"ProcessId": pid, "ParentProcessId": ppid, "Name": name, "CommandLine": cmd,
+            "ExecutablePath": exe, "Created": created}
+
+
+class LoadConfigBomTest(unittest.TestCase):
+    def test_reads_bom_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "config.json")
+            with open(p, "wb") as f:
+                f.write(b"\xef\xbb\xbf" + json.dumps({"coordinator_start": {"k": 1}}).encode("utf-8"))
+            self.assertEqual(coordinatorstart.load_config(p), {"k": 1})
+
+
+class FindEntryTest(unittest.TestCase):
+    S = {"alpha": ENTRY, "gamma": dict(ENTRY, agent=False, stem="gamma-training"),
+         "Beta": {"repo": "Beta", "agent": True, "stem": "beta-coordinator", "name": "g"}}
+
+    def test_cwd_top_folder_and_agent_true(self):
+        e, note = coordinatorstart.find_entry(self.S, ROOT + "/alpha/tools", root=ROOT)
+        self.assertEqual((e["stem"], note), ("alpha-coordinator", None))
+        self.assertEqual(coordinatorstart.find_entry(self.S, "d:/SRC/beta", root=ROOT)[0]["name"], "g")
+
+    def test_no_repos_root_is_a_key_error(self):
+        with self.assertRaises(KeyError):
+            coordinatorstart.find_entry(self.S, ROOT + "/alpha")
+
+    def test_not_under_root_or_no_entry(self):
+        with self.assertRaises(ValueError):
+            coordinatorstart.find_entry(self.S, "C:/x", root=ROOT)
+        with self.assertRaises(LookupError):
+            coordinatorstart.find_entry(self.S, ROOT + "/other", root=ROOT)
+
+    def test_ambiguous_prefers_name_else_first_and_says_so(self):
+        two = {"a": dict(ENTRY, name="n1", stem="s1"), "b": dict(ENTRY, name="n2", stem="s2")}
+        self.assertEqual(coordinatorstart.find_entry(two, ROOT + "/alpha", "n2", ROOT)[0]["name"], "n2")
+        e, note = coordinatorstart.find_entry(two, ROOT + "/alpha", None, ROOT)
+        self.assertEqual(e["name"], "n1")
+        self.assertIn("2 sessions entries", note)
+
+
+class RulingsTest(unittest.TestCase):
+    def files(self, note="seen R-9010 and R-9009", decides="x" * 300):
+        return {"STATE.md": note, "L.md": LEDGER_TEXT % decides}
+
+    def test_newer_for_repo_or_all_cut_to_200(self):
+        out = coordinatorstart.rulings(ENTRY, "L.md", reader(self.files()))
+        self.assertEqual(out[1], "R-9016: " + "x" * 200)
+        self.assertEqual(out[2], "R-9018: Retired: spent")
+        self.assertEqual(len(out), 3)
+
+    def test_cap_of_20_points_at_ledger(self):
+        led = "".join("## R-%04d | d | all | typed\nDecides: d\n\n" % i for i in range(9100, 9125))
+        out = coordinatorstart.rulings(ENTRY, "L.md", reader({"STATE.md": "R-9099", "L.md": led}))
+        self.assertEqual(len(out), 1 + 20 + 1)
+        self.assertIn("5 more", out[-1])
+        self.assertIn("L.md", out[-1])
+
+    def test_none_newer_no_rid_and_missing_files(self):
+        self.assertIn("no rulings newer", coordinatorstart.rulings(ENTRY, "L.md", reader(self.files("R-9050")))[0])
+        self.assertIn("no R-id", coordinatorstart.rulings(ENTRY, "L.md", reader(self.files("nothing")))[0])
+        with self.assertRaises(FileNotFoundError):
+            coordinatorstart.rulings(ENTRY, "L.md", reader({"STATE.md": "R-9001"}))
+        with self.assertRaises(KeyError):
+            coordinatorstart.rulings({"repo": "x"}, "L.md", reader({}))
+
+
+class CapReviewTest(unittest.TestCase):
+    CAPS = {"alpha": [{"cap": 6, "until": "2026-10-10"}, {"cap": 3}]}
+
+    def test_cap_first_unexpired(self):
+        self.assertEqual(coordinatorstart.cap({"cap": self.CAPS}, "alpha", TODAY),
+                         ["agent cap 6 until 2026-10-10, then 3"])
+        self.assertEqual(coordinatorstart.cap({"cap": self.CAPS}, "alpha", datetime.date(2026, 10, 11)),
+                         ["agent cap 3"])
+
+    def test_cap_missing(self):
+        with self.assertRaises(KeyError):
+            coordinatorstart.cap({}, "alpha", TODAY)
+        with self.assertRaises(KeyError):
+            coordinatorstart.cap({"cap": {}}, "alpha", TODAY)
+
+    def test_review_session(self):
+        f = coordinatorstart.review_session
+        self.assertEqual(f({"review_session": {"date": "2026-10-06", "name": "rev-1"}}, TODAY),
+                         ["review session today: rev-1"])
+        self.assertIn("fresh reviewers", f({"review_session": {"date": "2026-10-06", "name": None}}, TODAY)[0])
+        self.assertIn("ask the PM", f({"review_session": {"date": "2026-10-05", "name": "x"}}, TODAY)[0])
+        with self.assertRaises(KeyError):
+            f({}, TODAY)
+
+
+STATUS = {"reservations": {"active": [], "upcoming": [
+              {"start": "2026-10-06T20:00:00Z", "end": "2026-10-06T22:00:00Z", "start_local": "16:00",
+               "end_local": "18:00", "note": "gaming"},
+              {"start": "2026-10-07T20:00:00Z", "end": "2026-10-07T22:00:00Z", "start_local": "x", "end_local": "y"}]},
+          "lock": {"bookings": [{"start": "2026-10-06T18:00:00Z", "end": "2026-10-06T19:00:00Z",
+                                 "start_local": "14:00", "end_local": "15:00"}]},
+          "gpus": [{"idx": 0, "holder_id": "a"}, {"idx": 1, "holder_id": None}],
+          "cores": [{"holder_id": "a"}, {"holder_id": None}, {"holder_id": None}]}
+LOCK = {"lane": "full", "branches": ["b1"], "pid": None, "phase": "gate", "started_utc": "T"}
+
+
+class MachineTest(unittest.TestCase):
+    def run_fake(self, status=STATUS):
+        calls = []
+
+        def run(args, timeout=10):
+            calls.append(args)
+            return json.dumps(status) if "machine_lock.py" in args[1] else ROOT + "/alpha/.git\n"
+        return run, calls
+
+    def test_summary_and_landing_lock(self):
+        run, calls = self.run_fake()
+        read = reader({os.path.join(ROOT + "/alpha/.git", "alpha-landing.lock"): json.dumps(LOCK)})
+        out = coordinatorstart.machine(ENTRY, run, read, NOW, "H", ROOT, "alpha-landing.lock")
+        self.assertEqual(out[0], "machine: owner reservation 16:00-18:00: gaming; booking 14:00-15:00")
+        self.assertEqual(out[1], "machine: free gpu slots 1 of 2; free cpu slots 2 of 3")
+        self.assertIn("HELD - lane full, branches b1, a token holder, phase gate", out[2])
+        self.assertEqual(calls[0][-2:], ["status", "--json"])
+        self.assertTrue(calls[0][1].replace("\\", "/").endswith("H/.claude/tools/machine_lock/machine_lock.py"))
+
+    def test_lock_free_and_no_landing_lock_configured(self):
+        run, _ = self.run_fake(dict(STATUS, reservations={}, lock={}))
+        out = coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H", ROOT, "alpha-landing.lock")
+        self.assertIn("no owner reservation or booking within 4 h", out[0])
+        self.assertEqual(out[2], "landing lock (alpha): free")
+        for root, lock_file in ((ROOT, None), (None, "alpha-landing.lock")):
+            out = coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H", root, lock_file)
+            self.assertEqual(len(out), 2)
+
+    def test_lock_file_for_reads_the_config(self):
+        cfg = {"landing_lock": {"alpha": "alpha-landing.lock"}}
+        self.assertEqual(coordinatorstart.lock_file_for(cfg, "alpha"), "alpha-landing.lock")
+        self.assertEqual(coordinatorstart.lock_file_for(cfg, "Alpha"), "alpha-landing.lock")
+        self.assertIsNone(coordinatorstart.lock_file_for(cfg, "beta"))
+        self.assertIsNone(coordinatorstart.lock_file_for({}, "alpha"))
+
+    def test_runner_failure_propagates(self):
+        def run(args, timeout=10):
+            raise RuntimeError("boom")
+        with self.assertRaises(RuntimeError):
+            coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H")
+
+
+class OthersTest(unittest.TestCase):
+    def procs(self):
+        rc = '"C:/tools/claude.exe" --remote-control "%s" -n x'
+        return [proc(1, 0, "claude.exe", rc % "alpha-coordinator-a2-n5", created="2026-10-06T08:00"),
+                proc(2, 0, "claude.exe", rc % "alpha-coordinator-a2-n6", created="2026-10-06T09:00"),
+                proc(3, 2, "bash.exe", "bash", exe="C:/bash.exe"),
+                proc(4, 3, "python.exe", "hook", exe="C:/py.exe"),
+                proc(5, 0, "claude.exe", rc % "beta-coordinator-a2"),
+                proc(6, 0, "claude.exe", "Claude.exe", exe="C:/Program Files/WindowsApps/Claude/Claude.exe")]
+
+    def test_own_name_from_process_tree(self):
+        self.assertEqual(coordinatorstart.own_name(self.procs(), {}, 4), "alpha-coordinator-a2-n6")
+        self.assertEqual(coordinatorstart.own_name(self.procs(), {"PM_KIT_SESSION_NAME": "z"}, 4), "z")
+        self.assertIsNone(coordinatorstart.own_name(self.procs(), {}, 99))
+
+    def test_lists_predecessor(self):
+        out = coordinatorstart.others(ENTRY, self.procs(), {}, 4)
+        self.assertEqual(len(out), 1)
+        self.assertIn("also running: alpha-coordinator-a2-n5; if one is your winding-down", out[0])
+        self.assertNotIn("beta", out[0])
+
+    def test_unknown_self_is_newest_and_alone_prints_nothing(self):
+        self.assertIn("a2-n5", coordinatorstart.others(ENTRY, self.procs(), {}, 99)[0])
+        self.assertEqual(coordinatorstart.others(ENTRY, self.procs()[1:], {}, 4), [])
+        self.assertEqual(coordinatorstart.others(ENTRY, [], {}, 4), [])
+
+    def test_no_stem_raises(self):
+        with self.assertRaises(KeyError):
+            coordinatorstart.others({"repo": "x"}, [], {}, 1)
+
+
+class ContextTest(unittest.TestCase):
+    PM = {"sessions_file": "S.json"}
+
+    def build(self, cfg, **kw):
+        files = {"S.json": json.dumps({"alpha": ENTRY}), "STATE.md": "R-9010", "L.md": LEDGER_TEXT % "d"}
+
+        def run(args, timeout=10):
+            return json.dumps(STATUS) if "machine_lock.py" in args[1] else "G"
+        base = dict(env={"CLAUDE_CONFIG_DIR": "C:/u/.claude-account2"}, cwd=ROOT + "/alpha", now=NOW,
+                    procs=[], run=run, read=reader(files), home="H", pid=1, pm_cfg=self.PM)
+        base.update(kw)
+        return coordinatorstart.context(dict(dict(ledger="L.md", repos_root=ROOT), **cfg), **base)
+
+    def test_standing_first_then_checks(self):
+        cfg = {"standing": ["wind down"], "cap": {"alpha": [{"cap": 4}]},
+               "review_session": {"date": "2026-10-06", "name": "rv"}}
+        text = self.build(cfg)
+        self.assertEqual(text.split("\n")[:2], ["Coordinator session start:", "- wind down"])
+        for want in ("- rulings newer than R-9010", "- R-9016: d", "- agent cap 4", "- review session today: rv",
+                     "- machine: free gpu slots 1 of 2"):
+            self.assertIn(want, text)
+        self.assertNotIn("also running", text)
+        self.assertNotIn("usage", text.lower())
+
+    def test_eng_filing_lines_follow_the_standing_lines(self):
+        lines = self.build({"standing": ["wind down"], "eng_filing": True, "pricing_pass": True}).splitlines()
+        self.assertEqual(lines[1], "- wind down")
+        self.assertTrue(lines[2].startswith("- ENG rulings:"))
+        self.assertEqual(lines[3], "- " + coordinatorstart.PRICING_LINE)
+        self.assertTrue(lines[4].startswith("- rulings newer than"), lines[4])
+        self.assertIn("ENG <repo> <item>: <question> | options: a) .. b) .. | rec: <x> | why: <one line>", lines[2])
+        self.assertIn("consultant-<repo>", lines[2])
+        for owner_only in ("owner ruling", "Realism", "Security", "Money and accounts", "Priority", "Go-live"):
+            self.assertIn(owner_only, lines[2])
+
+    def test_eng_filing_line_is_off_unless_the_config_switches_it_on(self):
+        for cfg in ({"standing": ["x"]}, {"standing": ["x"], "eng_filing": False}, {"eng_filing": "yes"}):
+            self.assertNotIn("ENG rulings", self.build(cfg))
+
+    def test_missing_config_gives_one_line_per_check(self):
+        text = self.build({})
+        self.assertIn("could not check cap: cap not configured", text)
+        self.assertIn("could not check review session: review_session not configured", text)
+        self.assertNotIn("usage", text.lower())
+
+    def test_no_sessions_file_and_no_cwd_match_isolated(self):
+        text = self.build({}, pm_cfg={})
+        self.assertIn("could not check rulings: pm_start.sessions_file not configured", text)
+        self.assertIn("could not check other coordinators:", text)
+        self.assertIn("could not check rulings: LookupError", self.build({}, cwd=ROOT + "/zzz"))
+        self.assertIn("could not check rulings: ValueError", self.build({}, cwd="C:/elsewhere"))
+
+    def test_repos_root_and_ledger_come_from_the_config(self):
+        self.assertIn("could not check rulings: repos_root not configured", self.build({"repos_root": None}))
+        self.assertIn("could not check rulings: ledger not configured",
+                      self.build({"ledger": None}))
+
+
+class HookTest(unittest.TestCase):
+    def run_hook(self, role, config):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, ".claude-pm-kit"))
+            write(os.path.join(d, ".claude-pm-kit", "config.json"), config)
+            env = {k: v for k, v in os.environ.items() if k != "PM_KIT_ROLE"}
+            env.update(USERPROFILE=d, HOME=d)
+            if role:
+                env["PM_KIT_ROLE"] = role
+            return subprocess.run([sys.executable, HOOK], capture_output=True, text=True, env=env, timeout=30,
+                                  input=json.dumps({"cwd": "D:/src/elsewhere"}))
+
+    def test_role_unset_silent_exit_0(self):
+        r = self.run_hook(None, json.dumps({"coordinator_start": {"standing": ["a"]}}))
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_role_coordinator_emits_context(self):
+        r = self.run_hook("coordinator", json.dumps({"coordinator_start": {"standing": ["wind down"]}}))
+        self.assertEqual(r.returncode, 0)
+        out = json.loads(r.stdout)["hookSpecificOutput"]
+        self.assertEqual(out["hookEventName"], "SessionStart")
+        self.assertIn("- wind down", out["additionalContext"])
+
+    def test_role_coordinator_checks_run_and_never_fail_the_hook(self):
+        # temp HOME: no pm_start config, no machine_lock.py -> one could-not line per check
+        r = self.run_hook("coordinator", json.dumps({"coordinator_start": {"standing": ["s"]}}))
+        self.assertEqual(r.returncode, 0)
+        text = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(text.split("\n")[1], "- s")
+        for name in ("rulings", "cap", "review session"):
+            self.assertIn("could not check %s:" % name, text)
+
+    def test_old_role_and_old_config_key_still_work(self):
+        r = self.run_hook("conductor", json.dumps({"conductor_start": {"standing": ["wind down"]}}))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("- wind down", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
+
+    def test_new_key_wins_over_the_old_key(self):
+        r = self.run_hook("coordinator", json.dumps({"conductor_start": {"standing": ["old"]},
+                                                     "coordinator_start": {"standing": ["new"]}}))
+        text = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("- new", text)
+        self.assertNotIn("- old", text)
+
+    def test_bad_json_exit_0(self):
+        r = self.run_hook("coordinator", "{bad")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("could not check", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
+
+
+if __name__ == "__main__":
+    unittest.main()

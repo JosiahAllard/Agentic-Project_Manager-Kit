@@ -1,0 +1,27 @@
+{
+  "BUILD_COMMAND": "python -m pip install -e . pytest",
+  "TEST_COMMAND": "python -m pytest tests",
+  "FAST_TEST_COMMAND": "python -m pytest tests -m \"not slow\" -q",
+  "gitignore": [
+    "__pycache__/",
+    "*.py[cod]",
+    ".venv/",
+    "venv/",
+    "*.egg-info/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    ".coverage",
+    "htmlcov/",
+    "build/",
+    "dist/"
+  ],
+  "gitattributes": [
+    "*.pyi        text eol=lf",
+    "*.ini        text eol=lf",
+    "*.pyc        binary",
+    "*.whl        binary",
+    "*.so         binary",
+    "*.pyd        binary"
+  ]
+}

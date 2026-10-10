@@ -1,0 +1,13 @@
+# review_pack
+
+`tools/review_pack.py [-C DIR] <branch> [--base BRANCH] [--diff PATH]` prints, read-only, what a reviewer or lander needs about a branch. Logic: `kitlib/reviewpack`; the trailers rule is `kitlib/reviewpack/trailers.py`. Ported from the PM repo's `kit/tools/review_pack.py` at 1fbabe5.
+
+- `--base` defaults to gate.md "Default base" (`<remote>/<main>` when it resolves, with a line when the local main differs). `--diff PATH` prints only that file's diff against the merge-base.
+- Files are grouped by the risk level in `docs/ops/risk-map.md` (unlisted = High).
+- Owner-only paths and the trailer key come from `owner_rules()`: the base's `owner` section merged with the branch's (`kitlib.config.owner.merge`). A trailer approves only on a commit whose author is the base's "owner".email.
+- `.kit.json` "review_pack".coauthor (read at the base) lists commits with no Co-Authored-By trailer. `Owner-Approved` or `Owner-Authored: yes` excuses one only when `is_owner(author)`; otherwise it is printed as an unproven claim and the commit FAILs. With "owner".email unset nothing is the owner's.
+- The doc budget runs as `<python> <kit>/tools/doc_budget.py -C <checkout> --base <base> --head <branch>`, judged by `kitlib.verdict`. A kit without that file prints `docs NOT CHECKED` and does not change the exit status.
+- The doc index check runs as `<python> <kit>/tools/doc_index.py -C <checkout> --head <branch>` (`kitlib.reviewpack.index_line`), printed as a `doc index` line and judged on `DOC INDEX OK` / `DOC INDEX FAILED`; a failure is exit 1. The base's `.kit.json` "doc_index".enabled false prints nothing.
+- Exit codes: 0 nothing blocks, 1 an owner-only problem, a failing commit, a failing doc budget or a failing doc index listing, 2 usage, no merge-base, a failed git read or the configuration. A merge-base failure names git's exit and first stderr line; with exit 1 and nothing on stderr in a shallow clone (`merge_base()` asks `git rev-parse --is-shallow-repository`) it adds that the clone may lack the shared commit. `--diff` prints no base note, except in brackets after a merge-base failure.
+
+Not ported: `KIT_REPO_ROOT`, the legacy `doc_budget.json` owner config, and the import of `gate.py`'s trailers rule (now `kitlib/reviewpack/trailers.py`). Tests: `tests/reviewpack`.

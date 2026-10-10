@@ -1,0 +1,216 @@
+"""Branch, commit and ancestry queries. Read-only: nothing here moves a ref or touches a tree.
+
+Every answer is `(value, None)` or `(None, why)`. A rev a caller passes is refused before git
+sees it when it could be read as an option (a leading `-`) or carries a line break or NUL.
+"""
+import os
+import re
+
+from . import cache, cmd
+
+SHA_RE = re.compile(r'^[0-9a-f]{40}([0-9a-f]{24})?$')
+
+
+def bad_rev(rev):
+    """Why `rev` is refused, or None. A leading `-` would be read as an option."""
+    if not isinstance(rev, str) or not rev:
+        return 'not a rev: %r' % (rev,)
+    if rev.startswith('-') or any(c in rev for c in '\n\r\0'):
+        return 'not a rev: %r' % rev
+    return None
+
+
+def is_sha(text):
+    return isinstance(text, str) and bool(SHA_RE.fullmatch(text))
+
+
+def resolve(rev, cwd, peel='commit'):
+    """`(full hash, None)` of `rev` peeled to `peel` (commit, tree; None: no peel), or `(None, why)`.
+
+    In a test process (kitlib.git.cache.enable) a full hash's answer is kept: an object never
+    changes what it is. Only a found answer of the same length is kept (a 40-digit name in a sha256
+    repository is an abbreviation), none while a test fakes git (cmd.genuine), and any other rev
+    (a ref, HEAD, an abbreviation) is asked of git every time."""
+    why = bad_rev(rev)
+    if why:
+        return None, why
+    spec = '%s^{%s}' % (rev, peel) if peel else rev
+    key = (('resolve', os.path.normcase(os.path.abspath(cwd or os.curdir)), spec)
+           if is_sha(rev) and cmd.genuine() else None)
+    kept = cache.get(key)
+    if kept:
+        return kept, None
+    gen = cache.generation()
+    r = cmd.call(['rev-parse', '--verify', '--quiet', spec], cwd)
+    out = cmd.text(r.out).strip() if r.rc == 0 else ''
+    if out:
+        if len(out) == len(rev):
+            cache.put(key, gen, out)
+        return out, None
+    if r.rc is None or r.err:
+        return None, r.err or 'git rev-parse exited %s' % r.rc
+    return None, '%s does not name a %s' % (rev, peel or 'object')
+
+
+def head(cwd):
+    """`(HEAD's commit, None)` or `(None, why)`."""
+    return resolve('HEAD', cwd)
+
+
+def tree_of(rev, cwd):
+    """`(the tree hash of rev, None)` or `(None, why)`."""
+    return resolve(rev, cwd, peel='tree')
+
+
+def current_branch(cwd):
+    """`(branch name, None)`; `('', None)` on a detached HEAD; `(None, why)` when git fails."""
+    r = cmd.call(['symbolic-ref', '--quiet', '--short', 'HEAD'], cwd)
+    if r.rc is None:
+        return None, r.err
+    if r.rc == 1:
+        return '', None
+    if r.rc != 0:
+        return None, r.err or 'git symbolic-ref exited %d' % r.rc
+    return cmd.text(r.out).strip(), None
+
+
+def branch_tip(name, cwd):
+    """`(commit of refs/heads/<name>, None)`; `(None, why)` when there is no such branch."""
+    return resolve('refs/heads/%s' % name, cwd)
+
+
+def remote_tip(remote, name, cwd):
+    """`(commit of refs/remotes/<remote>/<name>, None)` as last fetched; no network."""
+    return resolve('refs/remotes/%s/%s' % (remote, name), cwd)
+
+
+def default_base(cwd, remote, main):
+    """The one default-base rule every kit tool measures against when the caller passes no base
+    (docs/gate.md "Default base"): `(rev, note)`.
+
+    `rev` is `refs/remotes/<remote>/<main>` (as last fetched) when it resolves, else the plain
+    `<main>` (the local branch, which may not exist either: the caller's own resolve then says so).
+    A local `<main>` lags whenever nobody pulled into the main checkout, and the branches under
+    review are cut from the remote's, so measuring against the local one counts the remote's newer
+    commits as the branch's work.
+
+    `note` is None when the local branch is absent or at the same commit; else one line naming
+    both commits, how far apart they are, and the ref used. A caller prints it."""
+    tracking = 'refs/remotes/%s/%s' % (remote, main)
+    remote_sha = resolve(tracking, cwd)[0] if remote and not bad_rev(remote) else None
+    local_sha = resolve('refs/heads/%s' % main, cwd)[0]
+    if not remote_sha:
+        return main, None
+    if not local_sha or local_sha == remote_sha:
+        return tracking, None
+    r = cmd.call(['rev-list', '--left-right', '--count', '%s...%s' % (local_sha, remote_sha)], cwd)
+    counts = cmd.text(r.out).split() if r.rc == 0 else []
+    if len(counts) == 2 and counts[0] == '0':
+        apart = '%s behind' % counts[1]
+    elif len(counts) == 2 and counts[1] == '0':
+        apart = '%s ahead of' % counts[0]
+    elif len(counts) == 2:
+        apart = '%s ahead of and %s behind' % tuple(counts)
+    else:
+        apart = 'not at'
+    return tracking, 'base: local %s %s is %s %s/%s %s; measuring against %s' % (
+        main, local_sha[:7], apart, remote, main, remote_sha[:7], tracking)
+
+
+def ls_remote(remote, ref, cwd, timeout=60):
+    """`(commit the remote's `ref` points at, None)`, `('', None)` when the remote has no such ref,
+    or `(None, why)`. Asks the remote (network); read-only."""
+    for r in (remote, ref):
+        why = bad_rev(r)
+        if why:
+            return None, why
+    out, why = cmd.run_text(['ls-remote', remote, ref], cwd, timeout=timeout)
+    if out is None:
+        return None, why
+    full = ref if ref.startswith('refs/') else 'refs/heads/%s' % ref
+    for line in out.splitlines():
+        sha, _, name = line.partition('\t')
+        if name == full:
+            return sha, None
+    return '', None
+
+
+def is_ancestor(ancestor, descendant, cwd):
+    """`(True/False, None)`: is `ancestor` an ancestor of (or equal to) `descendant`; `(None, why)`
+    when git cannot tell (an unknown rev, a failure)."""
+    for rev in (ancestor, descendant):
+        why = bad_rev(rev)
+        if why:
+            return None, why
+    r = cmd.call(['merge-base', '--is-ancestor', ancestor, descendant], cwd)
+    if r.rc == 0:
+        return True, None
+    if r.rc == 1:
+        return False, None
+    return None, r.err or 'git merge-base --is-ancestor exited %s' % r.rc
+
+
+def is_fast_forward(old, new, cwd):
+    """`(True/False, None)`: moving a ref from `old` to `new` is a fast-forward. An `old` of all
+    zeros (a ref being created) is a fast-forward; a `new` of all zeros (a deletion) is not."""
+    if old and set(old) == {'0'}:
+        return True, None
+    if new and set(new) == {'0'}:
+        return False, None
+    return is_ancestor(old, new, cwd)
+
+
+def merge_base(a, b, cwd):
+    """`(the best common ancestor, None)`, `('', None)` when there is none, or `(None, why)`."""
+    for rev in (a, b):
+        why = bad_rev(rev)
+        if why:
+            return None, why
+    r = cmd.call(['merge-base', a, b], cwd)
+    if r.rc == 0:
+        return cmd.text(r.out).strip(), None
+    if r.rc == 1 and not r.err:
+        return '', None
+    return None, r.err or 'git merge-base exited %s' % r.rc
+
+
+def merge_in_progress(cwd):
+    """`(True/False, None)`: the work tree at `cwd` has a MERGE_HEAD (per work tree, so a merge
+    in the main checkout is seen there and not in a linked worktree), or `(None, why)`."""
+    out, why = cmd.run_text(['rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD'], cwd)
+    if not out:
+        return None, why or 'git rev-parse --git-path printed nothing'
+    return os.path.isfile(os.path.normpath(out)), None
+
+
+def parse_porcelain_z(out):
+    """[(xy, path)] from `git status --porcelain -z` text. A rename or copy entry (R/C in either
+    column) is followed by one more field, its original path, which is skipped."""
+    entries, fields, i = [], out.split('\0'), 0
+    while i < len(fields):
+        f = fields[i]
+        i += 1
+        if len(f) < 4:
+            continue
+        xy, p = f[:2], f[3:]
+        entries.append((xy, p))
+        if 'R' in xy or 'C' in xy:
+            i += 1
+    return entries
+
+
+def status(cwd, untracked='all'):
+    """`([(xy, path)], None)` for the work tree at `cwd` (`??` marks untracked; ignored files are
+    left out), or `(None, why)`. `untracked` is git's --untracked-files value."""
+    data, why = cmd.run(['status', '--porcelain', '-z', '--untracked-files=%s' % untracked], cwd)
+    if data is None:
+        return None, why
+    return parse_porcelain_z(data.decode('utf-8', 'replace')), None
+
+
+def is_clean(cwd):
+    """`(True/False, None)`: no tracked change and no untracked, non-ignored file; or `(None, why)`."""
+    entries, why = status(cwd)
+    if entries is None:
+        return None, why
+    return not entries, None

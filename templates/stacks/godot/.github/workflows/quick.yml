@@ -1,0 +1,60 @@
+name: quick
+
+# Per-landing check. A push to main runs only this: the C# build and the
+# engine-free unit tests, a few minutes, no Godot download. The in-engine tests and
+# the import run in full.yml (manual dispatch once per batch of landings, tags,
+# pull requests). The local gate already ran before the push, so this is the final
+# gate, not the first run. Its green does NOT cover anything that needs the engine.
+#
+# paths-ignore: a push touching only these starts no run at all (a docs-only push
+# costs nothing). No job here reads them: repository tooling under tools/ is gated
+# locally by tools/gate.py (tools/godot.cmd is the local engine shim).
+# Test scenes and C# under tools/ still trigger a run.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - LICENSE
+      - .gitignore
+      - .gitattributes
+      - '.claude/**'
+      - 'tools/hooks/**'
+      - 'tools/**.ps1'
+      - 'tools/**.py'
+      - 'tools/*.json'
+      - 'tools/godot.cmd'
+
+# A newer run of the same event on the same ref cancels the older one still in
+# progress, so a superseded commit gets no result of its own. The event name is in
+# the group so a push never cancels a dispatched run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Godot's C# host and a net8.0 test project load the .NET 8 runtime. If
+      # global.json pins a newer SDK, list that version too: dropping the runtime
+      # the tests target breaks `dotnet test` even though the build succeeds.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+
+      - name: Build C# solution
+        run: |
+          dotnet --version
+          <BUILD_COMMAND>
+
+      - name: Engine-free unit tests
+        run: |
+          <FAST_TEST_COMMAND>

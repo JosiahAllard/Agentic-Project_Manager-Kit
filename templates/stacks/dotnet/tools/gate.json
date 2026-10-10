@@ -1,0 +1,17 @@
+{
+  "comment": ".NET stack, the \"gate\" section of .kit.json (point it here with \"gate\": \"tools/gate.json\"; keys: docs/kit-json.md). dotnet build then dotnet test from the repository root (which must hold the .sln); set \"cwd\" on both steps if the solution lives in a subfolder. The gate books the machine lock itself, so no wrapper is needed.",
+  "steps": [
+    {
+      "name": "dotnet-build",
+      "globs": ["*.cs", "*.csproj", "*.sln", "*.props", "*.targets", "*.razor", "*.resx", "global.json", "nuget.config", "NuGet.config"],
+      "cmd": ["dotnet", "build", "--nologo", "-nodeReuse:false"],
+      "requires": ["dotnet"]
+    },
+    {
+      "name": "dotnet-test",
+      "globs": ["*.cs", "*.csproj", "*.sln", "*.props", "*.targets", "*.razor", "*.resx", "global.json", "nuget.config", "NuGet.config"],
+      "cmd": ["dotnet", "test", "--nologo", "--no-build"],
+      "requires": ["dotnet"]
+    }
+  ]
+}

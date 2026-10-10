@@ -1,0 +1,1151 @@
+<title>Action Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one hub column — summary strip, filter tabs, question cards stacked newest-open first */
+:root{
+  --bg:#f3f5f7; --surface:#ffffff; --fg:#17202a; --muted:#5b6876; --line:#d9dfe6;
+  --accent:#1f5f8b; --accent-soft:#e3eef6; --rec:#8a5a00; --rec-soft:#fbf0d9;
+  --ok:#2c7a4b; --ok-soft:#e2f2e8; --warn:#a33b2b; --warn-soft:#f9e3df;
+  --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161c; --surface:#19212a; --fg:#e4e9ef; --muted:#93a1b0; --line:#2b3642;
+  --accent:#6fb0de; --accent-soft:#1c3346; --rec:#e9b55a; --rec-soft:#3a2d14;
+  --ok:#6cc995; --ok-soft:#173527; --warn:#ef8a7a; --warn-soft:#3d1d18; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161c; --surface:#19212a; --fg:#e4e9ef; --muted:#93a1b0; --line:#2b3642;
+  --accent:#6fb0de; --accent-soft:#1c3346; --rec:#e9b55a; --rec-soft:#3a2d14;
+  --ok:#6cc995; --ok-soft:#173527; --warn:#ef8a7a; --warn-soft:#3d1d18; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:15px/1.55 var(--f-body)}
+.wrap{max-width:760px;margin:0 auto;padding-inline:16px;padding-block:24px 64px;display:grid;gap:18px}
+header{display:grid;gap:4px}
+.alert{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-top:8px}
+.alert .status{max-width:52ch}
+h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--muted);margin:0;max-width:62ch}
+.tabs{display:flex;flex-wrap:wrap;gap:6px}
+.tab{font:600 .85rem var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:6px 12px;border-radius:999px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+.tab[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:var(--surface)}
+.tab .n{font:600 .75rem var(--f-mono);font-variant-numeric:tabular-nums;opacity:.85}
+.tab:focus-visible,button:focus-visible,textarea:focus-visible,label.opt:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+select{font:500 .85rem var(--f-body);padding:5px 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg)}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.list{display:grid;gap:14px}
+.wrap>*,.list>*{min-width:0}
+.usage{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
+.acct{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:12px;min-width:0}
+.acct h3{margin:0;font:600 1rem var(--f-body);display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.acct .who{font:500 .8rem var(--f-body);color:var(--muted)}
+.meter{display:grid;gap:4px}
+.meter .lab{display:flex;justify-content:space-between;gap:8px;font-size:.8rem;color:var(--muted)}
+.meter .pct{font:600 .9rem var(--f-mono);font-variant-numeric:tabular-nums;color:var(--fg)}
+.meter .track{height:8px;border-radius:999px;background:var(--line);overflow:hidden}
+.meter .fill{height:100%;border-radius:999px;background:var(--accent)}
+.meter.high .fill{background:var(--rec)} .meter.high .pct{color:var(--rec)}
+.meter.crit .fill{background:var(--warn)} .meter.crit .pct{color:var(--warn)}
+.acct .foot{font-size:.75rem;color:var(--muted)}
+.acct .foot.stale{color:var(--rec)}
+.bfil{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
+.bfil .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.bfil .lbl{font:600 .7rem var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);min-width:4.5em}
+.fchip{font:500 .8rem var(--f-body);padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
+.fchip[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.fchip .c{opacity:.75;margin-left:4px}
+.bfil input[type=search]{font:500 .85rem var(--f-body);padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg);width:100%;max-width:28rem;box-sizing:border-box}
+.period{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 8px;font-size:.85rem;color:var(--muted)}
+.agt .pr{font:600 .8rem var(--f-mono);white-space:nowrap}
+h3.blk{font:600 .78rem var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+.acct.cur{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.cur-tag{font:600 .7rem var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.unote{font-size:.8rem;color:var(--muted);margin:0 0 4px}
+.agwrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:10px}
+.agt{width:100%;border-collapse:collapse;font-size:.875rem}
+.agt th{text-align:left;font:600 .72rem var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:10px 14px;border-bottom:1px solid var(--line)}
+.agt td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+.agt tr:last-child td{border-bottom:0}
+.agt .nm{font:600 .875rem var(--f-mono);white-space:nowrap}
+.agt .md{font:500 .8rem var(--f-mono);white-space:nowrap}
+.agt .role{color:var(--muted);min-width:220px;overflow-wrap:anywhere}
+.q{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:12px;min-width:0}
+.q.answered{border-left:4px solid var(--accent)}
+.q.logged{border-left:4px solid var(--ok);opacity:.92}
+.meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:.78rem;color:var(--muted)}
+.id{font:600 .78rem var(--f-mono);color:var(--fg)}
+.chip{font:600 .7rem var(--f-body);text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent)}
+.chip.ok{background:var(--ok-soft);color:var(--ok)}
+.chip.rec{background:var(--rec-soft);color:var(--rec)}
+.q h2{font-size:1.08rem;margin:0;line-height:1.35;text-wrap:balance}
+.ctx{margin:0;white-space:pre-wrap;color:var(--fg);max-width:68ch;overflow-wrap:anywhere}
+.refs{font:.78rem var(--f-mono);color:var(--muted);overflow-wrap:anywhere}
+fieldset{border:0;margin:0;padding:0;display:grid;gap:8px;min-width:0}
+legend{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+label.opt{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;align-items:start}
+label.opt:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+label.opt input{margin-top:4px;accent-color:var(--accent)}
+.ol{font-weight:600;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.od{grid-column:2;color:var(--muted);font-size:.88rem;overflow-wrap:anywhere}
+textarea{width:100%;box-sizing:border-box;min-height:64px;font:inherit;font-size:.9rem;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);resize:vertical}
+.act{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+button.primary{font:600 .9rem var(--f-body);background:var(--accent);color:var(--surface);border:0;border-radius:8px;padding:8px 16px;cursor:pointer}
+button.link{font:500 .85rem var(--f-body);background:none;border:0;color:var(--accent);cursor:pointer;padding:4px 0;text-decoration:underline}
+button:disabled{opacity:.5;cursor:default}
+.status{font-size:.82rem;color:var(--muted)}
+.status.err{color:var(--warn)}
+.ans{background:var(--bg);border-radius:8px;padding:10px 12px;display:grid;gap:4px;font-size:.9rem}
+.ans b{font-weight:600}
+.empty{background:var(--surface);border:1px dashed var(--line);border-radius:10px;padding:28px 20px;text-align:center;color:var(--muted)}
+.sections{display:flex;flex-wrap:wrap;gap:0 4px;border-bottom:1px solid var(--line)}
+@media (max-width:560px){.sec{padding:8px 8px 10px;font-size:.92rem}}
+.sec{font:600 1rem var(--f-body);background:none;border:0;border-bottom:3px solid transparent;color:var(--muted);padding:8px 12px 10px;cursor:pointer;display:inline-flex;gap:8px;align-items:center}
+.sec[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+.sec .n{font:600 .75rem var(--f-mono);background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:1px 7px}
+.sec:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.t{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;min-width:0}
+.t.done{opacity:.72}
+.t.done h2{text-decoration:line-through;text-decoration-color:var(--muted)}
+.t > .body{display:grid;gap:8px;min-width:0}
+.t h2{font-size:1rem;margin:0;line-height:1.4;text-wrap:balance}
+.chk{width:22px;height:22px;margin-top:2px;accent-color:var(--ok);cursor:pointer}
+.cmd{display:flex;gap:8px;align-items:stretch;min-width:0}
+.cmd pre{margin:0;flex:1;min-width:0;overflow-x:auto;font:.8rem/1.5 var(--f-mono);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;white-space:pre}
+.copy{font:600 .78rem var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--accent);border-radius:6px;padding:0 10px;cursor:pointer}
+form.add{display:grid;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+form.add input[type=text]{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:100%;box-sizing:border-box}
+form.add textarea{min-height:44px}
+.chip.urgent{background:var(--warn-soft);color:var(--warn)}
+.q.urgent:not(.logged),.t.urgent:not(.done){border-left:4px solid var(--warn)}
+.sec .n.hot{background:var(--warn-soft);color:var(--warn)}
+.urg{display:inline-flex;gap:6px;align-items:center;font-size:.85rem;color:var(--muted);cursor:pointer}
+.urg input{accent-color:var(--warn)}
+.chip.need{background:var(--warn-soft);color:var(--warn)}
+.flow{display:flex;flex-wrap:wrap;gap:4px;font:500 .74rem var(--f-mono);color:var(--muted)}
+.flow span{padding:2px 8px;border-radius:999px;border:1px solid var(--line)}
+.flow span.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.flow span.past{color:var(--fg)}
+.links{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.story-to{margin:0;font:500 .85rem var(--f-body);color:var(--muted)}
+.story-to strong{color:var(--fg)}
+form.add select{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+form.add textarea.story{min-height:110px}
+.q.unread{border-left:4px solid var(--accent)}
+.quote{margin:0;padding-left:10px;border-left:3px solid var(--line);color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere;max-width:68ch}
+.reply{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-width:68ch}
+.dc{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 16px;display:grid;gap:6px;min-width:0}
+.dc h2{margin:0;font-size:1.02rem}
+.dc h2 a{color:var(--accent);text-decoration:underline;text-underline-offset:2px;overflow-wrap:anywhere}
+.dc .sum{margin:0;max-width:68ch;overflow-wrap:anywhere}
+.dc .acts{display:flex;flex-wrap:wrap;gap:12px}
+.reader{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;flex-direction:column}
+.reader .rbar{display:flex;align-items:center;gap:12px;padding:calc(env(safe-area-inset-top, 0px) + 10px) 16px 10px;border-bottom:1px solid var(--line);background:var(--surface)}
+.reader .rbar h2{margin:0;font-size:1rem;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reader .rbody{flex:1;min-height:0;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom, 0px)}
+.reader .rbody .sum{margin:16px}
+.reader iframe{flex:1;width:100%;min-height:0;border:0;background:var(--surface)}
+.pk-h{font:600 .78rem var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:6px 0 0}
+.pk{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 16px;display:grid;gap:6px;min-width:0}
+.pk .age{font:600 .8rem var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.pk .age.old{color:var(--rec)}
+.pk .br{font:.78rem var(--f-mono);color:var(--muted);overflow-wrap:anywhere}
+.fchip[aria-checked="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.pmf{display:grid;gap:8px;min-width:0}
+.pmf .row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
+.pmbar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.q.queued{border-left:4px solid var(--line)}
+.q.sent{border-left:4px solid var(--accent)}
+.q.done{border-left:4px solid var(--ok)}
+button.danger{color:var(--warn)}
+.empty strong{display:block;color:var(--fg);font-size:1rem;margin-bottom:4px}
+@media (prefers-reduced-motion:no-preference){.q{transition:border-color .15s}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Action Hub</h1>
+    <p class="sub">Questions from the PM and the coordinators, the PM's answers to what you ask, the steps only you can do, and your backlogs. Answer and tick off whenever you like; nothing waits on you.</p>
+    <div class="alert" id="alertbar" hidden><button class="primary" type="button" id="alert-btn">Alert the PM</button><span class="status" id="alert-status" role="status">Sends the PM a summary of everything waiting on it here.</span></div>
+  </header>
+
+  <div class="sections" role="tablist" id="sections">
+    <button class="sec" role="tab" data-s="questions" aria-selected="true" id="sec-questions">Inbox <span class="n" id="n-q">0</span></button>
+    <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">To PM <span class="n" id="n-pm">0</span></button>
+    <button class="sec" role="tab" data-s="todo" aria-selected="false" id="sec-todo">To do <span class="n" id="n-t">0</span></button>
+    <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span></button>
+    <button class="sec" role="tab" data-s="parked" aria-selected="false" id="sec-parked">Parked <span class="n" id="n-p">0</span></button>
+    <button class="sec" role="tab" data-s="pages" aria-selected="false" id="sec-pages">Docs <span class="n" id="n-d">0</span></button>
+    <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Info <span class="n" id="n-info" hidden>–</span></button>
+  </div>
+
+  <div class="bar" id="qbar">
+    <div class="tabs" role="tablist" id="qtabs" data-for="inbox">
+      <button class="tab" role="tab" data-qt="questions" aria-selected="true" id="qtab-questions">Questions <span class="n" id="n-qq">0</span></button>
+      <button class="tab" role="tab" data-qt="inbox" aria-selected="false" id="qtab-answers">Answers <span class="n" id="n-i">0</span></button>
+    </div>
+  </div>
+  <div class="bar">
+    <div class="tabs" role="tablist" id="tabs" data-for="questions">
+      <button class="tab" role="tab" data-f="open" aria-selected="true" id="tab-open">Open <span class="n" id="n-open">0</span></button>
+      <button class="tab" role="tab" data-f="answered" aria-selected="false" id="tab-answered">Submitted <span class="n" id="n-answered">0</span></button>
+      <button class="tab" role="tab" data-f="logged" aria-selected="false" id="tab-logged">Logged <span class="n" id="n-logged">0</span></button>
+    </div>
+    <div class="tabs" role="tablist" id="itabs" data-for="inbox" hidden>
+      <button class="tab" role="tab" data-if="unread" aria-selected="true" id="itab-unread">Unread <span class="n" id="n-iunread">0</span></button>
+      <button class="tab" role="tab" data-if="read" aria-selected="false" id="itab-read">Read <span class="n" id="n-iread">0</span></button>
+    </div>
+    <div class="tabs" role="tablist" id="ttabs" data-for="todo" hidden>
+      <button class="tab" role="tab" data-tf="open" aria-selected="true" id="ttab-open">To do <span class="n" id="n-topen">0</span></button>
+      <button class="tab" role="tab" data-tf="done" aria-selected="false" id="ttab-done">Done <span class="n" id="n-tdone">0</span></button>
+    </div>
+    <div class="tabs" role="tablist" id="stabs" data-for="backlog" hidden>
+      <button class="tab" role="tab" data-sf="new" aria-selected="true" id="stab-new">New story <span class="n" id="n-sactive">0</span></button>
+      <button class="tab" role="tab" data-sf="current" aria-selected="false" id="stab-current">Current backlog <span class="n" id="n-bcur">0</span></button>
+      <button class="tab" role="tab" data-sf="done" aria-selected="false" id="stab-done">Completed</button>
+    </div>
+    <div class="tabs" role="tablist" id="ftabs" data-for="info" hidden>
+      <button class="tab" role="tab" data-nf="usage" aria-selected="true" id="ftab-usage">Usage <span class="n" id="n-u">–</span></button>
+      <button class="tab" role="tab" data-nf="agents" aria-selected="false" id="ftab-agents">Agents <span class="n" id="n-a">0</span></button>
+    </div>
+    <div class="pmbar" id="pmtabs" hidden>
+      <div class="tabs" role="tablist" data-for="topm">
+        <button class="tab" role="tab" data-pf="queued" aria-selected="true" id="ptab-queued">Queued <span class="n" id="n-pqueued">0</span></button>
+        <button class="tab" role="tab" data-pf="sent" aria-selected="false" id="ptab-sent">Sent <span class="n" id="n-psent">0</span></button>
+        <button class="tab" role="tab" data-pf="done" aria-selected="false" id="ptab-done">Done <span class="n" id="n-pdone">0</span></button>
+      </div>
+      <button class="primary" type="button" id="pm-sendall" disabled>Send all</button><span class="status" id="pm-sendstatus" role="status"></span>
+    </div>
+    <select id="repo" aria-label="Filter by repository"><option value="">All repos</option></select>
+    <select id="brepo" aria-label="Backlog" hidden><option value="">All backlogs</option></select>
+  </div>
+
+  <form class="add" id="addform" hidden>
+    <input type="text" id="add-title" placeholder="Add your own item" aria-label="New to-do item" maxlength="200">
+    <textarea id="add-detail" placeholder="Details (optional)" aria-label="Details"></textarea>
+    <div class="act"><label class="urg" for="add-urgent"><input type="checkbox" id="add-urgent"> Urgent</label><button class="primary" type="submit" id="add-btn" disabled>Add</button><span class="status" id="add-status" role="status"></span></div>
+  </form>
+
+  <form class="add" id="pmform" hidden aria-label="Write to the PM">
+    <div id="pm-fields"></div>
+    <div class="act"><button class="primary" type="submit" id="pm-add" disabled>Add</button><span class="status" id="pm-addstatus" role="status"></span></div>
+  </form>
+
+  <form class="add" id="storyform" hidden>
+    <p class="story-to" id="story-repo" aria-live="polite"></p>
+    <input type="text" id="story-title" placeholder="Story title" aria-label="Story title" maxlength="200">
+    <textarea class="story" id="story-text" placeholder="What you want and why. The coordinator reviews it and asks you here if anything is unclear." aria-label="Story"></textarea>
+    <div class="act"><label class="urg" for="story-urgent"><input type="checkbox" id="story-urgent"> Urgent</label><button class="primary" type="submit" id="story-btn" disabled>Submit story</button><span class="status" id="story-status" role="status"></span></div>
+  </form>
+
+  <div class="list" id="list">
+    <div class="empty"><strong>Loading questions…</strong>The PM posts each question here with its context, options and recommendation.</div>
+  </div>
+</div>
+<div class="reader" id="reader" hidden role="dialog" aria-modal="true" aria-labelledby="rd-title">
+  <div class="rbar"><span class="id" id="rd-id"></span><h2 id="rd-title"></h2><button class="primary" type="button" id="rd-close">Close</button></div>
+  <div class="rbody" id="rd-body"></div>
+</div>
+
+<script>
+(function(){
+  const $ = s => document.querySelector(s);
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", usage: [], agents: [], parked: [], pages: [], reader: null, pageHtml: {}, repos: [], brepo: "", sfilter: "new", infotab: "usage", inboxtab: "questions", topm: [], pfilter: "queued", pmOlder: false, pmEdit: new Set(), section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
+  if (location.hash === "#inbox") state.section = "inbox";
+  if (location.hash === "#todo") state.section = "todo";
+  if (location.hash === "#topm") state.section = "topm";
+  if (location.hash === "#backlog" || location.hash === "#stories") state.section = "backlog";
+  try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "agents") state.infotab = it; } catch(e){}
+  if (location.hash === "#info") state.section = "info";
+  if (location.hash === "#usage" || location.hash === "#agents") { state.section = "info"; state.infotab = location.hash.slice(1); }
+  if (location.hash === "#parked") state.section = "parked";
+  if (location.hash === "#docs") state.section = "pages";
+  let db = null, canWrite = true;
+
+  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs"].includes(location.hash)) state.section = {stories: "backlog", agents: "info", usage: "info"}[sct] || sct; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
+  const draftKey = id => "oq.draft." + id;
+  const readDraft = id => { try { return JSON.parse(localStorage.getItem(draftKey(id)) || "null"); } catch(e){ return null; } };
+  const saveDraft = (id, d) => { try { localStorage.setItem(draftKey(id), JSON.stringify(d)); } catch(e){} };
+  const clearDraft = id => { try { localStorage.removeItem(draftKey(id)); } catch(e){} };
+
+  function el(tag, attrs, ...kids){
+    const n = document.createElement(tag);
+    for (const [k,v] of Object.entries(attrs||{})) {
+      if (v == null || v === false) continue;
+      if (k === "class") n.className = v; else if (k === "text") n.textContent = v;
+      else if (k.startsWith("on")) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v === true ? "" : v);
+    }
+    for (const c of kids.flat()) if (c != null) n.append(c);
+    return n;
+  }
+  const when = iso => { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? String(iso) : d.toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"}); };
+
+  function render(){
+    renderReader();
+    const sc = state.section, q = sc === "questions";
+    const inb = q || sc === "inbox";
+    document.querySelectorAll(".sec").forEach(b => b.setAttribute("aria-selected", String(b.dataset.s === "questions" ? inb : b.dataset.s === sc)));
+    document.querySelectorAll("#qtabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.qt === sc)));
+    $("#qbar").hidden = !inb; if (inb) state.inboxtab = sc;
+    const oq = state.docs.filter(d => d.status === "open"), ot = state.todos.filter(t => t.status !== "done");
+    const ui = state.inbox.filter(m => !m.read);
+    $("#n-qq").textContent = oq.length; $("#n-qq").classList.toggle("hot", oq.some(d => d.urgent));
+    $("#n-q").textContent = oq.length + ui.length; $("#n-q").classList.toggle("hot", oq.some(d => d.urgent) || ui.length > 0);
+    $("#n-t").textContent = ot.length; $("#n-t").classList.toggle("hot", ot.some(t => t.urgent));
+    const os = state.stories.filter(st => ACTIVE.includes(st.status));
+    $("#n-s").textContent = os.length; $("#n-s").classList.toggle("hot", os.some(st => st.status === "questions"));
+    const ua = state.usage.filter(u => u.account);
+    const peak = Math.max(-1, ...ua.map(u => Math.max(pctOf(u.five_hour), pctOf(u.seven_day))));
+    $("#n-u").textContent = peak < 0 ? "–" : peak + "%"; $("#n-u").classList.toggle("hot", peak >= 90);
+    const cu = ua.find(u => u.current), cp = cu ? Math.max(pctOf(cu.five_hour), pctOf(cu.seven_day)) : -1;
+    $("#n-info").hidden = !cu; $("#n-info").textContent = cu ? (/^\d+$/.test(String(cu.account)) ? "acct " + cu.account : cu.account) + " · " + (cp < 0 ? "–" : cp + "%") : "";
+    $("#n-info").title = cu ? "Usage of the account in use now (five-hour or weekly, whichever is higher)" : ""; $("#n-info").classList.toggle("hot", cp >= 90); $("#n-a").textContent = state.agents.length;
+    $("#n-i").textContent = ui.length; $("#n-i").classList.toggle("hot", ui.length > 0);
+    $("#n-p").textContent = state.parked.length;
+    $("#n-d").textContent = state.pages.length;
+    const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
+    $("#repo").hidden = sc === "info" || sc === "backlog" || sc === "topm";
+    $("#tabs").hidden = !q; $("#itabs").hidden = sc !== "inbox"; $("#ttabs").hidden = sc !== "todo"; $("#pmtabs").hidden = sc !== "topm"; $("#pmform").hidden = sc !== "topm" || !db || !canWrite; $("#stabs").hidden = $("#brepo").hidden = sc !== "backlog"; $("#ftabs").hidden = sc !== "info";
+    $("#addform").hidden = sc !== "todo" || !db || !canWrite;
+    $("#storyform").hidden = sc !== "backlog" || state.sfilter !== "new" || !db || !canWrite;
+    q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "parked" ? renderParked() : sc === "pages" ? renderPages() : renderBacklog();
+  }
+
+  function pctOf(v){ const n = typeof v === "number" ? v : parseFloat(v); return isNaN(n) ? -1 : Math.round(n); }
+  function meter(label, v, reset){
+    const n = pctOf(v), shown = n < 0 ? (v === "reset" ? "0%" : "?") : n + "%", w = n < 0 ? 0 : Math.min(100, n);
+    return el("div", {class: "meter" + (n >= 95 ? " crit" : n >= 90 ? " high" : "")},
+      el("div", {class:"lab"}, el("span", {text: label + (reset ? " · resets " + reset : "")}), el("span", {class:"pct", text: shown})),
+      el("div", {class:"track", role:"meter", "aria-label": label, "aria-valuemin":"0", "aria-valuemax":"100", "aria-valuenow": String(w)}, el("div", {class:"fill", style: "width:" + w + "%"})));
+  }
+  function renderUsage(){
+    const list = $("#list");
+    const rows = state.usage.filter(u => u.account).sort((a,b) => (b.current ? 1 : 0) - (a.current ? 1 : 0) || String(a.account).localeCompare(String(b.account), [], {numeric:true}));
+    if (!rows.length) { list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? "No usage posted yet" : "Usage needs the hub's database"}), "The PM posts each account's five-hour and weekly usage here when it reads them.")); return; }
+    const now = Date.now();
+    const cards = rows.map(u => {
+      const age = u.measured_at ? Math.round((now - new Date(u.measured_at)) / 60000) : null;
+      const stale = age == null || age > 120;
+      return el("article", {class: "acct" + (u.current ? " cur" : ""), id: "u-" + u.account},
+        el("h3", {}, el("span", {text: /^\d+$/.test(String(u.account)) ? "Account " + u.account : String(u.account)}), u.current ? el("span", {class:"cur-tag", text: "In use now"}) : null, u.who ? el("span", {class:"who", text: u.who}) : null),
+        meter("Five-hour", u.five_hour, u.five_reset),
+        meter("Weekly", u.seven_day, u.seven_reset),
+        el("div", {class: "foot" + (stale ? " stale" : ""), text: u.measured_at ? "Measured " + when(u.measured_at) + (age != null && age > 120 ? " (" + (age >= 1440 ? Math.round(age / 1440) + " d" : Math.round(age / 60) + " h") + " old)" : "") : "Measurement time unknown"}));
+    });
+    const posted = rows.map(u => u.posted_at).filter(Boolean).sort().pop();
+    list.replaceChildren(el("p", {class:"unote", text: "Posted by the PM" + (posted ? " " + when(posted) : "") + ". It refreshes these when it reads usage; 90% is amber, 95% red."}), el("div", {class:"usage"}, cards));
+  }
+
+  // Info: reference material; agent defaults first, more blocks later.
+  function renderInfo(){
+    document.querySelectorAll("#ftabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.nf === state.infotab)));
+    state.infotab === "agents" ? renderAgents() : renderUsage();
+  }
+  function renderAgents(){
+    const list = $("#list");
+    const tier = {opus: 0, sonnet: 1, haiku: 2};
+    const rows = state.agents.slice().sort((a,b) => ((tier[a.model] ?? 3) - (tier[b.model] ?? 3)) || String(a.id).localeCompare(String(b.id)));
+    if (!rows.length) { list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? "No agent defaults posted yet" : "Agents needs the hub's database"}), "The PM posts each agent's default model and effort here from its definition file.")); return; }
+    const posted = rows.map(a => a.posted_at).filter(Boolean).sort().pop();
+    const tbl = el("table", {class:"agt"},
+      el("thead", {}, el("tr", {}, el("th", {text:"Agent"}), el("th", {text:"Model"}), el("th", {text:"Effort"}), el("th", {text:"Used for"}))),
+      el("tbody", {}, rows.map(a => el("tr", {id: "a-" + a.id},
+        el("td", {class:"nm", text: a.id}),
+        el("td", {class:"md", text: a.model || "inherit"}),
+        el("td", {class:"md", text: a.effort || "default"}),
+        el("td", {class:"role", text: a.role || ""})))));
+    list.replaceChildren(el("p", {class:"unote", text: "Defaults from the agent definition files" + (posted ? ", posted " + when(posted) : "") + ". Coordinators may raise a model by risk at dispatch."}), el("div", {class:"agwrap"}, tbl));
+  }
+
+  // Parked: items a coordinator parked waiting on the owner; the PM writes parked/, the page only reads it.
+  const ageOf = iso => { const t = new Date(iso); if (!iso || isNaN(t)) return null; const m = Math.max(0, Math.round((Date.now() - t) / 60000)); return m < 60 ? m + "m" : m < 1440 ? Math.floor(m / 60) + "h" : Math.floor(m / 1440) + "d"; };
+  // Docs: every page published for the owner, newest first. Each doc's page is stored in page_html/<id>
+  // and shown in place, in a sandboxed frame with scripts off, so no separate artifact needs sharing.
+  const pageKey = d => d.id + "@" + (d.updated_at || d.at || "");
+  async function loadPage(d){
+    const k = pageKey(d); if (k in state.pageHtml || !db) return;
+    state.pageHtml[k] = undefined;
+    try { const snap = await db.doc("page_html/" + d.id).get(); const v = snap.exists ? snap.data().html : null; state.pageHtml[k] = typeof v === "string" ? await drawDiagrams(v) : null; }
+    catch { state.pageHtml[k] = null; }
+    render();
+  }
+  // The doc frame runs no scripts, so the hub draws a doc's mermaid blocks to static SVG before showing it.
+  // mermaid loads from cdnjs only when a doc has a diagram; securityLevel strict; a block that fails stays as text.
+  let mermaidLib = null, mmSeq = 0;
+  function loadMermaid(){
+    if (!mermaidLib) mermaidLib = new Promise((ok, no) => { const sc = document.createElement("script");
+      sc.src = "https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.4.0/mermaid.min.js"; sc.onload = () => window.mermaid ? ok(window.mermaid) : no(new Error("no mermaid")); sc.onerror = no;
+      document.head.appendChild(sc); }).catch(err => { mermaidLib = null; throw err; });
+    return mermaidLib;
+  }
+  async function drawDiagrams(html){
+    if (!/class=["'][^"']*mermaid/.test(html)) return html;
+    try {
+      const m = await loadMermaid();
+      const t = document.documentElement.dataset.theme, dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+      m.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default" });
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      for (const pre of doc.querySelectorAll(".mermaid")) {
+        try { const { svg } = await m.render("mm" + (++mmSeq), pre.textContent); const box = doc.createElement("div"); box.className = "mermaid-drawn"; box.innerHTML = svg; pre.replaceWith(box); }
+        catch {}
+      }
+      return "<!doctype html>" + doc.documentElement.outerHTML;
+    } catch { return html; }
+  }
+  // The owner can delete a doc (two clicks); it removes the listing and its stored page.
+  function docDelete(d){
+    const st = el("span", {class:"status", role:"status"}), del = el("button", {class:"link danger", type:"button", text:"Delete"});
+    let armed = false;
+    del.addEventListener("click", async () => {
+      if (!armed) { armed = true; del.textContent = "Confirm delete"; return; }
+      del.disabled = true;
+      try { await db.doc("pages/" + d.id).delete(); await db.doc("page_html/" + d.id).delete().catch(() => {});
+        state.pages = state.pages.filter(y => y.id !== d.id); if (state.reader === d.id) state.reader = null; render(); }
+      catch (err) { del.disabled = false; armed = false; del.textContent = "Delete"; st.className = "status err"; st.textContent = "Not deleted: " + (err?.message || "the store refused the write") + "."; }
+    });
+    return [del, st];
+  }
+  function renderPages(){
+    fillRepos(state.pages);
+    const rows = state.pages.filter(inR).sort((a,b) => String(b.updated_at || b.at || "").localeCompare(String(a.updated_at || a.at || "")));
+    const list = $("#list");
+    if (!rows.length) { list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? "No docs yet" : "Docs unavailable"}), db ? "Pages the PM and the coordinators publish for you are listed here with a link." : "Sign in to claude.ai to see the docs.")); return; }
+    list.replaceChildren(...rows.map(d => { const ok = /^https:\/\//.test(String(d.url || ""));
+      return el("article", {class:"dc", id: "dc-" + d.id},
+        el("div", {class:"meta"}, el("span", {class:"id", text: d.id}), d.repo ? el("span", {class:"chip", text: d.repo}) : null, d.from ? el("span", {text: "from " + d.from}) : null, (d.updated_at || d.at) ? el("span", {text: when(d.updated_at || d.at)}) : null),
+        el("h2", {text: d.title || d.id}),
+        d.summary ? el("p", {class:"sum", text: d.summary}) : null,
+        Array.isArray(d.refs) && d.refs.length ? el("div", {class:"refs", text: d.refs.join(" · ")}) : null,
+        el("div", {class:"acts"},
+          el("button", {class:"primary", type:"button", text:"Read here", onclick: () => { state.reader = d.id; loadPage(d); render(); $("#rd-close").focus(); }}),
+          ok ? el("a", {href: d.url, target: "_blank", rel: "noopener", class:"refs", text: "Separate page"}) : null,
+          ...(db && canWrite ? docDelete(d) : []))); }));
+  }
+  // A doc opens in a full-screen reader over the whole window, one scroll area, Close pinned at the top.
+  // The frame is rebuilt only when the doc's page changes, so live updates elsewhere keep the reading position.
+  function renderReader(){
+    const box = $("#reader"), body = $("#rd-body"), d = state.reader && state.pages.find(x => x.id === state.reader);
+    box.hidden = !d; document.documentElement.style.overflow = d ? "hidden" : "";
+    if (!d) { if (state.reader) state.reader = null; body.replaceChildren(); return; }
+    $("#rd-id").textContent = d.id; $("#rd-title").textContent = d.title || d.id;
+    const k = pageKey(d), h = state.pageHtml[k];
+    if (!(k in state.pageHtml)) loadPage(d);
+    if (body.dataset.key === k + "|" + (h === undefined ? "u" : h === null ? "n" : "h")) return;
+    body.dataset.key = k + "|" + (h === undefined ? "u" : h === null ? "n" : "h");
+    body.replaceChildren(h === undefined ? el("p", {class:"sum", text: "Loading…"}) : h === null ? el("p", {class:"sum", text: "This doc's page is not stored in the hub yet."})
+      : el("iframe", {sandbox: "", title: d.title || d.id, srcdoc: h}));
+  }
+
+  function renderParked(){
+    fillRepos(state.parked);
+    const rows = state.parked.filter(inR);
+    const list = $("#list");
+    if (!rows.length) { list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? "Nothing parked" : "Parked unavailable"}), db ? "When a coordinator parks an item waiting on you, it shows here with its question and how long it has waited." : "Sign in to claude.ai to see parked items.")); return; }
+    const groups = new Map();
+    for (const p of rows) { const k = (p.repo || "?") + " / " + (p.session || "?"); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); }
+    const out = [];
+    for (const k of [...groups.keys()].sort((a,b) => a.localeCompare(b))) {
+      out.push(el("h3", {class:"pk-h", text: k}));
+      for (const p of groups.get(k).sort((a,b) => String(a.parked_at||"").localeCompare(String(b.parked_at||"")))) {
+        const q = p.q ? state.docs.find(d => d.id === p.q) : null, age = ageOf(p.parked_at);
+        const old = p.parked_at && Date.now() - new Date(p.parked_at) > 2 * 86400000;
+        out.push(el("article", {class:"pk", id: "pk-" + p.id},
+          el("div", {class:"meta"}, el("span", {class:"id", text: p.item || p.id}), age ? el("span", {class:"age" + (old ? " old" : ""), title: "Parked " + when(p.parked_at), text: age}) : null),
+          p.q ? el("div", {class:"links"}, q ? el("button", {class:"link", type:"button", text: q.id + ": " + (q.title || ""), onclick: () => goQuestion(q.id)}) : el("span", {class:"refs", text: p.q})) : el("div", {class:"refs", text: "No question linked"}),
+          p.note ? el("div", {class:"ctx", text: p.note}) : null,
+          p.branch ? el("div", {class:"br", text: "branch " + p.branch}) : null));
+      }
+    }
+    list.replaceChildren(...out);
+  }
+
+  // Inbox: the PM's answers to questions the owner asks in a note (on a question, to-do or story).
+  function goInbox(ref){
+    const m = state.inbox.filter(x => x.ref === ref);
+    state.section = "inbox"; if (m.length) state.ifilter = m.some(x => !x.read) ? "unread" : "read"; state.repo = ""; $("#repo").value = "";
+    render();
+    const n = m.length && document.getElementById("m-" + m[0].id); if (n) n.scrollIntoView({block:"start"});
+  }
+  const inboxFor = ref => state.inbox.filter(m => m.ref === ref);
+  function renderInbox(){
+    const counts = {unread: 0, read: 0};
+    for (const m of state.inbox) counts[m.read ? "read" : "unread"]++;
+    $("#n-iunread").textContent = counts.unread; $("#n-iread").textContent = counts.read;
+    document.querySelectorAll("#itabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.if === state.ifilter)));
+    fillRepos(state.inbox);
+    const rows = state.inbox.filter(m => (state.ifilter === "read") === !!m.read && inR(m))
+      .sort((a,b) => String(b.at||"").localeCompare(String(a.at||"")));
+    const list = $("#list");
+    if (!rows.length) {
+      const msg = state.ifilter === "unread"
+        ? ["No unread answers", "Ask the PM anything in a question's note; its answer lands here."]
+        : ["Nothing read yet", "Answers you mark read move here."];
+      list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? msg[0] : "Inbox unavailable"}), db ? msg[1] : "Sign in to claude.ai to read the PM's answers."));
+      return;
+    }
+    list.replaceChildren(...rows.map(m => {
+      const q = m.ref ? state.docs.find(d => d.id === m.ref) : null;
+      const t = !q && m.ref ? state.todos.find(x => x.id === m.ref) : null;
+      const st = !q && !t && m.ref ? state.stories.find(x => x.id === m.ref) : null;
+      const go = q ? () => goQuestion(q.id) : st ? () => goStory(st.id) : null;
+      const refText = q ? q.id + ": " + (q.title || "") : t ? "To do: " + (t.title || t.id) : st ? "Story: " + (st.title || st.id) : m.ref;
+      const head = el("div", {class:"meta"},
+        el("span", {class:"id", text: m.id}),
+        m.repo ? el("span", {class:"chip", text: m.repo}) : null,
+        el("span", {text: "from " + (m.from || "PM")}),
+        m.at ? el("span", {text: when(m.at)}) : null);
+      const parts = [head];
+      if (m.title) parts.push(el("h2", {text: m.title}));
+      if (refText) parts.push(go ? el("div", {class:"links"}, el("button", {class:"link", type:"button", text: "Re " + refText, onclick: go})) : el("div", {class:"refs", text: "Re " + refText}));
+      if (m.asked) parts.push(el("div", {class:"ans"}, el("b", {text: "You asked:"}), el("p", {class:"quote", text: m.asked})));
+      parts.push(el("p", {class:"reply", text: m.text || ""}));
+      if (Array.isArray(m.refs) && m.refs.length) parts.push(el("div", {class:"refs", text: m.refs.join(" · ")}));
+      if (db && canWrite) {
+        const status = el("span", {class:"status", role:"status"});
+        const b = el("button", {class: m.read ? "link" : "primary", type:"button", text: m.read ? "Mark unread" : "Mark read"});
+        b.addEventListener("click", async () => {
+          b.disabled = true; status.className = "status"; status.textContent = "";
+          try { await db.doc("inbox/" + m.id).update(m.read ? { read: false, read_at: null } : { read: true, read_at: new Date().toISOString() }); }
+          catch (e) { b.disabled = false; status.className = "status err"; status.textContent = "Not saved: " + (e?.message || "the store refused the write") + "."; }
+        });
+        parts.push(el("div", {class:"act"}, b, status));
+      }
+      return el("article", {class: "q" + (m.read ? "" : " unread"), id: "m-" + m.id}, ...parts);
+    }));
+  }
+
+  // To PM: the owner's questions and FYIs to the PM, in to_pm/ (docs/action-hub.md). Inbox is PM -> owner; this is owner -> PM.
+  // The pure logic between the markers has no DOM; tests/hubtopm runs it under node.
+  // pm-pure:begin
+  const PM_DAY = 86400000, PM_DONE_DAYS = 30;
+  const pmNextId = items => { let m = 0; for (const x of items) { const n = /^P-(\d+)$/.exec(String(x.id)); if (n) m = Math.max(m, +n[1]); } return "P-" + String(m + 1).padStart(3, "0"); };
+  const pmDoneAt = x => x.done_at || x.sent_at || x.created_at || "";
+  const pmWhen = (x, tab) => tab === "queued" ? x.created_at : tab === "sent" ? x.sent_at : pmDoneAt(x);
+  const pmRecent = (x, now) => { const t = new Date(pmDoneAt(x)).getTime(); return isNaN(t) || t >= now - PM_DONE_DAYS * PM_DAY; };
+  // Rows of one tab: urgent first, then queued/sent oldest first, done newest first. Done shows the last 30 days unless older is true; hidden counts what the window leaves out.
+  function pmRows(items, tab, now, older){
+    let rows = items.filter(x => x.status === tab), hidden = 0;
+    if (tab === "done" && !older) { const all = rows.length; rows = rows.filter(x => pmRecent(x, now)); hidden = all - rows.length; }
+    const k = x => String(pmWhen(x, tab) || "");
+    rows.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || (tab === "done" ? k(b).localeCompare(k(a)) : k(a).localeCompare(k(b))));
+    return { rows, hidden };
+  }
+  const pmBadge = items => { const w = items.filter(x => x.status === "queued" || x.status === "sent"); return { n: w.length, hot: w.some(x => x.urgent) }; };
+  const pmSendAll = (items, iso) => items.filter(x => x.status === "queued").map(x => ({ id: x.id, patch: { status: "sent", sent_at: iso } }));
+  // Lines the alert lists so the PM processes every sent item.
+  function pmAlertLines(items){
+    const sent = items.filter(x => x.status === "sent");
+    if (!sent.length) return [];
+    const L = ["", "To PM (owner's questions and FYIs; reply in to_pm/ and set status done, with reply and ruling):"];
+    for (const x of sent) L.push("- " + x.id + " [" + (x.kind === "fyi" ? "FYI" : "Question") + (x.repo ? ", " + x.repo : "") + "]" + (x.urgent ? " (urgent)" : "") + ": " + String(x.text || "").replace(/\s+/g, " ").slice(0, 300));
+    return L;
+  }
+  // pm-pure:end
+
+  function pmFields(init){
+    const f = { kind: init.kind === "fyi" ? "fyi" : "question", repo: init.repo || "", urgent: !!init.urgent };
+    const kinds = el("div", {class:"row", role:"radiogroup", "aria-label":"Type"});
+    const drawKinds = () => kinds.replaceChildren(...[["question", "Question"], ["fyi", "FYI"]].map(([v, t]) => el("button", {type:"button", class:"fchip", role:"radio", "aria-checked": String(f.kind === v), text: t, onclick: () => { f.kind = v; drawKinds(); }})));
+    drawKinds();
+    // The repos load after the compose form is built, so the menu refills when it is opened;
+    // an old tag maps to its repo (canonRepo) once the repos are known.
+    const sel = el("select", {"aria-label":"Repository (optional)"});
+    const fill = () => {
+      const c = canonRepo(f.repo); if (c || state.repos.length) f.repo = c;
+      const want = ["", ...knownRepos()];
+      if ([...sel.options].map(o => o.value).join("|") !== want.join("|")) sel.replaceChildren(...want.map(r => el("option", {value:r, text: r || "No repo"})));
+      sel.value = f.repo;
+    };
+    fill(); sel.addEventListener("pointerdown", fill); sel.addEventListener("focus", fill);
+    sel.addEventListener("change", () => { f.repo = sel.value; });
+    const urg = el("input", {type:"checkbox"}); urg.checked = f.urgent; urg.addEventListener("change", () => { f.urgent = urg.checked; });
+    const ta = el("textarea", {placeholder:"What you want to ask or tell the PM", "aria-label":"Message to the PM"}); ta.value = init.text || "";
+    const node = el("div", {class:"pmf"}, el("div", {class:"row"}, kinds, sel, el("label", {class:"urg"}, urg, " Urgent")), ta);
+    return { node, ta, get: () => ({ kind: f.kind, repo: f.repo, urgent: f.urgent, text: ta.value.trim() }),
+      reset: () => { f.kind = "question"; f.repo = ""; f.urgent = false; sel.value = ""; urg.checked = false; ta.value = ""; drawKinds(); } };
+  }
+  const pmCompose = pmFields({});
+  $("#pm-fields").append(pmCompose.node);
+  pmCompose.ta.addEventListener("input", () => { $("#pm-add").disabled = !pmCompose.get().text; });
+  $("#pmform").addEventListener("submit", async e => {
+    e.preventDefault();
+    const v = pmCompose.get(), b = $("#pm-add"), st = $("#pm-addstatus"); if (!v.text) return;
+    b.disabled = true; st.className = "status"; st.textContent = "Adding…";
+    const id = pmNextId(state.topm), at = new Date().toISOString();
+    try {
+      await db.doc("to_pm/" + id).set({ kind: v.kind, repo: v.repo, urgent: v.urgent, text: v.text, status: "queued", created_at: at, sent_at: null, reply: null, ruling: null, done_at: null });
+      if (!state.topm.some(x => x.id === id)) state.topm.push({ id, ...v, status: "queued", created_at: at });
+      pmCompose.reset(); st.textContent = "Queued as " + id + ". Nothing is sent until you press Send all."; render();
+    } catch (err) { st.className = "status err"; st.textContent = "Not added: " + (err?.message || "the store refused the write") + ". Your text is kept."; b.disabled = false; }
+  });
+  $("#pmtabs").addEventListener("click", e => {
+    const t = e.target.closest(".tab"); if (!t) return;
+    state.pfilter = t.dataset.pf; render();
+  });
+  // Send all: queued -> sent, then the existing alert (fire, set up in setupAlert) goes out once.
+  let sendAlert = null;
+  $("#pm-sendall").addEventListener("click", async () => {
+    const b = $("#pm-sendall"), st = $("#pm-sendstatus"), jobs = pmSendAll(state.topm, new Date().toISOString());
+    if (!jobs.length) return;
+    b.disabled = true; st.className = "status"; st.textContent = "Sending…";
+    const res = await Promise.allSettled(jobs.map(j => db.doc("to_pm/" + j.id).update(j.patch)));
+    const ok = jobs.filter((j, i) => res[i].status === "fulfilled");
+    for (const j of ok) Object.assign(state.topm.find(x => x.id === j.id) || {}, j.patch);
+    if (ok.length < jobs.length) { st.className = "status err"; st.textContent = "Sent " + ok.length + " of " + jobs.length + "; the store refused the rest. Try Send all again."; }
+    else st.textContent = sendAlert ? "Sent " + ok.length + ". Alerting the PM; see the alert line at the top." : "Sent " + ok.length + ". No PM session is watching; it reads them at its next turn.";
+    render();
+    if (ok.length && sendAlert) await sendAlert();
+  });
+  function pmCard(x, tab){
+    const kind = x.kind === "fyi" ? "FYI" : "Question";
+    const parts = [el("div", {class:"meta"}, x.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, el("span", {class:"id", text: x.id}), el("span", {class:"chip", text: kind}), x.repo ? el("span", {class:"chip", text: x.repo}) : null,
+      x.created_at ? el("span", {text: "written " + when(x.created_at)}) : null, x.sent_at && tab !== "queued" ? el("span", {text: "sent " + when(x.sent_at)}) : null, tab === "done" && x.done_at ? el("span", {class:"chip ok", text: "done " + when(x.done_at)}) : null, tab === "done" && x.ruling ? el("span", {class:"chip ok", text: x.ruling}) : null)];
+    if (tab === "queued" && state.pmEdit.has(x.id) && canWrite) {
+      const fl = pmFields(x), st = el("span", {class:"status", role:"status"});
+      const save = el("button", {class:"primary", type:"button", text:"Save"});
+      save.addEventListener("click", async () => {
+        const v = fl.get(); if (!v.text) { st.className = "status err"; st.textContent = "The text cannot be empty."; return; }
+        save.disabled = true; st.className = "status"; st.textContent = "Saving…";
+        try { await db.doc("to_pm/" + x.id).update(v); Object.assign(x, v); state.pmEdit.delete(x.id); render(); }
+        catch (err) { save.disabled = false; st.className = "status err"; st.textContent = "Not saved: " + (err?.message || "the store refused the write") + "."; }
+      });
+      parts.push(fl.node, el("div", {class:"act"}, save, el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.pmEdit.delete(x.id); render(); }}), st));
+    } else {
+      parts.push(el("p", {class:"ctx", text: x.text || ""}));
+      if (tab === "queued" && canWrite) {
+        const st = el("span", {class:"status", role:"status"}), del = el("button", {class:"link danger", type:"button", text:"Delete"});
+        let armed = false;
+        del.addEventListener("click", async () => {
+          if (!armed) { armed = true; del.textContent = "Confirm delete"; return; }
+          del.disabled = true;
+          try { await db.doc("to_pm/" + x.id).delete(); state.topm = state.topm.filter(y => y.id !== x.id); render(); }
+          catch (err) { del.disabled = false; armed = false; del.textContent = "Delete"; st.className = "status err"; st.textContent = "Not deleted: " + (err?.message || "the store refused the write") + "."; }
+        });
+        parts.push(el("div", {class:"act"}, el("button", {class:"link", type:"button", text:"Edit", onclick: () => { state.pmEdit.add(x.id); render(); }}), del, st));
+      }
+      if (tab === "sent") parts.push(el("div", {class:"status", text:"Waiting on the PM."}));
+      if (tab === "done") parts.push(el("div", {class:"ans"}, el("b", {text:"PM:"}), el("p", {class:"reply", text: x.reply || "noted"})));
+    }
+    return el("article", {class: "q " + tab + (x.urgent && tab !== "done" ? " urgent" : ""), id: "pm-" + x.id}, ...parts);
+  }
+  function renderToPm(){
+    const c = { queued: 0, sent: 0, done: 0 };
+    for (const x of state.topm) if (x.status in c) c[x.status]++;
+    for (const k of Object.keys(c)) $("#n-p" + k).textContent = c[k];
+    document.querySelectorAll("#pmtabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.pf === state.pfilter)));
+    const sb = $("#pm-sendall"); sb.textContent = c.queued ? "Send all (" + c.queued + ")" : "Send all"; sb.disabled = !c.queued || !canWrite || !db;
+    const { rows, hidden } = pmRows(state.topm, state.pfilter, Date.now(), state.pmOlder), list = $("#list");
+    if (!rows.length && !hidden) {
+      const m = { queued: ["Nothing queued", "Write a question or an FYI above. It waits here, unsent, until you press Send all."], sent: ["Nothing waiting on the PM", "Items you send move here until the PM replies."], done: ["Nothing answered yet", "The PM's replies and any ruling ids show here."] }[state.pfilter];
+      list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? m[0] : "To PM unavailable"}), db ? m[1] : "Sign in to claude.ai to write to the PM."));
+      return;
+    }
+    const out = rows.map(x => pmCard(x, state.pfilter));
+    if (state.pfilter === "done" && hidden) out.push(el("button", {class:"link", type:"button", text: "Show older (" + hidden + ")", onclick: () => { state.pmOlder = true; render(); }}));
+    else if (state.pfilter === "done" && state.pmOlder) out.push(el("button", {class:"link", type:"button", text:"Show only the last " + PM_DONE_DAYS + " days", onclick: () => { state.pmOlder = false; render(); }}));
+    list.replaceChildren(...out);
+  }
+
+  function renderTodos(){
+    fillRepos(state.todos);
+    const open = state.todos.filter(t => t.status !== "done"), done = state.todos.filter(t => t.status === "done");
+    $("#n-topen").textContent = open.length; $("#n-tdone").textContent = done.length;
+    document.querySelectorAll("#ttabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.tf === state.tfilter)));
+    let rows = (state.tfilter === "done" ? done : open).filter(inR);
+    rows.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || (state.tfilter === "done" ? String(b.done_at||"").localeCompare(String(a.done_at||"")) : String(a.added_at||"").localeCompare(String(b.added_at||""))));
+    const list = $("#list");
+    if (!rows.length) {
+      const m = state.tfilter === "done" ? ["Nothing ticked off yet", "Items you mark done move here, and the PM follows up on them."] : ["Nothing to do", "Steps only you can do (commands to run, settings to change, files to delete) appear here, each with its exact command."];
+      list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? m[0] : "Inbox unavailable"}), db ? m[1] : "Sign in to claude.ai to see your list."));
+      return;
+    }
+    list.replaceChildren(...rows.map(todoCard));
+  }
+
+  function todoCard(t){
+    const isDone = t.status === "done";
+    const box = el("input", {type:"checkbox", class:"chk", id:"t-" + t.id, checked: isDone, disabled: !canWrite, "aria-label": isDone ? "Mark not done" : "Mark done"});
+    const status = el("span", {class:"status", role:"status"});
+    box.addEventListener("change", async () => {
+      box.disabled = true;
+      try {
+        await db.doc("todos/" + t.id).update(box.checked ? { status: "done", done_at: new Date().toISOString() } : { status: "open", done_at: null });
+      } catch (e) {
+        box.checked = !box.checked; box.disabled = false;
+        status.className = "status err"; status.textContent = "Not saved: " + (e?.message || "the store refused the write") + ".";
+      }
+    });
+    const body = el("div", {class:"body"},
+      el("div", {class:"meta"}, t.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, t.repo ? el("span", {class:"chip", text: t.repo}) : null, t.from ? el("span", {text: "from " + t.from}) : null, t.added_at ? el("span", {text: "added " + when(t.added_at)}) : null, isDone && t.done_at ? el("span", {class:"chip ok", text: "done " + when(t.done_at)}) : null),
+      el("h2", {}, el("label", {for: "t-" + t.id, text: t.title || "(untitled)"})));
+    if (t.detail) body.append(el("p", {class:"ctx", text: t.detail}));
+    for (const c of (Array.isArray(t.commands) ? t.commands : (t.command ? [t.command] : []))) {
+      const pre = el("pre", {}, el("code", {text: c}));
+      const btn = el("button", {class:"copy", type:"button", text:"Copy"});
+      btn.addEventListener("click", () => {
+        const ok = () => { btn.textContent = "Copied"; setTimeout(() => btn.textContent = "Copy", 1500); };
+        const sel = () => { const r = document.createRange(); r.selectNodeContents(pre); const w = getSelection(); w.removeAllRanges(); w.addRange(r); btn.textContent = "Selected"; };
+        try { navigator.clipboard.writeText(c).then(ok, sel); } catch(e){ sel(); }
+      });
+      body.append(el("div", {class:"cmd"}, pre, btn));
+    }
+    if (Array.isArray(t.refs) && t.refs.length) body.append(el("div", {class:"refs", text: "Refs: " + t.refs.join(", ")}));
+    body.append(status);
+    return el("article", {class: "t" + (isDone ? " done" : "") + (t.urgent ? " urgent" : ""), id: "todo-" + t.id}, box, body);
+  }
+
+  const ACTIVE = ["submitted", "review", "questions"];
+  const STEPS = [["submitted","Submitted"], ["review","Coordinator review"], ["questions","Needs you"], ["added","In backlog"]];
+  const storyQs = id => state.docs.filter(d => d.story === id);
+
+  function goQuestion(qid){
+    const d = state.docs.find(x => x.id === qid);
+    state.section = "questions"; if (d) state.filter = d.status; state.repo = ""; $("#repo").value = "";
+    render();
+    const n = document.getElementById("q-" + qid); if (n) n.scrollIntoView({block:"start"});
+  }
+  function goStory(sid){
+    const st = state.stories.find(x => x.id === sid);
+    state.section = "backlog"; state.sfilter = "new"; state.repo = ""; $("#repo").value = "";
+    render();
+    const n = document.getElementById("story-" + sid); if (n) n.scrollIntoView({block:"start"});
+  }
+
+  // Backlog: New story (the form and your stories), Current backlog, Completed.
+  // repo "all" is a scope (an item for every repo), never a menu choice: it shows under every repo.
+  // Every repo menu lists the same items, only the real repos (repos/). An old tag maps to the repo
+  // whose repos/ doc lists it in `aliases` (none by default); a tag that names no repo (machine)
+  // maps to "" and shows only under All.
+  function canonRepo(r){ const k = String(r || "").toLowerCase();
+    const named = d => String(d.name || d.id);
+    const hit = state.repos.find(d => named(d).toLowerCase() === k)
+      || state.repos.find(d => Array.isArray(d.aliases) && d.aliases.some(a => String(a).toLowerCase() === k));
+    return hit ? named(hit) : ""; }
+  const forRepo = (x, r) => !r || String(x.repo || "").toLowerCase() === "all" || canonRepo(x.repo).toLowerCase() === r.toLowerCase();
+  const inB = x => forRepo(x, state.brepo);
+  // Every repo the PM knows (repos/), one per name whatever its case; the rows' own tags add no items, so every menu matches.
+  function knownRepos(){
+    const seen = new Map();
+    for (const r of state.repos.map(d => d.name || d.id)) if (r && String(r).toLowerCase() !== "all" && !seen.has(String(r).toLowerCase())) seen.set(String(r).toLowerCase(), String(r));
+    return [...seen.values()].sort((a,b) => a.localeCompare(b, [], {sensitivity: "base"}));
+  }
+  function fillBrepo(){
+    const sel = $("#brepo"), want = ["", ...knownRepos()];
+    if ([...sel.options].map(o=>o.value).join("|") !== want.join("|")) sel.replaceChildren(...want.map(r => el("option", {value:r, text: r || "All backlogs"})));
+    const hit = want.find(r => r && r.toLowerCase() === state.brepo.toLowerCase());
+    state.brepo = hit || ""; sel.value = state.brepo;
+  }
+  function renderBacklog(){
+    fillBrepo(); storyTo();
+    const active = state.stories.filter(st => ACTIVE.includes(st.status));
+    $("#n-sactive").textContent = active.length; $("#n-bcur").textContent = state.backlog.length;
+    document.querySelectorAll("#stabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.sf === state.sfilter)));
+    state.sfilter === "current" ? renderCurrent() : state.sfilter === "done" ? renderCompleted() : renderStories();
+  }
+  function renderStories(){
+    const mine = state.stories.filter(inB), active = mine.filter(st => ACTIVE.includes(st.status)), closed = mine.filter(st => !ACTIVE.includes(st.status));
+    const need = st => st.status === "questions" ? 1 : 0;
+    active.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || need(b) - need(a) || String(a.submitted_at||"").localeCompare(String(b.submitted_at||"")));
+    closed.sort((a,b) => String(b.added_at||b.closed_at||"").localeCompare(String(a.added_at||a.closed_at||"")));
+    const list = $("#list");
+    if (!active.length && !closed.length) {
+      list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? "No stories yet" + (state.brepo ? " in this backlog" : "") : "Backlog unavailable"}), db ? (state.brepo ? "Write one above." : "Pick a backlog at the top and write one above.") + " The PM hands it to that repo's coordinator, whose follow-up questions come to your Questions tab." : "Sign in to claude.ai to add stories."));
+      return;
+    }
+    const out = [];
+    if (active.length) out.push(el("h3", {class:"blk", text: "In progress"}), ...active.map(storyCard));
+    if (closed.length) out.push(el("h3", {class:"blk", text: "Filed or closed"}), ...closed.map(storyCard));
+    list.replaceChildren(...out);
+  }
+  // backlog/<repo> and completed/<repo> come from the kit's hub_backlog tool, one doc per repo.
+  const prioOf = b => { const n = parseInt(b.priority, 10); return isNaN(n) ? 9 : n; };
+  const pkey = b => { const n = parseInt(b.priority, 10); return isNaN(n) ? "-" : String(n); };
+  const PRIOS = [["1", "P1"], ["2", "P2"], ["3", "P3"], ["4", "P4"], ["5", "P5"], ["-", "Unpriced"]];
+  const STATS = ["open", "blocked", "parked", "pulled"];
+  const bsearch = el("input", {type: "search", placeholder: "Search titles and ids", "aria-label": "Search the backlog"});
+  const bprioRow = el("div", {class: "row", role: "group", "aria-label": "Priority"}), bstatRow = el("div", {class: "row", role: "group", "aria-label": "Status"});
+  const bfil = el("div", {class: "bfil"}, bprioRow, bstatRow, bsearch), bout = el("div");
+  function bchips(row, label, opts, set, key, counts){
+    row.replaceChildren(el("span", {class: "lbl", text: label}), ...opts.map(([v, t]) => el("button", {type: "button", class: "fchip", "aria-pressed": String(set.has(v)),
+      onclick: () => { set.has(v) ? set.delete(v) : set.add(v); try { localStorage.setItem(key, JSON.stringify([...set])); } catch(e){} fillCurrent(); }},
+      t, el("span", {class: "c", text: String(counts[v] || 0)}))));
+  }
+  bsearch.addEventListener("input", () => { state.bq = bsearch.value; fillCurrent(); });
+  function itemTable(rows, cols){
+    return el("div", {class:"agwrap"}, el("table", {class:"agt"},
+      el("thead", {}, el("tr", {}, ...cols.map(c => el("th", {text: c[0]})))),
+      el("tbody", {}, rows.map(b => el("tr", {}, ...cols.map(c => el("td", {class: c[2] || "", text: c[1](b)})))))));
+  }
+  function byRepo(rows, cols){
+    const grp = b => String(b.repo || "").toLowerCase() === "all" ? "all" : canonRepo(b.repo) || "other";
+    const repos = [...new Set(rows.map(grp))].sort();
+    return repos.flatMap(r => { const rs = rows.filter(b => grp(b) === r); return [el("h3", {class:"blk", text: r + " · " + rs.length}), itemTable(rs, cols)]; });
+  }
+  function renderCurrent(){
+    const list = $("#list");
+    if (!state.backlog.length) { list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? "Nothing posted yet" : "Backlog unavailable"}), db ? "The PM's hub_backlog tool posts each repo's open records here." : "Sign in to claude.ai to see the backlog.")); return; }
+    if (list.firstChild !== bfil || list.childNodes.length !== 2) list.replaceChildren(bfil, bout);
+    if (bsearch.value !== state.bq) bsearch.value = state.bq;
+    fillCurrent();
+  }
+  function fillCurrent(){
+    const q = state.bq.trim().toLowerCase();
+    const mine = state.backlog.filter(b => inB(b) && (!q || (String(b.title || "") + " " + String(b.item || b.id)).toLowerCase().includes(q)));
+    const st = b => STATS.includes(b.status) ? b.status : "open";
+    const count = (rows, f) => rows.reduce((m, b) => (m[f(b)] = (m[f(b)] || 0) + 1, m), {});
+    bchips(bprioRow, "Priority", PRIOS, state.bprio, "oq.bprio", count(mine.filter(b => state.bstat.has(st(b))), pkey));
+    bchips(bstatRow, "Status", STATS.map(v => [v, v[0].toUpperCase() + v.slice(1)]), state.bstat, "oq.bstat", count(mine.filter(b => state.bprio.has(pkey(b))), st));
+    const rows = mine.filter(b => state.bprio.has(pkey(b)) && state.bstat.has(st(b))).sort((a,b) => prioOf(a) - prioOf(b) || String(a.item || a.id).localeCompare(String(b.item || b.id)));
+    if (!rows.length) { bout.replaceChildren(el("div", {class:"empty"}, el("strong", {text: state.backlog.some(inB) ? "Nothing matches these filters" : "Nothing open in this backlog"}), state.backlog.some(inB) ? "Turn on more priorities or statuses, or clear the search." : "Pick another backlog at the top, or All backlogs.")); return; }
+    const posted = rows.map(b => b.posted_at).filter(Boolean).sort().pop();
+    bout.replaceChildren(el("p", {class:"unote", text: rows.length + " of " + state.backlog.filter(inB).length + " open items, by repo, priority 1 first" + (posted ? "; posted " + when(posted) : "") + "."}),
+      ...byRepo(rows, [["P", b => b.priority == null ? "–" : String(b.priority), "pr"], ["Item", b => b.title || "", "role"], ["Status", b => b.status || "", "md"], ["Id", b => b.item || b.id, "md"]]));
+  }
+  function renderCompleted(){
+    const list = $("#list");
+    const sel = el("select", {"aria-label": "Period"}, ...[1, 7, 30, 90].map(d => el("option", {value: String(d), text: d === 1 ? "1 day" : d + " days"})));
+    sel.value = String(state.period);
+    sel.addEventListener("change", e => { state.period = +e.target.value; try { localStorage.setItem("oq.period", String(state.period)); } catch(err){} render(); });
+    const head = el("div", {class:"period"}, el("span", {text: "Completed in the last"}), sel);
+    const since = Date.now() - state.period * 86400000;
+    const rows = state.completed.filter(c => inB(c) && c.done_at && new Date(c.done_at) >= since).sort((a,b) => String(b.done_at).localeCompare(String(a.done_at)));
+    if (!state.completed.length) { list.replaceChildren(head, el("div", {class:"empty"}, el("strong", {text: db ? "Nothing posted yet" : "Backlog unavailable"}), db ? "The PM's hub_backlog tool posts each repo's closed records here." : "Sign in to claude.ai to see completed work.")); return; }
+    if (!rows.length) { list.replaceChildren(head, el("div", {class:"empty"}, el("strong", {text: "Nothing completed in that period"}), state.period < 90 ? "Pick a longer period." : "Pick another backlog at the top, or All backlogs.")); return; }
+    list.replaceChildren(head, ...byRepo(rows, [["Done", c => when(c.done_at), "md"], ["Item", c => c.title || "", "role"], ["Id", c => c.item || c.id, "md"]]));
+  }
+
+  function storyCard(st){
+    const live = ACTIVE.includes(st.status);
+    const stat = {
+      submitted: el("span", {class:"chip", text:"Submitted"}),
+      review: el("span", {class:"chip", text:"In review"}),
+      questions: el("span", {class:"chip need", text:"Needs you"}),
+      added: el("span", {class:"chip ok", text: st.backlog_id ? "Added as " + st.backlog_id : "Added"}),
+      declined: el("span", {class:"chip", text:"Not added"}),
+      withdrawn: el("span", {class:"chip", text:"Withdrawn"})
+    }[st.status] || el("span", {class:"chip", text: st.status || "?"});
+    const parts = [el("div", {class:"meta"},
+      st.urgent && live ? el("span", {class:"chip urgent", text:"Urgent"}) : null,
+      st.repo ? el("span", {class:"chip", text: st.repo}) : null, stat,
+      st.submitted_at ? el("span", {text: "submitted " + when(st.submitted_at)}) : null,
+      st.added_at ? el("span", {text: "added " + when(st.added_at)}) : null),
+      el("h2", {text: st.title || "(untitled)"})];
+    if (st.story) parts.push(el("p", {class:"ctx", text: st.story}));
+    const idx = STEPS.findIndex(x => x[0] === st.status);
+    if (idx >= 0) parts.push(el("div", {class:"flow", "aria-label":"Progress"}, ...STEPS.map((x, i) => el("span", {class: i === idx ? "on" : i < idx ? "past" : "", text: x[1]}))));
+    const who = st.reviewer || (st.repo ? "the " + st.repo + " coordinator" : "the coordinator");
+    const line = {
+      submitted: "Waiting for the PM to hand it to " + who + ".",
+      review: "With " + who + " for review.",
+      questions: "Follow-up questions from " + who + " are waiting in Questions.",
+      added: "Filed in the " + (st.repo || "") + " backlog" + (st.backlog_id ? " as " + st.backlog_id : "") + ".",
+      declined: "Not added" + (st.closed_note ? ": " + st.closed_note : "."),
+      withdrawn: "You withdrew this story."
+    }[st.status];
+    if (line) parts.push(el("div", {class:"status", text: line}));
+    if (st.review_note) parts.push(el("div", {class:"ans"}, el("div", {}, el("b", {text: "Coordinator: "}), st.review_note)));
+    const qs = storyQs(st.id);
+    if (qs.length) parts.push(el("div", {class:"links"}, el("span", {class:"status", text:"Follow-ups:"}),
+      ...qs.map(d => el("button", {class:"link", type:"button", text: d.id + (d.status === "open" ? " (answer)" : d.status === "answered" ? " (submitted)" : " (logged)"), onclick: () => goQuestion(d.id)}))));
+    if (st.status === "submitted" && canWrite) {
+      const status = el("span", {class:"status", role:"status"});
+      const w = el("button", {class:"link", type:"button", text:"Withdraw"});
+      w.addEventListener("click", async () => {
+        w.disabled = true;
+        try { await db.doc("stories/" + st.id).update({ status: "withdrawn", closed_at: new Date().toISOString() }); }
+        catch (e) { status.className = "status err"; status.textContent = "Not saved: " + (e?.message || "the store refused the write") + "."; w.disabled = false; }
+      });
+      parts.push(el("div", {class:"act"}, w, status));
+    }
+    return el("article", {class: "q" + (live ? "" : " logged") + (st.urgent && live ? " urgent" : ""), id: "story-" + st.id}, ...parts);
+  }
+
+  // The Questions, Inbox and To-do repo menu: every repo the PM knows plus any the rows name.
+  const inR = x => forRepo(x, state.repo);
+  function fillRepos(rows){
+    const sel = $("#repo"), want = ["", ...knownRepos()];
+    if ([...sel.options].map(o=>o.value).join("|") !== want.join("|")) sel.replaceChildren(...want.map(r => el("option", {value:r, text: r || "All repos"})));
+    state.repo = want.find(r => r && r.toLowerCase() === state.repo.toLowerCase()) || ""; sel.value = state.repo;
+  }
+
+  function renderQuestions(){
+    const counts = {open:0, answered:0, logged:0};
+    for (const d of state.docs) counts[d.status] = (counts[d.status]||0)+1;
+    for (const k of Object.keys(counts)) $("#n-"+k).textContent = counts[k];
+    document.querySelectorAll("#tabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.f === state.filter)));
+    fillRepos(state.docs);
+
+    let rows = state.docs.filter(d => d.status === state.filter && inR(d));
+    rows.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || (state.filter === "open"
+      ? String(a.asked_at||"").localeCompare(String(b.asked_at||""))
+      : String(b.answer?.at||"").localeCompare(String(a.answer?.at||""))));
+
+    const list = $("#list");
+    if (!rows.length) {
+      const msg = {
+        open: ["No open questions", "New questions from the PM appear here, oldest first."],
+        answered: ["Nothing waiting to be logged", "Answers you submit move here until the PM records them as rulings."],
+        logged: ["No logged answers yet", "Once the PM records an answer, it shows here with its R-id."]
+      }[state.filter];
+      list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? msg[0] : "Inbox unavailable"}), db ? msg[1] : "Sign in to claude.ai to read and answer questions."));
+      return;
+    }
+    list.replaceChildren(...rows.map(card));
+  }
+
+  function card(d){
+    const opts = Array.isArray(d.options) ? d.options : [];
+    const rec = Number.isInteger(d.recommended) ? d.recommended : 0;
+    const editable = d.status === "open" || (d.status === "answered" && state.editing.has(d.id));
+    const head = el("div", {class:"meta"},
+      d.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null,
+      el("span", {class:"id", text: d.id}),
+      d.repo ? el("span", {class:"chip", text: d.repo}) : null,
+      d.from ? el("span", {text: "from " + d.from}) : null,
+      d.story ? el("button", {class:"link", type:"button", text: "story: " + (state.stories.find(x => x.id === d.story)?.title || d.story), onclick: () => goStory(d.story)}) : null,
+      d.asked_at ? el("span", {text: "asked " + when(d.asked_at)}) : null,
+      d.status === "logged" && d.ruling ? el("span", {class:"chip ok", text: d.ruling}) : null
+    );
+    const parts = [head, el("h2", {text: d.title || "(untitled)"})];
+    if (d.context) parts.push(el("p", {class:"ctx", text: d.context}));
+    const replies = inboxFor(d.id);
+    if (replies.length) parts.push(el("div", {class:"links"}, el("button", {class:"link", type:"button", text: (replies.some(m => !m.read) ? "New answer from the PM" : "The PM's answer") + (replies.length > 1 ? "s (" + replies.length + ")" : "") + " in the Inbox", onclick: () => goInbox(d.id)})));
+    if (Array.isArray(d.refs) && d.refs.length) parts.push(el("div", {class:"refs", text: "Refs: " + d.refs.join(", ")}));
+
+    if (editable) {
+      const draft = readDraft(d.id) || (d.answer ? {choice: d.answer.choice, note: d.answer.note || ""} : {choice: null, note: ""});
+      const name = "q-" + d.id;
+      const fs = el("fieldset", {}, el("legend", {text: "Options for " + d.id}));
+      opts.forEach((o, i) => {
+        const input = el("input", {type:"radio", name, value: String(i), id: name + "-" + i, checked: draft.choice === i});
+        input.addEventListener("change", () => { draft.choice = i; saveDraft(d.id, draft); btn.disabled = false; });
+        fs.append(el("label", {class:"opt", for: name + "-" + i}, input,
+          el("span", {class:"ol"}, o.label || ("Option " + (i+1)), i === rec ? el("span", {class:"chip rec", text:"Recommended"}) : null),
+          o.description ? el("span", {class:"od", text: o.description}) : null));
+      });
+      const otherIn = el("input", {type:"radio", name, value:"other", id: name + "-other", checked: draft.choice === "other"});
+      otherIn.addEventListener("change", () => { draft.choice = "other"; saveDraft(d.id, draft); btn.disabled = !draft.note.trim(); });
+      fs.append(el("label", {class:"opt", for: name + "-other"}, otherIn, el("span", {class:"ol", text:"Something else"}), el("span", {class:"od", text:"Write your answer in the note below."})));
+      const note = el("textarea", {id: name + "-note", placeholder: "Note for the PM (optional; required for Something else)"});
+      note.value = draft.note || "";
+      note.addEventListener("input", () => { draft.note = note.value; saveDraft(d.id, draft); if (draft.choice === "other") btn.disabled = !note.value.trim(); });
+      const status = el("span", {class:"status", role:"status"});
+      const btn = el("button", {class:"primary", type:"button", text: d.status === "answered" ? "Save new answer" : "Send answer"});
+      btn.disabled = draft.choice == null || (draft.choice === "other" && !draft.note.trim()) || !canWrite;
+      btn.addEventListener("click", async () => {
+        btn.disabled = true; status.className = "status"; status.textContent = "Sending…";
+        const label = draft.choice === "other" ? "Something else" : (opts[draft.choice]?.label || "");
+        try {
+          await db.doc("questions/" + d.id).update({ status: "answered", answer: { choice: draft.choice, label, note: (draft.note||"").trim(), at: new Date().toISOString() } });
+          clearDraft(d.id); state.editing.delete(d.id);
+        } catch (e) {
+          status.className = "status err";
+          status.textContent = e && e.code === "permission_denied" ? "You can read this hub but not answer here." : "Not sent: " + (e?.message || "the store refused the write") + ". Your draft is kept; try again.";
+          btn.disabled = false;
+        }
+      });
+      const acts = el("div", {class:"act"}, btn, status);
+      if (d.status === "answered") acts.append(el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.editing.delete(d.id); clearDraft(d.id); render(); }}));
+      parts.push(fs, note, acts);
+    } else if (d.answer) {
+      const a = d.answer;
+      const pick = a.choice === "other" ? "Something else" : (a.label || opts[a.choice]?.label || "—");
+      parts.push(el("div", {class:"ans"},
+        el("div", {}, el("b", {text: "Your answer: "}), pick, a.choice === rec ? " (the recommendation)" : ""),
+        a.note ? el("div", {text: a.note}) : null,
+        el("div", {class:"status", text: (a.at ? "Submitted " + when(a.at) : "") + (d.status === "logged" ? " · logged" + (d.ruling ? " as " + d.ruling : "") : " · waiting for the PM to log it")})
+      ));
+      if (d.status === "answered" && canWrite) parts.push(el("div", {class:"act"}, el("button", {class:"link", type:"button", text:"Change answer", onclick: () => { state.editing.add(d.id); render(); }})));
+    }
+    return el("article", {class: "q " + d.status + (d.urgent ? " urgent" : ""), id: "q-" + d.id}, ...parts);
+  }
+
+  $("#tabs").addEventListener("click", e => {
+    const t = e.target.closest(".tab"); if (!t) return;
+    state.filter = t.dataset.f; try { localStorage.setItem("oq.filter", state.filter); } catch(e){}
+    render();
+  });
+  $("#sections").addEventListener("click", e => {
+    const b = e.target.closest(".sec"); if (!b) return;
+    state.section = b.dataset.s === "questions" && (state.section === "questions" || state.section === "inbox") ? state.section : b.dataset.s === "questions" ? state.inboxtab : b.dataset.s;
+    try { localStorage.setItem("oq.section", state.section); } catch(e){}
+    render();
+  });
+  $("#qtabs").addEventListener("click", e => {
+    const t = e.target.closest(".tab"); if (!t) return;
+    state.section = state.inboxtab = t.dataset.qt; try { localStorage.setItem("oq.section", state.section); } catch(err){}
+    render();
+  });
+  $("#ftabs").addEventListener("click", e => {
+    const t = e.target.closest(".tab"); if (!t) return;
+    state.infotab = t.dataset.nf; try { localStorage.setItem("oq.infotab", state.infotab); } catch(err){}
+    render();
+  });
+  $("#itabs").addEventListener("click", e => {
+    const t = e.target.closest(".tab"); if (!t) return;
+    state.ifilter = t.dataset.if; render();
+  });
+  $("#ttabs").addEventListener("click", e => {
+    const t = e.target.closest(".tab"); if (!t) return;
+    state.tfilter = t.dataset.tf; render();
+  });
+  const addT = $("#add-title"), addD = $("#add-detail"), addB = $("#add-btn"), addS = $("#add-status");
+  addT.addEventListener("input", () => { addB.disabled = !addT.value.trim(); });
+  $("#addform").addEventListener("submit", async e => {
+    e.preventDefault();
+    const title = addT.value.trim(); if (!title) return;
+    addB.disabled = true; addS.className = "status"; addS.textContent = "Adding…";
+    try {
+      await db.collection("todos").add({ status: "open", title, detail: addD.value.trim(), urgent: $("#add-urgent").checked, from: "you", added_at: new Date().toISOString() });
+      addT.value = ""; addD.value = ""; $("#add-urgent").checked = false; addS.textContent = "Added";
+    } catch (err) {
+      addS.className = "status err"; addS.textContent = "Not added: " + (err?.message || "the store refused the write") + ". Try again."; addB.disabled = false;
+    }
+  });
+  $("#stabs").addEventListener("click", e => {
+    const t = e.target.closest(".tab"); if (!t) return;
+    state.sfilter = t.dataset.sf; render();
+  });
+  function storyTo(){
+    const r = state.brepo;
+    $("#story-repo").replaceChildren(...(r ? ["Adding to the ", el("strong", {text: r}), " backlog"] : ["Pick a backlog at the top to add a story."]));
+    $("#story-btn").disabled = !(r && $("#story-title").value.trim());
+  }
+  $("#brepo").addEventListener("change", e => { state.brepo = e.target.value; try { localStorage.setItem("oq.brepo", state.brepo); } catch(err){} render(); });
+  const sR = {get value(){ return state.brepo; }}, sT = $("#story-title"), sX = $("#story-text"), sB = $("#story-btn"), sS = $("#story-status");
+  try { const d = JSON.parse(localStorage.getItem("oq.story") || "null"); if (d) { sT.value = d.t || ""; sX.value = d.x || ""; } } catch(e){}
+  const sCheck = () => { sB.disabled = !(sR.value && sT.value.trim()); try { localStorage.setItem("oq.story", JSON.stringify({t: sT.value, x: sX.value})); } catch(e){} };
+  sCheck();
+  [sT, sX].forEach(n => n.addEventListener("input", sCheck));
+  $("#storyform").addEventListener("submit", async e => {
+    e.preventDefault();
+    const title = sT.value.trim(); if (!title || !sR.value) return;
+    sB.disabled = true; sS.className = "status"; sS.textContent = "Submitting…";
+    try {
+      await db.collection("stories").add({ status: "submitted", repo: sR.value, title, story: sX.value.trim(), urgent: $("#story-urgent").checked, from: "you", submitted_at: new Date().toISOString() });
+      sT.value = ""; sX.value = ""; $("#story-urgent").checked = false; sCheck(); sS.textContent = "Submitted. The PM hands it to the coordinator.";
+    } catch (err) {
+      sS.className = "status err"; sS.textContent = "Not submitted: " + (err?.message || "the store refused the write") + ". Your draft is kept."; sB.disabled = false;
+    }
+  });
+  $("#repo").addEventListener("change", e => { state.repo = e.target.value; render(); });
+  const closeReader = () => { const id = state.reader; state.reader = null; render(); document.getElementById("dc-" + id)?.querySelector("button")?.focus(); };
+  $("#rd-close").addEventListener("click", closeReader);
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && state.reader) closeReader(); });
+
+  function alertText(){
+    const L = ["Action Hub alert from the owner: please process the hub."];
+    L.push(...pmAlertLines(state.topm));
+    const ans = state.docs.filter(d => d.status === "answered");
+    if (ans.length) { L.push("", "Answers to log:"); for (const d of ans) L.push("- " + d.id + ": " + (d.answer?.label || "?") + (d.answer?.note ? " (note: " + d.answer.note + ")" : "")); }
+    const sub = state.stories.filter(st => st.status === "submitted");
+    if (sub.length) { L.push("", "New stories:"); for (const st of sub) L.push("- [" + (st.repo || "?") + "] " + (st.title || "(untitled)") + (st.urgent ? " (urgent)" : "") + " id " + st.id); }
+    const done = state.todos.filter(t => t.status === "done" && !t.pm_ack);
+    if (done.length) { L.push("", "To-dos ticked done:"); for (const t of done) L.push("- " + t.id + ": " + (t.title || "")); }
+    const mine = state.todos.filter(t => t.status !== "done" && t.from === "you" && !t.pm_ack);
+    if (mine.length) { L.push("", "To-dos I added:"); for (const t of mine) L.push("- " + (t.title || "") + (t.urgent ? " (urgent)" : "")); }
+    if (L.length === 1) L.push("", "Nothing new is waiting; check the hub anyway.");
+    let txt = L.join("\n");
+    while (new TextEncoder().encode(txt).length > 3900) txt = txt.slice(0, -200);
+    return txt;
+  }
+  async function setupAlert(){
+    let cm = null;
+    try { cm = await window.claude.use("comments"); } catch(e){}
+    if (!cm || typeof cm.sendToClaude !== "function") return;
+    const bar = $("#alertbar"), btn = $("#alert-btn"), st = $("#alert-status");
+    const why = {
+      writers_only: "Only an editor of this page can alert the PM.",
+      no_session: "No PM session is watching right now. The PM checks the hub at its next turn anyway.",
+      off: "Alerts are not available in this view."
+    };
+    const check = async () => {
+      let c = "off";
+      try { c = await cm.canSendToClaude(); } catch(e){}
+      btn.disabled = c !== "available";
+      if (c !== "available") { st.className = "status"; st.textContent = why[c] || why.off; }
+      return c;
+    };
+    bar.hidden = false;
+    await check();
+    document.addEventListener("visibilitychange", () => { if (!document.hidden && !btn.dataset.busy) check(); });
+    const fire = async () => {
+      btn.disabled = true; btn.dataset.busy = "1"; st.className = "status"; st.textContent = "Sending…";
+      try {
+        const anchor = await cm.anchorFor(bar);
+        await cm.sendToClaude({ anchor, text: alertText() });
+        st.textContent = "Sent " + when(new Date().toISOString()) + ". The PM replies in the page's comments.";
+        setTimeout(() => { delete btn.dataset.busy; check(); }, 30000);
+      } catch (e) {
+        delete btn.dataset.busy;
+        st.className = "status err";
+        st.textContent = e?.code === "rate_limited" ? "Sent too recently; try again in a minute." : e?.code === "claude_unavailable" ? why.no_session : "Not sent: " + (e?.message || "the alert was refused") + ".";
+        btn.disabled = false;
+      }
+    };
+    btn.addEventListener("click", fire);
+    sendAlert = fire;
+  }
+
+  render();
+  (async () => {
+    db = window.claude ? await window.claude.use("db") : null;
+    if (!db) { render(); return; }
+    setupAlert();
+    try {
+      const user = await window.claude.use("user");
+      if (user && typeof user.can === "function") { const c = await user.can("data.write"); if (c === false) canWrite = false; }
+    } catch(e){}
+    db.collection("stories").onSnapshot(snap => {
+      state.stories = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, status: "submitted", ...s.data() }));
+      render();
+    }, () => {});
+    db.collection("repos").onSnapshot(snap => {
+      state.repos = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() }));
+      render();
+    }, () => {});
+    db.collection("backlog").onSnapshot(snap => {
+      state.backlog = snap.docs.filter(s => s.exists).flatMap(s => { const d = s.data();
+        return Array.isArray(d.items) ? d.items.map(i => ({ id: (d.repo || s.id) + ":" + i.id, repo: d.repo || s.id, item: i.id, title: i.t, priority: i.p, status: i.s, posted_at: d.posted_at })) : [{ id: s.id, ...d }]; });
+      render();
+    }, () => {});
+    db.collection("completed").onSnapshot(snap => {
+      state.completed = snap.docs.filter(s => s.exists).flatMap(s => { const d = s.data();
+        return Array.isArray(d.items) ? d.items.map(i => ({ id: (d.repo || s.id) + ":" + i.id, repo: d.repo || s.id, item: i.id, title: i.t, done_at: i.d, posted_at: d.posted_at })) : [{ id: s.id, ...d }]; });
+      render();
+    }, () => {});
+    db.collection("agents").onSnapshot(snap => {
+      state.agents = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() }));
+      render();
+    }, () => {});
+    db.collection("usage").onSnapshot(snap => {
+      state.usage = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, account: s.id, ...s.data() }));
+      render();
+    }, () => {});
+    db.collection("parked").onSnapshot(snap => {
+      state.parked = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() }));
+      render();
+    }, () => {});
+    db.collection("pages").onSnapshot(snap => {
+      state.pages = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() }));
+      render();
+    }, () => {});
+    db.collection("inbox").onSnapshot(snap => {
+      state.inbox = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() }));
+      render();
+    }, () => {});
+    db.collection("to_pm").onSnapshot(snap => {
+      state.topm = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, status: "queued", ...s.data() }));
+      render();
+    }, () => {});
+    db.collection("todos").onSnapshot(snap => {
+      state.todos = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, status: "open", ...s.data() }));
+      render();
+    }, () => {});
+    db.collection("questions").onSnapshot(snap => {
+      state.docs = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, status: "open", ...s.data() }));
+      render();
+    }, err => {
+      $("#list").replaceChildren(el("div", {class:"empty"}, el("strong", {text:"Could not load questions"}), (err && err.message) || "Reload the page to try again."));
+    });
+  })();
+})();
+</script>

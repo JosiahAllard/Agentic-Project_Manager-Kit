@@ -1,0 +1,18 @@
+{
+  "backlog_lint": {
+    "repos": {
+      "alpha": {
+        "root": "D:/src/alpha",
+        "backlog_cmd": "python tools/backlog.py -C <worktree>",
+        "rules": [
+          {"name": "gamma", "session": "gamma",
+           "ids": ["PVM-*", "GAMMA-*"], "paths": ["artifacts/models/", "research/gamma/"]},
+          {"name": "pm", "session": "pm",
+           "paths": ["tools/new_worktree.py", "tools/sync_base.py"],
+           "text": ["\\bthe PM takes it\\b", "\\bkit tool\\b"]},
+          {"name": "needs a live client", "hold": "live-client", "ids": ["BIND-HOPCYCLE"]}
+        ]
+      }
+    }
+  }
+}

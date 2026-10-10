@@ -1,0 +1,33 @@
+{
+  "BUILD_COMMAND": "dotnet build --nologo -nodeReuse:false -c Debug",
+  "TEST_COMMAND": "dotnet test --nologo -c Debug",
+  "FAST_TEST_COMMAND": "dotnet test --nologo -c Debug --filter \"Category!=Slow\"",
+  "gitignore": [
+    "bin/",
+    "obj/",
+    ".vs/",
+    "*.user",
+    "*.suo",
+    "*.userprefs",
+    "TestResults/",
+    "*.trx",
+    "artifacts/"
+  ],
+  "gitattributes": [
+    "*.cs         text eol=lf",
+    "*.csx        text eol=lf",
+    "*.csproj     text eol=lf",
+    "*.props      text eol=lf",
+    "*.targets    text eol=lf",
+    "*.xml        text eol=lf",
+    "*.config     text eol=lf",
+    "*.resx       text eol=lf",
+    "# Visual Studio rewrites solution files with CRLF; matching it avoids churn.",
+    "*.sln        text eol=crlf",
+    "*.dll        binary",
+    "*.exe        binary",
+    "*.pdb        binary",
+    "*.nupkg      binary",
+    "*.snk        binary"
+  ]
+}

@@ -1,0 +1,1 @@
+"""kitlib.lock (ARCHITECTURE.md)."""

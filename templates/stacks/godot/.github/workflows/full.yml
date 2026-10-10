@@ -1,0 +1,114 @@
+name: full
+
+# The full suite, engine included. Not on a push to main (that gets quick.yml): it
+# runs on manual dispatch (the coordinator starts one per batch of landings), on a
+# pushed v* tag, and on pull requests. Path filters are not evaluated for tags or
+# dispatch.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - LICENSE
+      - .gitignore
+      - .gitattributes
+      - '.claude/**'
+      - 'tools/hooks/**'
+      - 'tools/**.ps1'
+      - 'tools/**.py'
+      - 'tools/*.json'
+      - 'tools/godot.cmd'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# No artifact upload here. An export step added later uploads only on tags or
+# dispatch, never on a push to main, and with retention-days: 1.
+jobs:
+  full:
+    # Linux runner: engine runs headless, and a Windows build is a cross-export.
+    runs-on: ubuntu-latest
+    # Engine steps are bounded by their own `timeout`s; this is the backstop for the
+    # unbounded ones (download, import).
+    timeout-minutes: 30
+    env:
+      GODOT_VERSION: '<GODOT_VERSION>'
+      # The scene that runs the in-engine tests and quits with 0 on a pass, and the
+      # line it prints on a pass. A missing pass line fails the step whatever the
+      # exit status says.
+      ENGINE_TEST_SCENE: '<ENGINE_TEST_SCENE>'
+      ENGINE_TEST_PASS_STRING: '<ENGINE_TEST_PASS_STRING>'
+    steps:
+      - uses: actions/checkout@v4
+
+      # See quick.yml: keep the .NET 8 runtime alongside any newer pinned SDK.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+
+      - name: Download Godot (.NET build)
+        run: |
+          wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip"
+          mv "Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64" godot_dir
+          ln -s "godot_dir/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64" godot
+          chmod +x "godot_dir/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64"
+
+      - name: Build C# solution
+        run: |
+          dotnet --version
+          <BUILD_COMMAND>
+
+      - name: Engine-free unit tests
+        run: |
+          <FAST_TEST_COMMAND>
+
+      # Warms the import cache on this fresh checkout. Not gated on its output:
+      # Godot prints "ERROR: Can't open file" for a broken resource and still exits
+      # 0, so grepping here would make every run hostage to noise. The in-engine
+      # tests below are the gate, so they should assert that resources actually
+      # load, not just that a parent node attached.
+      - name: Import project
+        run: ./godot --headless --editor --quit --path . 2>&1 | tee import.log || true
+
+      - name: In-engine tests
+        shell: bash
+        run: |
+          # The engine's own exit status, not tee's. A step with no `shell:` key runs
+          # as `bash -e {0}` (no pipefail), so a pipeline's status is tee's 0 and
+          # `|| status=${PIPESTATUS[0]}` never fires. `shell: bash` adds pipefail and
+          # the `set -o pipefail` below repeats it. PIPESTATUS is read in the `||`
+          # branch of the pipeline's own list, before anything can overwrite it (a
+          # `|| true` first would). Through `timeout`: 124 is a hang, above 128 a
+          # crash (128 + signal).
+          set -o pipefail
+          status=0
+          timeout 180 ./godot --headless --path . "$ENGINE_TEST_SCENE" 2>&1 | tee engine_tests.log || status=${PIPESTATUS[0]}
+          echo "--- checks ---"
+          echo "engine exit status: $status"
+          # BASIC REGEX: the alternation needs \| - a bare | is a literal pipe that
+          # makes the whole pattern match nothing, silently. (A PowerShell copy of this
+          # pattern is .NET regex, where it is the other way round; never copy one
+          # into the other unchanged.) The class holds a literal dot so namespaced
+          # exceptions (System.IO.FileNotFoundException) match too.
+          ERRORS="SCRIPT ERROR\|Unhandled exception\|System\.[A-Za-z.]*Exception\|FATAL\|Fatal error\|Method not found"
+          st=0
+          grep -q "$ERRORS" engine_tests.log || st=$?
+          if [ "$st" -gt 1 ]; then echo "grep errored with status $st reading engine_tests.log"; exit 1; fi
+          if [ "$st" -eq 0 ]; then
+            echo "Script errors found"; grep -A2 "$ERRORS" engine_tests.log; exit 1
+          fi
+          if [ "$status" -eq 124 ]; then echo "In-engine tests hung: stopped by the 180 s timeout"; exit 1; fi
+          grep -qF "$ENGINE_TEST_PASS_STRING" engine_tests.log || { echo "In-engine tests failed: no '$ENGINE_TEST_PASS_STRING' line"; exit 1; }
+          grep -F "$ENGINE_TEST_PASS_STRING" engine_tests.log
+          if [ "$status" -ne 0 ]; then
+            echo "In-engine tests printed their pass line but the engine exited $status (above 128 is a crash: 128 + signal)."
+            exit 1
+          fi

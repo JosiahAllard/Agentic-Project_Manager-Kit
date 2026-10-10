@@ -1,0 +1,12 @@
+{
+  "comment": "Java/Gradle stack, the \"gate\" section of .kit.json (point it here with \"gate\": \"tools/gate.json\"; keys: docs/kit-json.md). gradle build runs the tests too, through the repo's wrapper. A dependency pin check (refuse any dependency that is not a pinned release) is a repo gate check: provide it as a GATE_CHECKS function in the hook module and add a step with \"check\": \"<name>\" selected by the Gradle build-definition files.",
+  "steps": [
+    {
+      "name": "gradle-build",
+      "globs": ["*.java", "*.kt", "*.kts", "*.gradle", "gradle.properties", "gradle/*", "buildSrc/*", "*.versions.toml"],
+      "exclude": ["*.md"],
+      "cmd": ["{root}\\gradlew.bat", "build", "--console=plain"],
+      "fail": ["BUILD FAILED"]
+    }
+  ]
+}

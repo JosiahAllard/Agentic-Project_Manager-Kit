@@ -1,0 +1,17 @@
+{
+  "repo": {"name": "Agentic-Project_Manager-Kit"},
+  "commit": {"merge_fold": true},
+  "doc_index": {"enabled": false},
+  "daily_full": {"enabled": true},
+  "gate": {
+    "steps": [
+      {
+        "name": "kit-suite",
+        "always": true,
+        "cmd": ["{python}", "tools/kit_tests.py", "--select", "-C", "{root}"],
+        "full_cmd": ["{python}", "tools/kit_tests.py", "--full", "-C", "{root}"],
+        "pass": ["kit_tests: OK"]
+      }
+    ]
+  }
+}

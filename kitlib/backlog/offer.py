@@ -1,0 +1,337 @@
+"""The partition, the rank order and the offer (ported from earlier per-repository
+tools/backlog.py copies, the `requires:` gate among them).
+
+Every record lands in exactly one bucket, and the banner refuses to print a partition that does
+not add up. The offer is a greedy fill down the rank order: scopes of live pulls are occupied
+first, and a comparison that cannot be decided is a collision, never a clearance.
+"""
+import re
+
+from kitlib.git import cmd, refs
+
+from . import record as rmod
+from . import scope as smod
+
+PULLABLE = 'pullable'
+HELD = 'held'
+PARKED = 'parked'
+IN_FLIGHT = 'in flight'
+UNPRIORITISED_OPEN = 'unprioritised+open'
+OWNER_PRIORITISED = 'owner to prioritise'
+UNCLASSIFIED = 'unclassifiable'
+NOT_READ = 'unreadable'
+BUCKETS = (PULLABLE, HELD, PARKED, IN_FLIGHT, UNPRIORITISED_OPEN, OWNER_PRIORITISED, UNCLASSIFIED,
+           NOT_READ)
+EFFORT_ORDER = {'s': 0, 'm': 1, 'l': 2, '-': 3}
+PROBE_TIMEOUT = 60
+
+
+class PartitionError(Exception):
+    """The buckets did not account for every file."""
+
+
+def classify(rec):
+    """`(bucket, None)`, or `(UNCLASSIFIED, why)`. Nothing is inferred."""
+    if not rec.readable:
+        return NOT_READ, None
+    state = rec.get('state')
+    if state is None or rmod._state(state) is not None:
+        return UNCLASSIFIED, 'no readable `state`'
+    if state == 'blocked':
+        return HELD, None
+    if state == 'parked':
+        return PARKED, None
+    if state == 'pulled':
+        return IN_FLIGHT, None
+    if state != 'open':
+        return UNCLASSIFIED, '`state: %s` parses but has no bucket' % state
+    priority = rec.get('priority')
+    if priority is None or rmod._priority(priority) is not None:
+        return UNCLASSIFIED, 'no readable `priority`'
+    if priority == rmod.OWNER_PRIORITY:
+        return OWNER_PRIORITISED, None
+    if priority == '-':
+        return UNPRIORITISED_OPEN, None
+    if rmod.is_band(priority):
+        return PULLABLE, None
+    return UNCLASSIFIED, '`priority: %s` parses but has no bucket' % priority
+
+
+class Banner(object):
+    """The line every read prints first, and the partition behind it."""
+
+    def __init__(self, snap):
+        self.snap = snap
+        self.buckets = {k: [] for k in BUCKETS}
+        self.unclassifiable_why = []
+        for rec in snap.records:
+            bucket, why = classify(rec)
+            self.buckets[bucket].append(rec)
+            if why:
+                self.unclassifiable_why.append((rec, why))
+        total = sum(len(v) for v in self.buckets.values())
+        if total != snap.file_count:
+            raise PartitionError('%d records in buckets, %d files read' % (total, snap.file_count))
+
+    def count(self, bucket):
+        return len(self.buckets[bucket])
+
+    def held_groups(self):
+        """`([(group, n)], multi)`: each held record counted once, under its first group."""
+        counts = dict.fromkeys(rmod.HELD_ORDER, 0)
+        multi = unaccounted = 0
+        for rec in self.buckets[HELD]:
+            kinds = [k for k in (rmod.blocker_kind(v) for v in rec.all('blocked_on')) if k]
+            if len(kinds) > 1:
+                multi += 1
+            for group in rmod.HELD_ORDER:
+                if group in kinds:
+                    counts[group] += 1
+                    break
+            else:
+                unaccounted += 1
+        groups = [(g, counts[g]) for g in rmod.HELD_ORDER if counts[g]]
+        if unaccounted:
+            groups.append(('unaccounted (blocked with no nameable blocker)', unaccounted))
+        if sum(n for _, n in groups) != self.count(HELD):
+            raise PartitionError('the held breakdown does not sum to the held count')
+        return groups, multi
+
+    def lines(self):
+        parts = ['BACKLOG %s' % self.snap.head_label(),
+                 '%d records' % self.snap.file_count,
+                 '%d pullable' % self.count(PULLABLE),
+                 '%d held' % self.count(HELD),
+                 '%d unprioritised+open' % self.count(UNPRIORITISED_OPEN)]
+        for bucket in (PARKED, IN_FLIGHT, OWNER_PRIORITISED, NOT_READ, UNCLASSIFIED):
+            if self.count(bucket):
+                parts.append('%d %s' % (self.count(bucket), bucket))
+        minus_one = sum(1 for r in self.snap.readable if r.get('priority') == rmod.OWNER_PRIORITY)
+        if minus_one != self.count(OWNER_PRIORITISED):
+            parts.append('%d at priority -1 (%d of them open)'
+                         % (minus_one, self.count(OWNER_PRIORITISED)))
+        out = [' | '.join(parts)]
+        groups, multi = self.held_groups()
+        if self.count(HELD):
+            line = 'held %d: %s' % (self.count(HELD), ', '.join('%d %s' % (n, g) for g, n in groups))
+            if multi:
+                line += '  (%d held on more than one thing, counted under the first)' % multi
+            out.append(line)
+        return out
+
+    def queue_warning(self):
+        """A line under 10 pullable, or under 3 pullable at priority 1-2; never an exit code."""
+        pullable = self.buckets[PULLABLE]
+        high = [r for r in pullable if r.get('priority') in ('1', '2')]
+        if len(pullable) >= 10 and len(high) >= 3:
+            return None
+        groups, _ = self.held_groups()
+        largest = max(groups, key=lambda gn: gn[1]) if groups else None
+        why = ('%d pullable' % len(pullable) if len(pullable) < 10
+               else '%d pullable at priority 1-2' % len(high))
+        return 'QUEUE DEPTH: %s. Largest held group: %s.' % (
+            why, '%s (%d)' % largest if largest else 'none - nothing is held')
+
+
+# --- rank -----------------------------------------------------------------------------------------
+
+def is_ranked(rec):
+    return rec.readable and rmod.is_band(rec.get('priority'))
+
+
+def rank_key(rec):
+    """Preempt, pin, then `resume` (an unparked record: above priority, never a pin),
+    priority, effort, id."""
+    pin = rec.get('pin')
+    pinned = pin is not None and rmod._pin(pin) is None
+    resume = rec.get('resume')
+    resumed = resume is not None and rmod._ruling(resume) is None
+    effort = rec.get('effort')
+    if effort not in EFFORT_ORDER:
+        effort = '-'
+    return (0 if rec.has('preempt') else 1, 0 if pinned else 1, int(pin) if pinned else 0,
+            0 if resumed else 1, int(rec.get('priority')), EFFORT_ORDER[effort], rec.id)
+
+
+def ranked(snap):
+    """`{id: rank}` over every banded record, 1-based. Blocked and pulled records rank too."""
+    order = sorted((r for r in snap.readable if is_ranked(r)), key=rank_key)
+    return {r.id: i for i, r in enumerate(order, 1)}
+
+
+def rank_label(rec, ranks):
+    if rec.has('preempt'):
+        return '*'
+    return str(ranks.get(rec.id, '-')) if is_ranked(rec) else '-'
+
+
+# --- in flight ------------------------------------------------------------------------------------
+
+def live_branches(root, remote):
+    """`(names, None)`: every local branch, `<remote>/<name>` and worktree branch; `(None, why)`
+    when git fails (half an answer is no answer)."""
+    out, why = cmd.run_text(['for-each-ref', '--format=%(refname)', 'refs/heads',
+                             'refs/remotes/%s' % remote], root, timeout=PROBE_TIMEOUT)
+    if out is None:
+        return None, why
+    trees, why = cmd.run_text(['worktree', 'list', '--porcelain'], root, timeout=PROBE_TIMEOUT)
+    if trees is None:
+        return None, why
+    names = set()
+    for ref in out.split('\n'):
+        for prefix in ('refs/heads/', 'refs/remotes/%s/' % remote):
+            if ref.startswith(prefix):
+                names.add(ref[len(prefix):])
+    for line in trees.split('\n'):
+        if line.startswith('branch refs/heads/'):
+            names.add(line[len('branch refs/heads/'):].strip())
+    return names, None
+
+
+def in_flight_split(snap, root, remote):
+    """`(holding, dead, why)` over the pulled records. A pull is dead only when git answered and
+    found no branch by its `pulled_by`; a failed probe holds every pull (fail closed)."""
+    pulled = [r for r in snap.records if classify(r)[0] == IN_FLIGHT]
+    if not pulled:
+        return [], [], None
+    names, why = live_branches(root, remote)
+    if names is None:
+        return pulled, [], why
+    holding = [r for r in pulled if r.get('pulled_by') in names]
+    return holding, [r for r in pulled if r not in holding], None
+
+
+# --- requires -------------------------------------------------------------------------------------
+
+def unmet_requires(rec, snap, history, root, main_branch):
+    """`[(member, why)]` for every gated `requires:` line not met. `item:X` is met when X has no
+    live record and the store history closed it; `commit:H` when H is on `main_branch`. Any
+    other `requires:` line is a note and gates nothing. A git that cannot answer is unmet."""
+    out = []
+    for member in rec.all('requires'):
+        kind, _, target = member.partition(':')
+        if kind == 'item' and target and snap.rules.id_re.match(target):
+            live = snap.get(target)
+            if live is not None:
+                out.append((member, 'it is still `state: %s`, not closed' % live.get('state')))
+                continue
+            last = history(target)
+            if last is None or not re.match(r'^\S+ closes ', last):
+                out.append((member, 'retired, so it will never land' if last else
+                            'no record has that id and none was closed'))
+        elif kind == 'commit' and target:
+            ok, why = refs.is_ancestor(target, 'refs/heads/%s' % main_branch, root)
+            if not ok:
+                out.append((member, 'it is not on %s' % main_branch if ok is False
+                            else 'git cannot tell (%s)' % why))
+    return out
+
+
+# --- the offer ------------------------------------------------------------------------------------
+
+class Offer(object):
+    def __init__(self, rec, rank, seeded=False):
+        self.rec, self.rank, self.seeded = rec, rank, seeded
+
+
+class PassedOver(object):
+    def __init__(self, rec, rank, why):
+        self.rec, self.rank, self.why = rec, rank, why
+
+
+def next_offer(snap, holding, cap=5, seeds=(), session=None, unmet=None):
+    """`((offers, passed), refusals, ranks)`. `holding` are the live pulls whose scopes are taken
+    first. `unmet(rec)` -> `[(member, why)]` gates `requires:`. Only records whose `session:`
+    equals `session` are offered; another session's record takes its scope silently."""
+    ranks = ranked(snap)
+    occupied = []
+    for rec in holding:
+        occupied.extend(rec.all('scope'))
+    bad = ['an in-flight record has `scope: %s` - %s' % (m, smod.scope_member_error(m))
+           for m in occupied if smod.scope_member_error(m) is not None]
+    if bad:
+        return None, bad, ranks
+
+    def own(r):
+        return r.get('session') == session
+
+    candidates = sorted((r for r in snap.readable if classify(r)[0] == PULLABLE), key=rank_key)
+    mine_by_id = {r.id: r for r in candidates if own(r)}
+    ordered = []
+    for sid in seeds:
+        if sid in mine_by_id and mine_by_id[sid] not in ordered:
+            ordered.append(mine_by_id[sid])
+    seeded = set(id(r) for r in ordered)
+    ordered.extend(r for r in candidates if r not in ordered)
+
+    offers, passed, reached, holders = [], [], set(), {}
+    for rec in ordered:
+        reached.add(id(rec))
+        rid = rec.id
+        scopes = rec.all('scope')
+        errs = [(m, smod.scope_member_error(m)) for m in scopes]
+        errs = [(m, why) for m, why in errs if why is not None]
+        if not scopes:
+            errs = [('(no scope line)', 'a record with no `scope:` is never offered')]
+        if errs:
+            if own(rec):
+                passed.append(PassedOver(rec, ranks.get(rid, '-'), 'scope undecidable, so this '
+                                         'is a collision: `%s` - %s' % errs[0]))
+            continue
+        try:
+            hit = smod.colliding_pairs(scopes, occupied) if occupied else []
+        except smod.UndecidableScope as exc:
+            if own(rec):
+                passed.append(PassedOver(rec, ranks.get(rid, '-'),
+                                         'scope undecidable, so this is a collision: %s' % exc))
+            continue
+        if hit and id(rec) not in seeded:
+            if own(rec):
+                holder = holders.get(hit[0][1])
+                passed.append(PassedOver(rec, ranks.get(rid, '-'), 'scope %s collides with %s '
+                                         'already taken%s' % (hit[0][0], hit[0][1], ' by %s '
+                                         '(session %s)' % holder if holder else '')))
+            continue
+        if own(rec) and unmet is not None:
+            missing = unmet(rec)
+            if missing:
+                passed.append(PassedOver(rec, ranks.get(rid, '-'), 'requires %s, which is unmet: '
+                                         '%s' % missing[0]))
+                continue
+        occupied.extend(scopes)
+        if not own(rec):
+            for m in scopes:
+                holders.setdefault(m, (rid, rec.get('session') or 'none'))
+            continue
+        offers.append(Offer(rec, ranks.get(rid, '-'), id(rec) in seeded))
+        if len(offers) >= cap:
+            break
+    for rec in ordered:
+        if id(rec) not in reached and own(rec):
+            passed.append(PassedOver(rec, ranks.get(rec.id, '-'),
+                                     'not reached - the cap was already full'))
+    return (offers, passed), [], ranks
+
+
+def not_offered_why(rec, passed, session=None):
+    """Why `rec` is not in the offer, named."""
+    bucket, why = classify(rec)
+    if bucket == HELD:
+        return 'it is held on %s' % ', '.join(rec.all('blocked_on'))
+    if bucket == PARKED:
+        return 'it is parked'
+    if bucket == UNPRIORITISED_OPEN:
+        return 'it is unprioritised, so it has no rank and is never offered'
+    if bucket == OWNER_PRIORITISED:
+        return 'it is `priority: -1`, the owner\'s to price, so it has no rank'
+    if bucket == UNCLASSIFIED:
+        return 'it cannot be classified: %s' % why
+    if rec.get('session') != session:
+        if rec.get('session'):
+            return ('it belongs to session `%s`, so only `next --session %s` offers it'
+                    % (rec.get('session'), rec.get('session')))
+        return 'it has no `session:`, and `--session %s` offers only that session\'s records' % session
+    for p in passed:
+        if p.rec is rec:
+            return 'it was passed over at rank %s: %s' % (p.rank, p.why)
+    return 'it is not in the offer'

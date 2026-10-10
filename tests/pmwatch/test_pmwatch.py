@@ -1,0 +1,323 @@
+"""Ported from the PM repo's launcher/test_pm_watch.py at 95f7262, plus Watcher and CLI tests."""
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+
+from kitlib import pmwatch as W
+from claude import claude_host as H
+
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "tools"))
+import pm_watch as cli                                              # noqa: E402
+
+
+class UsageEvents(unittest.TestCase):
+    def test_week_band_crossings_fire_once(self):
+        p = {"2": {"five": 10, "week": 89}}
+        self.assertEqual(W.usage_events(p, {"2": {"five": 10, "week": 95}}),
+                         ["USAGE account 2 seven_day 95% (now 95%)"])
+        self.assertEqual(W.usage_events({"2": {"five": 10, "week": 95}}, {"2": {"five": 10, "week": 96}}), [])
+
+    def test_five_hour_98(self):
+        self.assertEqual(W.usage_events({"1": {"five": 96, "week": 0}}, {"1": {"five": 98, "week": 0}}),
+                         ["USAGE account 1 five_hour 98% (now 98%)"])
+
+    def test_no_90_band(self):
+        self.assertEqual(W.usage_events({"1": {"five": 89, "week": 0}}, {"1": {"five": 90, "week": 0}}), [])
+
+    def test_reset_is_a_drop_of_20_or_more(self):
+        self.assertEqual(W.usage_events({"1": {"five": 0, "week": 80}}, {"1": {"five": 0, "week": 0}}),
+                         ["RESET account 1 (weekly 80% -> 0%)"])
+        self.assertEqual(W.usage_events({"1": {"five": 0, "week": 30}}, {"1": {"five": 0, "week": 15}}), [])
+
+    def test_new_account_is_baseline_only(self):
+        self.assertEqual(W.usage_events({}, {"3": {"five": 99, "week": 99}}), [])
+
+    def test_line_parser(self):
+        txt = ("account 1: five_hour=reset  seven_day=reset  [updated 2 min ago]\n"
+               "account 2: five_hour=39% (resets Fri 15:40)  seven_day=51% (resets Tue 00:00)")
+        got = {m.group(1): (m.group(2), m.group(3)) for m in W.LINE.finditer(txt)}
+        self.assertEqual(got, {"1": ("reset", "reset"), "2": ("39", "51")})
+
+    def test_parse_usage(self):
+        self.assertEqual(W.parse_usage("account codex: five_hour=reset  seven_day=40% (resets x)"),
+                         {"codex": {"five": 0, "week": 40}})
+        with self.assertRaises(RuntimeError):
+            W.parse_usage("account 1: no usage file")
+
+
+class AlertEvents(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def put(self, rid, reason, raw=None):
+        with open(os.path.join(self.d, rid + ".json"), "w", encoding="utf-8") as f:
+            f.write(raw if raw is not None else json.dumps({"id": rid, "reason": reason}))
+
+    def test_new_alert_fires_once(self):
+        self.put("r-1", "failed: exit 1 on launch 2 after 6 s;\nthe relaunch failed within 60 s")
+        ev, seen = W.alert_events(set(), self.d)
+        self.assertEqual(ev, ["BGFAIL run r-1 failed: exit 1 on launch 2 after 6 s; "
+                              "the relaunch failed within 60 s"])
+        self.assertEqual(W.alert_events(set(seen), self.d), ([], ["r-1.json"]))
+
+    def test_missing_folder_is_quiet(self):
+        self.assertEqual(W.alert_events({"r-9.json"}, os.path.join(self.d, "none")), ([], []))
+
+    def test_unreadable_retried_and_removed_dropped(self):
+        self.put("r-2", None, raw="{half")
+        self.assertEqual(W.alert_events(set(), self.d), ([], []))
+        self.put("r-2", "failed: exit 3 on launch 1")
+        ev, seen = W.alert_events({"r-gone.json"}, self.d)
+        self.assertEqual((ev, seen), (["BGFAIL run r-2 failed: exit 3 on launch 1"], ["r-2.json"]))
+
+    def test_baseline_is_seen(self):
+        self.put("r-3", "old")
+        _, seen = W.alert_events([], self.d)
+        self.assertEqual(W.alert_events(set(seen), self.d)[0], [])
+
+
+class IdleEvents(unittest.TestCase):
+    NOW = 1_000_000.0
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        self.proj = os.path.join(self.root, "acct1", "projects")
+        os.makedirs(self.proj)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def put(self, folder, rel, age_min, title=None):
+        path = os.path.join(self.proj, folder, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        stem = os.path.basename(path)[:-6]
+        with open(path, "w", encoding="utf-8") as f:
+            if title:
+                f.write(json.dumps({"type": "custom-title", "customTitle": title, "sessionId": stem}) + "\n")
+            f.write("{}\n")
+        t = self.NOW - age_min * 60
+        os.utime(path, (t, t))
+        return t
+
+    def run_idle(self, fired=None, nolog=None, minutes=20, names=("n7",)):
+        return W.idle_events(list(names), H.newest_finder([self.proj]), fired or {}, nolog or [],
+                             self.NOW, minutes)
+
+    def test_quiet_session_fires_once(self):
+        t = self.put("D--src-alpha", "a.jsonl", 30, "n7")
+        ev, fired, _ = self.run_idle()
+        self.assertEqual(len(ev), 1)
+        self.assertTrue(ev[0].startswith("IDLE n7 30m since "), ev[0])
+        self.assertEqual(fired, {"n7": t})
+        self.assertEqual(self.run_idle(fired)[0], [])
+
+    def test_active_session_is_quiet(self):
+        self.put("D--src-alpha", "a.jsonl", 5, "n7")
+        self.assertEqual(self.run_idle()[:2], ([], {}))
+
+    def test_two_sessions_one_folder_judged_separately(self):
+        self.put("D--src-alpha", "a.jsonl", 90, "n7")
+        self.put("D--src-alpha", "b.jsonl", 1, "gamma")
+        ev, fired, _ = self.run_idle(names=("n7", "gamma"))
+        self.assertEqual(len(ev), 1)
+        self.assertTrue(ev[0].startswith("IDLE n7 90m since "), ev[0])
+        self.assertEqual(list(fired), ["n7"])
+
+    def test_own_subagent_transcript_counts_as_active(self):
+        self.put("D--src-alpha", "a.jsonl", 60, "n7")
+        self.put("D--src-alpha", "a/subagents/agent-1.jsonl", 2)
+        self.assertEqual(self.run_idle()[0], [])
+
+    def test_other_sessions_subagent_does_not_count(self):
+        self.put("D--src-alpha", "a.jsonl", 60, "n7")
+        self.put("D--src-alpha", "b.jsonl", 60, "gamma")
+        self.put("D--src-alpha", "b/subagents/agent-1.jsonl", 2)
+        self.assertEqual(len(self.run_idle()[0]), 1)
+
+    def test_fires_again_after_activity_resumes(self):
+        t = self.put("D--src-alpha", "a.jsonl", 30, "n7")
+        _, fired, _ = self.run_idle({"n7": t - 500})
+        self.assertEqual(fired, {"n7": t})
+        self.put("D--src-alpha", "a.jsonl", 3, "n7")
+        ev, fired, _ = self.run_idle(fired)
+        self.assertEqual((ev, fired), ([], {}))
+        self.put("D--src-alpha", "a.jsonl", 25, "n7")
+        self.assertEqual(len(self.run_idle(fired)[0]), 1)
+
+    def test_no_transcript_errors_once(self):
+        ev, _, nolog = self.run_idle()
+        self.assertEqual(ev, ["ERROR idle: no transcript for n7"])
+        self.assertEqual(nolog, ["n7"])
+        self.assertEqual(self.run_idle(nolog=nolog)[0], [])
+
+    def test_name_in_text_is_not_a_title(self):
+        self.put("D--src-alpha", "a.jsonl", 60)
+        path = os.path.join(self.proj, "D--src-alpha", "a.jsonl")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "user", "text": "customTitle n7"}) + "\n")
+        self.assertEqual(self.run_idle()[0], ["ERROR idle: no transcript for n7"])
+
+    def test_threshold_is_idle_minutes(self):
+        self.put("D--src-alpha", "a.jsonl", 30, "n7")
+        self.assertEqual(self.run_idle(minutes=45)[0], [])
+
+    def test_watched_sessions(self):
+        p = os.path.join(self.root, "sessions.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"_note": "x", "r": {"repo": "alpha", "agent": True, "name": "n7"},
+                       "c": {"repo": "alpha", "agent": False, "name": "gamma"},
+                       "g": {"repo": "Beta", "agent": True, "name": "gb", "autostart": False},
+                       "n": {"repo": "x", "agent": True}}, f)
+        self.assertEqual(W.watched_sessions(p), ["gamma", "n7"])
+        self.assertEqual(W.watched_sessions(os.path.join(self.root, "none.json")), [])
+
+    def test_watched_sessions_reads_bom_file(self):
+        p = os.path.join(self.root, "bom-sessions.json")
+        with open(p, "wb") as f:
+            f.write(b"\xef\xbb\xbf" + json.dumps({"r": {"name": "n7"}}).encode("utf-8"))
+        self.assertEqual(W.watched_sessions(p), ["n7"])
+
+    def test_baseline_records_only_currently_idle(self):
+        t = self.put("D--src-alpha", "a.jsonl", 30, "n7")
+        self.put("D--src-alpha", "b.jsonl", 2, "gamma")
+        self.assertEqual(W.idle_baseline(["n7", "gamma", "none"], H.newest_finder([self.proj]),
+                                         self.NOW, 20), {"n7": t})
+
+    def test_project_roots_are_claude_config_folders(self):
+        for d in (".claude", ".claude-account2", ".codex", "other"):
+            os.makedirs(os.path.join(self.root, d))
+        self.assertEqual(H.project_roots(self.root),
+                         [os.path.join(self.root, d, "projects") for d in (".claude", ".claude-account2")])
+
+
+class WatcherRun(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.alerts = os.path.join(self.tmp.name, "alerts")
+        os.makedirs(self.alerts)
+        self.sessions = os.path.join(self.tmp.name, "sessions.json")
+        with open(self.sessions, "w", encoding="utf-8") as f:
+            json.dump({"r": {"name": "n7"}}, f)
+        self.use = {"1": {"five": 10, "week": 50}}
+        self.mt = {"n7": 1000.0}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def watcher(self, state, usage_reader=None, tip=lambda r, ref: "abcd1234"):
+        return W.Watcher(state, [("repo", "main")], usage_reader or (lambda: dict(self.use)),
+                         self.alerts, self.sessions, self.mt.get, tip=tip)
+
+    def test_first_run_is_baseline_only(self):
+        with open(os.path.join(self.alerts, "old.json"), "w") as f:
+            json.dump({"id": "old", "reason": "x"}, f)
+        w = self.watcher({})
+        w.start(1000.0 + 3600)
+        self.assertEqual(w.s, {"branches": {"repo main": "abcd1234"}, "usage": self.use,
+                               "bg_alerts": ["old.json"], "idle": {"n7": 1000.0}})
+        self.assertEqual(w.poll(1000.0 + 3600), [])
+        self.assertEqual(w.s["idle_nolog"], [])
+
+    def test_each_event_kind(self):
+        w = self.watcher({"branches": {"repo main": "old"}, "usage": {"1": {"five": 10, "week": 90}},
+                          "bg_alerts": [], "idle": {}}, )
+        with open(os.path.join(self.alerts, "r-5.json"), "w") as f:
+            json.dump({"id": "r-5", "reason": "failed"}, f)
+        self.use = {"1": {"five": 10, "week": 98}}
+        w.start(5000.0)
+        ev = w.poll(5000.0)
+        self.assertEqual(ev[:2], ["BRANCH repo main abcd1234", "USAGE account 1 seven_day 98% (now 98%)"])
+        self.assertTrue(ev[2].startswith("IDLE n7 66m since "), ev[2])
+        self.assertEqual(ev[3], "BGFAIL run r-5 failed")
+        self.assertEqual(w.s["branches"]["repo main"], "abcd1234")
+
+    def test_error_on_third_failure_only(self):
+        def bad():
+            raise RuntimeError("usage.ps1 printed no account lines")
+        w = self.watcher({"branches": {"repo main": "abcd1234"}, "usage": {}, "bg_alerts": [],
+                          "idle": {}}, usage_reader=bad)
+        w.usage_poll = 0
+        got = [w.poll(1000.0 + i) for i in range(4)]
+        self.assertEqual([g for g in got if g], [["ERROR usage check: usage.ps1 printed no account lines"]])
+
+
+class Cli(unittest.TestCase):
+    def test_missing_sessions_exits_2(self):
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as c:
+            cli.parse(["--usage-script", "u.ps1"], {})
+        self.assertEqual(c.exception.code, 2)
+        self.assertIn("pm_watch.sessions_file", err.getvalue())
+
+    def test_no_usage_script_and_no_launcher_key_exits_2(self):
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as c:
+            cli.parse(["--sessions", "s.json"], {}, launcher_set=False)
+        self.assertEqual(c.exception.code, 2)
+        self.assertIn("no usage source", err.getvalue())
+        self.assertEqual(cli.parse(["--sessions", "s.json", "--usage-script", "u.ps1"], {},
+                                   launcher_set=False).usage_script, "u.ps1")
+
+    def test_launcher_configured_reads_the_machine_config(self):
+        with tempfile.TemporaryDirectory() as home:
+            self.assertFalse(W.launcher_configured(home))
+            os.makedirs(os.path.join(home, ".claude-pm-kit"))
+            with open(os.path.join(home, ".claude-pm-kit", "config.json"), "w", encoding="utf-8") as f:
+                json.dump({"launcher": {"accounts": {"1": ["~/.claude"]}}}, f)
+            self.assertTrue(W.launcher_configured(home))
+
+    def test_no_usage_script_reads_usage_in_process(self):
+        a = cli.parse(["--sessions", "s.json"], {}, launcher_set=True)
+        self.assertIsNone(a.usage_script)
+        got = W.usage(None, report=lambda: ["account 1: five_hour=reset  seven_day=51% (resets Mon 10:00)  "
+                                            "[updated 3 min ago]", "account 2: no usage file",
+                                            "current account: 1"])
+        self.assertEqual(got, {"1": {"five": 0, "week": 51}})
+
+    def test_config_keys_are_defaults_and_flags_win(self):
+        cfg = {"usage_script": "u.ps1", "sessions_file": "s.json", "alerts_dir": "A", "state_file": "S"}
+        a = cli.parse([], cfg)
+        self.assertEqual((a.usage_script, a.sessions, a.alerts_dir, a.state, a.idle_minutes, a.idle_poll),
+                         ("u.ps1", "s.json", "A", "S", 20, 300))
+        a = cli.parse(["--sessions", "x.json", "--state", "T", "--idle-minutes", "5", "--idle-poll", "60"], cfg)
+        self.assertEqual((a.sessions, a.state, a.idle_minutes, a.idle_poll), ("x.json", "T", 5, 60))
+
+    def test_load_config_reads_pm_watch_key(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "config.json")
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"pm_start": {}, "pm_watch": {"sessions_file": "s.json"}}, f)
+            self.assertEqual(W.load_config(p), {"sessions_file": "s.json"})
+            self.assertEqual(W.load_config(os.path.join(d, "none.json")), {})
+
+    def test_once_with_no_events_exits_0_and_saves_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            sessions, state = os.path.join(d, "s.json"), os.path.join(d, "st", "state.json")
+            with open(sessions, "w", encoding="utf-8") as f:
+                json.dump({}, f)
+            with open(os.path.join(d, "u.ps1"), "w", encoding="utf-8") as f:
+                f.write("Write-Output 'account 1: five_hour=1% seven_day=2%'\n")
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = cli.main(["--usage-script", os.path.join(d, "u.ps1"), "--sessions", sessions,
+                               "--alerts-dir", os.path.join(d, "none"), "--state", state, "--once",
+                               "--notice-dir", ""],
+                              sleep=lambda s: self.fail("slept"))
+            self.assertEqual((rc, out.getvalue()), (0, ""))
+            with open(state, encoding="utf-8") as f:
+                self.assertEqual(json.load(f), {"branches": {}, "usage": {"1": {"five": 1, "week": 2}},
+                                                "bg_alerts": [], "idle": {}, "idle_nolog": []})
+
+
+if __name__ == "__main__":
+    unittest.main()

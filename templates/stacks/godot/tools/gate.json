@@ -1,0 +1,21 @@
+{
+  "comment": "Godot (C#) stack, the \"gate\" section of .kit.json (point it here with \"gate\": \"tools/gate.json\"; keys: docs/kit-json.md). dotnet build, then the headless test scene through tools/godot.cmd. The gate books the machine lock for the whole run, so no wrapper is needed. godot.cmd's exit status is not reliable, so the test step's verdict is its pass string (ok_exits is widened to match): the test scene must print UNIT TESTS OK only when every test passed. The scene path and the pass string are defaults to edit. setup is a headless editor import, which a fresh worktree and a merged tree both need before any scene runs.",
+  "setup": ["{root}\\tools\\godot.cmd", "--headless", "--editor", "--quit", "--path", "."],
+  "steps": [
+    {
+      "name": "dotnet-build",
+      "globs": ["*.cs", "*.csproj", "*.sln", "*.props", "*.targets"],
+      "cmd": ["dotnet", "build", "--nologo", "-nodeReuse:false"],
+      "fail": ["error CS\\d+"],
+      "requires": ["dotnet"]
+    },
+    {
+      "name": "godot-tests",
+      "globs": ["*.cs", "*.csproj", "*.gd", "*.tscn", "*.tres", "*.gdshader", "project.godot", "export_presets.cfg"],
+      "cmd": ["{root}\\tools\\godot.cmd", "--headless", "--path", ".", "res://tests/test_runner.tscn"],
+      "ok_exits": [0, 1],
+      "pass": ["UNIT TESTS OK"],
+      "fail": ["SCRIPT ERROR", "Unhandled exception", "\\[FAIL\\]"]
+    }
+  ]
+}

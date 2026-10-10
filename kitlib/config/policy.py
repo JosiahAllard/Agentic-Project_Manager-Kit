@@ -1,0 +1,231 @@
+"""Kit policy read from config: heavy programs, roles, the kinds table, and the repo hook module.
+
+Heavy programs (ARCHITECTURE.md "Kinds": a program is heavy because it is on the heavy list).
+  HEAVY_DEFAULTS are the kit's; `.kit.json` "heavy".programs adds a repo's own (it cannot remove
+  a default). heavy_match(program, args, entries) is the first entry whose `program` glob matches
+  the program's basename (case-insensitive), whose `when_args` (if any) has one argument present,
+  and whose `unless_args` has none. An argument matches by itself or as `<arg>=<value>`. Finding
+  the program in a command line (interpreters, shells, Start-Process) is the guard's job.
+
+Roles. role_name(event) is `main` for a PreToolUse event without `agent_id`, else its
+  `agent_type` when the roles table names it, else `subagent`. permissions(event, roles) is that
+  role's entry over its base (`main` or `subagent`) over ROLE_DEFAULTS.
+
+Kinds table: kitlib/lock/kinds.json, written by the lock package and committed by the
+  PM; this module only reads it.
+
+Repo hook module: `<root>/<tools_dir>/<module>.py`, named by `.kit.json` "hook".module.
+  Loaded from the working tree only, never from a revision. Gate checks: the module's
+  `GATE_CHECKS` is a dict of check name -> callable; a gate step `{"check": name}` runs one.
+  Repo grammar (a Gradle pin check, dotnet result regexes, the py-drops list) lives there, with
+  its settings in "hook".options. How a check is called and what it returns is gate.py's contract.
+"""
+import copy
+import fnmatch
+import hashlib
+import importlib.util
+import json
+import ntpath
+import os
+import re
+import sys
+
+from . import schema
+from .types import ConfigError, check, is_note
+
+DOTNET_BUILDS = ['build', 'test', 'publish', 'run', 'pack', 'msbuild', 'vstest']
+GRADLE_INFO = ['--version', '-v', '--help', '-h', '-?', '--stop', '--status']
+
+HEAVY_DEFAULTS = (
+    {'program': 'godot', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+     'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
+    {'program': 'godot.*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+     'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
+    {'program': 'godot_*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+     'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
+    {'program': 'blender*', 'kind': 'render', 'when_args': ['-b', '--background'], 'unless_args': [],
+     'why': 'machine_lock classify.py render: a background Blender run'},
+    # A .NET command that compiles, and any Gradle run but its information flags (dotnet --info and
+    # gradle --version are not heavy).
+    {'program': 'dotnet', 'kind': 'build', 'when_args': DOTNET_BUILDS, 'unless_args': [],
+     'why': 'a .NET build, test, publish or run compiles the project'},
+    {'program': 'dotnet.exe', 'kind': 'build', 'when_args': DOTNET_BUILDS, 'unless_args': [],
+     'why': 'a .NET build, test, publish or run compiles the project'},
+    {'program': 'gradle', 'kind': 'build', 'when_args': [], 'unless_args': GRADLE_INFO,
+     'why': 'a Gradle run configures and builds the project'},
+    {'program': 'gradle.*', 'kind': 'build', 'when_args': [], 'unless_args': GRADLE_INFO,
+     'why': 'a Gradle run configures and builds the project'},
+    {'program': 'gradlew', 'kind': 'build', 'when_args': [], 'unless_args': GRADLE_INFO,
+     'why': 'a Gradle run configures and builds the project'},
+    {'program': 'gradlew.*', 'kind': 'build', 'when_args': [], 'unless_args': GRADLE_INFO,
+     'why': 'a Gradle run configures and builds the project'},
+)
+
+ROLE_DEFAULTS = {
+    'main': {'edit_main_checkout': True, 'why': 'the session the owner or the PM launched'},
+    'subagent': {'edit_main_checkout': False,
+                 'why': 'ARCHITECTURE.md Guard rules: a subagent edit in a main checkout is denied'},
+}
+
+KINDS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lock', 'kinds.json')
+
+
+# ---------------------------------------------------------------- heavy programs
+
+def heavy_programs(cfg=None):
+    """The kit defaults followed by the repo's `heavy`.programs, each with every key present."""
+    out = [copy.deepcopy(e) for e in HEAVY_DEFAULTS]
+    for e in (cfg.section('heavy')['programs'] if cfg is not None else []):
+        entry = {'when_args': [], 'unless_args': []}
+        entry.update({k: copy.deepcopy(v) for k, v in e.items() if not is_note(k)})
+        out.append(entry)
+    return out
+
+
+def _has(args, wanted):
+    names = {a.split('=', 1)[0] if a.startswith('-') else a for a in args}
+    return any(w in names for w in wanted)
+
+
+def heavy_match(program, args, entries):
+    """The first entry `program` (a path or a name) run with `args` matches, or None."""
+    base = ntpath.basename(program.replace('/', '\\')).lower()
+    for e in entries:
+        if not fnmatch.fnmatchcase(base, e['program'].lower()):
+            continue
+        if e.get('when_args') and not _has(args, e['when_args']):
+            continue
+        if e.get('unless_args') and _has(args, e['unless_args']):
+            continue
+        return e
+    return None
+
+
+# ---------------------------------------------------------------- roles
+
+def roles(cfg=None):
+    """ROLE_DEFAULTS with the repo's `roles` entries laid over (an entry's missing keys are taken
+    from its base: `main` for `main`, else `subagent`)."""
+    out = copy.deepcopy(ROLE_DEFAULTS)
+    for name, entry in (cfg.section('roles') if cfg is not None else {}).items():
+        base = copy.deepcopy(out.get(name) or out['main' if name == 'main' else 'subagent'])
+        base.update({k: v for k, v in entry.items() if not is_note(k) and v is not None})
+        out[name] = base
+    return out
+
+
+def role_name(event, table=None):
+    """`main` (no agent_id), the event's agent_type when `table` names it, else `subagent`."""
+    if not (event or {}).get('agent_id'):
+        return 'main'
+    kind = event.get('agent_type')
+    if kind and kind in (table or ROLE_DEFAULTS) and kind != 'main':
+        return kind
+    return 'subagent'
+
+
+def permissions(event, table=None):
+    table = table or roles()
+    return dict(table[role_name(event, table)])
+
+
+# ---------------------------------------------------------------- kinds table
+
+def kinds_table(path=None):
+    """The kinds table as a dict (kind -> its entry), notes dropped. ConfigError when the file is
+    missing or is not a JSON object of objects."""
+    path = path or KINDS_FILE
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        raise ConfigError('no kinds table at %s' % path)
+    except (OSError, ValueError) as e:
+        raise ConfigError('cannot read the kinds table %s: %s' % (path, e))
+    if not isinstance(data, dict):
+        raise ConfigError('the kinds table %s must hold a JSON object' % path)
+    table = data.get('kinds', data) if isinstance(data.get('kinds'), dict) else data
+    out = {k: v for k, v in table.items() if not is_note(k)}
+    bad = sorted(k for k, v in out.items() if not isinstance(v, dict))
+    if bad:
+        raise ConfigError('the kinds table %s: entries %s must be objects' % (path, ', '.join(bad)))
+    return out
+
+
+# ---------------------------------------------------------------- repo hook module
+
+def hook_path(cfg):
+    """`(absolute path of the repo hook module, its options)`, or None when none is named."""
+    h = cfg.hook()
+    if not h:
+        return None
+    return os.path.join(cfg.root, cfg.tools_dir, h['module'] + '.py'), h['options']
+
+
+def load_hook_module(cfg):
+    """`(module, options)` of the repo's one hook module, or None when `.kit.json` names none.
+    ConfigError when it is named but missing or fails to import (a named hook never silently
+    becomes no hook; a module that calls sys.exit while it loads is one that fails). The
+    module is in sys.modules under its name while it runs and after, as an import would put it
+    (dataclasses, pickle and typing look a class's module up there); a module that fails, or is
+    interrupted, is taken out again."""
+    found = hook_path(cfg)
+    if not found:
+        return None
+    path, options = found
+    if not os.path.isfile(path):
+        raise ConfigError('.kit.json names the hook module %s, which does not exist' % path)
+    name = 'kit_repo_hook_%s' % hashlib.sha256(os.path.normcase(path).encode('utf-8')).hexdigest()[:12]
+    module = None
+    try:
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    except BaseException as e:    # the repo's code: any failure, SystemExit too, is a config
+        # failure, named; no half-loaded module is left behind in sys.modules
+        if module is not None and sys.modules.get(name) is module:
+            del sys.modules[name]
+        if not isinstance(e, (Exception, SystemExit)):
+            raise                     # Ctrl+C stops the caller
+        raise ConfigError('the hook module %s failed to load: %s: %s' % (
+            path, type(e).__name__, e.code if isinstance(e, SystemExit) else e))
+    return module, options
+
+
+def gate_checks(module):
+    """The validated `GATE_CHECKS` of a loaded hook module (name -> callable); {} when it has
+    none. ConfigError when it is not a dict, a name is not a step-name word, or a value is not
+    callable."""
+    checks = getattr(module, 'GATE_CHECKS', None)
+    if checks is None:
+        return {}
+    where = getattr(module, '__file__', 'the hook module')
+    if not isinstance(checks, dict):
+        raise ConfigError('%s: GATE_CHECKS must be a dict of check name -> callable' % where)
+    errs = []
+    for name, fn in checks.items():
+        if not isinstance(name, str) or not re.fullmatch(schema.NAME_RE, name):
+            errs.append('GATE_CHECKS key %r is not a check name' % (name,))
+        elif not callable(fn):
+            errs.append('GATE_CHECKS[%r] is not callable' % name)
+    if errs:
+        raise ConfigError('%s: %s' % (where, '; '.join(errs)))
+    return dict(checks)
+
+
+def load_gate_checks(cfg):
+    """`(checks, options)`: the hook module's gate checks and its options, ({}, {}) when no hook
+    is named. ConfigError when a gate step names a check the module does not provide."""
+    found = load_hook_module(cfg)
+    module, options = found if found else (None, {})
+    checks = gate_checks(module) if module is not None else {}
+    wanted = [(s['name'], s['check']) for s in cfg.section('gate')['steps'] or [] if s.get('check')]
+    missing = ['%s (step %s)' % (c, n) for n, c in wanted if c not in checks]
+    if missing:
+        raise ConfigError('the hook module provides no gate check %s' % ', '.join(missing))
+    return checks, options
+
+
+def check_heavy_entry(entry, where='heavy entry'):
+    return check(schema.HEAVY_ENTRY, entry, where)
