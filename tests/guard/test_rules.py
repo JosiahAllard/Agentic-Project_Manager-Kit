@@ -4,6 +4,7 @@ subagent, Bash and PowerShell, allow and deny, and the exact alternative each de
 Each row: (name, payload builder, expected kind or None for allow, rule, the text after
 "Instead: "). Paths in the expected text are filled from the fake world ({main}, {wt}, ... in
 forward-slash form; {main_bs} keeps backslashes)."""
+import json
 import os
 import unittest
 
@@ -438,13 +439,97 @@ class PmDataPlace(unittest.TestCase):
         self.configure()
         cases = ((self.write(os.path.join(self.w.data, 'x.md'), self.w.data), 'main-checkout'),
                  (self.write(os.path.join(self.w.data, 'x.md'), self.w.wt), 'main-checkout'),
-                 (bash('git merge kit/wt', self.w.data, sub=True), 'git-main-history'))
+                 (bash('git merge kit/wt', self.w.data, sub=True), 'git-main-history'),
+                 (bash('git restore a.md', self.w.data, sub=True), 'git-restore'),
+                 (bash('git checkout main', self.w.data), 'git-checkout'),
+                 (bash('git stash', self.w.data, sub=True), 'git-stash'))
         for ev, rule in cases:
-            d = decide(ev, self.w.ctx())
-            self.assertEqual(d.rule, rule, d and d.reason)
-            self.assertIn('Agents do not work in the PM data worktree "%s"' % W.fwd(self.w.data), d.reason)
-            self.assertIn('Instead: %s ' % rules.PM_DATA_ASK, d.reason)
-            self.assertNotIn('worktree add', d.reason)
+            with self.subTest(rule):
+                d = decide(ev, self.w.ctx())
+                self.assertEqual(d.rule, rule, d and d.reason)
+                self.assertIn('Agents do not work in the PM data worktree "%s"' % W.fwd(self.w.data), d.reason)
+                self.assertIn('To see its state: Instead: git -C "%s" status ' % W.fwd(self.w.data), d.reason)
+                self.assertNotIn('worktree add', d.reason)
+        # the kit's own main checkout still offers one
+        d = decide(bash('git stash', self.w.main, sub=True), self.w.ctx())
+        self.assertIn('Instead: git -C "%s" worktree add' % W.fwd(self.w.main), d.reason)
+
+    def test_push_from_pm_data_is_judged_by_the_kit_for_kit_refs(self):
+        self.configure()
+        for cmd in ('git push --no-verify origin main', 'git push --force origin main', 'git push origin +main'):
+            for sub in (False, True):
+                d = decide(bash(cmd, self.w.data, sub=sub), self.w.ctx())
+                self.assertIsNotNone(d, cmd)
+                self.assertEqual(d.rule, 'git-push-main', d.reason)
+                self.assertIn('to origin/main', d.reason)
+        # the data branch: the data worktree's own .kit.json (push_block off) allows it
+        self.assertIsNone(decide(bash('git push --force origin pmdata', self.w.data), self.w.ctx()))
+        with open(os.path.join(self.w.data, '.kit.json'), 'w', encoding='utf-8') as f:
+            json.dump({'repo': {'name': 'data', 'main_branch': 'pmdata', 'push_block': True}}, f)
+        d = decide(bash('git push --force origin pmdata', self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'git-push-main', d and d.reason)
+        self.assertIn('to origin/pmdata', d.reason)
+        # a kit .kit.json that does not load: refused
+        with open(os.path.join(self.w.main, '.kit.json'), 'w', encoding='utf-8') as f:
+            f.write('{')
+        d = decide(bash('git push origin kit/x', self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'git-push-main', d and d.reason)
+        self.assertIn('cannot be read', d.reason)
+
+    def test_worktree_remove_from_pm_data_is_judged_by_the_kit(self):
+        self.configure()
+        self.w.git.clean[os.path.normcase(os.path.abspath(self.w.wt))] = True
+        cmd = 'git worktree remove %s' % W.fwd(self.w.wt)
+        d = decide(bash(cmd, self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'git-worktree-remove', d and d.reason)
+        self.assertIn('not merged into main', d.reason)
+        self.w.git.ancestors.add((W.SHA_WT, 'main'))
+        self.assertIsNone(decide(bash(cmd, self.w.data), self.w.ctx()))
+
+    def test_a_bad_unrelated_key_does_not_hide_pm_data(self):
+        self.w.user_config({'pm_data': {'path': self.w.data}, 'a_key_this_kit_does_not_know': 1})
+        ctx = self.w.ctx()
+        self.assertTrue(ctx.is_pm_data(self.w.data))
+        self.assertIsNone(ctx.pm_data_error(self.w.wt))
+        self.assertIsNone(decide(self.write(os.path.join(self.w.wt, 'a.py'), self.w.wt), self.w.ctx()))
+        self.w.user_config({'pm_data': {'path': self.w.data, 'branch': 'a b'}, 'a_key_this_kit_does_not_know': 1})
+        d = decide(self.write(os.path.join(self.w.wt, 'a.py'), self.w.wt), self.w.ctx())
+        self.assertEqual(d.rule, 'pm-data', d and d.reason)
+        self.assertIn("branch must be a branch or remote name, not 'a b'", d.reason)
+
+    def test_machine_config_decides_alone_when_set(self):
+        self.w.user_config({'pm_data': {'path': self.w.plain}})
+        self.record()
+        self.head(self.w.data_git_dir, 'pmdata')
+        ctx = self.w.ctx()
+        self.assertEqual(ctx.place(self.w.data).kind, repo.LINKED)
+        # nor is a bad record read then
+        with open(pmdata.record_path(self.common), 'w', encoding='utf-8') as f:
+            f.write('{')
+        self.assertIsNone(decide(self.write(os.path.join(self.w.wt, 'a.py'), self.w.wt), self.w.ctx()))
+
+    def test_machine_path_matches_case_and_trailing_separator(self):
+        self.w.user_config({'pm_data': {'path': self.w.data.upper() + os.sep}})
+        ctx = self.w.ctx()
+        self.assertEqual(ctx.place(self.w.data).kind, repo.MAIN)
+        self.assertEqual(ctx.pm_data_branch(self.w.data), 'pmdata')
+
+    def test_unreadable_head_denies_subagent_writes(self):
+        self.record()                           # no HEAD file in the data worktree's git dir
+        d = decide(self.write(os.path.join(self.w.data, 'x.md'), self.w.data), self.w.ctx())
+        self.assertEqual(d.rule, 'pm-data', d and d.reason)
+        self.assertIn('cannot read', d.reason)
+        self.assertIn('HEAD', d.reason)
+
+    def test_bad_record_seen_only_through_the_target(self):
+        os.makedirs(self.common, exist_ok=True)
+        with open(pmdata.record_path(self.common), 'w', encoding='utf-8') as f:
+            f.write('{')
+        d = decide(self.write(os.path.join(self.w.wt, 'a.py'), self.w.plain), self.w.ctx())
+        self.assertEqual(d.rule, 'pm-data', d and d.reason)
+        # a write outside that repository, from outside it, is not this rule's
+        d = decide(self.write(os.path.join(self.w.plain, 'a.py'), self.w.plain), self.w.ctx())
+        self.assertTrue(d is None or d.rule != 'pm-data', d and d.reason)
 
 
 class LockMcp(unittest.TestCase):

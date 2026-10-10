@@ -7,13 +7,19 @@ a constructor argument, and the defaults read this machine.
                      PM data worktree (docs/pm-data-branch.md "Guard place and commit hooks"),
                      which git calls LINKED, is answered as MAIN, so the main-checkout rules
                      apply there. It is that worktree when the machine config's pm_data.path
-                     names its top (kitlib.pmdata.machine_settings), or when its HEAD is
-                     `ref: refs/heads/<branch>` of the kit-pm-data.json record in its common dir
-                     (kitlib.pmdata.read). A MAIN place is never changed.
-  is_pm_data(path)   True when place(path) is the PM data worktree
-  pm_data_error(path) why the guard cannot tell whether path's place (or any place, for a
-                     machine config whose pm_data does not read) is the PM data worktree, or
-                     None. The rules then deny every subagent write (fail closed).
+                     names its top (kitlib.pmdata.machine_settings), or, only when the machine
+                     config names no pm_data, when its HEAD is `ref: refs/heads/<branch>` of the
+                     kit-pm-data.json record in its common dir (kitlib.pmdata.read). A MAIN
+                     place is never changed.
+  is_pm_data(path), pm_data_branch(path)
+                     whether place(path) is the PM data worktree, and its data branch
+  repo_main_top(path) main_top, except for the PM data worktree: the kit's main checkout it
+                     shares a repository with (push and worktree remove judge that repository's
+                     refs by its .kit.json; config_at(top) reads one)
+  pm_data_error(path) why the guard cannot tell whether path's place is the PM data worktree:
+                     the machine config's pm_data does not read (any path), or path's place is a
+                     linked worktree whose repository's record or HEAD does not; else None. The
+                     rules then deny the subagent write (fail closed).
   config(path)       the .kit.json of the main checkout `path` belongs to (never a worktree's own:
                      an agent cannot loosen the rules from its branch; the PM data worktree,
                      answered as MAIN, is the one worktree whose own .kit.json is read); None
@@ -78,20 +84,42 @@ def _default_lock_held(environ, store):
 
 
 def _machine_pm_data(home):
-    """kitlib.pmdata.machine_settings(home). When the strict reader refuses the machine config
-    for another reason, a file that parses as an object without a pm_data key is still "no PM
-    data worktree" (None); anything else raises, and the guard fails closed."""
+    """kitlib.pmdata.machine_settings(home). When the strict reader refuses the machine config,
+    its pm_data key alone is read and checked with the same rules, so another key's fault does
+    not hide the PM data worktree; a file that cannot be read or parsed raises, and the guard
+    fails closed."""
     try:
         return pmdata.machine_settings(home)
-    except kconfig.ConfigError:
+    except kconfig.ConfigError as e:
+        path = kuser.config_file(home)
         try:
-            with open(kuser.config_file(home), encoding='utf-8-sig') as f:
+            with open(path, encoding='utf-8-sig') as f:
                 data = json.load(f)
         except (OSError, UnicodeDecodeError, ValueError, RecursionError):
-            data = None
-        if isinstance(data, dict) and pmdata.KEY not in data:
-            return None
-        raise
+            raise e
+        if not isinstance(data, dict):
+            raise e
+        return _check_pm_data(data.get(pmdata.KEY), '%s key %s' % (path, pmdata.KEY))
+
+
+def _check_pm_data(cfg, where):
+    """kitlib.pmdata.machine_settings's checks of a pm_data value read on its own."""
+    if cfg is None:
+        return None
+    if not isinstance(cfg, dict):
+        raise pmdata.PmDataError('%s must be an object' % where)
+    extra = set(cfg) - {'path', 'branch', 'remote'}
+    if extra:
+        raise pmdata.PmDataError('%s: unknown key(s) %s' % (where, ', '.join(sorted(extra))))
+    p = cfg.get('path')
+    if not isinstance(p, str) or not p.strip() or not os.path.isabs(p):
+        raise pmdata.PmDataError('%s: path must be an absolute path, not %r' % (where, p))
+    branch = cfg.get('branch', pmdata.DEFAULT_BRANCH)
+    remote = cfg.get('remote', pmdata.DEFAULT_REMOTE)
+    errs = pmdata.check_fields(branch, remote, '0' * 40)       # a valid root: only the names are checked
+    if errs:
+        raise pmdata.PmDataError('%s: %s' % (where, '; '.join(errs)))
+    return {'path': os.path.normpath(p), 'branch': branch, 'remote': remote}
 
 
 def _same_dir(a, b):
@@ -117,7 +145,7 @@ class Ctx(object):
         self._pm_data = pm_data or (lambda: _machine_pm_data(self.home))
         self._pm_settings = None                 # (settings or None, error or None), read once
         self._pm_records = {}                    # normcase(common) -> (Record or None, error or None)
-        self._pm_places = set()                  # keys of places answered as the PM data worktree
+        self._pm_places = {}                     # key of a place answered as the PM data worktree -> its branch
         self._pm_place_errors = {}               # key -> why the place could not be told
 
     # ------------------------------------------------------------ places and config
@@ -128,18 +156,33 @@ class Ctx(object):
         key = os.path.normcase(os.path.abspath(path))
         if key not in self._places:
             p = self._classify(path)
-            if p.kind == repo.LINKED and p.top and self._pm_data_top(key, p):
-                self._pm_places.add(key)
+            branch = self._pm_data_top(key, p) if p.kind == repo.LINKED and p.top else None
+            if branch:
+                self._pm_places[key] = branch
                 p = repo.Place(repo.MAIN, p.top, '', p.git_dir, p.common)
             self._places[key] = p
         return self._places[key]
 
     def is_pm_data(self, path):
         """True when place(path) is the PM data worktree (answered as MAIN)."""
+        return self.pm_data_branch(path) is not None
+
+    def pm_data_branch(self, path):
+        """The data branch when place(path) is the PM data worktree, else None."""
         if not path:
-            return False
+            return None
         self.place(path)
-        return os.path.normcase(os.path.abspath(path)) in self._pm_places
+        return self._pm_places.get(os.path.normcase(os.path.abspath(path)))
+
+    def repo_main_top(self, path):
+        """The main worktree of the repository `path` is in: main_top, except that for the PM
+        data worktree it is the kit's main checkout the data worktree belongs to (or None)."""
+        p = self.place(path)
+        if not self.is_pm_data(path):
+            return self.main_top(path)
+        if p.common and os.path.basename(p.common).lower() == '.git':
+            return os.path.dirname(p.common)
+        return None
 
     def pm_data_error(self, path=None):
         """Why the guard cannot tell the PM data worktree: the machine config's pm_data does not
@@ -162,13 +205,14 @@ class Ctx(object):
         return self._pm_settings
 
     def _pm_data_top(self, key, p):
-        """True when the linked worktree `p` is the PM data worktree (see place); an error that
-        stops the record signal from answering is kept for pm_data_error."""
-        settings, _ = self._pm_machine()
-        if settings and _same_dir(p.top, settings['path']):
-            return True
-        if not p.common or not p.git_dir:
-            return False
+        """The data branch when the linked worktree `p` is the PM data worktree (see place), else
+        None. A machine config that names pm_data decides alone; the record signal answers only
+        when it names none. An error that stops the record signal is kept for pm_data_error."""
+        settings, why = self._pm_machine()
+        if settings:
+            return settings['branch'] if _same_dir(p.top, settings['path']) else None
+        if why or not p.common or not p.git_dir:
+            return None
         ck = os.path.normcase(p.common)
         if ck not in self._pm_records:
             try:
@@ -178,9 +222,9 @@ class Ctx(object):
         record, why = self._pm_records[ck]
         if why:
             self._pm_place_errors[key] = 'the PM data record cannot be read: %s' % why
-            return False
+            return None
         if record is None:
-            return False
+            return None
         head = os.path.join(p.git_dir, 'HEAD')
         try:
             with open(head, encoding='utf-8') as f:
@@ -188,8 +232,8 @@ class Ctx(object):
         except (OSError, UnicodeDecodeError) as e:
             self._pm_place_errors[key] = 'cannot read %s to compare it with the PM data branch %s: %s' % (
                 head, record.branch, e)
-            return False
-        return text == 'ref: refs/heads/%s' % record.branch
+            return None
+        return record.branch if text == 'ref: refs/heads/%s' % record.branch else None
 
     def main_top(self, path):
         """The main checkout's work tree root for `path` (a worktree answers its main checkout),
@@ -202,7 +246,10 @@ class Ctx(object):
         return None
 
     def config(self, path):
-        top = self.main_top(path)
+        return self.config_at(self.main_top(path))
+
+    def config_at(self, top):
+        """The .kit.json of the main checkout `top` (cached), or None (config_error_at says why)."""
         if not top:
             return None
         key = os.path.normcase(top)
@@ -215,7 +262,9 @@ class Ctx(object):
         return self._configs[key]
 
     def config_error(self, path):
-        top = self.main_top(path)
+        return self.config_error_at(self.main_top(path))
+
+    def config_error_at(self, top):
         return self._config_errors.get(os.path.normcase(top)) if top else None
 
     # ------------------------------------------------------------ lock, records
