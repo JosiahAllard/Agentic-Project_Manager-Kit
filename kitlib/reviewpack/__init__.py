@@ -164,22 +164,84 @@ def rules_from_lines(lines, isdir):
         m = re.match(r'^- \**(High|Medium|Low)\b[^|]*\|(.*)$', line)
         if not m:
             continue
-        for tok in re.findall(r'[\w.*\-]+(?:/[\w.*\-]+)*/?', m.group(2)):
-            tok = tok.replace('*', '').strip()
+        for tok in _TOKEN.findall(m.group(2)):
             if '/' in tok or '.' in tok or isdir(tok):
                 out.append((m.group(1), tok.rstrip('/')))
     return out
 
 
+# A risk-map path: word characters, `.`, `-`, `*`, `?` and `{a,b}` groups, joined by `/`.
+_PIECE = r'(?:[\w.*?\-]|\{[\w.*?\-,/]*\})+'
+_TOKEN = re.compile(_PIECE + '(?:/' + _PIECE + ')*/?')
+
+
+def _is_glob(rule):
+    return any(c in rule for c in '*?{')
+
+
+def _glob_regex(rule):
+    """The regex for a glob rule: `*` and `?` stay inside one path segment, `**` crosses `/`,
+    `{a,b}` is a choice. A rule with no `/` matches a name at any depth. The match is of whole
+    segments, then anything below (like a directory prefix)."""
+    out, depth, i = [], 0, 0
+    while i < len(rule):
+        c = rule[i]
+        if rule.startswith('**/', i):
+            out.append('(?:.*/)?')
+            i += 3
+            continue
+        if c == '*':
+            if rule.startswith('**', i):
+                out.append('.*')
+                i += 2
+                continue
+            out.append('[^/]*')
+        elif c == '?':
+            out.append('[^/]')
+        elif c == '{':
+            depth += 1
+            out.append('(?:')
+        elif c == '}' and depth:
+            depth -= 1
+            out.append(')')
+        elif c == ',' and depth:
+            out.append('|')
+        else:
+            out.append(re.escape(c))
+        i += 1
+    out.append(')' * depth)
+    lead = '' if '/' in rule else '(?:.*/)?'
+    return re.compile(lead + ''.join(out) + '(?:/.*)?$')
+
+
+_GLOBS = {}
+
+
+def _matches(path, rule):
+    """(matched, specificity): the longer the literal text a rule names, the more specific."""
+    if _is_glob(rule):
+        rx = _GLOBS.get(rule)
+        if rx is None:
+            rx = _GLOBS[rule] = _glob_regex(rule)
+        return bool(rx.match(path)), len(re.sub(r'[*?{},]', '', rule))
+    if path.startswith(rule):
+        return True, len(rule)
+    if '/' not in rule and '.' in rule and path.rsplit('/', 1)[-1] == rule:
+        return True, len(rule)  # a bare file name names that file at any depth
+    return False, 0
+
+
 def level(path, levels):
-    """The risk level of `path`: the longest matching prefix; unlisted is High, except a `.md`."""
-    best = ('unlisted (= High)', '')
-    for lv, pre in levels:
-        if path.startswith(pre) and len(pre) > len(best[1]):
-            best = (lv, pre)
-    if path.endswith('.md') and best[1] == '':
+    """The risk level of `path`: the most specific matching rule (a plain rule is a path prefix; a
+    glob is read by _glob_regex); unlisted is High, except a `.md`."""
+    best, best_len = 'unlisted (= High)', 0
+    for lv, rule in levels:
+        hit, size = _matches(path, rule)
+        if hit and size > best_len:
+            best, best_len = lv, size
+    if path.endswith('.md') and best_len == 0:
         return 'Low'
-    return best[0]
+    return best
 
 
 # --- owner-only paths ---------------------------------------------------------------------------
