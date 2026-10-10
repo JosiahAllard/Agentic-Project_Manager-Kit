@@ -358,8 +358,8 @@ def ledger_rule(ctx, target, role, what):
     if broken and role == 'subagent':
         return refuse('ledger', role, '%s: the machine config %s is broken (%s), so the '
                       'guard cannot tell where the rulings ledger is and refuses every subagent write. The owner '
-                      'or the PM session fixes it.' % (what, kconfig.user.DISPLAY, broken),
-                      'python -m json.tool %s' % quote(kconfig.user.config_file(ctx.home)))
+                      'or the PM session fixes it.' % (what, ctx.config_location().display(), broken),
+                      'python -m json.tool %s' % quote(ctx.config_location().path))
     ledger = user.get('ledger_path')
     if not ledger or not target or not same_file(target, ledger):
         return None
@@ -476,7 +476,7 @@ def pm_data_unknown(ctx, target, cwd, role, what):
         return None
     return refuse('pm-data', role, '%s: the guard cannot tell which worktree is the PM data worktree (%s), so it '
                   'refuses every subagent write. The owner or the PM session fixes it. To read the machine config:'
-                  % (what, why), 'python -m json.tool %s' % quote(kconfig.user.config_file(ctx.home)))
+                  % (what, why), 'python -m json.tool %s' % quote(ctx.config_location().path))
 
 
 def own_worktree(ctx, cwd, main_top=None):

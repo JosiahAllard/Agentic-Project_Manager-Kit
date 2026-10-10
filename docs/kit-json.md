@@ -135,7 +135,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 
 ## Machine config keys
 
-The machine's own settings, read by `kitlib.config.user`: `config.json` in the folder `kitlib.config.user.DIR_NAME` names under the home folder (`config_dir()`); `python -c "from kitlib.config import user; print(user.config_file())"`, run in the kit, prints the path. Messages name it as `user.DISPLAY`, and this page and the others write `<config-dir>` for that folder. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config.
+The machine's own settings, read by `kitlib.config.user`: `config.json` in the folder `kitlib.config.user.DIR_NAME` names under the home folder, or, while that folder has none, in the retired folder ("Moving the machine config folder"); `python -c "from kitlib.config import user; print(user.config_file())"`, run in the kit, prints the path of the file read. Messages name the file read (`user.display()`), help text `user.DISPLAY`, and this page and the others write `<config-dir>` for that folder. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config.
 
 - `ledger_path` (absolute path): the rulings ledger file; set here only
 - `ledger_repos` (list of a lower-case repo name): the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)
@@ -160,3 +160,15 @@ The machine's own settings, read by `kitlib.config.user`: `config.json` in the f
 - `machine_lock` (object, checked by kitlib.lock.site): the machine lock settings: build daemons at release, lock-window notices
 - `temp_dir` (absolute path): the folder the kit's own temp files go in (test run folders, gate logs); unset: `AgentTemp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md "Temp folders"); older kit copies reject the key
 - `agent_temp_sweep` (object, checked by optional/agenttemp/agent_temp_sweep.py): the agents' temp folder to sweep and the age past which an unused entry goes
+
+## Moving the machine config folder
+
+The machine config folder was renamed: `kitlib.config.user.DIR_NAME` is the new name, `kitlib.config.migration.OLD_DIR_NAME` the retired one. The kit moves no file; the owner does, once.
+
+- **Which file is read:** `kitlib.config.user.locate` decides on the new folder's `config.json`, never on the folder alone (another writer, the hub backlog state say, may make the folder first). New file present: it is read, and the old one is ignored, never merged. New file absent: the old folder's file is read (the fallback). Neither: an empty config, named at the new folder.
+- **Fail closed:** a new folder that is not a folder, a new `config.json` that is not a file, or a path that cannot be examined (an error other than not-found) is `BAD`: a `ConfigError` for every reader, never the fallback, and the guard denies every subagent write (docs/guard.md "State", User config).
+- **Writers** write the new folder's file only (`user.writable_file`): `tools/pm_data.py init` (`kitlib.pmdata.init.write_machine`) refuses, before any write, while the config is still only in the old folder, since a new file holding one key would hide every other key.
+- **The `config` line of `tools/preflight.py`** (`kitlib.preflight.configline`) says which file is read: the new file, `FALLBACK` (the old one), `WARN both` with `same content` or `DIFFERENT (keys: ...)`, `none`, or `BROKEN`. It names keys, never values.
+- **Both present:** the new file decides alone, so the guard protects the new file's `ledger_path` only; an old file naming another ledger leaves that file unprotected (docs/guard.md "Known limits").
+- **The owner's move:** write the new folder's `config.json` from the old one (a copy, plus any new keys), check that the preflight `config` line names the new file, move any file the config points into the old folder (and its path), then retire the old folder by moving it out of the home folder's `.claude-*` names: `tools/machine_setup.py` takes every other `.claude-*` folder for a Claude account folder.
+- `machine_setup.py` skips both folder names (`kitlib.machinesetup.default_config_dirs`). The modules that use `OLD_DIR_NAME` are listed in tests/scrub/test_old_config_name.py, so retiring the fallback finds each.

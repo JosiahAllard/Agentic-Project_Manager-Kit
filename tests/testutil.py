@@ -48,7 +48,7 @@ def ancestor_reach():
     process; 0.0 when nothing does (and off Windows).
 
     WHY: the kit shields only the processes it starts itself (kitlib.pytests' units), never a
-    tree. But an older PM-kit gate (its pid_shield.TreeShield) shields every new process of a step
+    tree. But the older kit's gate (its pid_shield.TreeShield) shields every new process of a step
     for its grace whatever the code under test does, and these tests may run under one. A check
     that a process is UNshielded reads its DACL only after this many seconds. Measured on a
     canary child the test process starts directly: is it shielded within 1 s, and if so, for how

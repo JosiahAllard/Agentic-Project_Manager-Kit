@@ -34,7 +34,7 @@
   - `division` (in force), `default_division`, and `wanted_division` / `wanted_key` (the owner's machine.json division on this hardware), and `owner_division` (only the keys machine.json sets, `{}` when none; a dialog prefills from it so saving pins no derived key).
   - `source` (`config` or `default`) and `warning`.
   - `hardware_change` {changed, pending}. When `changed` is true, the wanted layout differs from the one in force, and it is adopted once nothing is live or queued. `pending` is true while it waits for that.
-  - A run record's `layout` is `layout.slot_key`, not `key`: the slot numbering only, in the format of the installed PM-kit `machine_lock.py`, which refuses a run while a live record holds a string other than its own.
+  - A run record's `layout` is `layout.slot_key`, not `key`: the slot numbering only, in the format of the older kit's installed `machine_lock.py`, which refuses a run while a live record holds a string other than its own.
 - **`slots`**: {cpu: [...], gpu: [...]}, one per slot.
   - {slot, holder (run id), background, hold (the hold id covering it now), hold_owner}.
   - cpu slots add `threads` and `pinned`; gpu slots add `card`.

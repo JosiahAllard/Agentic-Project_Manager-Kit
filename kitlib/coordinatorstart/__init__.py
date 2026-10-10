@@ -327,7 +327,7 @@ def render(env=None, path=None, **kw):
     try:
         cfg = load_config(path)
         if cfg is None:
-            return "Coordinator session start: no coordinator_start config in %s; skipped." % kuser.DISPLAY
+            return "Coordinator session start: no coordinator_start config in %s; skipped." % (path or kuser.display())
         return context(cfg, env=env, **kw)
     except Exception as e:
         return "Coordinator session start: could not check config: %s: %s" % (type(e).__name__, e)

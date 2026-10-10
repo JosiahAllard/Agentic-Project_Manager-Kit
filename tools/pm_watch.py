@@ -55,12 +55,12 @@ def parse(argv, cfg, launcher_set=None):
     ap.add_argument("--once", action="store_true", help="poll once, print events, exit 0")
     a = ap.parse_args(argv)
     if not a.sessions:
-        ap.error("--sessions not given and pm_watch.sessions_file not in %s" % kuser.DISPLAY)
+        ap.error("--sessions not given and pm_watch.sessions_file not in %s" % kuser.display())
     if not a.usage_script and not (W.launcher_configured() if launcher_set is None else launcher_set):
         ap.error("no usage source: --usage-script not given, pm_watch.usage_script not set, and "
                  "%s has no launcher key naming the accounts (docs/launcher.md "
                  "\"Settings\"); without one only the default ~/.claude account would be watched"
-                 % kuser.DISPLAY)
+                 % kuser.display())
     return a
 
 

@@ -20,6 +20,7 @@ One rule runs through all three: a reading that failed is printed as `?`, `UNKNO
 - **stray lines**: from `kitlib.git.stray.check`.
 - **report hooks**.
 - **engines and ports**: only when configured.
+- **config**: which machine config file is read, from `kitlib.preflight.configline` (docs/kit-json.md "Moving the machine config folder"): the file, `FALLBACK`, `WARN both`, `none` or `BROKEN`; keys are named, values never.
 - **traps**.
 - **index**.
 - **next**: the kit commands with this session's values, from `kitlib/preflight/nextblock.py`. In the main checkout this is only `new_worktree.py`. In a worktree it is `commit.py`, `review_pack.py` and `codemap.py`, plus `sync_base.py` when the branch is behind its base.

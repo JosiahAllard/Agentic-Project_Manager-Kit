@@ -169,7 +169,7 @@ def main(argv=None):
     except ConfigError as e:
         return fail(str(e))
     if not path:
-        return fail('no ledger_path in %s' % user.DISPLAY)
+        return fail('no ledger_path in %s' % user.display())
     try:
         return run(a, p, path, repos)
     except Usage as e:

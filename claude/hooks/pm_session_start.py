@@ -12,7 +12,7 @@ def main():
         cfg = pmstart.load_config()
         if cfg is None:
             from kitlib.config import user
-            text = "PM session start: no pm_start config in %s; checklist skipped." % user.DISPLAY
+            text = "PM session start: no pm_start config in %s; checklist skipped." % user.display()
         else:
             text = pmstart.checklist(cfg)
     except Exception as e:

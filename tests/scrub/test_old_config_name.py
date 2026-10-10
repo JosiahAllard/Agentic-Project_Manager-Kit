@@ -13,6 +13,7 @@ USERS = (
     'kitlib/config/user.py',          # locate(): the read fallback
     'kitlib/machinesetup/__init__.py',  # not a Claude account folder
     'docs/kit-json.md',               # "Moving the machine config folder" names it
+    'docs/machine-setup.md',          # the folders machine_setup skips
 )
 NAME = re.compile(r'\bOLD_DIR_NAME\b')
 

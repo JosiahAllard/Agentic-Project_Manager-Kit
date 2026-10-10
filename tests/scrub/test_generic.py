@@ -13,8 +13,8 @@ invented paths on purpose), the two name checks read tests/ too.
   pm_start.sessions_file, the coordinator_start.cap repository keys and the hub artifact id at the
   end of pm_start.hub_url. A machine with none of these skips the check with a printed note.
 - Kit names: the kit's repository name (`.kit.json` repo.name), the Claude plugin's name
-  (.claude-plugin/plugin.json) and the machine config folder's name (kitlib.config.user.DIR_NAME),
-  read from those files at test time, so this file names none of them. Each may stand only on a
+  (.claude-plugin/plugin.json) and the machine config folder's name (kitlib.config.user.DIR_NAME)
+  and retired name (kitlib.config.migration.OLD_DIR_NAME), read from those files at test time, so this file names none of them. Each may stand only on a
   line of KIT_NAMES_ALLOWED; everywhere else code derives it and text says what it is.
 
 An allow entry that matches nothing is printed as stale, not failed: the line it allowed is gone.
@@ -60,8 +60,9 @@ KIT_NAMES_ALLOWED = (
     ('.claude-plugin/*', '', 'the Claude plugin carries its own name, Claude-specific (an owner '
      'ruling); kitlib.lockmcp holds the one constant'),
     ('kitlib/lockmcp/__init__.py', "CLAUDE_PLUGIN_NAME = '", 'the one Claude-plugin name constant'),
-    # Goes when KIT-CONFIG-DIR-RENAME gives the machine config folder a neutral name.
     ('kitlib/config/user.py', "DIR_NAME = '", 'the one name of the machine config folder'),
+    ('kitlib/config/migration.py', "OLD_DIR_NAME = '", "the machine config folder's retired name, "
+     'read as a fallback until the owner moves the file (tests/scrub/test_old_config_name.py)'),
 )
 
 
@@ -145,9 +146,9 @@ def install_names(home=None, kit_dir=ROOT, toplevel=None):
 def kit_names(root=ROOT):
     """(name of the kit's repository or None, [(regex, source)]) for the kit's own names, read
     from its files under root: `.kit.json` repo.name, .claude-plugin/plugin.json's name and
-    kitlib.config.user.DIR_NAME without its leading dot. Names equal but for case share one
+    kitlib.config.user.DIR_NAME and kitlib.config.migration.OLD_DIR_NAME without their leading dot. Names equal but for case share one
     pattern; a missing file adds nothing."""
-    from kitlib.config import user
+    from kitlib.config import migration, user
     named = {}
 
     def add(name, source):
@@ -166,6 +167,7 @@ def kit_names(root=ROOT):
     add(kit, '.kit.json repo.name')
     add(read('.claude-plugin', 'plugin.json').get('name'), 'the Claude plugin name')
     add(user.DIR_NAME.lstrip('.'), 'the machine config folder')
+    add(migration.OLD_DIR_NAME.lstrip('.'), "the machine config folder's retired name")
     return (kit if isinstance(kit, str) else None,
             [(name_pattern(n), src) for n, src in sorted(named.values())])
 
@@ -295,7 +297,8 @@ class TheChecks(unittest.TestCase):
         kit, pats = kit_names(root)
         self.assertEqual(kit, 'Kit-Alpha')
         self.assertEqual(sorted(src for _, src in pats),
-                         ['.kit.json repo.name', 'the Claude plugin name', 'the machine config folder'])
+                         ['.kit.json repo.name', 'the Claude plugin name', 'the machine config folder',
+                          "the machine config folder's retired name"])
         files = {'tests/x.py': "name = 'kit-alpha'\n",          # tests/ is read too
                  'docs/a.md': 'prefix mcp__plugin_host-kit_lock__\n',
                  '.claude-plugin/plugin.json': '"name": "host-kit"\n',
@@ -306,13 +309,15 @@ class TheChecks(unittest.TestCase):
                                  'docs/a.md:1: host-kit (the Claude plugin name)',
                                  "tests/x.py:1: kit-alpha (.kit.json repo.name)"])
         self.assertEqual(sorted(g for g, _, _ in stale),
-                         ['kitlib/config/user.py', 'kitlib/lockmcp/__init__.py'])
+                         ['kitlib/config/migration.py', 'kitlib/config/user.py', 'kitlib/lockmcp/__init__.py'])
 
-    def test_kit_names_without_the_files_are_the_config_folder_only(self):
-        from kitlib.config import user
+    def test_kit_names_without_the_files_are_the_config_folder_names_only(self):
+        from kitlib.config import migration, user
         kit, pats = kit_names(self._kit(None, None))
         self.assertIsNone(kit)
-        self.assertEqual([rx.pattern for rx, _ in pats], [name_pattern(user.DIR_NAME.lstrip('.')).pattern])
+        self.assertEqual(sorted(rx.pattern for rx, _ in pats),
+                         sorted(name_pattern(n.lstrip('.')).pattern
+                                for n in (user.DIR_NAME, migration.OLD_DIR_NAME)))
         self.assertNotIn('README.md', [g for g, _, _ in kit_allowed(None)])
 
     def test_names_come_from_the_machine_config(self):

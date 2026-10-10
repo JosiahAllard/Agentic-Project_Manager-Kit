@@ -126,7 +126,7 @@ def _check_rulings(snap, ledger, name, key, kinds, skip=None):
                 and not (skip is not None and skip(r))]
     if not ledger.configured:
         return CheckResult(name, len(subjects), (), unit='ruled records',
-                           skipped='no ledger configured (%s ledger_path)' % kuser.DISPLAY)
+                           skipped='no ledger configured (%s ledger_path)' % kuser.display())
     found, warned = [], []
     if subjects:
         entries, why = ledger.entries()
