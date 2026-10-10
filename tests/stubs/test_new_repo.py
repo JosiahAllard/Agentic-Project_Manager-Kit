@@ -27,12 +27,33 @@ class NewRepo(unittest.TestCase):
         self.addCleanup(self.fx.cleanup)
         self.root = os.path.realpath(self.fx.root)
 
-    def ps(self, *args, target=None, owner=OWNER, agent=AGENT):
-        argv = ['powershell', '-NoProfile', '-NonInteractive', '-File', SCRIPT,
+    def ps(self, *args, target=None, owner=OWNER, agent=AGENT, script=SCRIPT):
+        argv = ['powershell', '-NoProfile', '-NonInteractive', '-File', script,
                 '-Target', target or self.root, '-OwnerEmail', owner, '-AgentEmail', agent]
         done = subprocess.run(argv + list(args), capture_output=True, text=True, encoding='utf-8',
                               errors='replace', env=gitfixture.fixture_env(), timeout=300)
         return done.returncode, (done.stdout or '') + (done.stderr or '')
+
+    def kit_copy(self):
+        """A copy of the kit beside the throwaway repository, so a test can lock or add template
+        files without touching this kit. Returns the copy's new-repo.ps1."""
+        kit = os.path.join(os.path.realpath(self.fx.base), 'kitcopy')
+        for name in ('installer', 'tools', 'kitlib', 'templates'):
+            shutil.copytree(os.path.join(stubs.KIT_ROOT, name), os.path.join(kit, name),
+                            ignore=shutil.ignore_patterns('__pycache__'))
+        return kit, os.path.join(kit, 'installer', 'new-repo.ps1')
+
+    def lock(self, path):
+        """Open `path` for read+write sharing nothing, until the test ends: any other read fails."""
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                    wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        handle = k32.CreateFileW(path, 0xC0000000, 0, None, 3, 0x80, None)  # read+write, share none
+        self.assertNotEqual(handle, wintypes.HANDLE(-1).value, 'could not lock the file')
+        self.addCleanup(k32.CloseHandle, wintypes.HANDLE(handle))
 
     def test_the_dry_run_writes_nothing(self):
         before = sorted(os.listdir(self.root))
@@ -197,22 +218,100 @@ class NewRepo(unittest.TestCase):
         self.assertNotIn('appended %s' % path, out)
         self.assertFalse(os.path.exists(os.path.join(self.root, 'docs', 'INDEX.md')))
 
-    def test_a_locked_file_that_cannot_be_read_stops_before_the_append(self):
-        import ctypes
-        from ctypes import wintypes
+    def test_a_failed_write_names_what_was_written_and_the_target_that_failed(self):
         path = os.path.join(self.root, '.gitignore')
         self.fx.write('.gitignore', 'build/\n')
-        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
-        k32.CreateFileW.restype = wintypes.HANDLE
-        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-                                    wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-        handle = k32.CreateFileW(path, 0xC0000000, 0, None, 3, 0x80, None)  # read+write, share none
-        self.assertNotEqual(handle, wintypes.HANDLE(-1).value, 'could not lock the file')
-        self.addCleanup(k32.CloseHandle, wintypes.HANDLE(handle))
+        os.chmod(path, stat.S_IREAD)
+        self.addCleanup(os.chmod, path, stat.S_IWRITE | stat.S_IREAD)
         code, out = self.ps('-Apply')
         self.assertEqual(code, 1, out)
-        self.assertIn('new-repo: FAILED - cannot read %s' % path, out)
+        undo = [ln for ln in out.splitlines() if 'already written' in ln]
+        self.assertEqual(len(undo), 1, out)
+        self.assertIn(os.path.join(self.root, '.kit.json'), undo[0])
+        self.assertIn('(and the stubs listed above)', undo[0])
+        self.assertNotIn(path, undo[0])
+        self.assertIn('%s may be partly written' % path, out)
+
+    def test_a_locked_ignore_file_refuses_at_plan_time_before_anything_is_written(self):
+        path = os.path.join(self.root, '.gitignore')
+        self.fx.write('.gitignore', 'build/\n')
+        self.lock(path)
+        code, out = self.ps()
+        self.assertEqual(code, 1, out)
+        self.assertIn('new-repo: REFUSED - cannot read %s' % path, out)
+        code, out = self.ps('-Apply')
+        self.assertEqual(code, 1, out)
+        self.assertIn('new-repo: REFUSED - cannot read %s' % path, out)
         self.assertNotIn('new-repo: wrote', out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
+
+    def test_an_unreadable_gate_template_fails_and_never_says_wrote(self):
+        kit, script = self.kit_copy()
+        self.lock(os.path.join(kit, 'templates', 'stacks', 'python', 'tools', 'gate.json'))
+        code, out = self.ps('-Apply', '-Stack', 'python', script=script)
+        self.assertEqual(code, 1, out)
+        self.assertIn('new-repo: FAILED - cannot read', out)
+        self.assertIn('gate.json', out)
+        self.assertNotIn('wrote    ', out)
+        self.assertNotIn('new-repo: wrote', out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools', 'gate.json')))
+
+    def test_an_unreadable_index_template_fails_and_never_says_wrote(self):
+        kit, script = self.kit_copy()
+        index = os.path.join(kit, 'templates', 'common', 'INDEX.md')
+        self.lock(index)
+        code, out = self.ps('-Apply', script=script)
+        self.assertEqual(code, 1, out)
+        self.assertIn('new-repo: FAILED - cannot read %s' % index, out)
+        self.assertNotIn('new-repo: wrote', out)
+        self.assertNotIn('wrote    %s' % os.path.join(self.root, 'docs', 'INDEX.md'), out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'docs', 'INDEX.md')))
+
+    def test_a_non_ascii_md_name_is_listed_as_it_is_not_quoted(self):
+        name = 'déjà vu.md'
+        self.fx.write(name, '# d\n')
+        self.fx.git('add', '--', name)
+        # -Command with the console set to UTF-8, so the name can be read back from the output.
+        command = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; & '%s' -Target '%s' -OwnerEmail %s "
+                   "-AgentEmail %s; exit $LASTEXITCODE" % (SCRIPT, self.root, OWNER, AGENT))
+        done = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', command],
+                              capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              env=gitfixture.fixture_env(), timeout=300)
+        out = (done.stdout or '') + (done.stderr or '')
+        self.assertEqual(done.returncode, 0, out)
+        self.assertIn('    %s' % name, out.splitlines())
+        self.assertNotIn('\\303', out)
+
+    def test_a_stack_tools_file_named_like_a_stub_refuses_at_plan_time(self):
+        kit, script = self.kit_copy()
+        stack = os.path.join(kit, 'templates', 'stacks', 'clash')
+        os.makedirs(os.path.join(stack, 'tools'))
+        shutil.copy(os.path.join(kit, 'templates', 'stacks', 'python', 'stack.json'), stack)
+        shutil.copy(os.path.join(kit, 'templates', 'stacks', 'python', 'tools', 'gate.json'),
+                    os.path.join(stack, 'tools'))
+        with open(os.path.join(stack, 'tools', 'Landed.py'), 'w', encoding='utf-8') as fh:
+            fh.write("print('not a stub')\n")
+        before = sorted(os.listdir(self.root))
+        for args in (('-Stack', 'clash'), ('-Apply', '-Stack', 'clash')):
+            code, out = self.ps(*args, script=script)
+            self.assertEqual(code, 1, out)
+            self.assertIn("REFUSED - the clash stack's tools file Landed.py has the name of a kit tool stub", out)
+            self.assertEqual(sorted(os.listdir(self.root)), before)
+
+    def test_a_godot_dry_run_writes_nothing(self):
+        before = sorted(os.listdir(self.root))
+        code, out = self.ps('-Stack', 'godot')
+        self.assertEqual(code, 0, out)
+        self.assertIn('DRY RUN', out)
+        self.assertIn('would create  %s' % os.path.join(self.root, 'tools', 'godot.cmd'), out)
+        self.assertEqual(sorted(os.listdir(self.root)), before)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
+
+    def test_next_step_1_names_the_stacks_tools_files(self):
+        code, out = self.ps('-Apply', '-Stack', 'godot')
+        self.assertEqual(code, 0, out)
+        self.assertIn('.gitattributes, docs/INDEX.md and tools/godot.cmd as usual', out)
 
     def test_tracked_md_files_the_starter_index_misses_are_listed_not_refused(self):
         self.fx.write('README.md', '# r\n')
