@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 """The kit's git pre-push hook (docs/guard.md "Pre-push"): refuses, whoever
-pushes, a push to main that is not a fast-forward or deletes it, and, when the repository sets
+pushes, first, when the repository records a PM data branch (kit-pm-data.json in its git common
+dir), any push that would put PM data on a remote other than the recorded private one, or send
+that remote anything but the data branch; then a push to main that is not a fast-forward or
+deletes it, and, when the repository sets
 repo.push_block, a push to main with no gate-OK record for the pushed commit or that adds a
 commit changing an owner-only path not authored by the owner (docs/guard.md "Owner-only commits").
 Logic: kitlib.guard.prepush. Install per repository with
