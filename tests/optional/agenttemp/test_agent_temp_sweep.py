@@ -74,10 +74,6 @@ class Config(Case):
         with self.assertRaises(S.SweepConfigError):
             S.load(self.home)
 
-    def test_its_config_folder_is_the_kits(self):
-        # The script ships alone, so it keeps its own copy of the folder name.
-        self.assertEqual(S.CONFIG_DIR, kuser.DIR_NAME)
-
     def test_unsafe_dirs_are_refused(self):
         root = os.path.abspath(os.sep)
         for d in (root, self.home, self.tmp, os.path.join(self.tmp, 'missing')):
@@ -222,6 +218,22 @@ class Cli(Case):
             code, out, _err = self.main('--apply')
         self.assertEqual(code, 1)
         self.assertIn('in-use', out)
+
+    @unittest.skipUnless(os.name == 'nt', 'the installed layout is a Windows junction')
+    def test_it_runs_through_an_installed_junction(self):
+        # machine setup installs <tools>/agenttemp as a junction into the kit; the script finds
+        # kitlib through the junction's real path, not beside the junction.
+        link = os.path.join(self.tmp, 'tools', 'agenttemp')
+        os.makedirs(os.path.dirname(link))
+        real = os.path.join(HERE, '..', '..', '..', 'optional', 'agenttemp')
+        subprocess.run(['cmd', '/c', 'mklink', '/J', link, os.path.abspath(real)], check=True,
+                       capture_output=True)
+        self.addCleanup(os.rmdir, link)          # the junction only, before the folder goes
+        env = dict(os.environ, USERPROFILE=self.home, HOME=self.home)
+        r = subprocess.run([sys.executable, os.path.join(link, 'agent_temp_sweep.py')], env=env,
+                           cwd=self.tmp, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('nothing to sweep', r.stderr)
 
 
 if __name__ == '__main__':

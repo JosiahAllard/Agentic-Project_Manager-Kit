@@ -15,7 +15,7 @@ top-level file or folder of dir) is removed only when all of these hold:
 - every part of it can be removed. A removal that fails part-way puts what is left back under its
   own name.
 Links are removed as links; their targets are never entered. dir may not be a filesystem root, the
-home folder or a folder holding it, or a link. Standard library only.
+home folder or a folder holding it, or a link. Standard library and the kit's own kitlib only.
 
 Exit codes: 0 done (or nothing to do); 1 some old entry could not be removed (in use or failed);
 2 no config, a bad config or an unsafe dir.
@@ -27,9 +27,11 @@ import stat
 import sys
 import time
 
-# The machine config's folder. This script ships alone, so it holds its own copy of
-# kitlib.config.user.DIR_NAME; tests/optional/agenttemp checks the two are equal.
-CONFIG_DIR = ".claude-pm-kit"
+# The machine config's place comes from the kit library (kitlib.config.user), found at the kit's
+# root through the real path: an installed junction (~/.claude/tools/agenttemp) resolves into the kit.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))))
+from kitlib.config import user as kuser                             # noqa: E402
+
 KEY = "agent_temp_sweep"
 DEFAULT_MAX_AGE_DAYS = 3
 CLAIM = ".sweeping-"            # the name an entry is renamed to while it is removed: <name>.sweeping-<pid>
@@ -57,7 +59,7 @@ def check(cfg):
 def load(home=None):
     """(dir, max_age_days) from the machine config, or None when it has no "agent_temp_sweep".
     A bad value or an unreadable config raises SweepConfigError."""
-    path = os.path.join(home or os.path.expanduser("~"), CONFIG_DIR, "config.json")
+    path = kuser.config_file(home)
     try:
         with open(path, encoding="utf-8-sig") as f:
             data = json.load(f)
