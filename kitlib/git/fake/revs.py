@@ -12,7 +12,7 @@ import re
 
 from . import refs as _refs
 from .errors import GitExit, Unsupported, die
-from .objects import Commit, Tag, parse_tree
+from .objects import EMPTY_TREE, Commit, Tag, parse_tree
 
 _HEX = re.compile(r'^[0-9a-f]+$')
 
@@ -74,20 +74,33 @@ def peel(repo, oid, want=None):
 
 
 def tree_entries(repo, tree_oid):
+    """[(mode, name, oid)] of a tree; None when the object is not a tree. A tree object that is
+    missing dies with git's words ("fatal: unable to read tree (<oid>)", exit 128: git 2.55
+    read-tree with a subtree object removed, probed 2026-10-10): taking it for an empty tree would
+    drop every path under it from what is written next. The empty tree needs no object, as in
+    git."""
     kind, data = read_object(repo, tree_oid)
+    if kind is None:
+        if tree_oid == EMPTY_TREE.get(repo.algo):
+            return []
+        raise die('unable to read tree (%s)' % tree_oid)
     if kind != 'tree':
         return None
     return parse_tree(data, repo.hexlen)
 
 
 def tree_lookup(repo, tree_oid, path):
-    """(mode, oid) of `path` ('a/b') inside a tree, or None."""
+    """(mode, oid) of `path` ('a/b') inside a tree, or None. A tree on the way that is missing
+    gives None too: git names such a `<rev>:<path>` as missing (rev-parse --verify -q exits 1,
+    cat-file --batch-check says "<name> missing") rather than dying as read-tree does."""
     if path in ('', '.'):
         return ('40000', tree_oid)
     parts = [p for p in path.split('/') if p]
     cur = tree_oid
     mode = '40000'
     for i, part in enumerate(parts):
+        if read_object(repo, cur)[0] is None and cur != EMPTY_TREE.get(repo.algo):
+            return None
         ents = tree_entries(repo, cur)
         if ents is None:
             return None

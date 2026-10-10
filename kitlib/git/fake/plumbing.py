@@ -1060,9 +1060,22 @@ _MB = _u.Spec('merge-base', flags='a|all is-ancestor octopus independent fork-po
 @command('merge-base')
 def merge_base(ctx, args):
     opts, pos, dd = _u.parse(_MB, args)
-    if opts.get('octopus') or opts.get('independent') or opts.get('fork-point'):
+    if opts.get('octopus') or opts.get('fork-point'):
         raise Unsupported('merge-base options')
     repo = ctx.need_repo()
+    if opts.get('independent'):
+        # The given commits that no other given commit reaches, each once, in the order given.
+        if not pos:
+            raise GitExit(129, 'usage: git merge-base --independent <commit>...\n')
+        oids = []
+        for x in pos:
+            c = _commit_arg(ctx, x)
+            if c not in oids:
+                oids.append(c)
+        for c in oids:
+            if not any(o != c and _revs.is_ancestor(repo, c, o) for o in oids):
+                ctx.write(c + '\n')
+        return 0
     if opts.get('is-ancestor'):
         if len(pos) != 2:
             raise GitExit(129, 'usage: git merge-base --is-ancestor <commit> <commit>\n')

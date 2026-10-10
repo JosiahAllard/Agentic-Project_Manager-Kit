@@ -657,6 +657,23 @@ class TheReportHooks(Fixture):
                          ['hook      NOT CHECKED - broken:lines: ModuleNotFoundError: No module '
                           "named 'no_such_module_here'"])
 
+    def test_a_hook_gets_its_own_sibling_not_the_kits_tool_of_that_name(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), 'tools'))
+        self.addCleanup(sys.modules.pop, 'pieces', None)
+        import pieces as kit_pieces              # the kit's tools/pieces.py, imported before
+        self.assertFalse(hasattr(kit_pieces, 'table'))
+        self.module('pieces', 'def table():\n    return ["repo table"]\n')
+        self.module('shadow', 'import pieces\n'
+                              'def lines():\n    return pieces.table()\n')
+        before = list(sys.path)
+        self.assertEqual(hooks.lines(self.tools, ['shadow:lines']), ['repo table'])
+        self.assertIs(sys.modules['pieces'], kit_pieces)     # kit code still has the kit's
+        self.assertEqual(sys.path, before)
+        del sys.modules['pieces']                            # and with none imported first
+        self.assertEqual(hooks.lines(self.tools, ['shadow:lines']), ['repo table'])
+        self.assertNotIn('pieces', sys.modules)
+
 
 TASKLIST = ('\nImage Name                     PID Session Name\n'
             '========================= ======== ================\n'

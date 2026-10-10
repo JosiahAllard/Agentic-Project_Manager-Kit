@@ -373,6 +373,46 @@ class Abandon(RemoveCase):
         self.assertIn('is also checked out at', out)
 
 
+class NoAncestryAnswer(RemoveCase):
+    """kitlib.git.refs.is_ancestor gives no answer (None) for a git ended from outside
+    (KIT-TEST-GRANDCHILD-SHIELD), where `merge-base --is-ancestor` gave exit 1, a NO. Every verb
+    refuses on no answer and changes nothing: an abandon must not tag and remove work it was told,
+    by a killed git, has not landed."""
+
+    WHY = 'git rev-list exited 1 and printed nothing'
+
+    def unknown(self):
+        return mock.patch.object(remove.refs, 'is_ancestor', return_value=(None, self.WHY))
+
+    def test_remove_refuses(self):
+        path = self.workstream('done')
+        self.land('kit/done')
+        with self.unknown():
+            rc, out = self.run_verb('remove', 'done')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('the merge check failed (%s); nothing was removed' % self.WHY, out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn('kit/done', self.branches())
+
+    def test_abandon_refuses(self):
+        path = self.workstream('drop')
+        with self.unknown():
+            rc, out = self.run_verb('abandon', 'drop', 'superseded')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('the merge check failed (%s); nothing was tagged or removed' % self.WHY, out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+
+    def test_abandon_branch_refuses(self):
+        self.orphan('gone')
+        with self.unknown():
+            rc, out = self.run_verb('abandon_branch', 'kit/gone', 'superseded')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('the merge check failed (%s); nothing was tagged or deleted' % self.WHY, out)
+        self.assertIn('kit/gone', self.branches())
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+
+
 class AbandonNextFree(RemoveCase):
 
     CONFIG = {'worktree_remove': {'archive_next_free': True}}
@@ -603,17 +643,13 @@ class RemoveBranch(RemoveCase):
     def test_a_merge_check_that_errors_refuses(self):
         self.orphan('done')
         self.land('kit/done')
-        real = remove.git
-
-        def failing(cwd, *args, **kw):
-            if args[:2] == ('merge-base', '--is-ancestor'):
-                return 128, '', 'fatal: boom'
-            return real(cwd, *args, **kw)
-        with mock.patch.object(remove, 'git', failing):
+        # No answer (kitlib.git.refs.is_ancestor: a failed git, or one ended from outside) is no
+        # NO and no YES: the verb refuses.
+        with mock.patch.object(remove.refs, 'is_ancestor', return_value=(None, 'fatal: boom')):
             rc, out = self.run_verb('remove_branch', 'kit/done')
         self.assertEqual(rc, 1, out)
-        self.assertIn('refused   kit/done: the merge check failed (git merge-base exited 128:'
-                      ' fatal: boom); nothing was deleted', out)
+        self.assertIn('refused   kit/done: the merge check failed (fatal: boom); nothing was'
+                      ' deleted', out)
         self.assertIn('kit/done', self.branches())
 
     def test_an_unreadable_worktree_list_refuses(self):
