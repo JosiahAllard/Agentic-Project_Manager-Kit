@@ -11,8 +11,9 @@ missing or bad, the PM account not signed in) are logged FAILED too, never raise
 Skipped: a "_" key, an entry without a stem, "autostart": false, and an entry whose stem is
 already running under any account or recycle. The PM resume is skipped when pm-session or the PM
 session id is running, when the Claude desktop app is running (resuming there too would fork the
-conversation), and, more than 15 minutes after boot, when the PM transcript was written in the
-last 15 minutes. --test starts only a throwaway "autostart-test" session.
+conversation) unless launcher.pm_resume_beside_desktop is true, and, more than 15 minutes after
+boot, when the PM transcript was written in the last 15 minutes. --test starts only a throwaway
+"autostart-test" session.
 """
 import glob
 import os
@@ -132,18 +133,18 @@ def run(settings, host, test=False, dry_run=False):
             continue
         log('started %s (%s) on account %s' % (args['name'], key, acct))
         entry['account'], entry['name'], changed = int(acct), args['name'], True
-    if dry_run:
-        return out
-    if changed:
+    if changed and not dry_run:
         try:
             state.write_json(state.path(settings, state.SESSIONS), sessions)
         except Exception as e:
             log('FAILED to write sessions.json : %s' % why(e))
-    out += resume_pm(settings, host, cfg, log)
+    out += resume_pm(settings, host, cfg, log, dry_run)
     return out
 
 
-def resume_pm(settings, host, cfg, log):
+def resume_pm(settings, host, cfg, log, dry_run=False):
+    """Resume the PM session unless a check skips it. dry_run: every check runs and the decision
+    is said ('would resume pm-session ...'), but no window opens."""
     sid, folder, pm_account = cfg.get('pm_session_id'), cfg.get('pm_folder'), cfg.get('pm_account')
     if not sid or not folder or not pm_account or str(sid).startswith('<'):
         log('conductors.json names no PM session (pm_session_id, pm_folder, pm_account), pm-session skipped')
@@ -153,8 +154,10 @@ def resume_pm(settings, host, cfg, log):
         log('pm-session already running, skipped')
         return []
     if desktop_app_running(procs):
-        log('desktop app running, pm-session skipped')
-        return []
+        if not settings.pm_resume_beside_desktop:
+            log('desktop app running, pm-session skipped')
+            return []
+        log('desktop app running, pm-session not skipped (launcher.pm_resume_beside_desktop)')
     m = newest_transcript_mtime(settings, sid)
     if host.uptime_minutes() > FRESH_MINUTES and m is not None and host.now().timestamp() - m < FRESH_MINUTES * 60:
         log('pm transcript active, pm-session skipped')
@@ -163,7 +166,11 @@ def resume_pm(settings, host, cfg, log):
         d = A.launch_dir(settings, str(pm_account))
         config_dir = None if settings.is_default(d) else d
         cmd = window.claude_command('pm-session', PM_PROMPT, resume=sid)
-        host.open_window(window.script('pm-session', window.PM, folder, cmd, config_dir, host.env('AGENT_TEMP')))
+        text = window.script('pm-session', window.PM, folder, cmd, config_dir, host.env('AGENT_TEMP'))
+        if dry_run:
+            log('would resume pm-session (session %s, account %s) in %s' % (sid, pm_account, folder))
+            return []
+        host.open_window(text)
     except Exception as e:                           # the PM account not signed in, or the window failed
         log('FAILED to resume pm-session : %s' % why(e))
         return []

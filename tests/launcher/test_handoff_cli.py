@@ -156,6 +156,17 @@ class Cli(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("launch.py start: repo 'nope' is not in launcher.repos", err)
 
+    def test_a_stop_whose_log_write_fails_exits_0_and_says_so_on_stderr(self):
+        from tests.launcher.test_lookup_stop import windowed
+        os.rmdir(self.h.state)
+        open(self.h.state, 'w').close()                  # the state folder is a file: the log write fails
+        code, out, err, host = self.main(['stop', '--name', 'x-a1'], windowed('x-a1'))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(host.killed), 3)
+        self.assertIn("stopped 'x-a1'", out)
+        self.assertNotIn('could not write', out)
+        self.assertIn('launch.py stop: could not write stop.log', err)
+
     def test_a_refused_stop_exits_2(self):
         code, out, _, _ = self.main(['stop', '--name', 'gone'])
         self.assertEqual(code, 2)

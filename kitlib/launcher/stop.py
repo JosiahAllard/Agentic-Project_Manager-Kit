@@ -16,7 +16,6 @@ process is stopped by pid and creation time, read when it is chosen, so a reused
 the session's command line is read again at that creation time and must still carry the name.
 """
 import re
-import sys
 
 from kitlib.launcher import lookup, state, window
 from kitlib.launcher.settings import LaunchError
@@ -109,17 +108,18 @@ def plan(procs, name, successor=None, pid=0, own_pid=None, pm_session_id=None):
     return target, win, con, succ, [what, wtext]
 
 
-def stop(settings, host, name, successor=None, pid=0, dry_run=False, procs=None):
+def stop(settings, host, name, successor=None, pid=0, dry_run=False, procs=None, warn=None):
     """Stop one session; the lines it says. Refused for a refusal; LaunchError when the session
-    could not be stopped."""
+    could not be stopped. A stop.log write that fails does not undo the stop: its message goes to
+    warn(text) (the CLI prints it on stderr), or, with no warn, is the last line said."""
     conductors = None
     try:
         conductors = state.read_conductors(settings)
     except LaunchError:
         conductors = None
     pm_id = (conductors or {}).get('pm_session_id') if isinstance(conductors, dict) else None
-    if pm_id and pm_id.startswith('<'):
-        pm_id = None                                # the example file's placeholder
+    if not isinstance(pm_id, str) or pm_id.startswith('<'):
+        pm_id = None                                # unset, not a string, or the example file's placeholder
     rows = host.processes() if procs is None else procs
     target, win, con, succ, (what, wtext) = plan(rows, name, successor, pid, host.own_pid(), pm_id)
     if dry_run:
@@ -145,5 +145,8 @@ def stop(settings, host, name, successor=None, pid=0, dry_run=False, procs=None)
     try:
         state.log(settings, LOG, line)
     except (OSError, LaunchError) as e:              # the stop happened; say the log line is missing
-        print('launch.py stop: could not write %s: %s' % (LOG, e), file=sys.stderr)
+        msg = 'could not write %s: %s' % (LOG, e)
+        if warn is None:
+            return [line, msg]
+        warn(msg)
     return [line]

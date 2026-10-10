@@ -81,7 +81,7 @@ def codex_line(home, now):
             hit = None
     if not hit:
         return 'account codex: no usage data'
-    pct = int(float(hit.group(1)))
+    pct = A.whole(hit.group(1))
     reset = datetime.datetime.fromtimestamp(int(hit.group(2)), datetime.timezone.utc)
     age = int((now.timestamp() - best[0]) // 60)
     wk = 'seven_day=reset' if reset < now else 'seven_day=%d%% (resets %s)' % (pct, A.short(reset))
