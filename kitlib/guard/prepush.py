@@ -33,6 +33,7 @@ refuses the push (fail closed).
 """
 import hashlib
 import os
+import re
 
 from kitlib import config as kconfig
 from kitlib import pmdata
@@ -47,14 +48,35 @@ MAIN_DEFAULT = kschema.SECTIONS['repo']['main_branch'].default
 
 # ---------------------------------------------------------------- PM data branch (leak stage)
 
+_URL_SCHEME = re.compile(r'([A-Za-z][A-Za-z0-9+.-]*)://([^/]*)(.*)\Z', re.S)
+_URL_SCP = re.compile(r'([^/@:]+@)?([^/:]{2,}):(.*)\Z', re.S)    # host:path; `D:` is a drive
+
+
+def _url_path(path):
+    path = path.rstrip('/')
+    if path.lower().endswith('.git'):
+        path = path[:-4]
+    return path.rstrip('/')
+
+
 def _norm_url(url):
-    """A remote URL in the form two are compared in: backslashes as slashes, a trailing slash
-    then a trailing `.git` dropped, case folded. Not git's own rewriting (insteadOf): a URL that
-    only matches after it is not matched, so it counts as public."""
-    u = str(url or '').strip().replace('\\', '/').rstrip('/')
-    if u.lower().endswith('.git'):
-        u = u[:-4]
-    return u.rstrip('/').casefold()
+    """A remote URL in the form two are compared in (git's rewriting is not done here: the URLs
+    compared are the ones git already rewrote). Always: a trailing slash, then a trailing `.git`,
+    then a trailing slash dropped. A remote URL (`<scheme>://` other than `file://`, or scp-like
+    `[user@]host:path`) has its scheme and host case folded and keeps its path's case, so two
+    repositories whose paths differ only in case stay two. A local path (a drive path, a UNC
+    path, `file://`, anything else) has backslashes as slashes and is case folded whole, as
+    Windows reads it."""
+    u = str(url or '').strip()
+    m = _URL_SCHEME.match(u)
+    if m and m.group(1).lower() != 'file':
+        scheme, auth, path = m.groups()
+        user, at, host = auth.rpartition('@')
+        return '%s://%s%s%s%s' % (scheme.casefold(), user, at, host.casefold(), _url_path(path))
+    m = _URL_SCP.match(u)
+    if m and not m.group(3).startswith('//'):
+        return '%s%s:%s' % (m.group(1) or '', m.group(2).casefold(), _url_path(m.group(3)))
+    return _url_path(u.replace('\\', '/')).casefold()
 
 
 def _config_env():

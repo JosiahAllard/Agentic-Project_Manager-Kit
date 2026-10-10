@@ -703,12 +703,29 @@ class PrivateTest(unittest.TestCase):
 
     def test_norm_url(self):
         n = prepush._norm_url
-        self.assertEqual(n('https://Example.invalid/Kit.git/'), 'https://example.invalid/kit')
         self.assertEqual(n('D:\\Data\\Private.GIT'), 'd:/data/private')
         self.assertEqual(n('d:/data/private/'), 'd:/data/private')
+        self.assertEqual(n('\\\\Server\\Share\\Repo.git'), '//server/share/repo')
+        self.assertEqual(n('file:///D:/Data/X.git'), 'file:///d:/data/x')
         self.assertEqual(n(' x.git '), 'x')
         self.assertNotEqual(n('d:/data/private2'), n('d:/data/private'))
         self.assertEqual(n(None), '')
+
+    def test_norm_url_keeps_a_remote_paths_case(self):
+        n = prepush._norm_url
+        self.assertEqual(n('HTTPS://Example.Invalid/Me/Kit.git/'), 'https://example.invalid/Me/Kit')
+        self.assertEqual(n('ssh://git@Host.Example.invalid:22/Me/Data.git'), 'ssh://git@host.example.invalid:22/Me/Data')
+        self.assertEqual(n('git@Host.Example.invalid:Me/Data.git'), 'git@host.example.invalid:Me/Data')
+        self.assertNotEqual(n('https://example.invalid/me/Data'), n('https://example.invalid/me/data'))
+        self.assertNotEqual(n('git@example.invalid:me/Data'), n('git@example.invalid:me/data'))
+        self.assertEqual(n('https://Example.invalid/me/Data'), n('https://example.invalid/me/Data.git'))
+
+    def test_a_remote_path_differing_in_case_is_another_repository(self):
+        remotes = {'private': {'push': {prepush._norm_url('https://example.invalid/me/Data')},
+                               'all': {prepush._norm_url('https://example.invalid/me/Data')}}}
+        self.assertTrue(self.private('private', 'https://Example.invalid/me/Data.git', remotes))
+        self.assertFalse(self.private('private', 'https://example.invalid/me/data', remotes))
+        self.assertFalse(self.private('private', 'git@example.invalid:me/data', remotes))
 
     def test_by_name_the_url_decides(self):
         self.assertTrue(self.private('private', 'D:\\Data\\Private.git'))
