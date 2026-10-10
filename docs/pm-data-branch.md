@@ -35,16 +35,16 @@ A bare `git push` in the data worktree goes to the upstream, the private remote;
 
 ## Pre-push guard
 
-`kitlib/guard/prepush.py` `check` judges only `refs/heads/<main>` remote refs today, so `git push origin pmdata` and a branch containing the data history pass it. Add a first stage that runs when `kit-pm-data.json` exists, before the main-branch rules, for every ref line and whatever the remote:
+`kitlib/guard/prepush.py` `check` runs a first stage, `leak_refusal`, when `kit-pm-data.json` exists, before the main-branch rules, for every ref line and whatever the remote (docs/guard.md "Pre-push" has the details):
 
 - **Leak by name.** The remote is not the private remote and the local or remote ref is `refs/heads/<data branch>`: refuse.
 - **Leak by history.** The remote is not the private remote and the pushed local sha has the recorded `root` as an ancestor (`refs.is_ancestor`): refuse. This covers the data branch merged onto main, any other branch and any tag. A cherry-picked data commit is a new commit without the root in its history, so a third check catches it by its objects: a push that would send any object reachable from the root or the data branch (the empty tree and blob excepted) is refused, which also refuses a file whose content is identical to a data file. Its limit: a copy edited by hand (any byte changed) is not caught. A deleting push (all-zero local sha) is not judged.
-- **Private remote gets only the data.** The remote is the private remote and the remote ref is not `refs/heads/<data branch>` (so no tag and no other branch goes there), or the local sha lacks the root as ancestor: refuse. (A private remote that also held the kit would let `main` and the data branch mix there.)
+- **Private remote gets only the data.** The remote is the private remote and the remote ref is not `refs/heads/<data branch>` (so no tag and no other branch goes there), or the local sha lacks the root as ancestor, or the push deletes any ref there: refuse. (A private remote that also held the kit would let `main` and the data branch mix there.)
 - **Fail closed.** `kit-pm-data.json` unreadable or malformed, or the root object missing from this clone, refuses every push with the file named.
 
-`remote` comes from git's argv (the remote's name or, for a URL push, its URL; a URL equal to a configured remote's counts as that remote). The existing main-branch rules then run as before. `--no-verify` skips the hook, as for every rule here; the `git-push-main` guard rule still covers agent sessions, and a new row denies an agent's `--no-verify` on a push when `kit-pm-data.json` exists (docs/guard.md "Rules").
+The private remote is judged by the URL git hands the hook (its second argument): it must be one of the recorded remote's push URLs as git computes them, read without any `git -c` configuration, and no other remote's (docs/guard.md "Pre-push", "Which remote is private"). The existing main-branch rules then run as before. `--no-verify` and `git send-pack` skip the hook; the guard rule `git-push-pmdata` denies both when `kit-pm-data.json` exists, in every session but the owner's own (docs/guard.md "Rules").
 
-`gate.py land` also refuses a branch whose history contains the recorded root: add it to `ancestry_refusal` (`kitlib/backlog/at_landing.py`) beside the backlog store's root, so a contaminated branch is refused before the merge instead of after it.
+`gate.py land` also refuses a branch whose history contains the recorded root: `ancestry_refusal` (`kitlib/backlog/at_landing.py`) checks it first (`pmdata_refusal`), before the backlog store's root, so a contaminated branch is refused before the merge instead of after it. The PM's data is never landed with gate.py land; data commits go through the kit tools' own commit and push, so the landing check has no exemption for the data branch.
 
 ## Guard place and commit hooks
 
@@ -76,14 +76,14 @@ A clone of the public remote has `main` only. `installer/new-repo.ps1` gains `-P
 | Private remote URL equals the public URL | `init` refuses |
 | `pmdata` branch deleted or renamed | the recorded root still guards; `pm_data.py init --adopt` re-links a branch |
 | Data worktree folder deleted | `git worktree prune` is blocked by the lock; `pm_data.py init --adopt` re-adds it |
-| Pre-push runs with `--no-verify` | not caught; the data was never on the public remote's `pmdata` unless pushed by name, which the agent rule denies |
+| Pre-push runs with `--no-verify`, or `git send-pack` | not caught by the hook; the guard rule `git-push-pmdata` denies both in every session but the owner's own |
 | A contaminated branch reaches `main` | `ancestry_refusal` before the merge, then the pre-push root check |
 | `git gc` / shallow clones of the data worktree's repo | out of scope; the root commit must stay reachable from `pmdata` |
 
 ## Code that must change (the spec disagrees with the code today)
 
 - `kitlib/ledger/vcs.py` `finish` pushes with a literal `origin` and `default_base` returns `origin/<main_branch>`. In this layout `origin` is the public remote, so `ledger.py add --push` would try to push `pmdata` there. Both read `repo.remote` from the ledger repository's config instead.
-- `kitlib/guard/prepush.py` `check` skips any remote ref that is not `refs/heads/...` and judges only the main branch (see above).
+- `kitlib/guard/prepush.py` `check` skipped any remote ref that is not `refs/heads/...` and judged only the main branch; it now runs the leak stage on every ref line first (see above).
 - `kitlib/config/user.py` `SCHEMA` has no `pm_data`; `tests/config/test_user_docs.py` keeps `docs/kit-json.md` equal to the schema, so the key and its doc line land in the same commit.
 - `kitlib/worktree/new.py` `create` loads the config of the main checkout (`load(main)`); the data worktree's own `.kit.json` is read only through the place rule above.
 
@@ -93,9 +93,9 @@ Throwaway repositories (`tests/gitfixture.py`) with bare scratch remotes; no net
 
 - `init`: root has no parent and an empty tree; `pmdata` and `main` share no commit (`merge-base` fails); worktree locked; `branch.pmdata.*` and `push.default` as specified; `.git/config` has no `remote.*.push` and no changed `remote.*.fetch`; refuses a `ref` backlog store, an equal URL, an existing branch without `--adopt`.
 - Bare `git push` in the data worktree reaches only the private remote; with no upstream it fails.
-- Pre-push (`tests/guard/test_prepush.py` `PmDataTest`, `PrivateTest`): `pmdata` to the public remote refused, by name and with `--all`; a branch with a data-branch commit cherry-picked refused by its objects; a branch merging `pmdata` refused; a light and an annotated tag on a data commit refused; `main` to public passes, an empty file in both branches included; `pmdata` to private passes, `.git/config` unchanged; a tag, `main` or another branch to private refused; an unreadable or malformed record, or a root missing from the clone, fails closed; a remote given as URL is judged as the matching remote; deleting `pmdata` on public allowed; any deletion on private refused; a private URL another remote also has counts as public; no record changes nothing; the leak stage runs before the main-branch rules.
+- Pre-push (`tests/guard/test_prepush.py` `PmDataTest`, `PrivateTest`): `pmdata` to the public remote refused, by name and with `--all`; a branch with a data-branch commit cherry-picked refused by its objects; a branch merging `pmdata` refused; a light and an annotated tag on a data commit refused; `main` to public passes, an empty file in both branches included; `pmdata` to private passes, `.git/config` unchanged; a tag, `main` or another branch to private refused; an unreadable or malformed record, or a root missing from the clone, fails closed; a remote given as URL is judged as the matching remote; deleting `pmdata` on public allowed; any deletion on private refused; a private URL another remote also has counts as public; no record changes nothing; the leak stage runs before the main-branch rules; a push by the private remote's name to a URL it does not push to, or with `git -c remote.private.pushurl=<other>`, is public; a remote path differing only in case is another repository; a remote named `origin/<x>` does not hide objects from `--remotes=origin`; a data ref, the remotes, the objects or the git directory git cannot read refuses.
 - `ancestry_refusal` (`tests/gate/test_land_store.py` `PmDataAncestry`) refuses a branch containing the root before any merge, also with a folder store; an unreadable record, a missing root or an undecidable ancestry refuses.
-- Guard (`tests/guard/test_rules.py` `PmDataNoVerify`): `push --no-verify`, abbreviated too, denied as `git-push-pmdata` when the record exists, `push_block` off, in a subagent and a marked session, not in the owner's own; the fallback catches it on an unreadable line.
+- Guard (`tests/guard/test_rules.py` `PmDataNoVerify`): `push --no-verify`, abbreviated too, denied as `git-push-pmdata` when the record exists, `push_block` off, in a subagent and a marked session, not in the owner's own; `git send-pack` and `git-send-pack` denied the same way; the fallback catches both on an unreadable line.
 - `kit_sync`: clean fast-forward; dirty, off main, mid-merge, landing held, offline (unreachable remote), diverged; `.git/config` unchanged afterwards.
 - Guard place: a subagent edit under `pm_data.path` denied; the path's own `.kit.json` is the config used; other worktrees unchanged.
 - Ledger: `add --commit --push` pushes to `repo.remote`.
