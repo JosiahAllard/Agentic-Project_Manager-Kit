@@ -2,8 +2,8 @@
 that moved the caller out of their own checkout is refused, so a shell in one checkout never gates
 another by running that checkout's stub.
 
-With no stub, a gate.py run from another checkout of its own repository with no -C (the kit's own
-repository, where every checkout has a real gate.py) is refused, and a relative --log-dir that would
+With no stub, a gate.py run on another checkout of its own repository with no -C or a relative one
+(the kit's own repository, where every checkout has a real gate.py) is refused, and a relative --log-dir that would
 be made outside the gated checkout is USAGE (OwnCopy, LogDir, RunByPath).
 
 kitlib.gate.caller is tested with a fake classify; the end-to-end cases run a written gate stub on a
@@ -296,13 +296,19 @@ class OwnCopy(unittest.TestCase):
                 self.assertIn('-C %s' % kit, text)      # the command to use instead
                 self.assertIn(os.path.join(kit, 'tools', 'gate.py'), text)
 
+    def test_a_relative_minus_c_is_named_in_the_refusal(self):
+        out = caller.own_copy_refusal(self.main, self.wt, rel='.', classify=self.classify)
+        self.assertEqual(out.code, G.REFUSED)
+        self.assertIn('given the relative -C . (%s)' % self.main, out.lines[0])
+        self.assertIn('-C %s' % self.wt, out.lines[0])
+
     def test_the_same_checkout_passes(self):
         self.assertIsNone(self.refusal(self.wt, self.wt))
         self.assertIsNone(self.refusal(self.main, self.main))
 
     def test_a_kit_in_another_repository_passes(self):
-        """A repository's stubs run the kit's release checkout: another repository, the normal
-        case."""
+        """A repository's stubs run the kit checkout written into them: another repository, the
+        normal case."""
         self.assertIsNone(self.refusal(self.main, self.other))
         self.assertIsNone(self.refusal(self.wt, self.other))
 
@@ -427,6 +433,33 @@ class RunByPath(unittest.TestCase):
         logs = os.path.join(self.repo.base, 'logs')
         code, out = self.gate(self.main, self.wt, '-C', self.wt, '--log-dir', logs)
         self.assertEqual(code, 0, out)
+
+    def test_a_relative_minus_c_naming_another_checkout_is_refused(self):
+        """`python <worktree>/tools/gate.py -C .` from the main checkout gated the main checkout
+        with the worktree's code, as no -C did; so did main's gate.py with a relative -C naming
+        the worktree."""
+        rel_wt = os.path.join('.claude', 'worktrees', 'x')
+        for cwd, kit, rel in ((self.main, self.wt, '.'), (self.wt, self.main, '.'),
+                              (self.main, self.main, rel_wt)):
+            with self.subTest(cwd=cwd, kit=kit, rel=rel):
+                code, out = self.gate(cwd, kit, '-C', rel)
+                self.assertEqual(code, G.REFUSED, out)
+                self.assertIn('given the relative -C %s' % rel, out)
+                self.assertIn('Name the tree with an absolute -C: python %s -C %s' % (
+                    os.path.join(kit, 'tools', 'gate.py'), kit), out)
+                self.assertNotIn('RUN   unit', out)
+
+    def test_a_relative_minus_c_naming_its_own_checkout_passes(self):
+        code, out = self.gate(self.main, self.wt, '-C', os.path.join('.claude', 'worktrees', 'x'))
+        self.assertEqual(code, 0, out)
+        self.assertIn('RUN   unit (always)', out)
+
+    def test_an_absolute_minus_c_naming_another_checkout_passes(self):
+        """main's gate.py with an absolute -C naming the worktree runs main's code on it, as
+        documented: an absolute -C names the tree on purpose."""
+        code, out = self.gate(self.main, self.main, '-C', self.wt)
+        self.assertEqual(code, 0, out)
+        self.assertIn('RUN   unit (always)', out)
 
 
 class TheStepsEnvironment(fixtures.GateRepoCase):
