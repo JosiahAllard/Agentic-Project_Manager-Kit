@@ -41,6 +41,10 @@ GIT_WORD_RE = re.compile(r'(?i)(?<![\w.-])git(?:\.exe)?(?![\w-])')  # git as a w
 # programs that run text as commands: on an unclean line their commands may be what it hides
 RUNNERS = cm.BASH_SHELLS | cm.PS_SHELLS | {'cmd', 'eval', 'iex', 'invoke-expression', 'source', '.'}
 
+# git with no subcommand run by xargs: the input names the repository and the command, so it is
+# judged machine-wide, not by the record of the directory it runs in
+XARGS_BARE_GIT = r'\bxargs\b[^|;&\n]*\bgit(?:\.exe)?[ \t]*(?=[|;&\n]|$)'
+
 MAIN_ONLY = (
     ('git-bulk-add', G + r'(?:add|stage)\b[^|;&]*(\s-A\b|\s--all\b|\s-u\b|\s--update\b|\s\.(\s|$))'),
     ('git-commit-all', G + r'commit\b[^|;&]*\s(-a|-am|-a[a-zA-Z]+|--all)\b'),
@@ -64,7 +68,7 @@ ANYWHERE = (
     ('git-push-pmdata', G + r'(?:push\b[^|;&\n]*)?(?:\$|`|%[A-Za-z_]\w*%|@\()'),
     # git push, or git with no subcommand, run by xargs: the input it appends may be --no-verify or push
     ('git-push-pmdata', r'\bxargs\b[^|;&\n]*\bgit(?:\.exe)?\b[^|;&\n]*\bpush\b'),
-    ('git-push-pmdata', r'\bxargs\b[^|;&\n]*\bgit(?:\.exe)?[ \t]*(?=[|;&\n]|$)'),
+    ('git-push-pmdata', XARGS_BARE_GIT),
     ('git-push-pmdata', r'(?i)(?<![\w.-])git-send-pack(?:\.exe)?\b'),
     ('wrapped-gate', r'(?:\bgate\.py|\bmachine_lock\.py\s+run)\b[^;&]*?(?<!\|)\|(?!\|)'),
     ('root-search', r'\bfind\s+(?:-[HLP]\s+)*(?:/|/[a-zA-Z]/?|[A-Za-z]:[\\/]?)(?=\s|$|["\'])'),
@@ -194,8 +198,8 @@ def check(event, ctx, text, cwd, role, parsed):
         where = cwd_at(parsed, m.start(), cwd)
         if rule in main_rules and not main_like(ctx, where):
             continue
-        if rule == 'git-push-pmdata' and (rules.is_owner_session(event, ctx)
-                                          or not rules.pmdata_recorded(ctx, where or cwd)):
+        if rule == 'git-push-pmdata' and (rules.is_owner_session(event, ctx) or (
+                pat != XARGS_BARE_GIT and not rules.pmdata_recorded(ctx, where or cwd))):
             continue
         return answer(reread(m.start(), where or cwd), rule)
     held = None

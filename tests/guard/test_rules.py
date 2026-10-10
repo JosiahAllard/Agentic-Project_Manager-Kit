@@ -918,17 +918,16 @@ class PmDataNoVerify(unittest.TestCase):
         self.assertIsNone(self.decide('git push origin x', sub=False, environ=pm))     # literal
 
     XARGS = ("printf -- '--no-verify\\n' | xargs git push origin pmdata",
-             'echo push --no-verify origin pmdata | xargs git',
              'echo --no-verify | xargs -r git -C . push origin pmdata')
+    BARE_XARGS = ('echo push --no-verify origin pmdata | xargs git',)
 
     def test_git_push_run_by_xargs_is_denied(self):
         # xargs appends its input to git's arguments: --no-verify, or the subcommand itself
         pm = {context.ROLE_ENV: 'pm'}
-        for text in self.XARGS:
+        for text in self.XARGS + self.BARE_XARGS:
             with self.subTest(text):
                 d = self.decide(text, sub=False, environ=pm)
                 self.assert_denied(d)
-                self.assertIn('cannot judge a computed push word with PM data present', d.reason)
                 self.assertIsNotNone(self.decide(text))                     # a subagent
                 d = self.decide(text, sub=False)                            # the owner's own
                 self.assertNotEqual(d and d.rule, 'git-push-pmdata')
@@ -938,14 +937,36 @@ class PmDataNoVerify(unittest.TestCase):
         # xargs running another git subcommand is not a push
         self.assertIsNone(self.decide('echo a.txt | xargs git add --', sub=False, environ=pm))
 
+    def test_a_bare_xargs_git_is_denied_wherever_it_runs(self):
+        # the input may name another repository (-C, --git-dir) and the subcommand: from a folder
+        # with no record (no checkout at all here) the guard still cannot tell, so it denies
+        pm = {context.ROLE_ENV: 'pm'}
+        main = W.fwd(self.w.main)
+        for text in ("printf '%%s\\n' -C %s push --no-verify origin pmdata | xargs git" % main,
+                     "printf '%%s\\n' --git-dir=%s/.git push --no-verify origin pmdata | xargs git" % main,
+                     'echo push --no-verify origin pmdata | xargs git'):
+            for cwd in (self.w.plain, self.w.wt):
+                with self.subTest(text, cwd=cwd):
+                    d = self.decide(text, sub=False, environ=pm, cwd=cwd)
+                    self.assert_denied(d, 'git -C "<checkout>" <subcommand> <arguments>')
+                    self.assertIn('cannot tell which repository or command xargs will run git with', d.reason)
+                    self.assertIsNotNone(self.decide(text, cwd=cwd))        # a subagent
+                    d = self.decide(text, sub=False, cwd=cwd)                # the owner's own
+                    self.assertNotEqual(d and d.rule, 'git-push-pmdata')
+        os.remove(self.record)                                              # machine-wide
+        self.assert_denied(self.decide(self.BARE_XARGS[0], sub=False, environ=pm, cwd=self.w.plain))
+        self.assert_denied(self.decide("echo 'x ; echo push | xargs git", sub=False, environ=pm, cwd=self.w.plain))
+        self.assertIsNone(self.decide("echo 'x ; echo push | xargs git", sub=False, cwd=self.w.plain))
+        self.assertIsNone(self.decide('echo a.txt | xargs git add --', sub=False, environ=pm, cwd=self.w.plain))
+
     def test_git_push_run_by_xargs_without_a_record_is_unchanged(self):
+        # with a literal subcommand the record of the repository decides
         os.remove(self.record)
         pm = {context.ROLE_ENV: 'pm'}
         for text in self.XARGS:
             with self.subTest(text):
                 d = self.decide(text, sub=False, environ=pm)
                 self.assertNotEqual(d and d.rule, 'git-push-pmdata')
-        self.assertIsNone(self.decide("echo 'x ; echo push | xargs git", sub=False, environ=pm))
 
     def test_a_computed_push_word_without_a_record_is_unchanged(self):
         os.remove(self.record)

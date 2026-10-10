@@ -2046,13 +2046,21 @@ def git_push_pmdata(event, ctx, gc, role):
     _short, longs, _pos = _opts('push', gc.rest)
     if not computed and 'no-verify' not in longs:
         return None
-    where = gc.dir
-    if where is None and xargs and gc.sub == '':
-        where = gc.inv.cmd.cwd              # xargs' input may name the place; judged where it runs
+    bare_xargs = xargs and gc.sub == ''
+    if bare_xargs and agent_session(event, ctx):
+        return None                         # the write jail denies it for them (git_jail_unknown)
+    # git with no subcommand run by xargs: the input names the repository (-C, --git-dir) and the
+    # command, so no record can be looked up for it: denied whatever the cwd holds (fail closed)
+    where = None if bare_xargs else gc.dir
     if not pmdata_recorded(ctx, where):     # None: the text cannot place it (recorded, fail closed)
         return None
+    if bare_xargs:
+        return refuse('git-push-pmdata', role, '`xargs git` takes its subcommand and repository from its input: the '
+                      'guard cannot tell which repository or command xargs will run git with, and a push with '
+                      '--no-verify would skip the pre-push hook that keeps PM data off public remotes. Run git '
+                      'with its subcommand written out:', 'git -C "<checkout>" <subcommand> <arguments>')
     if computed:
-        what = ('a git subcommand' if gc.sub_dyn or gc.sub == '' else
+        what = ('a git subcommand' if gc.sub_dyn else
                 'arguments xargs appends to `git push`' if xargs else 'a `git push` word')
         return refuse('git-push-pmdata', role, '`git %s %s` has %s computed at run time, and this repository has %s: '
                       'the guard cannot judge a computed push word with PM data present (it may be --no-verify, '
