@@ -11,6 +11,9 @@ each comes from this object, and a missing one is an error that says which key t
                       Unset: one account, "1", in the default folder ~/.claude
   orgs                {"<n>": config folder}: organization sign-ins (`--org n`)
   coordinator_agent   the agent file a coordinator session runs as; unset: coordinator
+  pm_resume_beside_desktop
+                      true: after-reboot resumes the PM session even while the desktop app or an
+                      unnamed Claude session runs (reboot.resume_pm); unset or false: it skips
 """
 import os
 import re
@@ -24,7 +27,7 @@ DEFAULT_ACCOUNTS = {'1': ['~/' + DEFAULT_FOLDER]}
 DEFAULT_COORDINATOR_AGENT = 'coordinator'
 _NUM = re.compile(r'^[1-9][0-9]?$')
 _AGENT = re.compile(r'^[A-Za-z0-9_-]+$')
-KNOWN = ('state_dir', 'repos', 'accounts', 'orgs', 'coordinator_agent')
+KNOWN = ('state_dir', 'repos', 'accounts', 'orgs', 'coordinator_agent', 'pm_resume_beside_desktop')
 
 
 class LaunchError(Exception):
@@ -88,6 +91,9 @@ def check(obj):
     ag = obj.get('coordinator_agent')
     if ag is not None and (not isinstance(ag, str) or not _AGENT.match(ag)):
         errs.append('launcher.coordinator_agent must be an agent name, not %r' % (ag,))
+    pr = obj.get('pm_resume_beside_desktop')
+    if pr is not None and not isinstance(pr, bool):
+        errs.append('launcher.pm_resume_beside_desktop must be true or false, not %r' % (pr,))
     return errs
 
 
@@ -105,6 +111,7 @@ class Settings(object):
         self.accounts = {str(k): list(v) for k, v in (obj.get('accounts') or DEFAULT_ACCOUNTS).items()}
         self.orgs = {str(k): v for k, v in (obj.get('orgs') or {}).items()}
         self.coordinator_agent = obj.get('coordinator_agent') or DEFAULT_COORDINATOR_AGENT
+        self.pm_resume_beside_desktop = obj.get('pm_resume_beside_desktop') is True
 
     def expand(self, folder):
         """A configured folder made absolute: ~ is the home folder."""

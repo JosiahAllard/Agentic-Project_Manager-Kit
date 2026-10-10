@@ -93,18 +93,30 @@ class Stop(unittest.TestCase):
         self.refused('names the PM session', 'PM-Session', windowed('PM-Session'))
         self.refused('names the PM session', 'x-a1', windowed('x-a1'), successor='old project manager')
 
-    def test_a_failed_stop_log_write_is_said_on_stderr(self):
-        import io
-        from contextlib import redirect_stderr
+    def break_the_log(self):
         os.rmdir(self.h.state)
         open(self.h.state, 'w').close()                  # the state folder is a file: the log write fails
+
+    def test_a_failed_stop_log_write_goes_to_warn_and_the_library_prints_nothing(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        self.break_the_log()
         host = self.host(windowed('x-a1'))
-        err = io.StringIO()
-        with redirect_stderr(err):
-            out = stop.stop(self.h.settings, host, 'x-a1')
+        said, printed = [], io.StringIO()
+        with redirect_stderr(printed), redirect_stdout(printed):
+            out = stop.stop(self.h.settings, host, 'x-a1', warn=said.append)
         self.assertEqual(len(host.killed), 3)
+        self.assertEqual(len(out), 1)
         self.assertTrue(out[0].startswith("stopped 'x-a1'"))
-        self.assertIn('launch.py stop: could not write stop.log', err.getvalue())
+        self.assertEqual(len(said), 1)
+        self.assertTrue(said[0].startswith('could not write stop.log: '), said)
+        self.assertEqual(printed.getvalue(), '')
+
+    def test_without_warn_a_failed_log_write_is_the_last_line(self):
+        self.break_the_log()
+        out = stop.stop(self.h.settings, self.host(windowed('x-a1')), 'x-a1')
+        self.assertEqual(len(out), 2)
+        self.assertTrue(out[1].startswith('could not write stop.log: '), out)
 
     def test_pid_picks_one_of_several(self):
         host = self.host(windowed('x-a1') + [session(11, 'x-a1', parent=0)])
@@ -120,6 +132,14 @@ class Stop(unittest.TestCase):
         self.h.write_state('conductors.json', {'pm_session_id': '<the PM session id>'})
         host = self.host(procs)
         stop.stop(self.h.settings, host, 'x-a1', dry_run=True)
+
+    def test_a_pm_session_id_that_is_not_a_string_counts_as_unset(self):
+        for value in (None, 12345, ['sid-1']):
+            self.h.write_state('conductors.json', {'pm_session_id': value})
+            host = self.host(windowed('x-a1'))
+            out = stop.stop(self.h.settings, host, 'x-a1')
+            self.assertEqual(host.killed, [(10, 1010), (20, 1020), (30, 1030)], value)
+            self.assertTrue(out[0].startswith("stopped 'x-a1'"), out)
 
 
 if __name__ == '__main__':

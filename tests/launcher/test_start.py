@@ -392,6 +392,7 @@ class Start(Base):
         out = self.go()
         for line in ('if (-not (Test-Path %s)) { New-Item -ItemType Directory -Force %s | Out-Null }'
                      % (window.q(temp), window.q(temp)),
+                     '$env:AGENT_TEMP = %s' % window.q(temp),
                      '$env:TEMP = %s' % window.q(temp), '$env:TMP = %s' % window.q(temp)):
             self.assertIn(line, out)
         self.assertLess(out.index('$env:TMP'), out.index('Set-Location'))

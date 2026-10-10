@@ -82,6 +82,15 @@ class Pick(unittest.TestCase):
         self.assertEqual(A.pick(h.settings, NOW)[0], '2')
         self.assertEqual([r[0] for r in A.pick(h.settings, NOW)[1]], ['1', '2'])
 
+    def test_a_fraction_rounds_as_powershell_did(self):
+        h = Home(self, accounts=('1', '2'))
+        h.usage('1', week=(94.6, NOW + DAY))         # rounds to 95: at the limit, passed over
+        h.usage('2', week=(10, NOW + 2 * DAY))
+        n, rows = A.pick(h.settings, NOW)
+        self.assertEqual([r[:2] for r in rows], [('1', 95), ('2', 10)])
+        self.assertEqual(n, '2')
+        self.assertEqual([A.whole(v) for v in (94.4, 94.5, 95.5, None)], [94, 94, 96, 0])
+
     def test_no_signed_in_account_is_an_error(self):
         h = Home(self, accounts=('1',), signed_out=('1',))
         with self.assertRaisesRegex(A.LaunchError, 'No account in launcher.accounts is signed in'):
@@ -102,6 +111,18 @@ class Usage(unittest.TestCase):
         self.assertEqual(lines[4], 'account codex: no usage data')
         self.assertEqual(pmwatch.parse_usage('\n'.join(lines)),
                          {'1': {'five': 12, 'week': 51}, '2': {'five': 0, 'week': 30}})
+
+
+    def test_the_codex_week_rounds_as_powershell_did(self):
+        h = Home(self)
+        d = os.path.join(h.root, '.codex', 'sessions', '2026')
+        os.makedirs(d)
+        reset = int((NOW + DAY).timestamp())
+        with open(os.path.join(d, 'a.jsonl'), 'w', encoding='utf-8') as f:
+            f.write('{"primary":{"used_percent":94.6,"window_minutes":10080,"resets_at":%d}}\n' % reset)
+        line = usage.codex_line(h.root, NOW)
+        self.assertTrue(line.startswith('account codex: five_hour=reset  seven_day=95% (resets '), line)
+        self.assertEqual(pmwatch.parse_usage(line), {'codex': {'five': 0, 'week': 95}})
 
 
 class ParseTime(unittest.TestCase):

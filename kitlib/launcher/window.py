@@ -9,7 +9,8 @@
      CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1;
   4. PM_KIT_ROLE, the session mark (kitlib.sessionmark; role_for), and PM_KIT_SESSION_NAME;
   5. CLAUDE_CONFIG_DIR for the account (removed for the default folder);
-  6. TEMP and TMP from AGENT_TEMP, when that is set;
+  6. AGENT_TEMP set again, and TEMP and TMP pointed at it, when the launcher sees one (a session
+     whose guard allows scratch writes only there finds all three; the PM resume too);
   7. the start folder, then `claude ... --permission-mode auto --remote-control '<name>' -n '<name>' '<prompt>'`
      (a resume: `claude --resume '<id>' --remote-control ...`).
 Every value is single-quoted with quotes doubled. `open_window` starts it minimized and unfocused:
@@ -89,6 +90,7 @@ def script(name, role, folder, command, config_dir=None, agent_temp=None):
     if agent_temp:
         lines += ['if (-not (Test-Path %s)) { New-Item -ItemType Directory -Force %s | Out-Null }'
                   % (q(agent_temp), q(agent_temp)),
+                  '$env:AGENT_TEMP = %s' % q(agent_temp),
                   '$env:TEMP = %s' % q(agent_temp), '$env:TMP = %s' % q(agent_temp)]
     lines += ['Set-Location %s' % q(folder), command]
     return '; '.join(lines)
