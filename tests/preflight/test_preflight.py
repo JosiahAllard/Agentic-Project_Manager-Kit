@@ -443,7 +443,7 @@ class TheLeftoversLine(Fixture):
 
 
 class TheNextBlock(Fixture):
-    """A repository's TOOLS-ADOPTION (moved): the `next` block prints the kit commands with
+    """The `next` block prints the kit commands with
     this session's values, so agents run the kit tools instead of improvising."""
 
     def worktree(self, base_ahead):

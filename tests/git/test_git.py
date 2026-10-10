@@ -331,7 +331,7 @@ class RefsTest(RepoFixture):
 
 
 class AKilledGitIsNoAncestryAnswer(RepoFixture):
-    """KIT-TEST-GRANDCHILD-SHIELD: a git ended from outside (a stale `taskkill /PID <n> /T /F`
+    """A git ended from outside (a stale `taskkill /PID <n> /T /F`
     that reached a reused pid, kitlib.proc.shield's GOTCHA) exits 1 having printed nothing, the
     shape `merge-base --is-ancestor` gives for NO. refs.is_ancestor must give no answer for it,
     never a NO git did not say. The pair asked is a real NO (feature is not in initial), so an

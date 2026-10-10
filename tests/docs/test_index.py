@@ -264,8 +264,7 @@ class RepoCase(unittest.TestCase):
 
 
 class IndexCheck(RepoCase):
-    """The index check reads every tracked .md at `head` with ONE `git cat-file --batch`
-    (TOOLS-GIT-BATCH)."""
+    """The index check reads every tracked .md at `head` with ONE `git cat-file --batch`."""
 
     def add_docs(self, first, n):
         for i in range(first, first + n):
@@ -459,7 +458,7 @@ class StaleReportMissingRefs(RepoCase):
 
 
 class ProxyCheckCase(RepoCase):
-    """A repo with an index and one state doc on main, for the PROXY-CHECK-UNLABELLED tests."""
+    """A repo with an index and one state doc on main, for the labelled-listing tests."""
 
     def build(self):
         self.write('.kit.json', json.dumps({'doc_budget': {'state_docs': ['docs/STATE.md']}}))
@@ -470,7 +469,7 @@ class ProxyCheckCase(RepoCase):
 
 
 class ProxyCheckLabels(ProxyCheckCase):
-    """PROXY-CHECK-UNLABELLED: every listing-based mode says which tree it read, and
+    """Every listing-based mode says which tree it read, and
     nothing it was asked to read is skipped in silence."""
 
     def test_the_ok_line_names_the_ref_and_the_md_count(self):
@@ -531,7 +530,7 @@ class ProxyCheckLabels(ProxyCheckCase):
 
 @real_git('git blame')
 class ProxyCheckBlame(ProxyCheckCase):
-    """PROXY-CHECK-UNLABELLED, the stale report: it blames the listed head."""
+    """The stale report: it blames the listed head."""
 
     def test_stale_blames_the_listed_head_and_names_it_on_the_summary(self):
         self.r.git('checkout', '-q', '-b', 'side')

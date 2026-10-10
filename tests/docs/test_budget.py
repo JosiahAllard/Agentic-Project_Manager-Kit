@@ -195,7 +195,7 @@ class BudgetFor(unittest.TestCase):
                            '.claude/coordinator-profile.md': 8704}}
         self.assertEqual(budget.config_errors(cfg), [])
         self.assertEqual(budget.budget_for(cfg, 'CLAUDE.md'), 11264)
-        for path in ('docs/reference/API_PLAN.md', 'docs/ops/gotchas.md', 'docs/backlog/ABC-001.md'):
+        for path in ('docs/reference/API_PLAN.md', 'docs/ops/gotchas.md', 'docs/backlog/EX-001.md'):
             self.assertIsNone(budget.budget_for(cfg, path))
 
 
@@ -210,7 +210,7 @@ class KitBudgetFor(unittest.TestCase):
         self.assertEqual(budget.budget_for(self.cfg(), 'docs/architecture.md'), 40960)
 
     def test_a_path_under_an_uncapped_dir_is_uncapped(self):
-        self.assertIsNone(budget.budget_for(self.cfg(), 'docs/backlog/ABC-001.md'))
+        self.assertIsNone(budget.budget_for(self.cfg(), 'docs/backlog/EX-001.md'))
 
     def test_a_sibling_path_that_only_shares_the_prefix_string_is_not_uncapped(self):
         self.assertEqual(budget.budget_for(self.cfg(), 'docs/backlog-notes.md'), 40960)
@@ -218,7 +218,7 @@ class KitBudgetFor(unittest.TestCase):
     def test_an_explicit_entry_under_the_uncapped_dir_still_wins(self):
         cfg = self.cfg(budgets={'docs/backlog/DESIGN.md': 4096})
         self.assertEqual(budget.budget_for(cfg, 'docs/backlog/DESIGN.md'), 4096)
-        self.assertIsNone(budget.budget_for(cfg, 'docs/backlog/ABC-001.md'))
+        self.assertIsNone(budget.budget_for(cfg, 'docs/backlog/EX-001.md'))
 
     def test_no_uncapped_dirs_configured_is_fine(self):
         self.assertEqual(budget.budget_for({'default': 100, 'budgets': {}}, 'x/y.md'), 100)
@@ -839,7 +839,7 @@ class UncappedDirsRepo(RepoCase):
 
     def test_one_item_file_far_over_default_passes(self):
         self.new_branch_on_top_of_index()
-        self.size('docs/backlog/ABC-001.md', 60000)
+        self.size('docs/backlog/EX-001.md', 60000)
         code, out = self.run_budget('--base', 'master', '--head', 'branch-a')
         self.assertEqual(code, 0, out)
 
@@ -935,7 +935,7 @@ class UncappedDirs(KitRepo):
 
     def test_one_item_file_far_over_default_passes(self):
         self.new_branch_on_top_of_index()
-        self.size('docs/backlog/ABC-001.md', 60000)
+        self.size('docs/backlog/EX-001.md', 60000)
         code, out = self.run_budget('--base', 'master', '--head', 'branch-a')
         self.assertEqual(code, 0, out)
 

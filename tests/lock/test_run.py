@@ -99,7 +99,7 @@ class Slot(StoreCase):
         self.assertEqual((self.store.read("queue.json") or {}).get("entries", []), [])
 
     def test_a_held_runs_record_carries_the_installed_tools_layout_key(self):
-        # KIT-LOCK-LAYOUT-KEY-MISMATCH: the installed PM-kit machine_lock.py refuses every run
+        # The installed PM-kit machine_lock.py refuses every run
         # while a live record's `layout` is not its own key. On this store's machine (24 threads,
         # SMT 2, one card) that key is the string below (lay.slot_key), not layout_key's.
         self.confine(1)

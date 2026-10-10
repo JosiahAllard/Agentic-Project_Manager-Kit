@@ -374,8 +374,8 @@ class Abandon(RemoveCase):
 
 
 class NoAncestryAnswer(RemoveCase):
-    """kitlib.git.refs.is_ancestor gives no answer (None) for a git ended from outside
-    (KIT-TEST-GRANDCHILD-SHIELD), where `merge-base --is-ancestor` gave exit 1, a NO. Every verb
+    """kitlib.git.refs.is_ancestor gives no answer (None) for a git ended from outside,
+    where `merge-base --is-ancestor` gave exit 1, a NO. Every verb
     refuses on no answer and changes nothing: an abandon must not tag and remove work it was told,
     by a killed git, has not landed."""
 
