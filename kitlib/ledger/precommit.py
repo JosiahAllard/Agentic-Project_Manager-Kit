@@ -7,10 +7,11 @@ itself (the front end reads no section file); otherwise nothing runs.
 
 Opted in, the check judges only a commit that changes the ledger file the machine config's
 `ledger_path` names, or the standing digest beside it (kitlib.ledger.standing.path_beside): any
-other commit passes after one `git diff --cached`. Such a commit is refused when either the ledger
-or the digest (whichever was staged) has unstaged changes (`tools/ledger.py check` reads the working
-files of both, so both must be what the commit holds), and otherwise runs `tools/ledger.py check --base HEAD` (well formed,
-append-only, standing digest); a failure refuses the commit.
+other commit passes after one `git diff --cached`. Such a commit is refused when either file has
+unstaged changes, whichever of them was staged (`tools/ledger.py check` reads the working files of
+both, so both must be what the commit holds); otherwise it runs
+`tools/ledger.py check --base HEAD` (well formed, append-only, standing digest), and a failure
+refuses the commit.
 
 Fails closed, opted in: a `.kit.json` the kit cannot load whose text names `pre_commit_check`, a
 machine config that cannot be read or sets no `ledger_path`, and git or the check not running all
