@@ -249,6 +249,15 @@ class RetiredKeyTest(TreeCase):
         self.assertNotIn('retired_docs', cfg.section('backlog'))
         self.assertNotIn('rename_script', cfg.section('backlog'))
 
+    def test_a_retired_key_in_a_backlog_section_file_loads_without_it(self):
+        cfg = self.load({'backlog': 'b.json'},
+                        {'b.json': {'phases': ['L0'], 'retired_docs': ['docs/D.md'],
+                                    'rename_script': 'tools/r.py'}})
+        self.assertEqual(cfg.section_file('backlog'), 'b.json')
+        self.assertEqual(cfg.section('backlog')['phases'], ['L0'])
+        self.assertNotIn('retired_docs', cfg.section('backlog'))
+        self.assertNotIn('rename_script', cfg.section('backlog'))
+
     def test_a_retired_key_is_not_a_schema_field(self):
         from kitlib.config import schema
         self.assertNotIn('retired_docs', schema.SECTIONS['backlog'])
