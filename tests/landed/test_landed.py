@@ -198,6 +198,17 @@ class Containment(Fixture):
                       'read', out)
         self.assertNotIn('LANDED', out)
 
+    def test_a_misnamed_remote_cannot_answer_and_names_the_remotes_there_are(self):
+        """`remote get-url origin` exits 2 (no such remote) while the clone has `upstream`: the
+        configured remote is misnamed, so the local main, which holds an unpushed merge, must
+        not decide (kitlib/backlog/store.py find_remote's rule)."""
+        self.land_locally()
+        self.git('remote', 'rename', 'origin', 'upstream')
+        code, out = self.look()
+        self.assertEqual(code, landed.CANNOT, out)
+        self.assertIn('there is no remote `origin`, but this clone has upstream', out)
+        self.assertNotIn('LANDED', out)
+
     def test_a_killed_ancestry_read_is_unknown_never_no(self):
         """refs.is_ancestor's None (a kill) was `bool()`-ed into "contained  no"."""
         self.land_locally()
