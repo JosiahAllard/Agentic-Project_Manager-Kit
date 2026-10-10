@@ -140,7 +140,7 @@ including `land.py` and `ledger.py`. The tools in the list below run by the kit'
 tracked file); without one it refuses (docs/backlog.md).
 
 The rulings ledger is once per machine: set `ledger_path` (and optionally `ledger_repos`) in
-`~/.claude-pm-kit/config.json`. The first `tools/ledger.py add` creates the file from
+the machine config (docs/kit-json.md "Machine config keys"). The first `tools/ledger.py add` creates the file from
 `templates/common/LEDGER.md` (docs/ledger.md "A new ledger").
 
 ## Stubs: tools/kit_stubs.py

@@ -137,7 +137,7 @@ class DocTest(unittest.TestCase):
         self.assertEqual(self.field_lines().get('`.kit.json` keys'), schema.doc_lines())
 
     def test_the_machine_config_section_is_its_schema(self):
-        self.assertEqual(self.field_lines().get('`~/.claude-pm-kit/config.json` keys'), user.doc_lines())
+        self.assertEqual(self.field_lines().get('Machine config keys'), user.doc_lines())
 
     def test_every_schema_section_is_documented(self):
         lines = '\n'.join(schema.doc_lines())

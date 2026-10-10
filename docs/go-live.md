@@ -27,7 +27,7 @@ The code is on kit main except the lines marked unbuilt.
 
 ## Machine config keys from the generic pass
 
-These keys in `~/.claude-pm-kit/config.json` carry the install's names, paths and ledger ids (docs/kit-json.md "`~/.claude-pm-kit/config.json` keys"). Set each before the hooks and tests go live:
+These keys in the machine config carry the install's names, paths and ledger ids (docs/kit-json.md "Machine config keys"). Set each before the hooks and tests go live:
 
 1. `scrub_patterns`: the install's repository, owner and account names, one case-insensitive regex each. Until set, the shipped-text scrub (tests/shipped.py, tests/agents/test_agents.py) checks only ruling ids and user and machine paths, and passes. tests/scrub/test_generic.py also reads it, with the names it derives from `pm_start` and `coordinator_start`, and prints "scrub_patterns is not set" while it is unset.
 2. `standing_delegation`: the ledger id of the standing delegation. Unset, the backlog refuses no id as the standing delegation.
@@ -42,7 +42,7 @@ These keys in `~/.claude-pm-kit/config.json` carry the install's names, paths an
 - worktree_remove.py and worktree_sweep_task.py (docs/worktree-remove.md): the owner registers the nightly sweep (Ported repo tools).
 - PM docs/machine-lock.md: add the line on docker exec runs that hold no gpu slot (docs/lock-api.md "Runs").
 - Lock MCP owner writes: the mark is built (kitlib/sessionmark.py, docs/guard.md "Session mark") and guard.py and the lock MCP server read it. The kit launcher (`tools/launch.py`, docs/launcher.md "The window") marks every session it starts: coordinator, deep-worker, consultant, pm, plain. Live with the Launcher switch above. Until then those sessions count as the owner's own, and owner writes through MCP come back forbidden because api.who sees claude.exe as the caller.
-- Lock MCP tool names (mcp__plugin_claude-pm-kit_machine-lock__*): no real PreToolUse payload captured. After the plugin install, read one and set `guard_mcp_prefix` and `guard_mcp_tools` if the names differ (docs/guard.md "Lock MCP").
+- Lock MCP tool names (the Claude plugin's MCP prefix, `kitlib.lockmcp.claude_tool_prefix()`): no real PreToolUse payload captured. After the plugin install, read one and set `guard_mcp_prefix` and `guard_mcp_tools` if the names differ (docs/guard.md "Lock MCP").
 - Pre-push non-fast-forward refusal (kitlib/guard/prepush.py; docs/guard.md "Pre-push"): refuses a non-ff push or delete of main wherever the hook is installed. A repo's own pre-push is deleted only once the kit's hook is on there.
 - Owner-only paths (docs/guard.md "Owner-only commits"): the author email can be forged.
 - Owner identity rule (docs/guard.md "Rules"): live with the guard. Open: an identity in the inherited environment.
@@ -143,6 +143,6 @@ The agent, skill, hook module, profile file name and prose say coordinator. Thes
 
 - Launcher: the old `start-conductor.ps1` passes `--agent conductor` and sets `PM_KIT_ROLE` to `conductor`; the kit's `launch.py` runs `launcher.coordinator_agent` (set it to `conductor` until the rename) and always marks it `coordinator`. The session names still say conductor (`kitlib.coordinatorstart` accepts both roles; `kitlib.guard.rules.AGENT_MARKS` holds both marks; `optional/procwatch/procwatch.py` matches both agent names).
 - `~/.claude/settings.json`: the SessionStart command still calls the old-path stub `hooks/conductor_session_start.py`; point it at `claude/hooks/coordinator_session_start.py`, then delete the stub and `tests/oldpaths`' conductor cases.
-- `~/.claude-pm-kit/config.json`: key `conductor_start` becomes `coordinator_start` (read as a fallback; the new key wins); then drop the `conductor_start` field in `kitlib/config/user.py`, `LEGACY_KEY` and `LEGACY_ROLE` in `kitlib/coordinatorstart`, and the `conductor` entry in `AGENT_MARKS`.
+- The machine config: key `conductor_start` becomes `coordinator_start` (read as a fallback; the new key wins); then drop the `conductor_start` field in `kitlib/config/user.py`, `LEGACY_KEY` and `LEGACY_ROLE` in `kitlib/coordinatorstart`, and the `conductor` entry in `AGENT_MARKS`.
 - Each repo: `.claude/conductor-profile.md` becomes `.claude/coordinator-profile.md` (also in each repo's doc-budget `capped` list), `docs/ops/conductor-runbook.md` becomes `coordinator-runbook.md`, and the owner-only CLAUDE.md and `.claude` files lose the word.
 - Installed copies: `~/.claude/agents/conductor.md` (replaced by the plugin's coordinator.md), `~/.claude/tools/usage/conductor_profile.py` and its test, the `conductor-dispatch` skill, `~/.claude/conductor-profile.TEMPLATE.md`.

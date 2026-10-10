@@ -1,6 +1,6 @@
 # The rulings ledger
 
-One append-only file holds the owner's rulings for every repository on the machine. It is the file the machine config's `ledger_path` names (docs/kit-json.md "`~/.claude-pm-kit/config.json` keys"); no flag or environment variable names another. Entry point `tools/ledger.py`; logic `kitlib/ledger` (`read` the one reader, `fmt` the format, `write` the writes, `vcs` the git, `orphans` the orphan scan, `standing` the standing digest, `precommit` the opt-in hook); tests `tests/ledger`. Ported from the PM repository's writer.
+One append-only file holds the owner's rulings for every repository on the machine. It is the file the machine config's `ledger_path` names (docs/kit-json.md "Machine config keys"); no flag or environment variable names another. Entry point `tools/ledger.py`; logic `kitlib/ledger` (`read` the one reader, `fmt` the format, `write` the writes, `vcs` the git, `orphans` the orphan scan, `standing` the standing digest, `precommit` the opt-in hook); tests `tests/ledger`. Ported from the PM repository's writer.
 
 ## Format
 
@@ -54,7 +54,7 @@ python tools/ledger_refs.py R-nnnn [R-nnnn ...] | --from-json FILE [FILE ...]
 
 ## Configuration
 
-The keys are in `~/.claude-pm-kit/config.json`:
+The keys are in the machine config (docs/kit-json.md "Machine config keys"):
 
 - `ledger_path` (absolute): the ledger file.
 - `ledger_repos`: the repo columns `add --repo` accepts, besides `all`. A name outside the list is a usage error, and `check` reports an entry with one. Unset, any lower-case name is accepted.

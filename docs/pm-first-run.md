@@ -22,10 +22,10 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    knowledge").
    Success: `ListSkills` shows each skill named in docs/shipping.md once.
 
-4. **Write the user config.** Create `<home>/.claude-pm-kit/config.json` holding a JSON object,
+4. **Write the user config.** Create `<config-dir>/config.json` (docs/kit-json.md "Machine config keys") holding a JSON object,
    with `ledger_path` set to the file for the owner's rulings (docs/ledger.md). It must be an
    absolute path; in JSON write Windows paths with `/` or `\\`.
-   Success: `python -c "import json,os;json.load(open(os.path.expanduser('~/.claude-pm-kit/config.json')))"`
+   Success: `python -c "from kitlib.config import user;user.user_config()"`, run in `<kit>`,
    prints nothing. When the owner gives the first ruling, `python <kit>/tools/ledger.py add`
    creates the ledger and prints the new ruling's id.
 

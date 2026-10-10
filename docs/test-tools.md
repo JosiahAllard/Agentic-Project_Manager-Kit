@@ -24,10 +24,10 @@ The tables are read from "tool_tests": `extra`, `pinned`, `patterns`, `whole_tre
 
 ## kit_tests
 
-`tools/kit_tests.py` (kitlib/tooldeps/selftree.py) runs the kit's own suite, whole or only the test packages a branch's change can reach. Kit build agents run their branch with `--select`, and kit landings gate with `--select` too; `--full` runs the whole suite by hand. `gate.py --full` and `daily_full.py` run the whole suite once the kit-suite gate step has a `full_cmd` running `--full` (docs/gate.md "Steps") and `daily_full` is enabled in `.kit.json`; the owner schedules daily_full.py. Wrap either in the machine lock, booking 4 cores (8 logical processors, so 8 modules at once):
+`tools/kit_tests.py` (kitlib/tooldeps/selftree.py) runs the kit's own suite, whole or only the test packages a branch's change can reach. Kit build agents run their branch with `--select`, and kit landings gate with `--select` too; `--full` runs the whole suite by hand. `gate.py --full` and `daily_full.py` run the whole suite once the kit-suite gate step has a `full_cmd` running `--full` (docs/gate.md "Steps") and `daily_full` is enabled in `.kit.json`; the owner schedules daily_full.py. Wrap either in the machine lock, booking 4 cores (8 logical processors, so 8 modules at once); `<repo>` is `repo.name` in `.kit.json`:
 
 ```
-python ~/.claude/tools/machine_lock/machine_lock.py run --repo Agentic-Project_Manager-Kit --slug <slug> --lock --kind engine-test --cores 4 -- python tools/kit_tests.py --select
+python ~/.claude/tools/machine_lock/machine_lock.py run --repo <repo> --slug <slug> --lock --kind engine-test --cores 4 -- python tools/kit_tests.py --select
 ```
 
 - `--select` diffs against the merge-base with `--base` (default: gate.md "Default base"), the work tree and untracked files included. `--changed PATH ...` takes the list instead.

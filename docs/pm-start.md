@@ -22,7 +22,7 @@ no git config and never rebases, resets or forces. The checks are a point in tim
 
 ## Config
 
-`~/.claude-pm-kit/config.json`, key `pm_start`; without it the checklist says it is skipped.
+The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; without it the checklist says it is skipped.
 `<home>`, `<pm-repo>` and `<kit>` stand for absolute paths.
 
 ```json
@@ -32,7 +32,7 @@ no git config and never rebases, resets or forces. The checks are a point in tim
   "pm_watch_cmd": "python -u <kit>/tools/pm_watch.py",
   "memory_dir": "<home>/.claude/projects/<project>/memory",
   "handoff_glob": "pm-handoff-*.md",
-  "reminders_file": "<home>/.claude-pm-kit/reminders.json",
+  "reminders_file": "<config-dir>/reminders.json",
   "sessions_file": "<launcher state_dir>/sessions.json",
   "eng_review": ["SCRIPT-API-*"]
 }}

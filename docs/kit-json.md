@@ -133,9 +133,9 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `worktree_remove.archive_next_free` (bool, default false): archive under the next free name
 - `worktree_remove.branch_template` (a branch name holding {slug} once): branch name for a slug
 
-## `~/.claude-pm-kit/config.json` keys
+## Machine config keys
 
-The machine's own settings, read by `kitlib.config.user`. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config.
+The machine's own settings, read by `kitlib.config.user`: `config.json` in the folder `kitlib.config.user.DIR_NAME` names under the home folder (`config_dir()`); `python -c "from kitlib.config import user; print(user.config_file())"`, run in the kit, prints the path. Messages name it as `user.DISPLAY`, and this page and the others write `<config-dir>` for that folder. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config.
 
 - `ledger_path` (absolute path): the rulings ledger file; set here only
 - `ledger_repos` (list of a lower-case repo name): the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)
