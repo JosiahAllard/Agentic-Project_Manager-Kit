@@ -18,6 +18,8 @@ from tests.scrub.test_scrub import read_text, tracked_files
 # (path glob, class, text the line contains, why): permanent exceptions.
 ALLOWED = (
     ('kitlib/git/fake/wtcmds.py', 'pinned-hash', 'abc1234', 'an invented hash in the fake git'),
+    ('tests/scrub/test_builtin.py', 'record-id', "('record-id', 'tests/backloglint/fixtures/",
+     'a PENDING_FIXTURES key names a fixture file; stale once the fixtures work renames them'),
 )
 
 # Today's hits, by the work that removes them.
