@@ -31,7 +31,7 @@ class FakeSnap(object):
 class LedgerName(unittest.TestCase):
 
     def test_ledger_repo_wins_over_the_repo_name(self):
-        self.assertEqual(lmod.ledger_name(FakeConfig('PM', 'project-manager')), 'pm')
+        self.assertEqual(lmod.ledger_name(FakeConfig('PM', 'some-folder')), 'pm')
 
     def test_the_repo_name_when_ledger_repo_is_unset(self):
         self.assertEqual(lmod.ledger_name(FakeConfig(None, 'Kit')), 'kit')

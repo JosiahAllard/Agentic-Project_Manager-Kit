@@ -30,8 +30,8 @@ NAME_KEYS = ('backlog.ledger_repo', 'repo.name')
 
 def ledger_name(cfg):
     """The ledger repo column that rules in the repository `cfg` was read from, lower-cased:
-    `backlog.ledger_repo`, else `repo.name`, else ''. Never the folder name: a folder named
-    `project-manager` whose ledger column is `pm` would silently rule nothing."""
+    `backlog.ledger_repo`, else `repo.name`, else ''. Never the folder name: a folder whose name
+    differs from its ledger column would silently rule nothing."""
     return (cfg.section('backlog')['ledger_repo'] or cfg.repo.get('name') or '').lower()
 
 
