@@ -24,8 +24,21 @@ def is_sha(text):
     return isinstance(text, str) and bool(SHA_RE.fullmatch(text))
 
 
-def resolve(rev, cwd, peel='commit'):
+NO_SUCH_REV = 'fatal: Needed a single revision'      # `rev-parse --verify`'s whole stderr for one
+
+
+def resolve(rev, cwd, peel='commit', known=False):
     """`(full hash, None)` of `rev` peeled to `peel` (commit, tree; None: no peel), or `(None, why)`.
+
+    `known=False` (the default): `(None, '<rev> does not name a <peel>')` when git answers that
+    `rev` names nothing, and `(None, why)` with another why when git gives no answer. `known=True`:
+    `('', None)` for the first, so a caller can tell "no such rev" from "git cannot tell" without
+    reading the why.
+
+    GOTCHA: KIT-GIT-EXIT1-ANSWERS - `rev-parse --verify --quiet` said "no such rev" as exit 1 with
+    no output, a killed git's shape (KILLED_SHAPE), so a kill read as "no such rev". The question
+    is asked without --quiet: "no such rev" is exit 128 with NO_SUCH_REV alone on stderr, and
+    anything else that is not exit 0 with a hash is no answer.
 
     In a test process (kitlib.git.cache.enable) a full hash's answer is kept: an object never
     changes what it is. Only a found answer of the same length is kept (a 40-digit name in a sha256
@@ -41,15 +54,17 @@ def resolve(rev, cwd, peel='commit'):
     if kept:
         return kept, None
     gen = cache.generation()
-    r = cmd.call(['rev-parse', '--verify', '--quiet', spec], cwd)
-    out = cmd.text(r.out).strip() if r.rc == 0 else ''
-    if out:
+    r = cmd.call(['rev-parse', '--verify', spec], cwd)
+    if r.rc is None:
+        return None, r.err
+    out = cmd.text(r.out).strip()
+    if r.rc == 0 and out:
         if len(out) == len(rev):
             cache.put(key, gen, out)
         return out, None
-    if r.rc is None or r.err:
-        return None, r.err or 'git rev-parse exited %s' % r.rc
-    return None, '%s does not name a %s' % (rev, peel or 'object')
+    if r.rc == 128 and not out and r.err == NO_SUCH_REV:
+        return ('', None) if known else (None, '%s does not name a %s' % (rev, peel or 'object'))
+    return None, _failed('rev-parse --verify %s' % spec, r, out)
 
 
 def head(cwd):

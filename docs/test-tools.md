@@ -190,8 +190,9 @@ Other reads whose "no" was exit 1 with no output now ask in a form that exits 0 
 - `refs.current_branch` asks `branch --show-current`, which prints nothing on a detached HEAD.
 - `refs.merge_base` confirms a "no common commit" by comparing the root commits each side reaches (`rev-list --max-parents=0`).
 - kitlib/pmdata/init.py reads config with `config --list -z` and filters it in Python.
+- `refs.resolve` asks `rev-parse --verify` without `--quiet`, so "no such rev" is exit 128 with `refs.NO_SUCH_REV` alone on stderr, and a silent exit 1 is no answer. By default both still return None, with different whys, so every caller's "missing" path is unchanged; `known=True` returns `('', None)` for "no such rev". kitlib/worktree/remove.py `tag_tip` and `branch_tip` use `known=True`: a killed tag read refuses the abandon ("cannot read tag") instead of taking the name for free.
 
-Reads that still take a quiet exit 1 as an answer include kitlib/guard/prepush.py (`config --get-regexp`, `rev-parse --quiet --verify`), kitlib/ledgerrefs `git grep`, kitlib/worktree/remove.py `tag_tip` and `branch_tip`, and `refs.resolve`, whose None does not tell a missing ref from a kill.
+Reads that still take a quiet exit 1 as an answer include kitlib/guard/prepush.py (`config --get-regexp`, `rev-parse --quiet --verify`), kitlib/ledgerrefs `git grep`, and the other `rev-parse --verify --quiet` reads (kitlib/backlog/landable.py, kitlib/syncbase, kitlib/worktree/new.py, kitlib/redfirst/run.py, kitlib/docs/budget.py, kitlib/reviewpack/trailers.py, kitlib/preflight/settings.py). The default-mode callers of `refs.resolve` still treat a no-answer None as "missing".
 
 ### What the hold costs
 
