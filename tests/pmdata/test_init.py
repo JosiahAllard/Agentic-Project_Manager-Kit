@@ -370,13 +370,39 @@ class ReviewFixTest(_Base):
         self.assertEqual(out.code, pminit.REFUSED, out.lines)
         self.assertIn('cannot read refs/heads/main', out.lines[0])
 
-    def test_an_adopt_that_fails_before_any_write_is_refused(self):
-        self.make_orphan()
-        with mock.patch.object(pmdata, 'write', side_effect=pmdata.PmDataError('disk full')):
-            out = self.init(adopt=True)
+    def test_a_failure_before_any_write_is_refused(self):
+        with mock.patch.object(pminit, '_empty_tree', side_effect=pminit._Failed('no tree')):
+            out = self.init()
         self.assertEqual(out.code, pminit.REFUSED, out.lines)
         self.assertIn('nothing was changed', out.lines)
         self.assertFalse(os.path.exists(self.data))
+
+    def test_a_failed_record_write_counts_as_a_write(self):
+        """Re-review 3: a write counts before it is tried, so its failure is PARTIAL."""
+        self.make_orphan()
+        with mock.patch.object(pmdata, 'write', side_effect=pmdata.PmDataError('disk full')):
+            out = self.init(adopt=True)
+        self.assertEqual(out.code, pminit.PARTIAL, out.lines)
+        self.assertNotIn('nothing was changed', out.lines)
+
+    def test_a_failed_branch_write_counts_as_a_write(self):
+        real = pminit._must
+
+        def must(cwd, *args, **kw):
+            if args[:1] == ('branch',):
+                raise pminit._Failed('git branch failed: lock held')
+            return real(cwd, *args, **kw)
+        with mock.patch.object(pminit, '_must', must):
+            out = self.init()
+        self.assertEqual(out.code, pminit.PARTIAL, out.lines)
+
+    def test_every_matching_insteadof_rule_is_compared(self):
+        """Re-review 1: two rules with the same prefix; the second names the public remote."""
+        harmless = os.path.join(self.repo.base, 'elsewhere.git')
+        self.repo.git('config', '--add', 'url.%s.insteadOf' % harmless, 'pub:')
+        self.repo.git('config', '--add', 'url.%s.insteadOf' % self.repo.remote, 'pub:')
+        out = self.refused(url='pub:')
+        self.assertIn('public', out.lines[0])
 
     def test_ctrl_c_reports_the_lines_made_so_far(self):
         with mock.patch.object(pminit, 'write_machine', side_effect=KeyboardInterrupt):
@@ -424,6 +450,13 @@ class CompareUrlTest(unittest.TestCase):
                          pminit.compare_url('https://github.com/org/kit'))
         self.assertEqual(pminit.compare_url('file:///c:/x/k.git'), pminit.compare_url('c:/x/k'))
         self.assertEqual(pminit.compare_url('C:/x/k'), 'c:/x/k')          # a drive is no host
+
+    def test_unc_paths_and_file_urls_of_a_share_compare_equal(self):
+        unc = pminit.compare_url('\\\\Server\\Share\\k.git')
+        self.assertEqual(unc, '//server/share/k')
+        self.assertEqual(pminit.compare_url('file://server/share/k.git'), unc)
+        self.assertEqual(pminit.compare_url('file:////server/share/k.git/'), unc)
+        self.assertEqual(pminit.compare_url('file://localhost/c:/x/k'), pminit.compare_url('c:/x/k'))
 
     def test_spellings_of_one_repository_compare_equal(self):
         same = ('https://github.com/Org/Kit.git', 'https://github.com/org/kit/',
@@ -481,6 +514,14 @@ class RealGitAdoptTest(_Base):
         recover = [l for l in out.lines if l.startswith('recover')]
         self.assertTrue(recover and 'git fetch private' in recover[0] and '--adopt' in recover[0],
                         out.lines)
+        steps = '\n'.join(out.lines)
+        for step in ('git worktree remove "%s"' % self.data, 'git branch -D pmdata',
+                     'delete %s' % pmdata.record_path(self.repo.common_dir()),
+                     'git fetch private refs/heads/pmdata:refs/heads/pmdata',
+                     'init --adopt --path "%s"' % self.data):
+            self.assertIn(os.path.normcase(step), os.path.normcase(steps))
+        self.assertIn('the tool does not', steps)
+        self.assertTrue(os.path.isdir(self.data))       # the tool ran none of them
         self.assertTrue(self.repo.git('rev-parse', '--verify', '-q', 'refs/heads/pmdata'))
         self.assertIsNotNone(pmdata.read(self.repo.common_dir()))
 

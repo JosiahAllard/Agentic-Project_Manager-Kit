@@ -110,11 +110,16 @@ def compare_url(url, base=None):
     """The form two remote urls are compared in: slashes forward, a trailing slash and `.git`
     trimmed (repeatedly), case folded. A `scheme://[user@]host[:port]/path` or `[user@]host:path`
     url becomes `host/path`, so the https and ssh spellings of one repository compare equal; a
-    `file://` url becomes its path; a relative path is taken from `base` (the checkout)."""
+    `file://` url becomes its path (`file://server/share/x` the UNC path `//server/share/x`, as
+    `\\\\server\\share\\x` is); a relative path is taken from `base` (the checkout)."""
     u = (url or '').strip().replace('\\', '/')
     m = _SCHEME.match(u)
     if m and m.group(1).lower() == 'file':
         u = u[len(m.group(1)) + 3:]
+        if u.lower().startswith('localhost/'):
+            u = u[len('localhost'):]
+        elif u and not u.startswith('/'):
+            u = '//' + u                # file://server/share/x: the UNC path //server/share/x
         if re.match(r'^/[A-Za-z]:', u):
             u = u[1:]
         u = _as_path(u, base)
@@ -159,14 +164,14 @@ def _rewrites(top):
 
 
 def _forms(url, rewrites, top):
-    """Every compare_url form `url` can reach: as written, after insteadOf and after
-    pushInsteadOf. Comparing all of them fails closed."""
+    """Every compare_url form `url` can reach: as written, and after EVERY matching insteadOf and
+    pushInsteadOf rule, not only the one git picks (its tie-break between rules of equal length
+    is not modelled; an extra form can only add a refusal). Comparing all of them fails closed."""
     forms = {compare_url(url, top)}
     for kind in ('insteadof', 'pushinsteadof'):
         for prefix, base in rewrites[kind]:
             if url.startswith(prefix):
                 forms.add(compare_url(base + url[len(prefix):], top))
-                break
     return forms
 
 
@@ -496,26 +501,27 @@ def _write(p, *args):
 
 def _apply(p, lines):
     """The writes. Raises _Failed after the first failed one; `lines` says what was done and
-    `p.wrote` whether anything was changed (a git object nothing names is not a change). The
-    branch and kit-pm-data.json are each made whole or not at all, so they count once made."""
+    `p.wrote` whether anything may have changed (a git object nothing names is not a change).
+    Every write counts as made before it is tried, so a failure is never reported as "nothing was
+    changed" once a write started: under --adopt the first write is kit-pm-data.json, so only
+    the checks in plan() refuse."""
     top, b, r = p.top, p.branch, p.remote
     lines.extend(p.notes)
     if p.root is None:
         tree = _empty_tree(top)
         root = _must(top, 'commit-tree', tree, '-m', ROOT_MESSAGE)
-        _must(top, 'branch', b, root)
-        p.wrote = True
+        _write(p, 'branch', b, root)
         p.root = root
         lines.append('root      %s (no parent, empty tree), branch %s made' % (root, b))
     else:
         lines.append('root      %s (branch %s, adopted)' % (p.root, b))
     want = pmdata.Record(b, r, p.root)
     if p.record != want:
+        p.wrote = True
         try:
             pmdata.write(p.common, b, r, p.root)
         except pmdata.PmDataError as e:
             raise _Failed(str(e))
-        p.wrote = True
         lines.append('record    %s written' % pmdata.record_path(p.common))
     else:
         lines.append('record    %s kept' % pmdata.record_path(p.common))
@@ -561,6 +567,23 @@ def _apply(p, lines):
     if not p.has_kit_json:
         lines.append('kit.json  the data worktree has no .kit.json; add %s with: %s'
                      % (os.path.join(p.path, '.kit.json'), kit_json_line(b, r)))
+
+
+def recover_steps(top, path, branch, remote, common):
+    """The lines naming, for the owner to run (this tool runs none of them), how to drop the new
+    local data branch and take the private remote's own instead, when the remote already holds a
+    different one."""
+    return [
+        'recover   if %s holds the real %s, drop the new local one and adopt it (run these '
+        'yourself, in %s; the tool does not):' % (remote, branch, top),
+        '            1. git worktree unlock "%s"' % path,
+        '            2. git worktree remove "%s"' % path,
+        '            3. git branch -D %s' % branch,
+        '            4. delete %s' % pmdata.record_path(common),
+        '            5. git fetch %s refs/heads/%s:refs/heads/%s' % (remote, branch, branch),
+        '            6. python tools/pm_data.py init --adopt --path "%s" --branch %s --remote %s'
+        % (path, branch, remote),
+    ]
 
 
 def init(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE, url=None,
@@ -610,6 +633,7 @@ def init(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
                      'pm_data.py init --adopt re-checks the branch against the recorded root'
                      % (p.remote, spec, p.remote, p.branch, p.remote, p.branch, p.remote,
                         p.branch))
+        lines.extend(recover_steps(p.top, p.path, p.branch, p.remote, p.common))
         return Outcome(PUSH_FAILED, lines)
     lines.append('push      %s to %s' % (spec, p.remote))
     return Outcome(OK, lines)
