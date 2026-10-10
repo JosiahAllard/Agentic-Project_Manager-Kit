@@ -20,6 +20,10 @@ ALLOWED = (
     ('kitlib/git/fake/wtcmds.py', 'pinned-hash', 'abc1234', 'an invented hash in the fake git'),
     ('tests/scrub/test_builtin.py', 'record-id', "('record-id', 'tests/backloglint/fixtures/",
      'a PENDING_FIXTURES key names a fixture file; stale once the fixtures work renames them'),
+    ('kitlib/guard/rules.py', 'drive', 'handling, so C:', 'a docstring on bash quoting'),
+    ('tests/backlog/test_verbs.py', 'drive', 'DRIVES = (', 'the fixtures of the machine-path '
+     'refusal, with an invented user'),
+    ('tests/scrub/test_generic.py', 'drive', "'C:", "an allow entry quoting the docstring above"),
 )
 
 # Today's hits, by the work that removes them.
@@ -59,7 +63,7 @@ PENDING_FIXTURES = {
     ('record-id', 'tests/worktree/test_new_worktree.py'): 7,
 }
 # Record ids in comments and docs become the reason written out; provenance pointers at the
-# earlier kit and pinned commit hashes go.
+# replaced kit and pinned commit hashes go.
 PENDING_HISTORY = {
     ('pinned-hash', 'docs/commit.md'): 1,
     ('pinned-hash', 'docs/pm-watch.md'): 1,
@@ -69,14 +73,16 @@ PENDING_HISTORY = {
     ('pinned-hash', 'kitlib/pmwatch/__init__.py'): 1,
     ('pinned-hash', 'kitlib/proc/shield.py'): 1,
     ('pinned-hash', 'kitlib/pytests/__init__.py'): 1,
-    ('provenance', 'docs/commit.md'): 1,
+    ('provenance', 'docs/commit.md'): 2,
     ('provenance', 'docs/doc-tools.md'): 2,
-    ('provenance', 'docs/gate.md'): 1,
-    ('provenance', 'docs/go-live.md'): 5,
+    ('provenance', 'docs/gate.md'): 14,
+    ('provenance', 'docs/go-live.md'): 6,
     ('provenance', 'docs/install.md'): 1,
     ('provenance', 'docs/landed.md'): 2,
     ('provenance', 'docs/launcher.md'): 3,
     ('provenance', 'docs/ledger.md'): 1,
+    ('provenance', 'docs/lock-api.md'): 1,
+    ('provenance', 'docs/lock-release.md'): 1,
     ('provenance', 'docs/machine-setup.md'): 7,
     ('provenance', 'docs/new-worktree.md'): 2,
     ('provenance', 'docs/pending.md'): 1,
@@ -90,65 +96,82 @@ PENDING_HISTORY = {
     ('provenance', 'docs/worktree-remove.md'): 2,
     ('provenance', 'installer/machine-setup.ps1'): 2,
     ('provenance', 'installer/new-repo.ps1'): 1,
-    ('provenance', 'kitlib/backlog/check.py'): 1,
+    ('provenance', 'kitlib/backlog/check.py'): 2,
     ('provenance', 'kitlib/backlog/errors.py'): 2,
-    ('provenance', 'kitlib/backlog/landable.py'): 1,
-    ('provenance', 'kitlib/backlog/offer.py'): 1,
-    ('provenance', 'kitlib/backlog/plan.py'): 1,
-    ('provenance', 'kitlib/backlog/record.py'): 1,
+    ('provenance', 'kitlib/backlog/landable.py'): 2,
+    ('provenance', 'kitlib/backlog/offer.py'): 2,
+    ('provenance', 'kitlib/backlog/plan.py'): 2,
+    ('provenance', 'kitlib/backlog/record.py'): 2,
     ('provenance', 'kitlib/backlog/scope.py'): 1,
     ('provenance', 'kitlib/backlog/stale.py'): 2,
-    ('provenance', 'kitlib/config/load.py'): 1,
-    ('provenance', 'kitlib/config/owner.py'): 1,
+    ('provenance', 'kitlib/commit/__init__.py'): 1,
+    ('provenance', 'kitlib/config/load.py'): 2,
+    ('provenance', 'kitlib/config/owner.py'): 2,
     ('provenance', 'kitlib/docs/budget.py'): 1,
     ('provenance', 'kitlib/docs/codemap.py'): 1,
+    ('provenance', 'kitlib/docs/index.py'): 1,
     ('provenance', 'kitlib/forbidden/__init__.py'): 2,
-    ('provenance', 'kitlib/gate/land.py'): 1,
+    ('provenance', 'kitlib/gate/land.py'): 2,
     ('provenance', 'kitlib/gate/reuse.py'): 1,
-    ('provenance', 'kitlib/gate/steps.py'): 1,
+    ('provenance', 'kitlib/gate/steps.py'): 2,
     ('provenance', 'kitlib/git/batch.py'): 2,
-    ('provenance', 'kitlib/landed/__init__.py'): 1,
+    ('provenance', 'kitlib/git/checkout.py'): 1,
+    ('provenance', 'kitlib/git/repo.py'): 1,
+    ('provenance', 'kitlib/landed/__init__.py'): 2,
+    ('provenance', 'kitlib/lock/layout.py'): 1,
+    ('provenance', 'kitlib/machinepaths/__init__.py'): 2,
     ('provenance', 'kitlib/machinesetup/__init__.py'): 4,
     ('provenance', 'kitlib/machinesetup/extras.py'): 1,
-    ('provenance', 'kitlib/machinesetup/links.py'): 2,
+    ('provenance', 'kitlib/machinesetup/links.py'): 3,
     ('provenance', 'kitlib/machinesetup/settings.py'): 8,
-    ('provenance', 'kitlib/proc/shield.py'): 1,
+    ('provenance', 'kitlib/preflight/leftovers.py'): 1,
+    ('provenance', 'kitlib/proc/shield.py'): 2,
     ('provenance', 'kitlib/pytests/__init__.py'): 2,
     ('provenance', 'kitlib/pytests/child.py'): 2,
-    ('provenance', 'kitlib/pytests/runner.py'): 1,
-    ('provenance', 'kitlib/records/landing.py'): 1,
+    ('provenance', 'kitlib/pytests/runner.py'): 2,
+    ('provenance', 'kitlib/records/landing.py'): 2,
+    ('provenance', 'kitlib/reviewpack/__init__.py'): 1,
     ('provenance', 'kitlib/reviewpack/trailers.py'): 1,
     ('provenance', 'kitlib/stubs/__init__.py'): 2,
     ('provenance', 'kitlib/syncbase/__init__.py'): 1,
     ('provenance', 'kitlib/testlist/__init__.py'): 2,
     ('provenance', 'kitlib/tooldeps/__init__.py'): 2,
-    ('provenance', 'kitlib/tooldeps/deps.py'): 1,
-    ('provenance', 'kitlib/worktree/holders.py'): 1,
+    ('provenance', 'kitlib/tooldeps/deps.py'): 2,
+    ('provenance', 'kitlib/verdict/__init__.py'): 1,
+    ('provenance', 'kitlib/worktree/holders.py'): 2,
     ('provenance', 'kitlib/worktree/new.py'): 2,
     ('provenance', 'kitlib/worktree/remove.py'): 2,
-    ('provenance', 'kitlib/worktree/sweep.py'): 1,
-    ('provenance', 'kitlib/worktree/task.py'): 1,
+    ('provenance', 'kitlib/worktree/sweep.py'): 2,
+    ('provenance', 'kitlib/worktree/task.py'): 2,
     ('provenance', 'tests/backlog/test_offer.py'): 1,
-    ('provenance', 'tests/backlog/test_records.py'): 1,
+    ('provenance', 'tests/backlog/test_records.py'): 2,
     ('provenance', 'tests/backlog/test_verbs.py'): 1,
-    ('provenance', 'tests/board/test_board.py'): 1,
-    ('provenance', 'tests/docs/test_budget.py'): 1,
-    ('provenance', 'tests/git/test_stray.py'): 1,
-    ('provenance', 'tests/landed/test_landed.py'): 1,
+    ('provenance', 'tests/board/test_board.py'): 2,
+    ('provenance', 'tests/docs/test_budget.py'): 2,
+    ('provenance', 'tests/docs/test_codemap.py'): 1,
+    ('provenance', 'tests/docs/test_index.py'): 1,
+    ('provenance', 'tests/git/test_stray.py'): 2,
+    ('provenance', 'tests/git/test_worktree_paths.py'): 1,
+    ('provenance', 'tests/landed/test_landed.py'): 2,
+    ('provenance', 'tests/lock/test_layout.py'): 1,
+    ('provenance', 'tests/lock/test_run.py'): 1,
     ('provenance', 'tests/machinepaths/test_machinepaths.py'): 2,
     ('provenance', 'tests/machinesetup/test_machinesetup.py'): 6,
     ('provenance', 'tests/pmwatch/test_pmwatch.py'): 1,
-    ('provenance', 'tests/preflight/test_preflight.py'): 1,
-    ('provenance', 'tests/proc/test_shield.py'): 1,
+    ('provenance', 'tests/preflight/test_preflight.py'): 2,
+    ('provenance', 'tests/proc/test_shield.py'): 2,
+    ('provenance', 'tests/pytests/test_pytests.py'): 2,
     ('provenance', 'tests/reviewpack/test_coauthor.py'): 1,
-    ('provenance', 'tests/reviewpack/test_pack.py'): 1,
-    ('provenance', 'tests/reviewpack/test_rules.py'): 1,
-    ('provenance', 'tests/syncbase/test_advice.py'): 1,
-    ('provenance', 'tests/syncbase/test_sync.py'): 1,
-    ('provenance', 'tests/testlist/test_testlist.py'): 1,
-    ('provenance', 'tests/testutil.py'): 1,
-    ('provenance', 'tests/tooldeps/test_tool_deps.py'): 1,
-    ('provenance', 'tests/worktree/test_new_worktree.py'): 1,
+    ('provenance', 'tests/reviewpack/test_pack.py'): 2,
+    ('provenance', 'tests/reviewpack/test_rules.py'): 2,
+    ('provenance', 'tests/stubs/test_kit_stubs.py'): 1,
+    ('provenance', 'tests/syncbase/test_advice.py'): 2,
+    ('provenance', 'tests/syncbase/test_sync.py'): 2,
+    ('provenance', 'tests/testlist/test_testlist.py'): 2,
+    ('provenance', 'tests/testutil.py'): 2,
+    ('provenance', 'tests/tooldeps/piecetable.py'): 1,
+    ('provenance', 'tests/tooldeps/test_tool_deps.py'): 2,
+    ('provenance', 'tests/worktree/test_new_worktree.py'): 2,
     ('provenance', 'tests/worktree/test_worktree_remove.py'): 1,
     ('provenance', 'tools/machine_setup.py'): 1,
     ('record-id', 'docs/engineering-rulings.md'): 1,
@@ -303,6 +326,86 @@ class TheChecks(unittest.TestCase):
         self.assertEqual(under, [('gender', 'docs/c.md', 0, 3)])
         self.assertEqual(scrub.ratchet(found[:1], ({('gender', 'docs/a.md'): 2},)),
                          ([], [('gender', 'docs/a.md', 1, 2)]))
+
+    def test_provenance_names_the_replaced_kit_not_this_one(self):
+        old, pm = j('ol', 'd'), j('P', 'M')
+        files = {'docs/a.md': '\n'.join([
+            j('the switch from the ', old, ' ', pm, ' kit'),
+            j('as the ', pm, " kit's `_paths", '.py` did'),
+            j('the ', pm, ' kit gate', '.py checks'),
+            j(old, ' ', pm, '-kit spellings'),
+            j('an earl', 'ier kit, a previ', 'ous kit and a lega', 'cy kit'),
+            j('Por', 'ted\nfrom the one before, an ', old, '\nkit file'),
+            '']),
+            'docs/b.md': j('# ', pm, ' kit\n', 'the ', pm, ' kit as a plugin; ', pm,
+                           ' kit tools live here\n')}
+        self.assertEqual(self.found(files), [
+            'docs/a.md:1: ' + j(old, ' ', pm, ' kit') + ' (provenance)',
+            'docs/a.md:2: ' + j(pm, " kit's `_paths", '.py') + ' (provenance)',
+            'docs/a.md:3: ' + j(pm, ' kit gate', '.py') + ' (provenance)',
+            'docs/a.md:4: ' + j(old, ' ', pm, '-kit') + ' (provenance)',
+            'docs/a.md:5: ' + j('earl', 'ier kit') + ' (provenance)',
+            'docs/a.md:5: ' + j('previ', 'ous kit') + ' (provenance)',
+            'docs/a.md:5: ' + j('lega', 'cy kit') + ' (provenance)',
+            'docs/a.md:6: ' + j('Por', 'ted from') + ' (provenance)',
+            'docs/a.md:7: ' + j(old, ' kit') + ' (provenance)'])
+
+    def test_an_allow_entry_matches_the_line_a_wrapped_hit_starts_on(self):
+        files = {'docs/a.md': j('x\nPor', 'ted\nfrom y\n')}
+        self.assertEqual(self.found(files, (('docs/a.md', 'provenance', 'Por', 'starts here'),)), [])
+        self.assertEqual(len(self.found(files, (('docs/a.md', 'provenance', 'from y', 'no'),))), 1)
+
+    def test_hardware_shapes(self):
+        files = {'docs/a.md': '\n'.join([
+            j('a ', '12', '-core part with ', '24', ' hardware threads'),
+            j('a Thread', 'ripper, an EP', 'YC, an Inte', 'l Core i7'),
+            j('an RT', 'X  3080'),
+            j('8', '-core, ', '4', ' threads and a core i7 alone pass'),
+            ''])}
+        self.assertEqual(self.found(files), [
+            'docs/a.md:1: ' + j('12', '-core') + ' (hardware)',
+            'docs/a.md:1: ' + j('24', ' hardware threads') + ' (hardware)',
+            'docs/a.md:2: ' + j('Thread', 'ripper') + ' (hardware)',
+            'docs/a.md:2: ' + j('EP', 'YC') + ' (hardware)',
+            'docs/a.md:2: ' + j('Inte', 'l Core i7') + ' (hardware)',
+            'docs/a.md:3: ' + j('RT', 'X 3080') + ' (hardware)'])
+
+    def test_a_drive_path_into_a_machine_folder_is_found_in_tests_too(self):
+        bs = chr(92)
+        files = {'tests/x/test_y.py': '\n'.join([
+            j('a = "', 'Z', ':', bs * 2, 'Git', 'Hub', bs * 2, 'repo"'),
+            j('b = "', 'z', ':/', 're', 'search/combat"'),
+            j('c = "', 'C', ':/', 'us', 'ers/x and ', 'D', ':/', 'Agent', 'Temp"'),
+            j('d = "', 'D', ':/src/alpha", "', 'C', ':/', 'Users', 'x/y"'),
+            ''])}
+        self.assertEqual(self.found(files), [
+            'tests/x/test_y.py:1: ' + j('Z', ':', bs * 2, 'Git', 'Hub') + ' (drive)',
+            'tests/x/test_y.py:2: ' + j('z', ':/', 're', 'search') + ' (drive)',
+            'tests/x/test_y.py:3: ' + j('C', ':/', 'us', 'ers') + ' (drive)',
+            'tests/x/test_y.py:3: ' + j('D', ':/', 'Agent', 'Temp') + ' (drive)'])
+
+    def test_machine_folders_agree_with_the_shipped_text_scrub(self):
+        import re
+        from tests.shipped import BASE_FORBIDDEN
+        shipped = {w.lower() for rx, what in BASE_FORBIDDEN if what != 'ruling id'
+                   for w in re.findall('[A-Za-z]{4,}', rx.pattern)}
+        self.assertEqual(shipped, {f.lower() for f in scrub.MACHINE_FOLDERS})
+
+    def test_a_new_hit_in_a_tracked_file_turns_the_gate_check_red(self):
+        from unittest import mock
+        from tests.scrub import test_builtin as me
+        extra = 'docs/zz-new.md'
+
+        files, real_read = me.tracked_files() + [extra], me.read_text
+
+        def read(rel):
+            return j('ask ', 'h', 'im\n') if rel == extra else real_read(rel)
+        result = unittest.TestResult()
+        with mock.patch.object(me, 'tracked_files', lambda: files), \
+                mock.patch.object(me, 'read_text', read):
+            me.BuiltIn('test_no_new_owner_text_in_a_tracked_file').run(result)
+        self.assertEqual(len(result.failures), 1, result.errors)
+        self.assertIn(extra + ':1: ' + j('h', 'im') + ' (gender)', result.failures[0][1])
 
     def test_a_hashed_name_is_found_without_being_written_down(self):
         name = 'quillfernow'                      # invented; NAME_STORE does not hold it

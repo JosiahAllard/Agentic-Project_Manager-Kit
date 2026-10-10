@@ -14,11 +14,19 @@ the install's own names stay with `tests/scrub/test_generic.py` and `scrub_patte
 - `gender`: a gendered pronoun; the kit writes "the owner".
 - `record-id`: a backlog record id. STOP_IDS lists the acronyms and markers that only look like
   one, and an invented id in a fixture starts with `EX-` (MADE_UP_ID_PREFIX).
-- `provenance`: a pointer at the earlier kit or its files.
+- `provenance`: the kit this one replaced, called old, earlier, previous or legacy, or one of its
+  files named; the bare title "PM kit" (CLAUDE.md) passes.
 - `pinned-hash`: a commit hash, outside tests/ only; git's empty tree and the hex alphabet pass
   (NOT_HASHES).
-- `hardware`: a GPU model, a CPU family or chiplet, or a total core or thread count of two digits
-  or more.
+- `hardware`: a GPU model, a CPU family or chiplet, or a total core or thread count of ten or
+  more.
+- `drive`: a drive path into one of MACHINE_FOLDERS, the machine folders that tests/shipped.py
+  BASE_FORBIDDEN also refuses (a test checks the two agree). It reads tests/ too; other drive
+  paths there are invented fixtures, and `tests/scrub/test_generic.py` refuses every drive path
+  outside tests/.
+
+Every class matches the whole file, so a phrase that a markdown wrap splits over two lines is
+still found, at the line it starts on.
 - `name`: a salted digest in NAME_STORE, hashed the way `kitlib/forbidden` hashes (docs/repo-checks.md,
   "forbidden"), so the names are never written down. The shipped store is empty; filling it is the
   owner's call.
