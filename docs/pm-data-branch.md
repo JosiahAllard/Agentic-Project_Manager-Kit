@@ -1,6 +1,6 @@
 # PM data on a private branch of the kit repo
 
-Status: design, not built. Not live until the kit's go-live review (docs/go-live.md).
+Status: tasks 1-8 built; task 9 (the go-live switch) pending. Not live until the kit's go-live review (docs/go-live.md).
 
 One git repository holds the public kit and one user's private PM data (rulings ledger, backlog, refusals log, handoffs, state). The data lives on an orphan branch, `pmdata`, that shares no history with `main`, is never merged, and is pushed only to a second, private remote. Other users who clone the kit get `main` only.
 
