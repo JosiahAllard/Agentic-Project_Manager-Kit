@@ -10,8 +10,6 @@ import os
 import sys
 import tempfile
 
-from kitlib import sessionmark
-
 from .types import ConfigError, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, parse_json
 
 DIR_NAME = '.claude-pm-kit'
@@ -72,15 +70,20 @@ def expand_home(path, home):
     return path
 
 
+# kitlib.sessionmark.RESERVED, repeated here so the machine config (which the lock tool reads)
+# does not import the session mark; tests/config/test_user_docs.py keeps the two equal
+RESERVED_MARKS = ('owner', 'subagent')
+
+
 class MarkMap(MapOf):
     """A map from session mark to a value: a reserved mark (owner, subagent) never names a
-    session (kitlib.sessionmark.RESERVED), so it is refused."""
+    session (RESERVED_MARKS), so it is refused."""
 
     def check(self, v, where, errs):
         MapOf.check(self, v, where, errs)
         if isinstance(v, dict):
             for k in v:
-                if isinstance(k, str) and k.strip().lower() in sessionmark.RESERVED:
+                if isinstance(k, str) and k.strip().lower() in RESERVED_MARKS:
                     errs.append('%s: %r is not a session mark (it is reserved)' % (where, k))
 
 
