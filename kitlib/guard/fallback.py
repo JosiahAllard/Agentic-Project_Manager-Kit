@@ -62,6 +62,9 @@ ANYWHERE = (
     ('git-push-pmdata', G + r'send-pack\b'),
     # a computed push word or subcommand ($X, `...`, $(...), %X%, @(...)): may be --no-verify or push
     ('git-push-pmdata', G + r'(?:push\b[^|;&\n]*)?(?:\$|`|%[A-Za-z_]\w*%|@\()'),
+    # git push, or git with no subcommand, run by xargs: the input it appends may be --no-verify or push
+    ('git-push-pmdata', r'\bxargs\b[^|;&\n]*\bgit(?:\.exe)?\b[^|;&\n]*\bpush\b'),
+    ('git-push-pmdata', r'\bxargs\b[^|;&\n]*\bgit(?:\.exe)?[ \t]*(?=[|;&\n]|$)'),
     ('git-push-pmdata', r'(?i)(?<![\w.-])git-send-pack(?:\.exe)?\b'),
     ('wrapped-gate', r'(?:\bgate\.py|\bmachine_lock\.py\s+run)\b[^;&]*?(?<!\|)\|(?!\|)'),
     ('root-search', r'\bfind\s+(?:-[HLP]\s+)*(?:/|/[a-zA-Z]/?|[A-Za-z]:[\\/]?)(?=\s|$|["\'])'),

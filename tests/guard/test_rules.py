@@ -651,6 +651,36 @@ class PmDataNoVerify(unittest.TestCase):
         self.assert_denied(d)
         self.assertIsNone(self.decide('git push origin x', sub=False, environ=pm))     # literal
 
+    XARGS = ("printf -- '--no-verify\\n' | xargs git push origin pmdata",
+             'echo push --no-verify origin pmdata | xargs git',
+             'echo --no-verify | xargs -r git -C . push origin pmdata')
+
+    def test_git_push_run_by_xargs_is_denied(self):
+        # xargs appends its input to git's arguments: --no-verify, or the subcommand itself
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in self.XARGS:
+            with self.subTest(text):
+                d = self.decide(text, sub=False, environ=pm)
+                self.assert_denied(d)
+                self.assertIn('cannot judge a computed push word with PM data present', d.reason)
+                self.assertIsNotNone(self.decide(text))                     # a subagent
+                d = self.decide(text, sub=False)                            # the owner's own
+                self.assertNotEqual(d and d.rule, 'git-push-pmdata')
+        # an unreadable line around it is read again
+        d = self.decide("echo 'x ; echo push | xargs git", sub=False, environ=pm)
+        self.assert_denied(d)
+        # xargs running another git subcommand is not a push
+        self.assertIsNone(self.decide('echo a.txt | xargs git add --', sub=False, environ=pm))
+
+    def test_git_push_run_by_xargs_without_a_record_is_unchanged(self):
+        os.remove(self.record)
+        pm = {context.ROLE_ENV: 'pm'}
+        for text in self.XARGS:
+            with self.subTest(text):
+                d = self.decide(text, sub=False, environ=pm)
+                self.assertNotEqual(d and d.rule, 'git-push-pmdata')
+        self.assertIsNone(self.decide("echo 'x ; echo push | xargs git", sub=False, environ=pm))
+
     def test_a_computed_push_word_without_a_record_is_unchanged(self):
         os.remove(self.record)
         pm = {context.ROLE_ENV: 'pm'}

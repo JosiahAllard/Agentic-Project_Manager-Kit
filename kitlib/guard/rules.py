@@ -1548,7 +1548,7 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
         return None
     if gc.alias:
         return git_alias(cmd, gc, role)
-    if gc.sub_dyn:
+    if gc.sub_dyn or (gc.sub == '' and gc.inv is not None and gc.inv.via == 'xargs'):
         d = git_push_pmdata(event, ctx, gc, role)       # a computed subcommand may be push
         if d:
             return d
@@ -1931,20 +1931,25 @@ def _no_verify_word(word):
 
 def git_push_pmdata(event, ctx, gc, role):
     """`git push --no-verify` (any abbreviation git accepts), and a `git push` with a word computed
-    at run time or git with a computed subcommand (either may be --no-verify or push), in a
+    at run time or arguments xargs appends, or git with a computed subcommand or one xargs
+    supplies (any of them may be --no-verify or push), in a
     repository with a PM data record, in every session but the owner's own: the pre-push hook is
     what keeps PM data off public remotes (docs/pm-data-branch.md "Pre-push guard")."""
     if is_owner_session(event, ctx):
         return None
-    computed = gc.sub_dyn or any(w.dyn for w in gc.rest)
+    xargs = gc.inv is not None and gc.inv.via == 'xargs'
+    computed = gc.sub_dyn or xargs or any(w.dyn for w in gc.rest)
     _short, longs, _pos = _opts('push', gc.rest)
     if not computed and 'no-verify' not in longs:
         return None
-    where = gc.dir                          # None: the text cannot place it (recorded, fail closed)
-    if not pmdata_recorded(ctx, where):
+    where = gc.dir
+    if where is None and xargs and gc.sub == '':
+        where = gc.inv.cmd.cwd              # xargs' input may name the place; judged where it runs
+    if not pmdata_recorded(ctx, where):     # None: the text cannot place it (recorded, fail closed)
         return None
     if computed:
-        what = ('a git subcommand' if gc.sub_dyn else 'a `git push` word')
+        what = ('a git subcommand' if gc.sub_dyn or gc.sub == '' else
+                'arguments xargs appends to `git push`' if xargs else 'a `git push` word')
         return refuse('git-push-pmdata', role, '`git %s %s` has %s computed at run time, and this repository has %s: '
                       'the guard cannot judge a computed push word with PM data present (it may be --no-verify, '
                       'which skips the pre-push hook). Write the push literally:'
