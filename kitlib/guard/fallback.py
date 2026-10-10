@@ -22,8 +22,9 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     a git subcommand or option by a variable. Such a line in a repository with a PM data record
     is denied too (`git-push-pmdata`), wherever in it, in every session but the owner's own: the
     hidden program may be git push --no-verify. PowerShell's `& (<subexpression>)` leaves a line
-    clean (commands.call_subexpr); on a line unclean for another reason it is judged only by that
-    PM data check (rules.call_subexpr_pmdata), never as unreadable.
+    clean (commands.call_subexpr); rules.call_subexpr_pmdata judges it, on a clean line or one
+    unclean for another reason: that PM data check, and in any repository an agent session is
+    denied, as here (`unreadable` for a subagent, `write-jail` for another jailed session).
 
 Where a pattern matches, the directory is the one the command holding the match runs in (a
 literal cd before it is followed), not only the call's.
@@ -240,7 +241,7 @@ def check(event, ctx, text, cwd, role, parsed):
         if not hidden:
             continue
         if cm.call_subexpr(inv):
-            # `& (...)`: judged only where PM data is (rules.call_subexpr_pmdata), never unreadable
+            # `& (...)`: judged by rules.call_subexpr_pmdata (PM data, then agent sessions), never unreadable
             d = rules.call_subexpr_pmdata(event, ctx, c, inv, cwd, role)
             if d:
                 return rules.Decision(d.kind, d.rule, '%s %s' % (why, d.reason))

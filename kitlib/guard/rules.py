@@ -2131,19 +2131,28 @@ def pmdata_possible(ctx, path):
 
 def call_subexpr_pmdata(event, ctx, cmd, inv, cwd, role):
     """PowerShell's call operator on a ( ) subexpression (`& (Get-Command git) push`,
-    commands.call_subexpr) in a repository with a PM data record, in every session but the
-    owner's own (rule git-push-pmdata): the program is what the ( ) computes, which may be git
-    push --no-verify. Elsewhere the line is read as any other (not unreadable)."""
+    commands.call_subexpr), in every session but the owner's own: the program is what the ( )
+    computes, so the rules that need a literal program (heavy, the write jail, the git rules)
+    cannot read it. In a repository with a PM data record it is denied as git-push-pmdata (it may
+    be git push --no-verify); elsewhere an agent session (agent_session) is denied as the
+    fallback denies an unreadable line, a subagent `unreadable` and another jailed session
+    `write-jail` (it may be git writing a checkout the jail cannot place). Only the owner and a
+    session the jail does not hold (`plain`) read the line as any other."""
     if not cm.call_subexpr(inv) or is_owner_session(event, ctx):
         return None
+    instead = ('& <program> %s' % ' '.join(w.text for w in inv.args)).rstrip()
     where = cmd.cwd
-    if not pmdata_possible(ctx, where):
+    if pmdata_possible(ctx, where):
+        return refuse('git-push-pmdata', role, '`& %s` runs the program a PowerShell subexpression computes, and this '
+                      'repository has %s (or the guard cannot tell): it may be git push --no-verify, which skips the '
+                      'pre-push hook that keeps PM data off public remotes. Name the program literally:'
+                      % (inv.path, pmdata.FILE_NAME), instead)
+    if not agent_session(event, ctx):
         return None
-    return refuse('git-push-pmdata', role, '`& %s` runs the program a PowerShell subexpression computes, and this '
-                  'repository has %s (or the guard cannot tell): it may be git push --no-verify, which skips the '
-                  'pre-push hook that keeps PM data off public remotes. Name the program literally:'
-                  % (inv.path, pmdata.FILE_NAME),
-                  ('& <program> %s' % ' '.join(w.text for w in inv.args)).rstrip())
+    rule = 'unreadable' if role == 'subagent' else 'write-jail'
+    return refuse(rule, role, '`& %s` runs the program a PowerShell subexpression computes, which the guard cannot '
+                  'name: it may be git writing a checkout the write jail cannot place, or a heavy program run '
+                  'without the machine lock. Name the program literally:' % inv.path, instead)
 
 
 def _no_verify_word(word):
@@ -2375,8 +2384,7 @@ def git_alias_config(event, ctx, gc, role):
         return None
     where = None if gc.unknown else gc.dir
     if where is None:
-        here = gc.inv.cmd.cwd if gc.inv is not None else None
-        if not (ctx.pm_data_named() or (here and pmdata_recorded(ctx, here))):
+        if not _unknown_dir_counts(ctx, gc):
             return None
     elif not (pmdata_recorded(ctx, where) or ctx.pm_data_named()):
         return None
@@ -2384,6 +2392,14 @@ def git_alias_config(event, ctx, gc, role):
     if moved:
         return _alias_unjudged(event, ctx, gc, role, where, [], moved)
     return _alias_judged(event, ctx, gc, role, where, [])
+
+
+def _unknown_dir_counts(ctx, gc):
+    """For a git call whose directory the text cannot tell: True when the machine config names
+    pm_data (or cannot be read), or the directory the command itself runs in has a PM data record
+    (pmdata_recorded). Otherwise an unknown directory is no ground to deny."""
+    here = gc.inv.cmd.cwd if gc.inv is not None else None
+    return bool(ctx.pm_data_named() or (here and pmdata_recorded(ctx, here)))
 
 
 def _alias_config_moved(gc):
@@ -2537,8 +2553,10 @@ def _remote_verb(gc):
 def git_remote_rewrite(event, ctx, gc, role):
     """git-remote-rewrite: `git remote set-url|add|rename|remove`, a `git config` write to
     remote.*, url.*, include.* or includeIf.* (any spelling: --add, --unset, set, unset, the
-    section verbs) and `git config --edit`, in a repository with a PM data record (or one the text
-    cannot place), in every session but the owner's own. A --global or --system write, or one to
+    section verbs) and `git config --edit`, in a repository with a PM data record (or one git
+    cannot place), in every session but the owner's own. A directory the text cannot tell counts
+    as git_alias_config counts it (_unknown_dir_counts: the machine config names pm_data, or the
+    command's own directory has a record). A --global or --system write, or one to
     a user or system config file, counts when the machine config names pm_data; a --file git
     does not read is left alone. The pre-push leak stage tells the private remote by its
     configured URLs, so a remote pointed elsewhere would make a public one look private
@@ -2546,12 +2564,14 @@ def git_remote_rewrite(event, ctx, gc, role):
     if gc.sub not in ('remote', 'config') or is_owner_session(event, ctx):
         return None
     where = None if gc.unknown else gc.dir
+    def here_recorded():
+        return pmdata_recorded(ctx, where) if where is not None else _unknown_dir_counts(ctx, gc)
     if gc.sub == 'remote':
         verb = _remote_verb(gc)
         if verb is None:
             return None
         what = 'repoints a remote (git remote %s)' % verb
-        recorded = pmdata_recorded(ctx, where)
+        recorded = here_recorded()
     else:
         call = config_rewrite(gc)
         if call is None:
@@ -2562,7 +2582,7 @@ def git_remote_rewrite(event, ctx, gc, role):
         if files:
             recorded = any(f.dyn or _config_file_recorded(ctx, f.text, where) for f in files)
         else:
-            recorded = pmdata_recorded(ctx, where) or (scope_all and machine_pm_data(ctx))
+            recorded = here_recorded() or (scope_all and machine_pm_data(ctx))
     if not recorded:
         return None
     return refuse('git-remote-rewrite', role, '`git %s %s` %s, and this repository has %s (or the guard cannot tell): '

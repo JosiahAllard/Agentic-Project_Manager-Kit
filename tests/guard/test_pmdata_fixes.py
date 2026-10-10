@@ -283,7 +283,8 @@ class AliasSplit(Base):
 
 class CallSubexpression(Base):
     """Regression: `& (<expr>) ...` made every such line unclean, so it read as unreadable in a
-    main checkout for every session. Only the PM data hidden-program check judges it."""
+    main checkout for every session. The PM data hidden-program check judges it, and an agent
+    session is denied it anywhere (tests/guard/test_pmdata_review.py)."""
 
     TEXT = '& (Join-Path $r x.exe) a'
 
@@ -292,9 +293,10 @@ class CallSubexpression(Base):
         self.assertIsNone(self.decide('& (Get-Command git) status', cwd=self.w.main, shell=ps))
 
     def test_an_ordinary_line_without_pm_data_is_not_unreadable(self):
+        # a session the write jail does not hold; an agent session is denied (CallSubexpressionAgents)
         os.remove(self.record)
-        self.assertIsNone(self.decide(self.TEXT, sub=True, shell=ps))
-        self.assertIsNone(self.decide(self.TEXT, environ=PM, cwd=self.w.main, shell=ps))
+        self.assertIsNone(self.decide(self.TEXT, environ=PLAIN, shell=ps))
+        self.assertIsNone(self.decide(self.TEXT, environ=PLAIN, cwd=self.w.main, shell=ps))
 
     def test_in_a_pm_data_repository_it_is_denied(self):
         for label, sub, env in self.sessions():

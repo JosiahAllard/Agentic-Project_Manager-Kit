@@ -868,32 +868,74 @@ COMPUTED_NAME = '<COMPUTED>'
 # options that take a value (in the same word or the next), and the options whose value is a name
 VAR_BUILTINS = {'read': ('adinNptu', 'a'), 'printf': ('v', 'v'), 'mapfile': ('dnOsuCc', ''),
                 'readarray': ('dnOsuCc', '')}
+# an arithmetic assignment: NAME (or NAME[i]) followed by = or a compound = (+=, <<=, ...) but not
+# ==, or by ++ / --; ++NAME / --NAME. A target written $n or ${n} is one the shell computes.
+_ARITH_OP = r'\s*(?:\[[^\]]*\]\s*)?(?:(?:\*\*|<<|>>|[-+*/%&^|])?=(?!=)|\+\+|--)'
+ARITH_SET_RE = re.compile(r'(?<![\w$])([A-Za-z_]\w*)' + _ARITH_OP + r'|(?:\+\+|--)\s*([A-Za-z_]\w*)')
+ARITH_COMPUTED_RE = re.compile(r'\$\{?[\w@*#?!-]+\}?' + _ARITH_OP + r'|(?:\+\+|--)\s*\$')
+ARITH_EXPANSION_RE = re.compile(r'\$\(\((.*?)(?:\)\)|$)', re.S)
+
+
+def arith_targets(text):
+    """The upper-case names a bash arithmetic expression assigns (HOME=1, HOME+=1, HOME++,
+    ++HOME, x=1,HOME=2), and COMPUTED_NAME when it assigns one written $n or ${n}."""
+    out = [(m.group(1) or m.group(2)).upper() for m in ARITH_SET_RE.finditer(text)]
+    if ARITH_COMPUTED_RE.search(text):
+        out.append(COMPUTED_NAME)
+    return out
+
+
+def _arith_command(c):
+    """True when the bash command `c` is the text of an arithmetic command, `(( ... ))` or a
+    part of `for (( ...; ...; ... ))`: its two innermost groups are ( ( and the source between
+    the nearest (( before it and its start closes none of them."""
+    g = c.groups
+    if len(g) < 2 or g[-1][1] != '(' or g[-2][1] != '(' or c.start is None:
+        return False
+    j = c.source.rfind('((', 0, c.start)
+    if j < 0:
+        return False
+    between = c.source[j + 2:c.start]
+    return between.count(')') <= between.count('(')
 
 
 def bash_var_targets(c):
     """The upper-case names a bash command assigns from its arguments rather than NAME=value:
     `read [options] NAME...` (and read -a NAME), `printf -v NAME`, `mapfile`/`readarray
-    [options] NAME`, `getopts OPTSTRING NAME`, `for NAME in ...` (and `for NAME; do`, which
-    loops over the positional parameters). A target the shell computes
-    (read $n) is COMPUTED_NAME: it may be any variable."""
+    [options] NAME`, `getopts OPTSTRING NAME`, `for NAME in ...` and `select NAME in ...` (and
+    `for NAME; do`, which loops over the positional parameters), and the arithmetic assignments
+    (arith_targets) of `let EXPR...`, `(( EXPR ))`, `for (( ...; ...; ... ))` and a $(( EXPR ))
+    in any word. A target the shell computes (read $n, $(($n=1))) is COMPUTED_NAME: it may be
+    any variable."""
     words = c.words
     if c.shell != sh.BASH or not words:
         return []
-    if not quoted(c, words[0]) and words[0].text == 'for' and len(words) > 1:
+    out = []
+    for w in words:
+        if w.dyn and '$((' in w.text:
+            for m in ARITH_EXPANSION_RE.finditer(w.text):
+                out += arith_targets(m.group(1))
+    if _arith_command(c):
+        return out + arith_targets(c.text)
+    if not quoted(c, words[0]) and words[0].text in ('for', 'select') and len(words) > 1:
         # for NAME in ...; for NAME; do; for NAME do (the last two loop over "$@"); not for ((...))
         if words[1].text.startswith('(') or (len(words) > 2 and words[2].text not in ('in', 'do')):
-            return []
-        return _var_target(c, words[1])
+            return out
+        return out + _var_target(c, words[1])
     inv = invocation(c)
     if inv is None:
-        return []
+        return out
+    if inv.name == 'let':
+        for w in inv.args:
+            out += arith_targets(passed(c, w))
+        return out
     if inv.name == 'getopts':
         pos = [w for w in inv.args if not w.text.startswith('-')]
-        return _var_target(c, pos[1]) if len(pos) > 1 else []
+        return out + (_var_target(c, pos[1]) if len(pos) > 1 else [])
     if inv.name not in VAR_BUILTINS:
-        return []
+        return out
     values, named = VAR_BUILTINS[inv.name]
-    out, pos, args, k = [], [], inv.args, 0
+    pos, args, k = [], inv.args, 0
     while k < len(args):
         w = args[k]
         t = passed(c, w)
@@ -1299,7 +1341,8 @@ def mark_git_env(parsed):
     nested text (eval, bash -c, Invoke-Expression, a sourced here-string) after the line's own
     commands, so order says nothing about which runs first. A line with no git is not
     affected. c.home_env is the first of HOME_ENV_NAMES the line sets (line_env_names: an
-    assignment, read HOME, printf -v HOME, for HOME in ...), or 'a variable named at run time'
+    assignment, read HOME, printf -v HOME, for HOME in ..., let HOME=1, $((HOME=1)); see
+    bash_var_targets), or 'a variable named at run time'
     for a builtin whose target is computed (read $n), else False: git then reads another user
     config (rules.home_config and rules.git_alias_config judge git with it)."""
     cmds = parsed.commands
@@ -1373,9 +1416,9 @@ def git_dyn_word(inv):
 def call_subexpr(inv):
     """True when PowerShell's call operator runs what a ( ) subexpression computes (`& (Get-Command
     git) push`, `& (Join-Path $r x.exe) a`; kitlib.guard.shell reads the ( ) as the program word).
-    The program is not literal, but the line stays clean: only rules.call_subexpr_pmdata (a PM data
-    repository, every session but the owner's own) judges it, so it makes no other line
-    unreadable."""
+    The program is not literal, but the line stays clean: rules.call_subexpr_pmdata judges it (a PM
+    data repository in every session but the owner's own; an agent session anywhere), so it makes
+    no other line unreadable."""
     if inv is None or not inv.dyn or inv.cmd.shell != sh.PS or inv.word is None or inv.via is not None:
         return False
     k = inv.index
