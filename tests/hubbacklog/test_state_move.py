@@ -19,6 +19,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.
 import hub_backlog                                                  # noqa: E402
 
 DOCS = ({"repo": "r", "items": [{"id": "A"}]}, {"repo": "r", "days": 90, "items": []})
+STATE_NAME = "hub_backlog_state.json"      # the file's name, as docs/action-hub.md gives it
 
 
 class StateAcrossTheMove(unittest.TestCase):
@@ -27,8 +28,8 @@ class StateAcrossTheMove(unittest.TestCase):
         self.base = tempfile.mkdtemp(prefix="kit-hub-state-")
         self.addCleanup(shutil.rmtree, self.base, True)
         self.home = os.path.join(self.base, "home")
-        self.new = os.path.join(self.home, user.DIR_NAME, hub_backlog.STATE_NAME)
-        self.old = os.path.join(self.home, migration.OLD_DIR_NAME, hub_backlog.STATE_NAME)
+        self.new = os.path.join(self.home, user.DIR_NAME, STATE_NAME)
+        self.old = os.path.join(self.home, migration.OLD_DIR_NAME, STATE_NAME)
         self.out = os.path.join(self.base, "batch.json")
         real_plan = hub_backlog.plan
         for p in (mock.patch.dict(os.environ, {"USERPROFILE": self.home, "HOME": self.home}),
@@ -61,6 +62,7 @@ class StateAcrossTheMove(unittest.TestCase):
     def test_the_first_run_after_the_move_reads_the_old_state_and_writes_the_new(self):
         old_state = {"backlog/r": {"d": "stale", "v": 4}, "completed/r": {"d": hubbacklog.digest(DOCS[1]), "v": 2}}
         self.put(self.old, old_state)
+        self.assertEqual(os.path.basename(hub_backlog.STATE), STATE_NAME)
         self.assertEqual(self.main(["--out", self.out]), 0)
         b = self.batch()
         self.assertEqual(list(b), [("backlog", "r")])                  # completed/r unchanged: not re-sent
