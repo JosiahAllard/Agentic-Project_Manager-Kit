@@ -49,5 +49,6 @@ Each verb returns `Outcome(code, lines)` and prints nothing; the tools print the
 - `tests/worktree/test_worktree_remove.py`
 - `tests/worktree/test_worktree_sweep.py`
 - `tests/worktree/test_worktree_sweep_task.py`
+- `tests/worktree/test_remove_snapshot.py` (what appears inside the window before git; a failing git)
 
 Every case uses throwaway `tests/gitfixture.py` repositories. The machine lock and PowerShell are seams. The holder and junction cases run on Windows only.

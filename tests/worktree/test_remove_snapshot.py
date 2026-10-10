@@ -115,8 +115,8 @@ class FileAppearsInTheWindow(WindowCase):
         self.assertIn('failed    git worktree remove exited', out)
         self.assert_kept_intact(out)
 
-    def test_an_ignored_file_written_after_the_status_read_stops_git(self):
-        # Between the refusal check and clear_disposable's own status read.
+    def test_an_ignored_file_written_between_the_dirty_check_and_the_reread_stops_git(self):
+        # After the refusal check, before clear_disposable's own status read.
         late = os.path.join(self.path, 'run.log')
         rc, out = self.run_in_window(lambda p: self.fx.write('run.log', 'mine\n', root=p),
                                      after=False)
@@ -196,7 +196,7 @@ class GitFails(WindowCase):
         self.assertIn('intact   the worktree is still registered; nothing was destroyed', out)
         self.assertNotIn('DESTROYED', out)
         self.assertEqual(len(fake.calls), 1, 'git must run once, never retried')
-        self.assertNotIn('--force', fake.calls[0])
+        self.assertFalse({'--force', '-f'} & set(fake.calls[0]), fake.calls[0])
         self.assertNotIn('deleted   branch', out)
         self.assert_kept_intact(out)
 
@@ -217,7 +217,7 @@ class GitFails(WindowCase):
         rc, out = self.run_failing(fake)
         self.assertEqual(rc, 1, out)
         self.assertIn("that message is git's, and its advice is a trap here", out)
-        self.assertNotIn('--force', fake.calls[0])
+        self.assertFalse({'--force', '-f'} & set(fake.calls[0]), fake.calls[0])
 
 
 if __name__ == '__main__':
