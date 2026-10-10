@@ -122,6 +122,14 @@ class ShallowClone(PackCase):
         self.assertIsNone(mb)
         self.assertIn('shallow', why)
 
+    def test_refs_merge_base_in_a_shallow_clone_is_no_answer_not_none(self):
+        # The cut-off commits read as roots there, so disjoint "roots" prove nothing.
+        self.clone()
+        from kitlib.git import refs
+        mb, why = refs.merge_base('origin/main', 'origin/phase/e', self.shallow)
+        self.assertIsNone(mb, 'a shallow clone was read as "no common history"')
+        self.assertIn('shallow clone', why)
+
 
 class TheBaseNoteAndTheDiffOption(WithOrigin):
     NOTE = 'review_pack: base: local main '

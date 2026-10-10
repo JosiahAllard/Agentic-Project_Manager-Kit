@@ -504,6 +504,20 @@ def kill_git(match):
     return mock.patch.object(cmd, '_run', side_effect=run)
 
 
+STRAY = b"warning: unable to access 'nowhere/.config/git/attributes': Permission denied\n"
+
+
+def stray_warning():
+    """A patch of cmd._run under which every git runs as before (the spawner captured before the
+    patch) and its stderr starts with STRAY, a warning about something other than the ref."""
+    real = cmd.spawner()
+
+    def run(argv, cwd=None, input=None, timeout=None, env=None):
+        rc, out, err = real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        return rc, out, STRAY + (err or b'')
+    return mock.patch.object(cmd, '_run', side_effect=run)
+
+
 class AKilledGitIsNoBranchOrBaseAnswer(RepoFixture):
     """KIT-GIT-EXIT1-ANSWERS: `symbolic-ref --quiet` (detached) and `merge-base` (no common
     commit) answer with exit 1 and no output, the shape a git ended from outside leaves. Each read
@@ -573,6 +587,38 @@ class PositiveForms(RepoFixture):
         self.assertIsNone(got, 'a killed git was read as "no such rev"')
         self.assertIn('printed nothing', why)
 
+    def test_a_stray_warning_leaves_no_such_ref_an_answer(self):
+        # A config deprecation warning, "unable to access", GIT_TRACE: stderr that is not about
+        # the ref. "No such ref" must stay "no such ref", not become "git cannot tell".
+        with stray_warning():
+            self.assertEqual(refs.resolve('refs/heads/no-such', self.r.root, known=True), ('', None))
+            self.assertEqual(refs.resolve('refs/heads/no-such', self.r.root),
+                             (None, 'refs/heads/no-such does not name a commit'))
+            self.assertEqual(refs.ref_commit('refs/heads/no-such', self.r.root), ('', None))
+            self.assertEqual(refs.ref_commit('refs/heads/kit/feature', self.r.root),
+                             (self.feature, None))
+
+    def test_a_stray_warning_whose_confirmation_is_killed_is_no_answer(self):
+        with stray_warning(), kill_git(lambda argv: argv[1] == 'rev-parse'):
+            got, why = refs.ref_commit('refs/heads/no-such', self.r.root)
+        self.assertIsNone(got, 'an unconfirmed "no ref" was given')
+        self.assertIn('confirming no ref', why)
+
+    def test_a_warning_that_names_the_rev_is_no_answer(self):
+        said = b'warning: ignoring broken ref refs/heads/x\nfatal: Needed a single revision'
+        with mock.patch.object(cmd, '_run', return_value=(128, b'', said)):
+            got, why = refs.resolve('refs/heads/x', self.r.root, known=True)
+        self.assertIsNone(got, 'a broken ref was read as "no such rev"')
+        self.assertIn('ignoring broken ref', why)
+
+    def test_a_ref_that_differs_only_in_case_is_no_answer(self):
+        # rev-parse opens a loose refs/heads/KIT/feature as kit/feature's file on a
+        # case-insensitive file system; for-each-ref lists only the name git wrote.
+        got, why = refs.ref_commit('refs/heads/KIT/feature', self.r.root)
+        self.assertIsNone(got, 'a case variant of an existing ref was read as "no ref"')
+        self.assertIn('refs/heads/kit/feature', why)
+        self.assertIn('differ only in case', why)
+
 
 class _Parity(object):
     """What the fake prints for the positive forms is what real git prints (each check runs on
@@ -616,6 +662,27 @@ class _Parity(object):
         self.assertIn('printed no line', why)              # exit 0: the shape of "no such ref"
         self.assertIn('ignoring broken ref refs/heads/broken', why)      # git's own warning
         self.assertEqual(refs.ref_commit('refs/heads/main', self.r.root), (self.r.initial, None))
+
+    def test_a_broken_loose_ref_is_no_answer_from_resolve_either(self):
+        with open(os.path.join(self.r.common_dir(), 'refs', 'heads', 'broken'), 'w') as f:
+            f.write('garbage\n')
+        got, why = refs.resolve('refs/heads/broken', self.r.root, known=True)
+        self.assertIsNone(got, 'a broken ref was read as "no such rev": %s' % why)
+        # git 2.55 (observed): exit 128, the warning, then refs.NO_SUCH_REV as the last line
+        self.assertIn('exited 128: warning: ignoring broken ref refs/heads/broken\n'
+                      'fatal: Needed a single revision', why)
+
+    def test_a_case_variant_of_a_loose_ref_is_no_answer(self):
+        got, why = refs.ref_commit('refs/heads/MAIN', self.r.root)
+        self.assertIsNone(got, 'a case variant of main was read as "no ref"')
+        self.assertIn('differ only in case', why)
+
+    def test_branch_show_current_on_an_unborn_branch_and_through_a_symref_chain(self):
+        self.r.git('symbolic-ref', 'HEAD', 'refs/heads/unborn')
+        self.assertEqual(refs.current_branch(self.r.root), ('unborn', None))
+        self.r.git('symbolic-ref', 'refs/heads/alias', 'refs/heads/main')
+        self.r.git('symbolic-ref', 'HEAD', 'refs/heads/alias')
+        self.assertEqual(refs.current_branch(self.r.root), ('main', None))   # the chain's end
 
     def test_resolve_tells_no_such_rev_from_no_answer(self):
         # rev-parse --verify without --quiet: "no such rev" is exit 128 and refs.NO_SUCH_REV.

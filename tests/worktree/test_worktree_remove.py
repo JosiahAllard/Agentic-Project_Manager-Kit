@@ -470,6 +470,42 @@ class KilledTagAndBranchReads(RemoveCase):
         self.assertIn('branch kit/kept kept at (unknown: git could not tell', out)
         self.assertIn('tag archive/kept holds %s' % tip[:10], out)
 
+    def test_a_tag_unreadable_after_it_is_made_refuses_the_removal(self):
+        path = self.workstream('drop')
+        tip = self.git('rev-parse', 'kit/drop')
+        made = []
+        real = cmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if 'tag' in argv and '-a' in argv:
+                made.append(argv)
+            elif made and argv[1] == 'rev-parse' and argv[-1].startswith('refs/tags/archive/drop'):
+                return 1, b'', b''                      # killed, once the tag is made
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(cmd, '_run', side_effect=run):
+            rc, out = self.run_verb('abandon', 'drop', 'superseded')
+        self.assertEqual(rc, 1, out)
+        self.assertTrue(made, out)
+        self.assertIn('refused   tag archive/drop could not be read (', out)
+        self.assertIn('after it was made; nothing was removed', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn('kit/drop', self.branches())
+        self.assertEqual(self.git('rev-parse', 'archive/drop^{commit}'), tip)
+
+    def test_a_tag_unreadable_before_the_delete_keeps_the_branch(self):
+        tip = self.orphan('kb')
+        self.git('tag', 'archive/kb', tip)
+        said = []
+        ctx = types.SimpleNamespace(main=self.repo, say=lambda *lines: said.extend(lines))
+        with kill_reads_of('refs/tags/archive/kb'):
+            code = remove.drop_branch(ctx, None, 'kit/kb', tip, 'archive/kb', False)
+        out = '\n'.join(said)
+        self.assertEqual(code, remove.REFUSED, out)
+        self.assertIn('failed    tag archive/kb could not be read (', out)
+        self.assertIn('so branch kit/kb was not deleted', out)
+        self.assertIn('tag archive/kb holds (unknown: git could not tell', out)
+        self.assertIn('kit/kb', self.branches())
+
 
 class AbandonPulled(RemoveCase):
 

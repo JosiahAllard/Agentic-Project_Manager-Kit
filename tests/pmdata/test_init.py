@@ -160,6 +160,21 @@ class InitTest(_Base):
         self.assertEqual(out.code, pminit.OK, out.lines)
         self.assertEqual(self.git_value('push.default'), 'current')
 
+    def test_push_default_set_more_than_once_keeps_every_value_and_reads_the_last(self):
+        self.repo.git('config', '--add', 'push.default', 'upstream')
+        self.repo.git('config', '--add', 'push.default', 'current')
+        out = self.init()
+        self.assertEqual(out.code, pminit.OK, out.lines)
+        self.assertTrue(any('push.default=current kept' in l for l in out.lines), out.lines)
+        self.assertEqual(self.repo.git('config', '--get-all', 'push.default').splitlines(),
+                         ['upstream', 'current'])
+
+    def test_config_list_keeps_a_value_with_a_newline_whole(self):
+        self.repo.git('config', 'kit.multi', 'one\ntwo')
+        pairs, why = pminit._config_list(self.repo.root, '--local')
+        self.assertIsNone(why)
+        self.assertIn(('kit.multi', 'one\ntwo'), pairs)
+
     def test_other_machine_config_keys_are_kept(self):
         os.makedirs(os.path.dirname(user.config_file(self.home)))
         with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
