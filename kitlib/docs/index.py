@@ -20,7 +20,8 @@ after the keywords is allowed.
 Index checks (`.kit.json` "doc_budget".shard_indexes {"<dir>": "<index file>"}):
   0. the index exists, and every tracked .md (but a "doc_budget" retired path) is named in
      backticks on an ENTRY line of it (listing_misses); skipped when "doc_index".enabled is false
-     or there is no `.kit.json` (moved here from doc_budget);
+     or there is no `.kit.json` (moved here from doc_budget); with `config_ref` (doc_index.py
+     --config-ref) every setting, and whether a `.kit.json` exists, is read at that revision;
   1. every .md under a shard dir is linked from its index file;
   2. in a doc that has an index block (a heading whose text starts with "Index"), every
      other `## ` heading's title appears in that block;
@@ -57,7 +58,7 @@ import os
 import re
 import time
 
-from kitlib.config import ConfigError, config_path, load
+from kitlib.config import ConfigError, config_path, load, load_at
 from kitlib.git import batch, cmd
 
 INDEX = 'docs/INDEX.md'          # the schema default of "doc_index".index
@@ -520,13 +521,25 @@ def refuse(error, out):
     return 2
 
 
+def has_config(root, config_ref=None):
+    """True when the configuration that counts exists: the working tree's `.kit.json`, or the one
+    revision `config_ref` holds."""
+    if config_ref is None:
+        return os.path.isfile(config_path(root))
+    return git(root, 'cat-file', '-e', '%s:%s' % (config_ref, os.path.basename(config_path(root)))
+               ).returncode == 0
+
+
 def run(root, out, section=None, find=None, tools=False, stale=False, role=None, doc=None,
-        head='HEAD', days=None):
+        head='HEAD', days=None, config_ref=None):
     """One doc_index mode over the checkout `root`; the exit status. `find` is the query string.
+    `config_ref` set: the whole configuration ("doc_index", "doc_budget" with its shard_indexes)
+    is the one that revision holds, never the working tree's, so a landing check run on a branch
+    reads the base's and the branch cannot switch its own check off.
     0 pass, 1 a miss (index check, find, role topic), 2 refused (config, unread index, listing,
     unknown role)."""
     try:
-        conf = load(root)
+        conf = load(root) if config_ref is None else load_at(root, config_ref)
         cfg = conf.section('doc_budget')
         di = settings(conf)
     except ConfigError as e:
@@ -568,7 +581,7 @@ def run(root, out, section=None, find=None, tools=False, stale=False, role=None,
         return 1
     bad = index_checks(files, cfg, text, index)
     # A repo that turned the index off, or has no .kit.json (it has not opted in), needs none.
-    if di['enabled'] and os.path.isfile(config_path(root)):
+    if di['enabled'] and has_config(root, config_ref):
         bad = listing_misses(files, cfg, text(index), index) + bad
     died = reader_died(root)
     if died:
