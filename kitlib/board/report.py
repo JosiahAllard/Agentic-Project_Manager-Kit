@@ -9,6 +9,7 @@ import os
 import sys
 
 from kitlib.git import cmd, repo
+from kitlib.git import refs as gitrefs
 from kitlib.preflight import lockline, machine, settings as st
 
 HEADER = 'branch | tip | ahead/behind | has base tip | last commit | dirty | owner-only touched'
@@ -35,9 +36,9 @@ def row(w, base, rules):
             w.branch, (w.head or '?')[:7])
     rc, lr_out = _git(w.path, 'rev-list', '--left-right', '--count', '%s...HEAD' % base)
     lr = lr_out.split() if rc == 0 else []
-    # Only 0 and 1 are ANSWERS (contained / not); `--is-ancestor` exits 128 when it could not look.
-    rc, _ = _git(w.path, 'merge-base', '--is-ancestor', base, 'HEAD')
-    has = {0: 'yes', 1: 'NO'}.get(rc, '?')
+    # Only True and False are ANSWERS (contained / not); no answer (an unknown rev, a failed git, a
+    # git ended from outside: kitlib.git.refs.is_ancestor) reads `?`.
+    has = {True: 'yes', False: 'NO'}.get(gitrefs.is_ancestor(base, 'HEAD', w.path)[0], '?')
     rc, age = _git(w.path, 'log', '-1', '--format=%cr')
     age = age if rc == 0 else '?'
     rc, status_out = _git(w.path, 'status', '--porcelain', '--untracked-files=no')
