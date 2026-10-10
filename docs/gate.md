@@ -178,7 +178,7 @@ kitlib/gate/reuse.py, ported from one repo's gate reuse. In a landing of one bra
 
 Then a step is reused when the record has it as `pass` and its merged-gate argv and cwd equal its branch-gate ones (its `merged_args`, or the lane's, make it run). A reused step's result is `reused` (`REUSED` with its reason in the output, `reused: <steps>` in the verdict); the lines go to `reuse.log` in the log folder. When every selected step is reused, nothing is booked and `setup` does not run.
 
-A reused step does not run, so nothing it would leave behind (a build output, a file a later step reads) exists in the merged gate: give a step whose output a later step needs the same group as that step. In the kit's own repository reuse never fires: the branch gate runs the worktree's kit (`kit.commit` is the tip) and the landing runs the main checkout's (the merge), so the kit identities differ.
+A reused step does not run, so nothing it would leave behind (a build output, a file a later step reads) exists in the merged gate: give a step whose output a later step needs the same group as that step. In the kit's own repository reuse never fires: the branch gate runs the worktree's kit (`kit.commit` is the tip, when the worktree's own gate.py runs, as The caller's checkout documents; `runner.kit_identity` reads the checkout of the gate.py that ran) and the landing runs the main checkout's (the merge), so the kit identities differ.
 
 ### Branch cleanup
 
@@ -199,10 +199,26 @@ A stub run from outside its checkout runs the kit tool in the stub's checkout (d
 - The caller's directory is in a different checkout from the gated one (their git dirs differ): `REFUSED: the caller is in the checkout ...`, exit 4, nothing run, no record.
 - The caller's directory is in no repository, or is in the gated checkout: it runs.
 - git cannot place the caller's directory or the gated tree, or the variable is malformed (a NUL in either path counts): REFUSED (fail closed).
-- An absolute `-C` names the tree, so it runs. A relative `-C` resolves against the stub's checkout, not the caller's directory, so the rule applies to it. Without a stub the gate runs in the caller's directory and the rule never applies.
+- An absolute `-C` names the tree, so it runs. A relative `-C` resolves against the stub's checkout, not the caller's directory, so the rule applies to it. Without a stub the gate runs in the caller's directory and this rule never applies (the no-stub rule below does).
 - A value whose stub checkout is not the gate's own directory was inherited from a stub further up, not set for this process: it is dropped and the gate runs. The two are compared as one directory (os.path.samefile), so a junction, symlink or 8.3 short name for the checkout still counts as its own.
 
-Landings, `wait-result` and `--measure` do not apply the rule. Tests: tests/gate/test_caller_checkout.py.
+With no stub there is a second hazard, in the kit's own repository: every checkout has a real `tools/gate.py`, so `python <worktree>/tools/gate.py` run from the main checkout with no `-C` would gate the main checkout with the worktree's code. For a branch gate run with no stub and no `-C`, `tools/gate.py` applies kitlib/gate/caller.py `own_copy_refusal` to the directory it was run from and its own checkout (`KIT` in tools/gate.py):
+
+- The two are different checkouts of one repository (the same git common dir, different git dirs): `REFUSED: <gate.py> is in the checkout ...`, exit 4, nothing run, naming the command to use instead.
+- They are the same checkout, the gate.py is in another repository (a repository's stubs run the kit checkout written into them, kitlib/stubs `KIT_ROOT`), or either is in no repository: it runs.
+- git cannot place the gate.py's checkout: REFUSED (fail closed). A directory git cannot place is left to the gate itself.
+
+A relative `--log-dir` resolves against the directory the gate was run from, not the gated tree, so when that directory is in another checkout the logs would be stray files there: kitlib/gate/caller.py `log_dir_refusal` makes it `USAGE: --log-dir <D> is relative ...`, exit 2, nothing run. An absolute `--log-dir`, none, or a directory in no repository passes.
+
+The one documented way to gate a worktree from another directory is that worktree's own gate.py with an absolute `-C` naming it:
+
+```
+python <worktree>/tools/gate.py -C <worktree> --full
+```
+
+Running the worktree's own gate.py matters in the kit's repository: the gate records the identity of the kit that ran it (`kit.commit`, Gate reuse), and the code under test is the code that gates.
+
+Landings, `wait-result` and `--measure` apply neither rule. Tests: tests/gate/test_caller_checkout.py (`Refusal` and `ThroughAStub` for the stub rule; `OwnCopy`, `LogDir` and `RunByPath` for the no-stub rule and `--log-dir`).
 
 ## Known limits
 

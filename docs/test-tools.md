@@ -30,6 +30,8 @@ The tables are read from "tool_tests": `extra`, `pinned`, `patterns`, `whole_tre
 python ~/.claude/tools/machine_lock/machine_lock.py run --repo <repo> --slug <slug> --lock --kind engine-test --cores 4 -- python tools/kit_tests.py --select
 ```
 
+To gate a worktree from another directory, run that worktree's own gate.py with an absolute `-C`: `python <worktree>/tools/gate.py -C <worktree> --full`. With no `-C`, a gate.py run from another checkout of its repository is refused (docs/gate.md "The caller's checkout").
+
 - `--select` diffs against the merge-base with `--base` (default: gate.md "Default base"), the work tree and untracked files included. `--changed PATH ...` takes the list instead.
 - It prints each selected `tests/<pkg>` with the reasons it was picked, then runs those packages' test modules.
 - `--full` runs every module `python -m unittest discover -s tests -t .` would load. `--plan` prints the selection and runs nothing.
