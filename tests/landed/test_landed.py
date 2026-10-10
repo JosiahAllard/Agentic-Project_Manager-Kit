@@ -209,6 +209,20 @@ class Containment(Fixture):
         self.assertIn('there is no remote `origin`, but this clone has upstream', out)
         self.assertNotIn('LANDED', out)
 
+    def test_a_missing_remote_with_a_killed_remote_listing_cannot_answer(self):
+        """`remote get-url origin` exits 2 (origin renamed away), and the `git remote` listing
+        that would tell "no remote at all" from "misnamed" is killed (exit 1, no output): no
+        answer, never the local main deciding."""
+        self.land_locally()
+        self.git('remote', 'rename', 'origin', 'upstream')
+        with self.kill(lambda argv: argv[1:] == ['remote']):
+            code, out = self.look()
+        self.assertEqual(code, landed.CANNOT, out)
+        self.assertIn('there is no remote `origin`, and the remotes there are could not be '
+                      'listed', out)
+        self.assertNotIn('local main (no remote', out)
+        self.assertNotIn('LANDED', out)
+
     def test_a_killed_ancestry_read_is_unknown_never_no(self):
         """refs.is_ancestor's None (a kill) was `bool()`-ed into "contained  no"."""
         self.land_locally()
