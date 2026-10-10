@@ -29,7 +29,7 @@ no git config and never rebases, resets or forces. The checks are a point in tim
 {"pm_start": {
   "hub_url": "https://claude.ai/artifact/<id>",
   "hub_source": "claude/hub/action-hub.html",
-  "pm_watch_cmd": "python launcher/pm_watch.py",
+  "pm_watch_cmd": "python -u <kit>/tools/pm_watch.py",
   "memory_dir": "<home>/.claude/projects/<project>/memory",
   "handoff_glob": "pm-handoff-*.md",
   "reminders_file": "<home>/.claude-pm-kit/reminders.json",

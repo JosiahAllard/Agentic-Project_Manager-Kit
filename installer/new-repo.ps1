@@ -16,7 +16,9 @@
 #                                overwritten: only the lines it lacks are appended.
 #   <Target>\docs\INDEX.md        a starter doc index (templates\common\INDEX.md), only if absent
 #   <Target>\tools\gate.json      with -Stack: templates\stacks\<Stack>\tools\gate.json, only if absent
-# It does not install the stack's CI workflows or other stack files, templates\common\CLAUDE.md,
+#   <Target>\tools\<file>        with -Stack: the stack's other files under templates\stacks\<Stack>\tools
+#                                (Godot: godot.cmd), each only if absent; one already there is kept
+# It does not install the stack's CI workflows or its other files outside tools\, templates\common\CLAUDE.md,
 # the agent profiles, or .claude\settings.json (docs/install.md "What the script does not install").
 # -OwnerEmail and -AgentEmail are required and must differ: an owner commit (Owner-Approved:) counts
 # only when its author email is "owner".email, so an empty or shared identity would let an agent's
@@ -33,7 +35,10 @@
 # private remote when -PrivateRemote is given. The dry run prints that command and runs nothing.
 # Its result is reported as pm_data.py gives it: its lines, then its exit code as this script's.
 #
-# Exit: 0 dry run printed or files written, 1 refused, 2 usage; with -PmData and -Apply, a non-zero
+# A write that fails (a read-only or locked file, a full disk) stops the script at once: it prints
+# "FAILED", what was already written, and exits 1. It never prints "wrote" for a file it did not write.
+#
+# Exit: 0 dry run printed or files written, 1 refused or a write failed, 2 usage; with -PmData and -Apply, a non-zero
 # exit of pm_data.py init (1 refused, 2 configuration, 3 made locally but the push failed, 4 stopped
 # part-way, 5 crashed, 130 Ctrl+C) after the target's files were written.
 param(
@@ -53,6 +58,32 @@ $stubTool = Join-Path $kit 'tools\kit_stubs.py'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 
 function Fail([string]$msg, [int]$code = 1) { Write-Host "new-repo: REFUSED - $msg"; exit $code }
+
+# Every write goes through Put-File: the script runs under Continue (see below), where a failed .NET
+# call only prints an error and the script goes on to say "wrote". Here a failure stops it, with the
+# files already written named so they can be undone.
+$written = New-Object System.Collections.Generic.List[string]
+function Stop-Write([string]$path, $err, [string]$verb = 'write') {
+    Write-Host "new-repo: FAILED - cannot $verb $path - $($err.Exception.Message)"
+    if ($written.Count) { Write-Host "  already written (delete them to undo): $($written -join ' , ')" }
+    else { Write-Host "  nothing had been written before it" }
+    exit 1
+}
+function Put-File([string]$path, [string]$text, [string]$how = 'wrote') {
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path $path) -ErrorAction Stop | Out-Null
+        if ($how -eq 'appended') { [IO.File]::AppendAllText($path, $text, $utf8) }
+        else { [IO.File]::WriteAllText($path, $text, $utf8) }
+    } catch { Stop-Write $path $_ }
+    $written.Add($path)
+}
+function Copy-NewFile([string]$src, [string]$dst) {
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path $dst) -ErrorAction Stop | Out-Null
+        [IO.File]::Copy($src, $dst, $false)
+    } catch { Stop-Write $dst $_ }
+    $written.Add($dst)
+}
 
 $emailRx = '^[^@\s"\\<>$]+@[^@\s"\\<>$]+\.[^@\s"\\<>$]+$'
 $OwnerEmail = $OwnerEmail.Trim(); $AgentEmail = $AgentEmail.Trim()
@@ -118,6 +149,7 @@ if (Test-Path -LiteralPath $kitJson) { Fail "$kitJson exists already; nothing wa
 # gitignore/gitattributes lists.
 $stackLines = @{ gitignore = @(); gitattributes = @() }
 $gateSrc = $null
+$toolFiles = @()
 $gateDst = Join-Path $targetFull 'tools\gate.json'
 if ($Stack) {
     if ($Stack -notmatch '^[a-z0-9]+$') { Fail "-Stack '$Stack' is not a stack name" 2 }
@@ -130,6 +162,10 @@ if ($Stack) {
     foreach ($k in 'gitignore', 'gitattributes') { if ($meta.$k) { $stackLines[$k] = @($meta.$k) } }
     $gateSrc = Join-Path $stackDir 'tools\gate.json'
     if (-not (Test-Path -LiteralPath $gateSrc)) { Fail "the kit has no $gateSrc" 2 }
+    # The stack's other tools files (Godot: godot.cmd); gate.json is handled apart (it must exist before
+    # the stubs are written, and one already there refuses).
+    $toolFiles = @(Get-ChildItem -LiteralPath (Join-Path $stackDir 'tools') -File | Where-Object { $_.Name -ine 'gate.json' } |
+        ForEach-Object { [pscustomobject]@{ Name = $_.Name; Src = $_.FullName; Dst = (Join-Path $targetFull "tools\$($_.Name)") } })
     if (Test-Path -LiteralPath $gateDst) { Fail "$gateDst exists already; nothing was written" }
 }
 $gateLine = if ($Stack) { "  `"gate`": `"tools/gate.json`",`n" } else { '' }
@@ -167,6 +203,13 @@ $lineFiles = @((Plan-LineFile '.gitignore' $stackLines.gitignore), (Plan-LineFil
 $indexDst = Join-Path $targetFull 'docs\INDEX.md'
 $indexSrc = Join-Path $kit 'templates\common\INDEX.md'
 $indexNew = -not (Test-Path -LiteralPath $indexDst)
+# Advisory: the tracked .md files the starter index does not name (the doc index check wants every
+# one named on an entry line). Only when the starter is what gets written; never a refusal.
+$unindexed = @()
+if ($indexNew) {
+    $named = @([regex]::Matches((Get-Content -LiteralPath $indexSrc -Raw -Encoding UTF8), '`([^`]+)`') | ForEach-Object { $_.Groups[1].Value })
+    $unindexed = @(& git -C $targetFull ls-files -- '*.md' 2>$null | Where-Object { $_ -and ($named -notcontains $_) })
+}
 
 # The stubs the kit would write, from kit_stubs itself (it reads the target's .kit.json, which is
 # not there yet: the default tools_dir and tool list apply, as they will after -Apply).
@@ -196,12 +239,20 @@ foreach ($f in $lineFiles) {
     else { Write-Host "  unchanged     $($f.Path)   (has every line already)" }
 }
 if ($indexNew) { Write-Host "  would create  $indexDst   (starter doc index)" } else { Write-Host "  kept          $indexDst   (exists)" }
+if ($unindexed.Count) {
+    Write-Host "  add these to docs/INDEX.md ($($unindexed.Count) tracked .md the starter index does not name; the doc index check lists them until you do):"
+    foreach ($u in $unindexed) { Write-Host "    $u" }
+}
 if ($Stack) { Write-Host "  would create  $gateDst   (from templates\stacks\$Stack\tools\gate.json)" }
 else { Write-Host "  no gate section (no -Stack): see Next, step 3" }
+foreach ($t in $toolFiles) {
+    if (Test-Path -LiteralPath $t.Dst) { Write-Host "  kept          $($t.Dst)   (exists)" }
+    else { Write-Host "  would create  $($t.Dst)   (from templates\stacks\$Stack\tools\$($t.Name))" }
+}
 Write-Host ""
 if ($hasOrigin) { Write-Host "remote:   origin -> $(@($remoteUrl)[0])" }
 else {
-    Write-Host "WARNING:  no remote named origin. new_worktree.py and preflight.py fetch it and refuse without it."
+    Write-Host "WARNING:  no remote named origin. new_worktree.py and preflight.py --fetch need it to fetch from."
     Write-Host "          git -C `"$targetFull`" remote add origin <url>   then   git -C `"$targetFull`" push -u origin $MainBranch"
 }
 if ($PmData) {
@@ -215,43 +266,48 @@ if (-not $Apply) { exit 0 }
 
 # The gate file goes first: kit_stubs reads .kit.json and refuses a "gate" path that is not there.
 if ($Stack) {
-    New-Item -ItemType Directory -Force -Path (Split-Path $gateDst) | Out-Null
-    [IO.File]::WriteAllText($gateDst, [IO.File]::ReadAllText($gateSrc, $utf8), $utf8)
+    Put-File $gateDst ([IO.File]::ReadAllText($gateSrc, $utf8))
     Write-Host "  wrote    $gateDst"
+    foreach ($t in $toolFiles) {
+        if (Test-Path -LiteralPath $t.Dst) { continue }
+        Copy-NewFile $t.Src $t.Dst
+        Write-Host "  wrote    $($t.Dst)"
+    }
 }
 try {
     $fs = New-Object IO.FileStream($kitJson, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
     try { $bytes = $utf8.GetBytes($text); $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
 } catch {
-    $did = if ($Stack) { "only $gateDst was written (delete it to undo)" } else { "nothing was written" }
+    $did = if ($written.Count) { "only $($written -join ' , ') was written (delete to undo)" } else { "nothing was written" }
     Fail "cannot create $kitJson - $($_.Exception.Message); $did"
 }
+$written.Add($kitJson)
 $out = & python $stubTool write -C $targetFull 2>&1
 $code = $LASTEXITCODE
 foreach ($line in @($out)) { Write-Host "  $line" }
 if ($code -ne 0) {
-    $wrote = if ($Stack) { ".kit.json and $gateDst" } else { ".kit.json" }
+    $wrote = if ($Stack) { (@(".kit.json", $gateDst) + @($toolFiles | Where-Object { $written -contains $_.Dst } | ForEach-Object { $_.Dst })) -join ', ' } else { ".kit.json" }
     Write-Host "new-repo: STOPPED - kit_stubs.py write exited $code after $wrote were written, and any stubs listed above."
     Write-Host "  The .gitignore, .gitattributes and docs/INDEX.md were not touched. To undo: delete $wrote and the stubs listed, then run again."
     exit 1
 }
+$written.Add('(and the stubs listed above)')
 foreach ($f in $lineFiles) {
     if (-not $f.Body.Count) { continue }
     $chunk = ($f.Body -join "`n") + "`n"
-    if ($f.New) { [IO.File]::WriteAllText($f.Path, $chunk, $utf8); Write-Host "  wrote    $($f.Path)" }
+    if ($f.New) { Put-File $f.Path $chunk; Write-Host "  wrote    $($f.Path)" }
     else {
-        $old = [IO.File]::ReadAllText($f.Path)
+        try { $old = [IO.File]::ReadAllText($f.Path) } catch { Stop-Write $f.Path $_ 'read' }
         # Append in the file's own line ending (CRLF when it has any).
         $nl = if ($old.Contains("`r`n")) { "`r`n" } else { "`n" }
         $chunk = ($f.Body -join $nl) + $nl
         $sep = if ($old.Length -and -not $old.EndsWith("`n")) { $nl } else { '' }
-        [IO.File]::AppendAllText($f.Path, $sep + $chunk, $utf8)
+        Put-File $f.Path ($sep + $chunk) 'appended'
         Write-Host "  appended $($f.Path)   ($($f.Missing.Count) line(s))"
     }
 }
 if ($indexNew) {
-    New-Item -ItemType Directory -Force -Path (Split-Path $indexDst) | Out-Null
-    [IO.File]::WriteAllText($indexDst, [IO.File]::ReadAllText($indexSrc, $utf8), $utf8)
+    Put-File $indexDst ([IO.File]::ReadAllText($indexSrc, $utf8))
     Write-Host "  wrote    $indexDst"
 }
 Write-Host ""
@@ -287,8 +343,13 @@ Write-Host "     owner's identity (owner-only paths: tools/commit.py refuses an 
 Write-Host "     .gitattributes and docs/INDEX.md as usual"
 Write-Host "  2. python `"$stubTool`" check -C `"$targetFull`"   (exit 0: every stub current)"
 if ($Stack) {
-    Write-Host "  3. tools/gate.json is the $Stack gate: edit its globs and test command to the project; its pass check"
-    Write-Host "     needs a line 'Ran N tests' with N of 1 or more, so keep at least one test or the step fails"
+    Write-Host "  3. tools/gate.json is the $Stack gate: edit its globs and test command to the project."
+    $passNote = @{
+        python = "its pass check needs a line 'Ran N tests' with N of 1 or more, so keep at least one test or the step fails"
+        godot  = "its test step passes only on a line 'UNIT TESTS OK', so the test scene must print it (and only when every test passed); set GODOT_DIR for tools/godot.cmd"
+    }[$Stack]
+    if (-not $passNote) { $passNote = "its steps pass on their exit status and fail patterns (see the steps in tools/gate.json)" }
+    Write-Host "     $passNote"
 } else {
     Write-Host "  3. the gate: with no gate section gate.py refuses (no gate step selected). Copy a stack's"
     Write-Host "     $kit\templates\stacks\<stack>\tools\gate.json to tools\gate.json and add  `"gate`": `"tools/gate.json`"  to .kit.json,"

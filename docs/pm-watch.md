@@ -20,17 +20,6 @@
 
 Kit-only additions: `--state`, and `--once` (one poll, print any events, exit 0) for checks.
 
-## Stub plan for the PM repo (at go-live)
+## Switch-over for the PM repo (at go-live)
 
-`launcher/pm_watch.py` becomes a stub that runs the kit tool with the launcher's own files as defaults, so `python -u launcher/pm_watch.py` keeps working and `kitlib/pmstart` still finds a `pm_watch.py` process:
-
-```python
-"""Stub: the PM watcher lives in the kit's tools/pm_watch.py."""
-import os, subprocess, sys
-HERE = os.path.dirname(os.path.abspath(__file__))
-KIT = "<kit>/tools/pm_watch.py"
-sys.exit(subprocess.call([sys.executable, "-u", KIT,
-                          "--sessions", os.path.join(HERE, "sessions.json")] + sys.argv[1:]))
-```
-
-With no `--usage-script` the stub reads usage in-process, so `launcher/usage.ps1` is not needed (docs/launcher.md). The same switch deletes `launcher/test_pm_watch.py` (the tests are in `tests/pmwatch`). Alternatively set the `pm_watch` keys and point `pm_start.pm_watch_cmd` at the kit tool, and drop the stub.
+The PM repository keeps no watcher code. Set `pm_watch.sessions_file` to the launcher's sessions.json and point `pm_start.pm_watch_cmd` at `python -u <kit>/tools/pm_watch.py` (docs/pm-start.md "Config"); `kitlib/pmstart` finds it as a `pm_watch.py` process. With no `usage_script`, usage is read in-process, so `launcher/usage.ps1` is not needed. Stop the old watcher, start the kit one, then delete `launcher/pm_watch.py` and `launcher/test_pm_watch.py` (the tests are in `tests/pmwatch`); the state file default is the same, so no event repeats.

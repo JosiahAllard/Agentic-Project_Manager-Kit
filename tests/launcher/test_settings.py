@@ -24,6 +24,15 @@ class Check(unittest.TestCase):
                      'launcher.coordinator_agent must be an agent name'):
             self.assertIn(want, text)
 
+    def test_pm_resume_beside_desktop_is_a_bool_key(self):
+        self.assertEqual(S.check({'pm_resume_beside_desktop': True}), [])
+        self.assertEqual(S.check({'pm_resume_beside_desktop': False}), [])
+        for bad in ('true', 1, 0, []):
+            self.assertIn('launcher.pm_resume_beside_desktop must be true or false',
+                          '\n'.join(S.check({'pm_resume_beside_desktop': bad})))
+        self.assertTrue(S.Settings({'pm_resume_beside_desktop': True}, '/h').pm_resume_beside_desktop)
+        self.assertFalse(S.Settings({}, '/h').pm_resume_beside_desktop)
+
     def test_a_bad_object_raises_a_config_error(self):
         with self.assertRaises(ConfigError):
             S.Settings({'accounts': {}}, '/h')

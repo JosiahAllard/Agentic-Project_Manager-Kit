@@ -13,6 +13,9 @@ BETA = {'repo': 'alpha', 'agent': True, 'stem': 'beta-coord', 'state': 's.md', '
 HELPER = {'repo': 'alpha', 'agent': False, 'stem': 'alpha-help', 'state': 's.md', 'brief': 'b.md', 'account': 1,
           'name': 'alpha-help-a1'}
 PM = {'pm_session_id': 'pm-sid-1', 'pm_folder': None, 'pm_account': 2}
+STORE = {'Name': 'claude.exe', 'ProcessId': 5, 'ExecutablePath': 'C:' + chr(92) + 'Program Files' + chr(92)
+         + 'WindowsApps' + chr(92) + 'claude.exe', 'CommandLine': 'claude'}
+UNNAMED = {'Name': 'claude.exe', 'ProcessId': 6, 'ExecutablePath': r'C:\bin\claude.exe', 'CommandLine': 'claude'}
 
 
 class FailingHost(FakeHost):
@@ -76,6 +79,19 @@ class Briefs(unittest.TestCase):
         self.assertEqual(start.entry_start_args(None, 'alpha', dict(ALPHA, brief='c.md'), '2', 'go')['brief'], 'c.md')
         self.assertNotIn('brief', start.entry_start_args(None, 'alpha', ALPHA, '2', 'go', any_brief=True))
 
+    def test_dry_run_says_the_pm_decision_and_opens_and_logs_nothing(self):
+        for key, said in ((False, 'desktop app running, pm-session skipped'),
+                          (True, 'would resume pm-session (session pm-sid-1, account 2) in ')):
+            h = Home(self, extra={'pm_resume_beside_desktop': key})
+            h.write_state('sessions.json', {'helper': dict(HELPER)})
+            h.write_state('conductors.json', dict(PM, pm_folder=h.root))
+            host = FakeHost(h.root, [STORE])
+            out = reboot.run(h.settings, host, dry_run=True)
+            self.assertTrue(any(line.startswith(said) for line in out), out)
+            self.assertEqual(host.opened, [])
+            self.assertFalse(os.path.exists(os.path.join(h.state, reboot.LOG)))
+            self.assertEqual(h.read_state('sessions.json'), {'helper': HELPER})
+
     def test_dry_run_says_the_brief(self):
         h = Home(self)
         h.write_state('sessions.json', {'helper': dict(HELPER)})
@@ -121,12 +137,33 @@ class ResumePm(unittest.TestCase):
         self.assertEqual(self.lines, ['pm-session already running, skipped'] * 2)
 
     def test_the_desktop_app_or_an_unnamed_session_skips_it(self):
-        store = {'Name': 'claude.exe', 'ProcessId': 5, 'ExecutablePath': 'C:' + chr(92) + 'Program Files' + chr(92)
-                 + 'WindowsApps' + chr(92) + 'claude.exe', 'CommandLine': 'claude'}
-        unnamed = {'Name': 'claude.exe', 'ProcessId': 6, 'ExecutablePath': r'C:\bin\claude.exe', 'CommandLine': 'claude'}
-        for p in (store, unnamed):
+        self.assertFalse(self.h.settings.pm_resume_beside_desktop)          # the default
+        for p in (STORE, UNNAMED):
             self.assertEqual(self.resume(self.cfg(), [p]).opened, [])
         self.assertEqual(self.lines, ['desktop app running, pm-session skipped'] * 2)
+
+    def beside(self):
+        return S.Settings(dict(self.h.obj, pm_resume_beside_desktop=True), self.h.root)
+
+    def test_the_key_resumes_the_pm_beside_the_desktop_app_or_an_unnamed_session(self):
+        for p in (STORE, UNNAMED):
+            text, = self.resume(self.cfg(), [p], settings=self.beside()).opened
+            self.assertEqual(role_of(text), 'pm')
+            self.assertIn("claude --resume 'pm-sid-1' --remote-control 'pm-session' -n 'pm-session'", text)
+        self.assertEqual(self.lines, ['desktop app running, pm-session not skipped '
+                                      '(launcher.pm_resume_beside_desktop)', 'started pm-session'] * 2)
+
+    def test_the_key_still_refuses_a_running_pm_session(self):
+        for procs in ([session(7, 'pm-session'), STORE],
+                      [dict(session(8, 'x'), CommandLine="claude --resume 'pm-sid-1' --remote-control 'x' -n 'x'"),
+                       UNNAMED]):
+            self.assertEqual(self.resume(self.cfg(), procs, settings=self.beside()).opened, [])
+        self.assertEqual(self.lines, ['pm-session already running, skipped'] * 2)
+
+    def test_the_key_keeps_the_fresh_transcript_rule(self):
+        self.transcript(minutes_ago=3)
+        self.assertEqual(self.resume(self.cfg(), [STORE], uptime=60, settings=self.beside()).opened, [])
+        self.assertEqual(self.lines[-1], 'pm transcript active, pm-session skipped')
 
     def test_a_fresh_transcript_skips_it_only_after_the_boot_window(self):
         self.transcript(minutes_ago=3)
@@ -144,6 +181,16 @@ class ResumePm(unittest.TestCase):
         self.assertIn("$env:CLAUDE_CONFIG_DIR = %s" % window.q(self.h.accounts['2'][0]), text)
         self.assertIn("Set-Location %s" % window.q(self.h.root), text)
         self.assertEqual(self.lines, ['started pm-session'])
+
+    def test_the_pm_window_sets_agent_temp_and_points_temp_and_tmp_at_it(self):
+        temp = os.path.join(self.h.root, 'agent-temp')
+        host = FakeHost(self.h.root, env={'AGENT_TEMP': temp})
+        reboot.resume_pm(self.h.settings, host, self.cfg(), self.lines.append)
+        text, = host.opened
+        self.assertEqual(role_of(text), 'pm')
+        for var in ('AGENT_TEMP', 'TEMP', 'TMP'):
+            self.assertIn('$env:%s = %s' % (var, window.q(temp)), text)
+        self.assertLess(text.index('$env:TMP'), text.index('claude --resume'))
 
     def test_the_default_account_folder_leaves_config_dir_unset(self):
         default = os.path.join(self.h.root, '.claude')

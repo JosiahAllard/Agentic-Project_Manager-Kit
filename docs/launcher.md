@@ -37,6 +37,9 @@ Exit codes: 0 done; 1 refused or failed (the reason on stderr); 2 a stop refused
 | `accounts` | `"<n>"`: config folders, first choice first; absolute or `~/...` | one account, `1`, in `~/.claude` |
 | `orgs` | `"<n>"`: an organization sign-in's config folder, for `--org n` | `--org` refused |
 | `coordinator_agent` | the agent file a coordinator runs as | `coordinator` |
+| `pm_resume_beside_desktop` | `true`: `after-reboot` resumes the PM session even while the desktop app or an unnamed session runs | `false`: it skips |
+
+`repos` keys match case-sensitively and must equal the `repo` values in sessions.json.
 
 The default folder `~/.claude` launches with `CLAUDE_CONFIG_DIR` removed, never set to it: setting it moves where Claude keeps `.claude.json`.
 
@@ -56,7 +59,7 @@ A launched session is a `claude.exe` that is not the Store app (under `WindowsAp
 
 ## The window
 
-`kitlib/launcher/window.py` `script()` writes the window's PowerShell: the title (the session name), the user's registry environment (but Path, TEMP, TMP), every inherited `CLAUDE*`/`ANTHROPIC*` variable cleared, then `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`, the session mark, `CLAUDE_CONFIG_DIR`, TEMP/TMP from `AGENT_TEMP` when set, the folder, and the `claude` command with `--permission-mode auto --remote-control '<name>' -n '<name>'`. It opens minimized and unfocused through `conhost.exe powershell.exe -NoExit -EncodedCommand`.
+`kitlib/launcher/window.py` `script()` writes the window's PowerShell: the title (the session name), the user's registry environment (but Path, TEMP, TMP), every inherited `CLAUDE*`/`ANTHROPIC*` variable cleared, then `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`, the session mark, `CLAUDE_CONFIG_DIR`, when the launcher sees `AGENT_TEMP`, that variable set again with TEMP/TMP pointed at it (the PM resume too), the folder, and the `claude` command with `--permission-mode auto --remote-control '<name>' -n '<name>'`. It opens minimized and unfocused through `conhost.exe powershell.exe -NoExit -EncodedCommand`.
 
 Every window sets `PM_KIT_ROLE` (docs/guard.md "Session mark") and `PM_KIT_SESSION_NAME`; `script()` refuses an empty role, since an unmarked session counts as the owner's.
 
@@ -69,7 +72,7 @@ Every window sets `PM_KIT_ROLE` (docs/guard.md "Session mark") and `PM_KIT_SESSI
 | the PM session `after-reboot` resumes | `pm` |
 | `start --agent <other>` | the agent's own name |
 
-The consultant is not marked `coordinator`: it never dispatches or lands, and the coordinator start hook should not fire for it; under the guard it is held like any non-owner session.
+Only the launcher's PM resume carries the `pm` mark; no settings file sets `PM_KIT_ROLE`, so a PM session opened by hand or in the desktop app is unmarked. The consultant is not marked `coordinator`: it never dispatches or lands, and the coordinator start hook should not fire for it; under the guard it is held like any non-owner session.
 
 ## Start
 
@@ -87,7 +90,7 @@ The consultant is not marked `coordinator`: it never dispatches or lands, and th
 
 ## After a reboot
 
-`after-reboot` waits 60 s, then starts every sessions.json entry on the account `pick-account` chooses, skipping `_` keys, `"autostart": false` and any entry whose stem is already running; an entry's brief is passed whenever it has one, and a start that fails in any way is logged `FAILED` and the run goes on. It then resumes the PM session (`claude --resume <pm_session_id>` as `pm-session`) unless it is running, the desktop app is running (resuming there too would fork the conversation), or, more than 15 minutes after boot, its transcript was written in the last 15 minutes. Lines go to `after-reboot.log`. The task runs hidden, so nothing it hits escapes as a traceback: no signed-in account or a missing or bad sessions.json (no entry started), a bad conductors.json (no PM resume), a failed sessions.json write, and a PM account not signed in are each logged `FAILED`, and the run goes on to what it still can. `--test` starts only a plain `autostart-test` session in the home folder; `--dry-run` says what it would start and writes nothing.
+`after-reboot` waits 60 s, then starts every sessions.json entry on the account `pick-account` chooses, skipping `_` keys, `"autostart": false` and any entry whose stem is already running; an entry's brief is passed whenever it has one, and a start that fails in any way is logged `FAILED` and the run goes on. It then resumes the PM session (`claude --resume <pm_session_id>` as `pm-session`) unless it is running, the desktop app is running (resuming there too would fork the conversation; with `pm_resume_beside_desktop` true it resumes anyway and logs so), or, more than 15 minutes after boot, its transcript was written in the last 15 minutes. Lines go to `after-reboot.log`. The task runs hidden, so nothing it hits escapes as a traceback: no signed-in account or a missing or bad sessions.json (no entry started), a bad conductors.json (no PM resume), a failed sessions.json write, and a PM account not signed in are each logged `FAILED`, and the run goes on to what it still can. `--test` starts only a plain `autostart-test` session in the home folder; `--dry-run` says what it would start, runs the PM resume checks and says their outcome, and opens and writes nothing.
 
 ## Autostart
 

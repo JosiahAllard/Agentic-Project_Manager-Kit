@@ -1,6 +1,7 @@
 """The old hook and hub paths stay live until settings point at claude/; delete this package then."""
 import json
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -18,12 +19,25 @@ def run(path, role):
     return r.returncode, r.stdout
 
 
+def steady(result):
+    """(code, out) with every "<n> min ago" age blanked: the two runs are a moment apart, so a minute boundary between them
+    would otherwise make the same stub print 8099 in one and 8100 in the other."""
+    return result[0], re.sub(r"\d+ min ago", "N min ago", result[1])
+
+
 class StubTest(unittest.TestCase):
     def same(self, name, role):
         old = run(os.path.join(ROOT, "hooks", name), role)
         new = run(os.path.join(ROOT, "claude", "hooks", name.replace("conductor", "coordinator")), role)
         self.assertEqual(old[0], 0)
-        self.assertEqual(old, new)
+        self.assertEqual(steady(old), steady(new))
+
+    def test_steady_ignores_an_age_ticking_over_a_minute(self):
+        self.assertEqual(steady((0, "last seen 8099 min ago; x")), steady((0, "last seen 8100 min ago; x")))
+
+    def test_steady_still_sees_other_differences(self):
+        self.assertNotEqual(steady((0, "8099 min ago")), steady((0, "8099 min ago!")))
+        self.assertNotEqual(steady((0, "8099 min ago")), steady((1, "8099 min ago")))
 
     def test_coordinator_stub_silent_without_role(self):
         self.same("conductor_session_start.py", None)

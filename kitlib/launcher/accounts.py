@@ -32,6 +32,12 @@ def parse_time(text):
     return dt if dt.tzinfo else dt.astimezone()
 
 
+def whole(pct):
+    """A percentage as a whole number, rounded half to even as PowerShell's [int] cast did (94.6 is
+    95, so a 95% limit counts it as over); None or '' is 0."""
+    return int(round(float(pct or 0)))
+
+
 def short(dt):
     """'ddd HH:mm' in local time, as the PowerShell launchers printed it."""
     return dt.astimezone().strftime('%a %H:%M')
@@ -147,7 +153,7 @@ def week_rows(settings, now):
         _, data = newest_usage(settings, n)
         w = (data or {}).get('seven_day')
         if isinstance(w, dict) and parse_time(w.get('resets_at')):
-            pct, reset = int(float(w.get('used_percentage') or 0)), parse_time(w['resets_at'])
+            pct, reset = whole(w.get('used_percentage')), parse_time(w['resets_at'])
             while reset < now:
                 reset, pct = reset + datetime.timedelta(days=7), 0
         rows.append((n, pct, reset))

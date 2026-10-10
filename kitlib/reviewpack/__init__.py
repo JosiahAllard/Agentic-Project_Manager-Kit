@@ -36,10 +36,12 @@ with no tools/doc_budget.py prints NOT CHECKED: nothing was measured, so it must
 and nothing failed, so the exit status is unchanged.
 
 The doc index check runs next to it as `<python> <kit>/tools/doc_index.py -C <checkout> --head
-<branch>` (the index checks doc_budget no longer makes), judged by kitlib.verdict on `DOC INDEX
-OK` / `DOC INDEX FAILED` and printed as a `doc index` line; a failure fails the pack like a failing
-doc budget. The BASE's `.kit.json` "doc_index".enabled false prints no line and runs nothing; the
-tool itself reads the checkout's `.kit.json`, so a branch that sets it false drops only the listing.
+<branch> --config-ref <base>` (the index checks doc_budget no longer makes), judged by
+kitlib.verdict on `DOC INDEX OK` / `DOC INDEX FAILED` and printed as a `doc index` line; a failure
+fails the pack like a failing doc budget. The BASE's `.kit.json` "doc_index".enabled false prints
+no line and runs nothing; the tool reads every doc index setting at the base too, so a branch's own
+`.kit.json` can neither switch the check off nor rename the index it checks. commit and preflight
+still read the working tree's: they are advisory and gate no landing; this pack is the landing check.
 
 Exit codes: OK 0 nothing to stop a landing; FAILED 1 an owner-only trailer problem, a commit the
 trailers rule fails, a failing doc budget or a failing doc index listing; USAGE 2 no merge-base, a
@@ -391,7 +393,7 @@ def index_line(root, base, branch, base_cfg):
         return None, False
     if not os.path.isfile(DOC_INDEX):
         return doc_callers.not_checked(), False
-    argv = [sys.executable, DOC_INDEX, '-C', root, '--head', branch]
+    argv = [sys.executable, DOC_INDEX, '-C', root, '--head', branch, '--config-ref', base]
     try:
         res = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
                              errors='replace', timeout=doc_callers.TIMEOUT)
