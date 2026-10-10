@@ -4,6 +4,7 @@ import hashlib
 import os
 import struct
 import threading
+import time
 import zlib
 
 from .errors import Unsupported
@@ -292,6 +293,25 @@ _PACK_CACHE = {}
 _PACK_LOCK = threading.Lock()
 
 
+def _read_loose(path):
+    """A loose object file's bytes, None when there is none. Windows denies an open
+    (PermissionError) while another holder of the file excludes readers or the file is being
+    replaced; that window is retried as refs._read_file retries a ref, and a denial that outlasts
+    it is raised: an object that exists but cannot be read is never taken for a missing one."""
+    for attempt in range(51):
+        try:
+            with open(path, 'rb') as f:
+                return f.read()
+        except PermissionError:
+            if os.path.isdir(path):
+                return None
+            if attempt == 50:
+                raise
+            time.sleep(0.01)
+        except OSError:
+            return None
+
+
 class ObjectStore:
     def __init__(self, objdir, algo):
         self.objdir = objdir
@@ -370,11 +390,9 @@ class ObjectStore:
     def _read(self, oid):
         if len(oid) != self.hexlen:
             return None
+        data = _read_loose(self._loose_path(oid))
         try:
-            with open(self._loose_path(oid), 'rb') as f:
-                raw = zlib.decompress(f.read())
-        except OSError:
-            raw = None
+            raw = zlib.decompress(data) if data is not None else None
         except zlib.error:
             raw = None
         if raw is not None:

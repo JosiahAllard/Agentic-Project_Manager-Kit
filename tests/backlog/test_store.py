@@ -3,7 +3,6 @@ races, validation before publish, the no-remote path and reads that never touch 
 import hashlib
 import os
 import shutil
-import threading
 import unittest
 from unittest import mock
 
@@ -13,7 +12,7 @@ from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Failure, Usage
 from kitlib.git import cmd
 
-from tests.backlog.helpers import BRANCH, StoreCase, priced, rec
+from tests.backlog.helpers import BRANCH, StoreCase, priced, race, rec
 from tests.gitfixture import TempRepo, fixture_env
 from tests.realgit import real_git
 
@@ -55,6 +54,17 @@ def wrap_git(case, on):
 
 def remote_log(case):
     return case.repo.git('log', '--format=%s', smod.STORE_REF, '--', cwd=case.repo.remote).split('\n')
+
+
+def store_history(case):
+    """[(subject, [(status, path), ...])] of the remote's store, newest first."""
+    out = case.repo.git('log', '--no-renames', '--format=%x01%s', '--name-status', smod.STORE_REF,
+                        '--', cwd=case.repo.remote)
+    history = []
+    for block in out.split('\x01')[1:]:
+        lines = [x for x in block.split('\n') if x.strip()]
+        history.append((lines[0], [tuple(x.split('\t', 1)) for x in lines[1:]]))
+    return history
 
 
 def worktree_state(repo):
@@ -151,36 +161,72 @@ class CompareAndSwap(StoreCase):
         self.assertIn('already in flight', str(cm.exception))
         self.assertEqual(self.get('FOO').get('pulled_by'), 'other-branch')
 
+    def writers(self, n):
+        return [('W%d' % i, clone(self, 'c%d' % i)[0]) for i in range(n)]
+
+    def assert_every_write_survives(self, names):
+        """The store holds every record, in a linear history of one commit per write, and no
+        commit deleted a record: a write built on a tree that lost its parent's records shows as
+        a D line here even when the final set happens to come out whole."""
+        snap = self.store.load()
+        history = store_history(self)
+        shown = '\n'.join('%s %s' % (subject, changes) for subject, changes in history)
+        self.assertEqual(sorted(r.id for r in snap.records), names, 'the store history:\n' + shown)
+        self.assertEqual([c for _, changes in history for c in changes if c[0] != 'A'], [],
+                         'a write deleted or changed another record:\n' + shown)
+        self.assertEqual(sorted(subject for subject, _ in history),
+                         sorted('backlog: add %s' % n for n in names),
+                         'a linear history, one commit per write:\n' + shown)
+
     def test_concurrent_writers_all_survive(self):
         """Every writer plans against the same empty store before any publishes (the barrier in
         before_publish), so all but one first push must lose the lease and retry."""
-        names = ['W%d' % i for i in range(4)]
-        stores = [clone(self, 'c%d' % i)[0] for i in range(len(names))]
-        errors, attempts = [], {n: [] for n in names}
-        gate = threading.Barrier(len(names), timeout=120)
-
-        def run(store, rid):
-            def planned(attempt):
-                attempts[rid].append(attempt)
-                if attempt == 0:
-                    gate.wait()
-            store.before_publish = planned
-            try:
-                add(store, rid)
-            except Exception as exc:          # reported below; a thread cannot fail the test
-                errors.append('%s: %r' % (rid, exc))
-        threads = [threading.Thread(target=run, args=(s, n)) for s, n in zip(stores, names)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(120)
+        writers = self.writers(4)
+        names = [n for n, _ in writers]
+        errors, attempts = race(self, writers, add)
         self.assertEqual(errors, [])
         retried = sorted(n for n in names if len(attempts[n]) > 1)
         self.assertEqual(len(retried), len(names) - 1,
                          'one first push wins, every other one conflicts: %r' % attempts)
-        self.assertEqual(sorted(r.id for r in self.store.load().records), names)
-        count = self.repo.git('rev-list', '--count', smod.STORE_REF)
-        self.assertEqual(count, str(len(names)), 'a linear history, one commit per write')
+        self.assert_every_write_survives(names)
+
+    def test_a_writer_that_dies_in_the_race_is_reported_not_lost(self):
+        """A writer killed by something that is not an Exception (the fake git's Unsupported is a
+        BaseException) is an error naming it, not a record the store seems to have lost."""
+        from kitlib.git.fake.errors import Unsupported
+        writers = self.writers(3)
+
+        def kill(name, attempt):
+            if name == 'W0':
+                raise Unsupported('injected: W0 dies after its plan')
+        errors, attempts = race(self, writers, add, hook=kill)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith('W0: Unsupported('), errors)
+        self.assertEqual(attempts['W0'], [0])
+        self.assert_every_write_survives(['W1', 'W2'])
+
+    def test_four_writers_planned_on_one_empty_store_publish_in_turn(self):
+        """The race without threads or load: each writer's first plan runs the next writer's whole
+        write before it publishes, so all four plan against the empty store, the innermost
+        publishes first, and every outer one loses the lease once, re-plans on the tip it lost to
+        and wins."""
+        writers = self.writers(4)
+        attempts = {n: [] for n, _ in writers}
+
+        def chain(i):
+            name, store = writers[i]
+
+            def planned(attempt):
+                attempts[name].append(attempt)
+                if attempt == 0 and i + 1 < len(writers):
+                    chain(i + 1)
+            store.before_publish = planned
+            add(store, name)
+        chain(0)
+        self.assertEqual(attempts, {'W0': [0, 1], 'W1': [0, 1], 'W2': [0, 1], 'W3': [0]})
+        self.assertEqual([subject for subject, _ in store_history(self)],
+                         ['backlog: add W0', 'backlog: add W1', 'backlog: add W2', 'backlog: add W3'])
+        self.assert_every_write_survives(['W0', 'W1', 'W2', 'W3'])
 
     def test_a_push_to_a_remote_that_cannot_be_read_fails_without_a_retry(self):
         self.seed(priced('FOO'))
