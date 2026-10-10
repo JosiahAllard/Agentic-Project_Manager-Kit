@@ -21,7 +21,9 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     a shell, eval, Invoke-Expression, source or an encoded command, pipes into a shell, or names
     a git subcommand or option by a variable. Such a line in a repository with a PM data record
     is denied too (`git-push-pmdata`), wherever in it, in every session but the owner's own: the
-    hidden program may be git push --no-verify.
+    hidden program may be git push --no-verify. PowerShell's `& (<subexpression>)` leaves a line
+    clean (commands.call_subexpr); on a line unclean for another reason it is judged only by that
+    PM data check (rules.call_subexpr_pmdata), never as unreadable.
 
 Where a pattern matches, the directory is the one the command holding the match runs in (a
 literal cd before it is followed), not only the call's.
