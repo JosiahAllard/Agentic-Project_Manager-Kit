@@ -18,7 +18,8 @@ from unittest import mock
 
 from kitlib.config import ConfigError, load as load_config
 from kitlib.git import cmd
-from kitlib.preflight import hooks, lockline, machine, nextblock, report, settings as st
+from kitlib.config import migration, user
+from kitlib.preflight import configline, hooks, lockline, machine, nextblock, report, settings as st
 from tests import gitfixture
 from tools import preflight
 
@@ -78,6 +79,19 @@ class Fixture(unittest.TestCase):
                               side_effect=lambda *a, **k: self.strays.append((a, k)) or (0, []))
         p.start()
         self.addCleanup(p.stop)
+        # the `config` line reads a scratch home (run_preflight passes it); one that reached for
+        # the user's own machine config would fail here instead of reading it
+        self.home = os.path.join(self.repo.base, 'home')
+        os.makedirs(self.home)
+        real_line = configline.line
+
+        def scratch_only(home=None):
+            if home is None:
+                raise AssertionError('the config line would read the real home folder')
+            return real_line(home)
+        p = mock.patch.object(report.configline, 'line', scratch_only)
+        p.start()
+        self.addCleanup(p.stop)
         old = os.getcwd()
         self.addCleanup(os.chdir, old)
 
@@ -97,7 +111,7 @@ class Fixture(unittest.TestCase):
         buf, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
             try:
-                code = preflight.main(argv, lock_reader=reader)
+                code = preflight.main(argv, lock_reader=reader, home=self.home)
             except SystemExit as e:
                 code = e.code
         return code, buf.getvalue() + err.getvalue()
@@ -380,6 +394,19 @@ class TheLinesAfterTheWorktrees(Fixture):
     def test_the_lock_line_is_last(self):
         out = self.run_preflight()[1]
         self.assertTrue(out.splitlines()[-1].startswith('lock      cpu free (0/4)'), out)
+
+    def test_the_config_line_reads_the_home_it_is_given(self):
+        """kitlib.preflight.configline over the scratch home: both folders, one key apart."""
+        for name, repos in ((user.DIR_NAME, ['alpha']), (migration.OLD_DIR_NAME, ['beta'])):
+            os.makedirs(os.path.join(self.home, name))
+            with open(os.path.join(self.home, name, user.FILE_NAME), 'w', encoding='utf-8') as fh:
+                json.dump({'ledger_repos': repos}, fh)
+        out = self.run_preflight()[1]
+        self.assertEqual(self.line(out, 'config '),
+                         'config    WARN both ~/%s/%s (read) and ~/%s/%s (ignored) exist, DIFFERENT (keys: '
+                         'ledger_repos) - retire the old folder (docs/kit-json.md "Moving the machine '
+                         'config folder")' % (user.DIR_NAME, user.FILE_NAME, migration.OLD_DIR_NAME, user.FILE_NAME))
+        self.assertLess(out.index('\nconfig '), out.index('\ntraps '))
 
 
 class TheLeftoversLine(Fixture):
@@ -673,6 +700,18 @@ class TheReportHooks(Fixture):
         del sys.modules['pieces']                            # and with none imported first
         self.assertEqual(hooks.lines(self.tools, ['shadow:lines']), ['repo table'])
         self.assertNotIn('pieces', sys.modules)
+
+    def test_a_hook_writes_no_bytecode_into_the_repo(self):
+        """A terminal without PYTHONDONTWRITEBYTECODE would leave tools/__pycache__ (the hook's
+        and its sibling's .pyc) as untracked files in the repo's tree."""
+        self.module('pyc_sibling', 'WORD = "sib"\n')
+        self.module('pyc_hook', 'import pyc_sibling\n'
+                                'def lines():\n    return [pyc_sibling.WORD]\n')
+        with mock.patch.object(sys, 'dont_write_bytecode', False):
+            self.assertEqual(hooks.lines(self.tools, ['pyc_hook:lines']), ['sib'])
+            self.assertFalse(sys.dont_write_bytecode)          # put back as it was
+        self.assertFalse(os.path.exists(os.path.join(self.tools, '__pycache__')),
+                         os.listdir(self.tools))
 
 
 TASKLIST = ('\nImage Name                     PID Session Name\n'

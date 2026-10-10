@@ -848,15 +848,130 @@ def ps_env_targets(c):
 
 
 def line_env_names(commands):
-    """The upper-case names of the environment variables the line's commands set literally, and
-    every name an item cmdlet on env: names (Rename-Item env:FOO TEMP, Copy-Item env:A env:TEMP,
-    New-Item env:TEMP): such a name may then hold any text."""
+    """The upper-case names of the environment variables the line's commands set literally, every
+    name an item cmdlet on env: names (Rename-Item env:FOO TEMP, Copy-Item env:A env:TEMP,
+    New-Item env:TEMP): such a name may then hold any text, and every name a bash builtin assigns
+    from its arguments (bash_var_targets: read HOME, printf -v HOME, for HOME in ...)."""
     names = set()
     for c in commands:
         names.update(n.upper() for n, _v in env_assignments(c, r'[A-Za-z_]\w*'))
         names.update(n.upper() for n in ps_env_targets(c))
         names.update(_ps_env_item_names(c))
+        names.update(bash_var_targets(c))
     return names
+
+
+# a bash builtin's target the text does not name (read $n): bash_var_targets gives it as this name,
+# which no variable has
+COMPUTED_NAME = '<COMPUTED>'
+# the bash builtins that assign a variable named by an argument, not by NAME=value: their short
+# options that take a value (in the same word or the next), and the options whose value is a name
+VAR_BUILTINS = {'read': ('adinNptu', 'a'), 'printf': ('v', 'v'), 'mapfile': ('dnOsuCc', ''),
+                'readarray': ('dnOsuCc', '')}
+# an arithmetic assignment: NAME (or NAME[i]) followed by = or a compound = (+=, <<=, ...) but not
+# ==, or by ++ / --; ++NAME / --NAME. A target written $n or ${n} is one the shell computes.
+_ARITH_OP = r'\s*(?:\[[^\]]*\]\s*)?(?:(?:\*\*|<<|>>|[-+*/%&^|])?=(?!=)|\+\+|--)'
+ARITH_SET_RE = re.compile(r'(?<![\w$])([A-Za-z_]\w*)' + _ARITH_OP + r'|(?:\+\+|--)\s*([A-Za-z_]\w*)')
+ARITH_COMPUTED_RE = re.compile(r'\$\{?[\w@*#?!-]+\}?' + _ARITH_OP + r'|(?:\+\+|--)\s*\$')
+ARITH_EXPANSION_RE = re.compile(r'\$\(\((.*?)(?:\)\)|$)', re.S)
+
+
+def arith_targets(text):
+    """The upper-case names a bash arithmetic expression assigns (HOME=1, HOME+=1, HOME++,
+    ++HOME, x=1,HOME=2), and COMPUTED_NAME when it assigns one written $n or ${n}."""
+    out = [(m.group(1) or m.group(2)).upper() for m in ARITH_SET_RE.finditer(text)]
+    if ARITH_COMPUTED_RE.search(text):
+        out.append(COMPUTED_NAME)
+    return out
+
+
+def _arith_command(c):
+    """True when the bash command `c` is the text of an arithmetic command, `(( ... ))` or a
+    part of `for (( ...; ...; ... ))`: its two innermost groups are ( ( and the source between
+    the nearest (( before it and its start closes none of them."""
+    g = c.groups
+    if len(g) < 2 or g[-1][1] != '(' or g[-2][1] != '(' or c.start is None:
+        return False
+    j = c.source.rfind('((', 0, c.start)
+    if j < 0:
+        return False
+    between = c.source[j + 2:c.start]
+    return between.count(')') <= between.count('(')
+
+
+def bash_var_targets(c):
+    """The upper-case names a bash command assigns from its arguments rather than NAME=value:
+    `read [options] NAME...` (and read -a NAME), `printf -v NAME`, `mapfile`/`readarray
+    [options] NAME`, `getopts OPTSTRING NAME`, `for NAME in ...` and `select NAME in ...` (and
+    `for NAME; do`, which loops over the positional parameters), and the arithmetic assignments
+    (arith_targets) of `let EXPR...`, `(( EXPR ))`, `for (( ...; ...; ... ))` and a $(( EXPR ))
+    in any word. A target the shell computes (read $n, $(($n=1))) is COMPUTED_NAME: it may be
+    any variable."""
+    words = c.words
+    if c.shell != sh.BASH or not words:
+        return []
+    out = []
+    for w in words:
+        if w.dyn and '$((' in w.text:
+            for m in ARITH_EXPANSION_RE.finditer(w.text):
+                out += arith_targets(m.group(1))
+    if _arith_command(c):
+        return out + arith_targets(c.text)
+    if not quoted(c, words[0]) and words[0].text in ('for', 'select') and len(words) > 1:
+        # for NAME in ...; for NAME; do; for NAME do (the last two loop over "$@"); not for ((...))
+        if words[1].text.startswith('(') or (len(words) > 2 and words[2].text not in ('in', 'do')):
+            return out
+        return out + _var_target(c, words[1])
+    inv = invocation(c)
+    if inv is None:
+        return out
+    if inv.name == 'let':
+        for w in inv.args:
+            out += arith_targets(passed(c, w))
+        return out
+    if inv.name == 'getopts':
+        pos = [w for w in inv.args if not w.text.startswith('-')]
+        return out + (_var_target(c, pos[1]) if len(pos) > 1 else [])
+    if inv.name not in VAR_BUILTINS:
+        return out
+    values, named = VAR_BUILTINS[inv.name]
+    pos, args, k = [], inv.args, 0
+    while k < len(args):
+        w = args[k]
+        t = passed(c, w)
+        if t == '--':
+            pos.extend(args[k + 1:])
+            break
+        if t.startswith('-') and len(t) > 1 and not w.dyn:
+            for j, ch in enumerate(t[1:], 1):
+                if ch not in values:
+                    continue
+                if t[j + 1:]:
+                    val = sh.Word(t[j + 1:], w.dyn, w.start, w.end)
+                else:
+                    k += 1
+                    val = args[k] if k < len(args) else None
+                if ch in named and val is not None:
+                    out += _var_target(c, val)
+                break
+            k += 1
+            continue
+        pos.append(w)
+        k += 1
+    if inv.name == 'printf':
+        return out                              # its positional words are the format and values
+    if inv.name in ('mapfile', 'readarray'):
+        pos = pos[:1]
+    for w in pos:
+        out += _var_target(c, w)
+    return out
+
+
+def _var_target(c, w):
+    if w.dyn:
+        return [COMPUTED_NAME]
+    t = passed(c, w)
+    return [t.upper()] if LITERAL_NAME_RE.match(t) else []
 
 
 def _ps_env_item_names(c):
@@ -1225,14 +1340,27 @@ def mark_git_env(parsed):
     ('`set -a`'), else False. The whole line, not the commands after the setter: expand appends
     nested text (eval, bash -c, Invoke-Expression, a sourced here-string) after the line's own
     commands, so order says nothing about which runs first. A line with no git is not
-    affected."""
+    affected. c.home_env is the first of HOME_ENV_NAMES the line sets (line_env_names: an
+    assignment, read HOME, printf -v HOME, for HOME in ..., let HOME=1, $((HOME=1)); see
+    bash_var_targets), or 'a variable named at run time'
+    for a builtin whose target is computed (read $n), else False: git then reads another user
+    config (rules.home_config and rules.git_alias_config judge git with it)."""
     cmds = parsed.commands
+    sets = line_env_names(cmds)
     name = next((n for n in map(git_env_set, cmds) if n), None)
     if name is None:
-        sets = line_env_names(cmds)
         name = next((why for why in (git_env_unsafe(c, sets) for c in cmds) if why), None)
+    home = next((n for n in HOME_ENV_NAMES if n in sets), None)
+    if home is None and COMPUTED_NAME in sets:
+        home = 'a variable named at run time'
     for c in cmds:
         c.git_env = name or False
+        c.home_env = home or False
+
+
+# The variables git for Windows finds the user config through: $XDG_CONFIG_HOME/git/config, and
+# ~/.gitconfig with ~ from HOME, else HOMEDRIVE+HOMEPATH, else USERPROFILE (observed with git 2.55)
+HOME_ENV_NAMES = ('HOME', 'XDG_CONFIG_HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH')
 
 
 FIND_EXEC = ('-exec', '-execdir', '-ok', '-okdir')
@@ -1285,6 +1413,18 @@ def git_dyn_word(inv):
     return None
 
 
+def call_subexpr(inv):
+    """True when PowerShell's call operator runs what a ( ) subexpression computes (`& (Get-Command
+    git) push`, `& (Join-Path $r x.exe) a`; kitlib.guard.shell reads the ( ) as the program word).
+    The program is not literal, but the line stays clean: rules.call_subexpr_pmdata judges it (a PM
+    data repository in every session but the owner's own; an agent session anywhere), so it makes
+    no other line unreadable."""
+    if inv is None or not inv.dyn or inv.cmd.shell != sh.PS or inv.word is None or inv.via is not None:
+        return False
+    k = inv.index
+    return inv.word.text.startswith('(') and k > 0 and inv.cmd.words[k - 1].text == '&'
+
+
 def expand(parsed):
     """Parse every nested shell's text into `parsed` (in place); returns parsed."""
     k = 0
@@ -1300,7 +1440,8 @@ def expand(parsed):
         if inv is None:
             continue
         if inv.dyn:
-            parsed.flag('a command whose program is not literal (%s)' % inv.path)
+            if not call_subexpr(inv):           # rules.call_subexpr_pmdata judges `& (...)`
+                parsed.flag('a command whose program is not literal (%s)' % inv.path)
             continue
         why = git_dyn_word(inv)
         if why:

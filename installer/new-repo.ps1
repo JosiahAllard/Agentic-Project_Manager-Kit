@@ -36,7 +36,11 @@
 # Its result is reported as pm_data.py gives it: its lines, then its exit code as this script's.
 #
 # A write that fails (a read-only or locked file, a full disk) stops the script at once: it prints
-# "FAILED", what was already written, and exits 1. It never prints "wrote" for a file it did not write.
+# "FAILED", what was already written (and the target that failed, which may be partly written), and exits 1.
+# It never prints "wrote" for a file it did not write. Every kit template (stack.json, gate.json,
+# common\.gitignore, gitattributes, INDEX.md) and an existing .gitignore / .gitattributes is read at
+# plan time: one that cannot be read, a stub plan that cannot be read, or a stack tools file named
+# like a stub, refuses before any write.
 #
 # Exit: 0 dry run printed or files written, 1 refused or a write failed, 2 usage; with -PmData and -Apply, a non-zero
 # exit of pm_data.py init (1 refused, 2 configuration, 3 made locally but the push failed, 4 stopped
@@ -63,10 +67,15 @@ function Fail([string]$msg, [int]$code = 1) { Write-Host "new-repo: REFUSED - $m
 # call only prints an error and the script goes on to say "wrote". Here a failure stops it, with the
 # files already written named so they can be undone.
 $written = New-Object System.Collections.Generic.List[string]
+# A file that was there already and only had lines appended is not the script's to delete: kept apart.
+$appended = New-Object System.Collections.Generic.List[string]
 function Stop-Write([string]$path, $err, [string]$verb = 'write') {
     Write-Host "new-repo: FAILED - cannot $verb $path - $($err.Exception.Message)"
     if ($written.Count) { Write-Host "  already written (delete them to undo): $($written -join ' , ')" }
-    else { Write-Host "  nothing had been written before it" }
+    elseif (-not $appended.Count) { Write-Host "  nothing had been written before it" }
+    foreach ($a in $appended) { Write-Host "  appended to $a : remove the '# Added by the kit installer' block to undo (the file is yours, do not delete it)" }
+    # The target that failed is not in the list above: a write can fail part-way.
+    if ($verb -eq 'write') { Write-Host "  $path may be partly written (the write that failed; delete it too if the script made it, check it if it was there before)" }
     exit 1
 }
 function Put-File([string]$path, [string]$text, [string]$how = 'wrote') {
@@ -75,7 +84,7 @@ function Put-File([string]$path, [string]$text, [string]$how = 'wrote') {
         if ($how -eq 'appended') { [IO.File]::AppendAllText($path, $text, $utf8) }
         else { [IO.File]::WriteAllText($path, $text, $utf8) }
     } catch { Stop-Write $path $_ }
-    $written.Add($path)
+    if ($how -eq 'appended') { $appended.Add($path) } else { $written.Add($path) }
 }
 function Copy-NewFile([string]$src, [string]$dst) {
     try {
@@ -158,10 +167,16 @@ if ($Stack) {
         $known = (Get-ChildItem -LiteralPath (Join-Path $kit 'templates\stacks') -Directory | ForEach-Object { $_.Name }) -join ', '
         Fail "-Stack '$Stack' is not a stack the kit has ($known)" 2
     }
-    $meta = Get-Content -LiteralPath (Join-Path $stackDir 'stack.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    # Every kit template is read here, at plan time, under Stop (the script runs under Continue, where a
+    # failed read only prints an error and goes on): an unreadable one refuses before anything is written.
+    $stackJson = Join-Path $stackDir 'stack.json'
+    try { $meta = Get-Content -LiteralPath $stackJson -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop }
+    catch { Fail "cannot read $stackJson - $($_.Exception.Message); nothing was written" }
     foreach ($k in 'gitignore', 'gitattributes') { if ($meta.$k) { $stackLines[$k] = @($meta.$k) } }
     $gateSrc = Join-Path $stackDir 'tools\gate.json'
     if (-not (Test-Path -LiteralPath $gateSrc)) { Fail "the kit has no $gateSrc" 2 }
+    try { $gateText = [IO.File]::ReadAllText($gateSrc, $utf8) }
+    catch { Fail "cannot read $gateSrc - $($_.Exception.Message); nothing was written" }
     # The stack's other tools files (Godot: godot.cmd); gate.json is handled apart (it must exist before
     # the stubs are written, and one already there refuses).
     $toolFiles = @(Get-ChildItem -LiteralPath (Join-Path $stackDir 'tools') -File | Where-Object { $_.Name -ine 'gate.json' } |
@@ -182,12 +197,19 @@ function Plan-LineFile([string]$name, [string[]]$stackWant) {
     # The kit ships the attributes template as "gitattributes": a tracked .gitattributes would apply to
     # the kit's own checkout (and the fake git of its tests refuses one).
     $tplName = if ($name -eq '.gitattributes') { 'gitattributes' } else { $name }
-    $tpl = @(Get-Content -LiteralPath (Join-Path $kit "templates\common\$tplName") -Encoding UTF8)
+    $tplPath = Join-Path $kit "templates\common\$tplName"
+    try { $tpl = @(Get-Content -LiteralPath $tplPath -Encoding UTF8 -ErrorAction Stop) }
+    catch { Fail "cannot read $tplPath - $($_.Exception.Message); nothing was written" }
     $stackWant = @($stackWant | Where-Object { $_ -and $_.Trim() -and -not $_.TrimStart().StartsWith('#') })
     $want = @($tpl | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') }) + @($stackWant)
     $new = -not (Test-Path -LiteralPath $path)
     $have = @()
-    if (-not $new) { $have = @(Get-Content -LiteralPath $path -Encoding UTF8 | ForEach-Object { Norm $_ }) }
+    # Under Continue a failed read only prints an error and leaves $have empty: read it under Stop and
+    # refuse here, before anything is written.
+    if (-not $new) {
+        try { $have = @(Get-Content -LiteralPath $path -Encoding UTF8 -ErrorAction Stop | ForEach-Object { Norm $_ }) }
+        catch { Fail "cannot read $path - $($_.Exception.Message); nothing was written" }
+    }
     $missing = @($want | Where-Object { $have -notcontains (Norm $_) })
     $body = @()
     if ($new) {
@@ -207,8 +229,26 @@ $indexNew = -not (Test-Path -LiteralPath $indexDst)
 # one named on an entry line). Only when the starter is what gets written; never a refusal.
 $unindexed = @()
 if ($indexNew) {
-    $named = @([regex]::Matches((Get-Content -LiteralPath $indexSrc -Raw -Encoding UTF8), '`([^`]+)`') | ForEach-Object { $_.Groups[1].Value })
-    $unindexed = @(& git -C $targetFull ls-files -- '*.md' 2>$null | Where-Object { $_ -and ($named -notcontains $_) })
+    try { $indexText = [IO.File]::ReadAllText($indexSrc, $utf8) }
+    catch { Fail "cannot read $indexSrc - $($_.Exception.Message); nothing was written" }
+    $named = @([regex]::Matches($indexText, '`([^`]+)`') | ForEach-Object { $_.Groups[1].Value })
+    # -z with core.quotePath=false gives the names raw (git otherwise quotes a non-ASCII name as "\303\251"),
+    # NUL-separated and UTF-8; read the bytes as UTF-8 through a process, not the console's code page.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'git'
+    $psi.Arguments = "-C `"$targetFull`" -c core.quotePath=false ls-files -z -- `"*.md`""
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = $utf8
+    $lsOut = ''
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $lsOut = $proc.StandardOutput.ReadToEnd()
+        $null = $proc.StandardError.ReadToEnd()
+        $proc.WaitForExit()
+    } catch { $lsOut = '' }
+    $unindexed = @($lsOut.Split([char]0) | Where-Object { $_ -and ($named -notcontains $_) })
 }
 
 # The stubs the kit would write, from kit_stubs itself (it reads the target's .kit.json, which is
@@ -262,11 +302,22 @@ if ($PmData) {
     Write-Host "  $when after the files above:  $pmLine"
 }
 if ($planCode -ne 0) { Fail "kit_stubs.py refused the stubs above (exit $planCode); nothing was written" }
+# A stack tools file that has a stub's name would be copied first and then be a file "that is not a
+# stub" where the stub goes. Refuse now, in the dry run too.
+$stubNames = @(@($plan) | ForEach-Object { if ("$_" -match '[\\/]([^\\/]+\.py)\s*$') { $Matches[1] } })
+if (@($plan | Where-Object { "$_".Trim() }).Count -and -not $stubNames.Count) {
+    Fail "cannot read the stub plan (kit_stubs.py printed lines with no stub file name in them, shown above); nothing was written"
+}
+foreach ($t in $toolFiles) {
+    if (@($stubNames | Where-Object { $_ -ieq $t.Name }).Count) {
+        Fail "the $Stack stack's tools file $($t.Name) has the name of a kit tool stub; nothing was written"
+    }
+}
 if (-not $Apply) { exit 0 }
 
 # The gate file goes first: kit_stubs reads .kit.json and refuses a "gate" path that is not there.
 if ($Stack) {
-    Put-File $gateDst ([IO.File]::ReadAllText($gateSrc, $utf8))
+    Put-File $gateDst $gateText
     Write-Host "  wrote    $gateDst"
     foreach ($t in $toolFiles) {
         if (Test-Path -LiteralPath $t.Dst) { continue }
@@ -307,7 +358,7 @@ foreach ($f in $lineFiles) {
     }
 }
 if ($indexNew) {
-    Put-File $indexDst ([IO.File]::ReadAllText($indexSrc, $utf8))
+    Put-File $indexDst $indexText
     Write-Host "  wrote    $indexDst"
 }
 Write-Host ""
@@ -338,9 +389,11 @@ if ($PmData) {
     }
 }
 Write-Host "Next:"
+$asUsual = @('.gitattributes', 'docs/INDEX.md') + @($toolFiles | ForEach-Object { "tools/$($_.Name)" })
+$asUsual = ($asUsual[0..($asUsual.Count - 2)] -join ', ') + ' and ' + $asUsual[-1]
 Write-Host "  1. review .kit.json (docs/kit-json.md names every key). Commit .kit.json and tools/gate.json under the"
 Write-Host "     owner's identity (owner-only paths: tools/commit.py refuses an agent's); commit the stubs, .gitignore,"
-Write-Host "     .gitattributes and docs/INDEX.md as usual"
+Write-Host "     $asUsual as usual"
 Write-Host "  2. python `"$stubTool`" check -C `"$targetFull`"   (exit 0: every stub current)"
 if ($Stack) {
     Write-Host "  3. tools/gate.json is the $Stack gate: edit its globs and test command to the project."

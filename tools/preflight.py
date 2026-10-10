@@ -55,7 +55,9 @@ def print_safe(text):
         print(text.encode(enc, errors='replace').decode(enc, errors='replace'), flush=True)
 
 
-def main(argv=None, lock_reader=None):
+def main(argv=None, lock_reader=None, home=None):
+    """`home` is the home folder the `config` line reads the machine config under (default the
+    user's); tests pass a scratch one."""
     p = build_parser()
     a = p.parse_args(argv)
     if a.base is not None:
@@ -68,7 +70,7 @@ def main(argv=None, lock_reader=None):
     try:
         cfg = load_config(top)
         kw = {'lock_reader': lock_reader} if lock_reader else {}
-        lines = report.report(top, cfg, KIT, base=a.base, fetch=a.fetch, **kw)
+        lines = report.report(top, cfg, KIT, base=a.base, fetch=a.fetch, home=home, **kw)
     except ConfigError as e:
         print_safe('preflight: refused: kit configuration: %s' % e)
         return USAGE

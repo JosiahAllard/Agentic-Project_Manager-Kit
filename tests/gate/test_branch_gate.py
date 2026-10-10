@@ -3,6 +3,7 @@ rule that the gate-OK record is written only for the commit whose clean tree pas
 import os
 import sys
 import unittest
+from unittest import mock
 
 from kitlib import gate as G
 import kitlib.config as kconfig
@@ -161,6 +162,91 @@ class BranchGate(fixtures.GateRepoCase):
         self.assertEqual(out.record, gate_ok.record_path(wt, tip))
         with open(out.results[0]['log'], encoding='utf-8') as f:
             self.assertIn('checked .kit.json,tools/kit_hooks.py', f.read())
+
+    def test_loading_the_hook_module_writes_no_bytecode_into_the_tree(self):
+        """In a terminal without PYTHONDONTWRITEBYTECODE, importing the hook module (and a sibling
+        it imports) would leave tools/__pycache__ in the work tree: an untracked change, so the
+        gate would write no record. The fixture has no .gitignore, as a client repo may not."""
+        wt = self.repo.worktree('feature')
+        self.repo.write('tools/hook_sibling.py', 'WORD = "sib"\n', root=wt)
+        self.repo.write('tools/kit_hooks.py', (
+            'import os, sys\n'
+            'sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n'
+            'import hook_sibling\n'
+            'sys.path.pop(0)\n'
+            'def ok(ctx):\n'
+            '    return ctx["run"]([sys.executable, "-c", "print(1)"])\n'
+            'GATE_CHECKS = {"ok": ok}\n'), root=wt)
+        self.addCleanup(sys.modules.pop, 'hook_sibling', None)
+        self.repo.write('.kit.json', '{"hook": {"module": "kit_hooks"}, "gate": {"steps": '
+                        '[{"name": "c", "always": true, "check": "ok"}]}}\n', root=wt)
+        tip = self.repo.commit('check', 'tools/kit_hooks.py', 'tools/hook_sibling.py',
+                               '.kit.json', cwd=wt)
+        with mock.patch.object(sys, 'dont_write_bytecode', False):
+            out = self.gate(wt)
+            self.assertFalse(sys.dont_write_bytecode)          # put back as it was
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertIsNone(out.no_record, out.lines)
+        self.assertEqual(out.record, gate_ok.record_path(wt, tip))
+        self.assertFalse(os.path.exists(os.path.join(wt, 'tools', '__pycache__')),
+                         os.listdir(os.path.join(wt, 'tools')))
+
+    def test_a_cmd_step_python_writes_no_bytecode_into_the_tree(self):
+        """A step's child Python does not inherit sys.dont_write_bytecode: the gate gives it
+        PYTHONDONTWRITEBYTECODE=1, even when the environment it was started from has none, so a
+        script importing a sibling leaves no tools/__pycache__ (the fixture has no .gitignore)."""
+        wt = self.repo.worktree('feature')
+        self.repo.write('tools/step_sibling.py', 'WORD = "sib"\n', root=wt)
+        self.repo.write('tools/step_main.py', 'import step_sibling\nprint("step", step_sibling.WORD)\n',
+                        root=wt)
+        self.repo.write('.kit.json', '{"gate": {"steps": [{"name": "s", "always": true, '
+                        '"cmd": ["{python}", "tools/step_main.py"], "pass": "^step sib"}]}}\n',
+                        root=wt)
+        tip = self.repo.commit('cmd step', 'tools/step_main.py', 'tools/step_sibling.py',
+                               '.kit.json', cwd=wt)
+        self.book_kw['env'].pop('PYTHONDONTWRITEBYTECODE', None)
+        with mock.patch.dict(os.environ):
+            os.environ.pop('PYTHONDONTWRITEBYTECODE', None)
+            out = self.gate(wt)
+        self.assertEqual(out.code, G.OK, out.lines)
+        with open(out.results[0]['log'], encoding='utf-8') as f:
+            self.assertIn('step sib', f.read())              # the script and its import ran
+        self.assertIsNone(out.no_record, out.lines)
+        self.assertEqual(out.record, gate_ok.record_path(wt, tip))
+        self.assertFalse(os.path.exists(os.path.join(wt, 'tools', '__pycache__')),
+                         os.listdir(os.path.join(wt, 'tools')))
+        self.assertNotIn('PYTHONDONTWRITEBYTECODE', self.book_kw['env'])   # merged, not mutated
+
+    def test_a_check_that_imports_a_sibling_lazily_writes_no_bytecode_into_the_tree(self):
+        """The check runs after the module loaded: its own import of a sibling is guarded too."""
+        wt = self.repo.worktree('feature')
+        self.repo.write('tools/lazy_sibling.py', 'WORD = "lazy"\n', root=wt)
+        self.repo.write('tools/kit_hooks.py', (
+            'import os, sys\n'
+            'def ok(ctx):\n'
+            '    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n'
+            '    try:\n'
+            '        import lazy_sibling\n'
+            '    finally:\n'
+            '        sys.path.pop(0)\n'
+            '    ctx["log"].write("sibling %s\\n" % lazy_sibling.WORD)\n'
+            '    return 0\n'
+            'GATE_CHECKS = {"ok": ok}\n'), root=wt)
+        self.addCleanup(sys.modules.pop, 'lazy_sibling', None)
+        self.repo.write('.kit.json', '{"hook": {"module": "kit_hooks"}, "gate": {"steps": '
+                        '[{"name": "c", "always": true, "check": "ok"}]}}\n', root=wt)
+        tip = self.repo.commit('lazy check', 'tools/kit_hooks.py', 'tools/lazy_sibling.py',
+                               '.kit.json', cwd=wt)
+        with mock.patch.object(sys, 'dont_write_bytecode', False):
+            out = self.gate(wt)
+            self.assertFalse(sys.dont_write_bytecode)          # put back as it was
+        self.assertEqual(out.code, G.OK, out.lines)
+        with open(out.results[0]['log'], encoding='utf-8') as f:
+            self.assertIn('sibling lazy', f.read())          # the lazy import did run
+        self.assertIsNone(out.no_record, out.lines)
+        self.assertEqual(out.record, gate_ok.record_path(wt, tip))
+        self.assertFalse(os.path.exists(os.path.join(wt, 'tools', '__pycache__')),
+                         os.listdir(os.path.join(wt, 'tools')))
 
 
 def mode_step(word):

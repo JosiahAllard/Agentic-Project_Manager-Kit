@@ -55,17 +55,22 @@ def parse(argv, cfg, launcher_set=None):
     ap.add_argument("--once", action="store_true", help="poll once, print events, exit 0")
     a = ap.parse_args(argv)
     if not a.sessions:
-        ap.error("--sessions not given and pm_watch.sessions_file not in %s" % kuser.DISPLAY)
+        ap.error("--sessions not given and pm_watch.sessions_file not in %s" % kuser.display())
     if not a.usage_script and not (W.launcher_configured() if launcher_set is None else launcher_set):
         ap.error("no usage source: --usage-script not given, pm_watch.usage_script not set, and "
                  "%s has no launcher key naming the accounts (docs/launcher.md "
                  "\"Settings\"); without one only the default ~/.claude account would be watched"
-                 % kuser.DISPLAY)
+                 % kuser.display())
     return a
 
 
 def main(argv=None, sleep=time.sleep, launcher_set=None):
-    a = parse(argv, W.load_config(), launcher_set)
+    try:
+        cfg = W.load_config()
+    except kuser.ConfigError as e:
+        print("pm_watch: machine config: %s" % e, file=sys.stderr)
+        return 2
+    a = parse(argv, cfg, launcher_set)
     w = W.Watcher(W.load_state(a.state) or {}, [tuple(b.split("=", 1)) for b in a.branch],
                   lambda: W.usage(a.usage_script), a.alerts_dir, a.sessions,
                   claude_host.newest_finder(), idle_minutes=a.idle_minutes,

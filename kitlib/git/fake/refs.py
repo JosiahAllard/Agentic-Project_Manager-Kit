@@ -3,7 +3,8 @@
 Updates lock `<ref>.lock` exclusively as git does, so a fake and a real git (or two fakes) on one
 repository exclude each other, and they fail with git's own words ("cannot lock ref"). No reflog
 is written; a deleted ref's reflog is removed with it, as git does. A reflog read is Unsupported,
-and so is reading a broken loose ref (one holding neither an object name nor "ref:").
+and so is reading a broken loose ref (one holding neither an object name nor "ref:": BrokenRef),
+except in for-each-ref and `rev-parse --verify`, which warn "ignoring broken ref" as git does.
 """
 import os
 import re
@@ -18,6 +19,17 @@ _PACKED_LOCK = threading.Lock()
 PER_WORKTREE_PREFIXES = ('refs/bisect/', 'refs/worktree/', 'refs/rewritten/')
 _PSEUDO = re.compile(r'^[A-Z][A-Z0-9_]*$')
 _HEXRE = re.compile(r'^[0-9a-f]{40}([0-9a-f]{24})?$')
+
+
+class BrokenRef(Unsupported):
+    """A loose ref file holding neither an object name nor "ref:". git warns "ignoring broken
+    ref" at some readers and not others, so only the readers that catch it imitate one
+    (for-each-ref through list_refs' `broken`, and `rev-parse --verify` without --quiet); to every
+    other reader the fake does not model it."""
+
+    def __init__(self, name):
+        super().__init__('a broken ref (%s)' % name)
+        self.name = name
 
 
 def is_pseudo(name):
@@ -118,8 +130,7 @@ def read_raw(repo, name):
         if _HEXRE.match(t[:repo.hexlen]) and len(t) >= repo.hexlen:
             return ('oid', t[:repo.hexlen])
         if name != 'FETCH_HEAD':
-            # git warns "ignoring broken ref" at some readers and not others; not imitated
-            raise Unsupported('a broken ref (%s)' % name)
+            raise BrokenRef(name)
         return None
     if not is_per_worktree(name):
         p = packed(repo).get(name)
@@ -167,9 +178,12 @@ def _loose_names(base, prefix):
     return out
 
 
-def list_refs(repo, prefix='refs/'):
+def list_refs(repo, prefix='refs/', broken=None):
     """[(name, oid)] for every ref under `prefix` (which ends in '/'), sorted by name; symrefs are
-    followed (a dangling one is left out). Per-worktree refs come from this worktree only."""
+    followed (a dangling one is left out). Per-worktree refs come from this worktree only.
+
+    A broken loose ref raises BrokenRef, unless `broken` is a list: its name is then appended
+    there and it is left out (for-each-ref's "ignoring broken ref")."""
     names = set()
     shared = [n for n in _loose_names(repo.commondir, 'refs') if n.startswith(prefix)]
     for n in shared:
@@ -190,7 +204,13 @@ def list_refs(repo, prefix='refs/'):
     for n in sorted(names, key=lambda s: s.encode('utf-8')):
         if not check_refname(n):
             continue
-        oid, _ = resolve(repo, n)
+        try:
+            oid, _ = resolve(repo, n)
+        except BrokenRef:
+            if broken is None:
+                raise
+            broken.append(n)
+            continue
         if oid is not None:
             out.append((n, oid))
     return out

@@ -1,7 +1,7 @@
 # Approved models
 
-Measured on the owner's PC: RTX 3080 Ti (12 GB), 64 GB RAM, ComfyUI 0.36.0 Desktop.
-Times are one run each on 2026-09-18, with other work competing for the GPU at times, so
+Measured on a desktop with a 12 GB GPU and 64 GB RAM, ComfyUI 0.36.0 Desktop, on 2026-09-18.
+Times are one run each, with other work competing for the GPU at times, so
 treat them as rough. Licences were checked on each model's official page on 2026-09-18.
 Recheck before shipping if a model is updated.
 

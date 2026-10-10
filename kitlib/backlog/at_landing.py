@@ -51,14 +51,8 @@ def _has_commit(root, sha):
 
 def _local_tip(ref, root):
     """`(commit, None)` of the local `ref`, `('', None)` when it does not exist, or `(None, why)`
-    when it cannot be read."""
-    r = cmd.call(['rev-parse', '--verify', '--quiet', '%s^{commit}' % ref], root)
-    out = cmd.text(r.out).strip() if r.rc == 0 else ''
-    if out:
-        return out, None
-    if r.rc == 1 and not r.err:
-        return '', None
-    return None, r.err or 'git rev-parse exited %s' % r.rc
+    when it cannot be read (a git ended from outside included: refs.ref_commit)."""
+    return refs.ref_commit(ref, root)
 
 
 def pmdata_refusal(root, tip):

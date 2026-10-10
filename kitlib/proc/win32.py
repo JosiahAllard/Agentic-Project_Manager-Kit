@@ -9,6 +9,7 @@ from ctypes import wintypes
 K32 = ctypes.WinDLL("kernel32", use_last_error=True)
 NTDLL = ctypes.WinDLL("ntdll")
 ADV = ctypes.WinDLL("advapi32", use_last_error=True)
+IPHLP = ctypes.WinDLL("iphlpapi")             # GetExtendedTcpTable returns its error code
 
 H, DW, BOOL = wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL
 
@@ -141,6 +142,7 @@ for _n, _r, _a in (
         ("QueryInformationJobObject", BOOL, (H, ctypes.c_int, wintypes.LPVOID, DW,
                                              ctypes.POINTER(DW))),
         ("AssignProcessToJobObject", BOOL, (H, H)),
+        ("IsProcessInJob", BOOL, (H, H, ctypes.POINTER(BOOL))),
         ("TerminateJobObject", BOOL, (H, wintypes.UINT)),
         ("TerminateProcess", BOOL, (H, wintypes.UINT)),
         ("CreateToolhelp32Snapshot", H, (DW, DW)),
@@ -162,6 +164,14 @@ NTDLL.NtQueryInformationProcess.restype = ctypes.c_long
 NTDLL.NtQueryInformationProcess.argtypes = (H, ctypes.c_int, wintypes.LPVOID, wintypes.ULONG,
                                             ctypes.POINTER(wintypes.ULONG))
 PROCESS_COMMAND_LINE_INFORMATION = 60       # Windows 8.1+: a UNICODE_STRING and its text
+
+# The TCP connection table with each row's owning pid (kitlib.proc.tcp)
+IPHLP.GetExtendedTcpTable.restype = DW
+IPHLP.GetExtendedTcpTable.argtypes = (wintypes.LPVOID, ctypes.POINTER(DW), BOOL, wintypes.ULONG,
+                                      ctypes.c_int, wintypes.ULONG)
+AF_INET, AF_INET6 = 2, 23
+TCP_TABLE_OWNER_PID_ALL = 5
+MIB_TCP_STATE_ESTAB = 5
 
 
 class UNICODE_STRING(ctypes.Structure):

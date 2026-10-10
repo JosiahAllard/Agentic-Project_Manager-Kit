@@ -19,6 +19,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from kitlib import pmwatch as W                                     # noqa: E402
+from kitlib.config import ConfigError                              # noqa: E402
 
 
 def main(argv=None, config_path=None):
@@ -28,7 +29,11 @@ def main(argv=None, config_path=None):
     g.add_argument("--out", help="write an ArtifactData batch of the pending notices here")
     g.add_argument("--posted", help="a batch this tool wrote and that was applied: mark it posted")
     a = ap.parse_args(argv)
-    d = a.dir or W.configured_notice_dir(config_path)
+    try:
+        d = a.dir or W.configured_notice_dir(config_path)
+    except ConfigError as e:
+        print("machine config: %s" % e, file=sys.stderr)
+        return 2
     if not d:
         print("no --dir and no machine_lock.notice.dir in the machine config", file=sys.stderr)
         return 2

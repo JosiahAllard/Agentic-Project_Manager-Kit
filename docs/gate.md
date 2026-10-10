@@ -6,7 +6,7 @@ The universal gate: `tools/gate.py` (entry) over `kitlib/gate` (library). ARCHIT
 
 | Command | Does |
 |---|---|
-| `gate.py [-C DIR] [--base REV] [--full \| --only STEP ...] [--plan] [--slug S] [--log-dir D]` | Gates the checkout under `book(<gate.kind>)` (default `engine-test`), booked as a gate run: the build daemons it leaves are stopped at its end (`kitlib/lock/site.py`). The base is the default base (Default base); the merge base with HEAD is what is compared. |
+| `gate.py [-C DIR] [--base REV] [--full \| --only STEP ...] [--plan] [--slug S] [--log-dir D]` | Gates the checkout under `book(<gate.kind>)` (default `engine-test`), booked as a gate run: the build daemons it leaves that serve nothing outside its job are stopped at its end (Build daemons). The base is the default base (Default base); the merge base with HEAD is what is compared. |
 | `land.py BRANCH [BRANCH ...] --expect-main SHA --expect-tip SHA [--expect-tip SHA ...] [-C DIR] [--lane L] [--summary T] [--full] [--fresh] [--wait S] [--log-dir D] [--keep-branch]` | The landing tool (tools/land.py): lands BRANCH, or a batch, from the main checkout (see Landing). One `--expect-tip` per branch, in the same order. `--wait` defaults to `"landing".wait_s`. Landed, each branch is cleaned up unless `--keep-branch` (see Branch cleanup). |
 | `land.py --sweep-landed [--apply] [-C DIR]` | The branch cleanup for every branch main already contains (`kitlib.gate.cleanup.sweep`; see Branch cleanup). Without `--apply` a dry run: it changes nothing and names what would go. |
 | `land.py --queue [-C DIR]` | Read-only: the landing lock's holder, then the landing queue in turn order (`kitlib.gate.land.queue`). |
@@ -49,6 +49,16 @@ kitlib/gate/steps.py. A step has a `cmd` (argv with `{python} {root} {base} {her
 - **Judging.** A step passes only when its exit code is in `ok_exits`, every `pass` pattern matches, no `fail` pattern matches, a cmd step's log is not empty, and it did not run zero tests (`Ran 0 tests` or a `zero_tests` pattern). The `errors` policy must also find no unexplained line. A `warn` step that fails, or a `warn_lines` hit, is WARN. A FAIL stops the rest unless the step has `continue`. A `requires` entry is a command name (looked up on PATH) or an argv probe that must exit 0 within 60 s (`PROBE_TIMEOUT`; on timeout its whole process tree is ended). One that is missing is SKIP, or FAIL with `requires_strict`. A gate whose selected steps were all skipped did not run anything, so it is REFUSED, not OK.
 - **Reuse.** A cmd step with `reuse` (`true`, or a group name: a group is reused whole or not at all) may be counted as passed in a landing without running (see Gate reuse). A check step never is.
 - **Check contract.** `GATE_CHECKS[name](ctx)`; ctx has `root base merged changed options name log run`. `run(argv, cwd=None)` runs in the slot's job and returns the exit code. A check returns 0/True to pass. Raising fails the check, and the traceback goes in the log. Calling `sys.exit` (any code, 0 included) also fails it, and the code goes in the log. Ctrl+C is not caught: it stops the gate.
+
+## Build daemons
+
+At the release of a gate run that ended "done", `kitlib/lock/run.py` `Slot.stop_daemons` stops the build daemons the gate's commands left in its job (policy: `machine_lock.daemons`, default `gates`, in `kitlib/lock/site.py`). A daemon is shared: any build on the machine may reuse one this gate started, so `kitlib/proc/daemons.py` `stop` ends one only when it is shown to serve the gate's job alone:
+
+- MSBuild nodes and the C#/VB compiler server (VBCSCompiler) are always left running. Their clients reach them over named pipes, and which process holds the other end of a pipe cannot be read from outside.
+- A Gradle or Kotlin daemon is stopped, with its children, only when the other end of every established TCP connection on this machine (`kitlib/proc/tcp.py` `peers`) of every process in its tree is in the gate's job (a job nested in it counts as in), in that same tree, or a process that has gone. `kitlib/proc/tcp.py` reads the connection table and `kitlib/proc/job.py` `Job.contains` asks Windows (`IsProcessInJob`).
+- Anything else leaves it running, never killed: a client outside the job, a client whose job Windows will not tell, a connection on this machine (to a loopback address, or to an address that is the local end of any row in the table) whose other end the table does not show, a connection table or process tree that cannot be read. A daemon in the tree of a daemon left running, or serving a process in that tree, is left too.
+
+Each daemon is said, as `run <id>: stopped the <label> (pid N) it left: <result>` or `run <id>: left the <label> (pid N) running: <why>`, and listed in the run's ended record under `daemons` (`pid`, `what`, `result`; a left one's result is `left: <why>`). A gate nested in another run says them and records none. The tree and the table are read once, before any daemon is ended, so a client that connects between that read and the kill is not seen. Exactly the (pid, creation time) pairs judged are ended, children first, each by `terminate_verified`; the tree is not read again, so a judged child whose pid a newer process now holds is not hit, and a process a daemon starts after the read is not ended. Tests: tests/proc/test_daemons.py, tests/proc/test_tcp.py, tests/lock/test_release_daemons.py.
 
 ## Gate-OK record
 
@@ -168,7 +178,7 @@ kitlib/gate/reuse.py, ported from one repo's gate reuse. In a landing of one bra
 
 Then a step is reused when the record has it as `pass` and its merged-gate argv and cwd equal its branch-gate ones (its `merged_args`, or the lane's, make it run). A reused step's result is `reused` (`REUSED` with its reason in the output, `reused: <steps>` in the verdict); the lines go to `reuse.log` in the log folder. When every selected step is reused, nothing is booked and `setup` does not run.
 
-A reused step does not run, so nothing it would leave behind (a build output, a file a later step reads) exists in the merged gate: give a step whose output a later step needs the same group as that step. In the kit's own repository reuse never fires: the branch gate runs the worktree's kit (`kit.commit` is the tip) and the landing runs the main checkout's (the merge), so the kit identities differ.
+A reused step does not run, so nothing it would leave behind (a build output, a file a later step reads) exists in the merged gate: give a step whose output a later step needs the same group as that step. In the kit's own repository reuse never fires: the branch gate runs the worktree's kit (`kit.commit` is the tip, when the worktree's own gate.py runs, as The caller's checkout documents; `runner.kit_identity` reads the checkout of the gate.py that ran) and the landing runs the main checkout's (the merge), so the kit identities differ.
 
 ### Branch cleanup
 
@@ -189,10 +199,27 @@ A stub run from outside its checkout runs the kit tool in the stub's checkout (d
 - The caller's directory is in a different checkout from the gated one (their git dirs differ): `REFUSED: the caller is in the checkout ...`, exit 4, nothing run, no record.
 - The caller's directory is in no repository, or is in the gated checkout: it runs.
 - git cannot place the caller's directory or the gated tree, or the variable is malformed (a NUL in either path counts): REFUSED (fail closed).
-- An absolute `-C` names the tree, so it runs. A relative `-C` resolves against the stub's checkout, not the caller's directory, so the rule applies to it. Without a stub the gate runs in the caller's directory and the rule never applies.
+- An absolute `-C` names the tree, so it runs. A relative `-C` resolves against the stub's checkout, not the caller's directory, so the rule applies to it. Without a stub the gate runs in the caller's directory and this rule never applies (the no-stub rule below does).
 - A value whose stub checkout is not the gate's own directory was inherited from a stub further up, not set for this process: it is dropped and the gate runs. The two are compared as one directory (os.path.samefile), so a junction, symlink or 8.3 short name for the checkout still counts as its own.
 
-Landings, `wait-result` and `--measure` do not apply the rule. Tests: tests/gate/test_caller_checkout.py.
+With no stub there is a second hazard, in the kit's own repository: every checkout has a real `tools/gate.py`, so `python <worktree>/tools/gate.py` run from the main checkout with no `-C`, or with a relative one such as `-C .`, would gate the main checkout with the worktree's code. For a branch gate run with no stub and no `-C` or a relative one, `tools/gate.py` applies kitlib/gate/caller.py `own_copy_refusal` to the tree it would gate (the directory it was run from, or where the relative `-C` resolves) and its own checkout (`KIT` in tools/gate.py, the same directory as kitlib/gate/steps.py `KIT_ROOT`):
+
+- The two are different checkouts of one repository (the same git common dir, different git dirs): `REFUSED: <gate.py> is in the checkout ...`, exit 4, nothing run. Each following line gives the documented command, `python <tree>/tools/gate.py -C <tree>`, for one tree, with a path that holds a space in double quotes. A relative `-C` names the tree meant, so only its line is given, headed `  to gate <tree>:`. With no `-C` the tree meant is ambiguous (the gate.py's path names one checkout, the directory another), so both are given, headed by intent: `  if you meant the directory you ran from:` (the checkout the directory is in) and `  if you meant the checkout this gate.py is in:`.
+- An absolute `-C` names the tree on purpose and is not checked: main's gate.py with an absolute `-C <worktree>` runs main's code on the worktree.
+- They are the same checkout, the gate.py is in another repository (a repository's stubs run the kit checkout written into them, kitlib/stubs `KIT_ROOT`), or either is in no repository: it runs.
+- git cannot place the gate.py's checkout (dubious ownership, a git timeout): REFUSED only when its path nests (one inside the other) with the gated checkout or with the folder that checkout's git common dir is in, so the two could be one repository's checkouts; the command lines follow as above. A sibling that only shares a name prefix (`main-co-x` beside `main-co`) does not nest. Otherwise it runs, as a repository's gate did before this check. A directory git cannot place is left to the gate itself.
+
+A relative `--log-dir` resolves against the directory the gate was run from, not the gated tree, so when that directory is in another checkout the logs would be stray files there: kitlib/gate/caller.py `log_dir_refusal` makes it `USAGE: --log-dir <D> is relative ...`, exit 2, nothing run. An absolute `--log-dir`, none, or a directory in no repository passes.
+
+The one documented way to gate a worktree from another directory is that worktree's own gate.py with an absolute `-C` naming it:
+
+```
+python <worktree>/tools/gate.py -C <worktree> --full
+```
+
+Running the worktree's own gate.py matters in the kit's repository: the gate records the identity of the kit that ran it (`kit.commit`, Gate reuse), and the code under test is the code that gates.
+
+Landings, `wait-result` and `--measure` apply neither rule. Tests: tests/gate/test_caller_checkout.py (`Refusal` and `ThroughAStub` for the stub rule; `OwnCopy`, `LogDir` and `RunByPath` for the no-stub rule and `--log-dir`).
 
 ## Known limits
 

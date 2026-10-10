@@ -40,7 +40,7 @@ Stop that line of work. Report the verbatim reason to the coordinator. No retry,
   (`--find gate`), or a change to them lands untested and the next landing finds main red.
 - The backlog store is the only tracker; closing an item is part of the landing (skill
   backlog-ops), never a records-agent edit; git history and the landing message are the record.
-  First move what must survive out of the closing record: his decisions, quoted and dated -> the
+  First move what must survive out of the closing record: the owner's decisions, quoted and dated -> the
   decisions log; constraints later work relies on -> beside the code they constrain or the doc
   owning the area. A closed record has no file and agents never search history for one. Open
   follow-ups become their own records, never a line kept inside an old one.
