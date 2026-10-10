@@ -10,7 +10,9 @@ import os
 import sys
 import tempfile
 
-from .types import ConfigError, Field, ListOf, MapOf, Obj, Regex, Str, T, parse_json
+from kitlib import sessionmark
+
+from .types import ConfigError, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, parse_json
 
 DIR_NAME = '.claude-pm-kit'
 FILE_NAME = 'config.json'
@@ -45,6 +47,50 @@ class Owned(T):
         return 'object, checked by %s' % self.module
 
 
+HOME_PREFIXES = ('~/', '~\\')
+
+
+class HomeOrAbsPath(Str):
+    """An absolute path, or one under the user's home written `~/...` (expand_home)."""
+
+    def __init__(self):
+        Str.__init__(self, what='an absolute path or ~/<path>')
+
+    def check(self, v, where, errs):
+        Str.check(self, v, where, errs)
+        if isinstance(v, str) and v.strip() and not os.path.isabs(v) and not v.startswith(HOME_PREFIXES):
+            errs.append('%s must be an absolute path or ~/<path>, not %r' % (where, v))
+
+    def describe(self):
+        return 'absolute path or ~/<path>'
+
+
+def expand_home(path, home):
+    """`path` with a leading `~/` (or `~\\`) read as the folder `home`; else unchanged."""
+    if isinstance(path, str) and path.startswith(HOME_PREFIXES):
+        return os.path.normpath(os.path.join(home, path[2:]))
+    return path
+
+
+class MarkMap(MapOf):
+    """A map from session mark to a value: a reserved mark (owner, subagent) never names a
+    session (kitlib.sessionmark.RESERVED), so it is refused."""
+
+    def check(self, v, where, errs):
+        MapOf.check(self, v, where, errs)
+        if isinstance(v, dict):
+            for k in v:
+                if isinstance(k, str) and k.strip().lower() in sessionmark.RESERVED:
+                    errs.append('%s: %r is not a session mark (it is reserved)' % (where, k))
+
+
+# guard_mark_roots: one more write root of the guard's write jail, for main sessions of one mark
+MARK_ROOT = Obj({
+    'path': Field(HomeOrAbsPath(), None, 'the folder, absolute or ~/<path>'),
+    'mode': Field(Enum('add-only', 'read-only', 'open'), None, 'add-only: new files only, never overwrite, move or delete; read-only: no write; open: any write'),
+    'why': Field(Str(), None, 'the reason, a ruling or a measurement'),
+}, required=('path', 'mode'), what='{path, mode, why}')
+
 # ledger_refs: where tools/ledger_refs.py looks for citations of a ruling id (docs/ledger.md "ledger_refs").
 LEDGER_REFS = Obj({
     'repos': Field(MapOf(Obj({
@@ -65,6 +111,7 @@ SCHEMA = {
     'guard_mcp_prefix': Field(Str(), None, 'the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")'),
     'guard_mcp_tools': Field(ListOf(Str()), None, 'more full tool names the guard treats as the lock MCP\'s owner-only tools, as a PreToolUse payload names them (docs/guard.md "Lock MCP")'),
     'guard_agent_marks': Field(ListOf(Str()), None, 'the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json and write-jail rules; it replaces the default list, so it names every mark it holds; unset: coordinator, conductor, deep-worker, consultant and pm (docs/guard.md "Session mark")'),
+    'guard_mark_roots': Field(MarkMap(ListOf(MARK_ROOT), what='mark'), None, 'more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside this config\'s own folder is ignored (docs/guard.md "Write jail")'),
     'pm_data': Field(Owned('kitlib.pmdata'), None, 'the worktree of the PM data branch: {path, branch, remote} (docs/pm-data-branch.md "Layout")'),
     'pm_start': Field(Owned('kitlib.pmstart'), None, 'the PM session-start checklist settings'),
     'coordinator_start': Field(Owned('kitlib.coordinatorstart'), None, 'the coordinator session-start settings'),

@@ -551,8 +551,17 @@ def kit_json(event, ctx, target, role, what):
                   'python -m json.tool %s' % quote(target))
 
 
-def jail_roots(ctx, cwd):
-    return jail.roots(ctx, cwd, lambda p: is_root(p, None, ctx))
+def session_mark(event, ctx):
+    """The launcher mark of a main session (guard_mark_roots looks it up), or None for a subagent
+    and the owner's unmarked session."""
+    if (event or {}).get('agent_id'):
+        return None
+    who = ctx.session_role(event)
+    return None if who in (context.OWNER, context.SUBAGENT) else who
+
+
+def jail_roots(event, ctx, cwd):
+    return jail.roots(ctx, cwd, lambda p: is_root(p, None, ctx), session_mark(event, ctx))
 
 
 JAIL_ASK = 'Ask the coordinator (a coordinator asks the PM) when the work needs a folder outside them.'
@@ -563,7 +572,7 @@ def write_jail(event, ctx, target, cwd, role, what, rewrite=None, run=None):
     the .kit.json data roots, judged by the resolved path."""
     if not target or not agent_session(event, ctx):
         return None
-    rs = jail_roots(ctx, cwd)
+    rs = jail_roots(event, ctx, cwd)
     verdict, root = jail.judge(target, rs)
     if verdict is None:
         return None
@@ -1976,7 +1985,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
         target = sh.resolve_path(w.text, gc.dir)
         if not target:
             continue
-        rs = rs or jail_roots(ctx, cwd)
+        rs = rs or jail_roots(event, ctx, cwd)
         verdict, root = jail.judge(target, rs)
         if verdict is not None:
             what = '`%s` makes %s' % (bare(cmd), w.text)
@@ -1990,7 +1999,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
     d = pm_data_unknown(ctx, gc.dir, cwd, role, '`%s`' % bare(cmd))
     if d:
         return d
-    rs = rs or jail_roots(ctx, cwd)
+    rs = rs or jail_roots(event, ctx, cwd)
     verdict, root = jail.judge(gc.dir, rs)
     if verdict is None:
         return None

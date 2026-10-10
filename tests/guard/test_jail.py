@@ -214,6 +214,79 @@ class Sessions(Base):
         self.allowed(self.outside(PM))
 
 
+class MarkRoots(Base):
+    """The machine config's guard_mark_roots: more write roots for the main sessions of one
+    launcher mark, never for a subagent, never on, over or in the machine config's folder
+    (docs/guard.md "Write jail")."""
+
+    def setUp(self):
+        Base.setUp(self)
+        self.notes = os.path.join(self.w.base, 'pmnotes')
+        os.makedirs(self.notes)
+
+    def roots(self, table):
+        self.w.user_config({'guard_mark_roots': table})
+
+    def test_a_mark_root_opens_a_folder_to_that_mark_only(self):
+        target = os.path.join(self.notes, 'x.md')
+        self.jailed(self.write(target, env=PM, sub=False))
+        self.roots({'pm': [{'path': self.notes, 'mode': 'open', 'why': 'test'}]})
+        self.allowed(self.write(target, env=PM, sub=False))
+        self.allowed(self.write(target, env={context.ROLE_ENV: 'PM'}, sub=False))     # case ignored
+        self.jailed(self.write(target, env=COORDINATOR, sub=False))
+        self.jailed(self.write(target, env=DEEP, sub=False))
+        self.jailed(self.write(target, env=PM, sub=True))       # a subagent of the PM's session
+        self.allowed(self.run_bash('echo x > "%s/y.md"' % W.fwd(self.notes), env=PM, sub=False))
+
+    def test_a_mark_root_keeps_its_mode(self):
+        touch(os.path.join(self.notes, 'old.md'))
+        self.roots({'pm': [{'path': self.notes, 'mode': 'add-only'}]})
+        self.allowed(self.write(os.path.join(self.notes, 'new.md'), env=PM, sub=False))
+        self.jailed(self.write(os.path.join(self.notes, 'old.md'), env=PM, sub=False))
+        d = self.jailed(self.write(os.path.join(self.w.plain, 'x.md'), env=PM, sub=False))
+        self.assertIn('"%s" (mark, add-only)' % W.fwd(self.notes), d.reason)
+
+    def test_a_home_path_reads_from_the_home_folder(self):
+        memory = os.path.join(self.w.home, 'projects', 'p', 'memory')
+        os.makedirs(memory)
+        self.roots({'pm': [{'path': '~/projects/p/memory', 'mode': 'open'}]})
+        self.allowed(self.write(os.path.join(memory, 'MEMORY.md'), env=PM, sub=False))
+        self.jailed(self.write(os.path.join(self.w.home, 'projects', 'other.md'), env=PM, sub=False))
+
+    def test_no_root_on_over_or_in_the_machine_config_folder(self):
+        cfg = os.path.join(self.w.home, '.claude-pm-kit')
+        for path in ('~/', '~/.claude-pm-kit', '~/.claude-pm-kit/sub', self.w.home, self.w.base):
+            with self.subTest(path):
+                self.roots({'pm': [{'path': path, 'mode': 'open'}]})
+                self.jailed(self.write(os.path.join(cfg, 'config.json'), env=PM, sub=False))
+                self.jailed(self.write(os.path.join(cfg, 'sub', 'x.json'), env=PM, sub=False))
+        # a sibling whose name only starts the same is not the folder
+        self.roots({'pm': [{'path': '~/.claude-pm-kit-notes', 'mode': 'open'}]})
+        self.allowed(self.write(os.path.join(self.w.home, '.claude-pm-kit-notes', 'x.md'), env=PM, sub=False))
+
+    def test_a_config_the_strict_reader_refuses_gives_no_mark_roots(self):
+        for table in ({'pm': [{'path': self.notes, 'mode': 'open'}, {'path': 'relative', 'mode': 'open'}]},
+                      {'pm': [{'path': self.notes, 'mode': 'write'}]},
+                      {'owner': [], 'pm': [{'path': self.notes, 'mode': 'open'}]}):
+            with self.subTest(table):
+                self.roots(table)
+                self.jailed(self.write(os.path.join(self.notes, 'x.md'), env=PM, sub=False))
+
+    def test_a_mark_root_over_another_checkout_lets_that_mark_run_git_there(self):
+        # the PM's red-merge reset in a repository's main checkout, from its own folder
+        reset = 'git -C "%s" reset --keep %s' % (W.fwd(self.w.main), 'a' * 40)
+        self.jailed(self.run_bash(reset, env=PM, sub=False))
+        self.roots({'pm': [{'path': self.w.main, 'mode': 'open'}]})
+        self.allowed(self.run_bash(reset, env=PM, sub=False))
+        self.jailed(self.run_bash(reset, env=COORDINATOR, sub=False))
+
+    def test_the_rules_before_the_jail_still_hold(self):
+        self.roots({'pm': [{'path': self.w.main, 'mode': 'open'}, {'path': '~/.claude', 'mode': 'open'}]})
+        self.jailed(self.write(os.path.join(self.w.main, '.kit.json'), env=PM, sub=False), 'kit-json')
+        self.jailed(self.write(os.path.join(self.w.home, '.claude', 'machine-lock', 'state.json'), env=PM, sub=False),
+                    'lock-state')
+
+
 class DataRoots(Base):
     def test_add_only_takes_a_new_file(self):
         self.allowed(self.write(os.path.join(self.w.add, 'model-2.bin')))
