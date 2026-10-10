@@ -491,7 +491,7 @@ _FLAGS = {'--first-parent', '--no-merges', '--merges', '--parents', '--no-walk',
 _VALUES = {'--format', '--pretty', '--max-count', '-n', '--grep', '--since', '--after', '--until',
            '--before', '--diff-filter', '--skip', '--max-parents', '--min-parents', '--author',
            '--committer', '--date', '--decorate', '--no-walk', '--color', '--abbrev'}
-_UNSUPPORTED_FLAGS = {'--stat', '--topo-order', '--full-history', '--simplify-merges', '--boundary',
+_UNSUPPORTED_FLAGS = {'--stat', '--topo-order', '--simplify-merges', '--boundary',
                       '--objects', '--use-mailmap', '--all-match', '--invert-grep', '--date-order'}
 
 
@@ -624,6 +624,7 @@ class Walker:
         self.a = a
         self.cmd = cmd
         self.first_parent = '--first-parent' in a.flags
+        self.full_history = '--full-history' in a.flags
         self.reader = _diffs.Reader(self.repo)
         self.include, self.exclude, self.sym = [], [], []
         self.left = set()
@@ -787,6 +788,10 @@ class Walker:
                         show = not self.treesame(o, None)
                     elif len(parents) == 1:
                         show = not self.treesame(o, parents[0])
+                    elif self.full_history:
+                        # --full-history without parent rewriting: walk every parent; the merge
+                        # shows unless it is TREESAME to all of them.
+                        show = not all(self.treesame(o, p) for p in parents)
                     else:
                         for p in parents:
                             if self.treesame(o, p):

@@ -83,6 +83,21 @@ def require(snap, rid):
     return rec
 
 
+def require_shown(snap, ctx, rid):
+    """require() for `show`: a missing id's NotFound also says which store commit removed it
+    (sha, date, session, subject; never an author name), or that none ever did."""
+    rec = snap.get(rid)
+    if rec is not None:
+        return rec
+    gone = ctx.store.removal(rid, snap)
+    if gone is None:
+        then = 'no commit in the store\'s history removed it: the id is unknown'
+    else:
+        then = 'removed by %s on %s (session %s): %s' % (gone.sha, gone.when, gone.session or '-',
+                                                       gone.subject)
+    raise NotFound('no record with `id: %s` in %s\n  %s' % (rid, snap.where, then))
+
+
 def _text(pairs, body):
     return rmod.render(pairs, body)
 
