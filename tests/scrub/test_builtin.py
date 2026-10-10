@@ -42,6 +42,7 @@ PENDING_FIXTURES = {
     ('record-id', 'tests/docs/test_budget.py'): 5,
     ('record-id', 'tests/docs/test_index.py'): 4,
     ('record-id', 'tests/gate/test_land_queue.py'): 1,
+    ('record-id', 'tests/git/test_fake_tier.py'): 1,
     ('record-id', 'tests/guard/test_entry.py'): 1,
     ('record-id', 'tests/guard/test_fsplace.py'): 1,
     ('record-id', 'tests/guard/test_place.py'): 1,
