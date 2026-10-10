@@ -289,7 +289,141 @@ class AdoptTest(_Base):
         self.assertIn('checked out at', out.lines[0])
 
 
+class ReviewFixTest(_Base):
+    """The review of 7397b37: each test fails on that commit."""
+
+    def refused(self, **kw):
+        refs, cfg = self.refs(), self.config_text()
+        out = self.init(**kw)
+        self.assertUnchanged(out, refs, cfg)
+        return out
+
+    def test_an_insteadof_alias_of_the_public_url_is_refused(self):
+        self.repo.git('config', 'url.%s.insteadOf' % self.repo.remote, 'pub:')
+        out = self.refused(url='pub:')
+        self.assertIn('public', out.lines[0])
+
+    def test_a_pushinsteadof_alias_of_the_public_url_is_refused(self):
+        self.repo.git('config', 'url.%s.pushInsteadOf' % self.repo.remote, 'pub:')
+        self.refused(url='pub:')
+
+    def test_a_file_url_of_the_public_path_is_refused(self):
+        self.refused(url='file:///' + self.repo.remote.replace('\\', '/'))
+
+    def test_a_public_remote_with_no_url_fails_closed(self):
+        self.repo.git('config', '--unset', 'remote.origin.url')
+        out = self.refused(url=self.private)
+        self.assertIn('has no url', out.lines[0])
+
+    def test_the_public_pushurl_is_refused(self):
+        push = os.path.join(self.repo.base, 'push.git')
+        self.repo.git('config', 'remote.origin.pushurl', push)
+        self.refused(url=push)
+
+    def test_any_other_remotes_url_is_refused(self):
+        self.repo.git('remote', 'add', 'mirror', self.private)
+        out = self.refused(url=self.private)
+        self.assertIn("'mirror'", out.lines[0])
+
+    def test_an_existing_private_remote_with_another_url_is_refused(self):
+        self.repo.git('remote', 'add', 'private', self.private)
+        out = self.refused(url=os.path.join(self.repo.base, 'other.git'))
+        self.assertIn('exists with url', out.lines[0])
+
+    def test_names_are_compared_without_case(self):
+        for name in ('PM', 'Main'):
+            self.refused(branch=name)
+        self.refused(remote='Origin')
+        self.repo.git('branch', 'Notes/one')
+        self.refused(branch='notes')
+
+    def test_a_case_twin_of_a_branch_is_refused(self):
+        self.repo.git('branch', 'Data')
+        out = self.refused(branch='data')
+        self.assertIn('only in case', out.lines[0])
+
+    def test_a_private_remote_that_has_the_branch_is_refused(self):
+        root = self.make_orphan()
+        self.repo.git('push', '-q', self.private, 'refs/heads/pmdata:refs/heads/pmdata')
+        self.repo.git('branch', '-D', 'pmdata')
+        out = self.refused(url=self.private)
+        self.assertIn('--adopt', out.lines[0])
+        self.repo.git('remote', 'add', 'private', self.private)
+        self.refused()
+        self.assertEqual(self.remote_ref(self.private, 'refs/heads/pmdata'), root)
+
+    def test_a_remote_tracking_data_branch_is_refused(self):
+        self.repo.git('update-ref', 'refs/remotes/private/pmdata', self.repo.initial)
+        out = self.refused()
+        self.assertIn('--adopt', out.lines[0])
+
+    def test_a_main_ref_git_cannot_read_refuses_adopt(self):
+        self.make_orphan()
+        real = pminit._git
+
+        def fake(cwd, *args, **kw):
+            if args[:3] == ('rev-parse', '--verify', '-q') and args[3].startswith('refs/heads/main'):
+                return 128, '', 'fatal: boom'
+            return real(cwd, *args, **kw)
+        with mock.patch.object(pminit, '_git', fake):
+            out = self.init(adopt=True)
+        self.assertEqual(out.code, pminit.REFUSED, out.lines)
+        self.assertIn('cannot read refs/heads/main', out.lines[0])
+
+    def test_an_adopt_that_fails_before_any_write_is_refused(self):
+        self.make_orphan()
+        with mock.patch.object(pmdata, 'write', side_effect=pmdata.PmDataError('disk full')):
+            out = self.init(adopt=True)
+        self.assertEqual(out.code, pminit.REFUSED, out.lines)
+        self.assertIn('nothing was changed', out.lines)
+        self.assertFalse(os.path.exists(self.data))
+
+    def test_ctrl_c_reports_the_lines_made_so_far(self):
+        with mock.patch.object(pminit, 'write_machine', side_effect=KeyboardInterrupt):
+            out = self.init()
+        self.assertEqual(out.code, pminit.INTERRUPTED, out.lines)
+        self.assertTrue(out.lines[0].startswith('root      '), out.lines)
+        self.assertIn('INTERRUPTED', out.lines)
+        self.assertTrue(out.lines[-1].startswith('stopped part-way'))
+
+    def test_a_failed_machine_config_write_is_partial_and_adopt_finishes_it(self):
+        with mock.patch.object(pminit, 'write_machine', side_effect=OSError('read-only')):
+            out = self.init(url=self.private)
+        self.assertEqual(out.code, pminit.PARTIAL, out.lines)
+        self.assertIn('FAILED: cannot write the machine config: read-only', out.lines)
+        self.assertEqual(self.remote_ref(self.private, 'refs/heads/pmdata'), '')   # no push yet
+        again = self.init(adopt=True, url=self.private)
+        self.assertEqual(again.code, pminit.OK, again.lines)
+        root = self.repo.git('rev-parse', 'refs/heads/pmdata')
+        self.assertEqual(self.remote_ref(self.private, 'refs/heads/pmdata'), root)
+        self.assertIsNotNone(pmdata.machine_settings(self.home))
+
+    def test_an_unreadable_machine_config_is_config(self):
+        os.makedirs(os.path.dirname(user.config_file(self.home)))
+        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
+            f.write('{')
+        refs, cfg = self.refs(), self.config_text()
+        out = self.init()
+        self.assertEqual(out.code, pminit.CONFIG, out.lines)
+        self.assertEqual((self.refs(), self.config_text()), (refs, cfg))
+
+    def test_write_machine_syncs_before_replacing(self):
+        with mock.patch.object(pminit.os, 'fsync', wraps=os.fsync) as sync, \
+                mock.patch.object(pminit.os, 'replace', wraps=os.replace) as replace:
+            order = []
+            sync.side_effect = lambda fd: order.append('fsync')
+            replace.side_effect = lambda a, b: (order.append('replace'), os.rename(a, b))
+            pminit.write_machine(self.home, {'path': self.data})
+        self.assertEqual(order, ['fsync', 'replace'])
+
+
 class CompareUrlTest(unittest.TestCase):
+
+    def test_scp_without_a_user_and_file_urls(self):
+        self.assertEqual(pminit.compare_url('github.com:org/kit.git'),
+                         pminit.compare_url('https://github.com/org/kit'))
+        self.assertEqual(pminit.compare_url('file:///c:/x/k.git'), pminit.compare_url('c:/x/k'))
+        self.assertEqual(pminit.compare_url('C:/x/k'), 'c:/x/k')          # a drive is no host
 
     def test_spellings_of_one_repository_compare_equal(self):
         same = ('https://github.com/Org/Kit.git', 'https://github.com/org/kit/',
@@ -344,6 +478,9 @@ class RealGitAdoptTest(_Base):
         out = self.init(url=os.path.join(self.repo.base, 'missing.git'))
         self.assertEqual(out.code, pminit.PUSH_FAILED, out.lines)
         self.assertTrue(any(l.startswith('push      NOT DONE') for l in out.lines))
+        recover = [l for l in out.lines if l.startswith('recover')]
+        self.assertTrue(recover and 'git fetch private' in recover[0] and '--adopt' in recover[0],
+                        out.lines)
         self.assertTrue(self.repo.git('rev-parse', '--verify', '-q', 'refs/heads/pmdata'))
         self.assertIsNotNone(pmdata.read(self.repo.common_dir()))
 

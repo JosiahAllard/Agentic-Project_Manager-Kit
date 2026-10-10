@@ -7,7 +7,8 @@
 -C names the main checkout (default: here). A relative --path is taken from the current folder.
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.pmdata.init, prints and
 exits. Exit codes: 0 done; 1 refused (nothing changed); 2 usage, or a configuration that cannot be
-read; 3 made locally, the push failed; 4 stopped part-way (run again with --adopt); 130 Ctrl+C.
+read; 3 made locally, the push failed; 4 stopped part-way (run again with --adopt); 130 Ctrl+C
+(the lines made so far are printed).
 """
 import argparse
 import os
