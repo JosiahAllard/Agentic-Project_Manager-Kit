@@ -432,6 +432,19 @@ class FakeUnreadableObjects(unittest.TestCase):
         self.assertFalse(os.path.exists(index))
         self.assertFalse(os.path.exists(index + '.lock'))
 
+    def test_a_path_through_a_missing_tree_is_missing_not_fatal(self):
+        """git 2.55 (probed 2026-10-10): `rev-parse --verify -q HEAD:d/a` exits 1 saying nothing,
+        and `cat-file --batch-check` answers "HEAD:d/a missing" and goes on."""
+        os.chmod(self.loose(self.sub), 0o666)
+        os.remove(self.loose(self.sub))
+        r = cmd.call(['rev-parse', '--verify', '-q', 'HEAD:d/a.txt'], self.r.root)
+        self.assertEqual((r.rc, r.out, r.err), (1, b'', ''))
+        r = cmd.call(['cat-file', '--batch-check'], self.r.root, stdin=b'HEAD:d/a.txt\nHEAD:b.txt\n')
+        self.assertEqual(r.rc, 0, r.err)
+        lines = r.out.decode().splitlines()
+        self.assertEqual(lines[0], 'HEAD:d/a.txt missing')
+        self.assertTrue(lines[1].endswith(' blob 2'), lines)
+
     def test_the_empty_tree_needs_no_object(self):
         from kitlib.git.fake import objects
         empty = objects.EMPTY_TREE['sha1']

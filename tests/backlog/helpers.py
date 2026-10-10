@@ -113,7 +113,9 @@ def race(case, writers, write, hook=None, deadline=120):
             errors.append('%s: %r' % (name, exc))
             if name not in passed:            # one that died before the barrier frees the rest
                 gate.abort()
-    threads = [threading.Thread(target=run, args=(s, n), name='race-%s' % n) for n, s in writers]
+    # daemon: a writer that hangs must not keep the unit's interpreter alive past the failed assert
+    threads = [threading.Thread(target=run, args=(s, n), name='race-%s' % n, daemon=True)
+               for n, s in writers]
     end = time.monotonic() + deadline
     for t in threads:
         t.start()
