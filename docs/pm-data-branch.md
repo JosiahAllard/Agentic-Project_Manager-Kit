@@ -27,6 +27,8 @@ The data worktree's `.kit.json` (on `pmdata`) sets `repo.main_branch: "pmdata"` 
 5. If a private URL was given: `git remote add <name> <url>` with git's default fetch refspec, then `git push <name> refs/heads/pmdata:refs/heads/pmdata`.
 6. Write `kit-pm-data.json` and the machine config key; print the one line the user adds to `.kit.json` of the data worktree if it has none.
 
+Built as `tools/pm_data.py init --path <dir> [--branch] [--remote] [--url] [--adopt]` over `kitlib/pmdata/init.py`, whose docstring is the detail. Every check runs before the first write, so a refusal (exit 1) changes nothing. Where it goes beyond the steps above: the empty tree is written by `git write-tree` of an empty index (the same id as the literal); `kit-pm-data.json` is written right after the branch, before anything is pushed; the private url is compared with the public remote's url and pushurl, also in host/path form, so the https and ssh spellings of one repository are equal; the name `pm`, a name with `/` and the prefix of an existing branch are refused; `--adopt` takes a branch with one root that no main-branch history holds, refuses a recorded root that differs, and refuses a `.kit.json` on the branch whose `repo.main_branch` or `repo.remote` is not the data branch and private remote or whose `backlog.store` is `ref`, the default included. Exit 3 means all was made locally and the push failed; exit 4 means it stopped part-way and `--adopt` finishes it.
+
 A bare `git push` in the data worktree goes to the upstream, the private remote; with no upstream it fails ("no upstream") rather than guessing. The pre-push check below is the enforcement; the config is only the default path.
 
 ## Never configure a refspec
