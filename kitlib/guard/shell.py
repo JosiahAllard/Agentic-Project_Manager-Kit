@@ -265,6 +265,15 @@ class _Scan(object):
                 # the call operator: `& prog args` runs prog
                 self.toks.append(('w', Word('&', False, self.i, self.i + 1), []))
                 self.i += 1
+                j = self.i
+                while j < self.n and self.s[j] in ' \t':
+                    j += 1
+                if j < self.n and self.s[j] == '(':
+                    # `& (Get-Command git) args`: the program is what the ( ) computes, one word
+                    # (not literal) whose commands are read as nested ones
+                    self.i = j + 1
+                    cmds = self.sub_until()
+                    self.toks.append(('w', Word(self.s[j:self.i], True, j, self.i), cmds))
                 return '&'
             if c == ',':
                 self.i += 1                     # an array: each element is an argument

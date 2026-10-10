@@ -21,8 +21,11 @@ Rules, in the order they are checked:
   root-search      a recursive search from a drive or filesystem root
   heavy            a heavy program run with no lock held (MACHINE_LOCK_RUN verified by nest_check)
   git-*            damaging git in a main checkout; branch -D anywhere; a push to main with no
-                   gate-OK record when the repo sets repo.push_block; push --no-verify in a
-                   repository with a PM data record, in any session but the owner's own
+                   gate-OK record when the repo sets repo.push_block; push --no-verify, send-pack,
+                   http-push, a remote helper or a git alias for one in a repository with a PM
+                   data record, and any push from a copy of PM data without one; a remote
+                   repointed (git-remote-rewrite) in a repository with one; all in any session
+                   but the owner's own
   git-hooks-path   a change of core.hooksPath (git config, git -c, clone -c, GIT_CONFIG_*), in
                    any session
   owner-identity   the owner's email given to a commit, in any session but the owner's own
@@ -1642,6 +1645,9 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
         d = git_push_pmdata(event, ctx, gc, role)       # a computed subcommand may be push
         if d:
             return d
+    d = git_alias_config(event, ctx, gc, role) or git_remote_rewrite(event, ctx, gc, role)
+    if d:
+        return d
     sub, args = gc.sub, gc.rest
     text = bare(cmd)
     if sub == 'worktree':
@@ -2079,25 +2085,328 @@ def git_push_pmdata(event, ctx, gc, role):
                   ('git -C %s push %s' % (quote(gc.dir), ' '.join(words))).rstrip())
 
 
+def hookless_sub(sub):
+    """True for a git subcommand that talks to a remote without running the pre-push hook:
+    send-pack, http-push, and a remote helper run by hand (remote-https, remote-ext, remote-fd,
+    any remote-<transport>)."""
+    return sub in ('send-pack', 'http-push') or (sub.startswith('remote-') and len(sub) > len('remote-'))
+
+
 def git_send_pack_pmdata(event, ctx, inv, role):
-    """`git send-pack`, or the `git-send-pack` program, in a repository with a PM data record (or
-    where the text cannot place it), in every session but the owner's own: it sends refs to a
-    remote without running the pre-push hook (rule git-push-pmdata)."""
+    """`git send-pack`, `git http-push` or a `git remote-<helper>`, or their dashed programs
+    (git-send-pack, git-http-push, git-remote-https, ...), in a repository with a PM data record
+    (or where the text cannot place it), in every session but the owner's own: each talks to a
+    remote without running the pre-push hook (rule git-push-pmdata). In a repository without a
+    record, data_copy judges it."""
     if inv is None or inv.dyn:
         return None
-    if inv.name == 'git-send-pack':
-        where, args = inv.cmd.cwd, [w.text for w in inv.args]
+    if inv.name.startswith('git-') and hookless_sub(inv.name[len('git-'):]):
+        sub, where, args = inv.name[len('git-'):], inv.cmd.cwd, [w.text for w in inv.args]
     else:
         gc = cm.git_call(inv)
-        if gc is None or gc.sub != 'send-pack':
+        if gc is None or not hookless_sub(gc.sub):
             return None
-        where, args = (None if gc.unknown else gc.dir), gc.argv
-    if is_owner_session(event, ctx) or not pmdata_recorded(ctx, where):
+        sub, where, args = gc.sub, (None if gc.unknown else gc.dir), gc.argv
+    return hookless_refusal(event, ctx, sub, where, args, role)
+
+
+def hookless_refusal(event, ctx, sub, where, args, role):
+    """git_send_pack_pmdata's judgement of `git <sub> <args>` run in `where`."""
+    if is_owner_session(event, ctx):
         return None
-    return refuse('git-push-pmdata', role, '`git send-pack %s` sends refs without running the pre-push hook, which '
+    text = ('git %s %s' % (sub, ' '.join(args))).rstrip()
+    if not pmdata_recorded(ctx, where):
+        return data_copy(event, ctx, where, role, '`%s`' % text)
+    return refuse('git-push-pmdata', role, '`%s` talks to a remote without running the pre-push hook, which '
                   'keeps PM data off public remotes in this repository (it has %s, or the guard cannot tell). '
-                  'Push with git push, which runs the hook:' % (' '.join(args), pmdata.FILE_NAME),
+                  'Push with git push, which runs the hook:' % (text, pmdata.FILE_NAME),
                   'git -C %s push <remote> <branch>' % (quote(where) if where else '"<checkout>"'))
+
+
+def data_copy(event, ctx, where, role, what):
+    """A push or send-pack (`what`) from a repository without a PM data record of its own that
+    holds the root commit the machine's record names (a clone or a fetch of the data branch), or
+    is shallow (it may hold data commits without their root), when the machine config names
+    pm_data, in every session but the owner's own: no pre-push leak stage judges it, as the
+    record is not there and core.hooksPath is set per repository (docs/pm-data-branch.md
+    "Failure modes"). A check git cannot answer denies too (fail closed)."""
+    if is_owner_session(event, ctx) or not where:
+        return None
+    if ctx.place(where).kind not in (repo.MAIN, repo.LINKED):
+        return None
+    root, why = ctx.pm_root()
+    if root is None and why is None:
+        return None                             # the machine config names no pm_data
+    found = None
+    if why is None:
+        held, why = ctx.gitread.has_commit(where, root)
+        if why is None and held:
+            found = 'holds the PM data root commit %s' % root[:12]
+    if why is None and found is None:
+        shallow, why = ctx.gitread.is_shallow(where)
+        if why is None and shallow:
+            found = 'is a shallow clone, which may hold PM data commits without their root'
+    if why is not None:
+        found = 'may hold PM data, and the guard cannot check it (%s)' % why
+    if found is None:
+        return None
+    return refuse('git-push-pmdata', role, '%s: the repository %s has no %s of its own but %s, so no pre-push leak '
+                  'stage would judge what it sends. PM data is pushed only from the repository that holds the '
+                  'record, to its private remote. To see where this repository fetches from:'
+                  % (what, fwd(where), pmdata.FILE_NAME, found), 'git -C %s remote -v' % quote(where))
+
+
+# ---------------------------------------------------------------- git aliases from config
+
+# git's builtin commands (git --list-cmds=builtins, git 2.55): git ignores an alias that would hide one
+GIT_BUILTINS = frozenset((
+    'add', 'am', 'annotate', 'apply', 'archive', 'backfill', 'bisect', 'blame', 'branch', 'bugreport', 'bundle',
+    'cat-file', 'check-attr', 'check-ignore', 'check-mailmap', 'check-ref-format', 'checkout', 'checkout--worker',
+    'checkout-index', 'cherry', 'cherry-pick', 'clean', 'clone', 'column', 'commit', 'commit-graph', 'commit-tree',
+    'config', 'count-objects', 'credential', 'credential-cache', 'credential-cache--daemon', 'credential-store',
+    'describe', 'diagnose', 'diff', 'diff-files', 'diff-index', 'diff-pairs', 'diff-tree', 'difftool',
+    'fast-export', 'fast-import', 'fetch', 'fetch-pack', 'fmt-merge-msg', 'for-each-ref', 'for-each-repo',
+    'format-patch', 'format-rev', 'fsck', 'fsck-objects', 'fsmonitor--daemon', 'gc', 'get-tar-commit-id', 'grep',
+    'hash-object', 'help', 'history', 'hook', 'index-pack', 'init', 'init-db', 'interpret-trailers',
+    'last-modified', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'mailinfo', 'mailsplit', 'maintenance', 'merge',
+    'merge-base', 'merge-file', 'merge-index', 'merge-ours', 'merge-recursive', 'merge-recursive-ours',
+    'merge-recursive-theirs', 'merge-subtree', 'merge-tree', 'mktag', 'mktree', 'multi-pack-index', 'mv',
+    'name-rev', 'notes', 'pack-objects', 'pack-redundant', 'pack-refs', 'patch-id', 'pickaxe', 'prune',
+    'prune-packed', 'pull', 'push', 'range-diff', 'read-tree', 'rebase', 'receive-pack', 'reflog', 'refs',
+    'remote', 'remote-ext', 'remote-fd', 'repack', 'replace', 'replay', 'repo', 'rerere', 'reset', 'restore',
+    'rev-list', 'rev-parse', 'revert', 'rm', 'send-pack', 'shortlog', 'show', 'show-branch', 'show-index',
+    'show-ref', 'sparse-checkout', 'stage', 'stash', 'status', 'stripspace', 'submodule--helper', 'survey',
+    'switch', 'symbolic-ref', 'tag', 'unpack-file', 'unpack-objects', 'update-index', 'update-ref',
+    'update-server-info', 'upload-archive', 'upload-archive--writer', 'upload-pack', 'url-parse', 'var',
+    'verify-commit', 'verify-pack', 'verify-tag', 'version', 'whatchanged', 'worktree', 'write-tree'))
+ALIAS_DEPTH = 10
+
+
+def split_alias(text):
+    """The words of an alias value as git splits them (split_cmdline): blanks separate, '...' and
+    "..." group, a backslash outside '...' takes the next character as it is. None for an
+    unclosed quote or a trailing backslash."""
+    words, cur, have, q, i = [], [], False, None, 0
+    while i < len(text):
+        c = text[i]
+        if q is None and c in ' \t\n':
+            if have:
+                words.append(''.join(cur))
+                cur, have = [], False
+        elif q is None and c in '\'"':
+            q, have = c, True
+        elif c == q:
+            q = None
+        elif c == '\\' and q != "'":
+            i += 1
+            if i >= len(text):
+                return None
+            cur.append(text[i])
+            have = True
+        else:
+            cur.append(c)
+            have = True
+        i += 1
+    if q is not None:
+        return None
+    if have:
+        words.append(''.join(cur))
+    return words
+
+
+def git_alias_config(event, ctx, gc, role):
+    """A git subcommand that is not a git builtin, in a repository with a PM data record (or one
+    the text cannot place), in every session but the owner's own: git runs the alias its config
+    gives the name (alias.<name>), so the expansion is judged as the command it runs (a push, a
+    hook-skipping transport, a remote rewrite, another alias). A shell alias (!...), one that
+    starts with an option or cannot be split, a chain deeper than ALIAS_DEPTH, and a config git
+    cannot read are denied (git-push-pmdata): the guard cannot judge them. A name with no alias
+    is left to git (its own error, or a git-<name> program)."""
+    if gc.sub_dyn or not gc.sub or gc.sub in GIT_BUILTINS or hookless_sub(gc.sub) or is_owner_session(event, ctx):
+        return None
+    where = None if gc.unknown else gc.dir
+    if not pmdata_recorded(ctx, where):
+        return None
+    return _alias_judged(event, ctx, gc, role, where, [])
+
+
+def _alias_refusal(gc, role, where, chain, why):
+    shown = ' -> '.join(chain) or 'alias.%s' % gc.sub
+    return refuse('git-push-pmdata', role, '`git %s` in a repository with a PM data record runs a git alias (%s) the '
+                  'guard cannot judge: %s. Write the git command itself:' % (gc.sub, shown, why),
+                  'git -C %s <subcommand> <arguments>' % (quote(where) if where else '"<checkout>"'))
+
+
+def _alias_judged(event, ctx, gc, role, where, chain):
+    if where is None:
+        return _alias_refusal(gc, role, where, chain, 'the guard cannot tell the repository whose config holds it')
+    val, why = ctx.gitread.alias(where, gc.sub)
+    if why:
+        return _alias_refusal(gc, role, where, chain, 'its config cannot be read (%s)' % why)
+    if val is None:
+        return None                             # no alias: git's own error, or a git-<name> program
+    chain = chain + ['alias.%s=%s' % (gc.sub, val)]
+    if len(chain) > ALIAS_DEPTH:
+        return _alias_refusal(gc, role, where, chain[:2], 'the aliases nest deeper than %d' % ALIAS_DEPTH)
+    if val.startswith('!'):
+        return _alias_refusal(gc, role, where, chain, 'it runs a shell command')
+    words = split_alias(val)
+    if not words or words[0].startswith('-'):
+        return _alias_refusal(gc, role, where, chain, 'it starts with an option or cannot be split' if words else
+                              'it cannot be split')
+    rest = [sh.Word(t, False, None, None) for t in words[1:]] + list(gc.rest)
+    sub = cm.GitCall(gc.dir, words[0], rest, gc.inv, gc.unknown, None, False, gc.blind)
+    if hookless_sub(sub.sub):
+        d = hookless_refusal(event, ctx, sub.sub, where, sub.argv, role)
+    elif sub.sub == 'push':
+        d = git_push(event, ctx, sub, role)
+    elif sub.sub in ('remote', 'config'):
+        d = git_remote_rewrite(event, ctx, sub, role)
+    elif sub.sub not in GIT_BUILTINS:
+        d = _alias_judged(event, ctx, sub, role, where, chain)
+    else:
+        d = None
+    if d is None or len(chain) > 1:
+        return d
+    return Decision(d.kind, d.rule, '`git %s` runs the git alias %s. %s' % (gc.sub, chain[0], d.reason))
+
+
+# ---------------------------------------------------------------- remotes repointed
+
+REMOTE_REWRITE_VERBS = ('set-url', 'add', 'rename', 'remove', 'rm')
+CONFIG_SECTION_OPTS = ('--remove-section', '--rename-section')
+CONFIG_EDIT_OPTS = ('--edit', '-e')
+
+
+def remote_rewrite_key(name):
+    """True for a config key or section that can point a remote somewhere else: remote.* (url,
+    pushurl, ...), url.* (insteadOf, pushInsteadOf), include.* and includeIf.* (they read
+    another file), case ignored as git ignores it in section and key names."""
+    n = name.lower()
+    return n in ('remote', 'url', 'include', 'includeif') or n.startswith(('remote.', 'url.', 'include.', 'includeif.'))
+
+
+def config_rewrite(gc):
+    """(what, files, scope_all) when a `git config` call writes a key or section
+    remote_rewrite_key names (a computed one counts) or opens a config in an editor, else None.
+    `files`: the Words of its -f/--file paths; `scope_all`: --global or --system."""
+    opts, pos, files = [], [], []
+    args = gc.rest
+    k = 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        if t == '--':
+            pos.extend(args[k + 1:])
+            break
+        if t.startswith('-') and len(t) > 1 and not w.dyn:
+            name, eq, val = t.partition('=')
+            opts.append(name)
+            if name in CONFIG_FILE_OPTS:
+                if eq:
+                    files.append(sh.Word(val, w.dyn, w.start, w.end))
+                elif k + 1 < len(args):
+                    files.append(args[k + 1])
+            k += 2 if (name in CONFIG_VALUE_OPTS and not eq) else 1
+            continue
+        pos.append(w)
+        k += 1
+    scope_all = any(o in ('--global', '--system') for o in opts)
+    if any(o in CONFIG_EDIT_OPTS for o in opts) or (pos and not pos[0].dyn and pos[0].text == 'edit'):
+        return 'opens a config file in an editor, where any remote can be changed', files, scope_all
+    if any(o in CONFIG_READ_OPTS for o in opts) or not pos:
+        return None
+    verb = pos[0].text
+    if verb in ('get', 'list'):
+        return None
+    if verb in ('set', 'unset'):
+        keys = pos[1:2]
+    elif verb in ('rename-section', 'remove-section'):
+        keys = pos[1:3]
+    elif any(o in CONFIG_SECTION_OPTS for o in opts):
+        keys = pos[:2]
+    elif any(o in CONFIG_WRITE_OPTS for o in opts) or len(pos) > 1:
+        keys = pos[:1]
+    else:
+        return None
+    for w in keys:
+        if w.dyn or remote_rewrite_key(w.text):
+            return 'writes %s' % w.text, files, scope_all
+    return None
+
+
+def _config_file_recorded(ctx, path, where):
+    """True when a config file git reads belongs to a repository with a PM data record (its
+    folder, or the git common dir two folders up from a worktree's config, holds the record), or
+    is a user or system config (scope_all, judged by machine_pm_data); a path that cannot be
+    resolved counts (fail closed)."""
+    p = sh.resolve_path(path, where) if path else None
+    if not p:
+        return True
+    parts = [x.lower() for x in fwd(posixpath.normpath(fwd(p))).split('/') if x]
+    if parts and (parts[-1] in ('.gitconfig', 'gitconfig') or parts[-3:-1] == ['.config', 'git']):
+        return machine_pm_data(ctx)
+    d = os.path.dirname(p)
+    for _ in range(3):
+        if os.path.exists(os.path.join(d, pmdata.FILE_NAME)):
+            return True
+        d = os.path.dirname(d)
+    return False
+
+
+def machine_pm_data(ctx):
+    """True when the machine config names pm_data, or cannot be read (Ctx.pm_data_named)."""
+    return ctx.pm_data_named()
+
+
+def _remote_verb(gc):
+    """The git remote verb that repoints a remote (REMOTE_REWRITE_VERBS), a computed one too,
+    or None."""
+    for w in gc.rest:
+        if w.dyn:
+            return w.text
+        if w.text.startswith('-'):
+            continue
+        return w.text if w.text in REMOTE_REWRITE_VERBS else None
+    return None
+
+
+def git_remote_rewrite(event, ctx, gc, role):
+    """git-remote-rewrite: `git remote set-url|add|rename|remove`, a `git config` write to
+    remote.*, url.*, include.* or includeIf.* (any spelling: --add, --unset, set, unset, the
+    section verbs) and `git config --edit`, in a repository with a PM data record (or one the text
+    cannot place), in every session but the owner's own. A --global or --system write, or one to
+    a user or system config file, counts when the machine config names pm_data; a --file git
+    does not read is left alone. The pre-push leak stage tells the private remote by its
+    configured URLs, so a remote pointed elsewhere would make a public one look private
+    (docs/pm-data-branch.md "Pre-push guard")."""
+    if gc.sub not in ('remote', 'config') or is_owner_session(event, ctx):
+        return None
+    where = None if gc.unknown else gc.dir
+    if gc.sub == 'remote':
+        verb = _remote_verb(gc)
+        if verb is None:
+            return None
+        what = 'repoints a remote (git remote %s)' % verb
+        recorded = pmdata_recorded(ctx, where)
+    else:
+        call = config_rewrite(gc)
+        if call is None:
+            return None
+        what, files, scope_all = call
+        if any(not f.dyn and not repo_config_file(f.text) for f in files):
+            return None                         # a file git does not read
+        if files:
+            recorded = any(f.dyn or _config_file_recorded(ctx, f.text, where) for f in files)
+        else:
+            recorded = pmdata_recorded(ctx, where) or (scope_all and machine_pm_data(ctx))
+    if not recorded:
+        return None
+    return refuse('git-remote-rewrite', role, '`git %s %s` %s, and this repository has %s (or the guard cannot tell): '
+                  'the pre-push hook tells the private remote by its configured URLs, so a remote pointed elsewhere '
+                  'could carry PM data to a public one. Ask the owner (through the PM) when a remote must change. '
+                  'To see them:' % (gc.sub, ' '.join(w.text for w in gc.rest), what, pmdata.FILE_NAME),
+                  'git -C %s remote -v' % (quote(where) if where else '"<checkout>"'))
 
 
 def git_push(event, ctx, gc, role):
@@ -2111,6 +2420,10 @@ def git_push(event, ctx, gc, role):
     d = git_push_pmdata(event, ctx, gc, role)
     if d:
         return d
+    if not pmdata_recorded(ctx, gc.dir):
+        d = data_copy(event, ctx, gc.dir, role, '`%s`' % ('git push %s' % rest).rstrip())
+        if d:
+            return d
     cfg = ctx.config(gc.dir)
     if cfg is None:
         err = ctx.config_error(gc.dir)

@@ -231,12 +231,14 @@ class ComputedProgram(Base):
     PS = ('& $env:G push --no-verify origin pmdata',)
 
     def test_pm_session_from_a_worktree_is_denied(self):
+        # a line naming git may meet the write jail first, where the session's mark is jailed
         for text in self.BASH:
             with self.subTest(text):
-                self.assert_denied(self.decide(text, environ=PM), 'git-push-pmdata')
+                self.assert_denied(self.decide(text, environ=PM), None if 'git' in text else 'git-push-pmdata')
         for text in self.PS:
             with self.subTest(text):
                 self.assert_denied(self.decide(text, environ=PM, shell=ps), 'git-push-pmdata')
+        self.assert_denied(self.decide(self.BASH[0], environ={context.ROLE_ENV: 'deep-worker'}), 'git-push-pmdata')
 
     def test_coordinator_too(self):
         self.assert_denied(self.decide(self.BASH[0], environ=COORD))
@@ -357,10 +359,11 @@ class RemoteHelper(Base):
                 self.assertIsNone(self.decide(text, environ=PM))
 
     def test_on_a_line_the_parser_cannot_read(self):
-        self.assert_denied(self.decide('git-remote-https origin %s; echo "unclosed' % PUBLIC, environ=PM),
-                           'git-push-pmdata')
-        self.assert_denied(self.decide('git http-push %s pmdata; echo "unclosed' % PUBLIC, environ=PM),
-                           'git-push-pmdata')
+        # the unclosed quote hides the helper from the parser: only fallback's patterns see it
+        for text in ("echo 'x ; git-remote-https origin %s" % PUBLIC, "echo 'x ; git http-push %s pmdata" % PUBLIC,
+                     "echo 'x ; git remote-ext origin x"):
+            with self.subTest(text):
+                self.assert_denied(self.decide(text, environ=PM), 'git-push-pmdata')
 
 
 if __name__ == '__main__':

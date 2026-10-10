@@ -19,7 +19,9 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     part may move git to a checkout the jail cannot place; a session the jail does not hold only
     in a main checkout or a place git cannot tell, and only when the line runs a program the text does not name, runs
     a shell, eval, Invoke-Expression, source or an encoded command, pipes into a shell, or names
-    a git subcommand or option by a variable.
+    a git subcommand or option by a variable. Such a line in a repository with a PM data record
+    is denied too (`git-push-pmdata`), wherever in it, in every session but the owner's own: the
+    hidden program may be git push --no-verify.
 
 Where a pattern matches, the directory is the one the command holding the match runs in (a
 literal cd before it is followed), not only the call's.
@@ -69,7 +71,9 @@ ANYWHERE = (
     # git push, or git with no subcommand, run by xargs: the input it appends may be --no-verify or push
     ('git-push-pmdata', r'\bxargs\b[^|;&\n]*\bgit(?:\.exe)?\b[^|;&\n]*\bpush\b'),
     ('git-push-pmdata', XARGS_BARE_GIT),
-    ('git-push-pmdata', r'(?i)(?<![\w.-])git-send-pack(?:\.exe)?\b'),
+    # git http-push and the remote helpers, run by hand, talk to a remote without the hook too
+    ('git-push-pmdata', G + r'(?:http-push|remote-[\w-]+)\b'),
+    ('git-push-pmdata', r'(?i)(?<![\w.-])git-(?:send-pack|http-push|remote-[\w-]+)(?:\.exe)?\b'),
     ('wrapped-gate', r'(?:\bgate\.py|\bmachine_lock\.py\s+run)\b[^;&]*?(?<!\|)\|(?!\|)'),
     ('root-search', r'\bfind\s+(?:-[HLP]\s+)*(?:/|/[a-zA-Z]/?|[A-Za-z]:[\\/]?)(?=\s|$|["\'])'),
     ('root-search', r'(?i)\b(?:get-childitem|gci|ls|dir)\b[^|;&]*\s["\']?[A-Za-z]:[\\/]?["\']?(?=\s|$)[^|;&]*\s-r'),
@@ -227,9 +231,17 @@ def check(event, ctx, text, cwd, role, parsed):
     if GIT_WORD_RE.search(text) and rules.agent_session(event, ctx):
         return rules.refuse('write-jail', role, '%s git on a line the guard cannot read may write a checkout it '
                             'cannot place; run the git in its own call.%s' % (why, PLAIN), plain(parsed, text))
+    owner = rules.is_owner_session(event, ctx)
     for c in parsed.commands:
         hidden = runs_hidden(cm.invocation(c))
-        if hidden and main_like(ctx, c.cwd):
+        if not hidden:
+            continue
+        if main_like(ctx, c.cwd):
             return rules.refuse('unreadable', role, '%s It runs %s in a main checkout or a place git cannot '
                                 'tell.%s' % (why, hidden, PLAIN), plain(parsed, text))
+        if not owner and rules.pmdata_recorded(ctx, c.cwd):
+            return rules.refuse('git-push-pmdata', role, '%s It runs %s in a repository with a PM data record (%s): '
+                                'it may be git push --no-verify, which skips the pre-push hook that keeps PM data '
+                                'off public remotes.%s' % (why, hidden, rules.pmdata.FILE_NAME, PLAIN),
+                                plain(parsed, text))
     return None
