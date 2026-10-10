@@ -696,6 +696,40 @@ class RemoveBranchPulled(RemoveCase):
         self.assertIn('kit/claim', self.branches())
 
 
+class RemoveBranchKilledStoreRead(RemoveCase):
+    """KIT-GIT-EXIT1-ANSWERS: a git ended from outside exits 1 having printed nothing, the shape
+    `rev-parse --verify --quiet` gives for "no such ref". The open-claim check of a ref store must
+    refuse on it, never read the store as holding no records."""
+
+    CONFIG = {'backlog': {'store': 'ref'}}
+
+    def test_a_killed_store_ref_read_refuses(self):
+        from kitlib.git import cmd
+        self.workstream('claim')
+        self.git('worktree', 'remove', '--force', os.path.join(self.home, 'claim'))
+        self.land('kit/claim')
+        real = cmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] in ('rev-parse', 'for-each-ref') and any('refs/backlog/' in a for a in argv):
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(cmd, '_run', side_effect=run):
+            rc, out = self.run_verb('remove_branch', 'kit/claim')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('the open-claim check failed', out)
+        self.assertIn('kit/claim', self.branches())
+
+    def test_an_absent_store_ref_holds_no_claim(self):
+        # The premise of the test above: unkilled, the same branch is removed.
+        self.workstream('claim')
+        self.git('worktree', 'remove', '--force', os.path.join(self.home, 'claim'))
+        self.land('kit/claim')
+        rc, out = self.run_verb('remove_branch', 'kit/claim')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('kit/claim', self.branches())
+
+
 class Holders(RemoveCase):
 
     def test_a_child_process_standing_in_the_tree_refuses(self):

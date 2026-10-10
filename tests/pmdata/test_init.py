@@ -10,11 +10,31 @@ from unittest import mock
 
 from kitlib import pmdata
 from kitlib.config import user
+from kitlib.git import cmd
 from kitlib.pmdata import init as pminit
 from tests import gitfixture
 from tests.realgit import real_git
 
 EMPTY_TREE = pminit.EMPTY_TREE['sha1']
+KILLED = (1, b'', b'')          # a git ended from outside: exit 1, nothing printed
+
+
+def stub_git(answer):
+    """A patch of cmd._run: `answer(argv)` gives the `(rc, out, err)` for a git argv, or None to
+    run it as before (the spawner captured before the patch: the fake, or real git)."""
+    real = cmd.spawner()
+
+    def run(argv, cwd=None, input=None, timeout=None, env=None):
+        got = answer(argv)
+        if got is not None:
+            return got
+        return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+    return mock.patch.object(cmd, '_run', side_effect=run)
+
+
+def reads_ref(argv, ref):
+    """True for a `rev-parse` or `for-each-ref` that reads `ref`."""
+    return argv[1] in ('rev-parse', 'for-each-ref') and any(a.startswith(ref) for a in argv[2:])
 
 
 class _Base(unittest.TestCase):
@@ -360,13 +380,8 @@ class ReviewFixTest(_Base):
 
     def test_a_main_ref_git_cannot_read_refuses_adopt(self):
         self.make_orphan()
-        real = pminit._git
-
-        def fake(cwd, *args, **kw):
-            if args[:3] == ('rev-parse', '--verify', '-q') and args[3].startswith('refs/heads/main'):
-                return 128, '', 'fatal: boom'
-            return real(cwd, *args, **kw)
-        with mock.patch.object(pminit, '_git', fake):
+        with stub_git(lambda argv: (128, b'', b'fatal: boom') if reads_ref(argv, 'refs/heads/main')
+                      else None):
             out = self.init(adopt=True)
         self.assertEqual(out.code, pminit.REFUSED, out.lines)
         self.assertIn('cannot read refs/heads/main', out.lines[0])
@@ -471,6 +486,60 @@ class ReviewFixTest(_Base):
             replace.side_effect = lambda a, b: (order.append('replace'), os.rename(a, b))
             pminit.write_machine(self.home, {'path': self.data})
         self.assertEqual(order, ['fsync', 'replace'])
+
+
+class KilledReadsTest(_Base):
+    """KIT-GIT-EXIT1-ANSWERS: `rev-parse -q`, `config --get` and `config --get-regexp` answer "no
+    such ref/key" as exit 1 with no output, which is also what a git ended from outside leaves. A
+    killed read must refuse or fail, never pass for "absent"."""
+
+    def test_a_killed_main_ref_read_refuses_adopt(self):
+        self.make_orphan()
+        with stub_git(lambda argv: KILLED if reads_ref(argv, 'refs/heads/main') else None):
+            out = self.init(adopt=True)
+        self.assertEqual(out.code, pminit.REFUSED, out.lines)
+        self.assertIn('cannot read refs/heads/main', out.lines[0])
+
+    def test_a_killed_remote_tracking_read_refuses(self):
+        ref = 'refs/remotes/private/pmdata'
+        before = self.refs(), self.config_text()
+        with stub_git(lambda argv: KILLED if reads_ref(argv, ref) else None):
+            out = self.init()
+        self.assertUnchanged(out, *before)
+        self.assertIn('cannot read %s' % ref, out.lines[0])
+
+    def test_a_killed_insteadof_read_refuses_never_reads_as_no_alias(self):
+        # The second config read is the url rewrites' (the first is the remotes'): killed, the
+        # alias pub: of the public url would go unseen.
+        self.repo.git('config', 'url.%s.insteadOf' % self.repo.remote, 'pub:')
+        reads = []
+
+        def answer(argv):
+            if argv[1] == 'config' and ('--get-regexp' in argv or '--list' in argv):
+                reads.append(argv)
+                if len(reads) == 2:
+                    return KILLED
+            return None
+        before = self.refs(), self.config_text()
+        with stub_git(answer):
+            out = self.init(url='pub:')
+        self.assertUnchanged(out, *before)
+        self.assertIn('cannot read git config', out.lines[0])
+
+    def test_a_killed_push_default_read_fails_and_keeps_the_value(self):
+        self.repo.git('config', 'push.default', 'current')
+
+        def answer(argv):
+            if argv[1] != 'config':
+                return None
+            if ('--get' in argv and 'push.default' in argv) or ('--local' in argv and '--list' in argv):
+                return KILLED
+            return None
+        with stub_git(answer):
+            out = self.init()
+        self.assertEqual(out.code, pminit.PARTIAL, out.lines)
+        self.assertTrue(any('cannot read push.default' in l for l in out.lines), out.lines)
+        self.assertEqual(self.git_value('push.default'), 'current')
 
 
 class CompareUrlTest(unittest.TestCase):

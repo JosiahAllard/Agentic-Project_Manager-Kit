@@ -489,6 +489,114 @@ class AKilledRealGitIsNoAncestryAnswer(RepoFixture):
         self.assertIn('printed nothing', why)
 
 
+def kill_git(match):
+    """A patch of cmd._run under which each git argv `match(argv)` picks exits 1 having printed
+    nothing (a git ended from outside, refs.KILLED_SHAPE) and every other one runs as before (the
+    spawner captured before the patch: the fake, or real git)."""
+    real = cmd.spawner()
+
+    def run(argv, cwd=None, input=None, timeout=None, env=None):
+        if match(argv):
+            return 1, b'', b''
+        return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+    return mock.patch.object(cmd, '_run', side_effect=run)
+
+
+class AKilledGitIsNoBranchOrBaseAnswer(RepoFixture):
+    """KIT-GIT-EXIT1-ANSWERS: `symbolic-ref --quiet` (detached) and `merge-base` (no common
+    commit) answer with exit 1 and no output, the shape a git ended from outside leaves. Each read
+    must give no answer for a kill, never "detached" or "no merge base"."""
+
+    def test_a_killed_branch_read_is_no_answer_not_a_detached_head(self):
+        with kill_git(lambda argv: True):
+            got, why = refs.current_branch(self.r.root)
+        self.assertIsNone(got, 'a killed git was read as a detached HEAD')
+        self.assertIn('printed nothing', why)
+
+    def test_a_killed_merge_base_is_no_answer_when_the_histories_share_a_root(self):
+        with kill_git(lambda argv: argv[1] == 'merge-base'):
+            got, why = refs.merge_base('main', 'kit/feature', self.r.root)
+        self.assertIsNone(got, 'a killed merge-base was read as "no common history"')
+        self.assertIn('confirming no merge base', why)
+        self.assertIn(self.r.initial[:10], why)
+
+    def test_a_merge_base_none_whose_confirmation_is_killed_is_no_answer(self):
+        with kill_git(lambda argv: argv[1] in ('merge-base', 'rev-list')):
+            got, why = refs.merge_base('main', 'kit/feature', self.r.root)
+        self.assertIsNone(got)
+        self.assertIn('confirming no merge base', why)
+        self.assertIn('printed nothing', why)
+
+
+class PositiveForms(RepoFixture):
+    """The answers the positive forms give where git really answers (KIT-GIT-EXIT1-ANSWERS)."""
+
+    def test_unrelated_histories_have_no_merge_base(self):
+        orphan = self.r.git('commit-tree', self.r.git('rev-parse', 'HEAD^{tree}'), '-m', 'orphan')
+        self.assertEqual(refs.merge_base(orphan, 'main', self.r.root), ('', None))
+        self.assertEqual(refs.merge_base('main', orphan, self.r.root), ('', None))
+
+    def test_ref_commit(self):
+        self.assertEqual(refs.ref_commit('refs/heads/kit/feature', self.r.root), (self.feature, None))
+        self.assertEqual(refs.ref_commit('refs/heads/no-such', self.r.root), ('', None))
+        # for-each-ref's pattern also matches the refs below it: only the exact name answers.
+        self.assertEqual(refs.ref_commit('refs/heads/kit', self.r.root), ('', None))
+        for bad in ('main', '-x', 'refs/heads/a\nb'):
+            got, why = refs.ref_commit(bad, self.r.root)
+            self.assertIsNone(got, bad)
+            self.assertTrue(why)
+
+    def test_a_killed_ref_read_is_no_answer_not_no_ref(self):
+        with kill_git(lambda argv: True):
+            got, why = refs.ref_commit('refs/heads/kit/feature', self.r.root)
+        self.assertIsNone(got, 'a killed git was read as "no such ref"')
+        self.assertIn('printed nothing', why)
+
+
+class _Parity(object):
+    """What the fake prints for the positive forms is what real git prints (each check runs on
+    the fake in FakeParity and on real git in RealGitParity)."""
+
+    def setUp(self):
+        self.r = gitfixture.TempRepo()
+        self.addCleanup(self.r.cleanup)
+
+    def test_config_list_z_puts_a_newline_between_key_and_value(self):
+        self.r.git('config', 'kit.probe', 'a b')
+        with open(os.path.join(self.r.common_dir(), 'config'), 'a', encoding='utf-8',
+                  newline='\n') as fh:
+            fh.write('[kit "Sub"]\n\tflag\n')
+        out, why = cmd.run(['config', '--local', '--list', '-z'], self.r.root)
+        self.assertIsNone(why)
+        items = out.split(b'\0')
+        self.assertIn(b'kit.probe\na b', items)
+        self.assertIn(b'kit.Sub.flag', items)          # no value: the key alone
+
+    def test_branch_show_current(self):
+        self.assertEqual(refs.current_branch(self.r.root), ('main', None))
+        self.r.git('checkout', '-q', '--detach')
+        self.assertEqual(refs.current_branch(self.r.root), ('', None))
+
+    def test_a_head_outside_refs_heads_is_no_branch_answer(self):
+        self.r.git('symbolic-ref', 'HEAD', 'refs/remotes/origin/main')
+        got, why = refs.current_branch(self.r.root)
+        self.assertIsNone(got)
+        self.assertIn('refs/heads', why)            # git's wording varies by version
+
+    def test_an_annotated_tag_ref_peels_to_its_commit(self):
+        self.r.git('tag', '-a', '-m', 'v', 'v1')
+        self.assertEqual(refs.ref_commit('refs/tags/v1', self.r.root), (self.r.initial, None))
+
+
+class FakeParity(_Parity, unittest.TestCase):
+    pass
+
+
+@real_git('parity: the fake\'s `config --list -z` and `branch --show-current` against real git')
+class RealGitParity(_Parity, unittest.TestCase):
+    pass
+
+
 class WorkTreeStateTest(unittest.TestCase):
 
     def setUp(self):
