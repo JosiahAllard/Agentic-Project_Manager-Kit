@@ -53,7 +53,10 @@ class StandingTest(unittest.TestCase):
 class HubTest(unittest.TestCase):
     def test_step_names_url(self):
         (s,) = pmstart.hub(CFG)
-        self.assertIn("republish claude/hub/action-hub.html to https://claude.ai/artifact/X", s)
+        self.assertIn("republish the kit's Action Hub page claude/hub/action-hub.html "
+                      "to https://claude.ai/artifact/X with the Artifact tool", s)
+        self.assertIn("docs/action-hub.md (For the PM)", s)
+        self.assertNotIn("republish claude/hub/action-hub.html to", s)  # the old bare line
         self.assertIn("pm_ack", s)
 
 
