@@ -22,7 +22,7 @@ Sources, named by what they are: the usage refresh (window 2026-10-08 14:08 to 2
 
 ## Usage and dispatch overrides (M)
 
-Window: 3.17 days, 1,157 runs, 4,237M tokens, 705M weighted units (wu = input + 1.25 cache write + 0.1 cache read + 5 output). No price table was applied. Served model family by wu: Opus 543M (77%), Sonnet 134M, Haiku 28M. Every served id was `claude-<family>-5-5`.
+Window: 3.17 days, 1,157 runs, 4,237M tokens, 705M weighted units (wu = input + 1.25 cache write + 0.1 cache read + 5 output). No price table was applied to these weighted units; dollars measured later are in "Subagent spend, measured in dollars" below. Served model family by wu: Opus 543M (77%), Sonnet 134M, Haiku 28M. Every served id was `claude-<family>-5-5`.
 
 | Agent | Runs | Defined | Served (runs) | Tokens, median |
 |---|---|---|---|---|
@@ -51,6 +51,76 @@ Window: 3.17 days, 1,157 runs, 4,237M tokens, 705M weighted units (wu = input + 
 ### Plan-shaped work on the Opus coders (M, shape tag H)
 
 44 plan-shaped opus-worker runs hold 720M tokens (47% of the type). 39 strong-worker runs hold 387M (26%). The tag uses the first dispatch only, and the three biggest "plan" runs went on to build, so these shares are upper bounds. If plan-shaped opus-worker runs cost what worker plan runs do, about 630M tokens would be saved. That is a ceiling, not a forecast. Strong-worker plans are within its charter and nobody tested a cheaper tier on them.
+
+## Subagent spend, measured in dollars
+
+Source: the review's final addendum (not in this repository). Labels: measured, computed, assumed, inferred. Method: every assistant message with its own usage block, deduplicated by message id, priced at that message's model. It replaces an earlier estimate that assumed a run mix and priced cache writes at the 1-hour rate; the real subagent writes are all 5-minute (measured), so the 5-minute rate is the point value, not the low end of a range.
+
+Totals for the same window (1,157 runs, 43,283 messages, measured): $1,828 over the window, $576 a day, $4,032 a week (computed; the week figure is scaled, so assumed). The earlier estimate was $2,010 for the window and $4,440 a week, about 9% too high. By model: opus $1,610 (88.1%), sonnet $209 (11.4%), haiku $8 (0.5%). By kind: cache write 48.5%, cache read 40.4%, output 11.0%. The measured run count matches the usage refresh, but weighted units are 4% above it; runs still going at the refresh may have grown after it (inferred, not tested).
+
+| Type | Runs | Window $ | Share | $/run mean | $/run median |
+|---|---|---|---|---|---|
+| opus-worker | 135 | 703 | 38.5% | 5.21 | 3.46 |
+| strong-worker | 95 | 652 | 35.7% | 6.86 | 3.91 |
+| reviewer | 295 | 171 | 9.3% | 0.58 | 0.34 |
+| worker | 210 | 145 | 7.9% | 0.69 | 0.33 |
+| general-purpose | 60 | 104 | 5.7% | 1.74 | 0.27 |
+
+The other eight types together are $55 (3.0%). All computed.
+
+Earlier estimate against measured, by agent type and served model (computed):
+
+| Line | Earlier $ | Measured $ | Change |
+|---|---|---|---|
+| opus-worker on opus | 759 | 699 | -8% |
+| strong-worker on opus | 705 | 650 | -8% |
+| reviewer on opus | 177 | 135 | -24% |
+| worker on sonnet | 158 | 131 | -17% |
+| general-purpose on opus | 115 | 98 | -15% |
+| everything | 2,010 | 1,828 | -9% |
+
+**Savings recomputed on the measured base.** Each is price only, with token counts held fixed, so a cheaper model that takes more turns would save less (assumed). "Week" is the window scaled (assumed).
+
+| Move | Earlier (window / week) | Recomputed (window / week) | Basis |
+|---|---|---|---|
+| Opus-worker to sonnet, sync and routine work | $9.9 / $22 | $9.1 / $20 | computed, measured line $699, same share, 50% price cut |
+| Opus-worker to sonnet, real plans | $129 / $285 | $118.8 / $262 | computed, 34% of $699, half price |
+| Same, all plan-shaped work (ceiling) | $318 / $700 | $292.8 / $646 | computed ceiling, share 47% |
+| Strong-worker down one step, mid case | $22.9 / $51 | $21.1 / $46.6 | computed, measured line $650 |
+| Strong-worker down one step, high case | $139 / $307 | $128 / $283 | assumed: earlier method could not be rebuilt, scaled by 650 / 705 |
+| Reviewer to sonnet, 25% of reviews | $22 / $49 | $16.9 / $37.2 | computed, measured $135 |
+| Reviewer to sonnet, 50% of reviews | $44 / $97 | $33.8 / $74.5 | computed |
+| Reviewer to sonnet, 75% of reviews | $109 / $240 | $83 / $183 | computed, assumes an 82% cut; at the 77% cut per measured run it is $78 / $172 |
+| general-purpose off opus | $0-46 / $0-102 | $49 / $108 | computed, $98 on opus, same tokens at sonnet price $49 |
+| Explore and Plan off opus | $11-22 a week | $7 / $15.4 | computed, $14 on opus, half price |
+| Lander to haiku | about $33 a week | $19 / $41.9 | computed, $20 at sonnet price, $1 at haiku price |
+
+The five Opus-reduction moves summed to $635 a week in the earlier estimate; on the measured base they sum to about $592 (computed: $262 + $167 + $74.5 + $46.6 + $41.9). The $167 line is carried from the earlier estimate and was not re-derived (inferred). The earlier "real plans" figure of $130 / $287 in the earlier text is replaced by $118.8 / $262 (the $129 / $285 above is the earlier base's own arithmetic). Two cautions: these are ceilings on price alone, and the coordinator replay (see [model-ab.md](model-ab.md)) shows sonnet matching the rules less often than opus, so a cheaper model that gets work wrong can cost more than it saves; and the sonnet lines assume the type's real work is moved, while the replay tests the coordinator only.
+
+## Corrections to the first-pass figures
+
+Source: the review's final addendum (not in this repository).
+
+- Coordinator replay run 1 totals (measured): 121 match, 18 mismatch, 1 safety break, over 140 scored answers. That line was missing from the first report. The second run is in model-ab.md.
+- Breakdown of the smallest model's misses (measured, read from the one-line notes): of its 12 misses, 8 delay hand-ups, 2 harm caught, and 2 are case-04 noise. The first report said 10 decline to act and 2 are case 04; and one triage count read "8 of its 11" where the table sums to 12, so "8 of its 12".
+- Subagent spend and savings: replaced by the dollar section above.
+- Subagent cache writes are 5-minute (measured), not the 1-hour rate assumed first.
+- The Sonnet cache read price in model-ab.md was $0.20; the list price is $0.10 (corrected there).
+
+## Context and cache findings
+
+Source: the review's final addendum (not in this repository), same 1,157 runs.
+
+What was measured:
+- A run starts with 8k to 48k tokens of prompt, but its first turn costs $0.02 to $0.12, because most of it is a shared cached prefix. Start-up is cheap; later re-reads cost more. In dollars (computed): start-up 2.6%, growth after the first turn 49.6%, re-reading the start-up prompt 13.2%, cache-miss rewrites 23.5%, output 11.0%.
+- A cache-miss rewrite is a turn that writes more than half its prompt back to the cache after turn 1. There were 1,316 of them in 43k turns, in 438 of 1,157 runs. 70% of rewrite turns follow a gap of 5 to 60 minutes (median gap 587 s), which fits a 5-minute cache life and so confirms by timestamps what was first only inferred. By the computed split, about 66% of the rewrite cost came from agents resumed by a message after a hand-back or idle, and about 10% from waiting on a gate or test. 54% of late continuations (313 of 583) came 5 to 10 minutes after the last turn.
+- Documented, nothing tried: subagents get a 5-minute cache even on a subscription; the main conversation gets one hour. A setting exists for all subagents (`subagentPromptCacheTtl`) and a per-agent-definition `experimental: cacheTtl: 1h`. Values and client versions are in the source.
+
+What is only a pricing computation, untested (assumed: every 5-to-60-minute rewrite becomes a full cache hit and nothing else changes): a one-hour cache for the opus-worker type nets about $174 a week; for strong-worker it costs about $74 a week more; for worker it nets about $45 a week; the whole fleet on one hour is about break-even ($42 a week). Sending a continuation sooner, or starting a fresh agent past a break-even context size, has computed upper bounds of about $525 a week (late continuations that rewrite) and about $114 a week (fresh start), and the timing share is roughly half of the first (inferred). Reading file ranges instead of whole large files targets tool-result growth of about $617 a week, a share of which is the saving; it was not measured separately. These are recommendations for the owner and the kit coordinator, not decisions; a change to an agent definition is the owner's.
+
+## Safety-check proposals
+
+Source: the review's final addendum (not in this repository). These are proposals only; none is built or tested. One is an automatic log of refusals and classifier denials using a documented hook event for auto-mode denials, whether that event fires for subagent calls being undocumented; another is a pre-tool hook that checks a dispatch against a refusal ledger, which is feasible in principle; the third is a red-first route in a worktree tool for when the base is unpushed or the landing lock is held. Hook, settings and agent-definition changes are the owner's decision; the tool change is an engineering call unless it relaxes an existing refusal.
 
 ## Refusals (M for counts, H for class)
 
@@ -187,7 +257,7 @@ What a firmer test would cost (estimate from the per-run figures in model-ab.md;
 ## What could not be measured
 
 - Main sessions (coordinator, project manager, consultant) and deep-worker sessions: not in the usage data. Compaction, state-note and consultant recommendations are unmeasured.
-- Per-token prices for the usage window: weighted units only.
+- Per-token prices for the usage window: weighted units only in the sections above. Dollars were computed afterwards, see "Subagent spend, measured in dollars".
 - Review verdict quality in the new window, and whether stop-like runs were re-dispatched except by shared record id.
 - Served model id per run in the older A/B tables: not recorded (see model-ab.md).
 - Any per-tier reviewer miss rate: zero certain misses in 84 reviewed branches. That is a floor, not a rate.
