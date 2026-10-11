@@ -829,6 +829,19 @@ class KeyCacheTest(unittest.TestCase):
         self.assertEqual(self.cache.get(B.kid), K.jwk(B))
         self.assertEqual((len(self.fetch.calls), self.cache.error), (6, ''))
 
+    def test_a_fetcher_that_raises_is_caught_on_its_own_thread(self):
+        # Uncaught there, the failure would be the same but the thread would print a traceback.
+        for failure in (OSError('unreachable'), KeyError('surprise'),
+                        access.AccessError('keys-fetch', 'TimeoutError')):
+            self.fetch.result = failure
+            cache = access.KeyCache(K.TEAM, fetch=self.fetch, clock=self.clock)
+            with mock.patch.object(threading, 'excepthook') as uncaught:
+                with self.assertRaises(access.AccessError) as caught:
+                    cache.get(A.kid)
+            self.assertEqual((caught.exception.reason, cache.error),
+                             ('keys-unavailable', 'keys-fetch'))
+            self.assertEqual(uncaught.call_args_list, [])
+
     def test_a_fetch_failure_without_a_cache_refuses(self):
         self.fetch.result = access.AccessError('keys-fetch', 'TimeoutError')
         self.fails('keys-unavailable')
@@ -988,9 +1001,10 @@ class KeyCacheTest(unittest.TestCase):
         self.assertEqual(results, [K.jwk(A)] * 8)
         self.assertEqual(calls, [K.TEAM])
 
-    def stalled(self, *keys):
+    def stalled(self, *keys, takes=0):
         """Make the fetcher wait, once called, for the event this returns beside the one it
-        sets on being called; then it answers with these keys."""
+        sets on being called; then the clock moves on `takes` seconds and it answers with
+        these keys."""
         entered, release = threading.Event(), threading.Event()
         self.addCleanup(release.set)
 
@@ -998,6 +1012,7 @@ class KeyCacheTest(unittest.TestCase):
             entered.set()
             if not release.wait(60):
                 raise OSError('the test never released the fetch')
+            self.clock.at += takes
             return K.document(*keys)
 
         self.fetch.result = fetch
@@ -1005,7 +1020,7 @@ class KeyCacheTest(unittest.TestCase):
 
     def test_a_known_kid_is_answered_while_a_fetch_is_out(self):
         self.cache.get(A.kid)
-        entered, release = self.stalled(A, B)
+        entered, release = self.stalled(A, B, takes=100)
         self.at(access.REFETCH_S)               # an unknown kid may fetch again; A is fresh
         poke = Asker(self.cache, B.kid)
         self.assertTrue(entered.wait(30))
@@ -1018,8 +1033,40 @@ class KeyCacheTest(unittest.TestCase):
         release.set()
         poke.join(30)
         other.join(30)
+        # The one that waited looks again at the time it is then, 100 s on: the attempt it
+        # waited behind has only just ended, so it is answered from that and fetches nothing.
         self.assertEqual((poke.got, other.got), ([K.jwk(B)], [None]))
         self.assertEqual((len(self.fetch.calls), self.cache.error), (2, ''))
+
+    def test_the_fields_are_used_under_their_lock_and_the_fetch_runs_outside_it(self):
+        seen = []
+
+        class Table(dict):
+            def get(self, kid):
+                seen.append(('table', cache._lock.locked()))
+                return dict.get(self, kid)
+
+        def clock():
+            seen.append(('clock', cache._lock.locked()))
+            return self.clock()
+
+        def fetch(team, timeout):
+            seen.append(('fetch', cache._lock.locked(), cache._fetching.locked()))
+            return K.document(A)
+
+        cache = access.KeyCache(K.TEAM, fetch=fetch, clock=clock)
+        table = access.key_table
+        with mock.patch.object(access, 'key_table', lambda document: Table(table(document))):
+            self.assertEqual(cache.get(A.kid), K.jwk(A))
+        self.assertEqual(seen, [
+            ('clock', True),            # the first look
+            ('clock', True),            # the second, holding the fetch lock
+            ('fetch', False, True),     # no request for a known kid waits on this
+            ('clock', True),            # the result written
+            ('table', True)])           # the answer
+        del seen[:]
+        self.assertEqual(cache.get(A.kid), K.jwk(A))
+        self.assertEqual(seen, [('clock', True), ('table', True)])
 
     def test_a_fetch_with_no_answer_is_given_up_and_no_other_is_started(self):
         self.assertEqual(access.FETCH_DEADLINE_S, 15)
@@ -1030,6 +1077,8 @@ class KeyCacheTest(unittest.TestCase):
         with mock.patch.object(access, 'FETCH_DEADLINE_S', 0.05):
             self.assertEqual(self.cache.get(A.kid), K.jwk(A))   # the cached keys keep serving
         self.assertEqual(self.cache.error, 'keys-fetch')
+        worker = self.cache._worker             # left behind: it must not keep the process up
+        self.assertEqual((worker.is_alive(), worker.daemon), (True, True))
         self.assertTrue(entered.wait(30))
         self.assertEqual(len(self.fetch.calls), 2)
         self.at(access.KEY_TTL_S + access.REFETCH_S)
