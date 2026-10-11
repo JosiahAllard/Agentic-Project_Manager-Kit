@@ -20,9 +20,10 @@ class PluginCurrentTest(unittest.TestCase):
     def setUp(self):
         self.k = Kit(self)
         self.s = P.Settings(self.k.root, False, "origin")
+        self.folders = []
 
     def check(self):
-        return pmstart.plugin_current(settings=self.s, kit=self.k.kit)
+        return pmstart.plugin_current(settings=self.s, kit=self.k.kit, folders=self.folders)
 
     def refresh(self, folders, proc):
         runner = claude.Runner(self.k.home, claude="claude.cmd", run_proc=proc)
@@ -32,8 +33,15 @@ class PluginCurrentTest(unittest.TestCase):
     def test_no_export_failed_folder_current_behind(self):
         got = self.check()
         self.assertEqual(len(got), 1)
-        self.assertIn("python tools/plugin_refresh.py --apply", got[0])
-        default, two = self.k.folders(".claude", ".claude-two")
+        self.assertTrue(got[0].endswith("python tools/plugin_refresh.py --migrate --apply"), got[0])
+        default, two = self.folders = self.k.folders(".claude", ".claude-two")
+        self.k.seed_migrated([default])
+        self.refresh([default], FakeProc())
+        got = self.check()
+        self.assertEqual(len(got), 1)
+        self.assertIn("not migrated to the export in %s" % two, got[0])
+        self.assertIn("--migrate --apply", got[0])
+        self.k.seed_migrated([default, two])
         self.refresh([default, two], FakeProc(fail={(".claude-two", "update"): 1}))
         got = self.check()
         self.assertEqual(len(got), 1)
@@ -57,7 +65,8 @@ class PluginCurrentTest(unittest.TestCase):
         self.assertIn("could not check the pm-kit plugin", got[0])
 
     def test_in_the_checklist_and_a_failure_isolated(self):
-        txt = pmstart.checklist({}, NOW, procs=[], plugin_current={"settings": self.s, "kit": self.k.kit},
+        txt = pmstart.checklist({}, NOW, procs=[], plugin_current={"settings": self.s, "kit": self.k.kit,
+                                                                 "folders": []},
                                 **FAKES)
         self.assertIn("- pm-kit plugin: no export at %s yet" % self.k.root, txt)
 

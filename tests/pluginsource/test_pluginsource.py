@@ -4,6 +4,7 @@ import datetime
 import json
 import os
 import unittest
+from unittest import mock
 
 from kitlib import pluginsource as P
 from kitlib.pluginsource import claude
@@ -83,6 +84,7 @@ class ExportTest(Base):
 class MarketplaceTest(Base):
     def test_names_the_new_folder_and_same_sha_twice_is_a_no_op(self):
         folders = self.k.folders('.claude', '.claude-two')
+        self.k.seed_migrated(folders)
         proc = FakeProc()
         self.assertEqual(self.refresh(folders, proc), 0)
         sha = self.remote_sha()
@@ -101,7 +103,8 @@ class MarketplaceTest(Base):
     def test_dry_run_writes_nothing(self):
         folders = self.k.folders('.claude')
         proc = FakeProc()
-        self.assertEqual(self.refresh(folders, proc, apply=False), 0)
+        self.assertEqual(self.refresh(folders, proc, apply=False, migrate=True), 0)
+        self.assertEqual(self.refresh(folders, proc, apply=False), 1)      # not migrated: refused
         self.assertFalse(os.path.exists(self.k.root))
         self.assertEqual(proc.calls, [])
         self.assertIn('DRY RUN', '\n'.join(self.lines))
@@ -110,6 +113,7 @@ class MarketplaceTest(Base):
 class FolderRunTest(Base):
     def test_each_folder_updates_in_order_with_its_config_dir(self):
         default, two = self.k.folders('.claude', '.claude-two')
+        self.k.seed_migrated([default, two])
         proc = FakeProc()
         self.assertEqual(self.refresh([default, two], proc), 0)
         self.assertEqual(proc.calls, [
@@ -120,6 +124,7 @@ class FolderRunTest(Base):
 
     def test_a_failed_folder_is_recorded_the_others_run_and_only_it_reruns(self):
         default, two, three = self.k.folders('.claude', '.claude-two', '.claude-three')
+        self.k.seed_migrated([default, two, three])
         proc = FakeProc(fail={('.claude-two', 'marketplace'): 1})
         self.assertEqual(self.refresh([default, two, three], proc), 1)
         self.assertEqual([c[1] for c in proc.calls], [None, None, two, three, three])
@@ -133,6 +138,7 @@ class FolderRunTest(Base):
 
     def test_claude_missing_is_refused_after_the_export(self):
         folders = self.k.folders('.claude')
+        self.k.seed_migrated(folders)
         self.assertEqual(self.refresh(folders, claude_path=''), 1)
         sha = self.remote_sha()
         self.assertTrue(os.path.isdir(os.path.join(self.k.root, sha[:12])))
@@ -177,7 +183,7 @@ class PruneTest(Base):
         other = os.path.join(self.k.root, 'notes')
         os.makedirs(other)
         P.write_marketplace(self.k.root, names[0])          # the oldest is the one installed
-        removed, failed = P.prune(self.k.root)
+        removed, failed = P.prune(self.k.root, now=NOW)
         self.assertEqual(failed, [])
         self.assertEqual(sorted(os.path.basename(r) for r in removed), names[1:3])
         left = sorted(os.listdir(self.k.root))
@@ -230,33 +236,238 @@ class SettingsTest(unittest.TestCase):
 
 class CurrentLinesTest(Base):
     def test_no_state_behind_failed_and_current(self):
-        lines = P.current_lines(self.k.kit, self.s)
+        default, two = self.k.folders('.claude', '.claude-two')
+        both = [default, two]
+        lines = P.current_lines(self.k.kit, self.s, folders=both)
         self.assertEqual(len(lines), 1)
         self.assertIn('no export', lines[0])
-        default, two = self.k.folders('.claude', '.claude-two')
-        self.refresh([default, two], FakeProc(fail={('.claude-two', 'update'): 2}))
-        lines = P.current_lines(self.k.kit, self.s)
+        self.assertTrue(lines[0].endswith(P.MIGRATE_CMD), lines[0])
+        self.k.seed_migrated(both)
+        self.refresh(both, FakeProc(fail={('.claude-two', 'update'): 2}))
+        lines = P.current_lines(self.k.kit, self.s, folders=both)
         self.assertEqual(len(lines), 1)
         self.assertIn('refresh failed in %s' % two, lines[0])
         self.assertIn(P.REFRESH_CMD, lines[0])
-        self.refresh([default, two])
-        self.assertEqual(P.current_lines(self.k.kit, self.s), [])
+        self.refresh(both)
+        self.assertEqual(P.current_lines(self.k.kit, self.s, folders=both), [])
+        later = self.advance()
+        lines = P.current_lines(self.k.kit, self.s, folders=both)
+        self.assertEqual(len(lines), 1)
+        self.assertIn('behind kit main', lines[0])
+        self.assertIn(later[:12], lines[0])
+        self.assertTrue(lines[0].endswith(P.REFRESH_CMD), lines[0])
+
+    def test_a_folder_not_migrated_names_the_migrate_command(self):
+        default, two = self.k.folders('.claude', '.claude-two')
+        self.k.seed_migrated([default])
+        self.assertEqual(self.refresh([default]), 0)
+        lines = P.current_lines(self.k.kit, self.s, folders=[default, two])
+        self.assertEqual(len(lines), 1)
+        self.assertIn('not migrated to the export in %s' % two, lines[0])
+        self.assertIn('%s (one folder first: --folder DIR)' % P.MIGRATE_CMD, lines[0])
+        self.advance()
+        lines = P.current_lines(self.k.kit, self.s, folders=[default, two])
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[1].endswith(P.MIGRATE_CMD), lines[1])
+        self.assertEqual(P.current_lines(self.k.kit, self.s, folders=[default])[0][-len(P.REFRESH_CMD):],
+                         P.REFRESH_CMD)
+
+    def advance(self):
         r = self.k.repo
         r.write('later.txt', 'z\n')
         r.commit('later', 'later.txt')
         r.git('push', '-q', 'origin', 'main')
-        lines = P.current_lines(self.k.kit, self.s)
-        self.assertEqual(len(lines), 1)
-        self.assertIn('behind kit main', lines[0])
-        self.assertIn(r.head()[:12], lines[0])
+        return r.head()
 
     def test_unreadable_state(self):
         os.makedirs(self.k.root)
         with open(os.path.join(self.k.root, P.STATE), 'w', encoding='utf-8') as fh:
             fh.write('{not json')
-        lines = P.current_lines(self.k.kit, self.s)
+        lines = P.current_lines(self.k.kit, self.s, folders=[])
         self.assertEqual(len(lines), 1)
         self.assertIn('could not check the pm-kit plugin', lines[0])
+
+
+class MigratedTest(Base):
+    def test_apply_refuses_a_folder_never_migrated_and_runs_the_others(self):
+        default, two = self.k.folders('.claude', '.claude-two')
+        self.k.seed_migrated([default])
+        proc = FakeProc()
+        self.assertEqual(self.refresh([default, two], proc, apply=False), 1)
+        self.assertEqual(proc.calls, [])
+        self.assertIn('REFUSED %s: not migrated to the export yet: %s --folder "%s"'
+                      % (two, P.MIGRATE_CMD, two), self.lines)
+        self.assertEqual(self.refresh([default, two], proc), 1)
+        self.assertEqual([c[1] for c in proc.calls], [None, None])
+        state = P.read_state(self.k.root)
+        self.assertEqual(sorted(state['folders']), [default])
+        self.assertTrue(os.path.isdir(os.path.join(self.k.root, self.remote_sha()[:12])))
+
+    def test_migrate_records_the_flag_and_a_failed_migrate_does_not(self):
+        two, three = self.k.folders('.claude-two', '.claude-three')
+        proc = FakeProc(fail={('.claude-three', 'install'): 1})
+        self.assertEqual(self.refresh([two, three], proc, migrate=True), 1)
+        state = P.read_state(self.k.root)
+        self.assertIs(state['folders'][two]['migrated'], True)
+        self.assertIs(state['folders'][three]['migrated'], False)
+        self.lines = []
+        again = FakeProc()
+        self.assertEqual(self.refresh([two, three], again), 1)     # three refused, two current
+        self.assertEqual(again.calls, [])
+        self.assertIn('--folder "%s"' % three, '\n'.join(self.lines))
+        self.assertEqual(self.refresh([two], again), 0)
+
+    def test_a_new_export_keeps_each_folders_migrated_flag(self):
+        (two,) = self.k.folders('.claude-two')
+        self.assertEqual(self.refresh([two], migrate=True), 0)
+        r = self.k.repo
+        r.write('later.txt', 'z\n')
+        r.commit('later', 'later.txt')
+        r.git('push', '-q', 'origin', 'main')
+        proc = FakeProc()
+        self.assertEqual(self.refresh([two], proc), 0)
+        self.assertEqual([c[0][1] for c in proc.calls], ['marketplace', 'update'])
+        state = P.read_state(self.k.root)
+        self.assertEqual(state['sha'], r.head())
+        self.assertEqual((state['folders'][two]['migrated'], state['folders'][two]['rc']), (True, 0))
+
+    def test_pick_folders(self):
+        a, b = self.k.folders('.claude', '.claude-two')
+        self.assertEqual(P.pick_folders([a, b], []), ([a, b], []))
+        self.assertEqual(P.pick_folders([a, b], [b.upper(), b + os.sep, 'X:\\nope']), ([b], ['X:\\nope']))
+
+
+class ExportStepsTest(Base):
+    def test_ensure_export_makes_the_export_once_and_keeps_the_flags(self):
+        (two,) = self.k.folders('.claude-two')
+        self.k.seed_migrated([two])
+        root, sha = P.ensure_export(self.k.kit, self.s, now=NOW, own=ME, alive=never_alive)
+        self.assertEqual((root, sha), (self.k.root, self.remote_sha()))
+        self.assertEqual(P.current_folder(root), sha[:12])
+        state = P.read_state(root)
+        self.assertEqual((state['sha'], state['folders']), (sha, {two: {'migrated': True}}))
+        before = os.path.getmtime(os.path.join(root, P.STATE))
+        self.assertEqual(P.ensure_export(self.k.kit, self.s, now=NOW, own=ME, alive=never_alive),
+                         (root, sha))
+        self.assertEqual(os.path.getmtime(os.path.join(root, P.STATE)), before)
+        self.assertFalse(os.path.exists(os.path.join(root, P.PIDFILE)))
+
+    def test_a_leftover_tmp_folder_is_replaced_by_a_whole_export(self):
+        sha = self.remote_sha()
+        tmp = os.path.join(self.k.root, sha[:12] + '.tmp')
+        os.makedirs(os.path.join(tmp, 'junk'))
+        with open(os.path.join(tmp, 'junk', 'half.txt'), 'w', encoding='utf-8') as fh:
+            fh.write('half\n')
+        folder, _v = P.export(self.k.kit, sha, self.k.root, NOW)
+        self.assertFalse(os.path.exists(tmp))
+        self.assertFalse(os.path.exists(os.path.join(folder, 'junk')))
+        self.assertTrue(os.path.isfile(os.path.join(folder, 'tools', 'x.py')))
+
+    def test_an_export_failing_partway_leaves_no_final_folder_and_a_retry_succeeds(self):
+        folders = self.k.folders('.claude')
+        self.k.seed_migrated(folders)
+        sha = self.remote_sha()
+        final = os.path.join(self.k.root, sha[:12])
+        proc = FakeProc()
+        with mock.patch.object(P, 'stamp', side_effect=P.RefreshError('boom')):
+            self.assertEqual(self.refresh(folders, proc), 1)
+        self.assertIn('REFUSED: the export failed: boom', self.lines)
+        self.assertFalse(os.path.exists(final))
+        self.assertEqual(proc.calls, [])
+        self.assertFalse(os.path.exists(os.path.join(self.k.root, P.PIDFILE)))
+        with mock.patch.object(P, 'write_marketplace', side_effect=OSError('disk full')):
+            self.assertEqual(self.refresh(folders, proc), 1)
+        self.assertIn('REFUSED: the marketplace write failed: disk full', self.lines)
+        self.assertEqual(proc.calls, [])
+        self.assertEqual(self.refresh(folders, proc), 0)
+        self.assertTrue(os.path.isdir(final))
+        self.assertFalse(os.path.exists(final + '.tmp'))
+        self.assertEqual(P.current_folder(self.k.root), sha[:12])
+
+
+class PruneRulesTest(Base):
+    make = PruneTest.make
+
+    def test_an_old_but_young_export_survives(self):
+        names = ['%012x' % i for i in range(1, 8)]
+        dates = ['2026-09-01T00:00:00', '2026-09-02T00:00:00', '2026-10-05T00:00:00',
+                 '2026-10-06T00:00:00', '2026-10-07T00:00:00', '2026-10-08T00:00:00', 'not a date']
+        for n, at in zip(names, dates):
+            self.make(n, at)
+        P.write_marketplace(self.k.root, names[0])
+        removed, failed = P.prune(self.k.root, now=NOW)
+        self.assertEqual(failed, [])
+        self.assertEqual([os.path.basename(r) for r in removed], [names[1]])
+        self.assertTrue(os.path.isdir(os.path.join(self.k.root, names[2])))   # young, not in the 3 newest
+        self.assertTrue(os.path.isdir(os.path.join(self.k.root, names[6])))   # date unreadable
+
+    def test_stale_tmp_folders_go_and_the_current_ones_stay(self):
+        cur = self.make('%012x' % 9, '2026-09-01T00:00:00')
+        P.write_marketplace(self.k.root, os.path.basename(cur))
+        stale = os.path.join(self.k.root, 'a' * 12 + '.tmp')
+        mine = cur + '.tmp'
+        os.makedirs(os.path.join(stale, 'x'))
+        os.makedirs(mine)
+        removed, failed = P.prune(self.k.root, now=NOW)
+        self.assertEqual((removed, failed), ([stale], []))
+        self.assertTrue(os.path.isdir(mine))
+
+    def test_a_junction_is_never_a_candidate(self):
+        import _winapi
+        target = os.path.join(self.k.base, 'elsewhere', '%012x' % 5)
+        os.makedirs(target)
+        with open(os.path.join(target, P.MARKER), 'w', encoding='utf-8') as fh:
+            json.dump({'sha': 'f' * 40, 'exported_at': '2020-01-01T00:00:00'}, fh)
+        os.makedirs(self.k.root)
+        link = os.path.join(self.k.root, '%012x' % 5)
+        _winapi.CreateJunction(target, link)
+        os.makedirs(os.path.join(self.k.base, 'elsewhere', 'b' * 12))
+        _winapi.CreateJunction(os.path.join(self.k.base, 'elsewhere', 'b' * 12),
+                               os.path.join(self.k.root, 'b' * 12 + '.tmp'))
+        removed, failed = P.prune(self.k.root, keep=0, now=NOW)
+        self.assertEqual((removed, failed), ([], []))
+        self.assertTrue(os.path.isfile(os.path.join(target, P.MARKER)))
+        self.assertTrue(os.path.lexists(link))
+
+
+class LockGraceTest(Base):
+    def test_an_empty_pid_file_is_live_until_the_grace_passes(self):
+        os.makedirs(self.k.root)
+        path = os.path.join(self.k.root, P.PIDFILE)
+        open(path, 'w').close()
+        with self.assertRaises(P.Busy) as cm:
+            P.RefreshLock(self.k.root, own=(2, 20), alive=never_alive).acquire()
+        self.assertIn('its pid not yet written', str(cm.exception))
+        self.assertTrue(P.lock_live(self.k.root, alive=never_alive))
+        old = os.path.getmtime(path) - P.LOCK_GRACE_S - 5
+        os.utime(path, (old, old))
+        self.assertFalse(P.lock_live(self.k.root, alive=never_alive))
+        lock = P.RefreshLock(self.k.root, own=(2, 20), alive=never_alive)
+        lock.acquire()
+        self.assertEqual(read_json(path), {'pid': 2, 'ctime': 20})
+        lock.release()
+
+
+class SafePathTest(unittest.TestCase):
+    def test_safe_rel(self):
+        for good in ('a/b.txt', 'CONFIG.md', 'console/x.py', 'a/com10.txt', 'nullable.txt'):
+            self.assertTrue(P._safe_rel(good), good)
+        for bad in ('a\\b.txt', 'CON', 'con.txt', 'a/nul', 'a/Com1.json', 'LPT9.x.y', 'aux ',
+                    'a/b.', 'a/b ', '../x', 'a//b', 'c:x', '/abs'):
+            self.assertFalse(P._safe_rel(bad), bad)
+
+
+class PlacementTest(unittest.TestCase):
+    def test_an_export_root_inside_the_kit_or_the_sweep_root_is_refused(self):
+        kit, sweep = r'C:\work\kit', r'D:\scratch'
+        self.assertTrue(P.check({'export_dir': r'C:\work\kit\export'}, kit=kit))
+        self.assertTrue(P.check({'export_dir': r'D:\Scratch\pm'}, sweep_dir=sweep))
+        self.assertEqual(P.check({'export_dir': r'C:\work\kit2'}, kit=kit, sweep_dir=sweep), [])
+        with self.assertRaises(P.RefreshError):
+            P.settings({'export_dir': kit}, kit=kit)
+        with self.assertRaises(P.RefreshError):
+            P.settings(None, environ={'LOCALAPPDATA': r'D:\scratch\lad'}, sweep_dir=sweep)
+        self.assertEqual(P.settings({'export_dir': r'E:\pm'}, kit=kit, sweep_dir=sweep).export_dir, r'E:\pm')
 
 
 class AccountFoldersTest(unittest.TestCase):

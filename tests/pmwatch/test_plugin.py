@@ -4,6 +4,7 @@ with a bare remote, a temp export root; spawn and the liveness probe are fakes."
 import json
 import os
 import unittest
+from unittest import mock
 
 from kitlib import pluginsource as P
 from kitlib import pmwatch as W
@@ -16,11 +17,11 @@ class PluginEventTest(unittest.TestCase):
         self.spawned = []
         self.live = set()
 
-    def watcher(self, auto, state=None):
+    def watcher(self, auto, state=None, folders=()):
         s = P.Settings(self.k.root, auto, "origin")
         check = W.plugin_check(kit=self.k.kit, settings=s,
                                spawn=lambda kit, root: self.spawned.append((kit, root)),
-                               alive=lambda pid, ct: pid in self.live)
+                               alive=lambda pid, ct: pid in self.live, folders=list(folders))
         w = W.Watcher(state if state is not None else {}, [], lambda: {}, os.path.join(self.k.base, "alerts"),
                       os.path.join(self.k.base, "sessions.json"), lambda n: None, branch_poll=0,
                       plugin=check)
@@ -95,6 +96,42 @@ class PluginEventTest(unittest.TestCase):
         w.start(0.0)
         got = [w.poll(1.0 + i) for i in range(4)]
         self.assertEqual([g for g in got if g], [["ERROR plugin check: LOCALAPPDATA is not set"]])
+
+
+    def test_no_export_or_a_folder_not_migrated_names_migrate_and_starts_nothing(self):
+        w = self.watcher(auto=True)
+        ev = w.poll(1.0)
+        self.assertEqual(ev, ["PLUGIN pm-kit plugin behind kit main %s: %s (auto_refresh: not started: "
+                              "no export yet)" % (self.main()[:12], P.MIGRATE_CMD)])
+        os.makedirs(self.k.root)
+        (two,) = self.k.folders(".claude-two")
+        self.export_at(self.main())
+        new = self.advance()
+        w = self.watcher(auto=True, folders=[two])
+        self.assertEqual(w.poll(2.0), ["PLUGIN pm-kit plugin behind kit main %s: %s (auto_refresh: not "
+                                       "started: not migrated in %s)" % (new[:12], P.MIGRATE_CMD, two)])
+        self.assertEqual(self.spawned, [])
+
+    def test_an_unreadable_ref_or_state_is_an_error_on_the_third(self):
+        for broken in ("ref", "state"):
+            w = self.watcher(auto=False)
+            if broken == "state":
+                os.makedirs(self.k.root, exist_ok=True)
+                with open(os.path.join(self.k.root, P.STATE), "w", encoding="utf-8") as fh:
+                    fh.write("{not json")
+                got = [w.poll(1.0 + i) for i in range(4)]
+            else:
+                with mock.patch.object(P, "tracking_main", lambda kit, remote: (None, "git broke")):
+                    got = [w.poll(1.0 + i) for i in range(4)]
+            errs = [g for g in got if g]
+            self.assertEqual(len(errs), 1, got)
+            self.assertTrue(errs[0][0].startswith("ERROR plugin check: "), errs)
+            self.assertIn("git broke" if broken == "ref" else P.STATE, errs[0][0])
+
+    def test_no_tracking_ref_is_silent(self):
+        with mock.patch.object(P, "tracking_main", lambda kit, remote: ("", None)):
+            w = self.watcher(auto=True)
+            self.assertEqual([w.poll(1.0 + i) for i in range(4)], [[], [], [], []])
 
 
 if __name__ == "__main__":

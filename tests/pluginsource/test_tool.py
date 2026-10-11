@@ -51,22 +51,47 @@ class ToolTest(unittest.TestCase):
         with open(self.log, encoding='utf-8', errors='replace') as fh:
             return [l.strip() for l in fh if l.strip()]
 
-    def test_dry_run_writes_nothing_and_apply_runs_claude_per_folder(self):
+    def test_dry_run_writes_nothing_migrate_one_folder_then_apply(self):
         os.makedirs(self.root)
         before = tree(self.lad)
-        r = self.run_tool()
+        r = self.run_tool('--migrate')
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('DRY RUN', r.stdout)
+        r = self.run_tool()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)      # no folder migrated yet
         self.assertIn('DRY RUN', r.stdout)
         self.assertEqual(tree(self.lad), before)
         self.assertEqual(self.calls(), [])
-        r = self.run_tool('--apply')
+        r = self.run_tool('--migrate', '--apply', '--folder', self.two)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.calls(), [
-            '[] plugin marketplace update pm-kit', '[] plugin update pm-kit@pm-kit',
+            '[%s] plugin marketplace remove pm-kit' % self.two,
+            '[%s] plugin marketplace add %s' % (self.two, self.root),
+            '[%s] plugin install pm-kit@pm-kit -s user' % self.two])
+        os.remove(self.log)
+        r = self.run_tool('--apply')                 # the default folder is not migrated yet
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn('REFUSED %s: not migrated to the export yet: python tools/plugin_refresh.py '
+                      '--migrate --apply --folder "%s"' % (self.default, self.default), r.stdout)
+        self.assertEqual(self.calls(), [])           # two is current already
+        self.k.repo.write('later.txt', 'z\n')
+        self.k.repo.commit('later', 'later.txt')
+        self.k.repo.git('push', '-q', 'origin', 'main')
+        r = self.run_tool('--apply', '--folder', self.two)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.calls(), [
             '[%s] plugin marketplace update pm-kit' % self.two,
             '[%s] plugin update pm-kit@pm-kit' % self.two])
         sha = self.k.repo.git('rev-parse', 'refs/remotes/origin/main')
         self.assertTrue(os.path.isdir(os.path.join(self.root, sha[:12])))
+
+    def test_a_folder_that_is_not_an_account_folder_is_refused(self):
+        r = self.run_tool('--apply', '--folder', self.two, '--folder', os.path.join(self.k.base, 'nope'))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn('REFUSED: not an account folder on this machine: %s'
+                      % os.path.join(self.k.base, 'nope'), r.stdout)
+        self.assertFalse(os.path.exists(self.root))
+        self.assertEqual(self.calls(), [])
 
     def test_bad_usage_exits_2(self):
         self.assertEqual(self.run_tool('--nope').returncode, 2)
