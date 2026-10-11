@@ -1,8 +1,9 @@
 """kitlib.hubsite.access: the Cloudflare Access token check and the key cache.
 
 Tokens come from tests.hubsite.access_keys: fixed test keys, signed with pow(). The key fetcher
-and the clock are injected. No test opens a socket to the internet; one binds port 0 on
-127.0.0.1 to watch a redirect being refused.
+and the clock are injected. No test opens a socket to the internet; two bind port 0 on
+127.0.0.1, one to watch a redirect being refused and one to read a body off a real response.
+No test reads the name of the user or of the machine.
 
 A refusal test asserts the reason, and unless it says otherwise its token is signed over exactly
 the bytes it carries and is right in every other respect, so the check under test is the only
@@ -14,8 +15,6 @@ import http.client
 import http.server
 import io
 import json
-import os
-import socket
 import ssl
 import string
 import threading
@@ -528,6 +527,48 @@ class VerifyTest(Case):
         loud = K.token(A, K.claims(email=plain.upper()))
         self.assertEqual(verify(loud, emails=[plain])['email'], plain.upper())
 
+    def test_a_letter_outside_ascii_is_never_lowered_onto_another(self):
+        ascii_k = 'kit@example.invalid'
+        pairs = ((ascii_k, '\u212ait@example.invalid'),            # Kelvin sign: lower() is k
+                 ('å@example.invalid', '\u212b@example.invalid'),  # Angstrom sign: a with ring
+                 ('ω@example.invalid', '\u2126@example.invalid'),  # Ohm sign: omega
+                 ('é@example.invalid', 'É@example.invalid'))       # E acute: e acute
+        for lower, upper in pairs:
+            for listed, claimed in ((lower, upper), (upper, lower)):
+                with self.subTest(listed=ascii(listed), claimed=ascii(claimed)):
+                    self.assertNotEqual(listed, claimed)
+                    self.assertEqual(listed.lower(), claimed.lower())
+                    self.refused('email-not-allowed', K.token(A, K.claims(email=claimed)),
+                                 emails=[listed])
+                    self.refused('email-not-allowed', K.token(A, K.claims(email=claimed)),
+                                 emails=[K.EMAIL, ' ' + listed + ' '])
+            for same in (lower, upper):
+                with self.subTest(same=ascii(same)):
+                    text = K.token(A, K.claims(email=same))
+                    self.assertEqual(verify(text, emails=[same])['email'], same)
+        # A-Z beside such a letter are still lowered, on both sides.
+        mixed = '\u212aIT@Example.INVALID'
+        text = K.token(A, K.claims(email=mixed))
+        self.assertEqual(verify(text, emails=['\u212ait@example.invalid'])['email'], mixed)
+        self.assertEqual(verify(K.token(A, K.claims(email=ascii_k.upper())),
+                                emails=[ascii_k])['email'], ascii_k.upper())
+        self.refused('email-not-allowed', text, emails=[ascii_k])
+
+    def test_all_of_a_to_z_is_lowered_and_no_character_beside_them(self):
+        letters = string.ascii_lowercase + '@example.invalid'
+        loud = K.token(A, K.claims(email=letters.upper()))
+        self.assertEqual(verify(loud, emails=[letters])['email'], letters.upper())
+        self.assertEqual(verify(K.token(A, K.claims(email=letters)), emails=[letters.upper()]),
+                         K.claims(email=letters))
+        # The characters on either side of A-Z, which stand 32 below ` and { as A does below a.
+        for upper, lower in (('@', '`'), ('[', '{')):
+            self.assertEqual(ord(lower) - ord(upper), ord('a') - ord('A'))
+            listed, claimed = 'own%ser@example.invalid' % lower, 'own%ser@example.invalid' % upper
+            for one, other in ((listed, claimed), (claimed, listed)):
+                with self.subTest(listed=one, claimed=other):
+                    self.refused('email-not-allowed', K.token(A, K.claims(email=other)),
+                                 emails=[one])
+
     def test_an_empty_allow_list_refuses_a_valid_token(self):
         self.assertEqual(verify(VALID), K.claims())
         for emails in ([], (), set(), {}, None, [''], ['  ', '\t'], iter(())):
@@ -701,21 +742,45 @@ class Asker(threading.Thread):
             self.got.append(exc)
 
 
-class Unstartable(threading.Thread):
-    def start(self):
-        raise RuntimeError("can't start new thread")
+def unstartable(error):
+    """A Thread class whose start raises `error`."""
+    class Unstartable(threading.Thread):
+        def start(self):
+            raise error
+    return Unstartable
 
 
 class Response:
-    """What an opener gives fetch_keys: a status, a bounded read, a context manager."""
+    """What an opener gives fetch_keys: a status, a body and a context manager. read1 gives what
+    is asked for, or `piece` bytes at most when that is set, after calling `tick` (the time one
+    socket operation took). `asked` lists the amounts read1 was asked for and `given` counts
+    the bytes it gave. `length` is what is still to come of the `promised` Content-Length,
+    None when the response gave none. read gives the body whole, as the real one does however
+    long that takes; `whole` lists its calls."""
 
-    def __init__(self, body, status=200):
-        self.body, self.status = body, status
-        self.closed, self.asked = False, None
+    def __init__(self, body, status=200, piece=None, tick=None, promised=None):
+        self.body, self.status, self.piece, self.tick = body, status, piece, tick
+        self.promised = promised
+        self.closed, self.asked, self.given, self.whole = False, [], 0, []
+
+    @property
+    def length(self):
+        return None if self.promised is None else self.promised - self.given
 
     def read(self, amount=None):
-        self.asked = amount
+        self.whole.append(amount)
         return self.body if amount is None else self.body[:amount]
+
+    def read1(self, amount=-1):
+        if amount < 1:
+            raise AssertionError('read1(%r): an unbounded read' % amount)
+        self.asked.append(amount)
+        if self.tick:
+            self.tick()
+        size = amount if self.piece is None else min(amount, self.piece)
+        piece = self.body[self.given:self.given + size]
+        self.given += len(piece)
+        return piece
 
     def __enter__(self):
         return self
@@ -926,13 +991,7 @@ class KeyCacheTest(unittest.TestCase):
         self.assertEqual(dict(request.header_items()),
                          {'User-agent': 'kit-hub-access/1', 'Accept': 'application/json'})
         self.assertEqual(access.USER_AGENT, 'kit-hub-access/1')
-        # Names this machine has: from the environment, where one that is not set reads as ''.
-        local = {socket.gethostname()} | {os.environ.get(name, '') for name in (
-            'USERNAME', 'COMPUTERNAME', 'USERDOMAIN')}
-        sent = (request.full_url + ' ' + access.USER_AGENT).lower()
-        for name in sorted(n for n in local if len(n) >= 4):
-            self.assertNotIn(name.lower(), sent)
-        self.assertNotIn('@', sent)
+        self.assertNotIn('@', request.full_url + access.USER_AGENT)
         self.assertTrue(opener.response.closed)
 
     def test_a_team_in_capitals_is_fetched_from_the_lower_case_host(self):
@@ -1026,8 +1085,50 @@ class KeyCacheTest(unittest.TestCase):
         self.assertTrue(entered.wait(30))
         known = Asker(self.cache, A.kid)        # a second thread, the fetch still out
         known.join(10)
-        self.assertEqual(known.got, [K.jwk(A)])
-        other = Asker(self.cache, 'key-z')      # needs a fetch too: waits, and starts none
+        self.assertEqual((poke.got, known.got, len(self.fetch.calls)), ([], [K.jwk(A)], 2))
+        release.set()
+        poke.join(30)
+        self.assertEqual(poke.got, [K.jwk(B)])
+        self.assertEqual((len(self.fetch.calls), self.cache.error), (2, ''))
+
+    def test_an_unknown_kid_is_refused_at_once_while_a_fetch_is_out(self):
+        self.cache.get(A.kid)
+        entered, release = self.stalled(A, B)
+        self.at(access.REFETCH_S)               # the keys are fresh; an unknown kid may fetch
+        poke = Asker(self.cache, B.kid)
+        self.assertTrue(entered.wait(30))
+        other = Asker(self.cache, 'key-z')      # unknown too, the fetch still out: no waiting
+        other.join(10)
+        self.assertEqual((poke.got, other.got, len(self.fetch.calls)), ([], [None], 2))
+        reasons = []
+
+        def check():                            # on a thread: a get that waited would hang here
+            try:
+                access.verify(K.token(A, head=K.header(A, kid='key-z')), self.cache, K.TEAM,
+                              K.AUD, [K.EMAIL], K.NOW)
+                reasons.append('accepted')
+            except access.AccessError as exc:
+                reasons.append(exc.reason)
+
+        thread = threading.Thread(target=check, daemon=True)
+        thread.start()
+        thread.join(10)
+        self.assertEqual(reasons, ['unknown-kid'])
+        # The attempt is still the first caller's: the refused ones neither took nor freed it.
+        self.assertEqual((poke.got, self.cache._fetching.locked()), ([], True))
+        release.set()
+        poke.join(30)
+        self.assertEqual(poke.got, [K.jwk(B)])
+        self.assertEqual((len(self.fetch.calls), self.cache.error), (2, ''))
+        self.assertFalse(self.cache._fetching.locked())
+
+    def test_a_caller_with_no_fresh_keys_waits_for_the_fetch_in_progress(self):
+        self.cache.get(A.kid)
+        entered, release = self.stalled(A, B, takes=100)
+        self.at(access.KEY_TTL_S)               # nothing is fresh: every caller needs the fetch
+        poke = Asker(self.cache, A.kid)
+        self.assertTrue(entered.wait(30))
+        other = Asker(self.cache, 'key-z')      # waits behind it, and starts none
         other.join(0.05)
         self.assertEqual((poke.got, other.got, len(self.fetch.calls)), ([], [], 2))
         release.set()
@@ -1035,7 +1136,7 @@ class KeyCacheTest(unittest.TestCase):
         other.join(30)
         # The one that waited looks again at the time it is then, 100 s on: the attempt it
         # waited behind has only just ended, so it is answered from that and fetches nothing.
-        self.assertEqual((poke.got, other.got), ([K.jwk(B)], [None]))
+        self.assertEqual((poke.got, other.got), ([K.jwk(A)], [None]))
         self.assertEqual((len(self.fetch.calls), self.cache.error), (2, ''))
 
     def test_the_fields_are_used_under_their_lock_and_the_fetch_runs_outside_it(self):
@@ -1130,25 +1231,98 @@ class KeyCacheTest(unittest.TestCase):
         self.assertIsNone(self.cache.get(A.kid))
         self.assertEqual(len(self.fetch.calls), 2)
 
+    def no_thread(self, error):
+        """While this is entered, the thread KeyCache makes raises `error` from start."""
+        return mock.patch.object(access, 'threading',
+                                 types.SimpleNamespace(Thread=unstartable(error)))
+
+    def refuses(self, cache, reason):
+        """verify, given `cache` for its keys, refuses a token that is right in every way."""
+        with self.assertRaises(access.AccessError) as caught:
+            access.verify(VALID, cache, K.TEAM, K.AUD, [K.EMAIL], K.NOW)
+        self.assertEqual(caught.exception.reason, reason)
+
     def test_a_fetch_thread_that_cannot_start_is_a_fetch_failure(self):
-        with mock.patch.object(access, 'threading', types.SimpleNamespace(Thread=Unstartable)):
+        with self.no_thread(RuntimeError("can't start new thread")):
             self.fails('keys-unavailable')
         self.assertEqual((self.cache.error, self.fetch.calls), ('keys-fetch', []))
         self.at(access.REFETCH_S)
         self.assertEqual(self.cache.get(A.kid), K.jwk(A))
         self.assertEqual(self.cache.error, '')
 
+    def test_whatever_starting_the_thread_raises_is_a_fetch_failure(self):
+        for error in (OSError('no handle left'), MemoryError(), ValueError('odd'),
+                      Exception('anything')):
+            with self.subTest(error=type(error).__name__):
+                fetch = Fetcher(A)
+                cache = access.KeyCache(K.TEAM, fetch=fetch, clock=Clock())
+                with self.no_thread(error):
+                    with self.assertRaises(access.AccessError) as caught:
+                        cache.get(A.kid)
+                    self.assertEqual((caught.exception.reason, cache.error),
+                                     ('keys-unavailable', 'keys-fetch'))
+                    self.refuses(cache, 'keys-unavailable')
+                self.assertEqual(fetch.calls, [])
+                self.assertFalse(cache._fetching.locked())
+        self.cache.get(A.kid)                   # with keys cached: they serve, nothing is added
+        self.fetch.result = K.document(A, B)
+        self.at(access.KEY_TTL_S)
+        with self.no_thread(OSError('no handle left')):
+            self.assertEqual(self.cache.get(A.kid), K.jwk(A))
+            self.assertIsNone(self.cache.get(B.kid))
+        self.assertEqual((self.cache.error, len(self.fetch.calls)), ('keys-fetch', 1))
+
+    def test_a_fetch_thread_that_ends_with_no_answer_is_a_fetch_failure(self):
+        class Odd(BaseException):
+            pass
+
+        for failure in (SystemExit(3), KeyboardInterrupt(), GeneratorExit(), Odd('odd')):
+            with self.subTest(failure=type(failure).__name__):
+                fetch = Fetcher(A)
+                fetch.result = failure
+                cache = access.KeyCache(K.TEAM, fetch=fetch, clock=Clock())
+                with mock.patch.object(threading, 'excepthook') as uncaught:
+                    with self.assertRaises(access.AccessError) as caught:
+                        cache.get(A.kid)
+                    self.refuses(cache, 'keys-unavailable')
+                self.assertEqual((caught.exception.reason, cache.error),
+                                 ('keys-unavailable', 'keys-fetch'))
+                # The fetcher was called and its thread did end on that, uncaught by `run`.
+                self.assertEqual(len(fetch.calls), 1)
+                self.assertEqual([call.args[0].exc_type for call in uncaught.call_args_list],
+                                 [type(failure)])
+                self.assertFalse(cache._fetching.locked())
+        self.cache.get(A.kid)                   # with keys cached: they serve, nothing is added
+        self.fetch.result = SystemExit(3)
+        self.at(access.KEY_TTL_S)
+        with mock.patch.object(threading, 'excepthook'):
+            self.assertEqual(self.cache.get(A.kid), K.jwk(A))
+            self.assertIsNone(self.cache.get(B.kid))
+        self.assertEqual((self.cache.error, len(self.fetch.calls)), ('keys-fetch', 2))
+
 
 class _Redirecting(http.server.BaseHTTPRequestHandler):
-    """/keys answers 302 to /elsewhere, which answers a key document."""
+    """/keys answers 302 to /elsewhere, which answers a key document; /chunked answers the
+    same document in chunks of 100 bytes; /short answers it under a Content-Length 10 bytes
+    longer than what is sent."""
 
     def do_GET(self):
         self.server.hits.append(self.path)
+        if self.path == '/chunked':
+            document = K.compact(K.document(A))
+            self.send_response(200)
+            self.send_header('Transfer-Encoding', 'chunked')
+            self.end_headers()
+            for at in range(0, len(document), 100):
+                piece = document[at:at + 100]
+                self.wfile.write(b'%x\r\n%s\r\n' % (len(piece), piece))
+            self.wfile.write(b'0\r\n\r\n')
+            return
         body = b'' if self.path == '/keys' else K.compact(K.document(A))
         self.send_response(302 if self.path == '/keys' else 200)
         if self.path == '/keys':
             self.send_header('Location', '/elsewhere')
-        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Content-Length', str(len(body) + 10 * (self.path == '/short')))
         self.end_headers()
         self.wfile.write(body)
 
@@ -1198,13 +1372,83 @@ class FetchKeysTest(unittest.TestCase):
         self.assertEqual(len(at), cap)
         opener = Opener(Response(at))
         self.assertEqual(access.fetch_keys(K.TEAM, opener=opener)['keys'], [K.jwk(A)])
-        self.assertEqual(opener.response.asked, cap + 1)        # never an unbounded read
-        self.fails(Response(K.compact(dict(K.document(A), pad='p' * (fill + 1)))),
-                   'a document over %d bytes' % cap)
+        # Never an unbounded read: one byte over the cap is asked for, then only what is left.
+        self.assertEqual(opener.response.asked, [cap + 1, 1])
+        over = self.fails(Response(K.compact(dict(K.document(A), pad='p' * (fill + 1)))),
+                          'a document over %d bytes' % cap).response
+        self.assertEqual((over.asked, over.given, over.closed), ([cap + 1], cap + 1, True))
+        size = 100000                                           # far over, a piece at a time
+        long = self.fails(Response(K.compact(dict(K.document(A), pad='p' * 4 * cap)),
+                                   piece=size), 'a document over %d bytes' % cap).response
+        self.assertEqual(long.asked, [cap + 1, cap + 1 - size, cap + 1 - 2 * size])
+        self.assertEqual((long.given, long.whole), (cap + 1, []))
         for body in (b'', b'<html>blocked</html>', b'{"keys":', b'\xff\xfe',
                      b'{"keys":[],"keys":[]}', b'{"keys":NaN}'):
             with self.subTest(body=body):
                 self.fails(Response(body), 'not JSON')
+
+    def timed(self, clock):
+        """While this is entered, fetch_keys reads the time from `clock`."""
+        return mock.patch.object(access, 'time', types.SimpleNamespace(monotonic=clock))
+
+    def test_a_body_that_comes_a_byte_at_a_time_is_given_up_at_the_deadline(self):
+        self.assertEqual(access.FETCH_DEADLINE_S, 15)
+        clock = Clock(100.0)
+
+        def second():                           # each read gives its byte a second later
+            clock.at += 1
+
+        response = Response(K.compact(K.document(A)), piece=1, tick=second)
+        with self.timed(clock):
+            self.fails(response, 'no whole document in 15 s')
+        self.assertEqual(response.asked, [access.MAX_KEYS_DOC + 1 - n for n in range(15)])
+        self.assertEqual((response.given, response.whole, response.closed), (15, [], True))
+
+    def test_the_deadline_is_on_the_whole_read_and_not_on_each_operation(self):
+        body = K.compact(K.document(A))
+        size = -(-len(body) // 3)               # three pieces
+        self.assertEqual(-(-len(body) // size), 3)
+        # What each read1 takes, the last one finding the end. (4, 5, 5, 5): the deadline is
+        # looked at between operations, so the fetch can end one operation after it.
+        for seconds, good in (((5, 5, 4, 0), True), ((5, 5, 5), False), ((4, 5, 5, 5), True)):
+            with self.subTest(seconds=seconds):
+                self.assertLessEqual(max(seconds), access.FETCH_TIMEOUT_S)  # none is too slow
+                clock, steps = Clock(100.0), iter(seconds)
+
+                def tick():
+                    clock.at += next(steps)
+
+                response = Response(body, piece=size, tick=tick)
+                with self.timed(clock):
+                    if good:
+                        self.assertEqual(access.fetch_keys(K.TEAM, opener=Opener(response)),
+                                         K.document(A))
+                    else:
+                        self.fails(response, 'no whole document in 15 s')
+                # Refused with every byte in hand: the end of the body was not seen in time.
+                self.assertEqual((len(response.asked), response.given, response.whole),
+                                 (len(seconds), len(body), []))
+                self.assertTrue(response.closed)
+
+    def test_the_deadline_runs_from_the_call_and_not_from_the_first_byte(self):
+        body = K.compact(K.document(A))
+        for before, good in ((14, True), (15, False), (60, False)):
+            with self.subTest(before=before):
+                clock, response = Clock(100.0), Response(body)
+
+                def opener(request, timeout):   # connecting and the headers took this long
+                    clock.at += before
+                    return response
+
+                with self.timed(clock):
+                    if good:
+                        self.assertEqual(access.fetch_keys(K.TEAM, opener=opener), K.document(A))
+                    else:
+                        with self.assertRaises(access.AccessError) as caught:
+                            access.fetch_keys(K.TEAM, opener=opener)
+                        self.assertEqual((caught.exception.reason, caught.exception.detail),
+                                         ('keys-fetch', 'no whole document in 15 s'))
+                self.assertEqual((len(response.asked), response.closed), (2 if good else 0, True))
 
     def test_a_document_nested_too_deep_to_parse_is_a_failure(self):
         """The cap leaves room for nesting the parser gives up on: that is a refusal too."""
@@ -1239,7 +1483,8 @@ class FetchKeysTest(unittest.TestCase):
         # That context, not the default urllib would make (which a process can replace).
         self.assertIs(secure[0]._context, context)
 
-    def test_a_redirect_is_not_followed(self):
+    def served(self):
+        """A _Redirecting server on a free loopback port: (the server, its URL with no path)."""
         server = http.server.HTTPServer(('127.0.0.1', 0), _Redirecting)
         server.hits = []
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1247,7 +1492,44 @@ class FetchKeysTest(unittest.TestCase):
         self.addCleanup(thread.join, 30)
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        url = 'http://127.0.0.1:%d/keys' % server.server_address[1]
+        return server, 'http://127.0.0.1:%d' % server.server_address[1]
+
+    def test_the_body_of_a_real_response_is_read_whole_chunked_or_not(self):
+        """The fake above is this file's own: here read1 is http.client's."""
+        _server, base = self.served()
+        ours = urllib.request.build_opener(urllib.request.ProxyHandler({}), access._NoRedirect)
+        for path, chunked in (('/elsewhere', False), ('/chunked', True)):
+            with self.subTest(path=path):
+                seen = []
+
+                def opener(request, timeout):
+                    seen.append(ours.open(base + path, timeout=30))
+                    return seen[0]
+
+                self.assertEqual(access.fetch_keys(K.TEAM, opener=opener), K.document(A))
+                self.assertEqual((type(seen[0]), seen[0].chunked, seen[0].closed),
+                                 (http.client.HTTPResponse, chunked, True))
+        # Every byte of a whole document, and a response that promised ten more: refused.
+        with self.assertRaises(access.AccessError) as caught:
+            access.fetch_keys(K.TEAM, opener=lambda request, timeout: ours.open(
+                base + '/short', timeout=30))
+        self.assertEqual((caught.exception.reason, caught.exception.detail),
+                         ('keys-fetch', 'a body cut short'))
+
+    def test_a_body_shorter_than_its_content_length_is_a_failure(self):
+        body = K.compact(K.document(A))
+        for piece in (None, 7):
+            with self.subTest(piece=piece):
+                whole = Opener(Response(body, piece=piece, promised=len(body)))
+                self.assertEqual(access.fetch_keys(K.TEAM, opener=whole), K.document(A))
+                for promised in (len(body) + 1, len(body) + 10, 2 * access.MAX_KEYS_DOC):
+                    short = self.fails(Response(body, piece=piece, promised=promised),
+                                       'a body cut short').response
+                    self.assertEqual((short.given, short.closed), (len(body), True))
+
+    def test_a_redirect_is_not_followed(self):
+        server, base = self.served()
+        url = base + '/keys'
         direct = urllib.request.ProxyHandler({})        # loopback, whatever the machine's proxy
 
         with urllib.request.build_opener(direct).open(url, timeout=30) as response:

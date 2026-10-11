@@ -27,7 +27,7 @@ whose `reason` is one of REASONS. Checks, in this order; the first that fails is
                         ISSUER % the team in lower case); wrong-audience (`aud` is neither the
                         tag nor a list holding it); no-email (absent, not text or blank: a
                         service token has none); email-not-allowed (not in `emails`; both sides
-                        stripped and lower-cased, see _address)
+                        stripped and their A-Z lower-cased, nothing else: see _address)
 
 The team is one DNS label in either case and is lower-cased once on entry by verify, certs_url
 and KeyCache: the host name and the `iss` claim carry it in lower case.
@@ -49,20 +49,30 @@ whole table (a key no longer published is gone). A fetch that fails, or whose do
 refuses, changes nothing: the cached keys keep serving until STALE_LIMIT_S after the last good
 fetch began, then get raises keys-stale; with no good fetch ever it raises keys-unavailable.
 
-One fetch runs at a time. A caller that needs one waits for the fetch in progress and is
-answered from its result; a caller whose kid is cached and fresh, or who comes within REFETCH_S
-of the last attempt, is answered at once from what is cached, fetch in progress or not. So a
-request naming an unknown kid cannot make a request naming a known one wait. An attempt has
-FETCH_DEADLINE_S in all: the fetcher runs on a thread of its own, and when it has not answered
-by then the attempt has failed (keys-fetch), the thread is left to end by itself and its late
-answer is dropped; while it lives every attempt fails at once, so at most one such thread
-exists. `fetch(team, timeout)` returns the parsed key document; `clock` is a monotonic seconds
-clock, and a clock that runs backwards counts as stale.
+One fetch runs at a time. A caller whose kid is cached and fresh, or who comes within REFETCH_S
+of the last attempt, is answered at once from what is cached, fetch in progress or not. So is a
+caller whose kid is not cached while the cached keys are fresh and an attempt is in progress:
+get gives None (unknown-kid), it does not wait for that attempt. So a request naming an unknown
+kid cannot make a request naming a known one wait, and a stream of them does not queue. Only a
+caller with no fresh keys waits for the attempt in progress, and is answered from its result.
+An attempt has FETCH_DEADLINE_S in all: the fetcher runs on a thread of its own, and when it
+has not answered by then the attempt has failed (keys-fetch), the thread is left to end by
+itself and its late answer is dropped; while it lives every attempt fails at once, so at most
+one such thread exists. A thread that cannot be started, and one that ends with no answer, are
+failed attempts too. `fetch(team, timeout)` returns the parsed key document; `clock` is a
+monotonic seconds clock, and a clock that runs backwards counts as stale.
 
 fetch_keys(team, timeout) is the one network call: GET ISSUER % team + CERTS_PATH over HTTPS
 with certificate checking, no redirect followed, USER_AGENT and nothing else that names the
-caller. `timeout` bounds each socket operation, not the whole fetch: the whole is bounded by
-KeyCache alone. It raises AccessError keys-fetch on any failure.
+caller. It raises AccessError keys-fetch on any failure. `timeout` bounds each socket
+operation. The body is read with read1, one operation at a time, and given up once
+FETCH_DEADLINE_S have passed since fetch_keys was called, so a peer that sends the body a few
+bytes at a time holds the fetch that long and one operation more; a body that ends short of
+its Content-Length is a failure. That deadline is looked at between reads of the body only: the
+status line, the headers and a chunked body's size lines and trailers are read inside urllib
+and http.client, each operation under `timeout` and the whole under no deadline of fetch_keys'
+own. There a KeyCache caller is still held FETCH_DEADLINE_S at most, by the attempt's deadline,
+but the fetch thread lives on and no other attempt is made while it does.
 """
 import base64
 import hashlib
@@ -84,7 +94,7 @@ NBF_LEEWAY_S = 60
 ISSUER = 'https://%s.cloudflareaccess.com'      # % team: the `iss` claim, and the keys' origin
 CERTS_PATH = '/cdn-cgi/access/certs'
 FETCH_TIMEOUT_S = 5             # each socket operation of the key fetch
-FETCH_DEADLINE_S = 15           # one whole fetch attempt of a KeyCache
+FETCH_DEADLINE_S = 15           # one whole fetch attempt of a KeyCache; fetch_keys' body read
 MAX_KEYS_DOC = 256 * 1024       # bytes; a longer key document is refused
 USER_AGENT = 'kit-hub-access/1'
 KEY_TTL_S = 3600                # a good fetch is fresh this long
@@ -105,6 +115,7 @@ REASONS = (
 )
 
 _TEAM = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?')
+_ASCII_LOWER = {code: code + 32 for code in range(ord('A'), ord('Z') + 1)}  # for str.translate
 
 
 class AccessError(Exception):
@@ -169,10 +180,14 @@ def _team(team):
 
 
 def _address(text):
-    """An email address as the allow-list compares it: surrounding white space off, lower case.
-    lower() and never casefold(): casefold makes sharp s equal `ss` and long s equal `s`, so an
-    address in one domain would pass for an address in another."""
-    return text.strip().lower()
+    """An email address as the allow-list compares it: surrounding white space off, A-Z in
+    lower case, every other character as written. Neither lower() nor casefold(): both put
+    letters from outside ASCII onto ASCII ones (the Kelvin sign U+212A onto `k`; casefold also
+    sharp s onto `ss` and long s onto `s`), so an address in one domain would pass for an
+    address in another. The price is paid on the safe side: a non-ASCII upper-case letter in a
+    claim does not match its lower-case form in the list, so that token is refused
+    (email-not-allowed). It fails closed."""
+    return text.strip().translate(_ASCII_LOWER)
 
 
 def _allowed(emails):
@@ -348,18 +363,41 @@ def _open(request, timeout):
     return _opener().open(request, timeout=timeout)
 
 
+def _body(response, deadline):
+    """The response's body, its first MAX_KEYS_DOC + 1 bytes at most, read with read1: one
+    socket operation a call, where read would wait for every byte however slowly they come.
+    AccessError keys-fetch when time.monotonic() has reached `deadline` and the body has not
+    ended, and when it ended short of its Content-Length: read raises IncompleteRead for that,
+    read1 just stops, and `length` is what http.client still expected (None when the response
+    gave no Content-Length)."""
+    pieces, left = [], MAX_KEYS_DOC + 1
+    while left > 0:
+        if not time.monotonic() < deadline:
+            raise AccessError('keys-fetch', 'no whole document in %d s' % FETCH_DEADLINE_S)
+        piece = response.read1(left)
+        if not piece:
+            if response.length:
+                raise AccessError('keys-fetch', 'a body cut short')
+            break
+        pieces.append(piece)
+        left -= len(piece)
+    return b''.join(pieces)
+
+
 def fetch_keys(team, timeout=FETCH_TIMEOUT_S, opener=None):
     """The team's key document, parsed: one HTTPS GET of certs_url(team). AccessError keys-fetch
     when it cannot be had (a socket operation over `timeout` seconds, a status other than 200, a
-    redirect, over MAX_KEYS_DOC bytes, not JSON). `opener(request, timeout)` replaces the
+    redirect, a body not ended FETCH_DEADLINE_S after this call began or shorter than its
+    Content-Length, over MAX_KEYS_DOC bytes, not JSON). `opener(request, timeout)` replaces the
     network in tests."""
     request = urllib.request.Request(certs_url(team), method='GET', headers={
         'User-Agent': USER_AGENT, 'Accept': 'application/json'})
+    deadline = time.monotonic() + FETCH_DEADLINE_S
     try:
         with (opener or _open)(request, timeout) as response:
             if response.status != 200:
                 raise AccessError('keys-fetch', 'status %d' % response.status)
-            raw = response.read(MAX_KEYS_DOC + 1)
+            raw = _body(response, deadline)
     except (OSError, http.client.HTTPException, ValueError) as exc:
         if isinstance(exc, urllib.error.HTTPError):
             exc.close()             # it holds the refused response, and that holds the socket
@@ -391,13 +429,18 @@ class KeyCache:
     def get(self, kid):
         """The JWK cached under `kid`, or None when the team publishes no such key. AccessError
         keys-unavailable when no fetch has ever been good, keys-stale when the last good one
-        began over STALE_LIMIT_S ago. It waits only when it needs a fetch, FETCH_DEADLINE_S at
-        most for each attempt it waits behind."""
+        began over STALE_LIMIT_S ago. It waits for its own attempt, and behind another's only
+        when it has no fresh keys: FETCH_DEADLINE_S at most each."""
         with self._lock:
             now = self._clock()
             if not self._due(kid, now):
                 return self._answer(kid, now)
-        with self._fetching:
+            fresh = self._fresh(now)
+        # Due with fresh keys: the kid is not among them. That caller makes the attempt when
+        # none is in flight and never waits behind one: to it the kid is unknown, at once.
+        if not self._fetching.acquire(blocking=not fresh):
+            return None
+        try:
             with self._lock:        # the attempt this caller waited behind may have served it
                 now = self._clock()
                 due = self._due(kid, now)
@@ -405,10 +448,14 @@ class KeyCache:
                 self._refresh(now)
             with self._lock:
                 return self._answer(kid, now)
+        finally:
+            self._fetching.release()
+
+    def _fresh(self, now):
+        return self._good_at is not None and 0 <= now - self._good_at < KEY_TTL_S
 
     def _due(self, kid, now):
-        fresh = self._good_at is not None and 0 <= now - self._good_at < KEY_TTL_S
-        if fresh and kid in self._keys:
+        if self._fresh(now) and kid in self._keys:
             return False
         return self._tried_at is None or not 0 <= now - self._tried_at < REFETCH_S
 
@@ -434,8 +481,10 @@ class KeyCache:
     def _attempt(self):
         """(the key table, '') from one run of the fetcher on a thread of its own, or (None, the
         reason): the fetcher's or key_table's AccessError, else keys-fetch. That covers a
-        fetcher with no answer after FETCH_DEADLINE_S, a thread that cannot be started, and
-        the thread of an earlier attempt still alive, when the fetcher is not called."""
+        fetcher with no answer after FETCH_DEADLINE_S, a thread whose start raises any
+        Exception, a thread that ended with no answer (its fetcher raised what `run` does not
+        catch), and the thread of an earlier attempt still alive, when the fetcher is not
+        called. Nothing a fetcher or the thread does comes out of get as another exception."""
         failed = None, 'keys-fetch'
         if self._worker is not None and self._worker.is_alive():
             return failed
@@ -452,7 +501,7 @@ class KeyCache:
         self._worker = threading.Thread(target=run, name='hub-access-keys', daemon=True)
         try:
             self._worker.start()
-        except RuntimeError:        # the process has no thread to give
+        except Exception:           # no thread to give (RuntimeError), no memory, anything
             return failed
         self._worker.join(FETCH_DEADLINE_S)
         return box[0] if box else failed
