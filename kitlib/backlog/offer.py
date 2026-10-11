@@ -24,6 +24,7 @@ BUCKETS = (PULLABLE, HELD, PARKED, IN_FLIGHT, UNPRIORITISED_OPEN, OWNER_PRIORITI
            NOT_READ)
 EFFORT_ORDER = {'s': 0, 'm': 1, 'l': 2, '-': 3}
 PROBE_TIMEOUT = 60
+DEFAULT_CAP = 5
 
 
 class PartitionError(Exception):
@@ -239,9 +240,9 @@ class PassedOver(object):
         self.rec, self.rank, self.why = rec, rank, why
 
 
-def next_offer(snap, holding, cap=5, seeds=(), session=None, unmet=None):
+def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=None):
     """`((offers, passed), refusals, ranks)`. `holding` are the live pulls whose scopes are taken
-    first. `unmet(rec)` -> `[(member, why)]` gates `requires:`. Only records whose `session:`
+    first. `cap` None offers every startable record (`next --all`), with the same pass-overs. `unmet(rec)` -> `[(member, why)]` gates `requires:`. Only records whose `session:`
     equals `session` are offered; another session's record takes its scope silently. A record
     passed over on a collision names the holder: a live pull by id and branch, another session's
     record by id and session, a record already in this offer as `(offered above)`. Scopes are each record's current `scope:` lines, so a pulled record
@@ -312,7 +313,7 @@ def next_offer(snap, holding, cap=5, seeds=(), session=None, unmet=None):
         for m in scopes:
             holders.setdefault(m, '%s (offered above)' % rid)
         offers.append(Offer(rec, ranks.get(rid, '-'), id(rec) in seeded))
-        if len(offers) >= cap:
+        if cap is not None and len(offers) >= cap:
             break
     for rec in ordered:
         if id(rec) not in reached and own(rec):

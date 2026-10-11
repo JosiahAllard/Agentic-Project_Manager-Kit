@@ -351,10 +351,18 @@ def _plan_recite(snap, ctx, rec, ruling):
 
 # --- block / unblock ------------------------------------------------------------------------------
 
-def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None):
+def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None):
     """`block` REPLACES `blocked_on`; leaving `owner` out on a record blocked on him releases his
-    hold, as `unblock` does, and takes the same `--ruling`."""
+    hold, as `unblock` does, and takes the same `--ruling`. `reason`, when given, goes into the
+    commit subject and onto one line appended to the body (`Blocked on M (date): T`), so `show`
+    says why the record is held; no header key is written for it."""
     refuse_machine_paths('--owner-ask', owner_ask)
+    if reason is not None:
+        refuse_machine_paths('--reason', reason)
+        bad = reason_error(reason, '--reason')
+        if bad:
+            raise Usage(bad)
+        reason = ' '.join(reason.split())
     rec = require(snap, rid)
     if not members:
         raise Usage('`block` requires at least one `--on <member>`')
@@ -394,7 +402,14 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None):
     subject = 'backlog: block %s on %s' % (rid, ', '.join(members))
     if ruling is not None:
         subject += ', releasing the owner hold'
-    return Change({rid: _text(pairs, rec.body)}, subject, lines, ruling=ruling)
+    body = rec.body
+    if reason is not None:
+        subject += ': %s' % reason
+        note = 'Blocked on %s (%s): %s' % (', '.join(members), ctx.date(), reason)
+        body = (body or '').rstrip('\n')
+        body = (body + '\n\n' if body.strip() else '') + note + '\n'
+        lines.append('  reason (in the body): %s' % reason)
+    return Change({rid: _text(pairs, body)}, subject, lines, ruling=ruling)
 
 
 def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
