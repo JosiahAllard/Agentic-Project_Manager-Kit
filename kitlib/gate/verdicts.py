@@ -1,0 +1,395 @@
+"""The verdict queue: reviewed branches waiting to land, one file per branch.
+
+A coordinator queues a branch after reading its review (tools/verdict.py add); a reviewer never
+does, so no reviewer can queue its own verdict. A landing takes what is ready (ready()) and drops
+what it landed.
+
+Where: `<git common dir>/kit-verdicts/<branch>.json`, the branch name percent-encoded
+(urllib.parse.quote with no safe characters: '/' is '%2F', '%' is '%25'), so the file name gives
+the branch back and holds no character Windows refuses. The common dir is shared by every work
+tree of the repository and never tracked. Every write is a temp file in the same folder, then
+os.replace; a re-add for the same branch replaces its entry.
+
+An entry (every key always present):
+
+  branch          the branch name, as `git branch` names it (kit/x)
+  tip             the full commit hash reviewed; add() checks it is `refs/heads/<branch>` now
+  verdict         LAND | LAND WITH FOLLOW-UP
+  risk            Low | Medium | High
+  reviewer        the reviewer's agent type
+  reviewer_model  the model the reviewer ran on
+  reviewer_id     the reviewer's agent or session id
+  author          the change's author: commit author and agent type
+  range           the range reviewed, `<base>..<tip>`; its right side is the tip or a prefix of
+                  it (7 or more hex digits), so the review covered the commit queued
+  session         the coordinator session that queued it
+  records         [backlog record ids] the branch carries
+  queued_utc      set by add(): YYYY-MM-DDTHH:MM:SSZ
+  state           queued | failed (mark_failed)
+  last_result     None, or why it was marked failed
+
+Errors (all VerdictError): BadEntry for a malformed entry or branch name given, nothing read or
+written; TipMismatch when the tip is not the branch's head, or there is no such branch;
+VerdictError itself for a queue file that cannot be read or written, or is not an entry, or git
+giving no answer. Nothing here prints.
+
+Concurrency (inference, not tested): add, drop and mark_failed read, then replace or remove,
+without a lock. A writer racing another on the same branch can lose that entry; it can never
+make a branch land, because a landing also checks each branch's head against the queued tip.
+"""
+import collections
+import datetime
+import json
+import os
+import re
+import secrets
+import time
+import urllib.parse
+
+from kitlib.git import refs
+
+DIR_NAME = 'kit-verdicts'
+SUFFIX = '.json'
+VERDICTS = ('LAND', 'LAND WITH FOLLOW-UP')
+RISKS = ('Low', 'Medium', 'High')
+QUEUED, FAILED = 'queued', 'failed'
+STATES = (QUEUED, FAILED)
+# What the coordinator states; add() sets the rest.
+GIVEN_KEYS = ('branch', 'tip', 'verdict', 'risk', 'reviewer', 'reviewer_model', 'reviewer_id',
+              'author', 'range', 'session', 'records')
+SET_KEYS = ('queued_utc', 'state', 'last_result')
+KEYS = GIVEN_KEYS + SET_KEYS
+TEXT_KEYS = ('reviewer', 'reviewer_model', 'reviewer_id', 'author', 'session')
+UTC_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+RANGE_TIP_RE = re.compile(r'^[0-9a-f]{7,64}$')
+# DOS device names: a file called CON.json or nul.x.json is the device, not a file.
+DEVICES = frozenset(['CON', 'PRN', 'AUX', 'NUL'] + ['COM%d' % i for i in range(1, 10)]
+                    + ['LPT%d' % i for i in range(1, 10)])
+RETRIES = 5
+RETRY_SLEEP = 0.2
+
+# Why ready() leaves an entry out of the batch (Skip.reason).
+SKIP_FAILED = 'failed'      # a landing marked it failed; a re-add queues it again
+SKIP_STALE = 'stale'        # the branch's head is not the queued tip (or the branch is gone)
+SKIP_HIGH = 'high'          # High risk lands alone
+SKIP_STRICT = 'strict'      # its diff touches a strict path (or that cannot be told): lands alone
+SKIP_LATER = 'later'        # ready, but the batch is full (batch_max)
+SKIP_INVALID = 'invalid'    # not a well-formed entry
+
+Skip = collections.namedtuple('Skip', 'branch reason why entry')
+
+
+class VerdictError(Exception):
+    """An entry is malformed, its file cannot be read or written, or git gave no answer."""
+
+
+class BadEntry(VerdictError):
+    """The entry (or branch name) given is malformed: nothing was read or written."""
+
+
+class TipMismatch(VerdictError):
+    """The tip to queue is not the branch's head (or the branch does not exist)."""
+
+
+def utc(when=None):
+    return (when or datetime.datetime.now(datetime.timezone.utc)).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def _branch_why(branch):
+    if not isinstance(branch, str) or not branch.strip():
+        return 'the branch is a non-empty name, not %r' % (branch,)
+    why = refs.bad_rev(branch)
+    if why:
+        return 'the branch %s' % why
+    if branch != branch.strip() or any(c.isspace() for c in branch):
+        return 'the branch name %r holds white space' % branch
+    if branch.startswith('refs/'):
+        return 'name the branch as git branch does (kit/x), not the ref %s' % branch
+    return None
+
+
+def file_name(branch):
+    """The queue file name for `branch`: percent-encoded, then .json."""
+    why = _branch_why(branch)
+    if why:
+        raise BadEntry(why)
+    name = urllib.parse.quote(branch, safe='') + SUFFIX
+    if name.split('.')[0].upper() in DEVICES:
+        raise BadEntry('the branch %s would be the file %s, a Windows device name' % (branch, name))
+    return name
+
+
+def branch_of(name):
+    """The branch a queue file name holds, or None when `name` is not one file_name() makes."""
+    if not name.endswith(SUFFIX) or name.startswith('.'):
+        return None
+    branch = urllib.parse.unquote(name[:-len(SUFFIX)])
+    try:
+        return branch if file_name(branch) == name else None
+    except VerdictError:
+        return None
+
+
+def queue_dir(common_dir):
+    return os.path.join(common_dir, DIR_NAME)
+
+
+def entry_path(common_dir, branch):
+    return os.path.join(queue_dir(common_dir), file_name(branch))
+
+
+def check(entry, stored=True):
+    """Why `entry` is not a well-formed entry, or None. `stored`: it must carry add()'s keys too
+    (an entry read back); False: only the keys the coordinator states (an entry given to add)."""
+    if not isinstance(entry, dict):
+        return 'an entry is a JSON object, not %s' % type(entry).__name__
+    keys = KEYS if stored else GIVEN_KEYS
+    missing = [k for k in keys if k not in entry]
+    if missing:
+        return 'the entry lacks %s' % ', '.join(missing)
+    extra = sorted(k for k in entry if k not in keys)
+    if extra:
+        return 'the entry has keys it may not set: %s' % ', '.join(extra)
+    why = _branch_why(entry['branch'])
+    if why:
+        return why
+    tip = entry['tip']
+    if not refs.is_sha(tip):
+        return 'tip is a full commit hash, not %r' % (tip,)
+    if entry['verdict'] not in VERDICTS:
+        return 'verdict is one of %s, not %r' % (' | '.join(VERDICTS), entry['verdict'])
+    if entry['risk'] not in RISKS:
+        return 'risk is one of %s, not %r' % (' | '.join(RISKS), entry['risk'])
+    for k in TEXT_KEYS:
+        v = entry[k]
+        if not isinstance(v, str) or not v.strip() or '\n' in v or '\r' in v:
+            return '%s is a non-empty one-line text, not %r' % (k, v)
+    rng = entry['range']
+    base, sep, right = rng.partition('..') if isinstance(rng, str) else ('', '', '')
+    if (not sep or not base or base.startswith('-') or any(c.isspace() for c in rng)
+            or not RANGE_TIP_RE.match(right) or not tip.startswith(right)):
+        return 'range is <base>..<tip> with the queued tip (or 7+ digits of it) on the right, not %r' % (rng,)
+    recs = entry['records']
+    if not isinstance(recs, list) or any(not isinstance(r, str) or not r or any(c.isspace() for c in r)
+                                         for r in recs):
+        return 'records is a list of record ids, not %r' % (recs,)
+    if stored:
+        if not isinstance(entry['queued_utc'], str) or not UTC_RE.match(entry['queued_utc']):
+            return 'queued_utc is YYYY-MM-DDTHH:MM:SSZ, not %r' % (entry['queued_utc'],)
+        if entry['state'] not in STATES:
+            return 'state is one of %s, not %r' % (' | '.join(STATES), entry['state'])
+        if entry['last_result'] is not None and not isinstance(entry['last_result'], str):
+            return 'last_result is null or a text, not %r' % (entry['last_result'],)
+    return None
+
+
+def _retry(fn, *args):
+    for i in range(RETRIES):
+        try:
+            return fn(*args)
+        except PermissionError:          # Windows: another process holds the file a moment
+            if i == RETRIES - 1:
+                raise
+            time.sleep(RETRY_SLEEP)
+
+
+def _read_text(path):
+    with open(path, encoding='utf-8') as f:
+        return f.read()
+
+
+def _load(path, branch):
+    """`entry` read from `path`; None when there is no file. Raises VerdictError when the file
+    cannot be read or is not a well-formed entry for `branch`."""
+    try:
+        text = _retry(_read_text, path)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise VerdictError('cannot read %s: %s' % (path, e))
+    try:
+        entry = json.loads(text)
+    except ValueError as e:
+        raise VerdictError('%s is not a verdict entry: %s' % (path, e))
+    why = check(entry)
+    if why:
+        raise VerdictError('%s is not a verdict entry: %s' % (path, why))
+    if entry['branch'] != branch:
+        raise VerdictError('%s holds the entry of %s, not %s (names that differ only in case share '
+                           'one file on Windows)' % (path, entry['branch'], branch))
+    return entry
+
+
+def _write(path, entry):
+    folder = os.path.dirname(path)
+    try:
+        os.makedirs(folder, exist_ok=True)
+        tmp = os.path.join(folder, '.%s.%s.tmp' % (os.path.basename(path), secrets.token_hex(4)))
+        try:
+            with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(json.dumps(entry, sort_keys=True, indent=1) + '\n')
+            _retry(os.replace, tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+    except OSError as e:
+        raise VerdictError('cannot write %s: %s' % (path, e))
+    return path
+
+
+def head_of(common_dir, branch):
+    """`refs/heads/<branch>`'s commit; '' when there is no such branch. Raises VerdictError when
+    git gives no answer."""
+    sha, why = refs.ref_commit('refs/heads/%s' % branch, common_dir)
+    if sha is None:
+        raise VerdictError('git cannot say where %s is: %s' % (branch, why))
+    return sha
+
+
+def add(common_dir, entry, now=None):
+    """Queue `entry` (the GIVEN_KEYS; nothing else) for its branch, replacing an entry already
+    queued for it: `(path, stored entry)`. The tip must be `refs/heads/<branch>` in the repository
+    whose common dir is `common_dir`, else TipMismatch. `now`: a datetime for queued_utc."""
+    why = check(entry, stored=False)
+    if why:
+        raise BadEntry(why)
+    branch, tip = entry['branch'], entry['tip']
+    path = entry_path(common_dir, branch)
+    head = head_of(common_dir, branch)
+    if not head:
+        raise TipMismatch('there is no branch %s' % branch)
+    if head != tip:
+        raise TipMismatch('%s is at %s, not the tip given %s' % (branch, head, tip))
+    _load(path, branch)                  # an unreadable entry, or another branch's, is not replaced
+    stored = dict(entry, records=list(entry['records']), queued_utc=utc(now), state=QUEUED,
+                  last_result=None)
+    return _write(path, stored), stored
+
+
+def scan(common_dir):
+    """`(entries, bad)`: every well-formed entry, oldest first, and `[(path, why)]` for each file
+    in the queue folder that is not one (temp files left out)."""
+    folder = queue_dir(common_dir)
+    try:
+        names = sorted(os.listdir(folder))
+    except FileNotFoundError:
+        return [], []
+    except OSError as e:
+        raise VerdictError('cannot list %s: %s' % (folder, e))
+    good, bad = [], []
+    for name in names:
+        path = os.path.join(folder, name)
+        if name.startswith('.') and name.endswith('.tmp'):
+            continue
+        branch = branch_of(name)
+        if branch is None:
+            bad.append((path, 'not a name a verdict entry file has'))
+            continue
+        try:
+            entry = _load(path, branch)
+        except VerdictError as e:
+            bad.append((path, str(e)))
+            continue
+        if entry is not None:
+            good.append(entry)
+    return order(good), bad
+
+
+def entries(common_dir):
+    """Every queued entry, oldest first. Raises VerdictError naming each file in the queue folder
+    that is not a well-formed entry: a landing takes nothing from a queue it cannot read whole."""
+    good, bad = scan(common_dir)
+    if bad:
+        raise VerdictError('the verdict queue holds files that are not entries (remove each with '
+                           'tools/verdict.py drop, or by hand): %s'
+                           % '; '.join('%s: %s' % pb for pb in bad))
+    return good
+
+
+def order(items):
+    """Oldest first; the branch name settles a tie. A malformed item sorts as text, never raises."""
+    def key(e):
+        e = e if isinstance(e, dict) else {}
+        return str(e.get('queued_utc') or ''), str(e.get('branch') or '')
+    return sorted(items, key=key)
+
+
+def drop(common_dir, branch, tip=None):
+    """Remove `branch`'s entry: True when one was removed, False when none is queued (or, with
+    `tip`, the entry queued is for another tip and is kept). Without `tip` an unreadable entry
+    file is removed too."""
+    path = entry_path(common_dir, branch)
+    if tip is not None:
+        entry = _load(path, branch)
+        if entry is None or entry['tip'] != tip:
+            return False
+    try:
+        _retry(os.remove, path)
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        raise VerdictError('cannot remove %s: %s' % (path, e))
+    return True
+
+
+def mark_failed(common_dir, branch, why, tip=None):
+    """Mark `branch`'s entry failed with `why` (kept in last_result): True when marked, False when
+    none is queued (or, with `tip`, the entry queued is for another tip and is left as is). A
+    failed entry is never in a batch; a re-add queues it again."""
+    if not isinstance(why, str) or not why.strip():
+        raise VerdictError('say why the landing failed')
+    path = entry_path(common_dir, branch)
+    entry = _load(path, branch)
+    if entry is None or (tip is not None and entry['tip'] != tip):
+        return False
+    entry.update(state=FAILED, last_result=why.strip())
+    _write(path, entry)
+    return True
+
+
+def ready(items, tip_of, strict_hits, batch_max):
+    """`(batch, skipped)` from queue entries `items`: the batch is the entries that may land
+    together, oldest first, at most `batch_max`; skipped is a Skip(branch, reason, why, entry) for
+    every other entry, oldest first.
+
+    Checked in this order, the first that holds naming the reason: not well-formed (invalid);
+    state failed (failed); tip_of(branch) is not the queued tip (stale: the branch moved, or
+    tip_of gave None because it is gone or git could not say); risk High (high); strict_hits(entry)
+    is a non-empty list of paths (strict) or None, which means it cannot be told (strict too);
+    the batch already holds batch_max (later). Nothing here calls git: the caller's tip_of and
+    strict_hits do."""
+    if isinstance(batch_max, bool) or not isinstance(batch_max, int) or batch_max < 1:
+        raise ValueError('batch_max is a whole number of at least 1, not %r' % (batch_max,))
+    batch, skipped = [], []
+    for e in order(items):
+        why = check(e)
+        branch = e.get('branch') if isinstance(e, dict) else None
+        if why:
+            skipped.append(Skip(branch, SKIP_INVALID, why, e))
+            continue
+        if e['state'] == FAILED:
+            skipped.append(Skip(branch, SKIP_FAILED, 'a landing failed: %s' % e['last_result'], e))
+            continue
+        now = tip_of(branch)
+        if now != e['tip']:
+            skipped.append(Skip(branch, SKIP_STALE,
+                                'queued at %s, but the branch is %s' % (
+                                    e['tip'][:10], now[:10] if now else 'gone or unknown'), e))
+            continue
+        if e['risk'] == 'High':
+            skipped.append(Skip(branch, SKIP_HIGH, 'High risk lands alone', e))
+            continue
+        hits = strict_hits(e)
+        if hits is None:
+            skipped.append(Skip(branch, SKIP_STRICT,
+                                'cannot tell whether it touches a strict path: lands alone', e))
+            continue
+        if hits:
+            skipped.append(Skip(branch, SKIP_STRICT, 'touches strict path %s: lands alone'
+                                % ', '.join(sorted(hits)), e))
+            continue
+        if len(batch) >= batch_max:
+            skipped.append(Skip(branch, SKIP_LATER, 'the batch is full (%d)' % batch_max, e))
+            continue
+        batch.append(e)
+    return batch, skipped
