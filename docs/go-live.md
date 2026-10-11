@@ -69,7 +69,7 @@ Settled:
 - Heavy runs: no scanner and no audit; the guard's heavy list is the mechanism, and each repo lists its own programs.
 - PidHold stays out of the gate. It is opt-in for agent test runs only (`--pid-hold` on tools/kit_tests.py and tools/pytests.py, off by default), and the gate refuses the flag (kitlib/gate/steps.py `unsupported`). Its whole-suite cost is measured in docs/test-tools.md "What the hold costs" (2026-10-10): the 3 s warm-up per run, with no steady cost above run-to-run noise, solo or with 2 runs at once.
 - Pin-check / offline hatch: a per-repo gate hook; the kit provides only the hook point.
-- Stack runners (check.py, js_tests.py, dotnet_each.py) are not kit tools; each repo keeps them as its own gate hooks.
+- Stack runners: dotnet_each.py and js_tests.py ship in the stack templates (`templates/stacks/dotnet/tools`, `templates/stacks/python/tools`); check.py stays a repo's own gate hook pending an owner answer.
 - No slash commands; skills cover them.
 - The lander may fetch and fast-forward merge in the main checkout.
 - Each repo's port audit was folded into its `.kit.json` migration (checked complete).

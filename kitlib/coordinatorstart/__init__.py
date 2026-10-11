@@ -3,7 +3,8 @@
 Pure functions that return data; the hook (claude/hooks/coordinator_session_start.py) prints it. The text
 comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
-filing and pricing-pass lines (each switched on in the config), then five live checks,
+filing and pricing-pass lines (each switched on in the config), then the live checks (rulings, cap,
+machine state, other coordinators, and stubs: a line only when the repo's stubs are not current),
 run as in kitlib.pmstart: each is a pure function over fakeable inputs (process list, file reads,
 a subprocess runner, now), and a failed one is one "could not check X: reason" line.
 
@@ -18,9 +19,10 @@ import os
 import re
 import sys
 
-from kitlib import pmstart
+from kitlib import pmstart, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
+from kitlib.ledger import safepath
 
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
@@ -140,12 +142,16 @@ def find_entry(sessions, cwd, name=None, root=None):
 
 
 def rulings(entry, ledger_path, read=_read):
-    """Ledger entries newer than the coordinator's state note's highest R-id, for its repo or all."""
+    """Ledger entries newer than the coordinator's state note's highest R-id, for its repo or all.
+    A ledger path the ledger's path checks refuse (kitlib.ledger.safepath) is one line saying why."""
     note = _need(entry, "state")
     ids = [int(m) for m in re.findall(r"R-(\d{4})", read(note))]
     if not ids:
         return ["no R-id in your state note %s: cannot tell which rulings are new" % note]
     top, repo = max(ids), str(entry.get("repo", "")).lower()
+    why = safepath.refusal(ledger_path)
+    if why is not None:
+        return [why]
     found, cur = [], None
     for line in read(ledger_path).splitlines():
         m = re.match(r"## R-(\d{4}) \| [^|]*\| ([^|]*) \|", line)
@@ -243,6 +249,18 @@ def machine(entry, run=_run, read=_read, now=None, home=None, root=None, lock_fi
     return lines
 
 
+def stubs_line(entry, root=None, check=stubs.problem_line):
+    """[the stubs line] for the coordinator's repo (repos_root/<repo>), [] when its stubs are current.
+    KeyError without repos_root; a missing folder is a could-not-check line, not an error."""
+    if not root:
+        raise KeyError("repos_root not configured")
+    repo = os.path.join(root, str(entry.get("repo")))
+    if not os.path.isdir(repo):
+        return ["could not check stubs: no repository folder %s" % repo]
+    line = check(repo)
+    return [line] if line else []
+
+
 def others(entry, procs, env, pid):
     """Other live sessions whose Remote Control name starts with this coordinator's stem."""
     stem = _need(entry, "stem")
@@ -264,8 +282,8 @@ def others(entry, procs, env, pid):
 
 
 def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, home=None,
-            pid=None, pm_cfg=None, live=True):
-    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the five live checks."""
+            pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line):
+    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the stubs check prints only when the repo's stubs are missing or stale)."""
     env = os.environ if env is None else env
     lines = [str(t) for t in cfg.get("standing") or []]
     if cfg.get("eng_filing") is True:
@@ -303,6 +321,7 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
             ("machine state", lambda: machine(entry_once(), run, read, now, home, cfg.get("repos_root"),
                                               lock_file_for(cfg, entry_once().get("repo")))),
             ("other coordinators", lambda: others(entry_once(), procs_once(), env, pid)),
+            ("stubs", lambda: stubs_line(entry_once(), cfg.get("repos_root"), stubs_check)),
         ]
         for name, fn in checks:
             try:

@@ -348,6 +348,34 @@ def kit_sync(settings):
     return ["kit updated to %s" % (sha or "?")[:9]]
 
 
+def launcher_repos():
+    """{name: folder} of the machine config's launcher.repos (kitlib.launcher.settings)."""
+    from kitlib.launcher import settings
+    return settings.load().repos
+
+
+def stubs(repos=None, check=None):
+    """One line per repository in launcher.repos whose stubs are missing or stale (kitlib.stubs.problem_line),
+    none when all are current. A folder that is not there, or a check that raises, is that repo's
+    own "could not check stubs" line."""
+    from kitlib import stubs as kstubs
+    check = check or kstubs.problem_line
+    repos = launcher_repos() if repos is None else repos
+    lines = []
+    for name in sorted(repos):
+        path = repos[name]
+        if not os.path.isdir(path):
+            lines.append("could not check stubs (%s): no repository folder %s" % (name, path))
+            continue
+        try:
+            line = check(path)
+        except Exception as e:
+            line = "could not check stubs (%s): %s: %s" % (name, type(e).__name__, e)
+        if line:
+            lines.append(line)
+    return lines
+
+
 def checklist(cfg, now=None, procs=None, **fakes):
     """The full session-start text. A failed check is one "could not check X: reason" line."""
     today = (now or datetime.datetime.now()).date()
@@ -368,6 +396,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("reminders", lambda: reminders(cfg, today, **fakes.get("reminders", {}))),
         ("liveness", lambda: liveness(cfg, procs_once(), **fakes.get("liveness", {}))),
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
+        ("stubs", lambda: stubs(**fakes.get("stubs", {}))),
         ("foreground_lock", lambda: fglock.check(cfg, **fakes.get("foreground_lock", {}))),
     ]
     for name, fn in checks:

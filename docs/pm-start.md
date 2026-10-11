@@ -24,6 +24,17 @@ when the fetch fails (offline, timed out); a diverged `main` is reported, never 
 no git config and never rebases, resets or forces. The checks are a point in time (the landing lock is only read); `git merge --ff-only` bounds a race with a landing, since it refuses anything that is not a fast-forward. Code: `kitlib/pmstart` `kit_sync`; tests:
 `tests/pmstart/test_kitsync.py`.
 
+## Stubs (`stubs`)
+
+For each repository in the machine config's `launcher.repos`, the `stubs` check runs
+`kitlib.stubs.problem_line` and prints one line for a repository whose stubs are missing or stale:
+`stubs (<repo>): N missing/stale: <names>; run python <kit>/tools/kit_stubs.py write -C <folder>`,
+with `(stale ones run the kit at <path>)` added when a stub runs another kit. A repository whose
+stubs are current prints nothing; a folder that is not there, or a check that fails, is that
+repository's own `could not check stubs (<repo>): ...` line. The coordinator's session start has the
+same check for its own repository (docs/install.md "Tools without a stub"). Code: `kitlib/pmstart`
+`stubs`; tests: `tests/pmstart/test_stubs_check.py`.
+
 ## Config
 
 The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; without it the checklist says it is skipped.

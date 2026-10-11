@@ -8,6 +8,7 @@ import unittest
 
 from kitlib import pmstart
 from kitlib.pmstart import fglock
+from tests.pmstart import keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 CFG = {"hub_url": "https://claude.ai/artifact/X", "hub_source": "claude/hub/action-hub.html",
@@ -23,6 +24,7 @@ def setUpModule():
     global _orig_read_live
     _orig_read_live = fglock.read_live
     fglock.read_live = lambda user32=None: 0
+    keep_off_launcher_repos()   # nor this machine's launcher.repos (the stubs check)
 
 
 def tearDownModule():
