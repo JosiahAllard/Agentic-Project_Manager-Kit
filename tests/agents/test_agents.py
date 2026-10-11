@@ -43,10 +43,12 @@ class AgentFilesTest(unittest.TestCase):
             self.assertTrue(fm.get("description"), p.name)
             self.assertIn(fm.get("model"), {"opus", "sonnet", "haiku"}, p.name)
 
-    def test_plugin_manifest_has_no_agents_key(self):
-        # The agents load through the user-level agents link, not the plugin.
+    def test_plugin_manifest_lists_every_agent_file(self):
+        # plugin.json's `agents` takes files, not a folder, and replaces the default agents/
+        # lookup: an agent file it does not list is never loaded.
         manifest = json.loads((AGENTS.parents[1] / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
-        self.assertNotIn("agents", manifest)
+        self.assertEqual(sorted(manifest["agents"]),
+                         sorted("./claude/agents/%s" % p.name for p in AGENTS.glob("*.md")))
         self.assertEqual(manifest["skills"], ["./claude/skills/"])
         self.assertTrue((AGENTS.parents[1] / "claude" / "skills").is_dir())
 
