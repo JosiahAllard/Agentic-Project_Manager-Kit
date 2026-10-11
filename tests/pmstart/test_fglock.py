@@ -14,7 +14,9 @@ FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]
 
 
 def setUpModule():
-    """The other checklist checks read this machine; keep them off it."""
+    """The other checklist checks read this machine; keep them off it (keep_off_launcher_repos
+    also keeps the plugin export and agent_temp checks off this machine's config and scheduler)."""
+    keep_off_launcher_repos()
     global _orig_settings
     _orig_settings = pmstart.pm_data_settings
     pmstart.pm_data_settings = lambda: None
