@@ -124,7 +124,7 @@ HOME_X =os.path.join(os.sep, 'nohome')
 
 class PowerShellCacheEnv(unittest.TestCase):
     """A real powershell given a temp USERPROFILE must not fall back to the cwd for its module
-    analysis cache (KIT-TESTS-PS-MODULE-CACHE-IN-WORKTREE)."""
+    analysis cache, which would land as an untracked file in a worktree."""
 
     def under(self, path, home):
         return os.path.normcase(os.path.dirname(path)) == os.path.normcase(home)
