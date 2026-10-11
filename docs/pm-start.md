@@ -27,7 +27,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 
 ```json
 {"pm_start": {
-  "hub_url": "https://claude.ai/artifact/<id>",
+  "hub_urls": {"1": "https://claude.ai/artifact/<id>"},
   "hub_source": "claude/hub/action-hub.html",
   "pm_watch_cmd": "python -u <kit>/tools/pm_watch.py",
   "memory_dir": "<home>/.claude/projects/<project>/memory",
@@ -38,6 +38,12 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 }}
 ```
 
+- `hub_urls`: account label -> that account's hub copy (docs/action-hub.md "One copy per
+  account"; `tools/hub_mirror.py set-url` writes it). This account's URL gives the republish
+  line; none gives the steps to publish a copy, record it and restore it from the mirror.
+  `hub_url` (one URL) is read only while `hub_urls` has no entry. `hub_mirror`: the absolute
+  mirror folder for an install without `pm_data`. Code: `kitlib/pmstart` `hub`; tests:
+  `tests/pmstart/test_hub_accounts.py`.
 - `reminders_file`: `[{"due": "YYYY-MM-DD", "text": "..."}]`.
 - `sessions_file`: `{"<key>": {"name": "<remote-control name>", "repo": "<repo>"}}`; an entry
   with `autostart: false` is not checked.

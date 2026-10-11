@@ -57,9 +57,15 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    config ... checklist skipped".
 
 8. **Publish the Action Hub.** Publish `claude/hub/action-hub.html` with the Artifact tool and the
-   capabilities docs/action-hub.md "For the PM" gives, pin it, set `pm_start.hub_url` to its URL,
-   and run `ArtifactComments watch` on that URL.
-   Success: the page opens and the watch is confirmed.
+   capabilities docs/action-hub.md "For the PM" gives, pin it, record its URL with
+   `python <kit>/tools/hub_mirror.py set-url --account <label> <url>` (the label:
+   `python <kit>/tools/hub_mirror.py account`), and run `ArtifactComments watch` on that URL.
+   The hub's data is mirrored in git (docs/action-hub.md "One copy per account"): with no
+   `pm_data` yet, set `pm_start.hub_mirror` to an absolute folder in a git work tree. Then
+   `python <kit>/tools/hub_mirror.py restore --out <file>` says the mirror is empty: a new
+   install has nothing to send.
+   Success: the page opens, the watch is confirmed, and the next session start gives the
+   republish line.
 
 9. **Install each repository** (docs/install.md).
    Success: `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0 and

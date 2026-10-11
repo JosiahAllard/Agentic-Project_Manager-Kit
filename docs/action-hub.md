@@ -27,13 +27,47 @@ repository.
 
 - Page: `claude/hub/action-hub.html`. Publish it once with the Artifact tool, declaring
   `capabilities: {db: {rules: [{path: "parked", read: "view", write: "admin"}]}, user: {}, comments: {}}`
-  (the rule: "parked/<generated id>"), and pin it. Each owner keeps one copy; record its URL as
-  `pm_start.hub_url` (docs/pm-start.md).
+  (the rule: "parked/<generated id>"), and pin it. Each account keeps one copy, filled from the
+  mirror ("One copy per account" below).
 - The PM reads and writes the store with the ArtifactData tool. Coordinators never write to it;
   they send questions and hand steps to the PM.
 - Inbox section: one button with two tabs, Questions (questions/) and Answers (inbox/). Its badge
   counts open questions plus unread answers; the button reopens the last tab used.
 - The repo filter lists every known repo; see repos/ below.
+
+### One copy per account
+
+A page belongs to the Claude account that published it, so each account the PM runs on has its
+own copy. `pm_start.hub_urls` maps an account label to its copy (docs/pm-start.md "Config"). The
+label (`kitlib.launcher.accounts.current_account`; `python tools/hub_mirror.py account` prints
+it) is the `launcher.accounts` entry listing this session's `CLAUDE_CONFIG_DIR` (unset:
+`~/.claude`), else `default`.
+
+The data of record is a mirror in git, `hub/<collection>/<doc_id>.json` in the PM data worktree
+(`pm_data.path`, docs/pm-data-branch.md), else in the absolute folder `pm_start.hub_mirror`;
+`tools/hub_mirror.py` refuses with neither. Mirrored (`kitlib.hubmirror.MIRRORED`): questions,
+inbox, to_pm, todos, parked, stories, pages, page_html. Not mirrored (`REGENERATED`), refilled on
+a new copy: backlog/ and completed/ (`hub_backlog.py --force`), repos/ (`hub_repos.py`, then any
+aliases again), usage/ and agents/ (posted as at session start).
+
+- **Save** after each time the PM processes the hub, and before it ends a session: read every
+  mirrored collection with ArtifactData into one `out_dir` folder, every page of each (a
+  collection read in part loses the rest from the mirror), then
+  `python tools/hub_mirror.py save --from <folder> --commit --push`. A collection folder present
+  replaces that collection in the mirror, so an empty collection needs its empty folder; one
+  absent is left alone. `--commit` commits the mirror's paths on the data branch; `--push` pushes
+  that branch to `pm_data.remote` with an explicit refspec.
+- **New copy:** publish the page as above, record it with
+  `python tools/hub_mirror.py set-url --account <label> <url>`, then
+  `python tools/hub_mirror.py restore --out <file>` writes ArtifactData batch files (`<file>`,
+  `<stem>-2.json`, ...; at most 50 `set` entries and under 1 MiB each; each document's fields in
+  its own file under `<stem>.docs/`, named by the entry's `file_path`). Send each with ArtifactData.
+  An empty mirror writes none. Then refill the regenerated collections.
+- `pm_start.hub_url` is the one copy of an install that has not moved to `hub_urls`; it is read
+  only while `hub_urls` has no entry. To move, set-url the old URL under its account first.
+- The JSON ArtifactData writes under `out_dir` has not been seen: save reads either a wrapped
+  document (`data` plus `id`/`version`) or bare fields, and keeps neither `id` (except in to_pm,
+  where it is a field) nor `version`.
 
 ## questions/Q-NNN
 | Field | Written by | Meaning |
