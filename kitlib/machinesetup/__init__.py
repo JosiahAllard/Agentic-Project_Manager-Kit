@@ -8,12 +8,13 @@ dry run prints and the function --apply runs, plus the refusals that stop both. 
   that point into the old kit clone become directory junctions into this kit;
 - settings (kitlib.machinesetup.settings): each config folder's settings.json loses the old kit's
   PreToolUse hooks, gains guard.py's entry and has its old hook and statusline paths re-pointed;
-- extras (kitlib.machinesetup.extras): the machine schedule shortcut, the agents' temp folder ACL,
-  and KIT_MACHINE_LOCK for comfy.
+- extras (kitlib.machinesetup.extras): the machine schedule shortcut, the agents' temp folder
+  (kitlib.machinesetup.agenttemp: the folder, AGENT_TEMP, the agent_temp_sweep config key, and the
+  sweep task, registered only with `register_sweep_task`) and its ACL, and KIT_MACHINE_LOCK for comfy.
 A fresh run (`fresh`, no older kit clone) switches no links and rewrites no entry: it only appends guard.py's
 entry (creating a missing settings.json), writes the PM SessionStart hook to `pm_settings` alone,
 installs the kit plugin per account from the export of the kit's pushed main
-(kitlib.machinesetup.plugin) and runs the shortcut and ACL extras, not KIT_MACHINE_LOCK. Its default
+(kitlib.machinesetup.plugin) and runs the shortcut, agent temp and ACL extras, not KIT_MACHINE_LOCK. Its default
 config folders are the plugin refresh's account folders (account_dirs).
 Nothing here prints or exits; run() gives the exit code and the lines.
 """
@@ -35,7 +36,7 @@ class Context(object):
     `old_kit` and `fresh` is given; `pm_settings` goes with `fresh` only."""
 
     def __init__(self, home, kit, old_kit=None, config_dirs=None, agent_temp=None, desktop=None,
-                 host=None, today=None, fresh=False, pm_settings=None):
+                 host=None, today=None, fresh=False, pm_settings=None, register_sweep_task=False):
         if bool(fresh) == bool(old_kit):
             raise ValueError('give old_kit or fresh, not both or neither')
         if pm_settings and not fresh:
@@ -50,6 +51,7 @@ class Context(object):
             config_dirs = account_dirs(self.home) if fresh else default_config_dirs(self.home)
         self.config_dirs = dedupe(os.path.abspath(d) for d in config_dirs)
         self.agent_temp = agent_temp
+        self.register_sweep_task = bool(register_sweep_task)
         self.desktop = desktop
         self.host = host or extras.Host()
         self.today = today or datetime.date.today().strftime('%Y%m%d')

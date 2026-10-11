@@ -1,6 +1,7 @@
 """Machine extras (docs/machine-setup.md "Extras"): the machine schedule shortcut, the agents' temp
-folder permissions and the comfy entry point's lock tool (not in fresh mode: the plugin's lock tool
-is used). Each is read first and planned only when it differs; Host is the Windows side (also the
+folder with its AGENT_TEMP variable, sweep config key and sweep task (kitlib.machinesetup.agenttemp),
+that folder's permissions, and the comfy entry point's lock tool (not in fresh mode: the plugin's
+lock tool is used). Each is read first and planned only when it differs; Host is the Windows side (also the
 `claude` runner that kitlib.machinesetup.plugin migrates each account with), and tests pass a fake.
 """
 import json
@@ -14,6 +15,7 @@ try:
 except ImportError:                                                  # not Windows
     winreg = None
 
+from . import agenttemp
 from .common import norm, under
 
 SHORTCUT = 'Machine schedule.lnk'
@@ -76,6 +78,16 @@ class Host(object):
     def env_set(self, name, value):
         self._ps('[Environment]::SetEnvironmentVariable(%s, %s, "User")' % (_ps_quote(name), _ps_quote(value)))
 
+    def task_exists(self, name):
+        """Whether the scheduled task `name` is registered (schtasks /Query)."""
+        r = subprocess.run(['schtasks', '/Query', '/TN', name], capture_output=True, text=True,
+                           creationflags=_NOWIN)
+        return r.returncode == 0
+
+    def task_register(self, line):
+        """Run the PowerShell line that registers a scheduled task (agenttemp.task_line)."""
+        self._ps(line)
+
     def guard_entry(self, kit):
         r = subprocess.run([sys.executable, os.path.join(kit, 'claude', 'hooks', 'guard.py'),
                             '--settings-entry'], capture_output=True, text=True, creationflags=_NOWIN)
@@ -131,7 +143,9 @@ def pythonw():
 
 def survey(plan, ctx):
     _shortcut(plan, ctx)
-    _acl(plan, ctx)
+    folder, made = agenttemp.survey(plan, ctx)        # before the ACL: it may make the folder
+    if folder:
+        _acl(plan, ctx, folder, made)
     if ctx.fresh:
         plan.note('extras', '%s left as is in fresh mode: the plugin\'s lock tool is used' % LOCK_ENV)
     else:
@@ -179,27 +193,10 @@ def _shortcut(plan, ctx):
                                 '"%s" works)' % (n, text.strip(), SHORTCUT[:-4]))
 
 
-def _agent_temp(ctx):
-    if ctx.agent_temp:
-        return ctx.agent_temp
-    try:
-        from kitlib.config import user_config, ConfigError
-    except ImportError:
-        return None
-    try:
-        sweep = user_config(ctx.home).get('agent_temp_sweep') or {}
-    except ConfigError:
-        return None
-    return sweep.get('dir') if isinstance(sweep, dict) else None
-
-
-def _acl(plan, ctx):
-    folder = _agent_temp(ctx)
-    if not folder:
-        plan.note('extras', 'agent temp permissions skipped: no folder (pass --agent-temp, or set '
-                            'agent_temp_sweep.dir in the machine config)')
-        return
-    if not os.path.isdir(folder):
+def _acl(plan, ctx, folder, made=False):
+    """`made`: this run makes the folder (agenttemp.survey), so there are no permissions to read
+    yet; the grant is planned as for a folder that inherits the drive's."""
+    if not made and not os.path.isdir(folder):
         plan.refuse('the agent temp folder %s does not exist' % folder)
         return
     host = ctx.host
@@ -208,6 +205,13 @@ def _acl(plan, ctx):
     if not dom or not name:
         plan.refuse('cannot name the user for %s\'s permissions: USERDOMAIN or USERNAME is empty (%r)' % (folder, me))
         return
+    grant = [folder, '/inheritance:r', '/grant:r'] + ['%s:%s' % (s, GRANT) for s in SIDS] + ['%s:%s' % (me, GRANT)]
+    if made:
+        plan.add('extras', '%s (made by this run): permissions to SYSTEM, Administrators and %s only '
+                           '(full control), inheritance from the drive removed: icacls %s'
+                 % (folder, me, ' '.join('"%s"' % a for a in grant)),
+                 lambda: host.icacls(grant), undo='icacls "%s" /reset' % folder)
+        return
     try:
         now = host.icacls([folder])
     except (OSError, RuntimeError) as e:
@@ -215,7 +219,6 @@ def _acl(plan, ctx):
         return
     if acl_done(now, folder, me):
         return
-    grant = [folder, '/inheritance:r', '/grant:r'] + ['%s:%s' % (s, GRANT) for s in SIDS] + ['%s:%s' % (me, GRANT)]
     removes = [[folder, '/remove:d' if deny else '/remove:g', who] for who, deny in acl_others(now, folder, me)]
     cmds = [grant] + removes
     text = '%s: permissions to SYSTEM, Administrators and %s only (full control), inheritance from the ' \

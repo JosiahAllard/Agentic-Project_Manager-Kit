@@ -457,9 +457,11 @@ class Fresh(FreshBase):
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertTrue(os.path.isfile(os.path.join(self.desk, extras.SHORTCUT)))
         self.assertTrue(self.host.acl_fixed)
-        self.assertEqual(self.host.env, {extras.LOCK_ENV: 'somewhere-else'})
-        self.assertNotIn('env', [c[0] for c in self.host.calls])
+        self.assertEqual(self.host.env, {extras.LOCK_ENV: 'somewhere-else', 'AGENT_TEMP': self.temp})
+        self.assertEqual([c[1] for c in self.host.calls if c[0] == 'env'], ['AGENT_TEMP'])
         self.assertIn('KIT_MACHINE_LOCK left as is in fresh mode', out)
+        self.assertIn('add agent_temp_sweep = ', out)                     # agent temp init runs fresh too
+        self.assertIn('scheduled task agent-temp-sweep is not registered', out)
 
 
 SLEEPER = '''import os, sys, time
