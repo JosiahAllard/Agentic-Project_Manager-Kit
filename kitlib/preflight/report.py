@@ -100,8 +100,10 @@ def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read
     out.extend(machine.preflight_lines(s))
     out.append(configline.line(home))
     out.append('traps     %s' % s['traps'])
-    out.append('index     docs: %s | a doc section: python %s/doc_index.py '
-               '--section "<title>"' % (cfg.section('doc_index')['index'], tools))
+    index = cfg.section('doc_index')['index']
+    gone = '' if os.path.isfile(os.path.join(top, index)) else ' (missing)'
+    out.append('index     docs: %s%s | a doc section: python %s/doc_index.py '
+               '--section "<title>"' % (index, gone, tools))
     out.extend(nextblock.lines(top, tools, branch, base, cfg.main_branch, behind, dirty or [],
                                in_main))
     out.append('lock      %s' % lockline.line_for(kit_root, lock_reader))
