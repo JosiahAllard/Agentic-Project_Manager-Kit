@@ -4,9 +4,12 @@ check by changing the hook module it lands (docs/gate.md "Landing").
 
 Only the module's own file is taken from the commit. An import inside it resolves as Python
 resolves it in the gating process (the merged checkout's files are not on sys.path), so a hook
-module that imports sibling files from its tools folder is not supported here.
+module that imports sibling files from its tools folder is not supported here. Its __file__ is
+the path the module has in the gated checkout (`root`), so paths derived from it are real; its
+tracebacks name `<rev10>:<rel>`, the commit its code came from.
 """
 import hashlib
+import os
 import sys
 import types
 
@@ -41,7 +44,10 @@ def load_module_at(cfg, root, rev):
     name = 'kit_repo_hook_rev_%s' % hashlib.sha256(
         ('%s\0%s\0' % (rev, rel)).encode('utf-8') + data).hexdigest()[:12]
     module = types.ModuleType(name)
-    module.__file__ = where
+    # The code is the commit's; __file__ is the work-tree path, so a hook that finds files from
+    # os.path.dirname(__file__) gets a real directory. Tracebacks and compile errors still name
+    # the commit: `where` is the compile filename.
+    module.__file__ = os.path.join(root, *rel.split('/'))
     sys.modules[name] = module
     try:
         with policy.no_bytecode():    # as the work-tree loader: an import writes no __pycache__
