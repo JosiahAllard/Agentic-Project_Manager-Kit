@@ -165,6 +165,7 @@ button.danger{color:var(--warn)}
     <h1>Action Hub</h1>
     <p class="sub">Questions from the PM and the coordinators, the PM's answers to what you ask, the steps only you can do, and your backlogs. Answer and tick off whenever you like; nothing waits on you.</p>
     <div class="alert" id="alertbar" hidden><button class="primary" type="button" id="alert-btn">Alert the PM</button><span class="status" id="alert-status" role="status">Sends the PM a summary of everything waiting on it here.</span></div>
+    <div class="status err" id="loaderr" role="alert" hidden></div>
   </header>
 
   <div class="sections" role="tablist" id="sections">
@@ -188,6 +189,7 @@ button.danger{color:var(--warn)}
       <button class="tab" role="tab" data-f="open" aria-selected="true" id="tab-open">Open <span class="n" id="n-open">0</span></button>
       <button class="tab" role="tab" data-f="answered" aria-selected="false" id="tab-answered">Submitted <span class="n" id="n-answered">0</span></button>
       <button class="tab" role="tab" data-f="logged" aria-selected="false" id="tab-logged">Logged <span class="n" id="n-logged">0</span></button>
+      <button class="tab" role="tab" data-f="other" aria-selected="false" id="tab-other" hidden>Other <span class="n" id="n-other">0</span></button>
     </div>
     <div class="tabs" role="tablist" id="itabs" data-for="inbox" hidden>
       <button class="tab" role="tab" data-if="unread" aria-selected="true" id="itab-unread">Unread <span class="n" id="n-iunread">0</span></button>
@@ -538,6 +540,59 @@ button.danger{color:var(--warn)}
     for (const x of sent) L.push("- " + x.id + " [" + (x.kind === "fyi" ? "FYI" : "Question") + (x.repo ? ", " + x.repo : "") + "]" + (x.urgent ? " (urgent)" : "") + ": " + String(x.text || "").replace(/\s+/g, " ").slice(0, 300));
     return L;
   }
+  // Alert text: the PM's whole to-do list for one alert, trimmed by whole lines to max bytes (E19), with ids on every item (E20).
+  const pmBytes = s => new TextEncoder().encode(s).length;
+  function pmAlertLines2(s){
+    const L = ["Action Hub alert from the owner: please process the hub."];
+    L.push(...pmAlertLines(s.topm));
+    const ans = s.docs.filter(d => d.status === "answered");
+    if (ans.length) { L.push("", "Answers to log:"); for (const d of ans) L.push("- " + d.id + ": " + (d.answer?.label || "?") + (d.answer?.note ? " (note: " + d.answer.note + ")" : "")); }
+    const sub = s.stories.filter(st => st.status === "submitted");
+    if (sub.length) { L.push("", "New stories:"); for (const st of sub) L.push("- [" + (st.repo || "?") + "] " + (st.title || "(untitled)") + (st.urgent ? " (urgent)" : "") + " id " + st.id); }
+    const done = s.todos.filter(t => t.status === "done" && !t.pm_ack);
+    if (done.length) { L.push("", "To-dos ticked done:"); for (const t of done) L.push("- " + t.id + ": " + (t.title || "")); }
+    const mine = s.todos.filter(t => t.status !== "done" && t.from === "you" && !t.pm_ack);
+    if (mine.length) { L.push("", "To-dos I added:"); for (const t of mine) L.push("- " + t.id + ": " + (t.title || "") + (t.urgent ? " (urgent)" : "")); }
+    return L;
+  }
+  const pmAlertEmpty = s => pmAlertLines2(s).length === 1;
+  function pmAlertText(s, max){
+    const L = pmAlertLines2(s);
+    if (L.length === 1) L.push("", "Nothing new is waiting; check the hub anyway.");
+    if (pmBytes(L.join("\n")) <= max) return L.join("\n");
+    const note = n => "(+" + n + " more not shown; process the hub, do not rely on this list)";
+    let dropped = 0;
+    while (L.length > 1) {
+      if (L.pop().startsWith("- ")) dropped++;
+      if (pmBytes(L.join("\n") + "\n" + note(dropped)) <= max) break;
+    }
+    return L.join("\n") + "\n" + note(dropped);
+  }
+  // An automatic alert goes out only when something waits and the text differs from the last one sent.
+  function pmAutoAlert(s, last, max){
+    if (pmAlertEmpty(s)) return { send: false, text: "" };
+    const text = pmAlertText(s, max);
+    return { send: text !== last, text };
+  }
+  // F2: a todo's commands as a list: an array, a lone string, or the older `command`.
+  const pmCommands = t => Array.isArray(t.commands) ? t.commands.filter(c => typeof c === "string" && c.trim()) : typeof t.commands === "string" && t.commands.trim() ? [t.commands] : typeof t.command === "string" && t.command.trim() ? [t.command] : [];
+  // E6: the question tab a doc belongs to; an unknown or missing status lands in "other".
+  const pmQBucket = d => d.status === "open" || d.status === "answered" || d.status === "logged" ? d.status : "other";
+  // F3: how current a regenerated collection is, from its docs' posted_at (stale after 3 days).
+  function pmFresh(items, now){
+    const t = items.map(x => x.posted_at).filter(Boolean).sort().pop();
+    if (!t) return { kind: "never" };
+    const ms = new Date(t).getTime();
+    return !isNaN(ms) && ms < now - 3 * PM_DAY ? { kind: "stale", since: t } : { kind: "fresh" };
+  }
+  // E4/E5: why the alert (and so Send all) is unavailable; "" when it is available.
+  function pmAlertWhy(code, hasComments){
+    if (!hasComments) return "Alerts are unavailable: this view has no comment access (for example, you were invited by email, or the page was published without the comments capability). Send all is blocked.";
+    return { available: "",
+      writers_only: "Only an editor of this page can alert the PM. Send all is blocked.",
+      no_session: "No PM session is watching right now, so Send all is blocked. Your queued items are saved; the PM sees sent items at its next hub check.",
+      off: "Alerts are not available in this view. Send all is blocked." }[code] ?? "Alerts are not available in this view. Send all is blocked.";
+  }
   // pm-pure:end
 
   function pmFields(init){
@@ -581,16 +636,36 @@ button.danger{color:var(--warn)}
     state.pfilter = t.dataset.pf; render();
   });
   // Send all: queued -> sent, then the existing alert (fire, set up in setupAlert) goes out once.
-  let sendAlert = null;
+  // sendAlert/recheckAlert are set by setupAlert; alertCode is canSendToClaude's last answer ("off" until known, or with no comments).
+  let sendAlert = null, recheckAlert = null, alertCode = "off", hasComments = false, lastAlertText = "", alertTimer = null;
+  const ALERT_DEBOUNCE_MS = 20000;
+  // The owner changed something the PM must handle: one batched alert, 20 s after the last such action.
+  function ownerActed(){
+    if (!sendAlert) return;
+    clearTimeout(alertTimer);
+    alertTimer = setTimeout(autoAlert, ALERT_DEBOUNCE_MS);
+  }
+  async function autoAlert(retried){
+    alertTimer = null;
+    const st = $("#alert-status");
+    if (alertCode !== "available") { st.className = "status"; st.textContent = "Not alerted: " + pmAlertWhy(alertCode, hasComments); return; }
+    const a = pmAutoAlert({ topm: state.topm, docs: state.docs, stories: state.stories, todos: state.todos }, lastAlertText, 3900);
+    if (!a.send) return;
+    const code = await sendAlert(a.text);
+    if (code === "rate_limited" && !retried) alertTimer = setTimeout(() => autoAlert(true), 60000);
+  }
   $("#pm-sendall").addEventListener("click", async () => {
     const b = $("#pm-sendall"), st = $("#pm-sendstatus"), jobs = pmSendAll(state.topm, new Date().toISOString());
     if (!jobs.length) return;
+    if (recheckAlert) await recheckAlert();
+    if (alertCode !== "available") { st.className = "status err"; st.textContent = pmAlertWhy(alertCode, hasComments); render(); return; }
+    clearTimeout(alertTimer); alertTimer = null;
     b.disabled = true; st.className = "status"; st.textContent = "Sending…";
     const res = await Promise.allSettled(jobs.map(j => db.doc("to_pm/" + j.id).update(j.patch)));
     const ok = jobs.filter((j, i) => res[i].status === "fulfilled");
     for (const j of ok) Object.assign(state.topm.find(x => x.id === j.id) || {}, j.patch);
     if (ok.length < jobs.length) { st.className = "status err"; st.textContent = "Sent " + ok.length + " of " + jobs.length + "; the store refused the rest. Try Send all again."; }
-    else st.textContent = sendAlert ? "Sent " + ok.length + ". Alerting the PM; see the alert line at the top." : "Sent " + ok.length + ". No PM session is watching; it reads them at its next turn.";
+    else st.textContent = "Sent " + ok.length + ". Alerting the PM; see the alert line at the top.";
     render();
     if (ok.length && sendAlert) await sendAlert();
   });
@@ -631,7 +706,10 @@ button.danger{color:var(--warn)}
     for (const x of state.topm) if (x.status in c) c[x.status]++;
     for (const k of Object.keys(c)) $("#n-p" + k).textContent = c[k];
     document.querySelectorAll("#pmtabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.pf === state.pfilter)));
-    const sb = $("#pm-sendall"); sb.textContent = c.queued ? "Send all (" + c.queued + ")" : "Send all"; sb.disabled = !c.queued || !canWrite || !db;
+    const sb = $("#pm-sendall"); sb.textContent = c.queued ? "Send all (" + c.queued + ")" : "Send all"; sb.disabled = !c.queued || !canWrite || !db || alertCode !== "available";
+    const sst = $("#pm-sendstatus");
+    if (c.queued && alertCode !== "available" && db && canWrite && !sst.textContent.startsWith("Sent")) { sst.className = "status err"; sst.textContent = pmAlertWhy(alertCode, hasComments); }
+    else if (alertCode === "available" && sst.textContent.includes("Send all is blocked")) sst.textContent = "";
     const { rows, hidden } = pmRows(state.topm, state.pfilter, Date.now(), state.pmOlder), list = $("#list");
     if (!rows.length && !hidden) {
       const m = { queued: ["Nothing queued", "Write a question or an FYI above. It waits here, unsent, until you press Send all."], sent: ["Nothing waiting on the PM", "Items you send move here until the PM replies."], done: ["Nothing answered yet", "The PM's replies and any ruling ids show here."] }[state.pfilter];
@@ -668,6 +746,7 @@ button.danger{color:var(--warn)}
       box.disabled = true;
       try {
         await db.doc("todos/" + t.id).update(box.checked ? { status: "done", done_at: new Date().toISOString() } : { status: "open", done_at: null });
+        if (box.checked) ownerActed();
       } catch (e) {
         box.checked = !box.checked; box.disabled = false;
         status.className = "status err"; status.textContent = "Not saved: " + (e?.message || "the store refused the write") + ".";
@@ -677,7 +756,7 @@ button.danger{color:var(--warn)}
       el("div", {class:"meta"}, t.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, t.repo ? el("span", {class:"chip", text: t.repo}) : null, t.from ? el("span", {text: "from " + t.from}) : null, t.added_at ? el("span", {text: "added " + when(t.added_at)}) : null, isDone && t.done_at ? el("span", {class:"chip ok", text: "done " + when(t.done_at)}) : null),
       el("h2", {}, el("label", {for: "t-" + t.id, text: t.title || "(untitled)"})));
     if (t.detail) body.append(el("p", {class:"ctx", text: t.detail}));
-    for (const c of (Array.isArray(t.commands) ? t.commands : (t.command ? [t.command] : []))) {
+    for (const c of pmCommands(t)) {
       const pre = el("pre", {}, el("code", {text: c}));
       const btn = el("button", {class:"copy", type:"button", text:"Copy"});
       btn.addEventListener("click", () => {
@@ -698,7 +777,7 @@ button.danger{color:var(--warn)}
 
   function goQuestion(qid){
     const d = state.docs.find(x => x.id === qid);
-    state.section = "questions"; if (d) state.filter = d.status; state.repo = ""; $("#repo").value = "";
+    state.section = "questions"; if (d) state.filter = pmQBucket(d); state.repo = ""; $("#repo").value = "";
     render();
     const n = document.getElementById("q-" + qid); if (n) n.scrollIntoView({block:"start"});
   }
@@ -779,9 +858,11 @@ button.danger{color:var(--warn)}
     const repos = [...new Set(rows.map(grp))].sort();
     return repos.flatMap(r => { const rs = rows.filter(b => grp(b) === r); return [el("h3", {class:"blk", text: r + " · " + rs.length}), itemTable(rs, cols)]; });
   }
+  // F3: a regenerated collection the PM has not refreshed for 3 days says since when.
+  const staleNote = rows => { const f = pmFresh(rows, Date.now()); return f.kind === "stale" ? " Stale since " + when(f.since) + "; ask the PM to refresh it." : ""; };
   function renderCurrent(){
     const list = $("#list");
-    if (!state.backlog.length) { list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? "Nothing posted yet" : "Backlog unavailable"}), db ? "The PM's hub_backlog tool posts each repo's open records here." : "Sign in to claude.ai to see the backlog.")); return; }
+    if (!state.backlog.length) { list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? "Never filled on this copy" : "Backlog unavailable"}), db ? "No backlog has been posted here, or nothing is open. The PM's hub_backlog tool posts each repo's open records here; ask it to run with --force." : "Sign in to claude.ai to see the backlog.")); return; }
     if (list.firstChild !== bfil || list.childNodes.length !== 2) list.replaceChildren(bfil, bout);
     if (bsearch.value !== state.bq) bsearch.value = state.bq;
     fillCurrent();
@@ -796,7 +877,7 @@ button.danger{color:var(--warn)}
     const rows = mine.filter(b => state.bprio.has(pkey(b)) && state.bstat.has(st(b))).sort((a,b) => prioOf(a) - prioOf(b) || String(a.item || a.id).localeCompare(String(b.item || b.id)));
     if (!rows.length) { bout.replaceChildren(el("div", {class:"empty"}, el("strong", {text: state.backlog.some(inB) ? "Nothing matches these filters" : "Nothing open in this backlog"}), state.backlog.some(inB) ? "Turn on more priorities or statuses, or clear the search." : "Pick another backlog at the top, or All backlogs.")); return; }
     const posted = rows.map(b => b.posted_at).filter(Boolean).sort().pop();
-    bout.replaceChildren(el("p", {class:"unote", text: rows.length + " of " + state.backlog.filter(inB).length + " open items, by repo, priority 1 first" + (posted ? "; posted " + when(posted) : "") + "."}),
+    bout.replaceChildren(el("p", {class:"unote", text: rows.length + " of " + state.backlog.filter(inB).length + " open items, by repo, priority 1 first" + (posted ? "; posted " + when(posted) : "") + "." + staleNote(state.backlog)}),
       ...byRepo(rows, [["P", b => b.priority == null ? "–" : String(b.priority), "pr"], ["Item", b => b.title || "", "role"], ["Status", b => b.status || "", "md"], ["Id", b => b.item || b.id, "md"]]));
   }
   function renderCompleted(){
@@ -807,9 +888,10 @@ button.danger{color:var(--warn)}
     const head = el("div", {class:"period"}, el("span", {text: "Completed in the last"}), sel);
     const since = Date.now() - state.period * 86400000;
     const rows = state.completed.filter(c => inB(c) && c.done_at && new Date(c.done_at) >= since).sort((a,b) => String(b.done_at).localeCompare(String(a.done_at)));
-    if (!state.completed.length) { list.replaceChildren(head, el("div", {class:"empty"}, el("strong", {text: db ? "Nothing posted yet" : "Backlog unavailable"}), db ? "The PM's hub_backlog tool posts each repo's closed records here." : "Sign in to claude.ai to see completed work.")); return; }
+    if (!state.completed.length) { list.replaceChildren(head, el("div", {class:"empty"}, el("strong", {text: db ? "Never filled on this copy" : "Backlog unavailable"}), db ? "No completed work has been posted here, or nothing has closed. The PM's hub_backlog tool posts each repo's closed records here; ask it to run with --force." : "Sign in to claude.ai to see completed work.")); return; }
     if (!rows.length) { list.replaceChildren(head, el("div", {class:"empty"}, el("strong", {text: "Nothing completed in that period"}), state.period < 90 ? "Pick a longer period." : "Pick another backlog at the top, or All backlogs.")); return; }
-    list.replaceChildren(head, ...byRepo(rows, [["Done", c => when(c.done_at), "md"], ["Item", c => c.title || "", "role"], ["Id", c => c.item || c.id, "md"]]));
+    const sn = staleNote(state.completed);
+    list.replaceChildren(head, ...(sn ? [el("p", {class:"unote", text: sn.trim()})] : []), ...byRepo(rows, [["Done", c => when(c.done_at), "md"], ["Item", c => c.title || "", "role"], ["Id", c => c.item || c.id, "md"]]));
   }
 
   function storyCard(st){
@@ -867,13 +949,15 @@ button.danger{color:var(--warn)}
   }
 
   function renderQuestions(){
-    const counts = {open:0, answered:0, logged:0};
-    for (const d of state.docs) counts[d.status] = (counts[d.status]||0)+1;
+    const counts = {open:0, answered:0, logged:0, other:0};
+    for (const d of state.docs) counts[pmQBucket(d)]++;
     for (const k of Object.keys(counts)) $("#n-"+k).textContent = counts[k];
+    $("#tab-other").hidden = !counts.other;
+    if (state.filter === "other" && !counts.other) state.filter = "open";
     document.querySelectorAll("#tabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.f === state.filter)));
     fillRepos(state.docs);
 
-    let rows = state.docs.filter(d => d.status === state.filter && inR(d));
+    let rows = state.docs.filter(d => pmQBucket(d) === state.filter && inR(d));
     rows.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || (state.filter === "open"
       ? String(a.asked_at||"").localeCompare(String(b.asked_at||""))
       : String(b.answer?.at||"").localeCompare(String(a.answer?.at||""))));
@@ -883,7 +967,8 @@ button.danger{color:var(--warn)}
       const msg = {
         open: ["No open questions", "New questions from the PM appear here, oldest first."],
         answered: ["Nothing waiting to be logged", "Answers you submit move here until the PM records them as rulings."],
-        logged: ["No logged answers yet", "Once the PM records an answer, it shows here with its R-id."]
+        logged: ["No logged answers yet", "Once the PM records an answer, it shows here with its R-id."],
+        other: ["Nothing here", "Questions with an unknown or missing status show here."]
       }[state.filter];
       list.replaceChildren(el("div", {class:"empty"}, el("strong", {text: db ? msg[0] : "Inbox unavailable"}), db ? msg[1] : "Sign in to claude.ai to read and answer questions."));
       return;
@@ -902,7 +987,8 @@ button.danger{color:var(--warn)}
       d.from ? el("span", {text: "from " + d.from}) : null,
       d.story ? el("button", {class:"link", type:"button", text: "story: " + (state.stories.find(x => x.id === d.story)?.title || d.story), onclick: () => goStory(d.story)}) : null,
       d.asked_at ? el("span", {text: "asked " + when(d.asked_at)}) : null,
-      d.status === "logged" && d.ruling ? el("span", {class:"chip ok", text: d.ruling}) : null
+      d.status === "logged" && d.ruling ? el("span", {class:"chip ok", text: d.ruling}) : null,
+      pmQBucket(d) === "other" ? el("span", {class:"chip need", text: "status: " + String(d.status)}) : null
     );
     const parts = [head, el("h2", {text: d.title || "(untitled)"})];
     if (d.context) parts.push(el("p", {class:"ctx", text: d.context}));
@@ -935,7 +1021,7 @@ button.danger{color:var(--warn)}
         const label = draft.choice === "other" ? "Something else" : (opts[draft.choice]?.label || "");
         try {
           await db.doc("questions/" + d.id).update({ status: "answered", answer: { choice: draft.choice, label, note: (draft.note||"").trim(), at: new Date().toISOString() } });
-          clearDraft(d.id); state.editing.delete(d.id);
+          clearDraft(d.id); state.editing.delete(d.id); ownerActed();
         } catch (e) {
           status.className = "status err";
           status.textContent = e && e.code === "permission_denied" ? "You can read this hub but not answer here." : "Not sent: " + (e?.message || "the store refused the write") + ". Your draft is kept; try again.";
@@ -995,7 +1081,7 @@ button.danger{color:var(--warn)}
     addB.disabled = true; addS.className = "status"; addS.textContent = "Adding…";
     try {
       await db.collection("todos").add({ status: "open", title, detail: addD.value.trim(), urgent: $("#add-urgent").checked, from: "you", added_at: new Date().toISOString() });
-      addT.value = ""; addD.value = ""; $("#add-urgent").checked = false; addS.textContent = "Added";
+      addT.value = ""; addD.value = ""; $("#add-urgent").checked = false; addS.textContent = "Added"; ownerActed();
     } catch (err) {
       addS.className = "status err"; addS.textContent = "Not added: " + (err?.message || "the store refused the write") + ". Try again."; addB.disabled = false;
     }
@@ -1021,7 +1107,7 @@ button.danger{color:var(--warn)}
     sB.disabled = true; sS.className = "status"; sS.textContent = "Submitting…";
     try {
       await db.collection("stories").add({ status: "submitted", repo: sR.value, title, story: sX.value.trim(), urgent: $("#story-urgent").checked, from: "you", submitted_at: new Date().toISOString() });
-      sT.value = ""; sX.value = ""; $("#story-urgent").checked = false; sCheck(); sS.textContent = "Submitted. The PM hands it to the coordinator.";
+      sT.value = ""; sX.value = ""; $("#story-urgent").checked = false; sCheck(); sS.textContent = "Submitted. The PM hands it to the coordinator."; ownerActed();
     } catch (err) {
       sS.className = "status err"; sS.textContent = "Not submitted: " + (err?.message || "the store refused the write") + ". Your draft is kept."; sB.disabled = false;
     }
@@ -1032,57 +1118,65 @@ button.danger{color:var(--warn)}
   document.addEventListener("keydown", e => { if (e.key === "Escape" && state.reader) closeReader(); });
 
   function alertText(){
-    const L = ["Action Hub alert from the owner: please process the hub."];
-    L.push(...pmAlertLines(state.topm));
-    const ans = state.docs.filter(d => d.status === "answered");
-    if (ans.length) { L.push("", "Answers to log:"); for (const d of ans) L.push("- " + d.id + ": " + (d.answer?.label || "?") + (d.answer?.note ? " (note: " + d.answer.note + ")" : "")); }
-    const sub = state.stories.filter(st => st.status === "submitted");
-    if (sub.length) { L.push("", "New stories:"); for (const st of sub) L.push("- [" + (st.repo || "?") + "] " + (st.title || "(untitled)") + (st.urgent ? " (urgent)" : "") + " id " + st.id); }
-    const done = state.todos.filter(t => t.status === "done" && !t.pm_ack);
-    if (done.length) { L.push("", "To-dos ticked done:"); for (const t of done) L.push("- " + t.id + ": " + (t.title || "")); }
-    const mine = state.todos.filter(t => t.status !== "done" && t.from === "you" && !t.pm_ack);
-    if (mine.length) { L.push("", "To-dos I added:"); for (const t of mine) L.push("- " + (t.title || "") + (t.urgent ? " (urgent)" : "")); }
-    if (L.length === 1) L.push("", "Nothing new is waiting; check the hub anyway.");
-    let txt = L.join("\n");
-    while (new TextEncoder().encode(txt).length > 3900) txt = txt.slice(0, -200);
-    return txt;
+    return pmAlertText({ topm: state.topm, docs: state.docs, stories: state.stories, todos: state.todos }, 3900);
   }
   async function setupAlert(){
     let cm = null;
     try { cm = await window.claude.use("comments"); } catch(e){}
-    if (!cm || typeof cm.sendToClaude !== "function") return;
     const bar = $("#alertbar"), btn = $("#alert-btn"), st = $("#alert-status");
-    const why = {
-      writers_only: "Only an editor of this page can alert the PM.",
-      no_session: "No PM session is watching right now. The PM checks the hub at its next turn anyway.",
-      off: "Alerts are not available in this view."
-    };
+    bar.hidden = false;
+    if (!cm || typeof cm.sendToClaude !== "function") {
+      // E4: say why instead of hiding the bar. Send all stays blocked (alertCode is "off").
+      btn.disabled = true; st.className = "status"; st.textContent = pmAlertWhy("off", false); render();
+      return;
+    }
+    hasComments = true;
     const check = async () => {
       let c = "off";
       try { c = await cm.canSendToClaude(); } catch(e){}
+      const changed = c !== alertCode; alertCode = c;
       btn.disabled = c !== "available";
-      if (c !== "available") { st.className = "status"; st.textContent = why[c] || why.off; }
+      if (c !== "available") { st.className = "status"; st.textContent = pmAlertWhy(c, true); }
+      if (changed) render();
       return c;
     };
-    bar.hidden = false;
+    recheckAlert = check;
     await check();
     document.addEventListener("visibilitychange", () => { if (!document.hidden && !btn.dataset.busy) check(); });
-    const fire = async () => {
+    setInterval(() => { if (!document.hidden && !btn.dataset.busy) check(); }, 60000);
+    // Sends one alert; returns "" when sent, else the error code (so the caller can retry a rate limit).
+    const fire = async (text) => {
       btn.disabled = true; btn.dataset.busy = "1"; st.className = "status"; st.textContent = "Sending…";
       try {
+        const body = typeof text === "string" ? text : alertText();
         const anchor = await cm.anchorFor(bar);
-        await cm.sendToClaude({ anchor, text: alertText() });
+        await cm.sendToClaude({ anchor, text: body });
+        lastAlertText = body;
         st.textContent = "Sent " + when(new Date().toISOString()) + ". The PM replies in the page's comments.";
         setTimeout(() => { delete btn.dataset.busy; check(); }, 30000);
+        return "";
       } catch (e) {
         delete btn.dataset.busy;
         st.className = "status err";
-        st.textContent = e?.code === "rate_limited" ? "Sent too recently; try again in a minute." : e?.code === "claude_unavailable" ? why.no_session : "Not sent: " + (e?.message || "the alert was refused") + ".";
+        if (e?.code === "claude_unavailable" && alertCode !== "no_session") { alertCode = "no_session"; render(); }
+        st.textContent = e?.code === "rate_limited" ? "Sent too recently; try again in a minute." : e?.code === "claude_unavailable" ? pmAlertWhy("no_session", true) : "Not sent: " + (e?.message || "the alert was refused") + ".";
         btn.disabled = false;
+        return e?.code || "error";
       }
     };
-    btn.addEventListener("click", fire);
+    btn.addEventListener("click", () => fire());
     sendAlert = fire;
+  }
+
+  // E3: an onSnapshot failure leaves its tab empty or stale, so say so in a banner at the top.
+  const loadErr = {};
+  function snapFail(name){
+    return err => {
+      loadErr[name] = (err && err.message) || "no reason given";
+      const b = $("#loaderr");
+      b.textContent = "Could not load " + Object.keys(loadErr).join(", ") + " (" + Object.values(loadErr).join("; ") + "). Those tabs may be empty or out of date. Reload the page to try again.";
+      b.hidden = false;
+    };
   }
 
   render();
@@ -1097,53 +1191,54 @@ button.danger{color:var(--warn)}
     db.collection("stories").onSnapshot(snap => {
       state.stories = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, status: "submitted", ...s.data() }));
       render();
-    }, () => {});
+    }, snapFail("stories"));
     db.collection("repos").onSnapshot(snap => {
       state.repos = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() }));
       render();
-    }, () => {});
+    }, snapFail("repos"));
     db.collection("backlog").onSnapshot(snap => {
       state.backlog = snap.docs.filter(s => s.exists).flatMap(s => { const d = s.data();
         return Array.isArray(d.items) ? d.items.map(i => ({ id: (d.repo || s.id) + ":" + i.id, repo: d.repo || s.id, item: i.id, title: i.t, priority: i.p, status: i.s, posted_at: d.posted_at })) : [{ id: s.id, ...d }]; });
       render();
-    }, () => {});
+    }, snapFail("backlog"));
     db.collection("completed").onSnapshot(snap => {
       state.completed = snap.docs.filter(s => s.exists).flatMap(s => { const d = s.data();
         return Array.isArray(d.items) ? d.items.map(i => ({ id: (d.repo || s.id) + ":" + i.id, repo: d.repo || s.id, item: i.id, title: i.t, done_at: i.d, posted_at: d.posted_at })) : [{ id: s.id, ...d }]; });
       render();
-    }, () => {});
+    }, snapFail("completed"));
     db.collection("agents").onSnapshot(snap => {
       state.agents = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() }));
       render();
-    }, () => {});
+    }, snapFail("agents"));
     db.collection("usage").onSnapshot(snap => {
       state.usage = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, account: s.id, ...s.data() }));
       render();
-    }, () => {});
+    }, snapFail("usage"));
     db.collection("parked").onSnapshot(snap => {
       state.parked = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() }));
       render();
-    }, () => {});
+    }, snapFail("parked"));
     db.collection("pages").onSnapshot(snap => {
       state.pages = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() }));
       render();
-    }, () => {});
+    }, snapFail("pages"));
     db.collection("inbox").onSnapshot(snap => {
       state.inbox = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() }));
       render();
-    }, () => {});
+    }, snapFail("inbox"));
     db.collection("to_pm").onSnapshot(snap => {
       state.topm = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, status: "queued", ...s.data() }));
       render();
-    }, () => {});
+    }, snapFail("to_pm"));
     db.collection("todos").onSnapshot(snap => {
       state.todos = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, status: "open", ...s.data() }));
       render();
-    }, () => {});
+    }, snapFail("todos"));
     db.collection("questions").onSnapshot(snap => {
       state.docs = snap.docs.filter(s => s.exists).map(s => ({ id: s.id, status: "open", ...s.data() }));
       render();
     }, err => {
+      snapFail("questions")(err);
       $("#list").replaceChildren(el("div", {class:"empty"}, el("strong", {text:"Could not load questions"}), (err && err.message) || "Reload the page to try again."));
     });
   })();
