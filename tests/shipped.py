@@ -40,8 +40,29 @@ BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),
 
 
 def forbidden(home=None):
-    """BASE_FORBIDDEN plus the install's own names (install_patterns)."""
+    """BASE_FORBIDDEN plus the install's own names (install_patterns). With no install names this
+    skips as install_patterns does, before any pattern runs: a test that scans text uses scan or
+    violations, which run BASE_FORBIDDEN first."""
     return BASE_FORBIDDEN + install_patterns(home)
+
+
+def scan(named_texts, home=None, base=BASE_FORBIDDEN):
+    """[(name, what)] for every forbidden pattern found in each (name, text) of named_texts.
+    The `base` patterns (BASE_FORBIDDEN unless a test keeps its own) always run. The install's
+    own names (install_patterns) run after them; when there are none to read, a base finding is
+    returned so the test fails on it, and only a clean base scan raises install_patterns' named
+    skip (unittest.SkipTest, NO_INSTALL_NAMES)."""
+    named_texts = list(named_texts)
+    found = [(name, what) for name, text in named_texts
+             for rx, what in base if rx.search(text)]
+    try:
+        names = install_patterns(home)
+    except unittest.SkipTest:
+        if found:
+            return found
+        raise
+    return found + [(name, what) for name, text in named_texts
+                   for rx, what in names if rx.search(text)]
 
 
 TEXT_SUFFIXES = {".md", ".json", ".py", ".pyw", ".ps1", ".cmd", ".yml", ".txt"}
@@ -65,13 +86,8 @@ def shipped_text_files(folder):
 
 
 def violations(folder, home=None, root=ROOT):
-    """[(file, what)] for every forbidden pattern (forbidden(home)) found in a text file under
-    folder; each file is named relative to root."""
-    patterns = forbidden(home)
-    found = []
-    for p in shipped_text_files(folder):
-        text = p.read_text(encoding="utf-8", errors="replace")
-        for rx, what in patterns:
-            if rx.search(text):
-                found.append((p.relative_to(root).as_posix(), what))
-    return found
+    """[(file, what)] for every forbidden pattern found in a text file under folder (scan: the
+    base patterns always, the install names when there are any); each file is named relative to
+    root."""
+    return scan(((p.relative_to(root).as_posix(), p.read_text(encoding="utf-8", errors="replace"))
+                 for p in shipped_text_files(folder)), home)

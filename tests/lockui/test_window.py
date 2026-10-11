@@ -8,7 +8,7 @@ import time
 import unittest
 from unittest import mock
 
-from tests.shipped import ROOT, forbidden, violations
+from tests.shipped import ROOT, scan, violations
 
 try:
     import tkinter as tk
@@ -63,7 +63,7 @@ class Scrub(unittest.TestCase):
         entry = ROOT / "reserve_ui.pyw"             # at the kit root; fail, never pass vacuously
         self.assertTrue(entry.is_file(), "reserve_ui.pyw is missing from the kit root")
         text = entry.read_text(encoding="utf-8", errors="replace")
-        self.assertEqual([what for rx, what in forbidden() if rx.search(text)], [])
+        self.assertEqual(scan([(entry.name, text)]), [])
 
 
 @unittest.skipUnless(HAVE_TK, "no tkinter display")

@@ -59,7 +59,8 @@ class InstallPatternsTest(unittest.TestCase):
 class RealScrubPatternsTest(unittest.TestCase):
     """tests.real_install_config, the home fence's one exception, with the home it records before
     the fence pointed at a temp folder: it opens the machine config only and returns its
-    install-name keys only; install_patterns() with no home uses it and skips by name without them.
+    install-name keys only; install_patterns() with no home uses it and skips by name without them,
+    while scan and violations still run the base patterns first and fail on a base finding.
     The process stays fenced, so any other home lookup would raise HomeFenced."""
 
     write_config = InstallPatternsTest.write_config
@@ -118,6 +119,41 @@ class RealScrubPatternsTest(unittest.TestCase):
         with self.assertRaises(unittest.SkipTest) as cm:
             shipped.forbidden()
         self.assertIn('sets no scrub_patterns', str(cm.exception))
+
+    def shipped_folder(self):
+        """A temp folder of shipped text: one file with a ruling id, a user path and a machine path
+        (each built here, so this file holds none), one clean file."""
+        folder = Path(self.home) / 'shipped'
+        folder.mkdir()
+        bad = 'see %s-%d, %s:\\%s\\x and %s:/%s/y\n' % ('R', 7, 'C', 'Users', 'D', 'AgentTemp')
+        (folder / 'a.md').write_text(bad, encoding='utf-8')
+        (folder / 'b.md').write_text('Nothing specific.\n', encoding='utf-8')
+        return folder
+
+    def test_base_patterns_run_with_no_config_file(self):
+        folder = self.shipped_folder()
+        self.assertEqual(shipped.violations(folder, root=Path(self.home)),
+                         [('shipped/a.md', 'ruling id'), ('shipped/a.md', 'Windows user path'),
+                          ('shipped/a.md', 'machine path')])
+        (folder / 'a.md').unlink()
+        with self.assertRaises(unittest.SkipTest) as cm:          # clean base scan: the named skip
+            shipped.violations(folder, root=Path(self.home))
+        self.assertIn('no machine config file', str(cm.exception))
+
+    def test_base_patterns_run_with_no_scrub_patterns_key(self):
+        self.write_config(json.dumps({'pm_start': {}}))
+        folder = self.shipped_folder()
+        self.assertEqual(shipped.scan([('a', (folder / 'a.md').read_text(encoding='utf-8'))]),
+                         [('a', 'ruling id'), ('a', 'Windows user path'), ('a', 'machine path')])
+        with self.assertRaises(unittest.SkipTest) as cm:
+            shipped.scan([('b', 'Nothing specific.')])
+        self.assertIn('sets no scrub_patterns', str(cm.exception))
+
+    def test_install_names_run_after_the_base_patterns(self):
+        self.write_config(json.dumps({'scrub_patterns': ['acme']}))
+        text = 'Acme, %s-%d\n' % ('R', 7)
+        self.assertEqual(shipped.scan([('a', text)]), [('a', 'ruling id'), ('a', 'install name')])
+        self.assertEqual(shipped.scan([('b', 'plain')]), [])
 
     def test_a_malformed_real_config_fails(self):
         self.write_config('{"scrub_patterns": ["(unclosed"]}')
