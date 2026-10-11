@@ -30,6 +30,7 @@ from kitlib.backlog import landable as landmod                      # noqa: E402
 from kitlib.backlog import migrate as mmod                          # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
+from kitlib.backlog import pull_branch as pullmod                   # noqa: E402
 from kitlib.backlog import record as rmod                           # noqa: E402
 from kitlib.backlog import retarget as retmod                       # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
@@ -308,7 +309,8 @@ def planner(args, ctx):
     if v == 'unblock':
         return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling, args.on, args.reason)
     if v == 'pull':
-        return lambda s: pmod.plan_pull(s, ctx, args.id, args.reason, args.ruling, args.blocker)
+        return lambda s: pullmod.plan_pull(s, ctx, args.id, args.reason, args.ruling,
+                                           args.blocker)
     if v == 'release':
         return lambda s: pmod.plan_release(s, ctx, args.id, args.reason)
     if v == 'close':
