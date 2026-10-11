@@ -72,6 +72,8 @@ Every window sets `PM_KIT_ROLE` (docs/guard.md "Session mark") and `PM_KIT_SESSI
 | the PM session `after-reboot` resumes | `pm` |
 | `start --agent <other>` | the agent's own name |
 
+An agent name (`--agent`, `coordinator_agent`, a sessions.json `agent`) may carry the kit plugin's prefix, `<plugin>:<name>` (`kitlib.agentname.PREFIX`; docs/guard.md "Agent names"); `window.AGENT` and `settings.check` accept it and no other colon. `role_for` compares the names without it, so `<plugin>:coordinator` is the coordinator, and the mark never carries it. The default session name (below) and the `ROLE_AUTOCOMPACT` lookup use the name without it too. The launcher passes `--agent` as given; nothing in it writes a prefixed name.
+
 Only the launcher's PM resume carries the `pm` mark; no settings file sets `PM_KIT_ROLE`, so a PM session opened by hand or in the desktop app is unmarked. The consultant is not marked `coordinator`: it never dispatches or lands, and the coordinator start hook should not fire for it; under the guard it is held like any non-owner session.
 
 ## Start

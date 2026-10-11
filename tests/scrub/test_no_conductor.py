@@ -62,7 +62,7 @@ ALLOWED = (
     # The old-path hook stub's map entry, and procwatch matching the old agent name.
     ('kitlib/machinesetup/settings.py', "'conductor_session_start.py': 'claude/hooks/", W1),
     ('docs/machine-setup.md', '(`conductor_session_start.py` too)', W2B),
-    ('optional/procwatch/procwatch.py', '"--agent conductor" in c', W2B),
+    ('optional/procwatch/procwatch.py', '(?:coordinator|conductor)")', W2B),
     # go-live's launcher switch line: the agent setting and marks until the rename.
     ('docs/go-live.md', '`coordinator_agent` `conductor` until the coordinator rename', W2B),
     # The go-live migration record of the rename.

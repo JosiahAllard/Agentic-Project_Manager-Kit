@@ -69,15 +69,26 @@ def records(path):
                 continue
 
 
+def bare_type(name):
+    """An agent type without the plugin that bundles it: `<plugin>:worker` is `worker`, so a
+    report groups an agent dispatched by either name together. This folder runs on its own,
+    without the kit's library, so any one `<plugin>:` prefix is dropped."""
+    if not isinstance(name, str):
+        return name
+    head, sep, tail = name.partition(":")
+    return tail if sep and head and tail else name
+
+
 def agent_type(path):
-    """(agent type, description) from the transcript's .meta.json; a transcript outside a
-    subagents folder with no meta is the main session ("coordinator")."""
+    """(agent type without its plugin prefix (bare_type), description) from the transcript's
+    .meta.json; a transcript outside a subagents folder with no meta is the main session
+    ("coordinator")."""
     meta = path[:-6] + ".meta.json"
     if os.path.exists(meta):
         try:
             with open_text(meta) as f:
                 m = json.load(f)
-            return m.get("agentType") or "?", m.get("description", "")
+            return bare_type(m.get("agentType")) or "?", m.get("description", "")
         except (OSError, ValueError):
             pass
     return ("coordinator" if "subagents" not in path else "?"), ""
