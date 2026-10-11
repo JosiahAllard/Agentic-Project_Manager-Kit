@@ -5,6 +5,10 @@ shell form (`python <script>`) in exec form (the guard entry's interpreter, `arg
 note a settings hook that the kit's plugin also carries (it runs twice once the plugin is enabled).
 statusLine stays in shell form: Claude Code gives it no `args` field.
 
+In fresh mode (ctx.fresh, no old kit) none of that rewriting runs: guard.py's entry is appended
+where it is absent (a missing settings.json is created), and survey_pm appends the PM SessionStart
+hook to ctx.pm_settings alone.
+
 Every path in a hook's `command` and `args` and in statusLine.command is read; one that resolves
 into the old kit clone is either in REMOVE (its hook goes; a group or event left empty goes too),
 in REPOINT (rewritten to this kit's file, forward slashes, quotes kept) or refused, named. A path
@@ -37,6 +41,9 @@ TOKEN = re.compile(r'"[^"]*"|\'[^\']*\'|[^\s"\']+')
 
 def survey(plan, d, ctx):
     path = os.path.join(d, 'settings.json')
+    if ctx.fresh:
+        _survey_fresh(plan, path, ctx)
+        return
     if not os.path.isfile(path):
         plan.note('settings', '%s: no settings.json; nothing re-pointed and no guard entry added' % d)
         return
@@ -79,15 +86,7 @@ def survey(plan, d, ctx):
     sl = data.get('statusLine')
     if isinstance(sl, dict) and isinstance(sl.get('command'), str):
         sl['command'], _ = ed.rewrite(sl['command'], 'statusLine.command', removable=False)
-    rel, plugin = plugin_hooks(ctx.kit, ctx.home)
-    for event in sorted(plugin):
-        seen = set()
-        for p in _hook_paths(data, event, ctx.home):
-            if norm(p) in plugin[event] and norm(p) not in seen:
-                seen.add(norm(p))
-                plan.note('settings', '%s: the %s hook %s is also the kit plugin\'s hook (%s); with the plugin '
-                                      'enabled it runs twice, so remove this entry in the same step as the '
-                                      'plugin install' % (path, event, os.path.basename(p), rel))
+    _note_plugin_twins(plan, path, data, ctx)
     guard = norm(os.path.join(ctx.kit, *GUARD.split('/')))
     if not any(norm(p) == guard for p in _hook_paths(data, 'PreToolUse', ctx.home)):
         try:
@@ -102,13 +101,37 @@ def survey(plan, d, ctx):
         ed.did.append('add guard.py\'s PreToolUse entry')
     if not ed.did:
         return
+    _plan_write(plan, ctx, path, raw, layout, data, ed.did)
+
+
+def _note_plugin_twins(plan, path, data, ctx):
+    rel, plugin = plugin_hooks(ctx.kit, ctx.home)
+    for event in sorted(plugin):
+        seen = set()
+        for p in _hook_paths(data, event, ctx.home):
+            if norm(p) in plugin[event] and norm(p) not in seen:
+                seen.add(norm(p))
+                plan.note('settings', '%s: the %s hook %s is also the kit plugin\'s hook (%s); with the plugin '
+                                      'enabled it runs twice, so remove this entry in the same step as the '
+                                      'plugin install' % (path, event, os.path.basename(p), rel))
+
+
+def _plan_write(plan, ctx, path, raw, layout, data, did):
+    """Plan the write of `data` to `path` in `layout`: a .bak and a replace when the file is there
+    (`raw`), a new file when it is not (`raw` None, fresh mode only)."""
     new = write(layout, data)
     if new == raw:
+        return
+    if raw is None:
+        diff = [l.rstrip('\r\n') for l in difflib.unified_diff(
+            [], new.decode('utf-8').splitlines(True), path + ' (none)', path + ' (after)', n=1)]
+        plan.add('settings', '%s: create it; %s' % (path, '; '.join(did)),
+                 lambda: _create(path, new), undo='delete "%s"' % path, detail=diff)
         return
     shared = _shared(path)
     if shared:
         plan.refuse('%s is %s; replacing it would split it from the file it shares (edit it by hand: %s)'
-                    % (path, shared, '; '.join(ed.did)))
+                    % (path, shared, '; '.join(did)))
         return
     if not layout['exact']:
         plan.note('settings', '%s: its layout is not one json.dumps writes; the whole file is '
@@ -117,9 +140,148 @@ def survey(plan, d, ctx):
     diff = [l.rstrip('\r\n') for l in difflib.unified_diff(
         old_text.splitlines(True), new_text.splitlines(True), path, path + ' (after)', n=1)]
     bak = free_name('%s.machine-setup-%s.bak' % (path, ctx.today))
-    plan.add('settings', '%s: %s (backup: %s)' % (path, '; '.join(ed.did), os.path.basename(bak)),
+    plan.add('settings', '%s: %s (backup: %s)' % (path, '; '.join(did), os.path.basename(bak)),
              lambda: _write(path, raw, new, bak), undo='copy "%s" over "%s"' % (bak, path),
              detail=diff)
+
+
+# Fresh mode (--fresh): append only. No entry is removed, re-pointed or reshaped; a missing file is
+# created in NEW_LAYOUT; the PM SessionStart hook goes to --pm-settings alone.
+NEW_LAYOUT = {'bom': False, 'crlf': False, 'final': True, 'indent': 2, 'ascii': False, 'exact': True}
+PM_HOOK = 'claude/hooks/pm_session_start.py'
+PM_MATCHER = 'startup|resume|compact'
+
+
+def _survey_fresh(plan, path, ctx):
+    got = _load(plan, path)
+    if got is None:
+        return
+    raw, layout, data = got
+    _note_plugin_twins(plan, path, data, ctx)
+    guard = norm(os.path.join(ctx.kit, *GUARD.split('/')))
+    if any(norm(p) == guard for p in _hook_paths(data, 'PreToolUse', ctx.home)):
+        return
+    try:
+        entry = ctx.host.guard_entry(ctx.kit)
+    except (OSError, RuntimeError, ValueError) as e:
+        plan.refuse('cannot read guard.py --settings-entry: %s' % e)
+        return
+    if _append(plan, path, data, entry):
+        _plan_write(plan, ctx, path, raw, layout, data, ['add guard.py\'s PreToolUse entry'])
+
+
+def survey_pm(plan, ctx):
+    """The PM SessionStart hook (docs/pm-start.md "Hook (settings.json)"), written to
+    ctx.pm_settings and nowhere else; a note when there is none."""
+    path = ctx.pm_settings
+    if not path:
+        plan.note('settings', 'no --pm-settings: the PM SessionStart hook is not written (add it by hand '
+                              'to the settings the PM session loads: docs/pm-first-run.md step 7)')
+        return
+    if not os.path.isdir(os.path.dirname(path)):
+        plan.refuse('--pm-settings %s: its folder does not exist' % path)
+        return
+    for d in ctx.config_dirs:
+        acct = os.path.join(d, 'settings.json')
+        if norm(acct) == norm(path) or norm(os.path.realpath(acct)) == norm(os.path.realpath(path)):
+            plan.refuse('--pm-settings %s is an account settings.json; the PM hook goes only in settings '
+                        'the PM session loads' % path)
+            return
+    got = _load(plan, path)
+    if got is None:
+        return
+    raw, layout, data = got
+    want = os.path.join(ctx.kit, *PM_HOOK.split('/'))
+    found = False
+    for h in _hooks(data, 'SessionStart'):
+        for tok in _tokens(h):
+            if os.path.basename(tok.replace('\\', '/')).lower() != 'pm_session_start.py':
+                continue
+            p = expand(tok, ctx.home)
+            if p and norm(p) == norm(want):
+                found = True
+                continue
+            plan.refuse('%s: a SessionStart hook already runs %s, not this kit\'s %s; two PM checklists '
+                        'would run (remove or re-point it by hand)' % (path, tok, PM_HOOK))
+            return
+    if found:
+        return
+    try:
+        exe = ctx.host.guard_entry(ctx.kit)['PreToolUse'][0]['hooks'][0]['command']
+        if not isinstance(exe, str) or not exe.strip():
+            raise ValueError('its command is %r' % (exe,))
+    except (OSError, RuntimeError, ValueError, KeyError, IndexError, TypeError) as e:
+        plan.refuse('%s: cannot write the PM SessionStart hook: guard.py --settings-entry gave no '
+                    'interpreter (%s)' % (path, e))
+        return
+    entry = {'SessionStart': [{'matcher': PM_MATCHER, 'hooks': [
+        {'type': 'command', 'command': exe, 'args': [want.replace('\\', '/')]}]}]}
+    if _append(plan, path, data, entry):
+        _plan_write(plan, ctx, path, raw, layout, data, ['add the PM SessionStart hook pm_session_start.py'])
+
+
+def _load(plan, path):
+    """(raw, layout, data) for the JSON object in `path`; (None, NEW_LAYOUT, {}) when there is no
+    file; None after a refusal."""
+    if not os.path.lexists(path):
+        return None, dict(NEW_LAYOUT), {}
+    if not os.path.isfile(path):
+        plan.refuse('%s is not a file' % path)
+        return None
+    with open(path, 'rb') as f:
+        raw = f.read()
+    try:
+        layout, data = read(raw)
+    except ValueError as e:
+        plan.refuse('%s is not JSON this step can edit: %s' % (path, e))
+        return None
+    if not isinstance(data, dict):
+        plan.refuse('%s does not hold a JSON object' % path)
+        return None
+    if data.get('hooks') is not None and not isinstance(data.get('hooks'), dict):
+        plan.refuse('%s: "hooks" is not a JSON object; this step cannot read it' % path)
+        return None
+    return raw, layout, data
+
+
+def _append(plan, path, data, entry):
+    """Append `entry`'s groups to data's hooks, each event's list kept; False after a refusal."""
+    hooks = data.get('hooks')
+    for event in entry:
+        if hooks is not None and event in hooks and not isinstance(hooks[event], list):
+            plan.refuse('%s: hooks.%s is not a list; this step cannot append to it' % (path, event))
+            return False
+    if hooks is None:
+        hooks = data['hooks'] = {}
+    for event, groups in entry.items():
+        hooks.setdefault(event, []).extend(groups)
+    return True
+
+
+def _hooks(data, event):
+    hooks = data.get('hooks')
+    groups = hooks.get(event) if isinstance(hooks, dict) else None
+    for g in groups if isinstance(groups, list) else []:
+        for h in (g.get('hooks') or []) if isinstance(g, dict) else []:
+            if isinstance(h, dict):
+                yield h
+
+
+def _tokens(h):
+    items = [m.group().strip('"\'') for m in TOKEN.finditer(h.get('command'))] \
+        if isinstance(h.get('command'), str) else []
+    return items + [a for a in h.get('args') or [] if isinstance(a, str)]
+
+
+def _create(path, new):
+    tmp = path + '.machine-setup.tmp'
+    with open(tmp, 'wb') as f:
+        f.write(new)
+    try:
+        os.rename(tmp, path)                                         # Windows: refuses an existing file
+    except FileExistsError:
+        os.remove(tmp)
+        raise RuntimeError('%s appeared since the survey; not replaced (run again)' % path)
 
 
 class _Editor(object):

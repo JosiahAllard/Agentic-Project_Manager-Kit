@@ -1,14 +1,19 @@
 """kitlib.machinesetup: switch a machine's Claude config folders from an older kit clone to this
-kit (tools/machine_setup.py, installer/machine-setup.ps1; docs/machine-setup.md).
+kit, or set up a fresh machine that has none (tools/machine_setup.py, installer/machine-setup.ps1;
+docs/machine-setup.md).
 
 survey() reads the machine and returns a Plan: the changes to make, in order, each with the text a
-dry run prints and the function --apply runs, plus the refusals that stop both. Three parts:
+dry run prints and the function --apply runs, plus the refusals that stop both. The parts:
 - links (kitlib.machinesetup.links): `tools`, `knowledge/asset-generation` and the skill links
   that point into the old kit clone become directory junctions into this kit;
 - settings (kitlib.machinesetup.settings): each config folder's settings.json loses the old kit's
   PreToolUse hooks, gains guard.py's entry and has its old hook and statusline paths re-pointed;
 - extras (kitlib.machinesetup.extras): the machine schedule shortcut, the agents' temp folder ACL,
   and KIT_MACHINE_LOCK for comfy.
+A fresh run (`fresh`, no old kit) switches no links and rewrites no entry: it only appends guard.py's
+entry (creating a missing settings.json), writes the PM SessionStart hook to `pm_settings` alone,
+installs the kit plugin per account (kitlib.machinesetup.plugin) and runs the shortcut and ACL
+extras, not KIT_MACHINE_LOCK.
 Nothing here prints or exits; run() gives the exit code and the lines.
 """
 import datetime
@@ -17,7 +22,7 @@ import os
 from kitlib.config import user
 from kitlib.config.migration import OLD_DIR_NAME
 
-from . import extras, links, settings
+from . import extras, links, plugin, settings
 from .common import Change, Plan
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
@@ -25,13 +30,20 @@ EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
 
 class Context(object):
     """What a survey reads. `host` is the Windows side (extras.Host): shortcuts, icacls, the user
-    environment and guard.py's settings entry; tests pass a fake."""
+    environment, guard.py's settings entry and the plugin CLI; tests pass a fake. Exactly one of
+    `old_kit` and `fresh` is given; `pm_settings` goes with `fresh` only."""
 
-    def __init__(self, home, kit, old_kit, config_dirs=None, agent_temp=None, desktop=None,
-                 host=None, today=None):
+    def __init__(self, home, kit, old_kit=None, config_dirs=None, agent_temp=None, desktop=None,
+                 host=None, today=None, fresh=False, pm_settings=None):
+        if bool(fresh) == bool(old_kit):
+            raise ValueError('give an old kit or fresh, not both or neither')
+        if pm_settings and not fresh:
+            raise ValueError('pm_settings goes with fresh only')
         self.home = os.path.abspath(home)
         self.kit = os.path.abspath(kit)
-        self.old_kit = os.path.abspath(old_kit)
+        self.fresh = bool(fresh)
+        self.old_kit = None if fresh else os.path.abspath(old_kit)
+        self.pm_settings = os.path.abspath(pm_settings) if pm_settings else None
         self.config_dirs = dedupe(os.path.abspath(d) for d in (config_dirs or default_config_dirs(self.home)))
         self.agent_temp = agent_temp
         self.desktop = desktop
@@ -68,11 +80,11 @@ def dedupe(dirs):
 
 
 def survey(ctx):
-    plan = Plan()
+    plan = Plan(Plan.FRESH_SECTIONS if ctx.fresh else None)
     if not os.path.isfile(os.path.join(ctx.kit, 'claude', 'hooks', 'guard.py')):
         plan.refuse('%s is not a kit checkout (no claude/hooks/guard.py)' % ctx.kit)
         return plan
-    if os.path.normcase(ctx.kit) == os.path.normcase(ctx.old_kit):
+    if not ctx.fresh and os.path.normcase(ctx.kit) == os.path.normcase(ctx.old_kit):
         plan.refuse('the old kit and the kit are the same folder: %s' % ctx.kit)
         return plan
     for d in ctx.config_dirs:
@@ -80,10 +92,16 @@ def survey(ctx):
             plan.refuse('no config folder at %s' % d)
     if plan.refusals:
         return plan
-    for d in ctx.config_dirs:
-        links.survey(plan, d, ctx)
+    if ctx.fresh:
+        plan.note('links', 'fresh: no old kit, no links switched')
+    else:
+        for d in ctx.config_dirs:
+            links.survey(plan, d, ctx)
     for d in ctx.config_dirs:
         settings.survey(plan, d, ctx)
+    if ctx.fresh:
+        settings.survey_pm(plan, ctx)
+        plugin.survey(plan, ctx)
     extras.survey(plan, ctx)
     return plan
 
@@ -102,8 +120,10 @@ def run(ctx, apply=False, out=None):
 
     emit('machine-setup: %s' % ('APPLY' if apply else 'DRY RUN (nothing changed; add --apply to act)'),
          '  kit:            %s' % ctx.kit,
-         '  old kit:        %s' % ctx.old_kit,
+         '  old kit:        %s' % (ctx.old_kit or 'none (--fresh)'),
          '  config folders: %s' % ', '.join(ctx.config_dirs))
+    if ctx.fresh:
+        emit('  pm settings:    %s' % (ctx.pm_settings or 'none (no --pm-settings)'))
     plan = survey(ctx)
     emit(*plan.lines())
     if plan.refusals:

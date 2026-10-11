@@ -12,9 +12,13 @@ class Change(object):
 
 
 class Plan(object):
+    """The changes in section order. A fresh run (--fresh) adds the `plugin` section after `settings`,
+    so the plugin CLI's write to settings.json lands after the settings write the survey diffed."""
     SECTIONS = ('links', 'settings', 'extras')
+    FRESH_SECTIONS = ('links', 'settings', 'plugin', 'extras')
 
-    def __init__(self):
+    def __init__(self, sections=None):
+        self.SECTIONS = tuple(sections or self.SECTIONS)
         self.changes, self.refusals = [], []
         self.notes = {s: [] for s in self.SECTIONS}
 

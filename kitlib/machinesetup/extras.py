@@ -1,10 +1,12 @@
 """Machine extras (docs/machine-setup.md "Extras"): the machine schedule shortcut, the agents' temp
-folder permissions and the comfy entry point's lock tool. Each is read first and planned only when
-it differs; Host is the Windows side, and tests pass a fake.
+folder permissions and the comfy entry point's lock tool (not in fresh mode: the plugin's lock tool
+is used). Each is read first and planned only when it differs; Host is the Windows side (also the
+`claude plugin` CLI that kitlib.machinesetup.plugin runs), and tests pass a fake.
 """
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -27,7 +29,8 @@ def _ps_quote(s):
 
 
 class Host(object):
-    """The real machine: PowerShell for shortcuts and the user environment, icacls, guard.py."""
+    """The real machine: PowerShell for shortcuts and the user environment, icacls, guard.py, the
+    `claude plugin` CLI."""
 
     def _ps(self, script):
         r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
@@ -84,6 +87,26 @@ class Host(object):
             raise ValueError('guard.py --settings-entry printed no {event: [groups]} object')
         return entry
 
+    def claude(self):
+        """The `claude` CLI on PATH, or None."""
+        return shutil.which('claude')
+
+    def plugin_install(self, config_dir, kit, plugin_id):
+        """docs/install.md "Plugin install (local marketplace)" for one account: `claude plugin
+        marketplace add <kit>`, then `claude plugin install <plugin_id>`, with CLAUDE_CONFIG_DIR set to
+        `config_dir` so the CLI writes that account's settings.json and plugins folder."""
+        exe = self.claude()
+        if not exe:
+            raise RuntimeError('no claude CLI on PATH')
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=config_dir)
+        for args in (['plugin', 'marketplace', 'add', kit], ['plugin', 'install', plugin_id]):
+            r = subprocess.run([exe] + args, capture_output=True, text=True, encoding='utf-8',
+                               errors='replace', env=env, timeout=300, stdin=subprocess.DEVNULL,
+                               creationflags=_NOWIN)
+            if r.returncode != 0:
+                raise RuntimeError('claude %s exit %d: %s' % (' '.join(args), r.returncode,
+                                                              (r.stderr or r.stdout or '').strip()))
+
 
 def pythonw():
     """The windowless python beside this one (python.exe -> pythonw.exe), else this one."""
@@ -95,7 +118,10 @@ def pythonw():
 def survey(plan, ctx):
     _shortcut(plan, ctx)
     _acl(plan, ctx)
-    _comfy(plan, ctx)
+    if ctx.fresh:
+        plan.note('extras', '%s left as is in fresh mode: the plugin\'s lock tool is used' % LOCK_ENV)
+    else:
+        _comfy(plan, ctx)
 
 
 def _shortcut(plan, ctx):
@@ -133,7 +159,8 @@ def _shortcut(plan, ctx):
         except (OSError, RuntimeError, ValueError):
             continue
         text = ' '.join(str(other.get(k) or '') for k in ('target', 'args', 'workdir'))
-        if norm(ctx.old_kit) in os.path.normcase(text.replace('/', '\\')) or 'reserve_shortcut.ps1' in text.lower():
+        old = ctx.old_kit and norm(ctx.old_kit) in os.path.normcase(text.replace('/', '\\'))
+        if old or 'reserve_shortcut.ps1' in text.lower():
             plan.note('extras', 'desktop shortcut %s still runs %s; left as is (delete it by hand once '
                                 '"%s" works)' % (n, text.strip(), SHORTCUT[:-4]))
 
