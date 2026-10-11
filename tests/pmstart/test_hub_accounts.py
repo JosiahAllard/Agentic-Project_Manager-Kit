@@ -10,9 +10,14 @@ from kitlib.pmstart import fglock
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
-SRC = "claude/hub/action-hub.html"
+SRC = os.path.join(KIT, "claude", "hub", "action-hub.html")    # absolute: resolved from the kit
 FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"})
+
+
+def joined(cfg, **kw):
+    """pmstart.hub's lines as one text."""
+    return "\n".join(pmstart.hub(cfg, **kw))
 
 
 def never():
@@ -26,22 +31,25 @@ class HubAccountsTest(unittest.TestCase):
         pmstart.pm_data_settings = lambda: None
         self._orig_live = fglock.read_live
         fglock.read_live = lambda user32=None: 0
+        self._orig_beat = pmstart.read_heartbeat
+        pmstart.read_heartbeat = lambda: None
 
     def tearDown(self):
         pmstart.pm_data_settings = self._orig
         fglock.read_live = self._orig_live
+        pmstart.read_heartbeat = self._orig_beat
 
     def test_this_accounts_url_gives_the_republish_line(self):
         cfg = {"hub_urls": {"1": "https://claude.ai/artifact/ONE", "2": "https://claude.ai/artifact/TWO"},
                "hub_url": "https://claude.ai/artifact/OLD"}
-        (s,) = pmstart.hub(cfg, account=lambda: "2")
+        s = joined(cfg, account=lambda: "2")
         self.assertIn("republish the kit's Action Hub page %s to https://claude.ai/artifact/TWO" % SRC, s)
         self.assertNotIn("OLD", s)
 
     def test_no_url_for_this_account_gives_publish_record_restore(self):
         cfg = {"hub_urls": {"1": "https://claude.ai/artifact/ONE"},
                "hub_url": "https://claude.ai/artifact/OLD"}      # ignored once hub_urls has an entry
-        (s,) = pmstart.hub(cfg, account=lambda: "3")
+        s = joined(cfg, account=lambda: "3")
         self.assertNotIn("republish", s)
         self.assertNotIn("artifact/", s)
         self.assertIn("no Action Hub copy is recorded for account 3", s)
@@ -60,11 +68,11 @@ class HubAccountsTest(unittest.TestCase):
             cfg = {"hub_url": "https://claude.ai/artifact/X"}
             if urls is not None:
                 cfg["hub_urls"] = urls
-            (s,) = pmstart.hub(cfg, account=never)
+            s = joined(cfg, account=never)
             self.assertIn("to https://claude.ai/artifact/X with the Artifact tool", s)
 
     def test_nothing_set_gives_the_publish_line_for_this_account(self):
-        (s,) = pmstart.hub({}, account=lambda: "default")
+        s = joined({}, account=lambda: "default")
         self.assertIn("no Action Hub copy is recorded for account default", s)
         self.assertIn("set-url --account default <url>", s)
 

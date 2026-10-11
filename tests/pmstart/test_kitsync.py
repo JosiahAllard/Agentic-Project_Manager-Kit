@@ -18,10 +18,14 @@ def setUpModule():
     global _orig_read_live
     _orig_read_live = fglock.read_live
     fglock.read_live = lambda user32=None: 0
+    global _orig_beat
+    _orig_beat = pmstart.read_heartbeat
+    pmstart.read_heartbeat = lambda: None     # nor this machine's pm_watch heartbeat
 
 
 def tearDownModule():
     fglock.read_live = _orig_read_live
+    pmstart.read_heartbeat = _orig_beat
 
 
 class Base(unittest.TestCase):

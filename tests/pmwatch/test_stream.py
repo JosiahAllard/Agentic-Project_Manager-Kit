@@ -1,0 +1,109 @@
+"""kitlib.pmwatch.run (stream and relaunch modes) and the heartbeat pm_watch writes for the PM
+session-start check (docs/pm-watch.md)."""
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr
+
+from kitlib import pmwatch as W
+
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "tools"))
+import pm_watch as cli                                              # noqa: E402
+
+
+class Stop(Exception):
+    pass
+
+
+class FakeWatcher:
+    """Hands out one list of events per poll from `batches`; [] once they run out."""
+
+    def __init__(self, batches):
+        self.batches, self.s, self.started = list(batches), {"n": 0}, None
+
+    def start(self, now):
+        self.started = now
+
+    def poll(self, now):
+        self.s = {"n": self.s["n"] + 1}
+        return self.batches.pop(0) if self.batches else []
+
+
+class RunTest(unittest.TestCase):
+
+    def go(self, batches, passes=10, **kw):
+        w, emitted, beats, saved, slept = FakeWatcher(batches), [], [], [], []
+
+        def sleep(s):
+            slept.append(s)
+            if len(slept) >= passes:
+                raise Stop()
+        clock = iter(range(100, 10000)).__next__
+        try:
+            rc = W.run(w, clock, sleep, saved.append, emitted.append, beats.append, **kw)
+        except Stop:
+            rc = "stopped"
+        return rc, emitted, beats, saved, slept
+
+    def test_stream_emits_every_batch_and_keeps_polling(self):
+        rc, emitted, beats, _saved, slept = self.go([["A 1"], [], ["B 1", "B 2"]], passes=4, stream=True)
+        self.assertEqual(rc, "stopped")                  # never returned on an event
+        self.assertEqual(emitted, ["A 1", "B 1\nB 2"])
+        self.assertEqual(len(beats), 4)                  # a heartbeat every pass
+        self.assertEqual(slept, [W.POLL_SLEEP] * 4)
+
+    def test_without_stream_the_first_events_end_the_run(self):
+        rc, emitted, beats, saved, slept = self.go([[], ["A 1"], ["B 1"]])
+        self.assertEqual((rc, emitted, slept), (0, ["A 1"], [W.POLL_SLEEP]))
+        self.assertEqual(len(beats), 2)
+        self.assertEqual(saved[-1], {"n": 2})            # the state is saved before the exit
+
+    def test_once_polls_once_and_writes_no_heartbeat(self):
+        rc, emitted, beats, _saved, slept = self.go([["A 1"]], once=True)
+        self.assertEqual((rc, emitted, beats, slept), (0, ["A 1"], [], []))
+
+
+class HeartbeatTest(unittest.TestCase):
+
+    def test_file_sits_beside_the_state_file(self):
+        self.assertEqual(W.heartbeat_file(os.path.join("d", "state.json")), os.path.join("d", "state.json.beat"))
+
+    def test_write_then_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "sub", "state.json.beat")
+            self.assertIsNone(W.read_heartbeat(p))
+            W.write_heartbeat(p, 42, 12.5, True)
+            self.assertEqual(W.read_heartbeat(p), {"pid": 42, "beat": 12.5, "stream": True})
+
+    def test_malformed_reads_as_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "b")
+            for bad in ("{not json", "[1]", json.dumps({"pid": "42", "beat": 1}),
+                        json.dumps({"pid": 42}), json.dumps({"pid": 42, "beat": True}),
+                        json.dumps({"pid": True, "beat": 1})):
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(bad)
+                self.assertIsNone(W.read_heartbeat(p), bad)
+
+
+class CliTest(unittest.TestCase):
+
+    def test_stream_flag_parses(self):
+        a = cli.parse(["--sessions", "s.json", "--usage-script", "u.ps1", "--stream"], {})
+        self.assertTrue(a.stream)
+        self.assertFalse(a.once)
+
+    def test_stream_and_once_together_exit_2(self):
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as c:
+            cli.parse(["--sessions", "s.json", "--usage-script", "u.ps1", "--stream", "--once"], {})
+        self.assertEqual(c.exception.code, 2)
+        self.assertIn("not allowed with", err.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -53,6 +53,51 @@ def save_state(path, s):
     os.replace(tmp, path)
 
 
+def heartbeat_file(state_path):
+    """The heartbeat file beside the state file: separate, so the state keys stay those of the
+    PM repo's copy (which shares the state file)."""
+    return state_path + ".beat"
+
+
+def write_heartbeat(path, pid, now, stream):
+    """Record that pm_watch `pid` polled at `now` (epoch seconds); `stream` is its --stream flag.
+    kitlib.pmstart.watcher reads it to tell a live watcher from a hung or exited one."""
+    save_state(path, {"pid": pid, "beat": now, "stream": bool(stream)})
+
+
+def read_heartbeat(path):
+    """The heartbeat dict, or None when the file is missing, unreadable or malformed."""
+    hb = load_state(path)
+    if (not isinstance(hb, dict) or type(hb.get("pid")) is not int
+            or isinstance(hb.get("beat"), bool) or not isinstance(hb.get("beat"), (int, float))):
+        return None
+    return hb
+
+
+POLL_SLEEP = 30       # seconds between passes
+
+
+def run(w, clock, sleep, save, emit, beat, once=False, stream=False):
+    """The watcher loop over Watcher `w`. Each pass polls, saves the state (`save(state)`) and,
+    except with `once`, calls `beat(now)`. Events go to `emit` as one text. Without `stream` the
+    first events end the run (the PM relaunches it); with `stream` it keeps polling, for a run
+    under Monitor. `once`: one pass, then 0. Returns the exit code."""
+    w.start(clock())
+    save(w.s)
+    while True:
+        events = w.poll(clock())
+        save(w.s)
+        if not once:
+            beat(clock())
+        if events:
+            emit("\n".join(events))
+            if not stream:
+                return 0
+        if once:
+            return 0
+        sleep(POLL_SLEEP)
+
+
 def branch_tip(repo, ref):
     args = ["ls-remote", "origin", ref]
     r = gitcmd.subprocess_run(["git", "-C", repo] + args, capture_output=True, text=True, timeout=60,

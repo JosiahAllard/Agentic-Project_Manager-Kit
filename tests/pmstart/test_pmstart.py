@@ -23,11 +23,15 @@ def setUpModule():
     global _orig_read_live
     _orig_read_live = fglock.read_live
     fglock.read_live = lambda user32=None: 0
+    global _orig_beat
+    _orig_beat = pmstart.read_heartbeat
+    pmstart.read_heartbeat = lambda: None     # nor this machine's pm_watch heartbeat
 
 
 def tearDownModule():
     pmstart.pm_data_settings = _orig_settings
     fglock.read_live = _orig_read_live
+    pmstart.read_heartbeat = _orig_beat
 
 
 def proc(name, cmd, exe=""):
@@ -57,22 +61,87 @@ class StandingTest(unittest.TestCase):
 
 class HubTest(unittest.TestCase):
     def test_step_names_url(self):
-        (s,) = pmstart.hub(CFG)
-        self.assertIn("republish the kit's Action Hub page claude/hub/action-hub.html "
-                      "to https://claude.ai/artifact/X with the Artifact tool", s)
+        s = pmstart.hub(CFG)[0]
+        src = os.path.join(pmstart.KIT_ROOT, "claude", "hub", "action-hub.html")
+        self.assertIn("republish the kit's Action Hub page %s "
+                      "to https://claude.ai/artifact/X with the Artifact tool" % src, s)
         self.assertIn("docs/action-hub.md (For the PM)", s)
         self.assertNotIn("republish claude/hub/action-hub.html to", s)  # the old bare line
-        self.assertIn("pm_ack", s)
+        self.assertIn("pm_ack", pmstart.hub(CFG)[-1])
+
+
+def wproc(pid, name="python.exe", cmd="python -u pm_watch.py --stream"):
+    return {"Name": name, "CommandLine": cmd, "ProcessId": pid}
 
 
 class WatcherTest(unittest.TestCase):
-    def test_running(self):
-        self.assertEqual(pmstart.watcher(CFG, [proc("python.exe", "python launcher/pm_watch.py")]), [])
+    """watcher: alive by heartbeat plus pid (pmstart.BEAT_STALE)."""
+    T = 1000000.0
 
-    def test_not_running_gives_start_step(self):
-        # a non-python process mentioning pm_watch.py (e.g. an editor) does not count
-        (s,) = pmstart.watcher(CFG, [proc("code.exe", "code pm_watch.py")])
+    def run_it(self, procs, hb, cfg=CFG):
+        return pmstart.watcher(cfg, procs, beat=lambda: hb, now=self.T)
+
+    def test_fresh_heartbeat_and_live_pid_is_running(self):
+        hb = {"pid": 42, "beat": self.T - 30, "stream": True}
+        self.assertEqual(self.run_it([wproc(42)], hb), [])
+
+    def test_stale_heartbeat_with_live_pid_says_it_stopped_polling(self):
+        hb = {"pid": 42, "beat": self.T - pmstart.BEAT_STALE - 120, "stream": True}
+        (s,) = self.run_it([wproc(42)], hb)
+        self.assertIn("pm_watch.py (pid 42) has not polled for 7m: stop that pid", s)
         self.assertIn("python launcher/pm_watch.py", s)
+
+    def test_fresh_heartbeat_with_pid_gone_is_not_running(self):
+        hb = {"pid": 42, "beat": self.T - 10, "stream": False}
+        (s,) = self.run_it([wproc(43, name="code.exe")], hb)
+        self.assertEqual(s, "pm_watch.py is not running (it last polled 10s ago): start it under "
+                            "Monitor: python launcher/pm_watch.py")
+
+    def test_a_pm_watch_process_without_a_heartbeat_is_an_older_copy(self):
+        for hb in (None, {"pid": 7, "beat": self.T}):     # none, or another process's
+            (s,) = self.run_it([wproc(42, cmd="python launcher/pm_watch.py")], hb)
+            self.assertIn("running without a heartbeat", s)
+            self.assertIn("restart it under Monitor", s)
+
+    def test_nothing_running_gives_start_step(self):
+        # a non-python process mentioning pm_watch.py (e.g. an editor) does not count
+        (s,) = self.run_it([wproc(42, name="code.exe", cmd="code pm_watch.py")], None)
+        self.assertEqual(s, "pm_watch.py is not running: start it under Monitor: python launcher/pm_watch.py")
+
+    def test_no_pm_watch_cmd_names_the_kits_stream_command(self):
+        cfg = dict(CFG)
+        del cfg["pm_watch_cmd"]
+        (s,) = self.run_it([], None, cfg)
+        tool = os.path.join(pmstart.KIT_ROOT, "tools", "pm_watch.py")
+        self.assertTrue(os.path.isfile(tool))
+        self.assertTrue(s.endswith('python -u "%s" --stream' % tool), s)
+
+    def test_the_configured_command_is_used_as_written(self):
+        (s,) = self.run_it([], None, dict(CFG, pm_watch_cmd="run the watcher"))
+        self.assertTrue(s.endswith("Monitor: run the watcher"), s)
+
+    def test_checklist_passes_the_watcher_fake(self):
+        hb = {"pid": 42, "beat": 0}
+        txt = pmstart.checklist(CFG, NOW, procs=[wproc(42)], watcher={"beat": lambda: hb, "now": 10},
+                                handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+                                liveness={"read": lambda p: "{}"})
+        self.assertNotIn("pm_watch.py", txt)
+
+    def test_read_heartbeat_reads_the_file_beside_pm_watchs_state(self):
+        from kitlib import pmwatch
+        with tempfile.TemporaryDirectory() as d:
+            cfgp = os.path.join(d, "config.json")
+            state = os.path.join(d, "st", "state.json")
+            with open(cfgp, "w", encoding="utf-8") as f:
+                json.dump({"pm_watch": {"state_file": state}}, f)
+            orig = pmwatch.load_config
+            pmwatch.load_config = lambda path=None: orig(cfgp)
+            try:
+                self.assertIsNone(_orig_beat())
+                pmwatch.write_heartbeat(pmwatch.heartbeat_file(state), 42, 5.0, True)
+                self.assertEqual(_orig_beat(), {"pid": 42, "beat": 5.0, "stream": True})
+            finally:
+                pmwatch.load_config = orig
 
 
 class HandoffTest(unittest.TestCase):
@@ -152,8 +221,9 @@ class ChecklistTest(unittest.TestCase):
         txt = pmstart.checklist({"hub_url": "u"}, NOW, procs=[],
                                 handoff={"globber": boom}, reminders={"read": boom})
         self.assertIn("republish", txt)  # hub still ran
-        for n in ("watcher", "handoff", "reminders", "liveness"):
+        for n in ("handoff", "reminders", "liveness"):
             self.assertIn("could not check %s:" % n, txt)
+        self.assertIn("pm_watch.py is not running", txt)  # no pm_watch_cmd: the kit's own command
 
     def test_process_listing_failure_isolated(self):
         orig = pmstart.list_processes
