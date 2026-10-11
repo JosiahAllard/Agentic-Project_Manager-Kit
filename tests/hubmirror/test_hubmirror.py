@@ -423,9 +423,16 @@ class CommitPushTest(unittest.TestCase):
         with self.assertRaises(hubmirror.Refused) as cm:
             self.plan()
         self.assertIn('a checkout of the kit itself', str(cm.exception))
-        with mock.patch.object(kcommit, 'KIT_ROOT', KIT):       # this very kit work tree
+        with mock.patch.object(kcommit, 'KIT_ROOT', self.wt):   # the kit's own work tree, on a branch
             with self.assertRaises(hubmirror.Refused) as cm:
-                self.plan(os.path.join(KIT, 'hub'))
+                self.plan()
+        self.assertIn('a checkout of the kit itself', str(cm.exception))
+
+    def test_a_checkout_of_the_kit_on_a_detached_head_is_still_refused_as_the_kit(self):
+        write_json(os.path.join(self.wt, 'kitlib', 'hubmirror', '__init__.py'), {})   # the kit's code
+        self.git('checkout', '--detach')
+        with self.assertRaises(hubmirror.Refused) as cm:
+            self.plan()
         self.assertIn('a checkout of the kit itself', str(cm.exception))
 
     def test_the_kits_repository_commits_only_on_its_recorded_data_branch(self):
