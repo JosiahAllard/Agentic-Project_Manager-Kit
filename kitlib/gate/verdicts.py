@@ -13,7 +13,9 @@ os.replace; a re-add for the same branch replaces its entry.
 The queue lock: add, drop, mark_failed and scan each run whole (read, check, then write or
 remove) holding `<queue folder>/.queue.lock`, a file made with O_CREAT|O_EXCL and removed when
 the call ends, so none of them acts on an entry another replaced between its read and its write.
-A call waits up to LOCK_WAIT_S for the lock, then raises VerdictError and does nothing. Stale-lock
+A call waits up to LOCK_WAIT_S for the lock, then raises VerdictError and does nothing; a lock
+file that cannot be made for any other reason than that it exists (PermissionError included) is
+a VerdictError at once, naming the cause. Stale-lock
 rule: a holder keeps the lock for milliseconds, so a lock file last written more than
 LOCK_STALE_S ago was left by a holder that died (a killed process skips its finally) and the
 next caller removes it and takes the lock. A lock file that cannot be removed when a call ends is
@@ -267,10 +269,8 @@ def _locked(common_dir):
             break
         except FileExistsError:
             _clear_stale(lock)
-        except PermissionError:          # Windows: the lock file is being removed
-            pass
-        except OSError as e:
-            raise VerdictError('cannot take the queue lock %s: %s' % (lock, e))
+        except OSError as e:             # PermissionError too: refused now, with its cause
+            raise VerdictError('cannot make the queue lock %s: %s' % (lock, e))
         if time.monotonic() >= deadline:
             raise VerdictError('the verdict queue stayed locked for %.0f s (%s); it is removed by '
                                'the next call once %.0f s old' % (LOCK_WAIT_S, lock, LOCK_STALE_S))
@@ -358,7 +358,7 @@ def _scan(folder, names):
         if name == LOCK_NAME:                # ours: scan holds it
             continue
         if name.startswith('.') and name.endswith('.tmp'):
-            bad.append((path, 'a temp file a write that died left behind; remove it by hand'))
+            bad.append((path, 'a temp file a write that died left behind'))
             continue
         branch = branch_of(name)
         if branch is None:
@@ -379,9 +379,12 @@ def entries(common_dir):
     that is not a well-formed entry: a landing takes nothing from a queue it cannot read whole."""
     good, bad = scan(common_dir)
     if bad:
-        raise VerdictError('the verdict queue holds files that are not entries (remove each with '
-                           'tools/verdict.py drop, or by hand): %s'
-                           % '; '.join('%s: %s' % pb for pb in bad))
+        def how(path):
+            branch = branch_of(os.path.basename(path))
+            return ('remove it with tools/verdict.py drop %s, or by hand' % branch if branch
+                    else 'remove it by hand')
+        raise VerdictError('the verdict queue holds files that are not entries: %s'
+                           % '; '.join('%s: %s (%s)' % (p, why, how(p)) for p, why in bad))
     return good
 
 
@@ -407,7 +410,11 @@ def drop(common_dir, branch, tip=None):
         except VerdictError:
             if tip is not None:
                 raise
-            if os.path.basename(path) not in os.listdir(os.path.dirname(path)):
+            try:
+                names = os.listdir(os.path.dirname(path))
+            except OSError as e:
+                raise VerdictError('cannot list %s: %s' % (os.path.dirname(path), e))
+            if os.path.basename(path) not in names:
                 raise OtherBranch('%s is not named for %s (names that differ only in case share '
                                   'one file on Windows): nothing removed' % (path, branch))
         else:

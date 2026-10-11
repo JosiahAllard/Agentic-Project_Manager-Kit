@@ -163,6 +163,7 @@ class Queue(QueueCase):
         with self.assertRaises(V.VerdictError) as cm:
             V.entries(self.common)
         self.assertIn('kit%2Fb.json', str(cm.exception))
+        self.assertIn('tools/verdict.py drop kit/b', str(cm.exception))
         good, bad = V.scan(self.common)
         self.assertEqual([e['branch'] for e in good], ['kit/a'])
         self.assertEqual(sorted(os.path.basename(p) for p, _ in bad), ['kit%2Fb.json', 'kit%2Fc.json'])
@@ -197,9 +198,28 @@ class Queue(QueueCase):
         good, bad = V.scan(self.common)
         self.assertEqual((good, [p for p, _ in bad]), ([], [tmp]))
         self.assertIn('temp file', bad[0][1])
-        with self.assertRaises(V.VerdictError):
+        with self.assertRaises(V.VerdictError) as cm:
             V.entries(self.common)
+        self.assertIn('remove it by hand', str(cm.exception))
+        self.assertNotIn('tools/verdict.py drop', str(cm.exception))
         self.assertEqual(self.folder_names(), [os.path.basename(tmp)])
+
+    def test_drop_says_so_when_the_queue_folder_cannot_be_listed(self):
+        folder = V.queue_dir(self.common)
+        os.makedirs(folder)
+        with open(os.path.join(folder, 'kit%2Fb.json'), 'w', encoding='utf-8') as f:
+            f.write('{not json')
+        real = os.listdir
+
+        def listdir(p):
+            if os.path.normcase(p) == os.path.normcase(folder):
+                raise OSError('listing refused')
+            return real(p)
+        with mock.patch.object(V.os, 'listdir', side_effect=listdir):
+            with self.assertRaises(V.VerdictError) as cm:
+                V.drop(self.common, 'kit/b')
+        self.assertIn('listing refused', str(cm.exception))
+        self.assertEqual(self.folder_names(), ['kit%2Fb.json'])
 
     def test_add_refuses_a_windows_device_name(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
@@ -262,6 +282,18 @@ class Lock(QueueCase):
     def test_an_add_racing_mark_failed_survives(self):
         self.assert_add_waited(*self.race(
             lambda first: V.mark_failed(self.common, 'kit/a', 'red', tip=first)))
+
+    def test_a_lock_that_cannot_be_made_is_refused_at_once_with_its_cause(self):
+        _, tip = self.branch('a', {'a.txt': 'a\n'})
+        for err in (PermissionError('denied by test'), OSError('disk said no')):
+            with mock.patch.object(V, 'LOCK_WAIT_S', 0.3, create=True), \
+                    mock.patch.object(V.os, 'open', side_effect=err) as opened:
+                with self.assertRaises(V.VerdictError) as cm:
+                    V.add(self.common, given('kit/a', tip))
+            self.assertEqual(opened.call_count, 1, err)
+            self.assertIn(str(err), str(cm.exception))
+            self.assertNotIn('locked for', str(cm.exception))
+        self.assertEqual(self.folder_names(), [])
 
     def test_a_held_lock_is_waited_for_and_a_stale_one_removed(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})

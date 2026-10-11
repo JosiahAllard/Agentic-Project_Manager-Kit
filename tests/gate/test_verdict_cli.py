@@ -6,6 +6,7 @@ import importlib.util
 import io
 import os
 import unittest
+from unittest import mock
 
 from kitlib.gate import steps
 from kitlib.gate import verdicts as V
@@ -100,6 +101,23 @@ class VerdictCli(GateRepoCase):
         self.assertTrue(out.startswith('BAD '), out)
         self.assertIn(os.path.normcase(os.path.join(folder, 'kit%2Fb.json')) + ': ',
                       os.path.normcase(out))
+
+    def test_drop_that_cannot_list_the_queue_is_not_done(self):
+        folder = V.queue_dir(self.repo.common_dir())
+        os.makedirs(folder)
+        with open(os.path.join(folder, 'kit%2Fb.json'), 'w', encoding='utf-8') as f:
+            f.write('{')
+        real = os.listdir
+
+        def listdir(p):
+            if os.path.normcase(p) == os.path.normcase(folder):
+                raise OSError('listing refused')
+            return real(p)
+        with mock.patch.object(V.os, 'listdir', side_effect=listdir):
+            code, out, _ = self.run_tool('drop', 'kit/b')
+        self.assertEqual(code, 1)
+        self.assertIn('NOT DONE: ', out)
+        self.assertIn('listing refused', out)
 
     def test_no_repository_is_not_done(self):
         out = io.StringIO()
