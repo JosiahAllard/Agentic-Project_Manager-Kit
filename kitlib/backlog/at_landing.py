@@ -1,20 +1,26 @@
 """The backlog store at a landing (docs/backlog-store.md "Lifecycle changes", "Merge safety";
-called by kitlib.gate.land). Only a `ref` or `branch` store takes part; a main store's records
-travel with the branch, so a landing leaves them alone.
+called by kitlib.gate.land). The configured store takes part when it is a `ref` or `branch`
+store; a main store's records travel with the branch, so a landing leaves them alone. The PM
+data branch's store (kitlib.pmdata: a folder store in the worktree that has the recorded data
+branch checked out) takes part too: the PM's records of this repository live there.
 
   ancestry_refusal  before any merge: why the branch may not land when its history holds the
                     store's root commit (a store never merges into main), or the PM data
                     branch's recorded root (pmdata_refusal; docs/pm-data-branch.md), else None
   close_landed      after the push is verified: close every record the landed branch still holds
-                    pulled, one commit each ("closes <ID>: landed <merge sha>"); what cannot be
-                    closed is a WARNING line naming the command, and the landing stands
+                    pulled, in the configured store (one commit each, "closes <ID>: landed <merge
+                    sha>") and in the PM data store (the record file deleted in that worktree, not
+                    committed); what cannot be closed is a WARNING line naming the command, and
+                    the landing stands
+  landable_commands the `backlog.py landable` command of each store that takes part
 
 Neither creates a store or adds the store's fetch refspec when the remote has no store, and
 ancestry_refusal moves no ref: it fetches the store's objects with an empty --refmap.
 """
 import os
 
-from kitlib import pmdata
+import kitlib.config as kconfig
+from kitlib import pluginsource, pmdata
 from kitlib.git import cmd, refs
 from kitlib.git import repo as gitrepo
 
@@ -25,17 +31,37 @@ from .errors import Refusal
 
 SESSION = 'gate-land'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-BACKLOG_PY = os.path.join(KIT_ROOT, 'tools', 'backlog.py')
 FETCH_TIMEOUT = 300
+# What a printed write command names for -C: a backlog write refuses in the main checkout (the
+# landers'), so the command never names the main checkout a landing runs in.
+WORKTREE = '<a worktree of this repository>'
 
 
 def _one_line(text):
     return ' '.join(str(text).split())
 
 
+def backlog_py():
+    """The kit's tools/backlog.py, in the live kit checkout: KIT_LIVE_ROOT when this code runs
+    from a pinned export of pushed main (kitlib.pluginsource.live_root), which a later prune may
+    remove, so a printed command never names it."""
+    return os.path.join(pluginsource.live_root(KIT_ROOT), 'tools', 'backlog.py')
+
+
 def backlog_command(root, *args):
     """The backlog.py command line that runs `args` against `root`."""
-    return 'python "%s" -C "%s" %s' % (BACKLOG_PY, root, ' '.join(args))
+    return 'python "%s" -C "%s" %s' % (backlog_py(), root, ' '.join(args))
+
+
+def close_command(root, *args):
+    """The command line that runs the backlog write `args` for the repository whose main checkout
+    is `root`: -C names a worktree placeholder (WORKTREE), never `root`. The repository's own
+    tools/backlog.py (the kit's, or a stub) when it has one, else the kit's."""
+    if os.path.isfile(os.path.join(root, 'tools', 'backlog.py')):
+        tool = 'tools/backlog.py'
+    else:
+        tool = '"%s"' % backlog_py()
+    return 'python %s -C "%s" %s' % (tool, WORKTREE, ' '.join(args))
 
 
 def ref_store(root, cfg, fetch=False):
@@ -147,26 +173,91 @@ def _close_plan(ctx, rid, branch, reason):
     return plan
 
 
-def _store_unread(branch, what, root):
+def _store_unread(branch, what, how):
     return ('WARNING: %s landed, and the backlog store could not be read (%s), so no record it '
-            'holds pulled was closed; see which with: %s'
-            % (branch, _one_line(what), backlog_command(root, 'landable', branch)))
+            'holds pulled was closed; see which with: %s' % (branch, _one_line(what), how))
+
+
+def _same_path(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def pm_data_root(root):
+    """`(path, None)` of the worktree of `root`'s repository that has the PM data branch checked
+    out (the branch kit-pm-data.json records; kitlib.pmdata), `(None, None)` when the repository
+    has no PM data record, or `(None, why)` when there is one and that worktree cannot be found."""
+    common, why = gitrepo.common_dir(root)
+    if common is None:
+        return None, 'cannot find the git directory to look for the PM data record: %s' % why
+    try:
+        record = pmdata.read(common)
+    except pmdata.PmDataError as exc:
+        return None, 'cannot read the PM data record: %s' % exc
+    if record is None:
+        return None, None
+    wts, why = gitrepo.worktrees(root)
+    if wts is None:
+        return None, 'cannot list the worktrees: %s' % why
+    for wt in wts:
+        if wt.branch == record.branch and not wt.bare:
+            return wt.path, None
+    return None, 'no worktree has the PM data branch %s checked out' % record.branch
+
+
+def _pm_data_store(root, configured):
+    """`(store root, Config, backend, None)` of the PM data branch's store, `(None,) * 4` when
+    there is none or it is the configured store (`configured`: its describe(), or None), or
+    `(None, None, None, why)` when it cannot be opened."""
+    pm_root, why = pm_data_root(root)
+    if pm_root is None:
+        return None, None, None, why
+    if _same_path(pm_root, root):
+        return None, None, None, None
+    try:
+        pm_cfg = kconfig.load(pm_root)
+        backend = smod.open_backend(pm_root, pm_cfg, fetch=True)
+    except (kconfig.ConfigError, Refusal, OSError) as exc:
+        return None, None, None, 'cannot open the backlog store in %s: %s' % (pm_root, exc)
+    if configured is not None and backend.describe() == configured:
+        return None, None, None, None
+    return pm_root, pm_cfg, backend, None
 
 
 def close_landed(root, cfg, branch, merge, session=SESSION):
-    """Close every record the store holds pulled by `branch`, which landed as `merge`: the lines
-    to print (`closed ...`, and a `WARNING: ...` naming the command for each record that could
-    not be closed). [] for a main store, a remote with no store, or nothing pulled."""
-    reason = 'landed %s' % merge
+    """Close every record `branch`, which landed as `merge`, holds pulled: in the configured store
+    when it is a `ref` or `branch` store, and in the PM data branch's store (_pm_data_store). The
+    lines to print (`closed ...`, and a `WARNING: ...` naming the command for each record or store
+    that could not be closed). [] when neither store takes part or nothing is pulled."""
+    lines = []
     backend = ref_store(root, cfg, fetch=True)
-    if backend is None:
-        return []
-    if backend.remote:
+    if backend is not None:
+        lines.extend(_close_in(backend, root, cfg, branch, merge, session,
+                               lambda *args: close_command(root, *args)))
+    pm_root, pm_cfg, pm_backend, why = _pm_data_store(
+        root, backend.describe() if backend is not None else None)
+    if why:
+        lines.append('WARNING: %s landed, and the PM data branch\'s backlog store was not read '
+                     '(%s), so no record it holds pulled there was closed; see which from that '
+                     'worktree with: %s' % (branch, _one_line(why),
+                                            backlog_command('<the PM data worktree>', 'landable',
+                                                            branch)))
+    elif pm_backend is not None:
+        lines.extend(_close_in(pm_backend, pm_root, pm_cfg, branch, merge, session,
+                               lambda *args: backlog_command(pm_root, *args)))
+    return lines
+
+
+def _close_in(backend, root, cfg, branch, merge, session, command):
+    """close_landed for one store: `backend` of the repository or worktree `root` with `cfg`;
+    `command(*args)` is the printed command line for a write the landing could not make."""
+    reason = 'landed %s' % merge
+    unread = backlog_command(root, 'landable', branch)
+    if getattr(backend, 'remote', None):
         remote_tip, why = refs.ls_remote(backend.remote, backend.remote_ref, root,
                                          timeout=FETCH_TIMEOUT)
         if remote_tip is None:
             return [_store_unread(branch, '%s on %s: %s' % (backend.remote_ref, backend.remote,
-                                                            why), root)]
+                                                            why), unread)]
         if not remote_tip:
             return []                       # no store: create none, add no refspec
     section = cfg.section('backlog')
@@ -176,10 +267,11 @@ def close_landed(root, cfg, branch, merge, session=SESSION):
         snap = store.load()
         smod.require_readable(snap)
     except Refusal as exc:
-        return [_store_unread(branch, '%s: %s' % (exc.label, exc), root)]
+        return [_store_unread(branch, '%s: %s' % (exc.label, exc), unread)]
     held = sorted(r.stem for r in snap.readable           # the store's lookup key (Snapshot.by_id)
                   if r.get('state') == 'pulled' and r.get('pulled_by') == branch)
     ctx = pmod.Context(store, root, remote=cfg.remote, main_branch=cfg.main_branch, branch=branch)
+    folder = isinstance(backend, smod.MainBackend)
     lines = []
     for rid in held:
         try:
@@ -191,14 +283,37 @@ def close_landed(root, cfg, branch, merge, session=SESSION):
             rec = snap.get(rid)
             if rec is not None and rmod.is_owner_held(rec):
                 args += ['--ruling', 'R-nnnn']      # his ruling ends the hold (plan_close)
-            command = backlog_command(root, *args)
             lines.append('WARNING: %s landed, and %s, which it holds pulled, was not closed (%s); '
-                         'close it with: %s' % (branch, rid, _one_line(what), command))
+                         'close it with: %s' % (branch, rid, _one_line(what), command(*args)))
             continue
         if not change.writes:
             lines.extend(change.lines)
             continue
-        lines.append('closed %s in the backlog store: %s (store at %s)'
-                     % (rid, reason, (tip or '?')[:10]))
+        if folder:
+            lines.append('closed %s in the backlog store %s: %s (the record file is deleted, '
+                         'not committed)' % (rid, backend.describe(), reason))
+        else:
+            lines.append('closed %s in the backlog store: %s (store at %s)'
+                         % (rid, reason, (tip or '?')[:10]))
         lines.extend('  ' + line for line in change.lines if line != 'CLOSED %s' % rid)
     return lines
+
+
+def landable_commands(root, cfg, branch):
+    """The `backlog.py landable` command of each store a landing closes records in (close_landed):
+    the configured store's when it is a `ref` or `branch` store, the PM data store's when there is
+    one. A store that cannot be opened names its command anyway."""
+    out = []
+    try:
+        configured = ref_store(root, cfg)
+    except Exception:                       # noqa: BLE001 - cannot tell: name it anyway
+        configured, out = None, [backlog_command(root, 'landable', branch)]
+    if configured is not None:
+        out.append(backlog_command(root, 'landable', branch))
+    try:
+        pm_root, _why = pm_data_root(root)
+    except Exception:                       # noqa: BLE001
+        pm_root = None
+    if pm_root is not None and not _same_path(pm_root, root):
+        out.append(backlog_command(pm_root, 'landable', branch))
+    return out

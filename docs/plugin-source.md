@@ -13,6 +13,7 @@ The export root is the machine config's `plugin.export_dir`, by default `%LOCALA
 - `state.json`: `{sha, version, folder, exported_at, folders: {<account folder>: {rc, at, step, migrated}}}`, where each folder entry is the result of its last refresh or migrate. `migrated` is true once a migrate of that folder succeeded; a new export keeps each folder's `migrated: true` (`kitlib.pluginsource` `_carry`).
 - `refresh.pid`: held while a refresh runs (`RefreshLock`). It is created exclusively and holds `{pid, ctime}`. A file whose process is gone, or whose pid now belongs to a process with another start time, is taken over. An empty or unreadable file is one a starting refresh has made but not yet written: it counts as live until its modified time is more than 10 seconds old (`LOCK_GRACE_S`), and is taken over after. A second refresh is refused with "a refresh is already running".
 - `refresh.log`: the output of a refresh that `pm_watch` started (`spawn_refresh`).
+- `pins/`: the exports `tools/land.py` and `tools/gate.py` run from when started from the kit's main checkout, `pins/<sha12>` (marker `made_by` `kitlib.gate.pin`), with their own `pins/refresh.pid` and `pins/leases/` (docs/gate.md "Pinned tools"). The plugin's marketplace never names them.
 
 ## Refresh
 
@@ -38,7 +39,7 @@ Never removed (`kitlib.pluginsource` `prune`, `KEEP`):
 - the 3 newest export folders by their marker's `exported_at`, because a running session may still load hooks or its MCP server from one;
 - every export folder replaced less than 7 days ago (`YOUNG_DAYS`), for the same reason. A folder is dated by when it was replaced, the `exported_at` of the next newer export, not by its own: one that was current for weeks and then replaced by three quick landings is kept. A folder whose own or replacing export's `exported_at` cannot be read is kept, and an unreadable date counts as the newest;
 - a link or junction, which is never followed or removed;
-- anything that is not a `<sha12>` folder holding the marker.
+- anything that is not a `<sha12>` folder holding the marker, so the `pins` folder is never touched; `kitlib.gate.pin` `prune` prunes it, by its leases (docs/gate.md "Pinned tools").
 
 Every other export folder is removed. A `<sha12>.tmp` folder other than the current export's is a half-written export left by a run that stopped, and is removed too (prune runs under `refresh.pid`, so no export is being written then). Prune never touches an account folder or a plugin cache.
 

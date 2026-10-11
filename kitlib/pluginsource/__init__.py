@@ -160,6 +160,21 @@ def kit_root():
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+LIVE_ROOT_ENV = 'KIT_LIVE_ROOT'      # set by kitlib.gate.pin for a tool it runs from an export
+
+
+def live_root(kit=None, environ=None):
+    """The kit checkout a printed command names: KIT_LIVE_ROOT when `kit` (default: this checkout)
+    is an export (it holds MARKER) and the variable names a folder, else `kit`. A tool pinned to
+    an export of pushed main (kitlib.gate.pin) runs from a folder a later prune may remove."""
+    kit = kit or kit_root()
+    env = os.environ if environ is None else environ
+    live = env.get(LIVE_ROOT_ENV)
+    if live and os.path.isdir(live) and os.path.isfile(os.path.join(kit, MARKER)):
+        return live
+    return kit
+
+
 # ---------------------------------------------------------------- git side
 
 def remote_main(kit, remote):
@@ -276,10 +291,11 @@ def folder_name(sha):
     return sha[:12]
 
 
-def export(kit, sha, root, now=None):
-    """<root>/<sha12>: the tracked files at `sha`, plugin.json's version stamped, and the marker.
-    Written into <sha12>.tmp and renamed, so a folder by the final name is always whole. An
-    existing folder whose marker names `sha` is kept as it is. Returns (folder, version)."""
+def export(kit, sha, root, now=None, made_by='tools/plugin_refresh.py'):
+    """<root>/<sha12>: the tracked files at `sha`, plugin.json's version stamped, and the marker
+    (`made_by`: the tool that wrote it). Written into <sha12>.tmp and renamed, so a folder by the
+    final name is always whole. An existing folder whose marker names `sha` is kept as it is.
+    Returns (folder, version)."""
     name = folder_name(sha)
     dest = os.path.join(root, name)
     have = read_marker(dest)
@@ -316,7 +332,7 @@ def export(kit, sha, root, now=None):
             fh.write(body)
     skipped = [e[3] for e in entries if e not in blobs]
     marker = {'sha': sha, 'version': version, 'exported_at': _stamp(now),
-              'skipped': skipped, 'made_by': 'tools/plugin_refresh.py'}
+              'skipped': skipped, 'made_by': made_by}
     with open(os.path.join(tmp, MARKER), 'w', encoding='utf-8', newline='\n') as fh:
         json.dump(marker, fh, indent=2)
         fh.write('\n')

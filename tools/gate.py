@@ -35,8 +35,17 @@ import sys
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, KIT)
 
-from kitlib import gate as G                                        # noqa: E402
-from kitlib.config import policy                                   # noqa: E402
+if __name__ == '__main__':      # from the kit's main checkout: run from pushed main (kitlib.gate.pin)
+    from kitlib.gate import pin                                     # noqa: E402
+    _code, _said = pin.run(__file__, sys.argv[1:])
+    if _said:
+        sys.stderr.write(_said + '\n')
+    if _code is not None:
+        sys.exit(_code)
+
+from kitlib import gate as G                                       # noqa: E402
+from kitlib import pluginsource                                    # noqa: E402
+from kitlib.config import policy                                  # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
 from kitlib.gate import caller, measure, runner                    # noqa: E402
 from kitlib.gate import result as resultmod                       # noqa: E402
@@ -235,7 +244,7 @@ def main(argv):
         # No stub, and no -C or a relative one: this gate.py on another checkout of its own
         # repository. An absolute -C names the tree on purpose.
         if here is None and not (a.root and os.path.isabs(a.root)):
-            refused = caller.own_copy_refusal(root, KIT, rel=a.root)
+            refused = caller.own_copy_refusal(root, pluginsource.live_root(KIT), rel=a.root)
             if refused is not None:
                 return emit(refused)
         refused = caller.log_dir_refusal(a.log_dir, root, os.getcwd())
