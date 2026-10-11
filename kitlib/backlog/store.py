@@ -165,7 +165,8 @@ def dangling_items(by_id):
         for m in r.all('blocked_on'):
             if m.startswith('item:') and m[len('item:'):] not in by_id:
                 out.append(rmod.Finding(rmod.ITEM_TARGETS, r.path, r.line_of('blocked_on'),
-                                        '`%s` names no live record - closed? `unblock` it' % m))
+                                        '`%s` names no live record - closed? `unblock %s --on %s '
+                                        '--reason "<why>"`' % (m, r.id, m)))
     return out
 
 

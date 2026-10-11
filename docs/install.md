@@ -178,6 +178,41 @@ step as the install, or it runs twice (`tools/machine_setup.py` notes it, docs/m
 "Settings"). guard.py stays in each account's settings and is never in the plugin (docs/guard.md
 "Go-live"); the PM repo's `pm_session_start.py` stays in that repo's settings.
 
+### After the plugin install: remove the per-item junctions
+
+An account set up by `machine_setup.py` has per-item junctions under `~/.claude` that load the same
+skills, hooks and agents the plugin now loads. Remove them in stages, in this order.
+
+**Stage 1.** At install, remove the kit's `~/.claude/skills/*` junctions, or each skill appears twice.
+Only the 12 kit skill names are touched (the directories under `claude/skills`); any other link stays.
+`cmd /c rmdir` removes the link only, never the target:
+
+```powershell
+$kit = 'backlog-ops','branch-review','branch-sync','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch'
+Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force |
+  Where-Object { $_.LinkType -eq 'Junction' -and $_.Name -in $kit } |
+  ForEach-Object { cmd /c rmdir "$($_.FullName)" }
+Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force | Where-Object { $_.LinkType -and $_.Name -in $kit }
+```
+
+The last command must print nothing. Then `ListSkills` shows each of the 12 names once.
+
+**Stage 1b.** Gated on the KIT-AGENTS-IN-PLUGIN rename landing; do not do this before.
+
+Remove ~/.claude/agents only after the plugin providing pm-kit agents is installed and the launcher uses pm-kit:coordinator.
+
+```powershell
+cmd /c rmdir "$env:USERPROFILE\.claude\agents"
+```
+
+**Stage 2.** Remove the `~/.claude/hooks` junction only after the plugin's SessionStart hook is live and
+`settings.json` no longer calls a guard through `~/.claude/hooks`. Check by searching
+`$env:USERPROFILE\.claude\settings.json` for `\.claude\\hooks`: it must have no hit.
+
+**Stage 3.** The `tools/*` and `knowledge/*` junctions stay for now: `~/.claude/tools/machine_lock` is the live
+lock path, and `machine_setup.py --apply` recreates those links. Record KIT-JUNCTIONS-TOOLS-KNOWLEDGE
+retires them.
+
 `tools/backlog.py add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md).
 
