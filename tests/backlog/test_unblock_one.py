@@ -76,6 +76,29 @@ class UnblockOne(StoreCase):
         self.assertEqual((r.get('state'), r.all('blocked_on'), r.get('owner_ask'), r.get('hold_ruling')),
                          ('blocked', ['live-client'], None, 'R-9001'))
 
+    def test_removing_owner_from_several_at_priority_minus_one_keeps_owner_ask(self):
+        self.seed(rec('FOO', state='blocked', blocked_on=['owner', 'live-client'],
+                      priority='-1', owner_ask='which one?'))
+        change = self.verb('unblock', 'FOO', on='owner', reason=REASON, ruling='R-9001')
+        r = self.get('FOO')
+        self.assertEqual((r.all('blocked_on'), r.get('owner_ask'), r.get('hold_ruling')),
+                         (['live-client'], 'which one?', 'R-9001'))
+        self.assertFalse([l for l in change.lines if 'owner_ask dropped' in l], change.lines)
+
+    def test_single_non_owner_blocker_ruling_keeps_the_old_usage_text(self):
+        self.seed(rec('FOO', state='blocked', blocked_on='live-client'))
+        with self.assertRaises(Usage) as cm:
+            self.verb('unblock', 'FOO', ruling='R-9001')
+        self.assertEqual(str(cm.exception),
+                         '`--ruling R-9001` was given, and `FOO` is not blocked on the owner')
+
+    def test_a_reason_with_no_real_blocker_gives_a_subject_without_from(self):
+        for stem, over in (('FOO', dict(blocked_on='-')), ('BAR', dict(drop=('blocked_on',)))):
+            self.seed(rec(stem, state='blocked', **over))
+            change = self.verb('unblock', stem, reason=REASON)
+            self.assertEqual(change.subject, 'backlog: unblock %s: %s' % (stem, REASON))
+            self.assertEqual(self.get(stem).get('state'), 'open')
+
     def test_ruling_while_owner_stays_is_usage(self):
         self.seed(rec('FOO', state='blocked', blocked_on=['owner', 'live-client'],
                       owner_ask='which one?'))

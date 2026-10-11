@@ -401,9 +401,11 @@ def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
     if unheld and ruling is None:
         raise Refusal('`%s` is blocked on the owner, so unblocking it needs `--ruling R-nnnn`' % rid)
     if ruling is not None:
+        if not unheld and not several:
+            raise Usage('`--ruling %s` was given, and `%s` is not blocked on the owner' % (ruling, rid))
         if not unheld:
-            raise Usage('`--ruling %s` was given, and this unblock of `%s` releases no hold of the '
-                        'owner\'s' % (ruling, rid))
+            raise Usage('`--ruling %s` was given, and clearing `%s` from `%s` releases no hold of '
+                        'the owner\'s' % (ruling, on, rid))
         lmod.check_ruling(ctx.ledger, rid, rec, ruling, 'unblock', hold_only=True)
     drop = unheld and rec.get('priority') != rmod.OWNER_PRIORITY
     pairs = [(k, v) for k, v in rec.pairs() if not (drop and k == 'owner_ask')]
@@ -418,7 +420,8 @@ def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
         lines.append('  owner_ask dropped: nothing waits on him now. It was: %s' % rec.get('owner_ask'))
     subject = 'backlog: unblock %s' % rid
     if reason is not None:
-        subject += ' from %s: %s' % (on or members[0], ' '.join(reason.split()))
+        named = next((m for m in ([on] if on else members) if m != '-'), None)
+        subject += '%s: %s' % (' from %s' % named if named else '', ' '.join(reason.split()))
     return Change({rid: _text(pairs, rec.body)}, subject, lines, ruling=ruling)
 
 
