@@ -7,6 +7,7 @@ from unittest import mock
 from kitlib.backlog import migrate as mmod
 from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Failure, Refusal, Usage
+from kitlib.git import cmd
 from tests.backlog.helpers import StoreCase, priced, record_text
 
 TOMB_CLOSED = ('id: Old-a\nsummary: a finished thing\nclosed: 2026-09-24\nref: e80f2c3\n\n'
@@ -204,6 +205,24 @@ class NoRemote(MigrateCase):
         with self.assertRaises(Refusal) as cm:
             self.run_migrate(src)
         self.assertIn('already exists', str(cm.exception))
+        self.assertEqual(self.local_tip(), tip)
+
+    def test_a_killed_read_of_the_local_store_refuses_and_is_never_read_as_no_store(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: a git ended from outside exits 1 having printed nothing, the
+        shape `rev-parse --verify --quiet` gave for "no such ref"; it skipped the refusal."""
+        src = self.commit_records(self.md(priced('FOO')), push=False)
+        tip = self.run_migrate(src).tip
+        real = cmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] in ('rev-parse', 'for-each-ref') and smod.STORE_REF in argv[-1]:
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(cmd, '_run', side_effect=run):
+            with self.assertRaises(Failure) as cm:
+                self.run_migrate(src, dry_run=True)
+        self.assertIn('cannot read %s' % smod.STORE_REF, str(cm.exception))
+        self.assertIn('nothing was written', str(cm.exception))
         self.assertEqual(self.local_tip(), tip)
 
     def test_a_store_created_mid_migration_is_not_overwritten(self):
