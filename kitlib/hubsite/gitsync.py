@@ -23,8 +23,10 @@ One pass (sync_once), in this order:
               the guard (below), then `merge -q --ff-only --no-autostash refs/remotes/<remote>/<b>`
               when the two commits differ.
   6. commit   the guard again and the identity check, then `add -- <untracked store files>` and
-              `commit -q --no-gpg-sign -m SUBJECT -- <store>`.
-  7. push     `push -q <remote> refs/heads/<b>:refs/heads/<b>`, never forced.
+              `commit -q --no-gpg-sign -m SUBJECT -- <store>`, then the branch's commit is read
+              again: a commit that did not move it ends the pass at `branch`.
+  7. push     `push -q --no-signed <remote> refs/heads/<b>:refs/heads/<b>`, never forced, never
+              signed (a `push.gpgSign` the owner has set would start the signing program).
 
 The fetch and the fast-forward run BEFORE the commit. That order is what makes a remote that
 moved cost nothing: the branch is fast-forwarded with the store's changes still uncommitted in the
@@ -37,8 +39,16 @@ branch is checked out, and looks in the work tree's own git directory (`rev-pars
 read once) for MARKERS: a merge, cherry-pick, revert or rebase under way, or an `index.lock`. A
 branch that changed ends the pass at `branch`; a marker ends it at `busy`, and the detail names
 what was found. Either way that pass writes nothing more: no fast-forward, no add, no commit, no
-reset, no push. What is left between the guard and git's own start is a few milliseconds, in
-which git's index lock still refuses a second writer.
+reset, no push.
+
+The guard is a check, not a lock: git children run between it and the write. Before the
+fast-forward that is the guard's own reads; before the commit it is those, the identity read,
+the read of what is staged and each `add`. Git's index lock refuses a second writer only while one
+of those children holds it, so a branch switched in between is not stopped. For the commit it is
+found afterwards: the pass reads the commit of `refs/heads/<b>` again, and when the commit child
+succeeded and that commit is the one from before, the commit went somewhere else (another branch,
+a detached HEAD). The pass then fails at `branch`, says so, and writes nothing more; the commit is
+left where it landed, for a person to move. The fast-forward has no such second check.
 
 The fast-forward never stashes. `--no-autostash` overrides a `merge.autoStash` the owner has set:
 uncommitted changes in the data worktree, the store's or anybody else's, are either left exactly
@@ -60,6 +70,9 @@ What a failure leaves, step by step:
     worktree finds them staged. A store path somebody else had staged before the add stays
     staged. `pending_commit` stays set and the next pass tries again; commits made earlier are
     still pushed. A reset that fails too is said in the same detail.
+  - the commit succeeds and the data branch has not moved (the work tree was switched after the
+    guard): the pass fails at `branch` with `pending_commit` set, nothing is unstaged and nothing
+    is pushed in that pass. The store's changes are committed on whatever was checked out.
   - a merge, add, commit or reset that ran into its time limit was stopped half way and may have
     left `index.lock` behind: the detail says so. Nothing here ever removes an `index.lock`; the
     next pass finds it and ends at `busy` until a person has removed it.
@@ -126,10 +139,15 @@ Limits, stated so nobody has to find them:
   - The Store never reloads from disk. A fast-forward that brings store documents written on
     another machine changes files under a running Store, which will not see them until it is
     opened again. Two machines writing one store is outside what this module makes safe.
-  - The store's lock is not taken. kitlib.hubsite.store keeps its folder lock for as long as a
-    Store is open and its write mutex to itself, so a commit can fall between the two files of
-    one write (`_meta.json`, then the document) and hold the first without the second. The next
-    pass commits the rest; one commit by itself is not promised to be a consistent store.
+  - There is no store lock around the add. kitlib.hubsite.store keeps its folder lock for as long
+    as a Store is open and its write mutex to itself, so the sync can read the folder while the
+    store is in the middle of a write. One pushed commit can therefore hold a mixed state: a
+    document newer than the `_meta.json` committed with it, or a `_meta.json` newer than the
+    document. The next pass commits the rest and heals it. Whoever restores a store from the
+    data branch takes the newest commit, not an arbitrary one.
+  - The guard and the fast-forward need git 2.31 or later (`rev-parse --path-format=absolute`,
+    `merge --no-autostash`). With an older git the sync fails closed: every pass that has
+    something to write ends at `busy`, for good, and nothing is committed or pushed.
   - Two machines that both commit before either pushes have diverged; that is reported, not
     repaired. The same holds for a remote that moves between one pass's fetch and its push when
     that pass committed: the push is refused (pass failed at `push`) and the next pass reports
@@ -631,7 +649,7 @@ class GitSync:
             return out
         if not self.push:
             if entries:
-                out.update(self._guard() or self._commit(entries, now))
+                out.update(self._guard() or self._commit(entries, now, local))
             out['pending_push'] = self._no_remote
             if self._no_remote and not out.get('failed'):
                 out.update(failed='push', detail=NO_REMOTE)
@@ -674,13 +692,16 @@ class GitSync:
 
         if entries:
             stop = self._guard()
+            if stop is None:
+                done = self._commit(entries, now, local)
+                out.update(done)
+                if done.get('failed') == 'branch':
+                    stop = done
+                elif not done.get('failed'):
+                    local = done['last_commit']
             if stop is not None:        # nothing more is written in this pass, the push included
                 out.update(stop, pending_push=not fetched or absent or local != tracking)
                 return out
-            done = self._commit(entries, now)
-            out.update(done)
-            if not done.get('failed'):
-                local = done['last_commit']
 
         if not fetched:
             out['pending_push'] = True      # unknown without the remote: the next pass finds out
@@ -689,8 +710,8 @@ class GitSync:
             return out
 
         if absent or local != tracking:
-            r = self._git(['push', '-q', plan.remote, '%s:%s' % (head_ref, head_ref)],
-                          timeout=NET_TIMEOUT, env=net)
+            r = self._git(['push', '-q', '--no-signed', plan.remote,
+                           '%s:%s' % (head_ref, head_ref)], timeout=NET_TIMEOUT, env=net)
             if r.rc != 0:
                 out['pending_push'] = True
                 if not out.get('failed'):
@@ -702,10 +723,13 @@ class GitSync:
         out['pending_push'] = False
         return out
 
-    def _commit(self, entries, now):
+    def _commit(self, entries, now, before):
         """Commit the store folder; the status keys that settles. The caller has just asked the
-        guard. Untracked store files are added by name, tracked ones (changed or deleted) are
-        taken by the pathspec. On a failure only what this pass added is unstaged again."""
+        guard; `before` is the data branch's commit as the pass last read it. Untracked store
+        files are added by name, tracked ones (changed or deleted) are taken by the pathspec. On
+        a failure only what this pass added is unstaged again. A commit that succeeded and left
+        the data branch at `before` did not land on it: failed `branch`, and nothing is unstaged
+        (git has taken those paths into the commit it made)."""
         plan = self.plan
         why = self._identity_missing()
         if why:
@@ -733,6 +757,12 @@ class GitSync:
         sha = self._tip('refs/heads/%s' % plan.branch) if why is None else None
         if why is None and sha is None:
             why = 'committed, but cannot read the new commit'
+        if why is None and sha == before:
+            return {'failed': 'branch', 'pending_commit': True,
+                    'detail': 'git made the commit, but the data branch %s is still at %s: the '
+                              'work tree was switched after the last check, and the store\'s '
+                              'changes are committed on what is checked out now, not on the data '
+                              'branch' % (plan.branch, before[:10])}
         if why is None:
             return {'pending_commit': False, 'last_commit': sha, 'last_commit_at': now}
         for run in _chunks(mine, ADD_CHARS):        # the index only, and only this pass's own adds

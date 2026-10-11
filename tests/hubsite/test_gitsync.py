@@ -23,7 +23,8 @@ from tests.gitfixture import EMAIL, NAME, TempRepo, fixture_env
 from tests.realgit import real_git
 
 FETCH = ['fetch', '-q', '--no-tags', 'origin', 'refs/heads/pmdata:refs/remotes/origin/pmdata']
-PUSH = ['push', '-q', 'origin', 'refs/heads/pmdata:refs/heads/pmdata']
+PUSH = ['push', '-q', '--no-signed', 'origin', 'refs/heads/pmdata:refs/heads/pmdata']
+FAKE_LACKS = ('--no-autostash', '--no-signed')          # flags the fake git has no model of
 STATUS = ['--no-optional-locks', 'status', '--porcelain', '-z', '--untracked-files=all', '--', 'hub']
 LOCK = '?? hub/' + LOCK_NAME
 WRITES = ('merge', 'add', 'commit', 'reset', 'push')    # what a pass that stops early never runs
@@ -80,9 +81,10 @@ class Case(unittest.TestCase):
         if forced is not None:
             return forced
         if gitcmd.fake_active():
-            # The fake git's merge has no --no-autostash (and no autostash to turn off). The flag
-            # is recorded above and runs on real git in EndToEndTest.
-            args = [a for a in args if a != '--no-autostash']
+            # The fake git's merge has no --no-autostash and its push no --no-signed (and neither
+            # an autostash nor a signed push to turn off). The flags are recorded above and run
+            # on real git in EndToEndTest.
+            args = [a for a in args if a not in FAKE_LACKS]
         return gitcmd.call(args, cwd, **kw)
 
     def sync(self, every=60, remote='origin', store=None, **kw):
@@ -428,7 +430,7 @@ class PassTest(Case):
         self.assertEqual(self.head(), first)
         self.assertEqual(self.git('diff', '--cached', '--name-only'), '')   # nothing left staged
         self.assertEqual(self.hub_status(), '?? hub/pages/a.json')
-        self.assertEqual(self.calls[-1][:2], ['push', '-q'])    # the branch itself still went
+        self.assertEqual(self.calls[-1], PUSH)              # the branch itself still went
         del self.answers['commit']
         self.now[0] += 60
         st = sync.sync_once()
@@ -531,6 +533,50 @@ class PassTest(Case):
         self.assertIn('fetch', self.subs())
         self.assertEqual((self.head(), self.hub_status(), self.remote_tip()),
                          (tip, '?? hub/pages/a.json', ''))
+
+    def test_a_branch_switched_between_the_guard_and_the_commit_fails_the_pass(self):
+        for n, kw in enumerate(({}, {'push': False})):
+            with self.subTest(kw=kw):
+                if n:
+                    self.git('checkout', '-q', 'pmdata')    # back from the first round's branch
+                sync = self.sync(**kw)
+                tip = self.head()
+                side, doc = 'side%d' % n, 'hub/pages/%d.json' % n
+                self.write(doc)
+                self.before['commit'] = lambda: self.git('checkout', '-q', '-b', side)
+                del self.calls[:]
+                st = sync.sync_once()                       # git commits, on the other branch
+                del self.before['commit']
+                self.assertEqual((st['ok'], st['failed'], st['pending_commit'], st['last_commit']),
+                                 (False, 'branch', True, ''))
+                self.assertEqual(st['pending_push'], not kw)    # the remote has no branch yet
+                self.assertIn('the data branch pmdata is still at %s' % tip[:10], st['detail'])
+                self.assertEqual([s for s in self.subs() if s in ('reset', 'push')], [])
+                self.assertEqual(self.subs()[-2:], ['commit', 'rev-parse'])     # nothing after it
+                self.assertEqual((self.git('rev-parse', 'refs/heads/pmdata'), self.remote_tip()),
+                                 (tip, ''))
+                self.assertEqual((self.git('branch', '--show-current'), self.committed()),
+                                 (side, [doc]))             # left where git put it
+                st = sync.sync_once()                       # and the next pass says where it is
+                self.assertEqual(st['failed'], 'branch')
+                self.assertIn(repr(side), st['detail'])
+
+    def test_an_add_or_an_unstage_stopped_at_its_time_limit_says_the_index_lock_may_be_left(self):
+        sync = self.sync()
+        self.write('hub/pages/a.json')
+        self.answers['add'] = gitcmd.Result(None, b'', 'git add -- timed out after 30 seconds')
+        st = sync.sync_once()
+        self.assertEqual((st['failed'], st['detail']),
+                         ('commit', 'git add -- timed out after 30 seconds' + gitsync.LOCK_NOTE))
+        del self.answers['add']
+        self.answers['commit'] = gitcmd.Result(1, b'', 'error: the hook said no\n')
+        late = 'git reset -q -- timed out after 30 seconds'
+        self.answers['reset'] = gitcmd.Result(None, b'', late)
+        st = sync.sync_once()                               # the commit did not time out: one note
+        self.assertTrue(st['detail'].startswith('error: the hook said no; and what'), st['detail'])
+        self.assertTrue(st['detail'].endswith(late + gitsync.LOCK_NOTE), st['detail'])
+        self.assertEqual(st['detail'].count(gitsync.LOCK_NOTE), 1)
+        self.assertIn('may have left index.lock behind', gitsync.LOCK_NOTE)
 
     def test_a_commit_stopped_at_its_time_limit_may_leave_the_index_lock_which_is_never_removed(self):
         sync = self.sync()
@@ -969,8 +1015,8 @@ class ThreadTest(Case):
 
 @real_git('end to end on the git binary: the wire between two repositories and a bare remote, '
           "the store's lock held while git reads the folder, .git/config as git leaves it, and "
-          'what the fake has none of: merge.autoStash, commit signing, the identity git makes up '
-          'and a path matched in the wrong case')
+          'what the fake has none of: merge.autoStash, commit and push signing, the identity git '
+          'makes up and a path matched in the wrong case')
 class EndToEndTest(Case):
     """Two repositories and one bare remote, all in temp folders; the default git runner."""
 
@@ -1026,6 +1072,15 @@ class EndToEndTest(Case):
         self.assertEqual((st['ok'], st['detail']), (True, ''))
         self.assertEqual(self.committed(), ['hub/pages/home.json'])
         self.assertEqual(self.git('log', '-1', '--format=%G?'), 'N')
+
+    def test_the_push_is_never_signed(self):
+        self.git('config', 'push.gpgSign', 'true')          # the owner's own setting
+        self.git('config', 'gpg.program', 'kit-no-such-signing-program')
+        mine = self.sync()
+        self.write('hub/pages/home.json')
+        st = mine.sync_once()
+        self.assertEqual((st['ok'], st['detail']), (True, ''))
+        self.assertEqual(self.remote_tip(), self.head())
 
     def test_without_a_git_identity_no_commit_is_made(self):
         mine = self.sync()
