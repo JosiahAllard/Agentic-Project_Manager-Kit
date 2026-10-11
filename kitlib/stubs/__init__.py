@@ -40,10 +40,18 @@ CALLER_VAR = 'KIT_STUB_CALLER'
 # libraries it listed are kitlib modules now and get no stub). A name the kit has no command for
 # yet is left out of the default until it does.
 SHARED = (
-    'backlog', 'board', 'checkout_guard', 'codemap', 'commit', 'doc_budget', 'doc_index',
-    'forbidden', 'gate', 'land', 'landed', 'ledger', 'machine_paths', 'new_worktree', 'pieces',
-    'preflight', 'pytests', 'review_pack', 'ruling_cites', 'sync_base', 'testlist', 'tool_deps',
-    'worktree_paths', 'worktree_remove',
+    'backlog', 'board', 'checkout_guard', 'codemap', 'commit', 'daily_full', 'doc_budget',
+    'doc_index', 'forbidden', 'gate', 'land', 'landed', 'ledger', 'machine_paths', 'new_worktree',
+    'pieces', 'preflight', 'pytests', 'redfirst', 'review_pack', 'ruling_cites', 'sync_base',
+    'testlist', 'tool_deps', 'trailers', 'worktree_paths', 'worktree_remove',
+)
+# The kit tools that get no stub: they act on the machine, the owner's files or the kit itself,
+# not on a repository checkout named by -C or the current directory. Every `tools/*.py` command
+# is in exactly one of SHARED and KIT_ONLY (tests/stubs: a new tool fails until it is classified).
+KIT_ONLY = (
+    'agent_roster', 'backlog_lint', 'hub_mirror', 'kit_tests', 'launch', 'ledger_refs',
+    'lock_release_check', 'machine_lock', 'machine_setup', 'pending', 'pm_data', 'pm_watch',
+    'worktree_sweep_task',
 )
 
 Outcome = collections.namedtuple('Outcome', 'code lines')
@@ -135,6 +143,54 @@ def stub_kit(text):
     return m.group(1).strip() if m else None
 
 
+def _check_one(path, exists, have, want, kit):
+    """None when the stub at `path` is current, else (the `check` line, the other kit it runs or None)."""
+    if not exists:
+        return 'missing  %s' % path, None
+    if have is None or MARK not in have:
+        return 'not a stub  %s' % path, None
+    if have != want:
+        other = stub_kit(have)
+        if other == repr(os.path.normpath(kit)):
+            return 'stale    %s' % path, None
+        return 'stale    %s (runs the kit at %s)' % (path, other), other
+    return None
+
+
+def unclassified(kit=KIT_ROOT):
+    """The kit's commands in neither SHARED nor KIT_ONLY (tests/stubs fails while there is one)."""
+    return [n for n in commands(kit) if n not in SHARED and n not in KIT_ONLY]
+
+
+def problem_line(root, kit=KIT_ROOT):
+    """None when the checkout `root` has every wanted stub current, else one line for a session
+    start: how many are missing or stale, which, the write command, and the kit a stale one runs.
+    A configuration that cannot be read gives a "could not check" line."""
+    label = os.path.basename(os.path.normpath(root))
+    try:
+        cfg = load(root)
+        names = wanted(cfg, kit)
+    except ConfigError as e:
+        return 'stubs (%s): could not check: %s' % (label, e)
+    tdir = os.path.normpath(os.path.join(root, cfg.tools_dir))
+    bad, others = [], []
+    for name in names:
+        path = os.path.join(tdir, name + '.py')
+        exists = os.path.exists(path)
+        have = _read(path) if exists else None
+        found = _check_one(path, exists, have, stub_text(name, cfg.tools_dir, kit), kit)
+        if found:
+            bad.append(name)
+            if found[1] and found[1] not in others:
+                others.append(found[1])
+    if not bad:
+        return None
+    return 'stubs (%s): %d missing/stale: %s; run python %s -C %s%s' % (
+        label, len(bad), ', '.join(bad),
+        os.path.join(kit, 'tools', 'kit_stubs.py') + ' write', root,
+        ' (stale ones run the kit at %s)' % ', '.join(others) if others else '')
+
+
 def run(root, verb, tools=None, replace=False, dry_run=False, kit=KIT_ROOT):
     """Outcome(code, lines) of `write` or `check` for the checkout `root`."""
     if verb not in ('write', 'check'):
@@ -153,14 +209,9 @@ def run(root, verb, tools=None, replace=False, dry_run=False, kit=KIT_ROOT):
         have = _read(path) if os.path.exists(path) else None
         exists = os.path.exists(path)
         if verb == 'check':
-            if not exists:
-                problems.append('missing  %s' % path)
-            elif have is None or MARK not in have:
-                problems.append('not a stub  %s' % path)
-            elif have != want:
-                other = stub_kit(have)
-                problems.append('stale    %s%s' % (path, '' if other == repr(os.path.normpath(kit))
-                                                   else ' (runs the kit at %s)' % other))
+            found = _check_one(path, exists, have, want, kit)
+            if found:
+                problems.append(found[0])
             continue
         if have == want:
             lines.append('ok       %s' % path)

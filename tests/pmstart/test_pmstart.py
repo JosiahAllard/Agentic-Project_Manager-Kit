@@ -23,9 +23,13 @@ def setUpModule():
     global _orig_read_live
     _orig_read_live = fglock.read_live
     fglock.read_live = lambda user32=None: 0
+    global _orig_repos
+    _orig_repos = pmstart.launcher_repos
+    pmstart.launcher_repos = lambda: {}   # nor this machine's launcher.repos (the stubs check)
 
 
 def tearDownModule():
+    pmstart.launcher_repos = _orig_repos
     pmstart.pm_data_settings = _orig_settings
     fglock.read_live = _orig_read_live
 

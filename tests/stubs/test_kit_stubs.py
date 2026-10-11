@@ -106,6 +106,52 @@ class WhichTools(StubCase):
         self.assertEqual(self.run_stubs('check')[0], stubs.CONFIG)
 
 
+class Partition(StubCase):
+    """Every tools/*.py command is stubbed (SHARED) or kit-only (KIT_ONLY), exactly one."""
+
+    def test_every_kit_command_is_in_exactly_one_list(self):
+        both = sorted(set(stubs.SHARED) & set(stubs.KIT_ONLY))
+        self.assertEqual(both, [], 'in both SHARED and KIT_ONLY')
+        self.assertEqual(stubs.unclassified(), [],
+                         'add each new tool to kitlib.stubs.SHARED (it acts on a repository checkout '
+                         'named by -C or the current directory) or KIT_ONLY (machine, owner or kit)')
+        self.assertEqual(sorted(set(stubs.SHARED) | set(stubs.KIT_ONLY)), sorted(stubs.commands()),
+                         'a listed name is not a kit command')
+
+    def test_unclassified_names_a_new_tool(self):
+        kit = os.path.join(self.tmp, 'fake-kit')
+        for n in ('landed', 'machine_lock', 'zzz_new'):
+            self.put(os.path.join(kit, 'tools', n + '.py'), "if __name__ == '__main__':\n    pass\n")
+        self.assertEqual(stubs.unclassified(kit), ['zzz_new'])
+
+
+class ProblemLine(StubCase):
+
+    def test_none_when_current(self):
+        self.assertEqual(self.run_stubs('write', tools=['landed'])[0], stubs.OK)
+        self.config(stubs={'tools': ['landed']})
+        self.assertIsNone(stubs.problem_line(self.root))
+
+    def test_names_missing_and_gives_the_write_command(self):
+        self.config(stubs={'tools': ['landed', 'gate']})
+        self.assertEqual(self.run_stubs('write', tools=['landed'])[0], stubs.OK)
+        line = stubs.problem_line(self.root)
+        self.assertEqual(line, 'stubs (%s): 1 missing/stale: gate; run python %s write -C %s' % (
+            os.path.basename(self.root), os.path.join(KIT, 'tools', 'kit_stubs.py'), self.root))
+
+    def test_a_stub_running_another_kit_carries_the_hint(self):
+        self.config(stubs={'tools': ['landed']})
+        other = os.path.join(self.tmp, 'other-kit')
+        self.put(self.stub('landed'), stubs.stub_text('landed', 'tools', other))
+        line = stubs.problem_line(self.root)
+        self.assertIn('1 missing/stale: landed;', line)
+        self.assertTrue(line.endswith('(stale ones run the kit at %s)' % repr(os.path.normpath(other))), line)
+
+    def test_a_config_the_kit_refuses_is_a_could_not_check_line(self):
+        self.config(stubs={'tools': ['no_such_tool']})
+        self.assertIn('could not check:', stubs.problem_line(self.root))
+
+
 class WriteAndCheck(StubCase):
 
     def setUp(self):
