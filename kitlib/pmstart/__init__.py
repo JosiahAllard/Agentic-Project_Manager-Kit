@@ -508,6 +508,50 @@ def plugin_current(settings=None, kit=None, folders=None):
     return pluginsource.current_lines(kit or pluginsource.kit_root(), s, folders=folders)
 
 
+AGENT_TEMP_ENV = "AGENT_TEMP"
+AGENT_TEMP_TASK = "agent-temp-sweep"
+
+
+def agent_temp_env():
+    """AGENT_TEMP from this process's environment, else the user environment in the registry
+    (kitlib.launcher.host._user_env: a variable machine_setup.py set after this session started)."""
+    v = os.environ.get(AGENT_TEMP_ENV)
+    if v:
+        return v
+    from kitlib.launcher.host import _user_env
+    return _user_env(AGENT_TEMP_ENV)
+
+
+def agent_temp_sweep_key():
+    """The machine config's agent_temp_sweep value (kitlib.config.user.user_config), or None."""
+    return kuser.user_config().get("agent_temp_sweep")
+
+
+def agent_temp_task_exists(name=AGENT_TEMP_TASK):
+    """Whether the scheduled task `name` is registered (`schtasks /Query /TN`, exit 0). OSError or
+    subprocess.TimeoutExpired when schtasks cannot be run."""
+    r = subprocess.run(["schtasks", "/Query", "/TN", name], capture_output=True, text=True, timeout=TIMEOUT,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return r.returncode == 0
+
+
+def agent_temp_lines(env=None, sweep_key=None, task_exists=None):
+    """Warnings for the agents' temp folder set-up (docs/machine-setup.md "Agent temp init"): AGENT_TEMP
+    unset, the machine config without agent_temp_sweep, the sweep task not registered. None when all
+    three are in place. A reader that raises is the checklist's "could not check agent_temp" line."""
+    env, sweep_key = env or agent_temp_env, sweep_key or agent_temp_sweep_key
+    task_exists = task_exists or agent_temp_task_exists
+    lines = []
+    if not env():
+        lines.append("%s is not set (machine_setup.py plans it)" % AGENT_TEMP_ENV)
+    if not sweep_key():
+        lines.append("agent_temp_sweep is not set in the machine config (machine_setup.py plans it)")
+    if not task_exists(AGENT_TEMP_TASK):
+        lines.append("agent temp sweep task %s is not registered (machine_setup.py --register-sweep-task "
+                     "--apply, the owner's act)" % AGENT_TEMP_TASK)
+    return lines
+
+
 def checklist(cfg, now=None, procs=None, **fakes):
     """The full session-start text. A failed check is one "could not check X: reason" line."""
     today = (now or datetime.datetime.now()).date()
@@ -530,6 +574,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
         ("plugin_current", lambda: plugin_current(**fakes.get("plugin_current", {}))),
         ("stubs", lambda: stubs(**fakes.get("stubs", {}))),
+        ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
         ("foreground_lock", lambda: fglock.check(cfg, **fakes.get("foreground_lock", {}))),
     ]
     for name, fn in checks:
