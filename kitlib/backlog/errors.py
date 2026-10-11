@@ -1,6 +1,6 @@
 """The four ways a backlog verb stops (ported from an earlier tools/backlog.py). Each fixes the
 label the CLI prints and its exit code; nothing was written when one is raised, except
-Uncommitted (a Failure)."""
+Uncommitted and IndexStale (each a Failure)."""
 
 
 class Refusal(Exception):
@@ -32,4 +32,21 @@ class Failure(Refusal):
 
 class Uncommitted(Failure):
     """The write's record files are on disk in the PM data worktree but its commit failed
-    (kitlib.backlog.store.MainBackend): `backlog.py catch-up --apply` commits them."""
+    (kitlib.backlog.store.MainBackend): `backlog.py catch-up --apply` commits them. `paths`: every
+    record path the write wrote, as git spells it."""
+
+    def __init__(self, message, paths=()):
+        Failure.__init__(self, message)
+        self.paths = list(paths)
+
+
+class IndexStale(Failure):
+    """The write is committed (HEAD has `commit`, or already held the paths when it is None) but
+    the PM data worktree's own index was not updated for `paths`, so a plain `git commit` there
+    would revert them. `repair`: the command that resets those index entries to HEAD."""
+
+    def __init__(self, message, commit=None, paths=(), repair=''):
+        Failure.__init__(self, message)
+        self.commit = commit
+        self.paths = list(paths)
+        self.repair = repair

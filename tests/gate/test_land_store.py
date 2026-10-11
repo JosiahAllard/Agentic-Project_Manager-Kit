@@ -14,7 +14,7 @@ from kitlib.backlog import at_landing
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from kitlib.git import cmd, refs
-from tests.backlog.helpers import priced
+from tests.backlog.helpers import priced, rec
 from tests.gate import test_land
 from tests.gitfixture import fixture_env
 from tests.realgit import real_git
@@ -404,6 +404,47 @@ class PmDataClose(StoreLandCase):
         self.assertIn('backlog.py" -C "%s" catch-up --apply kit/backlog/FOO.md'
                       % self.pm_root(wt), warn[0])
         self.assertEqual(self.main_now(), out.merge)
+
+    def test_catch_up_after_a_failed_close_names_every_path_the_close_wrote(self):
+        """The close also rewrites BAR, which FOO blocked: the catch-up command names both."""
+        wt = self.pm_worktree(pulled('FOO'), rec('BAR', state='blocked', blocked_on='item:FOO'))
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        lock = os.path.join(self.repo.common_dir(), 'refs', 'heads', 'pmdata.lock')
+        with open(lock, 'w') as f:
+            f.write('')
+        self.addCleanup(os.remove, lock)
+        with mock.patch.object(smod, 'ATTEMPTS', 1):
+            out = self.land()
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        command = warn[0].split('; commit it with: ', 1)[-1]   # the printed command, not the error
+        self.assertIn('backlog.py" -C "%s" catch-up --apply kit/backlog/BAR.md kit/backlog/FOO.md'
+                      % self.pm_root(wt), command)
+
+    def test_a_close_committed_with_a_stale_index_is_not_reported_unclosed(self):
+        """The close commits but the PM worktree's index is locked: the WARNING says it was
+        closed and committed and gives the index repair, never `close it with`."""
+        wt = self.pm_worktree(pulled('FOO'))
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        gitdir = self.repo.git('rev-parse', '--git-dir', cwd=wt)
+        if not os.path.isabs(gitdir):
+            gitdir = os.path.join(wt, gitdir)
+        lock = os.path.join(gitdir, 'index.lock')
+        with open(lock, 'w') as f:
+            f.write('')
+        self.addCleanup(os.remove, lock)
+        with mock.patch.object(smod, 'ATTEMPTS', 1):
+            out = self.land()
+        tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        self.assertEqual(self.repo.git('rev-parse', tip + '^', cwd=wt), before)
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertNotIn('was not closed', warn[0])
+        self.assertNotIn('close it with', warn[0])
+        self.assertIn('FOO was closed in the backlog store kit/backlog in ', warn[0])
+        self.assertIn('HEAD has the commit %s' % tip[:10], warn[0])
+        self.assertIn('reset -q -- kit/backlog/FOO.md', warn[0])
 
     def test_a_record_the_pm_data_store_cannot_close_names_the_command_and_the_landing_stands(self):
         wt = self.pm_worktree(pulled('FOO', priority='-1', priority_by='-',

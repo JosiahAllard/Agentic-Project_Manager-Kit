@@ -29,7 +29,7 @@ from kitlib.git import batch, cmd, refs
 from kitlib.git import repo as gitrepo
 
 from . import record as rmod
-from .errors import Failure, Uncommitted, Usage
+from .errors import Failure, IndexStale, Uncommitted, Usage
 
 STORE_REF = 'refs/backlog/main'
 STORE_DIR = 'backlog'
@@ -539,6 +539,13 @@ CATCH_UP = 'backlog.py catch-up'
 _UNSET = object()
 
 
+def _store_env():
+    """The environment of the main backend's git children: cmd.scrubbed_env() (no GIT_DIR,
+    GIT_WORK_TREE, GIT_COMMON_DIR, GIT_CEILING_DIRECTORIES) without GIT_INDEX_FILE too, so an index
+    the caller inherited (a hook's) is never the one a store write reads or updates."""
+    return {k: v for k, v in cmd.scrubbed_env().items() if k.upper() != 'GIT_INDEX_FILE'}
+
+
 class MainBackend(object):
     """`<dir>/<ID>.md` in a worktree. A write writes the files; the caller's branch carries them
     to main through a landing. There is no compare-and-swap on the files: a write checks that
@@ -548,8 +555,11 @@ class MainBackend(object):
 
     In the PM data branch's worktree (commit_branch) the write also commits exactly the record
     paths it wrote, as one commit on HEAD by compare-and-swap (`update-ref HEAD <new> <old>`,
-    rebuilt on a HEAD that moved), and sets those paths in the real index; nothing else in that
-    worktree is staged or committed. Elsewhere it commits nothing."""
+    rebuilt on a HEAD that moved unless the move changed one of those paths), and sets those
+    paths in the real index; nothing else in that worktree is staged or committed. A commit that
+    fails is Uncommitted (the files stay written); an index left stale after the commit is
+    IndexStale. Its git calls drop an inherited GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE
+    (_store_env). Elsewhere it commits nothing."""
 
     def __init__(self, root, rel):
         self.root = root
@@ -575,7 +585,7 @@ class MainBackend(object):
             raise Failure('cannot tell whether %s is the PM data worktree: %s' % (self.root, exc))
         if record is None:
             return None
-        r = cmd.call(['symbolic-ref', '-q', 'HEAD'], self.root)
+        r = cmd.call(['symbolic-ref', '-q', 'HEAD'], self.root, env=_store_env())
         if r.rc == 1:
             return None                              # detached
         if r.rc != 0:
@@ -677,9 +687,10 @@ class MainBackend(object):
         return Uncommitted('%s written but not committed in %s: %s. `%s` lists the uncommitted '
                            'record paths and `%s --apply %s` commits them'
                            % (', '.join(paths), self.root, why, CATCH_UP, CATCH_UP,
-                              ' '.join(paths)))
+                              ' '.join(paths)), paths)
 
     def _git(self, args, paths, **kw):
+        kw.setdefault('env', _store_env())
         out, why = cmd.run(args, self.root, **kw)
         if out is None:
             raise self._uncommitted(paths, 'git %s: %s' % (args[0], why))
@@ -688,24 +699,37 @@ class MainBackend(object):
     def _hash_text(self, data, paths):
         """The blob id of `data`, written to the object store before any record file is: a
         failure here is a plain Failure, with nothing written."""
-        out, why = cmd.run(['hash-object', '-w', '--stdin'], self.root, stdin=data)
+        out, why = cmd.run(['hash-object', '-w', '--stdin'], self.root, stdin=data,
+                           env=_store_env())
         if out is None:
             raise Failure('cannot write %s to the object store of %s: git hash-object: %s; '
                           'nothing was written' % (', '.join(paths), self.root, why))
         return cmd.text(out).strip()
 
     def _head(self):
-        out, why = cmd.run_text(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], self.root)
+        out, why = cmd.run_text(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], self.root,
+                                env=_store_env())
         if not out:
             raise Failure('cannot read HEAD in %s: %s' % (self.root, why or 'no commit'))
         return out
+
+    def _entries(self, rev, paths):
+        """`{path: 'mode type blob'}` for each of `paths` that `rev` holds: what a retry compares
+        to tell whether another commit changed this write's records."""
+        out = self._git(['ls-tree', '-z', '--full-tree', rev, '--'] + sorted(paths), paths)
+        found = {}
+        for entry in out.split('\0'):
+            meta, tab, path = entry.partition('\t')
+            if tab:
+                found[path] = meta
+        return found
 
     def _tree(self, head, lines, paths):
         """The tree of `head` with `lines` (`update-index --index-info` input) applied, built in a
         temporary index."""
         tmp = tempfile.mkdtemp(prefix='kit-backlog-')
         try:
-            env = dict(cmd.scrubbed_env(), GIT_INDEX_FILE=os.path.join(tmp, 'index'))
+            env = dict(_store_env(), GIT_INDEX_FILE=os.path.join(tmp, 'index'))
             self._git(['read-tree', head], paths, env=env)
             self._git(['update-index', '--index-info'], paths, env=env,
                       stdin=('\n'.join(lines) + '\n').encode('utf-8'))
@@ -730,9 +754,13 @@ class MainBackend(object):
         return new
 
     def _publish_commit(self, blobs, message, paths):
-        """`(new commit or None, index lines)`: _commit's compare-and-swap loop."""
+        """`(new commit or None, index lines)`: _commit's compare-and-swap loop. A retry builds on
+        the HEAD another commit moved only while that commit left this write's paths as the first
+        attempt found them; one that changed any of them stops the loop (Uncommitted), so that
+        commit is never overwritten."""
         subject = message.split('\n', 1)[0]
         last = ''
+        base = None
         for attempt in range(ATTEMPTS):
             head = self._head()
             zero = '0' * len(head)
@@ -741,9 +769,21 @@ class MainBackend(object):
             tree = self._tree(head, lines, paths)
             if tree == self._git(['rev-parse', head + '^{tree}'], paths):
                 return None, lines                   # HEAD holds them already: no empty commit
+            if base is None:
+                base = head
+            elif head != base:
+                was, now = self._entries(base, paths), self._entries(head, paths)
+                changed = [p for p in paths if was.get(p) != now.get(p)]
+                if changed:
+                    raise self._uncommitted(
+                        paths, 'another commit changed %s on HEAD since this write began (HEAD '
+                        'is now %s); not committed, so that commit is not overwritten: compare '
+                        'each file with HEAD before committing it' % (', '.join(changed),
+                                                                       head[:10]))
             new = self._git(['commit-tree', tree, '-p', head, '-F', '-'], paths,
                             stdin=message.encode('utf-8'))
-            r = cmd.call(['update-ref', '-m', 'backlog: ' + subject, 'HEAD', new, head], self.root)
+            r = cmd.call(['update-ref', '-m', 'backlog: ' + subject, 'HEAD', new, head], self.root,
+                         env=_store_env())
             if r.rc == 0:
                 return new, lines
             last = r.err or 'git update-ref exited %s' % r.rc
@@ -757,10 +797,11 @@ class MainBackend(object):
                                 % (ATTEMPTS, last))
 
     def _sync_index(self, lines, new, paths):
-        """Give the real index `lines` for those paths only, so `git status` shows them clean."""
+        """Give the real index `lines` for those paths only, so `git status` shows them clean.
+        IndexStale when it cannot: the write stays committed, and the error carries the repair."""
         why = ''
         for attempt in range(ATTEMPTS):
-            r = cmd.call(['update-index', '--index-info'], self.root,
+            r = cmd.call(['update-index', '--index-info'], self.root, env=_store_env(),
                          stdin=('\n'.join(lines) + '\n').encode('utf-8'))
             if r.rc == 0:
                 return
@@ -768,9 +809,15 @@ class MainBackend(object):
             if 'index.lock' not in why:
                 break
             time.sleep(random.uniform(0.05, 0.25) * (attempt + 1))
-        raise Failure('%s committed%s in %s, but its index was not updated (%s): `git status` '
-                      'shows them staged backwards until `git reset -q -- <path>` for each'
-                      % (', '.join(paths), ' as %s' % new[:10] if new else '', self.root, why))
+        repair = 'git -C "%s" reset -q -- %s' % (self.root, ' '.join(paths))
+        raise IndexStale(
+            '%s committed in %s: HEAD %s, but the real index of that worktree was not updated '
+            '(%s), so it is stale for them and a plain `git commit` there would revert them. '
+            'Repair the index (the worktree files are left alone): %s'
+            % (', '.join(paths), self.root,
+               'has the commit %s' % new[:10] if new else 'already holds them',
+               ' '.join(why.split()), repair),
+            commit=new, paths=paths, repair=repair)
 
     def pending(self):
         """`[(kind, path)]` of every path under the store folder whose worktree file differs from
@@ -778,7 +825,8 @@ class MainBackend(object):
         a record` for anything else there. Failure when git does not answer."""
         rel = self.rel.replace('\\', '/')
         out, why = cmd.run(['-c', 'core.quotePath=false', 'status', '--porcelain', '-z',
-                            '--untracked-files=all', '--no-renames', '--', rel + '/'], self.root)
+                            '--untracked-files=all', '--no-renames', '--', rel + '/'], self.root,
+                           env=_store_env())
         if out is None:
             raise Failure('cannot read the status of %s: %s' % (self.root, why))
         changed = set()
@@ -786,7 +834,7 @@ class MainBackend(object):
             if len(entry) > 3:
                 changed.add(entry[3:])
         tracked, why = cmd.run(['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', rel + '/'],
-                               self.root)
+                               self.root, env=_store_env())
         if tracked is None:
             raise Failure('cannot read HEAD in %s: %s' % (self.root, why))
         in_head = set(n for n in cmd.text(tracked).split('\0') if n)
@@ -849,7 +897,7 @@ class MainBackend(object):
         if os.path.exists(os.path.join(self.dir, rid + '.md')):
             return False
         r = cmd.call(['cat-file', '-e', 'HEAD:%s/%s.md' % (self.rel.replace('\\', '/'), rid)],
-                     self.root)
+                     self.root, env=_store_env())
         if r.rc is None:
             raise Failure(r.err)
         return r.rc == 0

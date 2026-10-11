@@ -27,7 +27,7 @@ from kitlib.git import repo as gitrepo
 from . import plan as pmod
 from . import record as rmod
 from . import store as smod
-from .errors import Refusal, Uncommitted
+from .errors import IndexStale, Refusal, Uncommitted
 
 SESSION = 'gate-land'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -280,7 +280,13 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
             lines.append('WARNING: %s landed, and %s was closed in the backlog store %s but not '
                          'committed (%s); commit it with: %s'
                          % (branch, rid, backend.describe(), _one_line(str(exc)),
-                            command('catch-up', '--apply', backend.path_of(rid))))
+                            command('catch-up', '--apply',
+                                    *(exc.paths or [backend.path_of(rid)]))))
+            continue
+        except IndexStale as exc:           # committed; only that worktree's index is behind
+            lines.append('WARNING: %s landed, and %s was closed in the backlog store %s (%s); '
+                         'repair the index with: %s'
+                         % (branch, rid, backend.describe(), _one_line(str(exc)), exc.repair))
             continue
         except Exception as exc:            # one record's failure never stops the others
             what = ('%s: %s' % (exc.label, exc) if isinstance(exc, Refusal)

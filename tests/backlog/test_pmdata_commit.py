@@ -3,6 +3,8 @@
 import contextlib
 import io
 import os
+import shutil
+import tempfile
 import unittest
 from unittest import mock
 
@@ -11,6 +13,7 @@ from kitlib.git import cmd
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
+from kitlib.backlog import errors
 from kitlib.backlog.errors import Failure, Uncommitted, Usage
 from tools import backlog as backlog_tool
 
@@ -166,6 +169,88 @@ class PmDataStore(unittest.TestCase):
         self.assertIn('catch-up', msg)
         self.assertEqual(self.head(), before)
         self.assertTrue(os.path.isfile(self.path('FOO')))
+
+    def test_a_retry_never_overwrites_another_writers_commit_of_the_same_record(self):
+        """Two writers on BAR: the other commits while this one is between its first HEAD read
+        and its update-ref. The retry sees HEAD's BAR changed since its first base and stops,
+        Uncommitted, naming the path; the other writer's commit stands."""
+        other = smod.Store(smod.MainBackend(self.wt, DIR), rmod.Rules(), session='kit-other')
+        other_ctx = pmod.Context(other, self.wt, branch=BRANCH)
+        real = self.backend._head
+        theirs = []
+
+        def head_then_the_other_writes():
+            sha = real()
+            if not theirs:
+                theirs.append(other.write(lambda s: pmod.plan_set(
+                    s, other_ctx, 'BAR', [('summary', ['theirs'])]))[1])
+            return sha
+        with mock.patch.object(self.backend, '_head', side_effect=head_then_the_other_writes), \
+                mock.patch.object(smod.time, 'sleep'):
+            with self.assertRaises(Uncommitted) as cm:
+                self.store.write(lambda s: pmod.plan_set(s, self.ctx, 'BAR', [('summary', ['mine'])]))
+        self.assertIsNotNone(theirs[0])
+        self.assertEqual(self.head(), theirs[0])
+        self.assertIn('summary: theirs', self.git('show', 'HEAD:%s/BAR.md' % DIR))
+        self.assertEqual(cm.exception.paths, [DIR + '/BAR.md'])
+        self.assertIn('another commit changed %s/BAR.md' % DIR, str(cm.exception))
+
+    def worktree_index(self):
+        """The worktree's own index file (its admin folder's `index`)."""
+        gitdir = self.git('rev-parse', '--git-dir')
+        index = os.path.join(gitdir if os.path.isabs(gitdir) else os.path.join(self.wt, gitdir),
+                             'index')
+        self.assertTrue(os.path.isfile(index), index)
+        return index
+
+    def test_an_index_left_stale_after_the_commit_is_its_own_result(self):
+        """The commit lands but the real index cannot be updated (index.lock held): IndexStale,
+        not Uncommitted, saying HEAD has the commit, and its repair command makes status clean."""
+        lock = self.worktree_index() + '.lock'
+        with open(lock, 'w') as f:
+            f.write('')
+        before = self.head()
+        try:
+            with mock.patch.object(smod.time, 'sleep'):
+                with self.assertRaises(Failure) as cm:
+                    self.store.write(
+                        lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+        finally:
+            os.remove(lock)
+        exc = cm.exception
+        self.assertEqual(type(exc).__name__, 'IndexStale', str(exc))
+        self.assertIsInstance(exc, errors.IndexStale)
+        self.assertNotIsInstance(exc, Uncommitted)
+        tip = self.head()
+        self.assertEqual(self.git('rev-parse', tip + '^'), before)
+        self.assertEqual(self.changed_in(tip), [('A', DIR + '/FOO.md')])
+        self.assertEqual((exc.commit, exc.paths), (tip, [DIR + '/FOO.md']))
+        self.assertEqual(exc.repair, 'git -C "%s" reset -q -- %s/FOO.md' % (self.wt, DIR))
+        msg = str(exc)
+        self.assertIn('HEAD has the commit %s' % tip[:10], msg)
+        self.assertIn('a plain `git commit` there would revert', msg)
+        self.assertIn(exc.repair, msg)
+        self.assertNotEqual(self.status(), [])           # stale: staged backwards
+        self.git('reset', '-q', '--', DIR + '/FOO.md')    # the repair, as it names it
+        self.assertEqual(self.status(), [])
+        self.assertEqual(self.head(), tip)
+
+    def test_an_inherited_git_index_file_is_not_the_one_a_write_updates(self):
+        """GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE inherited from the caller (a hook's
+        environment) take no part: the worktree's own index is updated, the stray one never made."""
+        tmp = tempfile.mkdtemp(prefix='kit-stray-')
+        self.addCleanup(shutil.rmtree, tmp, True)
+        stray = os.path.join(tmp, 'index')
+        before = self.head()
+        with mock.patch.dict(os.environ, {'GIT_INDEX_FILE': stray,
+                                          'GIT_DIR': os.path.join(tmp, 'no-repo'),
+                                          'GIT_WORK_TREE': tmp}):
+            _, tip = self.store.write(
+                lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+            pending = self.backend.pending()
+        self.assertFalse(os.path.exists(stray))
+        self.assertEqual(pending, [])
+        self.assert_committed(before, tip, [('A', DIR + '/FOO.md')])
 
     # -- which stores commit ---------------------------------------------------------------------
 
