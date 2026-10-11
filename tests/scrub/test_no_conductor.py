@@ -3,8 +3,8 @@
 - No `claude/agents/conductor.md`, and `.claude-plugin/plugin.json` lists no conductor.
 - No tracked file under claude/, kitlib/, tools/, templates/, optional/ or docs/, nor AGENTS.md,
   has a line matching `(?i)conductor`, unless ALLOWED pairs that file with a substring of the line.
-- Each ALLOWED entry carries its reason: W2B (an old-name fallback or one-release guard, removed after
-  the switch) or HISTORY (the go-live migration record and the launcher's port map, which stay).
+- Each ALLOWED entry carries its reason: W2B or W1 (an old-name fallback or one-release guard, removed
+  after the switch by that step) or HISTORY (the go-live migration record and the launcher's port map, which stay).
 - An ALLOWED entry that matches no line fails too, so a removed fallback takes its entry with it.
 """
 import json
@@ -19,6 +19,7 @@ SCOPE = ('claude/', 'kitlib/', 'tools/', 'templates/', 'optional/', 'docs/')
 FILES = ('AGENTS.md',)
 
 W2B = 'removed after the switch (W2b)'
+W1 = 'removed after the switch (W1)'
 HISTORY = 'history: stays'
 
 ALLOWED = (
@@ -29,15 +30,15 @@ ALLOWED = (
     ('kitlib/coordinatorstart/__init__.py', 'LEGACY_KEY = "conductor_start"', W2B),
     ('kitlib/coordinatorstart/__init__.py', 'LEGACY_ROLE = "conductor"', W2B),
     ('kitlib/config/user.py', "'conductor_start': Field(", W2B),
-    ('kitlib/config/user.py', 'unset: coordinator, conductor, deep-worker', W2B),
+    ('kitlib/config/user.py', 'unset: coordinator, conductor (removed after the switch)', W2B),
     ('docs/kit-json.md', '- `conductor_start` (object', W2B),
-    ('docs/kit-json.md', 'unset: coordinator, conductor, deep-worker', W2B),
+    ('docs/kit-json.md', 'unset: coordinator, conductor (removed after the switch)', W2B),
     # The guard holds the old session mark (kitlib/guard is not this branch's).
     ('kitlib/guard/rules.py', 'its old name conductor', W2B),
     ('kitlib/guard/rules.py', "'conductor' is the", W2B),
     ('kitlib/guard/rules.py', "AGENT_MARKS = ('coordinator', 'conductor'", W2B),
     ('docs/guard.md', 'its old name `conductor`', W2B),
-    ('docs/guard.md', "`conductor` (the coordinator's old mark)", W2B),
+    ('docs/guard.md', "`conductor` (the coordinator's old mark, removed after the switch)", W2B),
     # The launcher still runs the agent by its old name and marks it coordinator.
     ('kitlib/launcher/window.py', "'conductor': COORDINATOR", W2B),
     ('kitlib/launcher/window.py', '(and the old `conductor` name)', W2B),
@@ -59,17 +60,17 @@ ALLOWED = (
     ('docs/launcher.md', "a session under the entry's old conductor stem", W2B),
     ('docs/launcher.md', 'any entry a session under its old conductor stem runs for', W2B),
     # The old-path hook stub's map entry, and procwatch matching the old agent name.
-    ('kitlib/machinesetup/settings.py', "'conductor_session_start.py': 'claude/hooks/", W2B),
+    ('kitlib/machinesetup/settings.py', "'conductor_session_start.py': 'claude/hooks/", W1),
     ('docs/machine-setup.md', '(`conductor_session_start.py` too)', W2B),
     ('optional/procwatch/procwatch.py', '"--agent conductor" in c', W2B),
     # go-live's launcher switch line: the agent setting and marks until the rename.
     ('docs/go-live.md', '`coordinator_agent` `conductor` until the coordinator rename', W2B),
     # The go-live migration record of the rename.
     ('docs/go-live.md', 'These live names still say conductor', HISTORY),
-    ('docs/go-live.md', '- Launcher: the old `start-conductor.ps1`', HISTORY),
+    ('docs/go-live.md', '- Launcher: the old `start-conductor.ps1`', W2B),
     ('docs/go-live.md', r'(W2a, done before the switch): rename `<state_dir>\conductors.json`', HISTORY),
     ('docs/go-live.md', 'the old-path stub `hooks/conductor_session_start.py`', HISTORY),
-    ('docs/go-live.md', '- The machine config: key `conductor_start`', HISTORY),
+    ('docs/go-live.md', '- The machine config: key `conductor_start`', W2B),
     ('docs/go-live.md', '- Each repo: `.claude/conductor-profile.md`', HISTORY),
     ('docs/go-live.md', '- Installed copies: `~/.claude/agents/conductor.md`', HISTORY),
     # The launcher's port map names the PM repo's old scripts and example file.
@@ -110,12 +111,12 @@ class NoConductorTest(unittest.TestCase):
     def test_the_plugin_lists_no_conductor(self):
         with open(os.path.join(ROOT, '.claude-plugin', 'plugin.json'), encoding='utf-8') as f:
             text = f.read()
-        self.assertTrue(json.loads(text).get('agents'))
-        self.assertIsNone(WORD.search(text), 'plugin.json names a conductor')
+        agents = json.loads(text).get('agents') or []           # no `agents` key passes
+        self.assertEqual([a for a in agents if WORD.search(a)], [], 'plugin.json lists a conductor agent')
 
     def test_every_entry_has_a_reason(self):
         for f, sub, why in ALLOWED:
-            self.assertIn(why, (W2B, HISTORY), (f, sub))
+            self.assertIn(why, (W2B, W1, HISTORY), (f, sub))
             self.assertTrue(WORD.search(sub), (f, sub))
 
     def test_no_tracked_file_says_conductor_outside_the_allowlist(self):

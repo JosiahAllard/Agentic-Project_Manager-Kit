@@ -159,8 +159,20 @@ class OldStateFileElsewhere(unittest.TestCase):
 
     def test_stop_refuses_rather_than_lose_the_pm_session_id(self):
         host = FakeHost(self.h.root, [session(10, 'x-a1')])
-        with self.assertRaises(state.RenameNeeded):
+        with self.assertRaisesRegex(stop.Refused, 'rename .*conductors.json to coordinators.json'):
             stop.stop(self.h.settings, host, 'x-a1')
+        self.assertEqual(host.killed, [])
+
+    def test_stop_cli_says_refused_and_exits_2(self):
+        os.makedirs(kuser.config_dir(self.h.root))
+        with open(kuser.config_file(self.h.root), 'w', encoding='utf-8') as f:
+            json.dump({'launcher': self.h.obj}, f)
+        host = FakeHost(self.h.root, [session(10, 'x-a1')])
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = launch.main(['stop', '--name', 'x-a1'], host)
+        self.assertEqual(code, 2, err.getvalue())
+        self.assertRegex(out.getvalue(), r'REFUSED: rename .*conductors.json to coordinators.json')
         self.assertEqual(host.killed, [])
 
 

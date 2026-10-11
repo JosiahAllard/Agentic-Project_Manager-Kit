@@ -8,7 +8,7 @@ token. Refused (REFUSED: ..., nothing stopped):
   - a successor that is not running;
   - no match; several matches, unless --pid picks one; a --pid that is not one of them;
   - a match that is the PM session (its name, or the pm_session_id of coordinators.json);
-  - coordinators.json still under its old name (state.RenameNeeded), which would hide that id;
+  - coordinators.json still under its old name (state.RenameNeeded, said as Refused), which would hide that id;
   - a match that is this process's own ancestor (the caller).
 It stops the matched claude.exe, then its parent window only when that parent is powershell.exe
 whose script (plain or -EncodedCommand) carries the same name quoted as the window writes it, and
@@ -116,8 +116,8 @@ def stop(settings, host, name, successor=None, pid=0, dry_run=False, procs=None,
     coordinators = None
     try:
         coordinators = state.read_coordinators(settings)
-    except state.RenameNeeded:
-        raise                                       # never stop without the PM id because a rename was missed
+    except state.RenameNeeded as e:                 # never stop without the PM id because a rename was missed
+        raise Refused(str(e))
     except LaunchError:
         coordinators = None
     pm_id = (coordinators or {}).get('pm_session_id') if isinstance(coordinators, dict) else None
