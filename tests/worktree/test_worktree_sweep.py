@@ -170,6 +170,33 @@ class Sweep(SweepCase):
         self.assertIn('uncommitted or untracked files (1): ?? wip.txt', out)
         self.assertTrue(os.path.isdir(path))
 
+    def test_an_ignored_file_written_after_the_sweeps_second_status_read_survives(self):
+        self.fx.write('.gitignore', '*.log\n')
+        self.fx.commit('ignore', '.gitignore')
+        self.fx.git('push', '-q', 'origin', 'main')
+        path = self.landed('late')
+        late = os.path.join(path, 'run.log')
+        real, seen = sweep.sweep_status, []
+
+        def status(ctx, p):
+            got = real(ctx, p)
+            seen.append(p)
+            if len(seen) == 2:      # the read just before git: what comes now, the sweep never saw
+                self.fx.write('run.log', 'mine\n', root=path)
+            return got
+
+        with mock.patch.object(sweep, 'sweep_status', status):
+            rc, out = self.sweep(apply=True)
+        self.assertTrue(os.path.isfile(late), out)
+        self.assertEqual([os.path.normcase(p) for p in seen], [os.path.normcase(path)] * 2, out)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('ignored files that are not build output (1): !! run.log', out)
+        self.assertIn('git was NOT run', out)
+        self.assertNotIn('removed   %s' % path, out)
+        self.assertIn('summary   removed 0, would remove 0, skipped 1, failed 1', out)
+        self.assertIn(os.path.normcase(path), self.registered(), out)
+        self.assertIn('kit/late', self.branches())
+
     def test_it_runs_on_the_main_checkout_only(self):
         path = self.landed('x')
         rc, out = self.sweep(top=path)
