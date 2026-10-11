@@ -554,6 +554,69 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
         self.assertEqual(self.ended()["how"], "done")
         self.spared(daemon, plain, c)
 
+    def test_a_listed_process_gone_by_the_last_pass_is_not_said_to_run_on(self):
+        """A pid every pass lists whose process has exited (as one does between the last list
+        and the warning) is not said to run on. Here it is a process this test started and
+        waited for, its handle held so the pid stays its own."""
+        c = self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain")
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait(30)
+        real = s.job.pids
+        with mock.patch.object(s.job, "pids", lambda: list(real()) + [gone.pid]):
+            self.errored(s, p)
+        daemon, _, plain = self.shared_pids()
+        self.spared(daemon, plain, c)
+        self.assertFalse([x for x in self.said if "could not be ended" in x], self.said)
+
+    def test_a_second_kill_keeps_what_the_first_recorded(self):
+        """Ctrl+C during the cancel's passes, then the release's end_tree judges again. A daemon
+        the first judgement stopped is gone by the second, so only the first says it: the record
+        keeps it. (It is stood in for by a result added to the first judgement's; pid 4, the
+        System process, is never in a job, so no pass touches it.)"""
+        c = self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain", "stay")
+        daemon, _, plain = self.shared_pids()
+        real_stop, judged = rm.daemons.stop, []
+        first = (4, "kotlin-daemon", "killed")
+
+        def stop(found, contains):
+            judged.append(found)
+            return real_stop(found, contains) + ([first] if len(judged) == 1 else [])
+
+        def interrupted(pid, ct, code=1):   # the first pass's first kill: Ctrl+C
+            raise KeyboardInterrupt
+        self.assertTrue(rm.request_stop(self.store, s.id, "test"))
+        with mock.patch.object(rm.daemons, "stop", stop):
+            with mock.patch.object(process, "terminate_verified", interrupted):
+                with self.assertRaises(KeyboardInterrupt):
+                    s.wait(p)
+            s.release(130, "interrupted")
+        self.assertEqual(len(judged), 2, "the release did not judge the daemons again")
+        self.assertIn(first, self.results(), "the second kill dropped what the first recorded")
+        self.assertTrue(self.wait_gone(plain, self.recorded()[plain]),
+                        "a plain leftover outlived the kill")
+        self.connected(c)
+        self.assertTrue(process.alive(daemon, self.recorded()[daemon]),
+                        "the kill path ended the daemon another job's client uses")
+        why = "left: pid %d serves pid %d, which is outside the run's job" % (daemon, c.pid)
+        self.assertIn((daemon, "gradle-daemon", why), self.results())
+
+    def test_a_left_daemon_whose_creation_time_cannot_be_read_is_spared_with_its_tree(self):
+        """In the passes, the left daemon cannot be opened to read its creation time (as for a
+        process this user may not query), yet it is not surely gone: it and its worker are
+        spared, erring toward the client building on it."""
+        c = self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain")
+        daemon, _, plain = self.shared_pids()
+        real_ct = process.proc_ctime
+
+        def unreadable(pid):
+            return None if pid == daemon and self.judged() else real_ct(pid)
+        with mock.patch.object(process, "proc_ctime", unreadable):
+            self.errored(s, p)
+        self.spared(daemon, plain, c)
+
     def test_an_errored_gate_ends_a_daemon_only_its_own_client_uses(self):
         """Control: a daemon serving the run's own client dies on the kill path as it always
         did, under machine_lock.daemons "leave" too (the kill path does not read it)."""
