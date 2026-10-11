@@ -33,6 +33,7 @@
     ["knowledge/**", ["knowledge"]],
     ["optional/**", ["optional", "knowledge", "skills"]],
     ["tests/optional/**", ["knowledge"]],
+    ["tests/**", ["tooldeps"]],
     ["reserve_ui.pyw", ["lockui"]],
     ["tools/*.py", ["skills"]],
     ["kitlib/**", ["skills"]]
