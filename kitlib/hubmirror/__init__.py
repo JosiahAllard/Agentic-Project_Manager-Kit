@@ -15,18 +15,21 @@ pm_start.hub_mirror (an absolute folder) for an install without a data branch.
   restore  the mirror -> ArtifactData batch files of `set` entries for a fresh copy
   set_url  pm_start.hub_urls[<account>] in the machine config
 
-The JSON ArtifactData writes under `out_dir` has not been seen: both a wrapped document (an
-object with `data` plus `id` and/or `version`) and the bare fields are read, and `id`/`version`
-never become fields (fields_of). Nothing here prints, parses arguments or exits.
+The JSON ArtifactData writes under `out_dir` has not been seen: both a wrapped document (a `data`
+object plus only WRAPPER_KEYS) and the bare fields are read, a `data` object beside any other key
+is refused, and `id`/`version` never become fields (fields_of). Nothing here prints, parses
+arguments or exits.
 """
 import collections
 import json
 import os
+import posixpath
 import re
 import tempfile
 
 from kitlib import commit as kcommit
 from kitlib import config as kconfig
+from kitlib import pmdata
 from kitlib.config import user
 from kitlib.config.types import parse_json
 from kitlib.git import cmd, refs, repo
@@ -42,10 +45,8 @@ REGENERATED = (
     ('usage', 'launch.py usage, posted as at session start'),
     ('agents', 'repost each agent definition'),
 )
-# A wrapped out_dir document: `data` plus only these keys, at least one of id and version.
+# A wrapped out_dir document: a `data` object plus only these keys (fields_of).
 WRAPPER_KEYS = frozenset(('data', 'id', 'version', 'doc_id', 'collection'))
-# Collections whose documents carry a real `id` field (the page writes it): kept in fields.
-KEEPS_ID = frozenset(('to_pm',))
 BATCH_ENTRIES = 50                  # ArtifactData batch: at most 50 entries ...
 BATCH_BYTES = 1024 * 1024           # ... and 1 MiB
 BATCH_BUDGET = BATCH_BYTES - 64 * 1024   # margin: how the 1 MiB is counted has not been seen
@@ -53,7 +54,7 @@ PUSH_TIMEOUT = 120                  # seconds
 _LABEL = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]*$')
 
 Change = collections.namedtuple('Change', 'op rel')          # op: added, changed, deleted
-CommitPlan = collections.namedtuple('CommitPlan', 'root rel branch trailer remote env')
+CommitPlan = collections.namedtuple('CommitPlan', 'root rel branch model remote env')
 
 
 class Refused(Exception):
@@ -81,20 +82,29 @@ def mirror_dir(pm_data, pm_start):
 
 
 def fields_of(collection, obj):
-    """The document's own fields from one ArtifactData out_dir file or one mirror file. A wrapped
-    document (`data` an object, every other key in WRAPPER_KEYS, `id` or `version` among them)
-    gives its `data`. Otherwise the object is the fields; `version` is dropped, and `id` too
-    except in KEEPS_ID collections, whose documents hold a real `id`."""
+    """The document's own fields from one ArtifactData out_dir file or one mirror file. An object
+    whose `data` is an object and whose other keys are all in WRAPPER_KEYS (none at all included)
+    is a wrapped document and gives its `data`. An object with a `data` object beside any other
+    key is refused: it is either a wrapper with keys this module does not know or a document
+    with a `data` field, and mirroring the wrong one would restore nested garbage (no hub
+    collection has a `data` field, docs/action-hub.md). Otherwise the object is the fields.
+    `id` and `version` are never kept: a document's id is its file name (the page's to_pm writes
+    store no `id` field either)."""
     if not isinstance(obj, dict):
         raise Refused('a %s document is not a JSON object' % collection)
-    keys = set(obj)
-    if isinstance(obj.get('data'), dict) and keys <= WRAPPER_KEYS and keys & {'id', 'version'}:
+    if isinstance(obj.get('data'), dict):
+        extra = sorted(set(obj) - WRAPPER_KEYS)
+        if extra:
+            raise Refused(
+                'a %s document has a `data` object beside %s: cannot tell a wrapped ArtifactData '
+                'document from one with a `data` field, so nothing was saved. If these are '
+                "ArtifactData's own keys, add them to kitlib.hubmirror.WRAPPER_KEYS"
+                % (collection, ', '.join(extra)))
         out = dict(obj['data'])
     else:
         out = dict(obj)
     out.pop('version', None)
-    if collection not in KEEPS_ID:
-        out.pop('id', None)
+    out.pop('id', None)
     return out
 
 
@@ -210,36 +220,63 @@ def batch_paths(out, n):
     return [os.path.abspath(out)] + ['%s-%d%s' % (stem, i, ext or '.json') for i in range(2, n + 1)]
 
 
+def _is_batch_file(path):
+    """True when `path` is a file restore wrote: a JSON list of `set` entries with a file_path."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            entries = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return isinstance(entries, list) and bool(entries) and all(
+        isinstance(e, dict) and e.get('op') == 'set' and 'file_path' in e for e in entries)
+
+
 def restore(mirror, out):
     """Write ArtifactData batch files that `set` every mirrored document in a fresh copy (no
     if_version: a new copy holds no documents). Each document's fields go to their own file in
     <out without extension>.docs/<collection>/<doc_id>.json, named by the entry's file_path.
     Batches hold at most BATCH_ENTRIES entries and BATCH_BUDGET bytes (entries plus document
-    files). Returns [(batch path, entry count)]; an empty mirror writes nothing and returns []."""
+    files). Returns [(batch path, entry count)]; an empty mirror writes nothing and returns [].
+    Every document is sized before anything is written; numbered batch files an earlier, longer
+    run left beyond the last one written are removed, so no stale batch is sent. An OSError
+    writing is Refused."""
     docs = mirror_docs(mirror)
     if not docs:
         return []
     docs_dir = os.path.splitext(os.path.abspath(out))[0] + '.docs'
-    batches, cur, size = [], [], 2
+    batches, cur, size, bodies = [], [], 2, []
     for coll, doc_id, fields in docs:
         body = json.dumps(fields, ensure_ascii=False)
         path = os.path.join(docs_dir, coll, doc_id + '.json')
-        _write_text(path, body)
         entry = {'op': 'set', 'collection': coll, 'doc_id': doc_id,
                  'file_path': path.replace(os.sep, '/')}
         cost = len(json.dumps(entry).encode('utf-8')) + 2 + len(body.encode('utf-8'))
         if cost > BATCH_BUDGET:
-            raise Refused('%s/%s is %d bytes, over one batch (%d)' % (coll, doc_id, cost, BATCH_BUDGET))
+            raise Refused('%s/%s is %d bytes, over one batch (%d); nothing was written'
+                          % (coll, doc_id, cost, BATCH_BUDGET))
         if cur and (len(cur) >= BATCH_ENTRIES or size + cost > BATCH_BUDGET):
             batches.append(cur)
             cur, size = [], 2
         cur.append(entry)
+        bodies.append((path, body))
         size += cost
     batches.append(cur)
     written = []
-    for path, entries in zip(batch_paths(out, len(batches)), batches):
-        _write_text(path, json.dumps(entries, indent=1) + '\n')
-        written.append((path, len(entries)))
+    try:
+        for path, body in bodies:
+            _write_text(path, body)
+        for path, entries in zip(batch_paths(out, len(batches)), batches):
+            _write_text(path, json.dumps(entries, indent=1) + '\n')
+            written.append((path, len(entries)))
+        n = len(batches) + 1
+        while True:
+            stale = batch_paths(out, n)[-1]
+            if not _is_batch_file(stale):
+                break
+            os.remove(stale)
+            n += 1
+    except OSError as e:
+        raise Refused('cannot write the restore files: %s' % e)
     return written
 
 
@@ -248,8 +285,12 @@ def restore(mirror, out):
 def prepare_commit(mirror, model=None, environ=None, remote=None, env=None):
     """A CommitPlan for the mirror, or Refused: run before save writes anything. Needs the model
     for the Co-Authored-By trailer (model, else kitlib.commit.MODEL_ENV), the mirror inside a git
-    work tree, and that work tree on its `.kit.json` main branch (the data worktree's is the data
-    branch). `remote` is where push goes (pm_data.remote); None: the work tree's repo.remote."""
+    work tree that is not a main checkout (kitlib.commit refuses one) and is on its `.kit.json`
+    main branch (the data worktree's is the data branch), and refuses a work tree of the kit
+    itself (_kit_checkout_error): the hub holds the owner's private to-dos and answers, and the
+    kit's main is public. `remote` is where push goes (pm_data.remote); None: the data branch's
+    recorded remote in the kit's repository, else the work tree's repo.remote. `env` is the git
+    environment for status and push (tests); the commit itself runs in this process's."""
     name = model if model is not None else (os.environ if environ is None else environ).get(
         kcommit.MODEL_ENV, '')
     if not (name or '').strip():
@@ -274,16 +315,52 @@ def prepare_commit(mirror, model=None, environ=None, remote=None, env=None):
         raise Refused('cannot read the branch of %s: %s' % (root, why))
     if not branch:
         raise Refused('HEAD is detached in %s' % root)
+    data_remote = _kit_checkout_error(root, branch, remote)     # first: the reason that matters most
     if branch != sets['main_branch']:
         raise Refused('%s is on %r, not its main branch %s' % (root, branch, sets['main_branch']))
     rel = os.path.relpath(os.path.abspath(mirror), root).replace('\\', '/')
     if rel == '..' or rel.startswith('../'):
         raise Refused('the hub mirror %s is outside %s' % (mirror, root))
+    err = kcommit.main_checkout_error(False, root, sets['main_branch'], sets['rule_pointer'])
+    if err:
+        raise Refused('the hub mirror cannot be committed where it is: %s' % err)
     try:
-        trailer = kcommit.coauthor(name, sets['coauthor_families'])
+        kcommit.coauthor(name, sets['coauthor_families'])
     except ValueError as e:
         raise Refused(str(e))
-    return CommitPlan(root, rel, branch, trailer, remote or cfg.remote, env)
+    return CommitPlan(root, rel, branch, name, remote or data_remote or cfg.remote, env)
+
+
+def _kit_checkout_error(root, branch, remote):
+    """Refused when the work tree `root` is the kit's own: a checkout holding the kit's code (any
+    clone), or a work tree of the repository this kit runs from that is not on the data branch
+    recorded in its kit-pm-data.json (docs/pm-data-branch.md "Layout"), or one pushing to another
+    remote than the recorded one. Returns the recorded remote for the data branch, else None."""
+    if os.path.isfile(os.path.join(root, 'kitlib', 'hubmirror', '__init__.py')):
+        raise Refused('the hub mirror is in %s, a checkout of the kit itself: the hub holds the '
+                      "owner's private to-dos and answers and the kit is public; mirror into the "
+                      'PM data worktree (pm_data) or a private repository' % root)
+    same, why = repo.same_repository(root, kcommit.KIT_ROOT)
+    if same is None:
+        kit_common, _ = repo.common_dir(kcommit.KIT_ROOT)
+        if kit_common is not None:      # the kit is in git; the mirror's repository could not be told
+            raise Refused('cannot tell whether %s is the kit\'s repository: %s' % (root, why))
+        return None
+    if not same:
+        return None
+    try:
+        rec = pmdata.locate(root)
+    except pmdata.PmDataError as e:
+        raise Refused(str(e))
+    if rec is None or branch != rec.branch:
+        raise Refused('the hub mirror is in %s, a work tree of the kit\'s repository on %r, not its '
+                      'data branch%s: committing would put the owner\'s private hub data in the '
+                      "kit's history" % (root, branch, ' %s' % rec.branch if rec else
+                                         ' (no kit-pm-data.json: run pm_data.py init)'))
+    if remote is not None and remote != rec.remote:
+        raise Refused('the data branch %s pushes to %s (kit-pm-data.json), not %s'
+                      % (rec.branch, rec.remote, remote))
+    return rec.remote
 
 
 def _status_paths(plan):
@@ -307,23 +384,24 @@ def _status_paths(plan):
 
 
 def commit(plan, changes):
-    """Commit every mirror path that differs from HEAD (this save's changes and any an earlier
-    save left uncommitted), by explicit path: `git add -A -- <paths>` then `git commit -- <paths>`,
-    so nothing else staged is swept in. Returns lines; [] when there is nothing to commit."""
-    paths = _status_paths(plan)
+    """Commit this save's changed mirror paths that differ from HEAD through kitlib.commit (one
+    path each, named explicitly; its main-checkout refusal, staged machine-path scan, refusal of
+    anything else already staged, and trailer). Mirror paths an earlier save left uncommitted are
+    not committed; a line counts them. Returns lines; [] when nothing of this save differs."""
+    pending = {p.lower(): p for p in _status_paths(plan)}
+    mine = [posixpath.normpath(posixpath.join(plan.rel, c.rel)) for c in changes]
+    paths = sorted(p for p in mine if p.lower() in pending)
+    left = sorted(set(pending) - {p.lower() for p in paths})
+    lines = (['%d mirror path(s) an earlier save left uncommitted are not in this commit'
+              % len(left)] if left else [])
     if not paths:
-        return []
-    _, why = cmd.run(['add', '-A', '--'] + paths, plan.root, env=plan.env)
-    if why is None:
-        subject = 'hub mirror: save %d document change(s)' % (len(changes) or len(paths))
-        _, why = cmd.run(['commit', '-q', '-m', '%s\n\n%s\n' % (subject, plan.trailer), '--'] + paths,
-                         plan.root, env=plan.env)
-        if why is not None:
-            cmd.run(['reset', '-q', '--'] + paths, plan.root, env=plan.env)
-    if why is not None:
-        raise Refused('git failed: %s\nthe mirror is written but NOT committed (left unstaged).' % why)
-    sha, _ = cmd.run_text(['rev-parse', '--short', 'HEAD'], plan.root, env=plan.env)
-    return ['commit %s (%d path(s))' % (sha, len(paths))]
+        return lines
+    subject = 'hub mirror: save %d document change(s)' % len(paths)
+    out = kcommit.commit(kcommit.request(plan.root, subject, paths, model=plan.model,
+                                         cwd=plan.root))
+    if out.code != kcommit.OK:
+        raise Refused('%s\nthe mirror is written but NOT committed.' % '\n'.join(out.lines))
+    return out.lines + lines
 
 
 def push(plan):
@@ -341,10 +419,12 @@ def push(plan):
 
 def set_url(label, url, home=None):
     """Set pm_start.hub_urls[label] = url in the machine config, keeping every other key; the file
-    is replaced whole. Returns (config path, the URL it replaced or None). It writes what
+    is replaced whole. Returns (config path, the URL it replaced or None, notes): a note when this
+    is hub_urls' first entry while pm_start.hub_url holds another URL, which hub() stops reading
+    then (it is not moved: which account published it is not known here). It writes what
     kitlib.config.user.writable_file names and refuses what that refuses (ConfigError), and never
-    rewrites a file that does not check (user_config). Refused for a bad label or URL, or a
-    pm_start or hub_urls that is not an object."""
+    rewrites a file that does not check (user_config). Refused for a bad label or URL, a pm_start
+    or hub_urls that is not an object, or a write that fails (the file is left as it was)."""
     if not isinstance(label, str) or not _LABEL.match(label):
         raise Refused('the account label %r must be letters, digits, - or _ (an account number or '
                       '"default")' % (label,))
@@ -363,22 +443,31 @@ def set_url(label, url, home=None):
     urls = pm.setdefault('hub_urls', {})
     if not isinstance(urls, dict):
         raise Refused('pm_start.hub_urls in %s is not an object' % path)
+    notes = []
+    old = pm.get('hub_url')
+    if not urls and isinstance(old, str) and old.strip() and old != url:
+        notes.append('pm_start.hub_url %s is no longer read now that hub_urls has an entry: the '
+                     'other accounts that used it get the publish line at session start; if that '
+                     'copy is theirs, record it: set-url --account <its label> %s' % (old, old))
     was = urls.get(label)
     urls[label] = url
     folder = os.path.dirname(path)
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=user.FILE_NAME + '.', suffix='.tmp', dir=folder)
+    tmp = None
     try:
+        os.makedirs(folder, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=user.FILE_NAME + '.', suffix='.tmp', dir=folder)
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
             f.write(json.dumps(data, indent=2) + '\n')
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
         tmp = None
+    except OSError as e:
+        raise Refused('cannot write %s: %s; it is unchanged' % (path, e))
     finally:
         if tmp is not None:
             try:
                 os.remove(tmp)
             except OSError:
                 pass
-    return path, was
+    return path, was, notes

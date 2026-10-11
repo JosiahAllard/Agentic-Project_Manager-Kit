@@ -203,7 +203,8 @@ def current_account(machine, environ=None, home=None):
     h = home or os.path.expanduser('~')
     cur = env.get(CONFIG_DIR_ENV) or ''
     here = _same_folder_key(cur if cur.strip() else '~/.claude', h)
-    for n in sorted(accts, key=str):
+    # Numbered labels in number order ("2" before "10"), as the launcher lists them; others after.
+    for n in sorted(accts, key=lambda k: (0, int(k), '') if str(k).isdigit() else (1, 0, str(k))):
         dirs = accts[n]
         if not isinstance(dirs, list):
             continue

@@ -4,10 +4,11 @@
   hub_mirror.py save --from DIR [--commit [--push]] [--model NAME]
       DIR holds <collection>/<doc_id>.json as ArtifactData's out_dir writes them. Each mirrored
       collection present in DIR replaces its mirror copy (added, changed, deleted); a collection
-      absent from DIR is left alone. --commit commits every changed mirror path by explicit path
-      on the mirror's branch (it must be that work tree's main branch: the data branch); --push
-      then pushes that branch to pm_data.remote with an explicit refspec. Prints one line per
-      change. The trailer names --model, else $CLAUDE_AGENT_MODEL.
+      absent from DIR is left alone. --commit commits this save's changed mirror paths through
+      kitlib.commit (tools/commit.py's checks) on the mirror's branch: a linked work tree on its
+      main branch (the data branch), never a main checkout or a work tree of the kit itself;
+      --push then pushes that branch to pm_data.remote with an explicit refspec. Prints one line
+      per change. The trailer names --model, else $CLAUDE_AGENT_MODEL.
   hub_mirror.py restore --out PATH
       writes ArtifactData batch files that `set` every mirrored document in a new copy of the hub;
       prints each file and its entry count, or that the mirror is empty (nothing to send).
@@ -73,9 +74,11 @@ def main(argv=None):
             print(pmstart.current_account())
             return 0
         if a.verb == 'set-url':
-            path, was = hubmirror.set_url(a.account, a.url)
+            path, was, notes = hubmirror.set_url(a.account, a.url)
             print('pm_start.hub_urls[%s] = %s in %s%s' % (a.account, a.url, path,
                                                           ' (was %s)' % was if was else ''))
+            for n in notes:
+                print('NOTE: %s' % n)
             return 0
         data, start = _settings()
         mirror = hubmirror.mirror_dir(data, start)

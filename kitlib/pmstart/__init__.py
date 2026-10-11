@@ -71,6 +71,9 @@ def eng_review(cfg):
 
 
 HUB_SOURCE = "claude/hub/action-hub.html"
+# tools/hub_mirror.py in this kit, absolute: the PM session's directory is not the kit.
+HUB_MIRROR_TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "tools", "hub_mirror.py")
 # The capabilities docs/action-hub.md "For the PM" declares on every publish of the hub page.
 HUB_CAPABILITIES = ('{db: {rules: [{path: "parked", read: "view", write: "admin"}]}, '
                     'user: {}, comments: {}}')
@@ -132,11 +135,12 @@ def hub(cfg, account=None):
         label = (account or current_account)()
     return ["hub: no Action Hub copy is recorded for account %s: publish the kit's page %s with "
             "the Artifact tool declaring capabilities %s (docs/action-hub.md, For the PM) and pin "
-            "it; record its URL with `python tools/hub_mirror.py set-url --account %s <url>`; fill "
-            "it from the mirror with `python tools/hub_mirror.py restore --out <file>` and send "
+            "it; record its URL with `python \"%s\" set-url --account %s <url>`; fill "
+            "it from the mirror with `python \"%s\" restore --out <file>` and send "
             "every batch file it names with ArtifactData (an empty mirror gives none); refill the "
             "regenerated collections (%s); then ArtifactComments watch on the URL and process the hub"
-            % (label, src, HUB_CAPABILITIES, label, hubmirror.regenerate_text())]
+            % (label, src, HUB_CAPABILITIES, HUB_MIRROR_TOOL, label, HUB_MIRROR_TOOL,
+               hubmirror.regenerate_text())]
 
 
 def watcher(cfg, procs):

@@ -7,6 +7,7 @@ import unittest
 
 from kitlib import hubmirror, pmstart
 
+KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 SRC = "claude/hub/action-hub.html"
 FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
@@ -43,8 +44,10 @@ class HubAccountsTest(unittest.TestCase):
         self.assertIn("publish the kit's page %s" % SRC, s)
         self.assertIn(pmstart.HUB_CAPABILITIES, s)
         self.assertIn("pin it", s)
-        self.assertIn("python tools/hub_mirror.py set-url --account 3 <url>", s)
-        self.assertIn("python tools/hub_mirror.py restore --out <file>", s)
+        tool = os.path.join(KIT, "tools", "hub_mirror.py")        # absolute: the PM's cwd is not the kit
+        self.assertTrue(os.path.isfile(tool))
+        self.assertIn('python "%s" set-url --account 3 <url>' % tool, s)
+        self.assertIn('python "%s" restore --out <file>' % tool, s)
         self.assertIn(hubmirror.regenerate_text(), s)
         self.assertIn("ArtifactComments watch", s)
 

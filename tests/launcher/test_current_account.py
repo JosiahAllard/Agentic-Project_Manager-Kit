@@ -44,6 +44,10 @@ class CurrentAccountTest(unittest.TestCase):
                     {'launcher': {'accounts': ['~/.claude']}}):
             self.assertEqual(self.label(cfg, {}), accounts.DEFAULT_LABEL, msg=repr(cfg))
 
+    def test_two_accounts_listing_one_folder_the_lower_number_wins(self):
+        cfg = machine({'10': ['~/.claude'], 'work': ['~/.claude'], '2': ['~/.claude']})
+        self.assertEqual(self.label(cfg, {}), '2')          # not "10": numbers compare as numbers
+
     def test_a_malformed_folder_list_is_skipped_not_raised(self):
         cfg = machine({'1': '~/.claude', '2': [None, 5, '', '~/.claude']})
         self.assertEqual(self.label(cfg, {}), '2')
