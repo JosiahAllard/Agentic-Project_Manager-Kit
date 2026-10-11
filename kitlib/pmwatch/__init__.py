@@ -7,7 +7,6 @@ launcher/pm_watch.py at 95f7262. Transcript reading is host-specific and lives i
 import json
 import os
 import re
-import subprocess
 import time
 
 from kitlib.config import user as kuser
@@ -164,17 +163,13 @@ def launcher_configured(home=None):
         return False
 
 
-def usage(script=None, report=None):
-    """Every account's usage. No script: read in this process (kitlib.launcher.usage, from the
-    launcher settings of the machine config); else the lines a PowerShell script prints."""
-    if not script:
-        if report is None:
-            from kitlib.launcher import settings as launcher_settings, usage as launcher_usage
-            report = lambda: launcher_usage.report(launcher_settings.load())
-        return parse_usage("\n".join(report()))
-    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
-                       capture_output=True, text=True, timeout=120)
-    return parse_usage(r.stdout)
+def usage(report=None):
+    """Every account's usage, read in this process (kitlib.launcher.usage, from the launcher
+    settings of the machine config). `report` replaces that reader (a callable giving the lines)."""
+    if report is None:
+        from kitlib.launcher import settings as launcher_settings, usage as launcher_usage
+        report = lambda: launcher_usage.report(launcher_settings.load())
+    return parse_usage("\n".join(report()))
 
 
 def band(v, bands):
