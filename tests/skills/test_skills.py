@@ -19,6 +19,8 @@ REPO_LOCAL_SUFFIX = "-train-eval"     # the training-and-evaluation workflow ski
 # kit-only paths, written for the plugin's root (substituted at load); and repo-relative kit paths
 PLUGIN_RX = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([\w./-]*[\w-])")
 REPO_RX = re.compile(r"(?<![\w/}.~-])((?:tools|kitlib|optional)/[\w./-]+?\.(?:py|json))")
+DOC_RX = re.compile(r"(?<![\w/}.~-])docs/([\w-]+\.md)")
+TEMPLATE_RX = re.compile(r"(?<![\w/}.~-])templates/[\w./-]+")
 # files a repo supplies itself, not the kit (the skills say so beside each)
 REPO_FILES = {"tools/gate.json"}
 
@@ -66,6 +68,20 @@ class SkillFilesTest(unittest.TestCase):
                 self.assertTrue(rel in REPO_FILES or (rel.startswith("tools/") and
                                                       rel[len("tools/"):-len(".py")] in SHARED),
                                 f"{p.parent.name}/{p.name} names {rel}: not a stub tool; write ${{CLAUDE_PLUGIN_ROOT}}/{rel}")
+
+    def test_no_repo_relative_kit_doc_or_template(self):
+        """A kit doc (`docs/<name>.md` that exists in the kit's docs/) or a `templates/` file is
+        `${CLAUDE_PLUGIN_ROOT}/...`, never repo-relative, and no text says "kit checkout's"."""
+        for p in _shipped_text_files():
+            if GODOT_SKILL in p.parents:     # a repo-local template, not loaded as a plugin
+                continue
+            text = p.read_text(encoding="utf-8")
+            where = f"{p.parent.name}/{p.name}"
+            for name in DOC_RX.findall(text):
+                self.assertFalse((ROOT / "docs" / name).exists(),
+                                 f"{where} names docs/{name}: a kit doc; write ${{CLAUDE_PLUGIN_ROOT}}/docs/{name}")
+            self.assertEqual(TEMPLATE_RX.findall(text), [], f"{where}: a kit template; write ${{CLAUDE_PLUGIN_ROOT}}/templates/...")
+            self.assertNotIn("kit checkout's", text, where)
 
 
 if __name__ == "__main__":

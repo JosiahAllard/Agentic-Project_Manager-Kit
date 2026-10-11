@@ -48,7 +48,8 @@ Harness traps (Plan cannot write, output files are no rescue path): skill `subag
 
 Read `roster.md` in this skill's folder (beside this file): the agent types and what each is for,
 the cheap/strong split, the coding ladder, model and effort rules, `deep-worker` requests, the
-`consultant`, `researcher` and pass/fail-check routing.
+`consultant`, `researcher` and pass/fail-check routing. The kit's roster doc (the pinned models) is
+`${CLAUDE_PLUGIN_ROOT}/docs/ROSTER.md`.
 
 ## Creative dispatches
 
