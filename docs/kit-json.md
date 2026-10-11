@@ -97,7 +97,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `preflight.report_hooks` (list of "module:function", default []): module:function report hooks
 - `preflight.traps` (string): where the traps are written down
 - `preflight.udp_ports` (list of 2 int from 0 to 65535): [low, high] ports checked free
-- `redfirst.runners` (list of {glob, kind, pythonpath, dir, project, csproj, args}, default [{"glob": "tests/*test_*.py", "kind": "python"}]): which runner takes a test file, first match wins
+- `redfirst.runners` (list of {glob, kind, pythonpath, dir, project, csproj, args, lock}, default [{"glob": "tests/*test_*.py", "kind": "python"}]): which runner takes a test file, first match wins; a runner's lock is the kinds-table kind the run books around its command (unset: the kind of the heavy-list entry the command matches)
 - `redfirst.hold_wait` (int >= 0, default 60): seconds a held throwaway tree is re-checked before it is left
 - `review_pack.coauthor` (bool, default false): list the branch's commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks
 - `ruling_cites.repo` (string): the ledger repo column cited
