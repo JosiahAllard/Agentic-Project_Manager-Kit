@@ -279,6 +279,14 @@ class CurrentLinesTest(Base):
         r.git('push', '-q', 'origin', 'main')
         return r.head()
 
+    def test_a_migrated_folder_not_yet_refreshed_is_not_a_failure(self):
+        (two,) = self.k.folders('.claude-two')
+        self.k.seed_migrated([two])
+        _root, sha = P.ensure_export(self.k.kit, self.s, now=NOW, own=ME, alive=never_alive)
+        lines = P.current_lines(self.k.kit, self.s, folders=[two])
+        self.assertEqual(lines, ['pm-kit plugin in %s: not refreshed to %s: %s'
+                                 % (two, sha[:12], P.REFRESH_CMD)])
+
     def test_unreadable_state(self):
         os.makedirs(self.k.root)
         with open(os.path.join(self.k.root, P.STATE), 'w', encoding='utf-8') as fh:
@@ -352,6 +360,17 @@ class ExportStepsTest(Base):
         self.assertEqual(os.path.getmtime(os.path.join(root, P.STATE)), before)
         self.assertFalse(os.path.exists(os.path.join(root, P.PIDFILE)))
 
+    def test_ensure_export_refuses_an_unreadable_state_and_writes_nothing(self):
+        os.makedirs(self.k.root)
+        path = os.path.join(self.k.root, P.STATE)
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write('{"folders": {"x": {"migrated": true}')
+        with self.assertRaises(P.StateError):
+            P.ensure_export(self.k.kit, self.s, now=NOW, own=ME, alive=never_alive)
+        with open(path, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), '{"folders": {"x": {"migrated": true}')
+        self.assertEqual(sorted(os.listdir(self.k.root)), [P.STATE])
+
     def test_a_leftover_tmp_folder_is_replaced_by_a_whole_export(self):
         sha = self.remote_sha()
         tmp = os.path.join(self.k.root, sha[:12] + '.tmp')
@@ -390,16 +409,33 @@ class PruneRulesTest(Base):
 
     def test_an_old_but_young_export_survives(self):
         names = ['%012x' % i for i in range(1, 8)]
-        dates = ['2026-09-01T00:00:00', '2026-09-02T00:00:00', '2026-10-05T00:00:00',
+        dates = ['2026-09-01T00:00:00', '2026-09-02T00:00:00', '2026-09-03T00:00:00',
                  '2026-10-06T00:00:00', '2026-10-07T00:00:00', '2026-10-08T00:00:00', 'not a date']
         for n, at in zip(names, dates):
             self.make(n, at)
         P.write_marketplace(self.k.root, names[0])
         removed, failed = P.prune(self.k.root, now=NOW)
         self.assertEqual(failed, [])
-        self.assertEqual([os.path.basename(r) for r in removed], [names[1]])
-        self.assertTrue(os.path.isdir(os.path.join(self.k.root, names[2])))   # young, not in the 3 newest
+        self.assertEqual([os.path.basename(r) for r in removed], [names[1]])   # replaced 09-03
+        self.assertTrue(os.path.isdir(os.path.join(self.k.root, names[2])))   # replaced 10-06, not in the 3 newest
         self.assertTrue(os.path.isdir(os.path.join(self.k.root, names[6])))   # date unreadable
+
+    def test_an_old_export_current_until_recently_survives(self):
+        # 001 was current from 08-01 to 09-01 and is long replaced; 002 was current for weeks,
+        # until three quick landings on 10-09, 10-10 and 10-11 replaced it two days ago
+        names = ['%012x' % i for i in range(1, 6)]
+        dates = ['2026-08-01T00:00:00', '2026-09-01T00:00:00', '2026-10-09T00:00:00',
+                 '2026-10-10T00:00:00', '2026-10-11T00:00:00']
+        for n, at in zip(names, dates):
+            self.make(n, at)
+        P.write_marketplace(self.k.root, names[4])
+        removed, failed = P.prune(self.k.root, now=NOW)
+        self.assertEqual(failed, [])
+        self.assertEqual([os.path.basename(r) for r in removed], [names[0]])
+        self.assertTrue(os.path.isdir(os.path.join(self.k.root, names[1])))
+        P.write_marketplace(self.k.root, names[1])        # the current one is kept however old
+        removed, _f = P.prune(self.k.root, now=NOW + datetime.timedelta(days=30))
+        self.assertEqual(sorted(os.listdir(self.k.root)), sorted(['.claude-plugin'] + names[1:]))
 
     def test_stale_tmp_folders_go_and_the_current_ones_stay(self):
         cur = self.make('%012x' % 9, '2026-09-01T00:00:00')
