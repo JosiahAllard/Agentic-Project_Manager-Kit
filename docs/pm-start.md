@@ -7,7 +7,11 @@ PM. It always exits 0; a failed check becomes one "could not check X: reason" li
 Checks: standing rules, eng_review flags, the hub (republish it to arm the alert), `pm_watch.py`
 running, the newest handoff file, reminders due, and coordinators not running (no `claude.exe`
 with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/lookup.py`); each such line names the
-`launch.py start --session <key>` that starts it (docs/launcher.md).
+`launch.py start --session <key> --account <n>` that starts it (docs/launcher.md). `<n>` is the account
+this PM session runs on (`kitlib.pmstart` `current_account`), not the entry's stored one, so the PM
+launches every coordinator, the kit's included, from whatever account it started on; when that
+account cannot be identified the line says `--account auto` (pick-account's choice). Tests:
+`tests/pmstart/test_pmstart.py` `LivenessTest`.
 
 ## Kit currency (`kit_sync`)
 

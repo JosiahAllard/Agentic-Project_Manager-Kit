@@ -203,7 +203,7 @@ def live_session_names(procs):
     return names
 
 
-def liveness(cfg, procs, read=None):
+def liveness(cfg, procs, read=None, account=None):
     path = cfg.get("sessions_file")
     if not path:
         raise KeyError("sessions_file not configured")
@@ -211,13 +211,19 @@ def liveness(cfg, procs, read=None):
         read = _read
     sessions = json.loads(read(path))
     alive = live_session_names(procs)
+    label = None
     out = []
     for key, e in sessions.items():
         if not isinstance(e, dict) or not e.get("name") or e.get("autostart") is False:
             continue
         if e["name"] not in alive:  # exact, case-sensitive, as kitlib.launcher.lookup.find_exact
-            out.append("coordinator %s (%s) is not running: launch.py start --session %s"
-                       % (key, e["name"], key))
+            if label is None:     # read once, and only when something is down
+                from kitlib.launcher import accounts
+                label = (account or current_account)()
+                # an unidentified account is left to the launcher's pick-account
+                label = "auto" if label == accounts.DEFAULT_LABEL else label
+            out.append("coordinator %s (%s) is not running: launch.py start --session %s --account %s"
+                       % (key, e["name"], key, label))
     return out
 
 
