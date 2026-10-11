@@ -100,7 +100,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/kit_tests.py` | run the kit test suite, whole or selected (`docs/test-tools.md`) | kw: kit_tests, tests
 - `tools/ledger_refs.py` | where each ruling id is cited (`docs/ledger.md`) | kw: ledger_refs
 - `tools/machine_paths.py` | refuse a hard-coded machine path (`docs/commit.md`) | kw: machine_paths
-- `tools/machine_setup.py` | switch Claude config folders to this kit (`docs/machine-setup.md`) | kw: machine_setup
+- `tools/machine_setup.py` | switch Claude config folders to this kit, or set up a fresh machine (`docs/machine-setup.md`) | kw: machine_setup, fresh
 - `tools/plugin_refresh.py` | export pushed kit main and refresh the plugin in every account folder (`docs/plugin-source.md`) | kw: plugin_refresh, plugin
 - `tools/pieces.py` | the path-to-piece table (`docs/repo-checks.md`) | kw: pieces
 - `tools/pm_data.py` | make or re-link the PM-data branch (`docs/pm-data-branch.md`) | kw: pm_data
