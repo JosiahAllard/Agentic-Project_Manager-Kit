@@ -22,6 +22,7 @@ would give it; a stub that runs another kit location is stale.
 Exit codes: OK 0; PROBLEMS 1 (a file kept, missing, stale or not a stub, each named); CONFIG 2 (the
 configuration was refused).
 """
+import ast
 import collections
 import os
 import re
@@ -157,6 +158,15 @@ def _check_one(path, exists, have, want, kit):
     return None
 
 
+def _plain(quoted):
+    """A stub's `KIT = ...` value (a repr'd path) as the plain path; anything else unchanged."""
+    try:
+        value = ast.literal_eval(quoted) if quoted else quoted
+    except (ValueError, SyntaxError):
+        return quoted
+    return value if isinstance(value, str) else quoted
+
+
 def unclassified(kit=KIT_ROOT):
     """The kit's commands in neither SHARED nor KIT_ONLY (tests/stubs fails while there is one)."""
     return [n for n in commands(kit) if n not in SHARED and n not in KIT_ONLY]
@@ -171,7 +181,7 @@ def problem_line(root, kit=KIT_ROOT):
         cfg = load(root)
         names = wanted(cfg, kit)
     except ConfigError as e:
-        return 'stubs (%s): could not check: %s' % (label, e)
+        return 'could not check stubs (%s): %s' % (label, e)
     tdir = os.path.normpath(os.path.join(root, cfg.tools_dir))
     bad, others = [], []
     for name in names:
@@ -179,10 +189,11 @@ def problem_line(root, kit=KIT_ROOT):
         exists = os.path.exists(path)
         have = _read(path) if exists else None
         found = _check_one(path, exists, have, stub_text(name, cfg.tools_dir, kit), kit)
-        if found:
+        if found and not found[0].startswith('not a stub'):    # the repository's own tool is no problem
             bad.append(name)
-            if found[1] and found[1] not in others:
-                others.append(found[1])
+            other = _plain(found[1])
+            if other and other not in others:
+                others.append(other)
     if not bad:
         return None
     return 'stubs (%s): %d missing/stale: %s; run python %s -C %s%s' % (

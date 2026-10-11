@@ -145,11 +145,25 @@ class ProblemLine(StubCase):
         self.put(self.stub('landed'), stubs.stub_text('landed', 'tools', other))
         line = stubs.problem_line(self.root)
         self.assertIn('1 missing/stale: landed;', line)
-        self.assertTrue(line.endswith('(stale ones run the kit at %s)' % repr(os.path.normpath(other))), line)
+        self.assertTrue(line.endswith('(stale ones run the kit at %s)' % os.path.normpath(other)), line)
+        self.assertNotIn("'", line)
+        self.assertNotIn('\\\\', line)
 
     def test_a_config_the_kit_refuses_is_a_could_not_check_line(self):
         self.config(stubs={'tools': ['no_such_tool']})
-        self.assertIn('could not check:', stubs.problem_line(self.root))
+        self.assertTrue(stubs.problem_line(self.root).startswith(
+            'could not check stubs (%s): ' % os.path.basename(self.root)))
+
+    def test_a_repositorys_own_tools_are_no_problem(self):
+        for name in stubs.SHARED:
+            self.put(self.stub(name), '# the repository\'s own %s\n' % name)
+        self.assertIsNone(stubs.problem_line(self.root))
+        code, out = self.run_stubs('check')        # check still names them
+        self.assertEqual(code, stubs.PROBLEMS, out)
+        self.assertIn('not a stub  %s' % self.stub('landed'), out)
+
+    def test_the_kits_own_repository_is_silent(self):
+        self.assertIsNone(stubs.problem_line(stubs.KIT_ROOT))
 
 
 class WriteAndCheck(StubCase):
