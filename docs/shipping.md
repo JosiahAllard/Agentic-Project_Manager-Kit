@@ -30,7 +30,7 @@ file for ruling ids, repository names, user paths and the owner's name.
 - `templates/stacks/{dotnet,godot,java,python}`: `stack.json` (build and test commands,
   gitignore, gitattributes; `new-repo.ps1 -Stack` applies the two lists), `tools/gate.json` (a `"gate"` section of `.kit.json`; point to it
   with `"gate": "tools/gate.json"`) and `.github/workflows/{quick,full}.yml`. Godot also carries
-  `tools/godot.cmd` and `.claude/skills/godot-render-check/SKILL.md`.
+  `tools/godot.cmd` and `.claude/skills/godot-render-check/SKILL.md` (its `{kit_root}` is filled in at install).
 - The Java dependency-pin check is a hook-module check, not a gate key (the schema has none).
 
 ## Optional machine-wide tools (`optional/`, tests in `tests/optional`)
