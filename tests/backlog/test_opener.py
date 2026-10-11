@@ -37,8 +37,8 @@ class OpenStore(unittest.TestCase):
 
     def test_the_defaults_fetch_with_no_session_and_no_branch(self):
         ctx = opener.open_store(self.repo.root)
-        self.assertIs(ctx.store.backend.fetch, True)
         self.assertIsNotNone(ctx.store.load().get('FOO'), 'the default open did not fetch')
+        self.assertIs(ctx.store.backend.fetch, True)
         self.assertIsNone(ctx.session)
         self.assertIsNone(ctx.store.session)
         self.assertIsNone(ctx.branch)
@@ -49,8 +49,8 @@ class OpenStore(unittest.TestCase):
 
     def test_each_argument_reaches_the_context(self):
         ctx = opener.open_store(self.repo.root, fetch=False, session='S-1', branch='tools/wk')
-        self.assertIs(ctx.store.backend.fetch, False)
         self.assertIsNone(ctx.store.load().get('FOO'), 'fetch=False fetched')
+        self.assertIs(ctx.store.backend.fetch, False)
         self.assertEqual(ctx.session, 'S-1')
         self.assertEqual(ctx.branch, 'tools/wk')
 
