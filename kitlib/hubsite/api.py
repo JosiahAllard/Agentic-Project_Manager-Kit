@@ -42,6 +42,14 @@ path):
 Nothing here opens a socket, starts a thread, prints, parses arguments or exits. GET wait blocks
 in Store.wait for at most WAIT_MAX_S; how many may wait at once is the listener's rule.
 
+PM seen. GET snapshot carries `pm_seen`: {"waited", "pulled", "waiting"}. waited is the time
+(the Api's clock) an AGENT-role caller last entered or left GET wait, pulled the time one last
+read the pending work (GET pending, or GET wait with pending=1), waiting the number of agent
+waits blocked in Store.wait right now. All three live in this Api object, not in the store: a
+new Api (a server restart) starts at null, null and 0 until the next agent call. The owner's
+own calls never count. No lock is taken: each note is one assignment, and an open wait is one
+key put into and popped from a dict, which the interpreter does as one step each.
+
 Revision. A read's `revision` is taken before the data is copied, so it is never later than the
 data: a client that waits `since` it is told of any write the copy missed. GET health gives the
 store's folder to the owner only.
@@ -255,6 +263,8 @@ class Api(object):
         self.store = store
         self.views = views
         self.clock = clock or store.clock
+        self._seen = {'waited': None, 'pulled': None}
+        self._waits = {}            # one key per agent wait that is blocked right now
 
     def call(self, method, path, role, body=None, query=None, via=''):
         """(status, object) for one request. role is OWNER or AGENT as the caller resolved it;
@@ -360,6 +370,22 @@ class Api(object):
     def pending(self):
         return [p._asdict() for p in self.store.pending()]
 
+    def seen(self, req, what, opened=None, closed=None):
+        """Note that an agent (a PM session) just waited or pulled (`what`). `opened` is a key
+        for a wait that now blocks, `closed` the key of one that ended. The owner's calls are
+        not noted."""
+        if req.role != AGENT:
+            return
+        self._seen[what] = self.clock()
+        if opened is not None:
+            self._waits[opened] = True
+        if closed is not None:
+            self._waits.pop(closed, None)
+
+    def pm_seen(self):
+        return {'waited': self._seen['waited'], 'pulled': self._seen['pulled'],
+                'waiting': len(self._waits)}
+
 
 # ------------------------------------------------------------------ handlers
 def questions_list(api, req):
@@ -424,7 +450,8 @@ def todos_list(api, req):
 def todos_add(api, req):
     owner = req.role == OWNER
     names = ('title', 'detail', 'commands', 'repo', 'refs', 'urgent')
-    b = _fields(req, names if owner else names + ('from',), required=('title',))
+    b = _fields(req, names if owner else names + ('from',), required=('title',),
+                flags=('urgent',))
     for name in ('title', 'detail', 'repo', 'from'):
         _text(b, name)
     if owner:
@@ -454,6 +481,43 @@ def todos_ack(api, req):
     doc_id = req.params['id']
     d = api.doc('todos', doc_id, b)
     return api.change('todos', doc_id, d, {'pm_ack': True}, req, {'pm_ack': True})
+
+
+def _own(doc_id, d, what):
+    who = d.get('from')
+    if not isinstance(who, str) or _plain(who) != OWNER_FROM:
+        raise HubError('forbidden', '%s is from %s: the owner can %s only a to-do he added '
+                       'himself (from: %s)' % (doc_id, who or 'nobody', what, OWNER_FROM), 'from')
+
+
+def todos_edit(api, req):
+    b = _fields(req, ('title', 'detail', 'commands', 'repo', 'refs', 'urgent', 'if_version'),
+                flags=('urgent',))
+    _pin(b)
+    for name in ('title', 'detail', 'repo'):
+        _text(b, name)
+    for name in ('commands', 'refs'):
+        _typed(b, name, (list,), 'a list')
+    changes = {k: v for k, v in b.items() if k != 'if_version'}
+    if not changes:
+        raise _invalid('give at least one of title, detail, commands, repo, refs, urgent to '
+                       'change', 'body')
+    if 'title' in changes and not changes['title'].strip():
+        raise _invalid('title cannot be made empty', 'title')
+    doc_id = req.params['id']
+    d = api.doc('todos', doc_id, b)
+    _own(doc_id, d, 'edit')
+    return api.change('todos', doc_id, d, changes, req, {'status': d.get('status')})
+
+
+def todos_delete(api, req):
+    b = _fields(req, ('if_version',))
+    _pin(b)
+    doc_id = req.params['id']
+    d = api.doc('todos', doc_id, b)
+    _own(doc_id, d, 'delete')
+    r = api.store.delete('todos', doc_id, if_version=_version(d))
+    return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
 
 
 def stories_list(api, req):
@@ -642,7 +706,9 @@ def _listing(name):
 
 
 def pending(api, req):
-    return {'items': api.pending()}
+    items = api.pending()
+    api.seen(req, 'pulled')
+    return {'items': items}
 
 
 def wait(api, req):
@@ -662,10 +728,18 @@ def wait(api, req):
     # which Store.wait answers at once and with nothing (a client would loop on it)
     found = api.pending()
     items = found if want else []
+    if want:
+        api.seen(req, 'pulled')
     if items:
+        api.seen(req, 'waited')
         ch = api.store.changes_since(since)
     else:
-        ch = api.store.wait(since, min(timeout, WAIT_MAX_S))
+        key = object()
+        api.seen(req, 'waited', opened=key)
+        try:
+            ch = api.store.wait(since, min(timeout, WAIT_MAX_S))
+        finally:
+            api.seen(req, 'waited', closed=key)
         found = api.pending()
         items = found if want else []
     return {'revision': ch.revision, 'reset': ch.reset,
@@ -686,7 +760,7 @@ def snapshot(api, req):
             missing[name] = _reason(e)
     return {'revision': revision, 'collections': docs,
             'pending': [p._asdict() for p in api.store.pending()],
-            'views': views, 'unavailable': missing}
+            'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen()}
 
 
 def health(api, req):
@@ -717,6 +791,8 @@ ROUTES = (
     _r('POST', '/todos', ANY, todos_add),
     _r('POST', '/todos/{id}/done', OWNER, todos_done),
     _r('POST', '/todos/{id}/ack', AGENT, todos_ack),
+    _r('POST', '/todos/{id}/edit', OWNER, todos_edit),
+    _r('POST', '/todos/{id}/delete', OWNER, todos_delete),
     _r('GET', '/stories', ANY, stories_list),
     _r('POST', '/stories', OWNER, stories_add),
     _r('POST', '/stories/{id}', AGENT, stories_set),

@@ -958,6 +958,183 @@ class FixTest(ApiCase):
         self.assertEqual(self.store.get('to_pm', pid)['status'], 'sent')
 
 
+class OwnTodoTest(ApiCase):
+    """The owner's own to-dos: urgent, edit, delete. A to-do an agent gave is not his to change
+    (docs/action-hub.md, todos: "the owner can set it on their own items")."""
+
+    def mine(self, **kw):
+        body = {'title': 't', 'detail': 'd'}
+        body.update(kw)
+        return self.ok('POST', '/todos', OWNER, body)['id']
+
+    def theirs(self):
+        return self.ok('POST', '/todos', AGENT, {'title': 't', 'commands': ['dir']})['id']
+
+    def test_urgent_on_a_new_to_do_is_true_or_false(self):
+        tid = self.mine(urgent=True)
+        self.assertIs(self.store.get('todos', tid)['urgent'], True)
+        for bad in (None, 'yes', 1):
+            with self.subTest(urgent=bad):
+                self.refused('invalid', 'urgent', 'POST', '/todos', OWNER,
+                             {'title': 't', 'urgent': bad})
+
+    def test_the_owner_edits_his_own_to_do(self):
+        tid = self.mine()
+        obj = self.ok('POST', '/todos/%s/edit' % tid, OWNER, {'urgent': True}, via='web')
+        self.assertEqual((obj['id'], obj['version'], obj['status']), (tid, 2, 'open'))
+        obj = self.ok('POST', '/todos/%s/edit' % tid, OWNER,
+                      {'title': 'new', 'detail': 'more', 'repo': 'kit', 'commands': ['dir'],
+                       'urgent': False, 'if_version': 2})
+        d = self.store.get('todos', tid)
+        self.assertEqual((d['title'], d['detail'], d['repo'], d['commands'], d['urgent']),
+                         ('new', 'more', 'kit', ['dir'], False))
+        self.assertEqual((d['status'], d['from'], d['via']), ('open', 'you', 'api'))
+        self.ok('POST', '/todos/%s/done' % tid, OWNER)
+        self.assertEqual(self.ok('POST', '/todos/%s/edit' % tid, OWNER,
+                                 {'title': 'later'})['status'], 'done')
+        for body, field in (({}, 'body'), (None, 'body'), ({'title': ' '}, 'title'),
+                            ({'urgent': None}, 'urgent'), ({'urgent': 'yes'}, 'urgent'),
+                            ({'commands': 'dir'}, 'commands'), ({'status': 'done'}, 'status'),
+                            ({'from': 'pm'}, 'from'), ({'pm_ack': True}, 'pm_ack')):
+            with self.subTest(body=body):
+                self.refused('invalid', field, 'POST', '/todos/%s/edit' % tid, OWNER, body)
+        self.refused('conflict', 'if_version', 'POST', '/todos/%s/edit' % tid, OWNER,
+                     {'title': 'x', 'if_version': 1})
+
+    def test_the_owner_deletes_his_own_to_do(self):
+        tid, keep = self.mine(), self.mine()
+        self.refused('conflict', 'if_version', 'POST', '/todos/%s/delete' % tid, OWNER,
+                     {'if_version': 9})
+        self.refused('invalid', 'title', 'POST', '/todos/%s/delete' % tid, OWNER, {'title': 'x'})
+        obj = self.ok('POST', '/todos/%s/delete' % tid, OWNER)
+        self.assertEqual((obj['id'], obj['deleted']), (tid, True))
+        self.assertIsNone(self.store.get('todos', tid))
+        self.assertEqual([d['id'] for d in self.ok('GET', '/todos', OWNER)['items']], [keep])
+
+    def test_an_agent_cannot_edit_or_delete_a_to_do(self):
+        for tid in (self.mine(), self.theirs()):
+            self.refused('forbidden', 'role', 'POST', '/todos/%s/edit' % tid, AGENT,
+                         {'title': 'x'})
+            self.refused('forbidden', 'role', 'POST', '/todos/%s/delete' % tid, AGENT)
+
+    def test_a_to_do_an_agent_gave_is_not_the_owners_to_edit_or_delete(self):
+        tid = self.theirs()
+        for body in ({'title': 'x'}, {'urgent': True}):
+            self.refused('forbidden', 'from', 'POST', '/todos/%s/edit' % tid, OWNER, body)
+        self.refused('forbidden', 'from', 'POST', '/todos/%s/delete' % tid, OWNER)
+        self.assertEqual(self.store.get('todos', tid)['title'], 't')
+        self.ok('POST', '/todos/%s/done' % tid, OWNER)      # ticking it stays his
+
+    def test_a_to_do_with_no_readable_from_is_nobodys_to_edit_or_delete(self):
+        self.store = seeded(self, {'todos/T-1.json': {'status': 'open', 'title': 't'},
+                                   'todos/T-2.json': {'status': 'open', 'title': 't',
+                                                      'from': ['you']}})
+        self.api = api.Api(self.store, clock=CLOCK)
+        for tid in ('T-1', 'T-2'):
+            self.refused('forbidden', 'from', 'POST', '/todos/%s/edit' % tid, OWNER,
+                         {'title': 'x'})
+            self.refused('forbidden', 'from', 'POST', '/todos/%s/delete' % tid, OWNER)
+
+    def test_edit_or_delete_of_a_to_do_that_is_not_there(self):
+        self.refused('not_found', 'id', 'POST', '/todos/T-404/edit', OWNER, {'title': 'x'})
+        self.refused('not_found', 'id', 'POST', '/todos/T-404/delete', OWNER)
+
+
+class PmSeenTest(ApiCase):
+    """The snapshot says when an agent last waited and last pulled."""
+
+    def setUp(self):
+        super().setUp()
+        self.now = ['2026-01-02T03:00:00+00:00']
+        self.api = api.Api(self.store, clock=lambda: self.now[0])
+
+    def at(self, minute):
+        self.now[0] = '2026-01-02T03:%02d:00+00:00' % minute
+        return self.now[0]
+
+    def seen(self, role=OWNER):
+        return self.ok('GET', '/snapshot', role)['pm_seen']
+
+    def test_nobody_seen_yet_is_null(self):
+        self.assertEqual(self.seen(), {'waited': None, 'pulled': None, 'waiting': 0})
+        self.assertEqual(self.seen(AGENT), {'waited': None, 'pulled': None, 'waiting': 0})
+
+    def test_an_agents_wait_and_pull_are_noted_with_their_time(self):
+        t1 = self.at(1)
+        self.ok('GET', '/wait', AGENT, None, {'timeout': '0'})
+        self.assertEqual(self.seen(), {'waited': t1, 'pulled': None, 'waiting': 0})
+        t2 = self.at(2)
+        self.ok('GET', '/pending', AGENT)
+        self.assertEqual(self.seen(), {'waited': t1, 'pulled': t2, 'waiting': 0})
+        t3 = self.at(3)
+        self.ok('GET', '/wait', AGENT, None, {'timeout': '0', 'pending': '1'})
+        self.assertEqual(self.seen(), {'waited': t3, 'pulled': t3, 'waiting': 0})
+        self.at(4)
+        self.assertEqual(self.seen(AGENT), {'waited': t3, 'pulled': t3, 'waiting': 0})
+
+    def test_a_wait_with_work_pending_is_a_wait_and_a_pull(self):
+        self.ok('POST', '/to_pm', OWNER, {'text': 'x'})
+        self.ok('POST', '/to_pm/send', OWNER)
+        t = self.at(5)
+        got = self.ok('GET', '/wait', AGENT, None, {'timeout': '30', 'pending': '1'})
+        self.assertEqual(len(got['pending']), 1)
+        self.assertEqual(self.seen(), {'waited': t, 'pulled': t, 'waiting': 0})
+
+    def test_the_owners_own_calls_are_not_the_pm(self):
+        self.at(1)
+        self.ok('GET', '/wait', OWNER, None, {'timeout': '0', 'pending': '1'})
+        self.ok('GET', '/pending', OWNER)
+        self.assertEqual(self.seen(), {'waited': None, 'pulled': None, 'waiting': 0})
+
+    def test_a_refused_call_is_not_seen(self):
+        self.at(1)
+        self.call('GET', '/wait', AGENT, None, {'timeout': 'x'})
+        self.call('GET', '/wait', 'nobody', None, {'timeout': '0'})
+        self.call('GET', '/pending', 'nobody')
+        self.assertEqual(self.seen(), {'waited': None, 'pulled': None, 'waiting': 0})
+
+    def test_a_wait_in_progress_counts_as_listening(self):
+        real, during = self.store.wait, []
+
+        def blocked(since, timeout):
+            during.append(self.seen())          # what the page reads while the wait is open
+            self.at(9)
+            return real(since, 0)
+        self.store.wait = blocked
+        t1 = self.at(1)
+        self.ok('GET', '/wait', AGENT, None, {'timeout': '30'})
+        self.assertEqual(during, [{'waited': t1, 'pulled': None, 'waiting': 1}])
+        self.assertEqual(self.seen(), {'waited': self.now[0], 'pulled': None, 'waiting': 0})
+        del during[:]
+        self.ok('GET', '/wait', OWNER, None, {'timeout': '30'})     # the page's own wait
+        self.assertEqual(during[0]['waiting'], 0)
+
+    def test_a_wait_that_fails_stops_counting(self):
+        def broken(since, timeout):
+            raise HubError('store', 'gone')
+        self.store.wait = broken
+        self.at(1)
+        status, _ = self.call('GET', '/wait', AGENT, None, {'timeout': '30'})
+        self.assertEqual(status, 503)
+        self.assertEqual(self.seen()['waiting'], 0)
+
+    def test_a_new_api_object_starts_at_null(self):
+        self.at(1)
+        self.ok('GET', '/pending', AGENT)
+        self.api = api.Api(self.store, clock=lambda: self.now[0])       # a server restart
+        self.assertEqual(self.seen(), {'waited': None, 'pulled': None, 'waiting': 0})
+
+
+class ParkedTest(ApiCase):
+    def test_the_parked_state_reaches_the_backlog_view(self):
+        views = Views()
+        self.api = api.Api(self.store, views=views, clock=CLOCK)
+        self.ok('GET', '/backlog', OWNER, None, {'state': 'parked'})
+        self.ok('GET', '/backlog', OWNER, None, {'repo': 'kit', 'state': 'parked', 'fresh': '1'})
+        self.assertEqual(views.calls, [('backlog', '', 'parked', False),
+                                       ('backlog', 'kit', 'parked', True)])
+
+
 class IdGuardTest(ApiCase):
     """Api.doc asks schema.check_id before the store: an id that could not be a file name is
     never looked up. (The store answers None for one today; the guard is what keeps that from
