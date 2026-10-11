@@ -391,7 +391,8 @@ def read_body_file(path):
 
 
 def message_body(b, body_file, root, cwd):
-    """`(body, None)` from -b or --body-file, or `(None, usage error)`."""
+    """`(body, None)` from -b or --body-file, or `(None, usage error)`. In -b a typed `\\n` and a
+    `~~` each become a newline (`~~` survives shells that eat a backslash); a single `~` is kept."""
     if body_file is not None:
         return read_body_file(os.path.join(cwd, body_file))
     if not b:
@@ -399,7 +400,7 @@ def message_body(b, body_file, root, cwd):
     err = path_shaped_body(b, root, cwd)
     if err:
         return None, err
-    return b.replace('\\n', '\n'), None
+    return b.replace('\\n', '\n').replace('~~', '\n'), None
 
 
 def machine_path_error(subject, body, typed=''):

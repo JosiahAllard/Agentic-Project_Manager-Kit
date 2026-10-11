@@ -333,6 +333,28 @@ class AnOrdinaryCommit(LinkedCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(self.message(), 'add a\n\nline one\nline two\n\n' + COAUTHOR)
 
+    def test_a_double_tilde_in_a_body_becomes_a_newline(self):
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py', b='line one~~line two')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.message(), 'add a\n\nline one\nline two\n\n' + COAUTHOR)
+
+    def test_a_trailer_after_a_double_tilde_is_on_its_own_line(self):
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py', b='why it changed~~Claude-Session: https://x/s')
+        self.assertEqual(code, 0, out)
+        self.assertIn('\nClaude-Session: https://x/s\n', self.message())
+        self.assertNotIn('changed Claude-Session', self.message())
+        self.assertNotIn('~', self.message())
+
+    def test_a_body_without_a_double_tilde_is_unchanged(self):
+        self.assertEqual(C.message_body('plain body, no marker', None, '.', '.'),
+                         ('plain body, no marker', None))
+
+    def test_a_single_tilde_stays_literal(self):
+        self.assertEqual(C.message_body('about ~5 files, ~/x and a~b', None, '.', '.'),
+                         ('about ~5 files, ~/x and a~b', None))
+
     def test_the_environment_variable_supplies_the_model_and_says_so(self):
         self.put('a.py', 'a = 1\n')
         code, out = self.commit('add a', 'a.py', model=None, env={C.MODEL_ENV: 'Env Model'})
