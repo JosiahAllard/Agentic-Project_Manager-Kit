@@ -72,8 +72,10 @@ def ensure_tokens(folder):
     {role: path}. A token file that exists and read_token cannot use (empty, shorter than
     MIN_TOKEN, not ASCII, a directory) is a TokenFileError naming it: it is never replaced and
     never adopted. A new file is written whole beside its place and renamed in, so a crash
-    leaves no empty token file; the rename never replaces a file another process made first.
-    OSError propagates."""
+    leaves no empty token file; the rename never replaces a file another process made first
+    (that process's token is then the one in use). A hard kill can leave a `<file>.<hex>.tmp`
+    beside it: harmless, never read as a token, and nothing sweeps it. OSError propagates; a
+    failure to remove the temp file never hides it."""
     os.makedirs(folder, exist_ok=True)
     out = {}
     for role in ROLES:
@@ -87,8 +89,10 @@ def ensure_tokens(folder):
             except FileExistsError:
                 pass
             finally:
-                if os.path.lexists(tmp):
-                    os.remove(tmp)
+                try:
+                    os.remove(tmp)         # gone already after a rename that worked
+                except OSError:
+                    pass
         if read_token(folder, role) is None:
             raise TokenFileError(
                 'the hub token file %s holds no usable token (one line of %d to %d ASCII '

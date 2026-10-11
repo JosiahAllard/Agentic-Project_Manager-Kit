@@ -3,7 +3,7 @@
   load(environ=None, home=None)    the machine's Settings; every default when the key is absent
   settings(obj, pm_data, where)    the checked Settings of one `hub` object (None: every default)
   check(obj, where)                the problems in a `hub` object, as a list of messages
-  normalise_email(text)            an email as the allow-list compares it: stripped, casefolded
+  normalise_email(text)            an email as the allow-list compares it: stripped, lower-cased
 
 kitlib.config.user registers `hub` as an object this module checks (HUB). An unknown key is
 refused, so nothing here can name an address to bind: both listeners are loopback in code, and
@@ -59,8 +59,10 @@ HUB = Obj({
 
 
 def normalise_email(text):
-    """`text` as the allow-list compares an email: stripped and casefolded ('' for a non-string)."""
-    return text.strip().casefold() if isinstance(text, str) else ''
+    """`text` as the allow-list compares an email: stripped and lower-cased ('' for a
+    non-string). lower(), not casefold(): casefold makes a sharp s equal to `ss`, which would
+    make two different domains one."""
+    return text.strip().lower() if isinstance(text, str) else ''
 
 
 def normalise_emails(items):
@@ -76,15 +78,21 @@ def normalise_emails(items):
 class Access(collections.namedtuple('Access', 'team aud emails')):
     """What the tunnel listener requires: `team` and `aud` ('' when unset) and `emails`, the
     allow-list. `emails` is always the normalised tuple (normalise_emails), however the Access
-    was made, so `x in access.emails` and `allows(x)` cannot disagree for a normalised x."""
+    was made (the constructor, _make and _replace all normalise), so `x in access.emails` and
+    `allows(x)` cannot disagree for a normalised x."""
 
     def __new__(cls, team='', aud='', emails=()):
         return super(Access, cls).__new__(cls, team, aud, normalise_emails(emails))
 
+    @classmethod
+    def _make(cls, iterable):
+        """namedtuple's _make (which _replace uses too), through the normalising constructor."""
+        return cls(*iterable)
+
     @property
     def allowed_emails(self):
-        """`emails` as a frozenset."""
-        return frozenset(self.emails)
+        """`emails` as a frozenset, normalised once more: the comparison never trusts the tuple."""
+        return frozenset(normalise_emails(self.emails))
 
     def allows(self, email):
         """True when `email`, normalised the same way, is on the allow-list. An empty list

@@ -123,6 +123,25 @@ class ValuesTest(HomeCase):
         for e in a.emails:
             self.assertTrue(a.allows(e))
 
+    def test_replacing_or_remaking_an_access_normalises_the_emails(self):
+        a = settings.Access('t', 'a', ())._replace(emails=[' A@Example.invalid ', 'a@example.invalid'])
+        self.assertEqual(a.emails, ('a@example.invalid',))
+        self.assertTrue(a.allows('a@example.invalid'))
+        b = settings.Access._make(['t', 'a', [' B@Example.invalid ']])
+        self.assertEqual(b.emails, ('b@example.invalid',))
+        self.assertEqual(b.allowed_emails, frozenset(['b@example.invalid']))
+        self.assertIsInstance(a, settings.Access)
+
+    def test_a_sharp_s_and_a_double_s_are_two_different_emails(self):
+        sharp, double = 'user@straße.invalid', 'user@strasse.invalid'
+        self.assertNotEqual(settings.normalise_email(sharp), settings.normalise_email(double))
+        a = settings.Access('t', 'a', [sharp])
+        self.assertTrue(a.allows(sharp))
+        self.assertFalse(a.allows(double))
+        self.assertEqual(settings.Access('t', 'a', [sharp, double]).emails, (sharp, double))
+        self.assertTrue(settings.Access('t', 'a', ['USER@Example.INVALID']).allows('user@example.invalid'))
+        self.assertTrue(settings.Access('t', 'a', ['user@example.invalid']).allows(' User@EXAMPLE.invalid'))
+
     def test_push_defaults_on_only_for_the_store_in_the_data_worktree(self):
         store = os.path.join(self.home, 'elsewhere')
         self.write({'pm_data': {'path': self.data}})

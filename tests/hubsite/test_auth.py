@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib.config import user
 from kitlib.hubsite import auth
@@ -81,6 +82,48 @@ class TokenFileTest(Case):
         os.remove(self.paths[auth.AGENT])
         auth.ensure_tokens(self.folder)
         self.assertEqual(sorted(os.listdir(self.folder)), ['agent.token', 'owner.token'])
+
+    def test_a_lost_race_uses_the_winners_token_and_leaves_no_temp_file(self):
+        path, real = self.paths[auth.OWNER], os.rename
+        os.remove(path)
+
+        def late(src, dst):
+            with open(dst, 'w', encoding='ascii') as f:      # another process got there first
+                f.write('w' * 50 + '\n')
+            return real(src, dst)
+
+        with mock.patch.object(auth.os, 'rename', late):
+            self.assertEqual(auth.ensure_tokens(self.folder), self.paths)
+        self.assertEqual(auth.read_token(self.folder, auth.OWNER), 'w' * 50)
+        self.assertEqual(sorted(os.listdir(self.folder)), ['agent.token', 'owner.token'])
+
+    def test_a_failed_rename_leaves_no_token_file_and_no_temp_file(self):
+        path, seen = self.paths[auth.OWNER], []
+        os.remove(path)
+
+        def fail(src, dst):
+            with open(src, 'rb') as f:
+                seen.append((f.read(), dst, os.path.lexists(dst)))
+            raise PermissionError('the rename failed')
+
+        with mock.patch.object(auth.os, 'rename', fail):
+            with self.assertRaises(PermissionError):
+                auth.ensure_tokens(self.folder)
+        (raw, dst, there), = seen
+        self.assertEqual((dst, there), (path, False))            # whole before it is moved in
+        self.assertEqual(len(raw), auth.MIN_TOKEN + 1)
+        self.assertEqual(os.listdir(self.folder), ['agent.token'])
+
+    def test_a_failed_cleanup_does_not_hide_the_renames_error(self):
+        os.remove(self.paths[auth.OWNER])
+        with mock.patch.object(auth.os, 'rename', side_effect=PermissionError('the rename failed')), \
+                mock.patch.object(auth.os, 'remove', side_effect=OSError('the cleanup failed')):
+            with self.assertRaises(PermissionError) as cm:
+                auth.ensure_tokens(self.folder)
+        self.assertIn('the rename failed', str(cm.exception))
+        with mock.patch.object(auth.os, 'remove', side_effect=OSError('the cleanup failed')):
+            self.assertEqual(auth.ensure_tokens(self.folder), self.paths)   # and none at all is fine
+        self.assertIsNotNone(auth.read_token(self.folder, auth.OWNER))
 
     def test_a_token_file_that_cannot_serve_reads_as_none(self):
         for text in ('', '\n', 'short', 'x' * (auth.MIN_TOKEN - 1), 'x' * (auth.MAX_TOKEN + 1),
@@ -232,12 +275,17 @@ class PairingTest(Case):
                          'hub_session_8790=v; Path=/; Max-Age=%d; HttpOnly; SameSite=Strict'
                          % auth.SESSION_TTL_S)
 
-    def test_a_session_lives_exactly_the_session_length(self):
+    def test_a_session_is_honoured_before_its_length_and_refused_at_exactly_it(self):
+        start = self.clock.now
         value = self.creds.pair(self.creds.new_pairing_code())
-        self.clock.now += auth.SESSION_TTL_S - 1
+        self.clock.now = start + auth.SESSION_TTL_S - 1
         self.assertEqual(self.creds.role_for({}, self.cookie(value)), auth.OWNER)
-        self.clock.now += 2
+        self.clock.now = start + auth.SESSION_TTL_S
         self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+        other = auth.Credentials(self.folder, clock=self.clock)
+        value = other.pair(other.new_pairing_code())
+        self.clock.now += auth.SESSION_TTL_S + 1
+        self.assertIsNone(other.role_for({}, self.cookie(value)))
 
     def test_the_cookie_and_the_server_follow_the_one_constant(self):
         old = auth.SESSION_TTL_S
