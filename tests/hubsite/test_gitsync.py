@@ -1014,8 +1014,8 @@ class EndToEndTest(Case):
         self.assertEqual(self.config_bytes(), before)
 
     def test_every_other_git_operation_under_way_ends_the_pass_before_a_write(self):
-        self.assertEqual(gitsync.MARKERS, MARKERS)
         self.busy_pass(self.sync(git=self.runner), MARKERS)
+        self.assertEqual(gitsync.MARKERS, MARKERS)
 
     def test_the_commit_is_never_signed(self):
         self.git('config', 'commit.gpgSign', 'true')        # and a signing program that cannot run
