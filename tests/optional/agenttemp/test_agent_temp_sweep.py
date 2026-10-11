@@ -275,9 +275,25 @@ class SessionDirs(Case):
         self.assertEqual(got['x'], 'removed')
         self.assertEqual(got['claude/proj/work-notes'], 'removed')
         self.assertFalse(S.is_kept('claude/proj/a', ['claude*a']))       # * matches within one name
-        self.assertFalse(S.is_kept('claude/proj', ['claude/proj/a']))   # a longer item keeps no folder
+        self.assertTrue(S.is_kept('claude/proj', ['claude/proj/a']))    # an item inside a unit keeps it
+        self.assertFalse(S.is_kept('claude/other', ['claude/proj/a']))  # ... only the unit holding it
         self.assertTrue(S.is_kept('claude/proj/a', ['claude/proj']))    # a kept folder keeps what is in it
         self.assertTrue(S.is_kept('claude/proj/a', ['claude/*']))       # ... matched by a pattern too
+
+    def test_a_keep_item_deeper_than_a_unit_keeps_the_whole_unit(self):
+        # The sweep never enters a unit, so an item under one (kit-conductor/r2) keeps all of it;
+        # before, the unit kit-conductor matched no item and went whole once old.
+        put(os.path.join(self.dir, 'kit-conductor', 'r2', 'plan.md'))
+        put(os.path.join(self.dir, 'kit-conductor', 'r1', 'old.md'))
+        put(os.path.join(self.dir, 'other', 'a.txt'))
+        pinned = self.session('proj', SID_OLD)
+        got = self.sweep(apply=True, keep=['kit-conductor/r2', 'claude/proj/%s/scratchpad' % SID_OLD])
+        self.assertEqual(got['kit-conductor'], 'kept')
+        self.assertEqual(got['claude/proj/' + SID_OLD], 'kept')
+        self.assertEqual(got['other'], 'removed')
+        self.assertTrue(os.path.isfile(os.path.join(self.dir, 'kit-conductor', 'r2', 'plan.md')))
+        self.assertTrue(os.path.isfile(os.path.join(self.dir, 'kit-conductor', 'r1', 'old.md')))
+        self.assertTrue(os.path.isdir(pinned))
 
     def test_check_rejects_bad_keep(self):
         good = os.path.abspath(self.dir)
@@ -323,6 +339,40 @@ class SessionDirs(Case):
     def test_the_kit_and_folders_holding_it_are_refused(self):
         self.assertIsNotNone(S.unsafe_dir(S.KIT_ROOT, self.home))
         self.assertIsNotNone(S.unsafe_dir(os.path.dirname(S.KIT_ROOT), self.home))
+
+    def test_a_folder_in_the_home_folder_is_refused(self):
+        d = os.path.join(self.home, 'AppData', 'Local', 'Temp')
+        put(os.path.join(d, 'old.txt'))
+        self.assertIn('home folder', S.unsafe_dir(d, self.home))
+
+    def junction(self, link, target):
+        import _winapi
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        _winapi.CreateJunction(target, link)
+        self.addCleanup(lambda: os.path.lexists(link) and os.rmdir(link))   # the junction, not its target
+
+    @unittest.skipUnless(hasattr(__import__('_winapi'), 'CreateJunction'), 'a junction needs Windows')
+    def test_a_junction_above_dir_into_a_repo_is_refused(self):
+        # dir is no link itself, but a folder above it is a junction into a git checkout: by its
+        # text the walk-up finds no .git; by its real path it does.
+        repo = os.path.join(self.tmp, 'repo')
+        os.makedirs(os.path.join(repo, '.git'))
+        put(os.path.join(repo, 'src', 'temp', 'old.txt'))
+        self.junction(os.path.join(self.tmp, 'via'), os.path.join(repo, 'src'))
+        d = os.path.join(self.tmp, 'via', 'temp')
+        self.assertIn('git', S.unsafe_dir(d, self.home) or '')
+        with self.assertRaises(S.SweepConfigError):
+            S.sweep(d, 3, apply=True, now=LATER, home=self.home, lister=procs())
+        self.assertTrue(os.path.isfile(os.path.join(repo, 'src', 'temp', 'old.txt')))
+
+    @unittest.skipUnless(hasattr(__import__('_winapi'), 'CreateJunction'), 'a junction needs Windows')
+    def test_a_junction_above_dir_into_home_or_the_config_folder_is_refused(self):
+        self.junction(os.path.join(self.tmp, 'up'), self.tmp)
+        self.assertIn('home folder', S.unsafe_dir(os.path.join(self.tmp, 'up', 'home'), self.home) or '')
+        cfg = kuser.config_dir(self.home)
+        put(os.path.join(cfg, 'temp', 'old.txt'))
+        self.junction(os.path.join(self.tmp, 'cfgvia'), cfg)
+        self.assertIsNotNone(S.unsafe_dir(os.path.join(self.tmp, 'cfgvia', 'temp'), self.home))
 
     @unittest.skipUnless(hasattr(__import__('_winapi'), 'CreateJunction'), 'a junction needs Windows')
     def test_nothing_outside_dir_is_touched(self):

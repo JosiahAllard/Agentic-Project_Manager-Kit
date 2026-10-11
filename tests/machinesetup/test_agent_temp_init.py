@@ -129,6 +129,43 @@ class Init(T.Base):
         self.assertIn('inside the git checkout', out)
         self.assertFalse(os.path.exists(inside))
 
+    def assert_refused_untouched(self, out, code, folder):
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('may not be swept', out)
+        self.assertIn('nothing changed', out)
+        self.assertFalse([c for c in self.host.calls if c[0] in ('icacls', 'env', 'task')], out)
+        self.assertFalse(os.path.exists(self.cfg) and 'agent_temp_sweep' in T.readb(self.cfg).decode())
+
+    def test_the_sweeps_refusals_apply_to_every_source_of_the_folder(self):
+        # The folder gets the config key and an ACL with inheritance removed, so a folder the sweep
+        # would refuse (a drive root, the home folder or one in it such as %LOCALAPPDATA%\Temp, the
+        # kit, the machine config folder) is refused here too, from --agent-temp or AGENT_TEMP.
+        local_temp = os.path.join(self.home, 'AppData', 'Local', 'Temp')
+        os.makedirs(local_temp)
+        cfg_dir = kuser.config_dir(self.home)
+        for folder in (os.path.abspath(os.sep), self.home, local_temp, self.kit,
+                       os.path.join(self.kit, 'temp'), cfg_dir):
+            code, out = self.run_new(agent_temp=folder)
+            self.assert_refused_untouched(out, code, folder)
+        self.host.env['AGENT_TEMP'] = local_temp                 # taken from the user environment
+        code, out = self.run_new(apply=True, agent_temp=None)
+        self.assert_refused_untouched(out, code, local_temp)
+        self.assertEqual(self.host.env['AGENT_TEMP'], local_temp)
+
+    @unittest.skipUnless(hasattr(__import__('_winapi'), 'CreateJunction'), 'a junction needs Windows')
+    def test_a_folder_through_a_junction_into_a_repo_refuses(self):
+        import _winapi
+        repo = os.path.join(self.root, 'repo')
+        os.makedirs(os.path.join(repo, '.git'))
+        os.makedirs(os.path.join(repo, 'src'))
+        via = os.path.join(self.root, 'via')
+        _winapi.CreateJunction(os.path.join(repo, 'src'), via)
+        self.addCleanup(lambda: os.path.lexists(via) and os.rmdir(via))
+        code, out = self.run_new(apply=True, agent_temp=os.path.join(via, 'temp'))
+        self.assert_refused_untouched(out, code, via)
+        self.assertIn('git checkout', out)
+        self.assertFalse(os.path.exists(os.path.join(repo, 'src', 'temp')))
+
     def test_task_registered_only_with_the_flag(self):
         code, out = self.run_new(apply=True)
         self.assertEqual(code, M.EXIT_OK, out)
