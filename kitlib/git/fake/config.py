@@ -239,7 +239,7 @@ def _read_text(path):
     except OSError:
         return None
     # st_ino (the file id on Windows) changes with every replace, so a same-size rewrite in the
-    # same clock tick still misses (KIT-VCS-REMOTE-EXISTS-FLAKE).
+    # same clock tick still misses (tests/git/test_fake_cache.py).
     key = (os.path.normcase(os.path.abspath(path)), st.st_mtime_ns, st.st_size, st.st_ino)
     with _CACHE_LOCK:
         got = _CACHE.get(key)

@@ -1,7 +1,7 @@
 """kitlib.git.fake: the config text and packed-refs caches never answer from before a rewrite.
 
 Both are keyed on a file's stat. A rewrite that keeps the size and lands in the same clock tick
-(`git remote rename origin private` on a fixture config: KIT-VCS-REMOTE-EXISTS-FLAKE) kept the old
+(`git remote rename origin private` on a fixture config) kept the old
 key, so the next command read the old text. The mtime is pinned here with os.utime, so the test
 does not depend on the clock."""
 import os
