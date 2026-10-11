@@ -8,14 +8,16 @@ git children run with the fixture's environment (no global or system git config)
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
 
 from kitlib.config import load
-from kitlib.records import landing
+from kitlib.records import inflight, landing
 from kitlib.worktree import new
 from kitlib.git import cmd as gitcmd
 from tests import gitfixture
@@ -866,6 +868,20 @@ class InFlightWait(InFlightCase):
         self.assertIn('still in flight after 30s', out)
         self.assertEqual(sum(t.slept), 30)
 
+    def test_a_run_the_branch_checks_refuse_never_waits(self):
+        self.hold()
+        self.git('branch', 'fix/taken')
+        for branch, existing, why in (('fix/taken', False, 'branch exists already: fix/taken'),
+                                      ('fix/absent', True, 'no such branch: fix/absent')):
+            t, said = FakeTime(), []
+            got = new.create(self.repo, branch, existing=existing, say=said.append,
+                             sleep=t.sleep, clock=t.clock)
+            out = '\n'.join(got.lines)
+            self.assertEqual(got.code, new.REFUSED, out)
+            self.assertIn(why, out)
+            self.assertNotIn('landing ', out)
+            self.assertEqual((said, t.slept), ([], []))
+
     def test_the_cli_takes_no_wait(self):
         self.land('one')
         self.hold()
@@ -935,6 +951,45 @@ class InFlightCommand(InFlightCase):
         self.assertEqual(rc, 1, out)
         self.assertIn('refused   a landing is in flight, but origin/master did not resolve', out)
         self.assertFalse(os.path.exists(self.slug_path('fresh')), out)
+
+    def counted(self, code):
+        """use(code) with every run of the command counted: returns a function giving the count."""
+        tally = os.path.join(tempfile.mkdtemp(), 'runs.txt')
+        self.addCleanup(shutil.rmtree, os.path.dirname(tally), True)
+        self.use('open(r"%s", "a").write("x"); %s' % (tally, code))
+
+        def runs():
+            if not os.path.exists(tally):
+                return 0
+            with open(tally, encoding='utf-8') as fh:
+                return len(fh.read())
+        return runs
+
+    def test_equal_refs_never_ask_the_command_after_the_fetch(self):
+        runs = self.counted('print("lander: feat/x merging")')
+        tip = self.origin()
+        rc, out, _said, _t = self.create(wait=False)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(runs(), 1, 'asked once before the fetch, never after: refs equal')
+        self.assertNotIn('landing   in progress', out)
+        self.assertNotIn('(none)', out)
+        self.assertIn('branch    fix/fresh from master @ %s' % tip[:7], out)
+
+    def test_each_look_gets_only_what_is_left_of_wait_s(self):
+        self.configure(in_flight_config(command=['{python}', '-c', 'print("lander")'], wait_s=20))
+        self.land('one')
+        given = []
+        real = inflight.run
+
+        def run(argv, cwd, timeout):
+            given.append(timeout)
+            return real(argv, cwd, timeout)
+        with mock.patch.object(inflight, 'run', run):
+            rc, out, _said, t = self.create()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(sum(t.slept), 20)
+        # before the fetch: 20 s left, then 10, then none (the minimum); after it, the minimum
+        self.assertEqual(given, [20, 10, inflight.LOOK_MIN_S, inflight.LOOK_MIN_S])
 
 
 class BehindCountOnAKilledGit(unittest.TestCase):

@@ -1,9 +1,11 @@
 """kitlib.records.inflight: the two readers of "a landing is in flight", the wait and its lines.
 The command reader runs real (tiny) Python commands; the wait runs on a fake clock."""
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib.records import inflight, landing
 
@@ -32,7 +34,7 @@ class Looks(object):
     def __init__(self, answers, wait_s=inflight.WAIT_S):
         self.answers, self.wait_s, self.looks = list(answers), wait_s, 0
 
-    def look(self):
+    def look(self, left=None):
         self.looks += 1
         return self.answers[min(self.looks, len(self.answers)) - 1]
 
@@ -132,6 +134,18 @@ class CommandReader(unittest.TestCase):
         self.assertTrue(held)
         self.assertIn('did not answer within 1 seconds', who)
 
+    def test_a_look_gets_only_what_is_left_of_the_wait_but_never_under_the_minimum(self):
+        given = []
+
+        def run(argv, cwd, timeout):
+            given.append(timeout)
+            return inflight.FREE, b'', b''
+        r = inflight.CommandReader(py('0'), self.root)
+        with mock.patch.object(inflight, 'run', run):
+            for left in (None, 100, 12.5, 1, 0):
+                r.look(left)
+        self.assertEqual(given, [30, 30, 12.5, inflight.LOOK_MIN_S, inflight.LOOK_MIN_S])
+
     def test_a_command_that_cannot_start_is_in_flight(self):
         r = inflight.CommandReader([os.path.join(self.root, 'no-such-program.exe')], self.root)
         held, who = r.look()
@@ -206,6 +220,32 @@ class Settle(unittest.TestCase):
         self.assertEqual(lines, ['landing   in flight: h; waiting up to 20s (--no-wait goes on now)',
                                  'landing   still in flight after 20s, going on without it: h2'])
 
+
+    def test_the_time_a_hanging_command_takes_counts_toward_the_bound(self):
+        c = Clock()
+        timeouts = []
+
+        def hangs(argv, cwd, timeout):
+            c.now += timeout                            # each look runs out its whole timeout
+            timeouts.append(timeout)
+            raise subprocess.TimeoutExpired(argv, timeout)
+        r = inflight.CommandReader(py('0'), 'X:/repo', wait_s=100)
+        with mock.patch.object(inflight, 'run', hangs):
+            held, lines = inflight.settle(r, True, [].append, c.sleep, c.clock)
+        self.assertTrue(held)
+        self.assertEqual(timeouts, [30, 30, 20])        # the last look gets only what is left
+        self.assertEqual(c.slept, [10, 10])
+        self.assertEqual(c.now, 100)
+        self.assertIn('landing   still in flight after 100s', lines[-1])
+
+    def test_a_given_start_counts_the_time_before_settle(self):
+        c = Clock()
+        c.now = 95.0
+        held, lines = inflight.settle(Looks([(True, 'h')], wait_s=100), True, None, c.sleep,
+                                      c.clock, start=0.0)
+        self.assertTrue(held)
+        self.assertEqual(c.slept, [5])
+        self.assertEqual(lines[-1], 'landing   still in flight after 100s, going on without it: h')
 
 if __name__ == '__main__':
     unittest.main()

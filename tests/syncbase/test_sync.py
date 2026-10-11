@@ -4,6 +4,7 @@ Ported from the PM kit's test_sync_base.py. The fixture is a MAIN checkout parke
 branch, a LINKED worktree every case works in, and a real bare remote the base is pushed to:
 sync_base fetches <remote> <base> itself and merges only a hash on the fetched branch (P27).
 """
+import importlib.util
 import json
 import os
 import subprocess
@@ -755,6 +756,17 @@ class WaitsForALandingInFlight(SyncCase):
         self.assertIn('landing   in flight, not waited for (--no-wait): ', text)
         self.assertTrue(self.merged(target))
 
+
+class CtrlCWhileWaiting(unittest.TestCase):
+    """A Ctrl+C in the wait (or anywhere in sync) is exit 130, not a traceback."""
+
+    def test_keyboard_interrupt_exits_130(self):
+        spec = importlib.util.spec_from_file_location('kit_sync_base_entry_for_tests', SCRIPT)
+        entry = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(entry)
+        with mock.patch.object(entry.syncbase, 'sync', side_effect=KeyboardInterrupt) as sync:
+            self.assertEqual(entry.main(['abc1234', '--model', 'Test Model']), 130)
+        self.assertEqual(sync.call_count, 1)
 
 class InFlightUnsetNeverWaits(SyncCase):
     """No "landing".in_flight (the default): a held lock is not read, nothing waits, and the

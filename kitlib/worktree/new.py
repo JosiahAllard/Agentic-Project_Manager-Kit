@@ -31,8 +31,11 @@ updated. A local base with a commit the remote lacks (ahead or diverged) is stil
 The wait (only when `.kit.json` "landing".in_flight is set; kitlib.records.inflight): before the
 fetch, a landing in flight is waited for, up to its wait_s, so a landing that pushes meanwhile is
 in the new branch; at the bound, or with `wait` False (--no-wait), a line says so and the work
-goes on. With in_flight.command set, a command that says "in flight" (or cannot tell) after the
-fetch also takes the landing exception above, as a held kit lock does.
+goes on. wait_s counts from just before the first look, and each look by command gets only what
+is left of it. With in_flight.command set and local `<base>` != `<remote>/<base>` after the fetch,
+a command that says "in flight" (or cannot tell) also takes the landing exception above, as a held
+kit lock does; equal refs never ask it. The local branch checks (exists, --existing) refuse before
+any wait.
 
 Names: `<area>/<slug>`, ASCII letters, digits, `_`, `.` and `-`, each part starting with a letter
 or digit; the area is lowercase-first, and so is a NEW slug (`--existing` also takes a slug
@@ -215,8 +218,17 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
         return refuse('exists already: %s (pick another slug, or see what it is: `python '
                       '%s/worktree_remove.py --check`; never reuse a name that failed to delete)'
                       % (path, tools))
+    there = branch_exists(main, branch)       # local only: refuse before any wait or fetch
+    if existing and not there:
+        return refuse('no such branch: %s. --existing resumes a branch that is already there; '
+                      'drop it to create one.' % branch)
+    if there and not existing:
+        return refuse('branch exists already: %s @ %s. To resume it: --existing. To start a new '
+                      'branch, pick a name that is free.'
+                      % (branch, git(main, 'rev-parse', 'refs/heads/' + branch)[1][:7]))
+    began = clock()                           # wait_s counts from here, the looks included
     if reader is not None:                    # before the fetch: a landing that pushes is fetched
-        out.extend(inflight.settle(reader, wait, say, sleep, clock)[1])
+        out.extend(inflight.settle(reader, wait, say, sleep, clock, start=began)[1])
     rc, _, err = git(main, 'fetch', remote, timeout=FETCH_TIMEOUT)
     if rc != 0:
         return refuse('fetch failed: %s' % (err or 'exit %s' % rc))
@@ -240,8 +252,9 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
         m, om = refs()
         held, line = lock_line(lock)          # after the refs: see choose_base
         seen = 'the landing lock is held'
-        if not held and reader is not None and reader.kind == 'command':
-            held, said = reader.look()        # the repo's own lock: the landing exception too
+        if not held and reader is not None and reader.kind == 'command' and m != om:
+            # the repo's own lock: the landing exception too. Equal refs need no exception.
+            held, said = reader.look(inflight.time_left(reader, began, clock))
             if held:
                 line, seen = 'landing.in_flight.command: %s' % said, 'a landing is in flight'
             else:
@@ -269,15 +282,6 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
                        "%s's unpushed commit(s) %s" % (pushed, om[:7], base, shas))
         elif shas != '(none)':
             out.append("unpushed  %s's commit(s) %s, not counted below" % (base, shas))
-
-    there = branch_exists(main, branch)
-    if existing and not there:
-        return refuse('no such branch: %s. --existing resumes a branch that is already there; '
-                      'drop it to create one.' % branch)
-    if there and not existing:
-        return refuse('branch exists already: %s @ %s. To resume it: --existing. To start a new '
-                      'branch, pick a name that is free.'
-                      % (branch, git(main, 'rev-parse', 'refs/heads/' + branch)[1][:7]))
 
     add = (path, branch) if existing else (path, '-b', branch, start)
     rc, said, err = git(main, 'worktree', 'add', *add, timeout=FETCH_TIMEOUT)

@@ -5,12 +5,18 @@ they fetch (docs/new-worktree.md "Waiting for a landing in flight"; docs/sync-ba
 
 - `{}` (no command): the kit landing lock (kitlib.records.landing, the file `gate.py land` holds
   from its merge to its push or undo). Held, or a file that is no lock record: in flight.
-- `{"command": [argv]}`: a repository whose landing tool keeps its own lock. The argv runs in the
-  main checkout (`{python}` is this Python, `{root}` the main checkout; the program is found on
-  PATH or is absolute) with COMMAND_TIMEOUT seconds and no input. Exit 0: in flight, and the
-  first line it prints names the holder. Exit 1: none. Anything else, a timeout, or a command
-  that cannot start: in flight, because "cannot tell" must not read as "free".
-- `wait_s`: the most seconds `wait()` waits (unset: WAIT_S).
+- `{"command": [argv]}`: a repository whose landing tool keeps its own lock. The argv runs with
+  the main checkout as its working folder, no input and no shell (`{python}` is this Python,
+  `{root}` the main checkout), so `["{python}", "tools/x.py"]` runs the repository's tools/x.py.
+  The program itself is found by the Windows CreateProcess search, not from the root: a bare
+  name gets only `.exe` added, a .cmd, .bat or .ps1 needs its interpreter first in the argv, and a
+  relative program path resolves against the caller's folder.
+  One look gets COMMAND_TIMEOUT seconds, or what is left of wait_s when that is less (never under
+  LOOK_MIN_S). Exit 0: in flight, and the first line it prints names the holder. Exit 1: none.
+  Anything else, a timeout, or a command that cannot start: in flight, because "cannot tell"
+  must not read as "free".
+- `wait_s`: the most seconds from the first look to going on (unset: WAIT_S). A look still
+  running at the bound ends by its own capped timeout, plus KILL_GRACE at worst.
 
 A reader only reads; it never takes, breaks or changes a lock. Nothing here prints: `wait()` hands
 its progress lines to the caller's `say`.
@@ -29,6 +35,7 @@ WAIT_S = 100
 POLL_S = 10               # seconds between looks while waiting
 NOTE_EVERY_S = 60         # seconds between "still waiting" lines
 COMMAND_TIMEOUT = 30      # seconds one look by command may take
+LOOK_MIN_S = 2            # the least a look by command gets, however little of wait_s is left
 KILL_GRACE = 5            # seconds a timed-out command's pipes get to close after its tree is ended
 HOLDER_MAX = 200          # characters of the holder line kept
 HELD, FREE = 0, 1         # the command's exit codes
@@ -42,8 +49,9 @@ class LockReader(object):
     def __init__(self, lock, wait_s=WAIT_S):
         self.lock, self.wait_s = lock, wait_s
 
-    def look(self):
-        """`(held, holder)`; holder says who, or why a held lock names nobody. Reads only."""
+    def look(self, left=None):
+        """`(held, holder)`; holder says who, or why a held lock names nobody. Reads only. A file
+        read is quick, so `left` (the seconds of the wait left) is not needed."""
         try:
             record = self.lock.read()
         except landing.LockError as e:
@@ -66,13 +74,15 @@ class CommandReader(object):
     def shown(self):
         return ' '.join(self.argv)
 
-    def look(self):
-        """`(held, holder)`. Runs the command once."""
+    def look(self, left=None):
+        """`(held, holder)`. Runs the command once, for its timeout or `left` (the seconds of the
+        wait left; None: no wait to keep to), whichever is less, but never under LOOK_MIN_S."""
+        timeout = self.timeout if left is None else max(LOOK_MIN_S, min(self.timeout, left))
         try:
-            rc, out, err = run(self.argv, self.root, self.timeout)
+            rc, out, err = run(self.argv, self.root, timeout)
         except subprocess.TimeoutExpired:
-            return True, 'cannot tell: `%s` did not answer within %d seconds, treated as in ' \
-                         'flight' % (self.shown(), self.timeout)
+            return True, 'cannot tell: `%s` did not answer within %s seconds, treated as in ' \
+                         'flight' % (self.shown(), _secs(timeout))
         except OSError as e:
             return True, 'cannot tell: `%s` could not run (%s), treated as in flight' % (
                 self.shown(), e)
@@ -85,6 +95,16 @@ class CommandReader(object):
         why = first_line(err) or said
         return True, 'cannot tell: `%s` exited %s%s, treated as in flight' % (
             self.shown(), rc, (' (%s)' % why) if why else '')
+
+
+def _secs(n):
+    """n seconds as a whole number when it is one, else to a tenth."""
+    return '%d' % n if n == int(n) else '%.1f' % n
+
+
+def time_left(reader_, start, clock=time.monotonic):
+    """Seconds of reader_.wait_s left since `start` (a `clock()` reading), never below 0."""
+    return max(0, reader_.wait_s - (clock() - start))
 
 
 def first_line(data):
@@ -132,21 +152,24 @@ def reader(root, cfg, lock):
     return LockReader(lock, wait_s)
 
 
-def settle(reader_, wait_=True, say=None, sleep=time.sleep, clock=time.monotonic):
+def settle(reader_, wait_=True, say=None, sleep=time.sleep, clock=time.monotonic, start=None):
     """One look, and the wait when a landing is in flight: `(held, lines)`. held: still in flight
     when the caller goes on (the bound came first, or `wait_` False). lines are the caller's
     output: none when no landing was in flight; else one saying how it ended. The lines said
-    while waiting go to `say` as they happen (None: they lead `lines` instead)."""
+    while waiting go to `say` as they happen (None: they lead `lines` instead). wait_s counts
+    from `start` (a `clock()` reading; None: now, before the first look), so the time the looks
+    take is part of the wait."""
     live = []
     say = say or live.append
-    held, holder = reader_.look()
+    start = clock() if start is None else start
+    held, holder = reader_.look(time_left(reader_, start, clock))
     if not held:
         return False, []
     if not wait_:
         return True, ['landing   in flight, not waited for (--no-wait): %s' % holder]
     say('landing   in flight: %s; waiting up to %ds (--no-wait goes on now)'
         % (holder, reader_.wait_s))
-    held, holder, waited = wait(reader_, holder, say, sleep, clock)
+    held, holder, waited = wait(reader_, holder, say, sleep, clock, start=start)
     if held:
         return True, live + ['landing   still in flight after %ds, going on without it: %s'
                              % (waited, holder)]
@@ -154,19 +177,20 @@ def settle(reader_, wait_=True, say=None, sleep=time.sleep, clock=time.monotonic
 
 
 def wait(reader_, holder, say, sleep=time.sleep, clock=time.monotonic, poll_s=POLL_S,
-         every_s=NOTE_EVERY_S):
-    """Waits up to reader_.wait_s seconds for a landing seen in flight (`holder`) to end, looking
-    every `poll_s` seconds. `(held, holder, waited_s)`: held False once a look says it ended, True
-    when the bound came first (holder then is the last look's). `say(line)` gets a line each
-    `every_s` seconds of waiting."""
-    start = clock()
+         every_s=NOTE_EVERY_S, start=None):
+    """Waits up to reader_.wait_s seconds from `start` (a `clock()` reading; None: now) for a
+    landing seen in flight (`holder`) to end, looking every `poll_s` seconds, each look given
+    only what is left of the wait. `(held, holder, waited_s)`: held False once a look says it
+    ended, True when the bound came first (holder then is the last look's). `say(line)` gets a
+    line each `every_s` seconds of waiting."""
+    start = clock() if start is None else start
     noted = every_s
     while True:
         waited = clock() - start
         if waited >= reader_.wait_s:
             return True, holder, waited
         sleep(min(poll_s, reader_.wait_s - waited))
-        held, now = reader_.look()
+        held, now = reader_.look(time_left(reader_, start, clock))
         waited = clock() - start
         if not held:
             return False, holder, waited
