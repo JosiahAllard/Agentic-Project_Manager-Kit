@@ -5,7 +5,7 @@ installs from (docs/plugin-source.md).
   export(kit, sha, root)           <root>/<sha12>/: the tracked files at sha, plugin.json stamped
   write_marketplace(root, folder)  <root>/.claude-plugin/marketplace.json names that folder
   prune(root)                      old export folders removed (never the named one, the 3 newest, or
-                                   one younger than 7 days); stale <sha12>.tmp folders removed
+                                   one replaced less than 7 days ago); stale <sha12>.tmp folders removed
   read_state / write_state         <root>/state.json: {sha, version, folder, exported_at, folders}
   RefreshLock                      <root>/refresh.pid, one refresh at a time
   pick_folders(folders, wanted)    the account folders --folder names, and the names that are not one
@@ -40,7 +40,7 @@ STATE = 'state.json'
 PIDFILE = 'refresh.pid'
 LOGFILE = 'refresh.log'
 KEEP = 3                             # newest export folders prune keeps, besides the named one
-YOUNG_DAYS = 7                       # prune keeps every export younger than this (by exported_at)
+YOUNG_DAYS = 7                       # prune keeps every export replaced less than this many days ago
 LOCK_GRACE_S = 10                    # an empty or unreadable refresh.pid younger than this is live
 MANIFEST = '.claude-plugin/plugin.json'
 MARKETPLACE = '.claude-plugin/marketplace.json'
@@ -658,8 +658,8 @@ def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=N
         if not fresh:
             out('  export %s into %s, then point %s at it' % (sha[:12], os.path.join(root, name),
                                                          marketplace_path(root)))
-            out('  prune export folders other than that one, the %d newest and those younger than '
-                '%d days' % (KEEP, YOUNG_DAYS))
+            out('  prune export folders other than that one, the %d newest and those replaced less than '
+                '%d days ago' % (KEEP, YOUNG_DAYS))
         for f in todo:
             for st in steps:
                 out('  %s: claude %s' % (f, ' '.join(st)))

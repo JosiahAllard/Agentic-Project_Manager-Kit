@@ -28,7 +28,7 @@ The export root is the machine config's `plugin.export_dir`, by default `%LOCALA
    - Each folder's result goes into `state.json`. A failed folder does not stop the others, and the exit code is then 1.
    - A folder whose last refresh at the same sha succeeded is skipped. When the export, the marketplace and every folder are already current, nothing runs.
 
-Without `claude` on PATH, the export is still made, no folder is refreshed, and the exit code is 1. The tool takes no machine lock and imports nothing from `kitlib.lock` or `kitlib.gate`. `kitlib.pluginsource` `ensure_export` makes or keeps the export alone, with no `claude` call, for an installer that then adds the root as a marketplace.
+Without `claude` on PATH, the export is still made, no folder is refreshed, and the exit code is 1. The tool takes no machine lock and imports nothing from `kitlib.lock` or `kitlib.gate`. `kitlib.pluginsource` `ensure_export` makes or keeps the export alone, with no `claude` call, for an installer that then adds the root as a marketplace. It keeps each folder's `migrated: true`, and when `state.json` cannot be read it raises `StateError` and writes nothing, rather than replace the state with one that has no flags.
 
 ## Prune
 
@@ -36,7 +36,7 @@ Never removed (`kitlib.pluginsource` `prune`, `KEEP`):
 
 - the folder `marketplace.json` names;
 - the 3 newest export folders by their marker's `exported_at`, because a running session may still load hooks or its MCP server from one;
-- every export folder younger than 7 days by its marker's `exported_at` (`YOUNG_DAYS`), or whose `exported_at` cannot be read, for the same reason;
+- every export folder replaced less than 7 days ago (`YOUNG_DAYS`), for the same reason. A folder is dated by when it was replaced, the `exported_at` of the next newer export, not by its own: one that was current for weeks and then replaced by three quick landings is kept. A folder whose own or replacing export's `exported_at` cannot be read is kept, and an unreadable date counts as the newest;
 - a link or junction, which is never followed or removed;
 - anything that is not a `<sha12>` folder holding the marker.
 
@@ -71,7 +71,7 @@ Test-Path -LiteralPath $p     # must print False
   - there is no export yet;
   - `state.json`'s sha is not the kit's `refs/remotes/<remote>/main`;
   - a folder is not migrated;
-  - a migrated folder's last refresh failed, or `state.json` cannot be read.
+  - a migrated folder's last refresh failed, or it has not been refreshed to the current export yet (`not refreshed to <sha12>`), or `state.json` cannot be read.
 
   With no export, or a folder not migrated, the line names `python tools/plugin_refresh.py --migrate --apply` (`MIGRATE_CMD`), since `--apply` alone refuses such a folder; otherwise it names `python tools/plugin_refresh.py --apply` (`REFRESH_CMD`). The check reads only the export root, never an account folder or cache. A folder's last successful refresh stands in for what it has installed: this is a proxy, not a reading of the install.
 - **Watcher.** `pm_watch` (`kitlib.pmwatch` `plugin_check`, over `kitlib.pluginsource` `poll`) prints `PLUGIN pm-kit plugin behind kit main <sha12>: python tools/plugin_refresh.py --apply`, or `--migrate --apply` when there is no export or a folder is not migrated. It checks on the branch cadence (`--branch-poll`) by reading one ref and `state.json`:
