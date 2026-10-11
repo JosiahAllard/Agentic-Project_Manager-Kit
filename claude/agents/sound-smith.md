@@ -70,8 +70,8 @@ No profile, or no **Audio** section: stop and say so.
    over a few seconds), never sound effects. ACE-Step via
    `python ~/.claude/tools/comfy/comfy_gen.py music` (MIT; see
    `~/.claude/knowledge/asset-generation/MODELS.md`); read that folder's
-   `README.md` and `BEST_PRACTICES.md` first. `comfy_gen` takes its own GPU self-lock per
-   run (no two generations overlap); that is not the machine lock. Short runs while exploring; ask for `[Instrumental]`; generate only in the
+   `README.md` and `BEST_PRACTICES.md` first. `comfy_gen` re-runs itself under the machine lock
+   (`machine_lock_rerun`, kind local-ai) and also keeps a private GPU self-lock per run. Short runs while exploring; ask for `[Instrumental]`; generate only in the
    windows your coordinator gives you (no owner reservation live), never in a measurement window. `check`
    fails -> start and install nothing, say so. Record every session, failures
    included, in the repo's `docs/ops/assets.md`: tags, seconds, seed, what you

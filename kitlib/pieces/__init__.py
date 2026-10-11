@@ -38,7 +38,7 @@ class TableError(ValueError):
 
 def _rel_ok(p):
     return (isinstance(p, str) and p and '\\' not in p and not p.startswith('/')
-            and not p.endswith('/') and '..' not in p.split('/'))
+            and not p.endswith('/') and not ({'', '.', '..'} & set(p.split('/'))))
 
 
 def _under(path, d):
@@ -76,8 +76,10 @@ class Table(object):
                     raise TableError('%s: no %s' % (pid, need))
             if p['kind'] not in KINDS:
                 raise TableError('%s: unknown kind %r' % (pid, p['kind']))
-            if not _rel_ok(p['dir']) or ('was' in p and not _rel_ok(p['was'])):
-                raise TableError('%s: dir/was must be repo-relative, `/`-separated, no trailing /' % pid)
+            for key in ('dir', 'was'):
+                if key in p and not _rel_ok(p[key]):
+                    raise TableError('%s: %s %r must be repo-relative, `/`-separated, no trailing /, '
+                                     'no empty, `.` or `..` part' % (pid, key, p[key]))
             if (p['kind'] == 'gradle') != bool(p.get('gradle')) or \
                     (p.get('gradle') and not p['gradle'].startswith(':')):
                 raise TableError('%s: a gradle piece, and only one, names its project as `:name`' % pid)
@@ -95,7 +97,13 @@ class Table(object):
                 raise TableError('%s: deps form a cycle through it' % p['id'])
         for f in self.root + self.root_files + ((self._solution,) if self._solution else ()):
             if not _rel_ok(f):
-                raise TableError('root path %r must be repo-relative, `/`-separated' % f)
+                raise TableError('root path %r must be repo-relative, `/`-separated, no empty, '
+                                 '`.` or `..` part' % f)
+        for old, new in self._root_was.items():
+            for f in (old, new):
+                if not _rel_ok(f):
+                    raise TableError('dotnet.was path %r must be repo-relative, `/`-separated, no '
+                                     'empty, `.` or `..` part' % (f,))
 
     # ---- by id ----------------------------------------------------------------------------------
     def ids(self):

@@ -58,7 +58,8 @@ the owner can source it.
 - **Real-world size**, in the project's units, and what it sits next to in the
   world. Scale is the classic scripted-asset failure.
 - **Where it lives**: the asset path, and the scene or material that will use it.
-- **A slug**, and the lock the profile requires for any engine-side render.
+- **A slug**, and the lock the profile requires for any engine-side render
+  (`render_glb.py` takes its own render slot, so a contact sheet needs none from you).
 
 ## Options first
 
