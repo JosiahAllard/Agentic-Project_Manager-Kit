@@ -131,18 +131,31 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 
 ### Tools without a stub
 
-The stubs cover the tools a repository's agents run from their own checkout (`kitlib.stubs.SHARED`),
-including `land.py` and `ledger.py`. The tools in the list below run by the kit's path,
-`python <kit>/tools/<name>.py`, and get no stub:
+The stubs cover the tools that act on a repository checkout, named by `-C` or the current
+directory (`kitlib.stubs.SHARED`), including `land.py`, `ledger.py`, `redfirst.py`, `trailers.py`
+and `daily_full.py` (which exits "off" unless `.kit.json` opts in, docs/daily-full.md). Every
+`tools/*.py` command is in exactly one of `SHARED` and `KIT_ONLY` (`kitlib.stubs`). The test
+`Partition` in `tests/stubs/test_kit_stubs.py` fails when a new tool is in neither; the tool's
+author picks the list. The `KIT_ONLY` tools run by the kit's path,
+`python <kit>/tools/<name>.py`, and get no stub, because they act on the machine, the owner's
+files or the kit itself:
 
 - `machine_lock.py`: one lock per machine, so it runs from the machine's lock install, never a
   repository's. `run` needs `--repo <name> --slug <slug>` (and `--kind`); `status` needs nothing.
   A repository's own commands use it only through a gate (booked by `gate.py`) or a wrapped heavy
   run.
-- `kit_tests.py` (the kit's own suites), `redfirst.py`, `lock_release_check.py`,
-  `daily_full.py`, `backlog_lint.py`, `agent_roster.py`: run by the kit's maintainers or the PM
-  against a repository named by `-C` (docs/test-tools.md, docs/redfirst.md, docs/lock-release.md,
-  docs/daily-full.md, docs/backlog-lint.md, docs/ROSTER.md).
+- `kit_tests.py` (the kit's own suites), `lock_release_check.py` (its `-C` is the kit's release
+  checkout), `backlog_lint.py`, `agent_roster.py`: run by the kit's maintainers or the PM
+  (docs/test-tools.md, docs/lock-release.md, docs/backlog-lint.md, docs/ROSTER.md).
+- `launch.py`, `machine_setup.py`, `pm_data.py`, `pm_watch.py`, `hub_mirror.py`, `pending.py`,
+  `ledger_refs.py`, `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and
+  the machine.
+
+A stub bakes in the kit it was written from, so one written from a kit worktree runs that
+worktree and is stale on main (`check` says `runs the kit at ...`). At session start the
+coordinator's and the PM's checklists print one `stubs (<repo>): N missing/stale: ...` line, with
+the `kit_stubs.py write -C <repo>` command, for a repository whose stubs are not current
+(docs/pm-start.md).
 
 ### Plugin install (local marketplace)
 

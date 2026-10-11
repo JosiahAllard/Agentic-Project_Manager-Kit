@@ -10,6 +10,7 @@ from kitlib.pmstart import fglock
 from kitlib.git import cmd as gitcmd
 from kitlib.records import landing
 from tests import gitfixture
+from tests.pmstart import keep_off_launcher_repos
 from tests.realgit import real_git
 
 
@@ -18,6 +19,7 @@ def setUpModule():
     global _orig_read_live
     _orig_read_live = fglock.read_live
     fglock.read_live = lambda user32=None: 0
+    keep_off_launcher_repos()
 
 
 def tearDownModule():

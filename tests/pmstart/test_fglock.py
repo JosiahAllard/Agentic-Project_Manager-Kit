@@ -4,6 +4,7 @@ import unittest
 
 from kitlib import pmstart
 from kitlib.pmstart import fglock
+from tests.pmstart import keep_off_launcher_repos
 
 CFG = {}
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
