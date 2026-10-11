@@ -407,9 +407,10 @@ class PmDataClose(StoreLandCase):
         self.assertNotIn('compare each path with HEAD', warn[0])
         self.assertEqual(self.main_now(), out.merge)
 
-    def overtaken_close(self, after_my_files=None, removes=False):
+    def overtaken_close(self, after_my_files=None, removes=False, garbles=False):
         """`(wt, their commit, the landing)`: another session commits FOO in the PM data worktree
-        (an added line, or with `removes` the file's removal) after the close checked the files
+        (an added line, with `removes` the file's removal, with `garbles` bytes no record
+        parses from) after the close checked the files
         and before its first commit attempt. BAR is blocked on FOO, so the close writes it too.
         `after_my_files()` runs once the close's own file change is on disk."""
         wt = self.pm_worktree(pulled('FOO'), rec('BAR', state='blocked', blocked_on='item:FOO'))
@@ -421,6 +422,9 @@ class PmDataClose(StoreLandCase):
             first = branch and not theirs
             if first and removes:
                 os.remove(self.record(wt, 'FOO'))
+            elif first and garbles:
+                with open(self.record(wt, 'FOO'), 'wb') as f:
+                    f.write(b'\xff\xfe not a record\n')
             elif first:
                 with open(self.record(wt, 'FOO'), 'a', encoding='utf-8', newline='\n') as f:
                     f.write('\nanother session wrote this\n')
@@ -472,6 +476,39 @@ class PmDataClose(StoreLandCase):
                                          'removed it), so there is nothing to close'), warn[0])
         self.assertNotIn('close it with', warn[0])
         self.assertNotIn('catch-up', warn[0])
+
+    def test_a_close_overtaken_by_a_commit_that_left_the_record_unreadable_says_to_see_it(self):
+        """The other commit left FOO.md unparseable: the store still holds it, so the WARNING
+        does not say there is nothing to close; it gives the show command."""
+        wt, _, out = self.overtaken_close(garbles=True)
+        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertNotIn('no longer holds', warn[0])
+        self.assertNotIn('close it with', warn[0])
+        self.assertIn('FOO cannot be read as that commit left it', warn[0])
+        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" show FOO' % self.pm_root(wt)),
+                        warn[0])
+
+    def test_a_close_overtaken_with_the_store_unreadable_afterwards_says_so(self):
+        """The folder cannot be read again after the put back (an OSError): the WARNING is the
+        close's own, says the store could not be read again and gives the show command."""
+        real = smod.MainBackend._read
+        gone = []
+
+        def read(backend):
+            if gone:
+                raise OSError('the disk went away')
+            return real(backend)
+        with mock.patch.object(smod.MainBackend, '_read', read):
+            wt, _, out = self.overtaken_close(lambda wt: gone.append(wt))
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertIn('the close of FOO in the backlog store kit/backlog in ', warn[0])
+        self.assertIn('the store could not be read again (the disk went away), so see whether '
+                      'FOO is still open with: ', warn[0])
+        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" show FOO' % self.pm_root(wt)),
+                        warn[0])
 
     def test_a_close_another_commit_overtook_names_the_compare_for_a_file_it_left(self):
         """FOO is written again by hand after the close deleted it: the close leaves that file,

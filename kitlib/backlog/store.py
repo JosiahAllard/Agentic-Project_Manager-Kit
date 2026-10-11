@@ -552,6 +552,23 @@ def _store_env():
     return {k: v for k, v in cmd.scrubbed_env().items() if k.upper() != 'GIT_INDEX_FILE'}
 
 
+def _replace_file(full, data):
+    """Give `full` the bytes `data` in one step: written to a file beside it, then moved
+    over it. An OSError leaves `full` as it was, whole, and removes the other file."""
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(full) + '.', suffix='.put-back',
+                               dir=os.path.dirname(full))
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+        os.replace(tmp, full)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 class MainBackend(object):
     """`<dir>/<ID>.md` in a worktree. A write writes the files; the caller's branch carries them
     to main through a landing. There is no compare-and-swap on the files: a write checks that
@@ -670,8 +687,9 @@ class MainBackend(object):
         which HEAD may not hold: an uncommitted record stays one. A file is removed where that
         content is none. `wrote`, `before`: {path: bytes, or None for no file}. Only a file that
         still holds exactly what this write wrote is touched, and HEAD's content is fetched
-        first, so no git call sits between that check and the write. Returns the paths left as
-        they are: changed since, or git or the disk failed."""
+        first, so no git call sits between that check and the write. The content goes in
+        whole or not at all (_replace_file), so a path left is never a part of it. Returns
+        the paths left as they are: changed since, or git or the disk failed."""
         want = dict(before)
         unknown = set()
         try:
@@ -696,8 +714,7 @@ class MainBackend(object):
                 if path in unknown or mine != wrote[path]:
                     left.append(path)
                 elif want[path] is not None:
-                    with open(full, 'wb') as f:
-                        f.write(want[path])
+                    _replace_file(full, want[path])
                 elif mine is not None:
                     os.remove(full)
             except OSError:

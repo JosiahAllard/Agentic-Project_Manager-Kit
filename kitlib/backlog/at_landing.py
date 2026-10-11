@@ -249,16 +249,20 @@ def close_landed(root, cfg, branch, merge, session=SESSION):
 
 def _after_put_back(store, rid, branch, command, reason):
     """What is true of `rid` once a refused close was put back, read from the store again: the
-    other commit may have closed or removed the record, or released it. The close command is
-    given only while `branch` still holds the record pulled."""
+    other commit may have closed or removed the record, released it, or left its file
+    unreadable. The close command is given only while `branch` still holds the record
+    pulled."""
     try:
-        now = dict((r.stem, r) for r in store.load().readable).get(rid)
-    except Refusal as exc:
+        now = store.load().get(rid)
+    except (Refusal, OSError) as exc:
         return ('the store could not be read again (%s), so see whether %s is still open with: %s'
                 % (_one_line(str(exc)), rid, command('show', rid)))
     if now is None:
         return ('the store no longer holds %s (that commit closed or removed it), so there is '
                 'nothing to close' % rid)
+    if not now.readable:
+        return ('%s cannot be read as that commit left it, so it was not closed; see it with: %s'
+                % (rid, command('show', rid)))
     if now.get('state') == 'pulled' and now.get('pulled_by') == branch:
         return ('%s is still pulled by %s and was not closed; close it with: %s'
                 % (rid, branch, command('close', rid, '--reason', '"%s"' % reason)))

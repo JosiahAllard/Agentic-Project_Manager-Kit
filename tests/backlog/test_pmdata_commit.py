@@ -361,6 +361,37 @@ class PmDataStore(unittest.TestCase):
         self.assertEqual(self.backend.pending(), [('modified', DIR + '/BAZ.md'),
                                                   ('added', DIR + '/NEW.md')])
 
+    def test_an_overtaken_write_removes_a_record_it_created_that_no_commit_changed(self):
+        """A write that created NEW alongside a change to BAR, another commit changing BAR
+        alone: NEW.md, absent before the write and not on HEAD, is removed again."""
+        exc = self.overtaken_publish(
+            lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['theirs'])]),
+            {'BAR': priced('BAR', summary='mine')['BAR'], 'NEW': priced('NEW')['NEW']})
+        self.assertEqual((exc.changed, exc.left), ([DIR + '/BAR.md'], []))
+        self.assertFalse(os.path.exists(self.path('NEW')))
+        self.assertEqual(self.status(), [])
+        self.assertEqual(os.listdir(os.path.dirname(self.path('NEW'))), ['BAR.md', 'BAZ.md'])
+
+    def test_an_overtaken_file_that_cannot_be_put_back_keeps_what_the_write_wrote(self):
+        """The put back fails on the disk: the file is left whole, holding exactly what the
+        refused write wrote (never a part of HEAD's content), it is named as left, and no
+        other file stays in the store folder."""
+        mine = priced('BAR', summary='mine')['BAR']
+        real = os.replace
+
+        def replace(src, dst):
+            if os.path.basename(dst) == 'BAR.md':
+                raise OSError('disk full')
+            return real(src, dst)
+        with mock.patch.object(smod.os, 'replace', replace):
+            exc = self.overtaken_publish(
+                lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['theirs'])]),
+                {'BAR': mine})
+        self.assertEqual(exc.left, [DIR + '/BAR.md'])
+        with open(self.path('BAR'), 'rb') as f:
+            self.assertEqual(f.read(), mine.encode('utf-8'))
+        self.assertEqual(os.listdir(os.path.dirname(self.path('BAR'))), ['BAR.md', 'BAZ.md'])
+
     def test_an_overtaken_path_whose_head_content_cannot_be_read_is_left(self):
         """git gives neither HEAD's entries (ls-tree) nor, in the second case, the blob
         (cat-file): the overtaken path is left and named; the other path is still put back."""
