@@ -53,7 +53,10 @@ class StandingTest(unittest.TestCase):
 class HubTest(unittest.TestCase):
     def test_step_names_url(self):
         (s,) = pmstart.hub(CFG)
-        self.assertIn("republish claude/hub/action-hub.html to https://claude.ai/artifact/X", s)
+        self.assertIn("republish the kit's Action Hub page claude/hub/action-hub.html "
+                      "to https://claude.ai/artifact/X with the Artifact tool", s)
+        self.assertIn("docs/action-hub.md (For the PM)", s)
+        self.assertNotIn("republish claude/hub/action-hub.html to", s)  # the old bare line
         self.assertIn("pm_ack", s)
 
 
@@ -235,9 +238,9 @@ class EngReviewTest(unittest.TestCase):
     """pm_start.eng_review: the owner's design-review flags."""
 
     def test_set_lists_every_flag_and_says_to_hub_them(self):
-        out = pmstart.eng_review(dict(CFG, eng_review=["SCRIPT-API-*", "gamma"]))
+        out = pmstart.eng_review(dict(CFG, eng_review=["EX-API-*", "gamma"]))
         self.assertEqual(len(out), 1)
-        self.assertIn("SCRIPT-API-*, gamma", out[0])
+        self.assertIn("EX-API-*, gamma", out[0])
         self.assertIn("hub", out[0])
 
     def test_unset_or_empty_gives_no_line(self):
@@ -247,13 +250,13 @@ class EngReviewTest(unittest.TestCase):
         self.assertNotIn("eng_review", pmstart.checklist(CFG, NOW, procs=[], **fakes))
 
     def test_bad_value_raises(self):
-        for bad in ("SCRIPT-API-*", "", [1], [""], 5, 0, False, {}, None):
+        for bad in ("EX-API-*", "", [1], [""], 5, 0, False, {}, None):
             with self.assertRaises(TypeError):
                 pmstart.eng_review(dict(CFG, eng_review=bad))
 
     def test_in_checklist_and_bad_value_isolated(self):
         fakes = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"}, liveness={"read": lambda p: "{}"})
-        self.assertIn("SCRIPT-API-*", pmstart.checklist(dict(CFG, eng_review=["SCRIPT-API-*"]), NOW, procs=[], **fakes))
+        self.assertIn("EX-API-*", pmstart.checklist(dict(CFG, eng_review=["EX-API-*"]), NOW, procs=[], **fakes))
         txt = pmstart.checklist(dict(CFG, eng_review="x"), NOW, procs=[], **fakes)
         self.assertIn("could not check eng_review:", txt)
         self.assertIn("republish", txt)

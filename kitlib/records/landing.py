@@ -24,9 +24,11 @@ in it would be overwritten or removed (a file has no compare-and-swap here). `br
 never happens by age (a gate may run an hour). It is refused unless BOTH
   - the holder is gone: a process holder that kitlib.proc says is surely gone (a pid running with
     another start time is a reused pid: gone; one that cannot be inspected: alive), or a token
-    holder (or a lock that cannot be read) the caller declares gone with holder_gone=True, AND
+    holder (or a JSON object of an old format) the caller declares gone with holder_gone=True, AND
   - <main> == <remote>/<main> and the main checkout has no MERGE_HEAD (`<common dir>/MERGE_HEAD`,
     whichever checkout asks): nothing unpushed exists.
+A file that cannot be read, is empty, or is not a JSON object is never broken, holder_gone or not:
+a taker between its create and its write leaves it so. Such a file is cleared by hand.
 Just before removing, a break re-reads the file and refuses when it is no longer the one judged
 (released and taken again meanwhile). The window between that read and the remove is not closed.
 A take whose write fails after the create removes the file again: no empty lock is left behind.
@@ -166,7 +168,7 @@ class LandingLock(object):
                 text = f.read()
         except FileNotFoundError:
             return None
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:      # not UTF-8: unreadable, so held
             raise LockError('cannot read %s: %s' % (self.path, e))
         try:
             rec = json.loads(text)
@@ -196,6 +198,12 @@ class LandingLock(object):
             raise LockError('lane must be one of %s' % ', '.join(self.lanes))
         if not branches or not all(isinstance(b, str) and b for b in branches):
             raise LockError('a landing lock names the branches it lands')
+        # A lock already there is Busy before the record is built: a waiter's look then asks git
+        # nothing and looks up no process. The record is still built before the create, so the
+        # file is empty only for the write itself (readers take an empty file as held). The
+        # exclusive create below stays the only arbiter: a lock made after this look loses there.
+        if os.path.exists(self.path):
+            self._busy()
         record = {
             'lane': lane, 'branches': list(branches), 'pid': pid,
             'pid_start': self.start_of(pid) if pid is not None else None,
@@ -206,11 +214,7 @@ class LandingLock(object):
         try:
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
-            try:
-                holder = self.read()
-            except LockError as e:
-                holder = {'lane': '?', 'phase': '?', 'error': str(e)}
-            raise Busy(holder or {'lane': '?', 'phase': 'released while we looked'})
+            self._busy()
         except OSError as e:
             raise LockError('cannot create %s: %s' % (self.path, e))
         data = (json.dumps(record, sort_keys=True) + '\n').encode('utf-8')
@@ -227,6 +231,15 @@ class LandingLock(object):
                 pass
             raise LockError('cannot write %s: %s' % (self.path, e))
         return record
+
+    def _busy(self):
+        """Raise Busy naming the holder: lane '?' when the file is not a record, 'released while
+        we looked' when it is gone again."""
+        try:
+            holder = self.read()
+        except LockError as e:
+            holder = {'lane': '?', 'phase': '?', 'error': str(e)}
+        raise Busy(holder or {'lane': '?', 'phase': 'released while we looked'})
 
     def _held_by(self, token):
         rec = self.read()
@@ -291,24 +304,34 @@ class LandingLock(object):
         try:
             with open(self.path, encoding='utf-8') as f:
                 return f.read()
-        except OSError:
+        except (OSError, UnicodeDecodeError):      # break_lock refuses a file it cannot read
             return None
 
-    def _raw(self):
-        try:
-            rec = json.loads(self._text() or '')
-        except ValueError:
-            return {}
-        return rec if isinstance(rec, dict) else {}
-
     def break_lock(self, holder_gone=False):
-        """`(True, record removed)` or `(False, why not)`. Never by age."""
+        """`(True, record removed)` or `(False, why not)`. Never by age.
+
+        Fail closed: a file that cannot be read, is empty, or is not a JSON object is never
+        broken, holder_gone or not - a taker between its exclusive create and its write leaves
+        exactly that (KIT-LANDLOCK-BREAK-LIVE)."""
         judged = self._text()
+        if judged is None:
+            if not os.path.exists(self.path):
+                return False, 'nobody holds the landing lock: nothing to break'
+            return False, ('%s cannot be read: not broken. Cleared by hand only once no landing '
+                           'runs' % self.path)
+        try:
+            raw = json.loads(judged)
+        except ValueError:
+            raw = None
+        if not isinstance(raw, dict):
+            return False, ('%s is empty or not a JSON record (as a taker leaves it between its '
+                           'create and its write): not broken, holder_gone or not. Cleared by '
+                           'hand only once no landing runs' % self.path)
         try:
             rec = self.read()
         except LockError as e:
             rec = {'lane': '?', 'phase': '?', 'unreadable': str(e), 'pid': None}
-            raw = self._raw()          # an unknown lane still names its process: check it
+            # an old-format record (unknown lane, no token) still names its process: check it
             if raw.get('pid') is not None:
                 rec.update(lane=raw.get('lane', '?'), phase=raw.get('phase', '?'), pid=raw['pid'],
                            pid_start=raw.get('pid_start'))
@@ -318,7 +341,7 @@ class LandingLock(object):
         if state == 'alive':
             return False, 'the holder is alive: %s' % describe(rec)
         if state == 'token' and not holder_gone:
-            return False, ('a token holder (or an unreadable lock) cannot be seen from here: %s. '
+            return False, ('a token holder (or an old-format record) cannot be seen from here: %s. '
                            'Break it only when that lander is gone (holder_gone)' % describe(rec))
         why = self.unpushed()
         if why:

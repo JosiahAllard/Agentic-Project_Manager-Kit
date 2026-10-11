@@ -23,7 +23,7 @@ A: a
 Decides: Price the open and the closed ones.
 Source: chat
 Supersedes: -
-Items: OPEN-ONE, CLOSED-ONE
+Items: EX-OPEN-ONE, EX-CLOSED-ONE
 
 ## @2 | 2026-10-02 08:00Z | alpha | selected
 Q: q
@@ -31,7 +31,7 @@ A: a
 Decides: Names a record nobody has.
 Source: chat
 Supersedes: -
-Items: OPEN-ONE, TYPO-ONE, TYPO-TWO
+Items: EX-OPEN-ONE, EX-TYPO-ONE, EX-TYPO-TWO
 
 ## @3 | 2026-10-03 08:00Z | beta | selected
 Q: q
@@ -47,7 +47,7 @@ A: a
 Decides: For every repository.
 Source: chat
 Supersedes: -
-Items: ALSO-NOBODY
+Items: EX-ALSO-NOBODY
 
 ## @5 | 2026-10-05 08:00Z | alpha | selected
 Q: q
@@ -76,7 +76,7 @@ LEDGER = fill(TEMPLATE)
 class ScanTest(unittest.TestCase):
     def scan(self, repos=('alpha',)):
         entries = {e.id: e for e in read.parse(LEDGER)}
-        return orphans.scan(entries, repos, {'OPEN-ONE'}, lambda rid: rid == 'CLOSED-ONE')
+        return orphans.scan(entries, repos, {'EX-OPEN-ONE'}, lambda rid: rid == 'EX-CLOSED-ONE')
 
     def test_only_this_repositorys_and_all_entries_with_items_are_read(self):
         # The first, second and fourth entries: not beta's, not the one with no Items, not the tombstone.
@@ -85,10 +85,10 @@ class ScanTest(unittest.TestCase):
     def test_an_id_open_nowhere_is_warned_in_ledger_order(self):
         got = self.scan()
         self.assertEqual(len(got.warnings), 2)
-        self.assertTrue(got.warnings[0].startswith(rid(2) + ': Items: OPEN-ONE, TYPO-ONE, TYPO-TWO - '))
-        self.assertIn('`TYPO-ONE`, `TYPO-TWO` are', got.warnings[0])
+        self.assertTrue(got.warnings[0].startswith(rid(2) + ': Items: EX-OPEN-ONE, EX-TYPO-ONE, EX-TYPO-TWO - '))
+        self.assertIn('`EX-TYPO-ONE`, `EX-TYPO-TWO` are', got.warnings[0])
         self.assertTrue(got.warnings[1].startswith(rid(4) + ': '))
-        self.assertIn('`ALSO-NOBODY` is', got.warnings[1])
+        self.assertIn('`EX-ALSO-NOBODY` is', got.warnings[1])
 
     def test_an_open_or_closed_id_is_no_orphan(self):
         self.assertFalse([w for w in self.scan().warnings if w.startswith(rid(1))])
@@ -126,18 +126,18 @@ class CheckToolTest(unittest.TestCase):
 
     def store(self):
         self.kit_json()
-        for rid in ('OPEN-ONE', 'CLOSED-ONE'):
+        for rid in ('EX-OPEN-ONE', 'EX-CLOSED-ONE'):
             self.repo.write('docs/backlog/%s.md' % rid, record_text(id=rid))
-        self.repo.commit('add records', 'docs/backlog/OPEN-ONE.md', 'docs/backlog/CLOSED-ONE.md')
-        self.repo.git('rm', '-q', 'docs/backlog/CLOSED-ONE.md')
-        self.repo.git('commit', '-q', '-m', 'closes CLOSED-ONE: done')
+        self.repo.commit('add records', 'docs/backlog/EX-OPEN-ONE.md', 'docs/backlog/EX-CLOSED-ONE.md')
+        self.repo.git('rm', '-q', 'docs/backlog/EX-CLOSED-ONE.md')
+        self.repo.git('commit', '-q', '-m', 'closes EX-CLOSED-ONE: done')
 
     def test_orphans_warn_and_do_not_fail(self):
         self.store()
         r = self.check('--root', self.repo.root)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn('WARN %s: Items: OPEN-ONE, TYPO-ONE, TYPO-TWO' % rid(2), r.stdout)
-        self.assertIn('WARN %s: Items: ALSO-NOBODY' % rid(4), r.stdout)
+        self.assertIn('WARN %s: Items: EX-OPEN-ONE, EX-TYPO-ONE, EX-TYPO-TWO' % rid(2), r.stdout)
+        self.assertIn('WARN %s: Items: EX-ALSO-NOBODY' % rid(4), r.stdout)
         self.assertNotIn('WARN %s' % rid(1), r.stdout)
         self.assertIn('ruling orphans   3 Items line(s) read, 2 WARN', r.stdout)
         self.assertIn('ledger: 6 entries, OK', r.stdout)

@@ -190,6 +190,24 @@ class BranchCommitsWithAFullRefBase(WithOrigin):
         self.assertEqual([c.subject for c in commits], ['phase work'])
 
 
+    def test_a_killed_tracking_probe_is_no_answer_not_no_tracking_ref(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no tracking ref" as exit 1
+        with no output, the shape a git ended from outside leaves; the remote's newer base commits
+        were then counted as the branch's own."""
+        self.phase()
+        real = trailers.gitcmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] == 'rev-parse' and argv[-1] == 'refs/remotes/origin/main':
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(trailers.gitcmd, '_run', side_effect=run):
+            commits, why = trailers.branch_commits('main', self.root, head='phase/g')
+        self.assertIsNone(commits, 'a killed probe was read as "no tracking ref"')
+        self.assertIn('cannot read refs/remotes/origin/main', why)
+        self.assertIn('printed nothing', why)
+
+
 class ADiffRunThatStops(WithOrigin):
     def test_the_error_names_the_base_note_when_the_base_was_defaulted(self):
         self.advance_origin()

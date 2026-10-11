@@ -45,7 +45,7 @@ class TheProbe(unittest.TestCase):
 class TheDeadProcess(unittest.TestCase):
 
     def test_its_pid_stays_an_exited_process_while_the_popen_is_kept(self):
-        # KIT-DEADPID-REUSE: a helper that kept only `.pid` dropped the Popen's handle, and the
+        # A helper that kept only `.pid` dropped the Popen's handle, and the
         # pid was free for a new process. While the Popen is kept the pid opens to the exited
         # process object, which no new process can share.
         p = testutil.dead_process()

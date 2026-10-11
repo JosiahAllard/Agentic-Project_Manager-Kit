@@ -27,6 +27,24 @@ LOCK_NAME = 'test-landing.lock'
 MASTER_CONFIG = {'repo': {'main_branch': 'master'}, 'landing': {'lock_file': 'git:' + LOCK_NAME}}
 
 
+def kill_reads_of(spec, after=0):
+    """A patch of cmd._run under which a `rev-parse` whose last argument is `spec` exits 1 having
+    printed nothing (a git ended from outside, kitlib.git.refs.KILLED_SHAPE), once `after` such
+    reads have answered; every other git runs as before (the fake, or real git)."""
+    real = gitcmd.spawner()
+    seen = []
+
+    def run(argv, cwd=None, input=None, timeout=None, env=None):
+        if argv[1] == 'rev-parse' and argv[-1] == spec:
+            seen.append(argv)
+            if len(seen) > after:
+                return 1, b'', b''
+        return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+    patch = mock.patch.object(gitcmd, '_run', side_effect=run)
+    patch.seen = seen                   # every read of `spec`, answered or killed
+    return patch
+
+
 class WorktreeCase(unittest.TestCase):
     """A throwaway repo: bare origin, a BASE branch equal to it, CONFIG (when set) committed as
     `.kit.json` and pushed."""
@@ -139,6 +157,36 @@ class NewBranchMode(WorktreeCase):
         self.assertEqual(rc, 1, out)
         self.assertIn('tell the coordinator', out)
         self.assertFalse(os.path.exists(self.slug_path('fresh')))
+
+    def test_a_killed_read_of_the_base_is_refused_as_unread_not_unresolved(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no such ref" as exit 1 with
+        no output, which a git ended from outside also leaves."""
+        with kill_reads_of('%s^{commit}' % self.BASE):
+            rc, out = self.tool('fix/fresh')
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn('did not resolve', out)
+        self.assertIn('refused   %s could not be read (' % self.BASE, out)
+        self.assertIn('printed nothing', out)
+        self.assertIn('nothing was created', out)
+        self.assertFalse(os.path.exists(self.slug_path('fresh')))
+        self.assertFalse(new.branch_exists(self.repo, 'fix/fresh'))
+
+    def test_a_killed_second_read_of_the_base_is_refused_as_unread(self):
+        """main differs from origin and the lock is free, so choose_base reads both refs again;
+        that second read of main is the one killed (refs() raises _Unread from inside it)."""
+        self.write('b.txt', 'local only\n')
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', 'unpushed')
+        killer = kill_reads_of('%s^{commit}' % self.BASE, after=1)
+        with killer:
+            rc, out = self.tool('fix/fresh')
+        self.assertEqual(len(killer.seen), 2, 'the first read answered, the re-read was killed')
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn('did not resolve', out)
+        self.assertNotIn('not a landing in progress', out)
+        self.assertIn('refused   %s could not be read (' % self.BASE, out)
+        self.assertFalse(os.path.exists(self.slug_path('fresh')))
+        self.assertFalse(new.branch_exists(self.repo, 'fix/fresh'))
 
     def test_another_worktree_of_the_same_repository_may_call_it(self):
         rc, out = self.tool('fix/first')
@@ -266,30 +314,30 @@ class ACallerWrongAboutTheBranchIsTold(WorktreeCase):
 
 
 class UppercaseRecordIdBranches(WorktreeCase):
-    """`--existing` resumes `codex/<RECORD-ID>` branches; a new branch stays lowercase; case
+    """`--existing` resumes `codex/` branches named by an uppercase record id; a new branch stays lowercase; case
     twins (folder or branch) are refused, never resolved."""
 
-    BRANCH = 'codex/TOOLS-RECORD-ID'
+    BRANCH = 'codex/EX-RECORD-ID'
 
     def test_existing_resumes_an_uppercase_record_id_branch(self):
         tip = self.make_branch_with_work(self.BRANCH)
         rc, out = self.tool('--existing', self.BRANCH)
         self.assertEqual(rc, 0, out)
-        path = self.slug_path('TOOLS-RECORD-ID')
+        path = self.slug_path('EX-RECORD-ID')
         self.assertEqual(self.run_git(path, 'rev-parse', 'HEAD')[1], tip, out)
         self.assertEqual(self.run_git(path, 'rev-parse', '--abbrev-ref', 'HEAD')[1], self.BRANCH)
-        self.assertEqual([os.path.basename(p) for p in self.worktree_paths()], ['TOOLS-RECORD-ID'])
+        self.assertEqual([os.path.basename(p) for p in self.worktree_paths()], ['EX-RECORD-ID'])
 
     def test_a_new_branch_still_has_to_be_lowercase_first(self):
-        self.assertFalse(new.branch_ok('codex/TOOLS-NEW-ID', existing=False))
-        rc, out = self.cli('codex/TOOLS-NEW-ID')
+        self.assertFalse(new.branch_ok('codex/EX-NEW-ID', existing=False))
+        rc, out = self.cli('codex/EX-NEW-ID')
         self.assertEqual(rc, 2, out)
         self.assertIn('usage:', out)
-        self.assertFalse(new.branch_exists(self.repo, 'codex/TOOLS-NEW-ID'), out)
+        self.assertFalse(new.branch_exists(self.repo, 'codex/EX-NEW-ID'), out)
 
     def test_existing_in_the_wrong_case_is_refused_and_names_the_real_branch(self):
         self.make_branch_with_work(self.BRANCH)
-        rc, out = self.tool('--existing', 'codex/tools-record-id')
+        rc, out = self.tool('--existing', 'codex/ex-record-id')
         self.assertEqual(rc, 1, out)
         self.assertIn('differs only in case', out)
         self.assertIn(self.BRANCH, out)
@@ -304,7 +352,7 @@ class UppercaseRecordIdBranches(WorktreeCase):
         self.assertEqual(self.worktree_paths(), [])
 
     def test_a_folder_that_differs_only_in_case_is_refused_on_any_filesystem(self):
-        os.makedirs(self.slug_path('tools-record-id'))
+        os.makedirs(self.slug_path('ex-record-id'))
         self.make_branch_with_work(self.BRANCH)
         rc, out = self.tool('--existing', self.BRANCH)
         self.assertEqual(rc, 1, out)
@@ -314,7 +362,7 @@ class UppercaseRecordIdBranches(WorktreeCase):
     def test_branch_exists_is_case_exact(self):
         self.make_branch_with_work(self.BRANCH)
         self.assertTrue(new.branch_exists(self.repo, self.BRANCH))
-        self.assertFalse(new.branch_exists(self.repo, 'codex/tools-record-id'))
+        self.assertFalse(new.branch_exists(self.repo, 'codex/ex-record-id'))
 
 
 class BranchExistsProbeIsExact(WorktreeCase):
@@ -549,6 +597,17 @@ class ALandingInProgressBasesOnOrigin(LandingCase):
         self.assertIn('landing   in progress', out)
         self.assertIn("unpushed  master's commit(s) %s, not counted below" % merge[:7], out)
         self.assertIn('of pushed origin/master not in it', out)
+
+    def test_held_and_a_killed_read_of_origin_is_refused_as_unread(self):
+        self.land('one')
+        self.hold()
+        with kill_reads_of('refs/remotes/origin/master^{commit}'):
+            rc, out = self.tool('fix/fresh')
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn('did not resolve', out)
+        self.assertIn('refused   refs/remotes/origin/master could not be read (', out)
+        self.assertFalse(os.path.exists(self.slug_path('fresh')), out)
+        self.assertFalse(new.branch_exists(self.repo, 'fix/fresh'), out)
 
     def test_held_but_origin_does_not_resolve_refuses(self):
         """The one refusal under a held lock: no pushed commit to base on."""

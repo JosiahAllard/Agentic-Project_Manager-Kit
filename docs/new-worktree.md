@@ -25,7 +25,7 @@ The lock is the kit landing lock (`kitlib.records.landing`, the file in the git 
 - a new branch starts at the pushed `<remote>/<base>`;
 - the output names the base's unpushed commits the branch does not contain.
 
-A lock file that is not a lock record counts as held. The one refusal under a held lock is that `<remote>/<base>` does not resolve. With the lock free, the refs are read once more before refusing (`choose_base`), in case a lander pushed and released in between. The lock is only read.
+A lock file that is not a lock record counts as held. The one refusal under a held lock is that `<remote>/<base>` does not resolve. With the lock free, the refs are read once more before refusing (`choose_base`), in case a lander pushed and released in between. The lock is only read. A base ref git gives no answer for (a git ended from outside included) is refused as `<ref> could not be read (<why>)`, before or after that second read, never taken for one that does not resolve (`refs.resolve(known=True)`, KIT-GIT-EXIT1-ANSWERS-2).
 
 ## Local base behind the remote
 
