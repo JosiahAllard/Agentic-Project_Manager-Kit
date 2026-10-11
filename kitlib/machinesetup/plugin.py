@@ -15,6 +15,10 @@ to the folder, removed for ~/.claude) and records the folder as migrated. The CL
 keys of settings.json, so each folder's change copies settings.json to a .bak first, and then checks
 enabledPlugins is true. With no `claude` on PATH each folder's change becomes a note giving the
 migrate command.
+
+Only folders in the refresh set (kitlib.pluginsource.claude.account_folders) are installed: a
+--config-dir folder outside it would never be updated by tools/plugin_refresh.py or pm_start, so it
+is a note giving the hand commands, and the export change is still made for them.
 """
 import json
 import os
@@ -62,6 +66,9 @@ def survey(plan, ctx):
     except (ps.RefreshError, ps.StateError, ConfigError, OSError) as e:
         plan.refuse('the plugin export (docs/plugin-source.md): %s' % e)
         return
+    candidates, outside = _split(candidates, ctx.home)
+    for d in outside:
+        plan.note('plugin', _outside_note(d, s.export_dir))
     todo = []
     for d, path, have in candidates:
         if have is True and ps.migrated(state, d):
@@ -72,13 +79,13 @@ def survey(plan, ctx):
                                 'from the export. The old copy in its plugins cache is left: '
                                 'docs/plugin-source.md "Migrating"' % d)
         todo.append((d, path))
-    if not todo:
-        return
-    runner = ctx.host.plugin_runner(ctx.home)
-    if runner is None or not runner.available():
+    runner = ctx.host.plugin_runner(ctx.home) if todo else None
+    if todo and (runner is None or not runner.available()):
         for d, _path in todo:
             plan.note('plugin', '%s: the kit plugin is not enabled and no claude CLI is on PATH; once it '
                                 'is, run %s' % (d, ps.migrate_cmd(d)))
+        todo = []
+    if not todo and not outside:                 # an outside folder's hand steps need the export
         return
     sha, _why = ps.tracking_main(ctx.kit, s.remote)
     at = sha[:12] if sha else 'not fetched yet'
@@ -98,6 +105,28 @@ def survey(plan, ctx):
                  lambda d=d, path=path, bak=bak: _install(ctx, s, runner, d, path, pid, bak),
                  undo='copy "%s" over "%s"; to run it again: %s (it removes the marketplace first, its '
                       'failure tolerated)' % (bak, path, ps.migrate_cmd(d)))
+
+
+def _split(candidates, home):
+    """(the candidates in the refresh set, the folders of the rest). The refresh set is
+    kitlib.pluginsource.claude.account_folders: the folders tools/plugin_refresh.py and pm_start
+    keep up to date."""
+    from kitlib import pluginsource as ps
+    from kitlib.pluginsource import claude as pclaude
+    keys = set(ps.folder_key(f) for f in pclaude.account_folders(home))
+    inside = [c for c in candidates if ps.folder_key(c[0]) in keys]
+    return inside, [c[0] for c in candidates if ps.folder_key(c[0]) not in keys]
+
+
+def _outside_note(d, root):
+    from kitlib import pluginsource as ps
+    steps = '; '.join('claude %s' % ' '.join(st) for st in ps.migrate_steps(root))
+    update = '; '.join('claude %s' % ' '.join(st) for st in ps.UPDATE_STEPS)
+    return ('%s is outside the plugin refresh set (kitlib.pluginsource.claude.account_folders: ~/.claude, '
+            '~/.claude-* and the launcher\'s account and org folders), so tools/plugin_refresh.py and '
+            'pm_start never install or update the kit plugin there and this step does not install it. '
+            'By hand, after this run\'s export change, with CLAUDE_CONFIG_DIR=%s: %s (the remove may '
+            'fail); after each kit update: %s' % (d, d, steps, update))
 
 
 def _is_default(d, home):
