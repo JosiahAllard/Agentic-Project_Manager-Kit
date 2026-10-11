@@ -7,7 +7,10 @@ dispatch a row as `pm-kit:<row>` (`subagent_type`, `--agent`). A repo's own `.cl
 is a separate agent named `<row>`; it does not replace `pm-kit:<row>`. A repo that ships its own
 file lists that agent type in its `.claude/coordinator-profile.md` and is dispatched by the bare
 name; every other row is dispatched as `pm-kit:<row>` (tests/agents/test_override.py,
-tests/agents/test_dispatch_names.py).
+tests/agents/test_dispatch_names.py). That bare-name dispatch is for the Agent tool only: the launcher
+qualifies every bare kit agent name, so it always starts the kit's version, and a repo's own file for a
+launched row (coordinator, consultant, deep-worker) cannot be started by the launcher under that name
+(docs/launcher.md "The window").
 
 This table is the one place to set which agent runs at which model and effort, and when to use it.
 Edit a row, then `python tools/agent_roster.py --write` pins model and effort into that agent's
