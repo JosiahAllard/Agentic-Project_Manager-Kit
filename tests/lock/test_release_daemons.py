@@ -542,6 +542,18 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
             self.spared(daemon, plain, c)
         self.assertIn("test setup", str(caught.exception))
 
+    def test_the_launchers_kill_leaves_a_daemon_another_jobs_client_uses(self):
+        """Launcher.kill (what slot() yields) ends the job's processes but the shared daemon's
+        tree, as a cancel does; the block then ends "done"."""
+        c = self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain", "stay")
+        daemon, _, plain = self.shared_pids()
+        with s:
+            s.launcher.kill()
+            self.assertEqual(s.launcher.wait(p), 1, "the command outlived the launcher's kill")
+        self.assertEqual(self.ended()["how"], "done")
+        self.spared(daemon, plain, c)
+
     def test_an_errored_gate_ends_a_daemon_only_its_own_client_uses(self):
         """Control: a daemon serving the run's own client dies on the kill path as it always
         did, under machine_lock.daemons "leave" too (the kill path does not read it)."""
