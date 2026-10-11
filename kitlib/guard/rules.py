@@ -1048,9 +1048,9 @@ def write_targets(cmd, inv):
         if cmdlet in PS_CMDLETS and cmdlet != 'get-childitem':
             spec = PS_CMDLETS[cmdlet]
             bound = ps_args(cmd, args, cmdlet)
-            # a cmdlet's item on a drive that holds no files (env:FOO) is no file; curl and wget
-            # may be the native programs (pwsh 7), which read env:FOO as a file's stream
-            native = name in ('curl', 'wget') or inv.via is not None
+            # a provider-aware cmdlet's item on a drive that holds no files (env:FOO) is no file;
+            # every other writer (a native program, a script function, Out-File) gets a file
+            native = name not in PS_PROVIDER_CMDLETS or inv.via is not None
             for p in spec.writes:
                 out.extend(x for x in bound.get(p, []) if native or not ps_provider_item(cmd, x))
             if cmdlet == 'expand-archive' and not bound.get('destinationpath'):
@@ -1288,44 +1288,55 @@ DOTDOT_RE = re.compile(r'(?:^|[\\/:])\.\.(?:[\\/]|$)')
 # New-PSDr+ive).
 PS_DRIVE_REMAP_RE = re.compile(r'(?im)drive|psdr|\b(?:ndr|rdr|mount|iex|ipmo)\b|invoke-expression|import-module'
                                r'|\.ps1\b|\.psm1\b|scriptblock|sessionstate|(?:^|[;&|({])\s*\.\s')
-PS_CALL_OPS = ('&', '.')                        # the call and dot-source operators, as a command's first word
+# Session objects, .NET types and static calls a line may reach a drive through
+PS_DOTNET_RE = re.compile(r'(?im)\$executioncontext|\$host\b|new-object|add-type|^\s*using\b|[\])]\s*::')
+# The provider-aware item and content cmdlets, as the line names them (the canonical name or one
+# of these aliases): their item on a drive that holds no files is no file. Script functions
+# (Compress-Archive, mkdir) and the file-only writers (Out-File, Tee-Object, Export-*,
+# Start-Transcript, Invoke-WebRequest -OutFile) are not here and are judged as files.
+PS_PROVIDER_CMDLETS = frozenset(('new-item', 'set-content', 'add-content', 'clear-content', 'remove-item',
+                                 'rename-item', 'move-item', 'copy-item', 'set-itemproperty',
+                                 'ni', 'sc', 'ac', 'clc', 'ri', 'del', 'rni', 'mi', 'move', 'cpi', 'copy', 'sp'))
+# Read-only cmdlets a line of provider items may also hold
+PS_READ_CMDLETS = frozenset(('get-item', 'gi', 'get-content', 'gc', 'get-childitem', 'gci', 'test-path',
+                             'get-location', 'gl', 'pwd', 'write-output', 'echo', 'write-host'))
 
 
-def ps_line_may_remap(cmd):
-    """True when the PowerShell line `cmd` comes from may remap a drive or run code it does not
-    show: PS_DRIVE_REMAP_RE or commands.PS_SCRIPT_TEXT_RE in the raw line or in any decoded word,
-    any command that starts with the call or dot-source operator (& x, . .\\setup, & { }), any
-    command whose name is computed (& $c, & (gcm x), $(...) as a command), or a line the parser
-    does not read cleanly."""
+def ps_line_plain(cmd):
+    """True when every command on the PowerShell line `cmd` comes from is a plain call: the parser
+    reads the line cleanly; each command's first word is a literal name of a cmdlet in
+    PS_PROVIDER_CMDLETS or PS_READ_CMDLETS (no call or dot-source operator, no assignment or other
+    expression statement, no computed name, no Start-Process); every word is literal (no variable,
+    member call or subexpression); and neither the raw line nor any decoded word matches
+    PS_DRIVE_REMAP_RE, commands.PS_SCRIPT_TEXT_RE or PS_DOTNET_RE. Anything else may remap a drive."""
     src = cmd.source
-    if PS_DRIVE_REMAP_RE.search(src) or cm.PS_SCRIPT_TEXT_RE.search(src):
-        return True
+    if any(r.search(src) for r in (PS_DRIVE_REMAP_RE, cm.PS_SCRIPT_TEXT_RE, PS_DOTNET_RE)):
+        return False
     parsed = cm.read(src, sh.PS, cmd.cwd)
     if not parsed.clean:
-        return True
+        return False
     for c in parsed.commands:
-        ws = c.words
-        if not ws:
-            continue
-        if ws[0].text in PS_CALL_OPS or ws[0].dyn and ws[0].text.lstrip('$').startswith('('):
-            return True
+        if not c.words:
+            return False
         inv = cm.invocation(c)
-        if inv is not None and inv.dyn:
-            return True
-        if any(PS_DRIVE_REMAP_RE.search(w.text) or cm.PS_SCRIPT_TEXT_RE.search(w.text) for w in ws):
-            return True
-    return False
+        if inv is None or inv.dyn or inv.via is not None or inv.index != 0 or \
+                inv.name not in PS_PROVIDER_CMDLETS | PS_READ_CMDLETS:
+            return False
+        for w in c.words:
+            if w.dyn or any(r.search(w.text) for r in (PS_DRIVE_REMAP_RE, cm.PS_SCRIPT_TEXT_RE, PS_DOTNET_RE)):
+                return False
+    return True
 
 
 def ps_provider_item(cmd, w):
-    """True when the Word `w`, an item a PowerShell cmdlet writes (write_targets calls it only
-    for a cmdlet in PS_CMDLETS, never for a native program, curl, wget or Start-Process), names
-    an item on a built-in drive that holds no files (PS_PROVIDER_ITEM_RE): a literal word, no `..`
-    part, on a line that cannot remap the drive (ps_line_may_remap). Writing such an item writes no
-    file. A native program reads env:FOO as the stream FOO of a file named env: a file write."""
+    """True when the Word `w`, an item a cmdlet in PS_PROVIDER_CMDLETS writes (write_targets calls
+    it only for those, never for a native program, curl, wget, Start-Process or another cmdlet),
+    names an item on a built-in drive that holds no files (PS_PROVIDER_ITEM_RE): a literal word,
+    no `..` part, on a line of plain calls (ps_line_plain). Writing such an item writes no file. A
+    native program reads env:FOO as the stream FOO of a file named env: a file write."""
     if cmd.shell != sh.PS or w.dyn or not PS_PROVIDER_ITEM_RE.match(w.text) or DOTDOT_RE.search(w.text):
         return False
-    return not ps_line_may_remap(cmd)
+    return ps_line_plain(cmd)
 
 
 BASH_DEVICE_RE = re.compile(r'^/dev/')         # /dev/stderr, /dev/tty, /dev/fd/3: no file
