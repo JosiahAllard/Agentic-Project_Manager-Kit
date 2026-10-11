@@ -11,7 +11,7 @@ lost by switching accounts:
 The mirror is the folder MIRROR_FOLDER in the PM data worktree (pm_data.path), else
 pm_start.hub_mirror (an absolute folder) for an install without a data branch.
 
-  save     ArtifactData `out_dir` files -> the mirror (added, changed, deleted per collection)
+  save     ArtifactData `out_dir` files -> the mirror (added, changed; deleted only with prune)
   restore  the mirror -> ArtifactData batch files of `set` entries for a fresh copy
   set_url  pm_start.hub_urls[<account>] in the machine config
 
@@ -34,6 +34,7 @@ from kitlib import pmdata
 from kitlib.config import user
 from kitlib.config.types import parse_json
 from kitlib.git import cmd, refs, repo
+from kitlib.hubsite import store as hubstore
 
 MIRROR_FOLDER = 'hub'
 # The collections the owner, the page or the PM write and no tool regenerates: mirrored.
@@ -207,10 +208,15 @@ def _remove(path):
         raise Refused('cannot delete %s: %s' % (path, e))
 
 
-def save(found, mirror):
-    """Bring each collection in `found` (read_source) into the mirror: a new document is added, a
-    different one rewritten, and a mirror document missing from its collection in `found` deleted.
-    A collection absent from `found` is left alone. Returns the Changes, sorted by path."""
+def save(found, mirror, prune=False):
+    """Bring each collection in `found` (read_source) into the mirror: a new document is added and
+    a different one rewritten. A mirror document missing from its collection in `found` is kept,
+    unless `prune`, which deletes it. A collection absent from `found` is left alone. Refuses a
+    `mirror` that is a live hub site store (it holds the store's META_NAME file): the site is the
+    single writer there. Returns the Changes, sorted by path."""
+    if os.path.exists(os.path.join(mirror, hubstore.META_NAME)):
+        raise Refused('%s is a live hub site store (it holds %s): the mirror does not write there'
+                      % (mirror, hubstore.META_NAME))
     changes = []
     for coll in sorted(found):
         folder = os.path.join(mirror, coll)
@@ -230,7 +236,7 @@ def save(found, mirror):
                     _remove(old[1])
                 _write_text(path, text)
                 changes.append(Change('changed', '%s/%s.json' % (coll, doc_id)))
-        for key in sorted(set(have) - keep):
+        for key in sorted(set(have) - keep) if prune else ():
             doc_id, path = have[key]
             _remove(path)
             changes.append(Change('deleted', '%s/%s.json' % (coll, doc_id)))
