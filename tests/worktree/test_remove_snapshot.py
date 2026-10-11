@@ -87,6 +87,35 @@ class WindowCase(unittest.TestCase):
             got = remove.remove(self.repo, 'win')
         return got.code, '\n'.join(got.lines)
 
+    def git_calls(self):
+        """A stand-in for `remove.git` that records each `worktree remove` and runs every call."""
+        real = remove.git
+        calls = []
+
+        def spy(cwd, *args, **kw):
+            if args[:2] == ('worktree', 'remove'):
+                calls.append(args)
+            return real(cwd, *args, **kw)
+
+        spy.calls = calls
+        return spy
+
+    def assert_last_look_refuses(self, action, named):
+        """Run the remove verb with `action(path)` done after clear_disposable and assert that
+        `last_look` refused it: its line carries the one status line `named`, and `git worktree
+        remove` was never called. Returns the output."""
+        spy = self.git_calls()
+        with mock.patch.object(remove, 'git', spy):
+            rc, out = self.run_in_window(action)
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(spy.calls, [], 'git worktree remove must not run')
+        self.assertIn('failed    %s changed after it was checked - uncommitted or untracked files'
+                      ' (1): %s' % (self.path, named), out)
+        self.assertIn('git was NOT run', out)
+        self.assertNotIn('removed   ', out)
+        self.assert_kept_intact(out)
+        return out
+
     def assert_kept_intact(self, out):
         self.assertTrue(os.path.isdir(self.path), out)
         self.assertIn(os.path.normcase(self.path), self.registered(), out)
@@ -157,6 +186,40 @@ class FileAppearsInTheWindow(WindowCase):
         self.assertNotIn('failed    git worktree remove', out)       # git never ran
         self.assert_kept_intact(out)
 
+    def test_a_tracked_file_edited_after_clear_disposable_is_named_before_git_runs(self):
+        def edit(p):
+            with open(os.path.join(p, 'tracked.txt'), 'a', encoding='utf-8') as f:
+                f.write('more\n')
+
+        out = self.assert_last_look_refuses(edit, ' M tracked.txt; git was NOT run')
+        with open(os.path.join(self.path, 'tracked.txt'), encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'work\nmore\n', out)
+
+    def test_a_tracked_file_deleted_after_clear_disposable_is_named_before_git_runs(self):
+        out = self.assert_last_look_refuses(lambda p: os.remove(os.path.join(p, 'tracked.txt')),
+                                            ' D tracked.txt; git was NOT run')
+        self.assertNotIn('Traceback', out)
+
+
+class FolderGoneInTheWindow(WindowCase):
+
+    def test_a_folder_gone_after_clear_disposable_is_refused_and_stays_registered(self):
+        # No status can be read where the folder was, so git is not run: the entry is left for the
+        # next run to report, never dropped unseen.
+        moved = os.path.join(self.fx.base, 'moved_away')
+        spy = self.git_calls()
+        with mock.patch.object(remove, 'git', spy):
+            rc, out = self.run_in_window(lambda p: os.rename(p, moved))
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(spy.calls, [], 'git worktree remove must not run')
+        self.assertIn('failed    %s: its status could not be read again (' % self.path, out)
+        self.assertIn('git was NOT run', out)
+        self.assertNotIn('removed   ', out)
+        self.assertFalse(os.path.exists(self.path), out)
+        self.assertTrue(os.path.isfile(os.path.join(moved, 'tracked.txt')), out)
+        self.assertIn(os.path.normcase(self.path), self.registered(), out)
+        self.assertIn('kit/win', self.branches(), out)
+
 
 class IgnoredAfterTheLastStatusRead(WindowCase):
     """A file git ignores, written after the verb's last status read: `git worktree remove` does
@@ -164,19 +227,6 @@ class IgnoredAfterTheLastStatusRead(WindowCase):
 
     CONFIG = {'worktree_remove': {'disposable_untracked': ['*.tmp'], 'build_output': ['out/']}}
     IGNORE = '*.log\nout/\n'
-
-    def git_calls(self):
-        """A stand-in for `remove.git` that records each `worktree remove` and runs every call."""
-        real = remove.git
-        calls = []
-
-        def spy(cwd, *args, **kw):
-            if args[:2] == ('worktree', 'remove'):
-                calls.append(args)
-            return real(cwd, *args, **kw)
-
-        spy.calls = calls
-        return spy
 
     def test_an_ignored_file_written_after_clear_disposable_survives_and_git_is_not_run(self):
         late = os.path.join(self.path, 'run.log')
@@ -281,6 +331,12 @@ class DisposableInTheWindow(WindowCase):
         self.assertTrue(os.path.isfile(os.path.join(self.path, 'later.tmp')), out)
         self.assert_kept_intact(out)
 
+    def test_a_disposable_file_written_after_clear_disposable_is_named_and_git_is_not_run(self):
+        # last_look lists it as untracked: the verbs have cleared such files by then.
+        out = self.assert_last_look_refuses(lambda p: self.fx.write('later.tmp', 'y\n', root=p),
+                                            '?? later.tmp; git was NOT run')
+        self.assertTrue(os.path.isfile(os.path.join(self.path, 'later.tmp')), out)
+
 
 @unittest.skipUnless(os.name == 'nt', 'junctions are Windows')
 class JunctionAppearsInTheWindow(WindowCase):
@@ -299,6 +355,23 @@ class JunctionAppearsInTheWindow(WindowCase):
             self.assertEqual(rc, 1, out)
             self.assertTrue(os.path.isfile(keep), out)
             self.assert_kept_intact(out)
+        finally:
+            if os.path.lexists(junction):
+                os.rmdir(junction)                   # the junction itself, not its target
+
+    def test_a_junction_created_after_clear_disposable_is_named_before_git_runs(self):
+        import _winapi
+        target = os.path.join(self.fx.base, 'elsewhere')
+        os.makedirs(target)
+        keep = os.path.join(target, 'precious.txt')
+        with open(keep, 'w', encoding='utf-8') as f:
+            f.write('outside the tree\n')
+        junction = os.path.join(self.path, 'late_link')
+        try:
+            # The status lists what the junction leads to as untracked; that is what stops git.
+            out = self.assert_last_look_refuses(
+                lambda p: _winapi.CreateJunction(target, junction), '?? late_link/')
+            self.assertTrue(os.path.isfile(keep), out)
         finally:
             if os.path.lexists(junction):
                 os.rmdir(junction)                   # the junction itself, not its target
