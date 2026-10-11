@@ -500,7 +500,9 @@ def plan_unpark(snap, ctx, rid, ruling=None):
 def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     """Take an open, priced record and record the branch. One in `next`'s offer pulls plainly;
     one outside it needs `--reason` and records `preempt` and the `displaced` offer, computed
-    here. A `priority: -1` record needs `--ruling` (a hold release). An unmet `requires:` refuses."""
+    here. A `priority: -1` record needs `--ruling` (a hold release). An unmet `requires:` refuses.
+    A pulled record refuses, unless its pull is dead and it is this session's: see
+    `_plan_takeover`."""
     refuse_machine_paths('--reason', reason)
     rec = require(snap, rid)
     if reason is not None:
@@ -511,8 +513,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
         raise Usage('`--ruling %s` is not a ruling id - `R-nnnn`' % ruling)
     state = rec.get('state')
     if state == 'pulled':
-        raise Refusal('`%s` is already in flight - pulled %s by %s'
-                      % (rid, rec.get('pulled_at'), rec.get('pulled_by')))
+        return _plan_takeover(snap, ctx, rec, reason, ruling, blocker)
     if state != 'open':
         raise Refusal('`%s` is `state: %s`, and `pull` takes an open record. %s first, in its own '
                       'step' % (rid, state, 'Unblock it' if state == 'blocked' else 'Open it'))
@@ -578,6 +579,36 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     pairs = rmod.apply_changes(rec.pairs(), changes)
     return Change({rid: _text(pairs, rec.body)}, subject, lines,
                   ruling=ruling if (minus_one or not offered) else None)
+
+
+def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
+    """A pull of a pulled record. It refuses `already in flight`, unless the record's `session:` is
+    the caller's session and its pull is dead by `next`'s test (omod.in_flight_split: git
+    answered and no branch, remote-tracking branch or worktree has its `pulled_by`); then the
+    pull moves to this branch, `pulled_at` restamped, any pre-emption lines kept as the first pull
+    wrote them. A failed git probe holds the pull (fail closed)."""
+    rid, old = rec.id, rec.get('pulled_by')
+    busy = Refusal('`%s` is already in flight - pulled %s by %s'
+                   % (rid, rec.get('pulled_at'), old))
+    if not ctx.session or rec.get('session') != ctx.session:
+        raise busy
+    _holding, dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
+    if rec not in dead:
+        raise busy
+    given = [f for f, v in (('--reason', reason), ('--ruling', ruling), ('--blocker', blocker))
+             if v is not None]
+    if given:
+        raise Usage('`%s` is a dead pull of this session (pulled_by %s has no branch): `pull %s` '
+                    'takes it over as it stands, with no %s' % (rid, old, rid, ', '.join(given)))
+    branch = ctx.current_branch()
+    today = ctx.date()
+    pairs = rmod.apply_changes(rec.pairs(), [('pulled_at', [today]), ('pulled_by', [branch])])
+    lines = ['PULLED %s - took over a dead pull from %s (it has no branch)' % (rid, old),
+             '  pulled_at:  %s -> %s' % (rec.get('pulled_at'), today),
+             '  pulled_by:  %s -> %s' % (old, branch)]
+    return Change({rid: _text(pairs, rec.body)},
+                  'backlog: pull %s onto %s, taking over a dead pull from %s' % (rid, branch, old),
+                  lines)
 
 
 def branch_name_error(name, root):
