@@ -1,11 +1,13 @@
-"""kitlib.gate.reuse: a landing's merged gate counts a step that passed in the branch gate of the
-exact tree, and runs it again on every doubt (docs/gate.md "Gate reuse"). A scratch repository
-with a bare remote, the scratch lock store; the kit identity is pinned so the test does not
-depend on the kit checkout being clean."""
+"""kitlib.gate.reuse: the per-step gate cache (docs/gate.md "Gate reuse"). A step that asks for
+reuse and declares its inputs is not run again, in a branch-gate rerun or a landing, when a pass of
+the same key (its inputs, argv, cwd, gate config and kit files) is stored; every doubt runs it. A
+scratch repository with a bare remote, the scratch lock store; the gate-OK record's kit identity
+is pinned so the test does not depend on the kit checkout being clean."""
 import datetime
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -14,7 +16,8 @@ import unittest
 from unittest import mock
 
 from kitlib import gate as G
-from kitlib.gate import land, result, reuse, runner
+from kitlib.gate import land, result, reuse, runner, strict_defaults
+from kitlib.gate import steps as S
 from kitlib.records import gate_ok
 from tests.gate import fixtures
 
@@ -23,15 +26,20 @@ BRANCH = 'kit/feature'
 OK_CMD = ['{python}', '-c', 'print("ok")']
 IDENT = {'commit': 'a' * 40, 'python': os.path.normcase(os.path.abspath(sys.executable)),
          'clean': True}
-UNIT = {'name': 'unit', 'always': True, 'cmd': fixtures.RED_AWARE, 'pass': '^ok$', 'reuse': True}
+SRC = {'src/a.py': 'x = 1\n'}
+# RED_AWARE reads RED, so RED is declared
+UNIT = {'name': 'unit', 'always': True, 'globs': ['src/*', 'RED'], 'cmd': fixtures.RED_AWARE,
+        'pass': '^ok$', 'reuse': True}
+MERGED = {'name': 'merged', 'always': True, 'globs': ['src/*'], 'cmd': OK_CMD, 'pass': '^ok$',
+          'merged_args': ['--merged'], 'reuse': True}
+PLAIN = {'name': 'plain', 'always': True, 'cmd': OK_CMD, 'pass': '^ok$'}
+STAMP = r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ'
 
 
 class ReuseCase(fixtures.GateRepoCase):
-    GATE = {'steps': [UNIT,
-                      {'name': 'merged', 'always': True, 'cmd': OK_CMD, 'pass': '^ok$',
-                       'merged_args': ['--merged'], 'reuse': True},
-                      {'name': 'plain', 'always': True, 'cmd': OK_CMD, 'pass': '^ok$'}]}
+    GATE = {'steps': [UNIT, MERGED, PLAIN]}
     KIT = {'landing': {}}
+    ASKING = ('unit', 'merged')
 
     def setUp(self):
         fixtures.GateRepoCase.setUp(self)
@@ -41,14 +49,27 @@ class ReuseCase(fixtures.GateRepoCase):
         self.addCleanup(p.stop)
         self.said = []
 
+    def gate(self, wt, **kw):
+        """A branch gate of `wt`; self.said holds only its lines."""
+        self.said[:] = []
+        kw.setdefault('book_kw', self.book_kw)
+        kw.setdefault('log_dir', self.logs)
+        return runner.branch_gate(wt, say=self.said.append, **kw)
+
     def gated_branch(self, name='feature', files=None):
-        wt, tip = self.branch(name, files or {'a.py': 'x = 1\n'})
-        out = runner.branch_gate(wt, book_kw=self.book_kw, log_dir=self.logs)
+        wt, tip = self.branch(name, files or dict(SRC))
+        out = self.gate(wt)
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertIsNotNone(out.record, out.lines)
         return wt, tip
 
+    def commit(self, wt, files, msg='more work'):
+        for rel, text in files.items():
+            self.repo.write(rel, text, root=wt)
+        return self.repo.commit(msg, *files, cwd=wt)
+
     def land(self, branch, tip, expect_main=None, **kw):
+        self.said[:] = []
         kw.setdefault('git_env', self.env)
         kw.setdefault('book_kw', self.book_kw)
         kw.setdefault('log_dir', self.logs)
@@ -56,173 +77,381 @@ class ReuseCase(fixtures.GateRepoCase):
                              say=self.said.append, **kw)
         return lander, lander.run()
 
-    def reuse_lines(self):
-        return [l for l in self.said if l.startswith(reuse.PREFIX) or l.startswith('REUSED')]
+    def lines(self, word=None):
+        out = [l for l in self.said if l.startswith(reuse.PREFIX) or l.startswith('REUSED')]
+        if word is None:
+            return out
+        return [l for l in out if l.startswith(reuse.PREFIX + word + ' ')]
 
-    def assert_ran(self, lander, *names):
+    def assert_ran(self, log_dir, *names):
         for n in names:
-            self.assertTrue(os.path.exists(os.path.join(lander.gate_logs, n + '.log')),
+            self.assertTrue(os.path.exists(os.path.join(log_dir, n + '.log')),
                             '%s did not run: %s' % (n, self.said))
 
-    def assert_none(self, out, lander, why):
-        """Landed, every step ran, and the one reuse line says `why`."""
+    def assert_not_ran(self, log_dir, *names):
+        for n in names:
+            self.assertFalse(os.path.exists(os.path.join(log_dir, n + '.log')),
+                             '%s ran: %s' % (n, self.said))
+
+    def entries(self):
+        folder = reuse.cache_dir(self.repo.root)
+        out = []
+        if os.path.isdir(folder):
+            for d in sorted(os.listdir(folder)):
+                p = os.path.join(folder, d)
+                if os.path.isdir(p):
+                    out += [d + '/' + n for n in sorted(os.listdir(p)) if reuse.ENTRY_RE.match(n)]
+        return out
+
+    def assert_none(self, out, log_dir, why, names=None):
+        """The gate passed, every asking step ran and says NONE with `why`, and nothing was
+        stored."""
         self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual(self.reuse_lines(), [reuse.PREFIX + 'none: ' + why], self.said)
-        self.assert_ran(lander, 'unit', 'merged', 'plain')
+        self.assertEqual(self.lines(), [reuse.PREFIX + 'NONE %s: %s' % (n, why)
+                                        for n in names or self.ASKING], self.said)
+        self.assert_ran(log_dir, *(names or self.ASKING))
         self.assertNotIn('reused', out.verdict)
 
 
-class Reuses(ReuseCase):
-    def test_a_passed_step_of_the_exact_tree_is_reused(self):
+class Landing(ReuseCase):
+    def test_a_step_that_passed_on_the_same_inputs_is_reused(self):
         _, tip = self.gated_branch()
         lander, out = self.land(BRANCH, tip)
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertEqual(out.verdict, 'GATE OK (reused: unit)')
         logs = lander.gate_logs
-        self.assertFalse(os.path.exists(os.path.join(logs, 'unit.log')))     # never ran
-        self.assert_ran(lander, 'merged', 'plain')
-        lines = self.reuse_lines()
-        self.assertIn(reuse.PREFIX + 'merged runs: its merged-gate command differs (merged_args)',
-                      lines)
-        self.assertTrue(any(l.startswith('REUSED unit: passed in the branch gate of %s'
-                                         % tip[:10]) for l in lines), lines)
+        self.assert_not_ran(logs, 'unit')
+        self.assert_ran(logs, 'merged', 'plain')
+        hit = self.lines('HIT')
+        self.assertEqual(len(hit), 1, self.said)
+        self.assertRegex(hit[0], '^%sHIT unit: key [0-9a-f]{12}, stored %s$'
+                         % (re.escape(reuse.PREFIX), STAMP))
+        miss = self.lines('MISS')
+        self.assertEqual(len(miss), 1, self.said)        # its merged_args make another key
+        self.assertRegex(miss[0], '^%sMISS merged: no result stored for key [0-9a-f]{12}$'
+                         % re.escape(reuse.PREFIX))
+        self.assertTrue(any(l.startswith('REUSED unit: passed on the same inputs (key ')
+                            for l in self.lines()), self.said)
         with open(os.path.join(logs, 'reuse.log'), encoding='utf-8') as f:
-            self.assertEqual(f.read().splitlines(), lines)
+            self.assertEqual(f.read().splitlines(), self.lines())
         rec, why = gate_ok.verify(self.repo.root, out.merge)
         self.assertIsNone(why)
         self.assertEqual({s['name']: s['result'] for s in rec['steps']},
                          {'unit': 'reused', 'merged': 'pass', 'plain': 'pass'})
 
-    def test_fresh_reuses_nothing(self):
+    def test_main_moving_on_other_paths_still_reuses(self):
         _, tip = self.gated_branch()
-        lander, out = self.land(BRANCH, tip, fresh=True)
-        self.assert_none(out, lander, '--fresh')
+        other = self.repo.worktree('other')
+        self.repo.write('o.txt', 'o\n', root=other)
+        moved = self.repo.commit('other', 'o.txt', cwd=other)
+        self.repo.git('merge', '-q', '--ff-only', moved)
+        self.repo.git('push', '-q', 'origin', 'main')
+        lander, out = self.land(BRANCH, tip, expect_main=moved)
+        self.assertEqual(out.verdict, 'GATE OK (reused: unit)', self.said)
+        self.assert_not_ran(lander.gate_logs, 'unit')
 
-    def test_full_reuses_nothing(self):
+    def test_main_moving_an_input_runs_the_step(self):
         _, tip = self.gated_branch()
-        lander, out = self.land(BRANCH, tip, full=True)
-        self.assert_none(out, lander, '--full')
+        other = self.repo.worktree('other')
+        self.repo.write('src/b.py', 'b\n', root=other)
+        moved = self.repo.commit('other', 'src/b.py', cwd=other)
+        self.repo.git('merge', '-q', '--ff-only', moved)
+        self.repo.git('push', '-q', 'origin', 'main')
+        lander, out = self.land(BRANCH, tip, expect_main=moved)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertNotIn('reused', out.verdict)
+        self.assertTrue(self.lines('MISS')[0].startswith(reuse.PREFIX + 'MISS unit: no result '
+                                                         'stored for key '), self.said)
+        self.assert_ran(lander.gate_logs, 'unit')
 
-    def test_a_batch_reuses_nothing(self):
+    def test_a_batch_reuses_per_step(self):
         _, tip = self.gated_branch()
-        _, tip2 = self.gated_branch('other', {'b.py': 'y = 1\n'})
+        _, tip2 = self.gated_branch('other', {'b.txt': 'y\n'})
         lander, out = self.land([BRANCH, 'kit/other'], [tip, tip2])
-        self.assert_none(out, lander, 'a batch of 2 branches is gated whole')
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(out.verdict, 'GATE OK (reused: unit)', self.said)
+        self.assert_not_ran(lander.gate_logs, 'unit')
 
-    def test_no_branch_gate_reuses_nothing(self):
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+    def test_a_landing_stores_what_it_ran(self):
+        _, tip = self.branch('feature', dict(SRC))       # no branch gate: nothing stored yet
+        self.assertEqual(self.entries(), [])
         lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, 'no passing branch gate of %s at %s wrote its gate-OK record'
-                         % (BRANCH, tip[:10]))
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual([l[len(reuse.PREFIX):].split(':')[0] for l in self.lines('MISS')],
+                         ['MISS unit', 'MISS merged'])
+        self.assertEqual(len(self.lines('STORED')), 2, self.said)
+        self.assertEqual(len(self.entries()), 2)
+        with open(os.path.join(lander.gate_logs, 'reuse.log'), encoding='utf-8') as f:
+            self.assertEqual(f.read().splitlines(), self.lines())
+
+    def test_fresh_reads_and_stores_nothing(self):
+        _, tip = self.gated_branch()
+        before = self.entries()
+        lander, out = self.land(BRANCH, tip, fresh=True)
+        self.assert_none(out, lander.gate_logs, '--fresh')
+        self.assertEqual(self.entries(), before)
+
+    def test_full_reads_and_stores_nothing(self):
+        _, tip = self.gated_branch()
+        before = self.entries()
+        lander, out = self.land(BRANCH, tip, full=True)
+        self.assert_none(out, lander.gate_logs, '--full')
+        self.assertEqual(self.entries(), before)
 
     def test_a_later_red_gate_of_the_same_commit_reuses_nothing(self):
         wt, tip = self.gated_branch()
         self.repo.write('RED', 'x\n', root=wt)          # untracked: the same commit gates red
-        self.assertEqual(runner.branch_gate(wt, book_kw=self.book_kw, log_dir=self.logs).code,
-                         G.FAILED)
+        self.assertEqual(self.gate(wt).code, G.FAILED)
         os.remove(os.path.join(wt, 'RED'))
         lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, 'a gate of %s on %s ended fail' % (tip[:10], BRANCH))
+        self.assert_none(out, lander.gate_logs, 'a gate of %s on %s ended fail'
+                         % (tip[:10], BRANCH))
 
     def test_a_tip_that_failed_to_land_is_gated_again(self):
         _, tip = self.gated_branch()
         _, first = self.land(BRANCH, tip, merged_gate=lambda l: G.Outcome(
             G.FAILED, ['GATE FAILED: unit (unit: flaky)'], verdict='GATE FAILED'))
         self.assertEqual(first.code, G.FAILED, first.lines)
-        self.said[:] = []
         lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, '%s at %s was landed before (fail) and did not land: its '
-                         'tree is gated again' % (BRANCH, tip[:10]))
+        self.assert_none(out, lander.gate_logs, '%s at %s was landed before (fail) and did not '
+                         'land: its tree is gated again' % (BRANCH, tip[:10]))
 
-    def test_a_branch_gated_against_an_older_main_reuses_nothing(self):
+    def test_an_error_while_planning_runs_every_step(self):
         _, tip = self.gated_branch()
-        other = self.repo.worktree('other')
-        self.repo.write('o.py', 'o\n', root=other)
-        moved = self.repo.commit('other', 'o.py', cwd=other)
-        self.repo.git('merge', '-q', '--ff-only', moved)
-        self.repo.git('push', '-q', 'origin', 'main')
-        lander, out = self.land(BRANCH, tip, expect_main=moved)
-        self.assert_none(out, lander, 'the branch gate compared against %s, not --expect-main %s'
-                         % (self.main[:10], moved[:10]))
-
-    def test_another_kit_reuses_nothing(self):
-        _, tip = self.gated_branch()
-        self.ident['commit'] = 'b' * 40
-        lander, out = self.land(BRANCH, tip)
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertTrue(self.reuse_lines()[0].startswith(
-            reuse.PREFIX + 'none: the branch gate ran under another kit'), self.said)
-        self.assert_ran(lander, 'unit')
-
-    def test_a_dirty_kit_reuses_nothing(self):
-        _, tip = self.gated_branch()
-        self.ident['clean'] = False
-        lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, 'the kit checkout is not a clean commit')
-
-    def test_a_branch_gate_of_another_config_reuses_nothing(self):
-        _, tip = self.gated_branch()
-        cfg = runner.gate_config(runner.kconfig.load(self.repo.root))
-        cfg['fail'] = ['^never$']       # main's gate config changes after the branch gate
-        self.repo.write('.kit.json', json.dumps(dict(self.KIT, gate=cfg), indent=1) + '\n')
-        moved = self.repo.commit('gate config', '.kit.json')
-        self.repo.git('push', '-q', 'origin', 'main')
-        lander, out = self.land(BRANCH, tip, expect_main=moved)
-        self.assert_none(out, lander, 'the branch gate ran another gate config than '
-                         '--expect-main holds')
-
-    def test_an_error_while_planning_reuses_nothing(self):
-        _, tip = self.gated_branch()
-        with mock.patch.object(runner, 'verify_record', side_effect=RuntimeError('boom')):
+        with mock.patch.object(reuse, 'list_files', side_effect=RuntimeError('boom')):
             lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, 'RuntimeError: boom')
+        self.assert_none(out, lander.gate_logs, 'RuntimeError: boom')
 
-    def test_a_record_older_than_the_limit_is_not_reused(self):
-        rec = {'ended_utc': '2026-01-01T00:00:00Z'}
-        now = datetime.datetime(2026, 1, 2, 1, tzinfo=datetime.timezone.utc)
-        self.assertIn('25.0 h ago', reuse._age_why(rec, 24, now))
-        self.assertIsNone(reuse._age_why(rec, 26, now))
-        self.assertIn('future', reuse._age_why(rec, 24, now - datetime.timedelta(days=2)))
-        self.assertIn('no readable ended_utc', reuse._age_why({}, 24, now))
+    def test_a_failure_to_store_never_fails_the_gate(self):
+        _, tip = self.branch('feature', dict(SRC))
+        with mock.patch.object(reuse, '_write_entry', side_effect=OSError('disk full')):
+            lander, out = self.land(BRANCH, tip)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.lines('NOT STORED'), [
+            reuse.PREFIX + 'NOT STORED unit: OSError: disk full',
+            reuse.PREFIX + 'NOT STORED merged: OSError: disk full'], self.said)
+        self.assertEqual(self.entries(), [])
+
+
+class BranchRerun(ReuseCase):
+    def test_a_rerun_after_a_change_outside_the_inputs_reuses(self):
+        wt, _ = self.gated_branch()
+        head = self.commit(wt, {'notes.txt': 'n\n'})
+        out = self.gate(wt)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(out.verdict, 'GATE OK (reused: unit, merged)', self.said)
+        self.assert_not_ran(out.log_dir, 'unit', 'merged')
+        self.assert_ran(out.log_dir, 'plain')
+        self.assertEqual(len(self.lines('HIT')), 2, self.said)
+        rec, why = gate_ok.verify(self.repo.root, head)
+        self.assertIsNone(why)
+        self.assertEqual({s['name']: s['result'] for s in rec['steps']},
+                         {'unit': 'reused', 'merged': 'reused', 'plain': 'pass'})
+
+    def test_an_input_change_runs(self):
+        wt, _ = self.gated_branch()
+        self.commit(wt, {'src/a.py': 'x = 2\n'})
+        out = self.gate(wt)
+        self.assertEqual(out.verdict, 'GATE OK', self.said)
+        self.assertEqual(len(self.lines('MISS')), 2, self.said)
+        self.assert_ran(out.log_dir, 'unit', 'merged')
+
+    def test_a_new_untracked_input_runs(self):
+        wt, _ = self.gated_branch()
+        self.repo.write('src/new.py', 'n\n', root=wt)
+        out = self.gate(wt)
+        self.assertEqual(out.verdict, 'GATE OK', self.said)
+        self.assert_ran(out.log_dir, 'unit', 'merged')
+
+    def test_an_ignored_file_under_the_globs_is_not_an_input(self):
+        """The documented contract: inputs are the files git shows; a reuse step must not read
+        an ignored or generated file."""
+        files = dict(SRC, **{'.gitignore': '.claude/\nsrc/gen.py\n'})
+        wt, _ = self.gated_branch(files=files)
+        self.repo.write('src/gen.py', 'generated\n', root=wt)
+        out = self.gate(wt)
+        self.assertEqual(out.verdict, 'GATE OK (reused: unit, merged)', self.said)
+
+    def test_full_reads_and_stores_nothing(self):
+        wt, _ = self.gated_branch()
+        before = self.entries()
+        out = self.gate(wt, full=True)
+        self.assert_none(out, out.log_dir, '--full')
+        self.assertEqual(self.entries(), before)
+
+    def test_only_reads_and_stores_nothing(self):
+        wt, _ = self.gated_branch()
+        before = self.entries()
+        out = self.gate(wt, only=['unit'])
+        self.assert_none(out, out.log_dir, '--only', names=('unit',))
+        self.assertEqual(self.entries(), before)
+
+    def test_a_kit_file_change_runs(self):
+        wt, _ = self.gated_branch()
+        other = dict(reuse.kit_identity(), files='0' * 64)
+        with mock.patch.object(reuse, 'kit_identity', return_value=other):
+            out = self.gate(wt)
+        self.assertEqual(out.verdict, 'GATE OK', self.said)
+        self.assertEqual(len(self.lines('MISS')), 2, self.said)
+
+    def test_the_kit_commit_is_not_in_the_key(self):
+        wt, _ = self.gated_branch()
+        self.ident['commit'] = 'b' * 40         # another commit of the same kit files
+        out = self.gate(wt)
+        self.assertEqual(out.verdict, 'GATE OK (reused: unit, merged)', self.said)
+
+
+
+class Strict(ReuseCase):
+    def test_the_strict_paths_are_the_ones_the_code_imports(self):
+        self.assertIs(reuse.STRICT_DEFAULTS, strict_defaults.STRICT_DEFAULTS)
+        cfg = runner.kconfig.load(self.repo.root)
+        paths = [g.replace('**', 'x.py') for g in reuse.STRICT_DEFAULTS]
+        self.assertEqual(reuse.strict_hits(cfg, paths + ['src/a.py']), paths)
+
+    def test_a_strict_path_change_reads_and_stores_nothing(self):
+        path = reuse.STRICT_DEFAULTS[0].replace('**', 'strict.py')
+        why = 'a strict path changes: %s' % path
+        wt, tip = self.branch('feature', dict(SRC, **{path: 'x = 1\n'}))
+        out = self.gate(wt)
+        self.assert_none(out, out.log_dir, why)
+        self.commit(wt, {'notes.txt': 'n\n'})
+        out = self.gate(wt)
+        self.assert_none(out, out.log_dir, why)
+        self.assertEqual(self.entries(), [])
+        tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        lander, out = self.land(BRANCH, tip)
+        self.assert_none(out, lander.gate_logs, why)
+        self.assertEqual(self.entries(), [])
+
+
+WHOLE = {'name': 'whole', 'always': True, 'cmd': OK_CMD, 'pass': '^ok$', 'reuse': True}
+DIFFY = {'name': 'diffy', 'always': True, 'globs': ['src/*'], 'pass': '^ok$', 'reuse': True,
+         'cmd': ['{python}', '-c', 'print("ok")', '{base}']}
+
+
+class Undeclared(ReuseCase):
+    GATE = {'steps': [WHOLE, DIFFY]}
+
+    def test_a_step_with_undeclared_inputs_is_never_cached(self):
+        wt, _ = self.branch('feature', dict(SRC))
+        expect = [reuse.PREFIX + 'NONE whole: no declared inputs (no "globs" and no '
+                  '"content".globs)',
+                  reuse.PREFIX + 'NONE diffy: its command names {base}: it reads git history']
+        for i in range(2):
+            out = self.gate(wt)
+            self.assertEqual(out.code, G.OK, out.lines)
+            self.assertEqual(self.lines(), expect, self.said)
+            self.assert_ran(out.log_dir, 'whole', 'diffy')
+            self.commit(wt, {'notes.txt': 'n%d\n' % i})
+        self.assertEqual(self.entries(), [])
+
+
+class CheckStep(unittest.TestCase):
+    def test_a_check_step_is_never_cached(self):
+        spec = {'name': 'pins', 'check': 'pins', 'globs': ['src/*'], 'reuse': True}
+        step = S.Step('pins', None, 'pins', '.', [], [], (0,), False, False, [], False)
+        self.assertEqual(reuse.undeclared(spec, step, 'a' * 40), 'a check step')
+
+    def test_setup_is_never_cached(self):
+        step = S.Step('setup', ['x'], None, '.', [], [], (0,), False, False, [], False)
+        self.assertEqual(reuse.undeclared(None, step, 'a' * 40), 'not a configured step')
+
+
+SHAKY = {'name': 'shaky', 'always': True, 'globs': ['src/*'], 'pass': '^ok$', 'warn': True,
+         'reuse': True, 'cmd': ['{python}', '-c', 'import sys; print("ok"); sys.exit(1)']}
+
+
+class Warned(ReuseCase):
+    GATE = {'steps': [SHAKY]}
+
+    def test_a_warned_step_is_never_reused(self):
+        wt, _ = self.gated_branch()
+        stored = self.lines('STORED')
+        self.assertEqual(len(stored), 1, self.said)
+        self.assertRegex(stored[0], '^%sSTORED shaky: fail, key [0-9a-f]{12}$'
+                         % re.escape(reuse.PREFIX))
+        self.commit(wt, {'notes.txt': 'n\n'})
+        out = self.gate(wt)
+        self.assertEqual(out.verdict, 'GATE OK (warned: shaky)', self.said)
+        miss = self.lines('MISS')
+        self.assertEqual(len(miss), 1, self.said)
+        self.assertRegex(miss[0], '^%sMISS shaky: failed or warned on these inputs at %s '
+                         r'\(key [0-9a-f]{12}\)$' % (re.escape(reuse.PREFIX), STAMP))
+        self.assert_ran(out.log_dir, 'shaky')
+
+
+WRITER = {'name': 'writer', 'always': True, 'globs': ['src/*'], 'pass': '^ok$', 'reuse': True,
+          'cmd': ['{python}', '-c', 'open("src/a.py", "a").write("#\\n"); print("ok")']}
+
+
+class Writer(ReuseCase):
+    GATE = {'steps': [WRITER]}
+
+    def test_a_step_that_changes_its_inputs_is_not_stored(self):
+        wt, _ = self.branch('feature', dict(SRC))
+        out = self.gate(wt)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.lines('NOT STORED'), [
+            reuse.PREFIX + 'NOT STORED writer: its inputs changed while the gate ran'], self.said)
+        self.assertEqual(self.entries(), [])
 
 
 class NeverReused(ReuseCase):
     KIT = {'landing': {'reuse_never': ['docs/*']}}
 
-    def test_a_reuse_never_path_reuses_nothing(self):
-        _, tip = self.gated_branch(files={'docs/x.md': 'x\n'})
+    def test_a_reuse_never_path_reads_and_stores_nothing(self):
+        wt, tip = self.branch('feature', dict(SRC, **{'docs/x.md': 'x\n'}))
+        out = self.gate(wt)
+        self.assert_none(out, out.log_dir, 'the change touches docs/x.md')
         lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, 'the merge changes docs/x.md')
+        self.assert_none(out, lander.gate_logs, 'the change touches docs/x.md')
+        self.assertEqual(self.entries(), [])
 
 
 class MaxAgeZero(ReuseCase):
     KIT = {'landing': {'reuse_max_age_h': 0}}
 
-    def test_max_age_zero_reuses_nothing(self):
-        _, tip = self.gated_branch()
+    def test_max_age_zero_reads_and_stores_nothing(self):
+        wt, tip = self.branch('feature', dict(SRC))
+        out = self.gate(wt)
+        self.assert_none(out, out.log_dir, '"landing".reuse_max_age_h is 0')
         lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, '"landing".reuse_max_age_h is 0')
+        self.assert_none(out, lander.gate_logs, '"landing".reuse_max_age_h is 0')
+        self.assertEqual(self.entries(), [])
 
 
 class Groups(ReuseCase):
     GATE = {'setup': OK_CMD,
             'steps': [UNIT,
-                      {'name': 'build', 'always': True, 'cmd': OK_CMD, 'pass': '^ok$',
-                       'reuse': 'pair'},
-                      {'name': 'test', 'always': True, 'cmd': OK_CMD, 'pass': '^ok$',
-                       'reuse': 'pair', 'merged_args': ['--merged']}]}
+                      {'name': 'build', 'always': True, 'globs': ['src/*'], 'cmd': OK_CMD,
+                       'pass': '^ok$', 'reuse': 'pair'},
+                      {'name': 'test', 'always': True, 'globs': ['src/*'], 'cmd': OK_CMD,
+                       'pass': '^ok$', 'reuse': 'pair', 'merged_args': ['--merged']}]}
 
     def test_a_group_is_reused_whole_or_not_at_all(self):
         _, tip = self.gated_branch()
         lander, out = self.land(BRANCH, tip)
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertEqual(out.verdict, 'GATE OK (reused: unit)')
-        self.assertIn(reuse.PREFIX + 'build runs: test of its group pair runs', self.reuse_lines())
-        self.assert_ran(lander, 'setup', 'build', 'test')
+        self.assertIn(reuse.PREFIX + 'MISS build: test of its group pair runs', self.lines())
+        self.assert_ran(lander.gate_logs, 'setup', 'build', 'test')
 
 
 class AllReused(ReuseCase):
     GATE = {'setup': OK_CMD, 'steps': [UNIT]}
+
+    def test_a_rerun_with_every_step_reused_books_nothing(self):
+        wt, _ = self.gated_branch()
+        head = self.commit(wt, {'notes.txt': 'n\n'})
+        with mock.patch.object(runner.lockrun, 'book', side_effect=AssertionError('booked')):
+            out = self.gate(wt)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(out.verdict, 'GATE OK (reused: unit)')
+        self.assertEqual(sorted(os.listdir(out.log_dir)), ['reuse.log'])
+        rec, why = gate_ok.verify(self.repo.root, head)
+        self.assertIsNone(why)
+        self.assertEqual([(s['name'], s['result']) for s in rec['steps']], [('unit', 'reused')])
 
     def test_nothing_to_run_books_no_slot_and_runs_no_setup(self):
         _, tip = self.gated_branch()
@@ -241,11 +470,187 @@ class NoneAsked(ReuseCase):
 
     def test_no_step_asking_for_reuse_says_nothing(self):
         _, tip = self.gated_branch()
+        self.assertEqual(self.lines(), [])
         lander, out = self.land(BRANCH, tip)
         self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual(self.reuse_lines(), [])
+        self.assertEqual(self.lines(), [])
         self.assertFalse(os.path.exists(os.path.join(lander.gate_logs, 'reuse.log')))
-        self.assert_ran(lander, 'unit')
+        self.assert_ran(lander.gate_logs, 'unit')
+        self.assertEqual(self.entries(), [])
+
+
+class NeverList(ReuseCase):
+    """The config, a section file and the hook module are never reused across, whatever
+    "landing".reuse_never says. Owner-only paths are narrowed so the branch may change them."""
+    KIT = {'landing': {}, 'owner': {'paths': ['CLAUDE.md']}, 'hook': {'module': 'gate_hook'}}
+
+    def setUp(self):
+        ReuseCase.setUp(self)
+        kit = dict(self.KIT, gate=self.GATE, forbidden='cfg/forbidden.json')
+        self.repo.write('.kit.json', json.dumps(kit, indent=1) + '\n')
+        self.repo.write('cfg/forbidden.json', '{}\n')
+        self.main = self.repo.commit('forbidden in a section file', '.kit.json',
+                                     'cfg/forbidden.json')
+        self.repo.git('push', '-q', 'origin', 'main')
+
+    def check(self, files, path):
+        wt, tip = self.branch('feature', dict(SRC, **files))
+        out = self.gate(wt)
+        self.assert_none(out, out.log_dir, 'the change touches %s' % path)
+        lander, out = self.land(BRANCH, tip)
+        self.assert_none(out, lander.gate_logs, 'the change touches %s' % path)
+        self.assertEqual(self.entries(), [])
+
+    def test_the_kit_json_is_never_reused_across(self):
+        kit = dict(self.KIT, gate=self.GATE, forbidden='cfg/forbidden.json',
+                   repo={'name': 'renamed'})                   # the gate config is unchanged
+        self.check({'.kit.json': json.dumps(kit, indent=1) + '\n'}, '.kit.json')
+
+    def test_a_section_file_is_never_reused_across(self):
+        self.check({'cfg/forbidden.json': '{"x": 1}\n'}, 'cfg/forbidden.json')
+
+    def test_the_hook_module_is_never_reused_across(self):
+        self.check({'tools/gate_hook.py': 'GATE_CHECKS = {}\n'}, 'tools/gate_hook.py')
+
+
+KEY = 'ab' * 32
+NOW = datetime.datetime(2026, 10, 11, 12, tzinfo=datetime.timezone.utc)
+
+
+def hours(n):
+    return NOW - datetime.timedelta(hours=n)
+
+
+class Store(unittest.TestCase):
+    """The cache folder alone: entries, the hit rule, pruning."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder, True)
+
+    def put(self, res, when, key=KEY):
+        return reuse.store_entry(self.folder, key, 'unit', res, now=when)
+
+    def test_a_pass_within_the_age_hits(self):
+        self.put('pass', hours(1))
+        hit, why = reuse.lookup(self.folder, KEY, 24, NOW)
+        self.assertIsNone(why)
+        self.assertEqual(hit['stored_utc'], gate_ok.utc(hours(1)))
+
+    def test_nothing_stored_misses(self):
+        hit, why = reuse.lookup(self.folder, KEY, 24, NOW)
+        self.assertIsNone(hit)
+        self.assertEqual(why, 'no result stored for key %s' % KEY[:12])
+
+    def test_a_pass_older_than_the_limit_misses(self):
+        self.put('pass', hours(30))
+        hit, why = reuse.lookup(self.folder, KEY, 24, NOW)
+        self.assertIsNone(hit)
+        self.assertEqual(why, 'no pass within "landing".reuse_max_age_h (24) for key %s'
+                         % KEY[:12])
+
+    def test_a_pass_from_the_future_misses(self):
+        self.put('pass', NOW + datetime.timedelta(hours=1))
+        self.assertIsNone(reuse.lookup(self.folder, KEY, 24, NOW)[0])
+
+    def test_a_fail_in_the_window_is_sticky(self):
+        self.put('fail', hours(2))
+        self.put('pass', hours(1))
+        hit, why = reuse.lookup(self.folder, KEY, 24, NOW)
+        self.assertIsNone(hit)
+        self.assertEqual(why, 'failed or warned on these inputs at %s (key %s)'
+                         % (gate_ok.utc(hours(2)), KEY[:12]))
+
+    def test_a_fail_before_the_window_is_forgotten(self):
+        self.put('fail', hours(30))
+        self.put('pass', hours(1))
+        self.assertIsNotNone(reuse.lookup(self.folder, KEY, 24, NOW)[0])
+
+    def test_an_unreadable_entry_misses(self):
+        path = self.put('pass', hours(1))
+        self.put('pass', hours(2))
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('{"result": "pa')
+        hit, why = reuse.lookup(self.folder, KEY, 24, NOW)
+        self.assertIsNone(hit)
+        self.assertIn('cannot be read', why)
+
+    def test_an_entry_naming_another_key_misses(self):
+        path = self.put('pass', hours(1), key='cd' * 32)
+        os.makedirs(os.path.join(self.folder, KEY))
+        os.replace(path, os.path.join(self.folder, KEY, os.path.basename(path)))
+        hit, why = reuse.lookup(self.folder, KEY, 24, NOW)
+        self.assertIsNone(hit)
+        self.assertIn('cannot be read', why)
+
+    def test_a_foreign_file_is_ignored(self):
+        self.put('pass', hours(1))
+        with open(os.path.join(self.folder, KEY, 'notes.txt'), 'w', encoding='utf-8') as f:
+            f.write('x')
+        self.assertIsNotNone(reuse.lookup(self.folder, KEY, 24, NOW)[0])
+
+    def test_prune_removes_old_entries_and_leaves_foreign_files(self):
+        old = self.put('pass', hours(reuse.PRUNE_H + 1))
+        new = self.put('pass', hours(1))
+        gone_dir = os.path.dirname(self.put('pass', hours(reuse.PRUNE_H + 2), key='cd' * 32))
+        foreign = os.path.join(self.folder, KEY, 'notes.txt')
+        top = os.path.join(self.folder, 'README')
+        for p in (foreign, top):
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write('x')
+        self.assertEqual(reuse.prune(self.folder, NOW), [])
+        self.assertFalse(os.path.exists(old))
+        self.assertFalse(os.path.exists(gone_dir))         # emptied: removed
+        for p in (new, foreign, top):
+            self.assertTrue(os.path.exists(p), p)
+
+    def test_prune_never_follows_a_junction(self):
+        import _winapi
+        outside = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, outside, True)
+        old = os.path.join(outside, os.path.basename(self.put('pass', hours(reuse.PRUNE_H + 1),
+                                                                 key='ef' * 32)))
+        os.replace(os.path.join(self.folder, 'ef' * 32, os.path.basename(old)), old)
+        os.rmdir(os.path.join(self.folder, 'ef' * 32))
+        link = os.path.join(self.folder, 'ef' * 32)
+        _winapi.CreateJunction(outside, link)
+        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        self.assertEqual(reuse.prune(self.folder, NOW), [])
+        self.assertTrue(os.path.exists(old))
+
+    def test_a_failed_prune_says_one_line(self):
+        self.put('pass', hours(reuse.PRUNE_H + 1))
+        self.put('pass', hours(reuse.PRUNE_H + 2))
+        with mock.patch.object(reuse.os, 'remove', side_effect=PermissionError('in use')):
+            lines = reuse.prune(self.folder, NOW)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertTrue(lines[0].startswith(reuse.PREFIX + 'prune: '), lines)
+
+
+REAL_IDENTITY = runner.kit_identity
+
+
+class Identity(unittest.TestCase):
+    def test_the_cache_identity_is_the_kit_files_and_the_interpreter(self):
+        here = reuse.kit_identity()
+        self.assertEqual(sorted(here), ['files', 'python', 'version'])
+        self.assertRegex(here['files'], '^[0-9a-f]{64}$')
+        self.assertEqual(here['python'], os.path.normcase(os.path.abspath(sys.executable)))
+        other = os.path.join(os.path.dirname(sys.executable), 'other-python.exe')
+        with mock.patch.object(sys, 'executable', other):
+            there = reuse.kit_identity()
+        self.assertEqual(there['files'], here['files'])
+        self.assertNotEqual(there, here)
+
+    def test_kit_identity_names_the_running_interpreter(self):
+        here = REAL_IDENTITY()
+        self.assertEqual(here['python'], os.path.normcase(os.path.abspath(sys.executable)))
+        other = os.path.join(os.path.dirname(sys.executable), 'other-python.exe')
+        with mock.patch.object(sys, 'executable', other):
+            there = REAL_IDENTITY()
+        self.assertEqual(there['python'], os.path.normcase(os.path.abspath(other)))
+        self.assertEqual(there['commit'], here['commit'])
+        self.assertNotEqual(there, here)
 
 
 class PriorRecords(unittest.TestCase):
@@ -266,116 +671,6 @@ class PriorRecords(unittest.TestCase):
             with open(os.path.join(folder, 'red.gate.json'), 'w', encoding='utf-8') as f:
                 f.write('{"kind": "gate", "verdict": "fa')          # cut short: unreadable
             self.assertIsNone(reuse.prior_records('.', ['a' * 40]))
-
-
-class RecordEdits(ReuseCase):
-    """The branch gate's gate-OK record, edited after it was written, still verifies (it carries
-    no signature); reuse's own checks refuse it."""
-
-    def edit_record(self, tip, **changes):
-        path = gate_ok.record_path(self.repo.root, tip)
-        with open(path, encoding='utf-8') as f:
-            rec = json.load(f)
-        rec.update(changes)
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(rec, f)
-
-    def test_a_record_whose_config_rev_is_not_the_tip_is_not_reused(self):
-        _, tip = self.gated_branch()
-        self.edit_record(tip, config_rev=self.main)     # in its history, with the same config
-        self.assertIsNone(runner.verify_record(self.repo.root, tip)[1])
-        lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, 'the gate-OK record of %s was not written by its branch '
-                         'gate' % tip[:10])
-
-    def test_a_branch_gate_older_than_the_limit_is_not_reused(self):
-        _, tip = self.gated_branch()
-        ended = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=30)
-        self.edit_record(tip, ended_utc=ended.strftime('%Y-%m-%dT%H:%M:%SZ'))
-        lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, 'the branch gate passed 30.0 h ago, more than '
-                         '"landing".reuse_max_age_h (24)')
-
-
-class NeverList(ReuseCase):
-    """The config, a section file and the hook module are never reused across, whatever
-    "landing".reuse_never says. Owner-only paths are narrowed so the branch may change them."""
-    KIT = {'landing': {}, 'owner': {'paths': ['CLAUDE.md']}, 'hook': {'module': 'gate_hook'}}
-
-    def setUp(self):
-        ReuseCase.setUp(self)
-        kit = dict(self.KIT, gate=self.GATE, forbidden='cfg/forbidden.json')
-        self.repo.write('.kit.json', json.dumps(kit, indent=1) + '\n')
-        self.repo.write('cfg/forbidden.json', '{}\n')
-        self.main = self.repo.commit('forbidden in a section file', '.kit.json',
-                                     'cfg/forbidden.json')
-        self.repo.git('push', '-q', 'origin', 'main')
-
-    def test_the_kit_json_is_never_reused_across(self):
-        kit = dict(self.KIT, gate=self.GATE, forbidden='cfg/forbidden.json',
-                   repo={'name': 'renamed'})                   # the gate config is unchanged
-        _, tip = self.gated_branch(files={'.kit.json': json.dumps(kit, indent=1) + '\n'})
-        lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, 'the merge changes .kit.json')
-
-    def test_a_section_file_is_never_reused_across(self):
-        _, tip = self.gated_branch(files={'cfg/forbidden.json': '{"x": 1}\n'})
-        lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, 'the merge changes cfg/forbidden.json')
-
-    def test_the_hook_module_is_never_reused_across(self):
-        _, tip = self.gated_branch(files={'tools/gate_hook.py': 'GATE_CHECKS = {}\n'})
-        lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander, 'the merge changes tools/gate_hook.py')
-
-
-REAL_IDENTITY = runner.kit_identity
-
-
-class RealInterpreter(ReuseCase):
-    """runner.kit_identity computed for real; only the kit checkout's commit and cleanliness are
-    pinned (the kit checkout running the tests may be dirty)."""
-
-    def setUp(self):
-        ReuseCase.setUp(self)
-
-        def real():
-            return dict(REAL_IDENTITY(), commit='a' * 40, clean=True)
-        p =mock.patch.object(runner, 'kit_identity', side_effect=real)
-        p.start()
-        self.addCleanup(p.stop)
-
-    def test_kit_identity_names_the_running_interpreter(self):
-        here = REAL_IDENTITY()
-        self.assertEqual(here['python'], os.path.normcase(os.path.abspath(sys.executable)))
-        other = os.path.join(os.path.dirname(sys.executable), 'other-python.exe')
-        with mock.patch.object(sys, 'executable', other):
-            there = REAL_IDENTITY()
-        self.assertEqual(there['python'], os.path.normcase(os.path.abspath(other)))
-        self.assertEqual(there['commit'], here['commit'])
-        self.assertNotEqual(there, here)
-
-    def test_the_same_interpreter_reuses(self):
-        _, tip = self.gated_branch()
-        _, out = self.land(BRANCH, tip)
-        self.assertEqual(out.verdict, 'GATE OK (reused: unit)', self.said)
-
-    def test_a_branch_gate_under_another_interpreter_is_not_reused(self):
-        _, tip = self.gated_branch()
-        other = os.path.join(os.path.dirname(sys.executable), 'other-python.exe')
-        planned = reuse.plan
-
-        def plan_elsewhere(*a, **kw):       # the steps still run under the real interpreter
-            with mock.patch.object(sys, 'executable', other):
-                return planned(*a, **kw)
-        with mock.patch.object(reuse, 'plan', plan_elsewhere):
-            lander, out = self.land(BRANCH, tip)
-        self.assertEqual(out.code, G.OK, out.lines)
-        line = self.reuse_lines()[0]
-        self.assertTrue(line.startswith(reuse.PREFIX + 'none: the branch gate ran under another '
-                                        'kit'), self.said)
-        self.assertIn('other-python.exe', line)
-        self.assert_ran(lander, 'unit', 'merged', 'plain')
 
 
 def load_tool(path, name):
