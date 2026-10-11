@@ -38,10 +38,8 @@ WRITTEN_BY = {
 class Context(object):
     """What a plan needs beyond the snapshot. `branch` None: the branch checked out in `root`."""
 
-    def __init__(self, store, ledger, root, remote='origin', main_branch='main', branch=None,
-                 today=None):
+    def __init__(self, store, root, remote='origin', main_branch='main', branch=None, today=None):
         self.store = store
-        self.ledger = ledger
         self.root = root
         self.remote = remote
         self.main_branch = main_branch
@@ -207,8 +205,8 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
     """Edit fields and/or the body. `changes` is `[(key, [values])]`.
 
     - Changing a price field on an owner-prioritised or owner-held record, or writing
-      `priority_by: owner`, needs `--ruling` (checked, written as `priority_ruling`);
-      `priority_by: pm` always needs one (taken on its word, the ledger unread).
+      `priority_by: owner`, needs `--ruling` (its shape checked, written as `priority_ruling`);
+      `priority_by: pm` always needs one. A ruling id is taken on its word.
     - Releasing an owner hold (dropping `owner` from `blocked_on`, moving `priority` off `-1`)
       needs `--ruling` (written as `hold_ruling`); `-1` -> `-` is a release with no price.
     - A result of `priority_by: agent` drops `priority_ruling`.
@@ -278,9 +276,7 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
                         'owner hold: there is nothing for it to record' % ruling)
         if released_minus_one:
             lmod.refuse_unnamed_release(rid, rec, ruling, 'set')
-        lmod.check_ruling(ctx.ledger, rid, rec, ruling, 'set', hold_only=not priced,
-                          needs_items=releases,
-                          pm_price=bool(priced) and get('priority_by') == ['pm'])
+        _check_ruling(rid, rec, ruling, 'set', hold_only=not priced)
         if priced:
             pairs = rmod.apply_changes(pairs, [('priority_ruling', [ruling])])
         if releases:
@@ -320,6 +316,22 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
     return Change({rid: text}, subject, lines, ruling=ruling)
 
 
+def _check_ruling(rid, rec, ruling, verb, hold_only=False):
+    """`--ruling`'s refusals where an owner gate needs one: the shape, one ruling one change, a
+    spent id. The id is taken on its word: no ledger is read."""
+    if not rmod.RULING_RE.match(ruling or ''):
+        raise Usage('`--ruling %s` is not a ruling id - `R-nnnn`' % ruling)
+    if rec.get('priority_ruling') == ruling:
+        raise Refusal('`%s` already carries `priority_ruling: %s`. One ruling, one change: cite the '
+                      'ruling that allows THIS %s' % (rid, ruling, verb))
+    if ruling in lmod.spent_hold_rulings(rec):
+        raise Refusal('`--ruling %s` is spent: it released an earlier hold on `%s`, which was held '
+                      'again. This %s needs the ruling that releases THIS hold' % (ruling, rid, verb))
+    if rec.get('hold_ruling') == ruling and not hold_only:
+        raise Refusal('`%s` already carries `hold_ruling: %s`; a hold release never moves a price. '
+                      'Cite the ruling that allows THIS %s' % (rid, ruling, verb))
+
+
 def _plan_recite(snap, ctx, rec, ruling):
     rid = rec.id
     if not rmod.RULING_RE.match(ruling or ''):
@@ -331,17 +343,6 @@ def _plan_recite(snap, ctx, rec, ruling):
         raise Refusal('`%s` already carries `hold_ruling: %s`' % (rid, ruling))
     if rec.get('priority_ruling') == ruling:
         raise Refusal('`%s` already carries `priority_ruling: %s`. One ruling, one change' % (rid, ruling))
-    if ctx.ledger.standing and ruling == ctx.ledger.standing:
-        raise Refusal('`%s` is the standing delegation, not the ruling behind any one change' % ruling)
-    if ctx.ledger.configured:
-        entries, why = ctx.ledger.entries()
-        if entries is None:
-            raise Failure('`--hold-ruling %s` cannot be checked: %s' % (ruling, why))
-        bad = lmod.ruling_refusal(ctx.ledger, entries, ruling, lmod.HOLD_KINDS)
-        if bad is None:
-            bad = lmod.items_refusal(entries[ruling], ruling, rid)
-        if bad is not None:
-            raise Refusal(bad)
     pairs = rmod.apply_changes(rec.pairs(), [('hold_ruling', [ruling])])
     return Change({rid: _text(pairs, rec.body)},
                   'backlog: re-cite %s hold_ruling %s -> %s, no price change' % (rid, old, ruling),
@@ -376,7 +377,7 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None):
         if not unheld:
             raise Usage('`--ruling %s` was given, and this block releases no hold of the owner\'s'
                         % ruling)
-        lmod.check_ruling(ctx.ledger, rid, rec, ruling, 'block', hold_only=True)
+        _check_ruling(rid, rec, ruling, 'block', hold_only=True)
     if 'owner' in members and not owner_ask and not rec.has('owner_ask'):
         raise Usage('blocking on the owner needs `--owner-ask "<the question>"`')
     changes = [('state', ['blocked']), ('blocked_on', list(members))]
@@ -429,7 +430,7 @@ def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
         if not unheld:
             raise Usage('`--ruling %s` was given, and clearing `%s` from `%s` releases no hold of '
                         'the owner\'s' % (ruling, on, rid))
-        lmod.check_ruling(ctx.ledger, rid, rec, ruling, 'unblock', hold_only=True)
+        _check_ruling(rid, rec, ruling, 'unblock', hold_only=True)
     drop = unheld and rec.get('priority') != rmod.OWNER_PRIORITY
     pairs = [(k, v) for k, v in rec.pairs() if not (drop and k == 'owner_ask')]
     changes = [('blocked_on', left)] if left else [('state', ['open']), ('blocked_on', ['-'])]
@@ -486,7 +487,7 @@ def plan_unpark(snap, ctx, rid, ruling=None):
     if rec.get('state') != 'parked':
         raise Refusal('`%s` is `state: %s`, not `parked`: there is nothing to unpark'
                       % (rid, rec.get('state')))
-    lmod.check_ruling(ctx.ledger, rid, rec, ruling, 'unpark', hold_only=True, needs_items=False)
+    _check_ruling(rid, rec, ruling, 'unpark', hold_only=True)
     pairs = [(k, v) for k, v in rec.pairs() if k not in rmod.PARK_KEYS]
     pairs = rmod.apply_changes(pairs, [('state', ['open']), ('resume', [ruling])])
     lines = ['UNPARKED %s - state: open, resume: %s%s' % (rid, ruling, ' (was parked on %s)'
@@ -539,7 +540,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
                       % (rid, omod.not_offered_why(rec, passed, ctx.session), rid))
     if minus_one:
         lmod.refuse_unnamed_release(rid, rec, ruling, 'pull')
-        lmod.check_ruling(ctx.ledger, rid, rec, ruling, 'pull', hold_only=True)
+        _check_ruling(rid, rec, ruling, 'pull', hold_only=True)
     lines = ['PULLED %s - state: open -> pulled' % rid, '  pulled_at:  %s' % ctx.date(),
              '  pulled_by:  %s' % branch]
     today = ctx.date()
@@ -550,16 +551,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     else:
         recorded = reason
         if ruling is not None and not minus_one:
-            bad = None
-            if ctx.ledger.configured:
-                entries, why = ctx.ledger.entries()
-                bad = why if entries is None else lmod.ruling_refusal(ctx.ledger, entries, ruling,
-                                                                     lmod.HOLD_KINDS)
-            recorded = ('%s (context, unchecked: %s)' % (reason, ruling) if bad
-                        else '%s (PM %s)' % (reason, ruling))
-            if bad:
-                lines.append('warning: `--ruling %s` is not citable (%s); recorded as unchecked'
-                             % (ruling, bad))
+            recorded = '%s (PM %s)' % (reason, ruling)
         if blocker is not None:
             recorded += ' (unblocks %s)' % blocker
         for other in holding:
@@ -678,7 +670,7 @@ def plan_close(snap, ctx, rid, reason, ruling=None):
         if held:
             lmod.refuse_unnamed_release(rid, rec, ruling, 'close')
         if not own:
-            lmod.check_ruling(ctx.ledger, rid, rec, ruling, 'close', hold_only=True)
+            _check_ruling(rid, rec, ruling, 'close', hold_only=True)
     writes, lines = dependent_rewrites(snap, rid)
     writes[rid] = None
     lines.insert(0, 'CLOSED %s' % rid)
@@ -690,7 +682,7 @@ def plan_close(snap, ctx, rid, reason, ruling=None):
 
 def plan_retire(snap, ctx, rid, why, ruling=None):
     """The work should not be done: delete the record. An owner-prioritised or owner-held record
-    takes `--ruling`, an owner kind whose `Items:` line names it (never a delegated entry)."""
+    takes `--ruling`, a ruling id."""
     rec = require(snap, rid)
     subject = _claim_subject('retires', rid, why, '--why')
     guarded = rmod.is_owner_prioritised(rec) or rmod.is_owner_held(rec)
@@ -703,7 +695,7 @@ def plan_retire(snap, ctx, rid, why, ruling=None):
         if not guarded:
             raise Usage('`--ruling %s` was given, and `%s` is neither owner-prioritised nor '
                         'owner-held: its retirement needs no ruling' % (ruling, rid))
-        lmod.check_ruling(ctx.ledger, rid, rec, ruling, 'retirement')
+        _check_ruling(rid, rec, ruling, 'retirement')
     writes, lines = dependent_rewrites(snap, rid)
     writes[rid] = None
     lines.insert(0, 'RETIRED %s' % rid)
