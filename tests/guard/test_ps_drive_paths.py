@@ -76,8 +76,13 @@ class IntoMain(Base):
         self.assertIn('the directory it runs in is unknown', d.reason)
 
     def test_unknown_provider(self):
-        d = self.denied(self.run_ps(r'New-Item Registry::HKEY_CURRENT_USER\Software\x'), 'main-checkout')
-        self.assertIn('cannot place', d.reason)
+        # a provider the guard does not know (a module's own, or FileSystem from another module)
+        # may hold files anywhere; the built-in non-file ones (Registry::, Environment::) are
+        # left to kit/guard-env-drive's skip and are not pinned here
+        for text in (r'New-Item Demo.Provider::{main}\x.txt', r'New-Item Other.Module\FileSystem::{main}\x.txt'):
+            with self.subTest(text):
+                d = self.denied(self.run_ps(text), 'main-checkout')
+                self.assertIn('cannot place', d.reason)
 
     def test_jailed_session_that_may_edit_main_is_refused_by_the_jail(self):
         # a coordinator's main session may edit a main checkout, so main_checkout lets an unplaced
