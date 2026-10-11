@@ -29,6 +29,7 @@ import tempfile
 
 from kitlib import commit as kcommit
 from kitlib import config as kconfig
+from kitlib import hubvalidate
 from kitlib import pmdata
 from kitlib.config import user
 from kitlib.config.types import parse_json
@@ -136,7 +137,8 @@ def _doc_files(folder):
 def read_source(src):
     """({collection: {doc_id: fields}}, notes) from an ArtifactData out_dir folder: one entry per
     MIRRORED collection that has a folder in src (an empty folder is an empty collection); notes
-    name the other folders, which are not mirrored. Refused for a missing src or a file that is
+    name the other folders, which are not mirrored, then any VALIDATE lines (validation_notes;
+    they never stop a save). Refused for a missing src or a file that is
     not a JSON object; nothing is read into the mirror then."""
     if not os.path.isdir(src):
         raise Refused('--from %s is not a folder' % src)
@@ -151,7 +153,34 @@ def read_source(src):
         for doc_id, path in sorted(_doc_files(os.path.join(src, name)).items()):
             docs[doc_id] = fields_of(name, _read_json(path))
         found[name] = docs
+    notes.extend(validation_notes(found, read_repos(src)))
     return found, notes
+
+
+def read_repos(src):
+    """{doc_id: fields} of the repos/ folder in an out_dir (read only to judge repo tags, never
+    mirrored); None when src has no repos/ folder or one of its files cannot be read."""
+    folder = os.path.join(src, 'repos')
+    if not os.path.isdir(folder):
+        return None
+    try:
+        return {k: fields_of('repos', _read_json(p)) for k, p in sorted(_doc_files(folder).items())}
+    except Refused:
+        return None
+
+
+def validation_notes(found, repos=None):
+    """Lines for kitlib.hubvalidate's findings on `found` (plus repos/ when given): a warning
+    never stops a save. [] when the documents are clean."""
+    docs = dict(found)
+    if repos is not None:
+        docs['repos'] = repos
+    findings = hubvalidate.validate(docs)
+    if not findings:
+        return []
+    lines = ['VALIDATE %s' % hubvalidate.format_line(f) for f in findings]
+    lines.append('VALIDATE %s (saved anyway)' % hubvalidate.summary(findings))
+    return lines
 
 
 def _write_text(path, text):
