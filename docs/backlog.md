@@ -25,7 +25,7 @@ Globals: `-C DIR`, `--session S` (the offer and the commit body), `--as BRANCH` 
 | Verb | Does |
 |---|---|
 | `next [--cap N] [--with ID]...` | The banner, then up to N offers for `--session`, then what was passed over and why |
-| `show ID`, `list [--blocked [--on M]] [--needs-priority] [--status S] [--area A]` | Reads; `--needs-priority` is the open unpriced records, sorted by id; a parked row adds its `q` and days parked |
+| `show ID`, `list [--blocked [--on M]] [--needs-priority] [--status S] [--area A]` | Reads; `--needs-priority` is the open unpriced records, sorted by id; a parked row adds its `q` and days parked. `show` of a missing id is NOT FOUND (exit 1) plus the store commit that deleted its file (short sha, commit date, `Session:`, subject; no author name), found through merged side branches (`git log --full-history --no-renames --diff-filter=D`), or "the id is unknown". An id with a glob or path character is not looked up, and a history git cannot read still prints the plain NOT FOUND with a line saying so (kitlib/backlog/plan.py `require_shown`, store.py `last_removal`) |
 | `check` | Schema, store and pull checks; ruling checks only with a ledger (below). RED exits 1 |
 | `landable BRANCH...` | 0 LANDABLE, 1 CANNOT TELL, 2 NOT LANDABLE (it holds a pull) |
 | `stale [--days N]` | Read-only, default 30 days. Lists records whose last store commit is N+ days old, backticked body paths with no file, and `files` entries changed or gone since `files_at`. A record a test could not judge is NOT CHECKED, never current; the SWEPT line counts skips. Age is the last commit that wrote the record: after `migrate` it is the migrate date until the next write, and an uncommitted `main`-store edit ages by its last commit |

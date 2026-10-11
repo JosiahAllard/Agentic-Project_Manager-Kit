@@ -177,7 +177,7 @@ def do_next(args, ctx, snap):
 
 
 def do_show(args, ctx, snap):
-    rec = pmod.require(snap, args.id)
+    rec = pmod.require_shown(snap, ctx, args.id)
     ranks = omod.ranked(snap)
     bucket, _ = omod.classify(rec)
     say('%s  rank %s  %s  (%s)' % (rec.id, omod.rank_label(rec, ranks), bucket, rec.path))

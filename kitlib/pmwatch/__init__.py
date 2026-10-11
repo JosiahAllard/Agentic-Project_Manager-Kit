@@ -53,6 +53,86 @@ def save_state(path, s):
     os.replace(tmp, path)
 
 
+def heartbeat_file(state_path):
+    """The heartbeat file beside the state file: separate, so the state keys stay those of the
+    PM repo's copy (which shares the state file)."""
+    return state_path + ".beat"
+
+
+def _number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def write_heartbeat(path, pid, now, stream, started=None):
+    """Record that pm_watch `pid` polled at `now` (epoch seconds); `stream` is its --stream flag and
+    `started` its process start time (epoch seconds, None when unknown), so a reused pid is not
+    taken for the watcher. kitlib.pmstart.watcher reads it to tell a live watcher from a hung or
+    exited one."""
+    save_state(path, {"pid": pid, "beat": now, "stream": bool(stream), "started": started})
+
+
+def read_heartbeat(path):
+    """The heartbeat dict, or None when the file is missing, unreadable or malformed. "started"
+    is a number or None (None also for a heartbeat written without it)."""
+    hb = load_state(path)
+    if not isinstance(hb, dict) or type(hb.get("pid")) is not int or not _number(hb.get("beat")):
+        return None
+    if hb.get("started") is not None and not _number(hb["started"]):
+        return None
+    return dict(hb, started=hb.get("started"))
+
+
+_EPOCH_AS_FILETIME = 116444736000000000     # 1970-01-01 in 100 ns ticks since 1601-01-01
+
+
+def own_start_time():
+    """This process's start time in epoch seconds (kernel32 GetProcessTimes), None when it cannot
+    be read. The same clock as the CreationDate kitlib.pmstart.list_processes reports."""
+    import ctypes
+    from ctypes import wintypes
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        times = [wintypes.FILETIME() for _ in range(4)]
+        ok = k32.GetProcessTimes(wintypes.HANDLE(k32.GetCurrentProcess()),
+                                 *[ctypes.byref(t) for t in times])
+    except (OSError, AttributeError):
+        return None
+    if not ok:
+        return None
+    ticks = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+    return (ticks - _EPOCH_AS_FILETIME) / 1e7
+
+
+POLL_SLEEP = 30       # seconds between passes
+
+
+def run(w, clock, sleep, save, emit, beat, once=False, stream=False):
+    """The watcher loop over Watcher `w`. Each pass polls, saves the state (`save(state)`) and,
+    except with `once`, calls `beat(now)`. Events go to `emit` as one text. Without `stream` the
+    first events end the run (the PM relaunches it); with `stream` it keeps polling, for a run
+    under Monitor. `once`: one pass, then 0. Returns the exit code. A beat that raises OSError
+    (a locked or read-only heartbeat file, os.replace refused) is skipped, never fatal: the
+    heartbeat goes stale and the PM start check says so, while the events keep flowing."""
+    w.start(clock())
+    save(w.s)
+    while True:
+        events = w.poll(clock())
+        save(w.s)
+        if not once:
+            try:
+                beat(clock())
+            except OSError:
+                pass
+        if events:
+            emit("\n".join(events))
+            if not stream:
+                return 0
+        if once:
+            return 0
+        sleep(POLL_SLEEP)
+
+
 def branch_tip(repo, ref):
     args = ["ls-remote", "origin", ref]
     r = gitcmd.subprocess_run(["git", "-C", repo] + args, capture_output=True, text=True, timeout=60,

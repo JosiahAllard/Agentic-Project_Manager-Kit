@@ -31,7 +31,8 @@ def block():
 def js(expr, items):
     """Evaluate expr (which sees `items` and the page's pm* functions) under node; return its JSON."""
     src = block() + "\nconst items = %s;\nconsole.log(JSON.stringify(%s));" % (json.dumps(items), expr)
-    out = subprocess.run([NODE, "-e", src], capture_output=True, text=True, timeout=30)
+    # The script goes in on stdin: the pure block outgrew the Windows command-line limit.
+    out = subprocess.run([NODE, "-"], input=src, capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
 
@@ -104,7 +105,7 @@ class PageTest(unittest.TestCase):
         self.assertLess(p.index('data-s="questions"'), p.index('data-s="topm"'))
         self.assertLess(p.index('data-s="topm"'), p.index('data-s="todo"'))
         self.assertIn('db.collection("to_pm").onSnapshot', p)
-        self.assertIn("...pmAlertLines(state.topm)", p)
+        self.assertIn("...pmAlertLines(s.topm)", p)                           # in pmAlertLines2, which pmAlertText builds on
         self.assertIn("sendAlert = fire", p)
         self.assertEqual(p.count("cm.sendToClaude("), 1)                      # one alert path, reused by Send all
 

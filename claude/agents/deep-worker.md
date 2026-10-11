@@ -1,6 +1,6 @@
 ---
 name: deep-worker
-description: NEVER dispatch with the Agent tool. deep-worker is its own launched session - its own window, the 1M-context opus model with a 500k auto-compact window, effort xhigh - started by the PM's launcher (`launch.py deep`) with a brief and a named requester it reports back to. Only for the most difficult issues - root-causing a crash or a race, concurrency and networking changes where a subtle mistake is expensive - once strong-worker has been defeated or plainly will be. Coordinators request one; the PM launches it: SendMessage the PM a brief file path, your session name as requester and a slug.
+description: "NEVER dispatch with the Agent tool. deep-worker is its own launched session - its own window, the 1M-context opus model with a 500k auto-compact window, effort xhigh - started by the PM's launcher (`launch.py deep`) with a brief and a named requester it reports back to. Only for the most difficult issues - root-causing a crash or a race, concurrency and networking changes where a subtle mistake is expensive - once strong-worker has been defeated or plainly will be. Coordinators request one; the PM launches it: SendMessage the PM a brief file path, your session name as requester and a slug."
 model: opus
 effort: xhigh
 ---
