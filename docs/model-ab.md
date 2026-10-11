@@ -26,7 +26,7 @@ Haiku used about 1.7x the raw tokens and cost about 13x less. Misses: Haiku land
 
 Test finding: records and sync were viable on Haiku under conditions (records once the backlog tool has `set`; sync for clean or doc-level merges, high-risk-path conflicts stay on Sonnet or above). The lander decision follows from the re-run below.
 
-Where this stands (checked 2026-10-11, agent review): the records line above is out of date. A later owner decision keeps records off Haiku, and docs/ROSTER.md lists records as sonnet, low. The sync decision on Haiku is still open. Source for the later decision is the agent review's inventory notes, not a re-read of the decision itself.
+Where this stands (checked 2026-10-11, agent review): the records line above is out of date. This repository shows records as sonnet, low (docs/ROSTER.md). A decision to keep records off Haiku is reported from outside this repository (the owner's decision log); it was not re-read for this page. The sync decision on Haiku is still open.
 
 ## 2026-10-10: lander re-run with the clarified lander.md
 
@@ -63,7 +63,7 @@ Reviewer costs use other assumed rates than the price table above: Opus $5/$25, 
 
 Missed: Sonnet B2 doc contradiction, B3 silent data loss, B10 removed refusal; Opus B8 silent data loss; Haiku B8, B10. Every arm missed at least one silent data loss; a second reviewer on a different model covers more. Caveats: 10 bugs, one run per cell (1-2 catch gaps are noise); plants small and local; no tests run; wall time confounded by concurrency.
 
-Decision (owner, 2026-10-10): the reviewer model follows the risk tier of the worker that built the branch. Worker branches (low and medium risk) get Haiku at high effort. Opus-worker, strong-worker and deep-worker branches (high risk) get Opus. The coordinator's dispatch rule is to verify any Haiku "blocking" claim before it holds a landing, because Haiku overstated severity twice. State on 2026-10-11: decided but not built. The backlog record for the split is held until after go-live, so claude/agents/reviewer.md and docs/ROSTER.md still show Sonnet. A re-check against real review outcomes is planned about a month after go-live.
+Reported decision (2026-10-10): the reviewer model follows the risk tier of the worker that built the branch. Worker branches (low and medium risk) get Haiku at high effort. Opus-worker, strong-worker and deep-worker branches (high risk) get Opus. The coordinator would verify any Haiku "blocking" claim before it holds a landing, because Haiku overstated severity twice. Provenance: this is reported in the owner's decision log outside this repository and was not re-read for this page; no document in this repository records it. What this repository shows: claude/agents/reviewer.md and docs/ROSTER.md still show Sonnet, so the split is not built. The backlog record for the split was held until after go-live. Go-live has since happened; whether the record was released was not checked. A re-check against real review outcomes was planned about a month after go-live.
 
 Findings added with the decision: every model missed at least one silent data loss. Opus and Haiku together still miss B8 (only Sonnet caught it), so a Haiku second pass is no cover on high-risk work. Haiku was the slowest (222s against 88s for Sonnet). Real review history could not separate the tiers either way: see "Reviewer miss history" in [agent-review.md](agent-review.md).
 
@@ -134,8 +134,9 @@ Cases 01, 05, 06, 07, 11, 12 and 16 to 19 had no miss in any cell.
 **Haiku misses.** Of the 12 Haiku misses, 10 (all outside case 04) decline to act where the key says act: no lander, no go to a peer, or the call handed to the Project Manager. The other 2 are case 04. This is read from the one-line notes of the mismatch list; it is an observation, not a scored category.
 
 **Tokens and cost** (measured, 140 candidate runs; input / output / cache read / cache write):
-- Sonnet: 272 / 74,011 / 3,994,696 / 1,669,938. At the price table above, about $5.71.
-- Haiku: 240 / 21,840 / 3,412,160 / 1,835,186. At the price table above, about $0.27.
+- Sonnet (single-run): 272 / 74,011 / 3,994,696 / 1,669,938. At the price table above, about $5.71.
+- Haiku (single-run): 240 / 21,840 / 3,412,160 / 1,835,186. At the price table above, about $0.27.
+- Prices to be corrected against the published list in a follow-up.
 - Opus: 80 / 3,873 / 1,163,688 / 579,714. The price table has no Opus row, so tokens only.
 
 **Caveats**

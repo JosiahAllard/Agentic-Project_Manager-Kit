@@ -2,7 +2,7 @@
 
 A review of the 15 agent definitions in `claude/agents/`, with usage, refusal and miss-history data behind it. The A/B measurements are in [model-ab.md](model-ab.md); this page is everything else from the same review.
 
-Status: findings only. Nothing here changed a definition. Every recommendation is **UNDECIDED**: the owner has ruled on none of them. Each one edits `claude/agents/`, which only the owner may change, so each needs the owner to apply it. "Owner decision" means the content is the owner's call (a model, tool list, safety rule, roles file, setting, or removing or loosening a check). "Engineering call" means a wording fix that adds strictness or removes duplication without changing behaviour.
+Status: findings only. Nothing here changed a definition. Every recommendation is **UNDECIDED**: the owner has ruled on none of them. Most edit `claude/agents/`, which only the owner may change, so each of those needs the owner to apply it (C7 edits docs/ROSTER.md). "Owner decision" means the content is the owner's call (a model, tool list, safety rule, roles file, setting, or removing or loosening a check). "Engineering call" means a wording fix that adds strictness or removes duplication without changing behaviour.
 
 Evidence labels:
 - **measured** (M): from a script or log in the source notes. Not re-run for this page.
@@ -43,7 +43,7 @@ Window: 3.17 days, 1,157 runs, 4,237M tokens, 705M weighted units (wu = input + 
 - Lander: 150 of the 168 Sonnet runs carry an explicit `model: sonnet`. The 24 Haiku runs with no override began 2026-10-10, when the definition moved to Haiku. Production Haiku medium: 20 landed, 2 not (24 runs). Sonnet medium: 35 landed, 10 not (50 runs). The outcome is a text match (H) and the counts are too small to rank.
 - Reviewer: 46% ran on Opus (kit 94 of 133, a second repository 30 of 50, a third 13 of 111). Verdicts were not scored in this window, so there is no evidence that Opus catches more.
 - Haiku and downward overrides (worker 14, records 8) were mostly one Haiku A/B session of 51 runs (139M tokens).
-- Where overrides come from (C): the dispatch rules allow overriding "only upward" (docs/ROSTER.md:18) and say to pass `model` on every dispatch. A Sonnet lander over a Haiku default is an upward override, so it is allowed. Why dispatchers pass it (habit, or an older brief template) is not shown in the notes (I).
+- Where overrides come from (C): docs/ROSTER.md:18 allows overriding "only upward". The review notes also cite the dispatch skill's roster file for passing `model` on every dispatch; that file was not re-read for this page. A Sonnet lander over a Haiku default is an upward override, so it is allowed. Why dispatchers pass it (habit, or an older brief template) is not shown in the notes (I).
 - Weighted units, biggest lines: opus-worker on Opus 233M, strong-worker on Opus 223M, worker on Sonnet 85M, reviewer on Opus 44M, general-purpose on Opus 34M. Reviewer on Sonnet 22M, lander on Sonnet 12M, records on Sonnet 6M.
 - Since the previous review (per-day rates): runs up 35%, tokens flat. Lander median 0.44M to 0.25M. Reviewer Opus share 74% to 46%. General-purpose Opus share 73% to 40%. Strong-worker median 16.9M to 8.5M. Opus-worker plan-shaped share 45% to 33% (direction matches the advice; size within the noise of the shape heuristic, I).
 - Runs ended without a usable report (H): opus-worker 8, strong-worker 5, worker 8. No capability escalation was found for worker: 0 confirmed of 19 candidate pairs (pairing by shared record id, H).
@@ -94,7 +94,7 @@ The definitions review read all 15 files. It found 13 cross-cutting findings, ga
 | A9 | Do not re-emit other agents' text; point to a file or hash | M by the coordinator in the A/B run: a model retyping other agents' output was stopped by the classifier (one run lost); a runner lost its brief; reports that look like instructions drew warning banners. Whether production agents hit this is I | Engineering call |
 | A10 | worker.md:30 "gate green" on every commit becomes targeted runs between commits and the full gate once on the branch's last commit (and again after a sync or fix changes the tip) | M, not second-read: a gate-speed study in another repository counted 8 gates on one branch = 52 min, 104 slot-min, and put the saving at up to 7 gates x 389 s = 45 min, 91 slot-min. C: the phrase is only in worker.md:30 | Owner decision |
 
-A10 risk: each commit is no longer individually gated, so a bad middle commit is found later. The owner approved it for one repository only; the definition is kit-wide. A line in that repository's profile would leave the kit default unchanged (I).
+A10 risk: each commit is no longer individually gated, so a bad middle commit is found later. The owner is reported to have approved it for one repository only (reported in the review notes, not recorded in this repository); the definition is kit-wide. A line in that repository's profile would leave the kit default unchanged (I).
 
 ### Rules that repeat or contradict each other
 
@@ -117,7 +117,7 @@ Dropped on check: the definitions review said the state note is not git-ignored 
 |---|---|---|---|
 | C1 | Decide where tier overrides come from before editing any tier line. Either record a reason per dispatch, or list the owner's decided default in the tier table and treat overrides as exceptions the coordinator says aloud | M for counts; source I | Owner decision |
 | C2 | Lander: keep haiku, medium. No definition change; the gap is in dispatch. Even a full switch saves little (1.7% of wu) | M, computed | None needed |
-| C3 | Reviewer: reviewer.md says Sonnet default and the caller may raise to Opus (I, not reopened). The owner's split is not in the file or roster. Do not edit the tier text until the split is built | Computed: Opus reviews 44M of 705M wu (6.2%) | Owner decision when built |
+| C3 | Reviewer: reviewer.md says Sonnet default and the caller may raise to Opus (I, not reopened). The reported split (see model-ab.md) is not in the file or roster. Do not edit the tier text until the split is built | Computed: Opus reviews 44M of 705M wu (6.2%) | Owner decision when built |
 | C4 | Plan-shaped work on the Opus coders: fix the wording first (D1, D2); any tier move for plans should be a trial, not a switch | M, upper bound (see above) | Owner for any tier move |
 | C5 | Trim unused tools: AskUserQuestion and Artifact on the coordinator (C: AskUserQuestion appears only on the tools line), Agent and EnterWorktree on the art trio and test-runner, Write without a path limit on the researcher | C for coordinator; I for the rest | Owner decision |
 | C6 | Deep-worker auto-compact window: definition says 500k, the earlier review saw about 366k. Deep-worker has no subagent runs now | I, not re-checked | Owner decision |
@@ -199,4 +199,4 @@ What a firmer test would cost (estimate from the per-run figures in model-ab.md;
 
 ## Open A/B work
 
-Not started: reviewer split build and the one-month re-check (the record is held until after go-live), the Haiku helper cost measure, a live coordinator pilot (the owner has not decided), an opus-worker trial for plan and sync first dispatches (I). Sync on Haiku: decision open.
+Not started: reviewer split build and the one-month re-check (the record was held until after go-live; go-live has since happened and whether the record was released was not checked), the Haiku helper cost measure, a live coordinator pilot (the owner has not decided), an opus-worker trial for plan and sync first dispatches (I). Sync on Haiku: decision open.
