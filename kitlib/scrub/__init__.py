@@ -47,6 +47,8 @@ STOP_IDS = frozenset((
     'SHA-256', 'ISO-8601', 'JSON-RPC', 'ANSI-C', 'BSD-3', 'UTC-4',
     # a model name and an invalid one next to it; two threads per core; a span of rows
     'GPT-5', 'GPT-50', 'SMT-2', 'R4-R7',
+    # standard hash and signature-scheme names (RFC 8017, FIPS 180-4)
+    'SHA-224', 'SHA-384', 'SHA-512', 'EMSA-PKCS1', 'RSASSA-PKCS1',
     # hyphenated English and marker words written in capitals
     'OWNER-ONLY', 'SELF-TEST', 'ROW-ID', 'FOLLOW-UP', 'AUTO-GENERATED', 'UP-TO-DATE',
     'WORKING-RULES', 'CLAUDE-SPECIFIC', 'GATE-EXPECT-BEGIN', 'GATE-EXPECT-END'))
