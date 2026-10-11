@@ -57,6 +57,13 @@ class DoneWhenTest(unittest.TestCase):
     def test_a_ref_into_a_collection_that_was_not_read_is_not_judged(self):
         self.assertEqual(V.validate({'todos': {'T-1': todo(refs=['Q-910'])}}), [])
 
+    def test_a_ref_to_a_missing_story_id_is_flagged(self):
+        docs = {'stories': {'S-001': {'status': 'submitted', 'repo': 'pm', 'title': 't'}},
+                'todos': {'T-1': todo(refs=['S-002'])}}
+        self.assertEqual(codes(V.validate(docs)), [('todos/T-1', 'ref-dangling')])
+        docs['todos']['T-1']['refs'] = ['S-001']
+        self.assertEqual(V.validate(docs), [])
+
     def test_an_unaliased_repo_tag_is_flagged_until_aliased(self):
         docs = {'questions': {'Q-1': question(repo='pm-kit')},
                 'repos': {'pm': {'name': 'pm', 'added_at': 'x'}}}

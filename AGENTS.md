@@ -1,6 +1,6 @@
 # PM kit
 
-- Contract: ARCHITECTURE.md. Rulings are cited as PM R-nnnn (the PM ledger).
+- Contract: ARCHITECTURE.md.
 - Python standard library only. Windows only.
 - `kitlib/<pkg>/`: logic, with no argparse, no printing to the user and no sys.exit. `tools/`: thin entry points. `claude/`: everything Claude Code specific (agents, skills, the guard and session-start hooks, the Action Hub page). `githooks/`: pre-push, and the opt-in pre-commit. Tests go in `tests/<pkg>/`, written as unittest tests. They import the library and never the CLIs, except to test arguments and exit codes.
 - Work on a branch in a worktree under `.claude/worktrees/<slug>`, never in the main checkout. The PM lands.

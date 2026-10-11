@@ -77,28 +77,27 @@ class NewRepo(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn('.kit.json exists already', out)
 
-    def test_repo_name_is_the_ledger_column_and_the_backlog_reads_it(self):
-        # -RepoName wins over the folder name; ledger_name (the backlog's ruling column) reads it back
-        from kitlib.backlog import ledger as lmod
+    def test_repo_name_is_written_to_kit_json(self):
+        # -RepoName wins over the folder name; the loaded "repo" section reads it back
         code, out = self.ps('-RepoName', 'pm')
         self.assertEqual(code, 0, out)
         self.assertIn('"repo": {"main_branch": "main", "name": "pm"}', out)
         code, out = self.ps('-Apply', '-RepoName', 'pm')
         self.assertEqual(code, 0, out)
-        self.assertEqual(lmod.ledger_name(config.load(self.root)), 'pm')
+        self.assertEqual(config.load(self.root).section('repo')['name'], 'pm')
 
-    def test_a_repo_name_that_is_not_a_ledger_name_is_usage_and_writes_nothing(self):
+    def test_a_repo_name_that_is_not_a_repo_name_is_usage_and_writes_nothing(self):
         before = sorted(os.listdir(self.root))
         for bad in ('PM', 'my_repo', 'a.b'):
             code, out = self.ps('-Apply', '-RepoName', bad)
             self.assertEqual(code, 2, (bad, out))
-            self.assertIn('is not a lower-case ledger name', out)
+            self.assertIn('is not a lower-case repo name', out)
         odd = os.path.join(os.path.realpath(self.fx.base), 'Odd_Name')
         os.makedirs(odd)
         self.fx.git('init', '-q', '-b', 'main', odd, cwd=odd)
         code, out = self.ps('-Apply', target=odd)
         self.assertEqual(code, 2, out)
-        self.assertIn("the folder name 'odd_name' is not a lower-case ledger name", out)
+        self.assertIn("the folder name 'odd_name' is not a lower-case repo name", out)
         self.assertIn('give -RepoName', out)
         self.assertFalse(os.path.exists(os.path.join(odd, '.kit.json')))
         self.assertEqual(sorted(os.listdir(self.root)), before)
