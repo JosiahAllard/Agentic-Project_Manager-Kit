@@ -75,8 +75,9 @@ def hub(cfg):
     if not url:
         raise KeyError("hub_url not configured")
     src = cfg.get("hub_source", "claude/hub/action-hub.html")
-    return ["republish %s to %s to arm the alert, then process the hub "
-            "(answers, stories, to-dos, pm_ack)" % (src, url)]
+    return ["hub: republish the kit's Action Hub page %s to %s with the Artifact tool, "
+            "restating the capabilities in docs/action-hub.md (For the PM), to arm the alert; "
+            "then process the hub (answers, stories, to-dos, pm_ack)" % (src, url)]
 
 
 def watcher(cfg, procs):
