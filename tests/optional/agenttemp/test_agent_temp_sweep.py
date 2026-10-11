@@ -274,8 +274,10 @@ class SessionDirs(Case):
         self.assertEqual(got['Kit-Conductor'], 'kept')
         self.assertEqual(got['x'], 'removed')
         self.assertEqual(got['claude/proj/kit-conductor'], 'removed')
-        self.assertFalse(S.is_kept('claude/proj/a', ['claude/*']))       # * matches within one name
+        self.assertFalse(S.is_kept('claude/proj/a', ['claude*a']))       # * matches within one name
+        self.assertFalse(S.is_kept('claude/proj', ['claude/proj/a']))   # a longer item keeps no folder
         self.assertTrue(S.is_kept('claude/proj/a', ['claude/proj']))    # a kept folder keeps what is in it
+        self.assertTrue(S.is_kept('claude/proj/a', ['claude/*']))       # ... matched by a pattern too
 
     def test_check_rejects_bad_keep(self):
         good = os.path.abspath(self.dir)
