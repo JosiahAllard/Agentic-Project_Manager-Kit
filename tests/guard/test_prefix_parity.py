@@ -78,7 +78,10 @@ class PrefixParity(unittest.TestCase):
 
     def test_every_guard_test_passes_with_prefixed_names(self):
         loaded = unittest.defaultTestLoader.discover(HERE, pattern='test_*.py', top_level_dir=TOP)
-        suite = unittest.TestSuite(t for t in tests_in(loaded) if not t.id().startswith(__name__ + '.'))
+        skipped = (__name__ + '.',
+                   # pre-push hook against real git repos (175 s): commit emails only, no guard agent_type or role mark
+                   __package__ + '.test_prepush.')
+        suite = unittest.TestSuite(t for t in tests_in(loaded) if not t.id().startswith(skipped))
         knob = Knob()
         patches = knob.patches()
         for p in patches:
