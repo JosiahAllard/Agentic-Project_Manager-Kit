@@ -56,11 +56,14 @@ class Case(unittest.TestCase):
         self.calls = []             # the argv of every git command a pass ran
         self.envs = []              # (subcommand, env) of each
         self.answers = {}           # subcommand -> a Result given instead of running git
+        self.before = {}            # subcommand -> called just before that command runs
 
     def runner(self, args, cwd, **kw):
         sub = gitcmd.subcommand(args)
         self.calls.append(list(args))
         self.envs.append((sub, kw.get('env')))
+        if sub in self.before:
+            self.before[sub]()
         forced = self.answers.get(sub)
         if isinstance(forced, BaseException):
             raise forced
@@ -159,13 +162,10 @@ class PassTest(Case):
     def test_the_next_pass_is_due_a_period_after_the_last_one_ended(self):
         sync = self.sync(every=60)
         self.write('hub/pages/a.json')
-        run = self.runner
 
-        def slow(args, cwd, **kw):
-            if args[0] == 'fetch':
-                self.now[0] += 100                          # a fetch that took 100 seconds
-            return run(args, cwd, **kw)
-        sync._run = slow
+        def slow():
+            self.now[0] += 100                              # a fetch that took 100 seconds
+        self.before['fetch'] = slow
         self.now[0] += 60
         self.assertTrue(sync.poll()['ok'])                  # began at 1060, ended at 1160
         self.now[0] = 1219
@@ -212,6 +212,31 @@ class PassTest(Case):
         self.assertLess(subs.index('merge'), subs.index('commit'))
         self.assertLess(subs.index('commit'), subs.index('push'))
         self.assertIn(['merge', '-q', '--ff-only', 'refs/remotes/origin/pmdata'], self.calls)
+
+    def test_a_remote_that_moves_between_the_fetch_and_the_push_is_reported_not_forced(self):
+        sync = self.sync()
+        self.write('hub/pages/a.json')
+        self.assertTrue(sync.sync_once()['ok'])
+        clone = self.clone()
+        moved = []
+
+        def race():                                         # another machine pushes just now
+            if not moved:
+                moved.append(self.move_remote(clone))
+        self.before['push'] = race
+        self.write('hub/pages/b.json')
+        st = sync.sync_once()
+        self.assertEqual((st['ok'], st['failed']), (False, 'push'))
+        self.assertTrue(st['detail'])
+        self.assertEqual((st['pending_commit'], st['pending_push'], st['last_push_at']),
+                         (False, True, 1000.0))             # the first pass's push, not this one
+        mine = self.head()
+        self.assertEqual(self.committed(), ['hub/pages/b.json'])
+        self.assertEqual(self.remote_tip(), moved[0])       # the remote keeps the other commit
+        st = sync.sync_once()                               # the next pass sees two histories
+        self.assertEqual((st['failed'], st['diverged'], st['pending_push']),
+                         ('fast-forward', True, True))
+        self.assertEqual((self.head(), self.remote_tip()), (mine, moved[0]))
 
     def test_a_remote_that_moved_with_nothing_to_commit_but_a_push_waiting(self):
         sync = self.sync()

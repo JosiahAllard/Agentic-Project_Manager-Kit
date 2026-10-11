@@ -83,7 +83,9 @@ Limits, stated so nobody has to find them:
     another machine changes files under a running Store, which will not see them until it is
     opened again. Two machines writing one store is outside what this module makes safe.
   - Two machines that both commit before either pushes have diverged; that is reported, not
-    repaired.
+    repaired. The same holds for a remote that moves between one pass's fetch and its push when
+    that pass committed: the push is refused (pass failed at `push`) and the next pass reports
+    `diverged`.
   - A fast-forward that would overwrite a store file this store has changed and not committed
     (the other machine's commit and this store both rewrote `_meta.json`, say) is refused by git
     and stays refused: every pass fails at `fast-forward` with `pending_commit` set and `diverged`
