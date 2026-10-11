@@ -73,8 +73,13 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 
 ## Hook (settings.json)
 
-Only in settings the PM session loads; the hook does not check which session runs it.
+Only in settings the PM session loads; the hook does not check which session runs it. It is not
+in the plugin, which every session loads. Exec form, with `<pythonw>` the interpreter that
+`guard.py --settings-entry` prints (docs/guard.md "Go-live"), starts no shell. The PM repo's own
+`.claude/settings.json` is edited by hand: `tools/machine_setup.py` reads the account config
+folders (`~/.claude`, `~/.claude-*`, `default_config_dirs` in `kitlib/machinesetup`), not a
+repository's settings.
 
 ```json
-{"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"python <kit>/claude/hooks/pm_session_start.py"}]}]}}
+{"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"<pythonw>","args":["<kit>/claude/hooks/pm_session_start.py"]}]}]}}
 ```
