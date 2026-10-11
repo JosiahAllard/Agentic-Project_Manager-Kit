@@ -369,7 +369,10 @@ def _body(response, deadline):
     AccessError keys-fetch when time.monotonic() has reached `deadline` and the body has not
     ended, and when it ended short of its Content-Length: read raises IncompleteRead for that,
     read1 just stops, and `length` is what http.client still expected (None when the response
-    gave no Content-Length)."""
+    gave no Content-Length).
+    The limit: `deadline` is looked at between read1 calls only. Inside one call, the framing
+    of a chunked body is bounded per socket operation and not overall (fetch_keys says what
+    follows from that)."""
     pieces, left = [], MAX_KEYS_DOC + 1
     while left > 0:
         if not time.monotonic() < deadline:
@@ -389,7 +392,13 @@ def fetch_keys(team, timeout=FETCH_TIMEOUT_S, opener=None):
     when it cannot be had (a socket operation over `timeout` seconds, a status other than 200, a
     redirect, a body not ended FETCH_DEADLINE_S after this call began or shorter than its
     Content-Length, over MAX_KEYS_DOC bytes, not JSON). `opener(request, timeout)` replaces the
-    network in tests."""
+    network in tests.
+    The limit: FETCH_DEADLINE_S covers the body read only. The status line, the headers and the
+    framing of a chunked body are bounded by `timeout` per socket operation, not overall, so a
+    peer that trickles them can keep this call, and the KeyCache thread that runs it, alive
+    with no end. While that thread lives KeyCache makes no other fetch: cached keys serve until
+    STALE_LIMIT_S, and after that every request fails at once, closed, with keys-stale (with
+    keys-unavailable when no fetch was ever good), until the process is restarted."""
     request = urllib.request.Request(certs_url(team), method='GET', headers={
         'User-Agent': USER_AGENT, 'Accept': 'application/json'})
     deadline = time.monotonic() + FETCH_DEADLINE_S
@@ -481,7 +490,7 @@ class KeyCache:
     def _attempt(self):
         """(the key table, '') from one run of the fetcher on a thread of its own, or (None, the
         reason): the fetcher's or key_table's AccessError, else keys-fetch. That covers a
-        fetcher with no answer after FETCH_DEADLINE_S, a thread whose start raises any
+        fetcher with no answer after FETCH_DEADLINE_S, a thread whose making or start raises any
         Exception, a thread that ended with no answer (its fetcher raised what `run` does not
         catch), and the thread of an earlier attempt still alive, when the fetcher is not
         called. Nothing a fetcher or the thread does comes out of get as another exception."""
@@ -498,8 +507,8 @@ class KeyCache:
             except Exception:       # whatever a fetcher raises, the gate stays shut on it
                 box.append(failed)
 
-        self._worker = threading.Thread(target=run, name='hub-access-keys', daemon=True)
         try:
+            self._worker = threading.Thread(target=run, name='hub-access-keys', daemon=True)
             self._worker.start()
         except Exception:           # no thread to give (RuntimeError), no memory, anything
             return failed

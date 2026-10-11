@@ -15,6 +15,8 @@ import http.client
 import http.server
 import io
 import json
+import socket
+import socketserver
 import ssl
 import string
 import threading
@@ -750,6 +752,14 @@ def unstartable(error):
     return Unstartable
 
 
+def unmakeable(error):
+    """A Thread class that raises `error` when one is made."""
+    class Unmakeable(threading.Thread):
+        def __init__(self, *args, **kwargs):
+            raise error
+    return Unmakeable
+
+
 class Response:
     """What an opener gives fetch_keys: a status, a body and a context manager. read1 gives what
     is asked for, or `piece` bytes at most when that is set, after calling `tick` (the time one
@@ -1272,6 +1282,30 @@ class KeyCacheTest(unittest.TestCase):
             self.assertIsNone(self.cache.get(B.kid))
         self.assertEqual((self.cache.error, len(self.fetch.calls)), ('keys-fetch', 1))
 
+    def test_a_fetch_thread_that_cannot_be_made_is_a_fetch_failure(self):
+        for error in (RuntimeError('no thread'), MemoryError(), OSError('no handle left')):
+            with self.subTest(error=type(error).__name__):
+                fetch = Fetcher(A)
+                cache = access.KeyCache(K.TEAM, fetch=fetch, clock=Clock())
+                with mock.patch.object(access, 'threading',
+                                       types.SimpleNamespace(Thread=unmakeable(error))):
+                    with self.assertRaises(access.AccessError) as caught:
+                        cache.get(A.kid)
+                    self.assertEqual((caught.exception.reason, cache.error),
+                                     ('keys-unavailable', 'keys-fetch'))
+                    self.refuses(cache, 'keys-unavailable')
+                self.assertEqual(fetch.calls, [])
+                self.assertFalse(cache._fetching.locked())
+        self.cache.get(A.kid)                   # with keys cached: they serve, and the next
+        self.at(access.KEY_TTL_S)               # attempt finds no thread left alive behind it
+        with mock.patch.object(access, 'threading',
+                               types.SimpleNamespace(Thread=unmakeable(MemoryError()))):
+            self.assertEqual(self.cache.get(A.kid), K.jwk(A))
+        self.assertEqual((self.cache.error, len(self.fetch.calls)), ('keys-fetch', 1))
+        self.at(access.KEY_TTL_S + access.REFETCH_S)
+        self.assertEqual(self.cache.get(A.kid), K.jwk(A))
+        self.assertEqual((self.cache.error, len(self.fetch.calls)), ('', 2))
+
     def test_a_fetch_thread_that_ends_with_no_answer_is_a_fetch_failure(self):
         class Odd(BaseException):
             pass
@@ -1485,7 +1519,11 @@ class FetchKeysTest(unittest.TestCase):
 
     def served(self):
         """A _Redirecting server on a free loopback port: (the server, its URL with no path)."""
-        server = http.server.HTTPServer(('127.0.0.1', 0), _Redirecting)
+        # Not http.server.HTTPServer: its server_bind asks socket.getfqdn for the host's name.
+        named = AssertionError('a test asked for the name of the machine')
+        with mock.patch.object(socket, 'getfqdn', side_effect=named), \
+                mock.patch.object(socket, 'gethostname', side_effect=named):
+            server = socketserver.TCPServer(('127.0.0.1', 0), _Redirecting)
         server.hits = []
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
