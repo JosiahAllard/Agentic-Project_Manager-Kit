@@ -44,11 +44,13 @@ class ProviderItems(unittest.TestCase):
     def test_beside_a_plain_git_call(self):
         # git.exe cannot remap a PowerShell drive, and its words meet the git rules
         g = 'git -C "%s" status' % W.fwd(self.w.wt)
-        for text in ('Set-Content env:FOO x; %s' % g,
-                     'Rename-Item env:FOO BAR; Set-Content "$env:TEMP\\x.txt" hi; %s' % g,
-                     'New-Item -Path env:FOO -Value x\ngit.exe -C "%s" status' % W.fwd(self.w.wt)):
-            with self.subTest(text):
-                d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
+        for text, cwd in (('Set-Content env:FOO x; %s' % g, self.w.main),
+                          ('Rename-Item env:FOO BAR; Get-Content "$env:TEMP\\x.txt"; %s' % g, self.w.main),
+                          ('New-Item -Path env:FOO -Value x\ngit.exe -C "%s" status' % W.fwd(self.w.wt), self.w.main),
+                          # a $env:TEMP write target is judged on its own: from the worktree it passes
+                          ('Rename-Item env:FOO BAR; Set-Content "$env:TEMP\\x.txt" hi; %s' % g, self.w.wt)):
+            with self.subTest(text, cwd=cwd):
+                d = decide(ps(text, cwd, sub=True), self.w.ctx())
                 self.assertIsNone(d, d and d.reason)
 
     def test_other_non_file_drives_in_the_main_checkout(self):
