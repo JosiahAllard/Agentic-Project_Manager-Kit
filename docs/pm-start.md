@@ -51,6 +51,17 @@ repository's own `could not check stubs (<repo>): ...` line. The coordinator's s
 same check for its own repository (docs/install.md "Tools without a stub"). Code: `kitlib/pmstart`
 `stubs`; tests: `tests/pmstart/test_stubs_check.py`.
 
+## Agent temp (`agent_temp`)
+
+After `stubs`, the `agent_temp` check prints one line for each part of the agents' temp folder set-up
+(docs/machine-setup.md "Extras") that is missing: "AGENT_TEMP is not set (machine_setup.py plans
+it)" when neither the process nor the user environment has `AGENT_TEMP`; "agent_temp_sweep is not
+set in the machine config (machine_setup.py plans it)"; and "agent temp sweep task agent-temp-sweep
+is not registered (machine_setup.py --register-sweep-task --apply, the owner's act)" when
+`schtasks /Query` (4 second limit) does not find the task. It changes nothing. A reader that fails is one
+`could not check agent_temp: ...` line. Code: `kitlib/pmstart` `agent_temp_lines`; tests:
+`tests/pmstart/test_agent_temp_check.py`.
+
 ## Config
 
 The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; without it the checklist says it is skipped.
