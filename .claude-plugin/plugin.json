@@ -20,6 +20,7 @@
     "./claude/agents/worker.md"
   ],
   "skills": ["./claude/skills/"],
+  "hooks": "./claude/hooks/hooks.json",
   "mcpServers": {
     "machine-lock": {
       "command": "python",

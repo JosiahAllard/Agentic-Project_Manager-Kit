@@ -1,6 +1,9 @@
 """Per-account settings.json (docs/machine-setup.md "Settings"): drop the old kit's PreToolUse hooks,
 add guard.py's entry as `guard.py --settings-entry` prints it, re-point the old kit's SessionStart
-hooks and statusline scripts to this kit.
+hooks and statusline scripts to this kit, write a SessionStart hook that runs a kit hook script in
+shell form (`python <script>`) in exec form (the guard entry's interpreter, `args: [<script>]`), and
+note a settings hook that the kit's plugin also carries (it runs twice once the plugin is enabled).
+statusLine stays in shell form: Claude Code gives it no `args` field.
 
 Every path in a hook's `command` and `args` and in statusLine.command is read; one that resolves
 into the old kit clone is either in REMOVE (its hook goes; a group or event left empty goes too),
@@ -22,11 +25,13 @@ REMOVE = ('no_root_search.py', 'main_checkout_redirect_guard.py')
 REPOINT = {
     'pm_session_start.py': 'claude/hooks/pm_session_start.py',
     'coordinator_session_start.py': 'claude/hooks/coordinator_session_start.py',
-    'conductor_session_start.py': 'claude/hooks/coordinator_session_start.py',
     'statusline-usage.ps1': 'optional/usage/statusline-usage.ps1',
     'write-usage-status.ps1': 'optional/usage/write-usage-status.ps1',
 }
 GUARD = 'claude/hooks/guard.py'
+PYTHONS = ('python', 'python.exe', 'pythonw', 'pythonw.exe')
+PLUGIN_MANIFEST = '.claude-plugin/plugin.json'
+PLUGIN_ROOT = re.compile(r'\$\{CLAUDE_PLUGIN_ROOT\}|\$CLAUDE_PLUGIN_ROOT\b')
 TOKEN = re.compile(r'"[^"]*"|\'[^\']*\'|[^\s"\']+')
 
 
@@ -74,10 +79,19 @@ def survey(plan, d, ctx):
     sl = data.get('statusLine')
     if isinstance(sl, dict) and isinstance(sl.get('command'), str):
         sl['command'], _ = ed.rewrite(sl['command'], 'statusLine.command', removable=False)
+    rel, plugin = plugin_hooks(ctx.kit, ctx.home)
+    for event in sorted(plugin):
+        seen = set()
+        for p in _hook_paths(data, event, ctx.home):
+            if norm(p) in plugin[event] and norm(p) not in seen:
+                seen.add(norm(p))
+                plan.note('settings', '%s: the %s hook %s is also the kit plugin\'s hook (%s); with the plugin '
+                                      'enabled it runs twice, so remove this entry in the same step as the '
+                                      'plugin install' % (path, event, os.path.basename(p), rel))
     guard = norm(os.path.join(ctx.kit, *GUARD.split('/')))
     if not any(norm(p) == guard for p in _hook_paths(data, 'PreToolUse', ctx.home)):
         try:
-            entry = ctx.host.guard_entry(ctx.kit)
+            entry = ed.guard_entry()
         except (OSError, RuntimeError, ValueError) as e:
             plan.refuse('cannot read guard.py --settings-entry: %s' % e)
             return
@@ -112,9 +126,17 @@ class _Editor(object):
     def __init__(self, ctx, d, path, plan):
         self.ctx, self.d, self.path, self.plan = ctx, d, path, plan
         self.did = []
+        self._entry = None
+
+    def guard_entry(self):
+        """guard.py --settings-entry, read once per file; raises what the host raises."""
+        if self._entry is None:
+            self._entry = self.ctx.host.guard_entry(self.ctx.kit)
+        return self._entry
 
     def hook(self, event, h):
-        """True when `h` is an old kit hook to drop; otherwise its paths are re-pointed in place."""
+        """True when `h` is an old kit hook to drop; otherwise its paths are re-pointed in place and a
+        shell-form SessionStart hook running a kit hook script is written in exec form."""
         where = '%s hook' % event
         if isinstance(h.get('command'), str):
             h['command'], drop = self.rewrite(h['command'], where, True)
@@ -127,7 +149,37 @@ class _Editor(object):
                     args[i], drop = self.rewrite(a, where, True, whole=True)
                     if drop:
                         return True
+        if event == 'SessionStart':
+            self.exec_form(h, where)
         return False
+
+    def exec_form(self, h, where):
+        """Rewrite `python <kit>/claude/hooks/<x>.py` (shell form) as the guard entry's interpreter
+        with `args: [<script>]`, so no shell starts; any other command is left as it is."""
+        cmd = h.get('command')
+        if not isinstance(cmd, str) or 'args' in h:
+            return
+        toks = [m.group() for m in TOKEN.finditer(cmd)]
+        if len(toks) != 2:
+            return
+        interp, script = [t[1:-1] if len(t) > 1 and t[0] in '"\'' and t[-1] == t[0] else t for t in toks]
+        if os.path.basename(interp.replace('\\', '/')).lower() not in PYTHONS:
+            return
+        p = expand(script, self.ctx.home)
+        hooks_dir = os.path.join(self.ctx.kit, 'claude', 'hooks')
+        if not p or not p.lower().endswith('.py') or not under(p, hooks_dir) or not os.path.isfile(p):
+            return
+        try:
+            exe = self.guard_entry()['PreToolUse'][0]['hooks'][0]['command']
+            if not isinstance(exe, str) or not exe.strip():
+                raise ValueError('its command is %r' % (exe,))
+        except (OSError, RuntimeError, ValueError, KeyError, IndexError, TypeError) as e:
+            self.plan.refuse('%s: cannot write the %s %s in exec form: guard.py --settings-entry gave no '
+                             'interpreter (%s)' % (self.path, where, os.path.basename(p), e))
+            return
+        h['command'] = exe
+        h['args'] = [p.replace('\\', '/')]
+        self.did.append('write the %s %s in exec form' % (where, os.path.basename(p)))
 
     def rewrite(self, s, where, removable, whole=False):
         """(`s` with its old kit paths re-pointed, whether its hook is one to drop)."""
@@ -240,6 +292,41 @@ def _hook_paths(data, event, home):
                 p = expand(it, home)
                 if p:
                     yield p
+
+
+def plugin_hooks(kit, home):
+    """(the hooks file the kit's plugin manifest names, {event: normalised paths its hooks run}), with
+    ${CLAUDE_PLUGIN_ROOT} read as `kit`; ('', {}) when the manifest names no hooks file this can read."""
+    try:
+        with open(os.path.join(kit, *PLUGIN_MANIFEST.split('/')), encoding='utf-8-sig') as f:
+            manifest = json.load(f)
+        rel = manifest.get('hooks') if isinstance(manifest, dict) else None
+        if not isinstance(rel, str):
+            return '', {}
+        with open(os.path.join(kit, os.path.normpath(rel)), encoding='utf-8-sig') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return '', {}
+    if not isinstance(data, dict):
+        return '', {}
+    root = kit.replace('\\', '/')
+
+    def sub(v):
+        if isinstance(v, str):
+            return PLUGIN_ROOT.sub(lambda m: root, v)
+        if isinstance(v, list):
+            return [sub(x) for x in v]
+        if isinstance(v, dict):
+            return dict((k, sub(x)) for k, x in v.items())
+        return v
+    data = sub(data)
+    hooks = data.get('hooks')
+    out = {}
+    for event in hooks if isinstance(hooks, dict) else []:
+        paths = set(norm(p) for p in _hook_paths(data, event, home))
+        if paths:
+            out[event] = paths
+    return (rel[2:] if rel.startswith('./') else rel), out
 
 
 def read(raw):

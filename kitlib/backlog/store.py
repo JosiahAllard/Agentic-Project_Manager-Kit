@@ -1,6 +1,7 @@
 """Where records live and how a write reaches them (docs/backlog-store.md).
 
-Three backends behind one interface (`load`, `publish`, `history`, `touched`, `landed`):
+Three backends behind one interface (`load`, `publish`, `history`, `removal`, `touched`,
+`landed`):
 
   ref     `backlog/<ID>.md` on `refs/backlog/main`, a ref with no history shared with main
   branch  the same on a visible `backlog` branch
@@ -438,6 +439,12 @@ class RefBackend(object):
             return None
         return _last_closing(self.root, rid, snap.tip)
 
+    def removal(self, rid, snap):
+        """The newest store commit that deleted `backlog/<rid>.md` (a Removal), or None."""
+        if not snap.tip:
+            return None
+        return last_removal(self.root, snap.tip, STORE_DIR, rid)
+
     def touched(self, snap):
         """`{stem: epoch}` of the last store commit that wrote each record."""
         if not snap.tip:
@@ -456,6 +463,50 @@ def _last_closing(root, rid, rev):
     if out is None:
         raise Failure('cannot read the store history: %s' % why)
     return out or None
+
+
+class Removal(object):
+    """The commit that deleted a record's file: short sha, strict ISO commit date, the
+    `Session:` line of its message (None when it has none) and its subject."""
+
+    def __init__(self, sha, when, session, subject):
+        self.sha = sha
+        self.when = when
+        self.session = session
+        self.subject = subject
+
+
+def last_removal(root, rev, rel, rid):
+    """The newest commit reachable from `rev` that deleted `<rel>/<rid>.md`, or None. Only the id
+    is checked (Usage unless PLAIN_ID): the folder is configuration, a backslash in it read as
+    `/`. `--full-history`: a record added and deleted on a side branch that was merged leaves the
+    merge TREESAME to its first parent, and the default simplification would prune the side
+    branch, deleting commit and all. `--no-renames`: a record renamed away counts as deleted."""
+    if not PLAIN_ID.match(rid):
+        raise Usage('`%s` is not a plain id: as a git pathspec it could match other files' % rid)
+    path = '%s/%s.md' % (rel.replace('\\', '/').strip('/'), rid)
+    out, why = cmd.run_text(['log', '-1', '--full-history', '--no-renames', '--diff-filter=D',
+                             '--format=%h%x1f%cI%x1f%s%x1f%b', rev, '--', path], root)
+    if out is None:
+        raise Failure('cannot read the store history: %s' % why)
+    if not out:
+        return None
+    sha, when, subject, body = (out.split('\x1f', 3) + ['', '', ''])[:4]
+    return Removal(sha, when, session_of(body), subject)
+
+
+# An id the history lookup may put in a pathspec: no glob or pathspec-magic character, no path
+# separator (`show 'F*'` must not match other records' files).
+PLAIN_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
+
+
+def session_of(body):
+    """The value of the first `Session:` line of a commit body; None when there is none or it is
+    empty."""
+    for line in body.split('\n'):
+        if line.startswith('Session:'):
+            return line[len('Session:'):].strip() or None
+    return None
 
 
 def _touch_times(root, rev, rel):
@@ -534,6 +585,10 @@ class MainBackend(object):
     def history(self, rid, snap):
         return _last_closing(self.root, rid, 'HEAD')
 
+    def removal(self, rid, snap):
+        """The newest commit on HEAD that deleted `<dir>/<rid>.md` (a Removal), or None."""
+        return last_removal(self.root, 'HEAD', self.rel, rid)
+
     def touched(self, snap):
         return _touch_times(self.root, 'HEAD', self.rel)
 
@@ -585,6 +640,9 @@ class Store(object):
 
     def history(self, rid, snap):
         return self.backend.history(rid, snap)
+
+    def removal(self, rid, snap):
+        return self.backend.removal(rid, snap)
 
     def touched(self, snap):
         return self.backend.touched(snap)
