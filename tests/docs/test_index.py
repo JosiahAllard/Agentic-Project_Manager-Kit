@@ -288,6 +288,14 @@ class IndexCheck(RepoCase):
         self.assertIn('notes/doc02.md: section "Unindexed" is not in its index block', out)
         self.assertIn('Fix: add the index line in the same commit as the shard or section.', out)
 
+    def test_a_doc_with_a_non_ascii_name_is_listed_and_read(self):
+        # Without -z, git lists "notes/d\303\266c.md" in C-quotes: not ending in .md, never read.
+        self.write('notes/döc.md', '# Doc\n\n## Index\n\n- Body\n\n## Body\n\ntext\n\n## Unindexed\n\nmore\n')
+        self.commit('a non-ASCII name')
+        code, out = self.capture()
+        self.assertEqual(code, 1, out)
+        self.assertIn('notes/döc.md: section "Unindexed" is not in its index block', out)
+
     def test_a_failed_batch_read_is_a_failure_not_a_pass_over_empty_docs(self):
         self.add_docs(1, 2)
         with mock.patch.object(index.batch, 'cat_file', lambda *a, **k: (None, 'reader gone')):
