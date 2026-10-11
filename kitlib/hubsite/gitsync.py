@@ -128,7 +128,7 @@ branch other than the one the caller named, a store folder that is the work tree
 pathspec would then cover the whole data worktree) or whose path git would read as a pattern, a
 store folder git tracks under another spelling than the folder has on disk, a remote that is not
 a plain name or that the repository does not have, and a work tree of the kit itself, through
-kitlib.hubmirror's own check (_kit_checkout_error): a checkout holding the kit's code, a work tree
+kitlib.hubmirror's own checks (_kit_code_error, _kit_checkout_error): a checkout holding the kit's code, a work tree
 of the kit's repository that is not on its recorded data branch, or a remote other than the
 recorded one. The hub holds the owner's private data and the kit's history is public.
 
@@ -304,6 +304,7 @@ def prepare(store_dir, remote=None, branch=None):
     if remote is not None and not _name_ok(remote):
         raise Refused('the remote must be a remote name, not %r' % (remote,))
     try:
+        hubmirror._kit_code_error(root)
         recorded = hubmirror._kit_checkout_error(root, current, remote)
     except hubmirror.Refused as e:
         raise Refused('the hub store cannot be synced from %s: %s' % (root, e))
