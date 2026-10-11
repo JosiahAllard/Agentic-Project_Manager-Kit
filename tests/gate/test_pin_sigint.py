@@ -33,9 +33,9 @@ from tests.pluginsource import Kit
 CREATE_NO_WINDOW = 0x08000000
 
 CHILD = r'''import signal, sys, time
-print('python-handler' if signal.getsignal(signal.SIGINT) is signal.default_int_handler
-      else repr(signal.getsignal(signal.SIGINT)), flush=True)
-try:
+try:        # the line is printed inside the try: the helper sends Ctrl+C as soon as it reads it
+    print('python-handler' if signal.getsignal(signal.SIGINT) is signal.default_int_handler
+          else repr(signal.getsignal(signal.SIGINT)), flush=True)
     time.sleep(30)
 except KeyboardInterrupt:
     print('interrupted', flush=True)
@@ -209,6 +209,23 @@ class Window(unittest.TestCase):
         with mock.patch.object(pin, '_restore_ctrl_c', side_effect=restore):
             code, said = pin.run(self.tool, [self.out], environ=self.env)
         self.assertEqual((code, said), (7, None))
+        self.assertIs(signal.getsignal(signal.SIGINT), _sentinel)
+
+    def test_a_restore_that_fails_after_the_tool_ran_keeps_its_code_and_does_not_fail_open(self):
+        """Any other error from putting the handler back, once the tool has exited, is not a
+        fail-open: the caller would run the tool a second time, live."""
+        pin = _pin()
+        real = pin._restore_ctrl_c
+
+        def restore(before):
+            real(before)
+            raise RuntimeError('the handler cannot be put back')
+        with self.popen(), mock.patch.object(pin, '_restore_ctrl_c', side_effect=restore):
+            code, said = pin.run(self.tool, [self.out], environ=self.env)
+        self.assertEqual((code, said), (7, None))
+        self.assertEqual(len(self.started), 1)
+        self.assertNotEqual(self.env.get(pin.PINNED_ENV), pin.LIVE)    # nothing runs it again
+        self.assertEqual(os.listdir(os.path.join(pins_root(self.places), 'leases')), [])
         self.assertIs(signal.getsignal(signal.SIGINT), _sentinel)
 
     def test_off_the_main_thread_the_tool_still_runs(self):

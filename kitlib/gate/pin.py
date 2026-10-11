@@ -131,9 +131,9 @@ def _run(checkout, tool_file, argv, env, wait_s):
         finally:
             try:
                 _restore_ctrl_c(before)
-            except KeyboardInterrupt:   # a Ctrl+C as the handler comes back: the tool has run
-                if code is None:
-                    raise
+            except (Exception, KeyboardInterrupt):  # noqa: BLE001 - the tool has run: a Ctrl+C
+                if code is None:        # as the handler comes back, or a restore that fails,
+                    raise               # keeps its code (an error would fail open: a second run)
         return code, None
     finally:
         _remove(lease)
