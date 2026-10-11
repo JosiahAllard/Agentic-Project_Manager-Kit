@@ -30,6 +30,8 @@ with open(sys.argv[1], 'w', encoding='utf-8') as fh:
     json.dump({'file': os.path.abspath(__file__), 'argv': sys.argv[2:],
                'pinned': os.environ.get('KIT_PINNED'),
                'live': os.environ.get('KIT_LIVE_ROOT'),
+               'utf8': sys.flags.utf8_mode,
+               'unbuffered': getattr(sys.__stdout__, 'write_through', None),
                'leases': sorted(os.listdir(leases)) if os.path.isdir(leases) else None}, fh)
 sys.exit(7)
 '''
@@ -311,6 +313,18 @@ class Run(unittest.TestCase):
         got = self.read_probe()
         self.assertEqual(len(got['leases']), 1, got['leases'])
         self.assertEqual(os.listdir(os.path.join(pins_root(self.places), 'leases')), [])
+
+    def test_the_tool_runs_with_this_interpreters_flags(self):
+        """python -X utf8 -u tools/land.py: the pinned tool gets -X utf8 and -u too."""
+        pin = _pin()
+        stdout = mock.Mock(write_through=True)
+        with mock.patch.object(pin.subprocess, '_args_from_interpreter_flags',
+                               return_value=['-X', 'utf8']), \
+                mock.patch.object(pin.sys, '__stdout__', stdout):
+            code, _said = pin.run(self.tool, [self.out], environ=self.env)
+        self.assertEqual(code, 7)
+        got = self.read_probe()
+        self.assertEqual((got['utf8'], got['unbuffered']), (1, True))
 
     def test_no_remote_tracking_main_runs_live_without_a_warning(self):
         self.k.repo.git('update-ref', '-d', 'refs/remotes/origin/main')

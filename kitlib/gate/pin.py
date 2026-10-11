@@ -108,7 +108,10 @@ def _run(checkout, tool_file, argv, env, wait_s):
         child_env = dict(env)
         child_env[PINNED_ENV] = sha
         child_env[pluginsource.LIVE_ROOT_ENV] = checkout
-        proc = subprocess.Popen([sys.executable, tool] + list(argv), env=child_env)
+        flags = subprocess._args_from_interpreter_flags()   # this run's -X utf8, -B, -I, -W ...
+        if getattr(sys.__stdout__, 'write_through', False):
+            flags.append('-u')                              # ... and -u, which that leaves out
+        proc = subprocess.Popen([sys.executable] + flags + [tool] + list(argv), env=child_env)
         # From here the tool runs: nothing may fail open (that would run it twice), and a Ctrl+C
         # (the child has it too) only waits for the child: the lease holds until it exits.
         try:
