@@ -39,7 +39,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 
 ## Packaging
 The kit ships as a Claude Code plugin, which the owner installs once.
-- **Hooks:** guard.py and the startup alarm.
+- **Hooks:** the coordinator SessionStart hook (claude/hooks/hooks.json); guard.py stays in each account's settings.
 - **Bundled:** the agent definitions and slash commands.
 - **Skills:** landing, red-first, ledger, backlog, machine-lock, refusal, handoff and action-hub. Profiles and CLAUDE.md become pointers to these skills.
 - **Code:** tools and kitlib stay Python. Skills explain them, and enforcement stays in the hooks and the gate.
@@ -55,7 +55,7 @@ The kit ships as a Claude Code plugin, which the owner installs once.
 ## What comes from ~/.claude
 - **Into the plugin:**
   - agents
-  - hooks, folded into guard.py
+  - hooks: the coordinator SessionStart hook; guard.py stays in each account's settings
   - tools: the lock goes into kitlib; the rest become optional packages
   - generic skills: backlog-ops, branch-review, branch-sync, coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch, machine-lock-run, mutation-testing, session-handoff, shell-and-worktree-traps, subagent-dispatch
 - **Into the repos' .claude/skills:** a skill tied to one repository's engine, models or worktree tools stays in that repository.
