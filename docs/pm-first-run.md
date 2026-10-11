@@ -61,7 +61,9 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    `python <kit>/tools/hub_mirror.py set-url --account <label> <url>` (the label:
    `python <kit>/tools/hub_mirror.py account`), and run `ArtifactComments watch` on that URL.
    The hub's data is mirrored in git (docs/action-hub.md "One copy per account"): with no
-   `pm_data` yet, set `pm_start.hub_mirror` to an absolute folder in a git work tree. Then
+   `pm_data` yet, set `pm_start.hub_mirror` to an absolute folder in a linked work tree of a
+   private repository, on its `.kit.json` main branch (`save --commit` refuses a main checkout
+   and any work tree of the kit itself). Then
    `python <kit>/tools/hub_mirror.py restore --out <file>` says the mirror is empty: a new
    install has nothing to send.
    Success: the page opens, the watch is confirmed, and the next session start gives the

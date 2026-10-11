@@ -54,20 +54,33 @@ aliases again), usage/ and agents/ (posted as at session start).
   mirrored collection with ArtifactData into one `out_dir` folder, every page of each (a
   collection read in part loses the rest from the mirror), then
   `python tools/hub_mirror.py save --from <folder> --commit --push`. A collection folder present
-  replaces that collection in the mirror, so an empty collection needs its empty folder; one
-  absent is left alone. `--commit` commits the mirror's paths on the data branch; `--push` pushes
-  that branch to `pm_data.remote` with an explicit refspec.
+  replaces that collection in the mirror; one absent is left alone. An empty collection needs its
+  empty folder: if the read of a collection with no documents leaves no folder in `out_dir`,
+  create it before saving, or the documents deleted from the hub stay in the mirror and a
+  restore brings them back. `--commit` commits this save's changed mirror paths through
+  `kitlib.commit` (tools/commit.py's checks: never a main checkout, refused when anything else is
+  already staged or a staged file names a machine path), so the mirror must be in a linked work
+  tree on its `.kit.json` main branch, as the PM data worktree is; a work tree of the kit itself
+  (its code, or the kit's repository on any branch but the recorded data branch) is refused, as
+  the kit is public. Mirror paths an earlier save left uncommitted are counted, not committed.
+  `--push` pushes that branch to `pm_data.remote` with an explicit refspec.
 - **New copy:** publish the page as above, record it with
   `python tools/hub_mirror.py set-url --account <label> <url>`, then
   `python tools/hub_mirror.py restore --out <file>` writes ArtifactData batch files (`<file>`,
   `<stem>-2.json`, ...; at most 50 `set` entries and under 1 MiB each; each document's fields in
   its own file under `<stem>.docs/`, named by the entry's `file_path`). Send each with ArtifactData.
-  An empty mirror writes none. Then refill the regenerated collections.
+  An empty mirror writes none; a document too big for one batch (`kitlib.hubmirror.BATCH_BUDGET`,
+  960 KiB with its entry, most likely a large page_html) refuses the restore before anything is
+  written. Numbered batch files a longer earlier restore left are removed. Then refill the
+  regenerated collections.
 - `pm_start.hub_url` is the one copy of an install that has not moved to `hub_urls`; it is read
-  only while `hub_urls` has no entry. To move, set-url the old URL under its account first.
+  only while `hub_urls` has no entry. To move, set-url the old URL under its account first;
+  set-url prints a NOTE when its first `hub_urls` entry leaves a different `hub_url` unread (it
+  does not move it: which account published that copy is not known).
 - The JSON ArtifactData writes under `out_dir` has not been seen: save reads either a wrapped
-  document (`data` plus `id`/`version`) or bare fields, and keeps neither `id` (except in to_pm,
-  where it is a field) nor `version`.
+  document (a `data` object plus only `kitlib.hubmirror.WRAPPER_KEYS`) or bare fields, and keeps
+  neither `id` nor `version` (a document's id is its file name). A `data` object beside any other
+  key is refused and nothing is saved: it cannot be told from a document with a `data` field.
 
 ## questions/Q-NNN
 | Field | Written by | Meaning |
@@ -127,7 +140,7 @@ Send all sets every queued item to `sent` with `sent_at`, then fires the Alert-t
 
 | Field | Written by | Meaning |
 |---|---|---|
-| id | page | `P-001`, `P-002`, ...: the next number after the highest in the collection |
+| (doc id) | page | `P-001`, `P-002`, ...: the next number after the highest in the collection; the document's id, not a field |
 | kind | page | `question` or `fyi` |
 | repo | page | a repo name, `pm`, `all`, or empty |
 | urgent | page | true marks it Urgent and makes the badge hot |
