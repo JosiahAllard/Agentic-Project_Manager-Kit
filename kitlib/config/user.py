@@ -176,7 +176,15 @@ _PROFILE = None
 
 
 def _home_key(path):
-    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+    """The key two spellings of one folder path share: absolute, normalised, case folded, and
+    without the extended-length prefix (`\\\\?\\`, or `\\\\?\\UNC\\` before a share), which
+    os.path.abspath and os.path.realpath both keep. A share that names a folder of this machine
+    keeps its own key: nothing here resolves it."""
+    path = os.path.abspath(path)
+    if path.startswith('\\\\?\\'):
+        rest = path[4:]
+        path = '\\\\' + rest[4:] if rest[:4].lower() == 'unc\\' else rest
+    return os.path.normcase(os.path.normpath(path))
 
 
 def _real_key(path):
