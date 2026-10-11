@@ -86,7 +86,7 @@ class UnreadableHistory(StoreCase):
         self.addCleanup(r.cleanup)
         r.git('checkout', '-q', '--orphan', 'fresh')
         store = smod.Store(smod.MainBackend(r.root, 'docs/backlog'), rmod.Rules())
-        ctx = pmod.Context(store, self.ledger, r.root, branch=BRANCH)
+        ctx = pmod.Context(store, r.root, branch=BRANCH)
         with self.assertRaises(NotFound) as cm:
             pmod.require_shown(store.load(), ctx, 'FOO')
         said = str(cm.exception)
@@ -112,7 +112,7 @@ class MainStoreSideBranch(StoreCase):
         r.git('merge', '-q', '--no-ff', '-m', 'merge side', 'side')
         merge = r.head()
         store = smod.Store(smod.MainBackend(r.root, 'docs/backlog'), rmod.Rules())
-        ctx = pmod.Context(store, self.ledger, r.root, branch=BRANCH)
+        ctx = pmod.Context(store, r.root, branch=BRANCH)
         with self.assertRaises(NotFound) as cm:
             pmod.require_shown(store.load(), ctx, 'FOO')
         said = str(cm.exception)
@@ -133,7 +133,7 @@ class BackslashFolder(StoreCase):
         r.git('commit', '-q', '-m', 'closes FOO: gone\n\nSession: bs-session')
         deleted = r.head()
         store = smod.Store(smod.MainBackend(r.root, 'docs\\items'), rmod.Rules())
-        ctx = pmod.Context(store, self.ledger, r.root, branch=BRANCH)
+        ctx = pmod.Context(store, r.root, branch=BRANCH)
         with self.assertRaises(NotFound) as cm:
             pmod.require_shown(store.load(), ctx, 'FOO')
         said = str(cm.exception)

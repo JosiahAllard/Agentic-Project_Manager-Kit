@@ -8,7 +8,7 @@ from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
 from kitlib.backlog.errors import Refusal, Usage
 
-from tests.backlog.helpers import BRANCH, LEDGER_TEXT, TODAY, StoreCase, messages, priced, rec
+from tests.backlog.helpers import BRANCH, TODAY, StoreCase, messages, priced, rec
 from tests.backlog.test_offer import offer_ids, snap
 
 PARKED = dict(state='parked', q='Q-001', parked_at='2026-10-01')
@@ -56,7 +56,6 @@ class Park(StoreCase):
 
 class Unpark(StoreCase):
     remote = False
-    ledger_text = LEDGER_TEXT
 
     def test_unpark_opens_the_record_and_sets_resume(self):
         self.seed(priced('FOO', **PARKED))
@@ -71,13 +70,15 @@ class Unpark(StoreCase):
         self.seed(priced('FOO', **PARKED), priced('BAR'))
         for args, exc in ((('BAR', 'R-9001'), Refusal),      # not parked
                           (('FOO', None), Usage),            # no ruling
-                          (('FOO', 'R1'), Usage),            # not a ruling id
-                          (('FOO', 'R-9006'), Refusal),      # pm-note kind
-                          (('FOO', 'R-9999'), Refusal),      # not in the ledger
-                          (('FOO', 'R-9008'), Refusal)):     # the standing delegation
+                          (('FOO', 'R1'), Usage)):           # not a ruling id
             with self.assertRaises(exc, msg=args):
                 self.verb('unpark', *args)
         self.assertEqual(self.get('FOO').get('state'), 'parked')
+
+    def test_any_well_shaped_ruling_unparks(self):
+        self.seed(priced('FOO', **PARKED))
+        self.verb('unpark', 'FOO', 'R-9999')
+        self.assertEqual(self.get('FOO').get('resume'), 'R-9999')
 
 
 class ParkedRankAndCap(unittest.TestCase):

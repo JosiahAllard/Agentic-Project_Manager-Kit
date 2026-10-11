@@ -1,5 +1,5 @@
 """tools/backlog.py's arguments and exit codes, run as a subprocess against a temp repository
-with a bare remote and a temp home (no machine config, so the ledger is unconfigured)."""
+with a bare remote and a temp home (no machine config unless a test writes one)."""
 import json
 import os
 import subprocess
@@ -93,20 +93,6 @@ class Cli(unittest.TestCase):
         self.ok('set', 'FOO', '--priority-by', 'agent', '--priority', '4')
         self.assertIn('priority: 4', self.ok('show', 'FOO'))
 
-    def test_standing_delegation_comes_from_the_machine_config(self):
-        price = ('set', 'FOO', '--priority', '1', '--priority-by', 'owner', '--ruling', 'R-9008')
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
-        cfg = kuser.config_file(self.home)
-        os.makedirs(os.path.dirname(cfg))
-        with open(cfg, 'w', encoding='utf-8') as f:
-            json.dump({'standing_delegation': 'R-9008'}, f)
-        rc, out = self.run_tool(*price)
-        self.assertEqual(rc, 2, out)
-        self.assertIn('standing delegation', out)
-        os.remove(cfg)
-        self.ok(*price)                             # unset: no id is refused for it (no ledger here)
-        self.assertIn('priority_ruling: R-9008', self.ok('show', 'FOO'))
-
     def test_check_and_the_list_filters(self):
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
         self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'docs/y.md')
@@ -175,16 +161,19 @@ class Cli(unittest.TestCase):
         self.assertEqual(self.repo.git('status', '--porcelain'), '')
 
 
-class StandingDelegation(unittest.TestCase):
-    """The machine config's `standing_delegation` reaches the ledger tools/backlog.py builds: with
-    the key set, a change citing that id is refused; unset, the same change is priced."""
+class RulingCitesUnchecked(unittest.TestCase):
+    """A ledger the machine config names is never read by tools/backlog.py: `check` does not test
+    a record's cited ruling against it, and a ruled write takes any well-shaped id on its word,
+    whether the ledger holds it, retired it, or the machine config calls it the standing
+    delegation."""
     run_tool, ok = Cli.run_tool, Cli.ok      # Cli's sandbox, without rerunning Cli's tests
     LEDGER = ('# Rulings ledger (test fixture)\n\n'
-              '## R-9168 | 2026-09-25 08:08Z | kit | typed\n\nstand-in text\nItems: FOO\n')
+              '## R-9168 | 2026-09-25 08:08Z | kit | typed\n\nstand-in text\nItems: FOO\n\n'
+              '## R-9007 | 2026-09-25 09:09Z | kit | typed\n\n'
+              'Retired: superseded - replaced in the fixture (see -)\n')
 
     def setUp(self):
         Cli.setUp(self)
-        self.home = self.env['USERPROFILE']
         self.ledger = os.path.join(self.home, 'rulings.md')
         with open(self.ledger, 'w', encoding='utf-8', newline='\n') as f:
             f.write(self.LEDGER)
@@ -198,75 +187,34 @@ class StandingDelegation(unittest.TestCase):
         with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
             json.dump(dict(ledger_path=self.ledger, **extra), f)
 
-    def price(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
-        return self.run_tool('set', 'FOO', '--priority', '1', '--priority-by', 'owner',
-                             '--ruling', 'R-9168')
-
-    def test_the_configured_standing_delegation_is_refused_as_a_ruling(self):
-        self.configure(standing_delegation='R-9168')
-        rc, out = self.price()
-        self.assertEqual(rc, 2, out)
-        self.assertIn('`R-9168` is the standing delegation', out)
-
-    def test_without_the_key_the_same_ruling_prices_the_record(self):
-        self.configure()
-        rc, out = self.price()
-        self.assertEqual(rc, 0, out)
-        self.assertNotIn('standing delegation', out)
-
-
-class EmptyLedgerName(unittest.TestCase):
-    """A configured ledger and a `.kit.json` naming neither `backlog.ledger_repo` nor `repo.name`:
-    the ruling checks report one config error each (never a FAIL per record naming an empty repo
-    column), stay red, and a ruled write is refused with the same keys named."""
-    run_tool, ok = Cli.run_tool, Cli.ok
-    LEDGER = StandingDelegation.LEDGER
-
-    def setUp(self):
-        Cli.setUp(self)
-        self.home = self.env['USERPROFILE']
-        self.ledger = os.path.join(self.home, 'rulings.md')
-        with open(self.ledger, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(self.LEDGER)
-        for rid in ('FOO', 'BAR'):       # priced with no ledger configured: the shape alone is read
+    def test_check_stays_green_over_cites_the_ledger_does_not_hold(self):
+        # priced before the ledger is configured; R-9999 is absent from it, R-9007 is retired
+        for rid, ruling in (('FOO', 'R-9999'), ('BAR', 'R-9007')):
             self.ok('add', rid, '--summary', 'a thing to do', '--scope', 'tools/%s.py' % rid.lower())
-            self.ok('set', rid, '--priority', '1', '--priority-by', 'owner', '--ruling', 'R-9168')
-        os.makedirs(kuser.config_dir(self.home), exist_ok=True)
-        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump({'ledger_path': self.ledger}, f)
-
-    def kit_json(self, data):
-        with open(os.path.join(self.repo.root, '.kit.json'), 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-        self.repo.git('add', '.kit.json')
-        self.repo.git('commit', '-q', '-m', 'kit config')
-
-    def test_check_reports_one_config_error_and_stays_red(self):
+            self.ok('set', rid, '--priority', '1', '--priority-by', 'owner', '--ruling', ruling)
+        self.configure()
         rc, out = self.run_tool('--no-fetch', 'check')
-        self.assertEqual(rc, 1, out)
-        self.assertTrue(out.rstrip().endswith('RED'), out)
-        self.assertNotIn('is not a ruling header', out)
-        self.assertNotIn('FAIL', out.replace('FAILED', ''))
-        line = [l for l in out.splitlines() if l.startswith('priority rulings')]
-        self.assertEqual(len(line), 1, out)
-        self.assertIn('CONFIG ERROR', line[0])
-        for key in ('`backlog.ledger_repo`', '`repo.name`', '.kit.json', '2 ruled records'):
-            self.assertIn(key, line[0])
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out.rstrip().endswith('GREEN'), out)
+        self.assertNotIn('priority rulings', out)
+        self.assertNotIn('hold rulings', out)
 
-    def test_a_ruled_write_is_refused_naming_the_keys(self):
+    def test_a_ruled_write_takes_an_id_the_ledger_does_not_hold(self):
+        self.configure()
         self.ok('add', 'BAZ', '--summary', 'a thing to do', '--scope', 'tools/baz.py')
         rc, out = self.run_tool('set', 'BAZ', '--priority', '2', '--priority-by', 'owner',
-                                '--ruling', 'R-9168')
-        self.assertEqual(rc, 2, out)
-        self.assertNotIn('is not a ruling header', out)
-        self.assertIn('`backlog.ledger_repo`', out)
-        self.assertIn('`repo.name`', out)
+                                '--ruling', 'R-9999')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('priority_ruling: R-9999', self.ok('show', 'BAZ'))
 
-    def test_repo_name_names_the_ledger_column_when_ledger_repo_is_unset(self):
-        self.kit_json({'repo': {'name': 'kit'}})
-        out = self.ok('--no-fetch', 'check')
-        self.assertIn('priority rulings 2 ok, 0 FAILED', out)
+    def test_the_standing_delegation_id_is_not_refused(self):
+        self.configure(standing_delegation='R-9168')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        rc, out = self.run_tool('set', 'FOO', '--priority', '1', '--priority-by', 'owner',
+                                '--ruling', 'R-9168')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('standing delegation', out)
+        self.assertIn('priority_ruling: R-9168', self.ok('show', 'FOO'))
 
 
 if __name__ == '__main__':

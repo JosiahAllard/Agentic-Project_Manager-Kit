@@ -1,11 +1,10 @@
 """kitlib.backlog.ledger's name for this repository's rulings-ledger column: `backlog.ledger_repo`,
 else `repo.name`, lower-cased; neither set is '' (never the folder name), and a ledger built with
-no name reports one config error naming both keys and the file instead of checking any ruling."""
+no name reports one config error naming both keys and the file."""
 import os
 import tempfile
 import unittest
 
-from kitlib.backlog import check as cmod
 from kitlib.backlog import ledger as lmod
 from tests.gitfixture import rmtree
 
@@ -21,11 +20,6 @@ class FakeConfig(object):
     def section(self, name):
         assert name == 'backlog', name
         return dict(self._backlog)
-
-
-class FakeSnap(object):
-    readable = ()
-    file_count = 3
 
 
 class LedgerName(unittest.TestCase):
@@ -63,22 +57,6 @@ class Unnamed(unittest.TestCase):
         entries, _why = self.ledger.entries()
         bad = lmod.ruling_refusal(self.ledger, entries, 'R-9168', lmod.OWNER_KINDS)
         self.assertEqual(bad, self.ledger.name_error)
-
-    def test_the_ruling_checks_are_red_with_no_ruled_record(self):
-        # an unconfigured name never passes the ruling checks, even with nothing yet to check
-        res = cmod._check_rulings(FakeSnap(), self.ledger, cmod.HOLD_RULINGS, 'hold_ruling',
-                                  lmod.HOLD_KINDS)
-        self.assertTrue(res.red)
-        self.assertEqual(res.findings, [])
-        self.assertIn('CONFIG ERROR', res.line())
-        self.assertIn('`backlog.ledger_repo`', res.line())
-
-    def test_an_unconfigured_ledger_still_skips_before_the_name_is_read(self):
-        ledger = lmod.Ledger.for_repo(None, FakeConfig())
-        res = cmod._check_rulings(FakeSnap(), ledger, cmod.HOLD_RULINGS, 'hold_ruling',
-                                  lmod.HOLD_KINDS)
-        self.assertFalse(res.red)
-        self.assertIn('SKIPPED', res.line())
 
 
 if __name__ == '__main__':

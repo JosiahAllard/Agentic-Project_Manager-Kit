@@ -26,7 +26,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib.backlog import check as checkmod                        # noqa: E402
 from kitlib.backlog import landable as landmod                      # noqa: E402
-from kitlib.backlog import ledger as lmod                           # noqa: E402
 from kitlib.backlog import migrate as mmod                          # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
@@ -34,7 +33,7 @@ from kitlib.backlog import record as rmod                           # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
 from kitlib.backlog.errors import Failure, Refusal, Usage           # noqa: E402
-from kitlib.config import ConfigError, ledger_path, load as load_config, standing_delegation  # noqa: E402
+from kitlib.config import ConfigError, load as load_config          # noqa: E402
 from kitlib.git import repo as gitrepo                              # noqa: E402
 
 # `set --<field>` for every field but hold_ruling, whose `--hold-ruling` is the recite.
@@ -238,7 +237,7 @@ def do_stale(args, ctx, snap):
 def do_check(args, ctx, snap):
     say('CHECK %s (%s)' % (snap.head_label(), snap.where))
     red = False
-    for res in checkmod.check_store(snap, ctx.ledger):
+    for res in checkmod.check_store(snap):
         say(res.line())
         for f in res.findings:
             say('    FAIL %s:%s %s' % (f.path, f.line, f.message))
@@ -349,26 +348,22 @@ def main(argv=None):
     try:
         if args.verb == 'retire' and args.owner_said is not None:
             raise Usage('`--owner-said` is gone: owner words are never copied into a record. '
-                        'Retiring an owner-held record takes `--ruling R-nnnn`, a ledger entry whose '
-                        '`Items:` line names it')
+                        'Retiring an owner-held record takes `--ruling R-nnnn`')
         root = os.path.abspath(args.root or os.getcwd())
         top, why = gitrepo.toplevel(root)
         if not top:
             raise Failure(why)
         try:
             cfg = load_config(top)
-            ledger_file = ledger_path()
-            standing = standing_delegation()
         except ConfigError as exc:
             raise Failure(str(exc))
         section = cfg.section('backlog')
         rules = rmod.Rules(section['id_grammar'], section['phases'])
         if args.verb == 'migrate':
             return do_migrate(args, top, cfg, rules)
-        ledger = lmod.Ledger.for_repo(ledger_file, cfg, standing)
         backend = smod.open_backend(top, cfg, fetch=not args.no_fetch)
         store = smod.Store(backend, rules, session=args.session)
-        ctx = pmod.Context(store, ledger, top, remote=cfg.remote, main_branch=cfg.main_branch,
+        ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
                            branch=args.branch)
         if args.verb in WRITES:
             return do_write(args, ctx, store)
