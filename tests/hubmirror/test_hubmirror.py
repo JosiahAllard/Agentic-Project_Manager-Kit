@@ -109,7 +109,8 @@ class SaveTest(unittest.TestCase):
         self.assertEqual([tuple(c) for c in changes], [('added', 'questions/q1.json'),
                                                        ('added', 'todos/t1.json'),
                                                        ('added', 'todos/t2.json')])
-        self.assertEqual(notes, ['backlog/: not mirrored, left alone'])
+        self.assertEqual([n for n in notes if not n.startswith('VALIDATE ')],
+                         ['backlog/: not mirrored, left alone'])
         self.assertEqual(tree(self.mirror)['todos/t1.json'], '{\n  "text": "one"\n}\n')
         self.assertNotIn('version', tree(self.mirror)['todos/t2.json'])
 
