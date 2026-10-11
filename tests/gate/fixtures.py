@@ -16,9 +16,13 @@ GATE = {'steps': [{'name': 'unit', 'always': True, 'cmd': RED_AWARE, 'pass': '^o
 
 def test_env():
     """The fixture's git environment without the Claude Code and machine lock variables: what the
-    gate's steps and git writes get in a test."""
-    return {k: v for k, v in gitfixture.fixture_env().items()
-            if k not in ('CLAUDE_CODE_SESSION_ID', 'CLAUDE_PID') and not k.startswith('MACHINE_LOCK_')}
+    gate's steps and git writes get in a test. KIT_PINNED is `live`: a tools/gate.py or land.py a
+    test starts in the kit's main checkout runs this tree's code, never an export of pushed main
+    under the real LOCALAPPDATA (kitlib.gate.pin)."""
+    env = {k: v for k, v in gitfixture.fixture_env().items()
+           if k not in ('CLAUDE_CODE_SESSION_ID', 'CLAUDE_PID') and not k.startswith('MACHINE_LOCK_')}
+    env['KIT_PINNED'] = 'live'
+    return env
 
 
 class GateRepoCase(StoreCase):
