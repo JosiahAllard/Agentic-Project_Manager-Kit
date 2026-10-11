@@ -518,8 +518,8 @@ def todos_ack(api, req):
 def _own(doc_id, d, what):
     who = d.get('from')
     if who != OWNER_FROM:           # exactly what todos_add writes for the owner
-        raise HubError('forbidden', '%s is from %s: the owner can %s only a to-do he added '
-                       'himself (from: %s)' % (doc_id, who or 'nobody', what, OWNER_FROM), 'from')
+        raise HubError('forbidden', '%s is from %s: the owner can %s only a to-do the owner '
+                       'added (from: %s)' % (doc_id, who or 'nobody', what, OWNER_FROM), 'from')
 
 
 def todos_edit(api, req):

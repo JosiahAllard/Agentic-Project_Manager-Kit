@@ -1230,7 +1230,7 @@ class SecondFixTest(ApiCase):
 
 
 class OwnTodoTest(ApiCase):
-    """The owner's own to-dos: urgent, edit, delete. A to-do an agent gave is not his to change
+    """The owner's own to-dos: urgent, edit, delete. A to-do an agent gave is not theirs to change
     (docs/action-hub.md, todos: "the owner can set it on their own items")."""
 
     def mine(self, **kw):
@@ -1294,7 +1294,7 @@ class OwnTodoTest(ApiCase):
             self.refused('forbidden', 'from', 'POST', '/todos/%s/edit' % tid, OWNER, body)
         self.refused('forbidden', 'from', 'POST', '/todos/%s/delete' % tid, OWNER)
         self.assertEqual(self.store.get('todos', tid)['title'], 't')
-        self.ok('POST', '/todos/%s/done' % tid, OWNER)      # ticking it stays his
+        self.ok('POST', '/todos/%s/done' % tid, OWNER)      # ticking it stays the owner's
 
     def test_a_to_do_with_no_readable_from_is_nobodys_to_edit_or_delete(self):
         self.store = seeded(self, {'todos/T-1.json': {'status': 'open', 'title': 't'},
