@@ -56,7 +56,7 @@ def stop_cmd(name, successor=None, pid=None):
 
 def predecessor_text(old):
     return ("You succeed %s, which has checkpointed and lands nothing more. Land every LAND verdict its state "
-            "note lists at once (land.py --auto once queued); never wait on it. " % old)
+            "note lists at once; never wait on it. " % old)
 
 
 def _check_common(model, effort, autocompact, lo_hi=AUTOCOMPACT):

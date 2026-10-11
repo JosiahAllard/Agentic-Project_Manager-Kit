@@ -383,6 +383,7 @@ class Start(Base):
         self.assertIn('lands nothing', text)
         self.assertIn('every LAND verdict', text)
         self.assertIn('never wait on it', text)
+        self.assertNotIn('--auto', text)
 
     def test_the_default_account_folder_removes_config_dir(self):
         default = os.path.join(self.h.root, '.claude')
