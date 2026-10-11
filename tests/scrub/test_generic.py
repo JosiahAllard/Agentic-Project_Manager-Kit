@@ -357,6 +357,11 @@ class TheChecks(unittest.TestCase):
                                  "tests/x.py:1: kit-alpha (.kit.json repo.name)"])
         self.assertEqual(sorted(g for g, _, _ in stale), ['kitlib/config/migration.py'])
 
+    def test_the_plugin_name_is_no_kit_name(self):
+        # The plugin's name is neutral: kit_names reads no kit name from plugin.json.
+        _kit, pats = kit_names(self._kit(None, '{"name": "host-kit"}'))
+        self.assertFalse([src for rx, src in pats if rx.search("host-kit")])
+
     def test_kit_names_without_the_files_are_the_retired_config_folder_only(self):
         from kitlib.config import migration
         kit, pats = kit_names(self._kit(None, None))

@@ -279,21 +279,10 @@ class Manifest(unittest.TestCase):
 
     def test_the_guard_prefix_is_built_from_the_manifest_name(self):
         from kitlib import lockmcp
-        self.assertEqual(lockmcp.claude_tool_prefix(),
-                         "mcp__plugin_%s_machine-lock__" % self._manifest("plugin.json")["name"])
-
-    def test_the_plugin_name_is_no_kit_name(self):
-        # The plugin's name is neutral: tests/scrub reads no kit name from plugin.json.
-        import shutil
-        import tempfile
-        from tests.scrub.test_generic import kit_names
-        root = tempfile.mkdtemp(prefix="plugin-name-")
-        self.addCleanup(shutil.rmtree, root, True)
-        os.makedirs(os.path.join(root, ".claude-plugin"))
-        with open(os.path.join(root, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as f:
-            f.write('{"name": "host-kit"}')
-        _kit, pats = kit_names(root)
-        self.assertFalse([src for rx, src in pats if rx.search("host-kit")])
+        from kitlib.guard import rules
+        want = "mcp__plugin_%s_machine-lock__" % self._manifest("plugin.json")["name"]
+        self.assertEqual(lockmcp.claude_tool_prefix(), want)
+        self.assertEqual(rules.MCP_PREFIX, want)
 
 
 if __name__ == "__main__":

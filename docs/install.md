@@ -167,7 +167,8 @@ every kit-only path (the tools above, `kitlib/`, `optional/`, the kit's docs) as
 `${CLAUDE_PLUGIN_ROOT}/<path>` (tests/skills checks it), and only stub tools repo-relative. Source:
 https://code.claude.com/docs/en/plugin-marketplaces. That `${CLAUDE_PLUGIN_ROOT}` is substituted in
 agent and skill text is unverified: confirm it in one real loaded session before the first install.
-`claude plugin validate` passes.
+`claude plugin validate` passes with warnings only (no author field; CLAUDE.md is not loaded) and
+reports no reserved name.
 
 `tools/backlog.py add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md).
