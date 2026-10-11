@@ -23,14 +23,29 @@ class RelStrictTest(unittest.TestCase):
     def test_bad_was_refused(self):
         for bad in ('a//b', 'a/./b', '.'):
             with self.subTest(was=bad):
-                with self.assertRaises(pieces.TableError):
+                with self.assertRaises(pieces.TableError) as cm:
                     pieces.Table(_table(was=bad))
+                self.assertIn('was %r' % bad, str(cm.exception))
+                self.assertNotIn('dir', str(cm.exception).split('must be')[0])
 
-    def test_bad_root_path_refused(self):
+    def test_bad_root_paths_refused(self):
+        cases = (('root', ['docs/./x']), ('root', ['.']), ('root', ['a//b']),
+                 ('dotnet', {'root_files': ['a/../b']}), ('dotnet', {'solution': 'x//y.sln'}),
+                 ('dotnet', {'solution': '.'}),
+                 ('dotnet', {'was': {'old/./f': 'new'}}), ('dotnet', {'was': {'old': 'a//b'}}))
+        for key, val in cases:
+            with self.subTest(key=key, val=val):
+                data = _table()
+                data[key] = val
+                with self.assertRaises(pieces.TableError) as cm:
+                    pieces.Table(data)
+                self.assertIn('repo-relative', str(cm.exception))
+                self.assertIn("empty, `.` or `..`", str(cm.exception))
+
+    def test_valid_dotnet_paths_accepted(self):
         data = _table()
-        data['root'] = ['docs/./x']
-        with self.assertRaises(pieces.TableError):
-            pieces.Table(data)
+        data['dotnet'] = {'solution': 'F.slnx', 'root_files': ['F.slnx'], 'was': {'fleet/F.slnx': 'F.slnx'}}
+        pieces.Table(data)
 
     def test_valid_dirs_accepted(self):
         for good in ('a', 'a/b', 'dir.with.dots/x', '.hidden/x', 'a..b'):
