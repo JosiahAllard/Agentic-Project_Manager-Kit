@@ -212,38 +212,56 @@ class Queue(QueueCase):
 class Lock(QueueCase):
     def race(self, call):
         """Queue kit/a at its first tip, move it, then run call(first) with an add of the new tip
-        started between call's read of the entry and its write; wait for both. `(second, queue)`."""
+        started between call's read of the entry and its write. The read waits (no timing) until
+        the add either finds the queue locked or has finished, and records what the add had done
+        then. `(first, second, (blocked, finished, tip on disk) at that moment, queue after)`."""
         wt, first = self.branch('a', {'a.txt': 'a\n'})
-        V.add(self.common, given('kit/a', first))
+        path, _ = V.add(self.common, given('kit/a', first))
         second = self.more(wt, 'a', {'a.txt': 'b\n'})
-        real_load, racer, failed = V._load, [], []
+        real_load, real_clear = V._load, getattr(V, '_clear_stale', lambda p: None)
+        racer, failed, seen = [], [], []
+        blocked, finished, moved = threading.Event(), threading.Event(), threading.Event()
 
         def add_second():
             try:
                 V.add(self.common, given('kit/a', second))
             except Exception as e:                       # seen by the assertion below
                 failed.append(e)
+            finally:
+                finished.set()
+                moved.set()
 
-        def load(path, branch):
-            got = real_load(path, branch)
+        def clear(lock):                                 # the add found the lock held
+            blocked.set()
+            moved.set()
+            return real_clear(lock)
+
+        def load(path_, branch):
+            got = real_load(path_, branch)
             if not racer:
                 racer.append(threading.Thread(target=add_second))
                 racer[0].start()
-                racer[0].join(0.5)                       # with no lock the add ends here
+                moved.wait(60)                           # a hang guard, not a timing assumption
+                with open(path, encoding='utf-8') as f:
+                    seen.append((blocked.is_set(), finished.is_set(), json.load(f)['tip']))
             return got
-        with mock.patch.object(V, '_load', side_effect=load):
+        with mock.patch.object(V, '_load', side_effect=load), \
+                mock.patch.object(V, '_clear_stale', side_effect=clear, create=True):
             self.assertTrue(call(first))
-        racer[0].join(30)
+        racer[0].join(60)
         self.assertEqual(failed, [])
-        return second, V.entries(self.common)
+        return first, second, seen[0], V.entries(self.common)
+
+    def assert_add_waited(self, first, second, seen, queue):
+        self.assertEqual(seen, (True, False, first))     # blocked on the lock, nothing written
+        self.assertEqual([(e['tip'], e['state']) for e in queue], [(second, V.QUEUED)])
 
     def test_an_add_racing_a_drop_survives(self):
-        second, queue = self.race(lambda first: V.drop(self.common, 'kit/a', tip=first))
-        self.assertEqual([(e['tip'], e['state']) for e in queue], [(second, V.QUEUED)])
+        self.assert_add_waited(*self.race(lambda first: V.drop(self.common, 'kit/a', tip=first)))
 
     def test_an_add_racing_mark_failed_survives(self):
-        second, queue = self.race(lambda first: V.mark_failed(self.common, 'kit/a', 'red', tip=first))
-        self.assertEqual([(e['tip'], e['state']) for e in queue], [(second, V.QUEUED)])
+        self.assert_add_waited(*self.race(
+            lambda first: V.mark_failed(self.common, 'kit/a', 'red', tip=first)))
 
     def test_a_held_lock_is_waited_for_and_a_stale_one_removed(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
