@@ -104,6 +104,64 @@ class PieceBuildOutput(RemoveCase):
                 self.assertIn('"path" must be a folder relative to the piece', out)
                 self.assert_kept('badpath', path, 'models/env/.build/x.bin', out)
 
+    def test_bad_piece_path_glob_characters_refuse(self):
+        path = self.landed('globchars', 'models/env/.build/x.bin')
+        for bad in ('env/.build?/', 'env/[.]build/', 'env/.build]/'):
+            with self.subTest(bad):
+                self.configure(config([{'piece': 'pvp', 'path': bad}]))
+                rc, out = self.run_verb('remove', 'globchars')
+                self.assertEqual(rc, 1, out)
+                self.assertIn('"path" must be a folder relative to the piece', out)
+                self.assert_kept('globchars', path, 'models/env/.build/x.bin', out)
+
+    def test_null_piece_or_path_refuses(self):
+        # Obj.check lets a null through when the field has no default; piece_dirs must refuse it.
+        path = self.landed('null', 'models/env/.build/x.bin')
+        for ent in ({'piece': 'pvp', 'path': None}, {'piece': None, 'path': 'env/.build/'}):
+            with self.subTest(ent):
+                self.configure(config([ent]))
+                rc, out = self.run_verb('remove', 'null')
+                self.assertEqual(rc, 1, out)
+                self.assertIn('"piece" and "path" must both be strings', out)
+                self.assert_kept('null', path, 'models/env/.build/x.bin', out)
+
+    def test_wrong_shape_table_refuses(self):
+        path = self.landed('shape', 'models/env/.build/x.bin')
+        piece = dict(TABLE['pieces'][0])
+        cases = [
+            ('piece not an object', {'schema': 1, 'pieces': [1]}),
+            ('root not a list', {'schema': 1, 'root': 5, 'pieces': [piece]}),
+            ('list-valued kind', {'schema': 1, 'pieces': [dict(piece, kind=['spec'])]}),
+            ('unhashable deps', {'schema': 1, 'pieces': [dict(piece, deps=[['x']])]}),
+        ]
+        for name, table in cases:
+            with self.subTest(name):
+                self.configure(config([ENTRY], table=table))
+                rc, out = self.run_verb('remove', 'shape')
+                self.assertEqual(rc, 1, out)
+                self.assertIn('the pieces table cannot be read', out)
+                self.assert_kept('shape', path, 'models/env/.build/x.bin', out)
+
+    def test_piece_dir_with_a_dot_or_empty_part_refuses(self):
+        path = self.landed('dotdir', 'env/.build/x.bin', 'a/b/env/.build/x.bin')
+        for d in ('.', 'a//b'):
+            with self.subTest(d):
+                table = {'schema': 1, 'pieces': [dict(TABLE['pieces'][0], dir=d)]}
+                self.configure(config([ENTRY], table=table))
+                rc, out = self.run_verb('remove', 'dotdir')
+                self.assertEqual(rc, 1, out)
+                self.assertIn('which has an empty or `.` part', out)
+                self.assert_kept('dotdir', path, 'env/.build/x.bin', out)
+
+    def test_only_the_first_unmatched_line_carries_the_reason(self):
+        self.configure(config([ENTRY], table=None))
+        path = self.landed('first', 'models/env/.build/x.bin', 'other/.build/y.bin')
+        rc, out = self.run_verb('remove', 'first')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('!! models/env/.build/', out)
+        self.assertIn('!! other/.build/', out)
+        self.assertEqual(out.count('no pieces table'), 1, out)
+
     def test_globs_still_apply_when_the_table_is_unreadable(self):
         self.configure(config(['bin', ENTRY], table=None))
         path = self.landed('globs', 'bin/app.exe')

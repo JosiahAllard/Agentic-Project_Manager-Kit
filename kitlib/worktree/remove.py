@@ -114,26 +114,40 @@ class Ctx(object):
 def piece_dirs(cfg, entries):
     """`(dirs, None)`: each `{piece, path}` build_output entry as the literal repo-relative folder
     the pieces table puts it at (no trailing `/`), or `([], why)` when any of them cannot be
-    resolved - no table, a malformed one, an unknown piece, a path that is empty, absolute,
-    `..`-climbing, backslashed or a glob. Never raises: a caller refuses on `why` (fail closed)."""
+    resolved - no table, a malformed one (of any shape: the section is opaque, so anything the
+    table load raises counts), an unknown piece, a piece or path that is not a string (the schema
+    lets a null through), a path that is empty, absolute, `..`-climbing, backslashed or a glob,
+    and a piece dir with an empty or `.` part. Never raises: a caller refuses on `why` (fail
+    closed)."""
     if not entries:
         return [], None
     try:
         table = pieces.load_repo(None, cfg)
-    except (pieces.TableError, ConfigError) as e:
-        return [], 'the pieces table cannot be read (%s)' % e
+    except Exception as e:      # an opaque section: any shape can fail any way; refuse, never crash
+        return [], 'the pieces table cannot be read (%s: %s)' % (type(e).__name__, e)
     dirs = []
     for ent in entries:
-        rel = ent['path']
+        pid, rel = ent.get('piece'), ent.get('path')
+        if not isinstance(pid, str) or not isinstance(rel, str):
+            return [], ('build_output entry %s: "piece" and "path" must both be strings'
+                        % json.dumps(ent))
         parts = rel.rstrip('/').split('/')
         if (not rel.rstrip('/') or rel.startswith('/') or '\\' in rel or ':' in rel
                 or any(c in rel for c in '*?[]') or '..' in parts or '' in parts or '.' in parts):
             return [], ('build_output entry %s: "path" must be a folder relative to the piece,'
                         ' `/`-separated, with no glob, `..` or empty part' % json.dumps(ent))
         try:
-            dirs.append(table.path(ent['piece'], rel).rstrip('/'))
+            folder = table.path(pid, rel).rstrip('/')
         except KeyError as k:
             return [], 'build_output entry %s: %s' % (json.dumps(ent), k.args[0])
+        except Exception as e:
+            return [], 'build_output entry %s: the pieces table cannot resolve it (%s: %s)' % (
+                json.dumps(ent), type(e).__name__, e)
+        if any(p in ('', '.', '..') for p in folder.split('/')):
+            return [], ('build_output entry %s: piece %r has dir %r, which has an empty or `.`'
+                        ' part, so it names no folder git prints' % (json.dumps(ent), pid,
+                                                                       table.dir(pid)))
+        dirs.append(folder)
     return dirs, None
 
 
