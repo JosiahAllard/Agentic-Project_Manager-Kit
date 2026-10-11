@@ -63,6 +63,12 @@ aliases again), usage/ and agents/ (posted as at session start).
   tree on its `.kit.json` main branch, as the PM data worktree is; a work tree of the kit itself
   (its code, or the kit's repository on any branch but the recorded data branch) is refused, as
   the kit is public. Mirror paths an earlier save left uncommitted are counted, not committed.
+  A hub document that quotes a machine path is refused by that scan, stays uncommitted and is
+  lost on a restore from another machine, unless the data work tree's `.kit.json`
+  `"machine_paths".allow` has an entry for it, its glob naming the mirror folder (`{"glob": "hub/*", "line": "<regex>", "why": "..."}`;
+  `kitlib/machinepaths` docstring, docs/commit.md "`.kit.json` keys read").
+  A mirror path git ignores is skipped silently: `git status` does not list it, so it is never
+  committed, and a save whose only changes are ignored prints `nothing to commit`.
   `--push` pushes that branch to `pm_data.remote` with an explicit refspec.
 - **New copy:** publish the page as above, record it with
   `python tools/hub_mirror.py set-url --account <label> <url>`, then
