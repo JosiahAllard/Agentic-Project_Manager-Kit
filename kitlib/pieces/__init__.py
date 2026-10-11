@@ -38,7 +38,7 @@ class TableError(ValueError):
 
 def _rel_ok(p):
     return (isinstance(p, str) and p and '\\' not in p and not p.startswith('/')
-            and not p.endswith('/') and '..' not in p.split('/'))
+            and not p.endswith('/') and not ({'', '.', '..'} & set(p.split('/'))))
 
 
 def _under(path, d):
@@ -77,7 +77,8 @@ class Table(object):
             if p['kind'] not in KINDS:
                 raise TableError('%s: unknown kind %r' % (pid, p['kind']))
             if not _rel_ok(p['dir']) or ('was' in p and not _rel_ok(p['was'])):
-                raise TableError('%s: dir/was must be repo-relative, `/`-separated, no trailing /' % pid)
+                raise TableError('%s: dir/was must be repo-relative, `/`-separated, no trailing /, '
+                                 'no empty, `.` or `..` part (dir %r, was %r)' % (pid, p['dir'], p.get('was')))
             if (p['kind'] == 'gradle') != bool(p.get('gradle')) or \
                     (p.get('gradle') and not p['gradle'].startswith(':')):
                 raise TableError('%s: a gradle piece, and only one, names its project as `:name`' % pid)
