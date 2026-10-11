@@ -21,7 +21,10 @@
 #   <Target>\tools\gate.json      with -Stack: templates\stacks\<Stack>\tools\gate.json, only if absent
 #   <Target>\tools\<file>        with -Stack: the stack's other files under templates\stacks\<Stack>\tools
 #                                (Godot: godot.cmd), each only if absent; one already there is kept
-# It does not install the stack's CI workflows or its other files outside tools\, templates\common\CLAUDE.md,
+#   <Target>\.claude\skills\...  with -Stack: the stack's skills, by `tools\stack_skill.py install` (Godot:
+#                                godot-render-check), the kit's absolute path written over {kit_root};
+#                                one already there is kept; a kit path it cannot write refuses
+# It does not install the stack's CI workflows or its other files outside tools\ and .claude\skills\, templates\common\CLAUDE.md,
 # the agent profiles, or .claude\settings.json (docs/install.md "What the script does not install").
 # -OwnerEmail and -AgentEmail are required and must differ: an owner commit (Owner-Approved:) counts
 # only when its author email is "owner".email, so an empty or shared identity would let an agent's
@@ -152,6 +155,9 @@ if ($LASTEXITCODE -ne 0 -or -not $top) { Fail "$targetFull is not a git checkout
 $topFull = [IO.Path]::GetFullPath(($top | Select-Object -First 1).Trim()).TrimEnd('\')
 if ($topFull -ine $targetFull) { Fail "$targetFull is inside the checkout $topFull; name its top level" }
 if (-not (Test-Path -LiteralPath $stubTool)) { Fail "the kit at $kit has no tools\kit_stubs.py" 2 }
+# Every kit tool this script runs is a python script: with no python on PATH a call would only print an
+# error and the plan would look empty. Refuse here, before anything is written.
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) { Fail "python is not on PATH; the kit's tools need it (nothing was written)" 2 }
 # The PM-data command: argv for the call, and the same quoted for the printed line.
 $pmArgs = @()
 $pmLine = ''
@@ -273,6 +279,13 @@ $plan = & python $stubTool write -C $targetFull --dry-run 2>&1
 $planCode = $LASTEXITCODE
 
 # The default remote name: .kit.json "repo".remote is not set by this script.
+$skillTool = Join-Path $kit 'tools\stack_skill.py'
+$skillPlan = @()
+if ($Stack) {
+    if (-not (Test-Path -LiteralPath $skillTool)) { Fail "the kit at $kit has no tools\stack_skill.py" 2 }
+    $skillPlan = @(& python $skillTool install --stack $Stack -C $targetFull 2>&1 | ForEach-Object { "$_" })
+    if ($LASTEXITCODE -ne 0) { Fail "stack_skill.py refused the $Stack stack's skills ($($skillPlan -join ' ')); nothing was written" }
+}
 $remoteUrl = & git -C $targetFull remote get-url origin 2>$null
 $hasOrigin = ($LASTEXITCODE -eq 0 -and $remoteUrl)
 
@@ -305,6 +318,7 @@ foreach ($t in $toolFiles) {
     if (Test-Path -LiteralPath $t.Dst) { Write-Host "  kept          $($t.Dst)   (exists)" }
     else { Write-Host "  would create  $($t.Dst)   (from templates\stacks\$Stack\tools\$($t.Name))" }
 }
+foreach ($l in $skillPlan) { Write-Host "  $l   (stack skill, kit path written in)" }
 Write-Host ""
 if ($hasOrigin) { Write-Host "remote:   origin -> $(@($remoteUrl)[0])" }
 else {
@@ -331,6 +345,21 @@ foreach ($t in $toolFiles) {
 }
 if (-not $Apply) { exit 0 }
 
+# The stack's skills go before anything else, with the kit's absolute path written in; a refusal
+# stops here, before .kit.json (the plan-time run above makes one unlikely).
+$skillWritten = New-Object System.Collections.Generic.List[string]
+if ($Stack) {
+    $skillOut = @(& python $skillTool install --stack $Stack -C $targetFull --apply 2>&1 | ForEach-Object { "$_" })
+    foreach ($l in $skillOut) {
+        Write-Host "  $l"
+        if ($l -match '^wrote\s+(.+)$') { $written.Add($Matches[1].Trim()); $skillWritten.Add($Matches[1].Trim()) }
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "new-repo: STOPPED - stack_skill.py exited $LASTEXITCODE; .kit.json was not written."
+        if ($written.Count) { Write-Host "  already written (delete them to undo): $($written -join ' , ')" }
+        exit 1
+    }
+}
 # The gate file goes first: kit_stubs reads .kit.json and refuses a "gate" path that is not there.
 if ($Stack) {
     Put-File $gateDst $gateText
@@ -353,7 +382,7 @@ $out = & python $stubTool write -C $targetFull 2>&1
 $code = $LASTEXITCODE
 foreach ($line in @($out)) { Write-Host "  $line" }
 if ($code -ne 0) {
-    $wrote = if ($Stack) { (@(".kit.json", $gateDst) + @($toolFiles | Where-Object { $written -contains $_.Dst } | ForEach-Object { $_.Dst })) -join ', ' } else { ".kit.json" }
+    $wrote = if ($Stack) { (@(".kit.json", $gateDst) + @($toolFiles | Where-Object { $written -contains $_.Dst } | ForEach-Object { $_.Dst }) + @($skillWritten)) -join ', ' } else { ".kit.json" }
     Write-Host "new-repo: STOPPED - kit_stubs.py write exited $code after $wrote were written, and any stubs listed above."
     Write-Host "  The .gitignore, .gitattributes and docs/INDEX.md were not touched. To undo: delete $wrote and the stubs listed, then run again."
     exit 1
