@@ -62,7 +62,13 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    - `-Stack dotnet|godot|java|python` copies `templates/stacks/<stack>/tools/gate.json` to
      `tools/gate.json` (refused if one is there) and adds `"gate": "tools/gate.json"` to
      `.kit.json`, and copies the stack's other `tools/` files (only Godot has one, `tools/godot.cmd`),
-     keeping any that is there already. Edit the gate's globs and test command to the project.
+     keeping any that is there already. It also runs `tools/stack_skill.py install` for the stack's
+     `.claude/skills/**` (only Godot has one, `godot-render-check`): each `.md` has `{kit_root}`
+     replaced by the kit's absolute path with forward slashes (the template quotes it, so a space
+     is safe), a file already there is kept, and a kit root it cannot write (no
+     `tools/machine_lock.py` under it, or a double quote, brace, `$` or backtick in the path) refuses
+     the whole run before anything is written, as does a stack the kit has no folder for, and so does
+     no python on PATH. Edit the gate's globs and test command to the project.
      The python gate runs
      `unittest discover -s tests` and needs one test: its pass check wants a `Ran N tests` line
      with N of 1 or more, so a run of none fails on every Python version. It runs without
@@ -113,8 +119,8 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 ### What the script does not install
 
 - The stack's other files: `.github/workflows/{quick,full}.yml` (owner-only paths; copy them by
-  hand), and for Godot the render-check skill (`.claude/skills/godot-render-check/SKILL.md`).
-  `tools/godot.cmd` is installed.
+  hand). `tools/godot.cmd` and the stack's skills (Godot: `.claude/skills/godot-render-check/SKILL.md`,
+  with the kit path written in) are installed.
 - `templates/common/CLAUDE.md` and the two profile templates (`agent-profile.TEMPLATE.md`,
   `coordinator-profile.TEMPLATE.md`): the repository's rules file and profiles are drafted from
   them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates").
