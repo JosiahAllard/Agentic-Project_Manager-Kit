@@ -1,14 +1,17 @@
 # Bootstraps a repository onto the kit (docs/install.md; ported from the PM kit's new-repo.ps1).
 #
 #   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner>
-#                                -AgentEmail <agents> [-MainBranch main] [-Stack python]
-#                                [-PmData <folder> [-PrivateRemote <url>]] [-Apply]
+#                                -AgentEmail <agents> [-MainBranch main] [-RepoName <name>]
+#                                [-Stack python] [-PmData <folder> [-PrivateRemote <url>]] [-Apply]
 #
 # The target is an existing git checkout (`git init -b main` first for a new one); the folder -Target
 # names must be its top level. It writes these and nothing else (a repository holds stubs only,
 # never a copy of the kit):
-#   <Target>\.kit.json            "repo".main_branch, "owner".email, "owner".agent_emails, and with
-#                                -Stack "gate": "tools/gate.json"
+#   <Target>\.kit.json            "repo".main_branch, "repo".name, "owner".email, "owner".agent_emails,
+#                                and with -Stack "gate": "tools/gate.json"
+# "repo".name is the repository's column in the rulings ledger (backlog `check` is red without one when
+# the machine has a ledger): -RepoName, else the target folder's name lower-cased. Either must be a
+# lower-case ledger name ([a-z0-9][a-z0-9-]*); a folder name that is not one refuses, asking for -RepoName.
 #   <Target>\<tools_dir>\<n>.py   the kit tool stubs, by `tools\kit_stubs.py write -C <Target>`
 #   <Target>\.gitignore, .gitattributes   templates\common's lines (.claude/worktrees/ and .codex/worktrees/
 #                                keep the agents' worktrees out of the main checkout's status) plus the
@@ -50,6 +53,7 @@ param(
     [Parameter(Mandatory = $true)][string]$OwnerEmail,
     [Parameter(Mandatory = $true)][string]$AgentEmail,
     [string]$MainBranch = 'main',
+    [string]$RepoName = '',
     [string]$Stack = '',
     [string]$PmData = '',
     [string]$PrivateRemote = '',
@@ -128,6 +132,18 @@ if (($targetFull + '\').StartsWith($kitFull, [StringComparison]::OrdinalIgnoreCa
     Fail "the target $targetFull is inside the kit itself"
 }
 if (-not (Test-Path -LiteralPath $targetFull -PathType Container)) { Fail "$targetFull is not a folder" }
+# "repo".name: the ledger column (kitlib/backlog/ledger.py ledger_name), checked with the grammar of the
+# machine config's ledger_repos. -cnotmatch: PowerShell's -notmatch ignores case.
+$RepoName = $RepoName.Trim()
+$nameRx = '^[a-z0-9][a-z0-9-]*$'
+if ($RepoName) {
+    if ($RepoName -cnotmatch $nameRx) { Fail "-RepoName '$RepoName' is not a lower-case ledger name ([a-z0-9][a-z0-9-]*)" 2 }
+} else {
+    $RepoName = (Split-Path $targetFull -Leaf).ToLowerInvariant()
+    if ($RepoName -cnotmatch $nameRx) {
+        Fail "the folder name '$RepoName' is not a lower-case ledger name ([a-z0-9][a-z0-9-]*); give -RepoName <the repo column of the rulings ledger>" 2
+    }
+}
 # Native calls run under Continue: Windows PowerShell 5.1 turns a native stderr line into an error
 # record, which Stop would throw on.
 $ErrorActionPreference = 'Continue'
@@ -185,7 +201,7 @@ if ($Stack) {
 }
 $gateLine = if ($Stack) { "  `"gate`": `"tools/gate.json`",`n" } else { '' }
 $text = "{`n" +
-        "  `"repo`": {`"main_branch`": `"$MainBranch`"},`n" +
+        "  `"repo`": {`"main_branch`": `"$MainBranch`", `"name`": `"$RepoName`"},`n" +
         $gateLine +
         "  `"owner`": {`"email`": `"$OwnerEmail`", `"agent_emails`": [`"$AgentEmail`"]}`n" +
         "}`n"

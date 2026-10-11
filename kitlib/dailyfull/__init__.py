@@ -129,10 +129,11 @@ def prepare(main, wt, ref, remote, git=git):
 
 def plan(cfg, wt, sha):
     """The steps a full run takes at `wt`: every non-manual gate step (and setup), each running
-    its `full_cmd` when it has one, each set to continue past a failure. GateConfigError passes
-    through."""
+    its `daily_cmd` when it has one, else its `full_cmd`, else its `cmd` (kitlib.gate.steps
+    argv_of), each set to continue past a failure. GateConfigError passes through."""
     gate = cfg.section('gate')
-    chosen, _ = S.select(gate, S.build(gate, wt, sha, cfg.tools_dir, full=True), [], full=True)
+    chosen, _ = S.select(gate, S.build(gate, wt, sha, cfg.tools_dir, full=True, daily=True), [],
+                         full=True)
     return [s._replace(cont=True) for s in chosen]
 
 
