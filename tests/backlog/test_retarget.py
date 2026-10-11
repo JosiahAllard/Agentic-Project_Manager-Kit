@@ -9,7 +9,7 @@ from kitlib.backlog import store as smod
 from tests.backlog import test_cli
 from tests.backlog.helpers import StoreCase, rec
 
-OLD, NEW = 'docs/combat', 'docs/design/combat'
+OLD, NEW = 'docs/guide', 'docs/design/guide'
 
 
 class Rewrites(unittest.TestCase):
@@ -21,8 +21,8 @@ class Rewrites(unittest.TestCase):
         self.assertEqual(retmod.scope_member(OLD + '/**', OLD, NEW), (NEW + '/**', False))
 
     def test_scope_is_component_wise(self):
-        self.assertEqual(retmod.scope_member('docs/combatant.md', OLD, NEW), (None, False))
-        self.assertEqual(retmod.scope_member('docs/combat2/**', OLD, NEW), (None, False))
+        self.assertEqual(retmod.scope_member('docs/guidebook.md', OLD, NEW), (None, False))
+        self.assertEqual(retmod.scope_member('docs/guide2/**', OLD, NEW), (None, False))
         self.assertEqual(retmod.scope_member('none', OLD, NEW), (None, False))
 
     def test_a_glob_above_old_covers_it_and_is_left(self):
@@ -30,11 +30,11 @@ class Rewrites(unittest.TestCase):
 
     def test_text_whole_paths_only(self):
         t = retmod.text_value
-        self.assertEqual(t('see docs/combat/a.md and docs/combat.', OLD, NEW),
-                         'see docs/design/combat/a.md and docs/design/combat.')
-        self.assertEqual(t('docs/combatant.md, docs/combat.md, x/docs/combat', OLD, NEW),
-                         'docs/combatant.md, docs/combat.md, x/docs/combat')
-        self.assertEqual(t('`docs/combat`', OLD, NEW), '`docs/design/combat`')
+        self.assertEqual(t('see docs/guide/a.md and docs/guide.', OLD, NEW),
+                         'see docs/design/guide/a.md and docs/design/guide.')
+        self.assertEqual(t('docs/guidebook.md, docs/guide.md, x/docs/guide', OLD, NEW),
+                         'docs/guidebook.md, docs/guide.md, x/docs/guide')
+        self.assertEqual(t('`docs/guide`', OLD, NEW), '`docs/design/guide`')
 
     def test_bad_paths_are_usage(self):
         for old, new in ((OLD + '/**', NEW), (OLD, NEW + '/*'), (OLD, OLD), ('/abs', NEW),
@@ -52,7 +52,7 @@ class Plan(StoreCase):
     def seed_three(self):
         self.seed(rec('AAA', scope=[OLD + '/**', 'tools/x.py'], ref='%s/plan.md' % OLD,
                       summary='rewrite %s/plan.md now' % OLD),
-                  rec('BBB', scope='docs/**', summary='mentions docs/combatant.md only'),
+                  rec('BBB', scope='docs/**', summary='mentions docs/guidebook.md only'),
                   rec('CCC', scope=['tools/y.py']))
 
     def test_plan_rewrites_scope_ref_and_summary_and_lists_each_line(self):

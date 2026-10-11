@@ -5,15 +5,15 @@ What is rewritten, per record, in header order:
 
 - `scope:` lines. A member equal to OLD becomes NEW; a member under OLD (`OLD/...`, the
   trailing `/**` glob included) has that prefix replaced, so `OLD/**` becomes `NEW/**`. A
-  member that only covers OLD from above (`docs/**` when OLD is `docs/combat`) is left as it is
+  member that only covers OLD from above (`docs/**` when OLD is `docs/guide`) is left as it is
   and listed as not rewritten: narrowing it is a judgement, not a rename. A rewritten member that
   the record already holds is dropped, not written twice.
 - `ref:` and `summary:` lines. Every occurrence of OLD as a whole path in the text: not preceded
   by a path character, and followed by the end, a `/` (a path under OLD), or a character that
   cannot continue a path (a sentence's full stop counts as one).
 
-Matching is case-sensitive and component-wise: OLD `docs/combat` never touches
-`docs/combatant.md`. Nothing else is rewritten (`area`, `files`, the body). A plan only decides:
+Matching is case-sensitive and component-wise: OLD `docs/guide` never touches
+`docs/guidebook.md`. Nothing else is rewritten (`area`, `files`, the body). A plan only decides:
 it never touches a file, a ref or the screen.
 """
 import re

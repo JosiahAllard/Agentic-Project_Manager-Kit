@@ -44,9 +44,9 @@ A record passed over on a scope collision (in `next`, and in a `pull` refused as
 
 ### Retarget
 
-`retarget OLD NEW` follows a moved file or folder through the store (kitlib/backlog/retarget.py `plan_retarget`; `tests/backlog/test_retarget.py`). OLD and NEW are plain repo-relative paths: a glob in either, or OLD equal to NEW, is USAGE. Matching is case-sensitive and by whole path components, so OLD `docs/combat` never touches `docs/combatant.md`.
+`retarget OLD NEW` follows a moved file or folder through the store (kitlib/backlog/retarget.py `plan_retarget`; `tests/backlog/test_retarget.py`). OLD and NEW are plain repo-relative paths: a glob in either, or OLD equal to NEW, is USAGE. Matching is case-sensitive and by whole path components, so OLD `docs/guide` never touches `docs/guidebook.md`.
 
-- `scope:` lines. A member equal to OLD becomes NEW. A member under OLD has that prefix replaced, the trailing `/**` included: with OLD a folder, `OLD/a.md` becomes `NEW/a.md` and `OLD/**` becomes `NEW/**`. A `/**` member that covers OLD from above (`docs/**` when OLD is `docs/combat`) is not rewritten; the output lists it as `not rewritten`, since narrowing it is a judgement for `set ID --scope`. A rewritten member the record already holds is dropped, not written twice.
+- `scope:` lines. A member equal to OLD becomes NEW. A member under OLD has that prefix replaced, the trailing `/**` included: with OLD a folder, `OLD/a.md` becomes `NEW/a.md` and `OLD/**` becomes `NEW/**`. A `/**` member that covers OLD from above (`docs/**` when OLD is `docs/guide`) is not rewritten; the output lists it as `not rewritten`, since narrowing it is a judgement for `set ID --scope`. A rewritten member the record already holds is dropped, not written twice.
 - `ref:` and `summary:` lines. OLD is replaced wherever it stands as a whole path: not preceded by a path character, and followed by the end, a `/` (a path under OLD) or a character that cannot continue a path (a sentence's full stop counts).
 - Nothing else changes: `area`, `files` and the body are left as they are.
 
