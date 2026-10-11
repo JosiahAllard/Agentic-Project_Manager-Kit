@@ -150,7 +150,10 @@ class PieceBuildOutput(RemoveCase):
                 self.configure(config([ENTRY], table=table))
                 rc, out = self.run_verb('remove', 'dotdir')
                 self.assertEqual(rc, 1, out)
-                self.assertIn('which has an empty or `.` part', out)
+                # kitlib.pieces refuses such a dir at load (so the table is unreadable); the
+                # piece_dirs check on the resolved folder behind it only backs that up
+                self.assertIn('the pieces table cannot be read', out)
+                self.assertIn('no empty, `.` or `..` part', out)
                 self.assert_kept('dotdir', path, 'env/.build/x.bin', out)
 
     def test_only_the_first_unmatched_line_carries_the_reason(self):
