@@ -58,4 +58,4 @@ An owner price (`--priority-by owner|pm`), an owner hold (`blocked_on: owner`, `
 
 ## Records
 
-The existing record format, unchanged (every record of the first repository ported parses). Keys cut in the rewrite are unknown keys: `keys`, `class`, `small_fix_*`, `migrated`, `artefact`, `anchor`, `hold_spent`, `value*`.
+The existing record format, unchanged (every record of the first repository ported parses). A header key or value is one line: every write refuses a line break or other control character in one with USAGE, whatever the verb (kitlib/backlog/record.py `render`; `tests/backlog/test_scope_shape.py`); the body is not checked. Keys cut in the rewrite are unknown keys: `keys`, `class`, `small_fix_*`, `migrated`, `artefact`, `anchor`, `hold_spent`, `value*`.

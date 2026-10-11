@@ -9,6 +9,7 @@ import datetime
 import re
 
 from . import scope as scopemod
+from .errors import Usage
 
 Finding = collections.namedtuple('Finding', 'check path line message')
 
@@ -411,9 +412,21 @@ def _cross_field(rec):
 
 # --- writing --------------------------------------------------------------------------------------
 
+def _control_char(text):
+    return any(ord(ch) < 32 or ord(ch) == 127 for ch in str(text))
+
+
 def render(pairs, body):
-    """`key: value` header, one blank line, body. The only place a record is serialised."""
-    head = '\n'.join('%s: %s' % (k, v) for k, v in pairs)
+    """`key: value` header, one blank line, body. The only place a record is serialised.
+
+    Usage when a header key or value holds a control character: a line break would split one
+    header line into two (`summary: x` + an injected `pin: 1`), and no header value is multi-line.
+    The free body below the blank line is not checked."""
+    for k, v in pairs:
+        if _control_char(k) or _control_char(v):
+            raise Usage('`%s: %r` holds a line break or other control character; a header value '
+                        'is one line' % (k, v))
+    head ='\n'.join('%s: %s' % (k, v) for k, v in pairs)
     body = (body or '').rstrip('\n')
     return head + '\n\n' + (body + '\n' if body else '')
 
