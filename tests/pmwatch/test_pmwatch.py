@@ -334,7 +334,7 @@ class Cli(unittest.TestCase):
                 rc = cli.main(["--sessions", sessions,
                                "--alerts-dir", os.path.join(d, "none"), "--state", state, "--once",
                                "--notice-dir", ""],
-                              sleep=lambda s: self.fail("slept"), launcher_set=True)
+                              sleep=lambda s: self.fail("slept"), launcher_set=True, plugin=False)
             self.assertEqual((rc, out.getvalue()), (0, ""))
             with open(state, encoding="utf-8") as f:
                 self.assertEqual(json.load(f), {"branches": {}, "usage": {"1": {"five": 1, "week": 2}},
