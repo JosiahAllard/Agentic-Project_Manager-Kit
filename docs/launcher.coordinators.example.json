@@ -1,0 +1,7 @@
+{
+    "_note": "Copy to <launcher.state_dir>/coordinators.json (machine state, not in git). The account each repo's main coordinator is on (keyed by repo; handoff keeps it current), and the PM session after-reboot resumes. docs/launcher.md 'State files'.",
+    "app": 1,
+    "pm_session_id": "<PM session id: the .jsonl name under <account folder>/projects/*/>",
+    "pm_folder": "<the PM repo folder>",
+    "pm_account": 1
+}

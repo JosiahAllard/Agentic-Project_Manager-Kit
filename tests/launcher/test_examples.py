@@ -13,7 +13,7 @@ from tests.shipped import ROOT
 
 DOCS = ROOT / "docs"
 SESSIONS_EXAMPLE = DOCS / "launcher.sessions.example.json"
-CONDUCTORS_EXAMPLE = DOCS / "launcher.conductors.example.json"
+COORDINATORS_EXAMPLE = DOCS / "launcher.coordinators.example.json"
 
 
 class _Settings:
@@ -55,15 +55,15 @@ class ExamplesTest(unittest.TestCase):
             self.assertEqual(args["repo"], e["repo"], key)
             self.assertEqual(args.get("no_agent", False), not e["agent"], key)
 
-    def test_conductors_example_loads_and_names_the_coordinator_repos(self):
+    def test_coordinators_example_loads_and_names_the_coordinator_repos(self):
         self._copy(SESSIONS_EXAMPLE, state.SESSIONS)
-        self._copy(CONDUCTORS_EXAMPLE, state.CONDUCTORS)
-        conductors = state.read_conductors(self.settings)
+        self._copy(COORDINATORS_EXAMPLE, state.COORDINATORS)
+        coordinators = state.read_coordinators(self.settings)
         for k in ("pm_session_id", "pm_folder", "pm_account"):
-            self.assertIn(k, conductors)
+            self.assertIn(k, coordinators)
         repos = {e["repo"] for _, e in state.entries(state.read_sessions(self.settings)) if e["agent"]}
         for repo in repos:
-            self.assertIn(repo, conductors)
+            self.assertIn(repo, coordinators)
 
 
 if __name__ == "__main__":
