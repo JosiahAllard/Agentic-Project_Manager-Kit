@@ -251,8 +251,8 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
     occupied = []
     for rec in holding:
         occupied.extend(rec.all('scope'))
-    bad = ['an in-flight record has `scope: %s` - %s' % (m, smod.scope_member_error(m))
-           for m in occupied if smod.scope_member_error(m) is not None]
+    bad = ['an in-flight record has `scope: %s` - %s' % (m, smod.scope_member_error(m, True))
+           for m in occupied if smod.scope_member_error(m, True) is not None]
     if bad:
         return None, bad, ranks
 
@@ -276,7 +276,7 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
         reached.add(id(rec))
         rid = rec.id
         scopes = rec.all('scope')
-        errs = [(m, smod.scope_member_error(m)) for m in scopes]
+        errs = [(m, smod.scope_member_error(m, True)) for m in scopes]
         errs = [(m, why) for m, why in errs if why is not None]
         if not scopes:
             errs = [('(no scope line)', 'a record with no `scope:` is never offered')]

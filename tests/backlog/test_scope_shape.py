@@ -6,6 +6,7 @@ header key or value (never in the body) for every verb that writes a record. A t
 line, so a record that already holds one in its summary still takes writes."""
 import unittest
 
+from kitlib.backlog import offer as omod
 from kitlib.backlog import record as rmod
 from kitlib.backlog import scope as smod
 from kitlib.backlog import store as stmod
@@ -26,6 +27,14 @@ class Shape(unittest.TestCase):
 
     def test_a_plain_path_is_still_fine(self):
         self.assertIsNone(smod.path_shape_error('docs/a b.md'))
+
+    def test_the_collision_test_decides_a_member_that_already_holds_a_tab(self):
+        self.assertTrue(smod.members_collide('a/b\tc/**', 'a/b\tc/d.py'))
+        self.assertTrue(smod.members_collide('a/**', 'a/b\tc'))
+        self.assertFalse(smod.members_collide('a/b\tc', 'a/b c'))
+        self.assertFalse(smod.members_collide('x/y', 'a/b\tc/**'))
+        self.assertIsNone(smod.scope_member_error('a/b\tc', tab_ok=True))
+        self.assertIn('control character', smod.scope_member_error('a/b\nc', tab_ok=True))
 
     def test_render_refuses_a_control_character_in_the_header_only(self):
         for pairs in ([('summary', 'x\npin: 1')], [('summary', 'a\x0cb')], [('pin\n', '1')]):
@@ -58,6 +67,26 @@ class ExistingTab(StoreCase):
         bar = self.get('BAR')
         self.assertEqual((bar.get('state'), bar.get('blocked_on')), ('open', '-'))
         self.assertEqual(bar.get('summary'), 'another\tone')
+
+    def test_a_new_tab_in_a_files_path_is_still_refused(self):
+        self.seed(rec('FOO'))
+        before = self.remote_tip()
+        with self.assertRaises(Usage) as cm:
+            self.verb('set', 'FOO', [('files', ['a\tb']), ('files_at', ['abc1234'])])
+        self.assertIn('control character', str(cm.exception))
+        self.assertIn('files', str(cm.exception))
+        self.assertEqual(self.remote_tip(), before)
+
+    def test_a_pulled_record_with_a_tab_in_its_scope_blocks_no_offer(self):
+        self.seed(priced('HELD', scope='held/a\tb/**', state='pulled', pulled_at='2026-10-01',
+                         pulled_by='kit/held'),
+                  priced('TABBED', scope='tabbed/x\ty'), priced('OTHER', scope='other/**'),
+                  priced('UNDER', scope='held/a\tb/c.py'))
+        snap = self.store.load()
+        (offers, passed), refusals, _ranks = omod.next_offer(snap, [snap.get('HELD')])
+        self.assertEqual(refusals, [])
+        self.assertEqual(sorted(o.rec.id for o in offers), ['OTHER', 'TABBED'])
+        self.assertEqual([(p.rec.id, 'collides' in p.why) for p in passed], [('UNDER', True)])
 
     def test_a_new_tab_in_a_path_is_still_refused(self):
         self.seed(rec('FOO'))

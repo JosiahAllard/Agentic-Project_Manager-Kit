@@ -13,13 +13,15 @@ class UndecidableScope(Exception):
     """A comparison against a member this grammar cannot parse, or an empty scope set."""
 
 
-def path_shape_error(p, what='path'):
-    """None if `p` is a repo-root-relative forward-slash path, else why not."""
+def path_shape_error(p, what='path', tab_ok=False):
+    """None if `p` is a repo-root-relative forward-slash path, else why not. `tab_ok`: a tab inside
+    the path is an ordinary character - for reading members a record already holds (collision,
+    the offer), so an old tab blocks no session; a write's new tab is still a `check` finding."""
     if not p:
         return 'an empty %s' % what
     if p != p.strip():
         return 'a %s with leading or trailing whitespace' % what
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in p):
+    if any((ord(ch) < 32 and not (tab_ok and ch == '\t')) or ord(ch) == 127 for ch in p):
         return ('a control character in the %s %r - a line break would split a record line'
                 % (what, p))
     if ',' in p:
@@ -38,8 +40,8 @@ def path_shape_error(p, what='path'):
     return None
 
 
-def scope_member_error(member):
-    """None if `member` is a legal scope member, else why not."""
+def scope_member_error(member, tab_ok=False):
+    """None if `member` is a legal scope member, else why not (`tab_ok`: see path_shape_error)."""
     if member == NONE:
         return None
     if not member:
@@ -54,12 +56,12 @@ def scope_member_error(member):
     if any(ch in WILDCARD_CHARS for ch in body):
         return ('`%s` is not a scope: the only wildcard is a trailing `/**`; other globs are '
                 'parse errors, not patterns' % member)
-    return path_shape_error(body, 'scope')
+    return path_shape_error(body, 'scope', tab_ok)
 
 
 def scope_components(member):
     """The casefolded component list `members_collide` compares."""
-    err = scope_member_error(member)
+    err = scope_member_error(member, tab_ok=True)
     if err is not None:
         raise UndecidableScope('%s: %s' % (member, err))
     if member == NONE:
@@ -70,9 +72,10 @@ def scope_components(member):
 
 def members_collide(a, b):
     """True iff one member's component list is a prefix of the other's. Component-wise, so
-    `Foo.java` and `Foobar.java` are clear; over-approximate by design."""
+    `Foo.java` and `Foobar.java` are clear; over-approximate by design. A tab a member already
+    holds is an ordinary character here."""
     for m in (a, b):
-        err = scope_member_error(m)
+        err = scope_member_error(m, tab_ok=True)
         if err is not None:
             raise UndecidableScope('%s: %s' % (m, err))
     if a == NONE or b == NONE:
