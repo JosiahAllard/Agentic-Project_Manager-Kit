@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pythonw",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/claude/hooks/coordinator_session_start.py"]
+          }
+        ]
+      }
+    ]
+  }
+}

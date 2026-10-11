@@ -1,14 +1,17 @@
 # Bootstraps a repository onto the kit (docs/install.md; ported from the PM kit's new-repo.ps1).
 #
 #   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner>
-#                                -AgentEmail <agents> [-MainBranch main] [-Stack python]
-#                                [-PmData <folder> [-PrivateRemote <url>]] [-Apply]
+#                                -AgentEmail <agents> [-MainBranch main] [-RepoName <name>]
+#                                [-Stack python] [-PmData <folder> [-PrivateRemote <url>]] [-Apply]
 #
 # The target is an existing git checkout (`git init -b main` first for a new one); the folder -Target
 # names must be its top level. It writes these and nothing else (a repository holds stubs only,
 # never a copy of the kit):
-#   <Target>\.kit.json            "repo".main_branch, "owner".email, "owner".agent_emails, and with
-#                                -Stack "gate": "tools/gate.json"
+#   <Target>\.kit.json            "repo".main_branch, "repo".name, "owner".email, "owner".agent_emails,
+#                                and with -Stack "gate": "tools/gate.json"
+# "repo".name is the repository's column in the rulings ledger (backlog `check` is red without one when
+# the machine has a ledger): -RepoName, else the target folder's name lower-cased. Either must be a
+# lower-case ledger name ([a-z0-9][a-z0-9-]*); a folder name that is not one refuses, asking for -RepoName.
 #   <Target>\<tools_dir>\<n>.py   the kit tool stubs, by `tools\kit_stubs.py write -C <Target>`
 #   <Target>\.gitignore, .gitattributes   templates\common's lines (.claude/worktrees/ and .codex/worktrees/
 #                                keep the agents' worktrees out of the main checkout's status) plus the
@@ -17,8 +20,11 @@
 #   <Target>\docs\INDEX.md        a starter doc index (templates\common\INDEX.md), only if absent
 #   <Target>\tools\gate.json      with -Stack: templates\stacks\<Stack>\tools\gate.json, only if absent
 #   <Target>\tools\<file>        with -Stack: the stack's other files under templates\stacks\<Stack>\tools
-#                                (Godot: godot.cmd), each only if absent; one already there is kept
-# It does not install the stack's CI workflows or its other files outside tools\, templates\common\CLAUDE.md,
+#                                (dotnet: dotnet_each.py, godot: godot.cmd, python: js_tests.py), each only if absent; one already there is kept
+#   <Target>\.claude\skills\...  with -Stack: the stack's skills, by `tools\stack_skill.py install` (Godot:
+#                                godot-render-check), the kit's absolute path written over {kit_root};
+#                                one already there is kept; a kit path it cannot write refuses
+# It does not install the stack's CI workflows or its other files outside tools\ and .claude\skills\, templates\common\CLAUDE.md,
 # the agent profiles, or .claude\settings.json (docs/install.md "What the script does not install").
 # -OwnerEmail and -AgentEmail are required and must differ: an owner commit (Owner-Approved:) counts
 # only when its author email is "owner".email, so an empty or shared identity would let an agent's
@@ -50,6 +56,7 @@ param(
     [Parameter(Mandatory = $true)][string]$OwnerEmail,
     [Parameter(Mandatory = $true)][string]$AgentEmail,
     [string]$MainBranch = 'main',
+    [string]$RepoName = '',
     [string]$Stack = '',
     [string]$PmData = '',
     [string]$PrivateRemote = '',
@@ -128,6 +135,18 @@ if (($targetFull + '\').StartsWith($kitFull, [StringComparison]::OrdinalIgnoreCa
     Fail "the target $targetFull is inside the kit itself"
 }
 if (-not (Test-Path -LiteralPath $targetFull -PathType Container)) { Fail "$targetFull is not a folder" }
+# "repo".name: the ledger column (kitlib/backlog/ledger.py ledger_name), checked with the grammar of the
+# machine config's ledger_repos. -cnotmatch: PowerShell's -notmatch ignores case.
+$RepoName = $RepoName.Trim()
+$nameRx = '^[a-z0-9][a-z0-9-]*$'
+if ($RepoName) {
+    if ($RepoName -cnotmatch $nameRx) { Fail "-RepoName '$RepoName' is not a lower-case ledger name ([a-z0-9][a-z0-9-]*)" 2 }
+} else {
+    $RepoName = (Split-Path $targetFull -Leaf).ToLowerInvariant()
+    if ($RepoName -cnotmatch $nameRx) {
+        Fail "the folder name '$RepoName' is not a lower-case ledger name ([a-z0-9][a-z0-9-]*); give -RepoName <the repo column of the rulings ledger>" 2
+    }
+}
 # Native calls run under Continue: Windows PowerShell 5.1 turns a native stderr line into an error
 # record, which Stop would throw on.
 $ErrorActionPreference = 'Continue'
@@ -136,6 +155,9 @@ if ($LASTEXITCODE -ne 0 -or -not $top) { Fail "$targetFull is not a git checkout
 $topFull = [IO.Path]::GetFullPath(($top | Select-Object -First 1).Trim()).TrimEnd('\')
 if ($topFull -ine $targetFull) { Fail "$targetFull is inside the checkout $topFull; name its top level" }
 if (-not (Test-Path -LiteralPath $stubTool)) { Fail "the kit at $kit has no tools\kit_stubs.py" 2 }
+# Every kit tool this script runs is a python script: with no python on PATH a call would only print an
+# error and the plan would look empty. Refuse here, before anything is written.
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) { Fail "python is not on PATH; the kit's tools need it (nothing was written)" 2 }
 # The PM-data command: argv for the call, and the same quoted for the printed line.
 $pmArgs = @()
 $pmLine = ''
@@ -177,7 +199,7 @@ if ($Stack) {
     if (-not (Test-Path -LiteralPath $gateSrc)) { Fail "the kit has no $gateSrc" 2 }
     try { $gateText = [IO.File]::ReadAllText($gateSrc, $utf8) }
     catch { Fail "cannot read $gateSrc - $($_.Exception.Message); nothing was written" }
-    # The stack's other tools files (Godot: godot.cmd); gate.json is handled apart (it must exist before
+    # The stack's other tools files (dotnet_each.py, godot.cmd, js_tests.py, by stack); gate.json is handled apart (it must exist before
     # the stubs are written, and one already there refuses).
     $toolFiles = @(Get-ChildItem -LiteralPath (Join-Path $stackDir 'tools') -File | Where-Object { $_.Name -ine 'gate.json' } |
         ForEach-Object { [pscustomobject]@{ Name = $_.Name; Src = $_.FullName; Dst = (Join-Path $targetFull "tools\$($_.Name)") } })
@@ -185,7 +207,7 @@ if ($Stack) {
 }
 $gateLine = if ($Stack) { "  `"gate`": `"tools/gate.json`",`n" } else { '' }
 $text = "{`n" +
-        "  `"repo`": {`"main_branch`": `"$MainBranch`"},`n" +
+        "  `"repo`": {`"main_branch`": `"$MainBranch`", `"name`": `"$RepoName`"},`n" +
         $gateLine +
         "  `"owner`": {`"email`": `"$OwnerEmail`", `"agent_emails`": [`"$AgentEmail`"]}`n" +
         "}`n"
@@ -257,6 +279,13 @@ $plan = & python $stubTool write -C $targetFull --dry-run 2>&1
 $planCode = $LASTEXITCODE
 
 # The default remote name: .kit.json "repo".remote is not set by this script.
+$skillTool = Join-Path $kit 'tools\stack_skill.py'
+$skillPlan = @()
+if ($Stack) {
+    if (-not (Test-Path -LiteralPath $skillTool)) { Fail "the kit at $kit has no tools\stack_skill.py" 2 }
+    $skillPlan = @(& python $skillTool install --stack $Stack -C $targetFull 2>&1 | ForEach-Object { "$_" })
+    if ($LASTEXITCODE -ne 0) { Fail "stack_skill.py refused the $Stack stack's skills ($($skillPlan -join ' ')); nothing was written" }
+}
 $remoteUrl = & git -C $targetFull remote get-url origin 2>$null
 $hasOrigin = ($LASTEXITCODE -eq 0 -and $remoteUrl)
 
@@ -289,6 +318,7 @@ foreach ($t in $toolFiles) {
     if (Test-Path -LiteralPath $t.Dst) { Write-Host "  kept          $($t.Dst)   (exists)" }
     else { Write-Host "  would create  $($t.Dst)   (from templates\stacks\$Stack\tools\$($t.Name))" }
 }
+foreach ($l in $skillPlan) { Write-Host "  $l   (stack skill, kit path written in)" }
 Write-Host ""
 if ($hasOrigin) { Write-Host "remote:   origin -> $(@($remoteUrl)[0])" }
 else {
@@ -315,6 +345,21 @@ foreach ($t in $toolFiles) {
 }
 if (-not $Apply) { exit 0 }
 
+# The stack's skills go before anything else, with the kit's absolute path written in; a refusal
+# stops here, before .kit.json (the plan-time run above makes one unlikely).
+$skillWritten = New-Object System.Collections.Generic.List[string]
+if ($Stack) {
+    $skillOut = @(& python $skillTool install --stack $Stack -C $targetFull --apply 2>&1 | ForEach-Object { "$_" })
+    foreach ($l in $skillOut) {
+        Write-Host "  $l"
+        if ($l -match '^wrote\s+(.+)$') { $written.Add($Matches[1].Trim()); $skillWritten.Add($Matches[1].Trim()) }
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "new-repo: STOPPED - stack_skill.py exited $LASTEXITCODE; .kit.json was not written."
+        if ($written.Count) { Write-Host "  already written (delete them to undo): $($written -join ' , ')" }
+        exit 1
+    }
+}
 # The gate file goes first: kit_stubs reads .kit.json and refuses a "gate" path that is not there.
 if ($Stack) {
     Put-File $gateDst $gateText
@@ -337,7 +382,7 @@ $out = & python $stubTool write -C $targetFull 2>&1
 $code = $LASTEXITCODE
 foreach ($line in @($out)) { Write-Host "  $line" }
 if ($code -ne 0) {
-    $wrote = if ($Stack) { (@(".kit.json", $gateDst) + @($toolFiles | Where-Object { $written -contains $_.Dst } | ForEach-Object { $_.Dst })) -join ', ' } else { ".kit.json" }
+    $wrote = if ($Stack) { (@(".kit.json", $gateDst) + @($toolFiles | Where-Object { $written -contains $_.Dst } | ForEach-Object { $_.Dst }) + @($skillWritten)) -join ', ' } else { ".kit.json" }
     Write-Host "new-repo: STOPPED - kit_stubs.py write exited $code after $wrote were written, and any stubs listed above."
     Write-Host "  The .gitignore, .gitattributes and docs/INDEX.md were not touched. To undo: delete $wrote and the stubs listed, then run again."
     exit 1

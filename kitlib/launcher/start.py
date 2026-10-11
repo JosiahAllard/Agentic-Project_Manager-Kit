@@ -135,7 +135,9 @@ def entry_start_args(settings, key, entry, account, prompt, predecessor=None, na
 def start_entry(settings, host, key, account=None, prompt=None, whatif=False):
     """Start the sessions.json entry `key`. On the entry's own account it keeps the entry's recorded
     name (a recycle's <stem>-a<N>-r<M> included), so liveness, which checks that name, sees it come
-    back; on another account it is <stem>-a<N>. Refused while any session of its stem runs."""
+    back; on another account it is <stem>-a<N>. `account` may be a number, 'current' (the account this
+    process runs on, else pick-account's) or 'auto' (pick-account's). Refused while any session of its
+    stem runs."""
     sessions = state.read_sessions(settings)
     entry = sessions.get(key)
     if not isinstance(entry, dict) or not entry.get('stem'):
@@ -143,14 +145,25 @@ def start_entry(settings, host, key, account=None, prompt=None, whatif=False):
     if lookup.running_stem(host.processes(), entry['stem']):
         raise LaunchError("A session of '%s' (stem %s) is already running; stop it first or use handoff."
                           % (key, entry['stem']))
+    old = lookup.legacy_running(host.processes(), key, entry)   # one-release guard (W2b removes it)
+    if old:
+        raise LaunchError("A session under the old stem %s is running for '%s' (repo %s); stop it first "
+                          "(one-release guard for the conductor-to-coordinator rename)." % (old, key, entry.get('repo')))
+    out = []
+    if account == 'current':
+        account, note = A.resolve_current(settings, host.now(), host.environ)
+        if note:
+            out.append(note)
+    elif account == 'auto':
+        account = _pick_or(settings, host, account, out)
     same = not account or str(account) == str(entry.get('account'))
     account = account or entry.get('account')
     if prompt is None and entry.get('state'):
         prompt = ('Start up now: run your start-up routine, read %s, check in with the PM (the session named '
                   '%s), then continue the queue in the state note.' % (entry['state'], PM_NAME))
     name = entry.get('name') if same and entry.get('name') else None
-    return start(settings, host, whatif=whatif,
-                 **entry_start_args(settings, key, entry, str(account), prompt, name=name))
+    return out + start(settings, host, whatif=whatif,
+                       **entry_start_args(settings, key, entry, str(account), prompt, name=name))
 
 
 def _pick_or(settings, host, account, out, limit=A.HEADROOM_LIMIT):

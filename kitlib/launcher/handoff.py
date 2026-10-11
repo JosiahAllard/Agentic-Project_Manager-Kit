@@ -2,15 +2,20 @@
 
 Run after a session has replied "ready to hand off: <state file>" (or "ready to restart: <state
 file>" after a work-set wind-down): it starts the successor through start.start and records the
-move in sessions.json (and conductors.json for a repo's main coordinator). The old session keeps
+move in sessions.json (and coordinators.json for a repo's main coordinator). The old session keeps
 running idle; once the successor has checked in, the PM stops it (recycle prints the line).
 
   --session KEY --account N|auto     a successor <stem>-a<N> on another account
   --all --account N|auto             every entry, agent sessions first, then plain ones
   --session KEY --recycle            a fresh successor on the same account (or --account):
                                      <stem>-a<N>-r<k>, k counting up from 2
+  --session KEY --stem NEW ...       either of the above under a new stem: the successor is
+                                     NEW-a<N> (no -r<k>: the old name has another stem), and
+                                     sessions.json's stem becomes NEW
 Refused: an account that is not signed in, and (without --recycle) the account the session is
-already on (--all skips that entry instead), and an entry without a stem (--all skips it). Files are rewritten only after the start succeeds.
+already on (--all skips that entry instead), an entry without a stem (--all skips it), --stem
+with --all, a stem that is not a name, and coordinators.json still under its old name (read
+before anything starts). Files are rewritten only after the start succeeds.
 """
 import re
 
@@ -20,9 +25,14 @@ from kitlib.launcher import state
 from kitlib.launcher.settings import LaunchError
 
 _GEN = re.compile(r'-r(\d+)(\s|$)')
+STEM = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z')
 
 
-def successor_name(entry, target, recycle):
+def successor_name(entry, target, recycle, stem=None):
+    """<stem>-a<N>, with -r<k> on a recycle under the same stem. A new stem gets no -r<k>:
+    its name cannot equal the old one's."""
+    if stem and stem != entry['stem']:
+        return '%s-a%s' % (stem, target)
     new = '%s-a%s' % (entry['stem'], target)
     if recycle:
         m = _GEN.search(entry.get('name') or '')
@@ -40,17 +50,24 @@ def successor_prompt(entry, old, new):
             % (new, entry.get('brief'), entry.get('state'), S.PM_NAME))
 
 
-def handoff(settings, host, session=None, account=None, all_=False, recycle=False, whatif=False):
+def handoff(settings, host, session=None, account=None, all_=False, recycle=False, whatif=False, stem=None):
     if not all_ and not session:
         raise LaunchError('Give --session <key of sessions.json>, or --all.')
     if all_ and recycle:
         raise LaunchError('--recycle takes one --session, not --all.')
+    if stem is not None:
+        if all_:
+            raise LaunchError('--stem takes one --session, not --all.')
+        if not STEM.match(stem):
+            raise LaunchError("--stem '%s' must be 1-64 characters of letters, digits, '_' and '-', "
+                              "starting with a letter or digit." % stem)
     if not account:
         if not recycle:
             raise LaunchError('Give --account N|auto.')
         account = 'current'
     out = []
     sessions = state.read_sessions(settings)
+    coordinators = state.read_coordinators(settings)  # before anything starts: a refusal here starts nothing
     if account == 'current':
         entry = sessions.get(session)
         if not isinstance(entry, dict):
@@ -87,7 +104,7 @@ def handoff(settings, host, session=None, account=None, all_=False, recycle=Fals
             raise LaunchError('%s is already on account %s (%s); pick another account.'
                               % (key, target, entry.get('name')), out)
         old = entry.get('name')
-        new = successor_name(entry, target, recycle)
+        new = successor_name(entry, target, recycle, stem)
         args = S.entry_start_args(settings, key, entry, target, successor_prompt(entry, old, new),
                                   predecessor=old, name=new)
         out.append('== %s : %s (account %s) -> %s (account %s)' % (key, old, entry.get('account'), new, target))
@@ -98,18 +115,19 @@ def handoff(settings, host, session=None, account=None, all_=False, recycle=Fals
             raise
         main = bool(entry.get('agent')) and key == entry.get('repo')
         if whatif:
-            out.append('Would set sessions.json %s : account=%s name=%s' % (key, target, new))
+            out.append('Would set sessions.json %s : account=%s name=%s%s'
+                       % (key, target, new, ' stem=%s' % stem if stem else ''))
             if main:
-                out.append('Would set conductors.json %s = %s' % (key, target))
+                out.append('Would set coordinators.json %s = %s' % (key, target))
             continue
         entry['account'] = int(target)
         entry['name'] = new
+        if stem:
+            entry['stem'] = stem
         state.write_json(state.path(settings, state.SESSIONS), sessions)
-        if main:
-            c = state.read_conductors(settings)
-            if c is not None:
-                c[entry['repo']] = int(target)
-                state.write_json(state.path(settings, state.CONDUCTORS), c)
+        if main and coordinators is not None:
+            coordinators[entry['repo']] = int(target)
+            state.write_json(state.path(settings, state.COORDINATORS), coordinators)
         done.append(key)
         if recycle:
             stops.append(S.stop_cmd(old, successor=new))

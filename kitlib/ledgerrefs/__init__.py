@@ -3,7 +3,8 @@ reference to it so a citation is never broken silently (docs/ledger.md "ledger_r
 
 The places come from the machine config's `ledger_refs` (kitlib.config.user): `repos`, each
 searched with `git grep` at its committed `ref`, and `folders` (a folder or one file), searched on
-disk. The ledger file itself is counted apart: its mentions of an id, less the entry's own header.
+disk. The ledger file itself is counted apart: its mentions of an id, less the entry's own header;
+a ledger path the ledger's path checks refuse (kitlib.ledger.safepath) counts none and is an error.
 
 An id `R-nnnn` matches `R-nnnn` and `Rnnnn` not followed by a digit (`pattern`). Nothing here
 prints or exits; a repository git cannot search is an error line in the result, never "no hits".
@@ -13,6 +14,7 @@ import os
 import re
 
 from kitlib.git import cmd
+from kitlib.ledger import safepath
 
 ID_RE = re.compile(r'^R-(\d{4,})$')
 # The file types searched on disk.
@@ -97,4 +99,8 @@ def find(rid, settings, ledger_path):
             errors.append('%s: %s does not exist' % (name, folder))
             continue
         hits += ['%s:%s' % (name, h) for h in file_grep(folder, rx)]
+    why = safepath.refusal(ledger_path) if ledger_path else None
+    if why is not None:
+        errors.append('ledger: %s' % why)
+        return Refs(rid, hits, 0, errors)
     return Refs(rid, hits, ledger_mentions(ledger_path, rx), errors)

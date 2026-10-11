@@ -43,6 +43,12 @@ HEAVY_ENTRY = Obj({
     'why': Field(Str(), None, 'the reason, a ruling or a measurement'),
 }, required=('program', 'kind', 'why'), what='{program, kind, when_args, unless_args, why}')
 
+# How a landing in flight is seen (kitlib/records/inflight.py): the kit lock, or a repo command.
+IN_FLIGHT = Obj({
+    'wait_s': Field(Int(0, 3600), None, 'most seconds to wait; unset: 100 (inferred, not measured: under the agent shell 120 s timeout)'),
+    'command': Field(Argv, None, 'argv run in the main checkout: exit 0 in flight (first line names the holder), 1 none, else in flight'),
+}, what='{wait_s, command}')
+
 ROLE = Obj({
     'edit_main_checkout': Field(Bool(), None, 'may edit files in a main checkout; unset: the base role (main: true, any other: false)'),
     'why': Field(Str(), None, 'the ruling that grants it'),
@@ -54,6 +60,7 @@ STEP = Obj({
     'exclude': Field(Strs, None, 'changed paths that never select it'),
     'cmd': Field(Argv, None, 'the argv; {python} {root} {base} {here} {tools} are substituted'),
     'full_cmd': Field(Argv, None, 'the argv a full run (gate.py --full, land --full, daily_full) runs instead of cmd; placeholders as cmd'),
+    'daily_cmd': Field(Argv, None, 'the argv the daily full run (daily_full) runs instead of full_cmd and cmd; placeholders as cmd'),
     'check': Field(Str(pattern=NAME_RE, what='a check name'), None, 'a gate check the repo hook module provides (GATE_CHECKS), run instead of cmd'),
     'cwd': Field(RelPath(), None, 'run directory, repo-relative'),
     'pass': Field(Regexes, None, 'patterns the log must hold'),
@@ -71,7 +78,6 @@ STEP = Obj({
                           'regex': Field(Regex(), None, 'content that selects')},
                          required=('globs', 'regex'), what='{globs, regex}'),
                      None, 'select by changed file content'),
-    'kill_retry': Field(Bool(), None, 'retry once after killing a hung run'),
     'requires': Field(ListOf(Either(Str(), Argv), nonempty=True), None, 'commands or probe argvs; missing: skip'),
     'requires_strict': Field(Bool(), None, 'a missing requirement fails instead of skipping'),
     'reuse': Field(Either(Bool(), Str(pattern=NAME_RE, what='a group name')), None, 'a landing may reuse its pass from the branch gate of the exact tree; a group name: its group is reused together or not at all'),
@@ -137,7 +143,7 @@ SECTIONS = {
         'rename_script': Field(Str(nonempty=False), '', 'priority rename helper'),
     },
     'board': {
-        'state_file': Field(RelPath(), None, 'the board state file'),
+        'state_file': Field(RelPath(), None, 'the board state file, under the git dir (default <git common dir>/kit/board-state.md)'),
     },
     'checkout_guard': {
         'rule_pointer': Field(Str(), None, 'where a refusal points for the rule'),
@@ -203,6 +209,7 @@ SECTIONS = {
         'batch_max': Field(Int(1, 20), 3, 'most branches one tools/land.py landing merges and gates together'),
         'reuse_max_age_h': Field(Int(0, 168), 24, 'hours a branch gate-OK record serves a landing\'s gate reuse; 0: never reused'),
         'reuse_never': Field(Strs, [], 'globs of paths whose change makes a landing reuse no step'),
+        'in_flight': Field(IN_FLIGHT, None, 'how tools/new_worktree.py and tools/sync_base.py see a landing in flight before they fetch, and wait for it (unset: off; {}: the kit landing lock; wait_s unset: 100, inferred not measured; docs/new-worktree.md "Waiting for a landing in flight")'),
     },
     'ledger': {
         'pre_commit_check': Field(Bool(), False, 'githooks/pre-commit runs tools/ledger.py check --base HEAD before each commit that changes the ledger file or its standing digest (opt-in; docs/ledger.md "Pre-commit check")'),

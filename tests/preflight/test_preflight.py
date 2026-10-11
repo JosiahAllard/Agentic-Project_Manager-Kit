@@ -388,9 +388,24 @@ class TheLinesAfterTheWorktrees(Fixture):
 
     def test_the_index_line_names_the_configured_index(self):
         self.config(doc_index={'index': 'handbook/MAP.md'})
+        os.makedirs(os.path.join(self.root, 'handbook'))
+        with open(os.path.join(self.root, 'handbook', 'MAP.md'), 'w', encoding='utf-8') as fh:
+            fh.write('map\n')
         index = self.line(self.run_preflight()[1], 'index ')
         self.assertIn('docs: handbook/MAP.md |', index)
         self.assertNotIn('docs/INDEX.md', index)
+
+    def test_the_index_line_says_missing_when_the_index_file_is_absent(self):
+        index = self.line(self.run_preflight()[1], 'index ')
+        self.assertIn('docs: docs/INDEX.md (missing) |', index)
+
+    def test_the_index_line_has_no_marker_when_the_index_file_exists(self):
+        os.makedirs(os.path.join(self.root, 'docs'))
+        with open(os.path.join(self.root, 'docs', 'INDEX.md'), 'w', encoding='utf-8') as fh:
+            fh.write('index\n')
+        index = self.line(self.run_preflight()[1], 'index ')
+        self.assertIn('docs: docs/INDEX.md |', index)
+        self.assertNotIn('missing', index)
 
     def test_the_lock_line_is_last(self):
         out = self.run_preflight()[1]
@@ -471,7 +486,7 @@ class TheLeftoversLine(Fixture):
 
 
 class TheNextBlock(Fixture):
-    """A repository's TOOLS-ADOPTION (moved): the `next` block prints the kit commands with
+    """The `next` block prints the kit commands with
     this session's values, so agents run the kit tools instead of improvising."""
 
     def worktree(self, base_ahead):
@@ -1101,14 +1116,14 @@ class TheLockLine(unittest.TestCase):
                          'kind': kind, 'needs': {'cpu': cpu, 'gpu': gpu}, 'since': 'x',
                          'est_start': est.strftime(lockline.ISO) if est else None,
                          'backfill': False, 'parked': False}, **extra)
-        s = snap(queue={'entries': [row(1, 'wg', 'worldgraph', 6, 0, today),
+        s = snap(queue={'entries': [row(1, 'gb', 'graph-build', 6, 0, today),
                                     row(2, 'ai', 'local-ai', 1, 1, later, backfill=True),
                                     row(3, 'gone', 'build', 2, 0, None, parked=True)],
                         'error': None})
         line = lockline.summary(s)
         if today.astimezone().date() != now.astimezone().date():
             self.skipTest('the local day turns between the two fixture times')
-        self.assertIn('waiting 3: #1 pm/wg (worldgraph, 6 cores, starts %s), '
+        self.assertIn('waiting 3: #1 pm/gb (graph-build, 6 cores, starts %s), '
                       '#2 pm/ai (local-ai, 1 core + 1 gpu, starts %s, backfill), '
                       '#3 pm/gone (build, 2 cores, start not planned, parked)'
                       % (today.astimezone().strftime('%H:%M'),

@@ -51,5 +51,6 @@ A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` 
 - `tests/worktree/test_worktree_remove.py`
 - `tests/worktree/test_worktree_sweep.py`
 - `tests/worktree/test_worktree_sweep_task.py`
+- `tests/worktree/test_remove_snapshot.py` (what appears inside the window before git; a failing git)
 
 Every case uses throwaway `tests/gitfixture.py` repositories. The machine lock and PowerShell are seams. The holder and junction cases run on Windows only.

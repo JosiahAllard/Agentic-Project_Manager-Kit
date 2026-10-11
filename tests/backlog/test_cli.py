@@ -150,7 +150,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(rc, 0, out)
 
     def test_migrate_dry_run_then_copy_then_refuse(self):
-        self.repo.write('docs/backlog/FOO.md', 'id: FOO\narea: wg\npriority: 2\npriority_by: agent\n'
+        self.repo.write('docs/backlog/FOO.md', 'id: FOO\narea: xx\npriority: 2\npriority_by: agent\n'
                         'effort: s\nstate: open\nblocked_on: -\nscope: tools/x.py\n'
                         'summary: a thing to do\nmigrated: 12\n')
         self.repo.write('docs/backlog/OLD.md', 'id: OLD\nsummary: done\nclosed: 2026-09-24\n')
@@ -214,6 +214,59 @@ class StandingDelegation(unittest.TestCase):
         rc, out = self.price()
         self.assertEqual(rc, 0, out)
         self.assertNotIn('standing delegation', out)
+
+
+class EmptyLedgerName(unittest.TestCase):
+    """A configured ledger and a `.kit.json` naming neither `backlog.ledger_repo` nor `repo.name`:
+    the ruling checks report one config error each (never a FAIL per record naming an empty repo
+    column), stay red, and a ruled write is refused with the same keys named."""
+    run_tool, ok = Cli.run_tool, Cli.ok
+    LEDGER = StandingDelegation.LEDGER
+
+    def setUp(self):
+        Cli.setUp(self)
+        self.home = self.env['USERPROFILE']
+        self.ledger = os.path.join(self.home, 'rulings.md')
+        with open(self.ledger, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(self.LEDGER)
+        for rid in ('FOO', 'BAR'):       # priced with no ledger configured: the shape alone is read
+            self.ok('add', rid, '--summary', 'a thing to do', '--scope', 'tools/%s.py' % rid.lower())
+            self.ok('set', rid, '--priority', '1', '--priority-by', 'owner', '--ruling', 'R-9168')
+        os.makedirs(kuser.config_dir(self.home), exist_ok=True)
+        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
+            json.dump({'ledger_path': self.ledger}, f)
+
+    def kit_json(self, data):
+        with open(os.path.join(self.repo.root, '.kit.json'), 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        self.repo.git('add', '.kit.json')
+        self.repo.git('commit', '-q', '-m', 'kit config')
+
+    def test_check_reports_one_config_error_and_stays_red(self):
+        rc, out = self.run_tool('--no-fetch', 'check')
+        self.assertEqual(rc, 1, out)
+        self.assertTrue(out.rstrip().endswith('RED'), out)
+        self.assertNotIn('is not a ruling header', out)
+        self.assertNotIn('FAIL', out.replace('FAILED', ''))
+        line = [l for l in out.splitlines() if l.startswith('priority rulings')]
+        self.assertEqual(len(line), 1, out)
+        self.assertIn('CONFIG ERROR', line[0])
+        for key in ('`backlog.ledger_repo`', '`repo.name`', '.kit.json', '2 ruled records'):
+            self.assertIn(key, line[0])
+
+    def test_a_ruled_write_is_refused_naming_the_keys(self):
+        self.ok('add', 'BAZ', '--summary', 'a thing to do', '--scope', 'tools/baz.py')
+        rc, out = self.run_tool('set', 'BAZ', '--priority', '2', '--priority-by', 'owner',
+                                '--ruling', 'R-9168')
+        self.assertEqual(rc, 2, out)
+        self.assertNotIn('is not a ruling header', out)
+        self.assertIn('`backlog.ledger_repo`', out)
+        self.assertIn('`repo.name`', out)
+
+    def test_repo_name_names_the_ledger_column_when_ledger_repo_is_unset(self):
+        self.kit_json({'repo': {'name': 'kit'}})
+        out = self.ok('--no-fetch', 'check')
+        self.assertIn('priority rulings 2 ok, 0 FAILED', out)
 
 
 if __name__ == '__main__':

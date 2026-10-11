@@ -4,8 +4,10 @@
                    long-running session; handoff and reboot rewrite account and name. A key
                    starting with "_" is a note. agent true runs the coordinator agent, a string
                    that agent, false a plain session.
-  conductors.json  {repo: account, pm_session_id, pm_folder, pm_account}: the account each repo's
-                   main coordinator is on, and the PM session reboot resumes.
+  coordinators.json {repo: account, pm_session_id, pm_folder, pm_account}: the account each
+                   repo's main coordinator is on, and the PM session reboot resumes. Its old
+                   name present and the new one absent is a refusal that names the rename, never
+                   read in its place.
   *.log            stop.log and after-reboot.log, one line per action.
 JSON is read with or without a BOM and written UTF-8 without one.
 """
@@ -16,7 +18,8 @@ import os
 from kitlib.launcher.settings import LaunchError
 
 SESSIONS = 'sessions.json'
-CONDUCTORS = 'conductors.json'
+COORDINATORS = 'coordinators.json'
+OLD_COORDINATORS = 'conductors.json'   # the old name, refused, never read (removed after the switch, W2b)
 
 
 def path(settings, name):
@@ -51,8 +54,19 @@ def read_sessions(settings):
     return data
 
 
-def read_conductors(settings):
-    return read_json(path(settings, CONDUCTORS))
+class RenameNeeded(LaunchError):
+    """A state file still under its old name: the owner renames it; nothing reads the old one."""
+
+
+def read_coordinators(settings):
+    """coordinators.json, or None when it is absent. Refused (RenameNeeded) while only the
+    old-named file exists, so a forgotten rename is said, not silently read or ignored."""
+    p = path(settings, COORDINATORS)
+    data = read_json(p)
+    if data is None and os.path.exists(path(settings, OLD_COORDINATORS)):
+        raise RenameNeeded('rename %s to %s (the state file was renamed; docs/launcher.md "State files")'
+                           % (path(settings, OLD_COORDINATORS), COORDINATORS))
+    return data
 
 
 def entries(sessions):

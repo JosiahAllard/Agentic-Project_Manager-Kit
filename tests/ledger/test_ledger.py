@@ -38,7 +38,7 @@ A: PM (R-9099): b
 Decides: Use a record, not a class.
 Source: PM s under R-9099
 Supersedes: -
-Items: SCRIPT-API-1
+Items: EX-API-1
 
 ## R-9005 | 2026-10-07 12:28Z | all | delegated
 Q: q

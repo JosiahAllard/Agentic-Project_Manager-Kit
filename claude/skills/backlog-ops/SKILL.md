@@ -5,7 +5,7 @@ description: Use when you need to read or change a repo's backlog store with too
 
 # Backlog operations
 
-The store is read and written only through `python tools/backlog.py` (docs/backlog.md; the store's place comes from the repo's `.kit.json` `"backlog".store`). It is the only tracker. `python tools/backlog.py` with no arguments prints usage. Never edit a record file by hand.
+The store is read and written only through `python tools/backlog.py` (`${CLAUDE_PLUGIN_ROOT}/docs/backlog.md`; the store's place comes from the repo's `.kit.json` `"backlog".store`). It is the only tracker. `python tools/backlog.py` with no arguments prints usage. Never edit a record file by hand.
 
 ## Rules for every call
 
@@ -21,7 +21,7 @@ The store is read and written only through `python tools/backlog.py` (docs/backl
 3. Pull what `next` offers, before work starts: `python tools/backlog.py -C <worktree> pull <ID>`; a session-owned item takes its session, `python tools/backlog.py -C <worktree> --session <key> pull <ID>` (a corrected retry that only adds `--session` needs no `--reason`). An unpriced record refuses: pull only once its price is on the store you read, or set the same agent price in your worktree first when your brief says to. An item outside the offer is a pre-emption: `--reason "<why>"`; a true written reason is enough where the repo says so, otherwise it needs `--ruling`. Never pass it to fill a free slot or to re-run a pull the tool just refused; that reads as bypassing a gate. A `priority: -1` item needs the owner's ruling.
 4. Narrow an over-broad scope instead of overriding a collision: `python tools/backlog.py set <ID> --scope <path> [--scope <path>]` (repeat the flag per member; confirm with `show <ID>`).
 5. Close when the work is done, in the same commit as the work or as the repo's profile says: `python tools/backlog.py -C <worktree> close <ID> --reason "<what was done>"`. Owner-held records need `--ruling`. A record that should not be done: `retire <ID> --why "<why>"` (owner-held or owner-priced: add `--ruling R-nnnn`, a ledger entry whose `Items:` line names it; `--owner-said` is refused). Give a pull back unfinished with `release <ID> --reason "<why>"`.
-6. Block: `block <ID> --on <member> [--on <member>] [--owner-ask "<question>"]`; members include `owner` and `item:<ID>`; `unblock <ID>` clears it (an owner block needs `--ruling`).
+6. Block: `block <ID> --on <member> [--on <member>] [--owner-ask "<question>"]`; members include `owner` and `item:<ID>`; `unblock <ID>` clears a lone blocker; with several, `unblock <ID> --on <member> --reason "<why>"` clears that one only (clearing `owner` needs `--ruling`).
 7. Price and other edits: `set <ID> --priority <1-5> --priority-by <who>` (an owner price takes `--ruling`); other fields `set <ID> --<field> <value>`; body text `set <ID> --body-file <path>`. Park a record on an owner question with `set-status <ID> parked --q <Q-id>`.
 8. `python tools/backlog.py check` exits 0 before you commit.
 

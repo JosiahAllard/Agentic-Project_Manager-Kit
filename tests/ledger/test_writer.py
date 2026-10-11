@@ -80,11 +80,11 @@ class AddTest(Base):
         self.assertRegex(header, r'^R-\d{4} \| \d{4}-\d{2}-\d{2} \d{2}:\d{2}Z \| alpha \| selected$')
 
     def test_items_are_the_last_line_and_the_backlog_reads_them(self):
-        self.add(items=['T3', 'WG-UNLOCKS'])
-        self.assertIn('Supersedes: -\nItems: T3, WG-UNLOCKS\n', self.text())
+        self.add(items=['T3', 'EX-UNLOCKS'])
+        self.assertIn('Supersedes: -\nItems: T3, EX-UNLOCKS\n', self.text())
         found, why = backlog_ledger.read_entries(self.path)
         self.assertIsNone(why)
-        self.assertEqual(found[rid(1)].items, ('T3', 'WG-UNLOCKS'))
+        self.assertEqual(found[rid(1)].items, ('T3', 'EX-UNLOCKS'))
         self.assertEqual((found[rid(1)].repo, found[rid(1)].kind), ('alpha', 'selected'))
 
     def test_bad_or_repeated_items_are_refused(self):

@@ -16,6 +16,7 @@ from unittest import mock
 
 from kitlib import gate as G
 from kitlib.gate import land, result, runner
+from kitlib.git import cmd
 from kitlib.records import landing
 from tests.gate import fixtures
 from tests.realgit import real_git
@@ -177,6 +178,48 @@ class AfterLanding(CleanupCase):
         self.assertEqual(self.on_remote(BRANCH), ahead)
         self.assertIn('not in main', '\n'.join(entry['kept']))
         self.assertEqual((entry['worktree'], entry['local_branch']), ('removed', 'deleted'))
+
+    def kill_the_delete_and_the_read_after_it(self, branch):
+        """A patch of cmd._run under which `git branch -d` exits 1 having printed nothing (a git
+        ended from outside, refs.KILLED_SHAPE), and so does every later rev-parse of the branch;
+        every other git runs as before. KIT-GIT-EXIT1-ANSWERS-2: that read said "gone"."""
+        real = cmd.spawner()
+        tried = []
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] == 'branch' and '-d' in argv:
+                tried.append(argv)
+                return 1, b'', b''
+            if tried and argv[1] == 'rev-parse' and argv[-1].startswith('refs/heads/' + branch):
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        return mock.patch.object(cmd, '_run', side_effect=run), tried
+
+    def assert_kept_unread(self, entry, lines, tip):
+        self.assertEqual(entry['local_branch'], 'kept', lines)
+        self.assertIn('local branch: whether it is gone could not be read', '\n'.join(entry['kept']))
+        self.assertEqual(self.local(BRANCH), tip, 'the branch is still there')
+
+    def test_a_killed_read_after_the_worktree_removal_is_not_reported_deleted(self):
+        wt, tip = self.pushed('feature', {'a.py': 'x = 1\n'})
+        patch, tried = self.kill_the_delete_and_the_read_after_it(BRANCH)
+        with patch:
+            out = self.lander(BRANCH, self.main, tip).run()
+        entry = self.assert_landed(out)[BRANCH]
+        self.assertTrue(tried, 'the cleanup ran no branch -d')
+        self.assertEqual(entry['worktree'], 'removed', out.lines)
+        self.assert_kept_unread(entry, out.lines, tip)
+
+    def test_a_killed_read_after_a_branch_delete_is_not_reported_deleted(self):
+        wt, tip = self.pushed('feature', {'a.py': 'x = 1\n'})
+        self.repo.git('worktree', 'remove', wt)
+        patch, tried = self.kill_the_delete_and_the_read_after_it(BRANCH)
+        with patch:
+            out = self.lander(BRANCH, self.main, tip).run()
+        entry = self.assert_landed(out)[BRANCH]
+        self.assertTrue(tried, 'the cleanup ran no branch -d')
+        self.assertEqual(entry['worktree'], 'absent', out.lines)
+        self.assert_kept_unread(entry, out.lines, tip)
 
     def test_a_red_landing_removes_nothing(self):
         wt, tip = self.pushed('feature', {'RED': 'x\n'})

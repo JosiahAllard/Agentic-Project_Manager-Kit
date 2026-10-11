@@ -503,6 +503,16 @@ class Measure(fixtures.GateRepoCase):
         with open(self.live, encoding='utf-8') as f:
             self.assertEqual(f.read(), live)
 
+    def test_the_proposal_carries_the_live_tables_aliases(self):
+        aliases = {'old': {'to': 'build', 'why': 'a retired name'}}
+        with open(self.live, 'w', encoding='utf-8') as f:
+            json.dump({'kinds': {'build': {'cpu': 'medium', 'gpu': 0, 'warn_min': 60}},
+                       'aliases': aliases}, f)
+        out = os.path.join(self.tmp, 'proposal.json')
+        self.assertEqual(self.measure(out), G.OK)
+        with open(out, encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['aliases'], aliases)
+
     def store_layout(self):
         from kitlib.lock import layout as lay
         return lay.in_force(self.store)['layout']

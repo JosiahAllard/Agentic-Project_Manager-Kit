@@ -1,6 +1,6 @@
 # PM data on a private branch of the kit repo
 
-Status: tasks 1-8 built; task 9 (the go-live switch) pending. Not live until `pm_data.py init` runs on the PM's data repository (docs/go-live.md).
+Status: tasks 1-8 built. Task 9: the owner's PM data repository moved onto `pmdata` with `pm_data.py init --adopt` on 2026-10-11; not yet confirmed working end to end (docs/go-live.md).
 
 One git repository holds the public kit and one user's private PM data (rulings ledger, backlog, refusals log, handoffs, state). The data lives on an orphan branch, `pmdata`, that shares no history with `main`, is never merged, and is pushed only to a second, private remote. Other users who clone the kit get `main` only.
 
@@ -13,6 +13,7 @@ One git repository holds the public kit and one user's private PM data (rulings 
 | Private remote | any other remote name; default `private`; only `pmdata` is ever pushed there |
 | Record of the split | `<git common dir>/kit-pm-data.json`: `{"branch": "pmdata", "remote": "private", "root": "<sha of the data branch's root commit>"}` |
 | Machine config | The machine config, key `pm_data`: `{"path": "<abs>", "branch": "pmdata", "remote": "private"}` (`Owned('kitlib.pmdata')`) |
+| Hub mirror | `hub/<collection>/<doc_id>.json` in the data worktree: one folder per hub collection, one JSON file per document; written by `tools/hub_mirror.py save` (docs/action-hub.md) |
 
 The root commit is recorded when the branch is made, so the guard still knows it if the branch is renamed or deleted. The branch is called `pmdata`, not `pm`, so `pm/<slug>` work branches keep working (git refuses `refs/heads/pm/x` while `refs/heads/pm` exists; `pmdata/<slug>` would collide the same way, so no work branch uses that prefix). A test asserts `init` refuses the name `pm`.
 
@@ -121,7 +122,7 @@ Each lands independently on its own branch; sizes are S/M/L.
 | 6 | `kitlib/pmstart` `kit_sync` check; docs/pm-start.md | M | kit suite | 1 | done |
 | 7 | `githooks/pre-commit` (ledger check on the ledger file) | S | kit suite; High risk (hooks) | 1 | done |
 | 8 | `new-repo.ps1 -PmData/-PrivateRemote`; docs/install.md | S | kit suite plus the installer's dry run | 2 | done |
-| 9 | Go-live: switch row in docs/go-live.md, then the migration in the PM's own data repository | S | joint review | 2-8 | pending |
+| 9 | Go-live: switch row in docs/go-live.md, then the migration in the PM's own data repository | S | joint review | 2-8 | migrated 2026-10-11; to confirm |
 
 ## Open - needs the owner
 

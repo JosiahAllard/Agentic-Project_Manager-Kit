@@ -29,8 +29,9 @@ file for ruling ids, repository names, user paths and the owner's name.
   their headings are the ones the agents read, and `tests/templates` checks them.
 - `templates/stacks/{dotnet,godot,java,python}`: `stack.json` (build and test commands,
   gitignore, gitattributes; `new-repo.ps1 -Stack` applies the two lists), `tools/gate.json` (a `"gate"` section of `.kit.json`; point to it
-  with `"gate": "tools/gate.json"`) and `.github/workflows/{quick,full}.yml`. Godot also carries
-  `tools/godot.cmd` and `.claude/skills/godot-render-check/SKILL.md`.
+  with `"gate": "tools/gate.json"`) and `.github/workflows/{quick,full}.yml`. Some also carry a
+  stack runner under `tools/`: `dotnet_each.py` (dotnet), `godot.cmd` (godot), `js_tests.py` (python). Godot also carries
+  `.claude/skills/godot-render-check/SKILL.md` (its `{kit_root}` is filled in at install).
 - The Java dependency-pin check is a hook-module check, not a gate key (the schema has none).
 
 ## Optional machine-wide tools (`optional/`, tests in `tests/optional`)

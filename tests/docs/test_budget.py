@@ -195,7 +195,7 @@ class BudgetFor(unittest.TestCase):
                            '.claude/coordinator-profile.md': 8704}}
         self.assertEqual(budget.config_errors(cfg), [])
         self.assertEqual(budget.budget_for(cfg, 'CLAUDE.md'), 11264)
-        for path in ('docs/reference/API_PLAN.md', 'docs/ops/gotchas.md', 'docs/backlog/ABC-001.md'):
+        for path in ('docs/reference/API_PLAN.md', 'docs/ops/gotchas.md', 'docs/backlog/EX-001.md'):
             self.assertIsNone(budget.budget_for(cfg, path))
 
 
@@ -210,7 +210,7 @@ class KitBudgetFor(unittest.TestCase):
         self.assertEqual(budget.budget_for(self.cfg(), 'docs/architecture.md'), 40960)
 
     def test_a_path_under_an_uncapped_dir_is_uncapped(self):
-        self.assertIsNone(budget.budget_for(self.cfg(), 'docs/backlog/ABC-001.md'))
+        self.assertIsNone(budget.budget_for(self.cfg(), 'docs/backlog/EX-001.md'))
 
     def test_a_sibling_path_that_only_shares_the_prefix_string_is_not_uncapped(self):
         self.assertEqual(budget.budget_for(self.cfg(), 'docs/backlog-notes.md'), 40960)
@@ -218,7 +218,7 @@ class KitBudgetFor(unittest.TestCase):
     def test_an_explicit_entry_under_the_uncapped_dir_still_wins(self):
         cfg = self.cfg(budgets={'docs/backlog/DESIGN.md': 4096})
         self.assertEqual(budget.budget_for(cfg, 'docs/backlog/DESIGN.md'), 4096)
-        self.assertIsNone(budget.budget_for(cfg, 'docs/backlog/ABC-001.md'))
+        self.assertIsNone(budget.budget_for(cfg, 'docs/backlog/EX-001.md'))
 
     def test_no_uncapped_dirs_configured_is_fine(self):
         self.assertEqual(budget.budget_for({'default': 100, 'budgets': {}}, 'x/y.md'), 100)
@@ -255,6 +255,19 @@ class Pure(unittest.TestCase):
         self.assertEqual(budget.sizes_from(listing), {'a b.md': 12})
         self.assertEqual(budget.sizes_from(''), {})
 
+    def test_sizes_from_keeps_non_ascii_quote_and_newline_names_raw(self):
+        listing = '\x00'.join(
+            ['100644 blob %s     7\tdocs/café ü.md' % ('1' * 40),
+             '100644 blob %s     9\ta"q.md' % ('2' * 40),
+             '100644 blob %s    11\tline\nbreak.md' % ('3' * 40), ''])
+        self.assertEqual(budget.sizes_from(listing),
+                         {'docs/café ü.md': 7, 'a"q.md': 9, 'line\nbreak.md': 11})
+
+    def test_names_from_splits_on_nul_only(self):
+        self.assertEqual(budget.names_from('a b.md\0café.md\0line\nbreak.md\0'),
+                         ['a b.md', 'café.md', 'line\nbreak.md'])
+        self.assertEqual(budget.names_from(''), [])
+
     def test_section_of_drops_note_keys_from_the_section_and_its_budgets(self):
         class Conf:
             def raw(self, name):
@@ -284,6 +297,27 @@ class BranchSize(BudgetRepo):
         code, out = self.run_budget('--base', 'master', '--head', 'branch-a')
         self.assertEqual(code, 1, out)
         self.assertIn('9000', out)
+
+    def test_a_non_ascii_name_is_measured_at_its_real_size(self):
+        # Without -z the listing C-quotes the name, the size lookup misses and reads 0.
+        name = 'docs/café notes.md'
+        self.size(GOTCHAS, 100)
+        self.git('checkout', '-q', '-b', 'branch-a')
+        self.size(name, 50000)
+        code, out = self.run_budget('--base', 'master', '--head', 'branch-a')
+        self.assertEqual(code, 1, out)
+        self.assertIn(name, out)
+        self.assertIn('50000', out)
+
+    def test_a_non_ascii_name_is_listed_in_worktree_mode(self):
+        # Without -z, ls-files C-quotes the name, os.path.isfile misses it and the file is unmeasured.
+        name = 'docs/café notes.md'
+        self.size(GOTCHAS, 100)
+        self.git('checkout', '-q', '-b', 'branch-a')
+        self.size(name, 50000)
+        code, out = self.run_budget('--worktree')
+        self.assertEqual(code, 1, out)
+        self.assertIn(name, out)
 
     def test_an_over_budget_file_that_shrinks_on_the_branch_passes(self):
         self.size(GOTCHAS, 9000)
@@ -839,7 +873,7 @@ class UncappedDirsRepo(RepoCase):
 
     def test_one_item_file_far_over_default_passes(self):
         self.new_branch_on_top_of_index()
-        self.size('docs/backlog/ABC-001.md', 60000)
+        self.size('docs/backlog/EX-001.md', 60000)
         code, out = self.run_budget('--base', 'master', '--head', 'branch-a')
         self.assertEqual(code, 0, out)
 
@@ -919,7 +953,8 @@ class Refusals(KitRepo):
                                return_value=cmd.Result(None, b'', 'could not run git: git missing')):
             code, out = self.run_budget()
         self.assertEqual(code, 2, out)
-        self.assertIn('could not run: could not run git: git missing', out)
+        # The first git is now the base read (refs.resolve), so its refusal names the base.
+        self.assertIn('could not read base ref master (could not run git: git missing)', out)
 
 
 class UncappedDirs(KitRepo):
@@ -935,7 +970,7 @@ class UncappedDirs(KitRepo):
 
     def test_one_item_file_far_over_default_passes(self):
         self.new_branch_on_top_of_index()
-        self.size('docs/backlog/ABC-001.md', 60000)
+        self.size('docs/backlog/EX-001.md', 60000)
         code, out = self.run_budget('--base', 'master', '--head', 'branch-a')
         self.assertEqual(code, 0, out)
 
@@ -1248,18 +1283,24 @@ class FailedGitReads(BudgetRepo):
         self.assertEqual(code, 2, out)
         self.assertIn('git exit 0, but it listed no file', out)
 
-    def test_base_ref_exit_one_is_absent_and_any_other_exit_is_a_failed_read(self):
+    def test_a_base_ref_read_with_no_answer_is_a_failed_read_never_absent(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: exit 1 having printed nothing was read as "no such commit"
+        (`rev-parse --verify --quiet`), and a git ended from outside leaves that shape too
+        (kitlib.git.refs.KILLED_SHAPE). It, and any other failure, is a failed read."""
         self.size(GOTCHAS, 100)
-        verify = lambda a: a[:3] == ('rev-parse', '--verify', '--quiet')
-        with self.failing(verify, code=1, stderr=''):
-            code, out = self.run_budget('--worktree')
-        self.assertEqual(code, 2, out)
-        self.assertIn('base ref master does not exist here', out)
-        with self.failing(verify):
-            code, out = self.run_budget('--worktree')
-        self.assertEqual(code, 2, out)
-        self.assertIn('could not read base ref master (git exit 128: fatal: injected failure)', out)
-        self.assertNotIn('does not exist', out)
+        real = cmd.spawner()
+        for answer, words in (((1, b'', b''), 'printed nothing'),
+                              ((128, b'', b'fatal: injected failure'), 'fatal: injected failure')):
+            def run(argv, cwd=None, input=None, timeout=None, env=None, answer=answer):
+                if argv[1] == 'rev-parse' and argv[-1] == 'master^{commit}':
+                    return answer
+                return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+            with self.subTest(words=words), mock.patch.object(cmd, '_run', side_effect=run):
+                code, out = self.run_budget('--worktree')
+                self.assertEqual(code, 2, out)
+                self.assertIn('could not read base ref master (', out)
+                self.assertIn(words, out)
+                self.assertNotIn('does not exist', out)
 
 
 class FailedDiffsNameTheCause(StaleRepo):

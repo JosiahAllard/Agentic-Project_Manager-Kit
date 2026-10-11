@@ -164,22 +164,99 @@ def rules_from_lines(lines, isdir):
         m = re.match(r'^- \**(High|Medium|Low)\b[^|]*\|(.*)$', line)
         if not m:
             continue
-        for tok in re.findall(r'[\w.*\-]+(?:/[\w.*\-]+)*/?', m.group(2)):
-            tok = tok.replace('*', '').strip()
-            if '/' in tok or '.' in tok or isdir(tok):
+        for tok in _TOKEN.findall(m.group(2)):
+            tok = tok.rstrip('?')  # a `?` after a path is prose punctuation, not a wildcard
+            if tok.startswith('**') and not tok.startswith('**/'):
+                # markdown bold, not a glob: `**docs/**` names the plain prefix `docs`
+                tok = tok[2:]
+                if tok.endswith('**'):
+                    tok = tok[:-2]
+            if tok and ('/' in tok or '.' in tok or isdir(tok)):
                 out.append((m.group(1), tok.rstrip('/')))
     return out
 
 
+# A risk-map path: word characters, `.`, `-`, `*`, `?` and `{a,b}` groups, joined by `/`.
+_PIECE = r'(?:[\w.*?\-]|\{[\w.*?\-,/]*\})+'
+_TOKEN = re.compile(_PIECE + '(?:/' + _PIECE + ')*/?')
+
+
+def _is_glob(rule):
+    return any(c in rule for c in '*?{')
+
+
+def _glob_regex(rule):
+    """The regex for a glob rule: `*` and `?` stay inside one path segment, `**` crosses `/`,
+    `{a,b}` is a choice. A rule with no `/` matches a name at any depth. The match is of whole
+    segments, then anything below (like a directory prefix)."""
+    out, depth, i = [], 0, 0
+    while i < len(rule):
+        c = rule[i]
+        if rule.startswith('**/', i):
+            out.append('(?:.*/)?')
+            i += 3
+            continue
+        if c == '*':
+            if rule.startswith('**', i):
+                out.append('.*')
+                i += 2
+                continue
+            out.append('[^/]*')
+        elif c == '?':
+            out.append('[^/]')
+        elif c == '{':
+            depth += 1
+            out.append('(?:')
+        elif c == '}' and depth:
+            depth -= 1
+            out.append(')')
+        elif c == ',' and depth:
+            out.append('|')
+        else:
+            out.append(re.escape(c))
+        i += 1
+    out.append(')' * depth)
+    lead = '' if '/' in rule else '(?:.*/)?'
+    return re.compile(lead + ''.join(out) + '(?:/.*)?$')
+
+
+_GLOBS = {}
+_RANK = {'Low': 1, 'Medium': 2, 'High': 3}
+
+
+def _matches(path, rule):
+    """(matched, specificity): the longer the literal text a rule names, the more specific."""
+    if _is_glob(rule):
+        rx = _GLOBS.get(rule)
+        if rx is None:
+            rx = _GLOBS[rule] = _glob_regex(rule)
+        return bool(rx.match(path)), sum(c.isalnum() for c in rule)
+    if path.startswith(rule):
+        return True, len(rule)
+    return False, 0
+
+
 def level(path, levels):
-    """The risk level of `path`: the longest matching prefix; unlisted is High, except a `.md`."""
-    best = ('unlisted (= High)', '')
-    for lv, pre in levels:
-        if path.startswith(pre) and len(pre) > len(best[1]):
-            best = (lv, pre)
-    if path.endswith('.md') and best[1] == '':
-        return 'Low'
-    return best[0]
+    """The risk level of `path`. The longest matching plain prefix decides; a matching glob (read
+    by _glob_regex) may only raise that. With no plain match the most specific glob decides. Equal
+    specificity goes to the higher level, whatever the line order. A rule with no literal text is
+    ignored. Otherwise unlisted is High, except a `.md`."""
+    plain, plain_len, globs = None, 0, []
+    for lv, rule in levels:
+        hit, size = _matches(path, rule)
+        if not hit or size == 0:
+            continue
+        if _is_glob(rule):
+            globs.append((size, _RANK.get(lv, 0), lv))
+        elif size > plain_len or (size == plain_len and _RANK.get(lv, 0) > _RANK.get(plain, 0)):
+            plain, plain_len = lv, size
+    if plain is not None:
+        raised = max((g for g in globs if g[1] > _RANK.get(plain, 0)), key=lambda g: g[1],
+                     default=None)
+        return raised[2] if raised else plain
+    if globs:
+        return max(globs)[2]
+    return 'Low' if path.endswith('.md') else 'unlisted (= High)'
 
 
 # --- owner-only paths ---------------------------------------------------------------------------

@@ -77,6 +77,12 @@ def sizes_from(stdout):
     return out
 
 
+def names_from(stdout):
+    """The paths in one `-z` name listing (`ls-tree --name-only -z`, `ls-files -z`): NUL-separated
+    and raw, so a name with a quote, a newline or non-ASCII characters is not C-quoted. Pure."""
+    return [p for p in stdout.split('\0') if p]
+
+
 def is_glob(key):
     return any(c in key for c in '*?[')
 
@@ -205,12 +211,14 @@ def _check(root, out, base, head, worktree, report, failures):
         out('doc_budget: %s' % base_note)
 
     # A base that does not resolve would make every comparison below empty, and an empty one passes.
-    verified = g('rev-parse', '--verify', '--quiet', base + '^{commit}')
-    # `--quiet` makes exit 1 git's "no such commit"; any other non-zero exit is a failed read.
-    if verified.returncode == 1:
+    # known=True: '' is git's "no such commit"; None is no answer, a git ended from outside
+    # included (KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no such commit" as exit
+    # 1 with no output, a killed git's shape, gitrefs.KILLED_SHAPE).
+    verified, why = gitrefs.resolve(base, root, known=True)
+    if verified == '':
         stop('doc_budget: base ref %s does not exist here. Pass --base <ref>.' % base)
-    if verified.returncode != 0:
-        stop('doc_budget: could not read base ref %s (%s).' % (base, failure(verified)))
+    if verified is None:
+        stop('doc_budget: could not read base ref %s (%s).' % (base, why))
 
     def sizes_or_why(ref):
         r = g('ls-tree', '-r', '--long', '-z', ref)
@@ -225,8 +233,8 @@ def _check(root, out, base, head, worktree, report, failures):
         return sizes
 
     if worktree:
-        listing = g('ls-files', '-co', '--exclude-standard')
-        files = [p for p in listing.stdout.splitlines() if os.path.isfile(os.path.join(root, p))]
+        listing = g('ls-files', '-co', '--exclude-standard', '-z')
+        files = [p for p in names_from(listing.stdout) if os.path.isfile(os.path.join(root, p))]
 
         def size(path):
             # LF-normalised, so a CRLF checkout measures like the committed blob
@@ -234,8 +242,8 @@ def _check(root, out, base, head, worktree, report, failures):
                 return len(fh.read().replace(b'\r\n', b'\n'))
         where = 'the working tree'
     else:
-        listing = g('ls-tree', '-r', '--name-only', head)
-        files = listing.stdout.splitlines()
+        listing = g('ls-tree', '-r', '--name-only', '-z', head)
+        files = names_from(listing.stdout)
         head_sizes = sizes_or_refuse(head) if listing.returncode == 0 else {}
 
         def size(path):
@@ -260,7 +268,7 @@ def _check(root, out, base, head, worktree, report, failures):
         stop('doc_budget: cannot find the merge base of %s and %s (%s).'
              % (base, head_ref, failure(mb_read) if mb_read.returncode
                 else 'git exit 0, but it printed nothing'))
-    base_sha = verified.stdout.strip()
+    base_sha = verified
     touched = None                      # None: up to date with the base, so every file is the branch's
     if mb not in (base_sha, base):
         mb_sizes, why = sizes_or_why(mb)

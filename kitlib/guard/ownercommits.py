@@ -190,4 +190,4 @@ def describe(rules, bad, limit=5):
     if problem:
         line += '; %s' % problem
     return line + ('. Only the owner commits these paths (author email = "owner".email in '
-                   '.kit.json); ask him to make the change')
+                   '.kit.json); ask the owner to make the change')

@@ -18,6 +18,7 @@ import os
 import re
 from collections import OrderedDict
 
+from kitlib.docs import budget
 from kitlib.git import cmd
 
 EXTS = ('.java', '.kt', '.kts', '.cs', '.razor', '.py', '.ps1', '.js', '.ts', '.tsx', '.go', '.rs',
@@ -38,10 +39,10 @@ LIST_TIMEOUT = 120               # seconds; a large tree's listing is slow, not 
 def files(root):
     """`(source files, None)` git lists in `root`, filtered by EXTS and SKIP, or `(None, why)`
     when git could not list them (an empty map would read as "no source here")."""
-    r = cmd.call(['ls-files', '-co', '--exclude-standard'], root, timeout=LIST_TIMEOUT)
+    r = cmd.call(['ls-files', '-co', '--exclude-standard', '-z'], root, timeout=LIST_TIMEOUT)
     if r.rc != 0:
         return None, r.err or 'git ls-files exited %s' % r.rc
-    return [f for f in cmd.text(r.out).splitlines()
+    return [f for f in budget.names_from(cmd.text(r.out))
             if f.endswith(EXTS) and not any(s in f for s in SKIP)], None
 
 
