@@ -244,7 +244,7 @@ def next_offer(snap, holding, cap=5, seeds=(), session=None, unmet=None):
     first. `unmet(rec)` -> `[(member, why)]` gates `requires:`. Only records whose `session:`
     equals `session` are offered; another session's record takes its scope silently. A record
     passed over on a collision names the holder: a live pull by id and branch, another session's
-    record by id and session. Scopes are each record's current `scope:` lines, so a pulled record
+    record by id and session, a record already in this offer as `(offered above)`. Scopes are each record's current `scope:` lines, so a pulled record
     narrowed with `set --scope` frees what it gave up."""
     ranks = ranked(snap)
     occupied = []
@@ -309,6 +309,8 @@ def next_offer(snap, holding, cap=5, seeds=(), session=None, unmet=None):
             for m in scopes:
                 holders.setdefault(m, '%s (session %s)' % (rid, rec.get('session') or 'none'))
             continue
+        for m in scopes:
+            holders.setdefault(m, '%s (offered above)' % rid)
         offers.append(Offer(rec, ranks.get(rid, '-'), id(rec) in seeded))
         if len(offers) >= cap:
             break

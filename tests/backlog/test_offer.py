@@ -189,6 +189,35 @@ class CollisionHolder(unittest.TestCase):
         self.assertEqual(passed['BBB'], 'scope binding/x/** collides with binding/** already '
                          'taken by AAA (session gamma)')
 
+    def test_a_record_offered_above_in_the_same_pass_is_named(self):
+        s = snap(priced('AAA', priority='1', scope='binding/**'),
+                 priced('BBB', priority='2', scope='binding/x/**'),
+                 priced('CCC', priority='3', scope='worker/**'))
+        ids, passed = offer_ids(s)
+        self.assertEqual(ids, ['AAA', 'CCC'])
+        self.assertEqual(passed['BBB'], 'scope binding/x/** collides with binding/** already '
+                         'taken by AAA (offered above)')
+
+    def test_a_seed_offered_first_is_named_as_offered_above(self):
+        s = snap(priced('AAA', priority='1', scope='binding/**'),
+                 priced('BBB', priority='5', scope='binding/x/**'))
+        ids, passed = offer_ids(s, seeds=['BBB'])
+        self.assertEqual(ids, ['BBB'])
+        self.assertEqual(passed['AAA'], 'scope binding/** collides with binding/x/** already '
+                         'taken by BBB (offered above)')
+
+    def test_a_pull_with_no_branch_held_by_a_failed_probe_is_named_with_a_question_mark(self):
+        from unittest import mock
+        s = snap(priced('AAA', scope='kitlib/backlog/**'),
+                 priced('HOLD', state='pulled', pulled_at='2026-10-01',
+                        scope='kitlib/backlog/offer.py'))
+        with mock.patch.object(omod, 'live_branches', return_value=(None, 'git failed')):
+            holding, dead, why = omod.in_flight_split(s, '.', 'origin')
+        self.assertEqual(([r.id for r in holding], dead, why), (['HOLD'], [], 'git failed'))
+        _ids, passed = offer_ids(s, holding=holding)
+        self.assertEqual(passed['AAA'], 'scope kitlib/backlog/** collides with '
+                         'kitlib/backlog/offer.py already taken by HOLD (in flight on ?)')
+
 
 if __name__ == '__main__':
     unittest.main()
