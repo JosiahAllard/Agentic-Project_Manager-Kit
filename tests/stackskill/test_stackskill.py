@@ -70,6 +70,15 @@ class RenderTest(unittest.TestCase):
                 stackskill.install("godot", str(self.target), kit_root=root, apply=True)
         self.assertFalse((self.target / ".claude").exists())
 
+    def test_refuses_a_real_kit_whose_path_has_a_shell_special_character(self):
+        # complete kits, so only the character can be the reason: $ and a backtick expand inside bash
+        # double quotes, a brace can write the placeholder back
+        for ch in "$`{}":
+            kit = make_kit(self.tmp.name, name="k%sx" % ch)
+            with self.assertRaises(stackskill.StackSkillRefused, msg=ch):
+                stackskill.install("godot", str(self.target), kit_root=str(kit), apply=True)
+        self.assertFalse((self.target / ".claude").exists())
+
     def test_refuses_a_kit_path_that_would_write_a_placeholder_back(self):
         kit = make_kit(self.tmp.name, name="K{kit_root}")
         with self.assertRaises(stackskill.StackSkillRefused):
