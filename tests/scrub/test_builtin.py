@@ -61,10 +61,9 @@ PENDING_HISTORY = {
     ('provenance', 'docs/launcher.md'): 3,
     ('provenance', 'docs/ledger.md'): 1,
     ('provenance', 'docs/lock-release.md'): 1,
-    ('provenance', 'docs/machine-setup.md'): 8,
+    ('provenance', 'docs/machine-setup.md'): 7,
     ('provenance', 'docs/new-worktree.md'): 2,
     ('provenance', 'docs/pending.md'): 1,
-    ('provenance', 'docs/pm-first-run.md'): 1,
     ('provenance', 'docs/pm-watch.md'): 1,
     ('provenance', 'docs/preflight.md'): 3,
     ('provenance', 'docs/repo-checks.md'): 1,
@@ -150,7 +149,6 @@ PENDING_HISTORY = {
     ('provenance', 'tests/worktree/test_new_worktree.py'): 2,
     ('provenance', 'tests/worktree/test_worktree_remove.py'): 1,
     ('provenance', 'tools/machine_setup.py'): 1,
-    ('record-id', 'ARCHITECTURE.md'): 1,
     ('record-id', 'docs/gate.md'): 1,
     ('record-id', 'docs/guard.md'): 2,
     ('record-id', 'docs/install.md'): 2,
@@ -305,6 +303,15 @@ class TheChecks(unittest.TestCase):
                                 'abcdef', ' deadbeef 1234567 ', 'a1b2c3', '\n'),
                  'docs/d.md': j('2', ' cores, ', '4', ' threads, the PM kit, ', 'sup', 'port from x\n')}
         self.assertEqual(self.found(files), [])
+
+    def test_standard_crypto_names_are_no_record_ids(self):
+        real = j('ABC', '-DEF-12')
+        for name in ('EMSA-PKCS1', 'RSASSA-PKCS1', 'SHA-384'):
+            with self.subTest(name):
+                files = {'docs/a.md': 'signed with %s\n' % name}
+                self.assertEqual(self.found(files), [])
+                files = {'docs/a.md': 'signed with %s, see %s\n' % (name, real)}
+                self.assertEqual(self.found(files), ['docs/a.md:1: %s (record-id)' % real])
 
     def test_an_allow_entry_covers_only_its_file_and_class(self):
         line = j('ask ', 'h', 'im at ', '9f3e', '2a1', '\n')

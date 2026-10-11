@@ -124,6 +124,9 @@ class FreshBase(unittest.TestCase):
         os.makedirs(self.c1)
         os.makedirs(self.c2)
         os.makedirs(kuser.config_dir(self.home))
+        cache = mock.patch.dict(os.environ, gitfixture.ps_cache_env(self.home))   # real powershell: no cache in the cwd
+        cache.start()
+        self.addCleanup(cache.stop)
         self.machine_config({'plugin': {'export_dir': self.export}})
         self.s1 = os.path.join(self.c1, 'settings.json')
         self.s2 = os.path.join(self.c2, 'settings.json')
