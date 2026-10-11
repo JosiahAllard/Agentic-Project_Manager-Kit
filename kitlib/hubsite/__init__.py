@@ -8,4 +8,6 @@
   derived  the documents derived from the store, not written by hand
   backlog  the backlog views the site shows
   gitsync  the store's commits, and its pull and push against the PM data remote
+  httpd    one loopback HTTP listener in front of the api: the gate, the write rules, the waits
+  serve    the server: the store, the api, the views and the listeners, started and closed
 """

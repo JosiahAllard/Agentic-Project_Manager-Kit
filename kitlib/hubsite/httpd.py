@@ -41,10 +41,10 @@ One request, in this order, for every method and every path:
      file of static_dir ("/" is INDEX), else 404.
 A request line or a header block http.server cannot read, and a request line with no HTTP
 version (it carries no headers), is refused before step 1 with http.server's own status (400,
-414, 431, 505), a fixed body and no routing. A request answered before all it sent was read (a refusal ahead of
-the body, a body over the cap, an unreadable request) is answered first; then the sending side
-is closed and what the client still sends is read away, never parsed, for at most LINGER_S
-seconds and LINGER_BYTES bytes, so the answer reaches the client and not a reset.
+414, 431, 505), a fixed body and no routing. A request answered before all it sent was read (a
+refusal ahead of the body, a body over the cap, an unreadable request) is answered first; then
+the sending side is closed and what the client still sends is read away, never parsed, for at
+most LINGER_S seconds and LINGER_BYTES bytes, so the answer reaches the client and not a reset.
 
 via. A caller names its transport in the VIA_HEADER header (`web`, `cli`, `desktop-mcp`,
 `relay:<source>`): a short lower-case token, else the listener's own `via` is used ('' lets the
@@ -296,7 +296,7 @@ class _Server(http.server.ThreadingHTTPServer):
     def work(self, request, client_address):
         try:
             self.finish_request(request, client_address)
-        except Exception:           # noqa: BLE001 - a dropped connection must not end the thread loudly
+        except Exception:           # noqa: BLE001 - a dropped connection ends no thread loudly
             self.handle_error(request, client_address)
         finally:
             self.shutdown_request(request)
