@@ -178,6 +178,10 @@ step as the install, or it runs twice (`tools/machine_setup.py` notes it, docs/m
 "Settings"). guard.py stays in each account's settings and is never in the plugin (docs/guard.md
 "Go-live"); the PM repo's `pm_session_start.py` stays in that repo's settings.
 
+On a fresh machine, `machine-setup.ps1 -Fresh` runs these two commands for each account folder, with
+`CLAUDE_CONFIG_DIR` set to it (docs/machine-setup.md "Fresh machine (--fresh)"). The CLI also
+rewrites other keys of that `settings.json`, so the step backs the file up first.
+
 ### After the plugin install: remove the per-item junctions
 
 An account set up by `machine_setup.py` has per-item junctions under `~/.claude` that load the same

@@ -20,7 +20,7 @@ The code is on kit main except the lines marked unbuilt.
 - Hub repo aliases: before republishing the hub, set `aliases` on the hub's repos/ docs for every short tag the old map covered; the page no longer carries that map in canonRepo.
 - Retirements: heavy_run, test-runner wrappers. The global reserve_ui.pyw is replaced by the kit window `reserve_ui.pyw` at the kit root, which stays.
 - Backlog store per repo: `backlog.py migrate`, then the switch-over branch (docs/backlog-store.md "Migration"). Until a repo's remote has a store, the landing close writes nothing and the ancestry check passes; the check still asks the remote (`ls-remote`) and refuses the landing when it cannot. `backlog.py` refuses two repos' current `.kit.json`: they still use the older kit's spellings, refused on purpose (tests/config/test_load.py `test_the_old_hook_and_owner_spellings_refuse`). The new spellings are in docs/kit-json.md and docs/doc-tools.md. The PM kit cannot load them, so each repo runs `backlog.py migrate` first, then makes the key move on its switch-over branch.
-- Switch-over command: `installer/machine-setup.ps1 -OldKit <old kit clone>` makes the per-account re-point below and the links, statusline, shortcut, temp ACL and comfy steps in one reviewed run (dry run first, then `-Apply`; docs/machine-setup.md).
+- Switch-over command: `installer/machine-setup.ps1 -OldKit <old kit clone>` makes the per-account re-point below and the links, statusline, shortcut, temp ACL and comfy steps in one reviewed run (dry run first, then `-Apply`; docs/machine-setup.md). On a machine with no older kit clone, `installer/machine-setup.ps1 -Fresh -PmSettings <PM repo>\.claude\settings.local.json` appends guard.py's entry, writes the PM SessionStart hook to that file alone, enables the plugin per account and runs the shortcut and temp ACL steps; it does not set `KIT_MACHINE_LOCK`, because the plugin's lock tool is used (docs/machine-setup.md "Fresh machine (--fresh)").
 - Per-account settings re-point (owner runs these; PM drafts the commands):
   - Remove the old kit's PreToolUse hooks (no_root_search.py, main_checkout_redirect_guard.py) from settings.json in every account's config folder.
   - Add guard.py's PreToolUse entry as `python <kit>/claude/hooks/guard.py --settings-entry` prints it (docs/guard.md "Go-live (after the joint review)").
@@ -116,13 +116,15 @@ Per Claude account, once reviewed. Nothing here has been run.
 1. Skills: the account's skills currently come from the old kit. Enable the plugin so skills load from
    `claude/skills` (`claude plugin install` from the kit checkout, or add the kit as the account's plugin source),
    then remove the per-skill links as docs/install.md "After the plugin install: remove the per-item junctions" says.
+   On a fresh machine `machine-setup.ps1 -Fresh` enables it for every account and makes no per-skill links.
    Check with `ListSkills` that the twelve names in docs/shipping.md appear once each.
 2. Statusline: in the account's `settings.json`, point `statusLine.command` at
    `optional/usage/statusline-usage.ps1` in the kit checkout (it was the old kit's copy), and
    any scheduled call of `write-usage-status.ps1` at the kit's copy. Confirm the line renders.
 3. Optional tools: point comfy, procwatch and usage entry points (shortcuts, scheduled tasks) at
    `optional/<name>` in the kit. Set env `PROCWATCH_PROTECT` for any extra processes procwatch must spare
-   (the repo's live servers) and `KIT_MACHINE_LOCK` only if the lock tool is not the plugin's.
+   (the repo's live servers) and `KIT_MACHINE_LOCK` only if the lock tool is not the plugin's
+   (`machine-setup.ps1 -Fresh` does not set it; `-OldKit` does).
 4. Knowledge: replace `~/.claude/knowledge/asset-generation` with a link to
    `knowledge/asset-generation` in the kit checkout (keep the old folder until the link is verified;
    its LOG.md and samples are not in the kit).

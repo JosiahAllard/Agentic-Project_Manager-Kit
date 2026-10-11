@@ -1,10 +1,11 @@
 # Machine setup
 
-One reviewed command switches a machine's Claude config folders from an older kit clone to this kit checkout: the links, each account's `settings.json`, and three machine extras. It is the switch-over command for the joint review (docs/go-live.md "Switches"). Nothing has run it on a real machine yet.
+One reviewed command switches a machine's Claude config folders from an older kit clone to this kit checkout: the links, each account's `settings.json`, and three machine extras. It is the switch-over command for the joint review (docs/go-live.md "Switches"). With `--fresh` it sets up a machine that has no older kit clone instead ("Fresh machine (--fresh)" below). Nothing has run it on a real machine yet.
 
 ```
 powershell -NoProfile -File installer\machine-setup.ps1 -OldKit <old kit clone> [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>] [-Apply]
-python tools/machine_setup.py --old-kit DIR [--config-dir DIR]... [--agent-temp DIR] [--kit DIR] [--home DIR] [--desktop DIR] [--apply]
+powershell -NoProfile -File installer\machine-setup.ps1 -Fresh [-PmSettings <file>] [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>] [-Apply]
+python tools/machine_setup.py (--old-kit DIR | --fresh [--pm-settings FILE]) [--config-dir DIR]... [--agent-temp DIR] [--kit DIR] [--home DIR] [--desktop DIR] [--apply]
 ```
 
 Run it from the kit's main checkout, not a worktree: `--kit` defaults to the checkout the tool is in, and every link, hook path and shortcut names that folder.
@@ -15,7 +16,7 @@ Run it from the kit's main checkout, not a worktree: `--kit` defaults to the che
 - **Refusals.** Any refusal stops both modes before anything changes: an old-kit path in a settings file that this step neither removes nor re-points, a hook path it cannot resolve, a settings file it cannot read or must not replace, a kit file a link or path would need, a file where a link goes, a missing config folder, or `--kit` equal to `--old-kit`. Each refusal names the file and path.
 - **Part-way failure.** If a change fails under `--apply`, whatever the error, it stops there. It prints the change, the error, how to restore that change by hand, and the changes already made. Every line is printed as it is produced.
 
-Exit codes: 0 done, dry run printed or nothing to do; 1 refused or stopped; 2 usage (the wrapper also exits 2 with no `-OldKit` or no `python` on PATH).
+Exit codes: 0 done, dry run printed or nothing to do; 1 refused or stopped; 2 usage: neither or both of `--old-kit` and `--fresh`, or `--pm-settings` without `--fresh` (the wrapper also exits 2 for the same with `-OldKit`, `-Fresh` and `-PmSettings`, or with no `python` on PATH).
 
 ## Links
 
@@ -78,9 +79,18 @@ A `settings.json` that is a symbolic link or has more than one hard link is refu
 - **Comfy lock tool.** The user environment variable `KIT_MACHINE_LOCK` = `<kit>\tools\machine_lock.py`.
   - `optional/comfy/comfy_gen.py` otherwise looks two folders above itself, which is `<config>/tools/machine_lock.py` through the link and does not exist.
 
+## Fresh machine (--fresh)
+
+`--fresh` (`-Fresh`) is for a machine with no older kit clone. It cannot be given with `--old-kit`. It only appends: no entry is removed, re-pointed or rewritten into exec form. The sections run in the order links, settings, plugin, extras (`Plan.FRESH_SECTIONS`, `kitlib/machinesetup/common.py`).
+
+- **Links.** None are switched; the plan notes `fresh: no old kit, no links switched`.
+- **Settings.** In each config folder's `settings.json`, the guard entry `guard.py --settings-entry` prints is appended when no PreToolUse hook names `<kit>/claude/hooks/guard.py`. A missing `settings.json` is created, with indent 2, LF and a final newline; the dry run shows it as a diff from nothing, and `--apply` refuses to replace a file that appeared since the survey. An existing file keeps its layout and gets the `.bak` described in "Settings".
+- **PM SessionStart hook.** It is written only to the file `--pm-settings` (`-PmSettings`) names: the settings the PM session loads, for example `<PM repo>/.claude/settings.local.json` (docs/pm-start.md "Hook (settings.json)"). The hook runs `claude/hooks/pm_session_start.py` in exec form with the guard entry's interpreter and the matcher `startup|resume|compact`. Without `--pm-settings` it is a note, not a change. It refuses a file that is an account's `settings.json`, a missing folder, and a file whose SessionStart hook already runs a `pm_session_start.py` other than this kit's.
+- **Plugin.** For each config folder whose `settings.json` has no `enabledPlugins` entry for the kit plugin (`<plugin>@<marketplace>` from `.claude-plugin/marketplace.json`), one change runs the two commands of docs/install.md "Plugin install (local marketplace)" with `CLAUDE_CONFIG_DIR` set to that folder (`kitlib/machinesetup/plugin.py`). The CLI also rewrites other keys of `settings.json`, so the change first copies it to `settings.json.machine-setup-<yyyymmdd>-plugin.bak`, and afterwards checks the entry is `true`; if it is not, the run stops there. An entry that is `false` or any other value is noted and left. With no `claude` on PATH the change is a note giving the commands. It runs after the settings writes, so the `.bak` holds the guard entry.
+- **Extras.** The shortcut and the agent temp permissions run as in "Extras". `KIT_MACHINE_LOCK` is not set: the plugin's lock tool is used, and the plan notes it.
+
 ## Not done here
 
-- **A fresh machine.** One with no old kit is not handled: `-OldKit` is required (the wrapper exits 2 without it). There, the plugin, guard.py's PreToolUse entry and the PM SessionStart hook are hand steps (docs/pm-first-run.md steps 3, 6 and 7).
 - **Other old-kit links.** For example `agents` and `hooks` are noted and left: the plugin replaces agents (go-live.md "Switches"), and the launcher starts the agent `launcher.coordinator_agent` names (docs/launcher.md "Settings").
 - **Scheduled tasks.** Ones that run old-kit scripts are not scanned.
 - **Skills as a plugin.** go-live.md "Skills, templates, optional tools, knowledge" is a separate switch. These links keep skills loading until the plugin is enabled. Remove them then, or each skill appears twice (docs/install.md, "After the plugin install").
@@ -91,7 +101,8 @@ A `settings.json` that is a symbolic link or has more than one hard link is refu
 |---|---|
 | `kitlib/machinesetup/__init__.py` | `Context`, `default_config_dirs`, `dedupe`, `survey`, `run` (exit code and lines) |
 | `kitlib/machinesetup/common.py` | `Plan`, `Change`, link and path helpers |
-| `kitlib/machinesetup/links.py`, `settings.py`, `extras.py` | the three parts above |
+| `kitlib/machinesetup/links.py`, `settings.py`, `extras.py` | the three parts above; `settings.py` also holds the fresh-mode append and the PM hook (`survey_pm`) |
+| `kitlib/machinesetup/plugin.py` | the fresh-mode plugin step |
 | `tools/machine_setup.py`, `installer/machine-setup.ps1` | the entry point and its PowerShell wrapper |
 
-`tests/machinesetup/test_machinesetup.py` builds a fake home, a fake old kit and a fake kit in a temp folder. It runs a dry run, then `--apply`, then a second run, and checks each refusal. It never touches the real home folder, desktop, environment or permissions.
+`tests/machinesetup/test_machinesetup.py` builds a fake home, a fake old kit and a fake kit in a temp folder. It runs a dry run, then `--apply`, then a second run, and checks each refusal. `tests/machinesetup/test_fresh.py` does the same for `--fresh`, with a fake `claude` CLI. Neither touches the real home folder, desktop, environment or permissions. One test checks, by size and modification time only, that the real accounts' `settings.json` files are unchanged after a fresh `--apply` against a temp home.
