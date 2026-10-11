@@ -100,6 +100,18 @@ class FakeHost(object):
         self.calls.append(('env', name, value))
         self.env[name] = value
 
+    tasks = ()                                                       # names registered (a set once one is)
+    task_error = None                                                # raised by task_exists when set
+
+    def task_exists(self, name):
+        if self.task_error:
+            raise self.task_error
+        return name in self.tasks
+
+    def task_register(self, line):
+        self.calls.append(('task', line))
+        self.tasks = set(self.tasks) | {'agent-temp-sweep'}          # the only task machine setup registers
+
     def guard_entry(self, kit):
         return {'PreToolUse': [{'matcher': 'Bash|PowerShell', 'hooks': [
             {'type': 'command', 'command': PYW, 'args': [fwd(os.path.join(kit, 'claude', 'hooks', 'guard.py'))]}]}]}
@@ -467,7 +479,7 @@ class Edges(Base):
         self.assertEqual(code, M.EXIT_REFUSED)
         self.assertEqual(seen, lines)
         text = '\n'.join(seen)
-        self.assertIn('STOPPED at: user environment KIT_MACHINE_LOCK', text)
+        self.assertIn('STOPPED at: user environment AGENT_TEMP', text)     # the first env set
         self.assertIn('error: KeyError', text)
         self.assertIn('restore: [Environment]::SetEnvironmentVariable', text)
         self.assertIn('already done by this run (', text)
