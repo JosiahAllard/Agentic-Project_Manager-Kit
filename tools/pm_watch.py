@@ -1,6 +1,9 @@
 """pm_watch.py: the PM watcher (docs/pm-watch.md). Silent until something needs the PM, then
 prints one line per event and exits. The PM runs it as a background command and relaunches it
-after handling the event, so no model turn is spent while nothing happens.
+after handling the event, so no model turn is spent while nothing happens. With --stream it
+never exits on an event: it prints each one and keeps polling, for a run under Monitor (one
+notification per line). Every pass but a --once one writes a heartbeat, <state>.beat
+({pid, beat, stream, started}), that the PM session-start check reads (docs/pm-start.md).
 
 Events:
   BRANCH <repo> <ref> <hash>    a watched remote branch got a new tip (--branch, repeatable)
@@ -19,7 +22,7 @@ run only records a baseline.
   python tools/pm_watch.py [--branch <repo-dir>=<ref> ...] [--usage-script <ps1>]
                            [--branch-poll 300] [--usage-poll 600] [--alerts-dir <dir>]
                            [--idle-minutes 20] [--idle-poll 300] [--sessions <json>]
-                           [--notice-dir <dir>] [--state <json>] [--once]
+                           [--notice-dir <dir>] [--state <json>] [--once | --stream]
 --usage-script, --sessions, --alerts-dir and --state default to the "pm_watch" keys of
 the machine config (usage_script, sessions_file, alerts_dir, state_file). With no usage
 script, usage is read in this process (kitlib.launcher.usage, `launch.py usage`) from the accounts
@@ -52,7 +55,10 @@ def parse(argv, cfg, launcher_set=None):
     ap.add_argument("--sessions", default=cfg.get("sessions_file"))
     ap.add_argument("--notice-dir", default=W.configured_notice_dir())
     ap.add_argument("--state", default=cfg.get("state_file") or W.default_state_file())
-    ap.add_argument("--once", action="store_true", help="poll once, print events, exit 0")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--once", action="store_true", help="poll once, print events, exit 0")
+    mode.add_argument("--stream", action="store_true",
+                      help="never exit on an event: print each and keep polling (run under Monitor)")
     a = ap.parse_args(argv)
     if not a.sessions:
         ap.error("--sessions not given and pm_watch.sessions_file not in %s" % kuser.display())
@@ -76,17 +82,11 @@ def main(argv=None, sleep=time.sleep, launcher_set=None):
                   claude_host.newest_finder(), idle_minutes=a.idle_minutes,
                   branch_poll=a.branch_poll, usage_poll=a.usage_poll, idle_poll=a.idle_poll,
                   notice_dir=a.notice_dir)
-    w.start(time.time())
-    W.save_state(a.state, w.s)
-    while True:
-        events = w.poll(time.time())
-        W.save_state(a.state, w.s)
-        if events:
-            print("\n".join(events), flush=True)
-            return 0
-        if a.once:
-            return 0
-        sleep(30)
+    beat, started = W.heartbeat_file(a.state), W.own_start_time()
+    return W.run(w, time.time, sleep, lambda s: W.save_state(a.state, s),
+                 lambda text: print(text, flush=True),
+                 lambda now: W.write_heartbeat(beat, os.getpid(), now, a.stream, started),
+                 once=a.once, stream=a.stream)
 
 
 if __name__ == "__main__":
