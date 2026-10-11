@@ -12,7 +12,9 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
+from kitlib.config import load
 from kitlib.git import cmd
+from kitlib.records import landing
 from kitlib.redfirst import run as R
 from kitlib.redfirst import verdict as V
 from tests import gitfixture
@@ -179,6 +181,20 @@ class Runs(Case):
         self.assertIn('removed', out)
         self.assertEqual(self.throwaways(), [])
         self.assertNotIn(R.PREFIX, self.fx.git('worktree', 'list'))
+
+    def test_red_with_the_landing_lock_held_and_the_head_unpushed(self):
+        """new_worktree refuses a base with no pushed branch; this tool needs neither the lock
+        free nor a pushed head (the `route` line of kitlib/worktree/new.py points here)."""
+        self.commit({'tests/calc.py': CALC_MUL, 'tests/test_mul.py': TEST_MUL})
+        self.assertEqual(self.fx.git('for-each-ref', '--format=%(refname)', 'refs/remotes').strip(),
+                         'refs/remotes/origin/main', 'only main is pushed, not the branch under test')
+        lock = landing.LandingLock.for_config(self.fx.root, load(self.fx.root))
+        lock.take('full', ['feat/landing'])
+        self.assertIsNotNone(lock.read())
+        rc, out = self.run_tool('--tests', 'tests/test_mul.py')
+        self.assertEqual(rc, V.EXIT_RED, out)
+        self.assertIn('REDFIRST OK', out)
+        self.assertEqual(self.throwaways(), [])
 
     def test_passing_test_is_green(self):
         self.commit({'src/test_add.py': TEST_ADD})

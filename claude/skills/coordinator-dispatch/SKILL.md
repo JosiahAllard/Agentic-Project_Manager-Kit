@@ -26,6 +26,8 @@ Harness traps (Plan cannot write, output files are no rescue path): skill `subag
   owns it, or by a fresh agent dispatched into that worktree; never by you with `-C` from outside.
   Only for new work: a refused command is never rerouted this way.
 - Non-trivial: plan read-only -> your approval or correction -> build.
+- A change to `.kit.json` or any other owner-only path (`--find kit-json`, key `owner.paths`) is
+  never dispatched to a builder: it goes to the owner, through the PM.
 
 ## The brief
 
