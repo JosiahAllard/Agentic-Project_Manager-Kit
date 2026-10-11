@@ -59,7 +59,7 @@ class Scan(unittest.TestCase):
         self.assertEqual(n, 10)
 
     def test_files_keeps_source_extensions_and_drops_skipped_folders(self):
-        r = cmd.Result(0, b'a/b.gd\na/c.gdshader\n.godot/x.gd\nbuild/y.java\nsrc/Z.java\nREADME.md\n', '')
+        r = cmd.Result(0, b'a/b.gd\0a/c.gdshader\0.godot/x.gd\0build/y.java\0src/Z.java\0README.md\0', '')
         with mock.patch.object(codemap.cmd, 'call', return_value=r):
             self.assertEqual(codemap.files(self.root), (['a/b.gd', 'a/c.gdshader', 'src/Z.java'], None))
 
@@ -85,6 +85,12 @@ class Run(unittest.TestCase):
         self.assertEqual((rc, got), (0, ['tools/new.py:1  fresh()', '1 hits']))
         rc, got = self.lines(find='hidden')
         self.assertEqual((rc, got), (0, ['0 hits']))
+
+    def test_a_non_ascii_source_file_is_in_the_map(self):
+        # Without -z, git C-quotes the name ("tools/caf\303\251.py"), which ends in a quote.
+        self.repo.write('tools/café.py', 'def espresso():\n    pass\n')
+        rc, got = self.lines(find='espresso')
+        self.assertEqual((rc, got), (0, ['tools/café.py:1  espresso()', '1 hits']))
 
     def test_find_matches_a_type_by_substring_and_a_member_exactly(self):
         rc, got = self.lines(find='alp')

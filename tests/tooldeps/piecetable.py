@@ -7,31 +7,31 @@ import copy
 import sys
 
 OLD_PIECES = [
-    {'id': 'beta-api', 'kind': 'gradle', 'gradle': ':beta-api', 'dir': 'beta-api'},
-    {'id': 'Fleet.Protocol.Tests', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Protocol.Tests', 'dotnet': True},
-    {'id': 'binding', 'kind': 'gradle', 'gradle': ':binding', 'dir': 'binding'},
+    {'id': 'core-api', 'kind': 'gradle', 'gradle': ':core-api', 'dir': 'core-api'},
+    {'id': 'Mesh.Protocol.Tests', 'kind': 'dotnet', 'dir': 'mesh/Mesh.Protocol.Tests', 'dotnet': True},
+    {'id': 'link', 'kind': 'gradle', 'gradle': ':link', 'dir': 'link'},
     {'id': 'runtime', 'kind': 'gradle', 'gradle': ':runtime', 'dir': 'runtime'},
-    {'id': 'Fleet.Brain', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Brain', 'dotnet': True},
-    {'id': 'Fleet.Brain.Tests', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Brain.Tests', 'dotnet': True},
-    {'id': 'brain-ops', 'kind': 'asset', 'dir': 'fleet/ops', 'dotnet': True},
-    {'id': 'Fleet.Node', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Node', 'dotnet': True},
-    {'id': 'Fleet.Node.Tests', 'kind': 'dotnet', 'dir': 'fleet/Fleet.Node.Tests', 'dotnet': True},
-    {'id': 'delta-scripts', 'kind': 'gradle', 'gradle': ':delta-scripts', 'dir': 'delta-scripts'},
-    {'id': 'pvp', 'kind': 'builder', 'dir': 'pvp'},
-    {'id': 'model-sums', 'kind': 'file', 'dir': 'delta-scripts/models/SHA256SUMS'},
+    {'id': 'Mesh.Control', 'kind': 'dotnet', 'dir': 'mesh/Mesh.Control', 'dotnet': True},
+    {'id': 'Mesh.Control.Tests', 'kind': 'dotnet', 'dir': 'mesh/Mesh.Control.Tests', 'dotnet': True},
+    {'id': 'control-ops', 'kind': 'asset', 'dir': 'mesh/ops', 'dotnet': True},
+    {'id': 'Mesh.Node', 'kind': 'dotnet', 'dir': 'mesh/Mesh.Node', 'dotnet': True},
+    {'id': 'Mesh.Node.Tests', 'kind': 'dotnet', 'dir': 'mesh/Mesh.Node.Tests', 'dotnet': True},
+    {'id': 'aux-scripts', 'kind': 'gradle', 'gradle': ':aux-scripts', 'dir': 'aux-scripts'},
+    {'id': 'trainer', 'kind': 'builder', 'dir': 'trainer'},
+    {'id': 'model-sums', 'kind': 'file', 'dir': 'aux-scripts/models/SHA256SUMS'},
 ]
 MOVES = {
-    'beta-api': 'shared/beta-api',
-    'Fleet.Protocol.Tests': 'shared/Fleet.Protocol.Tests',
-    'binding': 'worker/binding',
+    'core-api': 'shared/core-api',
+    'Mesh.Protocol.Tests': 'shared/Mesh.Protocol.Tests',
+    'link': 'worker/link',
     'runtime': 'worker/runtime',
-    'Fleet.Brain': 'brain/Fleet.Brain',
-    'Fleet.Brain.Tests': 'brain/Fleet.Brain.Tests',
-    'brain-ops': 'brain/ops',
-    'Fleet.Node': 'node/Fleet.Node',
-    'Fleet.Node.Tests': 'node/Fleet.Node.Tests',
-    'delta-scripts': 'artifacts/scripts/delta-scripts',
-    'pvp': 'artifacts/models',
+    'Mesh.Control': 'control/Mesh.Control',
+    'Mesh.Control.Tests': 'control/Mesh.Control.Tests',
+    'control-ops': 'control/ops',
+    'Mesh.Node': 'node/Mesh.Node',
+    'Mesh.Node.Tests': 'node/Mesh.Node.Tests',
+    'aux-scripts': 'artifacts/scripts/aux-scripts',
+    'trainer': 'artifacts/models',
     'model-sums': 'artifacts/models/SHA256SUMS',
 }
 
@@ -64,8 +64,8 @@ def _moved():
     return out
 
 
-OLD = Table(OLD_PIECES, 'fleet/Fleet.slnx')
-NEW = Table(_moved(), 'Fleet.slnx')
+OLD = Table(OLD_PIECES, 'mesh/Mesh.slnx')
+NEW = Table(_moved(), 'Mesh.slnx')
 
 
 def both_tables(cls):

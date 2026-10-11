@@ -20,10 +20,10 @@ class VerbCase(StoreCase):
 class Add(VerbCase):
 
     def test_add_writes_an_unpriced_open_record(self):
-        self.verb('add', 'NEW', 'a new thing to do here', ['binding/src/**'], effort='s')
+        self.verb('add', 'NEW', 'a new thing to do here', ['link/src/**'], effort='s')
         r = self.get('NEW')
         self.assertEqual((r.get('priority'), r.get('priority_by'), r.get('state'), r.get('area'),
-                          r.get('effort')), ('-', '-', 'open', 'binding', 's'))
+                          r.get('effort')), ('-', '-', 'open', 'link', 's'))
         self.assertIn('## Why this is here', r.body)
 
     def test_add_refuses_a_taken_id_a_bad_id_and_a_bad_scope(self):
@@ -312,7 +312,7 @@ class CloseRetire(VerbCase):
 
 class MachinePaths(VerbCase):
     """Free text that carries a machine path is refused (Usage) before any write, in every verb."""
-    DRIVES = ('C:' + chr(92) + 'Users' + chr(92) + 'nick', 'C:/Users/nick')
+    DRIVES = ('C:' + chr(92) + 'Users' + chr(92) + 'nick', 'C:' + '/Users/nick')
 
     def refused(self, name, *args, **kw):
         before = self.remote_tip()
@@ -326,7 +326,7 @@ class MachinePaths(VerbCase):
         for d in self.DRIVES:
             text = 'see %s for the details' % d
             with self.subTest(drive=d):
-                self.refused('add', 'NEW', text, ['binding/src/**'])
+                self.refused('add', 'NEW', text, ['link/src/**'])
                 self.refused('set', 'FOO', [('summary', [text])])
                 self.refused('block', 'BAR', ['owner'], owner_ask=text)
                 self.refused('pull', 'FOO', reason=text)

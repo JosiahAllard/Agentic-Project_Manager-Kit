@@ -46,6 +46,26 @@ class Build(unittest.TestCase):
         (plain,) = S.build(gate_of(cmd('s')), ROOT, 'b', 't', full=True)     # no full_cmd: cmd
         self.assertEqual(plain.cmd[1:], ['-c', 'pass'])
 
+    def test_daily_cmd_replaces_full_cmd_and_cmd_only_in_a_daily_run(self):
+        g = gate_of(cmd('t', cmd=['{python}', 'kt.py', '--select'],
+                        full_cmd=['{python}', 'kt.py', '--full'],
+                        daily_cmd=['{python}', 'kt.py', '--full', '--both-tiers', '{root}']))
+        (a,) = S.build(g, ROOT, 'b', 't')
+        self.assertEqual(a.cmd[1:], ['kt.py', '--select'])
+        (f,) = S.build(g, ROOT, 'b', 't', full=True)
+        self.assertEqual(f.cmd[1:], ['kt.py', '--full'])
+        (d,) = S.build(g, ROOT, 'b', 't', full=True, daily=True)
+        self.assertEqual(d.cmd[1:], ['kt.py', '--full', '--both-tiers', ROOT])
+        (dn,) = S.build(g, ROOT, 'b', 't', daily=True)          # daily implies the full argv chain
+        self.assertEqual(dn.cmd, d.cmd)
+        # No daily_cmd: full_cmd; neither: cmd.
+        (df,) = S.build(gate_of(cmd('t', cmd=['{python}', 'kt.py', '--select'],
+                                    full_cmd=['{python}', 'kt.py', '--full'])),
+                        ROOT, 'b', 't', full=True, daily=True)
+        self.assertEqual(df.cmd[1:], ['kt.py', '--full'])
+        (dc,) = S.build(gate_of(cmd('s')), ROOT, 'b', 't', full=True, daily=True)
+        self.assertEqual(dc.cmd[1:], ['-c', 'pass'])
+
     def test_reserved_names_refuse(self):
         for name in S.RESERVED:
             with self.assertRaises(S.GateConfigError):
@@ -62,6 +82,7 @@ class Build(unittest.TestCase):
         kt = ['{python}', 'tools/kit_tests.py', '--select']
         for g in (gate_of(cmd('a', cmd=kt + [hold])),
                   gate_of(cmd('a', cmd=kt, full_cmd=kt + [hold])),
+                  gate_of(cmd('a', cmd=kt, daily_cmd=kt + [hold])),
                   gate_of(cmd('a', cmd=kt, merged_args=[hold])),
                   gate_of(cmd('a'), setup=['{python}', 'tools/pytests.py', '--all', hold])):
             with self.assertRaises(S.GateConfigError, msg=g) as cm:

@@ -25,20 +25,47 @@ Entry = read.Entry
 read_entries = read.read_entries
 
 
-class Ledger(object):
-    """`path` None (or a missing file): not configured. `repos` the repo columns that rule here.
-    `standing` the standing delegation's id, refused as the ruling behind any one change (None: none)."""
+NAME_KEYS = ('backlog.ledger_repo', 'repo.name')
 
-    def __init__(self, path, repos, standing=None):
+
+def ledger_name(cfg):
+    """The ledger repo column that rules in the repository `cfg` was read from, lower-cased:
+    `backlog.ledger_repo`, else `repo.name`, else ''. Never the folder name: a folder whose name
+    differs from its ledger column would silently rule nothing."""
+    return (cfg.section('backlog')['ledger_repo'] or cfg.repo.get('name') or '').lower()
+
+
+class Ledger(object):
+    """`path` None (or a missing file): not configured. `repos` the repo columns that rule here;
+    none is a config error (`name_error`), never a column that matches nobody. `where` names the
+    file the name is set in. `standing` the standing delegation's id, refused as the ruling behind
+    any one change (None: none)."""
+
+    def __init__(self, path, repos, standing=None, where=None):
         self.path = path
         self.standing = standing or None
         self.repos = tuple(r.lower() for r in repos if r)
+        self.where = where
         self._entries = None
         self._why = None
+
+    @classmethod
+    def for_repo(cls, path, cfg, standing=None):
+        """The ledger as the repository `cfg` was read from sees it (`ledger_name`)."""
+        return cls(path, [ledger_name(cfg)], standing, where=cfg.where)
 
     @property
     def configured(self):
         return bool(self.path) and os.path.isfile(self.path)
+
+    @property
+    def name_error(self):
+        """None when a repo column rules here; else the config error that says what to set."""
+        if self.repos:
+            return None
+        return ('no rulings-ledger repo name: set %s in %s. The ledger\'s repo column says '
+                'which repository a ruling binds, so no ruling can be checked until one is set'
+                % (' or '.join('`%s`' % k for k in NAME_KEYS), self.where or '.kit.json'))
 
     def entries(self):
         """`({id: Entry}, None)` or `(None, why)`."""
@@ -70,6 +97,8 @@ def ruling_refusal(ledger, entries, ruling, kinds, allow_retired=False):
     if ledger.standing and ruling == ledger.standing:
         return ('`%s` is the standing delegation, not the ruling behind any one change: cite the '
                 'delegated entry that names this record, or the owner ruling' % ruling)
+    if ledger.name_error is not None:
+        return ledger.name_error
     if got is None or got.repo not in ledger.repos:
         return ('`%s` is not a ruling header for %s in the rulings ledger%s'
                 % (ruling, ' or '.join('`%s`' % r for r in ledger.repos),
@@ -161,7 +190,7 @@ def record_view(root, cfg, fetch=False):
     snap = store.load()
     if not snap.records and snap.tip is None:
         raise Failure('%s holds no backlog store (%s)' % (root, store.backend.describe()))
-    name = (section['ledger_repo'] or cfg.repo.get('name') or '').lower()
+    name = ledger_name(cfg)
     return ((name,) if name else ()), set(snap.by_id), lambda rid: store.history(rid, snap) is not None
 
 

@@ -7,7 +7,8 @@ token. Refused (REFUSED: ..., nothing stopped):
   - a name with surrounding spaces, or a successor equal to the name;
   - a successor that is not running;
   - no match; several matches, unless --pid picks one; a --pid that is not one of them;
-  - a match that is the PM session (its name, or the pm_session_id of conductors.json);
+  - a match that is the PM session (its name, or the pm_session_id of coordinators.json);
+  - coordinators.json still under its old name (state.RenameNeeded, said as Refused), which would hide that id;
   - a match that is this process's own ancestor (the caller).
 It stops the matched claude.exe, then its parent window only when that parent is powershell.exe
 whose script (plain or -EncodedCommand) carries the same name quoted as the window writes it, and
@@ -112,12 +113,14 @@ def stop(settings, host, name, successor=None, pid=0, dry_run=False, procs=None,
     """Stop one session; the lines it says. Refused for a refusal; LaunchError when the session
     could not be stopped. A stop.log write that fails does not undo the stop: its message goes to
     warn(text) (the CLI prints it on stderr), or, with no warn, is the last line said."""
-    conductors = None
+    coordinators = None
     try:
-        conductors = state.read_conductors(settings)
+        coordinators = state.read_coordinators(settings)
+    except state.RenameNeeded as e:                 # never stop without the PM id because a rename was missed
+        raise Refused(str(e))
     except LaunchError:
-        conductors = None
-    pm_id = (conductors or {}).get('pm_session_id') if isinstance(conductors, dict) else None
+        coordinators = None
+    pm_id = (coordinators or {}).get('pm_session_id') if isinstance(coordinators, dict) else None
     if not isinstance(pm_id, str) or pm_id.startswith('<'):
         pm_id = None                                # unset, not a string, or the example file's placeholder
     rows = host.processes() if procs is None else procs

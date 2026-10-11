@@ -147,11 +147,53 @@ def kinds_table(path=None):
         raise ConfigError('cannot read the kinds table %s: %s' % (path, e))
     if not isinstance(data, dict):
         raise ConfigError('the kinds table %s must hold a JSON object' % path)
-    table = data.get('kinds', data) if isinstance(data.get('kinds'), dict) else data
-    out = {k: v for k, v in table.items() if not is_note(k)}
+    wrapped = isinstance(data.get('kinds'), dict)
+    table = data['kinds'] if wrapped else data
+    if wrapped and 'aliases' in table:
+        raise ConfigError('the kinds table %s: aliases belongs at the top level, beside kinds, '
+                          'not inside it' % path)
+    out = {k: v for k, v in table.items() if not is_note(k) and k != 'aliases'}   # a reserved key
     bad = sorted(k for k, v in out.items() if not isinstance(v, dict))
     if bad:
         raise ConfigError('the kinds table %s: entries %s must be objects' % (path, ', '.join(bad)))
+    return out
+
+
+def kinds_aliases(path=None):
+    """{alias: canonical kind} from the `aliases` object of the kinds table ({"alias": {"to": kind,
+    "why": text}}); {} when the file is missing or names none. ConfigError when the file cannot
+    be read, an alias is not an object with a `to` kind and a `why`, an alias is itself a kind,
+    or its `to` is not a kind (so no chain or cycle). `aliases` is a reserved key, never a kind,
+    in the flat form of the table too."""
+    path = path or KINDS_FILE
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        raise ConfigError('cannot read the kinds table %s: %s' % (path, e))
+    aliases = data.get('aliases') if isinstance(data, dict) else None
+    if aliases is None:
+        return {}
+    if not isinstance(aliases, dict):
+        raise ConfigError('the kinds table %s: aliases must be an object' % path)
+    out = {}
+    for name, a in aliases.items():
+        if is_note(name):
+            continue
+        if not (isinstance(a, dict) and isinstance(a.get('to'), str) and a['to']
+                and isinstance(a.get('why'), str) and a['why']):
+            raise ConfigError('the kinds table %s: alias %s needs a "to" kind and a "why"'
+                              % (path, name))
+        out[name] = a['to']
+    kinds = kinds_table(path)
+    for name, to in sorted(out.items()):
+        if name in kinds:
+            raise ConfigError('the kinds table %s: alias %s is a kind of its own' % (path, name))
+        if to not in kinds:
+            raise ConfigError('the kinds table %s: alias %s names %s, which is not a kind'
+                              % (path, name, to))
     return out
 
 

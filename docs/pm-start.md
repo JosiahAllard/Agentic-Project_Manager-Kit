@@ -7,7 +7,11 @@ PM. It always exits 0; a failed check becomes one "could not check X: reason" li
 Checks: standing rules, eng_review flags, the hub (republish it to arm the alert), `pm_watch.py`
 running, the newest handoff file, reminders due, and coordinators not running (no `claude.exe`
 with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/lookup.py`); each such line names the
-`launch.py start --session <key>` that starts it (docs/launcher.md).
+`launch.py start --session <key> --account <n>` that starts it (docs/launcher.md). `<n>` is the account
+this PM session runs on (`kitlib.pmstart` `current_account`), not the entry's stored one, so the PM
+launches every coordinator, the kit's included, from whatever account it started on; when that
+account cannot be identified the line says `--account auto` (pick-account's choice). Tests:
+`tests/pmstart/test_pmstart.py` `LivenessTest`. The last check, always on and with no config key, is the live foreground lock timeout (docs/windows-token-leak.md): a line while it is not 0, with the command the owner runs in their own PowerShell window. Code: `kitlib/pmstart/fglock.py`; tests: `tests/pmstart/test_fglock.py`.
 
 ## Kit currency (`kit_sync`)
 
@@ -27,17 +31,23 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 
 ```json
 {"pm_start": {
-  "hub_url": "https://claude.ai/artifact/<id>",
+  "hub_urls": {"1": "https://claude.ai/artifact/<id>"},
   "hub_source": "claude/hub/action-hub.html",
   "pm_watch_cmd": "python -u <kit>/tools/pm_watch.py",
   "memory_dir": "<home>/.claude/projects/<project>/memory",
   "handoff_glob": "pm-handoff-*.md",
   "reminders_file": "<config-dir>/reminders.json",
   "sessions_file": "<launcher state_dir>/sessions.json",
-  "eng_review": ["SCRIPT-API-*"]
+  "eng_review": ["EX-API-*"]
 }}
 ```
 
+- `hub_urls`: account label -> that account's hub copy (docs/action-hub.md "One copy per
+  account"; `tools/hub_mirror.py set-url` writes it). This account's URL gives the republish
+  line; none gives the steps to publish a copy, record it and restore it from the mirror.
+  `hub_url` (one URL) is read only while `hub_urls` has no entry. `hub_mirror`: the absolute
+  mirror folder for an install without `pm_data`. Code: `kitlib/pmstart` `hub`; tests:
+  `tests/pmstart/test_hub_accounts.py`.
 - `reminders_file`: `[{"due": "YYYY-MM-DD", "text": "..."}]`.
 - `sessions_file`: `{"<key>": {"name": "<remote-control name>", "repo": "<repo>"}}`; an entry
   with `autostart: false` is not checked.

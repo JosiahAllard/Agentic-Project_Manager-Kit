@@ -6,10 +6,22 @@ import unittest
 from unittest import mock
 
 from kitlib import pmstart
+from kitlib.pmstart import fglock
 from kitlib.git import cmd as gitcmd
 from kitlib.records import landing
 from tests import gitfixture
 from tests.realgit import real_git
+
+
+def setUpModule():
+    """The checklist must not read this machine's foreground lock value (fglock has its own tests)."""
+    global _orig_read_live
+    _orig_read_live = fglock.read_live
+    fglock.read_live = lambda user32=None: 0
+
+
+def tearDownModule():
+    fglock.read_live = _orig_read_live
 
 
 class Base(unittest.TestCase):

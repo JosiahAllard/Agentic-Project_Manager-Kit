@@ -7,7 +7,8 @@ Selection (`select`):
   diff     a step runs when it is `always`, or a changed path matches one of its `globs` and none
            of its `exclude`, or a changed path matching its `content.globs` holds `content.regex`
            (read from the working tree). `manual` steps never run here.
-  full     every step that is not `manual`; build(full=True) gives each its `full_cmd` when set.
+  full     every step that is not `manual`; build(full=True) gives each its `full_cmd` when set,
+           and build(daily=True) (the daily full run) its `daily_cmd` before that.
   only     exactly the named steps (manual ones included); an unknown name is a GateConfigError.
   In diff and full, a step is then dropped when a step its `skip_if_selected` names is selected.
 Order: `stage` first, main (the default), last; `defer` steps after all of them; config order
@@ -23,9 +24,10 @@ multi-line regexes (re.M).
 
 Gate keys this gate does not implement refuse (GateConfigError) when set, rather than being
 ignored: `python_tests` "pytests", `python_tests_floor` and `trailers` true (a step's
-`kill_retry` is no key at all: kitlib.config refuses it). docs/gate.md "Not ported" says why. A `--pid-hold` argument in `setup`, a
-step's `cmd`, `full_cmd` or `merged_args`, or a landing lane's merged_args refuses too: the pid
-hold of tools/pytests.py and tools/kit_tests.py is opt-in for agent runs, never in the gate.
+`kill_retry` is no key at all: kitlib.config refuses it). docs/gate.md "Not ported" says why. A
+`--pid-hold` argument in `setup`, a step's `cmd`, `full_cmd`, `daily_cmd` or `merged_args`, or a
+landing lane's merged_args refuses too: the pid hold of tools/pytests.py and tools/kit_tests.py
+is opt-in for agent runs, never in the gate.
 """
 import collections
 import fnmatch
@@ -73,7 +75,7 @@ def unsupported(gate):
     if PID_HOLD_FLAG in (gate.get('setup') or []):
         out.append('"setup" %s (%s)' % (PID_HOLD_FLAG, PID_HOLD_WHY))
     for s in gate.get('steps') or []:
-        for key in ('cmd', 'full_cmd', 'merged_args'):
+        for key in ('cmd', 'full_cmd', 'daily_cmd', 'merged_args'):
             if PID_HOLD_FLAG in (s.get(key) or []):
                 out.append('step %s "%s" %s (%s)' % (s.get('name'), key, PID_HOLD_FLAG,
                                                      PID_HOLD_WHY))
@@ -97,10 +99,22 @@ def substitute(argv, values):
     return out
 
 
-def build(gate, root, base, tools_dir, merged=False, extra=None, full=False):
+def argv_of(s, full=False, daily=False):
+    """The argv key a cmd step runs: in a daily run (kitlib.dailyfull) its `daily_cmd`, else
+    its `full_cmd`, else `cmd`; in any other full run its `full_cmd`, else `cmd`; otherwise
+    `cmd`."""
+    if daily and s.get('daily_cmd'):
+        return s['daily_cmd']
+    if (full or daily) and s.get('full_cmd'):
+        return s['full_cmd']
+    return s['cmd']
+
+
+def build(gate, root, base, tools_dir, merged=False, extra=None, full=False, daily=False):
     """[Step] for every configured step, in config order, plus `setup` first when configured.
     `full`: a step's `full_cmd`, when it has one, is its argv instead of `cmd` (a full run: a
-    step whose cmd selects by the change runs everything). `merged`: a step's merged_args are
+    step whose cmd selects by the change runs everything). `daily` (the daily full run): its
+    `daily_cmd` first, then `full_cmd`, then `cmd` (argv_of). `merged`: a step's merged_args are
     appended (the landing's merged-tree gate), then `extra` (a landing lane's merged_args),
     substituted alike."""
     bad = unsupported(gate)
@@ -119,7 +133,7 @@ def build(gate, root, base, tools_dir, merged=False, extra=None, full=False):
             raise GateConfigError('step name %r is reserved (%s)' % (s['name'], ', '.join(RESERVED)))
         cmd = None
         if s.get('cmd'):
-            argv = s['full_cmd'] if full and s.get('full_cmd') else s['cmd']
+            argv = argv_of(s, full, daily)
             cmd = substitute(list(argv) + (list(s.get('merged_args') or []) + list(extra or [])
                                                if merged else []), values)
         cwd = os.path.normpath(os.path.join(root, s['cwd'])) if s.get('cwd') else root

@@ -194,7 +194,7 @@ class TheHold(unittest.TestCase):
 
     def test_warm_waits_again_when_a_wait_wakes_early(self):
         # On Windows an Event.wait can return a fraction of a millisecond early (0.3997 s of
-        # 0.4 s, KIT-SHIELD-WARM-EARLY): warm waits until the clock reaches its target. Every
+        # 0.4 s): warm waits until the clock reaches its target. Every
         # wait here wakes 50 ms early, so one wait alone would return well short of 0.4 s.
         held = self.hold(0.5)
         real, asked = held._done.wait, []

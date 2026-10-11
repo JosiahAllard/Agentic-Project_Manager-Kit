@@ -900,6 +900,10 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
         table = kinds_table or kinds_mod.load(store.kinds_path)
     except kinds_mod.KindsError as e:
         raise LockError(EXIT_REQUIRE, "require-lock: %s; the command was not run" % e)
+    try:
+        kind = kinds_mod.resolve(kind, table, store.kinds_path)
+    except kinds_mod.KindsError as e:
+        raise LockError(EXIT_REQUIRE, "require-lock: %s; the command was not run" % e)
     if kind not in table:
         raise LockError(EXIT_USAGE, "usage: unknown kind %r (known: %s)" % (kind, ", ".join(sorted(table))))
     k = table[kind]

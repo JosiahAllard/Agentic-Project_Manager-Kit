@@ -376,7 +376,7 @@ class UsageMistakesAreUsageErrors(LinkedCase):
     def test_a_path_shaped_body(self):
         self.put('a.py', 'x\n')
         self.assert_usage('pass --body-file', 'a.py', b='a.py')
-        self.assert_usage('looks like an absolute path', 'a.py', b='Z:/nowhere/notes.txt')
+        self.assert_usage('looks like an absolute path', 'a.py', b='D:/nowhere/notes.txt')
         self.assert_usage('looks like an absolute path', 'a.py', b='%TEMP%\\notes')
 
     def test_owner_authored_is_not_exempt_from_the_path_shaped_body_refusal(self):
@@ -477,7 +477,7 @@ class AMachinePathInTheMessageIsRefused(LinkedCase):
 
 
 class AStagedMachinePathIsRefused(LinkedCase):
-    LINE = 'root = "Z:' + '\\\\' + 'GitHub' + '\\\\' + 'kit"\n'
+    LINE = 'root = "D:' + '\\\\' + 'GitHub' + '\\\\' + 'kit"\n'
 
     def test_a_staged_hit_is_refused_and_this_calls_additions_are_unstaged(self):
         self.put('ok.py', 'x\n')

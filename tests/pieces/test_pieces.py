@@ -77,14 +77,14 @@ class Answers(unittest.TestCase):
     """What the tools ask, under the layout before and after the move."""
 
     def test_path_keeps_a_trailing_slash(self):
-        self.assertEqual(self.P('pvp', 'puffer/patches/'), self.table.dir('pvp') + '/puffer/patches/')
-        self.assertEqual(self.P('pvp'), self.table.dir('pvp'))
+        self.assertEqual(self.P('trainer', 'vendor/patches/'), self.table.dir('trainer') + '/vendor/patches/')
+        self.assertEqual(self.P('trainer'), self.table.dir('trainer'))
 
     def test_the_longest_dir_wins(self):
         self.assertEqual(self.table.piece_of(self.P('model-sums')), 'model-sums')
-        self.assertEqual(self.table.piece_of(self.P('delta-scripts', 'src/A.java')), 'delta-scripts')
+        self.assertEqual(self.table.piece_of(self.P('aux-scripts', 'src/A.java')), 'aux-scripts')
         self.assertEqual(self.table.piece_of(self.P('node-docs')), 'node-docs')
-        self.assertEqual(self.table.piece_of(self.P('brain-docs', 'auth.md')), 'brain-docs')
+        self.assertEqual(self.table.piece_of(self.P('control-docs', 'auth.md')), 'control-docs')
         self.assertIsNone(self.table.piece_of('docs/INDEX.md'))
         self.assertIsNone(self.table.piece_of(self.table.dir('scripts') + 'x/A.java'))   # no bare prefix
 
@@ -102,18 +102,18 @@ class Answers(unittest.TestCase):
 
     def test_a_md_in_a_forcing_piece_forces_nothing(self):
         # A doc in a forcing piece must force no module's tests.
-        for rel in ('README.md', 'brain-node.md', 'notes/Spec.MD'):
+        for rel in ('README.md', 'control-node.md', 'notes/Spec.MD'):
             with self.subTest(rel=rel):
                 self.assertEqual(self.table.forces_of(self.P('protocol', rel)), [])
 
     def test_any_other_file_in_a_forcing_piece_still_forces(self):
-        for rel in ('brain-node.schema.json', 'relogin-exemption-cases.json', 'gen/Wire.java',
+        for rel in ('control-node.schema.json', 'exemption-cases.json', 'gen/Wire.java',
                     'build.gradle.kts', 'README.md.txt'):
             with self.subTest(rel=rel):
                 self.assertEqual(self.table.forces_of(self.P('protocol', rel)), ['worker'])
 
     def test_dotnet_changes(self):
-        for pid in ('Fleet.Brain', 'Fleet.Node.Core', 'Fleet.Protocol.Tests', 'brain-ops'):
+        for pid in ('Mesh.Control', 'Mesh.Node.Core', 'Mesh.Protocol.Tests', 'control-ops'):
             with self.subTest(piece=pid):
                 self.assertTrue(self.table.is_dotnet(self.P(pid, 'X.cs')))
         self.assertTrue(self.table.is_dotnet(self.table.solution()))
@@ -122,7 +122,7 @@ class Answers(unittest.TestCase):
 
     def test_a_path_under_the_solution_folder_no_piece_holds_is_dotnet(self):
         # A new project, Directory.Packages.props or nuget.config next to the solution: dotnet may
-        # read it, so it counts before the table lists it (as the old `fleet/` prefix rule did).
+        # read it, so it counts before the table lists it (as the old `mesh/` prefix rule did).
         sdir = self.table.solution_dir()
         for rel in ('NewProj/A.cs', 'Directory.Packages.props', 'nuget.config', 'X.cs'):
             path = posixpath.join(sdir, rel)
@@ -169,15 +169,15 @@ class Repath(unittest.TestCase):
                     self.assertEqual(fx.NEW.repath(p['was'] + '/a/b.txt'), p['dir'] + '/a/b.txt')
 
     def test_the_longest_was_wins(self):
-        self.assertEqual(fx.NEW.repath('fleet/docs/node.md'), fx.NEW.dir('node-docs'))
-        self.assertEqual(fx.NEW.repath('delta-scripts/models/SHA256SUMS'), fx.NEW.dir('model-sums'))
+        self.assertEqual(fx.NEW.repath('mesh/docs/node.md'), fx.NEW.dir('node-docs'))
+        self.assertEqual(fx.NEW.repath('aux-scripts/models/SHA256SUMS'), fx.NEW.dir('model-sums'))
 
     def test_root_files_paths_outside_any_piece_and_the_old_table(self):
-        self.assertEqual(fx.NEW.repath('fleet/global.json'), 'global.json')
+        self.assertEqual(fx.NEW.repath('mesh/global.json'), 'global.json')
         self.assertEqual(fx.NEW.repath('docs/INDEX.md'), 'docs/INDEX.md')
         self.assertEqual(fx.OLD.repath('worker/A.java'), 'worker/A.java')
-        self.assertIn('pvp', fx.NEW.legacy_dirs())
-        self.assertIn('fleet/.gitignore', fx.NEW.legacy_dirs())
+        self.assertIn('trainer', fx.NEW.legacy_dirs())
+        self.assertIn('mesh/.gitignore', fx.NEW.legacy_dirs())
         self.assertEqual(fx.OLD.legacy_dirs(), [])
 
     def test_a_removed_folder_maps_to_none(self):
@@ -250,7 +250,7 @@ class Cli(RepoCase):
         t = pieces.table(self.root)
         self.assertEqual(t.data, fx.NEW_DATA)
         self.assertEqual(self.run_cli('--dir', 'worker'), (0, t.dir('worker') + '\n'))
-        self.assertEqual(self.run_cli('--path', 'pvp', 'env/x.h'), (0, t.path('pvp', 'env/x.h') + '\n'))
+        self.assertEqual(self.run_cli('--path', 'trainer', 'env/x.h'), (0, t.path('trainer', 'env/x.h') + '\n'))
         self.assertEqual(self.run_cli('--piece-of', t.path('model-sums')), (0, 'model-sums\n'))
         code, out = self.run_cli('--list')
         self.assertEqual((code, len(out.splitlines())), (0, len(t.pieces)))
@@ -261,7 +261,7 @@ class Cli(RepoCase):
         self.assertEqual(self.run_cli('--output', 'worker', 'install'), (0, t.output('worker', 'install') + '\n'))
         self.assertEqual(self.run_cli('--was', 'worker'), (0, t.get('worker').get('was', '') + '\n'))
         self.assertEqual(self.run_cli('--was', 'plans'), (0, '\n'))
-        self.assertEqual(self.run_cli('--gradle', 'pvp')[0], 2)
+        self.assertEqual(self.run_cli('--gradle', 'trainer')[0], 2)
         self.assertEqual(self.run_cli('--output', 'scripts', 'nope')[0], 2)
 
     def test_an_unknown_id_or_path_exits_2(self):
