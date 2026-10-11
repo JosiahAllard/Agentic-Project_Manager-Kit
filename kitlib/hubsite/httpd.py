@@ -3,6 +3,7 @@
   Listener(addr, api, gate, static_dir=None, host_rule=None, routes=None, via='', log=None,
            max_waits=MAX_WAITS, max_body=MAX_BODY, max_connections=MAX_CONNECTIONS)
       .port .url .waiting          the bound port (addr may name port 0), its URL, waits blocked now
+      .closing                     close_door() was called
       .start()                     serve on a thread; .stop(timeout) = close_door() then join()
       .close_door()                stop accepting; requests in flight go on
       .drain(timeout)              wait for the requests in flight that are not long waits
@@ -32,7 +33,9 @@ One request, in this order, for every method and every path:
   3. The method: GET, HEAD and POST; anything else is a 405. No response carries a CORS header.
   4. A POST is a write: Content-Type application/json (415), exactly one Origin whose host
      equals the Host header (403), a Content-Length (411) of at most max_body bytes (413, the
-     body is not read) and a body that is JSON or empty (400).
+     body is not read) and a body that is JSON or empty (400). Once the door is closed
+     (close_door) a write still arriving on an open connection is a 503 `store`, its body not
+     read: after close_door() and then drain(), no write is in flight and none can begin.
   5. Routing: `routes` ({(method, path): fn(request) -> Response}), then every path under /api/
      through Api.call with the request's role, body, query and via, then for GET and HEAD a
      file of static_dir ("/" is INDEX), else 404.
@@ -101,6 +104,7 @@ BUSY = 'busy'
 RETRY_AFTER_S = 1
 INTERNAL = 'the server could not answer this request'
 UNREADABLE = 'the request could not be read'
+CLOSING = 'the server is closing: nothing more is written'
 SECURITY_HEADERS = (
     ('X-Content-Type-Options', 'nosniff'),
     ('Cache-Control', 'no-store'),
@@ -427,6 +431,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         request.via = self._via(listener)
         # 4. a write's own rules
         if request.method == 'POST':
+            # read after _enter() counted this request: a write that passes here is one drain()
+            # waits for, and one that arrives later is refused (Listener.closing)
+            if listener.closing:
+                return refusal(503, 'store', CLOSING, 'store')
             refused = self._read_body(listener, request, host)
             if refused is not None:
                 return refused
@@ -566,6 +574,11 @@ class Listener(object):
     def waiting(self):
         with self._cond:
             return self._waits
+
+    @property
+    def closing(self):
+        """True once close_door() was called: no connection is accepted and no write begins."""
+        return self._closed
 
     def _enter(self):
         with self._cond:

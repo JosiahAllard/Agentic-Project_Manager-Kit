@@ -1,9 +1,9 @@
-"""kitlib.hubsite.httpd: the wait gate. Long waits are held open over real sockets; every one is
-ended by an event (a store write, the store closing), never by a sleep."""
+"""kitlib.hubsite.httpd: the wait gate and the closing door. Long waits are held open over real
+sockets; every one is ended by an event (a store write, the store closing), never by a sleep."""
 import threading
 import unittest
 
-from kitlib.hubsite import api, httpd
+from kitlib.hubsite import api, auth, httpd
 from kitlib.hubsite.api import BASE
 from tests.hubsite import httpfix
 from tests.hubsite.httpfix import TIMEOUT, get, post
@@ -151,6 +151,48 @@ class WaitCase(httpfix.ListenerCase):
                 self.assertEqual(x.code(), 'store')
         self.assertEqual(lis.waiting, 0)
         self.assertEqual(self.errors(), [])
+
+    def held_request(self, send):
+        """Send one request through a gate that holds it, close the door while it is held, then
+        let it go on: (the listener, the reply)."""
+        arrived, go = threading.Event(), threading.Event()
+
+        def gate(request):
+            arrived.set()
+            go.wait(TIMEOUT)
+            return auth.OWNER
+
+        lis = self.listener(gate=gate)
+        self.assertFalse(lis.closing)
+        got = []
+        client = threading.Thread(target=lambda: got.append(send(lis.port)), name='test-client',
+                                  daemon=True)
+        client.start()
+        self.addCleanup(client.join, TIMEOUT)
+        self.addCleanup(go.set)
+        self.assertTrue(arrived.wait(TIMEOUT), 'the request never reached the gate')
+        lis.close_door()
+        self.assertTrue(lis.closing)
+        self.assertFalse(lis.drain(0), 'drain did not count the request in flight')
+        go.set()
+        client.join(TIMEOUT)
+        self.assertEqual(len(got), 1, 'the held request was never answered')
+        self.assertTrue(lis.drain(TIMEOUT))
+        return lis, got[0]
+
+    def test_a_write_that_meets_a_closed_door_is_refused_and_writes_nothing(self):
+        before = self.store.revision
+        lis, r = self.held_request(lambda port: post(port, BASE + '/todos', {'title': 't'}))
+        self.assertEqual((r.status, r.code()), (503, 'store'))
+        self.assertEqual(r.json()['error']['message'], httpd.CLOSING)
+        self.assertEqual(self.store.revision, before)
+        self.assertEqual(self.store.docs('todos'), {})
+        self.assertEqual(self.errors(), [])
+
+    def test_a_read_that_meets_a_closed_door_is_still_answered(self):
+        lis, r = self.held_request(lambda port: get(port, HEALTH))
+        self.assertEqual(r.status, 200)
+        self.assertIs(r.json()['ok'], True)
 
     def test_no_thread_outlives_its_listener(self):
         lis = self.listener()
