@@ -4,8 +4,9 @@ tools/landed.py; docs/landed.md). tools/landed.py is the entry point.
 `look(root, ref)` -> Outcome(code, lines). It never loops, sleeps, fetches or writes.
 
 LANDED: the tip is an ancestor of the main branch (`.kit.json` "repo".main_branch) ON THE REMOTE
-("repo".remote, read with `git ls-remote`) when the clone has that remote, else of the local main
-branch. A remote that cannot be reached falls back to the last fetched `refs/remotes/<remote>/<main>`
+("repo".remote, read with `git ls-remote`) when the clone has that remote, else, in a clone with
+no remote at all, of the local main branch (that remote missing beside others: CANNOT ANSWER). A
+remote that cannot be reached falls back to the last fetched `refs/remotes/<remote>/<main>`
 and says so. A remote sha this clone has never fetched cannot be judged: not yet, with a hint.
 
 Not landed, it reports:
@@ -26,7 +27,8 @@ A failed verdict older than the tip commit is stale (the branch moved on) and no
 
 Exit codes: LANDED 0; NOT_YET 1 (no verdict, a passing one, a landing holding the lock, or the
 remote sha unknown here); FAILED 2 (the newest verdict failed and the lock is free), and 2 too when
-it cannot answer (CANNOT ANSWER: the ref does not resolve; or the configuration was refused).
+it cannot answer (CANNOT ANSWER: the ref does not resolve, or git gives no answer for it or for
+whether the remote exists; or the configuration was refused).
 """
 import collections
 import os
@@ -55,11 +57,41 @@ def git(root, *args):
     return out
 
 
+NO_SUCH_REMOTE = 2      # `git remote get-url <name>` for a remote this clone does not have
+NOT_HERE = 'not in this clone'
+
+
+class NoAnswer(Exception):
+    """Git gave no answer to a question look() cannot go on without."""
+
+
 def remote_main(root, remote, main):
     """`(sha or None, how)`: the remote's main branch ('' when it has none), or None when this
-    clone has no such remote."""
-    if git(root, 'remote', 'get-url', remote) is None:
+    clone has no remote at all. NoAnswer when git cannot say whether it has the remote, or when
+    `remote` is missing but other remotes exist.
+
+    GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - any failure of `remote get-url` read as "no remote", so a
+    git ended from outside (exit 1, no output: refs.KILLED_SHAPE) let the LOCAL main decide and
+    could answer LANDED for a branch the remote does not have. Only git's own "No such remote"
+    exit (2) means no remote; any other failure is no answer.
+
+    GOTCHA: a remote missing while others exist is a misnamed one (`.kit.json` "repo".remote), and
+    the local main must not decide then either: NoAnswer naming the remotes there are, the rule of
+    kitlib/backlog/store.py find_remote. Only a clone with no remote at all falls back."""
+    r = cmd.call(['remote', 'get-url', remote], root, timeout=GIT_TIMEOUT)
+    if r.rc == NO_SUCH_REMOTE:
+        names, why = cmd.run_text(['remote'], root, timeout=GIT_TIMEOUT)
+        if names is None:
+            raise NoAnswer('there is no remote `%s`, and the remotes there are could not be '
+                           'listed: %s' % (remote, why))
+        if names:
+            raise NoAnswer('there is no remote `%s`, but this clone has %s: set .kit.json '
+                           '"repo".remote' % (remote, ', '.join(names.split())))
         return None, 'no remote `%s`' % remote
+    if r.rc != 0:
+        raise NoAnswer('whether this clone has the remote `%s` could not be read: git remote '
+                       'get-url exited %s%s' % (remote, r.rc, ': ' + r.err if r.err else
+                                                ' and printed nothing'))
     sha, _why = refs.ls_remote(remote, 'refs/heads/' + main, root, timeout=GIT_TIMEOUT)
     if sha is not None:
         return sha, 'ls-remote %s' % remote
@@ -68,11 +100,15 @@ def remote_main(root, remote, main):
 
 
 def contains(root, tip, target):
-    """True / False, or None when `target` is not a commit this clone has."""
-    if git(root, 'cat-file', '-e', target + '^{commit}') is None:
-        return None
-    got, _why = refs.is_ancestor(tip, target, root)
-    return bool(got)
+    """`(True/False, None)`; `(None, NOT_HERE)` when `target` is not a commit this clone has;
+    `(None, why)` when git gives no answer (refs.is_ancestor's None, a git ended from outside
+    included: KIT-GIT-EXIT1-ANSWERS-2, where `bool()` turned it into a NO)."""
+    have, why = refs.resolve(target, root, known=True)
+    if have == '':
+        return None, NOT_HERE
+    if have is None:
+        return None, why
+    return refs.is_ancestor(tip, target, root)
 
 
 def log_bases(cfg, root, ref, note=runner.say_note):
@@ -172,31 +208,46 @@ def look(root, ref):
     except (ConfigError, landing.LockError) as e:
         return Outcome(CANNOT, ['landed: refused: kit configuration: %s' % e])
     main_branch, remote = cfg.main_branch, cfg.remote
-    tip, _why = refs.resolve(ref, root)
+    tip, why = refs.resolve(ref, root, known=True)
     if tip is None:
+        return Outcome(CANNOT, ['landed: CANNOT ANSWER: `%s` could not be read in %s: %s'
+                                % (ref, root, why)])
+    if not tip:
         return Outcome(CANNOT, ['landed: CANNOT ANSWER: `%s` does not resolve to a commit in %s'
                                 % (ref, root)])
     out = []
-    local, _ = refs.branch_tip(main_branch, root)
+    # known=True: a git ended from outside is no answer, never "no such branch"
+    # (KIT-GIT-EXIT1-ANSWERS-2). An unread local main is shown as such and measures nothing.
+    local, why = refs.resolve('refs/heads/%s' % main_branch, root, known=True)
     out.append('tip        %s  %s' % (tip[:12], ref))
     out.append('local      %s  %s%s' % ((local or '-')[:12], main_branch,
-                                        '' if local else ' (no such branch here)'))
-    target, how = remote_main(root, remote, main_branch)
+                                        '' if local else ' (no such branch here)' if local == ''
+                                        else ' (UNKNOWN: %s)' % why))
+    try:
+        target, how = remote_main(root, remote, main_branch)
+    except NoAnswer as e:
+        return Outcome(CANNOT, out + ['landed: CANNOT ANSWER: %s' % e])
     if target is None:
         target, where = local, 'local %s (%s)' % (main_branch, how)
     else:
         out.append('remote     %s  %s/%s  (%s)' % ((target or '-')[:12], remote, main_branch, how))
         where = '%s/%s' % (remote, main_branch)
-    landed = contains(root, tip, target) if target else False
-    if landed is None:
+    landed, why = contains(root, tip, target) if target else (None if target is None else False,
+                                                              None)
+    if target is None:
+        out.append('contained  UNKNOWN: local %s could not be read' % main_branch)
+    elif landed is None and why == NOT_HERE:
         out.append('contained  UNKNOWN: %s is not in this clone - `git fetch %s`, then re-run'
                    % (target[:12], remote))
+    elif landed is None:
+        out.append('contained  UNKNOWN: whether %s holds %s could not be read: %s'
+                   % (where, tip[:12], why))
     else:
         out.append('contained  %s in %s' % ('YES' if landed else 'no', where))
     if landed:
         out.append('LANDED')
         return Outcome(LANDED, out)
-    if local and target != local and contains(root, tip, local):
+    if local and target != local and contains(root, tip, local)[0]:
         out.append('note       merged into local %s, not on %s yet' % (main_branch, where))
     held, line = lock_state(lock)
     out.append(line)

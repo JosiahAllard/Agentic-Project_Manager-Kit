@@ -48,15 +48,15 @@ R_DATA = {
         ['docs/ops/REPO.md', ['test_doc_index']],
         ['settings.gradle.kts', ['test_gate', 'test_pieces']],
         ['buildscripts/', ['test_buildscripts', 'test_republish_live']],
-        ['buildscripts/models-container.sh', ['test_pvp_step']],
-        ['gradle.properties', ['test_runelite_bump']],
+        ['buildscripts/models-container.sh', ['test_trainer_step']],
+        ['gradle.properties', ['test_dep_bump']],
         [{'piece': 'model-sums', 'path': ''}, ['test_deploy_scripts']],
-        [{'piece': 'delta-scripts', 'path': 'src/test/java/'}, ['test_gate']],
-        [{'piece': 'binding', 'path': 'src/main/java/org/beta/binding/client/CycleProbe.java'},
+        [{'piece': 'aux-scripts', 'path': 'src/test/java/'}, ['test_gate']],
+        [{'piece': 'link', 'path': 'src/main/java/org/example/link/client/CycleProbe.java'},
          ['test_density_report']],
-        [{'piece': 'brain-ops', 'path': '/'}, ['test_republish_live']],
-        [{'piece': 'pvp', 'path': 'env/'}, ['test_pvp_step']],
-        [{'piece': 'pvp', 'path': 'train/'}, ['test_pvp_step']],
+        [{'piece': 'control-ops', 'path': '/'}, ['test_republish_live']],
+        [{'piece': 'trainer', 'path': 'env/'}, ['test_trainer_step']],
+        [{'piece': 'trainer', 'path': 'train/'}, ['test_trainer_step']],
         [{'solution': True}, ['test_pieces']],
     ],
     'patterns': [{'regex': BUILD_GRAPH, 'modules': ['test_gate', 'test_test_reads']},
@@ -142,7 +142,7 @@ class Selection(Fixture):
         self.assertIn('test_dash_c', self.select('tools/c.py'))
 
     def test_a_docstring_or_assert_message_saying_import_is_not_an_edge(self):
-        # TOOLS-DEPS-PROSE-IMPORT: prose is not a `python -c` child, so it neither selects the test
+        # Prose is not a `python -c` child, so it neither selects the test
         # nor makes c count as tested.
         os.remove(os.path.join(self.dir, 'test_c.py'))
         self.write('test_prose.py', '"""Checks that `import c` still works."""\n'
@@ -180,7 +180,7 @@ class Selection(Fixture):
                 self.assertIn('c', self.graph().tested())
 
     def test_a_test_naming_a_tool_only_by_file_name_does_not_count_as_testing_it(self):
-        # TOOLS-DEPS-TESTED-EDGES: the literal still selects the test, but it does not make the
+        # The literal still selects the test, but it does not make the
         # untested audit count c as tested (c's own test_c is removed, so nothing imports it).
         os.remove(os.path.join(self.dir, 'test_c.py'))
         self.write('test_run.py', "import subprocess\nCMD = ['python', 'tools/c.py']\n" + TESTCASE)
@@ -256,12 +256,12 @@ class Selection(Fixture):
                          ['test_backlog', 'test_tool_deps'])
 
     def test_a_non_tools_unpinned_path_selects_nothing(self):
-        self.assertEqual(self.select('docs/architecture.md', 'fleet/Node.cs'), [])
+        self.assertEqual(self.select('docs/architecture.md', 'mesh/Node.cs'), [])
 
     def test_a_pinned_path_selects_exactly_its_module(self):
         self.assertEqual(self.select('docs/INDEX.md'), ['test_doc_index', 'test_tool_deps'])
-        # delta-scripts' test sources are also test sources: the literal-scan slice too.
-        self.assertEqual(self.select(OLD.path('delta-scripts', 'src/test/java/org/X.java')),
+        # aux-scripts' test sources are also test sources: the literal-scan slice too.
+        self.assertEqual(self.select(OLD.path('aux-scripts', 'src/test/java/org/X.java')),
                          ['test_gate', 'test_test_reads', 'test_tool_deps'])
 
     def test_a_tools_extra_file_selects_its_readers_dependents(self):
@@ -341,39 +341,39 @@ class PinnedInPieces(unittest.TestCase):
         self.assertIn('test_pieces', self.select(self.table.solution()))
 
     def test_every_build_graph_file_selects_test_gate(self):
-        # GATE-SCOPED review: BuildGraphOracle (in test_gate) must run on the branch that adds a
+        # BuildGraphOracle (in test_gate) must run on the branch that adds a
         # dependency edge, so every file it parses selects test_gate, a new module's included.
         paths = ['settings.gradle.kts', 'Directory.Build.props', 'Directory.Packages.props',
                  self.table.solution(), 'brand-new/build.gradle.kts', 'brand/New.Thing/New.Thing.csproj']
         paths += [d + '/build.gradle.kts' for _, d in self.table.gradle_pieces()]
         paths += [self.P(p['id'], p['id'] + '.csproj') for p in self.table.pieces
-                  if p.get('dotnet') and p['id'].startswith('Fleet.')]
+                  if p.get('dotnet') and p['id'].startswith('Mesh.')]
         for path in paths:
             with self.subTest(path=path):
                 self.assertIn('test_gate', self.select(path))
-        for path in ('settings.gradle', 'docs/build.gradle.kts.md', 'brain/Fleet.Brain/Program.cs',
+        for path in ('settings.gradle', 'docs/build.gradle.kts.md', 'control/Mesh.Control/Program.cs',
                      'shared/x.csproj.user'):
             with self.subTest(path=path):
                 self.assertNotIn('test_gate', self.select(path))
 
     def test_a_test_source_change_selects_the_literal_scan_slice_only(self):
-        # GATE-SCOPED re-review: a new runtime read in test code is checked on its own branch.
+        # A new runtime read in test code is checked on its own branch.
         paths = [self.P(m, 'src/test/java/org/X.java') for m, _ in self.table.gradle_pieces()]
-        paths += [self.P('beta-api', 'src/testFixtures/java/org/F.java'),
-                  self.P('Fleet.Brain.Tests', 'Backup/New.cs'), self.P('Fleet.Node.Tests', 'New.cs'),
-                  self.P('Fleet.Protocol.Tests', 'New.cs')]
+        paths += [self.P('core-api', 'src/testFixtures/java/org/F.java'),
+                  self.P('Mesh.Control.Tests', 'Backup/New.cs'), self.P('Mesh.Node.Tests', 'New.cs'),
+                  self.P('Mesh.Protocol.Tests', 'New.cs')]
         for path in paths:
             with self.subTest(path=path):
                 got = self.select(path)
                 self.assertIn('test_test_reads', got)
-                if not path.startswith(self.P('delta-scripts', '')):   # pinned to test_gate on its own
+                if not path.startswith(self.P('aux-scripts', '')):   # pinned to test_gate on its own
                     self.assertNotIn('test_gate', got)
-        for path in (self.P('Fleet.Brain', 'Program.cs'), self.P('binding', 'src/main/java/org/X.java')):
+        for path in (self.P('Mesh.Control', 'Program.cs'), self.P('link', 'src/main/java/org/X.java')):
             with self.subTest(path=path):
                 self.assertNotIn('test_test_reads', self.select(path))
-        # TOOLS-GATE-SELECT-SLNX review: a build-graph file can make a project a test project, so it
+        # A build-graph file can make a project a test project, so it
         # runs the slice's TEST_SOURCE naming guard too (a new non-*Tests* test project's .csproj).
-        for path in (self.P('Fleet.Brain.Tests', 'Fleet.Brain.Tests.csproj'), 'brand/New.Checks/New.Checks.csproj',
+        for path in (self.P('Mesh.Control.Tests', 'Mesh.Control.Tests.csproj'), 'brand/New.Checks/New.Checks.csproj',
                      'settings.gradle.kts', 'brand-new/build.gradle.kts'):
             with self.subTest(path=path):
                 self.assertIn('test_test_reads', self.select(path))
@@ -643,9 +643,9 @@ class Config(Fixture):
             tool_deps.select({'docs/x.md'}, g)
 
     def test_a_piece_pin_resolves_through_the_table_passed(self):
-        cfg = tool_deps.config(data={'pinned': [[{'piece': 'binding', 'path': 'x/'}, ['test_b']],
+        cfg = tool_deps.config(data={'pinned': [[{'piece': 'link', 'path': 'x/'}, ['test_b']],
                                                 [{'solution': True}, ['test_s']]]})
-        self.assertEqual(tool_deps.pinned(cfg, OLD), [(OLD.path('binding', 'x/'), ('test_b',)),
+        self.assertEqual(tool_deps.pinned(cfg, OLD), [(OLD.path('link', 'x/'), ('test_b',)),
                                                       (OLD.solution(), ('test_s',))])
 
     def test_the_tools_dir_comes_from_the_repo_section(self):
