@@ -4,11 +4,20 @@
 inherit the same. Classes marked tests.realgit.real_git (the integration tier) run on real git.
 
 The guard below makes the unit tier's promise checkable: while KIT_FAKE_GIT is 1, a process
-this package is imported into that starts git raises instead of starting it."""
+this package is imported into that starts git raises instead of starting it.
+
+The home fence (docs/test-tools.md "Home fence"): kitlib.config.user.fence_home() records the home
+folder this process starts with, and from then on kitlib.config.user.home_dir() refuses it
+(HomeFenced), so a test that forgets to give a home or account folders fails instead of reading the
+real ~/.claude* and machine config folders."""
 import os
 import sys
 
 os.environ.setdefault('KIT_FAKE_GIT', '1')
+
+from kitlib.config import user as _kuser  # noqa: E402  (after KIT_FAKE_GIT is set)
+
+_kuser.fence_home()
 
 
 def _is_git(argv):
