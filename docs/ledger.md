@@ -52,6 +52,21 @@ python tools/ledger_refs.py R-nnnn [R-nnnn ...] | --from-json FILE [FILE ...]
 
 `kitlib/ledger/read.py` (`parse`, `read_entries`, `Entry`) is the only parser of the ledger's entries. `kitlib.ledger.entries` and `list_rulings` (the digest feed), `kitlib.backlog.ledger` (the backlog's ruling gates, which re-exports `read_entries` and `Entry`), `kitlib/rulingcites` (through `kitlib.backlog.ledger`) and the orphan scan all read through it. It reads a header leniently and says whether it is also in the writer's form (`Entry.strict`); the validator and the append-only check in `kitlib/ledger/fmt.py` work on the text and stay apart, since they judge the format instead of reading entries. A file is read as UTF-8 with a leading BOM dropped.
 
+## Path checks
+
+Before the ledger, or the standing digest beside it, is read or written, `kitlib/ledger/safepath.py` (`refusal`) checks its path. This is defence in depth beside the guard, which refuses only a direct edit of the ledger file. Two checks, Windows APIs through ctypes:
+
+- **Reparse points.** The file and every existing folder above it, except the drive root, must not be a reparse point (a junction, a symlink or any other tag; `os.lstat` `st_file_attributes`).
+- **Owner.** The file and its own folder, where they exist, must be owned by this process's user, Administrators or SYSTEM (`GetNamedSecurityInfoW`). An owner that cannot be read is refused.
+
+A part that does not exist yet is skipped, so the first `add` can still create the ledger. A refused path is never opened:
+
+- `kitlib/ledger/read.py` `read_file` returns the refusal as its reason, and the consumers treat it as an unreadable ledger. A backlog write whose ruling must be checked fails (`kitlib.backlog.ledger.check_ruling`), `backlog.py check` reports each ruling as not checked, and `ruling_cites` prints its NOT CHECKED warning.
+- `kitlib/ledger/write.py` raises `Refused`, so `tools/ledger.py` exits 1. `list` and `standing` refuse the same way.
+- The coordinator start's rulings line becomes the refusal, and `ledger_refs` reports it as an error with no ledger mentions.
+
+Tests: `tests/ledger/test_safepath.py`.
+
 ## Configuration
 
 The keys are in the machine config (docs/kit-json.md "Machine config keys"):
