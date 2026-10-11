@@ -143,7 +143,14 @@ class RemapForms(unittest.TestCase):
                     '$c = "ndr"; & $c env FileSystem .', '$x = 1\n. .\\setup', '. .\\setup', '& .\\script',
                     '$p = [powershell]::Create()', '$ExecutionContext.InvokeCommand.InvokeScript($s)',
                     '$p.AddScript($s)'):
+            # before the item: refused (a computed command name meets `unreadable` first)
             text = '%s%s%s' % (pre, '\n' if '\n' in pre else '; ', item)
+            with self.subTest(text):
+                d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
+                self.assertIsNotNone(d, 'allowed: %s' % text)
+                self.assertIn(d.rule, ('main-checkout', 'unreadable'), d.reason)
+            # after the item: the line check alone keeps env:\x.txt judged as a file
+            text = '%s\n%s' % (item, pre)
             with self.subTest(text):
                 d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
                 self.assertIsNotNone(d, 'allowed: %s' % text)
