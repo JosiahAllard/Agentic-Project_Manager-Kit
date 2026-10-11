@@ -168,7 +168,7 @@ class LandingLock(object):
                 text = f.read()
         except FileNotFoundError:
             return None
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:      # not UTF-8: unreadable, so held
             raise LockError('cannot read %s: %s' % (self.path, e))
         try:
             rec = json.loads(text)
@@ -304,7 +304,7 @@ class LandingLock(object):
         try:
             with open(self.path, encoding='utf-8') as f:
                 return f.read()
-        except OSError:
+        except (OSError, UnicodeDecodeError):      # break_lock refuses a file it cannot read
             return None
 
     def break_lock(self, holder_gone=False):
@@ -317,7 +317,8 @@ class LandingLock(object):
         if judged is None:
             if not os.path.exists(self.path):
                 return False, 'nobody holds the landing lock: nothing to break'
-            return False, '%s cannot be read: not broken' % self.path
+            return False, ('%s cannot be read: not broken. Cleared by hand only once no landing '
+                           'runs' % self.path)
         try:
             raw = json.loads(judged)
         except ValueError:
