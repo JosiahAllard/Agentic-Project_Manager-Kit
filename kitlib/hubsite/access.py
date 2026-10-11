@@ -1,0 +1,401 @@
+"""kitlib.hubsite.access: checks a Cloudflare Access application token (an RS256 JWT) on the
+standard library. The tunnel listener's only gate: a token this module refuses is not the owner.
+
+No listener, no config read, no file: the caller passes the team, the audience tag, the allowed
+emails and the time. Nothing here prints, parses arguments or exits.
+
+verify(token, keys, team, aud, emails, now) returns the token's claims, or raises AccessError
+whose `reason` is one of REASONS. Checks, in this order; the first that fails is the reason:
+
+  the caller's values   bad-team (not one DNS label), no-audience (empty), bad-allow-list (a bare
+                        string, or an entry that is not text), no-allowed-emails (no entry left
+                        after stripping: an empty list never means "anyone"), bad-clock
+  the token's shape     malformed (not text), too-large (over MAX_TOKEN characters), malformed
+                        (not three dot-separated parts), bad-encoding (a part that is not
+                        canonical unpadded base64url), bad-json (header or payload is not one
+                        JSON object; a repeated key, NaN and Infinity are refused)
+  the header            bad-alg (`alg` is not exactly RS256, so none, HS256 and RS384 never
+                        reach a key), bad-header (a `crit` list: no extension is understood),
+                        bad-kid. `jku`, `x5u`, `jwk` and `x5c` are never read: the key comes
+                        from `keys` alone
+  the key               keys.get(kid): unknown-kid when it gives None; a KeyCache raises
+                        keys-unavailable or keys-stale itself. bad-key unless rsa_key accepts it
+  the signature         bad-signature-length (not the modulus length in bytes),
+                        signature-out-of-range (not below the modulus), bad-signature
+  the claims            no-exp, bad-exp, expired (now >= exp, no leeway); bad-nbf, not-yet-valid
+                        (now < nbf - NBF_LEEWAY_S); wrong-issuer (not ISSUER % team, compared
+                        as written); wrong-audience (`aud` is neither the tag nor a list holding
+                        it); no-email (absent, not text or blank: a service token has none);
+                        email-not-allowed (stripped and casefolded, not in `emails`)
+
+The signature check never parses the padding. It computes pow(s, e, n), builds the one
+EMSA-PKCS1-v1_5 block that is correct for the key size and the SHA-256 digest of
+`header.payload` as received (00 01, FF to fill, 00, DIGEST_INFO, the digest) and compares the
+two whole with hmac.compare_digest. A block with a short FF run, bytes after the digest or
+another DigestInfo encoding is therefore just a different block.
+
+`keys` is anything with get(kid) giving a JWK object or None: a KeyCache, or a dict in tests.
+
+KeyCache(team, fetch=None, clock=None) holds the team's signing keys in memory, kid -> JWK.
+get(kid) fetches when nothing is cached, when the last good fetch is KEY_TTL_S old, or when the
+kid is not cached; but never more than one attempt per REFETCH_S, whatever the reason, so
+neither a stream of unknown kids nor an unreachable server causes a fetch per request. A good
+fetch replaces the whole table (a key no longer published is gone). A fetch that fails, or whose
+document key_table refuses, changes nothing: the cached keys keep serving until STALE_LIMIT_S
+after the last good fetch, then get raises keys-stale; with no good fetch ever it raises
+keys-unavailable. One lock is held across the check and the fetch, so concurrent callers fetch
+once and the rest wait for it. `fetch(team, timeout)` returns the parsed key document; `clock`
+is a monotonic seconds clock, and a clock that runs backwards counts as stale.
+
+fetch_keys(team, timeout) is the one network call: GET ISSUER % team + CERTS_PATH over HTTPS
+with certificate checking, no redirect followed, USER_AGENT and nothing else that names the
+caller. `timeout` bounds each socket operation, not the whole fetch. It raises AccessError
+keys-fetch on any failure.
+"""
+import base64
+import hashlib
+import hmac
+import http.client
+import json
+import math
+import re
+import ssl
+import threading
+import time
+import urllib.error
+import urllib.request
+
+MAX_TOKEN = 8192                # characters; a longer token is refused unread
+ALG = 'RS256'
+MIN_MODULUS_BITS = 2048
+NBF_LEEWAY_S = 60
+ISSUER = 'https://%s.cloudflareaccess.com'      # % team: the `iss` claim, and the keys' origin
+CERTS_PATH = '/cdn-cgi/access/certs'
+FETCH_TIMEOUT_S = 5
+MAX_KEYS_DOC = 256 * 1024       # bytes; a longer key document is refused
+USER_AGENT = 'kit-hub-access/1'
+KEY_TTL_S = 3600                # a good fetch is fresh this long
+REFETCH_S = 60                  # at most one fetch attempt in this long
+STALE_LIMIT_S = 24 * 3600       # cached keys serve this long after the last good fetch
+# DER of DigestInfo{sha256, NULL} up to the 32 digest bytes (RFC 8017, section 9.2, note 1).
+DIGEST_INFO = bytes.fromhex('3031300d060960864801650304020105000420')
+
+REASONS = (
+    'bad-team', 'no-audience', 'bad-allow-list', 'no-allowed-emails', 'bad-clock',
+    'malformed', 'too-large', 'bad-encoding', 'bad-json',
+    'bad-alg', 'bad-header', 'bad-kid',
+    'unknown-kid', 'bad-key',
+    'bad-signature-length', 'signature-out-of-range', 'bad-signature',
+    'no-exp', 'bad-exp', 'expired', 'bad-nbf', 'not-yet-valid',
+    'wrong-issuer', 'wrong-audience', 'no-email', 'email-not-allowed',
+    'keys-unavailable', 'keys-stale', 'keys-fetch', 'keys-malformed',
+)
+
+_TEAM = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?')
+_B64URL = re.compile(r'[A-Za-z0-9_-]*')
+
+
+class AccessError(Exception):
+    """A refused token, or keys that cannot be had. `reason` is one of REASONS; `detail` is for
+    the local log and never holds a token, a claim or any other text the client sent."""
+
+    def __init__(self, reason, detail=''):
+        Exception.__init__(self, '%s: %s' % (reason, detail) if detail else reason)
+        self.reason = reason
+        self.detail = detail
+
+
+def _b64url(text):
+    """The bytes of an unpadded base64url string; ValueError unless it is canonical (the
+    alphabet only, a possible length, unused bits zero)."""
+    if not isinstance(text, str) or not _B64URL.fullmatch(text) or len(text) % 4 == 1:
+        raise ValueError('not base64url')
+    raw = base64.urlsafe_b64decode(text + '=' * (-len(text) % 4))
+    if base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii') != text:
+        raise ValueError('not canonical base64url')
+    return raw
+
+
+def _no_constant(name):
+    raise ValueError('%s is not JSON' % name)
+
+
+def _no_repeat(pairs):
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError('a repeated key')
+        out[key] = value
+    return out
+
+
+def _json(raw):
+    """The value of UTF-8 JSON bytes; ValueError on anything json accepts beyond the standard
+    (NaN, Infinity), on a repeated object key, and on nesting too deep to parse."""
+    try:
+        return json.loads(raw.decode('utf-8'), object_pairs_hook=_no_repeat,
+                          parse_constant=_no_constant)
+    except RecursionError:
+        raise ValueError('nested too deep') from None
+
+
+def _number(value):
+    """Whether value is a JSON number usable as a time: an int or a finite float, not a bool."""
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, int) or (isinstance(value, float) and math.isfinite(value))
+
+
+def _team_ok(team):
+    return isinstance(team, str) and _TEAM.fullmatch(team) is not None
+
+
+def _allowed(emails):
+    """The allow-list as a set of stripped, casefolded addresses; AccessError when it is not a
+    list of text or holds no address."""
+    if emails is None:
+        raise AccessError('no-allowed-emails')
+    if isinstance(emails, (str, bytes)):
+        raise AccessError('bad-allow-list', 'one string, not a list of addresses')
+    try:
+        entries = list(emails)
+    except TypeError:
+        raise AccessError('bad-allow-list', 'not a list') from None
+    if not all(isinstance(e, str) for e in entries):
+        raise AccessError('bad-allow-list', 'an entry that is not text')
+    allowed = {e.strip().casefold() for e in entries} - {''}
+    if not allowed:
+        raise AccessError('no-allowed-emails')
+    return allowed
+
+
+def rsa_key(jwk):
+    """(n, e) of a JWK the signature check may use; AccessError bad-key otherwise. Usable: `kty`
+    RSA; `alg` and `use`, when given, RS256 and sig; an odd modulus of at least
+    MIN_MODULUS_BITS; an odd exponent from 3 up to below the modulus (an exponent of 1 would
+    make every block its own signature)."""
+    if not isinstance(jwk, dict) or jwk.get('kty') != 'RSA':
+        raise AccessError('bad-key', 'not an RSA key')
+    if jwk.get('alg', ALG) != ALG or jwk.get('use', 'sig') != 'sig':
+        raise AccessError('bad-key', 'not an RS256 signing key')
+    try:
+        n = int.from_bytes(_b64url(jwk.get('n')), 'big')
+        e = int.from_bytes(_b64url(jwk.get('e')), 'big')
+    except ValueError:
+        raise AccessError('bad-key', 'modulus or exponent is not base64url') from None
+    if n.bit_length() < MIN_MODULUS_BITS or n % 2 == 0:
+        raise AccessError('bad-key', 'a modulus of %d bits' % n.bit_length())
+    if e < 3 or e % 2 == 0 or e >= n:
+        raise AccessError('bad-key', 'an unusable exponent')
+    return n, e
+
+
+def _check_signature(n, e, message, signature):
+    """Raise AccessError unless `signature` is the RSASSA-PKCS1-v1_5 SHA-256 signature of
+    `message` under (n, e). The expected block is built and compared whole, never parsed."""
+    size = (n.bit_length() + 7) // 8
+    if len(signature) != size:
+        raise AccessError('bad-signature-length', '%d bytes for a %d-byte modulus'
+                          % (len(signature), size))
+    s = int.from_bytes(signature, 'big')
+    if s >= n:
+        raise AccessError('signature-out-of-range')
+    tail = DIGEST_INFO + hashlib.sha256(message).digest()
+    fill = size - len(tail) - 3
+    if fill < 8:
+        raise AccessError('bad-key', 'a modulus too short for the block')
+    expected = b'\x00\x01' + b'\xff' * fill + b'\x00' + tail
+    if not hmac.compare_digest(pow(s, e, n).to_bytes(size, 'big'), expected):
+        raise AccessError('bad-signature')
+
+
+def verify(token, keys, team, aud, emails, now):
+    """The claims (a dict) of a valid Access token for this team and audience whose email is on
+    the allow-list; AccessError otherwise. The module docstring gives the checks and their
+    order. `keys` has get(kid); `emails` is the allowed addresses; `now` is Unix time."""
+    if not _team_ok(team):
+        raise AccessError('bad-team')
+    if not isinstance(aud, str) or not aud:
+        raise AccessError('no-audience')
+    allowed = _allowed(emails)
+    if not _number(now):
+        raise AccessError('bad-clock')
+
+    if not isinstance(token, str):
+        raise AccessError('malformed', 'not text')
+    if len(token) > MAX_TOKEN:
+        raise AccessError('too-large', '%d characters' % len(token))
+    parts = token.split('.')
+    if len(parts) != 3:
+        raise AccessError('malformed', '%d parts' % len(parts))
+    try:
+        header_raw, payload_raw, signature = [_b64url(part) for part in parts]
+    except ValueError:
+        raise AccessError('bad-encoding') from None
+    try:
+        header, claims = _json(header_raw), _json(payload_raw)
+    except ValueError:
+        raise AccessError('bad-json') from None
+    if not isinstance(header, dict) or not isinstance(claims, dict):
+        raise AccessError('bad-json', 'not an object')
+
+    alg = header.get('alg')
+    if not isinstance(alg, str) or alg != ALG:
+        raise AccessError('bad-alg')
+    if 'crit' in header:
+        raise AccessError('bad-header', 'a crit list')
+    kid = header.get('kid')
+    if not isinstance(kid, str) or not kid:
+        raise AccessError('bad-kid')
+
+    jwk = keys.get(kid)
+    if jwk is None:
+        raise AccessError('unknown-kid')
+    n, e = rsa_key(jwk)
+    _check_signature(n, e, (parts[0] + '.' + parts[1]).encode('ascii'), signature)
+
+    if 'exp' not in claims:
+        raise AccessError('no-exp')
+    exp = claims['exp']
+    if not _number(exp):
+        raise AccessError('bad-exp')
+    if not now < exp:
+        raise AccessError('expired')
+    if 'nbf' in claims:
+        nbf = claims['nbf']
+        if not _number(nbf):
+            raise AccessError('bad-nbf')
+        if not now >= nbf - NBF_LEEWAY_S:
+            raise AccessError('not-yet-valid')
+    iss = claims.get('iss')
+    if not isinstance(iss, str) or iss != ISSUER % team:
+        raise AccessError('wrong-issuer')
+    audience = claims.get('aud')
+    if isinstance(audience, str):
+        audience = [audience]
+    if not isinstance(audience, list) or aud not in audience:
+        raise AccessError('wrong-audience')
+    email = claims.get('email')
+    if not isinstance(email, str) or not email.strip():
+        raise AccessError('no-email')
+    if email.strip().casefold() not in allowed:
+        raise AccessError('email-not-allowed')
+    return claims
+
+
+def key_table(document):
+    """{kid: JWK} from a key document's `keys` array, the only field read; AccessError
+    keys-malformed unless it is a non-empty list of objects, each with its own non-empty text
+    `kid`. Whether a key is usable is rsa_key's question, asked when a token names it."""
+    keys = document.get('keys') if isinstance(document, dict) else None
+    if not isinstance(keys, list) or not keys:
+        raise AccessError('keys-malformed', 'no keys array')
+    table = {}
+    for jwk in keys:
+        kid = jwk.get('kid') if isinstance(jwk, dict) else None
+        if not isinstance(kid, str) or not kid or kid in table:
+            raise AccessError('keys-malformed', 'a key with no kid of its own')
+        table[kid] = jwk
+    return table
+
+
+def certs_url(team):
+    """Where the team's signing keys are published; AccessError bad-team unless `team` is one
+    DNS label, so the request can go to no other host."""
+    if not _team_ok(team):
+        raise AccessError('bad-team')
+    return ISSUER % team + CERTS_PATH
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """The keys are taken from the team's own host or not at all."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _tls_context():
+    """The TLS settings of the key fetch: the system's trust roots, the certificate required and
+    matched against the host name."""
+    return ssl.create_default_context()
+
+
+def _opener():
+    """A urllib opener that follows no redirect and uses _tls_context."""
+    return urllib.request.build_opener(_NoRedirect,
+                                       urllib.request.HTTPSHandler(context=_tls_context()))
+
+
+def _open(request, timeout):
+    return _opener().open(request, timeout=timeout)
+
+
+def fetch_keys(team, timeout=FETCH_TIMEOUT_S, opener=None):
+    """The team's key document, parsed: one HTTPS GET of certs_url(team). AccessError keys-fetch
+    when it cannot be had (a socket operation over `timeout` seconds, a status other than 200, a
+    redirect, over MAX_KEYS_DOC bytes, not JSON). `opener(request, timeout)` replaces the
+    network in tests."""
+    request = urllib.request.Request(certs_url(team), method='GET', headers={
+        'User-Agent': USER_AGENT, 'Accept': 'application/json'})
+    try:
+        with (opener or _open)(request, timeout) as response:
+            if response.status != 200:
+                raise AccessError('keys-fetch', 'status %d' % response.status)
+            raw = response.read(MAX_KEYS_DOC + 1)
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            exc.close()             # it holds the refused response, and that holds the socket
+        raise AccessError('keys-fetch', type(exc).__name__) from None
+    if len(raw) > MAX_KEYS_DOC:
+        raise AccessError('keys-fetch', 'a document over %d bytes' % MAX_KEYS_DOC)
+    try:
+        return _json(raw)
+    except ValueError:
+        raise AccessError('keys-fetch', 'not JSON') from None
+
+
+class KeyCache:
+    """The team's signing keys, held in memory (the module docstring gives the rules).
+    `error` is the reason the last fetch attempt failed, '' when it was good."""
+
+    def __init__(self, team, fetch=None, clock=None):
+        self.team = team
+        self.error = ''
+        self._fetch = fetch or fetch_keys
+        self._clock = clock or time.monotonic
+        self._lock = threading.Lock()
+        self._keys = {}
+        self._good_at = None        # clock time of the last good fetch
+        self._tried_at = None       # clock time of the last attempt, good or not
+
+    def get(self, kid):
+        """The JWK cached under `kid`, or None when the team publishes no such key. AccessError
+        keys-unavailable when no fetch has ever been good, keys-stale when the last good one
+        is over STALE_LIMIT_S old."""
+        with self._lock:
+            now = self._clock()
+            if self._due(kid, now):
+                self._refresh(now)
+            if self._good_at is None:
+                raise AccessError('keys-unavailable', self.error)
+            if not 0 <= now - self._good_at <= STALE_LIMIT_S:
+                raise AccessError('keys-stale', self.error)
+            return self._keys.get(kid)
+
+    def _due(self, kid, now):
+        fresh = self._good_at is not None and 0 <= now - self._good_at < KEY_TTL_S
+        if fresh and kid in self._keys:
+            return False
+        return self._tried_at is None or not 0 <= now - self._tried_at < REFETCH_S
+
+    def _refresh(self, now):
+        self._tried_at = now
+        try:
+            table = key_table(self._fetch(self.team, FETCH_TIMEOUT_S))
+        except AccessError as exc:
+            self.error = exc.reason
+            return
+        except Exception:           # whatever a fetcher raises, the gate stays shut on it
+            self.error = 'keys-fetch'
+            return
+        self._keys, self._good_at, self.error = table, now, ''
