@@ -87,7 +87,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
     `--account current` starts it on the account you are on. Add the kit's own coordinator the same way
     (sessions.json key `kit`, repo `kit`, a launcher.repos name for the kit checkout; see docs/launcher.sessions.example.json):
     the PM runs from the pmdata folder and its write-jail keeps it and its subagents out of kit worktrees,
-    so kit work and landings need a kit conductor.
+    so kit work and landings need a kit coordinator.
     Success: the next checklist does not list it as not running.
 
 12. **List the repositories on the hub.** `python <kit>/claude/hub/hub_repos.py` prints the known

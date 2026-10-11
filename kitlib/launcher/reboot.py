@@ -5,11 +5,13 @@ is left alone, so a second run never starts duplicates.
 
 An entry's brief is passed whenever it has one, agent or plain (after-reboot.ps1 did so); a
 failed start, of any kind, is logged FAILED and the run goes on to the next entry. The task runs
-hidden, so the failures around the entries (no signed-in account, sessions.json or conductors.json
-missing or bad, the PM account not signed in) are logged FAILED too, never raised.
+hidden, so the failures around the entries (no signed-in account, sessions.json or coordinators.json
+missing or bad, coordinators.json still under its old name, the PM account not signed in) are
+logged FAILED too, never raised.
 
 Skipped: a "_" key, an entry without a stem, "autostart": false, and an entry whose stem is
-already running under any account or recycle. The PM resume is skipped when pm-session or the PM
+already running under any account or recycle, or whose old `conductor` stem is
+(lookup.legacy_stems; a one-release guard). The PM resume is skipped when pm-session or the PM
 session id is running, when the Claude desktop app is running (resuming there too would fork the
 conversation) unless launcher.pm_resume_beside_desktop is true, and, more than 15 minutes after
 boot, when the PM transcript was written in the last 15 minutes. --test starts only a throwaway
@@ -100,9 +102,9 @@ def run(settings, host, test=False, dry_run=False):
         log('started ' + TEST_NAME)
         return out
     try:
-        cfg = state.read_conductors(settings) or {}
-    except Exception as e:                           # a bad conductors.json still lets the coordinators start
-        log('FAILED to read conductors.json : %s' % why(e))
+        cfg = state.read_coordinators(settings) or {}
+    except Exception as e:                           # a bad coordinators.json still lets the coordinators start
+        log('FAILED to read coordinators.json : %s' % why(e))
         cfg = {}
     try:
         acct, _ = A.pick(settings, host.now())
@@ -119,6 +121,10 @@ def run(settings, host, test=False, dry_run=False):
             continue
         if lookup.running_stem(procs, entry['stem']):
             log('%s already running, skipped' % key)
+            continue
+        legacy = lookup.legacy_running(procs, key, entry)
+        if legacy:                                   # one-release guard, removed after the switch (W2b)
+            log('%s already running under the old stem %s, skipped' % (key, legacy))
             continue
         args = S.entry_start_args(settings, key, entry, acct, PROMPT % (entry.get('state'), S.PM_NAME),
                                   any_brief=True)
@@ -147,7 +153,7 @@ def resume_pm(settings, host, cfg, log, dry_run=False):
     is said ('would resume pm-session ...'), but no window opens."""
     sid, folder, pm_account = cfg.get('pm_session_id'), cfg.get('pm_folder'), cfg.get('pm_account')
     if not sid or not folder or not pm_account or str(sid).startswith('<'):
-        log('conductors.json names no PM session (pm_session_id, pm_folder, pm_account), pm-session skipped')
+        log('coordinators.json names no PM session (pm_session_id, pm_folder, pm_account), pm-session skipped')
         return []
     procs = host.processes()
     if running(procs, 'pm-session') or running(procs, sid):

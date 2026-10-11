@@ -35,7 +35,7 @@ class FailedStarts(unittest.TestCase):
     def setUp(self):
         self.h = Home(self)
         self.h.write_state('sessions.json', {'alpha': dict(ALPHA), 'beta': dict(BETA)})
-        self.h.write_state('conductors.json', dict(PM, pm_folder=self.h.root))
+        self.h.write_state('coordinators.json', dict(PM, pm_folder=self.h.root))
 
     def check(self, exc, said):
         host = FailingHost(self.h.root, 'alpha-coord', exc)
@@ -84,7 +84,7 @@ class Briefs(unittest.TestCase):
                           (True, 'would resume pm-session (session pm-sid-1, account 2) in ')):
             h = Home(self, extra={'pm_resume_beside_desktop': key})
             h.write_state('sessions.json', {'helper': dict(HELPER)})
-            h.write_state('conductors.json', dict(PM, pm_folder=h.root))
+            h.write_state('coordinators.json', dict(PM, pm_folder=h.root))
             host = FakeHost(h.root, [STORE])
             out = reboot.run(h.settings, host, dry_run=True)
             self.assertTrue(any(line.startswith(said) for line in out), out)
@@ -221,7 +221,7 @@ class TopLevelFailures(unittest.TestCase):
     def test_no_signed_in_account_logs_failed_for_the_sessions_and_the_pm(self):
         h = Home(self, signed_out=('1', '2'))
         h.write_state('sessions.json', {'alpha': dict(ALPHA)})
-        h.write_state('conductors.json', dict(PM, pm_folder=h.root))
+        h.write_state('coordinators.json', dict(PM, pm_folder=h.root))
         host = FakeHost(h.root)
         out = reboot.run(h.settings, host)
         self.assertTrue(any(line.startswith('FAILED, no session started : ') for line in out), out)
@@ -232,7 +232,7 @@ class TopLevelFailures(unittest.TestCase):
     def test_a_missing_or_bad_sessions_json_logs_failed_and_resumes_the_pm(self):
         for bad in (None, 'not json'):
             h = Home(self)
-            h.write_state('conductors.json', dict(PM, pm_folder=h.root))
+            h.write_state('coordinators.json', dict(PM, pm_folder=h.root))
             if bad is not None:
                 with open(os.path.join(h.state, 'sessions.json'), 'w', encoding='utf-8') as f:
                     f.write(bad)
@@ -244,14 +244,14 @@ class TopLevelFailures(unittest.TestCase):
             self.assertEqual([role_of(t) for t in host.opened], ['pm'])
             self.assertIn('started pm-session', out)
 
-    def test_a_bad_conductors_json_logs_failed_and_the_coordinators_still_start(self):
+    def test_a_bad_coordinators_json_logs_failed_and_the_coordinators_still_start(self):
         h = Home(self)
         h.write_state('sessions.json', {'alpha': dict(ALPHA)})
-        with open(os.path.join(h.state, 'conductors.json'), 'w', encoding='utf-8') as f:
+        with open(os.path.join(h.state, 'coordinators.json'), 'w', encoding='utf-8') as f:
             f.write('{broken')
         host = FakeHost(h.root)
         out = reboot.run(h.settings, host)
-        self.assertTrue(any(line.startswith('FAILED to read conductors.json : ') for line in out), out)
+        self.assertTrue(any(line.startswith('FAILED to read coordinators.json : ') for line in out), out)
         self.assertEqual([role_of(t) for t in host.opened], ['coordinator'])
 
 
