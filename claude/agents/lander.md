@@ -66,7 +66,8 @@ Missing any: say what you need, do nothing.
    fakes a non-zero exit code. A landing can outlast the tool's default timeout
    (10 min), and a killed landing orphans its jobs and can leave a half-landed
    merge. So run it with `run_in_background` and wait for the task notification,
-   never a polling loop (the classifier denies it).
+   never a polling loop (the classifier denies it); no Monitor either (${CLAUDE_PLUGIN_ROOT}/docs/gate.md
+   "Waiting on a gate: who arms what").
 6. Verify, whatever the exit code said (0 LANDED, 1 NOT LANDED, 3 STUCK, 4
    REFUSED, 5 BUSY). At minimum: main and its remote match, and the branch tip is
    an ancestor of the remote main. Its verdict is the log's `LANDED` /
