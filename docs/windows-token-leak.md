@@ -171,7 +171,7 @@ comes from the registry: `live=0` means it does. The script itself never writes 
 ```powershell
 Unregister-ScheduledTask -TaskName 'Foreground lock timeout fix' -Confirm:$false -ErrorAction SilentlyContinue
 $ps1 = Join-Path $env:LOCALAPPDATA 'foreground-lock-fix\fix.ps1'
-$action = New-ScheduledTaskAction -Execute 'C:\Windows\System32\conhost.exe' -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Trigger task"
+$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\conhost.exe" -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Trigger task"
 $logon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $logon.Delay = 'PT20S'
 $unlock = Get-CimClass -Namespace ROOT\Microsoft\Windows\TaskScheduler -ClassName MSFT_TaskSessionStateChangeTrigger | New-CimInstance -ClientOnly -Property @{StateChange = [uint32]8; UserId = $env:USERNAME; Enabled = $true}
@@ -188,7 +188,7 @@ this line is its check).
 
 ```powershell
 $ps1 = Join-Path $env:LOCALAPPDATA 'foreground-lock-fix\fix.ps1'
-Set-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'ForegroundLockFix' -Value "C:\Windows\System32\conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Trigger run"
+Set-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'ForegroundLockFix' -Value "$env:SystemRoot\System32\conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Trigger run"
 ```
 
 ### Step 6: probe the task path
@@ -199,11 +199,11 @@ whether a task may set the value at all.
 ```powershell
 $ps1 = Join-Path $env:LOCALAPPDATA 'foreground-lock-fix\fix.ps1'
 $log = Join-Path $env:LOCALAPPDATA 'foreground-lock-fix\fix.log'
-$a = New-ScheduledTaskAction -Execute 'C:\Windows\System32\conhost.exe' -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Trigger probe-plain -Probe -NoNudge"
+$a = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\conhost.exe" -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Trigger probe-plain -Probe -NoNudge"
 Register-ScheduledTask -TaskName 'Foreground lock fix probe' -Action $a -Force | Out-Null
 Start-ScheduledTask -TaskName 'Foreground lock fix probe'
 Start-Sleep -Seconds 15
-$a = New-ScheduledTaskAction -Execute 'C:\Windows\System32\conhost.exe' -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Trigger probe-nudge -Probe"
+$a = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\conhost.exe" -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Trigger probe-nudge -Probe"
 Register-ScheduledTask -TaskName 'Foreground lock fix probe' -Action $a -Force | Out-Null
 Start-ScheduledTask -TaskName 'Foreground lock fix probe'
 Start-Sleep -Seconds 15
