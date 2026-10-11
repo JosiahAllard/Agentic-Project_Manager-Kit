@@ -466,6 +466,8 @@ class Settling(StoreCase):
 
         def pause(seconds):
             steps.append((os.path.exists(bad), self.waiting()))
+            # Two pauses are enough; more, and the wait would spin to the real WAIT_S unslept.
+            self.assertLessEqual(len(steps), 5, "its wait did not run out; it said %r" % (said,))
             if not os.path.exists(bad):
                 with open(bad, "w") as f:
                     f.write("{")
