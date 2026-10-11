@@ -336,11 +336,7 @@ def _create(path, new):
         except FileExistsError:
             raise RuntimeError('%s appeared since the survey; not replaced (run again)' % path)
     except BaseException:
-        if os.path.lexists(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+        _drop(tmp)
         raise
 
 
@@ -601,6 +597,19 @@ def _write(path, raw, new, bak):
     with open(bak, 'xb') as f:
         f.write(raw)
     tmp = path + '.machine-setup.tmp'
-    with open(tmp, 'wb') as f:
-        f.write(new)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, 'wb') as f:
+            f.write(new)
+        os.replace(tmp, path)
+    except BaseException:
+        _drop(tmp)
+        raise
+
+
+def _drop(tmp):
+    """Remove a .tmp this step wrote, if it is there; a failure to remove it is ignored."""
+    if os.path.lexists(tmp):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
