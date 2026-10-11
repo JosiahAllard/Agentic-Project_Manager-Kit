@@ -247,6 +247,25 @@ def close_landed(root, cfg, branch, merge, session=SESSION):
     return lines
 
 
+def _after_put_back(store, rid, branch, command, reason):
+    """What is true of `rid` once a refused close was put back, read from the store again: the
+    other commit may have closed or removed the record, or released it. The close command is
+    given only while `branch` still holds the record pulled."""
+    try:
+        now = dict((r.stem, r) for r in store.load().readable).get(rid)
+    except Refusal as exc:
+        return ('the store could not be read again (%s), so see whether %s is still open with: %s'
+                % (_one_line(str(exc)), rid, command('show', rid)))
+    if now is None:
+        return ('the store no longer holds %s (that commit closed or removed it), so there is '
+                'nothing to close' % rid)
+    if now.get('state') == 'pulled' and now.get('pulled_by') == branch:
+        return ('%s is still pulled by %s and was not closed; close it with: %s'
+                % (rid, branch, command('close', rid, '--reason', '"%s"' % reason)))
+    return ('%s is now %s and no longer pulled by %s, so it was not closed; see it with: %s'
+            % (rid, now.get('state') or 'in an unreadable state', branch, command('show', rid)))
+
+
 def _close_in(backend, root, cfg, branch, merge, session, command):
     """close_landed for one store: `backend` of the repository or worktree `root` with `cfg`;
     `command(*args)` is the printed command line for a write the landing could not make."""
@@ -284,10 +303,10 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
                              % (branch, rid, backend.describe(), _one_line(str(exc)),
                                 exc.compare))
             else:                           # put back: the record is as that commit left it
-                lines.append('WARNING: %s landed, and %s, which it holds pulled, was not closed '
-                             '(%s: %s); close it with: %s'
-                             % (branch, rid, exc.label, _one_line(str(exc)),
-                                command('close', rid, '--reason', '"%s"' % reason)))
+                lines.append('WARNING: %s landed, and the close of %s in the backlog store %s was '
+                             'refused and its files were put back (%s: %s); %s'
+                             % (branch, rid, backend.describe(), exc.label, _one_line(str(exc)),
+                                _after_put_back(store, rid, branch, command, reason)))
             continue
         except Uncommitted as exc:          # deleted in the PM data worktree, its commit failed
             lines.append('WARNING: %s landed, and %s was closed in the backlog store %s but not '

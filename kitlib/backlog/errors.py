@@ -45,10 +45,11 @@ class Uncommitted(Failure):
 class Overtaken(Uncommitted):
     """Refused because another commit changed one of the write's paths on HEAD (`head`) after the
     write began (`changed`: those paths): committing the files would overwrite that commit.
-    `left` is a list after a write (MainBackend.publish), which puts each file it wrote back to
-    what `head` holds: the paths it left as they are (the file no longer held what the write
-    wrote, or could not be put back), empty when nothing of the write remains on disk. `left` is None for `catch-up --apply`, whose files
-    are not its own and are all left. `compare`: the command that shows each path left against
+    `left` is a list after a write (MainBackend.publish), which puts each file it wrote back (a
+    path in `changed` to what `head` holds, any other to what it held before the write): the
+    paths it left as they are (the file no longer held what the write wrote, or could not be
+    put back), empty when nothing of the write remains on disk. `left` is None for
+    `catch-up --apply`, whose files are not its own and are all left. `compare`: the command that shows each path left against
     HEAD ('' when none is), the step before any `catch-up --apply`."""
 
     def __init__(self, message, paths=(), changed=(), compare='', head='', left=None):

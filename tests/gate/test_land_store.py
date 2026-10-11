@@ -407,20 +407,24 @@ class PmDataClose(StoreLandCase):
         self.assertNotIn('compare each path with HEAD', warn[0])
         self.assertEqual(self.main_now(), out.merge)
 
-    def overtaken_close(self, after_my_files=None):
+    def overtaken_close(self, after_my_files=None, removes=False):
         """`(wt, their commit, the landing)`: another session commits FOO in the PM data worktree
-        after the close checked the files and before its first commit attempt.
+        (an added line, or with `removes` the file's removal) after the close checked the files
+        and before its first commit attempt. BAR is blocked on FOO, so the close writes it too.
         `after_my_files()` runs once the close's own file change is on disk."""
-        wt = self.pm_worktree(pulled('FOO'))
+        wt = self.pm_worktree(pulled('FOO'), rec('BAR', state='blocked', blocked_on='item:FOO'))
         self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
         real = smod.MainBackend._write_files
         theirs = []
 
         def another_commit_then_write(backend, writes, before, paths, branch):
             first = branch and not theirs
-            if first:
+            if first and removes:
+                os.remove(self.record(wt, 'FOO'))
+            elif first:
                 with open(self.record(wt, 'FOO'), 'a', encoding='utf-8', newline='\n') as f:
                     f.write('\nanother session wrote this\n')
+            if first:
                 theirs.append(self.repo.commit('another session', 'kit/backlog/FOO.md', cwd=wt))
             real(backend, writes, before, paths, branch)
             if first and after_my_files is not None:
@@ -441,13 +445,33 @@ class PmDataClose(StoreLandCase):
         self.assertEqual(self.repo.git('status', '--porcelain', '--', 'kit/backlog', cwd=wt), '')
         warn = [l for l in out.lines if l.startswith('WARNING')]
         self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('FOO, which it holds pulled, was not closed (ERROR: ', warn[0])
+        self.assertIn('the close of FOO in the backlog store kit/backlog in ', warn[0])
+        self.assertIn('was refused and its files were put back (ERROR: ', warn[0])
         self.assertIn('another commit changed kit/backlog/FOO.md on HEAD', warn[0])
-        self.assertIn('put back to what HEAD holds', warn[0])
+        self.assertIn('FOO is still pulled by %s and was not closed; close it with: ' % BRANCH,
+                      warn[0])
+        with open(self.record(wt, 'BAR'), encoding='utf-8') as f:
+            self.assertIn('blocked_on: item:FOO', f.read())      # the dependent is as it was
         self.assertTrue(warn[0].endswith('backlog.py" -C "%s" close FOO --reason "landed %s"'
                                          % (self.pm_root(wt), out.merge)), warn[0])
         self.assertNotIn('catch-up', warn[0])
         self.assertNotIn('was closed', warn[0])
+
+    def test_a_close_overtaken_by_the_records_removal_prints_no_close_command(self):
+        """The other commit removed FOO: the close's rewrite of BAR is put back, and the WARNING
+        says the store no longer holds FOO; a close command would answer NOT FOUND."""
+        wt, _, out = self.overtaken_close(removes=True)
+        self.assertFalse(os.path.exists(self.record(wt, 'FOO')))
+        with open(self.record(wt, 'BAR'), encoding='utf-8') as f:
+            self.assertIn('blocked_on: item:FOO', f.read())
+        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'kit/backlog', cwd=wt), '')
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertIn('was refused and its files were put back (ERROR: ', warn[0])
+        self.assertTrue(warn[0].endswith('the store no longer holds FOO (that commit closed or '
+                                         'removed it), so there is nothing to close'), warn[0])
+        self.assertNotIn('close it with', warn[0])
+        self.assertNotIn('catch-up', warn[0])
 
     def test_a_close_another_commit_overtook_names_the_compare_for_a_file_it_left(self):
         """FOO is written again by hand after the close deleted it: the close leaves that file,

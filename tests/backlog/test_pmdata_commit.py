@@ -267,7 +267,7 @@ class PmDataStore(unittest.TestCase):
         self.assertIn('summary: theirs', after)
         self.assertNotIn('summary: mine', after)
         self.assertEqual((exc.paths, exc.changed, exc.left), ([DIR + '/BAR.md'],) * 2 + ([],))
-        self.assertIn('put back to what HEAD holds', str(exc))
+        self.assertIn('put back (%s/BAR.md to what HEAD holds' % DIR, str(exc))
         self.assertNotIn('catch-up', str(exc))
 
     def test_an_overtaken_write_of_a_record_the_winner_deleted_removes_its_file(self):
@@ -300,6 +300,99 @@ class PmDataStore(unittest.TestCase):
         self.assertEqual(exc.compare, 'git -C "%s" diff HEAD -- "%s/BAR.md"' % (self.wt, DIR))
         self.assertIn('Left as it is', str(exc))
         self.assertIn(exc.compare, str(exc))
+
+    def overtaken_publish(self, theirs, writes, **patches):
+        """The Overtaken of this backend's publish of `writes` ({stem: text or None}) on what it
+        reads now, another store's `theirs(snap, ctx)` having been written and committed after
+        this one checked the files. `patches`: backend methods replaced for the publish."""
+        other = smod.Store(smod.MainBackend(self.wt, DIR), rmod.Rules(), session='kit-other')
+        other_ctx = pmod.Context(other, self.wt, branch=BRANCH)
+        real = self.backend._write_files
+
+        def the_other_writes_then_write(*args):
+            self.winner = other.write(lambda s: theirs(s, other_ctx))[1]
+            real(*args)
+        snap = self.store.load()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(self.backend, '_write_files',
+                                                  side_effect=the_other_writes_then_write))
+            stack.enter_context(mock.patch.object(smod.time, 'sleep'))
+            for name, value in patches.items():
+                stack.enter_context(mock.patch.object(self.backend, name, side_effect=value))
+            with self.assertRaises(errors.Overtaken) as cm:
+                self.backend.publish(snap, writes, 'two records\n')
+        self.assertEqual(self.head(), self.winner)
+        return cm.exception
+
+    def read(self, stem):
+        with open(self.path(stem), 'rb') as f:
+            return f.read()
+
+    def test_an_overtaken_write_gives_a_path_no_commit_changed_its_earlier_bytes(self):
+        """A write of BAR and BAZ, BAZ holding uncommitted content: another commit changes BAR
+        alone. BAR goes back to HEAD's content; BAZ, which no commit changed, goes back to the
+        bytes it held before the write, and catch-up still lists it."""
+        with open(self.path('BAZ'), 'ab') as f:
+            f.write(b'\nedited by hand\n')
+        dirty = self.read('BAZ')
+        exc = self.overtaken_publish(
+            lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['theirs'])]),
+            {'BAR': priced('BAR', summary='mine')['BAR'],
+             'BAZ': priced('BAZ', summary='mine')['BAZ']})
+        self.assertEqual((exc.changed, exc.left), ([DIR + '/BAR.md'], []))
+        self.assertEqual(self.read('BAZ'), dirty)
+        self.assertEqual(self.backend.pending(), [('modified', DIR + '/BAZ.md')])
+        self.assertEqual(self.store.load().get('BAR').get('summary'), 'theirs')
+        self.assertIn('%s/BAR.md to what HEAD holds' % DIR, str(exc))
+        self.assertIn('held before the write', str(exc))
+
+    def test_an_overtaken_delete_of_a_path_no_commit_changed_brings_the_file_back(self):
+        """A write that deleted NEW (never committed) and BAZ (hand edited) and changed BAR,
+        another commit changing BAR alone: NEW.md and BAZ.md are back with their earlier bytes."""
+        self.repo.write('%s/NEW.md' % DIR, priced('NEW')['NEW'], root=self.wt)
+        with open(self.path('BAZ'), 'ab') as f:
+            f.write(b'\nedited by hand\n')
+        new, dirty = self.read('NEW'), self.read('BAZ')
+        exc = self.overtaken_publish(
+            lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['theirs'])]),
+            {'BAR': priced('BAR', summary='mine')['BAR'], 'BAZ': None, 'NEW': None})
+        self.assertEqual(exc.left, [])
+        self.assertEqual((self.read('NEW'), self.read('BAZ')), (new, dirty))
+        self.assertEqual(self.backend.pending(), [('modified', DIR + '/BAZ.md'),
+                                                  ('added', DIR + '/NEW.md')])
+
+    def test_an_overtaken_path_whose_head_content_cannot_be_read_is_left(self):
+        """git gives neither HEAD's entries (ls-tree) nor, in the second case, the blob
+        (cat-file): the overtaken path is left and named; the other path is still put back."""
+        real_entries, real_run = self.backend._entries, cmd.run
+        calls = []
+
+        def entries_fail_third(rev, paths):
+            calls.append(rev)
+            if len(calls) == 3:                       # 1, 2: the retry's compare; 3: _put_back
+                raise Failure('git ls-tree: ended from outside')
+            return real_entries(rev, paths)
+
+        def no_blob(args, *rest, **kw):
+            if list(args[:2]) == ['cat-file', 'blob']:
+                return None, 'ended from outside'
+            return real_run(args, *rest, **kw)
+        baz = self.read('BAZ')
+        writes = {'BAR': priced('BAR', summary='mine')['BAR'],
+                  'BAZ': priced('BAZ', summary='mine')['BAZ']}
+        theirs = lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['theirs'])])
+        exc = self.overtaken_publish(theirs, writes, _entries=entries_fail_third)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(exc.left, [DIR + '/BAR.md'])
+        self.assertIn(b'summary: mine', self.read('BAR'))
+        self.assertEqual(self.read('BAZ'), baz)
+        self.git('checkout', 'HEAD', '--', DIR)
+        theirs = lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['theirs again'])])
+        with mock.patch.object(smod.cmd, 'run', side_effect=no_blob):
+            exc = self.overtaken_publish(theirs, writes)
+        self.assertEqual(exc.left, [DIR + '/BAR.md'])
+        self.assertIn(b'summary: mine', self.read('BAR'))
+        self.assertEqual(self.read('BAZ'), baz)
 
     def test_an_unreadable_head_writes_nothing_and_says_so(self):
         """publish reads HEAD before it checks or writes any file: when git cannot give it, the
