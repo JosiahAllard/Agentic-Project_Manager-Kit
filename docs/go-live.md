@@ -24,7 +24,6 @@ The code is on kit main except the lines marked unbuilt.
   - Remove the old kit's PreToolUse hooks (no_root_search.py, main_checkout_redirect_guard.py) from settings.json in every account's config folder.
   - Add guard.py's PreToolUse entry as `python <kit>/claude/hooks/guard.py --settings-entry` prints it (docs/guard.md "Go-live (after the joint review)").
   - Re-point each account's ~/.claude/tools link (the live lock tool), where it has one, from the old kit to the kit checkout.
-- PM data branch (docs/pm-data-branch.md), after the repo switch-overs and the guard entry above: live when `tools/pm_data.py init` (or `--adopt` for an existing branch) runs on the PM's data repository, jointly with the owner, with a private remote that is not the public one ("Making the branch"). Tasks 1-8 are on kit main ("Tasks"); the guard rule `git-push-pmdata` and the pre-push leak stage guard it once `kit-pm-data.json` exists ("Pre-push guard"); the data worktree's `.kit.json` must set the data branch, private remote and a non-`ref` backlog store ("Layout").
 
 ## Machine config keys from the generic pass
 
