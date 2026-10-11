@@ -103,14 +103,31 @@ class LivenessTest(unittest.TestCase):
     def test_dead_listed_exact_match_store_app_ignored(self):
         procs = [proc("claude.exe", "claude --remote-control al-a2-n5", "C:/bin/claude.exe"),
                  proc("claude.exe", "claude --remote-control be-a2", "C:/X" + chr(92) + "WindowsApps" + chr(92) + "claude.exe")]
-        out = pmstart.liveness(CFG, procs, read=lambda p: self.SESS)
+        out = pmstart.liveness(CFG, procs, read=lambda p: self.SESS, account=lambda: "2")
         self.assertEqual(len(out), 1)
         self.assertIn("launch.py start --session Beta", out[0])
 
     def test_prefix_name_not_a_match(self):
         procs = [proc("claude.exe", "claude --remote-control al-a2-n5-x", "C:/bin/claude.exe")]
-        out = pmstart.liveness(CFG, procs, read=lambda p: self.SESS)
+        out = pmstart.liveness(CFG, procs, read=lambda p: self.SESS, account=lambda: "2")
         self.assertEqual(len(out), 2)
+
+    def test_the_start_line_names_the_account_this_session_is_on_not_the_entrys(self):
+        sess = json.dumps({"kit": {"name": "kit-a1", "account": 1}})
+        (line,) = pmstart.liveness(CFG, [], read=lambda p: sess, account=lambda: "10")
+        self.assertTrue(line.endswith("launch.py start --session kit --account 10"), line)
+
+    def test_an_unidentified_account_is_left_to_pick_account(self):
+        sess = json.dumps({"kit": {"name": "kit-a1", "account": 1}})
+        (line,) = pmstart.liveness(CFG, [], read=lambda p: sess, account=lambda: "default")
+        self.assertTrue(line.endswith("--session kit --account auto"), line)
+
+    def test_the_account_is_not_read_when_every_coordinator_runs(self):
+        def never():
+            raise AssertionError("the account was read although nothing is down")
+        procs = [proc("claude.exe", "claude --remote-control be-a2", "C:/bin/claude.exe")]
+        sess = json.dumps({"Beta": {"name": "be-a2"}})
+        self.assertEqual(pmstart.liveness(CFG, procs, read=lambda p: sess, account=never), [])
 
 
 class ChecklistTest(unittest.TestCase):
