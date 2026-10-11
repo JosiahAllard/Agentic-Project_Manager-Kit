@@ -93,7 +93,7 @@ class RolesTest(unittest.TestCase):
 
     def test_a_session_role_needs_a_mark_and_an_unlisted_role_only_reads(self):
         self.assertEqual(R.role_of('pm', subagent=False), 'pm')
-        self.assertEqual(R.role_of('conductor', subagent=False), 'coordinator')
+        self.assertIsNone(R.role_of('conductor', subagent=False))     # the old name is no role
         self.assertEqual(R.role_of('lander', subagent=True), 'lander')
         for name in ('owner', 'pm', 'coordinator', 'deep-worker', 'consultant', 'conductor'):
             self.assertIsNone(R.role_of(name, subagent=True), name)
