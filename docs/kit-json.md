@@ -38,7 +38,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `backlog.ledger_repo` (string): the ledger repo column; default the repo name
 - `backlog.retired_docs` (list of repo path, default []): docs the backlog replaced
 - `backlog.rename_script` (string, may be empty, default ""): priority rename helper
-- `board.state_file` (repo path): the board state file
+- `board.state_file` (repo path): the board state file, under the git dir (default <git common dir>/kit/board-state.md)
 - `checkout_guard.rule_pointer` (string): where a refusal points for the rule
 - `commit.merge_fold` (bool, default false): commit.py folds a merge commit
 - `commit.coauthor_families` (list of string, default []): accepted Co-Authored-By families beyond Claude
