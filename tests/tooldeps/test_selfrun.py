@@ -97,6 +97,71 @@ class GitDirect(unittest.TestCase):
         self.assertEqual(selfrun.git_direct_env(env), (env, None))
 
 
+SKIP_OK = 'Ran 3 tests in 0.1s\n\nOK (skipped=2)\n'
+NO_SKIP = 'Ran 3 tests in 0.1s\n\nOK\n'
+
+
+class Skips(unittest.TestCase):
+    MODS = ['tests.a.test_1', 'tests.a.test_2']
+
+    def run_texts(self, texts, skip_fails=()):
+        def run_unit(unit, audit, timeout, root=None, cmd=None, env=None):
+            return unit, 'OK', 3, 0.0, texts[unit[0]]
+        out = io.StringIO()
+        rc, summary = selfrun.run(self.MODS, tempfile.gettempdir(), 2, out=out, run_unit=run_unit,
+                                  label='full', counts={}, skip_fails=skip_fails)
+        return rc, summary, out.getvalue()
+
+    def test_skipped_of_reads_unittests_summary(self):
+        self.assertEqual(selfrun.skipped_of(SKIP_OK), 2)
+        self.assertEqual(selfrun.skipped_of('Ran 4 tests in 0s\n\nFAILED (failures=1, skipped=2)\n'), 2)
+        self.assertEqual(selfrun.skipped_of(NO_SKIP), 0)
+        self.assertEqual(selfrun.skipped_of('no summary at all'), 0)
+
+    def test_skipped_of_matches_a_real_unittest_run(self):
+        import subprocess
+        import sys
+        code = ('import unittest\nclass T(unittest.TestCase):\n'
+                '    def test_a(self): self.skipTest("runtime")\n'
+                '    @unittest.skip("static")\n    def test_b(self): pass\n'
+                '    def test_c(self): pass\n'
+                'unittest.main(argv=["x"])\n')
+        r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+        self.assertEqual(selfrun.skipped_of(r.stderr), 2, r.stderr)
+
+    def test_line_shows_skipped_count(self):
+        rc, summary, out = self.run_texts({m: SKIP_OK for m in self.MODS})
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'(?m)^  \[\d/2\] OK +\d+s +3 tests, 2 skipped  tests\.a\.test_[12]$')
+        self.assertRegex(out, r'tests/a +OK +6 tests +2 module\(s\) +\d+s  4 skipped')
+        self.assertTrue(summary.endswith('6 tests in 2 module(s), 1 package(s), 4 skipped'), summary)
+
+    def test_line_without_skips_is_unchanged(self):
+        rc, summary, out = self.run_texts({m: NO_SKIP for m in self.MODS})
+        self.assertRegex(out, r'(?m)^  \[\d/2\] OK +\d+s +3 tests  tests\.a\.test_[12]$')
+        self.assertNotIn('skipped', out)
+        self.assertTrue(summary.endswith('6 tests in 2 module(s), 1 package(s)'), summary)
+
+    def test_skip_fails_module_with_a_skip_is_failed(self):
+        rc, summary, out = self.run_texts({m: SKIP_OK for m in self.MODS},
+                                          [('tests.a.test_1', 'the proof')])
+        self.assertEqual(rc, 1, out)
+        self.assertIn('failed: tests.a.test_1 (FAILED)', summary)
+        self.assertNotIn('tests.a.test_2 (', summary)
+        self.assertIn('proof module', out)
+        self.assertIn('the proof', out)
+
+    def test_skip_fails_module_without_a_skip_stays_ok(self):
+        rc, _summary, out = self.run_texts({m: NO_SKIP for m in self.MODS},
+                                           [('tests.a.test_1', 'the proof')])
+        self.assertEqual(rc, 0, out)
+
+    def test_a_skip_in_an_unlisted_module_is_only_counted(self):
+        rc, _summary, out = self.run_texts({m: SKIP_OK for m in self.MODS},
+                                           [('tests.z.test_other', 'x')])
+        self.assertEqual(rc, 0, out)
+
+
 class Order(unittest.TestCase):
     MODS = ['tests.a.test_1', 'tests.a.test_2', 'tests.b.test_1', 'tests.b.test_2',
             'tests.c.test_1', 'tests.c.test_2']

@@ -235,6 +235,20 @@ class Config(unittest.TestCase):
             with self.assertRaises(selftree.ConfigError, msg=repr(data)):
                 selftree.config('unused', data)
 
+    def test_skip_fails_entries_are_module_and_reason_pairs(self):
+        self.assertEqual(selftree.config('unused', {})['skip_fails'], [])
+        cfg = selftree.config('unused', {'skip_fails': [['tests.a.test_a', 'the proof']]})
+        self.assertEqual(cfg['skip_fails'], [('tests.a.test_a', 'the proof')])
+        for bad in (['tests.a.test_a'], [['tests.a.test_a']], [['tests.a.test_a', ' ']],
+                    [['a.test_a', 'why']], 'tests.a.test_a'):
+            with self.assertRaises(selftree.ConfigError, msg=repr(bad)):
+                selftree.config('unused', {'skip_fails': bad})
+
+    def test_stale_skip_fails_names_a_module_the_tree_lacks(self):
+        pairs = [('tests.a.test_a', 'x'), ('tests.a.test_gone', 'y')]
+        self.assertEqual(selftree.stale_skip_fails(pairs, ['tests.a.test_a']), ['tests.a.test_gone'])
+        self.assertEqual(selftree.stale_skip_fails(pairs, ['tests.a.test_a', 'tests.a.test_gone']), [])
+
     def test_malformed_json_is_refused(self):
         root = tempfile.mkdtemp(prefix='kit-selftree-')
         self.addCleanup(rmtree, root)
@@ -469,6 +483,11 @@ class KitTree(unittest.TestCase):
         mods = set(selftree.all_test_modules(KIT))
         for module, why in self.cfg['serial']:
             self.assertIn(module, mods, why)
+
+    def test_the_table_lists_the_slot_treekill_proof_and_none_is_stale(self):
+        modules = set(selftree.all_test_modules(KIT))
+        self.assertIn('tests.lock.test_slot_treekill', dict(self.cfg['skip_fails']))
+        self.assertEqual(selftree.stale_skip_fails(self.cfg['skip_fails'], modules), [])
 
     def test_every_long_entry_names_a_test_module(self):
         mods = set(selftree.all_test_modules(KIT))
