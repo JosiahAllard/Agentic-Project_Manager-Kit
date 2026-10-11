@@ -54,16 +54,25 @@ python tools/ledger_refs.py R-nnnn [R-nnnn ...] | --from-json FILE [FILE ...]
 
 ## Path checks
 
-Before the ledger, or the standing digest beside it, is read or written, `kitlib/ledger/safepath.py` (`refusal`) checks its path. This is defence in depth beside the guard, which refuses only a direct edit of the ledger file. Two checks, Windows APIs through ctypes:
+Before the ledger, or the standing digest beside it, is read or written, `kitlib/ledger/safepath.py` (`refusal`) checks its path. This is defence in depth beside the guard, which refuses only a direct edit of the ledger file. It is not a lock: the check and the open are separate calls, so a swap made between them is not caught. Three checks:
 
 - **Reparse points.** The file and every existing folder above it, except the drive root, must not be a reparse point (a junction, a symlink or any other tag; `os.lstat` `st_file_attributes`).
-- **Owner.** The file and its own folder, where they exist, must be owned by this process's user, Administrators or SYSTEM (`GetNamedSecurityInfoW`). An owner that cannot be read is refused.
+- **Hard links.** The file must have one link (`st_nlink`). Through another name, an edit would reach the ledger by a path the guard does not watch. The writer's atomic replace leaves one link.
+- **Owner.** The file and its own folder, where they exist, must be owned by this process's user, Administrators or SYSTEM (`GetNamedSecurityInfoW` through ctypes). An owner that cannot be read is refused.
 
-A part that does not exist yet is skipped, so the first `add` can still create the ledger. A refused path is never opened:
+A part that does not exist yet is skipped, so the first `add` can still create the ledger. A refused path is never opened, and the refusal names the fix:
 
 - `kitlib/ledger/read.py` `read_file` returns the refusal as its reason, and the consumers treat it as an unreadable ledger. A backlog write whose ruling must be checked fails (`kitlib.backlog.ledger.check_ruling`), `backlog.py check` reports each ruling as not checked, and `ruling_cites` prints its NOT CHECKED warning.
-- `kitlib/ledger/write.py` raises `Refused`, so `tools/ledger.py` exits 1. `list` and `standing` refuse the same way.
-- The coordinator start's rulings line becomes the refusal, and `ledger_refs` reports it as an error with no ledger mentions.
+- `kitlib/ledger/write.py` raises `Refused`, so every `tools/ledger.py` verb exits 1. The coordinator start's rulings line becomes the refusal, and `ledger_refs` reports it as an error.
+
+Cases that lock a ledger out, and the fix for each:
+
+- A FAT or exFAT volume has no owner to read, and a network share's owner is not a local account. Keep the ledger on a local NTFS disk.
+- A folder copied or restored from elsewhere can keep a foreign owner. Run `takeown /f <path>`, or `icacls <path> /setowner <you>`.
+- OneDrive placeholders, mount points and folders relocated through a junction are reparse points. Point `ledger_path` at the real target.
+- A hard-linked ledger: remove the other names (`fsutil hardlink list <path>`), or copy the file to a new one.
+
+Not a path check: a configured `ledger_path` that names no file makes the backlog skip its ruling checks, rather than refuse (`kitlib.backlog.ledger` `Ledger.configured`). A separate record covers it.
 
 Tests: `tests/ledger/test_safepath.py`.
 

@@ -76,6 +76,29 @@ class ReparseTest(Case):
             self.skipTest('cannot create a symlink here (no Developer Mode or privilege): %s' % e)
         self.assertIn('%s is a reparse point' % link, safepath.refusal(link) or '')
 
+    def test_a_reparse_refusal_names_the_fix(self):
+        self.assertIn(safepath.REPARSE_FIX, safepath.refusal(self.through_junction()) or '')
+
+    def test_a_hard_linked_ledger_file_is_refused_by_either_name(self):
+        other = os.path.join(self.d, 'other.md')
+        try:
+            os.link(self.real, other)
+        except OSError as e:
+            self.skipTest('cannot create a hard link here: %s' % e)
+        for name in (self.real, other):
+            why = safepath.refusal(name) or ''
+            self.assertIn('the file has 2 hard links', why, name)
+            self.assertIn(safepath.LINK_FIX, why)
+        os.remove(other)
+        self.assertIsNone(safepath.refusal(self.real))
+
+    def test_the_writer_replace_leaves_one_link(self):
+        path = os.path.join(self.d, 'fresh', 'LEDGER.md')
+        for _ in range(2):
+            write.add(path, 'alpha', 'selected', 'q', 'a', 'd', 's', when='2026-10-06 08:00Z')
+            self.assertEqual(os.lstat(path).st_nlink, 1)
+            self.assertIsNone(safepath.refusal(path))
+
     def test_the_drive_root_is_not_checked(self):
         root = os.path.splitdrive(self.d)[0] + os.sep
         seen = []
@@ -108,6 +131,19 @@ class OwnerTest(Case):
         with self.owners({os.path.normcase(self.real): (FOREIGN, None)}):
             why = safepath.refusal(self.real)
         self.assertIn('%s is owned by %s' % (self.real, FOREIGN), why or '')
+        self.assertIn(safepath.OWNER_FIX, why)
+
+    def test_the_real_lookup_failing_is_refused(self):
+        """GetNamedSecurityInfoW's own failure (rc != 0, here no such file) fails closed."""
+        absent = self.real + '.absent'
+        sid, why = safepath.owner_sid(absent)
+        self.assertIsNone(sid)
+        self.assertEqual(why, 'GetNamedSecurityInfoW returned 2')
+        real_owner_sid = safepath.owner_sid
+        with mock.patch.object(safepath, 'owner_sid', lambda p: real_owner_sid(p + '.absent')):
+            why = safepath.refusal(self.real) or ''
+        self.assertIn('cannot read the owner of %s (GetNamedSecurityInfoW returned 2)' % self.real, why)
+        self.assertIn(safepath.OWNER_FIX, why)
 
     def test_a_foreign_owned_folder_is_refused(self):
         folder = os.path.dirname(self.real)

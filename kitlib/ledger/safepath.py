@@ -1,11 +1,14 @@
 """The rulings ledger's path checks, run before every read or write of it (docs/ledger.md "Path
 checks"). Defence in depth beside the guard, which refuses only a direct edit of the ledger file.
 
-`refusal(path)` is None when the path may be used, else one sentence saying why not. Two checks:
+`refusal(path)` is None when the path may be used, else one sentence saying why not and the fix.
+The checks and the open that follows are separate calls (no lock), so a swap in between is not
+caught. Three checks:
 
 - reparse: the file and every existing folder above it, except the drive root, must not be a
   reparse point (a junction, a symlink or any other tag), read with os.lstat's
   st_file_attributes. A swapped-in junction or link would point the ledger somewhere else.
+- hard links: the file must have one link (st_nlink); another name would be an unguarded path.
 - owner: the file and its own folder, where they exist, must be owned by this process's user,
   Administrators or SYSTEM (GetNamedSecurityInfoW). An owner that cannot be read is a refusal.
 
@@ -22,36 +25,42 @@ SYSTEM = 'S-1-5-18'
 _MISSING = (FileNotFoundError, NotADirectoryError)
 
 
+REPARSE_FIX = 'point ledger_path at the real target'
+OWNER_FIX = 'check the owner (takeown, or icacls /setowner)'
+LINK_FIX = 'remove the other links (fsutil hardlink list), or copy the file to a new one'
+
+
 def refusal(path):
-    """None when `path` may be read or written as the rulings ledger; else why not."""
+    """None when `path` may be read or written as the rulings ledger; else why not, with the fix."""
     full = os.path.abspath(path)
+    head = 'the rulings ledger path %s is refused: ' % full
     p = full
     while os.path.dirname(p) != p:              # the drive root is not checked
         try:
-            attrs = getattr(os.lstat(p), 'st_file_attributes', 0)
+            st = os.lstat(p)
         except _MISSING:
-            attrs = 0
+            st = None
         except OSError as exc:
-            return 'the rulings ledger path %s is refused: cannot check %s (%s)' % (full, p, exc)
-        if attrs & REPARSE_POINT:
-            return ('the rulings ledger path %s is refused: %s is a reparse point (a junction or '
-                    'symlink). The ledger file and every folder above it must be plain'
-                    % (full, p))
+            return head + 'cannot check %s (%s); %s' % (p, exc, REPARSE_FIX)
+        if st is not None and getattr(st, 'st_file_attributes', 0) & REPARSE_POINT:
+            return head + ('%s is a reparse point (a junction, symlink or other tag); the ledger '
+                           'file and every folder above it must be plain: %s' % (p, REPARSE_FIX))
+        if st is not None and p == full and stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+            return head + ('the file has %d hard links, so an edit through another name reaches '
+                           'it: %s' % (st.st_nlink, LINK_FIX))
         p = os.path.dirname(p)
     for p in (full, os.path.dirname(full)):
         if not os.path.lexists(p):
             continue
         sid, why = owner_sid(p)
         if sid is None:
-            return ('the rulings ledger path %s is refused: cannot read the owner of %s (%s)'
-                    % (full, p, why))
+            return head + 'cannot read the owner of %s (%s): %s' % (p, why, OWNER_FIX)
         me, why = user_sid()
         if me is None:
-            return ('the rulings ledger path %s is refused: cannot read this process\'s user (%s)'
-                    % (full, why))
+            return head + 'cannot read this process\'s user (%s): %s' % (why, OWNER_FIX)
         if sid not in (me, ADMINISTRATORS, SYSTEM):
-            return ('the rulings ledger path %s is refused: %s is owned by %s, not by this user '
-                    '(%s), Administrators or SYSTEM' % (full, p, sid, me))
+            return head + ('%s is owned by %s, not by this user (%s), Administrators or SYSTEM: '
+                           '%s' % (p, sid, me, OWNER_FIX))
     return None
 
 
