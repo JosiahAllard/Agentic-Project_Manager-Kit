@@ -37,7 +37,9 @@ A path that maps to no test package (but a `prose` one) is unmapped and selects 
 never means "skip". Each selected package carries the reasons it was picked.
 The table's `serial` list, [module, why] pairs, names the test modules that cannot run beside
 others; kitlib.tooldeps.selfrun runs them alone after its parallel phase. Its `long` list names
-the modules selfrun starts first and splits by class while it has no recorded time for them.
+the modules selfrun starts first and splits by class while it has no recorded time for them. Its
+`skip_fails` list, [module, why] pairs, names the proof modules: one that skips any test FAILS in
+selfrun (a skip would void the proof); `stale_skip_fails` finds an entry naming no module.
 """
 import ast
 import json
@@ -57,6 +59,7 @@ DEFAULTS = {
     'always': [],
     'serial': [],
     'long': [],
+    'skip_fails': [],
 }
 _KITLIB_REF = re.compile(r'\bkitlib[./\\]+([A-Za-z_]\w*)')
 _TESTS_REF = re.compile(r'\btests\.([A-Za-z_]\w*)')
@@ -110,6 +113,15 @@ def config(root, data=None):
                               'beside other tests"]' % (CONFIG_REL, i))
         serial.append((e[0], e[1]))
     out['serial'] = serial
+    proof = []
+    for i, e in enumerate(out['skip_fails']):
+        ok = (isinstance(e, list) and len(e) == 2 and all(isinstance(x, str) and x.strip() for x in e)
+              and e[0].startswith('tests.'))
+        if not ok:
+            raise ConfigError('%s: skip_fails[%d] must be ["tests.<pkg>.<module>", "why a skipped '
+                              'test voids it"]' % (CONFIG_REL, i))
+        proof.append((e[0], e[1]))
+    out['skip_fails'] = proof
     v = out['long']
     if not isinstance(v, list) or not all(isinstance(x, str) and x.startswith('tests.') for x in v):
         raise ConfigError('%s: long must be a list of "tests.<pkg>.<module>" names' % CONFIG_REL)
@@ -462,6 +474,13 @@ def all_test_modules(root):
     """Every dotted test module `python -m unittest discover -s tests -t .` loads, in sorted
     order (`tests/test*.py` included)."""
     return _walk_modules(root, [os.path.join(root, 'tests')])
+
+
+def stale_skip_fails(skip_fails, modules):
+    """The `skip_fails` modules ([module, why] pairs) that `modules` (every test module of the
+    tree) does not hold: a renamed or removed proof module, whose entry would guard nothing."""
+    have = set(modules)
+    return [m for m, _why in skip_fails if m not in have]
 
 
 def _walk_modules(root, tops):
