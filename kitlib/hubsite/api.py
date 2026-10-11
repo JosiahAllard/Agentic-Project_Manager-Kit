@@ -22,18 +22,27 @@ field named), so a body cannot carry a field another role owns (an agent posting
 cannot post its answer). status, the time stamps and a to-do's `from: you` are set here from the
 route and the role, never taken from the body. A write to an existing document is pinned to the
 version this module read (or the caller's `if_version`), so a check made on one version is never
-applied to another: the loser gets `conflict`.
+applied to another: the loser gets `conflict`. The `from` an agent gives a to-do is a name in
+printable ASCII (0x21 to 0x7E, single spaces inside it, the ends trimmed); anything else is
+`invalid`, and so is any spelling of `you`. On the two edit routes a null `repo` (and a to-do's
+null `detail`) clears the field exactly as "" does; any other null field is read as absent.
 
 Results. status is 200 with the route's object, or the status of STATUS[code] with
 {"ok": false, "error": {"code", "message", "field"}}; both carry `revision`. The codes are the
-store's HubError codes plus `forbidden`, `unavailable` (a view this server does not have) and
-`internal` (anything unexpected).
+store's HubError codes plus `forbidden`, `unavailable` (a view this server does not have, or one
+that failed) and `internal` (anything unexpected). A write answers the revision after it (send:
+after its last note), so a client that waits `since` it is not woken by its own write.
+
+What an agent is told. A `store` refusal names files and the store's folder, and an unexpected
+error may: the owner gets that text, any other caller gets the fixed phrase of AGENT_SAYS for a
+`store` refusal and only the exception's class name for `internal`. The store's `invalid`,
+`not_found` and `conflict` messages name a collection, an id and a field and go to both.
 
 Views. The live backlog and the derived views are other modules; `views` is any object with some
-of these methods, each one optional. A missing one answers `unavailable` on its own route. GET
-snapshot and GET health never fail for a view: the part is null and `unavailable` maps its name
-to a short reason (a HubError's code, else the exception's class name; never a message or a
-path):
+of these methods, each one optional. A missing one answers `unavailable` on its own route, and
+so does one that raises, with a short reason (a HubError's code, else the exception's class
+name; never a message or a path). GET snapshot and GET health never fail for a view: the part
+is null and `unavailable` maps its name to that same reason:
   backlog(repo='', state='', fresh=False)   [{repo, tip, fetched_at, items}]
   completed(repo='', days=None)             [{repo, tip, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
@@ -58,12 +67,11 @@ import collections
 import datetime
 import math
 import re
-import unicodedata
 
 from kitlib import hubvalidate
 
 from . import schema
-from .store import REFUSED, HubError
+from .store import HubError
 
 BASE = '/api/v1'
 API_VERSION = 'v1'
@@ -78,6 +86,8 @@ OWNER_FROM = 'you'                  # a to-do's or a story's `from` when the own
 AGENT_FROM = 'pm'                   # a to-do's `from` when an agent gives none
 AGENT_STORY_STATUSES = ('review', 'questions', 'added', 'declined')
 DAYS_MAX = 3650
+# what a caller who is not the owner is told in place of the store's own message, by code
+AGENT_SAYS = {'store': 'the hub store is not available: the owner sees why'}
 
 Route = collections.namedtuple('Route', 'method pattern role handler')
 Request = collections.namedtuple('Request', 'role params body query via')
@@ -85,6 +95,7 @@ Request = collections.namedtuple('Request', 'role params body query via')
 _TRUE = ('1', 'true', 'yes', 'on')
 _FALSE = ('', '0', 'false', 'no', 'off')
 _ID_SPLIT = re.compile(r'([0-9]+)')
+_NAME = re.compile(r'[\x21-\x7e]+(?: [\x21-\x7e]+)*')
 
 
 def error_body(code, message, field=''):
@@ -141,10 +152,10 @@ def sample_path(route, value='X-1'):
 
 
 # ------------------------------------------------------------------ reading a request
-def _fields(req, allowed, required=(), flags=()):
+def _fields(req, allowed, required=(), flags=(), blank=()):
     """The body's fields: an object holding only `allowed` names, a null one read as absent
-    (refused for a name in `flags`: null is neither true nor false), every `required` one
-    present."""
+    (refused for a name in `flags`: null is neither true nor false; read as "" for a name in
+    `blank`), every `required` one present."""
     body = req.body
     if body is None:
         body = {}
@@ -159,7 +170,7 @@ def _fields(req, allowed, required=(), flags=()):
             raise _invalid('%s must be true or false, not %s'
                            % (name, 'null' if body[name] is None else type(body[name]).__name__),
                            name)
-    out = {k: v for k, v in body.items() if v is not None}
+    out = {k: ('' if v is None else v) for k, v in body.items() if v is not None or k in blank}
     for name in required:
         v = out.get(name)
         if v is None or (isinstance(v, str) and not v.strip()):
@@ -246,11 +257,20 @@ def _reason(e):
     return e.code if isinstance(e, HubError) else type(e).__name__
 
 
-def _plain(text):
-    """text with its white space and its invisible (Unicode format, Cf) characters dropped,
-    casefolded: what a reader takes two spellings of one word to be."""
-    return ''.join(c for c in text if not c.isspace()
-                   and unicodedata.category(c) != 'Cf').casefold()
+def _agent_from(text):
+    """The `from` of a to-do an agent adds: text trimmed, AGENT_FROM when that leaves nothing.
+    Only printable ASCII with single spaces inside is a name (so no character a reader cannot
+    see or tell from another), and no spelling of OWNER_FROM is an agent's."""
+    name = text.strip()
+    if not name:
+        return AGENT_FROM
+    if not _NAME.fullmatch(name):
+        raise _invalid('from is a name in printable ASCII with single spaces inside, not %s'
+                       % ascii(name), 'from')
+    if name.replace(' ', '').casefold() == OWNER_FROM:
+        raise _invalid('from: %s marks a to-do the owner wrote; an agent cannot use it'
+                       % OWNER_FROM, 'from')
+    return name
 
 
 # ------------------------------------------------------------------ the Api
@@ -276,9 +296,11 @@ class Api(object):
         try:
             status, obj = 200, self._call(method, path, role, body, query, via)
         except HubError as e:
-            status, obj = STATUS.get(e.code, 500), error_body(e.code, e.message, e.field)
+            said = e.message if role == OWNER else AGENT_SAYS.get(e.code, e.message)
+            status, obj = STATUS.get(e.code, 500), error_body(e.code, said, e.field)
         except Exception as e:      # noqa: BLE001 - a transport gets an answer, never a traceback
-            status, obj = 500, error_body('internal', '%s: %s' % (type(e).__name__, e))
+            said = '%s: %s' % (type(e).__name__, e) if role == OWNER else type(e).__name__
+            status, obj = 500, error_body('internal', said)
         obj.setdefault('revision', revision)
         return status, obj
 
@@ -360,12 +382,25 @@ class Api(object):
             out.append(d)
         return sorted(out, key=lambda d: _natural(d['id']))
 
-    def view(self, name, **kw):
+    def _view(self, name):
         fn = getattr(self.views, name, None) if self.views is not None else None
         if not callable(fn):
             raise HubError('unavailable', 'the %s view is not available on this server' % name,
                            'views')
-        return fn(**kw)
+        return fn
+
+    def view(self, name, **kw):
+        """What the view gives; whatever it raises is the caller's to answer for."""
+        return self._view(name)(**kw)
+
+    def shown(self, name, **kw):
+        """view() for a route that is that one view: a view that raises is `unavailable` with
+        the short reason, never its message."""
+        fn = self._view(name)
+        try:
+            return fn(**kw)
+        except Exception as e:      # noqa: BLE001 - a view is another module's code
+            raise HubError('unavailable', 'the %s view failed: %s' % (name, _reason(e)), 'views')
 
     def pending(self):
         return [p._asdict() for p in self.store.pending()]
@@ -457,10 +492,7 @@ def todos_add(api, req):
     if owner:
         b['from'] = OWNER_FROM
     else:
-        b['from'] = (b.get('from') or '').strip() or AGENT_FROM
-        if _plain(b['from']) == OWNER_FROM:
-            raise _invalid('from: %s marks a to-do the owner wrote; an agent cannot use it'
-                           % OWNER_FROM, 'from')
+        b['from'] = _agent_from(b.get('from') or '')
     b.update(status='open', added_at=api.clock())
     return api.add('todos', b, req)
 
@@ -485,14 +517,14 @@ def todos_ack(api, req):
 
 def _own(doc_id, d, what):
     who = d.get('from')
-    if not isinstance(who, str) or _plain(who) != OWNER_FROM:
+    if who != OWNER_FROM:           # exactly what todos_add writes for the owner
         raise HubError('forbidden', '%s is from %s: the owner can %s only a to-do he added '
                        'himself (from: %s)' % (doc_id, who or 'nobody', what, OWNER_FROM), 'from')
 
 
 def todos_edit(api, req):
     b = _fields(req, ('title', 'detail', 'commands', 'repo', 'refs', 'urgent', 'if_version'),
-                flags=('urgent',))
+                flags=('urgent',), blank=('repo', 'detail'))
     _pin(b)
     for name in ('title', 'detail', 'repo'):
         _text(b, name)
@@ -586,7 +618,8 @@ def _queued(doc_id, d, what):
 
 
 def to_pm_edit(api, req):
-    b = _fields(req, ('kind', 'repo', 'urgent', 'text', 'if_version'), flags=('urgent',))
+    b = _fields(req, ('kind', 'repo', 'urgent', 'text', 'if_version'), flags=('urgent',),
+                blank=('repo',))
     _pin(b)
     for name in ('kind', 'repo', 'text'):
         _text(b, name)
@@ -611,31 +644,19 @@ def to_pm_delete(api, req):
     return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
 
 
-def _finding_key(f):
-    return (f.level, f.rel, f.field, f.code, f.message)
-
-
 def _refusal(docs, coll, doc_id, changes):
-    """Why the store would refuse to merge changes into coll/doc_id of docs (a snapshot's
-    collections), as a HubError, or None. It is the store's own rule (Store._validate: a schema
-    error, a new hubvalidate error, a new finding whose code is in REFUSED), asked before
-    anything is written."""
+    """Why the store would refuse to send a queued note: to merge changes (the status `sent`,
+    its time, via) into coll/doc_id of docs (a snapshot's collections), as a HubError, or None.
+    It is the schema half of the store's rule (Store._validate), asked before anything is
+    written. The other half, a new hubvalidate error or REFUSED finding, cannot arise here: of
+    a to_pm note hubvalidate judges the status (`sent` is one), its refs and its repo (warnings
+    both), and the changes touch none of the last two."""
     new = dict(docs[coll][doc_id], **changes)
-    rel = '%s/%s' % (coll, doc_id)
     errors = schema.check(coll, new, doc_id)
     if errors:
-        return HubError('invalid', '%s: %s' % (rel, '; '.join(f.message for f in errors)),
+        return HubError('invalid', '%s/%s: %s' % (coll, doc_id,
+                                                  '; '.join(f.message for f in errors)),
                         errors[0].field)
-    before = {_finding_key(f) for f in hubvalidate.validate(docs, only={rel})}
-    after = dict(docs)
-    after[coll] = dict(docs[coll])
-    after[coll][doc_id] = new
-    bad = [f for f in hubvalidate.validate(after, only={rel})
-           if _finding_key(f) not in before
-           and (f.level == hubvalidate.ERROR or f.code in REFUSED)]
-    if bad:
-        return HubError('invalid', '%s: %s' % (rel, '; '.join('%s [%s]' % (f.message, f.code)
-                                                               for f in bad)), bad[0].field)
     return None
 
 
@@ -650,9 +671,12 @@ def to_pm_send(api, req):
         why = _refusal(docs, 'to_pm', doc_id, changes)
         if why:
             raise why
+    out = {'ok': True, 'sent': queued, 'sent_at': at if queued else None}
     for doc_id in queued:
-        api.store.update('to_pm', doc_id, changes, if_version=_version(docs['to_pm'][doc_id]))
-    return {'ok': True, 'sent': queued, 'sent_at': at if queued else None}
+        r = api.store.update('to_pm', doc_id, changes,
+                             if_version=_version(docs['to_pm'][doc_id]))
+        out['revision'] = r.revision
+    return out
 
 
 def to_pm_reply(api, req):
@@ -661,6 +685,8 @@ def to_pm_reply(api, req):
     changes = {'status': 'done', 'done_at': api.clock(), 'reply': _text(b, 'reply')}
     if _text(b, 'ruling') is not None:
         changes['ruling'] = b['ruling'].strip()
+        if not changes['ruling']:
+            raise _invalid('ruling, when given, names the decision: it cannot be blank', 'ruling')
     doc_id = req.params['id']
     d = api.doc('to_pm', doc_id, b)
     if d.get('status') != 'sent':
@@ -689,18 +715,18 @@ def inbox_read(api, req):
 
 
 def backlog(api, req):
-    return {'repos': api.view('backlog', repo=_q(req, 'repo'), state=_q(req, 'state'),
-                              fresh=_q_flag(req, 'fresh'))}
+    return {'repos': api.shown('backlog', repo=_q(req, 'repo'), state=_q(req, 'state'),
+                               fresh=_q_flag(req, 'fresh'))}
 
 
 def completed(api, req):
-    return {'repos': api.view('completed', repo=_q(req, 'repo'),
-                              days=_q_int(req, 'days', 1, DAYS_MAX))}
+    return {'repos': api.shown('completed', repo=_q(req, 'repo'),
+                               days=_q_int(req, 'days', 1, DAYS_MAX))}
 
 
 def _listing(name):
     def handler(api, req):
-        return {'items': api.view(name)}
+        return {'items': api.shown(name)}
     handler.__name__ = name
     return handler
 

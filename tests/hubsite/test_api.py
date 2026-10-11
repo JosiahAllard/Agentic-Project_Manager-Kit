@@ -553,8 +553,12 @@ class ViewsTest(ApiCase):
             def notices(self):
                 raise OSError('gone')
         self.api = api.Api(self.store, views=Broken(), clock=CLOCK)
-        self.refused('store', 'backlog', 'GET', '/backlog', OWNER)
-        self.refused('internal', None, 'GET', '/notices', OWNER)
+        for role in (OWNER, AGENT):
+            with self.subTest(role=role):
+                obj = self.refused('unavailable', 'views', 'GET', '/backlog', role)
+                self.assertEqual(obj['error']['message'], 'the backlog view failed: store')
+                obj = self.refused('unavailable', 'views', 'GET', '/notices', role)
+                self.assertEqual(obj['error']['message'], 'the notices view failed: OSError')
         obj = self.ok('GET', '/snapshot', OWNER)
         self.assertEqual(obj['views']['backlog'], None)
         self.assertEqual(sorted(obj['unavailable']), sorted(api.VIEWS))
@@ -956,6 +960,273 @@ class FixTest(ApiCase):
         status, obj = self.call('POST', '/to_pm/%s/delete' % pid, OWNER)
         self.assertEqual((status, obj['error']['code']), (409, 'conflict'))
         self.assertEqual(self.store.get('to_pm', pid)['status'], 'sent')
+
+
+class SecondFixTest(ApiCase):
+    """The behaviours the second review asked for."""
+
+    def note(self, **kw):
+        body = {'text': 'one'}
+        body.update(kw)
+        return self.ok('POST', '/to_pm', OWNER, body)['id']
+
+    def agent_todo(self, name):
+        return {'title': 't', 'commands': ['dir'], 'from': name}
+
+    # ---- from: an agent's name is printable ASCII
+    def test_an_agents_from_is_printable_ascii(self):
+        for name in ('pm\x00', 'you\x00', 'y\x00ou', 'you\x7f', 'pm\x7f', 'yo\u034fu',
+                     'you\u3164', 'y\u3164ou', '\u3164', '\uff59\uff4f\uff55',
+                     '\uff39\uff2f\uff35', '\u0443\u043eu', 'y\u043eu', 'yo\u03c5',
+                     'caf\u00e9', 'p\tm', 'p\nm', 'p  m', 'pm\u200b', 'p\u00a0m'):
+            with self.subTest(name=ascii(name)):
+                self.refused('invalid', 'from', 'POST', '/todos', AGENT, self.agent_todo(name))
+        for name in ('you', 'YOU', 'Y o u', ' yOu ', 'y o U'):
+            with self.subTest(name=name):
+                self.refused('invalid', 'from', 'POST', '/todos', AGENT, self.agent_todo(name))
+        self.assertEqual(self.store.docs('todos'), {})
+        for name, stored in (('pm', 'pm'), (' worker 3 ', 'worker 3'), ('PM kit-2 ~!', 'PM kit-2 ~!'),
+                             ('your-agent', 'your-agent'), ('  ', 'pm'), ('', 'pm')):
+            with self.subTest(name=name):
+                tid = self.ok('POST', '/todos', AGENT, self.agent_todo(name))['id']
+                self.assertEqual(self.store.get('todos', tid)['from'], stored)
+
+    def test_a_stored_from_that_only_looks_like_you_is_not_the_owners(self):
+        self.store.close()
+        doc = {'status': 'open', 'title': 't', 'commands': ['dir']}
+        self.store = seeded(self, {'todos/T-1.json': dict(doc, **{'from': 'Y o u'}),
+                                   'todos/T-2.json': dict(doc, **{'from': 'you\u200b'}),
+                                   'todos/T-3.json': dict(doc, **{'from': 'you'})})
+        self.api = api.Api(self.store, clock=CLOCK)
+        for tid in ('T-1', 'T-2'):
+            with self.subTest(id=tid):
+                self.refused('forbidden', 'from', 'POST', '/todos/%s/edit' % tid, OWNER,
+                             {'title': 'x'})
+                self.refused('forbidden', 'from', 'POST', '/todos/%s/delete' % tid, OWNER)
+        self.ok('POST', '/todos/T-3/edit', OWNER, {'title': 'x'})
+
+    # ---- the revision a write answers
+    def test_send_answers_the_revision_after_its_last_note(self):
+        self.note()
+        self.note(text='two')
+        obj = self.ok('POST', '/to_pm/send', OWNER)
+        self.assertEqual(obj['revision'], self.store.revision)
+        got = self.ok('GET', '/wait', OWNER, None, {'since': str(obj['revision']),
+                                                    'timeout': '0'})
+        self.assertEqual((got['timed_out'], got['changes']), (True, []))
+        # nothing queued: nothing written, and the revision is the store's still
+        self.assertEqual(self.ok('POST', '/to_pm/send', OWNER)['revision'], self.store.revision)
+
+    def test_every_write_answers_the_revision_after_it(self):
+        qid = self.question()
+        sid = self.story()
+        gone = self.story()
+        pid, edited, dropped = self.note(), self.note(), self.note()
+        tid = self.ok('POST', '/todos', OWNER, {'title': 't'})['id']
+        mid = self.ok('POST', '/inbox', AGENT, {'text': 'x'})['id']
+        for method, path, role, body in (
+                ('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS}),
+                ('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0}),
+                ('POST', '/questions/%s/log' % qid, AGENT, {'ruling': 'decision-7',
+                                                            'if_version': 2}),
+                ('POST', '/todos', AGENT, {'title': 't', 'commands': ['dir']}),
+                ('POST', '/todos/%s/edit' % tid, OWNER, {'title': 'u'}),
+                ('POST', '/todos/%s/done' % tid, OWNER, None),
+                ('POST', '/todos/%s/ack' % tid, AGENT, None),
+                ('POST', '/todos/%s/delete' % tid, OWNER, None),
+                ('POST', '/stories', OWNER, {'repo': 'kit', 'title': 't', 'story': 's'}),
+                ('POST', '/stories/%s' % sid, AGENT, {'status': 'review', 'if_version': 1}),
+                ('POST', '/stories/%s/withdraw' % gone, OWNER, None),
+                ('POST', '/to_pm', OWNER, {'text': 'x'}),
+                ('POST', '/to_pm/%s/edit' % edited, OWNER, {'text': 'newer'}),
+                ('POST', '/to_pm/%s/delete' % dropped, OWNER, None),
+                ('POST', '/to_pm/send', OWNER, None),
+                ('POST', '/to_pm/%s/reply' % pid, AGENT, {'reply': 'r'}),
+                ('POST', '/inbox', AGENT, {'text': 'x'}),
+                ('POST', '/inbox/%s/read' % mid, OWNER, None)):
+            with self.subTest(path=path):
+                before = self.store.revision
+                obj = self.ok(method, path, role, body)
+                self.assertGreater(self.store.revision, before, 'the call wrote nothing')
+                self.assertEqual(obj['revision'], self.store.revision)
+
+    # ---- a view that fails, on its own route
+    def test_a_view_that_raises_is_unavailable_with_a_short_reason(self):
+        class Broken(object):
+            def backlog(self, **kw):
+                raise HubError('store', 'the backlog store in a-folder-on-this-machine is gone',
+                               'backlog')
+
+            def completed(self, **kw):
+                raise HubError('unavailable', 'nothing in a-folder-on-this-machine', 'views')
+
+            def notices(self):
+                raise OSError('cannot read a-folder-on-this-machine')
+
+            def repos(self):
+                return 1 / 0
+
+            def usage(self):
+                raise KeyError('a-folder-on-this-machine')
+
+            def agents(self):
+                raise HubError('invalid', 'a-folder-on-this-machine is no agent list', 'agents')
+        self.api = api.Api(self.store, views=Broken(), clock=CLOCK)
+        want = {'backlog': 'store', 'completed': 'unavailable', 'notices': 'OSError',
+                'repos': 'ZeroDivisionError', 'usage': 'KeyError', 'agents': 'invalid'}
+        self.assertEqual(sorted(want), sorted(api.VIEWS))
+        for name, why in sorted(want.items()):
+            for role in (OWNER, AGENT):
+                with self.subTest(view=name, role=role):
+                    status, obj = self.call('GET', '/' + name, role)
+                    self.assertEqual((status, obj['error']['code'], obj['error']['field']),
+                                     (503, 'unavailable', 'views'))
+                    self.assertEqual(obj['error']['message'],
+                                     'the %s view failed: %s' % (name, why))
+                    self.assertNotIn('a-folder-on-this-machine', json.dumps(obj))
+        # a bad query is still the caller's mistake, not the view's
+        self.refused('invalid', 'fresh', 'GET', '/backlog', AGENT, None, {'fresh': 'maybe'})
+
+    # ---- what an agent is told of a store refusal
+    def test_a_store_refusal_gives_its_folder_to_the_owner_only(self):
+        self.question()
+        root = json.dumps(self.store.root)[1:-1]
+        self.store.close()
+        for method, path, body, query in (('GET', '/wait', None, {'timeout': '0'}),
+                                          ('GET', '/wait', None, {'timeout': '0', 'pending': '1'}),
+                                          ('GET', '/questions', None, None),
+                                          ('GET', '/pending', None, None),
+                                          ('GET', '/snapshot', None, None),
+                                          ('POST', '/todos', {'title': 't', 'commands': ['dir']},
+                                           None)):
+            with self.subTest(path=path, query=query):
+                status, obj = self.call(method, path, AGENT, body, query)
+                self.assertEqual((status, obj['error']['code']), (503, 'store'))
+                self.assertEqual(obj['error']['message'], api.AGENT_SAYS['store'])
+                self.assertNotIn(root, json.dumps(obj))
+                status, obj = self.call(method, path, OWNER, body, query)
+                self.assertEqual((status, obj['error']['code']), (503, 'store'))
+                self.assertIn(root, json.dumps(obj))
+
+    def test_an_unexpected_error_gives_its_text_to_the_owner_only(self):
+        def docs(coll):
+            raise OSError('cannot read a-folder-on-this-machine')
+        self.store.docs = docs
+        status, obj = self.call('GET', '/questions', AGENT)
+        self.assertEqual((status, obj['error']['code'], obj['error']['message']),
+                         (500, 'internal', 'OSError'))
+        status, obj = self.call('GET', '/questions', OWNER)
+        self.assertEqual((status, obj['error']['code']), (500, 'internal'))
+        self.assertIn('a-folder-on-this-machine', obj['error']['message'])
+        # a role that is neither is told no more than an agent
+        status, obj = self.call('GET', '/questions', 'somebody')
+        self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
+
+    def test_the_stores_own_invalid_still_tells_an_agent_what_is_wrong(self):
+        obj = self.refused('invalid', None, 'POST', '/todos', AGENT, {'title': 't'})
+        self.assertIn('handstep-commands', obj['error']['message'])
+        self.assertNotIn(json.dumps(self.store.root)[1:-1], json.dumps(obj))
+
+    # ---- the send check and the store
+    def test_the_send_check_refuses_exactly_what_the_store_refuses(self):
+        good = {'status': 'queued', 'kind': 'fyi', 'text': 'good'}
+        notes = {
+            'P-001': good,
+            'P-002': {'status': 'queued', 'kind': 'fyi'},                      # no text
+            'P-003': {'status': 'queued', 'text': 'no kind'},
+            'P-004': dict(good, text=7),
+            'P-005': dict(good, text=''),
+            'P-006': dict(good, kind='order'),
+            'P-007': dict(good, kind=None),
+            'P-008': dict(good, urgent='yes'),
+            'P-009': dict(good, reply=7),
+            'P-010': dict(good, refs='Q-999'),
+            'P-011': dict(good, refs=['Q-999', 'T-404'], repo='no-such-repo'),  # warnings only
+            'P-012': dict(good, repo=3),
+            'P-013': dict(good, done_at=5, sent_at=5),
+            'P-014': dict(good, surprise={'a': 1}),
+            'P-015': dict(good, created_at='yesterday'),
+            'P-016': dict(good, text='  '),
+        }
+        self.store.close()
+        self.store = seeded(self, dict(('to_pm/%s.json' % k, v) for k, v in notes.items()))
+        _, docs = self.store.snapshot()
+        self.assertEqual(sorted(docs['to_pm']), sorted(notes))
+        changes = {'status': 'sent', 'sent_at': NOW, 'via': 'web'}
+        told = {}
+        for pid in sorted(notes):
+            why = api._refusal(docs, 'to_pm', pid, changes)
+            try:
+                self.store.update('to_pm', pid, changes, if_version=api._version(docs['to_pm'][pid]))
+                real = None
+            except HubError as e:
+                real = e
+            with self.subTest(id=pid, note=notes[pid]):
+                self.assertEqual(why and (why.code, why.field), real and (real.code, real.field))
+                if why and real:    # the store's own words, after the note they are about
+                    self.assertEqual(why.message, 'to_pm/%s: %s' % (pid, real.message))
+            told[pid] = real.field if real else None
+        self.assertIsNone(told['P-001'])
+        self.assertIsNone(told['P-011'])
+        self.assertEqual((told['P-002'], told['P-006']), ('text', 'kind'))
+        self.assertGreaterEqual(len([v for v in told.values() if v]), 4, told)
+
+    # ---- a blank ruling
+    def test_a_blank_ruling_is_refused_not_stored_empty(self):
+        pid = self.note()
+        self.ok('POST', '/to_pm/send', OWNER)
+        path = '/to_pm/%s/reply' % pid
+        for blank in ('', '  ', '\t\n'):
+            with self.subTest(ruling=blank):
+                self.refused('invalid', 'ruling', 'POST', path, AGENT,
+                             {'reply': 'r', 'ruling': blank})
+        self.assertEqual(self.store.get('to_pm', pid)['status'], 'sent')
+        self.ok('POST', path, AGENT, {'reply': 'r', 'ruling': None})       # null: none given
+        self.assertNotIn('ruling', self.store.get('to_pm', pid))
+
+    # ---- the store closes while a wait is open
+    def test_a_store_closed_during_a_wait_is_the_stores_refusal(self):
+        real = self.store.wait
+        for role in (AGENT, OWNER):
+            for query in ({'timeout': '30'}, {'timeout': '30', 'pending': '1'}):
+                with self.subTest(role=role, query=query):
+                    root = tempfile.mkdtemp(prefix='kit-hubapi-')
+                    self.addCleanup(shutil.rmtree, root, True)
+                    store = Store.open(root, clock=CLOCK)
+                    self.addCleanup(store.close)
+                    real, entered = store.wait, []
+
+                    def wait(since, timeout, _real=real, _store=store, _entered=entered):
+                        _entered.append(self.api.pm_seen()['waiting'])
+                        _store.close()          # the server stops while this call waits
+                        return _real(since, timeout)
+                    store.wait = wait
+                    self.api = api.Api(store, clock=CLOCK)
+                    status, obj = self.api.call('GET', BASE + '/wait', role, None, query)
+                    self.assertEqual((status, obj['error']['code']), (503, 'store'))
+                    self.assertNotIn('timed_out', obj)
+                    self.assertEqual(entered, [1 if role == AGENT else 0])
+                    self.assertEqual(self.api.pm_seen()['waiting'], 0)
+
+    # ---- null and "" on an edit
+    def test_a_null_repo_on_an_edit_clears_it_as_an_empty_one_does(self):
+        pid = self.note(repo='kit')
+        tid = self.ok('POST', '/todos', OWNER, {'title': 't', 'repo': 'kit', 'detail': 'd'})['id']
+        for coll, path, doc_id, names in (('to_pm', '/to_pm/%s/edit' % pid, pid, ('repo',)),
+                                          ('todos', '/todos/%s/edit' % tid, tid,
+                                           ('repo', 'detail'))):
+            for name in names:
+                for empty in (None, ''):
+                    with self.subTest(coll=coll, name=name, value=empty):
+                        self.ok('POST', path, OWNER, {name: 'kit'})
+                        self.assertEqual(self.store.get(coll, doc_id)[name], 'kit')
+                        self.ok('POST', path, OWNER, {name: empty})
+                        self.assertEqual(self.store.get(coll, doc_id)[name], '')
+        # any other null field is still read as absent: alone it changes nothing
+        self.refused('invalid', 'body', 'POST', '/to_pm/%s/edit' % pid, OWNER, {'text': None})
+        self.refused('invalid', 'body', 'POST', '/todos/%s/edit' % tid, OWNER, {'title': None})
+        self.ok('POST', '/to_pm/%s/edit' % pid, OWNER, {'text': None, 'repo': None})
+        self.assertEqual(self.store.get('to_pm', pid)['text'], 'one')
 
 
 class OwnTodoTest(ApiCase):
