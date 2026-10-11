@@ -6,7 +6,7 @@ import unittest
 from kitlib import hubmirror, pmstart
 from tests.pmstart import keep_off_launcher_repos
 
-KIT =os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_SRC = os.path.join(KIT, "claude", "hub", "action-hub.html")
 URL = "https://claude.ai/artifact/X"
 NOTE = "hub: pm_start.hub_url is ignored because hub_urls is set"
@@ -16,7 +16,7 @@ def setUpModule():
     keep_off_launcher_repos()   # like the other pmstart modules: never this machine's launcher.repos
 
 
-def lines(cfg,account=lambda: "1", isfile=lambda p: True):
+def lines(cfg, account=lambda: "1", isfile=lambda p: True):
     return pmstart.hub(cfg, account=account, isfile=isfile)
 
 

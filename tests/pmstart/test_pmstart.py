@@ -133,10 +133,15 @@ class WatcherTest(unittest.TestCase):
         self.assertEqual(self.run_it([dict(wproc(42), Created="garbled")], dict(hb, started=0.0)), [])
 
     def test_the_heartbeat_start_time_matches_the_process_lists(self):
-        """pm_watch's own start time (kernel32) and list_processes' CreationDate agree for one pid."""
+        """pm_watch's own start time (kernel32), written as list_processes' CreationDate 'o' form
+        (local time with its offset), reads back as the same pid's start: a live watcher passes."""
         from kitlib import pmwatch
-        (me,) = [p for p in pmstart.list_processes() if p.get("ProcessId") == os.getpid()]
-        self.assertLessEqual(abs(pmwatch.own_start_time() - pmstart._created(me)), pmstart.START_SLACK)
+        started = pmwatch.own_start_time()
+        created = datetime.datetime.fromtimestamp(started).astimezone().isoformat()
+        procs = [dict(wproc(os.getpid()), Created=created)]
+        hb = {"pid": os.getpid(), "beat": self.T - 30, "stream": True, "started": started}
+        self.assertLessEqual(abs(pmstart._created(procs[0]) - started), pmstart.START_SLACK)
+        self.assertEqual(self.run_it(procs, hb), [])
 
     def test_a_pm_watch_process_without_a_heartbeat_is_an_older_copy(self):
         for hb in (None, {"pid": 7, "beat": self.T}):     # none, or another process's
