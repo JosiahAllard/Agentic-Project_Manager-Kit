@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 from kitlib import pmwatch as W
 from claude import claude_host as H
@@ -256,18 +257,40 @@ class Cli(unittest.TestCase):
     def test_missing_sessions_exits_2(self):
         err = io.StringIO()
         with redirect_stderr(err), self.assertRaises(SystemExit) as c:
-            cli.parse(["--usage-script", "u.ps1"], {})
+            cli.parse([], {}, launcher_set=True)
         self.assertEqual(c.exception.code, 2)
         self.assertIn("pm_watch.sessions_file", err.getvalue())
 
-    def test_no_usage_script_and_no_launcher_key_exits_2(self):
+    def test_no_launcher_key_exits_2(self):
         err = io.StringIO()
         with redirect_stderr(err), self.assertRaises(SystemExit) as c:
             cli.parse(["--sessions", "s.json"], {}, launcher_set=False)
         self.assertEqual(c.exception.code, 2)
         self.assertIn("no usage source", err.getvalue())
-        self.assertEqual(cli.parse(["--sessions", "s.json", "--usage-script", "u.ps1"], {},
-                                   launcher_set=False).usage_script, "u.ps1")
+
+    def test_usage_script_flag_is_refused_with_a_pointer(self):
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as c:
+            cli.parse(["--sessions", "s.json", "--usage-script", "u.ps1"], {}, launcher_set=True)
+        self.assertEqual(c.exception.code, 2)
+        self.assertIn("retired", err.getvalue())
+        self.assertIn("kitlib.launcher.usage", err.getvalue())
+
+    def test_usage_script_config_key_is_refused_with_a_pointer(self):
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as c:
+            cli.parse(["--sessions", "s.json"], {"usage_script": "u.ps1"}, launcher_set=True)
+        self.assertEqual(c.exception.code, 2)
+        self.assertIn("pm_watch.usage_script", err.getvalue())
+        self.assertIn("retired", err.getvalue())
+
+    def test_usage_takes_no_script_and_starts_no_process(self):
+        with mock.patch("subprocess.run", side_effect=AssertionError("started a process")), \
+                mock.patch("subprocess.Popen", side_effect=AssertionError("started a process")):
+            got = W.usage(report=lambda: ["account 1: five_hour=3%  seven_day=4%"])
+        self.assertEqual(got, {"1": {"five": 3, "week": 4}})
+        with self.assertRaises(TypeError):
+            W.usage("u.ps1", report=lambda: [])
 
     def test_launcher_configured_reads_the_machine_config(self):
         with tempfile.TemporaryDirectory() as home:
@@ -277,20 +300,19 @@ class Cli(unittest.TestCase):
                 json.dump({"launcher": {"accounts": {"1": ["~/.claude"]}}}, f)
             self.assertTrue(W.launcher_configured(home))
 
-    def test_no_usage_script_reads_usage_in_process(self):
-        a = cli.parse(["--sessions", "s.json"], {}, launcher_set=True)
-        self.assertIsNone(a.usage_script)
-        got = W.usage(None, report=lambda: ["account 1: five_hour=reset  seven_day=51% (resets Mon 10:00)  "
+    def test_usage_is_read_in_process(self):
+        got = W.usage(report=lambda: ["account 1: five_hour=reset  seven_day=51% (resets Mon 10:00)  "
                                             "[updated 3 min ago]", "account 2: no usage file",
                                             "current account: 1"])
         self.assertEqual(got, {"1": {"five": 0, "week": 51}})
 
     def test_config_keys_are_defaults_and_flags_win(self):
-        cfg = {"usage_script": "u.ps1", "sessions_file": "s.json", "alerts_dir": "A", "state_file": "S"}
-        a = cli.parse([], cfg)
-        self.assertEqual((a.usage_script, a.sessions, a.alerts_dir, a.state, a.idle_minutes, a.idle_poll),
-                         ("u.ps1", "s.json", "A", "S", 20, 300))
-        a = cli.parse(["--sessions", "x.json", "--state", "T", "--idle-minutes", "5", "--idle-poll", "60"], cfg)
+        cfg = {"sessions_file": "s.json", "alerts_dir": "A", "state_file": "S"}
+        a = cli.parse([], cfg, launcher_set=True)
+        self.assertEqual((a.sessions, a.alerts_dir, a.state, a.idle_minutes, a.idle_poll),
+                         ("s.json", "A", "S", 20, 300))
+        a = cli.parse(["--sessions", "x.json", "--state", "T", "--idle-minutes", "5", "--idle-poll", "60"], cfg,
+                      launcher_set=True)
         self.assertEqual((a.sessions, a.state, a.idle_minutes, a.idle_poll), ("x.json", "T", 5, 60))
 
     def test_load_config_reads_pm_watch_key(self):
@@ -306,14 +328,13 @@ class Cli(unittest.TestCase):
             sessions, state = os.path.join(d, "s.json"), os.path.join(d, "st", "state.json")
             with open(sessions, "w", encoding="utf-8") as f:
                 json.dump({}, f)
-            with open(os.path.join(d, "u.ps1"), "w", encoding="utf-8") as f:
-                f.write("Write-Output 'account 1: five_hour=1% seven_day=2%'\n")
             out = io.StringIO()
-            with redirect_stdout(out):
-                rc = cli.main(["--usage-script", os.path.join(d, "u.ps1"), "--sessions", sessions,
+            with redirect_stdout(out), mock.patch.object(
+                    W, "usage", return_value={"1": {"five": 1, "week": 2}}):
+                rc = cli.main(["--sessions", sessions,
                                "--alerts-dir", os.path.join(d, "none"), "--state", state, "--once",
                                "--notice-dir", ""],
-                              sleep=lambda s: self.fail("slept"))
+                              sleep=lambda s: self.fail("slept"), launcher_set=True, plugin=False)
             self.assertEqual((rc, out.getvalue()), (0, ""))
             with open(state, encoding="utf-8") as f:
                 self.assertEqual(json.load(f), {"branches": {}, "usage": {"1": {"five": 1, "week": 2}},

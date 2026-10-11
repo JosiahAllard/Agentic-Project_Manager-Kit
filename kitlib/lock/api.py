@@ -506,6 +506,11 @@ def hold_create(actor, spec, store=None, kinds_table=None):
                 table = kinds_mod.load(store.kinds_path, agent_cap=L["agent_cap"])
             except kinds_mod.KindsError as e:
                 raise ApiError("store", str(e))
+        if table and s.get("kind"):
+            try:
+                s["kind"] = kinds_mod.resolve(s["kind"], table, store.kinds_path)
+            except kinds_mod.KindsError as e:
+                raise ApiError("store", str(e))
         h, notes = hl.create(store, L, s, me, table, now)
         return {"hold": hl.entry(h, now), "notes": notes}
     return _write(store, go)

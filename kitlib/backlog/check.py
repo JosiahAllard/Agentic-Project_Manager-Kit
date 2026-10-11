@@ -2,24 +2,21 @@
 tools/backlog.py; decision cites, anchors, ruling orphans and the UNBUILT lines cut).
 
 A check that looked at nothing over a store that was read is vacuous (an answer); one with no
-population at all is red (it never ran). Ruling checks run only when the ledger is configured.
+population at all is red (it never ran). No check reads the ledger: a ruling id on a record is
+taken on its word.
 """
-from . import ledger as lmod
 from . import offer as omod
 from . import record as rmod
 from . import scope as smod
 from .store import dangling_items
-from kitlib.config import user as kuser
 
 PREEMPTIONS = 'pre-emptions'
 PULL_RECORDS = 'pull records'
-PRIORITY_RULINGS = 'priority rulings'
-HOLD_RULINGS = 'hold rulings'
 
 
 class CheckResult(object):
     def __init__(self, name, subject, findings, unit='records', warnings=(), proxy=None,
-                 population=None, skipped=None):
+                 population=None, skipped=None, error=None):
         self.name = name
         self.subject = subject
         self.findings = list(findings)
@@ -28,6 +25,7 @@ class CheckResult(object):
         self.proxy = proxy
         self.population = population
         self.skipped = skipped          # why the check did not run (not red)
+        self.error = error              # why the check cannot run although it must (red)
 
     @property
     def failing_subjects(self):
@@ -47,11 +45,14 @@ class CheckResult(object):
 
     @property
     def red(self):
-        return self.empty or bool(self.findings)
+        return self.error is not None or self.empty or bool(self.findings)
 
     def line(self):
         if self.skipped is not None:
             return '%-16s SKIPPED - %s' % (self.name, self.skipped)
+        if self.error is not None:
+            return '%-16s CONFIG ERROR - %s (%d %s not checked)' % (
+                self.name, self.error, self.subject, self.unit)
         if self.empty:
             return '%-16s 0 ok, 0 FAILED, SUBJECT EMPTY - nothing was read' % self.name
         if self.vacuous:
@@ -121,30 +122,7 @@ def check_pull_records(snap):
                        proxy='reads the shape; colliding in-flight scopes are a WARN')
 
 
-def _check_rulings(snap, ledger, name, key, kinds, skip=None):
-    subjects = [r for r in snap.readable if r.has(key) and rmod._ruling(r.get(key)) is None
-                and not (skip is not None and skip(r))]
-    if not ledger.configured:
-        return CheckResult(name, len(subjects), (), unit='ruled records',
-                           skipped='no ledger configured (%s ledger_path)' % kuser.display())
-    found, warned = [], []
-    if subjects:
-        entries, why = ledger.entries()
-        for rec in subjects:
-            rid = rec.get(key)
-            if entries is None:
-                warned.append(rmod.Finding(name, rec.path, rec.line_of(key), '`%s: %s` not '
-                                           'checked - the ledger is unreadable (%s)' % (key, rid, why)))
-                continue
-            bad = lmod.ruling_refusal(ledger, entries, rid, kinds, allow_retired=key == 'hold_ruling'
-                                      and not lmod.hold_live(rec))
-            if bad is not None:
-                found.append(rmod.Finding(name, rec.path, rec.line_of(key), '`%s`: %s' % (key, bad)))
-    return CheckResult(name, len(subjects), found, unit='ruled records', warnings=warned,
-                       proxy='checks the id is a ledger entry of the right kind, not what it says')
-
-
-def check_store(snap, ledger):
+def check_store(snap):
     """Every check, each with its own denominator."""
     by_name = {}
     for f in snap.all_findings():
@@ -166,9 +144,6 @@ def check_store(snap, ledger):
         CheckResult(rmod.ID_FILENAME, len(readable), by_name.get(rmod.ID_FILENAME, ())),
         check_preemptions(snap),
         check_pull_records(snap),
-        _check_rulings(snap, ledger, PRIORITY_RULINGS, 'priority_ruling', lmod.OWNER_KINDS,
-                       skip=lambda r: r.get('priority_by') == 'pm'),
-        _check_rulings(snap, ledger, HOLD_RULINGS, 'hold_ruling', lmod.HOLD_KINDS),
     ]
     for r in results:
         r.population = snap.file_count
@@ -176,6 +151,6 @@ def check_store(snap, ledger):
 
 
 def fail_findings(snap):
-    """Every FAIL `check` reports for `snap` apart from the ruling checks (they need the ledger):
-    a write may not add one (store.check_change), so `check` and writes share one meaning of red."""
-    return [f for r in check_store(snap, lmod.Ledger(None, ())) for f in r.findings]
+    """Every FAIL `check` reports for `snap`: a write may not add one (store.check_change), so
+    `check` and writes share one meaning of red."""
+    return [f for r in check_store(snap) for f in r.findings]

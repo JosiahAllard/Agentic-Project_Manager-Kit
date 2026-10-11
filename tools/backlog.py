@@ -7,7 +7,8 @@
           stale [--days N]
   writes  add ID --summary S --scope P... [--effort s|m|l] [--ref R] [--reopen]
           set ID [--<field> V]... [--unset K]... [--ruling R] [--body-file F] [--hold-ruling R]
-          block ID --on M... [--owner-ask Q] [--ruling R]      unblock ID [--ruling R]
+          block ID --on M... [--owner-ask Q] [--ruling R]
+          unblock ID [--on M] [--reason T] [--ruling R]      (several blockers: --on and --reason)
           pull ID [--reason T] [--ruling R] [--blocker ID]   release ID --reason T
           close ID --reason T [--ruling R]                   retire ID --why T [--ruling R]
           set-status ID parked --q Q-nnn                     unpark ID --ruling R
@@ -25,7 +26,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib.backlog import check as checkmod                        # noqa: E402
 from kitlib.backlog import landable as landmod                      # noqa: E402
-from kitlib.backlog import ledger as lmod                           # noqa: E402
 from kitlib.backlog import migrate as mmod                          # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
@@ -33,7 +33,7 @@ from kitlib.backlog import record as rmod                           # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
 from kitlib.backlog.errors import Failure, Refusal, Usage           # noqa: E402
-from kitlib.config import ConfigError, ledger_path, load as load_config, standing_delegation  # noqa: E402
+from kitlib.config import ConfigError, load as load_config          # noqa: E402
 from kitlib.git import repo as gitrepo                              # noqa: E402
 
 # `set --<field>` for every field but hold_ruling, whose `--hold-ruling` is the recite.
@@ -104,6 +104,8 @@ def build_parser():
     v.add_argument('--ruling', default=None)
     v = sub.add_parser('unblock')
     v.add_argument('id')
+    v.add_argument('--on', default=None)
+    v.add_argument('--reason', default=None)
     v.add_argument('--ruling', default=None)
     v = sub.add_parser('pull')
     v.add_argument('id')
@@ -177,7 +179,7 @@ def do_next(args, ctx, snap):
 
 
 def do_show(args, ctx, snap):
-    rec = pmod.require(snap, args.id)
+    rec = pmod.require_shown(snap, ctx, args.id)
     ranks = omod.ranked(snap)
     bucket, _ = omod.classify(rec)
     say('%s  rank %s  %s  (%s)' % (rec.id, omod.rank_label(rec, ranks), bucket, rec.path))
@@ -235,7 +237,7 @@ def do_stale(args, ctx, snap):
 def do_check(args, ctx, snap):
     say('CHECK %s (%s)' % (snap.head_label(), snap.where))
     red = False
-    for res in checkmod.check_store(snap, ctx.ledger):
+    for res in checkmod.check_store(snap):
         say(res.line())
         for f in res.findings:
             say('    FAIL %s:%s %s' % (f.path, f.line, f.message))
@@ -285,7 +287,7 @@ def planner(args, ctx):
     if v == 'block':
         return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask, args.ruling)
     if v == 'unblock':
-        return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling)
+        return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling, args.on, args.reason)
     if v == 'pull':
         return lambda s: pmod.plan_pull(s, ctx, args.id, args.reason, args.ruling, args.blocker)
     if v == 'release':
@@ -346,26 +348,22 @@ def main(argv=None):
     try:
         if args.verb == 'retire' and args.owner_said is not None:
             raise Usage('`--owner-said` is gone: owner words are never copied into a record. '
-                        'Retiring an owner-held record takes `--ruling R-nnnn`, a ledger entry whose '
-                        '`Items:` line names it')
+                        'Retiring an owner-held record takes `--ruling R-nnnn`')
         root = os.path.abspath(args.root or os.getcwd())
         top, why = gitrepo.toplevel(root)
         if not top:
             raise Failure(why)
         try:
             cfg = load_config(top)
-            ledger_file = ledger_path()
-            standing = standing_delegation()
         except ConfigError as exc:
             raise Failure(str(exc))
         section = cfg.section('backlog')
         rules = rmod.Rules(section['id_grammar'], section['phases'])
         if args.verb == 'migrate':
             return do_migrate(args, top, cfg, rules)
-        ledger = lmod.Ledger(ledger_file, [section['ledger_repo'] or cfg.repo.get('name') or ''], standing)
         backend = smod.open_backend(top, cfg, fetch=not args.no_fetch)
         store = smod.Store(backend, rules, session=args.session)
-        ctx = pmod.Context(store, ledger, top, remote=cfg.remote, main_branch=cfg.main_branch,
+        ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
                            branch=args.branch)
         if args.verb in WRITES:
             return do_write(args, ctx, store)

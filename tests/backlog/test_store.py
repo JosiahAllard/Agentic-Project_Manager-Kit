@@ -29,14 +29,9 @@ def clone(case, name):
 
 
 def add(store, rid, scope=None):
-    ctx = pmod.Context(store, store_ledger(), store.backend.root, branch=BRANCH)
+    ctx = pmod.Context(store, store.backend.root, branch=BRANCH)
     return store.write(lambda s: pmod.plan_add(s, ctx, rid, 'summary of %s' % rid,
                                                [scope or 'area/%s/**' % rid.lower()]))
-
-
-def store_ledger():
-    from kitlib.backlog import ledger as lmod
-    return lmod.Ledger(None, ['kit'])
 
 
 def wrap_git(case, on):
@@ -107,7 +102,7 @@ class CompareAndSwap(StoreCase):
     def test_two_writers_on_one_record_both_changes_survive(self):
         self.seed(priced('FOO'))
         other, _ = clone(self, 'other')
-        octx = pmod.Context(other, store_ledger(), other.backend.root, branch=BRANCH)
+        octx = pmod.Context(other,other.backend.root, branch=BRANCH)
 
         def interfere(attempt):
             if attempt == 0:
@@ -149,7 +144,7 @@ class CompareAndSwap(StoreCase):
         """The plan runs again on the fresh snapshot: a pull that lost to another pull refuses."""
         self.seed(priced('FOO'))
         other, _ = clone(self, 'other')
-        octx = pmod.Context(other, store_ledger(), other.backend.root, branch='other-branch')
+        octx = pmod.Context(other,other.backend.root, branch='other-branch')
         self.repo.git('branch', 'other-branch')
 
         def interfere(attempt):
@@ -328,7 +323,7 @@ class PushFailures(StoreCase):
         our push and our cache update: the update is a fast-forward only, so it is skipped."""
         self.seed(priced('FOO'))
         second = smod.Store(self.make_backend(), self.rules)
-        sctx = pmod.Context(second, self.ledger, self.repo.root, branch=BRANCH)
+        sctx = pmod.Context(second, self.repo.root, branch=BRANCH)
         done = []
 
         def on(args, real):
@@ -582,7 +577,7 @@ class NoRemote(StoreCase):
     def test_update_ref_with_a_stale_old_value_retries(self):
         self.seed(priced('FOO'))
         second = smod.Store(self.make_backend(), self.rules)
-        sctx = pmod.Context(second, self.ledger, self.repo.root, branch=BRANCH)
+        sctx = pmod.Context(second, self.repo.root, branch=BRANCH)
 
         def interfere(attempt):
             if attempt == 0:
@@ -595,7 +590,7 @@ class NoRemote(StoreCase):
 
     def test_a_first_write_needs_the_ref_absent(self):
         second = smod.Store(self.make_backend(), self.rules)
-        sctx = pmod.Context(second, self.ledger, self.repo.root, branch=BRANCH)
+        sctx = pmod.Context(second, self.repo.root, branch=BRANCH)
 
         def interfere(attempt):
             if attempt == 0:
@@ -695,6 +690,24 @@ class AKilledStoreReadIsNoAnswer(StoreCase):
         self.assertIsNone(got, 'a killed git was read as "no store ref"')
         self.assertTrue(why)
 
+    def test_landable_reads_a_killed_branch_read_as_no_answer_not_no_branch(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet refs/heads/<b>` said "no such
+        branch" as exit 1 with no output, the shape a kill leaves."""
+        from kitlib.backlog import landable as L
+        snap = self.store.load()
+        self.repo.git('branch', 'tools/held', 'main')
+        real = cmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] == 'rev-parse' and argv[-1].startswith('refs/heads/tools/held'):
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(cmd, '_run', side_effect=run):
+            got = L.check(self.backend, snap, self.repo.root, ['tools/held'])
+        self.assertEqual([v.verdict for v in got], [L.CANNOT_TELL])
+        self.assertNotIn('no local branch', got[0].detail)
+        self.assertIn('cannot read refs/heads/tools/held', got[0].detail)
+
     def test_a_failed_update_ref_whose_reread_is_killed_may_have_landed(self):
         tip = self.seed(priced('FOO'))
         moved = []
@@ -728,9 +741,18 @@ class TheRefAndTheCheckout(StoreCase):
         from kitlib.backlog import check, landable, offer
         holding, dead, _ = offer.in_flight_split(snap, self.repo.root, 'origin')
         offer.next_offer(snap, holding)
-        check.check_store(snap, self.ledger)
+        check.check_store(snap)
         landable.check(self.backend, snap, self.repo.root, [BRANCH, 'main'])
         self.assertEqual(worktree_state(self.repo), before)
+
+    def test_check_takes_a_ruling_id_on_its_word(self):
+        """No check reads the ledger: a cited id no ledger holds is not a finding."""
+        self.seed(priced('FOO', priority_by='owner', priority_ruling='R-9999'),
+                  rec('BAR', hold_ruling='R-9997'))
+        from kitlib.backlog import check
+        results = check.check_store(self.store.load())
+        self.assertEqual([r.name for r in results if r.red], [])
+        self.assertFalse({'priority rulings', 'hold rulings'} & {r.name for r in results})
 
     def test_writes_never_touch_the_working_tree(self):
         before = worktree_state(self.repo)
@@ -842,7 +864,7 @@ class OtherBackends(unittest.TestCase):
         self.addCleanup(repo.cleanup)
         root = repo.worktree('w')
         store = smod.Store(smod.MainBackend(root, 'docs/backlog'), rmod.Rules())
-        ctx = pmod.Context(store, store_ledger(), root, branch=BRANCH)
+        ctx = pmod.Context(store,root, branch=BRANCH)
         return repo, root, store, ctx
 
     def test_the_main_backend_writes_files_and_commits_nothing(self):
@@ -859,7 +881,7 @@ class OtherBackends(unittest.TestCase):
         repo = TempRepo()
         self.addCleanup(repo.cleanup)
         store = smod.Store(smod.MainBackend(repo.root, 'docs/backlog'), rmod.Rules())
-        ctx = pmod.Context(store, store_ledger(), repo.root, branch=BRANCH)
+        ctx = pmod.Context(store,repo.root, branch=BRANCH)
         with self.assertRaises(Failure) as cm:
             store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary', ['area/foo/**']))
         self.assertIn('main checkout', str(cm.exception))

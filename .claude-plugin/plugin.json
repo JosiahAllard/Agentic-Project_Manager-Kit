@@ -1,5 +1,5 @@
 {
-  "name": "claude-pm-kit",
+  "name": "pm-kit",
   "version": "0.1.0",
   "description": "The PM kit as a Claude Code plugin (ARCHITECTURE.md, Packaging). The machine lock MCP server and the generic skills (agents and skills live in claude/); templates, optional tools and knowledge ship beside them (docs/shipping.md).",
   "agents": [
@@ -20,6 +20,7 @@
     "./claude/agents/worker.md"
   ],
   "skills": ["./claude/skills/"],
+  "hooks": "./claude/hooks/hooks.json",
   "mcpServers": {
     "machine-lock": {
       "command": "python",

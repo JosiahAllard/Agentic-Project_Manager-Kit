@@ -265,6 +265,25 @@ class Manifest(unittest.TestCase):
         self.assertEqual(list(m["mcpServers"]), [lockmcp.SERVER_NAME])
         self.assertEqual(lockmcp.claude_tool_prefix("p", "s"), "mcp__plugin_p_s__")
 
+    def _manifest(self, name):
+        with open(os.path.join(REPO, ".claude-plugin", name), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_the_plugin_name_has_no_reserved_claude_prefix(self):
+        # `claude plugin validate` reports a name starting with "claude-" as reserved.
+        self.assertFalse(self._manifest("plugin.json")["name"].startswith("claude-"))
+
+    def test_the_marketplace_lists_the_plugin_by_its_manifest_name(self):
+        self.assertEqual(self._manifest("marketplace.json")["plugins"][0]["name"],
+                         self._manifest("plugin.json")["name"])
+
+    def test_the_guard_prefix_is_built_from_the_manifest_name(self):
+        from kitlib import lockmcp
+        from kitlib.guard import rules
+        want = "mcp__plugin_%s_machine-lock__" % self._manifest("plugin.json")["name"]
+        self.assertEqual(lockmcp.claude_tool_prefix(), want)
+        self.assertEqual(rules.MCP_PREFIX, want)
+
 
 if __name__ == "__main__":
     unittest.main()

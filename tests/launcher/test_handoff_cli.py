@@ -26,7 +26,7 @@ class Handoff(unittest.TestCase):
     def setUp(self):
         self.h = Home(self, accounts=('1', '2', '3'), signed_out=('3',))
         self.h.write_state('sessions.json', {'_n': 'note', 'alpha': dict(ALPHA), 'helper': dict(HELPER)})
-        self.h.write_state('conductors.json', {'alpha': 1})
+        self.h.write_state('coordinators.json', {'alpha': 1})
         self.host = FakeHost(self.h.root)
 
     def test_a_successor_on_another_account_rewrites_both_files(self):
@@ -34,7 +34,7 @@ class Handoff(unittest.TestCase):
         self.assertIn('== alpha : alpha-coord-a1 (account 1) -> alpha-coord-a2 (account 2)', out)
         self.assertEqual(self.h.read_state('sessions.json')['alpha']['name'], 'alpha-coord-a2')
         self.assertEqual(self.h.read_state('sessions.json')['alpha']['account'], 2)
-        self.assertEqual(self.h.read_state('conductors.json'), {'alpha': 2})
+        self.assertEqual(self.h.read_state('coordinators.json'), {'alpha': 2})
         text, = self.host.opened
         self.assertEqual(role_of(text), 'coordinator')
         self.assertIn('You succeed alpha-coord-a1', text)
@@ -62,14 +62,14 @@ class Handoff(unittest.TestCase):
         self.h.write_state('sessions.json', sessions)
         out = handoff.handoff(self.h.settings, self.host, all_=True, account='2', whatif=True)
         self.assertIn('SKIP odd : no stem, so no successor name', out)
-        self.assertIn('Would set conductors.json alpha = 2', out)
+        self.assertIn('Would set coordinators.json alpha = 2', out)
         with self.assertRaisesRegex(handoff.LaunchError, "entry 'odd' has no stem"):
             handoff.handoff(self.h.settings, self.host, 'odd', '2')
 
     def test_all_skips_the_account_an_entry_is_on_and_what_if_writes_nothing(self):
         out = handoff.handoff(self.h.settings, self.host, all_=True, account='2', whatif=True)
         self.assertIn('SKIP helper : already on account 2', out)
-        self.assertIn('Would set conductors.json alpha = 2', out)
+        self.assertIn('Would set coordinators.json alpha = 2', out)
         self.assertEqual(self.host.opened, [])
         self.assertEqual(self.h.read_state('sessions.json')['alpha']['account'], 1)
 
@@ -78,7 +78,7 @@ class AfterReboot(unittest.TestCase):
     def test_skips_running_stems_autostart_off_and_a_running_desktop_app(self):
         h = Home(self)
         h.write_state('sessions.json', {'alpha': dict(ALPHA), 'helper': dict(HELPER, autostart=False)})
-        h.write_state('conductors.json', {'pm_session_id': 's1', 'pm_folder': h.root, 'pm_account': 1})
+        h.write_state('coordinators.json', {'pm_session_id': 's1', 'pm_folder': h.root, 'pm_account': 1})
         app = {'Name': 'claude.exe', 'ProcessId': 5, 'ParentProcessId': 1,
                'ExecutablePath': 'C:' + chr(92) + 'WindowsApps' + chr(92) + 'claude.exe', 'CommandLine': None}
         host = FakeHost(h.root, [session(9, 'alpha-coord-a2-r2'), app])
@@ -106,7 +106,7 @@ class Autostart(unittest.TestCase):
             raise AssertionError('what-if ran PowerShell')
         out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True, run=run)
         script = out[1]
-        self.assertIn("-TaskName 'Claude conductors after reboot'", script)
+        self.assertIn("-TaskName 'Claude coordinators after reboot'", script)
         self.assertIn('-LogonType Interactive -RunLevel Limited', script)
         enc = script.split('-EncodedCommand ')[1].split("'")[0]
         self.assertEqual(window.decode(enc), "& '/py/python.exe' '/kit/tools/launch.py' after-reboot")
@@ -116,7 +116,7 @@ class Autostart(unittest.TestCase):
             raise AssertionError('a refused install ran PowerShell')
         sep = chr(92)
         for path in ('/kit/.claude/worktrees/x/tools/launch.py',
-                     sep.join(['Z:', 'kit', '.Claude', 'Worktrees', 'x', 'tools', 'launch.py'])):
+                     sep.join(['D:', 'kit', '.Claude', 'Worktrees', 'x', 'tools', 'launch.py'])):
             with self.assertRaisesRegex(autostart.LaunchError, 'main kit checkout, not a worktree'):
                 autostart.install(path, python='/py/python.exe', run=run)
         self.assertFalse(autostart.in_worktree('/kit/tools/launch.py'))

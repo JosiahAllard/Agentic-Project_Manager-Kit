@@ -40,21 +40,22 @@ Harness traps (Plan cannot write, output files are no rescue path): skill `subag
   their first call, where the repo has it.
 - Every coding brief states its risk level and why (path in the risk map, or the reason it is
   higher); unlisted is not a reason - list routine paths at their real level.
-- Briefs to `records` and `spec-writer` give facts as keyword lines in the entry format
+- Briefs to `pm-kit:records` and `pm-kit:spec-writer` give facts as keyword lines in the entry format
   `ID | status | area | keywords | ref`, 300 chars at most, not paragraphs to transcribe. Decision
   logs split into more per-area files as they fill.
 
 ## Which agent, which model
 
 Read `roster.md` in this skill's folder (beside this file): the agent types and what each is for,
-the cheap/strong split, the coding ladder, model and effort rules, `deep-worker` requests, the
-`consultant`, `researcher` and pass/fail-check routing.
+the cheap/strong split, the coding ladder, model and effort rules, `pm-kit:deep-worker` requests, the
+`pm-kit:consultant`, `pm-kit:researcher` and pass/fail-check routing. The kit's roster doc (the pinned models) is
+`${CLAUDE_PLUGIN_ROOT}/docs/ROSTER.md`.
 
 ## Creative dispatches
 
-- `tech-artist` (art that is code), `asset-smith` (scripted 3D), `sound-smith` (sound; it cannot
+- `pm-kit:tech-artist` (art that is code), `pm-kit:asset-smith` (scripted 3D), `pm-kit:sound-smith` (sound; it cannot
   hear, so its report ends in a question you put to the owner): via the owner's local models,
-  against an art direction the owner has decided or, where none exists, `tech-artist` proposes
+  against an art direction the owner has decided or, where none exists, `pm-kit:tech-artist` proposes
   strongly different looks for the owner to pick; none hand-sculpts, rigs or animates. An asset
   generation cannot supply -> the owner, not another agent.
 - Every creative brief carries this block, filled in:
@@ -99,11 +100,11 @@ the cheap/strong split, the coding ladder, model and effort rules, `deep-worker`
 ## Upkeep
 
 - **Prune daily.** Start each day with `python tools/doc_index.py --stale`: confirm (touch it),
-  rewrite or delete each line, in ONE `records` commit. A new `.md`, shard or section adds its
+  rewrite or delete each line, in ONE `pm-kit:records` commit. A new `.md`, shard or section adds its
   index line in the same commit, or the doc-budget check refuses the branch.
 - Durable facts -> the repo's docs, landed like any docs change, never under `~/.claude`; session
   state -> `docs/ops/state.local.md`. `.claude/worktrees/` is unaffected: create and remove
   worktrees as the profile says.
 - **Grow the tool set.** Weekly, run the repetition report on the repo (the kit's
-  `optional/usage/repetition_report.py`, installed under `~/.claude/tools/usage/`): repeated shell shapes, or a scratch script written twice, become lines in the repo's
+  `${CLAUDE_PLUGIN_ROOT}/optional/usage/repetition_report.py`, installed under `~/.claude/tools/usage/`): repeated shell shapes, or a scratch script written twice, become lines in the repo's
   `docs/ops/tool-requests.md`; build the top one as ordinary work (`tools/` is High risk).

@@ -8,7 +8,9 @@ Heavy programs (ARCHITECTURE.md "Kinds": a program is heavy because it is on the
   the program in a command line (interpreters, shells, Start-Process) is the guard's job.
 
 Roles. role_name(event) is `main` for a PreToolUse event without `agent_id`, else its
-  `agent_type` when the roles table names it, else `subagent`. permissions(event, roles) is that
+  `agent_type` when the roles table names it, else `subagent`. An agent_type with the kit plugin's
+  prefix (`<plugin>:lander`) names the same role as the bare one; no other prefix does
+  (kitlib.agentname.bare). permissions(event, roles) is that
   role's entry over its base (`main` or `subagent`) over ROLE_DEFAULTS.
 
 Kinds table: kitlib/lock/kinds.json, written by the lock package and committed by the
@@ -32,6 +34,8 @@ import ntpath
 import os
 import re
 import sys
+
+from kitlib import agentname
 
 from . import schema
 from .types import ConfigError, check, is_note
@@ -118,10 +122,11 @@ def roles(cfg=None):
 
 
 def role_name(event, table=None):
-    """`main` (no agent_id), the event's agent_type when `table` names it, else `subagent`."""
+    """`main` (no agent_id), the event's agent_type (bare or with the kit plugin's prefix,
+    kitlib.agentname.bare) when `table` names it, else `subagent`."""
     if not (event or {}).get('agent_id'):
         return 'main'
-    kind = event.get('agent_type')
+    kind = agentname.bare(event.get('agent_type'))
     if kind and kind in (table or ROLE_DEFAULTS) and kind != 'main':
         return kind
     return 'subagent'
@@ -147,11 +152,53 @@ def kinds_table(path=None):
         raise ConfigError('cannot read the kinds table %s: %s' % (path, e))
     if not isinstance(data, dict):
         raise ConfigError('the kinds table %s must hold a JSON object' % path)
-    table = data.get('kinds', data) if isinstance(data.get('kinds'), dict) else data
-    out = {k: v for k, v in table.items() if not is_note(k)}
+    wrapped = isinstance(data.get('kinds'), dict)
+    table = data['kinds'] if wrapped else data
+    if wrapped and 'aliases' in table:
+        raise ConfigError('the kinds table %s: aliases belongs at the top level, beside kinds, '
+                          'not inside it' % path)
+    out = {k: v for k, v in table.items() if not is_note(k) and k != 'aliases'}   # a reserved key
     bad = sorted(k for k, v in out.items() if not isinstance(v, dict))
     if bad:
         raise ConfigError('the kinds table %s: entries %s must be objects' % (path, ', '.join(bad)))
+    return out
+
+
+def kinds_aliases(path=None):
+    """{alias: canonical kind} from the `aliases` object of the kinds table ({"alias": {"to": kind,
+    "why": text}}); {} when the file is missing or names none. ConfigError when the file cannot
+    be read, an alias is not an object with a `to` kind and a `why`, an alias is itself a kind,
+    or its `to` is not a kind (so no chain or cycle). `aliases` is a reserved key, never a kind,
+    in the flat form of the table too."""
+    path = path or KINDS_FILE
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        raise ConfigError('cannot read the kinds table %s: %s' % (path, e))
+    aliases = data.get('aliases') if isinstance(data, dict) else None
+    if aliases is None:
+        return {}
+    if not isinstance(aliases, dict):
+        raise ConfigError('the kinds table %s: aliases must be an object' % path)
+    out = {}
+    for name, a in aliases.items():
+        if is_note(name):
+            continue
+        if not (isinstance(a, dict) and isinstance(a.get('to'), str) and a['to']
+                and isinstance(a.get('why'), str) and a['why']):
+            raise ConfigError('the kinds table %s: alias %s needs a "to" kind and a "why"'
+                              % (path, name))
+        out[name] = a['to']
+    kinds = kinds_table(path)
+    for name, to in sorted(out.items()):
+        if name in kinds:
+            raise ConfigError('the kinds table %s: alias %s is a kind of its own' % (path, name))
+        if to not in kinds:
+            raise ConfigError('the kinds table %s: alias %s names %s, which is not a kind'
+                              % (path, name, to))
     return out
 
 
@@ -225,7 +272,8 @@ def gate_checks(module):
     checks = getattr(module, 'GATE_CHECKS', None)
     if checks is None:
         return {}
-    where = getattr(module, '__file__', 'the hook module')
+    # A module loaded from a commit (kitlib.gate.hookrev) is named as `<rev10>:<rel>`.
+    where = getattr(module, '__kit_where__', None) or getattr(module, '__file__', 'the hook module')
     if not isinstance(checks, dict):
         raise ConfigError('%s: GATE_CHECKS must be a dict of check name -> callable' % where)
     errs = []

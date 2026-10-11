@@ -39,7 +39,10 @@ OK, REFUSED, USAGE, ERROR = 0, 1, 2, 3
 # tests/lock/test_release.py walks the imports and fails when one falls outside). A name ending
 # in "/" is a folder.
 LOCK_PATHS = ("tools/machine_lock.py", "kitlib/__init__.py", "kitlib/lock/", "kitlib/proc/",
-              "kitlib/config/", "kitlib/git/")
+              "kitlib/config/", "kitlib/git/",
+              # kitlib/config/policy.py reads agent names through kitlib.agentname, whose prefix
+              # is the plugin name in kitlib/lockmcp/__init__.py
+              "kitlib/agentname.py", "kitlib/lockmcp/__init__.py")
 
 MISSING = "store folder (missing)"
 

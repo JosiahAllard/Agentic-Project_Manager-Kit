@@ -21,8 +21,9 @@
       7 no record at that tip within S seconds
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate, prints and exits.
-Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY; a machine lock
-refusal passes its own code through (6, 8, 10, 11, 12); 130 Ctrl+C.
+Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY, 9 LANDED_UNGATED
+(landed, but main was not gated whole); a machine lock refusal passes its own code through
+(6, 8, 10, 11, 12); 130 Ctrl+C.
 """
 import argparse
 import json
@@ -174,7 +175,8 @@ def do_measure(a):
         return G.REFUSED
     try:
         with open(live, encoding='utf-8') as f:
-            table = json.load(f)['kinds']
+            live_doc = json.load(f)
+        table, aliases = live_doc['kinds'], live_doc.get('aliases')
         store = Store(say=say)
         layout = lay.in_force(store)['layout']
         history = store.history_records(a.days)
@@ -184,7 +186,8 @@ def do_measure(a):
     kinds, notes = measure.propose(table, history, layout['medium_cores'],
                                    store.settings.history_min_runs, agent_cap=layout['agent_cap'])
     doc = measure.document(kinds, 'PROPOSED by gate.py --measure from %d day(s) of history; '
-                                  'review, then commit to kitlib/lock/kinds.json.' % a.days)
+                                  'review, then commit to kitlib/lock/kinds.json.' % a.days,
+                           aliases)
     try:
         with open(out, 'w', encoding='utf-8') as f:
             f.write(json.dumps(doc, indent=1) + '\n')

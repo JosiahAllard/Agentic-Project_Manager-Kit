@@ -52,6 +52,18 @@ class UsageHelpers(unittest.TestCase):
             self.assertEqual(U.agent_type(sub), ("worker", "build x"))
             self.assertEqual(U.agent_type(bare), ("?", ""))
 
+    def test_a_plugin_prefixed_agent_type_is_reported_bare(self):
+        with tempfile.TemporaryDirectory() as d:
+            for i, (given, want) in enumerate((("some-plugin:worker", "worker"),
+                                                ("some.plugin_2:test-runner", "test-runner"),
+                                                (":worker", ":worker"), ("worker:", "worker:"),
+                                                ("worker", "worker"))):
+                with self.subTest(given):
+                    sub = F.write(os.path.join(d, "s1", "subagents", "p%d.jsonl" % i), [],
+                                  meta={"agentType": given, "description": "x"})
+                    self.assertEqual(U.agent_type(sub), (want, "x"))
+        self.assertEqual(U.bare_type(None), None)
+
 
 class AgentCosts(unittest.TestCase):
     def setUp(self):

@@ -80,8 +80,8 @@ class LogBase(unittest.TestCase):
                              os.path.join(lad, 'Temp', 'demo-gate'))
 
     def test_configured_log_dir_still_wins(self):
-        base = runner.log_base(_Cfg({'log_dir': 'logs/gate'}), r'Z:\r\demo', 'demo')
-        self.assertEqual(base, os.path.join(r'Z:\r\demo', 'logs/gate'))
+        base = runner.log_base(_Cfg({'log_dir': 'logs/gate'}), r'D:\r\demo', 'demo')
+        self.assertEqual(base, os.path.join(r'D:\r\demo', 'logs/gate'))
 
 
 class NewLogDir(unittest.TestCase):

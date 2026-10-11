@@ -51,6 +51,12 @@ class Propose(unittest.TestCase):
         doc = measure.document({'k': {}}, 'note')
         self.assertEqual(doc, {'_note': 'note', 'kinds': {'k': {}}})
 
+    def test_document_carries_the_live_files_aliases(self):
+        aliases = {'old': {'to': 'k', 'why': 'w'}}
+        doc = measure.document({'k': {}}, 'note', aliases)
+        self.assertEqual(doc['aliases'], aliases)
+        self.assertIsNot(doc['aliases'], aliases)
+
 
 
 def booked(kind, held, peak, cores=None, need=None):

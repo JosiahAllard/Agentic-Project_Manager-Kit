@@ -11,10 +11,12 @@ from kitlib.git import repo
 from kitlib.guard import commands as cm
 from kitlib.guard import context, decide, rules
 from kitlib.guard import shell as sh
+from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
 
 from . import world as W
 from .world import bash, event, ps
 
+P = CLAUDE_PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
 COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 OLD_MARK = {context.ROLE_ENV: 'conductor'}   # the old name of the coordinator's mark, still held
 PM = {context.ROLE_ENV: 'pm'}
@@ -207,6 +209,14 @@ class Sessions(Base):
         self.allowed(self.outside(PLAIN))
         self.allowed(self.outside({context.ROLE_ENV: 'strong-worker'}))     # start --agent <other>
 
+    def test_a_plugin_prefixed_mark_is_the_bare_mark(self):
+        # docs/guard.md "Agent names"
+        for mark in (P + 'coordinator', P + 'deep-worker', P + 'consultant', P.upper() + 'pm', P + P + 'pm'):
+            with self.subTest(mark):
+                self.jailed(self.outside({context.ROLE_ENV: mark}))
+        self.allowed(self.outside({context.ROLE_ENV: P + 'plain'}))
+        self.allowed(self.outside({context.ROLE_ENV: P + 'strong-worker'}))
+
     def test_marks_from_the_machine_config(self):
         # the setting replaces the default list
         self.w.user_config({'guard_agent_marks': ['coordinator', 'plain']})
@@ -237,6 +247,16 @@ class MarkRoots(Base):
         self.jailed(self.write(target, env=DEEP, sub=False))
         self.jailed(self.write(target, env=PM, sub=True))       # a subagent of the PM's session
         self.allowed(self.run_bash('echo x > "%s/y.md"' % W.fwd(self.notes), env=PM, sub=False))
+
+    def test_a_plugin_prefixed_mark_gets_the_bare_marks_roots(self):
+        # docs/guard.md "Agent names": the roots are looked up by the mark without the prefix
+        target = os.path.join(self.notes, 'x.md')
+        self.roots({'pm': [{'path': self.notes, 'mode': 'open', 'why': 'test'}]})
+        for mark in (P + 'pm', P.upper() + 'PM'):
+            with self.subTest(mark):
+                self.allowed(self.write(target, env={context.ROLE_ENV: mark}, sub=False))
+                self.jailed(self.write(os.path.join(self.w.plain, 'x.md'), env={context.ROLE_ENV: mark}, sub=False))
+        self.jailed(self.write(target, env={context.ROLE_ENV: P + 'coordinator'}, sub=False))
 
     def test_a_mark_root_keeps_its_mode(self):
         touch(os.path.join(self.notes, 'old.md'))
@@ -775,6 +795,19 @@ class LanderMainCheckout(MainGit):
         d = decide(bash(fetch, self.w.wt), self.w.ctx(environ=COORDINATOR))
         self.jailed(d)
 
+    def test_the_plugin_prefixed_lander_may_land_and_no_other_spelling(self):
+        # docs/guard.md "Agent names": <plugin>:lander is the lander; any other prefix is not
+        fetch, merge = 'git -C "%s" fetch origin main' % self.main, 'git -C "%s" merge --ff-only origin/main' % self.main
+        self.allowed(self.git(fetch, P + 'lander'))
+        self.allowed(self.git(merge, P + 'lander'))
+        self.allowed(self.git('& git -C "%s" fetch origin' % self.main, P + 'lander', tool='PowerShell'))
+        self.jailed(self.git('git -C "%s" commit -m x' % self.main, P + 'lander'))
+        for kind in (P + 'worker', P + 'opus-worker', 'other:lander', P + P + 'lander', P.upper() + 'lander', P,
+                     P + 'main', P.rstrip(':') + 'lander', 'x' + P + 'lander', P[1:] + 'lander'):
+            with self.subTest(kind):
+                self.jailed(self.git(fetch, kind))
+                self.denied(self.git(merge, kind))
+
     def test_a_lander_the_repo_keeps_out_of_main_may_not(self):
         self.roles({'lander': {'edit_main_checkout': False, 'why': 'test'}})
         self.jailed(self.git('git -C "%s" fetch origin main' % self.main))
@@ -953,8 +986,8 @@ class UnplacedGit(MainGit):
                     self.assertTrue(p.clean, text)
                     d = decide(event(tool, {'command': text, 'description': 'test'}, where, True, 'worker'),
                                self.w.ctx(environ={}))
-                    # in the main checkout the main-checkout rule reads New-Item's env: as a folder
-                    # there and refuses first
+                    # in the main checkout the main-checkout rule cannot pin New-Item's computed
+                    # item (env: joined with $n) to the env: drive and refuses first
                     main_item = where == self.w.main and 'New-Item' in text
                     self.jailed(d, 'main-checkout' if main_item else 'write-jail')
             with self.subTest(text, role='main'):
