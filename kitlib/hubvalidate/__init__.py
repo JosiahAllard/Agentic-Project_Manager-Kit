@@ -32,13 +32,13 @@ STATUSES = {
     'todos': ('open', 'done'),
     'to_pm': ('queued', 'sent', 'done'),
 }
-# the collection a Q-/M-/T-/P- id names, and the fields that carry such ids
-REF_COLLECTIONS = {'Q': 'questions', 'M': 'inbox', 'T': 'todos', 'P': 'to_pm'}
+# the collection a Q-/M-/T-/P-/S- id names, and the fields that carry such ids
+REF_COLLECTIONS = {'Q': 'questions', 'M': 'inbox', 'T': 'todos', 'P': 'to_pm', 'S': 'stories'}
 REF_FIELDS = {'questions': ('refs',), 'inbox': ('ref', 'refs'), 'parked': ('q',),
               'todos': ('refs',), 'to_pm': ('refs',)}
 REPO_COLLECTIONS = ('questions', 'inbox', 'todos', 'to_pm', 'stories', 'parked')
 ANY_REPO = ('all', 'pm', '')        # a repo tag that needs no repos/ entry
-_REF = re.compile(r'(?<![A-Za-z0-9])([QMTP])-\d+(?![A-Za-z0-9])', re.I)
+_REF = re.compile(r'(?<![A-Za-z0-9])([QMTPS])-\d+(?![A-Za-z0-9])', re.I)
 
 
 def _f(level, coll, doc_id, field, code, message):
