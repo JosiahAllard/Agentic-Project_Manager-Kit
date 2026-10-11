@@ -183,8 +183,9 @@ class Queue(QueueCase):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
         V.add(self.common, given('kit/a', tip))
         for t in (None, tip):
-            with self.assertRaises(V.OtherBranch, msg=t):
+            with self.assertRaises(V.VerdictError, msg=t) as cm:
                 V.drop(self.common, 'kit/A', tip=t)
+            self.assertEqual(type(cm.exception).__name__, 'OtherBranch')
         self.assertEqual([e['branch'] for e in V.entries(self.common)], ['kit/a'])
 
     def test_a_temp_file_left_by_a_dead_write_is_named_and_kept(self):
@@ -232,7 +233,7 @@ class Lock(QueueCase):
             return got
         with mock.patch.object(V, '_load', side_effect=load):
             self.assertTrue(call(first))
-        racer[0].join(V.LOCK_WAIT_S + 5)
+        racer[0].join(30)
         self.assertEqual(failed, [])
         return second, V.entries(self.common)
 
@@ -248,15 +249,15 @@ class Lock(QueueCase):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
         folder = V.queue_dir(self.common)
         os.makedirs(folder)
-        lock = os.path.join(folder, V.LOCK_NAME)
+        lock = os.path.join(folder, '.queue.lock')
         with open(lock, 'w', encoding='utf-8') as f:
             f.write('pid 1\n')
-        with mock.patch.object(V, 'LOCK_WAIT_S', 0.3):
+        with mock.patch.object(V, 'LOCK_WAIT_S', 0.3, create=True):
             with self.assertRaises(V.VerdictError) as cm:
                 V.add(self.common, given('kit/a', tip))
         self.assertIn('locked', str(cm.exception))
-        self.assertEqual(self.folder_names(), [V.LOCK_NAME])
-        old = time.time() - V.LOCK_STALE_S - 5
+        self.assertEqual(self.folder_names(), ['.queue.lock'])
+        old = time.time() - 3600
         os.utime(lock, (old, old))
         V.add(self.common, given('kit/a', tip))
         self.assertEqual(self.folder_names(), ['kit%2Fa.json'])     # the lock is gone after
