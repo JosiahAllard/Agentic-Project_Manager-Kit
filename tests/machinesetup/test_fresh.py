@@ -572,7 +572,10 @@ class FreshTool(FreshBase):
         os.makedirs(desk)
         env = dict(os.environ, PATH=path, USERPROFILE=self.home, HOME=self.home, LOCALAPPDATA=lad)
         env.pop('CLAUDE_CONFIG_DIR', None)
-        args = ['-Fresh', '-PmSettings', self.pm, '-HomeDir', self.home, '-Desktop', desk]
+        # A temp agent folder beside the temp home: the user environment's AGENT_TEMP may hold this
+        # temp home, a folder the sweep (and so the setup) refuses.
+        args = ['-Fresh', '-PmSettings', self.pm, '-HomeDir', self.home, '-Desktop', desk,
+                '-AgentTemp', os.path.join(self.root, 'agent-temp')]
         r = self.ps1(args, env=env)
         self.assertEqual(r.returncode, M.EXIT_OK, r.stdout + r.stderr)
         self.assertIn('DRY RUN', r.stdout)

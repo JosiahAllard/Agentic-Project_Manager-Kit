@@ -151,6 +151,11 @@ def survey(plan, ctx):
         _comfy(plan, ctx)
 
 
+def acl_step(plan, ctx, folder, made=False):
+    """The agent temp folder's ACL step alone (kitlib.machinesetup.survey_agent_temp)."""
+    _acl(plan, ctx, folder, made)
+
+
 def _shortcut(plan, ctx):
     host = ctx.host
     try:

@@ -240,6 +240,58 @@ class Init(T.Base):
                 self.assertEqual(machine_setup.main(argv + ['--register-sweep-task']), 0)
         self.assertEqual(len([c for c in self.host.calls if c[0] == 'task']), 1)
 
+    def init_tool(self, *argv):
+        """tools/agent_temp_init.py main() against FakeHost: (exit code, stdout, stderr)."""
+        tools = os.path.dirname(T.TOOL)
+        sys.path.insert(0, tools)
+        self.addCleanup(sys.path.remove, tools)
+        import agent_temp_init
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(extras, 'Host', lambda: self.host), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = agent_temp_init.main(['--kit', self.kit, '--home', self.home] + list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_agent_temp_init_tool_dry_run_then_apply_does_the_temp_steps_only(self):
+        before = self.snapshot()
+        code, out, _ = self.init_tool('--agent-temp', self.new)
+        self.assertEqual(code, 0, out)
+        self.assertIn('agent-temp-init: DRY RUN', out)
+        self.assertIn('make the agent temp folder %s' % self.new, out)
+        self.assertIn('(made by this run): permissions', out)
+        self.assertNotIn('links:', out)
+        self.assertNotIn('settings:', out)
+        self.assertNotIn('Machine schedule', out)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.host.calls, [])
+        code, out, _ = self.init_tool('--agent-temp', self.new, '--apply')
+        self.assertEqual(code, 0, out)
+        self.assertIn('agent-temp-init: made', out)
+        self.assertTrue(os.path.isdir(self.new))
+        self.assertEqual(self.host.env['AGENT_TEMP'], self.new)
+        self.assertEqual(kuser.user_config(self.home)['agent_temp_sweep']['dir'], self.new)
+        self.assertEqual(sorted({c[0] for c in self.host.calls}), ['env', 'icacls'])
+        code, out, _ = self.init_tool('--agent-temp', self.new, '--apply', '--register-sweep-task')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len([c for c in self.host.calls if c[0] == 'task']), 1)
+        code, out, _ = self.init_tool('--apply')          # the config key names it now
+        self.assertEqual(code, 0, out)
+        self.assertIn('agent-temp-init: nothing to do', out)
+
+    def test_agent_temp_init_tool_exit_codes(self):
+        code, out, _ = self.init_tool('--agent-temp', os.path.join(self.home, 'AppData', 'Local', 'Temp'),
+                                      '--apply')
+        self.assertEqual(code, 1, out)
+        self.assertIn('agent-temp-init: REFUSED', out)
+        self.assertIn('agent-temp-init: nothing changed', out)
+        self.assertEqual(self.host.calls, [])
+        code, _, err = self.init_tool('--old-kit', self.old)    # not an option of this tool
+        self.assertEqual(code, 2, err)
+        self.assertIn('unrecognized arguments', err)
+        code, out, _ = self.init_tool('--help')
+        self.assertEqual(code, 0)
+        self.assertIn('--register-sweep-task', out)
+
     def test_task_query_failure_is_a_note(self):
         self.host.task_error = RuntimeError('schtasks broke')
         code, out = self.run_new(register_sweep_task=True)
