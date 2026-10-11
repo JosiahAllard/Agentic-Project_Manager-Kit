@@ -185,6 +185,55 @@ class UnwrittenRunners(Case):
         self.assertFalse(os.path.exists(self.logs), 'a refusal makes nothing')
 
 
+    def test_a_second_tests_value_no_runner_takes_is_the_one_refused(self):
+        self.commit({'dev/tools/test_add.py': TEST_ADD, 'spec/test_mul.py': TEST_MUL})
+        rc, out = self.run_tool('--tests', 'dev/tools/test_add.py', 'spec/test_mul.py')
+        self.assertEqual(rc, V.EXIT_USAGE, out)
+        self.assertIn("refused: --tests 'spec/test_mul.py': no runner takes it", out)
+        self.assertIn("glob 'dev/tools/*test_*.py' (python): matches 1 file(s) committed", out)
+        self.assertEqual(self.throwaways(), [])
+
+
+class FakeConfig(object):
+    """What runners_for reads of a loaded configuration."""
+
+    def __init__(self, tools_dir, runners=None, written=None):
+        self.tools_dir, self.runners, self.written = tools_dir, runners, written
+
+    def section(self, name):
+        return {'runners': list(self.runners if self.runners is not None
+                                else [{'glob': 'tests/*test_*.py', 'kind': 'python'}])}
+
+    def raw(self, name):
+        return {} if self.written is None else {'runners': self.written}
+
+
+class DerivedRunner(unittest.TestCase):
+    def derived(self, tools_dir, **kw):
+        return R.runners_for(FakeConfig(tools_dir, **kw))[0][1:]
+
+    def test_the_tools_folder_is_normalised_before_the_glob_is_made(self):
+        want = [{'glob': 'tools/*test_*.py', 'kind': 'python', 'pythonpath': 'tools'}]
+        for spelt in ('tools', './tools', ' tools', 'tools/', '.\\tools\\', 'tools/./'):
+            self.assertEqual(self.derived(spelt), want, spelt)
+        self.assertTrue(V.matches('tools/test_x.py', self.derived('./tools')[0]['glob']))
+
+    def test_a_tools_folder_that_is_the_root_adds_nothing(self):
+        for spelt in ('.', './', ' ', ''):
+            self.assertEqual(self.derived(spelt), [], repr(spelt))
+
+    def test_a_glob_already_listed_is_not_added_again(self):
+        listed = [{'glob': 'Tools/*test_*.py', 'kind': 'python'}]
+        self.assertEqual(R.runners_for(FakeConfig('tools', runners=listed)), (listed, False))
+
+    def test_an_empty_written_list_stays_empty_and_the_refusal_says_so(self):
+        runners, written = R.runners_for(FakeConfig('tools', runners=[], written=[]))
+        self.assertEqual((runners, written), ([], True))
+        said = R.no_runner_text('tests/test_x.py', runners, written, 'a' * 40, [])
+        self.assertIn('`.kit.json` "redfirst".runners is an empty list', said)
+        self.assertNotIn('not set', said)
+
+
 class WrittenRunners(Case):
     def test_written_runners_are_used_as_they_are(self):
         runners, written = R.runners_for(load(self.fx.root))

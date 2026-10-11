@@ -24,6 +24,7 @@ Output goes through `say(line)`; nothing here prints or exits.
 import datetime
 import json
 import os
+import posixpath
 import signal
 import subprocess
 import sys
@@ -387,7 +388,7 @@ def runners_for(cfg):
     runners = list(cfg.section('redfirst')['runners'])
     if cfg.raw('redfirst').get('runners') is not None:
         return runners, True
-    tools = cfg.tools_dir.replace('\\', '/').strip('/')
+    tools = posixpath.normpath(cfg.tools_dir.replace('\\', '/').strip() or '.').strip('/')
     if tools and tools != '.':
         derived = {'glob': tools + '/*test_*.py', 'kind': 'python', 'pythonpath': tools}
         if not any(r['glob'].lower() == derived['glob'].lower() for r in runners):
