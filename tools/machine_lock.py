@@ -34,7 +34,7 @@ from kitlib.lock.background import run_background                  # noqa: E402
 from kitlib.lock.run import ORIGIN_ENV, run_command                # noqa: E402
 from kitlib.lock.store import (EXIT_REQUIRE, EXIT_USAGE, LockError, Store,  # noqa: E402
                                caller, iso, new_id, utc_now)
-from kitlib.proc import bash, process                              # noqa: E402
+from kitlib.proc import bash, process, tcp                         # noqa: E402, F401
 
 PREFIX = "[machine-lock]"
 TOOL = os.path.abspath(__file__)
