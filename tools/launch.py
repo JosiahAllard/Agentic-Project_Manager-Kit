@@ -39,7 +39,7 @@ class Parser(argparse.ArgumentParser):
 def existing_file(path):
     if not os.path.isfile(path):
         raise argparse.ArgumentTypeError('no such file: %s' % path)
-    return path
+    return os.path.abspath(path)
 
 
 def parser():
