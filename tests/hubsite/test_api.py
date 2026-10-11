@@ -1396,6 +1396,86 @@ class PmSeenTest(ApiCase):
         self.assertEqual(self.seen(), {'waited': None, 'pulled': None, 'waiting': 0})
 
 
+class ThirdFixTest(ApiCase):
+    def test_a_clock_that_fails_as_a_wait_ends_neither_counts_nor_hides_the_error(self):
+        calls = []
+
+        def clock():
+            calls.append(1)
+            if len(calls) == 2:                 # the stamp as the wait ends
+                raise RuntimeError('no clock')
+            return CLOCK()
+
+        def broken(since, timeout):
+            raise HubError('store', 'gone')
+        real = self.store.wait
+        self.api = api.Api(self.store, clock=clock)
+        self.store.wait = broken
+        status, obj = self.call('GET', '/wait', AGENT, None, {'timeout': '30'})
+        self.assertEqual((status, obj['error']['code']), (503, 'store'))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.api.pm_seen()['waiting'], 0)
+        del calls[:]
+        self.store.wait = lambda since, timeout: real(since, 0)
+        self.ok('GET', '/wait', AGENT, None, {'timeout': '30'})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.api.pm_seen(), {'waited': CLOCK(), 'pulled': None, 'waiting': 0})
+
+    def test_an_agents_from_on_a_question_or_an_inbox_item_follows_the_to_do_rule(self):
+        for path, coll, body in (('/questions', 'questions', {'title': 't', 'options': OPTIONS}),
+                                 ('/inbox', 'inbox', {'text': 'x'})):
+            for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
+                        'a  b'):
+                with self.subTest(path=path, bad=bad):
+                    self.refused('invalid', 'from', 'POST', path, AGENT, dict(body, **{'from': bad}))
+            with self.subTest(path=path, ok=True):
+                did = self.ok('POST', path, AGENT, dict(body, **{'from': ' pm kit-2 '}))['id']
+                self.assertEqual(self.store.get(coll, did)['from'], 'pm kit-2')
+                did = self.ok('POST', path, AGENT, body)['id']
+                self.assertNotIn('from', self.store.get(coll, did))
+
+    def test_an_owner_edit_of_an_acked_to_do_makes_it_pending_again(self):
+        tid = self.ok('POST', '/todos', OWNER, {'title': 't'})['id']
+
+        def pending():
+            return [p['id'] for p in self.ok('GET', '/pending', AGENT)['items']]
+        self.assertEqual(pending(), [tid])
+        self.ok('POST', '/todos/%s/ack' % tid, AGENT)
+        self.assertEqual(pending(), [])
+        self.ok('POST', '/todos/%s/edit' % tid, OWNER, {'title': 'changed'})
+        self.assertEqual(pending(), [tid])
+        self.assertIs(self.store.get('todos', tid)['pm_ack'], False)
+        self.ok('POST', '/todos/%s/ack' % tid, AGENT)
+        self.assertEqual(pending(), [])
+
+    def test_two_agent_waits_at_once_are_both_counted(self):
+        real, entered, answers = self.store.wait, [], []
+        both = threading.Event()
+
+        def wait(since, timeout):
+            entered.append(1)
+            if len(entered) == 2:
+                both.set()
+            return real(since, timeout)
+        self.store.wait = wait
+
+        def waiter():
+            answers.append(self.api.call('GET', BASE + '/wait', AGENT, None, {'timeout': '30'}))
+        threads = [threading.Thread(target=waiter, daemon=True) for _ in range(2)]
+        for t in threads:
+            t.start()
+        self.assertTrue(both.wait(20), 'both waits reached the store')
+        self.assertEqual(self.api.pm_seen()['waiting'], 2)
+        self.assertEqual(answers, [])           # neither has answered: both are blocked
+        self.assertEqual(self.ok('GET', '/snapshot', OWNER)['pm_seen']['waiting'], 2)
+        self.ok('POST', '/todos', OWNER, {'title': 'wake'})
+        for t in threads:
+            t.join(20)
+            self.assertFalse(t.is_alive())
+        self.assertEqual([(s, o['timed_out']) for s, o in answers], [(200, False)] * 2)
+        self.assertEqual(self.api.pm_seen()['waiting'], 0)
+
+
 class ParkedTest(ApiCase):
     def test_the_parked_state_reaches_the_backlog_view(self):
         views = Views()

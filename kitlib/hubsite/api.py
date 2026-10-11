@@ -408,14 +408,20 @@ class Api(object):
     def seen(self, req, what, opened=None, closed=None):
         """Note that an agent (a PM session) just waited or pulled (`what`). `opened` is a key
         for a wait that now blocks, `closed` the key of one that ended. The owner's calls are
-        not noted."""
+        not noted. An ended wait stops counting before the clock is read, and a clock that
+        fails then leaves the earlier time: it never hides how the wait itself ended."""
         if req.role != AGENT:
+            return
+        if closed is not None:
+            self._waits.pop(closed, None)
+            try:
+                self._seen[what] = self.clock()
+            except Exception:       # noqa: BLE001 - the wait's own answer or error stands
+                pass
             return
         self._seen[what] = self.clock()
         if opened is not None:
             self._waits[opened] = True
-        if closed is not None:
-            self._waits.pop(closed, None)
 
     def pm_seen(self):
         return {'waited': self._seen['waited'], 'pulled': self._seen['pulled'],
@@ -432,6 +438,8 @@ def questions_add(api, req):
                       'urgent', 'story'), required=('title',))
     for name in ('repo', 'from', 'title', 'context', 'story'):
         _text(b, name)
+    if 'from' in b:                 # the route is an agent's: the same rule as a to-do's from
+        b['from'] = _agent_from(b['from'])
     _typed(b, 'options', (list,), 'a list of {label, description}')
     b.setdefault('options', [])
     b.update(status='open', asked_at=api.clock())
@@ -539,6 +547,8 @@ def todos_edit(api, req):
     doc_id = req.params['id']
     d = api.doc('todos', doc_id, b)
     _own(doc_id, d, 'edit')
+    if d.get('pm_ack'):             # the PM read the old text: the changed one is pending again
+        changes['pm_ack'] = False
     return api.change('todos', doc_id, d, changes, req, {'status': d.get('status')})
 
 
@@ -700,6 +710,8 @@ def inbox_add(api, req):
                 required=('text',))
     for name in ('ref', 'asked', 'text', 'title', 'repo', 'from'):
         _text(b, name)
+    if 'from' in b:                 # the route is an agent's: the same rule as a to-do's from
+        b['from'] = _agent_from(b['from'])
     b.update(at=api.clock(), read=False)
     return api.add('inbox', b, req)
 
