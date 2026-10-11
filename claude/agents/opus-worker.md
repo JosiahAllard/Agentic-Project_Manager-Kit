@@ -1,6 +1,6 @@
 ---
 name: opus-worker
-description: The default coder for High-risk build and fix work on standard paths - public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring - where a sonnet worker might fumble but the problem is not concurrency, networking, landing or lock logic, build-cache correctness or codegen design (those go to `strong-worker`). Opus at medium effort (worker is sonnet/medium, strong-worker opus/high, deep-worker opus 1M/xhigh as its own session). Escalate to strong-worker when the task turns out to be one of those. Never for landings, record-keeping, moves, routine changes, plan-only work or sync/prep (merging main into a branch, rebasing, conflict-free syncs, preparation): those go to `worker`.
+description: "The default coder for High-risk build and fix work on standard paths - public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring - where a sonnet worker might fumble but the problem is not concurrency, networking, landing or lock logic, build-cache correctness or codegen design (those go to `strong-worker`). Opus at medium effort (worker is sonnet/medium, strong-worker opus/high, deep-worker opus 1M/xhigh as its own session). Escalate to strong-worker when the task turns out to be one of those. Never for landings, record-keeping, moves, routine changes, plan-only work or sync/prep (merging main into a branch, rebasing, conflict-free syncs, preparation): those go to `worker`."
 model: opus
 effort: medium
 ---
