@@ -3,8 +3,10 @@ reads from git's files is what `git rev-parse HEAD` prints."""
 import os
 import subprocess
 import unittest
+from unittest import mock
 
 from tests import gitfixture
+from tests.home import temp_home
 from tests.realgit import real_git as on_real_git
 
 
@@ -119,3 +121,27 @@ class Copies(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+HOME_X = os.path.join(os.sep, 'nohome')
+
+
+class PowerShellCacheEnv(unittest.TestCase):
+    """A real powershell given a temp USERPROFILE must not fall back to the cwd for its module
+    analysis cache (KIT-TESTS-PS-MODULE-CACHE-IN-WORKTREE)."""
+
+    def under(self, path, home):
+        return os.path.normcase(os.path.dirname(path)) == os.path.normcase(home)
+
+    def test_fixture_env_with_a_userprofile_carries_the_cache_path_under_it(self):
+        env = gitfixture.fixture_env({'USERPROFILE': HOME_X, 'HOME': HOME_X})
+        self.assertTrue(self.under(env['PSModuleAnalysisCachePath'], HOME_X))
+
+    def test_fixture_env_without_a_userprofile_adds_none(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop('PSModuleAnalysisCachePath', None)
+            self.assertNotIn('PSModuleAnalysisCachePath', gitfixture.fixture_env())
+
+    def test_temp_home_sets_the_cache_path_under_the_home(self):
+        home = temp_home(self)
+        self.assertTrue(self.under(os.environ['PSModuleAnalysisCachePath'], home))
