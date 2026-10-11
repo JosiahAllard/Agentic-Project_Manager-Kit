@@ -27,6 +27,7 @@ import os
 import re
 import unittest
 
+from tests.realgit import real_git
 from tests.scrub.test_scrub import ROOT, read_text, tracked_files
 
 DRIVE = re.compile(r'(?<![A-Za-z0-9_?%$])[A-Za-z]:(?:\\|/)')
@@ -115,10 +116,19 @@ def _norm(p):
     return os.path.normcase(os.path.abspath(p))
 
 
-def install_names(home=None, kit_dir=ROOT, toplevel=None):
+def _common_dir(path):
+    """The normalised absolute git common dir of the repository holding path (the same for a
+    main checkout and every worktree of it), or None outside a repository."""
+    from kitlib.git import repo
+    found, _why = repo.common_dir(path)
+    return _norm(found) if found else None
+
+
+def install_names(home=None, kit_dir=ROOT, toplevel=None, common_dir=_common_dir):
     """([(regex, source)], [notes]) for this install's own names, read from the machine config
     under home (default the user's) and the files it points at. A source that is absent or
-    unreadable adds a note instead of a pattern."""
+    unreadable adds a note instead of a pattern. A known repository sharing the kit's git common
+    dir (its main checkout, any worktree of it) is the kit itself and adds no name."""
     from kitlib.config.user import user_config
     from kitlib import pmstart
     from tests.shipped import install_patterns
@@ -137,9 +147,22 @@ def install_names(home=None, kit_dir=ROOT, toplevel=None):
     sf = pm.get('sessions_file')
     if sf:
         kit = _norm(kit_dir)
+        kit_common = common_dir(kit_dir)
+        # The names of the kit's own repository: a sessions_file entry names its repository only by
+        # "repo", so the main checkout's folder name (the common dir's parent) is the one to match.
+        kit_names_ = set()
+        if kit_common and os.path.basename(kit_common) == '.git':
+            kit_names_.add(os.path.basename(os.path.dirname(kit_common)).lower())
+
+        def other(d):
+            """The repository name at d, None for the kit's own folder or any checkout of it."""
+            if _norm(d) == kit or (kit_common and common_dir(d) == kit_common):
+                return None
+            return toplevel(d)
         try:
-            for n in pmstart.known_repos(pm, kit_dir=kit_dir,
-                                         toplevel=lambda d: None if _norm(d) == kit else toplevel(d)):
+            for n in pmstart.known_repos(pm, kit_dir=kit_dir, toplevel=other):
+                if n.lower() in kit_names_:
+                    continue
                 add(n, 'pm_start known repository')
             with open(sf, encoding='utf-8-sig') as f:       # a file written with a BOM reads too
                 for e in json.load(f).values():
@@ -415,11 +438,53 @@ class TheChecks(unittest.TestCase):
         pats, _ = install_names(home, kit_dir=launcher, toplevel=lambda d: 'the-kit')
         self.assertEqual(pats, [])
 
+    def test_a_known_repo_sharing_the_kits_common_dir_is_left_out(self):
+        # the sessions file names the kit's main checkout by its repo name; the kit runs from a worktree
+        home = self._home({}, sessions={'kit': {'repo': 'Kit-Main'}, 'o': {'repo': 'Other'}})
+        launcher = os.path.join(home, 'pm', 'launcher')
+        commons = {_norm(ROOT): _norm('x/Kit-Main/.git'), _norm(launcher): _norm('x/Kit-Main/.git')}
+        got = lambda **kw: [(rx.pattern, src) for rx, src in install_names(
+            home, kit_dir=ROOT, common_dir=lambda d: commons.get(_norm(d)), **kw)[0]]
+        # an unrelated known repository is still an install name; the kit's own two are not
+        self.assertEqual(got(toplevel=lambda d: None),
+                         [(name_pattern('Other').pattern, 'pm_start known repository')])
+        # a folder in a checkout of the kit's repository is the kit, whatever its toplevel is called
+        self.assertEqual(got(toplevel=lambda d: 'wt-name'),
+                         [(name_pattern('Other').pattern, 'pm_start known repository')])
+        # the same folder in an unrelated repository is one
+        commons[_norm(launcher)] = _norm('x/Else/.git')
+        self.assertEqual(got(toplevel=lambda d: 'wt-name'),
+                         [(name_pattern('Other').pattern, 'pm_start known repository'),
+                          (name_pattern('wt-name').pattern, 'pm_start known repository')])
+
     def test_an_empty_machine_has_no_names_and_says_so(self):
         home = self._home({})
         pats, notes = install_names(home)
         self.assertEqual(pats, [])
         self.assertEqual(notes, ['scrub_patterns is not set', 'pm_start.sessions_file is not set'])
+
+
+@real_git('git worktree add: the fake tier does not make a second checkout to compare')
+class CommonDir(unittest.TestCase):
+    def test_the_common_dir_of_a_main_checkout_and_its_worktree_agree(self):
+        import shutil
+        import subprocess
+        import tempfile
+        base = tempfile.mkdtemp(prefix='scrub-git-')
+        self.addCleanup(shutil.rmtree, base, True)
+        main, wt, other = (os.path.join(base, n) for n in ('main', 'wt', 'other'))
+        os.makedirs(main)
+        os.makedirs(other)
+        ident = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid']
+        for d in (main, other):
+            subprocess.run(['git', '-C', d, 'init', '-q'], check=True)
+        subprocess.run(['git', '-C', main] + ident + ['commit', '-q', '--allow-empty', '-m', 'x'],
+                       check=True)
+        subprocess.run(['git', '-C', main, 'worktree', 'add', '-q', wt, '-b', 'w'], check=True)
+        self.assertIsNotNone(_common_dir(main))
+        self.assertEqual(_common_dir(main), _common_dir(wt))
+        self.assertNotEqual(_common_dir(main), _common_dir(other))
+        self.assertIsNone(_common_dir(base))
 
 
 if __name__ == '__main__':
