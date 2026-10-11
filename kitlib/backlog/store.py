@@ -29,7 +29,7 @@ from kitlib.git import batch, cmd, refs
 from kitlib.git import repo as gitrepo
 
 from . import record as rmod
-from .errors import Failure, Usage
+from .errors import Failure, Uncommitted, Usage
 
 STORE_REF = 'refs/backlog/main'
 STORE_DIR = 'backlog'
@@ -674,9 +674,10 @@ class MainBackend(object):
     # -- committing in the PM data worktree -------------------------------------------------------
 
     def _uncommitted(self, paths, why):
-        return Failure('%s written but not committed in %s: %s. `%s` lists the uncommitted record '
-                       'paths and `%s --apply` commits them'
-                       % (', '.join(paths), self.root, why, CATCH_UP, CATCH_UP))
+        return Uncommitted('%s written but not committed in %s: %s. `%s` lists the uncommitted '
+                           'record paths and `%s --apply %s` commits them'
+                           % (', '.join(paths), self.root, why, CATCH_UP, CATCH_UP,
+                              ' '.join(paths)))
 
     def _git(self, args, paths, **kw):
         out, why = cmd.run(args, self.root, **kw)
@@ -685,7 +686,13 @@ class MainBackend(object):
         return cmd.text(out).strip()
 
     def _hash_text(self, data, paths):
-        return self._git(['hash-object', '-w', '--stdin'], paths, stdin=data)
+        """The blob id of `data`, written to the object store before any record file is: a
+        failure here is a plain Failure, with nothing written."""
+        out, why = cmd.run(['hash-object', '-w', '--stdin'], self.root, stdin=data)
+        if out is None:
+            raise Failure('cannot write %s to the object store of %s: git hash-object: %s; '
+                          'nothing was written' % (', '.join(paths), self.root, why))
+        return cmd.text(out).strip()
 
     def _head(self):
         out, why = cmd.run_text(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], self.root)
@@ -712,7 +719,18 @@ class MainBackend(object):
         commit moved (ATTEMPTS times). Then the real index takes the same entries for those paths
         alone. Returns the new commit, or None when HEAD already holds them. No ref moves until the
         whole commit exists, so a failure leaves no commit holding part of the write; it is
-        raised (_uncommitted), never swallowed."""
+        raised as Uncommitted, never swallowed."""
+        try:
+            new, lines = self._publish_commit(blobs, message, paths)
+        except Uncommitted:
+            raise
+        except Failure as exc:                       # HEAD unreadable: the files are still written
+            raise self._uncommitted(paths, str(exc))
+        self._sync_index(lines, new, paths)
+        return new
+
+    def _publish_commit(self, blobs, message, paths):
+        """`(new commit or None, index lines)`: _commit's compare-and-swap loop."""
         subject = message.split('\n', 1)[0]
         last = ''
         for attempt in range(ATTEMPTS):
@@ -722,25 +740,21 @@ class MainBackend(object):
                      for p, sha in sorted(blobs.items())]
             tree = self._tree(head, lines, paths)
             if tree == self._git(['rev-parse', head + '^{tree}'], paths):
-                self._sync_index(lines, None, paths)
-                return None
+                return None, lines                   # HEAD holds them already: no empty commit
             new = self._git(['commit-tree', tree, '-p', head, '-F', '-'], paths,
                             stdin=message.encode('utf-8'))
             r = cmd.call(['update-ref', '-m', 'backlog: ' + subject, 'HEAD', new, head], self.root)
             if r.rc == 0:
-                break
+                return new, lines
             last = r.err or 'git update-ref exited %s' % r.rc
             now = self._head()
             if now == new:                           # rc None: timed out after the move
-                break
+                return new, lines
             if now == head and 'cannot lock ref' not in last:
                 raise self._uncommitted(paths, 'git update-ref HEAD: %s' % last)
             time.sleep(random.uniform(0.05, 0.25) * (attempt + 1))
-        else:
-            raise self._uncommitted(paths, 'HEAD moved or stayed locked under %d attempts (%s)'
-                                    % (ATTEMPTS, last))
-        self._sync_index(lines, new, paths)
-        return new
+        raise self._uncommitted(paths, 'HEAD moved or stayed locked under %d attempts (%s)'
+                                % (ATTEMPTS, last))
 
     def _sync_index(self, lines, new, paths):
         """Give the real index `lines` for those paths only, so `git status` shows them clean."""
@@ -846,6 +860,28 @@ class MainBackend(object):
     def landed(self, main_branch):
         """`(rev, folder)` holding the landed records: the folder on the main branch."""
         return main_branch, self.rel
+
+
+def catch_up(backend, paths, session):
+    """`backlog.py catch-up --apply PATH...`: commit `paths` in the PM data worktree as one commit
+    (MainBackend.commit_paths), each named and each an uncommitted record path that
+    MainBackend.pending lists. Usage for anything else, before anything moves. Returns the new
+    commit, or None when HEAD already holds them."""
+    if not isinstance(backend, MainBackend):
+        raise Usage('`catch-up` is for a folder store; %s commits its own writes'
+                    % backend.describe())
+    if not paths:
+        raise Usage('`catch-up --apply` takes the record paths to commit, each named; '
+                    '`catch-up` lists them')
+    paths = sorted(set(p.replace('\\', '/') for p in paths))
+    pending = dict((p, kind) for kind, p in backend.pending())
+    bad = [p for p in paths if p not in pending or pending[p] == 'not a record']
+    if bad:
+        raise Usage('not an uncommitted record path of %s: %s (`catch-up` lists them)'
+                    % (backend.describe(), ', '.join(bad)))
+    return backend.commit_paths(paths, 'backlog: catch up %d uncommitted record path%s\n\n'
+                                'Session: %s\n' % (len(paths), '' if len(paths) == 1 else 's',
+                                                   session or '-'))
 
 
 def open_backend(root, cfg, fetch=True, store=None):

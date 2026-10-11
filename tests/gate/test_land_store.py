@@ -366,6 +366,45 @@ class PmDataClose(StoreLandCase):
         self.assertEqual(len(landed), 1, out.lines)
         self.assertGreater(out.lines.index(closed[0]), landed[0], out.lines)
 
+    def test_the_close_in_the_pm_data_store_is_committed(self):
+        """Records committed on the PM data branch: the landing's close commits the deletion
+        there, alone, with a Session line (KIT-STORE-WRITES-UNCOMMITTED)."""
+        wt = self.pm_worktree(pulled('FOO'), priced('BAZ'))
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        out = self.land()
+        tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        self.assertEqual(self.repo.git('rev-parse', tip + '^', cwd=wt), before)
+        self.assertEqual(self.repo.git('diff-tree', '--no-commit-id', '--no-renames',
+                                       '--name-status', '-r', tip, cwd=wt),
+                         'D\tkit/backlog/FOO.md')
+        self.assertIn('\nSession: ', self.repo.git('log', '-1', '--format=%B', tip, cwd=wt))
+        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'kit/backlog', cwd=wt), '')
+        closed = [l for l in out.lines if l.startswith('closed ')]
+        self.assertEqual(len(closed), 1, out.lines)
+        self.assertIn('closed FOO in the backlog store kit/backlog in ', closed[0])
+        self.assertIn('(committed %s)' % tip[:10], closed[0])
+
+    def test_a_close_the_pm_data_store_cannot_commit_names_catch_up(self):
+        wt = self.pm_worktree(pulled('FOO'))
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        lock = os.path.join(self.repo.common_dir(), 'refs', 'heads', 'pmdata.lock')
+        with open(lock, 'w') as f:
+            f.write('')
+        self.addCleanup(os.remove, lock)
+        with mock.patch.object(smod, 'ATTEMPTS', 1):
+            out = self.land()
+        self.assertFalse(os.path.exists(self.record(wt, 'FOO')))
+        self.assertEqual(self.repo.git('rev-parse', 'HEAD', cwd=wt), before)
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertIn('FOO was closed in the backlog store kit/backlog in ', warn[0])
+        self.assertIn('but not committed', warn[0])
+        self.assertIn('backlog.py" -C "%s" catch-up --apply kit/backlog/FOO.md'
+                      % self.pm_root(wt), warn[0])
+        self.assertEqual(self.main_now(), out.merge)
+
     def test_a_record_the_pm_data_store_cannot_close_names_the_command_and_the_landing_stands(self):
         wt = self.pm_worktree(pulled('FOO', priority='-1', priority_by='-',
                                      owner_ask='may this ship?'))

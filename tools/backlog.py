@@ -14,6 +14,8 @@
           close ID --reason T [--ruling R]                   retire ID --why T [--ruling R]
           set-status ID parked --q Q-nnn                     unpark ID --ruling R
   start   migrate [--dry-run] [--to ref|branch] [--dir D]   (main's records -> a new store)
+  repair  catch-up [--apply PATH...]     (the PM data worktree's uncommitted record paths; a dry
+                                          run lists them, --apply commits the paths it names)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.backlog, prints and exits.
 Exit codes: 0 OK, 1 NOT FOUND / ERROR / a red check / a landable that cannot tell, 2 USAGE /
@@ -143,6 +145,9 @@ def build_parser():
     v.add_argument('--dry-run', action='store_true')
     v.add_argument('--to', default=None, choices=('ref', 'branch'))
     v.add_argument('--dir', default=None)
+    v = sub.add_parser('catch-up')
+    v.add_argument('--apply', nargs='+', default=None, metavar='PATH',
+                   help='commit these record paths, each named; without it a dry run')
     return p
 
 
@@ -327,7 +332,7 @@ def do_write(args, ctx, store):
     if not change.writes:
         say('nothing changed; nothing was written')
         return 0
-    say('WROTE %s -> %s' % (store.backend.describe(), (tip or 'the worktree')[:10]))
+    say('WROTE %s -> %s' % (store.backend.describe(), tip[:10] if tip else 'the worktree'))
     say('  %s' % change.subject)
     return 0
 
@@ -344,6 +349,36 @@ def do_retarget_dry(args, store):
         say(line)
     say('DRY RUN: nothing was written%s' % ('; `--apply` writes it as one store commit'
                                             if change.writes else ''))
+    return 0
+
+
+def do_catch_up(args, store):
+    """`catch-up`: each uncommitted path in the folder store as `<kind>  <path>`, then the counts;
+    with `--apply PATH...` commit the named record paths (kitlib.backlog.store.catch_up)."""
+    backend = store.backend
+    if args.apply is not None:
+        tip = smod.catch_up(backend, args.apply, store.session)
+        say('CAUGHT UP %d record path(s) in %s -> %s'
+            % (len(set(args.apply)), backend.describe(), tip[:10] if tip else 'nothing to commit'))
+        return 0
+    if not isinstance(backend, smod.MainBackend):
+        raise Usage('`catch-up` is for a folder store; %s commits its own writes'
+                    % backend.describe())
+    found = backend.pending()
+    say('CATCH-UP %s (%s)' % (backend.describe(), 'the PM data worktree: its writes commit'
+                              if backend.commit_branch() else 'not the PM data worktree'))
+    for kind, path in found:
+        say('  %-12s %s' % (kind, path))
+    counts = {}
+    for kind, _ in found:
+        counts[kind] = counts.get(kind, 0) + 1
+    say('%d path(s)%s' % (len(found), ''.join(', %d %s' % (counts[k], k) for k in sorted(counts))))
+    records = [p for kind, p in found if kind != 'not a record']
+    if records:
+        say('DRY RUN: nothing was committed; commit the record paths with: catch-up --apply %s'
+            % ' '.join(records))
+    else:
+        say('DRY RUN: no uncommitted record path')
     return 0
 
 
@@ -403,6 +438,8 @@ def main(argv=None):
             return do_write(args, ctx, store)
         if args.verb == 'retarget':
             return do_retarget_dry(args, store)
+        if args.verb == 'catch-up':
+            return do_catch_up(args, store)
         snap = store.load()
         if args.verb == 'landable':
             return do_landable(args, ctx, snap, backend)

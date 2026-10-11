@@ -1,5 +1,7 @@
 """A write to the PM data branch's folder store commits its own record paths
 (docs/backlog-store.md "The main backend"); other folder stores still commit nothing."""
+import contextlib
+import io
 import os
 import unittest
 from unittest import mock
@@ -9,7 +11,8 @@ from kitlib.git import cmd
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
-from kitlib.backlog.errors import Failure
+from kitlib.backlog.errors import Failure, Uncommitted, Usage
+from tools import backlog as backlog_tool
 
 from tests.backlog.helpers import BRANCH, priced
 from tests.gitfixture import TempRepo
@@ -141,6 +144,7 @@ class PmDataStore(unittest.TestCase):
                                                      'ZZZ': priced('ZZZ')['ZZZ']}, 'x\n')
         self.assertIn('not committed', str(cm.exception))
         self.assertIn('catch-up', str(cm.exception))
+        self.assertNotIsInstance(cm.exception, Uncommitted)  # put back: nothing left written
         self.assertEqual(self.head(), before)
         self.assertEqual(self.git('diff', '--cached', '--name-only'), '')
         self.assertFalse(os.path.exists(self.path('AAA')))    # the first file was put back
@@ -155,6 +159,7 @@ class PmDataStore(unittest.TestCase):
             with self.assertRaises(Failure) as cm:
                 self.store.write(
                     lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+        self.assertIsInstance(cm.exception, Uncommitted)    # the files are written
         msg = str(cm.exception)
         self.assertIn('%s/FOO.md' % DIR, msg)
         self.assertIn('not committed', msg)
@@ -210,6 +215,57 @@ class PmDataStore(unittest.TestCase):
         with self.assertRaises(Failure):
             self.backend.commit_paths(['elsewhere.txt'], 'x\n')
         self.assertEqual(self.head(), before)
+
+    def test_catch_up_apply_commits_only_the_paths_it_names(self):
+        self.leave_pending()
+        before = self.head()
+        tip = smod.catch_up(self.backend, [DIR + '\\NEW.md'], 'kit-test')
+        self.assertEqual(self.git('rev-parse', tip + '^'), before)
+        self.assertEqual(self.changed_in(tip), [('A', DIR + '/NEW.md')])
+        self.assertEqual(self.git('log', '-1', '--format=%B', tip),
+                         'backlog: catch up 1 uncommitted record path\n\nSession: kit-test')
+        self.assertEqual([p for _, p in self.backend.pending()],
+                         [DIR + '/BAR.md', DIR + '/BAZ.md', DIR + '/notes.txt'])
+
+    def test_catch_up_apply_refuses_what_is_not_an_uncommitted_record(self):
+        self.leave_pending()
+        before = self.head()
+        for paths in ([], [DIR + '/notes.txt'], [DIR + '/QUX.md'], ['elsewhere.txt'],
+                      [DIR + '/NEW.md', DIR + '/notes.txt']):
+            with self.assertRaises(Usage, msg=paths):
+                smod.catch_up(self.backend, paths, 'kit-test')
+        self.assertEqual(self.head(), before)
+        self.assertEqual(len(self.backend.pending()), 4)
+
+    # -- the catch-up verb's arguments and exit codes --------------------------------------------
+
+    def tool(self, *args):
+        cfg = os.path.join(self.wt, '.kit.json')
+        if not os.path.exists(cfg):
+            self.repo.write('.kit.json', '{"backlog": {"store": "%s"}}\n' % DIR, root=self.wt)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = backlog_tool.main(['-C', self.wt, '--session', 'kit-test'] + list(args))
+        return rc, out.getvalue()
+
+    def test_the_catch_up_verb_lists_then_applies(self):
+        self.leave_pending()
+        rc, out = self.tool('catch-up')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('  deleted      %s/BAR.md\n' % DIR, out)
+        self.assertIn('  not a record %s/notes.txt\n' % DIR, out)
+        self.assertIn('4 path(s), 1 added, 1 deleted, 1 modified, 1 not a record\n', out)
+        self.assertIn('catch-up --apply %s/BAR.md %s/BAZ.md %s/NEW.md\n' % (DIR, DIR, DIR), out)
+        before = self.head()
+        rc, out = self.tool('catch-up', '--apply', DIR + '/notes.txt')
+        self.assertEqual(rc, 2, out)
+        self.assertIn('USAGE: ', out)
+        self.assertEqual(self.head(), before)
+        rc, out = self.tool('catch-up', '--apply', DIR + '/BAR.md', DIR + '/BAZ.md')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('CAUGHT UP 2 record path(s)', out)
+        self.assertEqual(self.changed_in(self.head()), [('D', DIR + '/BAR.md'),
+                                                        ('M', DIR + '/BAZ.md')])
 
 
 if __name__ == '__main__':

@@ -1,5 +1,6 @@
 """The four ways a backlog verb stops (ported from an earlier tools/backlog.py). Each fixes the
-label the CLI prints and its exit code; nothing was written when one is raised."""
+label the CLI prints and its exit code; nothing was written when one is raised, except
+Uncommitted (a Failure)."""
 
 
 class Refusal(Exception):
@@ -27,3 +28,8 @@ class Failure(Refusal):
     write lost every compare-and-swap race it was allowed."""
     label = 'ERROR'
     code = 1
+
+
+class Uncommitted(Failure):
+    """The write's record files are on disk in the PM data worktree but its commit failed
+    (kitlib.backlog.store.MainBackend): `backlog.py catch-up --apply` commits them."""

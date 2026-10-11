@@ -27,7 +27,7 @@ from kitlib.git import repo as gitrepo
 from . import plan as pmod
 from . import record as rmod
 from . import store as smod
-from .errors import Refusal
+from .errors import Refusal, Uncommitted
 
 SESSION = 'gate-land'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -276,6 +276,12 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
     for rid in held:
         try:
             change, tip = store.write(_close_plan(ctx, rid, branch, reason))
+        except Uncommitted as exc:          # deleted in the PM data worktree, its commit failed
+            lines.append('WARNING: %s landed, and %s was closed in the backlog store %s but not '
+                         'committed (%s); commit it with: %s'
+                         % (branch, rid, backend.describe(), _one_line(str(exc)),
+                            command('catch-up', '--apply', backend.path_of(rid))))
+            continue
         except Exception as exc:            # one record's failure never stops the others
             what = ('%s: %s' % (exc.label, exc) if isinstance(exc, Refusal)
                     else '%s: %s' % (type(exc).__name__, exc))
@@ -290,8 +296,10 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
             lines.extend(change.lines)
             continue
         if folder:
-            lines.append('closed %s in the backlog store %s: %s (the record file is deleted, '
-                         'not committed)' % (rid, backend.describe(), reason))
+            lines.append('closed %s in the backlog store %s: %s (%s)'
+                         % (rid, backend.describe(), reason,
+                            'committed %s' % tip[:10] if tip
+                            else 'the record file is deleted, not committed'))
         else:
             lines.append('closed %s in the backlog store: %s (store at %s)'
                          % (rid, reason, (tip or '?')[:10]))
