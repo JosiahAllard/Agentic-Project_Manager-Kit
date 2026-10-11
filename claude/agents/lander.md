@@ -69,7 +69,8 @@ Missing any: say what you need, do nothing.
    never a polling loop (the classifier denies it); no Monitor either (${CLAUDE_PLUGIN_ROOT}/docs/gate.md
    "Waiting on a gate: who arms what").
 6. Verify, whatever the exit code said (0 LANDED, 1 NOT LANDED, 3 STUCK, 4
-   REFUSED, 5 BUSY). At minimum: main and its remote match, and the branch tip is
+   REFUSED, 5 BUSY, 9 LANDED_UNGATED: landed, but main was not gated whole; report
+   its `WARNING:` line verbatim). At minimum: main and its remote match, and the branch tip is
    an ancestor of the remote main. Its verdict is the log's `LANDED` /
    `NOT LANDED:` / `STUCK:` / `REFUSED:` / `BUSY:` line.
    Keep verification read-only and on its own: `git ls-remote origin <main>` plus
