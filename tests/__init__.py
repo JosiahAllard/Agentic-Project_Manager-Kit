@@ -9,7 +9,11 @@ this package is imported into that starts git raises instead of starting it.
 The home fence (docs/test-tools.md "Home fence"): kitlib.config.user.fence_home() records the home
 folder this process starts with, and from then on kitlib.config.user.home_dir() refuses it
 (HomeFenced), so a test that forgets to give a home or account folders fails instead of reading the
-real ~/.claude* and machine config folders.
+real ~/.claude* and machine config folders. The tools a test starts do not import this package, so
+kitlib.config.user.fence_env() also puts the fence's marker (KIT_HOME_FENCE, that home folder) in
+the environment unless it is already there (kit_tests.py marks its units; a nested run keeps the
+outer run's): a kit process that inherits it refuses that folder too, and the profile folder
+Windows reports. A child given a hand-built environment without the marker is not fenced.
 
 The fence has one exception, real_install_config(): the scrub tests check the kit's files against
 this install's own names, which only the real machine config holds. It reads the machine config
@@ -23,6 +27,7 @@ os.environ.setdefault('KIT_FAKE_GIT', '1')
 from kitlib.config import user as _kuser  # noqa: E402  (after KIT_FAKE_GIT is set)
 
 _REAL_HOME = os.path.expanduser('~')    # read by real_install_config() only
+_kuser.fence_env(os.environ)            # the marker the children of this process inherit
 _kuser.fence_home()
 
 
