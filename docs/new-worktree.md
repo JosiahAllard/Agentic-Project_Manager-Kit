@@ -8,6 +8,7 @@ Held for the joint review: no repository runs it yet.
 python tools/new_worktree.py [-C DIR] <area>/<slug>                 a NEW branch off the main branch
 python tools/new_worktree.py [-C DIR] --existing <area>/<slug>      an EXISTING branch, resumed
                              [--base BRANCH]                        another base than the main branch
+                             [--no-wait]                            do not wait for a landing in flight
 ```
 
 Exit 0 made; 1 refused (nothing made, the lines say why); 2 usage, or the kit configuration was refused; 130 Ctrl+C.
@@ -27,6 +28,25 @@ The lock is the kit landing lock (`kitlib.records.landing`, the file in the git 
 
 A lock file that is not a lock record counts as held. The one refusal under a held lock is that `<remote>/<base>` does not resolve. With the lock free, the refs are read once more before refusing (`choose_base`), in case a lander pushed and released in between. The lock is only read. A base ref git gives no answer for (a git ended from outside included) is refused as `<ref> could not be read (<why>)`, before or after that second read, never taken for one that does not resolve (`refs.resolve(known=True)`, KIT-GIT-EXIT1-ANSWERS-2).
 
+## Waiting for a landing in flight
+
+Without a wait, a branch made while a lander holds the lock with its merge unpushed starts at the pushed `<remote>/<base>`, without that landing: stale at birth. `.kit.json` "landing".`in_flight` turns on a wait before the fetch, so a landing that pushes meanwhile is in the new branch. Unset (the default), nothing waits and nothing below applies. Logic: `kitlib/records/inflight.py`; `tools/sync_base.py` reads the same key ([sync-base.md](sync-base.md)).
+
+- `{}`: a landing is in flight while the kit landing lock is held (a lock file that is no lock record counts as held).
+- `{"command": [argv]}`: for a repository whose landing tool keeps its own lock. The argv runs in the main checkout with no input and 30 seconds to answer (`COMMAND_TIMEOUT`); `{python}` is the running Python, `{root}` the main checkout, and the program is found on PATH or named absolute. Exit 0: in flight, and the first line printed names the holder. Exit 1: none. Any other exit, a timeout, or a program that cannot start: in flight, since "cannot tell" must not read as "free".
+- `wait_s`: the most seconds to wait, 0 to 3600. Unset: 100 (`WAIT_S`). The 100 is inferred, not measured: under the agent shell's default 120-second command timeout, so a wait that runs out still leaves time to fetch and finish.
+
+While a landing is in flight it prints the holder and the bound, looks every 10 seconds, and prints a line each minute:
+
+```
+landing   in flight: the landing lock <path> is held: <holder>; waiting up to 100s (--no-wait goes on now)
+landing   done after 40s
+```
+
+At the bound it goes on, with `landing   still in flight after 100s, going on without it: <holder>`, and the rest runs as without the wait (a held kit lock takes the landing exception above). `--no-wait` does not wait: `landing   in flight, not waited for (--no-wait): <holder>`. The wait only reads; it never takes, breaks or changes a lock.
+
+Behaviour change with a command: after the fetch the command is asked again when the kit lock is free. If it says (or cannot say) a landing is in flight, the landing exception applies (`landing   in progress: landing.in_flight.command: <holder>`, the branch from the pushed `<remote>/<base>`), where before the free-lock refusal fired. Exit 1 keeps the refusal, its reason naming what the command said.
+
 ## Local base behind the remote
 
 With the landing lock free and local `<base>` a pure fast-forward behind `<remote>/<base>` (an ancestor of it, not equal: no commit of its own), the new branch starts at `<remote>/<base>` (by hash) and one line says so:
@@ -40,7 +60,7 @@ Local `<base>` is not updated (`behind_count` in `kitlib/worktree/new.py` only r
 ## Keys read
 
 - `.kit.json` "repo": `main_branch`, `remote`, `worktrees_dir`, `tools_dir`.
-- "landing": `lock_file` (`git:<name>`) and `lanes`.
+- "landing": `lock_file` (`git:<name>`), `lanes`, and `in_flight` (see "Waiting for a landing in flight").
 
 "new_worktree" has no keys.
 

@@ -84,6 +84,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `landing.batch_max` (int from 1 to 20, default 3): most branches one tools/land.py landing merges and gates together
 - `landing.reuse_max_age_h` (int from 0 to 168, default 24): hours a branch gate-OK record serves a landing's gate reuse; 0: never reused
 - `landing.reuse_never` (list of string, default []): globs of paths whose change makes a landing reuse no step
+- `landing.in_flight` ({wait_s, command}): how tools/new_worktree.py and tools/sync_base.py see a landing in flight before they fetch, and wait for it (unset: off; {}: the kit landing lock; wait_s unset: 100, inferred not measured; docs/new-worktree.md "Waiting for a landing in flight")
 - `ledger.pre_commit_check` (bool, default false): githooks/pre-commit runs tools/ledger.py check --base HEAD before each commit that changes the ledger file or its standing digest (opt-in; docs/ledger.md "Pre-commit check")
 - `machine_paths.allow` (list of {glob, line, hit, why, temporary}, default []): machine-path hits allowed
 - `machine_paths.fixtures` (list of {glob, hits, line, why}, default []): test fixtures that name machine paths
