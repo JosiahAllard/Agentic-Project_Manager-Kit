@@ -39,6 +39,8 @@ Globals: `-C DIR`, `--session S` (the offer and the commit body), `--as BRANCH` 
 
 Exit codes (kitlib/backlog/errors.py): 0 OK; 1 `NOT FOUND:`, `ERROR:`, a RED check; 2 `USAGE:`, `REFUSED:`, or bad arguments. Every write refusal leaves the store untouched. By kind: `Usage` 2, `Refusal` 2, `NotFound` 1, `Failure` 1; a bad id shape and an unblock of a record that is not blocked are `USAGE:`, an id already taken is `REFUSED:`. `tests/backlog/test_refusal_kinds.py` pins the codes and audits the guard sites by AST.
 
+A record passed over on a scope collision (in `next`, and in a `pull` refused as out of order) names both colliding paths and the holder: `already taken by ID (in flight on BRANCH)` for a live pull, `by ID (session S)` for another session's record (kitlib/backlog/offer.py `next_offer`). A pulled record holds its current `scope:` lines, never its branch's diff, so narrowing them with `set ID --scope P` frees the rest (`tests/backlog/test_pull_holder.py`).
+
 ## Owner gates
 
 An owner price (`--priority-by owner|pm`), an owner hold (`blocked_on: owner`, `priority: -1`), and closing or retiring such a record take `--ruling R-nnnn`; for a retirement the ruling alone satisfies the owner check (an owner kind, never a delegated one) and nothing of the owner's is written into the record. The ledger entry is read only when `ledger_path` in the machine config names an existing file. Without one, only the ruling's shape is checked and `check` skips the ruling checks. A release, a close and a retirement also need the entry's `Items:` line to name the record. `unpark`'s ruling is checked as a hold release's (an owner or delegated entry) without the `Items:` line (`plan_unpark`).

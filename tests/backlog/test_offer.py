@@ -157,5 +157,38 @@ class Requires(unittest.TestCase):
         self.assertEqual([m for m, _ in got], ['item:BBB', 'item:DDD'])
 
 
+class CollisionHolder(unittest.TestCase):
+    """A collision names who holds the scope; a pulled record's narrowed `scope:` lines are what
+    it holds (BACKLOG-PULL-NARROW-SCOPES)."""
+
+    def hold(self, scope):
+        return priced('HOLD', state='pulled', pulled_at='2026-10-01', pulled_by='kit/holder',
+                      scope=scope)
+
+    def test_a_collision_with_a_live_pull_names_the_holder_and_its_branch(self):
+        s = snap(priced('AAA', scope='kitlib/backlog/**'), self.hold('kitlib/backlog/offer.py'))
+        _ids, passed = offer_ids(s, holding=[s.get('HOLD')])
+        self.assertEqual(passed['AAA'], 'scope kitlib/backlog/** collides with '
+                         'kitlib/backlog/offer.py already taken by HOLD (in flight on kit/holder)')
+
+    def test_a_narrowed_live_pull_clears_a_disjoint_record(self):
+        wide = snap(priced('AAA', scope='kitlib/backlog/scope.py'), self.hold('kitlib/backlog/**'))
+        ids, passed = offer_ids(wide, holding=[wide.get('HOLD')])
+        self.assertEqual(ids, [])
+        self.assertIn('already taken by HOLD (in flight on kit/holder)', passed['AAA'])
+        narrowed = snap(priced('AAA', scope='kitlib/backlog/scope.py'),
+                        self.hold('kitlib/backlog/offer.py'))
+        ids, passed = offer_ids(narrowed, holding=[narrowed.get('HOLD')])
+        self.assertEqual(ids, ['AAA'])
+        self.assertNotIn('AAA', passed)
+
+    def test_another_sessions_holder_is_still_named_by_session(self):
+        s = snap(priced('AAA', priority='1', scope='binding/**', session='gamma'),
+                 priced('BBB', priority='2', scope='binding/x/**', session='kit'))
+        _ids, passed = offer_ids(s, session='kit')
+        self.assertEqual(passed['BBB'], 'scope binding/x/** collides with binding/** already '
+                         'taken by AAA (session gamma)')
+
+
 if __name__ == '__main__':
     unittest.main()
