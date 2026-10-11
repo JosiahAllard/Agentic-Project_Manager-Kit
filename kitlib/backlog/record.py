@@ -413,7 +413,8 @@ def _cross_field(rec):
 # --- writing --------------------------------------------------------------------------------------
 
 def _control_char(text):
-    return any(ord(ch) < 32 or ord(ch) == 127 for ch in str(text))
+    """True when `text` holds a control character other than a tab."""
+    return any((ord(ch) < 32 and ch != '\t') or ord(ch) == 127 for ch in str(text))
 
 
 def render(pairs, body):
@@ -421,7 +422,9 @@ def render(pairs, body):
 
     Usage when a header key or value holds a control character: a line break would split one
     header line into two (`summary: x` + an injected `pin: 1`), and no header value is multi-line.
-    The free body below the blank line is not checked."""
+    A tab is let through: it splits no line, and a record that already holds one in a pasted
+    summary must still take writes it did not cause (a path with one is still a new FAIL finding
+    at store.check_change, through scope.path_shape_error). The body is not checked."""
     for k, v in pairs:
         if _control_char(k) or _control_char(v):
             raise Usage('`%s: %r` holds a line break or other control character; a header value '
