@@ -36,7 +36,7 @@ Source: the files in the project manager's `kit/agents/` at the time of the copy
 
 The live files held no ruling id, no repo name and no owner path, so the scrub changed only two files.
 
-- **coordinator.md**, startup step 3 (check in with the project manager): "since `<newest R-id in your state note>`" became "since `<newest ruling id in your state note>`". Reason: the R-id was the project manager's own numbering; the rule (report the newest ruling you know of) is kept in plain words.
+- **coordinator.md**, startup step 3 (check in with the project manager): the id of the newest ruling in the state note was replaced by plain words, and later the step stopped asking for an id at all: it asks for "owner decisions since your last check-in". Reason: the ids were the project manager's own numbering.
 - **researcher.md**, end of "Repo tools": removed one line, a research exclusion for a single repository. Reason: it named a repo, and is a repo-specific research exclusion. It belongs in that repo's `.claude/agent-profile.md`; the agent already reads the profile. Until a repo's profile carries it, an agent could research those topics.
 
 Left as is, on purpose:
