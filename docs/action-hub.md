@@ -8,7 +8,8 @@ steps when it suits you. Nobody waits on it.
 - **Inbox.** Questions from the PM, each with options and a recommendation; pick one and add a
   note if you like. The Answers tab holds the PM's replies to questions you asked in a note.
 - **To PM.** Write the PM a question or an FYI. Add keeps it queued; Send all sends every queued
-  item and alerts the PM.
+  item and alerts the PM. Send all is blocked, with the reason shown, while no PM session is
+  watching (your queued items stay saved).
 - **To-do.** Hand steps for you, each with the exact commands and a Copy button. Tick one when
   done. You can add your own.
 - **Parked.** Work a coordinator has paused until you answer something.
@@ -16,7 +17,9 @@ steps when it suits you. Nobody waits on it.
   closed recently.
 - **Info.** Account usage and which model each agent runs on.
 - **Alert the PM** (header button) tells a watching PM session that something waits on it.
-  With no PM watching, the PM picks it up at its next turn.
+  The page also alerts by itself, 20 seconds after you answer a question, tick or add a to-do, or
+  submit a story. With no PM watching, the PM picks it up at its next hub check.
+- **Banners.** A red banner at the top names any collection that failed to load; reload the page.
 
 Links ending `#todo`, `#topm`, `#parked`, `#backlog` or `#info` open that section;
 `#questions` and `#inbox` open the Inbox's Questions and Answers tabs; `#usage` and `#agents`
@@ -31,6 +34,7 @@ repository.
   mirror ("One copy per account" below).
 - The PM reads and writes the store with the ArtifactData tool. Coordinators never write to it;
   they send questions and hand steps to the PM.
+- Questions with a status other than open, answered or logged show in an Other tab, which appears only when there are any.
 - Before sending a batch with ArtifactData, run `python claude/hub/hub_validate.py --batch <file>
   [--against <folder of the hub as last read>]` (`kitlib.hubvalidate`): it checks the hub data
   against the field tables below and exits 1 on an error (a `commands` that is not a list of
@@ -175,14 +179,14 @@ Send all sets every queued item to `sent` with `sent_at`, then fires the Alert-t
 
 PM steps: on an alert (or at session start) list `to_pm` where `status` is `sent`; each is also listed under "To PM" in the alert text. Answer a Question with `reply`, and log any ruling it makes first (provenance `typed`) and put its id in `ruling`; for an FYI set `reply` to a short acknowledgement or leave it empty. Then `update` the doc with `status: done`, `done_at`, `reply`, `ruling`. The owner can write to the collection; the PM may restrict `done` writes by a db rule if wanted (the page only writes queued and sent).
 
-Logic: the pure functions (`pmNextId`, `pmRows`, `pmBadge`, `pmSendAll`, `pmAlertLines`) sit between the `pm-pure:begin` and `pm-pure:end` markers in `claude/hub/action-hub.html`; `tests/hubtopm` runs that block under node.
+Logic: the pure functions (`pmNextId`, `pmRows`, `pmBadge`, `pmSendAll`, `pmAlertLines`, and the alert, status and freshness helpers `pmAlertText`, `pmAutoAlert`, `pmAlertWhy`, `pmCommands`, `pmQBucket`, `pmFresh`) sit between the `pm-pure:begin` and `pm-pure:end` markers in `claude/hub/action-hub.html`; `tests/hubtopm` runs that block under node.
 
 ## todos/T-NNN (or a generated id for the owner's own items)
 | Field | Meaning |
 |---|---|
 | status | `open` or `done` (the owner ticks it) |
 | title, detail | what to do and why |
-| commands | a list of strings (a bare string is an error in `hub_validate.py`): the exact PowerShell commands, each with a Copy button, on every item that involves running something; to edit a file by hand, a command that opens it |
+| commands | a list of strings (a bare string is an error in `hub_validate.py`, though the page shows a lone string as a one-command list): the exact PowerShell commands, each with a Copy button, on every item that involves running something; to edit a file by hand, a command that opens it |
 | repo, from, added_at, refs | provenance |
 | done_at | set by the page when ticked |
 | urgent | true sorts it to the top; the owner can set it on their own items |
@@ -192,6 +196,8 @@ The owner can add items (`from: "you"`). The PM checks the done items and follow
 
 ## Backlog section
 Three tabs: New story (the form, then the owner's stories in progress and filed), Current backlog, and Completed (1, 7, 30 or 90 days).
+
+Freshness: an empty Current backlog or Completed tab says "Never filled on this copy" (the page cannot tell that from nothing being open); a tab whose newest `posted_at` is more than 3 days old says "Stale since" that time (`pmFresh`).
 
 One backlog dropdown at the top (All backlogs, then every repo) is shared by all three tabs and remembered. It filters each tab; the story form shows the chosen backlog as read-only text and submits only when one is chosen.
 
@@ -228,7 +234,9 @@ PM steps:
 The coordinator files the record itself with its own backlog tool, citing the story; pricing follows that repo's usual rules.
 
 ## Alert the PM
-The header button sends the PM session a "Send to Claude" comment summarising what waits on it: answered questions, submitted stories, and to-dos ticked done or added by the owner without `pm_ack`, and every To PM item with status `sent`. Send all in the To PM section fires this same alert. It works only while a PM session watches the artifact with auto-replies armed; otherwise the page says so and the PM picks things up at its next turn. A relaunched PM runs `ArtifactComments watch` on the hub URL. On an alert, the PM processes the hub, replies in the thread with what it did, and resolves it.
+The header button sends the PM session a "Send to Claude" comment summarising what waits on it: answered questions, submitted stories, and to-dos ticked done or added by the owner without `pm_ack`, and every To PM item with status `sent`. Send all in the To PM section fires this same alert. It works only while a PM session watches the artifact with auto-replies armed; otherwise the page says so, blocks Send all (queued items stay saved) and the PM picks up what was already sent at its next hub check. With no `comments` capability (an email invitee, or a page published without it) the bar stays visible and says why.
+
+Automatic alerts: 20 seconds after the last owner action (answer submitted, to-do ticked done, to-do added, story submitted) the page sends one alert (`pmAutoAlert`), unless nothing waits or the text equals the last one sent; a rate-limited send is retried once after 60 seconds. Every item line carries its id, including to-dos the owner added. The text is capped at 3900 bytes: whole lines are dropped from the end and a "(+N more not shown" line says how many, so the PM then reads the hub itself (`pmAlertText`). A relaunched PM runs `ArtifactComments watch` on the hub URL. On an alert, the PM processes the hub, replies in the thread with what it did, and resolves it.
 
 ## Info section
 Reference material in two tabs, Usage and Agents. The Info button shows the usage of the account in use now: its higher of five-hour and weekly, hot at 90%.
