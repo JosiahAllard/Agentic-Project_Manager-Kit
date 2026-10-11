@@ -34,6 +34,9 @@ repository.
 - Inbox section: one button with two tabs, Questions (questions/) and Answers (inbox/). Its badge
   counts open questions plus unread answers; the button reopens the last tab used.
 - The repo filter lists every known repo; see repos/ below.
+- At each start, resume and compact, the PM session-start checklist (docs/pm-start.md) prints the hub steps:
+  republish (or publish and record a copy), start the ArtifactComments watch on the copy, check the
+  `backlog` collection and refill the regenerated collections when it is empty, then process the hub.
 
 ### One copy per account
 
