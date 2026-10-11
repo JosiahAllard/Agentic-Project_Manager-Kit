@@ -1,5 +1,5 @@
 """The coordinator-start review-session check and its machine config key were removed on the
-owner's word (KIT-REVIEW-SESSION-OPTIONAL): neither name may come back in a tracked file.
+owner's word, since the check was optional: neither name may come back in a tracked file.
 
 The two names are built from parts, so this file holds neither itself.
 """

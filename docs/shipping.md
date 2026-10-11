@@ -4,6 +4,40 @@ Everything below lives only in the kit. Claude accounts and repositories point a
 never copy it. `tests/skills`, `tests/templates` and `tests/knowledge` scrub every shipped text
 file for ruling ids, repository names, user paths and the owner's name.
 
+## The built-in scrub
+
+`tests/scrub/test_builtin.py` reads every file `git ls-files` lists, tests/ included, with the
+classes in `kitlib/scrub` (CLASSES). It needs no machine config, so a clean clone runs it too;
+the install's own names stay with `tests/scrub/test_generic.py` and `scrub_patterns`
+(docs/kit-json.md).
+
+- `gender`: the masculine subject, object, possessive and reflexive pronouns as whole words in
+  any case, `\bh(?:e|is|im|imself)\b` (GENDER), and nothing else; the kit writes "the owner".
+- `record-id`: a backlog record id. STOP_IDS lists the acronyms and markers that only look like
+  one, and an invented id in a fixture starts with `EX-` (MADE_UP_ID_PREFIX).
+- `provenance`: the kit this one replaced, called old, earlier, previous or legacy, or one of its
+  files named; the bare title "PM kit" (CLAUDE.md) passes.
+- `pinned-hash`: a commit hash, outside tests/ only; git's empty tree and the hex alphabet pass
+  (NOT_HASHES).
+- `hardware`: a GPU model, a CPU family or chiplet, or a total core or thread count of ten or
+  more.
+- `drive`: a drive path into one of MACHINE_FOLDERS, the machine folders that tests/shipped.py
+  BASE_FORBIDDEN also refuses (a test checks the two agree). It reads tests/ too; other drive
+  paths there are invented fixtures, and `tests/scrub/test_generic.py` refuses every drive path
+  outside tests/.
+- `name`: a salted digest in NAME_STORE, hashed the way `kitlib/forbidden` hashes (docs/repo-checks.md,
+  "forbidden"), so the names are never written down. The shipped store is empty; filling it is the
+  owner's call.
+
+Every class matches the whole file, so a phrase that a markdown wrap splits over two lines is
+still found, at the line it starts on.
+
+A permanent exception is an ALLOWED entry (path glob, class, line text, reason) in the test file;
+an entry that no longer matches anything fails the check, so it is removed with the text it covered.
+Hits that later work removes wait in its PENDING_* blocks, a baseline per (class, file): more hits
+than the baseline fails, a file with no baseline fails on its first hit, and fewer hits prints
+"lower the baseline" without failing. Each block is done when it is empty.
+
 ## The Claude Code plugin (`.claude-plugin/plugin.json`)
 
 - **Agents** (`claude/agents/`): the agent definitions; docs/ROSTER.md says which model and
