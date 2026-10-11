@@ -150,6 +150,42 @@ class IdTest(StoreCase):
         s = self.open()
         self.assertEqual(s.add('questions', question()).id, 'Q-003')
 
+    def test_a_put_of_a_server_id_raises_the_counter(self):
+        s = self.open()
+        s.add('questions', question())
+        s.put('questions', 'Q-005', question())
+        self.assertEqual(s.add('questions', question()).id, 'Q-006')
+        s.close()
+        self.assertIn('"Q": 6', read_file(os.path.join(self.root, store.META_NAME)))
+
+    def test_an_id_differing_only_in_case_is_refused(self):
+        s = self.open()
+        s.put('pages', 'alpha', {'title': 'first'})
+        for call in (lambda: s.put('pages', 'Alpha', {'title': 'second'}, if_version=0),
+                     lambda: s.put('pages', 'ALPHA', {'title': 'second'})):
+            with self.assertRaises(HubError) as cm:
+                call()
+            self.assertEqual((cm.exception.code, cm.exception.field), ('invalid', 'id'))
+            self.assertIn('case', cm.exception.message)
+        self.assertEqual(s.get('pages', 'alpha')['title'], 'first')
+        self.assertEqual(sorted(s.docs('pages')), ['alpha'])
+        self.assertEqual(s.revision, 1)
+
+    def test_an_unreadable_or_empty_meta_is_rebuilt_like_a_missing_one(self):
+        s = self.open()
+        s.add('questions', question())
+        s.add('questions', question())
+        s.close()
+        for text in ('', '{"revision": 2, "coun'):
+            write_file(os.path.join(self.root, store.META_NAME), text)
+            s = Store.open(self.root, clock=CLOCK)
+            try:
+                self.assertEqual(s.revision, 0)
+                self.assertEqual(s.add('questions', question()).id, 'Q-003')
+                s.delete('questions', 'Q-003')
+            finally:
+                s.close()
+
     def test_ids_past_999_keep_counting(self):
         root = tmpdir(self)
         write_file(os.path.join(root, 'questions', 'Q-999.json'), '{"status": "open", "title": "x"}')
@@ -200,6 +236,26 @@ class RevisionTest(StoreCase):
         s.put('pages', 'p', {'title': 'a', 'version': 40, 'id': 'zz', 'updated_at': 'x'})
         self.assertEqual(s.get('pages', 'p'), {'title': 'a', 'version': 1,
                                                'updated_at': CLOCK()})
+
+    def test_the_caller_changing_its_fields_afterwards_changes_nothing(self):
+        s = self.open()
+        refs = ['T-001']
+        fields = {'status': 'open', 'title': 't', 'from': 'you', 'refs': refs}
+        s.add('todos', fields)
+        refs.append('T-002')
+        fields['title'] = 'changed'
+        self.assertEqual(s.get('todos', 'T-001')['refs'], ['T-001'])
+        self.assertEqual(s.get('todos', 'T-001')['title'], 't')
+
+    def test_a_create_only_put_matches_a_mirror_document(self):
+        root = tmpdir(self)
+        write_file(os.path.join(root, 'pages', 'home.json'), '{"title": "old"}')
+        s = self.open(root)
+        r = s.put('pages', 'home', {'title': 'new'}, if_version=0)
+        self.assertEqual(r.version, 1)
+        with self.assertRaises(HubError) as cm:
+            s.put('pages', 'home', {'title': 'again'}, if_version=0)
+        self.assertEqual(cm.exception.code, 'conflict')
 
     def test_update_and_delete_of_a_missing_document_are_not_found(self):
         s = self.open()
@@ -296,6 +352,14 @@ class RingTest(StoreCase):
         self.assertEqual(s.changes_since(1), store.Changes(2, [], True))
         self.assertEqual(s.changes_since(2), store.Changes(2, [], False))
         self.assertTrue(s.changes_since(9).reset)
+
+    def test_wait_past_the_revision_returns_reset_at_once(self):
+        s = self.open()
+        s.put('pages', 'p', {'title': 't'})
+        start = time.monotonic()
+        c = s.wait(9, 10)
+        self.assertLess(time.monotonic() - start, 5)
+        self.assertEqual(c, store.Changes(1, [], True))
 
     def test_the_status_is_in_the_event(self):
         s = self.open()

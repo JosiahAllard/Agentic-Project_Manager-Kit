@@ -32,8 +32,13 @@ A write, in this order (add, put, update, delete):
   5. append the event to the in-memory ring and wake the waiters.
 _meta.json is written BEFORE the document: a crash between the two leaves a revision or an id
 skipped, never a document newer than the revision. Store.open also raises each id counter to the
-highest id on disk, so a stale or missing _meta.json never gives an id twice, and removes the
-temp files a crash left.
+highest id on disk, treating an unreadable or empty _meta.json as missing, and removes the temp
+files a crash left. An id is never given twice, unless _meta.json is lost or rolled back after the
+document holding the highest id was deleted: the counter is then rebuilt from the ids still on
+disk. A put of a server-style id (Q-005) raises its counter too, committed with the meta.
+
+Ids are file names, and NTFS ignores case: a new id that differs only in case from an existing
+one (Alpha beside alpha) is refused, HubError invalid.
 
 Revision and versions. `revision` counts writes over the store's life; it can skip a number.
 Each document's `version` counts its own writes. `if_version` pins a write: None writes
@@ -245,7 +250,10 @@ class Store(object):
                     docs[n[:-5]] = _read_json(path)
             self._docs[coll] = docs
         meta_path = os.path.join(self.root, META_NAME)
-        meta = _read_json(meta_path) if os.path.exists(meta_path) else {}
+        try:
+            meta = _read_json(meta_path) if os.path.exists(meta_path) else {}
+        except HubError:
+            meta = {}       # unreadable or empty: rebuilt like a missing one (counters from ids)
         rev = meta.get('revision', 0)
         self._revision = rev if isinstance(rev, int) and not isinstance(rev, bool) else 0
         saved = meta.get('counters') if isinstance(meta.get('counters'), dict) else {}
@@ -316,10 +324,11 @@ class Store(object):
         return Changes(self._revision, events, since < self._known)
 
     def wait(self, since, timeout):
-        """changes_since(since) once the revision passes since, or after timeout seconds (then
-        with no events), or when the store closes."""
+        """changes_since(since) once the revision differs from since (at once, with reset, when
+        since is past it), or after timeout seconds (then with no events), or when the store
+        closes."""
         with self._cond:
-            self._cond.wait_for(lambda: self._revision > since or not self._open, timeout)
+            self._cond.wait_for(lambda: self._revision != since or not self._open, timeout)
             return self._changes(since)
 
     # ---------------------------------------------------------------- writes
@@ -363,6 +372,15 @@ class Store(object):
                 raise HubError('invalid', why, 'id')
             rel = '%s/%s' % (coll, doc_id)
             cur = self._docs[coll].get(doc_id)
+            if cur is None:
+                # NTFS names ignore case: Alpha would write over alpha.json
+                same = [d for d in self._docs[coll] if d.lower() == doc_id.lower()]
+                if same:
+                    raise HubError('invalid', '%s differs only in case from %s/%s, and file '
+                                   'names ignore case' % (rel, coll, same[0]), 'id')
+            if op == 'put' and coll in schema.ID_PREFIX:
+                prefix = schema.ID_PREFIX[coll]
+                counters[prefix] = max(counters[prefix], _id_number(prefix, doc_id))
             if cur is None and op in ('update', 'delete'):
                 raise HubError('not_found', 'there is no %s' % rel, 'id')
             if if_version is not None and _version(cur) != if_version:
@@ -371,7 +389,7 @@ class Store(object):
             new, warnings = None, []
             if op != 'delete':
                 new = dict(cur) if op == 'update' else {}
-                new.update(fields)
+                new.update(copy.deepcopy(fields))
                 for k in ('id',) + schema.STORE_KEYS:
                     new.pop(k, None)
                 new['version'] = _version(cur) + 1
