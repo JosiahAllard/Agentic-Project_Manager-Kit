@@ -5,7 +5,8 @@ Three backends behind one interface (`load`, `publish`, `history`, `removal`, `t
 
   ref     `backlog/<ID>.md` on `refs/backlog/main`, a ref with no history shared with main
   branch  the same on a visible `backlog` branch
-  main    `<dir>/<ID>.md` files in a linked worktree (today's behaviour; landing carries them)
+  main    `<dir>/<ID>.md` files in a linked worktree (today's behaviour; landing carries them);
+          in the PM data branch's worktree each write also commits its own record paths
 
 A write (`Store.write`) on a ref store is a compare-and-swap loop. Each attempt loads a fresh
 snapshot (fetching first), plans the change against it, validates the result, builds a commit
@@ -23,6 +24,7 @@ import shutil
 import tempfile
 import time
 
+from kitlib import pmdata
 from kitlib.git import batch, cmd, refs
 from kitlib.git import repo as gitrepo
 
@@ -533,17 +535,56 @@ def _touch_times(root, rev, rel):
 
 # --- the main backend -----------------------------------------------------------------------------
 
+CATCH_UP = 'backlog.py catch-up'
+_UNSET = object()
+
+
 class MainBackend(object):
-    """`<dir>/<ID>.md` in a worktree. A write writes the files and commits nothing; the caller's
-    branch carries them to main through a landing. There is no compare-and-swap: a write checks
-    that each record it rewrites still holds the bytes it read, then writes, so it is safe only
-    where one writer works - it refuses anywhere but a linked worktree (a main checkout is the
-    landers')."""
+    """`<dir>/<ID>.md` in a worktree. A write writes the files; the caller's branch carries them
+    to main through a landing. There is no compare-and-swap on the files: a write checks that
+    each record it rewrites still holds the bytes it read, then writes, so it is safe only where
+    one writer works - it refuses anywhere but a linked worktree (a main checkout is the
+    landers').
+
+    In the PM data branch's worktree (commit_branch) the write also commits exactly the record
+    paths it wrote, as one commit on HEAD by compare-and-swap (`update-ref HEAD <new> <old>`,
+    rebuilt on a HEAD that moved), and sets those paths in the real index; nothing else in that
+    worktree is staged or committed. Elsewhere it commits nothing."""
 
     def __init__(self, root, rel):
         self.root = root
         self.rel = rel.strip('/')
         self.dir = os.path.join(root, *self.rel.split('/'))
+        self._branch = _UNSET
+
+    def commit_branch(self, place=None):
+        """The PM data branch (kitlib.pmdata) when `root` is a worktree that has it checked out:
+        a write there commits. None elsewhere, a detached HEAD included. Failure when git or a
+        present PM data record cannot be read: never a silent uncommitted write there. `place`:
+        gitrepo.classify(root) when the caller has it."""
+        if self._branch is _UNSET:
+            self._branch = self._find_branch(place or gitrepo.classify(self.root))
+        return self._branch
+
+    def _find_branch(self, place):
+        if place.kind not in (gitrepo.MAIN, gitrepo.LINKED):
+            return None
+        try:
+            record = pmdata.read(place.common)
+        except pmdata.PmDataError as exc:
+            raise Failure('cannot tell whether %s is the PM data worktree: %s' % (self.root, exc))
+        if record is None:
+            return None
+        r = cmd.call(['symbolic-ref', '-q', 'HEAD'], self.root)
+        if r.rc == 1:
+            return None                              # detached
+        if r.rc != 0:
+            raise Failure('cannot tell whether %s is the PM data worktree: git symbolic-ref: %s'
+                          % (self.root, r.err or 'exit %s' % r.rc))
+        return record.branch if cmd.text(r.out).strip() == 'refs/heads/' + record.branch else None
+
+    def path_of(self, stem):
+        return '%s/%s.md' % (self.rel.replace('\\', '/'), stem)
 
     def describe(self):
         return '%s in %s' % (self.rel, self.root)
@@ -572,20 +613,210 @@ class MainBackend(object):
                           'compare-and-swap); %s is %s - write from your branch worktree'
                           % (self.root, 'the main checkout' if place.kind == gitrepo.MAIN
                              else 'not one (%s)' % (place.detail or place.kind)))
+        branch = self.commit_branch(place)
         now = self._read()
         for stem in writes:
             if now.get(stem) != snap.raw.get(stem):
                 raise Conflict('%s.md changed since it was read' % stem)
-        os.makedirs(self.dir, exist_ok=True)
-        for stem, text in sorted(writes.items()):
+        paths = [self.path_of(stem) for stem in sorted(writes)]
+        blobs = {}
+        if branch:                                   # objects first: a failure here writes nothing
+            for stem, text in sorted(writes.items()):
+                blobs[self.path_of(stem)] = (None if text is None
+                                             else self._hash_text(text.encode('utf-8'), paths))
+        self._write_files(writes, now, paths, branch)
+        if not branch:
+            return None
+        return self._commit(blobs, message, paths)
+
+    def _write_files(self, writes, before, paths, branch):
+        """Write `writes`; on an OSError put back the files already written (`before`: their
+        bytes) and raise Failure saying nothing was committed."""
+        done = []
+        try:
+            os.makedirs(self.dir, exist_ok=True)
+            for stem, text in sorted(writes.items()):
+                full = os.path.join(self.dir, stem + '.md')
+                if text is None:
+                    if os.path.exists(full):
+                        os.remove(full)
+                else:
+                    with open(full, 'wb') as f:
+                        f.write(text.encode('utf-8'))
+                done.append(stem)
+        except OSError as exc:
+            left = self._restore(done, before)
+            msg = 'cannot write %s: %s; %s' % (
+                self.dir, exc, 'the files already written were put back' if not left else
+                'these were written and could not be put back: %s' % ', '.join(left))
+            if branch:
+                msg += ('; the write is not committed (`%s` lists any uncommitted record path)'
+                        % CATCH_UP)
+            raise Failure(msg)
+
+    def _restore(self, stems, before):
+        """Put back the bytes `before` held for each of `stems` (delete one it did not hold).
+        Returns the paths that could not be put back."""
+        left = []
+        for stem in stems:
             full = os.path.join(self.dir, stem + '.md')
-            if text is None:
-                if os.path.exists(full):
-                    os.remove(full)
+            try:
+                if before.get(stem) is None:
+                    if os.path.exists(full):
+                        os.remove(full)
+                else:
+                    with open(full, 'wb') as f:
+                        f.write(before[stem])
+            except OSError:
+                left.append(self.path_of(stem))
+        return left
+
+    # -- committing in the PM data worktree -------------------------------------------------------
+
+    def _uncommitted(self, paths, why):
+        return Failure('%s written but not committed in %s: %s. `%s` lists the uncommitted record '
+                       'paths and `%s --apply` commits them'
+                       % (', '.join(paths), self.root, why, CATCH_UP, CATCH_UP))
+
+    def _git(self, args, paths, **kw):
+        out, why = cmd.run(args, self.root, **kw)
+        if out is None:
+            raise self._uncommitted(paths, 'git %s: %s' % (args[0], why))
+        return cmd.text(out).strip()
+
+    def _hash_text(self, data, paths):
+        return self._git(['hash-object', '-w', '--stdin'], paths, stdin=data)
+
+    def _head(self):
+        out, why = cmd.run_text(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], self.root)
+        if not out:
+            raise Failure('cannot read HEAD in %s: %s' % (self.root, why or 'no commit'))
+        return out
+
+    def _tree(self, head, lines, paths):
+        """The tree of `head` with `lines` (`update-index --index-info` input) applied, built in a
+        temporary index."""
+        tmp = tempfile.mkdtemp(prefix='kit-backlog-')
+        try:
+            env = dict(cmd.scrubbed_env(), GIT_INDEX_FILE=os.path.join(tmp, 'index'))
+            self._git(['read-tree', head], paths, env=env)
+            self._git(['update-index', '--index-info'], paths, env=env,
+                      stdin=('\n'.join(lines) + '\n').encode('utf-8'))
+            return self._git(['write-tree'], paths, env=env)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _commit(self, blobs, message, paths):
+        """Commit `blobs` ({path: blob id, or None to delete}) on HEAD as one commit: built in a
+        temporary index, published by `update-ref HEAD <new> <old>` and rebuilt on a HEAD another
+        commit moved (ATTEMPTS times). Then the real index takes the same entries for those paths
+        alone. Returns the new commit, or None when HEAD already holds them. No ref moves until the
+        whole commit exists, so a failure leaves no commit holding part of the write; it is
+        raised (_uncommitted), never swallowed."""
+        subject = message.split('\n', 1)[0]
+        last = ''
+        for attempt in range(ATTEMPTS):
+            head = self._head()
+            zero = '0' * len(head)
+            lines = ['100644 %s\t%s' % (sha, p) if sha else '0 %s\t%s' % (zero, p)
+                     for p, sha in sorted(blobs.items())]
+            tree = self._tree(head, lines, paths)
+            if tree == self._git(['rev-parse', head + '^{tree}'], paths):
+                self._sync_index(lines, None, paths)
+                return None
+            new = self._git(['commit-tree', tree, '-p', head, '-F', '-'], paths,
+                            stdin=message.encode('utf-8'))
+            r = cmd.call(['update-ref', '-m', 'backlog: ' + subject, 'HEAD', new, head], self.root)
+            if r.rc == 0:
+                break
+            last = r.err or 'git update-ref exited %s' % r.rc
+            now = self._head()
+            if now == new:                           # rc None: timed out after the move
+                break
+            if now == head and 'cannot lock ref' not in last:
+                raise self._uncommitted(paths, 'git update-ref HEAD: %s' % last)
+            time.sleep(random.uniform(0.05, 0.25) * (attempt + 1))
+        else:
+            raise self._uncommitted(paths, 'HEAD moved or stayed locked under %d attempts (%s)'
+                                    % (ATTEMPTS, last))
+        self._sync_index(lines, new, paths)
+        return new
+
+    def _sync_index(self, lines, new, paths):
+        """Give the real index `lines` for those paths only, so `git status` shows them clean."""
+        why = ''
+        for attempt in range(ATTEMPTS):
+            r = cmd.call(['update-index', '--index-info'], self.root,
+                         stdin=('\n'.join(lines) + '\n').encode('utf-8'))
+            if r.rc == 0:
+                return
+            why = r.err or 'git update-index exited %s' % r.rc
+            if 'index.lock' not in why:
+                break
+            time.sleep(random.uniform(0.05, 0.25) * (attempt + 1))
+        raise Failure('%s committed%s in %s, but its index was not updated (%s): `git status` '
+                      'shows them staged backwards until `git reset -q -- <path>` for each'
+                      % (', '.join(paths), ' as %s' % new[:10] if new else '', self.root, why))
+
+    def pending(self):
+        """`[(kind, path)]` of every path under the store folder whose worktree file differs from
+        HEAD, in path order: `added`, `modified` or `deleted` for a record (`<dir>/<ID>.md`), `not
+        a record` for anything else there. Failure when git does not answer."""
+        rel = self.rel.replace('\\', '/')
+        out, why = cmd.run(['-c', 'core.quotePath=false', 'status', '--porcelain', '-z',
+                            '--untracked-files=all', '--no-renames', '--', rel + '/'], self.root)
+        if out is None:
+            raise Failure('cannot read the status of %s: %s' % (self.root, why))
+        changed = set()
+        for entry in cmd.text(out).split('\0'):
+            if len(entry) > 3:
+                changed.add(entry[3:])
+        tracked, why = cmd.run(['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', rel + '/'],
+                               self.root)
+        if tracked is None:
+            raise Failure('cannot read HEAD in %s: %s' % (self.root, why))
+        in_head = set(n for n in cmd.text(tracked).split('\0') if n)
+        found = []
+        for p in sorted(changed):
+            on_disk = os.path.isfile(os.path.join(self.root, *p.split('/')))
+            if not self.is_record_path(p):
+                kind = 'not a record'
+            elif p in in_head:
+                kind = 'modified' if on_disk else 'deleted'
+            elif on_disk:
+                kind = 'added'
             else:
-                with open(full, 'wb') as f:
-                    f.write(text.encode('utf-8'))
-        return None
+                continue                             # staged, then removed: nothing to commit
+            found.append((kind, p))
+        return found
+
+    def is_record_path(self, path):
+        """True for `<dir>/<ID>.md` directly in the store folder, `path` as git spells it."""
+        prefix = self.rel.replace('\\', '/') + '/'
+        stem = path[len(prefix):-3] if path.startswith(prefix) and path.endswith('.md') else ''
+        return bool(stem) and PLAIN_ID.match(stem) is not None
+
+    def commit_paths(self, paths, message):
+        """Commit the worktree's state of `paths` (record paths, as git spells them; a missing
+        file is a deletion) as one commit on HEAD, as a write does: `catch-up --apply`. Only in
+        the PM data worktree and only record paths (Failure otherwise, before anything moves).
+        Returns the new commit, or None when HEAD already holds them."""
+        if not self.commit_branch():
+            raise Failure('%s is not the PM data worktree: its store writes are not committed '
+                          'here' % self.root)
+        bad = [p for p in paths if not self.is_record_path(p)]
+        if bad or not paths:
+            raise Failure('not a record path of %s/: %s' % (self.rel, ', '.join(bad) or 'none given'))
+        paths = sorted(set(paths))
+        present = [p for p in paths if os.path.isfile(os.path.join(self.root, *p.split('/')))]
+        blobs = dict.fromkeys(paths)
+        if present:                                   # as `git add` would: the path's filters
+            shas = self._git(['hash-object', '-w', '--'] + present, paths).split('\n')
+            if len(shas) != len(present):
+                raise self._uncommitted(paths, 'git hash-object printed %d ids for %d files'
+                                        % (len(shas), len(present)))
+            blobs.update(zip(present, shas))
+        return self._commit(blobs, message, paths)
 
     def history(self, rid, snap):
         return _last_closing(self.root, rid, 'HEAD')
@@ -596,7 +827,8 @@ class MainBackend(object):
 
     def uncommitted_removal(self, rid):
         """True when HEAD tracks `<dir>/<rid>.md` and the worktree no longer holds it: a write
-        here deleted it (`close`, `retire`, which commit nothing) or a hand removed it. False on
+        here deleted it (`close`, `retire`, which commit nothing outside the PM data worktree)
+        or a hand removed it. False on
         an unborn HEAD. Failure when git did not answer (killed, timed out): fail closed."""
         if not PLAIN_ID.match(rid):
             raise Usage('`%s` is not a plain id: as a git pathspec it could match other files' % rid)
