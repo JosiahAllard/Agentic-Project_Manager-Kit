@@ -1277,7 +1277,7 @@ PS_PROVIDER_ITEM_RE = re.compile(
     r'|(?:microsoft\.(?:powershell\.(?:core|security)|wsman\.management)\\)?'
     r'(?:environment|variable|function|alias|registry|certificate|wsman)::)')
 DOTDOT_RE = re.compile(r'(?:^|[\\/:])\.\.(?:[\\/]|$)')
-# A line that may remap a drive name to a folder (New-PSDrive env FileSystem C:\x) or run code
+# A line that may remap a drive name to a folder (New-PSDrive env FileSystem <folder>) or run code
 # the text does not show: there env:x may be a file, so it is judged as one.
 PS_DRIVE_REMAP_RE = re.compile(r'(?i)drive|\b(?:ndr|rdr|mount|iex|ipmo)\b|invoke-expression|import-module'
                                r'|\.ps1\b|\.psm1\b|scriptblock|sessionstate|(?:^|[;&|({]\s*)\.\s')
