@@ -59,6 +59,9 @@ slots.
 
 The log (`run`): a line per unit as it ends, the full output of every unit that did not pass, a
 table per test package (result, tests, modules, summed unit seconds), then one summary line.
+A unit that skipped tests says `N tests, K skipped` (unittest's `skipped=K`, `skipped_of`; the
+package row and the summary end carry the sum), and nothing extra when none were. A module in the
+selection table's `skip_fails` list FAILS when it skipped any test.
 """
 import itertools
 import json
@@ -136,6 +139,8 @@ SPLIT_SHARE = 0.5
 TIMES_FILE = 'kit-tests-times.json'
 # A test module that must not share an interpreter with other units says so, and why, in its own
 # source: `KIT_TESTS_OWN_PROCESS = '<why>'`; its units run as `python -m unittest <unit>` alone.
+# unittest's summary line ends `OK (skipped=N)` or `FAILED (failures=1, skipped=N)`.
+SKIPPED = re.compile(r'^(?:OK|FAILED) \(.*?\bskipped=(\d+)', re.M)
 OWN_PROCESS = re.compile(r'''^KIT_TESTS_OWN_PROCESS\s*=\s*(['"])(.+?)\1''', re.M)
 
 
@@ -152,6 +157,12 @@ def default_jobs(environ=None):
             return n, 'the %d logical processor(s) the lock run holds (%s)' % (n, CPUMASK_ENV)
         return FALLBACK_JOBS, '%s=%r is not a processor mask; %d' % (CPUMASK_ENV, raw, FALLBACK_JOBS)
     return FALLBACK_JOBS, 'not under a machine lock run (no %s); %d' % (CPUMASK_ENV, FALLBACK_JOBS)
+
+
+def skipped_of(text):
+    """The tests a unit skipped, from unittest's own summary in its output (`OK (skipped=2)`,
+    `FAILED (failures=1, skipped=2)`), runtime `skipTest()` included; 0 when it has none."""
+    return sum(int(x) for x in SKIPPED.findall(text or ''))
 
 
 def package_of(module):
@@ -387,7 +398,7 @@ def plan_units(modules, root, jobs, classes=None, times=None, hint=()):
 
 def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, environ=None,
         label='selected', counts=None, classes=None, times_path=None, hint=(), give_back=None,
-        hold=None, record_times=True):
+        hold=None, record_times=True, skip_fails=()):
     """Run `modules` (checkout `root`), up to `jobs` at once, then the `serial` ones ({module:
     why}) one at a time; write the log to `out`; return (exit status 0, 1 or INTERRUPTED, the
     summary line). `counts` {module: tests} skips the count_tests child (tests use it), and
@@ -398,7 +409,10 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
     caller before it copied `environ`, so its beacon reaches the units; its end line is written
     before the summary. None: no hold. `record_times` False: the times at `times_path` still
     order and split the run, but this run's are not written back (kit_tests --both-tiers'
-    real-git pass, so the file keeps the landing tier's times)."""
+    real-git pass, so the file keeps the landing tier's times). `skip_fails` ([module, why] pairs,
+    the selection table's list): a listed module whose unit skipped any test is FAILED, since a
+    skip voids the proof it exists for."""
+    proof = dict(skip_fails)
     out = out or sys.stdout
     injected = run_unit
     timeout = timeout or UNIT_TIMEOUT
@@ -446,11 +460,19 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
                  % (e,))
         finally:
             rmtree_force(folder, ignore_errors=True)
-        _, status, ran, secs, _text = r
+        unit_id, status, ran, secs, text = r
+        skipped = skipped_of(text)
+        why = proof.get(module_of(module))
+        if skipped and why and status == 'OK':
+            status = 'FAILED'
+            r = (unit_id, status, ran, secs,
+                 text + '\nkit_tests: %s skipped %d test(s); it is a proof module (tests/'
+                 'selection.json skip_fails), so a skip FAILS: %s\n' % (module, skipped, why))
         with say_lock:
             done.append(r)
-            out.write('  [%d/%d] %-7s %6.0fs %4d tests  %s%s\n' % (
-                len(done), total[0], status, secs, ran, module,
+            out.write('  [%d/%d] %-7s %6.0fs %4d tests%s  %s%s\n' % (
+                len(done), total[0], status, secs, ran,
+                ', %d skipped' % skipped if skipped else '', module,
                 ' (serial)' if module in serial else ''))
             out.flush()
         return r
@@ -548,10 +570,12 @@ def report(results, wall, jobs, n_serial, out, label='selected', not_run=None):
         out.write('\n==== %s (%d tests, %.0fs, %s) ====\n' % (module, ran, secs, status))
         out.write(text if text.endswith('\n') else text + '\n')
     pkgs = {}
-    for (unit, _, _), status, ran, secs, _ in results:
-        p = pkgs.setdefault(package_of(unit), {'ok': True, 'tests': 0, 'mods': set(), 'secs': 0.0})
+    for (unit, _, _), status, ran, secs, text in results:
+        p = pkgs.setdefault(package_of(unit), {'ok': True, 'tests': 0, 'mods': set(), 'secs': 0.0,
+                                               'skipped': 0})
         p['ok'] = p['ok'] and status == 'OK'
         p['tests'] += ran
+        p['skipped'] += skipped_of(text)
         p['mods'].add(module_of(unit))
         p['secs'] += secs
     n_modules = sum(len(p['mods']) for p in pkgs.values())
@@ -561,12 +585,15 @@ def report(results, wall, jobs, n_serial, out, label='selected', not_run=None):
     width = max([len(p) for p in pkgs] + [8]) + 6
     for name in sorted(pkgs):
         p = pkgs[name]
-        out.write('  %s %-6s %5d tests %3d module(s) %7.0fs\n' % (
+        out.write('  %s %-6s %5d tests %3d module(s) %7.0fs%s\n' % (
             ('tests/' + name).ljust(width), 'OK' if p['ok'] else 'FAILED', p['tests'], p['mods'],
-            p['secs']))
+            p['secs'], '  %d skipped' % p['skipped'] if p['skipped'] else ''))
     tests = sum(r[2] for r in results)
     how = '%.0fs (%s, %d jobs, %d serial): %d tests in %d module(s), %d package(s)' % (
         wall, label, jobs, n_serial, tests, n_modules, len(pkgs))
+    skipped = sum(p['skipped'] for p in pkgs.values())
+    if skipped:
+        how += ', %d skipped' % skipped
     failed = ', '.join('%s (%s)' % (r[0][0], r[1]) for r in bad)
     if not_run is not None:
         rc = INTERRUPTED

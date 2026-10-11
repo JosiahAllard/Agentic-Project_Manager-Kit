@@ -58,7 +58,7 @@ Parallel runs (kitlib/tooldeps/selfrun.py):
 - Once every pooled unit has started, each unit that ends gives back the cpu slots the units still running do not use, the highest slots first (`kitlib.lock.giveback.drainer`, docs/lock-api.md "Giving back slots"), so a queued run starts on them before this run ends. Only when the lock run offers it (`machine_lock.py run` from this kit, or a gate's last step) and no `serial` module is still to run; the log says what was given back. Units never get the offer. A run under the installed monolith wrapper (the installed `machine_lock.py`) gives back nothing, because only kit-wrapped runs offer slots back; with no offer the log says `kit_tests: give back: no offer ...` once.
 - One child process first asks unittest's loader how many tests each module holds. A module with none (a helper `test*.py` matches) is listed and not run. A module whose tests come from an import still counts.
 - Ctrl+C starts no new unit, waits for the running ones to end, removes the temp folders, prints the summary and exits 130.
-- The log has a line per unit as it ends, the full output of every unit that did not pass, a table per test package, then one summary line.
+- The log has a line per unit as it ends, the full output of every unit that did not pass, a table per test package, then one summary line. A unit that skipped tests says `[3/170] OK 12s 25 tests, 2 skipped <module>` (the count is unittest's `skipped=N`, runtime `skipTest()` included); the package row and the summary end add the sum, only when it is above 0.
 - `--jobs 1` runs the single `python -m unittest` process instead.
 - `--pid-hold` (opt-in, off by default) first starts the pid hold (section "The pid shield"), so no process a test starts can be given a pid that a stale taskkill still names.
 
@@ -81,6 +81,7 @@ Known limits: a run is seen only as a string literal naming `<x>.py`, so a path 
 - `always`: test packages that read every tracked file (`scrub`: no ruling id, no machine path in any file `git ls-files` lists). Any non-empty change that does not run everything adds them, so a doc edit cannot reach main unscanned.
 - `serial`: `[module, why]` pairs for test modules that cannot run beside others; each runs alone after the parallel phase.
 - `long`: test modules known to run long; with no recorded time they start first and run split by class.
+- `skip_fails`: `[module, why]` pairs for proof modules. A listed module whose unit skipped any test (a decorator or a runtime `skipTest()`) is FAILED and the log says why, because a skip would void the proof. An entry naming a module the tree does not hold prints a `kit_tests: WARNING: skip_fails names ...` line.
 
 Any other path is unmapped and runs the full suite: unmapped never means skip.
 
