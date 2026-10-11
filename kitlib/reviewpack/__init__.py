@@ -166,6 +166,11 @@ def rules_from_lines(lines, isdir):
             continue
         for tok in _TOKEN.findall(m.group(2)):
             tok = tok.rstrip('?')  # a `?` after a path is prose punctuation, not a wildcard
+            if tok.startswith('**') and not tok.startswith('**/'):
+                # markdown bold, not a glob: `**docs/**` names the plain prefix `docs`
+                tok = tok[2:]
+                if tok.endswith('**'):
+                    tok = tok[:-2]
             if tok and ('/' in tok or '.' in tok or isdir(tok)):
                 out.append((m.group(1), tok.rstrip('/')))
     return out
@@ -225,7 +230,7 @@ def _matches(path, rule):
         rx = _GLOBS.get(rule)
         if rx is None:
             rx = _GLOBS[rule] = _glob_regex(rule)
-        return bool(rx.match(path)), len(re.sub(r'[*?{},]', '', rule))
+        return bool(rx.match(path)), sum(c.isalnum() for c in rule)
     if path.startswith(rule):
         return True, len(rule)
     return False, 0

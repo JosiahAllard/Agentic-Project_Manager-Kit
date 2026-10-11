@@ -89,6 +89,16 @@ class Matching(unittest.TestCase):
         self.assertEqual(reviewpack.level('x/a.py', levels), 'unlisted (= High)')
         self.assertEqual(reviewpack.level('x/a.md', [('High', '*')]), 'Low')
 
+    def test_catch_all_globs_have_no_literal_text_and_are_ignored(self):
+        for glob in ('**/*', '*.*'):
+            self.assertEqual(reviewpack.level('src/x.py', [('Low', glob)]), 'unlisted (= High)')
+            self.assertEqual(lv('src/x.py', ('Low', glob)), 'unlisted (= High)')
+
+    def test_bold_markup_is_not_a_glob(self):
+        self.assertEqual(rules(('Low', '**docs/**, **/*.tscn')),
+                         [('Low', 'docs'), ('Low', '**/*.tscn')])
+        self.assertEqual(lv('docs/a.py', ('Low', '**docs/**')), 'Low')
+
     def test_a_glob_never_lowers_a_matching_plain_rule(self):
         self.assertEqual(lv('net/readme.md', ('Low', '**/*.md'), ('High', 'net/')), 'High')
         self.assertEqual(lv('ui/a.tscn', ('High', 'ui/'), ('Medium', '**/*.tscn')), 'High')
