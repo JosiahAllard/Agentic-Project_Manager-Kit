@@ -1048,15 +1048,20 @@ def write_targets(cmd, inv):
         if cmdlet in PS_CMDLETS and cmdlet != 'get-childitem':
             spec = PS_CMDLETS[cmdlet]
             bound = ps_args(cmd, args, cmdlet)
+            # a cmdlet's item on a drive that holds no files (env:FOO) is no file; curl and wget
+            # may be the native programs (pwsh 7), which read env:FOO as a file's stream
+            native = name in ('curl', 'wget') or inv.via is not None
             for p in spec.writes:
-                out.extend(bound.get(p, []))
+                out.extend(x for x in bound.get(p, []) if native or not ps_provider_item(cmd, x))
             if cmdlet == 'expand-archive' and not bound.get('destinationpath'):
                 out.append(here(word))
             if cmdlet == 'new-item' and bound.get('name'):
                 base = (bound.get('path') or [None])[0]
                 for n in bound['name']:
-                    out.append(sh.Word(ntpath.join(base.text, n.text) if base is not None else n.text,
-                                       n.dyn or (base is not None and base.dyn), n.start, n.end))
+                    x = sh.Word(ntpath.join(base.text, n.text) if base is not None else n.text,
+                                n.dyn or (base is not None and base.dyn), n.start, n.end)
+                    if native or not ps_provider_item(cmd, x):
+                        out.append(x)
             if name not in ('curl', 'wget'):
                 return out
         elif cmdlet.startswith('export-') and cmdlet not in PS_CMDLETS:
@@ -1278,18 +1283,49 @@ PS_PROVIDER_ITEM_RE = re.compile(
     r'(?:environment|variable|function|alias|registry|certificate|wsman)::)')
 DOTDOT_RE = re.compile(r'(?:^|[\\/:])\.\.(?:[\\/]|$)')
 # A line that may remap a drive name to a folder (New-PSDrive env FileSystem <folder>) or run code
-# the text does not show: there env:x may be a file, so it is judged as one.
-PS_DRIVE_REMAP_RE = re.compile(r'(?i)drive|\b(?:ndr|rdr|mount|iex|ipmo)\b|invoke-expression|import-module'
-                               r'|\.ps1\b|\.psm1\b|scriptblock|sessionstate|(?:^|[;&|({]\s*)\.\s')
+# the text does not show: there env:x may be a file, so it is judged as one. Matched against the
+# raw line and against each word as the parser decodes it (n`dr reads ndr, 'New-PSDr'+'ive' reads
+# New-PSDr+ive).
+PS_DRIVE_REMAP_RE = re.compile(r'(?im)drive|psdr|\b(?:ndr|rdr|mount|iex|ipmo)\b|invoke-expression|import-module'
+                               r'|\.ps1\b|\.psm1\b|scriptblock|sessionstate|(?:^|[;&|({])\s*\.\s')
+PS_CALL_OPS = ('&', '.')                        # the call and dot-source operators, as a command's first word
+
+
+def ps_line_may_remap(cmd):
+    """True when the PowerShell line `cmd` comes from may remap a drive or run code it does not
+    show: PS_DRIVE_REMAP_RE or commands.PS_SCRIPT_TEXT_RE in the raw line or in any decoded word,
+    any command that starts with the call or dot-source operator (& x, . .\\setup, & { }), any
+    command whose name is computed (& $c, & (gcm x), $(...) as a command), or a line the parser
+    does not read cleanly."""
+    src = cmd.source
+    if PS_DRIVE_REMAP_RE.search(src) or cm.PS_SCRIPT_TEXT_RE.search(src):
+        return True
+    parsed = cm.read(src, sh.PS, cmd.cwd)
+    if not parsed.clean:
+        return True
+    for c in parsed.commands:
+        ws = c.words
+        if not ws:
+            continue
+        if ws[0].text in PS_CALL_OPS or ws[0].dyn and ws[0].text.lstrip('$').startswith('('):
+            return True
+        inv = cm.invocation(c)
+        if inv is not None and inv.dyn:
+            return True
+        if any(PS_DRIVE_REMAP_RE.search(w.text) or cm.PS_SCRIPT_TEXT_RE.search(w.text) for w in ws):
+            return True
+    return False
 
 
 def ps_provider_item(cmd, w):
-    """True when the PowerShell Word `w` names an item on a built-in drive that holds no files
-    (PS_PROVIDER_ITEM_RE): a literal word, no `..` part, on a line that cannot remap the drive
-    (PS_DRIVE_REMAP_RE). Writing such an item writes no file."""
-    if cmd.shell != sh.PS or w.dyn or not PS_PROVIDER_ITEM_RE.match(w.text):
+    """True when the Word `w`, an item a PowerShell cmdlet writes (write_targets calls it only
+    for a cmdlet in PS_CMDLETS, never for a native program, curl, wget or Start-Process), names
+    an item on a built-in drive that holds no files (PS_PROVIDER_ITEM_RE): a literal word, no `..`
+    part, on a line that cannot remap the drive (ps_line_may_remap). Writing such an item writes no
+    file. A native program reads env:FOO as the stream FOO of a file named env: a file write."""
+    if cmd.shell != sh.PS or w.dyn or not PS_PROVIDER_ITEM_RE.match(w.text) or DOTDOT_RE.search(w.text):
         return False
-    return not DOTDOT_RE.search(w.text) and not PS_DRIVE_REMAP_RE.search(cmd.source)
+    return not ps_line_may_remap(cmd)
 
 
 BASH_DEVICE_RE = re.compile(r'^/dev/')         # /dev/stderr, /dev/tty, /dev/fd/3: no file
@@ -1304,8 +1340,6 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
     for w in write_targets(cmd, inv):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
             continue
-        if ps_provider_item(cmd, w):
-            continue                            # New-Item -Path env:FOO: no file
         if w.dyn:
             target, why = None, 'a target that is not literal: %s' % w.text
         elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
