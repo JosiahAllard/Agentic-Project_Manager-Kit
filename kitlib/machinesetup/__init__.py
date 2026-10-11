@@ -10,7 +10,7 @@ dry run prints and the function --apply runs, plus the refusals that stop both. 
   PreToolUse hooks, gains guard.py's entry and has its old hook and statusline paths re-pointed;
 - extras (kitlib.machinesetup.extras): the machine schedule shortcut, the agents' temp folder ACL,
   and KIT_MACHINE_LOCK for comfy.
-A fresh run (`fresh`, no old kit) switches no links and rewrites no entry: it only appends guard.py's
+A fresh run (`fresh`, no older kit clone) switches no links and rewrites no entry: it only appends guard.py's
 entry (creating a missing settings.json), writes the PM SessionStart hook to `pm_settings` alone,
 installs the kit plugin per account (kitlib.machinesetup.plugin) and runs the shortcut and ACL
 extras, not KIT_MACHINE_LOCK.
@@ -36,7 +36,7 @@ class Context(object):
     def __init__(self, home, kit, old_kit=None, config_dirs=None, agent_temp=None, desktop=None,
                  host=None, today=None, fresh=False, pm_settings=None):
         if bool(fresh) == bool(old_kit):
-            raise ValueError('give an old kit or fresh, not both or neither')
+            raise ValueError('give old_kit or fresh, not both or neither')
         if pm_settings and not fresh:
             raise ValueError('pm_settings goes with fresh only')
         self.home = os.path.abspath(home)
@@ -93,7 +93,7 @@ def survey(ctx):
     if plan.refusals:
         return plan
     if ctx.fresh:
-        plan.note('links', 'fresh: no old kit, no links switched')
+        plan.note('links', 'fresh: no older kit clone, no links switched')
     else:
         for d in ctx.config_dirs:
             links.survey(plan, d, ctx)

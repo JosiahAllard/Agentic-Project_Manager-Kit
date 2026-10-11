@@ -1,5 +1,5 @@
-"""machine_setup --fresh (docs/machine-setup.md "Fresh machine (--fresh)"): a machine with no old kit
-clone. Against a fake home, a fake PM repo and a fake kit in a temp folder; the Windows side and the
+"""machine_setup --fresh (docs/machine-setup.md "Fresh machine (--fresh)"): a machine with no older
+kit clone. Against a fake home, a fake PM repo and a fake kit in a temp folder; the Windows side and the
 `claude plugin` CLI are a FreshHost, so no claude process starts. One test stats (never reads) the
 real account settings.json files around a run, to show none of this touches them.
 """
@@ -164,7 +164,7 @@ class Fresh(FreshBase):
         code, out = self.run_it(pm_settings=self.pm)
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertIn('DRY RUN', out)
-        self.assertIn('old kit:        none (--fresh)', out)
+        self.assertIn(' kit:        none (--fresh)', out)                 # the old-kit header line
         self.assertIn('change(s) to make', out)
         self.assertIn('+        "matcher": "startup|resume|compact"', out)  # the PM hook's diff
         self.assertEqual(self.snapshot(), before)
@@ -265,7 +265,8 @@ class FreshTool(FreshBase):
         for args in ([], ['-OldKit', self.root, '-Fresh']):
             r = self.ps1(args)
             self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
-            self.assertIn('give -OldKit <old kit clone> or -Fresh (not both)', r.stdout)
+            self.assertIn('usage - give -OldKit <', r.stdout)
+            self.assertIn('> or -Fresh (not both)', r.stdout)
         r = self.ps1(['-OldKit', self.root, '-PmSettings', self.pm])
         self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
         self.assertIn('-PmSettings goes with -Fresh only', r.stdout)
@@ -281,7 +282,7 @@ class FreshTool(FreshBase):
         r = self.ps1(['-Fresh', '-PmSettings', self.pm, '-HomeDir', self.home, '-ConfigDir', missing])
         self.assertEqual(r.returncode, M.EXIT_REFUSED, r.stdout + r.stderr)
         self.assertIn('REFUSED - no config folder at %s' % missing, r.stdout)
-        self.assertIn('old kit:        none (--fresh)', r.stdout)
+        self.assertIn(' kit:        none (--fresh)', r.stdout)            # the old-kit header line
         self.assertIn('pm settings:    %s' % self.pm, r.stdout)
         self.assertIn('DRY RUN', r.stdout)
 

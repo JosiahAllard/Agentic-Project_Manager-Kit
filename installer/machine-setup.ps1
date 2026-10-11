@@ -9,7 +9,7 @@
 #
 # Dry run by default: prints every link, settings.json diff and extra it would change. -Apply makes
 # them, writing a .bak beside each settings.json and renaming any real folder aside (never deleting
-# one). A second run reports nothing to do. -Fresh (no old kit) only appends: guard.py's entry in each
+# one). A second run reports nothing to do. -Fresh (no older kit clone) only appends: guard.py's entry in each
 # account's settings.json, the PM SessionStart hook in -PmSettings alone, and the kit plugin through
 # the claude CLI per account. -ConfigDir defaults to ~\.claude and every ~\.claude-* folder; under
 # -File, "a,b" arrives as one string, so each value is split on commas (a folder name with a comma

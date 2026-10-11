@@ -5,7 +5,7 @@ shell form (`python <script>`) in exec form (the guard entry's interpreter, `arg
 note a settings hook that the kit's plugin also carries (it runs twice once the plugin is enabled).
 statusLine stays in shell form: Claude Code gives it no `args` field.
 
-In fresh mode (ctx.fresh, no old kit) none of that rewriting runs: guard.py's entry is appended
+In fresh mode (ctx.fresh, no older kit clone) none of that rewriting runs: guard.py's entry is appended
 where it is absent (a missing settings.json is created), and survey_pm appends the PM SessionStart
 hook to ctx.pm_settings alone.
 
