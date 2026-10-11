@@ -12,8 +12,11 @@ class Change(object):
 
 
 class Plan(object):
-    """The changes in section order. A fresh run (--fresh) adds the `plugin` section after `settings`,
-    so the plugin CLI's write to settings.json lands after the settings write the survey diffed."""
+    """A survey's changes, notes and refusals. lines() prints them grouped by section, in SECTIONS
+    order; a fresh run (--fresh) uses FRESH_SECTIONS, which adds a `plugin` section. The changes
+    are made (run()) in the order the survey added them, not by section: survey() adds each
+    folder's settings write, then the PM hook, then the plugin changes, then the extras, so claude's
+    write to a settings.json lands after the settings write the survey diffed."""
     SECTIONS = ('links', 'settings', 'extras')
     FRESH_SECTIONS = ('links', 'settings', 'plugin', 'extras')
 
