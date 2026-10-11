@@ -95,7 +95,7 @@ class RiskMap(unittest.TestCase):
                  '- Medium ui | ui\n', '- Low docs | docs/*.md, readme\n']
         self.assertEqual(reviewpack.rules_from_lines(lines, lambda tok: tok == 'ui'),
                          [('High', 'net'), ('High', 'src/core/Wire.java'), ('Medium', 'ui'),
-                          ('Low', 'docs/.md')])
+                          ('Low', 'docs/*.md')])
 
     def test_level_is_the_longest_prefix_and_an_unlisted_doc_is_low(self):
         rules = [('High', 'net'), ('Low', 'net/docs')]
