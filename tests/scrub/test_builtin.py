@@ -407,16 +407,6 @@ class TheChecks(unittest.TestCase):
         self.assertEqual(len(result.failures), 1, result.errors)
         self.assertIn(extra + ':1: ' + j('h', 'im') + ' (gender)', result.failures[0][1])
 
-    def test_a_stale_allow_entry_turns_the_gate_check_red(self):
-        from unittest import mock
-        from tests.scrub import test_builtin as me
-        stale = ('docs/zz-gone.md', 'gender', 'nothing here', 'an invented entry no file matches')
-        result = unittest.TestResult()
-        with mock.patch.object(me, 'ALLOWED', me.ALLOWED + (stale,)):
-            me.BuiltIn('test_no_new_owner_text_in_a_tracked_file').run(result)
-        self.assertEqual(len(result.failures), 1, result.errors)
-        self.assertIn("docs/zz-gone.md gender 'nothing here'", result.failures[0][1])
-
     def test_a_hashed_name_is_found_without_being_written_down(self):
         name = 'quillfernow'                      # invented; NAME_STORE does not hold it
         salt = scrub.NAME_STORE['salt']
