@@ -9,6 +9,7 @@ from contextlib import redirect_stderr
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), 'tools'))
 import launch                                                       # noqa: E402
+from tests.launcher.fakes import FakeHost, Home                     # noqa: E402
 
 
 class HandoffState(unittest.TestCase):
@@ -45,6 +46,24 @@ class HandoffState(unittest.TestCase):
             self.assertEqual(a.state, note)
         a = launch.parser().parse_args(['handoff', '--session', 'alpha', '--account', '2'])
         self.assertIsNone(a.state)
+
+
+class HandoffStateWiring(unittest.TestCase):
+    def test_run_passes_the_state_file_to_the_successors_first_message(self):
+        h = Home(self, accounts=('1', '2'))
+        h.write_state('sessions.json', {'alpha': {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord',
+                                                   'state': 'entry-state.md', 'account': 1,
+                                                   'name': 'alpha-coord-a1'}})
+        h.write_state('coordinators.json', {'alpha': 1})
+        host = FakeHost(h.root)
+        note = os.path.join(h.root, 'state-r2.md')
+        with open(note, 'w', encoding='utf-8') as f:
+            f.write('note\n')
+        a = launch.parser().parse_args(['handoff', '--session', 'alpha', '--account', '2', '--state', note])
+        launch.run(a, h.settings, host)
+        text, = host.opened
+        self.assertIn('state-r2.md', text)
+        self.assertNotIn('entry-state.md', text)
 
 
 if __name__ == '__main__':
