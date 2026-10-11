@@ -5,8 +5,10 @@ they go red there - red-first evidence with no in-place mutant (docs/redfirst.md
               [--log-dir DIR]
 
   --tests   a committed test file of --head, repo-relative, optionally ::<filter>; the runner that
-            takes it is the first `.kit.json` "redfirst".runners entry whose glob matches
-  --also    a further committed file of --head checked out with the tests (a new fixture); never run
+            takes it is the first `.kit.json` "redfirst".runners entry whose glob matches; may be
+            repeated, the values accumulate
+  --also    a further committed file of --head checked out with the tests (a new fixture); never run;
+            may be repeated
   --base    the pre-change commit; default the merge-base of --head with <remote>/<main branch>
   --head    where the test files come from; default HEAD
   --log-dir where the logs go; default `<gate log dir>/redfirst/<stamp>-<pid>`
@@ -52,8 +54,8 @@ def split_root(argv):
 
 def parse_args(argv):
     ap = argparse.ArgumentParser(prog='redfirst.py', description=__doc__.split('\n\n')[0])
-    ap.add_argument('--tests', nargs='+', required=True, metavar='FILE[::FILTER]')
-    ap.add_argument('--also', nargs='+', default=[], metavar='FILE')
+    ap.add_argument('--tests', nargs='+', action='extend', required=True, metavar='FILE[::FILTER]')
+    ap.add_argument('--also', nargs='+', action='extend', default=[], metavar='FILE')
     ap.add_argument('--base')
     ap.add_argument('--head', default='HEAD')
     ap.add_argument('--log-dir')
