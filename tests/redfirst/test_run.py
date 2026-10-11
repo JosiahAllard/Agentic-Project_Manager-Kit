@@ -37,17 +37,20 @@ CONFIG = {'redfirst': {'runners': [{'glob': 'tests/test_*.py', 'kind': 'python',
 
 
 class Case(unittest.TestCase):
+    KIT_JSON = CONFIG                               # the fixture's .kit.json
+    CALC_AT = ('src/calc.py', 'tests/calc.py')      # where the base has calc.py
+
     def setUp(self):
         env = mock.patch.dict(os.environ, gitfixture.fixture_env(), clear=True)
         env.start()
         self.addCleanup(env.stop)
         self.fx = gitfixture.TempRepo(branch='main', bare_remote=True)
         self.addCleanup(self.fx.cleanup)
-        self.fx.write('.kit.json', json.dumps(CONFIG) + '\n')
+        self.fx.write('.kit.json', json.dumps(self.KIT_JSON) + '\n')
         self.fx.write('.gitignore', '.claude/\n')
-        self.fx.write('src/calc.py', CALC)
-        self.fx.write('tests/calc.py', CALC)
-        self.base = self.fx.commit('base', '.kit.json', '.gitignore', 'src/calc.py', 'tests/calc.py')
+        for rel in self.CALC_AT:
+            self.fx.write(rel, CALC)
+        self.base = self.fx.commit('base', '.kit.json', '.gitignore', *self.CALC_AT)
         self.fx.git('push', '-q', 'origin', 'main')
         self.wt = os.path.realpath(self.fx.worktree('task'))
         self.logs = os.path.join(self.fx.base, 'logs')
@@ -106,6 +109,28 @@ class Refusals(Case):
         self.assertEqual(rc, V.EXIT_USAGE)
         self.assertIn('no runner takes it', out)
 
+    def test_no_runner_names_the_written_globs_and_the_key(self):
+        """Runners written in .kit.json are used as they are: no tools-folder glob is added, and
+        the refusal says the globs are the written ones, with what each matches at head."""
+        head = self.commit({'tools/test_mul.py': TEST_MUL, 'tests/test_mul.py': TEST_MUL})
+        rc, out = self.run_tool('--tests', 'tools/test_mul.py')
+        self.assertEqual(rc, V.EXIT_USAGE, out)
+        self.assertIn("refused: --tests 'tools/test_mul.py': no runner takes it; nothing was run", out)
+        self.assertIn("glob 'tests/test_*.py' (python): matches 1 file(s) committed at head %s"
+                      % head[:10], out)
+        self.assertIn("glob 'src/test_*.py' (python): matches no file committed at head", out)
+        self.assertIn('these are the globs `.kit.json` "redfirst".runners holds', out)
+        self.assertNotIn('tools/*test_*.py', out)
+        self.assertNotIn('not set', out)
+        self.assertEqual(self.throwaways(), [])
+
+    def test_a_path_outside_the_repo_keeps_its_usage_line(self):
+        self.commit({'tests/test_mul.py': TEST_MUL})
+        rc, out = self.run_tool('--tests', '../test_mul.py')
+        self.assertEqual(rc, V.EXIT_USAGE, out)
+        self.assertIn('a repo-relative file path', out)
+        self.assertNotIn('no runner takes it', out)
+
     def test_base_not_ancestor_refused(self):
         head = self.commit({'tests/test_mul.py': TEST_MUL})
         self.fx.write('other.txt', 'x\n')
@@ -117,6 +142,54 @@ class Refusals(Case):
     def test_help_is_never_red(self):
         with redirect_stdout(io.StringIO()), mock.patch('sys.stderr', io.StringIO()):
             self.assertEqual(tool.main(['--help']), V.EXIT_USAGE)
+
+
+class UnwrittenRunners(Case):
+    """No "redfirst".runners in .kit.json, and the tools folder moved ("repo".tools_dir): the
+    schema default glob, then one for test files of the tools folder."""
+    KIT_JSON = {'repo': {'tools_dir': 'dev/tools'}}
+    CALC_AT = ('dev/tools/calc.py', 'tests/calc.py')
+
+    def test_runners_are_the_default_then_the_tools_folder(self):
+        runners, written = R.runners_for(load(self.fx.root))
+        self.assertFalse(written)
+        self.assertEqual(runners, [{'glob': 'tests/*test_*.py', 'kind': 'python'},
+                                   {'glob': 'dev/tools/*test_*.py', 'kind': 'python',
+                                    'pythonpath': 'dev/tools'}])
+
+    def test_a_test_in_the_tools_folder_is_found_and_run(self):
+        self.commit({'dev/tools/calc.py': CALC_MUL, 'dev/tools/test_mul.py': TEST_MUL})
+        rc, out = self.run_tool('--tests', 'dev/tools/test_mul.py')
+        self.assertEqual(rc, V.EXIT_RED, out)
+        self.assertIn('RED    dev/tools/test_mul.py  does not import against the base', out)
+        self.assertEqual(self.throwaways(), [])
+
+    def test_a_tools_folder_test_runs_with_the_tools_folder_on_the_path(self):
+        """GREEN proves the module was imported with the tools folder as PYTHONPATH: `from calc
+        import add` resolves only there."""
+        self.commit({'dev/tools/test_add.py': TEST_ADD})
+        rc, out = self.run_tool('--tests', 'dev/tools/test_add.py')
+        self.assertEqual(rc, V.EXIT_GREEN, out)
+        self.assertIn('GREEN  dev/tools/test_add.py', out)
+
+    def test_a_test_no_default_glob_takes_is_refused_naming_globs_and_key(self):
+        self.commit({'spec/test_mul.py': TEST_MUL})
+        rc, out = self.run_tool('--tests', 'spec/test_mul.py')
+        self.assertEqual(rc, V.EXIT_USAGE, out)
+        self.assertIn("refused: --tests 'spec/test_mul.py': no runner takes it; nothing was run", out)
+        self.assertIn("glob 'tests/*test_*.py' (python): matches no file committed at head", out)
+        self.assertIn("glob 'dev/tools/*test_*.py' (python): matches no file committed at head", out)
+        self.assertIn('`.kit.json` "redfirst".runners is not set, so these are the defaults', out)
+        self.assertIn('set `.kit.json` "redfirst".runners to an entry whose glob takes the file', out)
+        self.assertEqual(self.throwaways(), [])
+        self.assertFalse(os.path.exists(self.logs), 'a refusal makes nothing')
+
+
+class WrittenRunners(Case):
+    def test_written_runners_are_used_as_they_are(self):
+        runners, written = R.runners_for(load(self.fx.root))
+        self.assertTrue(written)
+        self.assertEqual(runners, CONFIG['redfirst']['runners'])
 
 
 class Arguments(unittest.TestCase):
