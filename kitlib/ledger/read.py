@@ -5,10 +5,13 @@ A header is read leniently, `## R-nnnn | <when> | <repo> | <kind>`; `strict` say
 form the writer produces (kitlib.ledger.fmt, docs/ledger.md "Format"). Beneath a header only the
 `Decides:` line and the last non-blank line are read. A last line `Items: A, B` names records; no
 such line, or a malformed one, names nobody. A tombstone (`Retired: <class> - <why> (see R-n|-)` as
-the whole body) has `retired` set to `(class, successor)`. Pure over text, except `read_file`.
+the whole body) has `retired` set to `(class, successor)`. Pure over text, except `read_file`,
+which runs the ledger's path checks first (kitlib.ledger.safepath).
 """
 import collections
 import re
+
+from . import safepath
 
 HEADER_RE = re.compile(r'^## (R-[0-9]{4,}) \|([^|]*)\|([^|]*)\|(.*)$')
 STRICT_RE = re.compile(r'^## (R-\d{4,}) \| (\d{4}-\d{2}-\d{2}) \d{2}:\d{2}Z \| ([^|]*) \| ([a-z-]+)\s*$')
@@ -66,7 +69,11 @@ def parse(text):
 
 
 def read_file(path):
-    """`(text, None)` or `(None, why)`; a leading BOM is dropped."""
+    """`(text, None)` or `(None, why)`; a leading BOM is dropped. A path the ledger's path checks
+    refuse (kitlib.ledger.safepath) is never opened."""
+    why = safepath.refusal(path)
+    if why is not None:
+        return None, why
     try:
         with open(path, encoding='utf-8-sig') as fh:
             return fh.read(), None

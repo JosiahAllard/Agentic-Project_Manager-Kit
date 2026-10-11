@@ -21,6 +21,7 @@ import sys
 from kitlib import pmstart
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
+from kitlib.ledger import safepath
 
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
@@ -140,12 +141,16 @@ def find_entry(sessions, cwd, name=None, root=None):
 
 
 def rulings(entry, ledger_path, read=_read):
-    """Ledger entries newer than the coordinator's state note's highest R-id, for its repo or all."""
+    """Ledger entries newer than the coordinator's state note's highest R-id, for its repo or all.
+    A ledger path the ledger's path checks refuse (kitlib.ledger.safepath) is one line saying why."""
     note = _need(entry, "state")
     ids = [int(m) for m in re.findall(r"R-(\d{4})", read(note))]
     if not ids:
         return ["no R-id in your state note %s: cannot tell which rulings are new" % note]
     top, repo = max(ids), str(entry.get("repo", "")).lower()
+    why = safepath.refusal(ledger_path)
+    if why is not None:
+        return [why]
     found, cur = [], None
     for line in read(ledger_path).splitlines():
         m = re.match(r"## R-(\d{4}) \| [^|]*\| ([^|]*) \|", line)
