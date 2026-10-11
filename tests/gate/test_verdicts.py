@@ -204,6 +204,22 @@ class Queue(QueueCase):
         self.assertNotIn('tools/verdict.py drop', str(cm.exception))
         self.assertEqual(self.folder_names(), [os.path.basename(tmp)])
 
+    def test_a_file_holding_another_branchs_entry_is_not_offered_to_drop(self):
+        _, tip = self.branch('a', {'a.txt': 'a\n'})
+        folder = V.queue_dir(self.common)
+        os.makedirs(folder)
+        with open(os.path.join(folder, 'kit%2Fc.json'), 'w', encoding='utf-8') as f:
+            json.dump(dict(given('kit/C', tip), queued_utc=V.utc(), state='queued',
+                           last_result=None), f)
+        with self.assertRaises(V.VerdictError) as cm:
+            V.entries(self.common)
+        self.assertIn('kit%2Fc.json', str(cm.exception))
+        self.assertIn('remove it by hand', str(cm.exception))
+        self.assertNotIn('tools/verdict.py drop', str(cm.exception))   # drop would refuse it
+        with self.assertRaises(V.VerdictError):
+            V.drop(self.common, 'kit/c')
+        self.assertEqual(self.folder_names(), ['kit%2Fc.json'])
+
     def test_drop_says_so_when_the_queue_folder_cannot_be_listed(self):
         folder = V.queue_dir(self.common)
         os.makedirs(folder)
@@ -283,17 +299,44 @@ class Lock(QueueCase):
         self.assert_add_waited(*self.race(
             lambda first: V.mark_failed(self.common, 'kit/a', 'red', tip=first)))
 
-    def test_a_lock_that_cannot_be_made_is_refused_at_once_with_its_cause(self):
+    def test_a_lasting_permission_error_on_the_lock_refuses_after_the_wait_naming_it(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
-        for err in (PermissionError('denied by test'), OSError('disk said no')):
-            with mock.patch.object(V, 'LOCK_WAIT_S', 0.3, create=True), \
-                    mock.patch.object(V.os, 'open', side_effect=err) as opened:
-                with self.assertRaises(V.VerdictError) as cm:
-                    V.add(self.common, given('kit/a', tip))
-            self.assertEqual(opened.call_count, 1, err)
-            self.assertIn(str(err), str(cm.exception))
-            self.assertNotIn('locked for', str(cm.exception))
+        err = PermissionError('denied by test')
+        with mock.patch.object(V, 'LOCK_WAIT_S', 0.3, create=True), \
+                mock.patch.object(V.os, 'open', side_effect=err) as opened:
+            with self.assertRaises(V.VerdictError) as cm:
+                V.add(self.common, given('kit/a', tip))
+        self.assertGreater(opened.call_count, 1)         # retried, as a lock being removed is
+        self.assertIn(str(err), str(cm.exception))
+        self.assertNotIn('locked for', str(cm.exception))
         self.assertEqual(self.folder_names(), [])
+
+    def test_another_os_error_on_the_lock_refuses_at_once_naming_it(self):
+        _, tip = self.branch('a', {'a.txt': 'a\n'})
+        err = OSError('disk said no')
+        with mock.patch.object(V, 'LOCK_WAIT_S', 0.3, create=True), \
+                mock.patch.object(V.os, 'open', side_effect=err) as opened:
+            with self.assertRaises(V.VerdictError) as cm:
+                V.add(self.common, given('kit/a', tip))
+        self.assertEqual(opened.call_count, 1)
+        self.assertIn(str(err), str(cm.exception))
+        self.assertEqual(self.folder_names(), [])
+
+    def test_a_permission_error_on_the_lock_that_clears_is_waited_out(self):
+        _, tip = self.branch('a', {'a.txt': 'a\n'})
+        real, denied = os.open, []
+
+        def open_(path, *a, **k):
+            if os.path.basename(path) == '.queue.lock' and not denied:
+                denied.append(path)
+                raise PermissionError('delete pending, by test')
+            return real(path, *a, **k)
+        with mock.patch.object(V.os, 'open', side_effect=open_):
+            V.add(self.common, given('kit/a', tip))
+        self.assertEqual(len(denied), 1)
+        self.assertEqual([(e['tip'], e['state']) for e in V.entries(self.common)],
+                         [(tip, V.QUEUED)])
+        self.assertEqual(self.folder_names(), ['kit%2Fa.json'])
 
     def test_a_held_lock_is_waited_for_and_a_stale_one_removed(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
