@@ -92,7 +92,6 @@ REASONS = (
 )
 
 _TEAM = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?')
-_B64URL = re.compile(r'[A-Za-z0-9_-]*')
 
 
 class AccessError(Exception):
@@ -106,10 +105,12 @@ class AccessError(Exception):
 
 
 def _b64url(text):
-    """The bytes of an unpadded base64url string; ValueError unless it is canonical (the
-    alphabet only, a possible length, unused bits zero)."""
-    if not isinstance(text, str) or not _B64URL.fullmatch(text) or len(text) % 4 == 1:
-        raise ValueError('not base64url')
+    """The bytes of an unpadded base64url string; ValueError unless it is canonical. The decoder
+    is lenient (it skips what it does not know), so the round trip is the whole test: only the
+    text that encoding the result gives back is accepted. That refuses padding, the standard
+    alphabet, white space, a length no number of bytes gives and unused bits that are not zero."""
+    if not isinstance(text, str):
+        raise ValueError('not text')
     raw = base64.urlsafe_b64decode(text + '=' * (-len(text) % 4))
     if base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii') != text:
         raise ValueError('not canonical base64url')
@@ -155,7 +156,7 @@ def _allowed(emails):
     list of text or holds no address."""
     if emails is None:
         raise AccessError('no-allowed-emails')
-    if isinstance(emails, (str, bytes)):
+    if isinstance(emails, str):         # its characters would each pass for an entry
         raise AccessError('bad-allow-list', 'one string, not a list of addresses')
     try:
         entries = list(emails)
@@ -192,7 +193,8 @@ def rsa_key(jwk):
 
 def _check_signature(n, e, message, signature):
     """Raise AccessError unless `signature` is the RSASSA-PKCS1-v1_5 SHA-256 signature of
-    `message` under (n, e). The expected block is built and compared whole, never parsed."""
+    `message` under (n, e), a key rsa_key accepted (so the block has room for its FF run). The
+    expected block is built and compared whole, never parsed."""
     size = (n.bit_length() + 7) // 8
     if len(signature) != size:
         raise AccessError('bad-signature-length', '%d bytes for a %d-byte modulus'
@@ -201,10 +203,7 @@ def _check_signature(n, e, message, signature):
     if s >= n:
         raise AccessError('signature-out-of-range')
     tail = DIGEST_INFO + hashlib.sha256(message).digest()
-    fill = size - len(tail) - 3
-    if fill < 8:
-        raise AccessError('bad-key', 'a modulus too short for the block')
-    expected = b'\x00\x01' + b'\xff' * fill + b'\x00' + tail
+    expected = b'\x00\x01' + b'\xff' * (size - len(tail) - 3) + b'\x00' + tail
     if not hmac.compare_digest(pow(s, e, n).to_bytes(size, 'big'), expected):
         raise AccessError('bad-signature')
 
@@ -239,8 +238,7 @@ def verify(token, keys, team, aud, emails, now):
     if not isinstance(header, dict) or not isinstance(claims, dict):
         raise AccessError('bad-json', 'not an object')
 
-    alg = header.get('alg')
-    if not isinstance(alg, str) or alg != ALG:
+    if header.get('alg') != ALG:
         raise AccessError('bad-alg')
     if 'crit' in header:
         raise AccessError('bad-header', 'a crit list')
@@ -267,8 +265,7 @@ def verify(token, keys, team, aud, emails, now):
             raise AccessError('bad-nbf')
         if not now >= nbf - NBF_LEEWAY_S:
             raise AccessError('not-yet-valid')
-    iss = claims.get('iss')
-    if not isinstance(iss, str) or iss != ISSUER % team:
+    if claims.get('iss') != ISSUER % team:
         raise AccessError('wrong-issuer')
     audience = claims.get('aud')
     if isinstance(audience, str):

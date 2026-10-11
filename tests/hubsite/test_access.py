@@ -14,6 +14,7 @@ import hmac
 import http.client
 import http.server
 import io
+import json
 import os
 import socket
 import ssl
@@ -415,6 +416,10 @@ class VerifyTest(Case):
         self.refused('bad-key', text, keys={small.kid: K.jwk(small)})
         self.assertEqual(access.MIN_MODULUS_BITS, 2048)
         self.assertEqual(A.n.bit_length(), 2048)        # the accepted keys sit on the limit
+        under = (A.n >> 1) | 1                          # odd, and one bit short of it
+        self.assertEqual(under.bit_length(), 2047)
+        self.refused('bad-key', VALID,
+                     keys={A.kid: K.jwk(A, n=K.b64u(under.to_bytes(K.size(A), 'big')))})
 
     def test_a_key_that_is_not_an_rs256_signing_key_is_refused(self):
         n = K.jwk(A)['n']
@@ -611,6 +616,7 @@ class KeyTableTest(unittest.TestCase):
 
     def test_a_document_without_usable_key_names_is_refused(self):
         for document in ({}, {'keys': []}, {'keys': None}, {'keys': 'text'}, {'keys': KEYS}, [],
+                         {'keys': 5}, {'keys': True}, {'keys': K.jwk(A)},
                          None, 'text', [K.jwk(A)], {'public_certs': [K.jwk(A)]},
                          {'keys': [K.jwk(A), 'text']}, {'keys': [K.jwk(A), K.jwk(A)]},
                          {'keys': [K.jwk(A, kid='')]}, {'keys': [K.jwk(A, kid=5)]},
@@ -941,7 +947,6 @@ class FetchKeysTest(unittest.TestCase):
                 self.assertTrue(opener.response.closed)
 
     def test_an_error_from_the_network_is_a_failure(self):
-        url = K.ISSUER + access.CERTS_PATH
         for error in (urllib.error.URLError('no route'), TimeoutError('timed out'),
                       ConnectionResetError('reset'), ssl.SSLError('handshake'),
                       ssl.SSLCertVerificationError('wrong host'),
@@ -974,6 +979,14 @@ class FetchKeysTest(unittest.TestCase):
             with self.subTest(body=body):
                 self.fails(Response(body), 'not JSON')
 
+    def test_a_document_nested_too_deep_to_parse_is_a_failure(self):
+        """The cap leaves room for nesting the parser gives up on: that is a refusal too."""
+        deep = b'{"keys":' + b'[' * 100000 + b']' * 100000 + b'}'
+        self.assertLess(len(deep), access.MAX_KEYS_DOC)
+        with self.assertRaises(RecursionError):
+            json.loads(deep)
+        self.fails(Response(deep), 'not JSON')
+
     def test_a_bad_team_sends_nothing(self):
         for team in ('', 'a.b', 'example.invalid/x', K.TEAM + '@example.invalid', None):
             with self.subTest(team=team):
@@ -989,12 +1002,15 @@ class FetchKeysTest(unittest.TestCase):
         context = access._tls_context()
         self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
         self.assertTrue(context.check_hostname)
-        handlers = access._opener().handlers
+        with mock.patch.object(access, '_tls_context', return_value=context):
+            handlers = access._opener().handlers
         redirecting = [type(h) for h in handlers
                        if isinstance(h, urllib.request.HTTPRedirectHandler)]
         self.assertEqual(redirecting, [access._NoRedirect])
-        self.assertEqual(len([h for h in handlers
-                              if isinstance(h, urllib.request.HTTPSHandler)]), 1)
+        secure = [h for h in handlers if isinstance(h, urllib.request.HTTPSHandler)]
+        self.assertEqual(len(secure), 1)
+        # That context, not the default urllib would make (which a process can replace).
+        self.assertIs(secure[0]._context, context)
 
     def test_a_redirect_is_not_followed(self):
         server = http.server.HTTPServer(('127.0.0.1', 0), _Redirecting)
