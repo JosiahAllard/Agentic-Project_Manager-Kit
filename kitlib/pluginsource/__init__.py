@@ -4,11 +4,13 @@ installs from (docs/plugin-source.md).
   remote_main(kit, remote)         the sha the remote's main points at; refuses one not fetched
   export(kit, sha, root)           <root>/<sha12>/: the tracked files at sha, plugin.json stamped
   write_marketplace(root, folder)  <root>/.claude-plugin/marketplace.json names that folder
-  prune(root)                      old export folders removed (never the named one, never the 3 newest)
+  prune(root)                      old export folders removed (never the named one, the 3 newest, or
+                                   one younger than 7 days); stale <sha12>.tmp folders removed
   read_state / write_state         <root>/state.json: {sha, version, folder, exported_at, folders}
   RefreshLock                      <root>/refresh.pid, one refresh at a time
+  pick_folders(folders, wanted)    the account folders --folder names, and the names that are not one
   refresh(...)                     the whole run tools/plugin_refresh.py makes
-  current_lines(kit, s)            the pm_start warning lines (behind, failed folder)
+  current_lines(kit, s, folders)   the pm_start warning lines (no export, not migrated, behind, failed)
   poll(kit, s, last, ...)          the pm_watch check: an event line per new main, and the spawn
                                    of a refresh when plugin.auto_refresh is on
 
@@ -25,6 +27,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 
 from kitlib.git import batch, cmd, refs
 
@@ -37,11 +40,17 @@ STATE = 'state.json'
 PIDFILE = 'refresh.pid'
 LOGFILE = 'refresh.log'
 KEEP = 3                             # newest export folders prune keeps, besides the named one
+YOUNG_DAYS = 7                       # prune keeps every export younger than this (by exported_at)
+LOCK_GRACE_S = 10                    # an empty or unreadable refresh.pid younger than this is live
 MANIFEST = '.claude-plugin/plugin.json'
 MARKETPLACE = '.claude-plugin/marketplace.json'
 REFRESH_CMD = 'python tools/plugin_refresh.py --apply'
+MIGRATE_CMD = 'python tools/plugin_refresh.py --migrate --apply'
 CONFIG_KEY = 'plugin'
 _SHA12 = re.compile(r'^[0-9a-f]{12}$')
+_TMP = re.compile(r'^([0-9a-f]{12})\.tmp$')
+_RESERVED = frozenset(['CON', 'PRN', 'AUX', 'NUL'] + ['COM%d' % i for i in range(1, 10)]
+                      + ['LPT%d' % i for i in range(1, 10)])
 _VERSION = re.compile(rb'("version"\s*:\s*")([^"\\]*)(")')
 _BOM = b'\xef\xbb\xbf'
 _NOWIN = 0x08000000 if sys.platform == 'win32' else 0               # CREATE_NO_WINDOW
@@ -61,9 +70,34 @@ class StateError(Exception):
 Settings = collections.namedtuple('Settings', 'export_dir auto_refresh remote')
 
 
-def check(obj):
+def _norm(path):
+    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+
+def _under(path, top):
+    """True when `path` is `top` or inside it."""
+    p, t = _norm(path), _norm(top)
+    return p == t or p.startswith(t.rstrip(os.sep) + os.sep)
+
+
+def placement_errors(root, kit=None, sweep_dir=None):
+    """Errors for an export root inside the kit checkout (the export would then be part of the
+    tree it exports, and a worktree clean could take it) or under the agent temp sweep root
+    (agent_temp_sweep.dir, whose sweep removes unused entries)."""
+    errs = []
+    if kit and _under(root, kit):
+        errs.append('plugin.export_dir %s is inside the kit checkout %s: put it outside' % (root, kit))
+    if isinstance(sweep_dir, str) and sweep_dir.strip() and os.path.isabs(sweep_dir) \
+            and _under(root, sweep_dir):
+        errs.append('plugin.export_dir %s is under the agent temp sweep root %s (agent_temp_sweep.dir), '
+                    'which removes unused entries: put it elsewhere' % (root, sweep_dir))
+    return errs
+
+
+def check(obj, kit=None, sweep_dir=None):
     """Errors in the machine config's `plugin` object (kitlib.config.user registers the key as an
-    object; its inner keys are checked here)."""
+    object; its inner keys are checked here). With `kit` or `sweep_dir`, an export_dir inside
+    either is an error too (placement_errors)."""
     errs = []
     if obj is None:
         return errs
@@ -76,6 +110,8 @@ def check(obj):
         if k == 'export_dir':
             if not isinstance(v, str) or not v.strip() or not os.path.isabs(v):
                 errs.append('plugin.export_dir must be an absolute path, not %r' % (v,))
+            else:
+                errs.extend(placement_errors(v, kit, sweep_dir))
         elif k == 'auto_refresh':
             if not isinstance(v, bool):
                 errs.append('plugin.auto_refresh must be true or false, not %r' % (v,))
@@ -87,9 +123,10 @@ def check(obj):
     return errs
 
 
-def settings(obj, environ=None):
+def settings(obj, environ=None, kit=None, sweep_dir=None):
     """The checked Settings of a `plugin` object (None: every default). The default export_dir is
-    %LOCALAPPDATA%\\pm-kit\\plugin; RefreshError when that is needed and LOCALAPPDATA is unset."""
+    %LOCALAPPDATA%\\pm-kit\\plugin; RefreshError when that is needed and LOCALAPPDATA is unset,
+    and when the export root is inside `kit` or `sweep_dir` (placement_errors)."""
     errs = check(obj)
     if errs:
         raise RefreshError('; '.join(errs))
@@ -101,14 +138,21 @@ def settings(obj, environ=None):
         if not base or not os.path.isabs(base):
             raise RefreshError('LOCALAPPDATA is not set: set plugin.export_dir in the machine config')
         root = os.path.join(base, 'pm-kit', 'plugin')
+    errs = placement_errors(root, kit, sweep_dir)
+    if errs:
+        raise RefreshError('; '.join(errs))
     return Settings(os.path.normpath(root), obj.get('auto_refresh') is True,
                     obj.get('remote') or DEFAULT_REMOTE)
 
 
-def load(home=None, environ=None):
-    """The machine's plugin Settings (kitlib.config ConfigError for a bad machine config)."""
+def load(home=None, environ=None, kit=None):
+    """The machine's plugin Settings (kitlib.config ConfigError for a bad machine config). The
+    export root must lie outside `kit` (default: this checkout) and agent_temp_sweep.dir."""
     from kitlib.config import user
-    return settings(user.user_config(home).get(CONFIG_KEY), environ)
+    cfg = user.user_config(home)
+    sweep = cfg.get('agent_temp_sweep')
+    return settings(cfg.get(CONFIG_KEY), environ, kit or kit_root(),
+                    sweep.get('dir') if isinstance(sweep, dict) else None)
 
 
 def kit_root():
@@ -192,15 +236,40 @@ def stamp(manifest, version):
 
 
 def _safe_rel(path):
-    parts = path.split('/')
-    return not (os.path.isabs(path) or ':' in path or any(p in ('', '.', '..') for p in parts))
+    """True for a tree path that writes one file inside the export folder on Windows: relative,
+    `/`-separated, no `\\` or `:`, no empty, `.` or `..` part, no part ending in a dot or a space
+    (Windows drops those), and no reserved device name (CON, NUL, COM1, ...; with any extension)."""
+    if '\\' in path or ':' in path or os.path.isabs(path):
+        return False
+    for p in path.split('/'):
+        if p in ('', '.', '..') or p[-1] in '. ':
+            return False
+        if p.split('.')[0].rstrip(' ').upper() in _RESERVED:
+            return False
+    return True
+
+
+def _is_link(path):
+    """True for a symlink, a junction or any other reparse point (or a path lstat cannot read)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return True
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, 'st_file_attributes', 0) & 0x400)
 
 
 def _rmtree(path):
-    def onerror(func, p, _exc):
+    """shutil.rmtree, clearing a read-only bit on the way. A failure other than removing one entry
+    (rmtree refusing a link, a listing error) is raised, never passed over."""
+    def retry(func, p, exc):
+        if func not in (os.unlink, os.rmdir, os.remove):
+            raise exc
         os.chmod(p, stat.S_IWRITE)
         func(p)
-    shutil.rmtree(path, onerror=onerror)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=retry)
+    else:
+        shutil.rmtree(path, onerror=lambda func, p, info: retry(func, p, info[1]))
 
 
 def folder_name(sha):
@@ -328,21 +397,42 @@ def write_state(root, state):
     _write_json(os.path.join(root, STATE), state)
 
 
-def prune(root, keep=KEEP):
+def _when(text):
+    """A marker's exported_at as a naive local datetime, or None."""
+    try:
+        when = datetime.datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    return when.astimezone().replace(tzinfo=None) if when.tzinfo else when
+
+
+def prune(root, keep=KEEP, now=None, young_days=YOUNG_DAYS):
     """Remove old export folders. Never removed: the folder marketplace.json names (the plugin
-    loads from it, in place or by a copy at the next update) and the `keep` newest by their
-    marker's exported_at (a running session may still load hooks and its MCP server from one).
-    Only a <sha12> folder holding the marker is a candidate; anything else in the root stays.
-    Returns ([removed folder], [(folder, why) not removed])."""
+    loads from it, in place or by a copy at the next update), the `keep` newest by their
+    marker's exported_at, and every export younger than `young_days` by that date, or whose date
+    cannot be read (a running session may still load hooks and its MCP server from one, and the
+    plugin may load in place: docs/plugin-source.md "Open questions"). Only a <sha12> folder
+    holding the marker is a candidate; a link or junction is never one, and anything else in the
+    root stays. A <sha12>.tmp folder other than the named folder's is a half-written export left
+    by a run that stopped (prune runs under refresh.pid, so no export is being written) and is
+    removed too. Returns ([removed folder], [(folder, why) not removed])."""
     current = current_folder(root)
-    found = []
+    now = now or datetime.datetime.now()
+    found, stale = [], []
     try:
         names = os.listdir(root)
     except OSError:
         return [], []
     for n in names:
         full = os.path.join(root, n)
-        if not _SHA12.match(n) or not os.path.isdir(full):
+        if not os.path.isdir(full) or _is_link(full):
+            continue
+        tmp = _TMP.match(n)
+        if tmp:
+            if tmp.group(1) != current:
+                stale.append(n)
+            continue
+        if not _SHA12.match(n):
             continue
         marker = read_marker(full)
         if marker is None:
@@ -352,10 +442,12 @@ def prune(root, keep=KEEP):
     spare = {n for _, n in found[:keep]}
     if current:
         spare.add(current)
+    for at, n in found:
+        when = _when(at)
+        if when is None or now - when < datetime.timedelta(days=young_days):
+            spare.add(n)
     removed, failed = [], []
-    for _, n in found:
-        if n in spare:
-            continue
+    for n in [n for _, n in found if n not in spare] + sorted(stale):
         full = os.path.join(root, n)
         try:
             _rmtree(full)
@@ -383,24 +475,34 @@ def _alive(pid, ctime):
 
 class RefreshLock(object):
     """<root>/refresh.pid, created exclusively, holding {pid, ctime}. A file whose process is gone
-    (pid dead, or its start time differs: a reused pid) is stale and taken over."""
+    (pid dead, or its start time differs: a reused pid) is stale and taken over. An empty or
+    unreadable file is one a starting refresh has made but not yet written: live until its mtime
+    is more than LOCK_GRACE_S old, stale after."""
 
-    def __init__(self, root, own=None, alive=None):
+    def __init__(self, root, own=None, alive=None, clock=None):
         self.path = os.path.join(root, PIDFILE)
         self.own = own or _own()
         self.alive = alive or _alive
+        self.clock = clock or time.time
         self.held = False
 
     def holder(self):
-        """{pid, ctime} of a live holder, or None (no file, or a stale one)."""
+        """{pid, ctime} of a live holder (pid None: a file not yet written), or None (no file, or
+        a stale one)."""
         try:
             with open(self.path, encoding='utf-8') as fh:
                 data = json.load(fh)
             pid, ctime = int(data['pid']), data.get('ctime')
         except FileNotFoundError:
             return None
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            try:
+                age = self.clock() - os.path.getmtime(self.path)
+            except FileNotFoundError:
+                return None
+            except OSError:
+                age = 0
+            return None if age > LOCK_GRACE_S else {'pid': None, 'ctime': None}
         return {'pid': pid, 'ctime': ctime} if self.alive(pid, ctime) else None
 
     def acquire(self):
@@ -413,7 +515,8 @@ class RefreshLock(object):
             except FileExistsError:
                 h = self.holder()
                 if h is not None:
-                    raise Busy('a refresh is already running (pid %d, %s)' % (h['pid'], self.path))
+                    who = 'pid %d' % h['pid'] if h['pid'] is not None else 'its pid not yet written'
+                    raise Busy('a refresh is already running (%s, %s)' % (who, self.path))
                 try:
                     os.remove(self.path)        # stale: its process is gone
                 except FileNotFoundError:
@@ -459,11 +562,67 @@ def migrate_steps(root):
             ['plugin', 'install', PLUGIN_ID, '-s', 'user'])
 
 
+def folder_key(folder):
+    """The key an account folder is matched by (state.json keys, --folder names)."""
+    return _norm(folder)
+
+
+def _record(state, folder):
+    """state.json's record of `folder` ({} when none)."""
+    k = folder_key(folder)
+    for f, r in (state or {}).get('folders', {}).items():
+        if folder_key(f) == k and isinstance(r, dict):
+            return r
+    return {}
+
+
+def migrated(state, folder):
+    """True when `folder`'s last migrate succeeded (its record holds `migrated: true`)."""
+    return _record(state, folder).get('migrated') is True
+
+
+def _carry(state):
+    """The folder records a new export's state starts with: each migrated folder, as migrated."""
+    return {f: {'migrated': True} for f, r in (state or {}).get('folders', {}).items()
+            if isinstance(r, dict) and r.get('migrated') is True}
+
+
+def _set_record(state, folder, rec):
+    k = folder_key(folder)
+    for f in [f for f in state['folders'] if folder_key(f) == k]:
+        del state['folders'][f]
+    state['folders'][folder] = rec
+
+
+def pick_folders(folders, wanted):
+    """([account folder], [name]): the folders of `folders` that `wanted` (--folder) names, each
+    once and in the order named, and the names that are not one of `folders`. Nothing wanted:
+    every folder."""
+    if not wanted:
+        return list(folders), []
+    by = {folder_key(f): f for f in folders}
+    picked, bad = [], []
+    for w in wanted:
+        f = by.get(folder_key(w))
+        if f is None:
+            bad.append(w)
+        elif f not in picked:
+            picked.append(f)
+    return picked, bad
+
+
+def migrate_cmd(folder):
+    return '%s --folder "%s"' % (MIGRATE_CMD, folder)
+
+
 def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=None, own=None,
             alive=None):
-    """One refresh (tools/plugin_refresh.py). `folders` are the account folders; `runner` is
-    kitlib.pluginsource.claude.Runner (or a test's). Dry run (apply False): prints the plan and
-    writes nothing. Returns the exit code: 0 done or nothing to do, 1 refused or a folder failed."""
+    """One refresh (tools/plugin_refresh.py). `folders` are the account folders to run in (all of
+    them, or those --folder named); `runner` is kitlib.pluginsource.claude.Runner (or a test's).
+    Without `migrate`, a folder whose state record does not say `migrated: true` is refused with
+    a line naming the migrate command for it, and the others still run. Dry run (apply False):
+    prints the plan and writes nothing. Returns the exit code: 0 done or nothing to do, 1 refused
+    (the whole run or one folder) or a folder failed."""
     root = s.export_dir
     try:
         sha = remote_main(kit, s.remote)
@@ -475,20 +634,28 @@ def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=N
     exported = read_marker(os.path.join(root, name))
     fresh = bool(exported and exported.get('sha') == sha and current_folder(root) == name
                  and state and state.get('sha') == sha)
-    done = (state or {}).get('folders', {}) if fresh else {}
-    todo = list(folders) if migrate else [f for f in folders if (done.get(f) or {}).get('rc') != 0]
+    refused = [] if migrate else [f for f in folders if not migrated(state, f)]
+    if migrate:
+        todo = list(folders)
+    else:
+        todo = [f for f in folders if f not in refused
+                and not (fresh and _record(state, f).get('rc') == 0)]
     steps = migrate_steps(root) if migrate else UPDATE_STEPS
     out('kit %s/%s: %s' % (s.remote, MAIN, sha[:12]))
+    for f in refused:
+        out('REFUSED %s: not migrated to the export yet: %s' % (f, migrate_cmd(f)))
     if fresh and not todo:
-        out('pm-kit plugin is current: %s is exported and every account folder refreshed; nothing to do'
-            % name)
-        return 0
+        if not refused:
+            out('pm-kit plugin is current: %s is exported and every account folder named refreshed; '
+                'nothing to do' % name)
+        return 1 if refused else 0
     if not apply:
         out('DRY RUN (nothing written; --apply makes these):')
         if not fresh:
             out('  export %s into %s, then point %s at it' % (sha[:12], os.path.join(root, name),
                                                          marketplace_path(root)))
-            out('  prune export folders other than that one and the %d newest' % KEEP)
+            out('  prune export folders other than that one, the %d newest and those younger than '
+                '%d days' % (KEEP, YOUNG_DAYS))
         for f in todo:
             for st in steps:
                 out('  %s: claude %s' % (f, ' '.join(st)))
@@ -496,7 +663,7 @@ def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=N
             out('  no account folder to run claude in')
         if migrate:
             _old_cache_lines(kit, sha, folders, out)
-        return 0
+        return 1 if refused else 0
     try:
         os.makedirs(root, exist_ok=True)
     except OSError as e:
@@ -509,28 +676,32 @@ def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=N
         out('REFUSED: %s' % e)
         return 1
     try:
-        return _apply(kit, s, sha, state if fresh else None, todo, steps, migrate, folders, runner,
-                      out, now)
+        code = _apply(kit, s, sha, state, fresh, todo, steps, migrate, folders, runner, out, now)
     finally:
         lock.release()
+    return 1 if refused else code
 
 
-def _apply(kit, s, sha, state, todo, steps, migrate, folders, runner, out, now):
+def _apply(kit, s, sha, state, fresh, todo, steps, migrate, folders, runner, out, now):
     root = s.export_dir
     name = folder_name(sha)
+    step = 'export'
     try:
         folder, version = export(kit, sha, root, now)
-    except (RefreshError, OSError) as e:
-        out('REFUSED: the export failed: %s' % e)
+        out('exported %s: %s (version %s)' % (sha[:12], folder, version))
+        step = 'marketplace write'
+        write_marketplace(root, name)
+        out('marketplace %s names ./%s' % (marketplace_path(root), name))
+        if not fresh:
+            step = 'state write'
+            state = {'sha': sha, 'version': version, 'folder': name, 'exported_at': _stamp(now),
+                     'folders': _carry(state)}
+            write_state(root, state)
+        step = 'prune'
+        removed, failed = prune(root, now=now)
+    except (RefreshError, OSError, ValueError) as e:
+        out('REFUSED: the %s failed: %s' % (step, e))
         return 1
-    out('exported %s: %s (version %s)' % (sha[:12], folder, version))
-    write_marketplace(root, name)
-    out('marketplace %s names ./%s' % (marketplace_path(root), name))
-    if state is None:
-        state = {'sha': sha, 'version': version, 'folder': name, 'exported_at': _stamp(now),
-                 'folders': {}}
-        write_state(root, state)
-    removed, failed = prune(root)
     for r in removed:
         out('pruned %s' % r)
     for f, why in failed:
@@ -544,27 +715,34 @@ def _apply(kit, s, sha, state, todo, steps, migrate, folders, runner, out, now):
         return 1
     code = 0
     for f in todo:
-        rc, step, text = 0, None, ''
+        rc, cmd_line, text = 0, None, ''
         for st in steps:
             rc, text = runner.run(st, f)
-            step = ' '.join(st)
+            cmd_line = ' '.join(st)
             if rc != 0 and not (migrate and st[:3] == ['plugin', 'marketplace', 'remove']):
                 break
             rc = 0
-        state['folders'][f] = {'rc': rc, 'at': _stamp(now), 'step': step}
-        write_state(root, state)
+        rec = {'rc': rc, 'at': _stamp(now), 'step': cmd_line,
+               'migrated': (rc == 0) if migrate else True}
+        _set_record(state, f, rec)
+        try:
+            write_state(root, state)
+        except (OSError, ValueError) as e:
+            out('REFUSED: the state write failed after %s: %s' % (f, e))
+            return 1
         if rc == 0:
-            out('%s: refreshed' % f)
+            out('%s: %s' % (f, 'migrated' if migrate else 'refreshed'))
         else:
             code = 1
-            out('FAILED %s: claude %s exited %s: %s' % (f, step, rc, (text or '').strip()[-400:]))
+            out('FAILED %s: claude %s exited %s: %s' % (f, cmd_line, rc, (text or '').strip()[-400:]))
     return code
 
 
 def ensure_export(kit, s, now=None, own=None, alive=None):
     """The export root, holding an export of the remote's main that marketplace.json names: made
     when missing, kept when current. Runs no claude command and records no account folder (an
-    installer then adds the root as a marketplace). Returns (root, sha); RefreshError or Busy."""
+    installer then adds the root as a marketplace); a new export's state keeps each folder's
+    migrated flag. Returns (root, sha); RefreshError, Busy or OSError."""
     sha = remote_main(kit, s.remote)
     root = s.export_dir
     name = folder_name(sha)
@@ -583,8 +761,8 @@ def ensure_export(kit, s, now=None, own=None, alive=None):
         write_marketplace(root, name)
         if not state or state.get('sha') != sha:
             write_state(root, {'sha': sha, 'version': version, 'folder': name,
-                               'exported_at': _stamp(now), 'folders': {}})
-        prune(root)
+                               'exported_at': _stamp(now), 'folders': _carry(state)})
+        prune(root, now=now)
     finally:
         lock.release()
     return root, sha
@@ -609,26 +787,45 @@ def _old_cache_lines(kit, sha, folders, out):
 
 # ---------------------------------------------------------------- pm_start and pm_watch
 
-def current_lines(kit, s):
+def _folders(folders):
+    if folders is None:
+        from kitlib.pluginsource import claude
+        folders = claude.account_folders()
+    return list(folders)
+
+
+def unmigrated(state, folders):
+    """The account folders of `folders` whose state record does not say `migrated: true`."""
+    return [f for f in folders if not migrated(state, f)]
+
+
+def current_lines(kit, s, folders=None):
     """pm_start lines: none when the export is at the kit's refs/remotes/<remote>/main and every
-    account folder's last refresh succeeded. Reads the export state only, never an account folder:
-    a folder's last refresh result stands in for what it has installed."""
+    account folder (`folders`, default claude.account_folders()) is migrated and its last refresh
+    succeeded. Reads the export state only, never an account folder's contents: a folder's last
+    refresh result stands in for what it has installed. No export yet, or a folder not migrated:
+    the line names the migrate command, not --apply alone (which refuses such a folder)."""
     try:
         state = read_state(s.export_dir)
     except StateError as e:
         return ['could not check the pm-kit plugin: %s' % e]
     if state is None:
-        return ['pm-kit plugin: no export at %s yet: %s' % (s.export_dir, REFRESH_CMD)]
+        return ['pm-kit plugin: no export at %s yet: %s' % (s.export_dir, MIGRATE_CMD)]
     main, why = tracking_main(kit, s.remote)
     if main is None:
         return ['could not check the pm-kit plugin: %s' % why]
+    todo = unmigrated(state, _folders(folders))
+    cmd = MIGRATE_CMD if todo else REFRESH_CMD
     lines = []
+    if todo:
+        lines.append('pm-kit plugin: not migrated to the export in %s: %s (one folder first: '
+                     '--folder DIR)' % (', '.join(todo), MIGRATE_CMD))
     if main and main != state.get('sha'):
         lines.append('pm-kit plugin behind kit main (exported %s, %s/%s %s): %s'
-                     % (str(state.get('sha') or '?')[:12], s.remote, MAIN, main[:12], REFRESH_CMD))
+                     % (str(state.get('sha') or '?')[:12], s.remote, MAIN, main[:12], cmd))
     for f in sorted(state['folders']):
         r = state['folders'][f] or {}
-        if r.get('rc') != 0:
+        if r.get('migrated') is True and r.get('rc') != 0:
             lines.append('pm-kit plugin refresh failed in %s (claude %s exited %s at %s): %s'
                          % (f, r.get('step') or '?', r.get('rc'), r.get('at') or '?', REFRESH_CMD))
     return lines
@@ -647,22 +844,32 @@ def spawn_refresh(kit, root):
         log.close()
 
 
-def poll(kit, s, last, spawn=None, alive=None):
+def poll(kit, s, last, spawn=None, alive=None, folders=None):
     """One pm_watch check. Returns (lines, last): an event line the first time the kit's
     refs/remotes/<remote>/main differs from the exported sha (`last` is the main last reported, so
-    the same sha is not reported twice), none when current. With plugin.auto_refresh on, that first
-    time also starts a refresh (`spawn(kit, root)`), unless one holds refresh.pid already."""
-    main, _why = tracking_main(kit, s.remote)
+    the same sha is not reported twice), none when current. No export yet, or an account folder
+    (`folders`, default claude.account_folders()) not migrated: the line names the migrate command
+    and auto_refresh starts nothing. Otherwise, with plugin.auto_refresh on, that first time also
+    starts a refresh (`spawn(kit, root)`), unless one holds refresh.pid already. No tracking ref:
+    nothing. Raises RefreshError when the tracking ref cannot be read and StateError when
+    state.json cannot, so pm_watch counts the failure."""
+    main, why = tracking_main(kit, s.remote)
+    if main is None:
+        raise RefreshError('cannot read %s/%s: %s' % (s.remote, MAIN, why))
     if not main:
         return [], last
-    try:
-        state = read_state(s.export_dir) or {}
-    except StateError:
-        return [], last
-    if main == state.get('sha'):
+    state = read_state(s.export_dir)
+    if state is not None and main == state.get('sha'):
         return [], None
     if main == last:
         return [], last
+    todo = None if state is None else unmigrated(state, _folders(folders))
+    if state is None or todo:
+        line = 'pm-kit plugin behind kit main %s: %s' % (main[:12], MIGRATE_CMD)
+        if s.auto_refresh:
+            line += (' (auto_refresh: not started: no export yet)' if state is None else
+                     ' (auto_refresh: not started: not migrated in %s)' % ', '.join(todo))
+        return [line], main
     line = 'pm-kit plugin behind kit main %s: %s' % (main[:12], REFRESH_CMD)
     if s.auto_refresh:
         if lock_live(s.export_dir, alive):

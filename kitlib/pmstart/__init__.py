@@ -495,16 +495,17 @@ def plugin_settings():
     return pluginsource.load()
 
 
-def plugin_current(settings=None, kit=None):
-    """Lines when the pm-kit plugin export is behind the kit's refs/remotes/<remote>/main (which
-    kit_sync, just before, has fetched) or an account folder's last refresh failed
-    (kitlib.pluginsource.current_lines; docs/plugin-source.md "Behind warnings"). None for
-    `settings` reads the machine config; a loader that gives None checks nothing."""
+def plugin_current(settings=None, kit=None, folders=None):
+    """Lines when the pm-kit plugin export is missing or behind the kit's
+    refs/remotes/<remote>/main (which kit_sync, just before, has fetched), an account folder is not
+    migrated, or one's last refresh failed (kitlib.pluginsource.current_lines; docs/plugin-source.md
+    "Behind warnings"). None for `settings` reads the machine config; a loader that gives None
+    checks nothing. None for `folders`: this machine's account folders."""
     from kitlib import pluginsource
     s = plugin_settings() if settings is None else settings
     if s is None:
         return []
-    return pluginsource.current_lines(kit or pluginsource.kit_root(), s)
+    return pluginsource.current_lines(kit or pluginsource.kit_root(), s, folders=folders)
 
 
 def checklist(cfg, now=None, procs=None, **fakes):

@@ -335,17 +335,20 @@ def idle_events(names, newest, fired, nolog, now, minutes):
     return ev, cur, miss
 
 
-def plugin_check(kit=None, settings=None, spawn=None, alive=None):
+def plugin_check(kit=None, settings=None, spawn=None, alive=None, folders=None):
     """The PLUGIN check for Watcher: check(last) -> (lines, last), over kitlib.pluginsource.poll
     (docs/plugin-source.md "Behind warnings"). `last` is the kit main sha last reported (None when
     current), kept in the state file so a relaunch does not report the same sha again. With no
     `settings` the machine config's plugin key is read on every call, so a bad key is a failed
-    check (ERROR on the third), never a dead watcher; with no `kit`, the checkout this code is in."""
+    check (ERROR on the third), never a dead watcher, and so is an unreadable tracking ref or
+    state.json; with no `kit`, the checkout this code is in; with no `folders`, this machine's
+    account folders."""
     from kitlib import pluginsource
 
     def check(last):
         s = pluginsource.load() if settings is None else settings
-        return pluginsource.poll(kit or pluginsource.kit_root(), s, last, spawn=spawn, alive=alive)
+        return pluginsource.poll(kit or pluginsource.kit_root(), s, last, spawn=spawn, alive=alive,
+                                 folders=folders)
     return check
 
 
