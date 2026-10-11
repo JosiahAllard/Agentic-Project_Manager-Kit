@@ -164,6 +164,24 @@ class Landing(ReuseCase):
                                                          'stored for key '), self.said)
         self.assert_ran(lander.gate_logs, 'unit')
 
+    def test_main_changing_the_gate_config_runs_the_step(self):
+        """Main's own change is not in the landing's changed paths, so only the config hash in
+        the key sees it: unit's argv, cwd, program and inputs are the same."""
+        _, tip = self.gated_branch()
+        other = self.repo.worktree('other')
+        steps = [UNIT, MERGED, dict(PLAIN, **{'pass': '^o.$'})]
+        kit = dict(self.KIT, gate=dict(self.GATE, steps=steps))
+        self.repo.write('.kit.json', json.dumps(kit, indent=1) + '\n', root=other)
+        moved = self.repo.commit('another gate config', '.kit.json', cwd=other)
+        self.repo.git('merge', '-q', '--ff-only', moved)
+        self.repo.git('push', '-q', 'origin', 'main')
+        lander, out = self.land(BRANCH, tip, expect_main=moved)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertNotIn('reused', out.verdict)
+        self.assertTrue(self.lines('MISS')[0].startswith(reuse.PREFIX + 'MISS unit: no result '
+                                                         'stored for key '), self.said)
+        self.assert_ran(lander.gate_logs, 'unit')
+
     def test_a_batch_reuses_per_step(self):
         _, tip = self.gated_branch()
         _, tip2 = self.gated_branch('other', {'b.txt': 'y\n'})
@@ -347,6 +365,60 @@ class Undeclared(ReuseCase):
         self.assertEqual(self.entries(), [])
 
 
+TYPO = {'name': 'typo', 'always': True, 'globs': ['srcc/*'], 'cmd': OK_CMD, 'pass': '^ok$',
+        'reuse': True}
+GEN = {'name': 'gen', 'always': True, 'content': {'globs': ['gen/*'], 'regex': 'x'},
+       'cmd': OK_CMD, 'pass': '^ok$', 'reuse': True}
+NO_INPUT = 'its "globs" and "content".globs match no file git shows in the work tree'
+
+
+class NoInputs(ReuseCase):
+    """Globs that match no file git shows are no declared input: a mistyped glob, or one that
+    names only ignored files, would key the step on its command alone."""
+    GATE = {'steps': [TYPO, GEN, UNIT]}
+    ASKING = ('typo', 'gen')
+
+    def test_a_step_whose_globs_match_no_file_is_never_cached(self):
+        files = dict(SRC, **{'.gitignore': '.claude/\ngen/\n'})
+        wt, _ = self.branch('feature', files)
+        self.repo.write('gen/out.py', 'x = 1\n', root=wt)       # ignored: git does not show it
+        none = [reuse.PREFIX + 'NONE %s: %s' % (n, NO_INPUT) for n in self.ASKING]
+        for i in range(2):
+            out = self.gate(wt)
+            self.assertEqual(out.code, G.OK, out.lines)
+            self.assertEqual(self.lines()[:2], none, self.said)
+            self.assert_ran(out.log_dir, *self.ASKING)
+            self.assertEqual([e for e in self.entries() if '"typo"' in self.body(e)
+                              or '"gen"' in self.body(e)], [])
+            self.commit(wt, {'notes.txt': 'n%d\n' % i})
+        # the positive case, in the same gate: unit has inputs and is cached and reused
+        self.assertEqual(out.verdict, 'GATE OK (reused: unit)', self.said)
+        self.assertEqual(len(self.entries()), 1, self.entries())
+        tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        lander, out = self.land(BRANCH, tip)
+        self.assertEqual(out.verdict, 'GATE OK (reused: unit)', self.said)
+        self.assertEqual(self.lines()[:2], none, self.said)
+        self.assert_ran(lander.gate_logs, *self.ASKING)
+        self.assertEqual(len(self.entries()), 1, self.entries())
+
+    def body(self, entry):
+        with open(os.path.join(reuse.cache_dir(self.repo.root), entry), encoding='utf-8') as f:
+            return f.read()
+
+    def test_step_key_refuses_an_empty_input_set(self):
+        cfg = runner.kconfig.load(self.repo.root)
+        step = S.Step('typo', [sys.executable, '-c', 'print("ok")'], None, self.repo.root, [],
+                      [], (0,), False, False, [], False)
+        kit = {'files': '0' * 64}
+        with self.assertRaises(reuse.NotCacheable) as caught:
+            reuse.step_key(self.repo.root, cfg, TYPO, step, ['src/a.py', 'notes.txt'], kit)
+        self.assertEqual(str(caught.exception), NO_INPUT)
+        self.repo.write('srcc/a.py', 'x = 1\n')
+        key, ins = reuse.step_key(self.repo.root, cfg, TYPO, step, ['srcc/a.py'], kit)
+        self.assertRegex(key, '^[0-9a-f]{64}$')
+        self.assertEqual(sorted(ins), ['srcc/a.py'])
+
+
 class CheckStep(unittest.TestCase):
     def test_a_check_step_is_never_cached(self):
         spec = {'name': 'pins', 'check': 'pins', 'globs': ['src/*'], 'reuse': True}
@@ -396,6 +468,66 @@ class Warned(ReuseCase):
             reuse.PREFIX + 'NOT STORED shaky: its key changed while the gate ran (the kit, a '
             'program or the config)'], self.said)
         self.assertEqual(self.entries(), [])
+
+
+# RED is ignored below, so it is not an input: the step fails and then passes on one key
+FAILER = {'name': 'unit', 'always': True, 'globs': ['src/*'], 'cmd': fixtures.RED_AWARE,
+          'pass': '^ok$', 'reuse': True}
+
+
+class Failed(ReuseCase):
+    GATE = {'steps': [FAILER]}
+
+    def test_a_failed_run_blocks_a_later_pass_on_the_same_key(self):
+        """FAIL is stored as fail by the runner, and the fail outlives a later pass."""
+        wt, _ = self.branch('feature', dict(SRC, **{'.gitignore': '.claude/\nRED\n'}))
+        self.repo.write('RED', 'x\n', root=wt)
+        out = self.gate(wt)
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        stored = self.lines('STORED')
+        self.assertEqual(len(stored), 1, self.said)
+        found = re.match('^%sSTORED unit: fail, key ([0-9a-f]{12})$' % re.escape(reuse.PREFIX),
+                         stored[0])
+        self.assertIsNotNone(found, self.said)
+        key = found.group(1)
+        os.remove(os.path.join(wt, 'RED'))
+        blocked = '^%sMISS unit: failed or warned on these inputs at %s %s$' % (
+            re.escape(reuse.PREFIX), STAMP, re.escape('(key %s)' % key))
+        for i in range(2):                  # the pass of the first rerun never serves the second
+            out = self.gate(wt)
+            self.assertEqual(out.verdict, 'GATE OK', self.said)
+            self.assertEqual(len(self.lines('MISS')), 1, self.said)
+            self.assertRegex(self.lines('MISS')[0], blocked)
+            self.assert_ran(out.log_dir, 'unit')
+            self.assertEqual(self.lines('STORED'),
+                             [reuse.PREFIX + 'STORED unit: pass, key %s' % key], self.said)
+            self.commit(wt, {'notes.txt': 'n%d\n' % i})
+        self.assertEqual(sorted(e.split('.')[-2] for e in self.entries()),
+                         ['fail', 'pass', 'pass'])
+        self.assertEqual(len({e.split('/')[0] for e in self.entries()}), 1, self.entries())
+
+
+SCRIPTED = {'name': 'scripted', 'always': True, 'globs': ['src/*'], 'pass': '^ok$', 'reuse': True,
+            'cmd': ['{python}', 'scripts/check.py']}
+
+
+class Scripted(ReuseCase):
+    GATE = {'steps': [SCRIPTED]}
+
+    def test_a_change_to_a_file_the_command_names_runs_the_step(self):
+        """scripts/check.py is not under the step's globs: only the hash of the argv file in the
+        key sees it change."""
+        wt, _ = self.gated_branch(files=dict(SRC, **{'scripts/check.py': 'print("ok")\n'}))
+        self.commit(wt, {'notes.txt': 'n\n'})
+        out = self.gate(wt)                 # the positive case: nothing the key names changed
+        self.assertEqual(out.verdict, 'GATE OK (reused: scripted)', self.said)
+        self.commit(wt, {'scripts/check.py': 'print("ok")  # another check\n'})
+        out = self.gate(wt)
+        self.assertEqual(out.verdict, 'GATE OK', self.said)
+        self.assertEqual(len(self.lines('MISS')), 1, self.said)
+        self.assertTrue(self.lines('MISS')[0].startswith(
+            reuse.PREFIX + 'MISS scripted: no result stored for key '), self.said)
+        self.assert_ran(out.log_dir, 'scripted')
 
 
 WRITER = {'name': 'writer', 'always': True, 'globs': ['src/*'], 'pass': '^ok$', 'reuse': True,
@@ -628,6 +760,58 @@ class Store(unittest.TestCase):
         for p in (new, foreign, top):
             self.assertTrue(os.path.exists(p), p)
 
+    def temp(self, age_h, key=KEY, name='.tmp-4242-0a1b2c3d'):
+        """A temp file as _write_entry names it, left by a crash before its rename, last
+        written `age_h` hours before NOW."""
+        os.makedirs(os.path.join(self.folder, key), exist_ok=True)
+        path = os.path.join(self.folder, key, name)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('{"result": "pa')
+        when = hours(age_h).timestamp()
+        os.utime(path, (when, when))
+        return path
+
+    def test_the_temp_name_prune_knows_is_the_one_written(self):
+        seen = []
+        real = os.replace
+
+        def replace(src, dst):
+            seen.append(os.path.basename(src))
+            return real(src, dst)
+        with mock.patch.object(reuse.os, 'replace', replace):
+            self.put('pass', hours(1))
+        self.assertEqual(len(seen), 1, seen)
+        self.assertRegex(seen[0], reuse.TMP_RE)
+
+    def test_prune_removes_a_stale_temp_file_and_its_emptied_folder(self):
+        alone = self.temp(reuse.PRUNE_H + 1, key='cd' * 32)
+        beside = self.temp(reuse.PRUNE_H + 1)
+        new = self.put('pass', hours(1))
+        self.assertEqual(reuse.prune(self.folder, NOW), [])
+        self.assertFalse(os.path.exists(alone))
+        self.assertFalse(os.path.exists(os.path.dirname(alone)))    # nothing else kept it
+        self.assertFalse(os.path.exists(beside))
+        self.assertTrue(os.path.exists(new))
+
+    def test_prune_keeps_a_fresh_temp_file(self):
+        """Another gate may be between its write and its rename."""
+        fresh = self.temp(1, key='cd' * 32)
+        edge = self.temp(reuse.PRUNE_H - 1)
+        self.assertEqual(reuse.prune(self.folder, NOW), [])
+        for p in (fresh, edge):
+            self.assertTrue(os.path.exists(p), p)
+
+    def test_prune_leaves_a_name_that_only_looks_like_a_temp_file(self):
+        names = ('.tmp-4242-0a1b2c3d.json', 'x.tmp-4242-0a1b2c3d', '.tmp-notes')
+        kept = [self.temp(reuse.PRUNE_H + 1, name=n) for n in names]
+        kept.append(os.path.join(self.folder, KEY, '.tmp-1-0a1b2c3d'))
+        os.mkdir(kept[-1])                                  # a folder, not a file
+        when = hours(reuse.PRUNE_H + 1).timestamp()
+        os.utime(kept[-1], (when, when))
+        self.assertEqual(reuse.prune(self.folder, NOW), [])
+        for p in kept:
+            self.assertTrue(os.path.exists(p), p)
+
     def test_prune_never_follows_a_junction(self):
         import _winapi
         outside = tempfile.mkdtemp()
@@ -675,6 +859,132 @@ class Identity(unittest.TestCase):
         self.assertEqual(there['python'], os.path.normcase(os.path.abspath(other)))
         self.assertEqual(there['commit'], here['commit'])
         self.assertNotEqual(there, here)
+
+
+class KitFiles(unittest.TestCase):
+    """kit_files_hash walks the files of a kit's kitlib/ and tools/: a temp kit, and
+    reuse.kit_identity as it is (never a mock of it)."""
+    FILES = {'kitlib/gate/a.py': 'a = 1\n', 'tools/t.py': 't = 1\n', 'docs/x.md': 'x\n'}
+
+    def setUp(self):
+        self.kit = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.kit, True)
+        for rel, text in self.FILES.items():
+            self.write(rel, text)
+        p = mock.patch.object(S, 'KIT_ROOT', self.kit)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def write(self, rel, text):
+        path = os.path.join(self.kit, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
+        return path
+
+    def files(self):
+        return reuse.kit_identity()['files']
+
+    def test_a_changed_file_under_kitlib_or_tools_changes_the_hash(self):
+        first = self.files()
+        self.assertRegex(first, '^[0-9a-f]{64}$')
+        self.assertEqual(self.files(), first)
+        for rel in ('kitlib/gate/a.py', 'tools/t.py'):
+            with self.subTest(rel):
+                self.write(rel, 'other = 2\n')
+                self.assertNotEqual(self.files(), first)
+                self.write(rel, self.FILES[rel])
+                self.assertEqual(self.files(), first)
+
+    def test_a_new_or_a_renamed_file_changes_the_hash(self):
+        first = self.files()
+        for rel in ('kitlib/new.py', 'tools/deep/new.py'):
+            with self.subTest(rel):
+                new = self.write(rel, '')
+                self.assertNotEqual(self.files(), first)
+                os.remove(new)
+                self.assertEqual(self.files(), first)
+        os.replace(os.path.join(self.kit, 'tools', 't.py'), os.path.join(self.kit, 'tools', 'u.py'))
+        self.assertNotEqual(self.files(), first)        # the path is hashed, not only the bytes
+
+    def test_bytecode_and_files_outside_the_two_folders_do_not(self):
+        first = self.files()
+        self.write('kitlib/gate/__pycache__/a.cpython-313.pyc', 'x')
+        self.write('tools/t.pyc', 'x')
+        self.write('docs/x.md', 'another\n')
+        self.write('README.md', 'r\n')
+        self.assertEqual(self.files(), first)
+
+    def test_a_missing_folder_raises(self):
+        shutil.rmtree(os.path.join(self.kit, 'tools'))
+        with self.assertRaises(OSError):
+            reuse.kit_identity()
+
+
+class Key(ReuseCase):
+    """step_key alone: each part of its material changes the key, and nothing else does. Each
+    test changes one part only."""
+    ARGV = [sys.executable, '-c', 'print("ok")']
+
+    def setUp(self):
+        ReuseCase.setUp(self)
+        self.root = self.repo.root
+        for rel, text in (('src/a.py', 'x = 1\n'), ('sub/keep.txt', 'k\n'),
+                          ('scripts/check.py', 'print("ok")\n')):
+            self.repo.write(rel, text)
+        self.cfg = runner.kconfig.load(self.root)
+        self.kit = {'files': '0' * 64, 'python': 'p', 'version': 'v'}
+        self.files = reuse.list_files(self.root)
+
+    def step(self, argv=None, cwd=None, name='unit'):
+        return S.Step(name, argv or self.ARGV, None, cwd or self.root, [], [], (0,), False,
+                      False, [], False)
+
+    def key(self, step=None, cfg=None, kit=None):
+        key, ins = reuse.step_key(self.root, cfg or self.cfg, UNIT, step or self.step(),
+                                  self.files, kit or self.kit)
+        self.assertEqual(sorted(ins), ['src/a.py'])
+        return key
+
+    def test_the_same_material_makes_the_same_key(self):
+        self.assertRegex(self.key(), '^[0-9a-f]{64}$')
+        self.assertEqual(self.key(), self.key())
+        self.repo.write('sub/keep.txt', 'not an input\n')
+        self.assertEqual(self.key(), self.key(self.step()))
+
+    def test_the_cwd_is_in_the_key(self):
+        there = self.step(cwd=os.path.join(self.root, 'sub'))
+        self.assertEqual(reuse.tools_of(there, []), reuse.tools_of(self.step(), []))
+        self.assertNotEqual(self.key(there), self.key())
+
+    def test_the_program_is_in_the_key(self):
+        first = self.key()
+        other = os.path.join(self.root, 'scripts', 'check.py')      # any other file's bytes
+        with mock.patch.object(reuse.shutil, 'which', return_value=other) as which:
+            second = self.key()
+        which.assert_called_once_with(sys.executable)
+        self.assertNotEqual(second, first)
+
+    def test_a_file_the_command_names_is_in_the_key(self):
+        step = self.step(argv=[sys.executable, 'scripts/check.py'])
+        first = self.key(step)
+        self.repo.write('scripts/check.py', 'print("ok")  # another check\n')
+        self.assertNotEqual(self.key(step), first)
+        self.repo.write('scripts/check.py', 'print("ok")\n')
+        self.assertEqual(self.key(step), first)
+
+    def test_the_gate_config_is_in_the_key(self):
+        first = self.key()
+        steps = [UNIT, MERGED, dict(PLAIN, **{'pass': '^o.$'})]
+        kit = dict(self.KIT, gate=dict(self.GATE, steps=steps))
+        self.repo.write('.kit.json', json.dumps(kit, indent=1) + '\n')
+        self.assertNotEqual(self.key(cfg=runner.kconfig.load(self.root)), first)
+
+    def test_the_step_name_and_the_kit_are_in_the_key(self):
+        first = self.key()
+        self.assertNotEqual(self.key(self.step(name='other')), first)
+        self.assertNotEqual(self.key(kit=dict(self.kit, files='1' * 64)), first)
+        self.assertNotEqual(self.key(kit=dict(self.kit, python='q')), first)
 
 
 class PriorRecords(unittest.TestCase):
