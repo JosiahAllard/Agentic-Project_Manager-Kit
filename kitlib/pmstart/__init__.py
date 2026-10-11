@@ -11,6 +11,7 @@ import re
 import subprocess
 
 from kitlib.config import user as kuser
+from kitlib.pmstart import fglock
 
 KEY = "pm_start"
 TIMEOUT = 4
@@ -367,6 +368,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("reminders", lambda: reminders(cfg, today, **fakes.get("reminders", {}))),
         ("liveness", lambda: liveness(cfg, procs_once(), **fakes.get("liveness", {}))),
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
+        ("foreground_lock", lambda: fglock.check(cfg, **fakes.get("foreground_lock", {}))),
     ]
     for name, fn in checks:
         try:
