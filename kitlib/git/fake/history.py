@@ -790,8 +790,12 @@ class Walker:
                         show = not self.treesame(o, parents[0])
                     elif self.full_history:
                         # --full-history without parent rewriting: walk every parent; the merge
-                        # shows unless it is TREESAME to all of them.
-                        show = not all(self.treesame(o, p) for p in parents)
+                        # shows unless it is TREESAME to all of them. With --diff-filter (and no
+                        # -m/-c/--cc) git shows no diff for a merge, so the filter drops it.
+                        if self.filter and not (a.flags & {'-m', '-c', '--cc'}):
+                            show = False
+                        else:
+                            show = not all(self.treesame(o, p) for p in parents)
                     else:
                         for p in parents:
                             if self.treesame(o, p):

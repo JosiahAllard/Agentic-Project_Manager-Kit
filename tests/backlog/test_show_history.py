@@ -5,11 +5,12 @@ import os
 import subprocess
 import sys
 import tempfile
+import unittest
 
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
-from kitlib.backlog.errors import NotFound
+from kitlib.backlog.errors import NotFound, Usage
 from tests.backlog.helpers import BRANCH, StoreCase, rec, record_text
 from tests.gitfixture import NAME, TempRepo, fixture_env, rmtree
 
@@ -46,6 +47,51 @@ class RefStore(StoreCase):
     def test_a_live_record_is_returned(self):
         self.seed(rec('FOO'))
         self.assertEqual(pmod.require_shown(self.store.load(), self.ctx, 'FOO').id, 'FOO')
+
+    def test_a_store_with_no_tip_has_no_history_and_the_id_is_unknown(self):
+        self.assertIsNone(self.store.load().tip)
+        self.assertIn('the id is unknown', self.missing('FOO'))
+
+    def test_a_removal_without_a_session_line_prints_a_dash(self):
+        self.seed(rec('FOO'))
+        self.backend.publish(self.store.load(), {'FOO': None}, 'closes FOO: by hand\n\nno trailer\n')
+        self.assertIn('(session -): closes FOO: by hand', self.missing('FOO'))
+
+    def test_a_glob_id_is_not_looked_up_and_matches_no_other_record(self):
+        self.seed(rec('FOO'), rec('FOX'))
+        self.verb('close', 'FOO', 'the work is finished')
+        said = self.missing('FO*')
+        self.assertIn('history not searched: `FO*` is not a plain id', said)
+        self.assertNotIn('removed by', said)
+        for path in ('backlog/FO*.md', 'backlog/F?O.md', 'backlog/[F]OO.md', 'backlog/../FOO.md'):
+            with self.assertRaises(Usage, msg=path):
+                smod.last_removal(self.repo.root, self.remote_tip(), path)
+
+
+class SessionLine(unittest.TestCase):
+
+    def test_the_first_session_line_wins_and_an_empty_one_is_none(self):
+        self.assertIsNone(smod.session_of(''))
+        self.assertIsNone(smod.session_of('no trailer here\n'))
+        self.assertEqual(smod.session_of('Session: one\nSession: two\n'), 'one')
+        self.assertIsNone(smod.session_of('Session:\n'))
+        self.assertIsNone(smod.session_of('Session:   \nRuling: PM R-1\n'))
+        self.assertEqual(smod.session_of('Ruling: PM R-1\nSession: s-1\n'), 's-1')
+
+
+class UnreadableHistory(StoreCase):
+
+    def test_an_unborn_head_on_a_main_store_is_still_not_found(self):
+        r = TempRepo()
+        self.addCleanup(r.cleanup)
+        r.git('checkout', '-q', '--orphan', 'fresh')
+        store = smod.Store(smod.MainBackend(r.root, 'docs/backlog'), rmod.Rules())
+        ctx = pmod.Context(store, self.ledger, r.root, branch=BRANCH)
+        with self.assertRaises(NotFound) as cm:
+            pmod.require_shown(store.load(), ctx, 'FOO')
+        said = str(cm.exception)
+        self.assertIn('no record with `id: FOO`', said)
+        self.assertIn("the store's history could not be read", said)
 
 
 class MainStoreSideBranch(StoreCase):

@@ -46,6 +46,26 @@ class FullHistory(unittest.TestCase):
         self.assertEqual(self.log('--', 'y.md'), {self.add_y})
         self.assertEqual(self.log('--full-history', '--', 'y.md'), {self.add_y, self.merge})
 
+    def test_a_diff_filter_never_shows_a_merge(self):
+        # w.md is deleted on main (C) while a branch cut before C still has it; the --no-ff merge
+        # differs from that branch's parent for w.md, yet git names C, not the merge.
+        r = self.r
+        r.write('w.md', 'w\n')
+        r.commit('add w', 'w.md')
+        r.git('branch', 'stale')
+        r.git('rm', '-q', '--', 'w.md')
+        r.git('commit', '-q', '-m', 'delete w on main')
+        deleted = r.head()
+        r.git('checkout', '-q', 'stale')
+        r.write('v.txt', 'v\n')
+        r.commit('stale moves', 'v.txt')
+        r.git('checkout', '-q', 'main')
+        r.git('merge', '-q', '--no-ff', '-m', 'merge stale', 'stale')
+        self.assertEqual(self.log('--full-history', '--no-renames', '--diff-filter=D', '--',
+                                  'w.md'), {deleted})
+        self.assertEqual(self.r.git('log', '-1', '--format=%H', '--full-history', '--no-renames',
+                                    '--diff-filter=D', '--', 'w.md'), deleted)
+
 
 @real_git('fidelity twin: the same --full-history walk answered by git itself')
 class FullHistoryRealGit(FullHistory):

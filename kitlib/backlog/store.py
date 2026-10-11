@@ -481,6 +481,8 @@ def last_removal(root, rev, path):
     record added and deleted on a side branch that was merged leaves the merge TREESAME to its
     first parent, and the default simplification would prune the side branch, deleting commit and
     all. `--no-renames`: a record renamed away counts as deleted."""
+    if re.search(r'[*?\[\]\\:]', path) or '..' in path.split('/'):
+        raise Usage('`%s` would be a pattern, not one file, as a git pathspec' % path)
     out, why = cmd.run_text(['log', '-1', '--full-history', '--no-renames', '--diff-filter=D',
                              '--format=%h%x1f%cI%x1f%s%x1f%b', rev, '--', path], root)
     if out is None:
@@ -488,11 +490,21 @@ def last_removal(root, rev, path):
     if not out:
         return None
     sha, when, subject, body = (out.split('\x1f', 3) + ['', '', ''])[:4]
-    session = None
+    return Removal(sha, when, session_of(body), subject)
+
+
+# An id the history lookup may put in a pathspec: no glob or pathspec-magic character, no path
+# separator (`show 'F*'` must not match other records' files).
+PLAIN_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
+
+
+def session_of(body):
+    """The value of the first `Session:` line of a commit body; None when there is none or it is
+    empty."""
     for line in body.split('\n'):
-        if line.startswith('Session: '):
-            session = line[len('Session: '):].strip() or None
-    return Removal(sha, when, session, subject)
+        if line.startswith('Session:'):
+            return line[len('Session:'):].strip() or None
+    return None
 
 
 def _touch_times(root, rev, rel):
