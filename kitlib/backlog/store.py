@@ -443,7 +443,7 @@ class RefBackend(object):
         """The newest store commit that deleted `backlog/<rid>.md` (a Removal), or None."""
         if not snap.tip:
             return None
-        return last_removal(self.root, snap.tip, self.path_of(rid))
+        return last_removal(self.root, snap.tip, STORE_DIR, rid)
 
     def touched(self, snap):
         """`{stem: epoch}` of the last store commit that wrote each record."""
@@ -476,13 +476,15 @@ class Removal(object):
         self.subject = subject
 
 
-def last_removal(root, rev, path):
-    """The newest commit reachable from `rev` that deleted `path`, or None. `--full-history`: a
-    record added and deleted on a side branch that was merged leaves the merge TREESAME to its
-    first parent, and the default simplification would prune the side branch, deleting commit and
-    all. `--no-renames`: a record renamed away counts as deleted."""
-    if re.search(r'[*?\[\]\\:]', path) or '..' in path.split('/'):
-        raise Usage('`%s` would be a pattern, not one file, as a git pathspec' % path)
+def last_removal(root, rev, rel, rid):
+    """The newest commit reachable from `rev` that deleted `<rel>/<rid>.md`, or None. Only the id
+    is checked (Usage unless PLAIN_ID): the folder is configuration, a backslash in it read as
+    `/`. `--full-history`: a record added and deleted on a side branch that was merged leaves the
+    merge TREESAME to its first parent, and the default simplification would prune the side
+    branch, deleting commit and all. `--no-renames`: a record renamed away counts as deleted."""
+    if not PLAIN_ID.match(rid):
+        raise Usage('`%s` is not a plain id: as a git pathspec it could match other files' % rid)
+    path = '%s/%s.md' % (rel.replace('\\', '/').strip('/'), rid)
     out, why = cmd.run_text(['log', '-1', '--full-history', '--no-renames', '--diff-filter=D',
                              '--format=%h%x1f%cI%x1f%s%x1f%b', rev, '--', path], root)
     if out is None:
@@ -585,7 +587,7 @@ class MainBackend(object):
 
     def removal(self, rid, snap):
         """The newest commit on HEAD that deleted `<dir>/<rid>.md` (a Removal), or None."""
-        return last_removal(self.root, 'HEAD', '%s/%s.md' % (self.rel, rid))
+        return last_removal(self.root, 'HEAD', self.rel, rid)
 
     def touched(self, snap):
         return _touch_times(self.root, 'HEAD', self.rel)

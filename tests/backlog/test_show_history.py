@@ -63,9 +63,9 @@ class RefStore(StoreCase):
         said = self.missing('FO*')
         self.assertIn('history not searched: `FO*` is not a plain id', said)
         self.assertNotIn('removed by', said)
-        for path in ('backlog/FO*.md', 'backlog/F?O.md', 'backlog/[F]OO.md', 'backlog/../FOO.md'):
-            with self.assertRaises(Usage, msg=path):
-                smod.last_removal(self.repo.root, self.remote_tip(), path)
+        for rid in ('FO*', 'F?O', '[F]OO', '../FOO', 'F\\OO', ':FOO'):
+            with self.assertRaises(Usage, msg=rid):
+                smod.last_removal(self.repo.root, self.remote_tip(), smod.STORE_DIR, rid)
 
 
 class SessionLine(unittest.TestCase):
@@ -119,6 +119,26 @@ class MainStoreSideBranch(StoreCase):
         self.assertIn('removed by %s ' % r.git('rev-parse', '--short', deleted), said)
         self.assertIn('(session side-session): closes FOO: done on the side', said)
         self.assertNotIn(r.git('rev-parse', '--short', merge), said)
+
+
+class BackslashFolder(StoreCase):
+    """A main store configured as `docs\\items` (a valid RelPath) is looked up as `docs/items`."""
+
+    def test_a_backslash_folder_still_names_the_deleting_commit(self):
+        r = TempRepo()
+        self.addCleanup(r.cleanup)
+        r.write('docs/items/FOO.md', record_text(id='FOO'))
+        r.commit('adds FOO', 'docs/items/FOO.md')
+        r.git('rm', '-q', '--', 'docs/items/FOO.md')
+        r.git('commit', '-q', '-m', 'closes FOO: gone\n\nSession: bs-session')
+        deleted = r.head()
+        store = smod.Store(smod.MainBackend(r.root, 'docs\\items'), rmod.Rules())
+        ctx = pmod.Context(store, self.ledger, r.root, branch=BRANCH)
+        with self.assertRaises(NotFound) as cm:
+            pmod.require_shown(store.load(), ctx, 'FOO')
+        said = str(cm.exception)
+        self.assertIn('removed by %s ' % r.git('rev-parse', '--short', deleted), said)
+        self.assertIn('(session bs-session): closes FOO: gone', said)
 
 
 class Cli(StoreCase):
