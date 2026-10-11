@@ -63,35 +63,43 @@ class SlotTreeKill(StoreCase):
             p.kill()
         p.wait(30)
 
-    def pids(self, d, timeout=30):
-        """{level: pid} once every level has written its pid file."""
-        out, end = {}, time.monotonic() + timeout
+    def pids(self, d, hold=LEVELS, timeout=30):
+        """({level: pid}, {level: handle}) once every level has written its pid file. Each level
+        in `hold` is opened the moment its pid is read (it sleeps 60 s, so the pid is its own)
+        and its handle registered for cleanup at once, before anything is asserted: a later
+        failure - this wait timing out, a check in hold() - leaves no held level running."""
+        out, handles, end = {}, {}, time.monotonic() + timeout
         while len(out) < len(LEVELS) and time.monotonic() < end:
             for lv in LEVELS:
                 path = os.path.join(d, "%d.pid" % lv)
                 if lv not in out and os.path.exists(path):
                     with open(path, encoding="utf-8") as f:
                         out[lv] = int(f.read())
+                    if lv in hold:
+                        h = process.open_process(out[lv], process.SYNCHRONIZE
+                                                 | process.PROCESS_TERMINATE
+                                                 | process.PROCESS_QUERY_LIMITED_INFORMATION)
+                        if h:
+                            self.addCleanup(self.drop, h)
+                            handles[lv] = h
             time.sleep(0.02)
         self.assertEqual(sorted(out), list(LEVELS), "the tree never came up")
-        return out
+        for lv in hold:
+            self.assertIn(lv, handles, "level %d (pid %d) could not be opened" % (lv, out[lv]))
+        return out, handles
 
     def drop(self, h):
         if win32.K32.WaitForSingleObject(h, 0) == win32.WAIT_TIMEOUT:
             win32.K32.TerminateProcess(h, 1)
         process.close(h)
 
-    def hold(self, pids, levels, in_job=None):
-        """{level: handle} for `levels`, each opened while alive and held until cleanup; checks
-        each is its parent level's child and, given in_job (the launcher's pids), in the job."""
+    def hold(self, got, in_job=None):
+        """The handles of pids(), each checked: alive, its parent level's child and, given in_job
+        (the launcher's pids), in the slot's job. Every handle is already held for cleanup."""
+        pids, handles = got
         parents = process.process_parents()
-        out = {}
-        for lv in levels:
+        for lv, h in sorted(handles.items()):
             pid = pids[lv]
-            h = process.open_process(pid, process.SYNCHRONIZE | process.PROCESS_TERMINATE
-                                     | process.PROCESS_QUERY_LIMITED_INFORMATION)
-            self.assertTrue(h, "level %d (pid %d) could not be opened" % (lv, pid))
-            self.addCleanup(self.drop, h)
             self.assertEqual(win32.K32.WaitForSingleObject(h, 0), win32.WAIT_TIMEOUT,
                              "level %d had ended before it was held" % lv)
             if lv:
@@ -99,8 +107,7 @@ class SlotTreeKill(StoreCase):
                                  "pid %d is not level %d's child" % (pid, lv - 1))
             if in_job is not None:
                 self.assertIn(pid, in_job, "level %d is not in the slot's job" % lv)
-            out[lv] = h
-        return out
+        return handles
 
     def assert_gone(self, handles):
         for lv, h in sorted(handles.items()):
@@ -121,7 +128,7 @@ class SlotTreeKill(StoreCase):
             rid = launch.id
             p = launch.start(argv)
             self.addCleanup(self.reap, p)
-            handles = self.hold(self.pids(d), LEVELS, launch.pids())
+            handles = self.hold(self.pids(d), launch.pids())
             self.assertTrue(rm.request_stop(self.store, rid, "test"))
             self.assertEqual(launch.wait(p), 1)
             self.assert_gone(handles)
@@ -134,7 +141,7 @@ class SlotTreeKill(StoreCase):
                 rid = launch.id
                 p = launch.start(argv)
                 self.addCleanup(self.reap, p)
-                handles = self.hold(self.pids(d), LEVELS, launch.pids())
+                handles = self.hold(self.pids(d), launch.pids())
                 raise RuntimeError("boom")
         self.assert_gone(handles)
         self.assertEqual(self.ended(rid), ("error", 1))
@@ -148,9 +155,10 @@ class SlotTreeKill(StoreCase):
                 rid = launch.id
                 p = launch.start(argv)
                 self.addCleanup(self.reap, p)
-                pids = self.pids(d)
+                # Level 0 exits on its own, so it is never opened (its pid may be reused).
+                got = self.pids(d, hold=(1, 2))
                 self.assertEqual(p.wait(30), 0)
-                handles = self.hold(pids, (1, 2), launch.pids())
+                handles = self.hold(got, launch.pids())
                 raise KeyboardInterrupt
         self.assert_gone(handles)
         self.assertEqual(self.ended(rid), ("interrupted", 130))
@@ -160,7 +168,7 @@ class SlotTreeKill(StoreCase):
         with self.slot() as launch:
             p = launch.start(argv)
             self.addCleanup(self.reap, p)
-            handles = self.hold(self.pids(d), LEVELS, launch.pids())
+            handles = self.hold(self.pids(d), launch.pids())
             launch.kill()
             self.assertEqual(launch.wait(p), 1)
             self.assert_gone(handles)
@@ -170,7 +178,7 @@ class SlotTreeKill(StoreCase):
         argv, d = self.tree()
         p = subprocess.Popen(argv, env=clean_env())
         self.addCleanup(self.reap, p)
-        handles = self.hold(self.pids(d), LEVELS)
+        handles = self.hold(self.pids(d))
         p.kill()
         p.wait(30)
         self.assertEqual(win32.K32.WaitForSingleObject(handles[0], GONE_MS), win32.WAIT_OBJECT_0)
