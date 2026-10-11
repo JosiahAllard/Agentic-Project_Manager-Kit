@@ -41,7 +41,7 @@ CALLER_VAR = 'KIT_STUB_CALLER'
 # libraries it listed are kitlib modules now and get no stub). A name the kit has no command for
 # yet is left out of the default until it does.
 SHARED = (
-    'backlog', 'board', 'checkout_guard', 'codemap', 'commit', 'daily_full', 'doc_budget',
+    'backlog', 'board', 'branch_overlap', 'checkout_guard', 'codemap', 'commit', 'daily_full', 'doc_budget',
     'doc_index', 'forbidden', 'gate', 'land', 'landed', 'ledger', 'machine_paths', 'new_worktree',
     'pieces', 'preflight', 'pytests', 'redfirst', 'review_pack', 'ruling_cites', 'stack_skill',
     'sync_base', 'testlist', 'tool_deps', 'trailers', 'worktree_paths', 'worktree_remove',
