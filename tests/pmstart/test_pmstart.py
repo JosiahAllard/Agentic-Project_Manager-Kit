@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from kitlib import pmstart
+from kitlib.pmstart import fglock
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 CFG = {"hub_url": "https://claude.ai/artifact/X", "hub_source": "claude/hub/action-hub.html",
@@ -19,10 +20,14 @@ def setUpModule():
     global _orig_settings
     _orig_settings = pmstart.pm_data_settings
     pmstart.pm_data_settings = lambda: None
+    global _orig_read_live
+    _orig_read_live = fglock.read_live
+    fglock.read_live = lambda user32=None: 0
 
 
 def tearDownModule():
     pmstart.pm_data_settings = _orig_settings
+    fglock.read_live = _orig_read_live
 
 
 def proc(name, cmd, exe=""):

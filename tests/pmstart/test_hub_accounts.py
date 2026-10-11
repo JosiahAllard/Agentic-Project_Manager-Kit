@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from kitlib import hubmirror, pmstart
+from kitlib.pmstart import fglock
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
@@ -23,9 +24,12 @@ class HubAccountsTest(unittest.TestCase):
     def setUp(self):
         self._orig = pmstart.pm_data_settings
         pmstart.pm_data_settings = lambda: None
+        self._orig_live = fglock.read_live
+        fglock.read_live = lambda user32=None: 0
 
     def tearDown(self):
         pmstart.pm_data_settings = self._orig
+        fglock.read_live = self._orig_live
 
     def test_this_accounts_url_gives_the_republish_line(self):
         cfg = {"hub_urls": {"1": "https://claude.ai/artifact/ONE", "2": "https://claude.ai/artifact/TWO"},
