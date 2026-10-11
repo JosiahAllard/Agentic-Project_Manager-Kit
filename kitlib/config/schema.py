@@ -31,7 +31,8 @@ Argv = ListOf(Str(), nonempty=True)
 Regexes = Either(Regex(), ListOf(Regex()))
 
 # Paths only the owner changes (PM kit _owner_only.DEFAULT): an entry ending `/` locks a directory.
-OWNER_PATHS = ['CLAUDE.md', '.claude/', '.github/workflows/', '.kit.json', 'tools/gate.json']
+OWNER_PATHS = ['CLAUDE.md', '.claude/', '.github/workflows/', '.kit.json', 'tools/gate.json',
+               'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']
 OWNER_PATHS_EXCEPT = ['.claude/worktrees/']
 
 # The heavy-program entry shape: kit defaults (policy.HEAVY_DEFAULTS) and `.kit.json` "heavy".programs.
@@ -78,7 +79,6 @@ STEP = Obj({
                           'regex': Field(Regex(), None, 'content that selects')},
                          required=('globs', 'regex'), what='{globs, regex}'),
                      None, 'select by changed file content'),
-    'kill_retry': Field(Bool(), None, 'retry once after killing a hung run'),
     'requires': Field(ListOf(Either(Str(), Argv), nonempty=True), None, 'commands or probe argvs; missing: skip'),
     'requires_strict': Field(Bool(), None, 'a missing requirement fails instead of skipping'),
     'reuse': Field(Either(Bool(), Str(pattern=NAME_RE, what='a group name')), None, 'a landing may reuse its pass from the branch gate of the exact tree; a group name: its group is reused together or not at all'),
@@ -140,8 +140,6 @@ SECTIONS = {
         'phases': Field(Strs, [], 'phase names in order'),
         'id_grammar': Field(Enum('upper', 'mixed'), 'upper', 'item id spelling'),
         'ledger_repo': Field(Str(), None, 'the ledger repo column; default the repo name'),
-        'retired_docs': Field(Paths, [], 'docs the backlog replaced'),
-        'rename_script': Field(Str(nonempty=False), '', 'priority rename helper'),
     },
     'board': {
         'state_file': Field(RelPath(), None, 'the board state file, under the git dir (default <git common dir>/kit/board-state.md)'),
@@ -294,7 +292,7 @@ SECTIONS = {
     'worktree_remove': {
         'exempt': Field(MapOf(Str(), 'folder'), {}, 'worktree folder -> the ruling exempting it'),
         'disposable_untracked': Field(Strs, [], 'untracked file globs removal may discard'),
-        'build_output': Field(Strs, [], 'build output path globs'),
+        'build_output': Field(ListOf(Either(Str(), Obj({'piece': Field(Str(), None, 'piece id'), 'path': Field(Str(), None, 'folder in the piece')}, required=('piece', 'path'), what='{piece, path}'))), [], 'build output path globs, or {piece, path} folders resolved through the pieces table'),
         'keepers': Field(Strs, [], 'file globs that refuse a removal, added to the kit list'),
         'archive_next_free': Field(Bool(), False, 'archive under the next free name'),
         'branch_template': Field(Str(pattern=r'[^{}]*\{slug\}[^{}]*', what='a branch name holding {slug} once'), None, 'branch name for a slug'),
@@ -308,6 +306,11 @@ FILE_OK = frozenset(SECTIONS) - {'repo', 'owner', 'hook', 'guard'}
 OPAQUE = frozenset(('forbidden', 'pieces'))
 # Sections that are a map of one entry type: role name -> permissions, over policy.ROLE_DEFAULTS.
 MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, over the kit defaults')}
+
+
+# Keys no tool reads any more, per section. A config that still carries one loads: the key is
+# dropped unchecked (not an unknown-key refusal), so an install written before the removal works.
+RETIRED = {'backlog': ('retired_docs', 'rename_script')}
 
 
 def section_type(name):

@@ -2,12 +2,14 @@
 
   backlog.py [-C DIR] [--session S] [--as BRANCH] [--no-fetch] <verb> ...
 
-  reads   next [--cap N] [--with ID]...     show ID     check     landable BRANCH...
+  reads   next [--cap N | --all] [--with ID]...     show ID     check     landable BRANCH...
           list [--blocked [--on M]] [--needs-priority] [--status S] [--area A]
           stale [--days N]
   writes  add ID --summary S --scope P... [--effort s|m|l] [--ref R] [--reopen]
           set ID [--<field> V]... [--unset K]... [--ruling R] [--body-file F] [--hold-ruling R]
-          block ID --on M... [--owner-ask Q] [--ruling R]      unblock ID [--ruling R]
+          block ID --on M... [--reason T] [--owner-ask Q] [--ruling R]
+          retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
+          unblock ID [--on M] [--reason T] [--ruling R]      (several blockers: --on and --reason)
           pull ID [--reason T] [--ruling R] [--blocker ID]   release ID --reason T
           close ID --reason T [--ruling R]                   retire ID --why T [--ruling R]
           set-status ID parked --q Q-nnn                     unpark ID --ruling R
@@ -29,6 +31,7 @@ from kitlib.backlog import migrate as mmod                          # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
 from kitlib.backlog import record as rmod                           # noqa: E402
+from kitlib.backlog import retarget as retmod                       # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
 from kitlib.backlog.errors import Failure, Refusal, Usage           # noqa: E402
@@ -58,7 +61,8 @@ def build_parser():
     sub.required = True
 
     v = sub.add_parser('next')
-    v.add_argument('--cap', type=int, default=5)
+    v.add_argument('--cap', type=int, default=None)
+    v.add_argument('--all', action='store_true', help='every startable item, no cap')
     v.add_argument('--with', dest='seeds', action='append', default=[])
     v = sub.add_parser('show')
     v.add_argument('id')
@@ -93,10 +97,17 @@ def build_parser():
     v = sub.add_parser('block')
     v.add_argument('id')
     v.add_argument('--on', action='append', default=[])
+    v.add_argument('--reason', default=None)
     v.add_argument('--owner-ask', default=None)
     v.add_argument('--ruling', default=None)
+    v = sub.add_parser('retarget')
+    v.add_argument('old')
+    v.add_argument('new')
+    v.add_argument('--apply', action='store_true', help='write; without it a dry run')
     v = sub.add_parser('unblock')
     v.add_argument('id')
+    v.add_argument('--on', default=None)
+    v.add_argument('--reason', default=None)
     v.add_argument('--ruling', default=None)
     v = sub.add_parser('pull')
     v.add_argument('id')
@@ -145,6 +156,9 @@ def row(rec, ranks):
 
 
 def do_next(args, ctx, snap):
+    if args.all and args.cap is not None:
+        raise Usage('`--all` lists every startable item; it takes no `--cap`')
+    cap = None if args.all else (args.cap if args.cap is not None else omod.DEFAULT_CAP)
     b = banner(snap)
     warn = b.queue_warning()
     if warn:
@@ -153,15 +167,20 @@ def do_next(args, ctx, snap):
     if why:
         say('in flight: cannot read the branches (%s); every pull holds its scope' % why)
     for rec in dead:
-        say('DEAD PULL %s (pulled_by %s has no branch): `release %s --reason "..."`'
-            % (rec.id, rec.get('pulled_by'), rec.id))
-    result, refusals, ranks = omod.next_offer(snap, holding, cap=args.cap, seeds=args.seeds,
+        # The record's own session takes a dead pull over with a plain `pull` (plan_pull);
+        # anyone else releases it first.
+        taker = ('a pull by session %s takes it over; otherwise ' % rec.get('session')
+                 if rec.get('session') else '')
+        say('DEAD PULL %s (pulled_by %s has no branch): %s`release %s --reason ...`'
+            % (rec.id, rec.get('pulled_by'), taker, rec.id))
+    result, refusals, ranks = omod.next_offer(snap, holding, cap=cap, seeds=args.seeds,
                                               session=ctx.session, unmet=ctx.unmet(snap))
     if refusals:
         raise Failure('cannot compute an offer: %s' % '; '.join(refusals))
     offers, passed = result
     say('')
-    say('NEXT (%d offered%s)' % (len(offers), ', session %s' % ctx.session if ctx.session else ''))
+    say('NEXT (%d offered%s%s)' % (len(offers), ', session %s' % ctx.session if ctx.session else '',
+                                   ', --all: no cap' if cap is None else ''))
     for o in offers:
         say(row(o.rec, ranks) + ('  (--with)' if o.seeded else ''))
     for p in passed:
@@ -228,7 +247,7 @@ def do_stale(args, ctx, snap):
 def do_check(args, ctx, snap):
     say('CHECK %s (%s)' % (snap.head_label(), snap.where))
     red = False
-    for res in checkmod.check_store(snap, ctx.ledger):
+    for res in checkmod.check_store(snap):
         say(res.line())
         for f in res.findings:
             say('    FAIL %s:%s %s' % (f.path, f.line, f.message))
@@ -272,6 +291,21 @@ def do_write(args, ctx, store):
     return 0
 
 
+def do_retarget_dry(args, store):
+    """`retarget` without `--apply`: the change it would write, planned against a fresh read and
+    checked as a write would be; nothing is published."""
+    snap = store.load()
+    smod.require_readable(snap)
+    change = retmod.plan_retarget(snap, args.old, args.new)
+    if change.writes:
+        smod.check_change(snap, change)
+    for line in change.lines:
+        say(line)
+    say('DRY RUN: nothing was written%s' % ('; `--apply` writes it as one store commit'
+                                            if change.writes else ''))
+    return 0
+
+
 # --- start a store --------------------------------------------------------------------------------
 
 def do_migrate(args, top, cfg, rules):
@@ -307,16 +341,17 @@ def main(argv=None):
     try:
         if args.verb == 'retire' and args.owner_said is not None:
             raise Usage('`--owner-said` is gone: owner words are never copied into a record. '
-                        'Retiring an owner-held record takes `--ruling R-nnnn`, a ledger entry whose '
-                        '`Items:` line names it')
+                        'Retiring an owner-held record takes `--ruling R-nnnn`')
         root = os.path.abspath(args.root or os.getcwd())
         if args.verb == 'migrate':
             top, cfg, rules, _, _ = open_repo(root)
             return do_migrate(args, top, cfg, rules)
         ctx = open_store(root, fetch=not args.no_fetch, session=args.session, branch=args.branch)
         store = ctx.store
-        if args.verb in WRITES:
+        if args.verb in WRITES or (args.verb == 'retarget' and args.apply):
             return do_write(args, ctx, store)
+        if args.verb == 'retarget':
+            return do_retarget_dry(args, store)
         snap = store.load()
         if args.verb == 'landable':
             return do_landable(args, ctx, snap, store.backend)

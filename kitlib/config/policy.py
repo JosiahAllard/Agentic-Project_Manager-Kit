@@ -8,7 +8,9 @@ Heavy programs (ARCHITECTURE.md "Kinds": a program is heavy because it is on the
   the program in a command line (interpreters, shells, Start-Process) is the guard's job.
 
 Roles. role_name(event) is `main` for a PreToolUse event without `agent_id`, else its
-  `agent_type` when the roles table names it, else `subagent`. permissions(event, roles) is that
+  `agent_type` when the roles table names it, else `subagent`. An agent_type with the kit plugin's
+  prefix (`<plugin>:lander`) names the same role as the bare one; no other prefix does
+  (kitlib.agentname.bare). permissions(event, roles) is that
   role's entry over its base (`main` or `subagent`) over ROLE_DEFAULTS.
 
 Kinds table: kitlib/lock/kinds.json, written by the lock package and committed by the
@@ -32,6 +34,8 @@ import ntpath
 import os
 import re
 import sys
+
+from kitlib import agentname
 
 from . import schema
 from .types import ConfigError, check, is_note
@@ -118,10 +122,11 @@ def roles(cfg=None):
 
 
 def role_name(event, table=None):
-    """`main` (no agent_id), the event's agent_type when `table` names it, else `subagent`."""
+    """`main` (no agent_id), the event's agent_type (bare or with the kit plugin's prefix,
+    kitlib.agentname.bare) when `table` names it, else `subagent`."""
     if not (event or {}).get('agent_id'):
         return 'main'
-    kind = event.get('agent_type')
+    kind = agentname.bare(event.get('agent_type'))
     if kind and kind in (table or ROLE_DEFAULTS) and kind != 'main':
         return kind
     return 'subagent'
@@ -267,7 +272,8 @@ def gate_checks(module):
     checks = getattr(module, 'GATE_CHECKS', None)
     if checks is None:
         return {}
-    where = getattr(module, '__file__', 'the hook module')
+    # A module loaded from a commit (kitlib.gate.hookrev) is named as `<rev10>:<rel>`.
+    where = getattr(module, '__kit_where__', None) or getattr(module, '__file__', 'the hook module')
     if not isinstance(checks, dict):
         raise ConfigError('%s: GATE_CHECKS must be a dict of check name -> callable' % where)
     errs = []

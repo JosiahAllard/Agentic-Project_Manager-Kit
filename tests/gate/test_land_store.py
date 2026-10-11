@@ -2,6 +2,7 @@
 safety"): a landing closes the records its branch still holds pulled once the push is verified, a
 close that fails is a WARNING and the landing stands, and a branch whose history holds the store's
 root commit is refused before any merge. Scratch repository and bare remote in temp only."""
+import json
 import os
 import unittest
 from unittest import mock
@@ -118,8 +119,11 @@ class ClosesAtLanding(StoreLandCase):
         self.assertEqual(len(warn), 1, out.lines)
         self.assertIn('FOO', warn[0])
         self.assertIn('owner-held', warn[0])
+        # A backlog write refuses in the main checkout, so the command names a worktree, never
+        # the main checkout the landing ran in.
         self.assertIn('backlog.py" -C "%s" close FOO --reason "landed %s"'
-                      % (self.repo.root, merge), warn[0])
+                      % (at_landing.WORKTREE, merge), warn[0])
+        self.assertNotIn(self.repo.root, warn[0])
         self.assertEqual(len([l for l in out.lines if l.startswith('LANDED ')]), 1, out.lines)
         self.assertIsNone(self.lock().read())
 
@@ -308,6 +312,90 @@ class PmDataAncestryFolderStore(PmDataAncestry):
         self.assertIsNone(at_landing.ref_store(self.repo.root, cfg))
 
 
+class PmDataClose(StoreLandCase):
+    """A landing closes what the branch holds pulled in the PM data branch's store too: a folder
+    store in the worktree that has the recorded data branch checked out (kitlib.pmdata), where
+    the PM keeps this repository's records while the configured store stays empty."""
+
+    def setUp(self):
+        StoreLandCase.setUp(self)
+        tree = self.repo.git('rev-parse', self.main + '^{tree}')
+        root = self.repo.git('commit-tree', tree, '-m', 'PM data root')
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', root)
+
+    def pm_worktree(self, *records):
+        wt = self.repo.worktree('pm', branch='pmdata')
+        with open(os.path.join(wt, '.kit.json'), encoding='utf-8') as f:
+            cfg = json.load(f)
+        cfg['backlog'] = {'store': 'kit/backlog'}
+        self.repo.write('.kit.json', json.dumps(cfg, indent=1) + '\n', root=wt)
+        for r in records:
+            for stem, text in r.items():
+                self.repo.write('kit/backlog/%s.md' % stem, text, root=wt)
+        return wt
+
+    def record(self, wt, rid):
+        return os.path.join(wt, 'kit', 'backlog', rid + '.md')
+
+    def pm_root(self, wt):
+        """The PM data worktree as git spells it (what the printed commands name): `wt`."""
+        found, why = at_landing.pm_data_root(self.repo.root)
+        self.assertIsNotNone(found, why)
+        self.assertTrue(os.path.samefile(found, wt), (found, wt))
+        return found
+
+    def land(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.remote_main(), out.merge)
+        return out
+
+    def test_a_landing_closes_the_records_the_branch_holds_in_the_pm_data_store(self):
+        wt = self.pm_worktree(pulled('FOO'), pulled('QUX', by='kit/other'), priced('BAZ'))
+        out = self.land()
+        self.assertFalse(os.path.exists(self.record(wt, 'FOO')), out.lines)
+        self.assertTrue(os.path.exists(self.record(wt, 'QUX')))
+        self.assertTrue(os.path.exists(self.record(wt, 'BAZ')))
+        closed = [l for l in out.lines if l.startswith('closed ')]
+        self.assertEqual(len(closed), 1, out.lines)
+        self.assertIn('closed FOO in the backlog store kit/backlog in ', closed[0])
+        self.assertIn('landed %s' % out.merge, closed[0])
+        self.assertFalse([l for l in out.lines if l.startswith('WARNING')], out.lines)
+        landed = [i for i, l in enumerate(out.lines) if l.startswith('LANDED ')]
+        self.assertEqual(len(landed), 1, out.lines)
+        self.assertGreater(out.lines.index(closed[0]), landed[0], out.lines)
+
+    def test_a_record_the_pm_data_store_cannot_close_names_the_command_and_the_landing_stands(self):
+        wt = self.pm_worktree(pulled('FOO', priority='-1', priority_by='-',
+                                     owner_ask='may this ship?'))
+        out = self.land()
+        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertIn('owner-held', warn[0])
+        self.assertIn('backlog.py" -C "%s" close FOO --reason "landed %s" --ruling R-nnnn'
+                      % (self.pm_root(wt), out.merge), warn[0])
+        self.assertEqual(self.main_now(), out.merge)
+        self.assertIsNone(self.lock().read())
+
+    def test_no_worktree_on_the_pm_data_branch_is_a_warning_and_the_landing_stands(self):
+        out = self.land()
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertIn('no worktree has the PM data branch pmdata checked out', warn[0])
+        self.assertIn('landable %s' % BRANCH, warn[0])
+        self.assertEqual(self.main_now(), out.merge)
+
+    def test_the_landable_commands_name_the_pm_data_worktree(self):
+        wt = self.pm_worktree()
+        cfg = kconfig.load_at(self.repo.root, self.main)
+        hows = at_landing.landable_commands(self.repo.root, cfg, BRANCH)
+        self.assertEqual(len(hows), 2, hows)
+        self.assertIn('-C "%s" landable %s' % (self.repo.root, BRANCH), hows[0])
+        self.assertIn('-C "%s" landable %s' % (self.pm_root(wt), BRANCH), hows[1])
+
+
 class CloseEdges(StoreLandCase):
     """The lookup key, the owner-held command, the re-pull race and an unreadable store."""
 
@@ -336,6 +424,23 @@ class CloseEdges(StoreLandCase):
         warn = self.warnings(out)
         self.assertEqual(len(warn), 1, out.lines)
         self.assertIn('close FOO --reason "landed %s" --ruling R-nnnn' % out.merge, warn[0])
+
+    def test_an_owner_held_records_command_names_a_worktree_not_the_main_checkout(self):
+        self.seed(pulled('FOO', priority='-1', priority_by='-', owner_ask='may this ship?'))
+        out = self.land()
+        warn = self.warnings(out)
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertIn('backlog.py" -C "%s" close FOO --reason "landed %s" --ruling R-nnnn'
+                      % (at_landing.WORKTREE, out.merge), warn[0])
+        self.assertNotIn(self.repo.root, warn[0])
+
+    def test_the_close_command_runs_the_repositorys_own_backlog_tool_when_it_has_one(self):
+        self.assertEqual(at_landing.close_command(self.repo.root, 'close', 'FOO'),
+                         'python "%s" -C "%s" close FOO'
+                         % (at_landing.backlog_py(), at_landing.WORKTREE))
+        self.repo.write(os.path.join('tools', 'backlog.py'), '')
+        self.assertEqual(at_landing.close_command(self.repo.root, 'close', 'FOO'),
+                         'python tools/backlog.py -C "%s" close FOO' % at_landing.WORKTREE)
 
     def test_a_record_re_pulled_by_another_branch_mid_close_is_left_as_it_is(self):
         self.seed(pulled('FOO'))

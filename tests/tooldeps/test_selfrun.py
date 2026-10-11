@@ -5,6 +5,8 @@ and timeout cases run real child processes on throwaway test modules.
 import _thread
 import io
 import os
+import shutil
+import stat
 import tempfile
 import threading
 import time
@@ -15,6 +17,7 @@ from kitlib.config import user
 from kitlib.proc import shield
 from kitlib.tooldeps import selfrun
 from tests.gitfixture import rmtree
+from tests.home import TempHomeCase
 
 
 def fake_unit(log, lock, status=None, ran=3, pause=0.4):
@@ -95,7 +98,75 @@ class GitDirect(unittest.TestCase):
         self.assertEqual(selfrun.git_direct_env(env), (env, None))
 
 
-class Order(unittest.TestCase):
+SKIP_OK = 'Ran 3 tests in 0.1s\n\nOK (skipped=2)\n'
+NO_SKIP = 'Ran 3 tests in 0.1s\n\nOK\n'
+
+
+class Skips(TempHomeCase):
+    # TempHomeCase (tests/home.py): selfrun.run makes its run folder through
+    # kitlib.config.user.make_temp, which reads temp_dir from an empty machine config.
+    MODS = ['tests.a.test_1', 'tests.a.test_2']
+
+    def run_texts(self, texts, skip_fails=()):
+        def run_unit(unit, audit, timeout, root=None, cmd=None, env=None):
+            return unit, 'OK', 3, 0.0, texts[unit[0]]
+        out = io.StringIO()
+        rc, summary = selfrun.run(self.MODS, tempfile.gettempdir(), 2, out=out, run_unit=run_unit,
+                                  label='full', counts={}, skip_fails=skip_fails)
+        return rc, summary, out.getvalue()
+
+    def test_skipped_of_reads_unittests_summary(self):
+        self.assertEqual(selfrun.skipped_of(SKIP_OK), 2)
+        self.assertEqual(selfrun.skipped_of('Ran 4 tests in 0s\n\nFAILED (failures=1, skipped=2)\n'), 2)
+        self.assertEqual(selfrun.skipped_of(NO_SKIP), 0)
+        self.assertEqual(selfrun.skipped_of('no summary at all'), 0)
+
+    def test_skipped_of_matches_a_real_unittest_run(self):
+        import subprocess
+        import sys
+        code = ('import unittest\nclass T(unittest.TestCase):\n'
+                '    def test_a(self): self.skipTest("runtime")\n'
+                '    @unittest.skip("static")\n    def test_b(self): pass\n'
+                '    def test_c(self): pass\n'
+                'unittest.main(argv=["x"])\n')
+        r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+        self.assertEqual(selfrun.skipped_of(r.stderr), 2, r.stderr)
+
+    def test_line_shows_skipped_count(self):
+        rc, summary, out = self.run_texts({m: SKIP_OK for m in self.MODS})
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'(?m)^  \[\d/2\] OK +\d+s +3 tests, 2 skipped  tests\.a\.test_[12]$')
+        self.assertRegex(out, r'tests/a +OK +6 tests +2 module\(s\) +\d+s  4 skipped')
+        self.assertTrue(summary.endswith('6 tests in 2 module(s), 1 package(s), 4 skipped'), summary)
+
+    def test_line_without_skips_is_unchanged(self):
+        rc, summary, out = self.run_texts({m: NO_SKIP for m in self.MODS})
+        self.assertRegex(out, r'(?m)^  \[\d/2\] OK +\d+s +3 tests  tests\.a\.test_[12]$')
+        self.assertNotIn('skipped', out)
+        self.assertTrue(summary.endswith('6 tests in 2 module(s), 1 package(s)'), summary)
+
+    def test_skip_fails_module_with_a_skip_is_failed(self):
+        rc, summary, out = self.run_texts({m: SKIP_OK for m in self.MODS},
+                                          [('tests.a.test_1', 'the proof')])
+        self.assertEqual(rc, 1, out)
+        self.assertIn('failed: tests.a.test_1 (FAILED)', summary)
+        self.assertNotIn('tests.a.test_2 (', summary)
+        self.assertIn('proof module', out)
+        self.assertIn('the proof', out)
+
+    def test_skip_fails_module_without_a_skip_stays_ok(self):
+        rc, _summary, out = self.run_texts({m: NO_SKIP for m in self.MODS},
+                                           [('tests.a.test_1', 'the proof')])
+        self.assertEqual(rc, 0, out)
+
+    def test_a_skip_in_an_unlisted_module_is_only_counted(self):
+        rc, _summary, out = self.run_texts({m: SKIP_OK for m in self.MODS},
+                                           [('tests.z.test_other', 'x')])
+        self.assertEqual(rc, 0, out)
+
+
+class Order(TempHomeCase):
+    # TempHomeCase: selfrun.run's run folder comes from user.make_temp (an empty machine config).
     MODS = ['tests.a.test_1', 'tests.a.test_2', 'tests.b.test_1', 'tests.b.test_2',
             'tests.c.test_1', 'tests.c.test_2']
 
@@ -264,6 +335,78 @@ class Order(unittest.TestCase):
                                   r'module\(s\) not run$')
 
 
+def read_only_repo(parent):
+    """A folder shaped like a throwaway git repository whose object files are read-only (as git
+    writes them): <parent>/repo/.git/objects/ab/cdef..., plus a writable file beside it."""
+    repo = os.path.join(parent, 'repo')
+    objects = os.path.join(repo, '.git', 'objects', 'ab')
+    os.makedirs(objects)
+    for name in ('cdef0123', 'cdef4567'):
+        path = os.path.join(objects, name)
+        with open(path, 'wb') as f:
+            f.write(b'x')
+        os.chmod(path, stat.S_IREAD)
+    with open(os.path.join(repo, 'README.md'), 'w') as f:
+        f.write('hello\n')
+    return repo
+
+
+class RmtreeForce(TempHomeCase):
+    """A temp git repository with read-only object files is removed, not left in TEMP."""
+
+    def setUp(self):
+        super().setUp()         # TempHomeCase: the run case's folder comes from user.make_temp
+        self.parent = tempfile.mkdtemp(prefix='kit-rmforce-')
+        self.addCleanup(selfrun.rmtree_force, self.parent, True)
+
+    def test_a_repo_with_read_only_object_files_is_removed(self):
+        repo = read_only_repo(self.parent)
+        selfrun.rmtree_force(repo)
+        self.assertFalse(os.path.exists(repo))
+        self.assertTrue(os.path.isdir(self.parent))             # only the folder asked for
+
+    def test_plain_rmtree_with_ignore_errors_leaves_it(self):
+        # What the runner and the fixtures did before: the error is swallowed and the repo stays.
+        repo = read_only_repo(self.parent)
+        shutil.rmtree(repo, ignore_errors=True)
+        self.assertTrue(os.path.exists(repo))
+        selfrun.rmtree_force(repo)
+        self.assertFalse(os.path.exists(repo))
+
+    def test_a_missing_folder_is_not_an_error(self):
+        selfrun.rmtree_force(os.path.join(self.parent, 'none'))
+
+    def test_the_handler_is_passed_as_onexc_or_onerror_by_python_version(self):
+        for has_onexc, keyword in ((True, 'onexc'), (False, 'onerror')):
+            repo = read_only_repo(self.parent)
+            seen = {}
+            real = shutil.rmtree
+
+            def spy(path, **kw):
+                seen.update(kw)
+                return real(path, **kw)
+            with mock.patch.object(selfrun, '_HAS_ONEXC', has_onexc), \
+                    mock.patch.object(selfrun.shutil, 'rmtree', spy):
+                selfrun.rmtree_force(repo)
+            self.assertEqual(list(seen), [keyword])
+            self.assertFalse(os.path.exists(repo))
+
+    def test_a_unit_folder_holding_a_read_only_repo_is_gone_after_the_run(self):
+        log = []
+
+        def run_unit(unit, audit, timeout, root=None, cmd=None, env=None):
+            read_only_repo(env['TEMP'])
+            log.append(env['TEMP'])
+            return unit, 'OK', 1, 0.0, ''
+        out = io.StringIO()
+        rc, _summary = selfrun.run(['tests.a.test_1'], tempfile.gettempdir(), 1, out=out,
+                                   run_unit=run_unit, environ={'X': '1'}, label='full', counts={})
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertEqual(len(log), 1)
+        self.assertFalse(os.path.exists(log[0]))                # the unit's folder
+        self.assertFalse(os.path.exists(os.path.dirname(log[0])))     # the run folder
+
+
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -374,8 +517,9 @@ class Plan(unittest.TestCase):
         self.assertEqual(selfrun.module_of('tests.a.test_big'), 'tests.a.test_big')
 
 
-class Times(unittest.TestCase):
+class Times(TempHomeCase):
     def setUp(self):
+        super().setUp()         # TempHomeCase: selfrun.run's run folder comes from user.make_temp
         self.dir = tempfile.mkdtemp(prefix='kit-selfrun-')
         self.addCleanup(rmtree, self.dir)
         self.path = os.path.join(self.dir, selfrun.TIMES_FILE)
@@ -472,8 +616,9 @@ class Imported(unittest.TestCase):
 '''
 
 
-class Empty(unittest.TestCase):
+class Empty(TempHomeCase):
     def setUp(self):
+        super().setUp()         # TempHomeCase: selfrun.run's run folder comes from user.make_temp
         self.root = tempfile.mkdtemp(prefix='kit-selfrun-')
         self.addCleanup(rmtree, self.root)
         write(self.root, {
@@ -522,8 +667,9 @@ class Empty(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == 'nt', 'units run in Windows job objects')
-class RealUnits(unittest.TestCase):
+class RealUnits(TempHomeCase):
     def setUp(self):
+        super().setUp()         # TempHomeCase: the run folder (user.make_temp); units inherit it
         self.root = tempfile.mkdtemp(prefix='kit-selfrun-')
         self.addCleanup(rmtree, self.root)
         write(self.root, {'tests/__init__.py': '', 'tests/p/__init__.py': ''})

@@ -12,9 +12,16 @@ class Change(object):
 
 
 class Plan(object):
+    """A survey's changes, notes and refusals. lines() prints them grouped by section, in SECTIONS
+    order; a fresh run (--fresh) uses FRESH_SECTIONS, which adds a `plugin` section. The changes
+    are made (run()) in the order the survey added them, not by section: survey() adds each
+    folder's settings write, then the PM hook, then the plugin changes, then the extras, so claude's
+    write to a settings.json lands after the settings write the survey diffed."""
     SECTIONS = ('links', 'settings', 'extras')
+    FRESH_SECTIONS = ('links', 'settings', 'plugin', 'extras')
 
-    def __init__(self):
+    def __init__(self, sections=None):
+        self.SECTIONS = tuple(sections or self.SECTIONS)
         self.changes, self.refusals = [], []
         self.notes = {s: [] for s in self.SECTIONS}
 

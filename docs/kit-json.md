@@ -11,6 +11,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `gate.kind` names the kind a gate run books; the lock books that kind's size (kitlib/lock/kinds.json). A size is a whole number of cpu slots 1..the layout's agent_cap (`medium` and `heavy` remain as aliases), set only by `gate.py --measure` and a reviewed commit. No `.kit.json` key sets a gate's core count.
 - A `landing.lanes` entry is keyed by the lane name and has four keys (`LANE` in `kitlib/config/schema.py`): `branch_prefix` (list of string; a branch on the lane starts with one), `paths` (list of glob; every path the branch changes matches one), `why` (string; the ruling that made the lane) and `merged_args` (list of string; added to every step command of the lane's merged-tree gate, after the step's own `merged_args`, with the same `{root}`-style substitutions). `tools/land.py` reads `main_branch` and `remote` from `repo`, the lanes, `wait_s` and `batch_max` from `landing`, and the gate steps from `gate` (docs/gate.md, Landing).
 - No old spelling is read: the hook module is the top-level `hook` (not `gate.hook`), and owner settings are `owner` (not `doc_budget` keys).
+- Retired keys are still accepted and ignored, so an older install loads: `backlog` may still carry `retired_docs` and `rename_script` (`RETIRED` in `kitlib/config/schema.py`); nothing reads them.
 - A repo lists its own heavy programs in `heavy.programs`; the kit defaults are general tools only (godot, blender, dotnet, gradle). For example `{"program": "run_tests.bat", "kind": "engine-test", "why": "runs the engine test suite"}`, `{"program": "graph_build*", "kind": "worldgraph", "why": "rebuilds the world graph"}` and `{"program": "local_model*", "kind": "local-ai", "unless_args": ["--help"], "why": "loads a model onto the gpu"}`.
 
 ## `.kit.json` keys
@@ -23,7 +24,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `repo.push_block` (bool, default false): pre-push refuses a push to main without a gate-OK record
 - `owner.email` (email): author email of the owner's own commits; unset: no owner commit is provable
 - `owner.agent_emails` (list of email, default []): author emails known to be agents', never the owner's
-- `owner.paths` (list of string, default ["CLAUDE.md", ".claude/", ".github/workflows/", ".kit.json", "tools/gate.json"]): owner-only paths; an entry ending / locks a directory; replaces the default
+- `owner.paths` (list of string, default ["CLAUDE.md", ".claude/", ".github/workflows/", ".kit.json", "tools/gate.json", "kitlib/gate/strict_defaults.py", "kitlib/backlog/roles.py"]): owner-only paths; an entry ending / locks a directory; replaces the default
 - `owner.paths_except` (list of string, default [".claude/worktrees/"]): what under a locked directory is not locked
 - `owner.trailer` (a trailer key, default "Owner-Approved"): the trailer key approving an owner-only change
 - `hook.module` (a module name): the one repo hook module, <tools_dir>/<module>.py
@@ -36,8 +37,6 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `backlog.phases` (list of string, default []): phase names in order
 - `backlog.id_grammar` (upper|mixed, default "upper"): item id spelling
 - `backlog.ledger_repo` (string): the ledger repo column; default the repo name
-- `backlog.retired_docs` (list of repo path, default []): docs the backlog replaced
-- `backlog.rename_script` (string, may be empty, default ""): priority rename helper
 - `board.state_file` (repo path): the board state file, under the git dir (default <git common dir>/kit/board-state.md)
 - `checkout_guard.rule_pointer` (string): where a refusal points for the rule
 - `commit.merge_fold` (bool, default false): commit.py folds a merge commit
@@ -129,7 +128,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `tool_tests.unit_timeout` (int >= 1, default 3600): pytests: seconds per unit
 - `worktree_remove.exempt` (map folder -> string, default {}): worktree folder -> the ruling exempting it
 - `worktree_remove.disposable_untracked` (list of string, default []): untracked file globs removal may discard
-- `worktree_remove.build_output` (list of string, default []): build output path globs
+- `worktree_remove.build_output` (list of string or {piece, path}, default []): build output path globs, or {piece, path} folders resolved through the pieces table
 - `worktree_remove.keepers` (list of string, default []): file globs that refuse a removal, added to the kit list
 - `worktree_remove.archive_next_free` (bool, default false): archive under the next free name
 - `worktree_remove.branch_template` (a branch name holding {slug} once): branch name for a slug
@@ -162,6 +161,10 @@ The machine's own settings, read by `kitlib.config.user`: `config.json` in the f
 - `machine_lock` (object, checked by kitlib.lock.site): the machine lock settings: build daemons at release, lock-window notices
 - `temp_dir` (absolute path): the folder the kit's own temp files go in (test run folders, gate logs); unset: `AgentTemp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md "Temp folders"); older kit copies reject the key
 - `agent_temp_sweep` (object, checked by optional/agenttemp/agent_temp_sweep.py): the agents' temp folder to sweep and the age past which an unused entry goes
+- `plugin` (object, checked by kitlib.pluginsource): where the plugin export of pushed kit main lives, and whether pm_watch refreshes it on its own (docs/plugin-source.md); older kit copies reject the key; set it only after every folder is migrated
+  - `export_dir` (absolute path): the export root; unset: `%LOCALAPPDATA%\pm-kit\plugin`. Nothing needs setting for the default. It must lie outside the kit checkout and `agent_temp_sweep.dir` (`kitlib.pluginsource` `placement_errors`).
+  - `auto_refresh` (true or false, default false): pm_watch starts `tools/plugin_refresh.py --apply` itself when kit main moves.
+  - `remote` (a remote name, default `origin`): the kit checkout's remote whose `main` is exported.
 
 ## Moving the machine config folder
 

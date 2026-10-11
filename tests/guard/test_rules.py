@@ -1040,6 +1040,24 @@ class RolesFromConfig(unittest.TestCase):
         self.assertEqual(decide(event('Bash', {'command': 'git restore a.py'}, w.main, sub=True, agent_type='lander'), w.ctx()).rule,
                          'git-restore')
 
+    def test_the_plugin_prefixed_lander_is_the_lander(self):
+        # docs/guard.md "Agent names": <plugin>:lander holds the lander role, no other spelling does
+        p = lockmcp_names.CLAUDE_PLUGIN_NAME + ':'           # kitlib.agentname.PREFIX
+        w = W.World(kit={'repo': {'name': 'demo'}, 'roles': {'lander': {'edit_main_checkout': True, 'why': 'test'}}})
+        self.addCleanup(w.cleanup)
+        target = os.path.join(w.main, 'a.md')
+        write = lambda kind: decide(event('Write', {'file_path': target, 'content': ''}, w.main, sub=True, agent_type=kind), w.ctx())
+        git = lambda cmd, kind: decide(event('Bash', {'command': cmd}, w.main, sub=True, agent_type=kind), w.ctx())
+        self.assertIsNone(write(p + 'lander'))
+        for cmd in ('git merge --no-ff kit/wt', 'git commit -m "x"', 'git revert abc123'):
+            self.assertIsNone(git(cmd, p + 'lander'), cmd)
+        self.assertEqual(git('git restore a.py', p + 'lander').rule, 'git-restore')
+        for kind in (p + 'worker', p + 'opus-worker', 'other:lander', p + p + 'lander', p.upper() + 'lander', p,
+                     p + 'main', p.rstrip(':') + 'lander', 'x' + p + 'lander', p[1:] + 'lander'):
+            with self.subTest(kind):
+                self.assertEqual(write(kind).rule, 'main-checkout')
+                self.assertEqual(git('git merge --no-ff kit/wt', kind).rule, 'git-main-history')
+
 
 class OtherTools(unittest.TestCase):
     def test_reads_and_unknown_tools_pass(self):

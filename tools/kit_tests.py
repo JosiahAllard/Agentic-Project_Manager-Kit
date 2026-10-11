@@ -3,6 +3,8 @@ reach (docs/test-tools.md "kit_tests").
 
   kit_tests.py [-C DIR] --select [--base B] [--changed PATH ...] [--plan] [--jobs N]
   kit_tests.py [-C DIR] --full [--plan] [--jobs N]
+  kit_tests.py [-C DIR] --list: every test id sorted, then a summary and the decorator skips
+  (kitlib.tooldeps.selflist; nothing runs; runtime skips are not counted)
   add --real-git to either: every test on real git, not the fake
   add --both-tiers to either: the fake-git pass, then the real-git pass (kitlib.tooldeps.tiers)
   add --pid-hold to either: hold pids for the run (opt-in, agent runs only; the gate refuses it;
@@ -43,7 +45,7 @@ from kitlib.git import refs as gitrefs                              # noqa: E402
 from kitlib.git import repo as gitrepo                              # noqa: E402
 from kitlib.lock import giveback                                    # noqa: E402
 from kitlib.pytests import runner as unit_runner                    # noqa: E402
-from kitlib.tooldeps import selfrun, selftree, tiers                # noqa: E402
+from kitlib.tooldeps import selflist, selfrun, selftree, tiers              # noqa: E402
 
 USAGE = 2
 FULL = ['-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
@@ -64,6 +66,8 @@ def build_parser():
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument('--select', action='store_true', help='only what the change can reach')
     g.add_argument('--full', action='store_true', help='the whole suite')
+    g.add_argument('--list', dest='list_tests', action='store_true',
+                   help='print every test id, sorted, and the decorator skips; run nothing')
     p.add_argument('--base', help='--select: diff against the merge-base with this (default: '
                    'origin/main when it resolves, else main)')
     p.add_argument('--changed', nargs='+', metavar='PATH', help='--select: these paths, not git')
@@ -132,10 +136,28 @@ def main(argv=None, out=None):
         parser.error('--both-tiers already runs the real-git tier; drop --real-git')
     if a.both_tiers and a.pid_hold:
         parser.error('--both-tiers takes no --pid-hold (one hold cannot span two passes)')
+    if a.list_tests:
+        for flag, used in (('--jobs', a.jobs is not None), ('--plan', a.plan),
+                           ('--real-git', a.real_git), ('--both-tiers', a.both_tiers),
+                           (unit_runner.PID_HOLD_FLAG, a.pid_hold), ('--changed', a.changed),
+                           ('--base', a.base is not None)):
+            if used:
+                parser.error('%s does not go with --list (it runs nothing)' % flag)
     top, why = gitrepo.toplevel(os.path.abspath(a.root))
     if not top:
         say('kit_tests: refused: %s' % why)
         return USAGE
+    if a.list_tests:
+        modules = selftree.all_test_modules(top)
+        env = dict(os.environ)
+        env.setdefault('KIT_FAKE_GIT', '1')
+        entries = selflist.collect(top, modules, environ=env)
+        if entries is None:
+            say('kit_tests: refused: the child that loads the tests failed - nothing listed')
+            return USAGE
+        for line in selflist.render(entries, modules):
+            say(line)
+        return 0
     try:
         cfg = selftree.config(top)
     except selftree.ConfigError as e:
@@ -144,7 +166,11 @@ def main(argv=None, out=None):
             return USAGE
         # --full is the escape hatch: it needs no table, so a broken one cannot stop it.
         say('kit_tests: WARNING: %s; --full runs every module, none serial' % e)
-        cfg = {'serial': []}
+        cfg = {'serial': [], 'skip_fails': []}
+    stale = selftree.stale_skip_fails(cfg.get('skip_fails', ()), selftree.all_test_modules(top))
+    for m in stale:
+        say('kit_tests: WARNING: skip_fails names %s, which is not a test module; its entry guards '
+            'nothing (fix tests/selection.json)' % m)
     if a.full:
         say('kit_tests: full suite (--full)')
         args = FULL
@@ -225,7 +251,8 @@ def run_pass(args, top, cfg, jobs, fake, out, hold, give_back=True, record_times
         say('kit_tests: give back: off for this pass (a later tier runs on the same slots)')
     rc, _summary = selfrun.run(modules, top, jobs, serial=cfg['serial'], out=out, label=label,
                                times_path=times, hint=cfg.get('long', ()), environ=env,
-                               give_back=give, hold=hold, record_times=record_times)
+                               give_back=give, hold=hold, record_times=record_times,
+                               skip_fails=cfg.get('skip_fails', ()))
     return rc
 
 

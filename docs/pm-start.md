@@ -36,6 +36,10 @@ when the fetch fails (offline, timed out); a diverged `main` is reported, never 
 no git config and never rebases, resets or forces. The checks are a point in time (the landing lock is only read); `git merge --ff-only` bounds a race with a landing, since it refuses anything that is not a fast-forward. Code: `kitlib/pmstart` `kit_sync`; tests:
 `tests/pmstart/test_kitsync.py`.
 
+## Plugin export (`plugin_current`)
+
+Right after `kit_sync`, the `plugin_current` check prints one line when the pm-kit plugin export is missing, behind the kit's `refs/remotes/<remote>/main`, or an account folder's last refresh failed, each with `python tools/plugin_refresh.py --apply`, and when there is no export or an account folder is not migrated, with `python tools/plugin_refresh.py --migrate --apply` instead; an unreadable export state is a `could not check the pm-kit plugin` line. It reads the export root only, never an account folder (docs/plugin-source.md "Behind warnings"). Code: `kitlib/pmstart` `plugin_current`, `kitlib.pluginsource` `current_lines`; tests: `tests/pmstart/test_plugin_current.py`.
+
 ## Stubs (`stubs`)
 
 For each repository in the machine config's `launcher.repos`, the `stubs` check runs
@@ -94,10 +98,12 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 
 Only in settings the PM session loads; the hook does not check which session runs it. It is not
 in the plugin, which every session loads. Exec form, with `<pythonw>` the interpreter that
-`guard.py --settings-entry` prints (docs/guard.md "Go-live"), starts no shell. The PM repo's own
-`.claude/settings.json` is edited by hand: `tools/machine_setup.py` reads the account config
-folders (`~/.claude`, `~/.claude-*`, `default_config_dirs` in `kitlib/machinesetup`), not a
-repository's settings.
+`guard.py --settings-entry` prints (docs/guard.md "Go-live"), starts no shell. Put it in the PM
+repo's `.claude/settings.local.json`, which only that checkout loads. `tools/machine_setup.py`
+otherwise reads the account config folders (`~/.claude`, `~/.claude-*`, `default_config_dirs` in
+`kitlib/machinesetup`), never a repository's settings, so this file is edited by hand, except that
+`machine-setup.ps1 -Fresh -PmSettings <file>` writes the hook to the one file it names and refuses an
+account's `settings.json` (docs/machine-setup.md "Fresh machine (--fresh)").
 
 ```json
 {"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"<pythonw>","args":["<kit>/claude/hooks/pm_session_start.py"]}]}]}}

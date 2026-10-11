@@ -41,6 +41,9 @@
   "prose": ["docs/**", "*.md", ".gitignore"],
   "always": ["scrub"],
   "serial": [],
+  "skip_fails": [
+    ["tests.lock.test_slot_treekill", "the proof that kill_retry is not needed; its confine() skips when no fake cpu slot fits the gate's affinity, which would silently void it"]
+  ],
   "long": [
     "tests.docs.test_budget",
     "tests.backlog.test_store",

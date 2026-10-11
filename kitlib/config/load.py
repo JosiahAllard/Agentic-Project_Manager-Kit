@@ -26,7 +26,7 @@ KIT_SECTIONS = ('repo', 'owner', 'hook', 'heavy', 'roles')
 PLACEHOLDER = re.compile(r'\{([A-Za-z_]\w*)\}')
 PLACEHOLDERS = ('python', 'root', 'base', 'here', 'tools')    # gate.py's substitution mapping
 # Step keys about running a subprocess; a hook check is called, not run.
-CMD_ONLY = ('cwd', 'daily_cmd', 'full_cmd', 'kill_retry', 'merged_args', 'ok_exits', 'reuse')
+CMD_ONLY = ('cwd', 'daily_cmd', 'full_cmd', 'merged_args', 'ok_exits', 'reuse')
 
 
 def _parse(text, where):
@@ -215,6 +215,8 @@ def _build(root, where, reader):
             files[name] = rel
         else:
             continue
+        if isinstance(value, dict) and name in schema.RETIRED:
+            value = {k: v for k, v in value.items() if k not in schema.RETIRED[name]}
         schema.section_type(name).check(value, '"%s"' % name, errs)
         raw[name] = value
     hook = raw.get('hook')

@@ -1,6 +1,6 @@
 # redfirst
 
-`tools/redfirst.py [-C WORKTREE] --tests FILE[::FILTER] ... [--also FILE ...] [--base REV] [--head REV] [--log-dir DIR]` runs new tests against the pre-change commit and confirms they fail there: red-first evidence with no in-place mutant. Logic: `kitlib/redfirst` (`verdict.py` pure, `run.py` git and cleanup); the module docstrings hold the full rules.
+`tools/redfirst.py [-C WORKTREE] --tests FILE[::FILTER] ... [--also FILE ...] [--base REV] [--head REV] [--log-dir DIR]` runs new tests against the pre-change commit and confirms they fail there: red-first evidence with no in-place mutant. Logic: `kitlib/redfirst` (`verdict.py` pure, `run.py` git and cleanup); the module docstrings hold the full rules. `--tests` and `--also` each take several values and may also be repeated (`--tests A --tests B` is `--tests A B`).
 
 - The test files must be committed at `--head` (default HEAD). They are checked out into a throwaway detached worktree at `--base`, `<main checkout>/<worktrees_dir>/redfirst-<base10>-<pid>`. The default base is the merge-base with `<remote>/<main branch>`. The caller's worktree is only read. A main checkout is refused.
 - `.kit.json` "redfirst".runners picks the runner. The first entry whose `glob` matches the path (case-blind) wins. Kinds:

@@ -147,12 +147,45 @@ SCHEMA = {
     'machine_lock': Field(Owned('kitlib.lock.site'), None, 'the machine lock settings: build daemons at release, lock-window notices'),
     'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs); unset: `AgentTemp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
     'agent_temp_sweep': Field(Owned('optional/agenttemp/agent_temp_sweep.py'), None, 'the agents\' temp folder to sweep and the age past which an unused entry goes'),
+    'plugin': Field(Owned('kitlib.pluginsource'), None, 'where the plugin export of pushed kit main lives, and whether pm_watch refreshes it on its own (docs/plugin-source.md); older kit copies reject the key; set it only after every folder is migrated'),
 }
 
 
+class HomeFenced(BaseException):
+    """home_dir() resolved the real home folder in a process that fence_home() fenced (the kit's
+    tests). A BaseException, so the `except Exception` that isolates a check (pmstart's "could not
+    check" lines, pmwatch's third failure) cannot turn the refusal into a line a test may miss."""
+
+
+FENCE_MESSAGE = ('home lookup refused under the kit\'s tests: it resolved the real home folder; '
+                 'give it an explicit home or folders (a temp folder), or patch USERPROFILE/HOME '
+                 'to one (docs/test-tools.md "Home fence")')
+# The real home folder (_home_key) recorded by fence_home(); None: no fence, home_dir() as ever.
+_FENCED_HOME = None
+
+
+def _home_key(path):
+    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+
+def fence_home():
+    """Fence this process's home lookups: record the home folder resolved now, after which
+    home_dir() raises HomeFenced whenever it resolves to that folder again. tests/__init__.py calls
+    it once, before any test patches the environment; kitlib never does, so a real run is unfenced.
+    Returns the recorded key."""
+    global _FENCED_HOME
+    _FENCED_HOME = _home_key(os.path.expanduser('~'))
+    return _FENCED_HOME
+
+
 def home_dir():
-    """The user's home folder (os.path.expanduser: USERPROFILE on Windows, HOME elsewhere)."""
-    return os.path.expanduser('~')
+    """The user's home folder (os.path.expanduser: USERPROFILE on Windows, HOME elsewhere).
+    HomeFenced when the process is fenced (fence_home) and it resolves to the recorded real home:
+    a test gives an explicit home, or points USERPROFILE/HOME at a temp folder."""
+    h = os.path.expanduser('~')
+    if _FENCED_HOME is not None and _home_key(h) == _FENCED_HOME:
+        raise HomeFenced(FENCE_MESSAGE)
+    return h
 
 
 def shared_temp(environ=None, platform=None):

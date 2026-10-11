@@ -125,9 +125,13 @@ class GuardSites(unittest.TestCase):
         self.assertEqual(sorted(set(raised_kinds(fn))), ['Failure', 'Refusal'])
         self.assertEqual(raised_kinds(fn).count('Refusal'), 2)
 
+    def test_a_bad_retarget_path_raises_usage(self):
+        fn = function(parse('kitlib/backlog/retarget.py'), 'check_paths')
+        self.assertEqual(sorted(set(raised_kinds(fn))), ['Usage'])
+
     def test_every_raise_in_the_verbs_is_one_of_the_four_kinds(self):
         for rel in ('kitlib/backlog/plan.py', 'kitlib/backlog/ledger.py', 'kitlib/backlog/migrate.py',
-                    'kitlib/backlog/opener.py'):
+                    'kitlib/backlog/retarget.py', 'kitlib/backlog/opener.py'):
             kinds = raised_kinds(parse(rel))
             self.assertTrue(kinds, '%s raises nothing: the sweep would pass unread' % rel)
             for kind in kinds:

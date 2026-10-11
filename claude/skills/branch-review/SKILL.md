@@ -11,7 +11,7 @@ works, not that the change is right, in scope, or exercised.
 1. Scope check, yourself: `git diff --stat` branch vs merge base against the brief. Files outside
    scope = a finding before you read a line.
 2. Read every hunk yourself only when the diff is small (~150 lines) and low/medium risk; docs and
-   additive content: skim. Larger or high-risk -> `reviewer` (fresh, read-only, never the author,
+   additive content: skim. Larger or high-risk -> `pm-kit:reviewer` (fresh, read-only, never the author,
    `sonnet` by default, `opus` for a high-risk diff), given the brief, diff range, the author's
    gate report and log paths. You read findings; the verdict stays yours. Standing checks:
    `--find review`.

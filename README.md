@@ -27,9 +27,8 @@ test and land code at the same time. The kit lays the rails they run on:
   pre-push hook refuses any push to main that is not a fast-forward.
 - **Worktrees.** Every task gets its own branch in its own folder, so agents never share a
   checkout.
-- **Backlog and rulings.** Each repository keeps its task list (the backlog) in git, on a hidden
-  ref beside main. The owner's decisions (rulings) go in one append-only file for the whole
-  machine.
+- **Backlog and owner decisions.** Each repository keeps its task list (the backlog) in git, on a
+  hidden ref beside main. The PM keeps the owner's decisions in its own private record.
 - **Action Hub.** One private web page where you, the owner, answer the PM's questions, tick off
   hand steps and write new stories. Nobody waits on it: you answer when it suits you.
 
@@ -88,7 +87,7 @@ Kit tools run from the kit checkout; in a repository they run through the stubs,
 1. **Start the PM.** Open Claude Code in the PM's own folder. A session-start hook prints a
    checklist of what needs doing (docs/pm-start.md).
 2. **Start a coordinator** in each repository you want worked on, with the environment variable
-   `PM_KIT_ROLE` set to `coordinator`: `claude --agent coordinator --remote-control "<name>"`, or let
+   `PM_KIT_ROLE` set to `coordinator`: `claude --agent pm-kit:coordinator --remote-control "<name>"`, or let
    `tools/launch.py start` do it (docs/launcher.md).
    Use exactly the name its entry in the PM's sessions file has (docs/pm-start.md), or the PM's
    checklist reports it as not running. On its first start it drafts the repository's profiles
@@ -123,5 +122,5 @@ it in place.
 | The machine lock | docs/lock-api.md, skill `machine-lock-run` |
 | The guard and pre-push hook | docs/guard.md |
 | The backlog | docs/backlog.md |
-| The rulings ledger | docs/ledger.md |
+| The PM's private ledger | docs/ledger.md |
 | How the kit is built | ARCHITECTURE.md |

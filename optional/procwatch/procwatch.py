@@ -63,6 +63,11 @@ def _cmd(p):
     return (p.get("cmd") or "").lower()
 
 
+# a coordinator session's claude.exe: `--agent coordinator`, or the agent as a plugin names it
+# (`<plugin>:coordinator`); the old name too. Matched against _cmd (lower case).
+COORDINATOR_ARG = re.compile(r"--agent (?:[\w.-]+:)?(?:coordinator|conductor)")
+
+
 def _in_git_usr_bin(p):
     return "\\git\\usr\\bin\\" in (p.get("image") or "").lower()
 
@@ -207,7 +212,7 @@ def origin(p, by_pid):
             c = _cmd(q)
             if "--type=" in c or "\\windowsapps\\claude_" in (q.get("image") or "").lower():
                 return "Claude desktop app"
-            if "--agent coordinator" in c or "--agent conductor" in c:
+            if COORDINATOR_ARG.search(c):
                 m = re.search(r"-n\s+(\S+)", q.get("cmd") or "")
                 return "coordinator claude.exe " + (m.group(1) if m else str(q["pid"]))
             return f"claude.exe {q['pid']} session"

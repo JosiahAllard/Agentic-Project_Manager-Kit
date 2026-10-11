@@ -4,8 +4,11 @@ import os
 import unittest
 
 from kitlib import pmwatch
+from kitlib.config import user as kuser
 from kitlib.launcher import accounts as A
+from kitlib.launcher import settings as lsettings
 from kitlib.launcher import usage
+from tests.home import fence_decoy
 from tests.launcher.fakes import NOW, Home
 
 DAY = datetime.timedelta(days=1)
@@ -133,6 +136,20 @@ class ParseTime(unittest.TestCase):
         self.assertEqual(A.parse_time('2026-10-10T12:21:02.123Z'), want.replace(microsecond=123000))
         for bad in ('', None, 'soon', 5):
             self.assertIsNone(A.parse_time(bad))
+
+
+class HomeFence(unittest.TestCase):
+    """docs/test-tools.md "Home fence": the launcher's home lookups refuse the fenced home."""
+
+    def test_no_home_is_refused(self):
+        fence_decoy(self)
+        machine = {'launcher': {'accounts': {'1': ['~/.claude']}}}
+        with self.assertRaises(kuser.HomeFenced):
+            A.current_account(machine, environ={})
+        with self.assertRaises(kuser.HomeFenced):
+            lsettings.load()
+        given = Home(self, accounts=('1',))
+        self.assertEqual(A.current_account(machine, environ={}, home=given.root), '1')
 
 
 if __name__ == '__main__':

@@ -20,8 +20,9 @@
 at once). Every landing writes a result record per branch (gate.py wait-result --kind land).
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate.land, prints and exits.
-Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY; a machine lock
-refusal passes its own code through (6, 8, 10, 11, 12); 130 Ctrl+C.
+Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY, 9 LANDED_UNGATED
+(landed, but main was not gated whole); a machine lock refusal passes its own code through
+(6, 8, 10, 11, 12); 130 Ctrl+C.
 """
 import argparse
 import os
@@ -29,7 +30,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kitlib import gate as G                                        # noqa: E402
+if __name__ == '__main__':      # from the kit's main checkout: run from pushed main (kitlib.gate.pin)
+    from kitlib.gate import pin                                     # noqa: E402
+    _code, _said = pin.run(__file__, sys.argv[1:])
+    if _said:
+        sys.stderr.write(_said + '\n')
+    if _code is not None:
+        sys.exit(_code)
+
+from kitlib import gate as G                                       # noqa: E402
 from kitlib.gate import cleanup                                    # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
 from kitlib.gate import runner                                     # noqa: E402

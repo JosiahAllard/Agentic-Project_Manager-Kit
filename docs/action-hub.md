@@ -117,12 +117,10 @@ aliases again), usage/ and agents/ (posted as at session start).
 | context | PM | everything needed to answer; nothing is assumed from chat |
 | options | PM | `[{label, description}]`, recommendation first |
 | recommended | PM | index into options, normally 0 |
-| refs | PM | ruling ids |
 | urgent | PM | true sorts it to the top with an Urgent marker; only for items that block work or have a deadline |
 | answer | page | `{choice: index or "other", label, note, at}` |
-| ruling | PM | the ruling id once logged |
 
-The PM logs each answer as a ruling (provenance `selected`, or `typed` when the choice is "other" or the note changes it), then sets `status: logged` and `ruling`, pinning `if_version`.
+The PM files each answer, then sets `status: logged`, pinning `if_version`.
 
 ## inbox/M-NNN
 The owner's inbox: the PM's answer to every question the owner asks in a note (on a question, a to-do or a story). The question card links to its answers; the Answers tab counts the unread ones.
@@ -133,10 +131,10 @@ The owner's inbox: the PM's answer to every question the owner asks in a note (o
 | asked | PM | the owner's question, quoted from the note |
 | text | PM | the answer, complete on its own |
 | title | PM | optional one-line heading |
-| repo, from, at, refs | PM | provenance; at is ISO time |
+| repo, from, at | PM | provenance; at is ISO time |
 | read, read_at | page | the owner marks it read (or unread again) |
 
-PM steps: when processing the hub, read every answer note and every to-do or story detail for a question; post the answer here, and still log any ruling the note makes.
+PM steps: when processing the hub, read every answer note and every to-do or story detail for a question; post the answer here, and still file any decision the note makes.
 
 ### Lock-window notices
 Also in inbox/: the machine lock's own notices that a heavy or exclusive window started or ended, so the owner hears of it without anyone relaying it (`kitlib/lock/notice.py`). Off unless `machine_lock.notice.dir` is set in the machine config (`kitlib/lock/site.py`). Notices are per run, not per window: two heavy runs side by side post two start and two end notices, and the machine is free again only once every started run has its end notice. Ids are `L-<run id>-start` and `L-<run id>-end`; fields are title, text, at, repo, from (`machine lock`), kind (`lock-window`), run and phase, with no ref or asked. The lock writes each as a file in that folder; the PM watcher prints `LOCKNOTICE <id> <title>` for each new one. PM steps: `claude/hub/hub_notices.py --out <file>` writes the ArtifactData batch of the pending ones; apply it, then `claude/hub/hub_notices.py --posted <file>` moves them to the folder's `posted/`.
@@ -160,7 +158,7 @@ Publish: the db capability needs a rule so only an editor writes it: `capabiliti
 ## to_pm/P-NNN
 The To PM section, directly after Inbox: the owner's questions and FYIs to the PM. Inbox is PM -> owner and To PM is owner -> PM; the two never share a collection, and replies to To PM items do not go to inbox/ (the Inbox Answers tab stays answers to notes on PM items).
 
-The owner writes in the compose box at the top (type chip Question or FYI, default Question; optional repo: a repo name, `pm` or `all`; urgent; text). Add saves the item as `queued` and alerts nobody. Tabs: Queued (the owner can edit or delete), Sent (waiting on the PM), Done (the PM's reply, or "noted", and any ruling id; the last 30 days by done time, with a Show older control). The section badge counts queued plus sent.
+The owner writes in the compose box at the top (type chip Question or FYI, default Question; optional repo: a repo name, `pm` or `all`; urgent; text). Add saves the item as `queued` and alerts nobody. Tabs: Queued (the owner can edit or delete), Sent (waiting on the PM), Done (the PM's reply, or "noted"; the last 30 days by done time, with a Show older control). The section badge counts queued plus sent.
 
 Send all sets every queued item to `sent` with `sent_at`, then fires the Alert-the-PM button's code path once (`fire` in `setupAlert`), so the alert text lists them. Without a watching PM session the items are still sent and the PM reads them at its next turn.
 
@@ -174,10 +172,9 @@ Send all sets every queued item to `sent` with `sent_at`, then fires the Alert-t
 | status | page, PM | `queued` (page), `sent` (page, Send all), `done` (PM) |
 | created_at, sent_at | page | ISO times; sent_at is null until sent |
 | reply | PM | the answer, complete on its own; null or empty shows as "noted" |
-| ruling | PM | the ruling id the PM logged for it, if any |
 | done_at | PM | ISO time the PM finished it; the Done window and order use it (falling back to sent_at, then created_at) |
 
-PM steps: on an alert (or at session start) list `to_pm` where `status` is `sent`; each is also listed under "To PM" in the alert text. Answer a Question with `reply`, and log any ruling it makes first (provenance `typed`) and put its id in `ruling`; for an FYI set `reply` to a short acknowledgement or leave it empty. Then `update` the doc with `status: done`, `done_at`, `reply`, `ruling`. The owner can write to the collection; the PM may restrict `done` writes by a db rule if wanted (the page only writes queued and sent).
+PM steps: on an alert (or at session start) list `to_pm` where `status` is `sent`; each is also listed under "To PM" in the alert text. Answer a Question with `reply`; for an FYI set `reply` to a short acknowledgement or leave it empty. Then `update` the doc with `status: done`, `done_at`, `reply`. The owner can write to the collection; the PM may restrict `done` writes by a db rule if wanted (the page only writes queued and sent).
 
 Logic: the pure functions (`pmNextId`, `pmRows`, `pmBadge`, `pmSendAll`, `pmAlertLines`, and the alert, status and freshness helpers `pmAlertText`, `pmAutoAlert`, `pmAlertWhy`, `pmCommands`, `pmQBucket`, `pmFresh`) sit between the `pm-pure:begin` and `pm-pure:end` markers in `claude/hub/action-hub.html`; `tests/hubtopm` runs that block under node.
 
@@ -187,7 +184,7 @@ Logic: the pure functions (`pmNextId`, `pmRows`, `pmBadge`, `pmSendAll`, `pmAler
 | status | `open` or `done` (the owner ticks it) |
 | title, detail | what to do and why |
 | commands | a list of strings (a bare string is an error in `hub_validate.py`, though the page shows a lone string as a one-command list): the exact PowerShell commands, each with a Copy button, on every item that involves running something; to edit a file by hand, a command that opens it |
-| repo, from, added_at, refs | provenance |
+| repo, from, added_at | provenance |
 | done_at | set by the page when ticked |
 | urgent | true sorts it to the top; the owner can set it on their own items |
 | pm_ack | PM: set once it has followed up on a done item or picked up an owner-added one; keeps it out of the next alert |
@@ -228,7 +225,7 @@ Follow-up questions are ordinary `questions` docs with `story: <story id>`; the 
 PM steps:
 1. On a `submitted` story, send it verbatim to that repo's coordinator (coordinators stay in scope) and set `status: review`, `reviewer`.
 2. The coordinator reviews it against its backlog (duplicates, size, fit) and either files it or sends follow-ups to the PM. The PM posts each follow-up as a question with `story` set and sets `status: questions`.
-3. The PM logs answers as usual and relays the R-ids to the coordinator; the story goes back to `review`.
+3. The PM files the answers as usual and relays them to the coordinator; the story goes back to `review`.
 4. When the coordinator reports the filed record, set `status: added`, `backlog_id`, `added_at`, and a one-line `review_note`. A coordinator that declines (duplicate, out of scope) gives a reason; set `declined` and `closed_note`.
 
 The coordinator files the record itself with its own backlog tool, citing the story; pricing follows that repo's usual rules.

@@ -19,7 +19,7 @@ import os
 import re
 import sys
 
-from kitlib import pmstart, stubs
+from kitlib import pmstart, sessionmark, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
 from kitlib.ledger import safepath
@@ -55,7 +55,9 @@ PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch: run 
 
 
 def is_coordinator(env=None):
-    return (os.environ if env is None else env).get(ROLE_VAR) in (ROLE, LEGACY_ROLE)
+    """The session mark (ROLE_VAR, read by kitlib.sessionmark: the kit plugin's prefix removed) is
+    the coordinator's or its old name."""
+    return sessionmark.mark(os.environ if env is None else env) in (ROLE, LEGACY_ROLE)
 
 
 def load_config(path=None):
@@ -225,7 +227,7 @@ def landing_lock(entry, run=_run, read=_read, root=None, lock_file=None):
 
 def machine(entry, run=_run, read=_read, now=None, home=None, root=None, lock_file=None):
     """Owner reservations and bookings in force or starting within 4 h, free gpu and cpu slots, landing lock."""
-    home = home or os.path.expanduser("~")
+    home = home or kuser.home_dir()
     now = now or datetime.datetime.now().astimezone()
     s = json.loads(run([sys.executable, os.path.join(home, ".claude", "tools", "machine_lock", "machine_lock.py"),
                         "status", "--json"]))

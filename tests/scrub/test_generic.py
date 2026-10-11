@@ -12,12 +12,12 @@ invented paths on purpose), the two name checks read tests/ too.
   PM knows (kitlib/pmstart known_repos, the kit's own left out), the launched session names in
   pm_start.sessions_file, the coordinator_start.cap repository keys and the hub artifact id at the
   end of pm_start.hub_url. A machine with none of these skips the check with a printed note.
-- Kit names: the kit's repository name (`.kit.json` repo.name), the Claude plugin's name
-  (.claude-plugin/plugin.json) and the machine config folder's retired name
-  (kitlib.config.migration.OLD_DIR_NAME), read from those files at test time, so this file names
-  none of them. Each may stand only on a line of KIT_NAMES_ALLOWED; everywhere else code derives
-  it and text says what it is. The folder's current name (kitlib.config.user.DIR_NAME) is neutral
-  (KIT-CONFIG-DIR-RENAME), so it is no kit name.
+- Kit names: the kit's repository name (`.kit.json` repo.name) and the machine config folder's
+  retired name (kitlib.config.migration.OLD_DIR_NAME), read from those files at test time, so this
+  file names none of them. Each may stand only on a line of KIT_NAMES_ALLOWED; everywhere else code
+  derives it and text says what it is. The folder's current name (kitlib.config.user.DIR_NAME) is
+  neutral (KIT-CONFIG-DIR-RENAME), and so is the Claude plugin's name (.claude-plugin/plugin.json),
+  so neither is a kit name.
 
 An allow entry that matches nothing is printed as stale, not failed: the line it allowed is gone.
 """
@@ -60,9 +60,6 @@ NAMES_ALLOWED = ()
 KIT_NAMES_ALLOWED = (
     ('.kit.json', r'\s*"repo": \{"name": "{kit}"\},?', "the kit's own name lives in its .kit.json, repo.name"),
     ('README.md', r'# {kit}', "the project page keeps the project's title (an owner ruling)"),
-    ('.claude-plugin/*', r'.*', 'the Claude plugin carries its own name, Claude-specific (an owner '
-     'ruling); kitlib.lockmcp holds the one constant'),
-    ('kitlib/lockmcp/__init__.py', r"CLAUDE_PLUGIN_NAME = '[^']*'", 'the one Claude-plugin name constant'),
     ('kitlib/config/migration.py', r"OLD_DIR_NAME = '[^']*'", "the machine config folder's retired name, "
      'read as a fallback until the owner moves the file (tests/scrub/test_old_config_name.py)'),
 )
@@ -128,15 +125,23 @@ def install_names(home=None, kit_dir=ROOT, toplevel=None, common_dir=_common_dir
     """([(regex, source)], [notes]) for this install's own names, read from the machine config
     under home (default the user's) and the files it points at. A source that is absent or
     unreadable adds a note instead of a pattern. A known repository sharing the kit's git common
-    dir (its main checkout, any worktree of it) is the kit itself and adds no name."""
-    from kitlib.config.user import user_config
+    dir (its main checkout, any worktree of it) is the kit itself and adds no name. With no home
+    the machine config is the real one, read through the home fence's one exception
+    (tests.real_install_config); a machine with no config file skips the calling test by name."""
     from kitlib import pmstart
-    from tests.shipped import install_patterns
+    from tests import install_config, real_install_config
+    from tests.shipped import NO_INSTALL_NAMES
     if toplevel is None:
         toplevel = pmstart._toplevel
-    pats = [(rx, 'scrub_patterns') for rx, _ in install_patterns(home)]
+    if home is None:
+        cfg, why = real_install_config()
+        if cfg is None:
+            raise unittest.SkipTest(NO_INSTALL_NAMES % why)
+    else:
+        from kitlib.config.user import user_config
+        cfg = install_config(user_config(home))
+    pats = [(re.compile(p, re.I), 'scrub_patterns') for p in cfg['scrub_patterns'] or []]
     notes = [] if pats else ['scrub_patterns is not set']
-    cfg = user_config(home)
     named = {}
 
     def add(name, source):
@@ -175,7 +180,7 @@ def install_names(home=None, kit_dir=ROOT, toplevel=None, common_dir=_common_dir
     url = pm.get('hub_url')
     if isinstance(url, str) and url.rstrip('/'):
         add(url.rstrip('/').rsplit('/', 1)[-1], 'pm_start.hub_url artifact id')
-    for repo in ((cfg['coordinator_start'] or cfg['conductor_start'] or {}).get('cap') or {}):
+    for repo in (cfg['cap'] or {}):
         add(repo, 'coordinator_start.cap key')
     pats += [(name_pattern(n), src) for n, src in sorted(named.values())]
     return pats, notes
@@ -183,9 +188,9 @@ def install_names(home=None, kit_dir=ROOT, toplevel=None, common_dir=_common_dir
 
 def kit_names(root=ROOT, strict=False):
     """(name of the kit's repository or None, [(regex, source)]) for the kit's own names, read
-    from its files under root: `.kit.json` repo.name, .claude-plugin/plugin.json's name and
-    kitlib.config.migration.OLD_DIR_NAME without its leading dot (kit_name_pattern); the current
-    kitlib.config.user.DIR_NAME is neutral and not one. Names equal but for case and separators share one pattern. A missing file
+    from its files under root: `.kit.json` repo.name and kitlib.config.migration.OLD_DIR_NAME
+    without its leading dot (kit_name_pattern); the current kitlib.config.user.DIR_NAME and the
+    Claude plugin's name in .claude-plugin/plugin.json are neutral and not ones. Names equal but for case and separators share one pattern. A missing file
     or name adds nothing, unless strict: then it raises ValueError naming the source, so the live
     check cannot pass on fewer names."""
     from kitlib.config import migration
@@ -215,7 +220,6 @@ def kit_names(root=ROOT, strict=False):
     repo = read('.kit.json').get('repo')
     kit = repo.get('name') if isinstance(repo, dict) else None
     add(kit, '.kit.json repo.name')
-    add(read('.claude-plugin', 'plugin.json').get('name'), 'the Claude plugin name')
     add(migration.OLD_DIR_NAME.lstrip('.'), "the machine config folder's retired name")
     return (kit if isinstance(kit, str) else None,
             [(kit_name_pattern(n), src) for n, src in sorted(named.values())])
@@ -268,14 +272,14 @@ class Generic(unittest.TestCase):
 
     def test_no_kit_name_in_a_tracked_file(self):
         try:
-            kit, pats = kit_names(strict=True)       # all three sources, or a failure naming one
+            kit, pats = kit_names(strict=True)       # both sources, or a failure naming one
         except ValueError as e:
             self.fail('a kit name source cannot be read: %s' % e)
         found, stale = scan(tracked_files(), read_text, pats, kit_allowed(kit), excluded=())
         _report(stale)
         self.assertEqual(found, [], "the kit's own names in tracked files (derive them: "
-                         'kitlib.config.user for the machine config, kitlib.lockmcp for the Claude '
-                         'plugin, `.kit.json` repo.name for the repository; in text, say what it is; '
+                         'kitlib.config.user for the machine config, `.kit.json` repo.name for the '
+                         'repository; in text, say what it is; '
                          'or add a KIT_NAMES_ALLOWED entry with its reason):\n' + '\n'.join(found))
 
 
@@ -350,8 +354,7 @@ class TheChecks(unittest.TestCase):
         kit, pats = kit_names(root)
         self.assertEqual(kit, 'Kit-Alpha')
         self.assertEqual(sorted(src for _, src in pats),
-                         ['.kit.json repo.name', 'the Claude plugin name',
-                          "the machine config folder's retired name"])
+                         ['.kit.json repo.name', "the machine config folder's retired name"])
         files = {'tests/x.py': "name = 'kit-alpha'\n",          # tests/ is read too
                  'docs/a.md': 'prefix mcp__plugin_host-kit_lock__\n',
                  '.claude-plugin/plugin.json': '"name": "host-kit"\n',
@@ -359,10 +362,13 @@ class TheChecks(unittest.TestCase):
                  'README.md': '# Kit-Alpha\nthe Kit-Alpha way\n'}
         found, stale = scan(sorted(files), files.get, pats, kit_allowed(kit), excluded=())
         self.assertEqual(found, ['README.md:2: Kit-Alpha (.kit.json repo.name)',
-                                 'docs/a.md:1: host-kit (the Claude plugin name)',
                                  "tests/x.py:1: kit-alpha (.kit.json repo.name)"])
-        self.assertEqual(sorted(g for g, _, _ in stale),
-                         ['kitlib/config/migration.py', 'kitlib/lockmcp/__init__.py'])
+        self.assertEqual(sorted(g for g, _, _ in stale), ['kitlib/config/migration.py'])
+
+    def test_the_plugin_name_is_no_kit_name(self):
+        # The plugin's name is neutral: kit_names reads no kit name from plugin.json.
+        _kit, pats = kit_names(self._kit(None, '{"name": "host-kit"}'))
+        self.assertFalse([src for rx, src in pats if rx.search("host-kit")])
 
     def test_kit_names_without_the_files_are_the_retired_config_folder_only(self):
         from kitlib.config import migration
@@ -375,9 +381,7 @@ class TheChecks(unittest.TestCase):
     def test_strict_kit_names_refuse_a_missing_source(self):
         for kit_json, plugin_json, says in ((None, '{"name": "host-kit"}', '.kit.json is missing'),
                                             ('{"repo": {}}', '{"name": "host-kit"}', '.kit.json repo.name'),
-                                            ('{"repo": {"name": "Kit-Alpha"}}', None, 'plugin.json is missing'),
-                                            ('{"repo": {"name": "Kit-Alpha"}}', '{}', 'the Claude plugin name'),
-                                            ('{"repo": {"name": "Kit-Alpha"}}', '[]', 'not a JSON object')):
+                                            ('[]', '{"name": "host-kit"}', 'not a JSON object')):
             with self.subTest(says):
                 root = self._kit(kit_json, plugin_json)
                 with self.assertRaises(ValueError) as cm:
@@ -399,14 +403,10 @@ class TheChecks(unittest.TestCase):
         root = self._kit('{"repo": {"name": "Kit-Alpha"}}', '{"name": "host-kit"}')
         kit, pats = kit_names(root)
         files = {'README.md': '# Kit-Alpha\n# Kit-Alpha notes\n',
-                 '.kit.json': '  "repo": {"name": "Kit-Alpha"},\n  "x": "Kit-Alpha"\n',
-                 'kitlib/lockmcp/__init__.py': "CLAUDE_PLUGIN_NAME = 'host-kit'\nX = 'host-kit'\n",
-                 'kitlib/config/user.py': "TEMP_DIR_NAME = 'host-kit'\n"}
+                 '.kit.json': '  "repo": {"name": "Kit-Alpha"},\n  "x": "Kit-Alpha"\n'}
         found, _ = scan(sorted(files), files.get, pats, kit_allowed(kit), excluded=())
         self.assertEqual(found, ['.kit.json:2: Kit-Alpha (.kit.json repo.name)',
-                                 'README.md:2: Kit-Alpha (.kit.json repo.name)',
-                                 'kitlib/config/user.py:1: host-kit (the Claude plugin name)',
-                                 "kitlib/lockmcp/__init__.py:2: host-kit (the Claude plugin name)"])
+                                 'README.md:2: Kit-Alpha (.kit.json repo.name)'])
 
     def test_names_come_from_the_machine_config(self):
         home = self._home({'scrub_patterns': ['\\bowner\\b'],

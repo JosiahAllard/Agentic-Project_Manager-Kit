@@ -18,6 +18,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog
 - `docs/backlog-lint.md` | backlog lint | checking backlog records | kw: backlog-lint, lint
 - `docs/backlog-store.md` | backlog store design | changing the store | kw: backlog-store, store
+- `docs/branch-overlap.md` | branch overlap: unmerged branches touching a file set | checking a sweep's exclusions | kw: branch_overlap, overlap
 - `docs/commit.md` | commit.py and machine_paths.py | committing | kw: commit, machine_paths
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
@@ -25,7 +26,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/gate.md` | gate.py | running the gate | kw: gate, test
 - `docs/go-live.md` | go-live list | switching a repo to the kit | kw: go-live
 - `docs/guard.md` | shell guard and git hooks | a command is refused | kw: guard, hooks, refusal
-- `docs/install.md` | installing the kit in a repository | setting up a repo | kw: install, installer
+- `docs/install.md` | installing the kit in a repository | setting up a repo | kw: install, installer, junctions, plugin
 - `docs/kit-json.md` | `.kit.json` keys, types and defaults | configuring | kw: kit-json, config
 - `docs/landed.md` | landed: has a branch landed | checking a branch | kw: landed
 - `docs/launcher.md` | launcher | starting sessions | kw: launcher, launch
@@ -39,6 +40,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/pending.md` | the pending-steps file | pending steps | kw: pending
 - `docs/pm-data-branch.md` | PM data on a private branch of the kit repo | PM data | kw: pm-data, data-branch
 - `docs/pm-first-run.md` | PM first run | the first PM session | kw: pm-first-run
+- `docs/plugin-source.md` | the plugin's source: export of pushed kit main, refresh, migrate | installing or refreshing the plugin | kw: plugin-source, plugin, plugin_refresh, export
 - `docs/pm-start.md` | PM session-start checklist | starting a PM session | kw: pm-start, checklist
 - `docs/pm-watch.md` | PM watcher | watching sessions | kw: pm-watch, watcher
 - `docs/preflight.md` | preflight, board and checkout guard | starting any task | kw: preflight, board, checkout
@@ -80,6 +82,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/review_pack.py` | review pack (`docs/review-pack.md`) | kw: review_pack
 - `tools/land.py` | land a reviewed branch (`docs/shipping.md`) | kw: land
 - `tools/landed.py` | has a branch landed (`docs/landed.md`) | kw: landed
+- `tools/branch_overlap.py` | unmerged branches that change files in a set (`docs/branch-overlap.md`) | kw: branch_overlap, overlap
 - `tools/machine_lock.py` | machine lock (`docs/lock-api.md`) | kw: machine_lock, lock
 - `tools/lock_release_check.py` | lock release pre-check (`docs/lock-release.md`) | kw: lock_release_check
 - `tools/worktree_remove.py` | remove a worktree (`docs/worktree-remove.md`) | kw: worktree_remove
@@ -99,7 +102,8 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/kit_tests.py` | run the kit test suite, whole or selected (`docs/test-tools.md`) | kw: kit_tests, tests
 - `tools/ledger_refs.py` | where each ruling id is cited (`docs/ledger.md`) | kw: ledger_refs
 - `tools/machine_paths.py` | refuse a hard-coded machine path (`docs/commit.md`) | kw: machine_paths
-- `tools/machine_setup.py` | switch Claude config folders to this kit (`docs/machine-setup.md`) | kw: machine_setup
+- `tools/machine_setup.py` | switch Claude config folders to this kit, or set up a fresh machine (`docs/machine-setup.md`) | kw: machine_setup, fresh
+- `tools/plugin_refresh.py` | export pushed kit main and refresh the plugin in every account folder (`docs/plugin-source.md`) | kw: plugin_refresh, plugin
 - `tools/pieces.py` | the path-to-piece table (`docs/repo-checks.md`) | kw: pieces
 - `tools/pm_data.py` | make or re-link the PM-data branch (`docs/pm-data-branch.md`) | kw: pm_data
 - `tools/ruling_cites.py` | fail an added ruling citation the ledger cannot back (`docs/repo-checks.md`) | kw: ruling_cites

@@ -9,6 +9,7 @@ import unittest
 
 from kitlib.launcher import start, window
 from kitlib.launcher import settings as S
+from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
 from tests.launcher.fakes import EXE, NOW, FakeHost, Home, role_of, session
 
 DAY = datetime.timedelta(days=1)
@@ -60,7 +61,7 @@ class Deep(Base):
     def test_command_has_agent_model_effort_window_and_name(self):
         out = self.deep()
         self.assertIn('Would open a new window running:', out)
-        self.assertIn("claude --agent deep-worker --model 'opus[1m]' --effort xhigh --autocompact 500000 "
+        self.assertIn("claude --agent pm-kit:deep-worker --model 'opus[1m]' --effort xhigh --autocompact 500000 "
                       "--permission-mode auto --remote-control 'deep-net-race' -n 'deep-net-race' ", out)
         self.assertIn("$Host.UI.RawUI.WindowTitle = 'deep-net-race'", out)
         self.assertIn('Set-Location %s' % window.q(self.repo), out)
@@ -211,7 +212,7 @@ class Consultant(Base):
     def test_command_has_agent_model_effort_window_and_name(self):
         out = self.cons()
         self.assertIn('Would open a new window running:', out)
-        self.assertIn("claude --agent consultant --model 'opus[1m]' --effort high --autocompact 350000 "
+        self.assertIn("claude --agent pm-kit:consultant --model 'opus[1m]' --effort high --autocompact 350000 "
                       "--permission-mode auto --remote-control 'consultant-myrepo' -n 'consultant-myrepo' ", out)
         self.assertIn("$Host.UI.RawUI.WindowTitle = 'consultant-myrepo'", out)
         self.assertIn('Set-Location %s' % window.q(self.repo), out)
@@ -319,7 +320,7 @@ class Consultant(Base):
     def test_launch_passes_consultant_settings_and_writes_nothing(self):
         self.cons(plan=False)
         text, = self.host.opened
-        self.assertIn("--agent consultant --model 'opus[1m]' --effort high --autocompact 350000 ", text)
+        self.assertIn("--agent pm-kit:consultant --model 'opus[1m]' --effort high --autocompact 350000 ", text)
         self.assertIn('$env:CLAUDE_CONFIG_DIR = %s' % window.q(self.h.accounts['1'][0]), text)
         self.assertFalse(os.path.exists(os.path.join(self.repo, 'docs', 'ops')))
 
@@ -339,7 +340,7 @@ class Start(Base):
 
     def test_coordinator_command_carries_only_the_default_compact_window(self):
         out = self.go(name='x-coordinator-a1', prompt='go')
-        self.assertIn("claude --agent coordinator --autocompact 170000 --permission-mode auto "
+        self.assertIn("claude --agent pm-kit:coordinator --autocompact 170000 --permission-mode auto "
                       "--remote-control 'x-coordinator-a1' -n 'x-coordinator-a1' 'go'", out)
         for flag in ('--model', '--effort'):
             self.assertNotIn(flag, out)
@@ -374,6 +375,24 @@ class Start(Base):
         out = self.go(prompt='go', predecessor='old-a1')
         self.assertIn("'You succeed old-a1, which has checkpointed", out)
         self.assertTrue(out.rstrip().endswith("go'\""), out[-40:])      # the what-if line closes its quote
+
+    def test_the_predecessor_text_serialises_no_landing(self):
+        text = start.predecessor_text('x')
+        for old in (r'leave .*landing slot', 'hands them over', r'(?<!never )wait'):
+            self.assertNotRegex(text, old)
+        self.assertIn('lands nothing', text)
+        self.assertIn('every LAND verdict', text)
+        self.assertIn('never wait on it', text)
+        self.assertNotIn('--auto', text)
+
+    def test_only_a_coordinators_successor_is_told_to_land(self):
+        out = self.go(prompt='go', predecessor='old-a1')
+        self.assertIn('Land every LAND verdict', out)
+        for kw in ({'agent': 'consultant'}, {'agent': 'deep-worker'}, {'no_agent': True}):
+            out = self.go(prompt='go', predecessor='old-a1', **kw)
+            self.assertIn('You succeed old-a1', out)
+            self.assertNotIn('LAND', out)
+            self.assertNotIn('lands nothing', out)
 
     def test_the_default_account_folder_removes_config_dir(self):
         default = os.path.join(self.h.root, '.claude')
@@ -417,6 +436,44 @@ class Start(Base):
                                                        'state': 's.md', 'account': 2}})
             out = '\n'.join(start.start_entry(self.h.settings, self.host, 'k', whatif=True))
             self.assertIn('--autocompact %d ' % window_, out)
+
+    def test_a_plugin_prefixed_agent_is_named_bare_and_keeps_its_roles_window(self):
+        p = CLAUDE_PLUGIN_NAME + ':'
+        out = self.go(agent=p + 'deep-worker')
+        self.assertIn('--agent %sdeep-worker ' % p, out)
+        self.assertIn("-n 'alpha-deep-worker-a1'", out)
+        for agent, window_ in ((p + 'consultant', 350000), (p + 'deep-worker', 500000), (p + 'reviewer', 170000),
+                               ('other:consultant', 170000)):
+            with self.subTest(agent):
+                args = start.entry_start_args(self.h.settings, 'k', {'repo': 'alpha', 'agent': agent,
+                                                                     'stem': 'alpha-x'}, '2', None)
+                self.assertEqual(args.get('autocompact', start.DEFAULT_AUTOCOMPACT), window_)
+                self.assertEqual(args['agent'], agent)
+        for bad in ('other:deep-worker', 'a:b:c', ':x', p, p + p + 'x'):
+            with self.subTest(bad):
+                with self.assertRaisesRegex(S.LaunchError, 'is not an agent name'):
+                    self.go(agent=bad)
+
+    def test_a_bare_kit_agent_starts_under_the_plugins_prefix(self):
+        """The plugin registers its agents only as pm-kit:<name>; a bare one is qualified, named bare."""
+        out = self.go(agent='reviewer')
+        self.assertIn('--agent pm-kit:reviewer ', out)
+        self.assertIn("-n 'alpha-reviewer-a1'", out)
+        self.h.write_state('sessions.json', {'k': {'repo': 'alpha', 'agent': 'reviewer', 'stem': 'alpha-x',
+                                                   'state': 's.md', 'account': 2}})
+        out = '\n'.join(start.start_entry(self.h.settings, self.host, 'k', whatif=True))
+        self.assertIn('--agent pm-kit:reviewer ', out)
+
+    def test_a_repos_own_agent_starts_as_given(self):
+        for agent in ('my-repo-agent', 'conductor'):
+            with self.subTest(agent):
+                self.assertIn('--agent %s ' % agent, self.go(agent=agent))
+
+    def test_kit_agents_are_the_plugins_agent_files(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        folder = os.path.join(here, '..', '..', 'claude', 'agents')
+        stems = sorted(f[:-3] for f in os.listdir(folder) if f.endswith('.md'))
+        self.assertEqual(sorted(start.KIT_AGENTS), stems)
 
     def rec(self, **kw):
         e = {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord', 'state': 's.md', 'account': 1,

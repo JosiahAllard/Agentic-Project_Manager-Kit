@@ -38,9 +38,12 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    (docs/guard.md "Go-live (after the joint review)").
    Success: a Bash search from a drive root is denied with `rule=root-search`.
 
-   Steps 3, 6 and 7's hook are hand steps on a fresh machine: `installer/machine-setup.ps1`
-   needs an old kit to switch from and does not install them (docs/machine-setup.md "Not done
-   here").
+   On a fresh machine (no older kit clone), steps 3, 6 and 7's hook are one owner command instead:
+   from `<kit>`, `powershell -NoProfile -File installer\machine-setup.ps1 -Fresh -PmSettings
+   <PM repo>\.claude\settings.local.json` prints the plan, and the same command with `-Apply`
+   makes it (docs/machine-setup.md "Fresh machine (--fresh)"). It still runs as a hand step: the
+   owner reviews the dry run and runs `-Apply`. Steps 3 and 6's success checks still apply. Step
+   7's hook needs the file's folder to exist; create the rest of step 7's files either way.
 
 7. **Turn on the PM checklist.** Create the files it reads: a sessions file, a reminders file
    holding `[]`, and a memory folder for handoff notes. The sessions file is `sessions.json` in
@@ -49,10 +52,10 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    repository (`claude/hub/hub_backlog.py` finds the repository from the sessions file's folder
    and fails outside a git repo). Fill `pm_start` in the user config with their paths, and
    `pm_watch_cmd` (docs/pm-start.md "Config"); set `pm_watch.sessions_file` to the same file
-   (docs/pm-watch.md "Config"). `usage_script` is optional: without it `pm_watch.py` reads usage
-   in-process from the machine config's `launcher` key, and exits 2 only when neither is set.
+   (docs/pm-watch.md "Config"). `pm_watch.py` reads usage
+   in-process from the machine config's `launcher` key and exits 2 without it; `usage_script` is refused.
    Then, as a hand step, the owner adds the SessionStart hook from docs/pm-start.md to the
-   settings only the PM session loads.
+   settings only the PM session loads (on a fresh machine, `-Fresh -PmSettings` above writes it).
    Success: the next PM session starts with "PM session start checklist", not "no pm_start
    config ... checklist skipped".
 
@@ -81,7 +84,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
     `"<key>": {"name": "<name>", "repo": "<repo name>"}` (docs/pm-start.md). Start the coordinator
     with `python <kit>/tools/launch.py start --session <key> --account <n>` (the entry then also needs
     `stem` and `agent`, docs/launcher.md "State files"; it sets `PM_KIT_ROLE` to `coordinator`), or by hand in the repository with `PM_KIT_ROLE` set to `coordinator`:
-    `claude --agent coordinator --remote-control "<name>"`. The name must match the entry
+    `claude --agent pm-kit:coordinator --remote-control "<name>"`. The name must match the entry
     exactly, case included: the checklist finds a coordinator only by that flag. On its first
     start it drafts the repository's profiles for the owner to approve.
     `--account current` starts it on the account you are on. Add the kit's own coordinator the same way

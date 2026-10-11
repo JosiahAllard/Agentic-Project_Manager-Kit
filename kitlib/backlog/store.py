@@ -165,7 +165,8 @@ def dangling_items(by_id):
         for m in r.all('blocked_on'):
             if m.startswith('item:') and m[len('item:'):] not in by_id:
                 out.append(rmod.Finding(rmod.ITEM_TARGETS, r.path, r.line_of('blocked_on'),
-                                        '`%s` names no live record - closed? `unblock` it' % m))
+                                        '`%s` names no live record - closed? `unblock %s --on %s '
+                                        '--reason "<why>"`' % (m, r.id, m)))
     return out
 
 
@@ -445,6 +446,10 @@ class RefBackend(object):
             return None
         return last_removal(self.root, snap.tip, STORE_DIR, rid)
 
+    def uncommitted_removal(self, rid):
+        """Always False: every write to a ref store is a commit."""
+        return False
+
     def touched(self, snap):
         """`{stem: epoch}` of the last store commit that wrote each record."""
         if not snap.tip:
@@ -589,6 +594,20 @@ class MainBackend(object):
         """The newest commit on HEAD that deleted `<dir>/<rid>.md` (a Removal), or None."""
         return last_removal(self.root, 'HEAD', self.rel, rid)
 
+    def uncommitted_removal(self, rid):
+        """True when HEAD tracks `<dir>/<rid>.md` and the worktree no longer holds it: a write
+        here deleted it (`close`, `retire`, which commit nothing) or a hand removed it. False on
+        an unborn HEAD. Failure when git did not answer (killed, timed out): fail closed."""
+        if not PLAIN_ID.match(rid):
+            raise Usage('`%s` is not a plain id: as a git pathspec it could match other files' % rid)
+        if os.path.exists(os.path.join(self.dir, rid + '.md')):
+            return False
+        r = cmd.call(['cat-file', '-e', 'HEAD:%s/%s.md' % (self.rel.replace('\\', '/'), rid)],
+                     self.root)
+        if r.rc is None:
+            raise Failure(r.err)
+        return r.rc == 0
+
     def touched(self, snap):
         return _touch_times(self.root, 'HEAD', self.rel)
 
@@ -643,6 +662,9 @@ class Store(object):
 
     def removal(self, rid, snap):
         return self.backend.removal(rid, snap)
+
+    def uncommitted_removal(self, rid):
+        return self.backend.uncommitted_removal(rid)
 
     def touched(self, snap):
         return self.backend.touched(snap)

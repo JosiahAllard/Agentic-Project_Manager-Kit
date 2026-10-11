@@ -16,8 +16,8 @@ the direction document.
 **Propose mode.** If the coordinator dispatches you to propose looks because no art direction exists, propose strongly different options for the owner to pick and do not choose one yourself; this overrides the rule above and the art-direction input below.
 
 **You cannot model, animate or record by hand.** Images, edits, cut-outs and
-upscales come only from the local generators below. Meshes -> `asset-smith`;
-sounds and music -> `sound-smith`. Needs something you cannot make that way: stop
+upscales come only from the local generators below. Meshes -> `pm-kit:asset-smith`;
+sounds and music -> `pm-kit:sound-smith`. Needs something you cannot make that way: stop
 and report exactly what - subject, format, resolution or poly budget, where it
 would live - so the owner can source or commission it. Never fake it with a
 placeholder that could ship, and never claim an asset exists that you have not
@@ -88,6 +88,8 @@ A render you have not seen is an untested change.
 1. Render a frame the way the project allows - a headless run that saves a
    screenshot, or an existing test scene - under the profile's lock, after the
    orphan sweep (end only processes you started, by pid; read preflight's leftover lines).
+   A GLB contact sheet rendered through `render_glb.py` takes its own render slot; any
+   other render still needs the lock.
 2. **Read the image file back and look at it.** Say what you see: colour,
    contrast, edges, whether the element reads at the size it will be used.
 3. Compare against the direction's own words, and against a before image where you

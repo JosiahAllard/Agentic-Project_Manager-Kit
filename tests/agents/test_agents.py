@@ -3,7 +3,7 @@ import re
 import unittest
 from pathlib import Path
 
-from tests.shipped import install_patterns
+from tests.shipped import scan
 
 AGENTS = Path(__file__).resolve().parents[2] / "claude" / "agents"
 EXPECTED = {"coordinator", "worker", "opus-worker", "strong-worker", "deep-worker", "consultant", "reviewer",
@@ -121,11 +121,10 @@ class AgentFilesTest(unittest.TestCase):
                               f"{p.name} names skill(s) {named} but its tools: list has no Skill")
 
     def test_no_repo_or_owner_specifics(self):
-        patterns = BASE_FORBIDDEN + install_patterns()   # read here: a bad config fails this test
-        for p in AGENTS.glob("*.md"):
-            text = p.read_text(encoding="utf-8")
-            for rx, what in patterns:
-                self.assertIsNone(rx.search(text), f"{p.name}: {what}")
+        # read here: a bad config fails this test; the base patterns run with or without names
+        found = scan([(p.name, p.read_text(encoding="utf-8")) for p in AGENTS.glob("*.md")],
+                     base=BASE_FORBIDDEN)
+        self.assertEqual(found, [])
 
 
 if __name__ == "__main__":
