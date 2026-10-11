@@ -11,22 +11,38 @@ One pass (sync_once), in this order:
 
   1. branch   `branch --show-current` must still answer the branch prepare() saw. Anything else
               ends the pass before a write.
-  2. status   `status --porcelain -z --untracked-files=all -- <store>`: what differs from HEAD
-              under the store folder. The store's lock file and its temp files are never counted
-              and never added.
+  2. status   `--no-optional-locks status --porcelain -z --untracked-files=all -- <store>`: what
+              differs from HEAD under the store folder, read without rewriting the index. The
+              store's lock file and its temp files are never counted and never added.
   3. read     the branch's commit and the remote-tracking ref's commit (`rev-parse --verify`).
      Nothing to commit and nothing to push ends the pass here: an idle sync runs no fetch.
-  4. fetch    `fetch -q <remote> refs/heads/<b>:refs/remotes/<remote>/<b>`, never with `+`.
-              A remote that has no such branch yet is not a failure: the push creates it.
+  4. fetch    `fetch -q --no-tags <remote> refs/heads/<b>:refs/remotes/<remote>/<b>`, never
+              with `+`. A remote that has no such branch yet is not a failure: the push creates
+              it.
   5. fast-forward
-              `merge -q --ff-only refs/remotes/<remote>/<b>` when the two commits differ.
-  6. commit   `add -- <untracked store files>`, then `commit -q -m SUBJECT -- <store>`.
+              the guard (below), then `merge -q --ff-only --no-autostash refs/remotes/<remote>/<b>`
+              when the two commits differ.
+  6. commit   the guard again and the identity check, then `add -- <untracked store files>` and
+              `commit -q --no-gpg-sign -m SUBJECT -- <store>`.
   7. push     `push -q <remote> refs/heads/<b>:refs/heads/<b>`, never forced.
 
 The fetch and the fast-forward run BEFORE the commit. That order is what makes a remote that
 moved cost nothing: the branch is fast-forwarded with the store's changes still uncommitted in the
 work tree, the commit lands on top of the remote's commit, and the push is a fast-forward. Commit
 first and the same case is two diverged histories.
+
+The guard. The fetch can take minutes, and the data worktree belongs to other tools too. So
+before each of the two local writes (the fast-forward, the commit) the pass asks again which
+branch is checked out, and looks in the work tree's own git directory (`rev-parse --git-path`,
+read once) for MARKERS: a merge, cherry-pick, revert or rebase under way, or an `index.lock`. A
+branch that changed ends the pass at `branch`; a marker ends it at `busy`, and the detail names
+what was found. Either way that pass writes nothing more: no fast-forward, no add, no commit, no
+reset, no push. What is left between the guard and git's own start is a few milliseconds, in
+which git's index lock still refuses a second writer.
+
+The fast-forward never stashes. `--no-autostash` overrides a `merge.autoStash` the owner has set:
+uncommitted changes in the data worktree, the store's or anybody else's, are either left exactly
+as they are under a fast-forward that does not touch them, or git refuses the fast-forward.
 
 What a failure leaves, step by step:
 
@@ -37,19 +53,45 @@ What a failure leaves, step by step:
     tip, would turn a remote that only moved into a real divergence. `diverged` is True when git
     says the remote's commit does not contain the branch's (refs.is_ancestor, a definite NO only):
     the two histories have to be joined by a person. gitsync never merges, rebases or forces.
-  - add or commit fails or is refused (a hook, no git identity, the index held): the store's
-    paths are unstaged again (`reset -q -- <store>`, the index only, as kitlib.ledger.vcs does) so
-    no other commit in the data worktree finds them staged, `pending_commit` stays set, and the
-    next pass tries again. Commits made earlier are still pushed.
+  - no git identity (identity check, below): nothing is added or committed, the pass fails at
+    `commit` with a detail that begins "git identity not set".
+  - add or commit fails or is refused (a hook, the index held): the paths THIS pass added are
+    unstaged again (`reset -q -- <those paths>`, the index only), so no other commit in the data
+    worktree finds them staged. A store path somebody else had staged before the add stays
+    staged. `pending_commit` stays set and the next pass tries again; commits made earlier are
+    still pushed. A reset that fails too is said in the same detail.
+  - a merge, add, commit or reset that ran into its time limit was stopped half way and may have
+    left `index.lock` behind: the detail says so. Nothing here ever removes an `index.lock`; the
+    next pass finds it and ends at `busy` until a person has removed it.
   - push fails or is refused: `pending_push` stays set and the next pass tries again.
+  - `push` on and no remote to push to: every pass commits, and reports `pending_push` with
+    failed `push` and the detail NO_REMOTE, from the constructor on. Passing `push` False is how
+    a caller says a store is meant to stay local.
 
 Every pass ends in the status object (GitSync.status), which the server's /health reads.
 
 The commit is a plain data commit: the machine's own git identity (no --author, no -c), the fixed
 subject SUBJECT, no body, no agent trailer, limited by pathspec to the store folder, hooks left
-on. It does not go through kitlib.commit: that is the path for an agent's change to tracked code,
-with a model trailer and a staged machine-path scan, and neither fits data the owner wrote in a
-browser. Other paths staged in the data worktree stay staged and out of the commit.
+on, never signed (`--no-gpg-sign`: a signing program may ask for a passphrase, and nobody watches
+this thread). It does not go through kitlib.commit: that is the path for an agent's change to
+tracked code, with a model trailer and a staged machine-path scan, and neither fits data the owner
+wrote in a browser. Other paths staged in the data worktree stay staged and out of the commit.
+
+The identity check. Before the add, `config --get-regexp` reads user.name, user.email and the
+author.* and committer.* forms. A name and an email must each come from GIT_AUTHOR_* and
+GIT_COMMITTER_* in the child's environment or from that config (the email also from EMAIL), the
+sources git itself reads first. When one is missing git would make it up from the account and
+host name; no commit is made instead.
+
+Nothing may wait for a person. A fetch and a push run with git's terminal prompt and the
+credential manager's window off (kitlib.git.cmd.NETWORK_ENV's two switches), and with GIT_ASKPASS
+and SSH_ASKPASS set to the empty string: git reads an empty GIT_ASKPASS as "no helper program",
+ahead of core.askPass and SSH_ASKPASS, so no program is started and a missing credential is a
+failed fetch or push. GIT_SSH_COMMAND is set to SSH_BATCH (`ssh -o BatchMode=yes`: ssh fails
+where it would ask for a passphrase or a password) only when nothing else chooses the ssh
+command: not when the environment sets GIT_SSH_COMMAND or GIT_SSH, and not when `core.sshCommand`
+is set or cannot be read. Those are the owner's own choice of key and program, and GIT_SSH_COMMAND
+would replace them; with one of them set, keeping ssh from asking is up to that choice.
 
 Machine paths. A hub document is the owner's own text and may hold a path of this machine. Nothing
 here scans or changes it. The machine-path check (kitlib.machinepaths) keeps running for
@@ -63,14 +105,16 @@ with an allow-list entry, for a store folder `hub`:
 collection.) That entry is an allow-list, never a scrub of the owner's text. gitsync reads and
 writes no `.kit.json`.
 
-No git config is written, ever: no `config`, no `remote`, no upstream. Every fetch and push names
-its refspec on the command line, so `.git/config` is byte-identical after any number of passes
+No git config is written, ever: `config` is run only as a read (`--get`, `--get-regexp`), and
+there is no `remote` write and no upstream. Every fetch and push names its refspec on the command
+line, so `.git/config` is byte-identical after any number of passes
 (tests/hubsite/test_gitsync.py asserts it on real git).
 
 prepare() refuses, before anything runs: a store folder in no git work tree, a detached HEAD, a
 branch other than the one the caller named, a store folder that is the work tree's root (the
 pathspec would then cover the whole data worktree) or whose path git would read as a pattern, a
-remote that is not a plain name, and a work tree of the kit itself, through
+store folder git tracks under another spelling than the folder has on disk, a remote that is not
+a plain name or that the repository does not have, and a work tree of the kit itself, through
 kitlib.hubmirror's own check (_kit_checkout_error): a checkout holding the kit's code, a work tree
 of the kit's repository that is not on its recorded data branch, or a remote other than the
 recorded one. The hub holds the owner's private data and the kit's history is public.
@@ -82,19 +126,21 @@ Limits, stated so nobody has to find them:
   - The Store never reloads from disk. A fast-forward that brings store documents written on
     another machine changes files under a running Store, which will not see them until it is
     opened again. Two machines writing one store is outside what this module makes safe.
+  - The store's lock is not taken. kitlib.hubsite.store keeps its folder lock for as long as a
+    Store is open and its write mutex to itself, so a commit can fall between the two files of
+    one write (`_meta.json`, then the document) and hold the first without the second. The next
+    pass commits the rest; one commit by itself is not promised to be a consistent store.
   - Two machines that both commit before either pushes have diverged; that is reported, not
     repaired. The same holds for a remote that moves between one pass's fetch and its push when
     that pass committed: the push is refused (pass failed at `push`) and the next pass reports
     `diverged`.
-  - A fast-forward that would overwrite a store file this store has changed and not committed
+  - A fast-forward that would overwrite a file changed and not committed in the data worktree
     (the other machine's commit and this store both rewrote `_meta.json`, say) is refused by git
-    and stays refused: every pass fails at `fast-forward` with `pending_commit` set and `diverged`
-    False, until a person settles it. Commits from elsewhere that touch no uncommitted store file
-    (backlog records, most of the data branch) fast-forward under the store's changes.
+    and stays refused: every pass fails at `fast-forward` with `diverged` False, until a person
+    settles it. Commits from elsewhere that touch no uncommitted file (backlog records, most of
+    the data branch) fast-forward under the store's changes.
   - A pass can take as long as git takes: stop() waits for the pass in flight (NET_TIMEOUT at
     most for a fetch or a push, kitlib.git.cmd.GIT_TIMEOUT for anything else).
-  - The push runs with git's credential prompts off (kitlib.git.cmd.NETWORK_ENV's two prompt
-    switches): a thread nobody watches must fail, not wait for a password.
 """
 import collections
 import os
@@ -112,14 +158,27 @@ NET_TIMEOUT = 120               # seconds one fetch or one push may take
 ADD_CHARS = 6000                # the most path text one `git add` is given (a Windows command line)
 
 # The steps a pass can fail at, in the order they run; `internal` is a pass that raised.
-STEPS = ('branch', 'status', 'read', 'fetch', 'fast-forward', 'commit', 'push', 'internal')
+STEPS = ('branch', 'status', 'read', 'fetch', 'busy', 'fast-forward', 'commit', 'push', 'internal')
+
+# What the guard looks for in the work tree's own git directory: another git operation under way.
+MARKERS = ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply',
+           'index.lock')
+NO_REMOTE = 'no remote to push to: none was named and none is recorded for the data branch'
+NO_IDENTITY = 'git identity not set'
+LOCK_NOTE = ('; git was stopped at its time limit and may have left index.lock behind in the git '
+             'directory (nothing here removes it)')
+SSH_BATCH = 'ssh -o BatchMode=yes'
 
 _NO_REMOTE_REF = "couldn't find remote ref"     # git's stderr (C locale) for a branch the remote lacks
+_NO_SUCH_REMOTE = 2                             # `git remote get-url <name>`: no remote of that name
 _NAME = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_./-]*\Z')
 _PROMPTS_OFF = ('GIT_TERMINAL_PROMPT', 'GCM_INTERACTIVE')
+_ASKPASS_OFF = {'GIT_ASKPASS': '', 'SSH_ASKPASS': ''}
+_IDENTITY_KEYS = r'^(user|author|committer)\.(name|email)$'
 
-# root: the work tree's top level; rel: the store folder below it, forward slashes; branch: the
-# data branch; remote: the remote's name, or None when there is none to push to.
+# root: the work tree's top level; rel: the store folder below it, forward slashes, spelled as
+# the folder is on disk; branch: the data branch; remote: the remote's name, or None when there
+# is none to push to.
 Plan = collections.namedtuple('Plan', 'root rel branch remote')
 
 
@@ -152,14 +211,62 @@ def _rel(folder, root):
     return None
 
 
+def _disk_case(root, rel):
+    """`rel` with every part that exists below `root` spelled as its folder lists it. A caller may
+    name the store in any case on a file system that folds case; git matches a pathspec by its
+    exact spelling, and a store named `HUB` for the folder `hub` would match nothing. A part that
+    is not there yet keeps the caller's spelling: the store makes the folder under that name."""
+    parts, here = [], root
+    for part in rel.split('/'):
+        try:
+            names = os.listdir(here)
+        except OSError:
+            names = []
+        if part not in names:
+            same = [n for n in names if os.path.normcase(n) == os.path.normcase(part)]
+            if len(same) == 1:
+                part = same[0]
+        parts.append(part)
+        here = os.path.join(here, part)
+    return '/'.join(parts)
+
+
+def _tracked_as(root, rel):
+    """The other spellings under which git's index holds the folder `rel` (same letters, another
+    case), sorted; Refused when the index cannot be read."""
+    r = cmd.call(['ls-files', '-z', '--full-name'], root)
+    if r.rc != 0:
+        raise Refused('cannot read what git tracks in %s: %s'
+                      % (root, _first_line(r.err) or 'git ls-files exited %s' % r.rc))
+    depth, want, other = rel.count('/') + 1, os.path.normcase(rel), set()
+    for path in cmd.text(r.out).split('\0'):
+        parts = path.split('/')
+        if len(parts) > depth:
+            head = '/'.join(parts[:depth])
+            if head != rel and os.path.normcase(head) == want:
+                other.add(head)
+    return sorted(other)
+
+
 def prepare(store_dir, remote=None, branch=None):
     """A Plan for syncing the store folder `store_dir`, or Refused. Runs before anything is
     written and writes nothing itself.
 
-    `branch`: the data branch the caller expects (pm_data.branch); None accepts the branch that is
-    checked out. `remote`: the remote to fetch from and push to (pm_data.remote); None takes the
-    remote recorded for the data branch in the kit's repository (kit-pm-data.json), and a store in
-    any other repository then has no remote: its Plan commits and never fetches or pushes."""
+    `branch`: the data branch the caller expects (pm_data.branch); a work tree on any other
+    branch is Refused. None means the caller does not know its name, and the branch checked out
+    when prepare() runs IS then the data branch for the life of the Plan: in the kit's own
+    repository that can only be the recorded data branch (the hubmirror check), in any other
+    repository nothing else vouches for it, so a caller that has the name passes it. Either way
+    the branch has to be readable and attached: a detached HEAD, or a work tree whose branch git
+    cannot name, is Refused.
+
+    `remote`: the remote to fetch from and push to (pm_data.remote); None takes the remote
+    recorded for the data branch in the kit's repository (kit-pm-data.json), and a store in any
+    other repository then has no remote: its Plan commits and never fetches or pushes. A remote
+    the repository does not have is Refused.
+
+    The Plan's `rel` is the store folder spelled as it is on disk, whatever case the caller
+    wrote; a store git tracks under one spelling while the folder has another is Refused."""
     folder = os.path.abspath(store_dir)
     while not os.path.isdir(folder):
         parent = os.path.dirname(folder)
@@ -171,9 +278,11 @@ def prepare(store_dir, remote=None, branch=None):
         raise Refused('the hub store %s is in no git work tree: %s' % (store_dir, why))
     current, why = refs.current_branch(root)
     if current is None:
-        raise Refused('cannot read the branch of %s: %s' % (root, why))
+        raise Refused('the data branch cannot be determined: cannot read the branch of %s: %s'
+                      % (root, why))
     if not current:
-        raise Refused('HEAD is detached in %s: the hub store is committed to a branch' % root)
+        raise Refused('the data branch cannot be determined: HEAD is detached in %s, and the hub '
+                      'store is committed to a branch' % root)
     if remote is not None and not _name_ok(remote):
         raise Refused('the remote must be a remote name, not %r' % (remote,))
     try:
@@ -191,14 +300,27 @@ def prepare(store_dir, remote=None, branch=None):
     if rel in ('', '.'):
         raise Refused('the hub store %s is the root of its work tree: it must be a folder below '
                       'it, so the commit is limited to the store' % store_dir)
-    if rel == '.git' or rel.startswith('.git/'):
+    if rel.lower() == '.git' or rel.lower().startswith('.git/'):
         raise Refused('the hub store %s is inside the git directory' % store_dir)
     if rel.startswith(':') or any(c in rel for c in '*?[]'):
         raise Refused('the hub store folder %r holds a character git reads as a pattern: the '
                       'commit could not be limited to it' % rel)
+    rel = _disk_case(root, rel)
+    other = _tracked_as(root, rel)
+    if other:
+        raise Refused('git tracks the hub store folder as %s and the folder on disk is %r: git '
+                      'matches a path by its exact spelling, so nothing would be committed. '
+                      'Rename one to match the other' % (', '.join(repr(o) for o in other), rel))
     name = remote or recorded
-    if name is not None and not _name_ok(name):
-        raise Refused('the recorded remote must be a remote name, not %r' % (name,))
+    if name is not None:
+        if not _name_ok(name):
+            raise Refused('the recorded remote must be a remote name, not %r' % (name,))
+        r = cmd.call(['remote', 'get-url', name], root)
+        if r.rc == _NO_SUCH_REMOTE:
+            raise Refused('%s has no remote named %r' % (root, name))
+        if r.rc != 0:
+            raise Refused('cannot read whether %s has the remote %r: %s'
+                          % (root, name, _first_line(r.err) or 'git remote get-url exited %s' % r.rc))
     return Plan(root, rel, current, name)
 
 
@@ -211,6 +333,16 @@ def _first_line(text):
         if line.startswith(('fatal:', 'error:')):
             return line[:300]
     return lines[-1][:300] if lines else ''
+
+
+def _why(r, what):
+    """Why the git command `what` failed, from its result `r`; with LOCK_NOTE when it wrote to
+    the index and was stopped at its time limit (kitlib.git.cmd.call answers rc None and
+    'git ... timed out after N seconds')."""
+    why = _first_line(r.err) or 'git %s exited %s' % (what, r.rc)
+    if r.rc is None and 'timed out' in (r.err or ''):
+        why += LOCK_NOTE
+    return why
 
 
 def _chunks(paths, limit):
@@ -235,11 +367,13 @@ class GitSync:
         sync.stop()             # joins the thread
 
     The constructor runs prepare() and raises Refused; it starts nothing. `push` False commits
-    and never fetches or pushes. `clock` (default time.time) answers seconds and decides when a
-    pass is due; `git` (default kitlib.git.cmd.call) runs every git command of a pass as
-    `git(args, cwd, timeout=, env=)` and answers an object with rc (None: git did not run), out
-    (bytes) and err (text); `env` is the environment those commands get (None: cmd.call's own).
-    One question is asked outside `git`: refs.is_ancestor, after a fast-forward that failed.
+    and never fetches or pushes, and says nothing about it; `push` True with no remote to push to
+    commits too, and status() reports that from the start (NO_REMOTE). `clock` (default
+    time.time) answers seconds and decides when a pass is due; `git` (default
+    kitlib.git.cmd.call) runs every git command of a pass as `git(args, cwd, timeout=, env=)` and
+    answers an object with rc (None: git did not run), out (bytes) and err (text); `env` is the
+    environment those commands get (None: cmd.call's own). One question is asked outside `git`:
+    refs.is_ancestor, after a fast-forward that failed or was not tried.
 
     poll() and sync_once() may be called from any thread, with or without the thread running: one
     pass runs at a time, and status() never waits for one."""
@@ -253,6 +387,7 @@ class GitSync:
         self.plan = prepare(store_dir, remote, branch)
         self.every = commit_every_s
         self.push = bool(push) and self.plan.remote is not None
+        self._no_remote = bool(push) and self.plan.remote is None
         self._clock = clock or time.time
         self._run = git or cmd.call
         self._env = env
@@ -262,26 +397,29 @@ class GitSync:
         self._stop = threading.Event()
         self._due = self._clock() + self.every
         self._pushed = None                     # the commit the last push of this process sent
+        self._marker_paths = None               # [(name, path)] of MARKERS, read by the first guard
         self._state = {
-            'ok': None, 'failed': '', 'detail': '', 'pending_commit': False,
-            'pending_push': False, 'diverged': False, 'failing_since': None,
+            'ok': None, 'failed': 'push' if self._no_remote else '',
+            'detail': NO_REMOTE if self._no_remote else '', 'pending_commit': False,
+            'pending_push': self._no_remote, 'diverged': False, 'failing_since': None,
             'last_pass_at': None, 'last_commit_at': None, 'last_commit': '',
             'last_push_at': None}
 
     # ---- the thread ---------------------------------------------------------------------------
 
     def start(self):
-        """Start the sync thread: a pass at once, then one every commit_every_s. False when it
-        is already running."""
+        """Start the sync thread: a pass at once, then one every commit_every_s. False, and
+        nothing started, when it is already running. The thread is made AND started under the
+        lock, so of two callers at the same moment one starts it and the other finds it alive."""
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 return False
-            self._stop = threading.Event()
+            stop = threading.Event()
+            thread = threading.Thread(target=self._loop, args=(stop,), name='hub-gitsync',
+                                      daemon=True)
             self._due = self._clock()
-            self._thread = threading.Thread(target=self._loop, args=(self._stop,),
-                                            name='hub-gitsync', daemon=True)
-            thread = self._thread
-        thread.start()
+            thread.start()
+            self._stop, self._thread = stop, thread
         return True
 
     def stop(self, timeout=None):
@@ -336,11 +474,13 @@ class GitSync:
           remote           the remote's name; '' when nothing is fetched or pushed
           every            commit_every_s
           ok               the last pass ended without a failure; None before the first pass
-          failed           the step the last pass failed at (one of STEPS), else ''
+          failed           the step the last pass failed at (one of STEPS), else ''; `push` from
+                           the constructor on when `push` is on and there is no remote
           detail           why, in a line; git's own words may name a remote URL or a path, so
                            show it only where the caller may see those
           pending_commit   the store folder holds changes that are not committed
-          pending_push     the data branch holds commits the remote does not
+          pending_push     the data branch holds commits the remote does not (always, when
+                           `push` is on and there is no remote)
           diverged         the remote's branch and the local one have diverged: a person joins them
           failing_since    the clock at the first of the failing passes still running, else None
           last_pass_at, last_commit_at, last_push_at    clock values, None before the first
@@ -391,10 +531,82 @@ class GitSync:
         sha = cmd.text(r.out).strip() if r.rc == 0 else ''
         return sha if refs.is_sha(sha) else None
 
-    def _push_env(self):
+    def _net_env(self):
+        """The environment of this pass's fetch and push: nothing in it may wait for a person
+        (the module docstring, "Nothing may wait for a person")."""
         env = dict(cmd.scrubbed_env() if self._env is None else self._env)
-        env.update((k, cmd.NETWORK_ENV[k]) for k in _PROMPTS_OFF)
+        forced = dict(_ASKPASS_OFF)
+        forced.update((k, cmd.NETWORK_ENV[k]) for k in _PROMPTS_OFF)
+        for key in [k for k in env if k.upper() in forced]:     # Windows reads names in any case
+            del env[key]
+        env.update(forced)
+        names = {k.upper() for k in env}
+        if 'GIT_SSH_COMMAND' not in names and 'GIT_SSH' not in names:
+            r = self._git(['config', '--get', 'core.sshCommand'])
+            if r.rc == 1:               # git's answer for a key that is not set
+                env['GIT_SSH_COMMAND'] = SSH_BATCH
         return env
+
+    def _on_branch(self):
+        """None while the work tree is on the data branch, else the keys of a pass that ends at
+        `branch`."""
+        r = self._git(['branch', '--show-current'])
+        current = cmd.text(r.out).strip() if r.rc == 0 else None
+        if current == self.plan.branch:
+            return None
+        why = ('the work tree is on %r, not the data branch %s' % (current, self.plan.branch)
+               if current is not None else 'cannot read the branch: %s' % _first_line(r.err))
+        return {'failed': 'branch', 'detail': why}
+
+    def _guard(self):
+        """Asked immediately before a write to the work tree or its index: None when the work
+        tree is still on the data branch and no other git operation holds it, else the keys of a
+        pass that ends here (`branch`, or `busy` with the MARKERS found)."""
+        stop = self._on_branch()
+        if stop is not None:
+            return stop
+        if self._marker_paths is None:
+            args = ['rev-parse', '--path-format=absolute']
+            for name in MARKERS:
+                args += ['--git-path', name]
+            r = self._git(args)
+            lines = cmd.text(r.out).splitlines() if r.rc == 0 else []
+            if len(lines) != len(MARKERS) or not all(os.path.isabs(l) for l in lines):
+                return {'failed': 'busy', 'detail': 'cannot tell whether another git operation '
+                        'holds the work tree: %s' % (_first_line(r.err) or 'git rev-parse '
+                                                     '--git-path answered %r' % (lines,))}
+            self._marker_paths = list(zip(MARKERS, lines))
+        found = [name for name, path in self._marker_paths if os.path.lexists(path)]
+        if found:
+            return {'failed': 'busy', 'detail': 'another git operation holds the work tree (%s): '
+                    'nothing was written' % ', '.join(found)}
+        return None
+
+    def _identity_missing(self):
+        """'' when git has a name and an email for the commit's author and committer without
+        making one up, else the detail of the refusal (it begins with NO_IDENTITY)."""
+        r = self._git(['config', '--get-regexp', _IDENTITY_KEYS])
+        if r.rc not in (0, 1):          # 1: none of the keys is set
+            return '%s: cannot read the git config (%s)' % (
+                NO_IDENTITY, _first_line(r.err) or 'git config exited %s' % r.rc)
+        config = {}
+        for line in cmd.text(r.out).splitlines():
+            key, _, value = line.partition(' ')
+            config[key.lower()] = value.strip()
+        source = os.environ if self._env is None else self._env
+        env = {k.upper(): v for k, v in source.items()}
+        missing = []
+        for who in ('author', 'committer'):
+            if not (env.get('GIT_%s_NAME' % who.upper()) or config.get('%s.name' % who)
+                    or config.get('user.name')):
+                missing.append('user.name')
+            if not (env.get('GIT_%s_EMAIL' % who.upper()) or config.get('%s.email' % who)
+                    or config.get('user.email') or env.get('EMAIL')):
+                missing.append('user.email')
+        if not missing:
+            return ''
+        return ('%s: no %s for the commit, and one made up from the account and the host name '
+                'is never used' % (NO_IDENTITY, ' and no '.join(sorted(set(missing)))))
 
     def _pass(self, now):
         """One pass; the status keys it settled. `failed` and `detail` are set only on failure."""
@@ -402,14 +614,12 @@ class GitSync:
         head_ref = 'refs/heads/%s' % plan.branch
         track_ref = 'refs/remotes/%s/%s' % (plan.remote, plan.branch)
 
-        r = self._git(['branch', '--show-current'])
-        current = cmd.text(r.out).strip() if r.rc == 0 else None
-        if current != plan.branch:
-            why = ('the work tree is on %r, not the data branch %s' % (current, plan.branch)
-                   if current is not None else 'cannot read the branch: %s' % _first_line(r.err))
-            return {'failed': 'branch', 'detail': why}
+        stop = self._on_branch()
+        if stop is not None:
+            return stop
 
-        r = self._git(['status', '--porcelain', '-z', '--untracked-files=all', '--', plan.rel])
+        r = self._git(['--no-optional-locks', 'status', '--porcelain', '-z',
+                       '--untracked-files=all', '--', plan.rel])
         if r.rc != 0:
             return {'failed': 'status', 'detail': _first_line(r.err) or 'git status exited %s' % r.rc}
         entries = [(xy, p) for xy, p in refs.parse_porcelain_z(cmd.text(r.out)) if not skipped(p)]
@@ -421,8 +631,10 @@ class GitSync:
             return out
         if not self.push:
             if entries:
-                out.update(self._commit(entries, now))
-            out['pending_push'] = False
+                out.update(self._guard() or self._commit(entries, now))
+            out['pending_push'] = self._no_remote
+            if self._no_remote and not out.get('failed'):
+                out.update(failed='push', detail=NO_REMOTE)
             return out
 
         tracking = self._tip(track_ref)
@@ -430,8 +642,9 @@ class GitSync:
             out.update(pending_push=False, diverged=False)
             return out
 
-        r = self._git(['fetch', '-q', plan.remote, '%s:%s' % (head_ref, track_ref)],
-                      timeout=NET_TIMEOUT)
+        net = self._net_env()
+        r = self._git(['fetch', '-q', '--no-tags', plan.remote, '%s:%s' % (head_ref, track_ref)],
+                      timeout=NET_TIMEOUT, env=net)
         absent = r.rc is not None and r.rc != 0 and _NO_REMOTE_REF in (r.err or '')
         fetched = r.rc == 0 or absent
         fetch_why = '' if fetched else (_first_line(r.err) or 'git fetch exited %s' % r.rc)
@@ -443,12 +656,14 @@ class GitSync:
                            pending_push=True)
                 return out
             if tracking != local:
-                r = self._git(['merge', '-q', '--ff-only', track_ref])
-                if r.rc != 0:
-                    contains, _why = refs.is_ancestor(local, tracking, plan.root)
-                    out.update(failed='fast-forward', diverged=contains is False,
-                               pending_push=contains is not True,
-                               detail=_first_line(r.err) or 'git merge --ff-only exited %s' % r.rc)
+                stop = self._guard()
+                if stop is None:
+                    r = self._git(['merge', '-q', '--ff-only', '--no-autostash', track_ref])
+                    if r.rc != 0:
+                        stop = {'failed': 'fast-forward', 'detail': _why(r, 'merge --ff-only')}
+                if stop is not None:
+                    contains, _unread = refs.is_ancestor(local, tracking, plan.root)
+                    out.update(stop, diverged=contains is False, pending_push=contains is not True)
                     return out
                 local = self._tip(head_ref)
                 if local is None:
@@ -458,6 +673,10 @@ class GitSync:
             out['diverged'] = False     # fast-forwarded, level, ahead, or no branch there yet
 
         if entries:
+            stop = self._guard()
+            if stop is not None:        # nothing more is written in this pass, the push included
+                out.update(stop, pending_push=not fetched or absent or local != tracking)
+                return out
             done = self._commit(entries, now)
             out.update(done)
             if not done.get('failed'):
@@ -471,7 +690,7 @@ class GitSync:
 
         if absent or local != tracking:
             r = self._git(['push', '-q', plan.remote, '%s:%s' % (head_ref, head_ref)],
-                          timeout=NET_TIMEOUT, env=self._push_env())
+                          timeout=NET_TIMEOUT, env=net)
             if r.rc != 0:
                 out['pending_push'] = True
                 if not out.get('failed'):
@@ -484,23 +703,42 @@ class GitSync:
         return out
 
     def _commit(self, entries, now):
-        """Commit the store folder; the status keys that settles. Untracked store files are added
-        by name, tracked ones (changed or deleted) are taken by the pathspec."""
+        """Commit the store folder; the status keys that settles. The caller has just asked the
+        guard. Untracked store files are added by name, tracked ones (changed or deleted) are
+        taken by the pathspec. On a failure only what this pass added is unstaged again."""
         plan = self.plan
-        why = None
-        for run in _chunks(sorted(p for xy, p in entries if xy == '??'), ADD_CHARS):
+        why = self._identity_missing()
+        if why:
+            return {'failed': 'commit', 'detail': why, 'pending_commit': True}
+        new = sorted(p for xy, p in entries if xy == '??')
+        staged = set()
+        if new:     # what somebody else staged under the store since the status: never unstaged here
+            r = self._git(['diff', '--cached', '--name-only', '-z', '--', plan.rel])
+            if r.rc != 0:
+                return {'failed': 'commit', 'pending_commit': True,
+                        'detail': 'cannot read what is staged under the store: %s'
+                                  % (_first_line(r.err) or 'git diff --cached exited %s' % r.rc)}
+            staged = set(cmd.text(r.out).split('\0'))
+        mine, why = [], None
+        for run in _chunks(new, ADD_CHARS):
+            mine += [p for p in run if p not in staged]
             r = self._git(['add', '--'] + run)
             if r.rc != 0:
-                why = _first_line(r.err) or 'git add exited %s' % r.rc
+                why = _why(r, 'add')
                 break
         if why is None:
-            r = self._git(['commit', '-q', '-m', SUBJECT, '--', plan.rel])
+            r = self._git(['commit', '-q', '--no-gpg-sign', '-m', SUBJECT, '--', plan.rel])
             if r.rc != 0:
-                why = _first_line(r.err) or 'git commit exited %s' % r.rc
+                why = _why(r, 'commit')
         sha = self._tip('refs/heads/%s' % plan.branch) if why is None else None
         if why is None and sha is None:
             why = 'committed, but cannot read the new commit'
-        if why is not None:
-            self._git(['reset', '-q', '--', plan.rel])      # the index only: nothing stays staged
-            return {'failed': 'commit', 'detail': why, 'pending_commit': True}
-        return {'pending_commit': False, 'last_commit': sha, 'last_commit_at': now}
+        if why is None:
+            return {'pending_commit': False, 'last_commit': sha, 'last_commit_at': now}
+        for run in _chunks(mine, ADD_CHARS):        # the index only, and only this pass's own adds
+            r = self._git(['reset', '-q', '--'] + run)
+            if r.rc != 0:
+                why += ('; and what this pass staged under the store could not be unstaged '
+                        'again: %s' % _why(r, 'reset'))
+                break
+        return {'failed': 'commit', 'detail': why, 'pending_commit': True}

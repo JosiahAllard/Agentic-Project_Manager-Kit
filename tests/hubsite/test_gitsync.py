@@ -1,8 +1,11 @@
 """kitlib.hubsite.gitsync: the store folder's debounced commit, then fetch, fast-forward and push
-with explicit refspecs; what a refused or failed step leaves pending; the refusals; the thread.
+with explicit refspecs; what a refused or failed step leaves pending; the guard before each local
+write; the refusals; the thread.
 
 The logic runs on the fake git. One class, EndToEndTest, runs on real git: two repositories and a
-bare remote in temp folders, and `.git/config` byte-identical before and after."""
+bare remote in temp folders, `.git/config` byte-identical before and after, and the cases the fake
+has no model of (merge.autoStash, a signing program, an identity git would make up, a path in the
+wrong case)."""
 import os
 import shutil
 import tempfile
@@ -19,9 +22,15 @@ from kitlib.hubsite.store import LOCK_NAME, Store
 from tests.gitfixture import EMAIL, NAME, TempRepo, fixture_env
 from tests.realgit import real_git
 
-FETCH = ['fetch', '-q', 'origin', 'refs/heads/pmdata:refs/remotes/origin/pmdata']
+FETCH = ['fetch', '-q', '--no-tags', 'origin', 'refs/heads/pmdata:refs/remotes/origin/pmdata']
 PUSH = ['push', '-q', 'origin', 'refs/heads/pmdata:refs/heads/pmdata']
+STATUS = ['--no-optional-locks', 'status', '--porcelain', '-z', '--untracked-files=all', '--', 'hub']
 LOCK = '?? hub/' + LOCK_NAME
+WRITES = ('merge', 'add', 'commit', 'reset', 'push')    # what a pass that stops early never runs
+SESSION_ENV = ('GIT_SSH_COMMAND', 'GIT_SSH', 'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_TERMINAL_PROMPT',
+               'GCM_INTERACTIVE', 'EMAIL')              # what the session running the tests may set
+MARKERS = ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply',
+           'index.lock')                                # what another git operation leaves behind
 
 
 def tmpdir(test):
@@ -51,7 +60,8 @@ class Case(unittest.TestCase):
         self.addCleanup(self.repo.cleanup)
         self.wt = self.repo.worktree('data', branch='pmdata')
         self.hub = os.path.join(self.wt, 'hub')
-        self.env = fixture_env()
+        self.env = {k: v for k, v in fixture_env().items()  # nor the session's ssh and prompt
+                    if k.upper() not in SESSION_ENV}        # choices, nor its EMAIL
         self.now = [1000.0]
         self.calls = []             # the argv of every git command a pass ran
         self.envs = []              # (subcommand, env) of each
@@ -69,14 +79,77 @@ class Case(unittest.TestCase):
             raise forced
         if forced is not None:
             return forced
+        if gitcmd.fake_active():
+            # The fake git's merge has no --no-autostash (and no autostash to turn off). The flag
+            # is recorded above and runs on real git in EndToEndTest.
+            args = [a for a in args if a != '--no-autostash']
         return gitcmd.call(args, cwd, **kw)
 
     def sync(self, every=60, remote='origin', store=None, **kw):
         kw.setdefault('clock', lambda: self.now[0])
         kw.setdefault('git', self.runner)
-        s = gitsync.GitSync(store or self.hub, every, remote=remote, env=self.env, **kw)
+        kw.setdefault('env', self.env)
+        s = gitsync.GitSync(store or self.hub, every, remote=remote, **kw)
         self.addCleanup(s.stop)
         return s
+
+    def git_path(self, name):
+        """Where the data work tree's own git directory keeps `name` (MERGE_HEAD, index.lock)."""
+        return self.git('rev-parse', '--path-format=absolute', '--git-path', name)
+
+    def mark(self, name):
+        """Leave `name` behind as another git operation would; its path."""
+        path = self.git_path(name)
+        if name.startswith('rebase-'):
+            os.mkdir(path)
+        else:
+            with open(path, 'w', encoding='utf-8'):
+                pass
+        return path
+
+    def unmark(self, path):
+        if os.path.isdir(path):
+            os.rmdir(path)
+        else:
+            os.remove(path)
+
+    def busy_pass(self, sync, markers):
+        """With each of `markers` left in the git directory in turn, a pass over a store with one
+        new document ends at `busy` and writes nothing; with none left, the next pass commits.
+        `sync` records its git commands through self.runner."""
+        self.write('hub/pages/a.json')
+        self.assertTrue(sync.sync_once()['ok'])
+        tip = self.head()
+        self.write('hub/pages/b.json')
+        for name in markers:
+            with self.subTest(marker=name):
+                path = self.mark(name)
+                del self.calls[:]
+                try:
+                    st = sync.sync_once()
+                finally:
+                    self.unmark(path)
+                self.assertEqual((st['ok'], st['failed']), (False, 'busy'))
+                self.assertIn('(%s)' % name, st['detail'])
+                self.assertEqual((st['pending_commit'], st['pending_push']), (True, False))
+                self.assertEqual(self.wrote(), [])
+                self.assertEqual((self.head(), self.hub_status()), (tip, '?? hub/pages/b.json'))
+        st = sync.sync_once()                               # the other operation is over
+        self.assertEqual((st['ok'], st['failed'], st['pending_commit']), (True, '', False))
+        self.assertEqual(self.committed(), ['hub/pages/b.json'])
+
+    def read(self, rel, root=None):
+        with open(os.path.join(root or self.wt, rel), encoding='utf-8', newline='') as f:
+            return f.read()
+
+    def wrote(self):
+        """The subcommands of the recorded calls that write to the work tree, the index or the
+        remote."""
+        return [s for s in self.subs() if s in WRITES]
+
+    def env_of(self, sub):
+        """The environment the first recorded `sub` ran in."""
+        return [e for s, e in self.envs if s == sub][0]
 
     def store(self, root=None):
         s = Store.open(root or self.hub)
@@ -180,17 +253,59 @@ class PassTest(Case):
         self.assertEqual([a for a in self.calls if a[0] == 'fetch'], [FETCH])
         self.assertEqual([a for a in self.calls if a[0] == 'push'], [PUSH])
         self.assertEqual([a for a in self.calls if a[0] == 'commit'],
-                         [['commit', '-q', '-m', gitsync.SUBJECT, '--', 'hub']])
+                         [['commit', '-q', '--no-gpg-sign', '-m', gitsync.SUBJECT, '--', 'hub']])
         self.assertEqual([a for a in self.calls if a[0] == 'add'], [['add', '--', 'hub/pages/a.json']])
-        self.assertEqual(set(self.subs()), {'branch', 'status', 'rev-parse', 'fetch', 'add',
-                                            'commit', 'push'})
+        self.assertEqual([a for a in self.calls if 'status' in a], [STATUS])
+        # config and diff are reads: the identity and the ssh command, and what is staged already
+        self.assertEqual(set(self.subs()), {'branch', 'status', 'rev-parse', 'config', 'diff',
+                                            'fetch', 'add', 'commit', 'push'})
+        self.assertEqual([a for a in self.calls if a[0] in ('config', 'diff')],
+                         [['config', '--get', 'core.sshCommand'],
+                          ['config', '--get-regexp', r'^(user|author|committer)\.(name|email)$'],
+                          ['diff', '--cached', '--name-only', '-z', '--', 'hub']])
         for argv in self.calls:
             for arg in argv:
                 self.assertFalse(arg.startswith('+') or arg in ('-f', '--force', '--no-verify', '-n')
                                  or arg.startswith(('--force', '--author', '-c')), argv)
-        push_env = [e for s, e in self.envs if s == 'push'][0]
-        self.assertEqual((push_env['GIT_TERMINAL_PROMPT'], push_env['GCM_INTERACTIVE']),
-                         ('0', 'never'))
+
+    def test_a_fetch_and_a_push_can_wait_for_nobody(self):
+        sync = self.sync()
+        self.write('hub/pages/a.json')
+        self.assertTrue(sync.sync_once()['ok'])
+        for sub in ('fetch', 'push'):
+            with self.subTest(sub=sub):
+                env = self.env_of(sub)
+                self.assertEqual([env.get(k) for k in ('GIT_TERMINAL_PROMPT', 'GCM_INTERACTIVE',
+                                                       'GIT_ASKPASS', 'SSH_ASKPASS',
+                                                       'GIT_SSH_COMMAND')],
+                                 ['0', 'never', '', '', 'ssh -o BatchMode=yes'])
+        self.assertNotIn('GIT_SSH_COMMAND', self.env_of('commit'))  # the network commands only
+        self.assertNotIn('GIT_ASKPASS', self.env)                   # and the caller's own is untouched
+
+    def test_the_owners_own_ssh_command_is_never_replaced(self):
+        for n, (extra, config, want) in enumerate((
+                ({'GIT_SSH_COMMAND': 'ssh -i key'}, None, 'ssh -i key'),
+                ({'Git_Ssh': 'plink'}, None, None),
+                ({}, 'ssh -i key', None))):
+            with self.subTest(extra=extra, config=config):
+                del self.envs[:]
+                if config:
+                    self.git('config', 'core.sshCommand', config)
+                sync = self.sync(env=dict(self.env, **extra))
+                self.write('hub/pages/%d.json' % n)
+                self.assertTrue(sync.sync_once()['ok'])
+                for sub in ('fetch', 'push'):
+                    env = self.env_of(sub)
+                    self.assertEqual((env.get('GIT_SSH_COMMAND'), env['GIT_ASKPASS'],
+                                      env['SSH_ASKPASS']), (want, '', ''))
+
+    def test_an_askpass_named_in_another_case_does_not_survive(self):
+        sync = self.sync(env=dict(self.env, Git_AskPass='a-program', ssh_askpass='another'))
+        self.write('hub/pages/a.json')
+        self.assertTrue(sync.sync_once()['ok'])
+        env = self.env_of('push')
+        self.assertEqual({k: v for k, v in env.items() if k.upper().endswith('_ASKPASS')},
+                         {'GIT_ASKPASS': '', 'SSH_ASKPASS': ''})
 
     def test_a_remote_that_moved_is_fast_forwarded_before_the_push(self):
         sync = self.sync()
@@ -211,7 +326,8 @@ class PassTest(Case):
         self.assertLess(subs.index('fetch'), subs.index('merge'))
         self.assertLess(subs.index('merge'), subs.index('commit'))
         self.assertLess(subs.index('commit'), subs.index('push'))
-        self.assertIn(['merge', '-q', '--ff-only', 'refs/remotes/origin/pmdata'], self.calls)
+        self.assertIn(['merge', '-q', '--ff-only', '--no-autostash', 'refs/remotes/origin/pmdata'],
+                      self.calls)
 
     def test_a_remote_that_moves_between_the_fetch_and_the_push_is_reported_not_forced(self):
         sync = self.sync()
@@ -327,7 +443,168 @@ class PassTest(Case):
         st = sync.sync_once()
         self.assertEqual((st['failed'], st['pending_commit']), ('commit', True))
         self.assertNotIn('commit', self.subs())
-        self.assertIn(['reset', '-q', '--', 'hub'], self.calls)
+        self.assertEqual([a for a in self.calls if a[0] == 'reset'],
+                         [['reset', '-q', '--', 'hub/pages/a.json']])
+
+    def test_a_failed_commit_unstages_only_what_this_pass_staged(self):
+        sync = self.sync()
+        self.write('hub/pages/theirs.json')
+        self.git('add', '--', 'hub/pages/theirs.json')      # staged by somebody else, not committed
+        self.write('hub/pages/mine.json')
+        self.answers['commit'] = gitcmd.Result(1, b'', 'error: the hook said no\n')
+        st = sync.sync_once()
+        self.assertEqual((st['failed'], st['detail'], st['pending_commit']),
+                         ('commit', 'error: the hook said no', True))
+        self.assertEqual([a for a in self.calls if a[0] == 'reset'],
+                         [['reset', '-q', '--', 'hub/pages/mine.json']])
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), 'hub/pages/theirs.json')
+        self.assertEqual(sorted(self.hub_status().splitlines()),
+                         ['?? hub/pages/mine.json', 'A  hub/pages/theirs.json'])
+        del self.answers['commit']
+        self.assertTrue(sync.sync_once()['ok'])             # the store's commit takes both
+        self.assertEqual(self.committed(), ['hub/pages/mine.json', 'hub/pages/theirs.json'])
+
+    def test_a_failed_unstage_is_reported(self):
+        sync = self.sync()
+        self.write('hub/pages/a.json')
+        self.answers['commit'] = gitcmd.Result(1, b'', 'error: the hook said no\n')
+        self.answers['reset'] = gitcmd.Result(
+            128, b'', "fatal: Unable to create 'index.lock': File exists.\n")
+        st = sync.sync_once()
+        self.assertEqual((st['ok'], st['failed'], st['pending_commit']), (False, 'commit', True))
+        self.assertTrue(st['detail'].startswith('error: the hook said no; and what this pass '
+                                                'staged under the store could not be unstaged'),
+                        st['detail'])
+        self.assertIn("fatal: Unable to create 'index.lock': File exists.", st['detail'])
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), 'hub/pages/a.json')
+
+    def test_another_git_operation_under_way_ends_the_pass_before_a_write(self):
+        # The two the fake git can hold; EndToEndTest runs every one of MARKERS on real git.
+        self.busy_pass(self.sync(), ('MERGE_HEAD', 'index.lock'))
+
+    def test_another_git_operation_under_way_stops_the_fast_forward_too(self):
+        sync = self.sync()
+        self.write('hub/pages/a.json')
+        self.assertTrue(sync.sync_once()['ok'])
+        tip = self.head()
+        moved = self.move_remote(self.clone())
+        self.write('hub/pages/b.json')
+        self.mark('MERGE_HEAD')
+        del self.calls[:]
+        st = sync.sync_once()
+        self.assertEqual((st['ok'], st['failed'], st['diverged'], st['pending_push']),
+                         (False, 'busy', False, False))
+        self.assertIn('(MERGE_HEAD)', st['detail'])
+        self.assertEqual(self.wrote(), [])
+        self.assertEqual((self.head(), self.remote_tip()), (tip, moved))
+        self.assertEqual(self.hub_status(), '?? hub/pages/b.json')
+
+    def test_a_branch_switched_during_the_fetch_stops_the_fast_forward(self):
+        sync = self.sync()
+        self.write('hub/pages/a.json')
+        self.assertTrue(sync.sync_once()['ok'])
+        tip = self.head()
+        moved = self.move_remote(self.clone())
+        self.write('hub/pages/b.json')
+        self.before['fetch'] = lambda: self.git('checkout', '-q', '-b', 'side')
+        del self.calls[:]
+        st = sync.sync_once()
+        self.assertEqual((st['ok'], st['failed']), (False, 'branch'))
+        self.assertIn("'side'", st['detail'])
+        self.assertEqual(self.wrote(), [])
+        self.assertIn('fetch', self.subs())                 # the pass had got that far
+        self.assertEqual(self.git('branch', '--show-current'), 'side')
+        self.assertEqual((self.head(), self.git('rev-parse', 'refs/heads/pmdata'), self.remote_tip()),
+                         (tip, tip, moved))                 # neither branch moved
+        self.assertEqual(self.hub_status(), '?? hub/pages/b.json')
+
+    def test_a_branch_switched_during_the_fetch_stops_the_commit(self):
+        sync = self.sync()
+        tip = self.head()
+        self.write('hub/pages/a.json')
+        self.before['fetch'] = lambda: self.git('checkout', '-q', '-b', 'side')
+        st = sync.sync_once()
+        self.assertEqual((st['ok'], st['failed'], st['pending_commit'], st['pending_push']),
+                         (False, 'branch', True, True))
+        self.assertIn("'side'", st['detail'])
+        self.assertEqual(self.wrote(), [])
+        self.assertIn('fetch', self.subs())
+        self.assertEqual((self.head(), self.hub_status(), self.remote_tip()),
+                         (tip, '?? hub/pages/a.json', ''))
+
+    def test_a_commit_stopped_at_its_time_limit_may_leave_the_index_lock_which_is_never_removed(self):
+        sync = self.sync()
+        tip = self.head()
+        self.write('hub/pages/a.json')
+        lock = self.git_path('index.lock')
+        self.before['commit'] = lambda: self.mark('index.lock')     # what the stopped git left
+        self.answers['commit'] = gitcmd.Result(
+            None, b'', 'git commit -q --no-gpg-sign timed out after 30 seconds')
+        self.answers['reset'] = gitcmd.Result(
+            128, b'', "fatal: Unable to create 'index.lock': File exists.\n")
+        st = sync.sync_once()
+        self.assertEqual((st['failed'], st['pending_commit']), ('commit', True))
+        self.assertTrue(st['detail'].startswith('git commit -q --no-gpg-sign timed out after 30 '
+                                                'seconds; git was stopped at its time limit and '
+                                                'may have left index.lock behind'), st['detail'])
+        self.assertTrue(os.path.isfile(lock))
+        self.before.clear()
+        self.answers.clear()
+        del self.calls[:]
+        self.now[0] += 60
+        st = sync.sync_once()                               # the lock is still there: hands off
+        self.assertEqual((st['failed'], st['pending_commit']), ('busy', True))
+        self.assertIn('(index.lock)', st['detail'])
+        self.assertEqual(self.wrote(), [])
+        self.assertTrue(os.path.isfile(lock))
+        self.assertEqual(self.head(), tip)
+        os.remove(lock)                                     # a person did; never the sync
+        st = sync.sync_once()
+        self.assertEqual((st['ok'], st['pending_commit']), (True, False))
+        self.assertEqual(self.committed(), ['hub/pages/a.json'])
+
+    def test_a_fast_forward_stopped_at_its_time_limit_says_the_index_lock_may_be_left(self):
+        sync = self.sync()
+        self.write('hub/pages/a.json')
+        self.assertTrue(sync.sync_once()['ok'])
+        tip = self.head()
+        self.move_remote(self.clone())
+        self.write('hub/pages/b.json')
+        self.answers['merge'] = gitcmd.Result(
+            None, b'', 'git merge -q --ff-only timed out after 30 seconds')
+        del self.calls[:]
+        st = sync.sync_once()
+        self.assertEqual((st['failed'], st['diverged']), ('fast-forward', False))
+        self.assertEqual(st['detail'], 'git merge -q --ff-only timed out after 30 seconds; git was '
+                         'stopped at its time limit and may have left index.lock behind in the git '
+                         'directory (nothing here removes it)')
+        self.assertEqual([s for s in self.wrote() if s != 'merge'], [])
+        self.assertEqual(self.head(), tip)
+
+    def test_without_a_git_identity_nothing_is_committed(self):
+        sync = self.sync()
+        tip = self.head()
+        self.write('hub/pages/a.json')
+        self.git('config', '--unset', 'user.email')
+        st = sync.sync_once()
+        self.assertEqual((st['ok'], st['failed'], st['pending_commit']), (False, 'commit', True))
+        self.assertTrue(st['detail'].startswith('git identity not set: no user.email for'),
+                        st['detail'])
+        self.assertNotIn('user.name', st['detail'])
+        self.assertEqual([s for s in self.subs() if s in ('add', 'commit', 'reset')], [])
+        self.assertEqual((self.head(), self.hub_status()), (tip, '?? hub/pages/a.json'))
+        # GIT_AUTHOR_* and GIT_COMMITTER_* are an identity too, and the one git reads first
+        named = self.sync(env=dict(self.env, GIT_AUTHOR_EMAIL='author@example.invalid',
+                                   GIT_COMMITTER_EMAIL='committer@example.invalid'))
+        st = named.sync_once()
+        self.assertEqual((st['ok'], st['detail'], st['pending_commit']), (True, '', False))
+        self.assertEqual(self.git('log', '-1', '--format=%ae %ce'),
+                         'author@example.invalid committer@example.invalid')
+        half = self.sync(env=dict(self.env, GIT_AUTHOR_EMAIL='author@example.invalid'))
+        self.write('hub/pages/b.json')
+        st = half.sync_once()                               # the committer has none
+        self.assertEqual(st['failed'], 'commit')
+        self.assertTrue(st['detail'].startswith('git identity not set: no user.email for'))
 
     def test_a_failed_push_stays_pending_and_is_retried_with_nothing_new_written(self):
         sync = self.sync()
@@ -432,17 +709,46 @@ class PassTest(Case):
                          ('status', 'git status timed out after 30 seconds'))
         self.assertEqual(self.subs(), ['branch', 'status'])
 
-    def test_without_a_remote_or_with_push_off_it_commits_and_stops_there(self):
-        for kw in ({'remote': None}, {'remote': 'origin', 'push': False}):
+    def test_with_push_off_it_commits_and_stops_there_and_says_nothing(self):
+        for kw in ({'remote': 'origin', 'push': False}, {'remote': None, 'push': False}):
             with self.subTest(kw=kw):
                 del self.calls[:]
                 sync = self.sync(**kw)
-                self.write('hub/pages/%d.json' % len(kw))
+                st = sync.status()
+                self.assertEqual((st['ok'], st['failed'], st['detail'], st['pending_push']),
+                                 (None, '', '', False))
+                self.write('hub/pages/%s.json' % kw['remote'])
                 st = sync.sync_once()
                 self.assertEqual((st['ok'], st['remote'], st['pending_commit'], st['pending_push']),
                                  (True, '', False, False))
                 self.assertEqual(st['last_commit'], self.head())
-                self.assertEqual(set(self.subs()), {'branch', 'status', 'rev-parse', 'add', 'commit'})
+                self.assertEqual(set(self.subs()), {'branch', 'status', 'rev-parse', 'config',
+                                                    'diff', 'add', 'commit'})
+        self.assertEqual(self.remote_tip(), '')
+
+    def test_push_on_and_no_remote_is_reported_from_the_start(self):
+        sync = self.sync(remote=None)
+        st = sync.status()                                  # before any pass
+        self.assertEqual((st['ok'], st['failed'], st['pending_push'], st['remote']),
+                         (None, 'push', True, ''))
+        self.assertTrue(st['detail'].startswith('no remote to push to'), st['detail'])
+        self.write('hub/pages/a.json')
+        st = sync.sync_once()
+        self.assertEqual((st['ok'], st['failed'], st['pending_commit'], st['pending_push']),
+                         (False, 'push', False, True))
+        self.assertTrue(st['detail'].startswith('no remote to push to'), st['detail'])
+        self.assertEqual((st['last_commit'], self.committed()), (self.head(), ['hub/pages/a.json']))
+        self.assertEqual(set(self.subs()), {'branch', 'status', 'rev-parse', 'config', 'diff',
+                                            'add', 'commit'})
+        self.now[0] += 60
+        st = sync.sync_once()                               # nothing to commit: still said
+        self.assertEqual((st['ok'], st['failed'], st['pending_push'], st['failing_since']),
+                         (False, 'push', True, 1000.0))
+        self.answers['commit'] = gitcmd.Result(1, b'', 'error: the hook said no\n')
+        self.write('hub/pages/b.json')
+        st = sync.sync_once()                               # an earlier failure is the one named
+        self.assertEqual((st['failed'], st['detail'], st['pending_push']),
+                         ('commit', 'error: the hook said no', True))
         self.assertEqual(self.remote_tip(), '')
 
     def test_many_new_files_are_added_in_runs(self):
@@ -499,6 +805,7 @@ class PrepareTest(Case):
                 (self.hub, {'branch': 'other'}, "is on 'pmdata', not the data branch other"),
                 (self.hub, {'remote': '--upload-pack=x'}, 'must be a remote name'),
                 (self.hub, {'remote': 'a b'}, 'must be a remote name'),
+                (self.hub, {'remote': 'nowhere'}, "has no remote named 'nowhere'"),
                 (os.path.join(self.wt, 'h[ub]'), {}, 'git reads as a pattern'),
                 (os.path.join(self.wt, '.git', 'hub'), {}, 'inside the git directory')):
             with self.subTest(text=text):
@@ -509,6 +816,27 @@ class PrepareTest(Case):
         with self.assertRaises(gitsync.Refused) as cm:
             gitsync.prepare(self.hub)
         self.assertIn('detached', str(cm.exception))
+        self.assertIn('the data branch cannot be determined', str(cm.exception))
+
+    def test_the_store_folder_is_named_as_it_is_on_disk(self):
+        self.write('hub/pages/a.json')
+        plan = gitsync.prepare(os.path.join(self.wt, 'HUB'), remote='origin', branch='pmdata')
+        self.assertEqual(plan.rel, 'hub')                   # the folder's spelling, not the caller's
+        self.write('data/Store/pages/a.json')
+        self.assertEqual(gitsync.prepare(os.path.join(self.wt, 'DATA', 'store')).rel, 'data/Store')
+        # a folder that is not there yet is made by the store under the caller's own spelling
+        self.assertEqual(gitsync.prepare(os.path.join(self.wt, 'DATA', 'New', 'Hub')).rel,
+                         'data/New/Hub')
+
+    def test_a_store_git_tracks_under_another_spelling_is_refused(self):
+        self.write('hub/pages/a.json')
+        self.repo.commit('tracked as hub', 'hub/pages/a.json', cwd=self.wt)
+        os.rename(self.hub, self.hub + '-moving')           # the folder renamed outside git
+        os.rename(self.hub + '-moving', os.path.join(self.wt, 'Hub'))
+        with self.assertRaises(gitsync.Refused) as cm:
+            gitsync.prepare(self.hub, remote='origin')
+        self.assertIn("git tracks the hub store folder as 'hub' and the folder on disk is 'Hub'",
+                      str(cm.exception))
 
     def test_the_period_must_be_a_positive_number(self):
         for bad in (0, -1, True, '60', None, float('inf'), float('nan')):
@@ -582,17 +910,162 @@ class ThreadTest(Case):
         self.assertTrue(sync.status()['running'])
         self.assertTrue(sync.stop())
 
+    def test_two_starts_at_once_start_one_thread(self):
+        sync = self.sync(every=3600, clock=time.monotonic)
+        real, started = threading.Thread, []
+        entered, go = threading.Event(), threading.Event()
+
+        class Slow(real):                                   # a sync thread that is slow to start
+            def start(thread):
+                if thread.name == 'hub-gitsync':
+                    started.append(thread)
+                    entered.set()
+                    go.wait(30)
+                real.start(thread)
+
+        results = []
+        callers = [real(target=lambda: results.append(sync.start())) for _ in range(2)]
+        with mock.patch.object(threading, 'Thread', Slow):
+            callers[0].start()
+            self.assertTrue(entered.wait(30))               # the first caller is starting the thread
+            callers[1].start()
+            self.wait_for(lambda: len(started) == 2, seconds=0.5)   # a second thread, if one is made
+            go.set()
+            for caller in callers:
+                caller.join(30)
+        self.assertEqual(sorted(results), [False, True])
+        self.assertEqual(len(started), 1)
+        self.assertEqual([t.name for t in threading.enumerate()].count('hub-gitsync'), 1)
+        self.assertTrue(sync.stop())
+        self.assertNotIn('hub-gitsync', [t.name for t in threading.enumerate()])
+
+    def test_stop_waits_for_the_pass_in_flight_and_no_other_pass_starts(self):
+        in_pass, release = threading.Event(), threading.Event()
+
+        def hold():
+            in_pass.set()
+            release.wait(30)
+        self.before['status'] = hold
+        sync = self.sync(every=0.05, clock=time.monotonic)
+        self.write('hub/pages/a.json')
+        sync.start()
+        self.assertTrue(in_pass.wait(30))
+        stopped = []
+        stopper = threading.Thread(target=lambda: stopped.append(sync.stop()))
+        stopper.start()
+        stopper.join(0.3)
+        self.assertTrue(stopper.is_alive())                 # stop() waits for the pass
+        self.assertEqual((stopped, self.subs().count('status')), ([], 1))
+        release.set()
+        stopper.join(30)
+        self.assertEqual(stopped, [True])
+        st = sync.status()                                  # the pass in flight ran to its end
+        self.assertEqual((st['running'], st['ok'], st['pending_commit']), (False, True, False))
+        self.assertEqual(self.committed(), ['hub/pages/a.json'])
+        time.sleep(0.3)                                     # six periods
+        self.assertEqual(self.subs().count('status'), 1)
+        self.assertNotIn('hub-gitsync', [t.name for t in threading.enumerate()])
+
 
 @real_git('end to end on the git binary: the wire between two repositories and a bare remote, '
-          "the store's lock held while git reads the folder, and .git/config as git leaves it")
+          "the store's lock held while git reads the folder, .git/config as git leaves it, and "
+          'what the fake has none of: merge.autoStash, commit signing, the identity git makes up '
+          'and a path matched in the wrong case')
 class EndToEndTest(Case):
     """Two repositories and one bare remote, all in temp folders; the default git runner."""
 
     def sync(self, store=None, **kw):
+        kw.setdefault('env', self.env)
         s = gitsync.GitSync(store or self.hub, 60, remote='origin', branch='pmdata',
-                            clock=lambda: self.now[0], env=self.env, **kw)
+                            clock=lambda: self.now[0], **kw)
         self.addCleanup(s.stop)
         return s
+
+    def test_the_fast_forward_never_stashes_an_uncommitted_change(self):
+        self.write('notes.txt', 'one\n')
+        self.repo.commit('notes', 'notes.txt', cwd=self.wt)
+        mine = self.sync()
+        self.write('hub/pages/home.json')
+        self.assertTrue(mine.sync_once()['ok'])
+        self.git('config', 'merge.autoStash', 'true')       # the owner's own setting
+        before = self.config_bytes()
+        other = self.clone()
+
+        self.write('notes.txt', 'mine, not committed\n')    # outside the store, tracked, changed
+        moved = self.move_remote(other)                     # touches another file: nothing in the way
+        self.write('hub/pages/two.json')
+        st = mine.sync_once()
+        self.assertEqual((st['ok'], st['detail']), (True, ''))
+        self.assertEqual(self.git('log', '-1', '--format=%P'), moved)
+        self.assertEqual(self.git('stash', 'list'), '')
+        self.assertEqual(self.read('notes.txt'), 'mine, not committed\n')
+
+        first = self.head()
+        self.repo.git('pull', '-q', '--ff-only', 'origin', 'pmdata', cwd=other)
+        moved = self.move_remote(other, 'notes.txt', 'theirs\n')    # the very file changed here
+        self.write('hub/pages/three.json')
+        st = mine.sync_once()                               # refused by git, never stashed
+        self.assertEqual((st['ok'], st['failed'], st['diverged']), (False, 'fast-forward', False))
+        self.assertEqual(self.git('stash', 'list'), '')
+        self.assertEqual(self.read('notes.txt'), 'mine, not committed\n')   # no conflict markers
+        self.assertEqual((self.head(), self.remote_tip()), (first, moved))
+        self.assertEqual(self.git('status', '--porcelain', '--untracked-files=all').splitlines(),
+                         ['M notes.txt', '?? hub/pages/three.json'])
+        self.assertEqual(self.config_bytes(), before)
+
+    def test_every_other_git_operation_under_way_ends_the_pass_before_a_write(self):
+        self.assertEqual(gitsync.MARKERS, MARKERS)
+        self.busy_pass(self.sync(git=self.runner), MARKERS)
+
+    def test_the_commit_is_never_signed(self):
+        self.git('config', 'commit.gpgSign', 'true')        # and a signing program that cannot run
+        self.git('config', 'gpg.program', 'kit-no-such-signing-program')
+        mine = self.sync()
+        self.write('hub/pages/home.json')
+        st = mine.sync_once()
+        self.assertEqual((st['ok'], st['detail']), (True, ''))
+        self.assertEqual(self.committed(), ['hub/pages/home.json'])
+        self.assertEqual(self.git('log', '-1', '--format=%G?'), 'N')
+
+    def test_without_a_git_identity_no_commit_is_made(self):
+        mine = self.sync()
+        first = self.head()
+        self.write('hub/pages/home.json')
+        self.git('config', '--unset', 'user.name')
+        self.git('config', '--unset', 'user.email')
+        st = mine.sync_once()                               # git would make one up: account@host
+        self.assertEqual((st['ok'], st['failed'], st['pending_commit']), (False, 'commit', True))
+        self.assertTrue(st['detail'].startswith('git identity not set: no user.email and no '
+                                                'user.name for'), st['detail'])
+        self.assertEqual((self.head(), self.git('diff', '--cached', '--name-only')), (first, ''))
+        self.assertEqual(self.hub_status(), '?? hub/pages/home.json')
+
+    def test_a_store_named_in_another_case_is_committed_all_the_same(self):
+        self.write('hub/pages/home.json')
+        mine = self.sync(store=os.path.join(self.wt, 'HUB'))
+        self.assertEqual(mine.plan.rel, 'hub')
+        st = mine.sync_once()
+        self.assertEqual((st['ok'], st['pending_commit'], st['pending_push']), (True, False, False))
+        self.assertEqual(self.committed(), ['hub/pages/home.json'])
+        self.write('hub/pages/two.json')
+        self.write('hub/pages/home.json', '{"title": "changed"}\n')
+        self.assertTrue(mine.sync_once()['ok'])
+        self.assertEqual(self.committed(), ['hub/pages/home.json', 'hub/pages/two.json'])
+        self.assertEqual((self.remote_tip(), self.hub_status()), (self.head(), ''))
+
+    def test_a_file_staged_outside_the_store_stays_staged_and_out_of_the_commit(self):
+        mine = self.sync()
+        self.write('hub/pages/home.json')
+        self.write('other.txt', 'staged by somebody else\n')
+        self.git('add', '--', 'other.txt')
+        st = mine.sync_once()
+        self.assertEqual((st['ok'], st['detail']), (True, ''))
+        self.assertEqual(self.committed(), ['hub/pages/home.json'])
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), 'other.txt')
+        self.assertEqual(self.remote_tip(), self.head())
+        self.assertNotIn('other.txt', self.repo.git('ls-tree', '-r', '--name-only',
+                                                    'refs/heads/pmdata', cwd=self.repo.remote).split())
+        self.assertEqual(self.git('status', '--porcelain', '--untracked-files=all'), 'A  other.txt')
 
     def test_write_commit_push_and_a_second_clone_fast_forwards(self):
         mine = self.sync()
