@@ -143,8 +143,14 @@ class GateRulesTest(TreeCase):
 
     def test_the_dropped_step_keys_and_repo_gate_keys_refuse(self):
         why = self.steps({'name': 'a', 'always': True, 'cmd': ['x'], 'unless_only': ['*.md'],
-                          'cmd_windows': ['x.exe'], 'exit_code': False, 'offline_flag': '--offline'})
-        self.assertIn('unknown key(s) cmd_windows, exit_code, offline_flag, unless_only', why)
+                          'cmd_windows': ['x.exe'], 'exit_code': False, 'offline_flag': '--offline',
+                          'kill_retry': True})
+        self.assertIn('unknown key(s) cmd_windows, exit_code, kill_retry, offline_flag, unless_only',
+                      why)
+        # kill_retry went once slot() was shown to end a step's whole tree (tests/lock/
+        # test_slot_treekill.py); false is no more a key than true.
+        self.assertIn('unknown key(s) kill_retry',
+                      self.steps({'name': 'a', 'always': True, 'cmd': ['x'], 'kill_retry': False}))
         why = self.refused({'gate': {'dependency_pin_check': True, 'python_tests_audit': True,
                                      'python_tests_docs': ['m'], 'python_tests_docs_floor': 1,
                                      'python_tests_drops': 'd.txt', 'python_tests_selected_floor': True}})
@@ -161,9 +167,9 @@ class GateRulesTest(TreeCase):
     def test_a_check_step_refuses_the_subprocess_keys(self):
         why = self.refused({'hook': {'module': 'gate_hook'},
                             'gate': {'steps': [{'name': 'a', 'always': True, 'check': 'pins', 'cwd': 'x',
-                                                'kill_retry': True, 'merged_args': ['-m'],
+                                                'merged_args': ['-m'],
                                                 'ok_exits': [0, 1], 'reuse': True}]}})
-        self.assertIn('cwd, kill_retry, merged_args, ok_exits, reuse only apply to a "cmd" step', why)
+        self.assertIn('cwd, merged_args, ok_exits, reuse only apply to a "cmd" step', why)
 
     def test_a_steps_reuse_is_true_or_a_group_name(self):
         why = self.steps({'name': 'a', 'always': True, 'cmd': ['x'], 'reuse': 'two words'})

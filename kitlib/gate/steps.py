@@ -22,8 +22,8 @@ pattern), and the gate's `errors` policy finds no unexplained error line. Patter
 multi-line regexes (re.M).
 
 Gate keys this gate does not implement refuse (GateConfigError) when set, rather than being
-ignored: `python_tests` "pytests", `python_tests_floor`, `trailers` true, and a step's
-`kill_retry` true. docs/gate.md "Not ported" says why. A `--pid-hold` argument in `setup`, a
+ignored: `python_tests` "pytests", `python_tests_floor` and `trailers` true (a step's
+`kill_retry` is no key at all: kitlib.config refuses it). docs/gate.md "Not ported" says why. A `--pid-hold` argument in `setup`, a
 step's `cmd`, `full_cmd` or `merged_args`, or a landing lane's merged_args refuses too: the pid
 hold of tools/pytests.py and tools/kit_tests.py is opt-in for agent runs, never in the gate.
 """
@@ -73,8 +73,6 @@ def unsupported(gate):
     if PID_HOLD_FLAG in (gate.get('setup') or []):
         out.append('"setup" %s (%s)' % (PID_HOLD_FLAG, PID_HOLD_WHY))
     for s in gate.get('steps') or []:
-        if s.get('kill_retry'):
-            out.append('step %s "kill_retry": true (no retry in this gate)' % s.get('name'))
         for key in ('cmd', 'full_cmd', 'merged_args'):
             if PID_HOLD_FLAG in (s.get(key) or []):
                 out.append('step %s "%s" %s (%s)' % (s.get('name'), key, PID_HOLD_FLAG,

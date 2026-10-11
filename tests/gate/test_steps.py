@@ -55,8 +55,6 @@ class Build(unittest.TestCase):
         for top in ({'python_tests': 'pytests'}, {'python_tests_floor': 10}, {'trailers': True}):
             with self.assertRaises(S.GateConfigError, msg=top):
                 S.build(gate_of(cmd('a'), **top), ROOT, 'b', 't')
-        with self.assertRaises(S.GateConfigError):
-            S.build(gate_of(cmd('a', kill_retry=True)), ROOT, 'b', 't')
         self.assertEqual(S.unsupported(gate_of(cmd('a'), python_tests='discover')), [])
 
     def test_the_pid_hold_flag_refuses_wherever_a_gate_could_pass_it(self):
