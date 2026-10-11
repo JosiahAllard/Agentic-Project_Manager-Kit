@@ -153,7 +153,8 @@ SCHEMA = {
 
 class HomeFenced(BaseException):
     """home_dir() resolved a real home folder in a fenced process (the kit's tests and their
-    children): one fence_home() fenced, or one whose environment carries FENCE_ENV. A
+    children): one fence_home() fenced, or one whose environment carries FENCE_ENV. The machine
+    lock raises it too, for a use of the machine's lock store there (kitlib.lock.store.fence). A
     BaseException, so the `except Exception` that isolates a check (pmstart's "could not check"
     lines, pmwatch's third failure) cannot turn the refusal into a line a test may miss."""
 
@@ -167,7 +168,7 @@ UNPROVEN_MESSAGE = ('home lookup refused under the kit\'s tests: Windows did not
 # The fence's marker: the home folder the kit's test run started with, in the environment of the
 # test units (tools/kit_tests.py run_pass) and of a process that imports the tests package
 # (tests/__init__.py), so the tools a test starts inherit it. Set by fence_env only; read by
-# home_dir() only, at each call. Unset or empty: no marker. A real run never has it.
+# home_dir() and fenced() only, at each call. Unset or empty: no marker. A real run never has it.
 FENCE_ENV = 'KIT_HOME_FENCE'
 # The real home folder (_home_key) recorded by fence_home(); None: fence_home() was not called.
 _FENCED_HOME = None
@@ -259,6 +260,15 @@ def fence_home():
     global _FENCED_HOME
     _FENCED_HOME = _home_key(os.path.expanduser('~'))
     return _FENCED_HOME
+
+
+def fenced():
+    """Whether this process is under the kit's tests: fence_home() was called here, or the
+    environment carries FENCE_ENV. One global read and one environment read; Windows is not asked
+    and nothing is resolved, so it says nothing about which home a lookup would give. For code that
+    must refuse a real machine resource under the tests without a home lookup
+    (kitlib.lock.store.fence)."""
+    return _FENCED_HOME is not None or bool(os.environ.get(FENCE_ENV))
 
 
 def _refused(h, marker):
