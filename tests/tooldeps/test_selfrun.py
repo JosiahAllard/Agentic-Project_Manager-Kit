@@ -5,6 +5,8 @@ and timeout cases run real child processes on throwaway test modules.
 import _thread
 import io
 import os
+import shutil
+import stat
 import tempfile
 import threading
 import time
@@ -264,6 +266,77 @@ class Order(unittest.TestCase):
                                   r'module\(s\) not run$')
 
 
+def read_only_repo(parent):
+    """A folder shaped like a throwaway git repository whose object files are read-only (as git
+    writes them): <parent>/repo/.git/objects/ab/cdef..., plus a writable file beside it."""
+    repo = os.path.join(parent, 'repo')
+    objects = os.path.join(repo, '.git', 'objects', 'ab')
+    os.makedirs(objects)
+    for name in ('cdef0123', 'cdef4567'):
+        path = os.path.join(objects, name)
+        with open(path, 'wb') as f:
+            f.write(b'x')
+        os.chmod(path, stat.S_IREAD)
+    with open(os.path.join(repo, 'README.md'), 'w') as f:
+        f.write('hello\n')
+    return repo
+
+
+class RmtreeForce(unittest.TestCase):
+    """A temp git repository with read-only object files is removed, not left in TEMP."""
+
+    def setUp(self):
+        self.parent = tempfile.mkdtemp(prefix='kit-rmforce-')
+        self.addCleanup(selfrun.rmtree_force, self.parent, True)
+
+    def test_a_repo_with_read_only_object_files_is_removed(self):
+        repo = read_only_repo(self.parent)
+        selfrun.rmtree_force(repo)
+        self.assertFalse(os.path.exists(repo))
+        self.assertTrue(os.path.isdir(self.parent))             # only the folder asked for
+
+    def test_plain_rmtree_with_ignore_errors_leaves_it(self):
+        # What the runner and the fixtures did before: the error is swallowed and the repo stays.
+        repo = read_only_repo(self.parent)
+        shutil.rmtree(repo, ignore_errors=True)
+        self.assertTrue(os.path.exists(repo))
+        selfrun.rmtree_force(repo)
+        self.assertFalse(os.path.exists(repo))
+
+    def test_a_missing_folder_is_not_an_error(self):
+        selfrun.rmtree_force(os.path.join(self.parent, 'none'))
+
+    def test_the_handler_is_passed_as_onexc_or_onerror_by_python_version(self):
+        for has_onexc, keyword in ((True, 'onexc'), (False, 'onerror')):
+            repo = read_only_repo(self.parent)
+            seen = {}
+            real = shutil.rmtree
+
+            def spy(path, **kw):
+                seen.update(kw)
+                return real(path, **kw)
+            with mock.patch.object(selfrun, '_HAS_ONEXC', has_onexc), \
+                    mock.patch.object(selfrun.shutil, 'rmtree', spy):
+                selfrun.rmtree_force(repo)
+            self.assertEqual(list(seen), [keyword])
+            self.assertFalse(os.path.exists(repo))
+
+    def test_a_unit_folder_holding_a_read_only_repo_is_gone_after_the_run(self):
+        log = []
+
+        def run_unit(unit, audit, timeout, root=None, cmd=None, env=None):
+            read_only_repo(env['TEMP'])
+            log.append(env['TEMP'])
+            return unit, 'OK', 1, 0.0, ''
+        out = io.StringIO()
+        rc, _summary = selfrun.run(['tests.a.test_1'], tempfile.gettempdir(), 1, out=out,
+                                   run_unit=run_unit, environ={'X': '1'}, label='full', counts={})
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertEqual(len(log), 1)
+        self.assertFalse(os.path.exists(log[0]))                # the unit's folder
+        self.assertFalse(os.path.exists(os.path.dirname(log[0])))     # the run folder
+
+
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -396,6 +469,22 @@ class Times(unittest.TestCase):
             'tests.z.test_other': 3.0, 'tests.a.test_m': 30.0, 'tests.a.test_m.A': 10.0,
             'tests.a.test_m.B': 20.0})                  # a timeout is no measure of the unit
         self.assertEqual(os.listdir(self.dir), [selfrun.TIMES_FILE])     # no temp file left
+
+    def test_a_run_that_does_not_record_still_plans_by_the_recorded_times(self):
+        # kit_tests --both-tiers' real-git pass: ordered by the recorded times, writes none.
+        text = '{"tests.a.test_m": 1.0, "tests.b.test_n": 50.0}'
+        write(self.dir, {selfrun.TIMES_FILE: text})
+        log, out = [], io.StringIO()
+        mods = ['tests.a.test_m', 'tests.b.test_n']
+        rc, _ = selfrun.run(mods, tempfile.gettempdir(), 1, out=out,
+                            run_unit=fake_unit(log, threading.Lock(), pause=0),
+                            counts={m: 3 for m in mods}, times_path=self.path,
+                            record_times=False)
+        self.assertEqual(rc, 0, out.getvalue())
+        started = [m for w, m, _t in log if w == 'start']
+        self.assertEqual(started, ['tests.b.test_n', 'tests.a.test_m'])     # longest first
+        with open(self.path, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), text)
 
     def test_a_split_run_reports_modules_not_units_and_records_times(self):
         log, out = [], io.StringIO()

@@ -40,13 +40,15 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 2. **Dry run** `installer/new-repo.ps1` from the kit checkout:
 
    ```
-   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner> -AgentEmail <agents> [-MainBranch main] [-Stack python]
+   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner> -AgentEmail <agents> [-MainBranch main] [-RepoName <name>] [-Stack python]
    ```
 
-   It prints what it would write: `.kit.json` (`"repo".main_branch`, `"owner".email`,
+   It prints what it would write: `.kit.json` (`"repo".main_branch`, `"repo".name`, `"owner".email`,
    `"owner".agent_emails`), the stubs (by `kit_stubs.py write -C <target>`), `.gitignore` and
    `.gitattributes`, a starter `docs/INDEX.md`, and with `-Stack` the stack's `tools/gate.json`.
-   The target must be a checkout's top level. Both emails are required and must differ, or an
+   `"repo".name` is the repository's rulings-ledger column (docs/backlog.md "Owner gates"): `-RepoName`,
+   else the target folder's name lower-cased; either must match `[a-z0-9][a-z0-9-]*` or the script
+   refuses (exit 2). The target must be a checkout's top level. Both emails are required and must differ, or an
    agent's commit could pass as the owner's.
    - `.gitignore` and `.gitattributes` start from `templates/common` (`.claude/worktrees/` and `.codex/worktrees/`
      are the lines that matter: without them the first agent worktree dirties the main checkout and a
@@ -59,8 +61,14 @@ down the longer the machine stays up: docs/windows-token-leak.md.
      (under "add these to docs/INDEX.md"; advice only, never a refusal), for you to add.
    - `-Stack dotnet|godot|java|python` copies `templates/stacks/<stack>/tools/gate.json` to
      `tools/gate.json` (refused if one is there) and adds `"gate": "tools/gate.json"` to
-     `.kit.json`, and copies the stack's other `tools/` files (only Godot has one, `tools/godot.cmd`),
-     keeping any that is there already. Edit the gate's globs and test command to the project.
+     `.kit.json`, and copies the stack's other `tools/` files (dotnet: `tools/dotnet_each.py`; godot:
+     `tools/godot.cmd`; python: `tools/js_tests.py`; java has none), keeping any that is there already. It also runs `tools/stack_skill.py install` for the stack's
+     `.claude/skills/**` (only Godot has one, `godot-render-check`): each `.md` has `{kit_root}`
+     replaced by the kit's absolute path with forward slashes (the template quotes it, so a space
+     is safe), a file already there is kept, and a kit root it cannot write (no
+     `tools/machine_lock.py` under it, or a double quote, brace, `$` or backtick in the path) refuses
+     the whole run before anything is written, as does a stack the kit has no folder for, and so does
+     no python on PATH. Edit the gate's globs and test command to the project.
      The python gate runs
      `unittest discover -s tests` and needs one test: its pass check wants a `Ran N tests` line
      with N of 1 or more, so a run of none fails on every Python version. It runs without
@@ -111,8 +119,8 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 ### What the script does not install
 
 - The stack's other files: `.github/workflows/{quick,full}.yml` (owner-only paths; copy them by
-  hand), and for Godot the render-check skill (`.claude/skills/godot-render-check/SKILL.md`).
-  `tools/godot.cmd` is installed.
+  hand). The stack's `tools/` files (see above) and its skills (only Godot has one:
+  `.claude/skills/godot-render-check/SKILL.md`, with the kit path written in) are installed.
 - `templates/common/CLAUDE.md` and the two profile templates (`agent-profile.TEMPLATE.md`,
   `coordinator-profile.TEMPLATE.md`): the repository's rules file and profiles are drafted from
   them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates").
@@ -123,18 +131,97 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 
 ### Tools without a stub
 
-The stubs cover the tools a repository's agents run from their own checkout (`kitlib.stubs.SHARED`),
-including `land.py` and `ledger.py`. The tools in the list below run by the kit's path,
-`python <kit>/tools/<name>.py`, and get no stub:
+The stubs cover the tools that act on a repository checkout, named by `-C` or the current
+directory (`kitlib.stubs.SHARED`), including `land.py`, `ledger.py`, `redfirst.py`, `trailers.py`
+and `daily_full.py` (which exits "off" unless `.kit.json` opts in, docs/daily-full.md). Every
+`tools/*.py` command is in exactly one of `SHARED` and `KIT_ONLY` (`kitlib.stubs`). The test
+`Partition` in `tests/stubs/test_kit_stubs.py` fails when a new tool is in neither; the tool's
+author picks the list. The `KIT_ONLY` tools run by the kit's path,
+`python <kit>/tools/<name>.py`, and get no stub, because they act on the machine, the owner's
+files or the kit itself:
 
 - `machine_lock.py`: one lock per machine, so it runs from the machine's lock install, never a
   repository's. `run` needs `--repo <name> --slug <slug>` (and `--kind`); `status` needs nothing.
   A repository's own commands use it only through a gate (booked by `gate.py`) or a wrapped heavy
   run.
-- `kit_tests.py` (the kit's own suites), `redfirst.py`, `lock_release_check.py`,
-  `daily_full.py`, `backlog_lint.py`, `agent_roster.py`: run by the kit's maintainers or the PM
-  against a repository named by `-C` (docs/test-tools.md, docs/redfirst.md, docs/lock-release.md,
-  docs/daily-full.md, docs/backlog-lint.md, docs/ROSTER.md).
+- `kit_tests.py` (the kit's own suites), `lock_release_check.py` (its `-C` is the kit's release
+  checkout), `backlog_lint.py`, `agent_roster.py`: run by the kit's maintainers or the PM
+  (docs/test-tools.md, docs/lock-release.md, docs/backlog-lint.md, docs/ROSTER.md).
+- `launch.py`, `machine_setup.py`, `pm_data.py`, `pm_watch.py`, `hub_mirror.py`, `pending.py`,
+  `ledger_refs.py`, `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and
+  the machine.
+
+A stub bakes in the kit it was written from, so one written from a kit worktree runs that
+worktree and is stale on main (`check` says `runs the kit at ...`). At session start the
+coordinator's and the PM's checklists print one `stubs (<repo>): N missing/stale: ...` line, with
+the `kit_stubs.py write -C <repo>` command, for a repository whose stubs are not current
+(docs/pm-start.md).
+
+### Plugin install (local marketplace)
+
+Each account folder installs the plugin from the kit's export of pushed main, not from the
+checkout (docs/plugin-source.md). `python tools/plugin_refresh.py --migrate --apply` adds the
+export root as the marketplace `pm-kit` and installs `pm-kit@pm-kit` in every account folder; after
+each kit landing `python tools/plugin_refresh.py --apply` refreshes them. Each is a dry run without
+`--apply`. Migrate one folder first (`--folder DIR`, repeatable), check a session there, then the
+rest; `--apply` refuses a folder that is not migrated (docs/plugin-source.md "Migrating"). The
+exact `claude plugin` subcommands and flags these run, and the claim that an old session's MCP
+server holds files open in the folder it loaded, are inferences (docs/plugin-source.md "Open
+questions"). Adding the checkout itself as a marketplace (its `.claude-plugin/marketplace.json` lists
+the plugin with `"source": "./"`) is the old way, which `--migrate` replaces. Whether Claude Code loads a relative-path plugin of a local marketplace in
+place or copies it into its plugin cache is not settled: the plugins reference
+(https://code.claude.com/docs/en/plugins/loading, "In-place and copied plugins") says in place, and
+an install from the checkout was observed copied into the cache (docs/plugin-source.md "Open
+questions"). Either way `${CLAUDE_PLUGIN_ROOT}` holds pushed kit main, not the checkout the stubs
+run: the skills and agents write every kit-only path (the tools above, `kitlib/`, `optional/`, the
+kit's docs) as `${CLAUDE_PLUGIN_ROOT}/<path>` (tests/skills checks it), and only stub tools
+repo-relative. Source: https://code.claude.com/docs/en/plugin-marketplaces. That `${CLAUDE_PLUGIN_ROOT}` is substituted in
+agent and skill text is unverified: confirm it in one real loaded session before the first install.
+`claude plugin validate` passes with warnings only (no author field; CLAUDE.md is not loaded) and
+reports no reserved name.
+
+The plugin carries one hook: the coordinator SessionStart hook, `claude/hooks/hooks.json` (named by
+`"hooks"` in `.claude-plugin/plugin.json`), run in exec form as `pythonw` with
+`${CLAUDE_PLUGIN_ROOT}/claude/hooks/coordinator_session_start.py` as its argument. Each account's
+settings already run that script, so the owner removes the settings SessionStart entry in the same
+step as the install, or it runs twice (`tools/machine_setup.py` notes it, docs/machine-setup.md
+"Settings"). guard.py stays in each account's settings and is never in the plugin (docs/guard.md
+"Go-live"); the PM repo's `pm_session_start.py` stays in that repo's settings.
+
+### After the plugin install: remove the per-item junctions
+
+An account set up by `machine_setup.py` has per-item junctions under `~/.claude` that load the same
+skills, hooks and agents the plugin now loads. Remove them in stages, in this order.
+
+**Stage 1.** At install, remove the kit's `~/.claude/skills/*` junctions, or each skill appears twice.
+Only the 12 kit skill names are touched (the directories under `claude/skills`); any other link stays.
+`cmd /c rmdir` removes the link only, never the target:
+
+```powershell
+$kit = 'backlog-ops','branch-review','branch-sync','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch'
+Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force |
+  Where-Object { $_.LinkType -eq 'Junction' -and $_.Name -in $kit } |
+  ForEach-Object { cmd /c rmdir "$($_.FullName)" }
+Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force | Where-Object { $_.LinkType -and $_.Name -in $kit }
+```
+
+The last command must print nothing. Then `ListSkills` shows each of the 12 names once.
+
+**Stage 1b.** Gated on the KIT-AGENTS-IN-PLUGIN rename landing; do not do this before.
+
+Remove ~/.claude/agents only after the plugin providing pm-kit agents is installed and the launcher uses pm-kit:coordinator.
+
+```powershell
+cmd /c rmdir "$env:USERPROFILE\.claude\agents"
+```
+
+**Stage 2.** Remove the `~/.claude/hooks` junction only after the plugin's SessionStart hook is live and
+`settings.json` no longer calls a guard through `~/.claude/hooks`. Check by searching
+`$env:USERPROFILE\.claude\settings.json` for `\.claude\\hooks`: it must have no hit.
+
+**Stage 3.** The `tools/*` and `knowledge/*` junctions stay for now: `~/.claude/tools/machine_lock` is the live
+lock path, and `machine_setup.py --apply` recreates those links. Record KIT-JUNCTIONS-TOOLS-KNOWLEDGE
+retires them.
 
 `tools/backlog.py add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md).
@@ -186,5 +273,5 @@ paths must allow it (`machine_paths.allow`, docs/kit-json.md).
   libraries are `kitlib` modules); the warnings those modes needed. The old tool had no tests.
 - new-repo.ps1: copying `kit\tools\**`, `templates\common` and `templates\stacks\<Stack>`
   wholesale, with placeholder substitution (a repository holds stubs only; `-Stack` installs
-  only the stack's `tools/` files (`gate.json`, and Godot's `godot.cmd`) and its ignore lines); writing the identities
+  only the stack's `tools/` files (`gate.json` and the runners above), its skills and its ignore lines); writing the identities
   into `tools\doc_budget.json` (they go to `.kit.json` "owner").

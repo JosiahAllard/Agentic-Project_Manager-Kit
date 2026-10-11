@@ -38,20 +38,36 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    (docs/guard.md "Go-live (after the joint review)").
    Success: a Bash search from a drive root is denied with `rule=root-search`.
 
-7. **Turn on the PM checklist.** Create the files it reads: a sessions file holding `{}`, a
-   reminders file holding `[]`, and a memory folder for handoff notes. Put the sessions file inside
-   the PM repository (`claude/hub/hub_backlog.py` finds the repository from its folder and fails
-   outside a git repo). Fill `pm_start` in the user
-   config with their paths, and `pm_watch_cmd` (docs/pm-start.md, docs/pm-watch.md). `pm_watch`
-   needs `usage_script` (flag or key) or it exits 2. Then, as a hand step, the owner adds the SessionStart hook from docs/pm-start.md to the settings only the
-   PM session loads.
+   Steps 3, 6 and 7's hook are hand steps on a fresh machine: `installer/machine-setup.ps1`
+   needs an old kit to switch from and does not install them (docs/machine-setup.md "Not done
+   here").
+
+7. **Turn on the PM checklist.** Create the files it reads: a sessions file, a reminders file
+   holding `[]`, and a memory folder for handoff notes. The sessions file is `sessions.json` in
+   `launcher.state_dir` (docs/launcher.md "State files"): start it from
+   `docs/launcher.sessions.example.json`, or from `{}` until step 11. Put that folder inside the PM
+   repository (`claude/hub/hub_backlog.py` finds the repository from the sessions file's folder
+   and fails outside a git repo). Fill `pm_start` in the user config with their paths, and
+   `pm_watch_cmd` (docs/pm-start.md "Config"); set `pm_watch.sessions_file` to the same file
+   (docs/pm-watch.md "Config"). `pm_watch.py` reads usage
+   in-process from the machine config's `launcher` key and exits 2 without it; `usage_script` is refused.
+   Then, as a hand step, the owner adds the SessionStart hook from docs/pm-start.md to the
+   settings only the PM session loads.
    Success: the next PM session starts with "PM session start checklist", not "no pm_start
    config ... checklist skipped".
 
 8. **Publish the Action Hub.** Publish `claude/hub/action-hub.html` with the Artifact tool and the
-   capabilities docs/action-hub.md "For the PM" gives, pin it, set `pm_start.hub_url` to its URL,
-   and run `ArtifactComments watch` on that URL.
-   Success: the page opens and the watch is confirmed.
+   capabilities docs/action-hub.md "For the PM" gives, pin it, record its URL with
+   `python <kit>/tools/hub_mirror.py set-url --account <label> <url>` (the label:
+   `python <kit>/tools/hub_mirror.py account`), and run `ArtifactComments watch` on that URL.
+   The hub's data is mirrored in git (docs/action-hub.md "One copy per account"): with no
+   `pm_data` yet, set `pm_start.hub_mirror` to an absolute folder in a linked work tree of a
+   private repository, on its `.kit.json` main branch (`save --commit` refuses a main checkout
+   and any work tree of the kit itself). Then
+   `python <kit>/tools/hub_mirror.py restore --out <file>` says the mirror is empty: a new
+   install has nothing to send.
+   Success: the page opens, the watch is confirmed, and the next session start gives the
+   republish line.
 
 9. **Install each repository** (docs/install.md).
    Success: `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0 and
@@ -68,6 +84,10 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
     `claude --agent coordinator --remote-control "<name>"`. The name must match the entry
     exactly, case included: the checklist finds a coordinator only by that flag. On its first
     start it drafts the repository's profiles for the owner to approve.
+    `--account current` starts it on the account you are on. Add the kit's own coordinator the same way
+    (sessions.json key `kit`, repo `kit`, a launcher.repos name for the kit checkout; see docs/launcher.sessions.example.json):
+    the PM runs from the pmdata folder and its write-jail keeps it and its subagents out of kit worktrees,
+    so kit work and landings need a kit coordinator.
     Success: the next checklist does not list it as not running.
 
 12. **List the repositories on the hub.** `python <kit>/claude/hub/hub_repos.py` prints the known

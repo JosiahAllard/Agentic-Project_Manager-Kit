@@ -1,5 +1,6 @@
 """Claude accounts: which config folder a launch uses, whether it is signed in, how much of its
-usage windows is left, and which account to pick (docs/launcher.md "Accounts").
+usage windows is left, which account to pick (docs/launcher.md "Accounts"), and which account
+this session runs on (current_account, for the Action Hub's one copy per account).
 
 Every Claude session's status line writes usage-status.json into its account's config folder:
 {"updated_at": iso, "five_hour": {"used_percentage": n, "resets_at": iso} | null,
@@ -170,6 +171,57 @@ def pick(settings, now, limit=PICK_LIMIT):
     ok = [r for r in rows if r[1] < limit]
     chosen = min(ok or rows, key=lambda r: r[2])
     return chosen[0], rows
+
+
+DEFAULT_LABEL = 'default'    # current_account's answer with no launcher accounts or no match
+CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR'
+
+
+def _same_folder_key(folder, home):
+    """`folder` (absolute, or ~ / ~/<path>) as a comparable key: home expanded, normalised,
+    case and slashes folded (os.path.normcase on Windows)."""
+    f = folder.strip()
+    if f == '~':
+        f = home
+    elif f.startswith(('~/', '~\\')):
+        f = os.path.join(home, f[2:])
+    return os.path.normcase(os.path.normpath(f))
+
+
+def current_account(machine, environ=None, home=None):
+    """The label of the Claude account this process runs on: the `launcher.accounts` key (of the
+    machine config dict `machine`) whose folder list holds this session's config folder, which is
+    CLAUDE_CONFIG_DIR, or Claude Code's default folder ~/.claude when that is unset or empty.
+    DEFAULT_LABEL when the machine config has no launcher accounts (a fresh user) or no account
+    lists the folder. Pure: it reads only its arguments (environ defaults to os.environ, home to
+    the user's home folder) and never raises for a malformed launcher object."""
+    launcher = machine.get('launcher') if isinstance(machine, dict) else None
+    accts = launcher.get('accounts') if isinstance(launcher, dict) else None
+    if not isinstance(accts, dict) or not accts:
+        return DEFAULT_LABEL
+    env = os.environ if environ is None else environ
+    h = home or os.path.expanduser('~')
+    cur = env.get(CONFIG_DIR_ENV) or ''
+    here = _same_folder_key(cur if cur.strip() else '~/.claude', h)
+    # Numbered labels in number order ("2" before "10"), as the launcher lists them; others after.
+    for n in sorted(accts, key=lambda k: (0, int(k), '') if str(k).isdigit() else (1, 0, str(k))):
+        dirs = accts[n]
+        if not isinstance(dirs, list):
+            continue
+        if any(isinstance(d, str) and d.strip() and _same_folder_key(d, h) == here for d in dirs):
+            return str(n)
+    return DEFAULT_LABEL
+
+
+def resolve_current(settings, now, environ=None):
+    """(account, note) for `--account current`: current_account over this machine's launcher
+    accounts (`settings.accounts`, `settings.home`). A session whose folder no account lists
+    (DEFAULT_LABEL) falls back to pick, and note says so. LaunchError when no account is signed in."""
+    label = current_account({'launcher': {'accounts': settings.accounts}}, environ=environ, home=settings.home)
+    if label in settings.accounts:
+        return label, None
+    n, _ = pick(settings, now)
+    return n, 'current account not identified; picked %s' % n
 
 
 def explain(rows):

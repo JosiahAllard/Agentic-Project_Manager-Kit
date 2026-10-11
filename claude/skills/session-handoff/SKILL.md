@@ -19,7 +19,7 @@ The PM moves long-running sessions between Claude accounts and recycles coordina
 ## Successor (started with "read <state file>")
 
 1. Read the state file (and your brief, if one is named).
-2. Verify its claims before acting: `git ls-remote` for branches and main, process checks for agents and runs, `python tools/machine_lock.py status` for lock runs.
+2. Verify its claims before acting: `git ls-remote` for branches and main, process checks for agents and runs, `python ${CLAUDE_PLUGIN_ROOT}/tools/machine_lock.py status` for lock runs.
 3. Before re-dispatching work on any worktree, confirm the old session's agents there have stopped (no process with that worktree as cwd, no file changes for 5 minutes). If one is still running, wait and tell the PM.
 4. Check in with the PM, then act on the note.
 

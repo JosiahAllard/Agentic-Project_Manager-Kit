@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from kitlib import config
+from kitlib import config, lockmcp
 from kitlib.config import policy
 from tests.config.helpers import TempTree
 
@@ -113,6 +113,20 @@ class RolesTest(TreeCase):
         self.assertFalse(policy.permissions({}, table)['edit_main_checkout'])
         self.assertEqual(policy.role_name({'agent_id': 'a', 'agent_type': 'worker'}, table), 'subagent')
 
+    def test_the_plugin_prefixed_agent_type_names_the_same_role(self):
+        # docs/guard.md "Agent names": the kit plugin bundles its agents as <plugin>:<name>
+        # (kitlib.agentname.PREFIX; tests/agentname pins it to this value)
+        p = lockmcp.CLAUDE_PLUGIN_NAME + ':'
+        table = policy.roles(self.load({'roles': {'lander': {'edit_main_checkout': True, 'why': 'merges'}}}))
+        self.assertEqual(policy.role_name({'agent_id': 'a', 'agent_type': p + 'lander'}, table), 'lander')
+        self.assertTrue(policy.permissions({'agent_id': 'a', 'agent_type': p + 'lander'}, table)['edit_main_checkout'])
+        for kind in ('other:lander', p + p + 'lander', p.upper() + 'lander', p, p + 'main',
+                     p.rstrip(':') + 'lander', 'x' + p + 'lander', p[1:] + 'lander'):
+            with self.subTest(kind):
+                self.assertEqual(policy.role_name({'agent_id': 'a', 'agent_type': kind}, table), 'subagent')
+                self.assertFalse(policy.permissions({'agent_id': 'a', 'agent_type': kind}, table)['edit_main_checkout'])
+        self.assertEqual(policy.role_name({'agent_type': p + 'lander'}, table), 'main')
+
     def test_a_role_with_an_unknown_permission_refuses(self):
         t = TempTree({'roles': {'lander': {'edit_main': True}}})
         self.addCleanup(t.cleanup)
@@ -149,6 +163,45 @@ class KindsTableTest(unittest.TestCase):
         for bad in ('{', '[1]', '{"build": 3}'):
             with self.assertRaises(config.ConfigError):
                 policy.kinds_table(self.write(bad))
+
+    def test_aliases_map_a_retired_name_to_its_kind(self):
+        data = {'kinds': {'graph-build': {'cpu': 'heavy'}},
+                'aliases': {'_note': 'n', 'worldgraph': {'to': 'graph-build', 'why': 'retired'}}}
+        path = self.write(data)
+        self.assertEqual(policy.kinds_aliases(path), {'worldgraph': 'graph-build'})
+        self.assertEqual(sorted(policy.kinds_table(path)), ['graph-build'])  # not a kind itself
+
+    def test_no_aliases_or_no_file_is_none(self):
+        self.assertEqual(policy.kinds_aliases(self.write({'kinds': {'b': {}}})), {})
+        self.assertEqual(policy.kinds_aliases(
+            os.path.join(tempfile.gettempdir(), 'kit-no-such-kinds.json')), {})
+
+    def test_a_bad_alias_refuses(self):
+        for bad in ({'a': 'b'}, {'a': {'to': 'b'}}, {'a': {'why': 'w'}}, ['a']):
+            with self.assertRaises(config.ConfigError):
+                policy.kinds_aliases(self.write({'kinds': {'b': {}}, 'aliases': bad}))
+
+    def test_an_alias_that_is_a_kind_or_names_no_kind_refuses(self):
+        kinds = {'a': {}, 'b': {}}
+        for aliases in ({'a': {'to': 'b', 'why': 'w'}},          # the alias is a kind
+                        {'x': {'to': 'nope', 'why': 'w'}},       # to is not a kind
+                        {'x': {'to': 'y', 'why': 'w'}, 'y': {'to': 'a', 'why': 'w'}}):   # chain
+            with self.assertRaises(config.ConfigError):
+                policy.kinds_aliases(self.write({'kinds': kinds, 'aliases': aliases}))
+
+    def test_aliases_is_never_a_kind_in_the_flat_form(self):
+        flat = {'engine-test': {'cpu': 1}, 'aliases': {'old': {'to': 'engine-test', 'why': 'w'}}}
+        path = self.write(flat)
+        self.assertEqual(sorted(policy.kinds_table(path)), ['engine-test'])
+        self.assertEqual(policy.kinds_aliases(path), {'old': 'engine-test'})
+
+    def test_aliases_inside_the_kinds_object_refuses(self):
+        path = self.write({'kinds': {'a': {}, 'aliases': {'x': {'to': 'a', 'why': 'w'}}}})
+        with self.assertRaisesRegex(config.ConfigError, 'aliases belongs at the top level'):
+            policy.kinds_table(path)
+
+    def test_the_kits_table_aliases_worldgraph_to_graph_build(self):
+        self.assertEqual(policy.kinds_aliases().get('worldgraph'), 'graph-build')
 
 
 class HookModuleTest(TreeCase):

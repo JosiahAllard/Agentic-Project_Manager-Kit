@@ -65,6 +65,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -191,6 +192,30 @@ def git_direct_env(base_env):
     env = dict(base_env)
     env[key] = direct + os.pathsep + base_env[key]
     return env, 'git: %s first on PATH, not the %s launcher' % (direct, found)
+
+
+_HAS_ONEXC = sys.version_info >= (3, 12)       # shutil.rmtree's onexc; before it, onerror
+
+
+def rmtree_force(path, ignore_errors=False):
+    """Remove the folder `path` the way shutil.rmtree does, but clear the read-only bit of what
+    refuses to go and retry it once: git writes its objects read-only, and on Windows rmtree stops
+    at the first one, so a throwaway repository would stay in TEMP. Python 3.12+ takes the handler
+    as onexc, older as onerror. `ignore_errors` leaves what still stays; otherwise it raises.
+    Only `path` and what is under it is touched; a missing `path` is not an error."""
+    def clear(func, target, _exc):
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except OSError:
+            if not ignore_errors:
+                raise
+    if not os.path.lexists(path):
+        return
+    if _HAS_ONEXC:
+        shutil.rmtree(path, onexc=clear)
+    else:
+        shutil.rmtree(path, onerror=clear)
 
 
 def work_parent(root):
@@ -362,7 +387,7 @@ def plan_units(modules, root, jobs, classes=None, times=None, hint=()):
 
 def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, environ=None,
         label='selected', counts=None, classes=None, times_path=None, hint=(), give_back=None,
-        hold=None):
+        hold=None, record_times=True):
     """Run `modules` (checkout `root`), up to `jobs` at once, then the `serial` ones ({module:
     why}) one at a time; write the log to `out`; return (exit status 0, 1 or INTERRUPTED, the
     summary line). `counts` {module: tests} skips the count_tests child (tests use it), and
@@ -371,7 +396,9 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
     while unrecorded. `give_back(units still running)`: called as the pool drains (Giving back).
     `hold`: the run's opted-in pid hold (kitlib.pytests.runner.PidHoldRun), already started by the
     caller before it copied `environ`, so its beacon reaches the units; its end line is written
-    before the summary. None: no hold."""
+    before the summary. None: no hold. `record_times` False: the times at `times_path` still
+    order and split the run, but this run's are not written back (kit_tests --both-tiers'
+    real-git pass, so the file keeps the landing tier's times)."""
     out = out or sys.stdout
     injected = run_unit
     timeout = timeout or UNIT_TIMEOUT
@@ -418,7 +445,7 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
             r = ((module, 1, 1), 'FAILED', 0, 0.0, 'kit_tests: the runner failed on this unit: %r\n'
                  % (e,))
         finally:
-            shutil.rmtree(folder, ignore_errors=True)
+            rmtree_force(folder, ignore_errors=True)
         _, status, ran, secs, _text = r
         with say_lock:
             done.append(r)
@@ -487,7 +514,7 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
             pool.shutdown(wait=True)        # running units end through their own processes
         if workers is not None:
             workers.close()
-        shutil.rmtree(work, ignore_errors=True)
+        rmtree_force(work, ignore_errors=True)
     if workers is not None:
         say(interpreters_line(workers.stats(), done, own))
         for name, why in workers.why_replaced():
@@ -495,7 +522,8 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
     if hold is not None:
         say('kit_tests: %s' % hold.end())
     wall = time.time() - start
-    save_times(times_path, done, split)
+    if record_times:
+        save_times(times_path, done, split)
     return report(done, wall, jobs, len(alone), out, label,
                   not_run=(total[0] - len(done)) if interrupted else None)
 

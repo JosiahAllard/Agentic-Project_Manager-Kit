@@ -36,7 +36,7 @@ from kitlib import ledger                                          # noqa: E402
 from kitlib.backlog import ledger as backlog_ledger                # noqa: E402
 from kitlib.config import user                                     # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
-from kitlib.ledger import fmt, standing, vcs, write                # noqa: E402
+from kitlib.ledger import fmt, safepath, standing, vcs, write      # noqa: E402
 from kitlib.ledger.errors import Refused, Usage                    # noqa: E402
 
 
@@ -92,6 +92,9 @@ def fail(msg, code=1):
 
 def run(a, p, path, repos):
     if a.cmd == 'list':
+        why = safepath.refusal(path)
+        if why is not None:
+            return fail(why)
         try:
             with open(path, encoding='utf-8-sig') as f:
                 text = f.read()

@@ -159,6 +159,21 @@ class FullCmd(Case):
             self.assertEqual(f.read().strip(), 'mode full')
 
 
+class DailyCmd(Case):
+    """A step with a daily_cmd runs it in a daily run, ahead of its full_cmd."""
+    GATE = {'steps': [{'name': 'suite', 'always': True,
+                       'cmd': ['{python}', '-c', 'print("mode select")'],
+                       'full_cmd': ['{python}', '-c', 'print("mode full")'],
+                       'daily_cmd': ['{python}', '-c', 'print("mode daily")'], 'pass': '^mode '}]}
+
+    def test_the_daily_run_runs_daily_cmd(self):
+        o = self.run_daily()
+        self.assertEqual(o.code, G.OK, o.lines)
+        (step,) = self.result()['steps']
+        with open(step['log'], encoding='utf-8') as f:
+            self.assertEqual(f.read().strip(), 'mode daily')
+
+
 class Unchanged(Case):
     def test_same_commit_after_green_is_a_recorded_skip(self):
         self.run_daily('20261008-040000')

@@ -1,27 +1,25 @@
 """Shared fixtures for the backlog tests: a record builder in the per-repository shape and a store
 on a real temporary repository with a bare remote (tests/gitfixture.py)."""
 import os
-import tempfile
 import threading
 import time
 import unittest
 from unittest import mock
 
-from kitlib.backlog import ledger as lmod
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
-from tests.gitfixture import TempRepo, fixture_env, rmtree
+from tests.gitfixture import TempRepo, fixture_env
 
 BASE = [
     ('id', 'FOO'),
-    ('area', 'wg'),
+    ('area', 'xx'),
     ('priority', '-'),
     ('priority_by', '-'),
     ('effort', '-'),
     ('state', 'open'),
     ('blocked_on', '-'),
-    ('scope', 'worldgraph/**'),
+    ('scope', 'routegraph/**'),
     ('summary', 'a thing that is wrong and should be fixed'),
 ]
 BRANCH = 'tools/some-branch'
@@ -68,20 +66,6 @@ def parse(stem='FOO', **kw):
 def messages(stem='FOO', rules=None, **kw):
     r = parse(stem=stem, **kw)
     return [f.message for f in r.structural + rmod.validate(r, rules or rmod.Rules())]
-
-
-LEDGER_ITEMS = 'Items: FOO, BAR, BAZ, QUX\n'
-STANDING = 'R-9008'                 # the fixture's standing delegation (machine config standing_delegation)
-LEDGER_TEXT = ('# Rulings ledger (test fixture)\n\n'
-               '## R-9001 | 2026-09-25 08:00Z | kit | typed\n\nstand-in text\n' + LEDGER_ITEMS + '\n'
-               '## R-9002 | 2026-09-25 08:01Z | all | selected\n\nstand-in text\n' + LEDGER_ITEMS + '\n'
-               '## R-9003 | 2026-09-25 08:02Z | beta | typed\n\nstand-in text\n' + LEDGER_ITEMS + '\n'
-               '## R-9004 | 2026-09-25 08:03Z | kit | delegated\n\nstand-in text\n' + LEDGER_ITEMS + '\n'
-               '## R-9005 | 2026-09-25 08:04Z | kit | typed\n\nno items line here\n\n'
-               '## R-9006 | 2026-09-25 08:05Z | kit | pm-note\n\nstand-in text\n' + LEDGER_ITEMS + '\n'
-               '## R-9007 | 2026-09-25 08:06Z | kit | typed\n\n'
-               'Retired: superseded - replaced (see R-9001)\n\n'
-               '## R-9008 | 2026-09-25 08:08Z | all | selected\n\nstand-in text\n' + LEDGER_ITEMS)
 
 
 def race(case, writers, write, hook=None, deadline=120):
@@ -136,8 +120,6 @@ class StoreCase(unittest.TestCase):
     """A ref store on a temp repository with a bare remote (`remote = False`: none)."""
     remote = True
     object_format = None
-    ledger_text = None
-    standing = STANDING
 
     def setUp(self):
         # The library's own git calls inherit os.environ: no global config, no auto-gc/maintenance.
@@ -150,15 +132,7 @@ class StoreCase(unittest.TestCase):
         self.rules = rmod.Rules('upper', ('L0', 'L1'))
         self.backend = self.make_backend()
         self.store = smod.Store(self.backend, self.rules)
-        path = None
-        if self.ledger_text is not None:
-            d = tempfile.mkdtemp(prefix='kit-ledger-')
-            self.addCleanup(rmtree, d)
-            path = os.path.join(d, 'ledger.md')
-            with open(path, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(self.ledger_text)
-        self.ledger = lmod.Ledger(path, ['kit'], self.standing)
-        self.ctx = pmod.Context(self.store, self.ledger, self.repo.root, branch=BRANCH, today=TODAY)
+        self.ctx = pmod.Context(self.store, self.repo.root, branch=BRANCH, today=TODAY)
 
     def make_backend(self, root=None):
         return smod.RefBackend(root or self.repo.root, 'origin', smod.STORE_REF, smod.STORE_REF)

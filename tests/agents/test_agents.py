@@ -25,7 +25,61 @@ def frontmatter(text):
     return out
 
 
+def strict_frontmatter(text):
+    """Parse the frontmatter the way a YAML loader would accept it, for the flat `key: value` shape
+    the agent files use. Returns (dict, problems). An unquoted scalar holding ': ' (or ' #') is a
+    YAML error, and a quoted one must close its quote at the end of the line."""
+    m = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", text, re.S)
+    if not m:
+        return None, ["no frontmatter block"]
+    out, problems = {}, []
+    for line in m.group(1).splitlines():
+        if not line.strip():
+            continue
+        km = re.match(r"([A-Za-z][\w-]*):(?: +(.*))?$", line)
+        if not km:
+            problems.append("not a flat 'key: value' line: %r" % line[:60])
+            continue
+        key, val = km.group(1), (km.group(2) or "").strip()
+        if key in out:
+            problems.append("duplicate key %s" % key)
+        if val[:1] in ("'", '"'):
+            q = val[0]
+            body = val[1:-1]
+            if len(val) < 2 or val[-1] != q:
+                problems.append("%s: quote not closed at end of line" % key)
+            elif q == "'" and re.search(r"(?<!')'(?!')", body):
+                problems.append("%s: lone ' inside single-quoted scalar" % key)
+            elif q == '"' and re.search(r'(?<!\\)"', body):
+                problems.append('%s: unescaped " inside double-quoted scalar' % key)
+            val = body
+        else:
+            if ": " in val or val.endswith(":"):
+                problems.append("%s: unquoted scalar contains ': '" % key)
+            if " #" in val:
+                problems.append("%s: unquoted scalar contains ' #'" % key)
+            if val[:1] in "[]{}&*!|>%@`,":
+                problems.append("%s: unquoted scalar starts with %r" % (key, val[:1]))
+        out[key] = val
+    return out, problems
+
+
 class AgentFilesTest(unittest.TestCase):
+    def test_frontmatter_is_valid_yaml(self):
+        """An agent file whose frontmatter does not parse is dropped from every session."""
+        for p in sorted(AGENTS.glob("*.md")):
+            with self.subTest(agent=p.name):
+                fm, problems = strict_frontmatter(p.read_text(encoding="utf-8"))
+                self.assertEqual(problems, [], p.name)
+                self.assertEqual(fm.get("name"), p.stem, p.name)
+                self.assertTrue(fm.get("description"), p.name)
+
+    def test_strict_parser_refuses_colon_space_in_plain_scalar(self):
+        _, problems = strict_frontmatter("---\nname: x\ndescription: go (a): those go to y.\n---\nbody\n")
+        self.assertTrue(problems)
+        _, problems = strict_frontmatter('---\nname: x\ndescription: "go (a): those go to y."\n---\nbody\n')
+        self.assertEqual(problems, [])
+
     def test_set_is_complete(self):
         self.assertEqual({p.stem for p in AGENTS.glob("*.md")}, EXPECTED)
 

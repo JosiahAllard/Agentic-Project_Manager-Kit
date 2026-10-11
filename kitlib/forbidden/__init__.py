@@ -212,7 +212,12 @@ def default_base(root, cfg=None):
     if 'main_branch' in cfg.raw('repo'):
         name = cfg.main_branch
     else:
-        sha, _why = gitrefs.resolve('refs/heads/main', root)
+        # known=True: a git ended from outside is no answer (KIT-GIT-EXIT1-ANSWERS-2), never "no
+        # main", which measured against master.
+        sha, why = gitrefs.resolve('refs/heads/main', root, known=True)
+        if sha is None:
+            raise ForbiddenError('cannot tell whether the branch main exists, so the base is '
+                                 'unknown: %s' % why)
         name = 'main' if sha else 'master'
     return gitrefs.default_base(root, cfg.remote, name)
 

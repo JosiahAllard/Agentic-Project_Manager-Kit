@@ -131,6 +131,17 @@ class GateRulesTest(TreeCase):
         step = {'name': 'a', 'always': True, 'cmd': ['x', '--select'], 'full_cmd': ['x', '--full']}
         self.assertEqual(self.load({'gate': {'steps': [step]}}).section('gate')['steps'], [step])
 
+    def test_daily_cmd_is_a_cmd_step_argv_with_known_placeholders(self):
+        self.assertIn('"daily_cmd": unknown placeholder(s) {repo}',
+                      self.steps({'name': 'a', 'always': True, 'cmd': ['x'], 'daily_cmd': ['{repo}']}))
+        why = self.refused({'hook': {'module': 'gate_hook'},
+                            'gate': {'steps': [{'name': 'a', 'always': True, 'check': 'pins',
+                                                'daily_cmd': ['x']}]}})
+        self.assertIn('daily_cmd only apply to a "cmd" step', why)
+        step = {'name': 'a', 'always': True, 'cmd': ['x', '--select'], 'full_cmd': ['x', '--full'],
+                'daily_cmd': ['x', '--full', '--both-tiers']}
+        self.assertEqual(self.load({'gate': {'steps': [step]}}).section('gate')['steps'], [step])
+
     def test_a_step_needs_globs_or_a_reason_to_run(self):
         self.assertIn('needs "globs"', self.steps({'name': 'a', 'cmd': ['x']}))
 
@@ -143,8 +154,14 @@ class GateRulesTest(TreeCase):
 
     def test_the_dropped_step_keys_and_repo_gate_keys_refuse(self):
         why = self.steps({'name': 'a', 'always': True, 'cmd': ['x'], 'unless_only': ['*.md'],
-                          'cmd_windows': ['x.exe'], 'exit_code': False, 'offline_flag': '--offline'})
-        self.assertIn('unknown key(s) cmd_windows, exit_code, offline_flag, unless_only', why)
+                          'cmd_windows': ['x.exe'], 'exit_code': False, 'offline_flag': '--offline',
+                          'kill_retry': True})
+        self.assertIn('unknown key(s) cmd_windows, exit_code, kill_retry, offline_flag, unless_only',
+                      why)
+        # kill_retry went once slot() was shown to end a step's whole tree (tests/lock/
+        # test_slot_treekill.py); false is no more a key than true.
+        self.assertIn('unknown key(s) kill_retry',
+                      self.steps({'name': 'a', 'always': True, 'cmd': ['x'], 'kill_retry': False}))
         why = self.refused({'gate': {'dependency_pin_check': True, 'python_tests_audit': True,
                                      'python_tests_docs': ['m'], 'python_tests_docs_floor': 1,
                                      'python_tests_drops': 'd.txt', 'python_tests_selected_floor': True}})
@@ -161,9 +178,9 @@ class GateRulesTest(TreeCase):
     def test_a_check_step_refuses_the_subprocess_keys(self):
         why = self.refused({'hook': {'module': 'gate_hook'},
                             'gate': {'steps': [{'name': 'a', 'always': True, 'check': 'pins', 'cwd': 'x',
-                                                'kill_retry': True, 'merged_args': ['-m'],
+                                                'merged_args': ['-m'],
                                                 'ok_exits': [0, 1], 'reuse': True}]}})
-        self.assertIn('cwd, kill_retry, merged_args, ok_exits, reuse only apply to a "cmd" step', why)
+        self.assertIn('cwd, merged_args, ok_exits, reuse only apply to a "cmd" step', why)
 
     def test_a_steps_reuse_is_true_or_a_group_name(self):
         why = self.steps({'name': 'a', 'always': True, 'cmd': ['x'], 'reuse': 'two words'})
@@ -238,6 +255,34 @@ class DuplicateKeyTest(TreeCase):
     def test_the_same_key_in_two_objects_is_fine(self):
         cfg = self.load('{"repo": {"name": "a"}, "backlog": {"ledger_repo": "a"}, "commit": {"merge_fold": true}}')
         self.assertEqual(cfg.section('repo')['name'], 'a')
+
+
+class RetiredKeyTest(TreeCase):
+
+    def test_a_config_still_carrying_a_retired_key_loads_without_it(self):
+        cfg = self.load({'backlog': {'phases': ['L0'], 'retired_docs': ['docs/D.md'],
+                                     'rename_script': 'tools/r.py'}})
+        self.assertEqual(cfg.section('backlog')['phases'], ['L0'])
+        self.assertNotIn('retired_docs', cfg.section('backlog'))
+        self.assertNotIn('rename_script', cfg.section('backlog'))
+
+    def test_a_retired_key_in_a_backlog_section_file_loads_without_it(self):
+        cfg = self.load({'backlog': 'b.json'},
+                        {'b.json': {'phases': ['L0'], 'retired_docs': ['docs/D.md'],
+                                    'rename_script': 'tools/r.py'}})
+        self.assertEqual(cfg.section_file('backlog'), 'b.json')
+        self.assertEqual(cfg.section('backlog')['phases'], ['L0'])
+        self.assertNotIn('retired_docs', cfg.section('backlog'))
+        self.assertNotIn('rename_script', cfg.section('backlog'))
+
+    def test_a_retired_key_is_not_a_schema_field(self):
+        from kitlib.config import schema
+        self.assertNotIn('retired_docs', schema.SECTIONS['backlog'])
+        self.assertNotIn('rename_script', schema.SECTIONS['backlog'])
+
+    def test_a_typo_beside_a_retired_key_still_refuses(self):
+        self.assertIn('unknown key(s) phasez',
+                      self.refused({'backlog': {'retired_docs': [], 'phasez': []}}))
 
 
 class HookAndOwnerTest(TreeCase):

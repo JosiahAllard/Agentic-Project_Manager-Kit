@@ -13,6 +13,7 @@ import os
 import re
 import sys
 
+from kitlib import agentname
 from kitlib.launcher import accounts as A
 from kitlib.launcher import lookup, state, window
 from kitlib.launcher.settings import LaunchError
@@ -26,7 +27,8 @@ DEFAULT_AUTOCOMPACT = 170000   # a coordinator, another agent or a plain session
 DEEP_AUTOCOMPACT = 500000
 CONSULTANT_AUTOCOMPACT = (100000, 500000)
 CONSULTANT_DEFAULT_AUTOCOMPACT = 350000
-ROLE_AUTOCOMPACT = {'consultant': CONSULTANT_DEFAULT_AUTOCOMPACT, 'deep-worker': DEEP_AUTOCOMPACT}  # a sessions.json entry of that agent
+# a sessions.json entry of that agent, bare or with the kit plugin's prefix (kitlib.agentname)
+ROLE_AUTOCOMPACT = {'consultant': CONSULTANT_DEFAULT_AUTOCOMPACT, 'deep-worker': DEEP_AUTOCOMPACT}
 LONG_MODEL = 'opus[1m]'
 NOTES_DEFAULT = 'docs/ops/consultant-notes.local.md'
 DIGEST = os.path.join('docs', 'conventions-digest.md')
@@ -103,7 +105,7 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
     if predecessor:
         prompt = predecessor_text(predecessor) + prompt
     repo_label = repo or os.path.basename(os.path.normpath(folder))
-    name = name or '%s-%s-%s' % (repo_label.lower(), agent or 'session', tag)
+    name = name or '%s-%s-%s' % (repo_label.lower(), agentname.bare(agent) or 'session', tag)
     role = window.role_for(agent, settings.coordinator_agent)
     command = window.claude_command(name, prompt, agent, model, effort, autocompact)
     text = window_text(settings, host, name, role, folder, command, config_dir)
@@ -123,8 +125,9 @@ def entry_start_args(settings, key, entry, account, prompt, predecessor=None, na
     if entry.get('agent'):
         if isinstance(entry['agent'], str):
             args['agent'] = entry['agent']
-            if entry['agent'] in ROLE_AUTOCOMPACT:
-                args['autocompact'] = ROLE_AUTOCOMPACT[entry['agent']]
+            role = agentname.bare(entry['agent'])
+            if role in ROLE_AUTOCOMPACT:
+                args['autocompact'] = ROLE_AUTOCOMPACT[role]
     else:
         args['no_agent'] = True
     if entry.get('brief') and (entry.get('agent') or any_brief):
@@ -135,7 +138,9 @@ def entry_start_args(settings, key, entry, account, prompt, predecessor=None, na
 def start_entry(settings, host, key, account=None, prompt=None, whatif=False):
     """Start the sessions.json entry `key`. On the entry's own account it keeps the entry's recorded
     name (a recycle's <stem>-a<N>-r<M> included), so liveness, which checks that name, sees it come
-    back; on another account it is <stem>-a<N>. Refused while any session of its stem runs."""
+    back; on another account it is <stem>-a<N>. `account` may be a number, 'current' (the account this
+    process runs on, else pick-account's) or 'auto' (pick-account's). Refused while any session of its
+    stem runs."""
     sessions = state.read_sessions(settings)
     entry = sessions.get(key)
     if not isinstance(entry, dict) or not entry.get('stem'):
@@ -143,14 +148,25 @@ def start_entry(settings, host, key, account=None, prompt=None, whatif=False):
     if lookup.running_stem(host.processes(), entry['stem']):
         raise LaunchError("A session of '%s' (stem %s) is already running; stop it first or use handoff."
                           % (key, entry['stem']))
+    old = lookup.legacy_running(host.processes(), key, entry)   # one-release guard (W2b removes it)
+    if old:
+        raise LaunchError("A session under the old stem %s is running for '%s' (repo %s); stop it first "
+                          "(one-release guard for the conductor-to-coordinator rename)." % (old, key, entry.get('repo')))
+    out = []
+    if account == 'current':
+        account, note = A.resolve_current(settings, host.now(), host.environ)
+        if note:
+            out.append(note)
+    elif account == 'auto':
+        account = _pick_or(settings, host, account, out)
     same = not account or str(account) == str(entry.get('account'))
     account = account or entry.get('account')
     if prompt is None and entry.get('state'):
         prompt = ('Start up now: run your start-up routine, read %s, check in with the PM (the session named '
                   '%s), then continue the queue in the state note.' % (entry['state'], PM_NAME))
     name = entry.get('name') if same and entry.get('name') else None
-    return start(settings, host, whatif=whatif,
-                 **entry_start_args(settings, key, entry, str(account), prompt, name=name))
+    return out + start(settings, host, whatif=whatif,
+                       **entry_start_args(settings, key, entry, str(account), prompt, name=name))
 
 
 def _pick_or(settings, host, account, out, limit=A.HEADROOM_LIMIT):

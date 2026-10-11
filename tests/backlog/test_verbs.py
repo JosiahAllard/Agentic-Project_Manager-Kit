@@ -7,7 +7,7 @@ import unittest
 
 from kitlib.backlog.errors import NotFound, Refusal, Usage
 
-from tests.backlog.helpers import BRANCH, LEDGER_TEXT, TODAY, StoreCase, priced, rec
+from tests.backlog.helpers import BRANCH, TODAY, StoreCase, priced, rec
 
 OWNER_PRICED = dict(priority='2', priority_by='owner', priority_ruling='R-9001')
 OWNER_BLOCKED = dict(state='blocked', blocked_on='owner', owner_ask='which one?')
@@ -20,10 +20,10 @@ class VerbCase(StoreCase):
 class Add(VerbCase):
 
     def test_add_writes_an_unpriced_open_record(self):
-        self.verb('add', 'NEW', 'a new thing to do here', ['binding/src/**'], effort='s')
+        self.verb('add', 'NEW', 'a new thing to do here', ['link/src/**'], effort='s')
         r = self.get('NEW')
         self.assertEqual((r.get('priority'), r.get('priority_by'), r.get('state'), r.get('area'),
-                          r.get('effort')), ('-', '-', 'open', 'binding', 's'))
+                          r.get('effort')), ('-', '-', 'open', 'link', 's'))
         self.assertIn('## Why this is here', r.body)
 
     def test_add_refuses_a_taken_id_a_bad_id_and_a_bad_scope(self):
@@ -103,48 +103,28 @@ class Set(VerbCase):
             self.verb('set', 'NOPE', [('effort', ['s'])])
 
 
-class LedgerGates(VerbCase):
-    """With a configured ledger the entry itself is read, not just the id's shape."""
-    ledger_text = LEDGER_TEXT
+class RulingShapeOnly(VerbCase):
+    """A ruling id is taken on its word: only its shape and the record's own cites are checked."""
 
     def owner_price(self, ruling, rid='FOO'):
         return self.verb('set', rid, [('priority', ['1']), ('priority_by', ['owner'])],
                          ruling=ruling)
 
-    def test_a_typed_ruling_that_names_the_record_prices_it(self):
+    def test_any_well_shaped_id_prices_a_record(self):
         self.seed(rec('FOO'))
-        self.owner_price('R-9001')
-        self.assertEqual(self.get('FOO').get('priority_ruling'), 'R-9001')
+        self.owner_price('R-9999')
+        self.assertEqual(self.get('FOO').get('priority_ruling'), 'R-9999')
 
-    def test_refused_rulings(self):
-        self.seed(rec('FOO'), rec('ZED'))
-        cases = {'R-9003': 'repo column', 'R-9004': 'delegated', 'R-9006': 'pm-note',
-                 'R-9007': 'cite R-9001', 'R-9008': 'standing delegation', 'R-9999': 'not a ruling'}
-        for ruling, says in cases.items():
-            with self.assertRaises(Refusal, msg=ruling) as cm:
-                self.owner_price(ruling)
-            self.assertIn(says, str(cm.exception), ruling)
-        self.assertEqual(self.get('FOO').get('priority'), '-')
-
-    def test_no_standing_delegation_configured_refuses_no_id_for_it(self):
-        self.ledger.standing = None
-        self.seed(rec('FOO'))
-        with self.assertRaises(Refusal) as cm:        # still checked as an entry: `all` is not `kit`
-            self.owner_price('R-9008')
-        self.assertNotIn('standing delegation', str(cm.exception))
-        self.assertIn('repo column', str(cm.exception))
-
-    def test_a_release_needs_an_items_line_that_names_the_record(self):
-        self.seed(rec('ZED', **OWNER_BLOCKED), rec('FOO', **OWNER_BLOCKED))
+    def test_a_bad_shape_is_usage_and_one_ruling_is_one_change(self):
+        self.seed(rec('FOO', **OWNER_PRICED))
+        with self.assertRaises(Usage):
+            self.owner_price('R-12')
         with self.assertRaises(Refusal) as cm:
-            self.verb('unblock', 'ZED', ruling='R-9001')
-        self.assertIn('does not name `ZED`', str(cm.exception))
-        with self.assertRaises(Refusal) as cm:
-            self.verb('unblock', 'FOO', ruling='R-9005')
-        self.assertIn('no `Items:` last line', str(cm.exception))
-        self.assertEqual(self.get('ZED').get('state'), 'blocked')
+            self.owner_price('R-9001')
+        self.assertIn('One ruling, one change', str(cm.exception))
+        self.assertEqual(self.get('FOO').get('priority'), '2')
 
-    def test_retiring_an_owner_held_record_takes_a_ruling_that_names_it(self):
+    def test_retiring_an_owner_held_record_takes_a_ruling(self):
         self.seed(rec('FOO', **OWNER_BLOCKED))
         change = self.verb('retire', 'FOO', 'no longer wanted at all', ruling='R-9001')
         self.assertIsNone(self.get('FOO'))
@@ -152,32 +132,12 @@ class LedgerGates(VerbCase):
         self.assertEqual(change.subject, 'retires FOO: no longer wanted at all')
         self.assertNotIn('Owner said', ' '.join(change.lines))
 
-    def test_retiring_with_a_ruling_that_does_not_name_the_record_is_refused(self):
-        self.seed(rec('ZED', **OWNER_BLOCKED), rec('FOO', **OWNER_BLOCKED))
-        cases = {'R-9005': 'no `Items:` last line', 'R-9004': 'delegated', 'R-9003': 'repo column'}
-        with self.assertRaises(Refusal) as cm:
-            self.verb('retire', 'ZED', 'no longer wanted at all', ruling='R-9001')
-        self.assertIn('does not name `ZED`', str(cm.exception))
-        for ruling, says in cases.items():
-            with self.assertRaises(Refusal, msg=ruling) as cm:
-                self.verb('retire', 'FOO', 'no longer wanted at all', ruling=ruling)
-            self.assertIn(says, str(cm.exception), ruling)
-        self.assertIsNotNone(self.get('ZED'))
-        self.assertIsNotNone(self.get('FOO'))
-
-    def test_a_delegated_ruling_releases_an_owner_hold(self):
+    def test_any_well_shaped_id_releases_an_owner_hold(self):
         self.seed(rec('FOO', **OWNER_BLOCKED))
         self.verb('unblock', 'FOO', ruling='R-9004')
         r = self.get('FOO')
         self.assertEqual((r.get('state'), r.get('hold_ruling'), r.get('owner_ask')),
                          ('open', 'R-9004', None))
-
-    def test_without_a_ledger_only_the_shape_is_checked(self):
-        self.ledger.path = None
-        self.seed(rec('ZED'))
-        self.owner_price('R-9003', rid='ZED')
-        with self.assertRaises(Usage):
-            self.owner_price('R-12', rid='ZED')
 
 
 class BlockUnblock(VerbCase):
@@ -312,7 +272,7 @@ class CloseRetire(VerbCase):
 
 class MachinePaths(VerbCase):
     """Free text that carries a machine path is refused (Usage) before any write, in every verb."""
-    DRIVES = ('C:' + chr(92) + 'Users' + chr(92) + 'nick', 'C:/Users/nick')
+    DRIVES = ('C:' + chr(92) + 'Users' + chr(92) + 'nick', 'C:' + '/Users/nick')
 
     def refused(self, name, *args, **kw):
         before = self.remote_tip()
@@ -326,7 +286,7 @@ class MachinePaths(VerbCase):
         for d in self.DRIVES:
             text = 'see %s for the details' % d
             with self.subTest(drive=d):
-                self.refused('add', 'NEW', text, ['binding/src/**'])
+                self.refused('add', 'NEW', text, ['link/src/**'])
                 self.refused('set', 'FOO', [('summary', [text])])
                 self.refused('block', 'BAR', ['owner'], owner_ask=text)
                 self.refused('pull', 'FOO', reason=text)

@@ -159,7 +159,7 @@ class Verdicts(Fakes):
         self.assertIn('no_such_module_anywhere', out)
 
     def test_a_unit_that_dies_without_output_is_named_with_its_exit_code(self):
-        # PYTESTS-SILENT-CHILD-EXIT: the log said only `(0 tests, 0s, FAILED)`; now it says how.
+        # The log once said only `(0 tests, 0s, FAILED)`; now it says how.
         self.write('test_silent', 'import os\nos._exit(1)\n')
         code, out = self.run_modules(['test_silent'])
         self.assertEqual(code, 1, out)
@@ -242,15 +242,15 @@ class Verdicts(Fakes):
             body += textwrap.dedent('''
                 class C%d(unittest.TestCase):
                     def test_it(self):
-                        print('RAN-C%d')
+                        print('EX-RAN-C%d')
                 ''' % (i, i))
         self.write('test_many', body)
         code, out = self.run_modules(['test_many'], cfg=cfg(shards={'test_many': 3}))
         self.assertEqual(code, 0, out)
         self.assertEqual([h.split()[1] for h in self.headers(out)],
                          ['test_many[1/3]', 'test_many[2/3]', 'test_many[3/3]'])
-        ran = sorted(re.findall(r'RAN-C\d', out))
-        self.assertEqual(ran, ['RAN-C%d' % i for i in range(7)])
+        ran = sorted(re.findall(r'EX-RAN-C\d', out))
+        self.assertEqual(ran, ['EX-RAN-C%d' % i for i in range(7)])
 
     def test_split_classes_runs_one_unit_per_class(self):
         self.write('test_two_classes', '''
@@ -279,7 +279,7 @@ class Verdicts(Fakes):
         self.assertEqual([h.split()[1] for h in self.headers(out)], ['test_two_classes'])
 
     def test_a_unit_runs_with_auto_gc_and_maintenance_off(self):
-        # TOOLS-GIT-SPAWN-DIET: the child sets it itself (kitlib.git.batch.fixture_env), so a
+        # The child sets it itself (kitlib.git.batch.fixture_env), so a
         # module that sets nothing still makes no `maintenance run --auto` per fixture commit.
         self.write('test_env', 'import os, unittest\nclass E(unittest.TestCase):\n'
                                '    def test_e(self):\n'
@@ -460,7 +460,7 @@ class Timeouts(Fakes):
 
 
 class TheShield(Fakes):
-    """PYTESTS-SILENT-CHILD-EXIT: a unit's own process refuses a kill by its pid (shield_unit) - a
+    """A unit's own process refuses a kill by its pid (shield_unit) - a
     stale `taskkill /PID <n> /T /F` meant for a dead shell cannot end it - while the runner's job
     still does (TerminateJobObject: Timeouts above; KILL_ON_JOB_CLOSE: here)."""
 

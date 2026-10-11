@@ -7,7 +7,6 @@ launcher/pm_watch.py at 95f7262. Transcript reading is host-specific and lives i
 import json
 import os
 import re
-import subprocess
 import time
 
 from kitlib.config import user as kuser
@@ -53,6 +52,86 @@ def save_state(path, s):
     os.replace(tmp, path)
 
 
+def heartbeat_file(state_path):
+    """The heartbeat file beside the state file: separate, so the state keys stay those of the
+    PM repo's copy (which shares the state file)."""
+    return state_path + ".beat"
+
+
+def _number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def write_heartbeat(path, pid, now, stream, started=None):
+    """Record that pm_watch `pid` polled at `now` (epoch seconds); `stream` is its --stream flag and
+    `started` its process start time (epoch seconds, None when unknown), so a reused pid is not
+    taken for the watcher. kitlib.pmstart.watcher reads it to tell a live watcher from a hung or
+    exited one."""
+    save_state(path, {"pid": pid, "beat": now, "stream": bool(stream), "started": started})
+
+
+def read_heartbeat(path):
+    """The heartbeat dict, or None when the file is missing, unreadable or malformed. "started"
+    is a number or None (None also for a heartbeat written without it)."""
+    hb = load_state(path)
+    if not isinstance(hb, dict) or type(hb.get("pid")) is not int or not _number(hb.get("beat")):
+        return None
+    if hb.get("started") is not None and not _number(hb["started"]):
+        return None
+    return dict(hb, started=hb.get("started"))
+
+
+_EPOCH_AS_FILETIME = 116444736000000000     # 1970-01-01 in 100 ns ticks since 1601-01-01
+
+
+def own_start_time():
+    """This process's start time in epoch seconds (kernel32 GetProcessTimes), None when it cannot
+    be read. The same clock as the CreationDate kitlib.pmstart.list_processes reports."""
+    import ctypes
+    from ctypes import wintypes
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        times = [wintypes.FILETIME() for _ in range(4)]
+        ok = k32.GetProcessTimes(wintypes.HANDLE(k32.GetCurrentProcess()),
+                                 *[ctypes.byref(t) for t in times])
+    except (OSError, AttributeError):
+        return None
+    if not ok:
+        return None
+    ticks = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+    return (ticks - _EPOCH_AS_FILETIME) / 1e7
+
+
+POLL_SLEEP = 30       # seconds between passes
+
+
+def run(w, clock, sleep, save, emit, beat, once=False, stream=False):
+    """The watcher loop over Watcher `w`. Each pass polls, saves the state (`save(state)`) and,
+    except with `once`, calls `beat(now)`. Events go to `emit` as one text. Without `stream` the
+    first events end the run (the PM relaunches it); with `stream` it keeps polling, for a run
+    under Monitor. `once`: one pass, then 0. Returns the exit code. A beat that raises OSError
+    (a locked or read-only heartbeat file, os.replace refused) is skipped, never fatal: the
+    heartbeat goes stale and the PM start check says so, while the events keep flowing."""
+    w.start(clock())
+    save(w.s)
+    while True:
+        events = w.poll(clock())
+        save(w.s)
+        if not once:
+            try:
+                beat(clock())
+            except OSError:
+                pass
+        if events:
+            emit("\n".join(events))
+            if not stream:
+                return 0
+        if once:
+            return 0
+        sleep(POLL_SLEEP)
+
+
 def branch_tip(repo, ref):
     args = ["ls-remote", "origin", ref]
     r = gitcmd.subprocess_run(["git", "-C", repo] + args, capture_output=True, text=True, timeout=60,
@@ -84,17 +163,13 @@ def launcher_configured(home=None):
         return False
 
 
-def usage(script=None, report=None):
-    """Every account's usage. No script: read in this process (kitlib.launcher.usage, from the
-    launcher settings of the machine config); else the lines a PowerShell script prints."""
-    if not script:
-        if report is None:
-            from kitlib.launcher import settings as launcher_settings, usage as launcher_usage
-            report = lambda: launcher_usage.report(launcher_settings.load())
-        return parse_usage("\n".join(report()))
-    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
-                       capture_output=True, text=True, timeout=120)
-    return parse_usage(r.stdout)
+def usage(report=None):
+    """Every account's usage, read in this process (kitlib.launcher.usage, from the launcher
+    settings of the machine config). `report` replaces that reader (a callable giving the lines)."""
+    if report is None:
+        from kitlib.launcher import settings as launcher_settings, usage as launcher_usage
+        report = lambda: launcher_usage.report(launcher_settings.load())
+    return parse_usage("\n".join(report()))
 
 
 def band(v, bands):
@@ -260,18 +335,37 @@ def idle_events(names, newest, fired, nolog, now, minutes):
     return ev, cur, miss
 
 
+def plugin_check(kit=None, settings=None, spawn=None, alive=None, folders=None):
+    """The PLUGIN check for Watcher: check(last) -> (lines, last), over kitlib.pluginsource.poll
+    (docs/plugin-source.md "Behind warnings"). `last` is the kit main sha last reported (None when
+    current), kept in the state file so a relaunch does not report the same sha again. With no
+    `settings` the machine config's plugin key is read on every call, so a bad key is a failed
+    check (ERROR on the third), never a dead watcher, and so is an unreadable tracking ref or
+    state.json; with no `kit`, the checkout this code is in; with no `folders`, this machine's
+    account folders."""
+    from kitlib import pluginsource
+
+    def check(last):
+        s = pluginsource.load() if settings is None else settings
+        return pluginsource.poll(kit or pluginsource.kit_root(), s, last, spawn=spawn, alive=alive,
+                                 folders=folders)
+    return check
+
+
 class Watcher:
     """One watcher run. start() records baselines; poll(now) runs the checks that are due and
     returns their event lines. The caller saves state after each poll and stops at the first
     non-empty one. Every check gives an ERROR line on its third failure in a row.
 
     branches: [(repo_dir, ref)]; usage_reader() -> {account: {"five", "week"}};
-    sessions: path of sessions.json; newest(name) -> mtime or None; tip(repo, ref) -> short sha.
+    sessions: path of sessions.json; newest(name) -> mtime or None; tip(repo, ref) -> short sha;
+    plugin: check(last) -> (lines, last) (plugin_check), or None for no PLUGIN check. Unlike the
+    others it has no baseline: a plugin export already behind at the first run is reported then.
     """
 
     def __init__(self, state, branches, usage_reader, alerts_dir, sessions, newest,
                  idle_minutes=20, branch_poll=300, usage_poll=600, idle_poll=300, tip=branch_tip,
-                 notice_dir=None):
+                 notice_dir=None, plugin=None):
         self.s = state
         self.branches = branches
         self.usage_reader = usage_reader
@@ -282,8 +376,9 @@ class Watcher:
         self.branch_poll, self.usage_poll, self.idle_poll = branch_poll, usage_poll, idle_poll
         self.tip = tip
         self.notice_dir = notice_dir
-        self.fails = {"branch": 0, "usage": 0, "alerts": 0, "idle": 0, "notices": 0}
-        self.next_b = self.next_u = self.next_i = 0.0
+        self.plugin = plugin
+        self.fails = {"branch": 0, "usage": 0, "alerts": 0, "idle": 0, "notices": 0, "plugin": 0}
+        self.next_b = self.next_u = self.next_i = self.next_p = 0.0
 
     def start(self, now):
         s = self.s
@@ -354,4 +449,12 @@ class Watcher:
                 self.fails["notices"] = 0
             except Exception as e:
                 self._failed("notices", e, events)
+        if self.plugin and now >= self.next_p:      # on the branch cadence: a ref read, a json read
+            self.next_p = now + self.branch_poll
+            try:
+                ev, s["plugin_main"] = self.plugin(s.get("plugin_main"))
+                events += ["PLUGIN %s" % line for line in ev]
+                self.fails["plugin"] = 0
+            except Exception as e:
+                self._failed("plugin", e, events)
         return events

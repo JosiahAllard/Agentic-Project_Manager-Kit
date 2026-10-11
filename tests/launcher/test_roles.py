@@ -5,7 +5,10 @@ import unittest
 
 from kitlib import sessionmark
 from kitlib.launcher import reboot, start, window
+from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
 from tests.launcher.fakes import FakeHost, Home, role_of
+
+P = CLAUDE_PLUGIN_NAME + ':'
 
 
 class RoleFor(unittest.TestCase):
@@ -17,6 +20,18 @@ class RoleFor(unittest.TestCase):
         self.assertEqual(window.role_for('deep-worker'), 'deep-worker')
         self.assertEqual(window.role_for('consultant'), 'consultant')
         self.assertEqual(window.role_for('reviewer'), 'reviewer')
+
+    def test_the_plugin_prefixed_agent_gets_the_bare_agents_mark(self):
+        # docs/guard.md "Agent names": the mark never carries the prefix
+        self.assertEqual(window.role_for(P + 'deep-worker'), 'deep-worker')
+        self.assertEqual(window.role_for(P + 'consultant'), 'consultant')
+        self.assertEqual(window.role_for(P + 'conductor'), 'coordinator')
+        self.assertEqual(window.role_for(P + 'reviewer'), 'reviewer')
+        self.assertEqual(window.role_for(P + 'coordinator', P + 'coordinator'), 'coordinator')
+        self.assertEqual(window.role_for('lead', P + 'lead'), 'coordinator')
+        self.assertEqual(window.role_for(P + 'lead', 'lead'), 'coordinator')
+        # another plugin's prefix is not read off
+        self.assertEqual(window.role_for('other:deep-worker'), 'other:deep-worker')
 
     def test_the_env_name_is_the_session_mark_and_a_script_needs_a_role(self):
         self.assertEqual(window.ROLE_ENV, sessionmark.ENV)
@@ -55,6 +70,13 @@ class EveryKind(unittest.TestCase):
         start.start(self.h.settings, self.host, repo='alpha', account='2', agent='reviewer')
         self.assertEqual(role_of(self.only_window()), 'reviewer')
 
+    def test_start_with_a_plugin_prefixed_agent_marks_the_bare_agent(self):
+        out = start.start(self.h.settings, self.host, repo='alpha', account='2', agent=P + 'reviewer')
+        text = self.only_window()
+        self.assertEqual(role_of(text), 'reviewer')
+        self.assertIn('--agent %sreviewer ' % P, text)       # started as given
+        self.assertIn('alpha-reviewer-a2', out[0])            # named without the prefix
+
     def test_start_without_an_agent_is_plain(self):
         start.start(self.h.settings, self.host, repo='alpha', account='1', no_agent=True)
         text = self.only_window()
@@ -86,7 +108,7 @@ class EveryKind(unittest.TestCase):
                       'name': 'alpha-coord-a1'},
             'helper': {'repo': 'alpha', 'agent': False, 'stem': 'alpha-helper', 'brief': 'b.md', 'state': 's.md',
                        'account': 1, 'name': 'alpha-helper-a1'}})
-        self.h.write_state('conductors.json', {'alpha': 1, 'pm_session_id': 'abc-123', 'pm_folder': self.h.root,
+        self.h.write_state('coordinators.json', {'alpha': 1, 'pm_session_id': 'abc-123', 'pm_folder': self.h.root,
                                                'pm_account': 2})
         reboot.run(self.h.settings, self.host)
         roles = sorted(role_of(t) for t in self.host.opened)

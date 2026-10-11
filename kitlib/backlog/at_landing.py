@@ -18,7 +18,6 @@ from kitlib import pmdata
 from kitlib.git import cmd, refs
 from kitlib.git import repo as gitrepo
 
-from . import ledger as lmod
 from . import plan as pmod
 from . import record as rmod
 from . import store as smod
@@ -180,8 +179,7 @@ def close_landed(root, cfg, branch, merge, session=SESSION):
         return [_store_unread(branch, '%s: %s' % (exc.label, exc), root)]
     held = sorted(r.stem for r in snap.readable           # the store's lookup key (Snapshot.by_id)
                   if r.get('state') == 'pulled' and r.get('pulled_by') == branch)
-    ctx = pmod.Context(store, lmod.Ledger(None, ()), root, remote=cfg.remote,
-                       main_branch=cfg.main_branch, branch=branch)
+    ctx = pmod.Context(store, root, remote=cfg.remote, main_branch=cfg.main_branch, branch=branch)
     lines = []
     for rid in held:
         try:

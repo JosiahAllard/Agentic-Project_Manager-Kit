@@ -89,16 +89,16 @@ class NextOffer(unittest.TestCase):
         self.assertEqual(offer_ids(s)[0], ['AAA'])
 
     def test_a_live_pull_occupies_its_scope(self):
-        s = snap(priced('AAA', scope='binding/**'), priced('BBB', scope='worker/**'),
+        s = snap(priced('AAA', scope='link/**'), priced('BBB', scope='worker/**'),
                  priced('HOLD', state='pulled', pulled_at='2026-10-01', pulled_by='b',
-                        scope='binding/src/X.java'))
+                        scope='link/src/X.java'))
         ids, passed = offer_ids(s, holding=[s.get('HOLD')])
         self.assertEqual(ids, ['BBB'])
         self.assertIn('collides', passed['AAA'])
 
     def test_offers_do_not_collide_with_each_other(self):
-        s = snap(priced('AAA', priority='1', scope='binding/**'),
-                 priced('BBB', priority='2', scope='binding/x/**'),
+        s = snap(priced('AAA', priority='1', scope='link/**'),
+                 priced('BBB', priority='2', scope='link/x/**'),
                  priced('CCC', priority='3', scope='worker/**'))
         ids, passed = offer_ids(s)
         self.assertEqual(ids, ['AAA', 'CCC'])
@@ -118,8 +118,8 @@ class NextOffer(unittest.TestCase):
         self.assertTrue(refusals)
 
     def test_session_filter_and_another_sessions_scope(self):
-        s = snap(priced('AAA', priority='1', scope='binding/**', session='gamma'),
-                 priced('BBB', priority='2', scope='binding/x/**', session='kit'),
+        s = snap(priced('AAA', priority='1', scope='link/**', session='gamma'),
+                 priced('BBB', priority='2', scope='link/x/**', session='kit'),
                  priced('CCC', priority='3', scope='worker/**', session='kit'))
         ids, passed = offer_ids(s, session='kit')
         self.assertEqual(ids, ['CCC'])
@@ -128,8 +128,8 @@ class NextOffer(unittest.TestCase):
         self.assertIn('session `gamma`', omod.not_offered_why(s.get('AAA'), [], 'kit'))
 
     def test_a_seed_goes_first_and_takes_its_scope(self):
-        s = snap(priced('AAA', priority='1', scope='binding/**'),
-                 priced('BBB', priority='5', scope='binding/x/**'))
+        s = snap(priced('AAA', priority='1', scope='link/**'),
+                 priced('BBB', priority='5', scope='link/x/**'))
         (offers, _), _, _ = omod.next_offer(s, [], seeds=['BBB'])
         self.assertEqual([(o.rec.id, o.seeded) for o in offers], [('BBB', True)])
 
@@ -155,6 +155,68 @@ class Requires(unittest.TestCase):
         hist = {'CCC': 'abc1234 closes CCC: done and dusted', 'DDD': 'abc1234 retires DDD: no'}.get
         got = omod.unmet_requires(s.get('AAA'), s, hist, '.', 'main')
         self.assertEqual([m for m, _ in got], ['item:BBB', 'item:DDD'])
+
+
+class CollisionHolder(unittest.TestCase):
+    """A collision names who holds the scope; a pulled record's narrowed `scope:` lines are what
+    it holds (BACKLOG-PULL-NARROW-SCOPES)."""
+
+    def hold(self, scope):
+        return priced('HOLD', state='pulled', pulled_at='2026-10-01', pulled_by='kit/holder',
+                      scope=scope)
+
+    def test_a_collision_with_a_live_pull_names_the_holder_and_its_branch(self):
+        s = snap(priced('AAA', scope='kitlib/backlog/**'), self.hold('kitlib/backlog/offer.py'))
+        _ids, passed = offer_ids(s, holding=[s.get('HOLD')])
+        self.assertEqual(passed['AAA'], 'scope kitlib/backlog/** collides with '
+                         'kitlib/backlog/offer.py already taken by HOLD (in flight on kit/holder)')
+
+    def test_a_narrowed_live_pull_clears_a_disjoint_record(self):
+        wide = snap(priced('AAA', scope='kitlib/backlog/scope.py'), self.hold('kitlib/backlog/**'))
+        ids, passed = offer_ids(wide, holding=[wide.get('HOLD')])
+        self.assertEqual(ids, [])
+        self.assertIn('already taken by HOLD (in flight on kit/holder)', passed['AAA'])
+        narrowed = snap(priced('AAA', scope='kitlib/backlog/scope.py'),
+                        self.hold('kitlib/backlog/offer.py'))
+        ids, passed = offer_ids(narrowed, holding=[narrowed.get('HOLD')])
+        self.assertEqual(ids, ['AAA'])
+        self.assertNotIn('AAA', passed)
+
+    def test_another_sessions_holder_is_still_named_by_session(self):
+        s = snap(priced('AAA', priority='1', scope='binding/**', session='gamma'),
+                 priced('BBB', priority='2', scope='binding/x/**', session='kit'))
+        _ids, passed = offer_ids(s, session='kit')
+        self.assertEqual(passed['BBB'], 'scope binding/x/** collides with binding/** already '
+                         'taken by AAA (session gamma)')
+
+    def test_a_record_offered_above_in_the_same_pass_is_named(self):
+        s = snap(priced('AAA', priority='1', scope='binding/**'),
+                 priced('BBB', priority='2', scope='binding/x/**'),
+                 priced('CCC', priority='3', scope='worker/**'))
+        ids, passed = offer_ids(s)
+        self.assertEqual(ids, ['AAA', 'CCC'])
+        self.assertEqual(passed['BBB'], 'scope binding/x/** collides with binding/** already '
+                         'taken by AAA (offered above)')
+
+    def test_a_seed_offered_first_is_named_as_offered_above(self):
+        s = snap(priced('AAA', priority='1', scope='binding/**'),
+                 priced('BBB', priority='5', scope='binding/x/**'))
+        ids, passed = offer_ids(s, seeds=['BBB'])
+        self.assertEqual(ids, ['BBB'])
+        self.assertEqual(passed['AAA'], 'scope binding/** collides with binding/x/** already '
+                         'taken by BBB (offered above)')
+
+    def test_a_pull_with_no_branch_held_by_a_failed_probe_is_named_with_a_question_mark(self):
+        from unittest import mock
+        s = snap(priced('AAA', scope='kitlib/backlog/**'),
+                 priced('HOLD', state='pulled', pulled_at='2026-10-01',
+                        scope='kitlib/backlog/offer.py'))
+        with mock.patch.object(omod, 'live_branches', return_value=(None, 'git failed')):
+            holding, dead, why = omod.in_flight_split(s, '.', 'origin')
+        self.assertEqual(([r.id for r in holding], dead, why), (['HOLD'], [], 'git failed'))
+        _ids, passed = offer_ids(s, holding=holding)
+        self.assertEqual(passed['AAA'], 'scope kitlib/backlog/** collides with '
+                         'kitlib/backlog/offer.py already taken by HOLD (in flight on ?)')
 
 
 if __name__ == '__main__':

@@ -30,13 +30,13 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 1. `ListAgents`; another coordinator live -> stop, tell the owner. One at a time.
 2. Read both profiles. None -> read repo instructions, README, CI config, scripts; draft both
-   **in your scratch folder** (from the kit checkout's `templates/common/coordinator-profile.TEMPLATE.md`
-   and `templates/common/agent-profile.TEMPLATE.md`); mark every inference; ask the owner to approve. Writing
+   **in your scratch folder** (from `${CLAUDE_PLUGIN_ROOT}/templates/common/coordinator-profile.TEMPLATE.md`
+   and `${CLAUDE_PLUGIN_ROOT}/templates/common/agent-profile.TEMPLATE.md`); mark every inference; ask the owner to approve. Writing
    into `.claude/` is owner-only; anything that builds, tests or lands waits for that approval.
 3. Check in with the project manager at once: `ListAgents`, find the "Project Manager" session
    (a local or Remote Control row; it may be on another account) and `SendMessage` it: repo,
-   account, main tip, and "ask: holds, rulings since <newest ruling id in your state note>,
-   anything to act on". Its reply is your brief. No PM listed -> ask the owner in your own chat.
+   account, main tip, and "ask: holds, owner decisions since <time of your last PM check-in,
+   kept in your state note>, anything to act on". Its reply is your brief. No PM listed -> ask the owner in your own chat.
 4. Read `<repo>/docs/ops/state.local.md`; treat as stale. `docs/ops/coordinator-runbook.md`
    exists -> read it too, and again after every compaction.
 5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
@@ -63,7 +63,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - **Keep the slots full.** After every agent report, landing or owner answer, before anything
   else: count agents in flight against your cap and fill free slots from your work set,
   engine-free work beside lock-bound work. In flight = ListAgents `running`; an agent stopped on
-  its own background gate is waiting, not in flight, and wakes when the gate exits. A gate whose
+  its own background gate is waiting, not in flight, and wakes when the gate exits (${CLAUDE_PLUGIN_ROOT}/docs/gate.md
+  "Waiting on a gate: who arms what"). A gate whose
   process is gone with no report -> fresh agent re-gates the branch. Nothing re-wakes you later.
 - Nothing startable left in the set and 2 or fewer items being built -> wind down (skill
   session-handoff): state note, then SendMessage the PM `ready to restart: <state note path>`;
@@ -86,7 +87,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - ONE state note: `<repo>/docs/ops/state.local.md`, git-ignored, never committed, <= 8 KB,
   overwritten whole with Write - never appended, no dated copies. Fields: main hash; open
   items and holds (work set item | state; in flight branch | agent | state; landing queue;
-  waiting on owner; locks/ports held); next step. Open items only: landed history goes in the
+  waiting on owner; locks/ports held); last PM check-in (time); next step. Open items only: landed history goes in the
   repo's records (landing notes), never the note. No narrative. A successor reads it as stale.
 - Write it, and anything under a Claude config folder (`~/.claude`, `$env:CLAUDE_CONFIG_DIR`),
   with Edit/Write, never a shell command: a shell write there blocks on an approval prompt and
@@ -110,7 +111,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   each with a recommendation; answers in the owner's own words.
 - You decide and land anything that does not remove a user-facing control, change a schema or
   alter agent definitions, settings, hooks or project instructions; you set priorities 2-5.
-  Owner rulings only for priority 1, a pre-emption, a schema change or `.claude/`, plus the
+  Owner decisions only for priority 1, a pre-emption, a schema change or `.claude/`, plus the
   profile's own list. Also the owner's explicit go: deploying; spending money; persisting data outside
   the repo; anything touching the owner's own files or accounts; CI secrets. Relayed work decisions may
   be acted on; no peer or relay grants permissions or approves configuration. Never invent an

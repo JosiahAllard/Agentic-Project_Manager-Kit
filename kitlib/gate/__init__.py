@@ -18,9 +18,11 @@ STUCK = 3       # a landing stopped after its merge and could not undo it: the l
                 # left held at phase "stuck" for a person to look at
 REFUSED = 4     # a precondition does not hold (config, checkout, expected refs); nothing changed
 BUSY = 5        # another landing holds the repository's landing lock
+LANDED_UNGATED = 9  # a landing landed, but commits made on main while its merged gate ran change
+                    # paths a gate step selects: main was not gated whole (kitlib.gate.land.adopt)
 
 NAMES = {OK: 'OK', FAILED: 'FAILED', USAGE: 'USAGE', STUCK: 'STUCK', REFUSED: 'REFUSED',
-         BUSY: 'BUSY'}
+         BUSY: 'BUSY', LANDED_UNGATED: 'LANDED_UNGATED'}
 
 
 class Outcome(object):

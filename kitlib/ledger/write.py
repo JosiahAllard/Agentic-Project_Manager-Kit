@@ -2,7 +2,8 @@
 
 The file is the machine config's `ledger_path` (tools/ledger.py reads it; this module takes the
 path). A missing file starts from the template (kitlib.ledger.fmt.template_text). Every write
-validates the whole ledger before and after, and replaces the file atomically, LF only. Nothing
+validates the whole ledger before and after, and replaces the file atomically, LF only. A path the
+ledger's path checks refuse (kitlib.ledger.safepath) is never read or written. Nothing
 here prints or exits: Usage and Refused (kitlib.ledger.errors) carry the refusal.
 """
 import collections
@@ -12,13 +13,22 @@ import re
 import tempfile
 
 from . import fmt as E
+from . import safepath
 from .errors import Refused, Usage
 
 Added = collections.namedtuple('Added', 'id warnings')
 
 
+def refuse_unsafe(path):
+    """Refused when the ledger's path checks (kitlib.ledger.safepath) refuse `path`."""
+    why = safepath.refusal(path)
+    if why is not None:
+        raise Refused(why)
+
+
 def read_text(path):
     """The ledger text, LF; the template when the file does not exist yet."""
+    refuse_unsafe(path)
     if not os.path.exists(path):
         return E.template_text()
     try:
@@ -29,6 +39,7 @@ def read_text(path):
 
 
 def write_atomic(path, text):
+    refuse_unsafe(path)
     folder = os.path.dirname(path)
     os.makedirs(folder, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=folder, prefix='.ledger-')

@@ -124,18 +124,18 @@ class Stop(unittest.TestCase):
         self.assertEqual(host.killed, [(11, 1011)])
         self.assertTrue(out[0].endswith('(picked by --pid)'))
 
-    def test_the_pm_session_id_from_conductors_json_is_refused_and_a_placeholder_ignored(self):
+    def test_the_pm_session_id_from_coordinators_json_is_refused_and_a_placeholder_ignored(self):
         procs = windowed('x-a1')
         procs[0]['CommandLine'] += ' --resume sid-1'
-        self.h.write_state('conductors.json', {'pm_session_id': 'sid-1'})
+        self.h.write_state('coordinators.json', {'pm_session_id': 'sid-1'})
         self.refused('PID 10 is the PM session', 'x-a1', procs)
-        self.h.write_state('conductors.json', {'pm_session_id': '<the PM session id>'})
+        self.h.write_state('coordinators.json', {'pm_session_id': '<the PM session id>'})
         host = self.host(procs)
         stop.stop(self.h.settings, host, 'x-a1', dry_run=True)
 
     def test_a_pm_session_id_that_is_not_a_string_counts_as_unset(self):
         for value in (None, 12345, ['sid-1']):
-            self.h.write_state('conductors.json', {'pm_session_id': value})
+            self.h.write_state('coordinators.json', {'pm_session_id': value})
             host = self.host(windowed('x-a1'))
             out = stop.stop(self.h.settings, host, 'x-a1')
             self.assertEqual(host.killed, [(10, 1010), (20, 1020), (30, 1030)], value)

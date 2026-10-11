@@ -40,6 +40,7 @@ import os
 import posixpath
 import re
 
+from kitlib import agentname
 from kitlib import config as kconfig
 from kitlib import pmdata
 from kitlib.git import repo
@@ -188,11 +189,13 @@ def agent_session(event, ctx):
     """True for a subagent, or a session whose mark is one of guard_agent_marks (default
     AGENT_MARKS: coordinator, its old name conductor, deep-worker, consultant and pm), case
     ignored; a guard_agent_marks value replaces the default list. The rules only agents are held to (kill by name, lock state,
-    kit-json, the write jail) use it."""
+    kit-json, the write jail) use it. The mark is compared without the kit plugin's prefix
+    (kitlib.agentname.bare_mark), so a role_resolver that does not strip it fails closed too."""
     if (event or {}).get('agent_id'):
         return True
     marks = ctx.user().get('guard_agent_marks') or AGENT_MARKS
-    return str(ctx.session_role(event) or '').lower() in {str(m).lower() for m in marks}
+    who = agentname.bare_mark(str(ctx.session_role(event) or ''))
+    return who.lower() in {str(m).lower() for m in marks}
 
 
 # every session kind the kit launcher marks but `plain` and other agents' names; 'conductor' is the
@@ -558,11 +561,11 @@ def kit_json(event, ctx, target, role, what):
 
 
 def session_mark(event, ctx):
-    """The launcher mark of a main session (guard_mark_roots looks it up), or None for a subagent
-    and the owner's unmarked session."""
+    """The launcher mark of a main session without the kit plugin's prefix (guard_mark_roots looks
+    it up), or None for a subagent and the owner's unmarked session."""
     if (event or {}).get('agent_id'):
         return None
-    who = ctx.session_role(event)
+    who = agentname.bare_mark(ctx.session_role(event))
     return None if who in (context.OWNER, context.SUBAGENT) else who
 
 
@@ -1048,15 +1051,20 @@ def write_targets(cmd, inv):
         if cmdlet in PS_CMDLETS and cmdlet != 'get-childitem':
             spec = PS_CMDLETS[cmdlet]
             bound = ps_args(cmd, args, cmdlet)
+            # a provider-aware cmdlet's item on a drive that holds no files (env:FOO) is no file;
+            # every other writer (a native program, a script function, Out-File) gets a file
+            native = name not in PS_PROVIDER_CMDLETS or inv.via is not None
             for p in spec.writes:
-                out.extend(bound.get(p, []))
+                out.extend(x for x in bound.get(p, []) if native or not ps_provider_item(cmd, x))
             if cmdlet == 'expand-archive' and not bound.get('destinationpath'):
                 out.append(here(word))
             if cmdlet == 'new-item' and bound.get('name'):
                 base = (bound.get('path') or [None])[0]
                 for n in bound['name']:
-                    out.append(sh.Word(ntpath.join(base.text, n.text) if base is not None else n.text,
-                                       n.dyn or (base is not None and base.dyn), n.start, n.end))
+                    x = sh.Word(ntpath.join(base.text, n.text) if base is not None else n.text,
+                                n.dyn or (base is not None and base.dyn), n.start, n.end)
+                    if native or not ps_provider_item(cmd, x):
+                        out.append(x)
             if name not in ('curl', 'wget'):
                 return out
         elif cmdlet.startswith('export-') and cmdlet not in PS_CMDLETS:
@@ -1266,6 +1274,80 @@ def into_folder(target, w, into, cwd):
                 return [target]
         out.append(os.path.join(target, base))
     return out
+
+
+# A PowerShell item on a built-in drive that holds no files: env:FOO, Env:\FOO, variable:x,
+# function:f, alias:a, HKCU:\x, HKLM:/x, Cert:\x, WSMan:\x, or the provider spelled out
+# (Environment::FOO, Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\x). Temp: and
+# FileSystem:: hold files and are not here.
+PS_PROVIDER_ITEM_RE = re.compile(
+    r'(?i)^(?:(?:env|variable|function|alias|hkcu|hklm|cert|wsman):'
+    r'|(?:microsoft\.(?:powershell\.(?:core|security)|wsman\.management)\\)?'
+    r'(?:environment|variable|function|alias|registry|certificate|wsman)::)')
+DOTDOT_RE = re.compile(r'(?:^|[\\/:])\.\.(?:[\\/]|$)')
+# A line that may remap a drive name to a folder (New-PSDrive env FileSystem <folder>) or run code
+# the text does not show: there env:x may be a file, so it is judged as one. Matched against the
+# raw line and against each word as the parser decodes it (n`dr reads ndr, 'New-PSDr'+'ive' reads
+# New-PSDr+ive).
+PS_DRIVE_REMAP_RE = re.compile(r'(?im)drive|psdr|\b(?:ndr|rdr|mount|iex|ipmo)\b|invoke-expression|import-module'
+                               r'|\.ps1\b|\.psm1\b|scriptblock|sessionstate|(?:^|[;&|({])\s*\.\s')
+# Session objects, .NET types and static calls a line may reach a drive through
+PS_DOTNET_RE = re.compile(r'(?im)\$executioncontext|\$host\b|new-object|add-type|^\s*using\b|[\])]\s*::')
+# The provider-aware item and content cmdlets, as the line names them (the canonical name or one
+# of these aliases): their item on a drive that holds no files is no file. Script functions
+# (Compress-Archive, mkdir) and the file-only writers (Out-File, Tee-Object, Export-*,
+# Start-Transcript, Invoke-WebRequest -OutFile) are not here and are judged as files.
+PS_PROVIDER_CMDLETS = frozenset(('new-item', 'set-content', 'add-content', 'clear-content', 'remove-item',
+                                 'rename-item', 'move-item', 'copy-item', 'set-itemproperty',
+                                 'ni', 'sc', 'ac', 'clc', 'ri', 'del', 'rni', 'mi', 'move', 'cpi', 'copy', 'sp'))
+# Read-only cmdlets a line of provider items may also hold
+PS_READ_CMDLETS = frozenset(('get-item', 'gi', 'get-content', 'gc', 'get-childitem', 'gci', 'test-path',
+                             'get-location', 'gl', 'pwd', 'write-output', 'echo', 'write-host'))
+# The one native program such a line may also run: git, named literally (git.exe cannot remap a
+# PowerShell drive, and its words meet the git rules)
+PS_PLAIN_GIT = ('git', 'git.exe')
+# A word that only reads an environment variable, with a literal tail: $env:TEMP, "$env:TEMP\x.txt"
+PS_ENV_READ_WORD_RE = re.compile(r'(?i)^\$(?:env:[A-Za-z_]\w*|\{env:[A-Za-z_]\w*\})(?:[\\/][^$`()\[\]{}]*)?$')
+
+
+def ps_line_plain(cmd):
+    """True when every command on the PowerShell line `cmd` comes from is a plain call: the parser
+    reads the line cleanly; each command's first word is a literal name of a cmdlet in
+    PS_PROVIDER_CMDLETS or PS_READ_CMDLETS, or git (PS_PLAIN_GIT) (no call or dot-source operator,
+    no assignment or other expression statement, no computed name, no Start-Process); every word is
+    literal or only reads an environment variable (PS_ENV_READ_WORD_RE; no other variable, member
+    call or subexpression); and neither the raw line nor any decoded word matches
+    PS_DRIVE_REMAP_RE, commands.PS_SCRIPT_TEXT_RE or PS_DOTNET_RE. Anything else may remap a drive."""
+    src = cmd.source
+    if any(r.search(src) for r in (PS_DRIVE_REMAP_RE, cm.PS_SCRIPT_TEXT_RE, PS_DOTNET_RE)):
+        return False
+    parsed = cm.read(src, sh.PS, cmd.cwd)
+    if not parsed.clean:
+        return False
+    for c in parsed.commands:
+        if not c.words:
+            return False
+        inv = cm.invocation(c)
+        if inv is None or inv.dyn or inv.via is not None or inv.index != 0 or c.words[0].dyn:
+            return False
+        git = inv.name == 'git' and c.words[0].text.lower() in PS_PLAIN_GIT
+        if not git and inv.name not in PS_PROVIDER_CMDLETS | PS_READ_CMDLETS:
+            return False
+        for w in c.words:
+            if w.dyn and not PS_ENV_READ_WORD_RE.match(w.text) or any(r.search(w.text) for r in (PS_DRIVE_REMAP_RE, cm.PS_SCRIPT_TEXT_RE, PS_DOTNET_RE)):
+                return False
+    return True
+
+
+def ps_provider_item(cmd, w):
+    """True when the Word `w`, an item a cmdlet in PS_PROVIDER_CMDLETS writes (write_targets calls
+    it only for those, never for a native program, curl, wget, Start-Process or another cmdlet),
+    names an item on a built-in drive that holds no files (PS_PROVIDER_ITEM_RE): a literal word,
+    no `..` part, on a line of plain calls (ps_line_plain). Writing such an item writes no file. A
+    native program reads env:FOO as the stream FOO of a file named env: a file write."""
+    if cmd.shell != sh.PS or w.dyn or not PS_PROVIDER_ITEM_RE.match(w.text) or DOTDOT_RE.search(w.text):
+        return False
+    return ps_line_plain(cmd)
 
 
 BASH_DEVICE_RE = re.compile(r'^/dev/')         # /dev/stderr, /dev/tty, /dev/fd/3: no file
@@ -1914,7 +1996,7 @@ def lander_check(event, ctx, cmd, inv, gc):
     from a worktree. (False, <the first test that failed>) when one fails. (False, None) for any
     other session, verb or place: the other rules judge it as before."""
     ev = event or {}
-    if not ev.get('agent_id') or ev.get('agent_type') != LANDER:
+    if not ev.get('agent_id') or agentname.bare(ev.get('agent_type')) != LANDER:
         return False, None
     if gc.unknown or gc.sub not in LANDER_VERBS or not gc.dir or ctx.place(gc.dir).kind != repo.MAIN:
         return False, None

@@ -36,10 +36,10 @@ a topic: `python tools/doc_index.py --find <topic>`, then the one section it nam
 - Engineering calls are yours: conventions, approach and design trade-offs, risk level of a
   change, which agent tier a task needs, whether a branch's approach is sound, where code lives.
   Not yours, and sent to the PM unanswered: priorities and pre-emptions, owner-held areas or
-  owner-only paths, live systems, spending, product or design taste, anything an owner ruling
+  owner-only paths, live systems, spending, product or design taste, anything an owner decision
   already settles the other way. Say "not mine: ask the PM" and why.
-- Answer within the rulings and conventions you have read. A question that would overturn one:
-  say so, and send it to the PM rather than ruling.
+- Answer within the owner decisions and conventions you have read. A question that would overturn one:
+  say so, and send it to the PM rather than deciding it.
 - Not sure, and reading cannot settle it: say what would settle it (a measurement, a test, an
   owner answer) rather than guessing.
 
@@ -51,8 +51,8 @@ a topic: `python tools/doc_index.py --find <topic>`, then the one section it nam
    superseded by later ones; the file must stay small enough to read in full after a compaction.
    It is your only write, it is local (gitignored), and it is never committed.
 2. **The PM.** SendMessage the session named Project Manager: `engineering call for delegated
-   logging` with the question, the answer, the reason and who asked. The PM logs it as a
-   delegated ruling; you never log rulings yourself.
+   logging` with the question, the answer, the reason and who asked. The PM logs it
+   as delegated; you never log it yourself.
 
 ## Never
 
