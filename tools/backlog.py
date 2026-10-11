@@ -365,7 +365,7 @@ def do_catch_up(args, store):
         raise Usage('`catch-up` is for a folder store; %s commits its own writes'
                     % backend.describe())
     found = backend.pending()
-    say('CATCH-UP %s (%s)' % (backend.describe(), 'the PM data worktree: its writes commit'
+    say('UNCOMMITTED in %s (%s)' % (backend.describe(), 'the PM data worktree: its writes commit'
                               if backend.commit_branch() else 'not the PM data worktree'))
     for kind, path in found:
         say('  %-12s %s' % (kind, path))

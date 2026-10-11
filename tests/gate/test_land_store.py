@@ -368,7 +368,7 @@ class PmDataClose(StoreLandCase):
 
     def test_the_close_in_the_pm_data_store_is_committed(self):
         """Records committed on the PM data branch: the landing's close commits the deletion
-        there, alone, with a Session line (KIT-STORE-WRITES-UNCOMMITTED)."""
+        there, alone, with a Session line."""
         wt = self.pm_worktree(pulled('FOO'), priced('BAZ'))
         self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
         before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
