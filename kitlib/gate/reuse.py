@@ -16,13 +16,13 @@ A file git ignores is never an input: a step that reads one must not ask for reu
 
 Fail closed. Anything that raises means every step runs. Nothing is read or stored:
   - for a step that runs no command, a check step, a step without `globs` or `content`.globs, a
-    step whose cmd, full_cmd, daily_cmd or merged_args names {base}, or whose argv holds the base
-    commit (a lane's merged_args);
+    step whose globs match no file git shows (a mistyped glob, or one naming only ignored
+    files, would key it on its command alone), a step whose cmd, full_cmd, daily_cmd or
+    merged_args names {base}, or whose argv holds the base commit (a lane's merged_args);
   - for an input that is not a plain file (a link, a folder: a nested repository or submodule);
   - in a --full run, a branch gate's --only, or when "landing".reuse_max_age_h is 0;
   - when the change touches `.kit.json`, a config section file, the hook module, a path matching
-    "landing".reuse_never, or a strict path (kitlib.gate.strict_defaults.STRICT_DEFAULTS and
-    "landing".strict_paths);
+    "landing".reuse_never, or a strict path (kitlib.gate.strict_defaults.STRICT_DEFAULTS);
   - in a landing: --fresh; a result record that cannot be read; a land record of a tip (it got
     past its locked checks and did not land); a gate record of a tip that did not pass; a main
     checkout that is not clean.
@@ -31,8 +31,10 @@ run as before it: PASS as pass, FAIL or WARN as fail; a skipped or unrun step st
 Storing or pruning that fails says one line and never fails the gate.
 
 Entries live in `<git common dir>/kit-gate-cache/<key>/<YYYYmmddTHHMMSSZ>-<pid>-<hex8>.<pass|fail>.json`,
-written to a temp file and renamed. Entries older than PRUNE_H hours are pruned; only names
-matching ENTRY_RE in key folders (KEY_RE) are removed, and no link out of the folder is followed.
+written to a temp file (TMP_RE) and renamed. Entries older than PRUNE_H hours are pruned, and so
+is a temp file last written that long ago (a crash between the write and the rename left it; a
+newer one may be another gate's write in flight). Only names matching ENTRY_RE or TMP_RE in key
+folders (KEY_RE) are removed, and no link out of the folder is followed.
 """
 import collections
 import datetime
@@ -64,6 +66,8 @@ PRUNE_H = 168       # entries older than this are pruned (the largest reuse_max_
 STAMP = '%Y%m%dT%H%M%SZ'
 KEY_RE = re.compile(r'^[0-9a-f]{64}$')
 ENTRY_RE = re.compile(r'^(\d{8}T\d{6}Z)-(\d+)-([0-9a-f]{8})\.(pass|fail)\.json$')
+TMP = '.tmp-%d-%s'  # (pid, hex8): an entry being written, renamed to its ENTRY_RE name
+TMP_RE = re.compile(r'^\.tmp-\d+-[0-9a-f]{8}$')
 STORE_AS = {'PASS': 'pass', 'FAIL': 'fail', 'WARN': 'fail'}
 CHUNK = 1 << 20
 KIT_DIRS = ('kitlib', 'tools')
@@ -115,10 +119,9 @@ def never_hits(cfg, changed):
 
 
 def strict_hits(cfg, changed):
-    """The paths of `changed` that match a strict path: STRICT_DEFAULTS (imported, never copied)
-    and "landing".strict_paths when the config has it."""
-    globs = list(STRICT_DEFAULTS) + list(cfg.section('landing').get('strict_paths') or [])
-    return [p for p in changed if S._match(p, globs)]
+    """The paths of `changed` that match a strict path: STRICT_DEFAULTS (imported, never
+    copied). `cfg` is not read: `.kit.json` has no key that adds a strict path."""
+    return [p for p in changed if S._match(p, list(STRICT_DEFAULTS))]
 
 
 def _change_why(cfg, changed):
@@ -305,9 +308,13 @@ def tools_of(step, subs):
 
 def step_key(root, cfg, spec, step, files, kit):
     """`(key, inputs)` of `step` in the work tree at `root` (`files`: list_files; `kit`:
-    kit_identity)."""
+    kit_identity). NotCacheable when no file is an input: the key would not change with
+    whatever the step really reads."""
     subs = _subs(root)
     ins = inputs(root, spec, files)
+    if not ins:
+        raise NotCacheable('its "globs" and "content".globs match no file git shows in the work '
+                           'tree')
     material = {
         'schema': SCHEMA, 'step': step.name,
         'argv': [_norm(a, subs) for a in step.cmd],
@@ -341,7 +348,7 @@ def _now():
 def _write_entry(folder, name, body):
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, name)
-    tmp = os.path.join(folder, '.tmp-%d-%s' % (os.getpid(), secrets.token_hex(4)))
+    tmp = os.path.join(folder, TMP % (os.getpid(), secrets.token_hex(4)))
     try:
         with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
             f.write(json.dumps(body, sort_keys=True, indent=1) + '\n')
@@ -423,9 +430,10 @@ def _is_link(entry):
 
 
 def prune(folder, now):
-    """Remove entries older than PRUNE_H hours, and key folders left empty. Only ENTRY_RE names
-    that are plain files in KEY_RE folders that are plain folders inside `folder` are touched.
-    Returns [] or one line naming the failures."""
+    """Remove entries older than PRUNE_H hours, temp files (TMP_RE) last written that long ago,
+    and key folders left empty. A newer temp file stays: another gate may be between its write
+    and its rename. Only ENTRY_RE and TMP_RE names that are plain files in KEY_RE folders that
+    are plain folders inside `folder` are touched. Returns [] or one line naming the failures."""
     cutoff = now - datetime.timedelta(hours=PRUNE_H)
     try:
         with os.scandir(folder) as it:
@@ -447,11 +455,15 @@ def prune(folder, now):
             left = 0
             for e in entries:
                 m = ENTRY_RE.match(e.name)
-                if not m or _is_link(e) or not e.is_file(follow_symlinks=False):
+                tmp = TMP_RE.match(e.name)
+                if not (m or tmp) or _is_link(e) or not e.is_file(follow_symlinks=False):
                     left += 1
                     continue
                 try:
-                    old = _when(m.group(1)) < cutoff
+                    if m:
+                        old = _when(m.group(1)) < cutoff
+                    else:                   # a temp file's name holds no time: its last write
+                        old = e.stat(follow_symlinks=False).st_mtime < cutoff.timestamp()
                 except ValueError:
                     old = False
                 if not old:

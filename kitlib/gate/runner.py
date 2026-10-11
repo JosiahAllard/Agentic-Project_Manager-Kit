@@ -18,12 +18,16 @@ A check step calls the repo hook module's GATE_CHECKS[<check>](ctx). ctx is a di
 It returns 0 or True to pass; any other int or False fails it; raising, or calling sys.exit with
 any code, fails it with the traceback in the log.
 
-A gate where no selected step PASSed or WARNed (all skipped for a missing `requires`) is REFUSED
-(nothing_ran). The branch gate writes the gate-OK record (kitlib.records.gate_ok) for HEAD only
-when every selected step passed, warned or was skipped, no --only was given, the base is the
-default base, the work tree was clean (no tracked change, no untracked file) when the gate
-started and when it ended, and HEAD did not move: the record then names exactly the commit whose
-tree was gated, and its config_rev is that commit.
+A gate where no selected step PASSed, WARNed, FAILed or was REUSED (all skipped for a missing
+`requires`) is REFUSED (nothing_ran). The branch gate writes the gate-OK record
+(kitlib.records.gate_ok) for HEAD only when every selected step passed, warned, was reused or
+was skipped, no --only was given, the base is the default base, the work tree was clean (no
+tracked change, no untracked file) when the gate started and when it ended, and HEAD did not
+move: the record then names exactly the commit whose tree was gated, and its config_rev is that
+commit. A REUSED step did not run in this gate: a pass of its key is in the gate cache
+(kitlib.gate.reuse), stored by an earlier gate of the same inputs. A rerun with every step
+reused therefore writes a gate-OK record for a commit on which no step ran; its record says
+`reused` for each step.
 """
 import datetime
 import os
@@ -374,9 +378,11 @@ def verdict(results):
 
 
 def nothing_ran(results):
-    """The REFUSED line when no step PASSed, WARNed or was REUSED (a landing's step that passed in
-    the branch gate of the exact tree, kitlib.gate.reuse), i.e. every selected step was skipped
-    for a missing `requires`; else None: a gate where nothing ran never passes."""
+    """The REFUSED line when no step PASSed, WARNed, FAILed or was REUSED, i.e. every selected
+    step was skipped for a missing `requires`; else None. A REUSED step counts though it did
+    not run here: a pass of its key (its inputs, argv, cwd, program, gate config and kit files)
+    is in the gate cache (kitlib.gate.reuse). So a gate whose every step is reused passes, and a
+    branch rerun of that kind writes a gate-OK record for a commit on which no step ran."""
     if any(r['status'] in ('PASS', 'WARN', 'FAIL', 'REUSED') for r in results):
         return None
     skipped = ['%s: %s' % (r['name'], '; '.join(r['reasons']) or 'skipped') for r in results]

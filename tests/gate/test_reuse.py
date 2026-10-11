@@ -327,6 +327,17 @@ class Strict(ReuseCase):
         paths = [g.replace('**', 'x.py') for g in reuse.STRICT_DEFAULTS]
         self.assertEqual(reuse.strict_hits(cfg, paths + ['src/a.py']), paths)
 
+    def test_the_config_adds_no_strict_path(self):
+        """`.kit.json` has no strict-path key (the schema refuses an unknown one), so the config
+        is never read for one."""
+        paths = [g.replace('**', 'x.py') for g in reuse.STRICT_DEFAULTS]
+        self.assertEqual(reuse.strict_hits(None, paths + ['src/a.py']), paths)
+        kit = dict(self.KIT, gate=self.GATE, landing={'strict_paths': ['src/*']})
+        self.repo.write('.kit.json', json.dumps(kit, indent=1) + '\n')
+        with self.assertRaises(runner.ConfigError) as caught:
+            runner.kconfig.load(self.repo.root)
+        self.assertIn('strict_paths', str(caught.exception))
+
     def test_a_strict_path_change_reads_and_stores_nothing(self):
         path = reuse.STRICT_DEFAULTS[0].replace('**', 'strict.py')
         why = 'a strict path changes: %s' % path
