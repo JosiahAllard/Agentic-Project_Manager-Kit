@@ -40,7 +40,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 ## Packaging
 The kit ships as a Claude Code plugin, which the owner installs once.
 - **Hooks:** the coordinator SessionStart hook (claude/hooks/hooks.json); guard.py stays in each account's settings.
-- **Bundled:** the agent definitions and slash commands.
+- **Bundled:** skills, the lock MCP server and the coordinator SessionStart hook. Agents stay user-level through the ~/.claude/agents junction and are not listed in plugin.json.
 - **Skills:** landing, red-first, ledger, backlog, machine-lock, refusal, handoff and action-hub. Profiles and CLAUDE.md become pointers to these skills.
 - **Code:** tools and kitlib stay Python. Skills explain them, and enforcement stays in the hooks and the gate.
 - **Build order:** after kitlib and guard.
@@ -53,8 +53,7 @@ The kit ships as a Claude Code plugin, which the owner installs once.
 - **The schedule window** stays: `reserve_ui.pyw` (kit root) (logic in `kitlib/lockui/`) is a tkinter adapter over the same API, next to the hub section.
 
 ## What comes from ~/.claude
-- **Into the plugin:**
-  - agents
+- **Into the plugin** (agents stay user-level through the ~/.claude/agents junction):
   - hooks: the coordinator SessionStart hook; guard.py stays in each account's settings
   - tools: the lock goes into kitlib; the rest become optional packages
   - generic skills: backlog-ops, branch-review, branch-sync, coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch, machine-lock-run, mutation-testing, session-handoff, shell-and-worktree-traps, subagent-dispatch
