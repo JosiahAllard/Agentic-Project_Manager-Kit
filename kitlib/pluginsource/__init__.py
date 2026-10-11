@@ -409,9 +409,12 @@ def _when(text):
 def prune(root, keep=KEEP, now=None, young_days=YOUNG_DAYS):
     """Remove old export folders. Never removed: the folder marketplace.json names (the plugin
     loads from it, in place or by a copy at the next update), the `keep` newest by their
-    marker's exported_at, and every export younger than `young_days` by that date, or whose date
+    marker's exported_at, and every export replaced less than `young_days` ago, or whose dates
     cannot be read (a running session may still load hooks and its MCP server from one, and the
-    plugin may load in place: docs/plugin-source.md "Open questions"). Only a <sha12> folder
+    plugin may load in place: docs/plugin-source.md "Open questions"). An export is dated by
+    when it was replaced, the exported_at of the next newer export, not by its own exported_at:
+    one that was current for weeks and then replaced by a few quick landings may still be in use.
+    An unreadable exported_at counts as newer than every readable one. Only a <sha12> folder
     holding the marker is a candidate; a link or junction is never one, and anything else in the
     root stays. A <sha12>.tmp folder other than the named folder's is a half-written export left
     by a run that stopped (prune runs under refresh.pid, so no export is being written) and is
@@ -437,14 +440,15 @@ def prune(root, keep=KEEP, now=None, young_days=YOUNG_DAYS):
         marker = read_marker(full)
         if marker is None:
             continue
-        found.append((str(marker.get('exported_at') or ''), n))
-    found.sort(reverse=True)
+        found.append((_when(str(marker.get('exported_at') or '')), n))
+    # newest first; an unreadable date first of all (it may be the newest)
+    found.sort(key=lambda w: (w[0] is None, w[0] or datetime.datetime.min, w[1]), reverse=True)
     spare = {n for _, n in found[:keep]}
     if current:
         spare.add(current)
-    for at, n in found:
-        when = _when(at)
-        if when is None or now - when < datetime.timedelta(days=young_days):
+    for i, (when, n) in enumerate(found):
+        replaced = found[i - 1][0] if i else None      # the exported_at of the next newer export
+        if when is None or replaced is None or now - replaced < datetime.timedelta(days=young_days):
             spare.add(n)
     removed, failed = [], []
     for n in [n for _, n in found if n not in spare] + sorted(stale):
@@ -742,7 +746,9 @@ def ensure_export(kit, s, now=None, own=None, alive=None):
     """The export root, holding an export of the remote's main that marketplace.json names: made
     when missing, kept when current. Runs no claude command and records no account folder (an
     installer then adds the root as a marketplace); a new export's state keeps each folder's
-    migrated flag. Returns (root, sha); RefreshError, Busy or OSError."""
+    migrated flag. A state.json that cannot be read raises StateError before anything is
+    written, so its migrated flags are never overwritten. Returns (root, sha); RefreshError,
+    StateError, Busy or OSError."""
     sha = remote_main(kit, s.remote)
     root = s.export_dir
     name = folder_name(sha)
@@ -753,10 +759,7 @@ def ensure_export(kit, s, now=None, own=None, alive=None):
     lock = RefreshLock(root, own=own, alive=alive)
     lock.acquire()
     try:
-        try:
-            state = read_state(root)
-        except StateError:
-            state = None
+        state = read_state(root)        # StateError: refuse rather than drop the flags
         _folder, version = export(kit, sha, root, now)
         write_marketplace(root, name)
         if not state or state.get('sha') != sha:
@@ -825,7 +828,12 @@ def current_lines(kit, s, folders=None):
                      % (str(state.get('sha') or '?')[:12], s.remote, MAIN, main[:12], cmd))
     for f in sorted(state['folders']):
         r = state['folders'][f] or {}
-        if r.get('migrated') is True and r.get('rc') != 0:
+        if r.get('migrated') is not True or r.get('rc') == 0:
+            continue
+        if r.get('rc') is None:     # migrated, carried into this export, never refreshed to it
+            lines.append('pm-kit plugin in %s: not refreshed to %s: %s'
+                         % (f, str(state.get('sha') or '?')[:12], REFRESH_CMD))
+        else:
             lines.append('pm-kit plugin refresh failed in %s (claude %s exited %s at %s): %s'
                          % (f, r.get('step') or '?', r.get('rc'), r.get('at') or '?', REFRESH_CMD))
     return lines
