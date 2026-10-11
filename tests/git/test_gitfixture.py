@@ -119,11 +119,7 @@ class Copies(unittest.TestCase):
                          'a refused template was left behind')
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
-HOME_X = os.path.join(os.sep, 'nohome')
+HOME_X =os.path.join(os.sep, 'nohome')
 
 
 class PowerShellCacheEnv(unittest.TestCase):
@@ -145,3 +141,7 @@ class PowerShellCacheEnv(unittest.TestCase):
     def test_temp_home_sets_the_cache_path_under_the_home(self):
         home = temp_home(self)
         self.assertTrue(self.under(os.environ['PSModuleAnalysisCachePath'], home))
+
+
+if __name__ == '__main__':
+    unittest.main()
