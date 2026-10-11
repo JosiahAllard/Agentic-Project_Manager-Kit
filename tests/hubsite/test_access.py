@@ -8,7 +8,6 @@ A refusal test asserts the reason, and unless it says otherwise its token is sig
 the bytes it carries and is right in every other respect, so the check under test is the only
 one that can refuse it.
 """
-import getpass
 import hashlib
 import hmac
 import http.client
@@ -20,6 +19,7 @@ import socket
 import ssl
 import string
 import threading
+import types
 import unittest
 import urllib.error
 import urllib.request
@@ -191,7 +191,17 @@ class VerifyTest(Case):
             with self.subTest(iss=iss):
                 self.refused('wrong-issuer', K.token(A, K.claims(iss=iss)))
         self.refused('wrong-issuer', VALID, team='another-team')
-        self.refused('wrong-issuer', VALID, team=K.TEAM.upper())    # compared as written
+
+    def test_a_team_written_in_capitals_is_the_same_team(self):
+        self.assertEqual(K.ISSUER, K.ISSUER.lower())
+        for team in (K.TEAM.upper(), K.TEAM.title(), 'kit-Test-TEAM'):
+            with self.subTest(team=team):
+                self.assertNotEqual(team, K.TEAM)
+                self.assertEqual(verify(VALID, team=team), K.claims())
+                # The claim itself is still compared as written: Access writes it in lower case.
+                loud = K.token(A, K.claims(iss=access.ISSUER % team))
+                self.refused('wrong-issuer', loud, team=team)
+                self.refused('wrong-issuer', loud)
 
     def test_an_expired_token_is_refused(self):
         for exp in (K.NOW - 1, K.NOW, K.NOW - 0.5, 0, -5):
@@ -497,6 +507,27 @@ class VerifyTest(Case):
         self.assertEqual(verify(K.token(A, K.claims(email=loud)), emails=[OTHER, loud.swapcase()]),
                          K.claims(email=loud))
 
+    def test_letters_only_casefolding_makes_equal_are_different_addresses(self):
+        plain = 'owner@strasse.example'
+        sharp = plain.replace('ss', 'ß')           # sharp s: a different domain
+        long_s = plain.replace('ss', 'ſs')         # long s, then s
+        for listed, claimed in ((sharp, plain), (plain, sharp), (long_s, plain), (plain, long_s),
+                                (sharp, long_s), (long_s, sharp), (sharp, plain.upper()),
+                                (long_s, plain.upper())):
+            with self.subTest(listed=ascii(listed), claimed=ascii(claimed)):
+                self.assertNotEqual(listed, claimed)
+                self.assertEqual(listed.casefold(), claimed.casefold())
+                self.refused('email-not-allowed', K.token(A, K.claims(email=claimed)),
+                             emails=[listed])
+                self.refused('email-not-allowed', K.token(A, K.claims(email=claimed)),
+                             emails=[K.EMAIL, ' ' + listed + ' '])
+        for same in (plain, sharp, long_s):
+            with self.subTest(same=ascii(same)):
+                text = K.token(A, K.claims(email=same))
+                self.assertEqual(verify(text, emails=[same])['email'], same)
+        loud = K.token(A, K.claims(email=plain.upper()))
+        self.assertEqual(verify(loud, emails=[plain])['email'], plain.upper())
+
     def test_an_empty_allow_list_refuses_a_valid_token(self):
         self.assertEqual(verify(VALID), K.claims())
         for emails in ([], (), set(), {}, None, [''], ['  ', '\t'], iter(())):
@@ -520,9 +551,9 @@ class VerifyTest(Case):
             with self.subTest(team=team):
                 iss = access.ISSUER % (team,)
                 self.refused('bad-team', K.token(A, K.claims(iss=iss)), team=team)
-        for team in ('a', 'x' * 63, 'Team-9'):
+        for team in ('a', 'x' * 63, 'Team-9', '9'):
             with self.subTest(team=team):
-                iss = access.ISSUER % team
+                iss = access.ISSUER % team.lower()
                 self.assertEqual(verify(K.token(A, K.claims(iss=iss)), team=team)['iss'], iss)
 
     def test_an_empty_audience_setting_is_refused(self):
@@ -640,7 +671,8 @@ class Clock:
 
 
 class Fetcher:
-    """A fetch(team, timeout) that gives `result`, or raises it when it is an exception."""
+    """A fetch(team, timeout) that gives `result`, raises it when it is an exception, or gives
+    what it returns when it is a function."""
 
     def __init__(self, *keys):
         self.result = K.document(*keys)
@@ -650,7 +682,28 @@ class Fetcher:
         self.calls.append((team, timeout))
         if isinstance(self.result, BaseException):
             raise self.result
-        return self.result
+        return self.result() if callable(self.result) else self.result
+
+
+class Asker(threading.Thread):
+    """A started thread that asks `cache` for one kid; `got` holds its answer, or what get
+    raised, once it has one."""
+
+    def __init__(self, cache, kid):
+        threading.Thread.__init__(self, daemon=True)
+        self.cache, self.kid, self.got = cache, kid, []
+        self.start()
+
+    def run(self):
+        try:
+            self.got.append(self.cache.get(self.kid))
+        except Exception as exc:            # shown by the caller's assertion
+            self.got.append(exc)
+
+
+class Unstartable(threading.Thread):
+    def start(self):
+        raise RuntimeError("can't start new thread")
 
 
 class Response:
@@ -860,13 +913,37 @@ class KeyCacheTest(unittest.TestCase):
         self.assertEqual(dict(request.header_items()),
                          {'User-agent': 'kit-hub-access/1', 'Accept': 'application/json'})
         self.assertEqual(access.USER_AGENT, 'kit-hub-access/1')
-        local = {getpass.getuser(), socket.gethostname(), os.environ.get('USERNAME', ''),
-                 os.environ.get('COMPUTERNAME', ''), os.environ.get('USERDOMAIN', '')}
+        # Names this machine has: from the environment, where one that is not set reads as ''.
+        local = {socket.gethostname()} | {os.environ.get(name, '') for name in (
+            'USERNAME', 'COMPUTERNAME', 'USERDOMAIN')}
         sent = (request.full_url + ' ' + access.USER_AGENT).lower()
         for name in sorted(n for n in local if len(n) >= 4):
             self.assertNotIn(name.lower(), sent)
         self.assertNotIn('@', sent)
         self.assertTrue(opener.response.closed)
+
+    def test_a_team_in_capitals_is_fetched_from_the_lower_case_host(self):
+        for team in (K.TEAM.upper(), K.TEAM.title()):
+            with self.subTest(team=team):
+                self.assertEqual(access.certs_url(team), K.ISSUER + '/cdn-cgi/access/certs')
+                opener = Opener(Response(K.compact(K.document(A))))
+                access.fetch_keys(team, opener=opener)
+                (request, _timeout), = opener.calls
+                self.assertEqual(request.full_url, K.ISSUER + '/cdn-cgi/access/certs')
+                self.assertEqual(request.host, K.TEAM + '.cloudflareaccess.com')
+                fetch = Fetcher(A)
+                cache = access.KeyCache(team, fetch=fetch, clock=self.clock)
+                self.assertEqual(cache.team, K.TEAM)
+                self.assertEqual(verify(VALID, keys=cache, team=team), K.claims())
+                self.assertEqual(fetch.calls, [(K.TEAM, access.FETCH_TIMEOUT_S)])
+
+    def test_a_cache_for_a_team_that_is_not_one_dns_label_is_refused(self):
+        for team in ('', 'a.b', K.TEAM + '/', K.TEAM + '@example.invalid', None, 5):
+            with self.subTest(team=team):
+                with self.assertRaises(access.AccessError) as caught:
+                    access.KeyCache(team, fetch=self.fetch, clock=self.clock)
+                self.assertEqual(caught.exception.reason, 'bad-team')
+        self.assertEqual(self.fetch.calls, [])
 
     def test_a_cache_made_with_no_fetcher_uses_fetch_keys(self):
         opener = Opener(Response(K.compact(K.document(A))))
@@ -910,6 +987,107 @@ class KeyCacheTest(unittest.TestCase):
         self.assertEqual([t.is_alive() for t in threads], [False] * 8)
         self.assertEqual(results, [K.jwk(A)] * 8)
         self.assertEqual(calls, [K.TEAM])
+
+    def stalled(self, *keys):
+        """Make the fetcher wait, once called, for the event this returns beside the one it
+        sets on being called; then it answers with these keys."""
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def fetch():
+            entered.set()
+            if not release.wait(60):
+                raise OSError('the test never released the fetch')
+            return K.document(*keys)
+
+        self.fetch.result = fetch
+        return entered, release
+
+    def test_a_known_kid_is_answered_while_a_fetch_is_out(self):
+        self.cache.get(A.kid)
+        entered, release = self.stalled(A, B)
+        self.at(access.REFETCH_S)               # an unknown kid may fetch again; A is fresh
+        poke = Asker(self.cache, B.kid)
+        self.assertTrue(entered.wait(30))
+        known = Asker(self.cache, A.kid)        # a second thread, the fetch still out
+        known.join(10)
+        self.assertEqual(known.got, [K.jwk(A)])
+        other = Asker(self.cache, 'key-z')      # needs a fetch too: waits, and starts none
+        other.join(0.05)
+        self.assertEqual((poke.got, other.got, len(self.fetch.calls)), ([], [], 2))
+        release.set()
+        poke.join(30)
+        other.join(30)
+        self.assertEqual((poke.got, other.got), ([K.jwk(B)], [None]))
+        self.assertEqual((len(self.fetch.calls), self.cache.error), (2, ''))
+
+    def test_a_fetch_with_no_answer_is_given_up_and_no_other_is_started(self):
+        self.assertEqual(access.FETCH_DEADLINE_S, 15)
+        self.assertLess(access.FETCH_DEADLINE_S, access.REFETCH_S)
+        self.cache.get(A.kid)
+        entered, release = self.stalled(A, B)
+        self.at(access.KEY_TTL_S)               # no longer fresh: asking for A needs a fetch
+        with mock.patch.object(access, 'FETCH_DEADLINE_S', 0.05):
+            self.assertEqual(self.cache.get(A.kid), K.jwk(A))   # the cached keys keep serving
+        self.assertEqual(self.cache.error, 'keys-fetch')
+        self.assertTrue(entered.wait(30))
+        self.assertEqual(len(self.fetch.calls), 2)
+        self.at(access.KEY_TTL_S + access.REFETCH_S)
+        # Its thread still lives: this attempt fails at once and the fetcher is not called. Were
+        # it called, this would wait the whole deadline behind a second stalled fetch.
+        self.assertEqual(self.cache.get(A.kid), K.jwk(A))
+        self.assertEqual((len(self.fetch.calls), self.cache.error), (2, 'keys-fetch'))
+        release.set()
+        self.cache._worker.join(30)
+        self.assertFalse(self.cache._worker.is_alive())
+        self.assertIsNone(self.cache.get(B.kid))                # the late answer was dropped
+        self.fetch.result = K.document(A, B)
+        self.at(access.KEY_TTL_S + 2 * access.REFETCH_S)
+        self.assertEqual(self.cache.get(B.kid), K.jwk(B))
+        self.assertEqual((len(self.fetch.calls), self.cache.error), (3, ''))
+
+    def test_the_wait_before_the_next_attempt_runs_from_the_end_of_the_last(self):
+        gap = access.REFETCH_S
+        self.cache.get(A.kid)
+
+        def slow_failure():
+            self.clock.at += 100                # the attempt outlasts the interval
+            raise OSError('unreachable')
+
+        self.fetch.result = slow_failure
+        self.at(gap)
+        self.assertIsNone(self.cache.get(B.kid))                # tried from gap to gap + 100
+        self.assertEqual((self.clock.at - self.start, len(self.fetch.calls)), (gap + 100, 2))
+        self.assertIsNone(self.cache.get(B.kid))
+        self.at(gap + 100 + gap - 1)
+        self.assertIsNone(self.cache.get(B.kid))
+        self.assertEqual(len(self.fetch.calls), 2)
+        self.at(gap + 100 + gap)
+        self.assertIsNone(self.cache.get(B.kid))
+        self.assertEqual(len(self.fetch.calls), 3)
+
+    def test_freshness_runs_from_the_beginning_of_the_fetch(self):
+        def slow():
+            self.clock.at += 100
+            return K.document(A)
+
+        self.fetch.result = slow
+        self.assertEqual(self.cache.get(A.kid), K.jwk(A))       # began at 0, ended at 100
+        self.fetch.result = K.document(B)
+        self.at(access.KEY_TTL_S - 1)
+        self.assertEqual(self.cache.get(A.kid), K.jwk(A))
+        self.assertEqual(len(self.fetch.calls), 1)
+        self.at(access.KEY_TTL_S)
+        self.assertIsNone(self.cache.get(A.kid))
+        self.assertEqual(len(self.fetch.calls), 2)
+
+    def test_a_fetch_thread_that_cannot_start_is_a_fetch_failure(self):
+        with mock.patch.object(access, 'threading', types.SimpleNamespace(Thread=Unstartable)):
+            self.fails('keys-unavailable')
+        self.assertEqual((self.cache.error, self.fetch.calls), ('keys-fetch', []))
+        self.at(access.REFETCH_S)
+        self.assertEqual(self.cache.get(A.kid), K.jwk(A))
+        self.assertEqual(self.cache.error, '')
 
 
 class _Redirecting(http.server.BaseHTTPRequestHandler):

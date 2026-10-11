@@ -23,10 +23,14 @@ whose `reason` is one of REASONS. Checks, in this order; the first that fails is
   the signature         bad-signature-length (not the modulus length in bytes),
                         signature-out-of-range (not below the modulus), bad-signature
   the claims            no-exp, bad-exp, expired (now >= exp, no leeway); bad-nbf, not-yet-valid
-                        (now < nbf - NBF_LEEWAY_S); wrong-issuer (not ISSUER % team, compared
-                        as written); wrong-audience (`aud` is neither the tag nor a list holding
-                        it); no-email (absent, not text or blank: a service token has none);
-                        email-not-allowed (stripped and casefolded, not in `emails`)
+                        (now < nbf - NBF_LEEWAY_S); wrong-issuer (`iss`, as written, is not
+                        ISSUER % the team in lower case); wrong-audience (`aud` is neither the
+                        tag nor a list holding it); no-email (absent, not text or blank: a
+                        service token has none); email-not-allowed (not in `emails`; both sides
+                        stripped and lower-cased, see _address)
+
+The team is one DNS label in either case and is lower-cased once on entry by verify, certs_url
+and KeyCache: the host name and the `iss` claim carry it in lower case.
 
 The signature check never parses the padding. It computes pow(s, e, n), builds the one
 PKCS #1 v1.5 encoded block (RFC 8017, section 9.2) that is correct for the key size and the
@@ -36,21 +40,29 @@ the digest or another DigestInfo encoding is therefore just a different block.
 
 `keys` is anything with get(kid) giving a JWK object or None: a KeyCache, or a dict in tests.
 
-KeyCache(team, fetch=None, clock=None) holds the team's signing keys in memory, kid -> JWK.
-get(kid) fetches when nothing is cached, when the last good fetch is KEY_TTL_S old, or when the
-kid is not cached; but never more than one attempt per REFETCH_S, whatever the reason, so
-neither a stream of unknown kids nor an unreachable server causes a fetch per request. A good
-fetch replaces the whole table (a key no longer published is gone). A fetch that fails, or whose
-document key_table refuses, changes nothing: the cached keys keep serving until STALE_LIMIT_S
-after the last good fetch, then get raises keys-stale; with no good fetch ever it raises
-keys-unavailable. One lock is held across the check and the fetch, so concurrent callers fetch
-once and the rest wait for it. `fetch(team, timeout)` returns the parsed key document; `clock`
-is a monotonic seconds clock, and a clock that runs backwards counts as stale.
+KeyCache(team, fetch=None, clock=None) holds the team's signing keys in memory, kid -> JWK;
+AccessError bad-team when the team is not one DNS label. get(kid) fetches when nothing is
+cached, when the last good fetch began KEY_TTL_S ago, or when the kid is not cached; but never
+within REFETCH_S of the end of the last attempt, whatever the reason, so neither a stream of
+unknown kids nor an unreachable server causes a fetch per request. A good fetch replaces the
+whole table (a key no longer published is gone). A fetch that fails, or whose document key_table
+refuses, changes nothing: the cached keys keep serving until STALE_LIMIT_S after the last good
+fetch began, then get raises keys-stale; with no good fetch ever it raises keys-unavailable.
+
+One fetch runs at a time. A caller that needs one waits for the fetch in progress and is
+answered from its result; a caller whose kid is cached and fresh, or who comes within REFETCH_S
+of the last attempt, is answered at once from what is cached, fetch in progress or not. So a
+request naming an unknown kid cannot make a request naming a known one wait. An attempt has
+FETCH_DEADLINE_S in all: the fetcher runs on a thread of its own, and when it has not answered
+by then the attempt has failed (keys-fetch), the thread is left to end by itself and its late
+answer is dropped; while it lives every attempt fails at once, so at most one such thread
+exists. `fetch(team, timeout)` returns the parsed key document; `clock` is a monotonic seconds
+clock, and a clock that runs backwards counts as stale.
 
 fetch_keys(team, timeout) is the one network call: GET ISSUER % team + CERTS_PATH over HTTPS
 with certificate checking, no redirect followed, USER_AGENT and nothing else that names the
-caller. `timeout` bounds each socket operation, not the whole fetch. It raises AccessError
-keys-fetch on any failure.
+caller. `timeout` bounds each socket operation, not the whole fetch: the whole is bounded by
+KeyCache alone. It raises AccessError keys-fetch on any failure.
 """
 import base64
 import hashlib
@@ -71,7 +83,8 @@ MIN_MODULUS_BITS = 2048
 NBF_LEEWAY_S = 60
 ISSUER = 'https://%s.cloudflareaccess.com'      # % team: the `iss` claim, and the keys' origin
 CERTS_PATH = '/cdn-cgi/access/certs'
-FETCH_TIMEOUT_S = 5
+FETCH_TIMEOUT_S = 5             # each socket operation of the key fetch
+FETCH_DEADLINE_S = 15           # one whole fetch attempt of a KeyCache
 MAX_KEYS_DOC = 256 * 1024       # bytes; a longer key document is refused
 USER_AGENT = 'kit-hub-access/1'
 KEY_TTL_S = 3600                # a good fetch is fresh this long
@@ -147,13 +160,24 @@ def _number(value):
     return isinstance(value, int) or (isinstance(value, float) and math.isfinite(value))
 
 
-def _team_ok(team):
-    return isinstance(team, str) and _TEAM.fullmatch(team) is not None
+def _team(team):
+    """The team name in lower case, as its host name and the `iss` claim carry it; AccessError
+    bad-team unless it is one DNS label. _TEAM admits ASCII alone, so lower() changes A-Z only."""
+    if not isinstance(team, str) or _TEAM.fullmatch(team) is None:
+        raise AccessError('bad-team')
+    return team.lower()
+
+
+def _address(text):
+    """An email address as the allow-list compares it: surrounding white space off, lower case.
+    lower() and never casefold(): casefold makes sharp s equal `ss` and long s equal `s`, so an
+    address in one domain would pass for an address in another."""
+    return text.strip().lower()
 
 
 def _allowed(emails):
-    """The allow-list as a set of stripped, casefolded addresses; AccessError when it is not a
-    list of text or holds no address."""
+    """The allow-list as a set of addresses, each as _address gives it; AccessError when it is
+    not a list of text or holds no address."""
     if emails is None:
         raise AccessError('no-allowed-emails')
     if isinstance(emails, str):         # its characters would each pass for an entry
@@ -164,7 +188,7 @@ def _allowed(emails):
         raise AccessError('bad-allow-list', 'not a list') from None
     if not all(isinstance(e, str) for e in entries):
         raise AccessError('bad-allow-list', 'an entry that is not text')
-    allowed = {e.strip().casefold() for e in entries} - {''}
+    allowed = {_address(e) for e in entries} - {''}
     if not allowed:
         raise AccessError('no-allowed-emails')
     return allowed
@@ -212,8 +236,7 @@ def verify(token, keys, team, aud, emails, now):
     """The claims (a dict) of a valid Access token for this team and audience whose email is on
     the allow-list; AccessError otherwise. The module docstring gives the checks and their
     order. `keys` has get(kid); `emails` is the allowed addresses; `now` is Unix time."""
-    if not _team_ok(team):
-        raise AccessError('bad-team')
+    team = _team(team)
     if not isinstance(aud, str) or not aud:
         raise AccessError('no-audience')
     allowed = _allowed(emails)
@@ -275,7 +298,7 @@ def verify(token, keys, team, aud, emails, now):
     email = claims.get('email')
     if not isinstance(email, str) or not email.strip():
         raise AccessError('no-email')
-    if email.strip().casefold() not in allowed:
+    if _address(email) not in allowed:
         raise AccessError('email-not-allowed')
     return claims
 
@@ -297,11 +320,9 @@ def key_table(document):
 
 
 def certs_url(team):
-    """Where the team's signing keys are published; AccessError bad-team unless `team` is one
-    DNS label, so the request can go to no other host."""
-    if not _team_ok(team):
-        raise AccessError('bad-team')
-    return ISSUER % team + CERTS_PATH
+    """Where the team's signing keys are published, the host in lower case; AccessError bad-team
+    unless `team` is one DNS label, so the request can go to no other host."""
+    return ISSUER % _team(team) + CERTS_PATH
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -356,28 +377,34 @@ class KeyCache:
     `error` is the reason the last fetch attempt failed, '' when it was good."""
 
     def __init__(self, team, fetch=None, clock=None):
-        self.team = team
+        self.team = _team(team)
         self.error = ''
         self._fetch = fetch or fetch_keys
         self._clock = clock or time.monotonic
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()       # the five fields below; never held across a fetch
+        self._fetching = threading.Lock()   # held by the one caller making a fetch attempt
         self._keys = {}
-        self._good_at = None        # clock time of the last good fetch
-        self._tried_at = None       # clock time of the last attempt, good or not
+        self._good_at = None        # clock time the last good fetch began
+        self._tried_at = None       # clock time the last attempt ended, good or not
+        self._worker = None         # the thread of the last attempt; read under _fetching
 
     def get(self, kid):
         """The JWK cached under `kid`, or None when the team publishes no such key. AccessError
         keys-unavailable when no fetch has ever been good, keys-stale when the last good one
-        is over STALE_LIMIT_S old."""
+        began over STALE_LIMIT_S ago. It waits only when it needs a fetch, FETCH_DEADLINE_S at
+        most for each attempt it waits behind."""
         with self._lock:
             now = self._clock()
-            if self._due(kid, now):
+            if not self._due(kid, now):
+                return self._answer(kid, now)
+        with self._fetching:
+            with self._lock:        # the attempt this caller waited behind may have served it
+                now = self._clock()
+                due = self._due(kid, now)
+            if due:
                 self._refresh(now)
-            if self._good_at is None:
-                raise AccessError('keys-unavailable', self.error)
-            if not 0 <= now - self._good_at <= STALE_LIMIT_S:
-                raise AccessError('keys-stale', self.error)
-            return self._keys.get(kid)
+            with self._lock:
+                return self._answer(kid, now)
 
     def _due(self, kid, now):
         fresh = self._good_at is not None and 0 <= now - self._good_at < KEY_TTL_S
@@ -385,14 +412,47 @@ class KeyCache:
             return False
         return self._tried_at is None or not 0 <= now - self._tried_at < REFETCH_S
 
+    def _answer(self, kid, now):
+        if self._good_at is None:
+            raise AccessError('keys-unavailable', self.error)
+        if not 0 <= now - self._good_at <= STALE_LIMIT_S:
+            raise AccessError('keys-stale', self.error)
+        return self._keys.get(kid)
+
     def _refresh(self, now):
-        self._tried_at = now
+        """One fetch attempt begun at `now`, by the caller that holds _fetching. Freshness runs
+        from its beginning; the wait before the next attempt runs from its end, so an attempt
+        that took long is not followed at once by another."""
+        table, error = self._attempt()
+        with self._lock:
+            self._tried_at = self._clock()
+            if table is None:
+                self.error = error
+            else:
+                self._keys, self._good_at, self.error = table, now, ''
+
+    def _attempt(self):
+        """(the key table, '') from one run of the fetcher on a thread of its own, or (None, the
+        reason): the fetcher's or key_table's AccessError, else keys-fetch. That covers a
+        fetcher with no answer after FETCH_DEADLINE_S, a thread that cannot be started, and
+        the thread of an earlier attempt still alive, when the fetcher is not called."""
+        failed = None, 'keys-fetch'
+        if self._worker is not None and self._worker.is_alive():
+            return failed
+        box = []
+
+        def run():
+            try:
+                box.append((key_table(self._fetch(self.team, FETCH_TIMEOUT_S)), ''))
+            except AccessError as exc:
+                box.append((None, exc.reason))
+            except Exception:       # whatever a fetcher raises, the gate stays shut on it
+                box.append(failed)
+
+        self._worker = threading.Thread(target=run, name='hub-access-keys', daemon=True)
         try:
-            table = key_table(self._fetch(self.team, FETCH_TIMEOUT_S))
-        except AccessError as exc:
-            self.error = exc.reason
-            return
-        except Exception:           # whatever a fetcher raises, the gate stays shut on it
-            self.error = 'keys-fetch'
-            return
-        self._keys, self._good_at, self.error = table, now, ''
+            self._worker.start()
+        except RuntimeError:        # the process has no thread to give
+            return failed
+        self._worker.join(FETCH_DEADLINE_S)
+        return box[0] if box else failed
