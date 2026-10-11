@@ -953,8 +953,8 @@ class UnplacedGit(MainGit):
                     self.assertTrue(p.clean, text)
                     d = decide(event(tool, {'command': text, 'description': 'test'}, where, True, 'worker'),
                                self.w.ctx(environ={}))
-                    # in the main checkout the main-checkout rule reads New-Item's env: as a folder
-                    # there and refuses first
+                    # in the main checkout the main-checkout rule cannot pin New-Item's computed
+                    # item (env: joined with $n) to the env: drive and refuses first
                     main_item = where == self.w.main and 'New-Item' in text
                     self.jailed(d, 'main-checkout' if main_item else 'write-jail')
             with self.subTest(text, role='main'):
