@@ -1,7 +1,10 @@
 """`pull` of a pulled record (plan._plan_takeover): the record's own session takes over a dead
 pull (no branch by its `pulled_by`) without `release --reason`; another session, a live
 `pulled_by` branch, or no session refuses `already in flight` as before."""
-from kitlib.backlog.errors import Refusal, Usage
+from unittest import mock
+
+from kitlib.backlog import offer as omod
+from kitlib.backlog.errors import Failure, Refusal, Usage
 
 from tests.backlog.helpers import BRANCH, TODAY, StoreCase, priced
 
@@ -54,6 +57,65 @@ class PullTakeover(StoreCase):
         with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'DEAD')
         self.assertIn('already in flight', str(cm.exception))
+
+    def test_a_takeover_takes_no_ruling_or_blocker(self):
+        self.seed(self.pulled('DEAD', GONE))
+        for flag, kw in (('--ruling', dict(ruling='R-9001')), ('--blocker', dict(blocker='OTHER'))):
+            with self.subTest(flag=flag):
+                with self.assertRaises(Usage) as cm:
+                    self.verb('pull', 'DEAD', **kw)
+                self.assertIn('with no %s' % flag, str(cm.exception))
+                self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
+
+    def test_a_takeover_warns_of_a_live_pull_whose_scope_collides(self):
+        self.repo.git('branch', 'kit/live-one')
+        self.seed(self.pulled('DEAD', GONE, scope='area/shared/**'),
+                  self.pulled('LIVE', 'kit/live-one', session='other', scope='area/shared/x.py'))
+        change = self.verb('pull', 'DEAD')
+        self.assertIn('warning: scope collides with `LIVE`, in flight on kit/live-one',
+                      change.lines)
+        self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
+
+    def test_a_failed_branch_probe_holds_the_pull(self):
+        self.seed(self.pulled('DEAD', GONE))
+        with mock.patch.object(omod, 'live_branches', return_value=(None, 'git failed')):
+            with self.assertRaises(Refusal) as cm:
+                self.verb('pull', 'DEAD')
+        self.assertIn('already in flight', str(cm.exception))
+        self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
+
+    def land(self, branch):
+        """A `--no-ff` merge of `branch` on main with the subject a landing writes, then the
+        branch deleted, as a landing and its cleanup leave it."""
+        self.repo.git('checkout', '-q', '-b', branch)
+        self.repo.write('landed/%s.txt' % branch.replace('/', '-'), 'x\n')
+        self.repo.commit('work', 'landed')
+        self.repo.git('checkout', '-q', 'main')
+        self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge %s: its summary' % branch, branch)
+        self.repo.git('branch', '-D', branch)
+
+    def test_a_landed_pull_is_refused_not_taken_over(self):
+        self.land(GONE)
+        self.seed(self.pulled('DEAD', GONE))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'DEAD')
+        self.assertIn('which has landed on main', str(cm.exception))
+        self.assertIn('close the record', str(cm.exception))
+        self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
+
+    def test_a_landed_branch_of_a_longer_name_does_not_count(self):
+        self.land(GONE + '-two')
+        self.seed(self.pulled('DEAD', GONE))
+        self.verb('pull', 'DEAD')
+        self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
+
+    def test_a_history_git_cannot_read_fails_closed(self):
+        self.ctx.main_branch = 'no-such-main'
+        self.seed(self.pulled('DEAD', GONE))
+        with self.assertRaises(Failure) as cm:
+            self.verb('pull', 'DEAD')
+        self.assertIn('cannot read the history of no-such-main', str(cm.exception))
+        self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
 
     def test_a_live_branch_is_refused(self):
         self.repo.git('branch', 'kit/live-one')

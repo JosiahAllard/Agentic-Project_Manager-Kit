@@ -555,14 +555,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
             recorded = '%s (PM %s)' % (reason, ruling)
         if blocker is not None:
             recorded += ' (unblocks %s)' % blocker
-        for other in holding:
-            try:
-                if smod.scopes_collide(rec.all('scope'), other.all('scope')):
-                    lines.append('warning: scope collides with `%s`, in flight on %s'
-                                 % (other.id, other.get('pulled_by')))
-            except smod.UndecidableScope as exc:
-                lines.append('warning: scope cannot be compared with `%s` (in flight), so it is a '
-                             'collision: %s' % (other.id, exc))
+        lines += _collisions(rec, holding)
         displaced = ['%s rank %s priority %s' % (o.rec.id, o.rank, o.rec.get('priority'))
                      for o in offers] or ['-']
         changes += [('preempt', [recorded]), ('preempt_by', [branch]), ('preempt_at', [today]),
@@ -581,18 +574,53 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
                   ruling=ruling if (minus_one or not offered) else None)
 
 
+def _collisions(rec, holding):
+    """A warning line for each in-flight record in `holding` whose scope collides with `rec`'s
+    (or cannot be compared with it)."""
+    lines = []
+    for other in holding:
+        try:
+            if smod.scopes_collide(rec.all('scope'), other.all('scope')):
+                lines.append('warning: scope collides with `%s`, in flight on %s'
+                             % (other.id, other.get('pulled_by')))
+        except smod.UndecidableScope as exc:
+            lines.append('warning: scope cannot be compared with `%s` (in flight), so it is a '
+                         'collision: %s' % (other.id, exc))
+    return lines
+
+
+def landing_merge(root, main_branch, branch):
+    """The landing merge of `branch` on `main_branch` (`<short sha> <subject>`, the subject
+    `Merge <branch>` or `Merge <branch>: <summary>` as kitlib/gate/land.py writes it), or None
+    when its history has none. Failure when git cannot say."""
+    want = 'Merge %s' % branch
+    out, why = cmd.run_text(['log', '--merges', '--format=%h %s', '-F', '--grep', want,
+                             'refs/heads/%s' % main_branch, '--'], root)
+    if out is None:
+        raise Failure('cannot read the history of %s to see whether %s landed: %s'
+                      % (main_branch, branch, why))
+    for line in out.split('\n'):
+        _sha, _, subject = line.partition(' ')
+        if subject == want or subject.startswith(want + ': '):
+            return line
+    return None
+
+
 def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     """A pull of a pulled record. It refuses `already in flight`, unless the record's `session:` is
     the caller's session and its pull is dead by `next`'s test (omod.in_flight_split: git
     answered and no branch, remote-tracking branch or worktree has its `pulled_by`); then the
     pull moves to this branch, `pulled_at` restamped, any pre-emption lines kept as the first pull
-    wrote them. A failed git probe holds the pull (fail closed)."""
+    wrote them, with the scope-collision warnings a pre-empting pull prints. A failed git probe
+    holds the pull (fail closed). A `pulled_by` that landed on the main branch (a `Merge <branch>`
+    merge in its history) is not dead but unclosed: that refuses, and a git that cannot say
+    fails."""
     rid, old = rec.id, rec.get('pulled_by')
     busy = Refusal('`%s` is already in flight - pulled %s by %s'
                    % (rid, rec.get('pulled_at'), old))
     if not ctx.session or rec.get('session') != ctx.session:
         raise busy
-    _holding, dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
+    holding, dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
     if rec not in dead:
         raise busy
     given = [f for f, v in (('--reason', reason), ('--ruling', ruling), ('--blocker', blocker))
@@ -600,12 +628,17 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     if given:
         raise Usage('`%s` is a dead pull of this session (pulled_by %s has no branch): `pull %s` '
                     'takes it over as it stands, with no %s' % (rid, old, rid, ', '.join(given)))
+    merge = landing_merge(ctx.root, ctx.main_branch, old)
+    if merge:
+        raise Refusal('`%s` was pulled by %s, which has landed on %s (%s): close the record, do '
+                      'not take it over' % (rid, old, ctx.main_branch, merge))
     branch = ctx.current_branch()
     today = ctx.date()
     pairs = rmod.apply_changes(rec.pairs(), [('pulled_at', [today]), ('pulled_by', [branch])])
     lines = ['PULLED %s - took over a dead pull from %s (it has no branch)' % (rid, old),
              '  pulled_at:  %s -> %s' % (rec.get('pulled_at'), today),
              '  pulled_by:  %s -> %s' % (old, branch)]
+    lines += _collisions(rec, holding)
     return Change({rid: _text(pairs, rec.body)},
                   'backlog: pull %s onto %s, taking over a dead pull from %s' % (rid, branch, old),
                   lines)
