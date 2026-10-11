@@ -159,13 +159,23 @@ the `kit_stubs.py write -C <repo>` command, for a repository whose stubs are not
 
 ### Plugin install (local marketplace)
 
-`.claude-plugin/marketplace.json` lists the plugin with `"source": "./"`, so a kit checkout is a
-marketplace of its own. Add it by path and install from it: `claude plugin marketplace add <kit>`,
-then `claude plugin install pm-kit@pm-kit`. A relative-path plugin of a local marketplace
-loads in place, so `${CLAUDE_PLUGIN_ROOT}` is the checkout the stubs run: the skills and agents write
-every kit-only path (the tools above, `kitlib/`, `optional/`, the kit's docs) as
-`${CLAUDE_PLUGIN_ROOT}/<path>` (tests/skills checks it), and only stub tools repo-relative. Source:
-https://code.claude.com/docs/en/plugin-marketplaces. That `${CLAUDE_PLUGIN_ROOT}` is substituted in
+Each account folder installs the plugin from the kit's export of pushed main, not from the
+checkout (docs/plugin-source.md). `python tools/plugin_refresh.py --migrate --apply` adds the
+export root as the marketplace `pm-kit` and installs `pm-kit@pm-kit` in every account folder; after
+each kit landing `python tools/plugin_refresh.py --apply` refreshes them. Each is a dry run without
+`--apply`. Migrate one folder first (`--folder DIR`, repeatable), check a session there, then the
+rest; `--apply` refuses a folder that is not migrated (docs/plugin-source.md "Migrating"). The
+exact `claude plugin` subcommands and flags these run, and the claim that an old session's MCP
+server holds files open in the folder it loaded, are inferences (docs/plugin-source.md "Open
+questions"). Adding the checkout itself as a marketplace (its `.claude-plugin/marketplace.json` lists
+the plugin with `"source": "./"`) is the old way, which `--migrate` replaces. Whether Claude Code loads a relative-path plugin of a local marketplace in
+place or copies it into its plugin cache is not settled: the plugins reference
+(https://code.claude.com/docs/en/plugins/loading, "In-place and copied plugins") says in place, and
+an install from the checkout was observed copied into the cache (docs/plugin-source.md "Open
+questions"). Either way `${CLAUDE_PLUGIN_ROOT}` holds pushed kit main, not the checkout the stubs
+run: the skills and agents write every kit-only path (the tools above, `kitlib/`, `optional/`, the
+kit's docs) as `${CLAUDE_PLUGIN_ROOT}/<path>` (tests/skills checks it), and only stub tools
+repo-relative. Source: https://code.claude.com/docs/en/plugin-marketplaces. That `${CLAUDE_PLUGIN_ROOT}` is substituted in
 agent and skill text is unverified: confirm it in one real loaded session before the first install.
 `claude plugin validate` passes with warnings only (no author field; CLAUDE.md is not loaded) and
 reports no reserved name.
