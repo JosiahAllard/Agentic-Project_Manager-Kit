@@ -7,8 +7,9 @@ Per kind, over its finished runs (history `how` "done") in the last `days`:
   fewer than MIN_RUNS (the lock's history_min_runs) runs: the entry is kept as it is
   cpu samples  the lock measures a run's job object only, so a finished run is a cpu sample
             only when its line shows work in the job (skip_reason): it is not `partial`, it
-            held MIN_HELD_S or more, it has `cpu_s` and `peak_cpu_cores`, and its cpu_s is at
-            least MIN_BUSY_THREADS x held_s. Fewer than MIN_RUNS cpu samples: the entry is
+            held MIN_HELD_S or more, it has `cpu_s` and a `peak_cpu_cores` above 0 (a peak of
+            0 is a peak never measured), and its cpu_s is at least MIN_BUSY_THREADS x held_s,
+            compared on the figures as written. Fewer than MIN_RUNS cpu samples: the entry is
             kept as it is, warn_min too, and the note counts the skipped runs by reason. A
             kind that really idles in its job is skipped the same way and keeps its size. Not
             caught: a wrapper that is itself that busy while the work runs outside the job.
@@ -30,15 +31,18 @@ per reason, when any run was skipped), p90 and max peak cpu slots of the cpu sam
 memory (MB), and the layout figures used. p90 is the nearest-rank percentile.
 """
 import copy
+import decimal
 import math
 
 WARN_MARGIN = 1.5
 SATURATED = 0.9
-MIN_HELD_S = 10             # two of the lock's 5 s sample windows (usage_sample_s); under: no peak
+# The lock records a peak when a 5 s sample window (usage_sample_s) closes; the first closes
+# about 6 s into a run. Under 10 s a run has one window at most, often none: no peak to trust.
+MIN_HELD_S = 10
 MIN_BUSY_THREADS = 0.1      # cpu_s / held_s, the job's mean busy cpu threads, of a run seen working
 SKIPPED = (('partial', 'partial (docker exec: use partly outside the job)'),
            ('short', 'held under %d s (no peak window)' % MIN_HELD_S),
-           ('no_figures', 'without cpu figures'),
+           ('no_figures', 'without cpu figures (none, or a peak of 0)'),
            ('idle', "under %s cpu thread busy (work outside the run's job, or idle)"
             % MIN_BUSY_THREADS))
 
@@ -59,13 +63,20 @@ def skip_reason(d):
     None when its line shows work in the run's job (see the module note)."""
     if d.get('partial'):
         return 'partial'
-    if _num(d, 'held_s') < MIN_HELD_S:
+    held, cpu_s, peak = _num(d, 'held_s'), _num(d, 'cpu_s'), _num(d, 'peak_cpu_cores')
+    if held is None or held < MIN_HELD_S:
         return 'short'
-    if _num(d, 'cpu_s') is None or _num(d, 'peak_cpu_cores') is None:
-        return 'no_figures'
-    if _num(d, 'cpu_s') < MIN_BUSY_THREADS * _num(d, 'held_s'):
+    if cpu_s is None or not peak:
+        return 'no_figures'         # a peak of 0 was never measured
+    if _dec(cpu_s) < _dec(MIN_BUSY_THREADS) * _dec(held):
         return 'idle'
     return None
+
+
+def _dec(x):
+    """`x` as the decimal figure it is written as, so the busy edge is exact: in binary floats
+    0.1 * 12 is more than 1.2."""
+    return decimal.Decimal(repr(x))
 
 
 def _skipped_text(skipped):

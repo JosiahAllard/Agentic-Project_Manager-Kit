@@ -121,7 +121,8 @@ class IntegerSizes(unittest.TestCase):
         new, notes = self.prop(hist)
         self.assertEqual(new['engine-test']['cpu'], 2)
         self.assertIn('engine-test: kept (0 cpu sample(s) of 3 finished run(s); 3 needed; skipped: '
-                      '3 without cpu figures); cpu medium -> 2 (its size on this layout)', notes)
+                      '3 without cpu figures (none, or a peak of 0)); cpu medium -> 2 '
+                      '(its size on this layout)', notes)
 
     def test_every_kind_in_the_proposal_is_a_whole_number(self):
         hist = [booked('engine-test', 60, 2.5, cores=6) for _ in range(3)]
