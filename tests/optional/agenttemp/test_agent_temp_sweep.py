@@ -267,13 +267,13 @@ class SessionDirs(Case):
         self.assertTrue(os.path.isfile(os.path.join(self.dir, 'kit-conductor', 'plan.md')))
 
     def test_keep_is_case_insensitive_and_matches_by_relpath_not_basename(self):
-        put(os.path.join(self.dir, 'Kit-Conductor', 'a.txt'))
-        put(os.path.join(self.dir, 'x', 'kit-conductor', 'a.txt'))
-        self.session('proj', 'kit-conductor')
-        got = self.sweep(apply=True, keep=['KIT-CONDUCTOR'])
-        self.assertEqual(got['Kit-Conductor'], 'kept')
+        put(os.path.join(self.dir, 'Work-Notes', 'a.txt'))
+        put(os.path.join(self.dir, 'x', 'work-notes', 'a.txt'))
+        self.session('proj', 'work-notes')
+        got = self.sweep(apply=True, keep=['wORK-nOTES'])
+        self.assertEqual(got['Work-Notes'], 'kept')
         self.assertEqual(got['x'], 'removed')
-        self.assertEqual(got['claude/proj/kit-conductor'], 'removed')
+        self.assertEqual(got['claude/proj/work-notes'], 'removed')
         self.assertFalse(S.is_kept('claude/proj/a', ['claude*a']))       # * matches within one name
         self.assertFalse(S.is_kept('claude/proj', ['claude/proj/a']))   # a longer item keeps no folder
         self.assertTrue(S.is_kept('claude/proj/a', ['claude/proj']))    # a kept folder keeps what is in it

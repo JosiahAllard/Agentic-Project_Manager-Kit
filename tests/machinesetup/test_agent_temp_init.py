@@ -25,9 +25,8 @@ def at():
 
 class DefaultFolder(unittest.TestCase):
     def test_default_agent_temp_is_AgentTemp_on_the_kits_drive(self):
-        for kit, want in (('C:\\x\\kit', 'C:\\AgentTemp'), ('D:\\kit', 'D:\\AgentTemp'),
-                          ('Z:\\GitHub\\kit', 'Z:\\AgentTemp')):
-            self.assertEqual(at().default_agent_temp(kit), want, kit)
+        for kit, drive in (('C:\\x\\kit', 'C:'), ('D:\\kit', 'D:'), ('Z:\\src\\kit', 'Z:')):
+            self.assertEqual(at().default_agent_temp(kit), drive + '\\AgentTemp', kit)
         self.assertIsNone(at().default_agent_temp('\\\\server\\share\\kit'))
 
 
