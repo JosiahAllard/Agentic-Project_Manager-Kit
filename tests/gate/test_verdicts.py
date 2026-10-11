@@ -3,6 +3,8 @@ GateRepoCase, and ready() on fake tip_of and strict_hits callables."""
 import hashlib
 import json
 import os
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -169,16 +171,95 @@ class Queue(QueueCase):
             V.add(self.common, given('kit/b', tip_b))   # an unreadable entry is not replaced
         self.assertIs(type(cm.exception), V.VerdictError)
         self.assertIn('not a verdict entry', str(cm.exception))
+        with self.assertRaises(V.OtherBranch):
+            V.drop(self.common, 'kit/B')                 # unreadable, and named for kit/b
         self.assertTrue(V.drop(self.common, 'kit/b'))    # drop without a tip removes it
-        self.assertTrue(V.drop(self.common, 'kit/c'))
+        with self.assertRaises(V.OtherBranch):
+            V.drop(self.common, 'kit/c')                 # it holds kit/C's entry
+        self.assertTrue(V.drop(self.common, 'kit/C'))
         self.assertEqual([e['branch'] for e in V.entries(self.common)], ['kit/a'])
 
-    def test_a_temp_file_left_by_a_crash_is_not_an_entry(self):
+    def test_drop_refuses_a_branch_differing_only_in_case(self):
+        _, tip = self.branch('a', {'a.txt': 'a\n'})
+        V.add(self.common, given('kit/a', tip))
+        for t in (None, tip):
+            with self.assertRaises(V.OtherBranch, msg=t):
+                V.drop(self.common, 'kit/A', tip=t)
+        self.assertEqual([e['branch'] for e in V.entries(self.common)], ['kit/a'])
+
+    def test_a_temp_file_left_by_a_dead_write_is_named_and_kept(self):
         folder = V.queue_dir(self.common)
         os.makedirs(folder)
-        with open(os.path.join(folder, '.kit%2Fa.json.0123abcd.tmp'), 'w', encoding='utf-8') as f:
+        tmp = os.path.join(folder, '.kit%2Fa.json.0123abcd.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
             f.write('{')
-        self.assertEqual(V.scan(self.common), ([], []))
+        good, bad = V.scan(self.common)
+        self.assertEqual((good, [p for p, _ in bad]), ([], [tmp]))
+        self.assertIn('temp file', bad[0][1])
+        with self.assertRaises(V.VerdictError):
+            V.entries(self.common)
+        self.assertEqual(self.folder_names(), [os.path.basename(tmp)])
+
+    def test_add_refuses_a_windows_device_name(self):
+        _, tip = self.branch('a', {'a.txt': 'a\n'})
+        for name in ('con', 'aux.x'):
+            with self.assertRaises(V.BadEntry, msg=name):
+                V.add(self.common, given(name, tip))
+        self.assertEqual(self.folder_names(), [])
+
+
+class Lock(QueueCase):
+    def race(self, call):
+        """Queue kit/a at its first tip, move it, then run call(first) with an add of the new tip
+        started between call's read of the entry and its write; wait for both. `(second, queue)`."""
+        wt, first = self.branch('a', {'a.txt': 'a\n'})
+        V.add(self.common, given('kit/a', first))
+        second = self.more(wt, 'a', {'a.txt': 'b\n'})
+        real_load, racer, failed = V._load, [], []
+
+        def add_second():
+            try:
+                V.add(self.common, given('kit/a', second))
+            except Exception as e:                       # seen by the assertion below
+                failed.append(e)
+
+        def load(path, branch):
+            got = real_load(path, branch)
+            if not racer:
+                racer.append(threading.Thread(target=add_second))
+                racer[0].start()
+                racer[0].join(0.5)                       # with no lock the add ends here
+            return got
+        with mock.patch.object(V, '_load', side_effect=load):
+            self.assertTrue(call(first))
+        racer[0].join(V.LOCK_WAIT_S + 5)
+        self.assertEqual(failed, [])
+        return second, V.entries(self.common)
+
+    def test_an_add_racing_a_drop_survives(self):
+        second, queue = self.race(lambda first: V.drop(self.common, 'kit/a', tip=first))
+        self.assertEqual([(e['tip'], e['state']) for e in queue], [(second, V.QUEUED)])
+
+    def test_an_add_racing_mark_failed_survives(self):
+        second, queue = self.race(lambda first: V.mark_failed(self.common, 'kit/a', 'red', tip=first))
+        self.assertEqual([(e['tip'], e['state']) for e in queue], [(second, V.QUEUED)])
+
+    def test_a_held_lock_is_waited_for_and_a_stale_one_removed(self):
+        _, tip = self.branch('a', {'a.txt': 'a\n'})
+        folder = V.queue_dir(self.common)
+        os.makedirs(folder)
+        lock = os.path.join(folder, V.LOCK_NAME)
+        with open(lock, 'w', encoding='utf-8') as f:
+            f.write('pid 1\n')
+        with mock.patch.object(V, 'LOCK_WAIT_S', 0.3):
+            with self.assertRaises(V.VerdictError) as cm:
+                V.add(self.common, given('kit/a', tip))
+        self.assertIn('locked', str(cm.exception))
+        self.assertEqual(self.folder_names(), [V.LOCK_NAME])
+        old = time.time() - V.LOCK_STALE_S - 5
+        os.utime(lock, (old, old))
+        V.add(self.common, given('kit/a', tip))
+        self.assertEqual(self.folder_names(), ['kit%2Fa.json'])     # the lock is gone after
 
 
 def entry(branch, utc, tip=None, **over):
@@ -230,6 +311,13 @@ class Ready(unittest.TestCase):
         self.assertEqual(batch, [])
         self.assertEqual([(s.branch, s.reason) for s in skipped],
                          [('kit/unknown', V.SKIP_STRICT), ('kit/gone', V.SKIP_STALE)])
+
+    def test_strict_hits_that_is_not_a_list_holds_the_entry(self):
+        for hits in (None, False, 0, '', (), {}):
+            items = [entry('kit/a', '2026-01-01T00:00:01Z')]
+            batch, skipped = V.ready(items, tips(items), lambda e: hits, 5)
+            self.assertEqual((batch, [s.reason for s in skipped]), ([], [V.SKIP_STRICT]), msg=hits)
+            self.assertIn('cannot tell', skipped[0].why)
 
     def test_a_stale_entry_is_not_asked_about_strict_paths(self):
         items = [entry('kit/a', '2026-01-01T00:00:01Z', risk='High')]

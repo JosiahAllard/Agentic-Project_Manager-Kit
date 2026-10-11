@@ -10,6 +10,17 @@ the branch back and holds no character Windows refuses. The common dir is shared
 tree of the repository and never tracked. Every write is a temp file in the same folder, then
 os.replace; a re-add for the same branch replaces its entry.
 
+The queue lock: add, drop, mark_failed and scan each run whole (read, check, then write or
+remove) holding `<queue folder>/.queue.lock`, a file made with O_CREAT|O_EXCL and removed when
+the call ends, so none of them acts on an entry another replaced between its read and its write.
+A call waits up to LOCK_WAIT_S for the lock, then raises VerdictError and does nothing. Stale-lock
+rule: a holder keeps the lock for milliseconds, so a lock file last written more than
+LOCK_STALE_S ago was left by a holder that died (a killed process skips its finally) and the
+next caller removes it and takes the lock. A lock file that cannot be removed when a call ends is
+left to that rule. Temp files are made only under the lock, so one that scan (holding it) sees
+was left by a write that died: scan reports it among the files that are not entries, which stops
+entries(); nothing here deletes it.
+
 An entry (every key always present):
 
   branch          the branch name, as `git branch` names it (kit/x)
@@ -30,14 +41,17 @@ An entry (every key always present):
 
 Errors (all VerdictError): BadEntry for a malformed entry or branch name given, nothing read or
 written; TipMismatch when the tip is not the branch's head, or there is no such branch;
-VerdictError itself for a queue file that cannot be read or written, or is not an entry, or git
-giving no answer. Nothing here prints.
+OtherBranch when the file for the branch named holds another branch's entry (names that differ
+only in case share one file on Windows); VerdictError itself for a queue file that cannot be read
+or written, or is not an entry, the queue lock not had in time, or git giving no answer. Nothing
+here prints.
 
-Concurrency (inference, not tested): add, drop and mark_failed read, then replace or remove,
-without a lock. A writer racing another on the same branch can lose that entry; it can never
-make a branch land, because a landing also checks each branch's head against the queued tip.
+Residual race (inference, not tested): two callers that find the same stale lock at once can
+both remove it, the second removing the lock the first just made; that needs a holder to have
+died first. A wall-clock jump of more than LOCK_STALE_S can make a held lock look stale.
 """
 import collections
+import contextlib
 import datetime
 import json
 import os
@@ -67,6 +81,10 @@ DEVICES = frozenset(['CON', 'PRN', 'AUX', 'NUL'] + ['COM%d' % i for i in range(1
                     + ['LPT%d' % i for i in range(1, 10)])
 RETRIES = 5
 RETRY_SLEEP = 0.2
+LOCK_NAME = '.queue.lock'
+LOCK_WAIT_S = 10.0          # how long add, drop and mark_failed wait for the queue lock
+LOCK_STALE_S = 60.0         # a lock file older than this was left by a crash
+LOCK_POLL_S = 0.05
 
 # Why ready() leaves an entry out of the batch (Skip.reason).
 SKIP_FAILED = 'failed'      # a landing marked it failed; a re-add queues it again
@@ -89,6 +107,10 @@ class BadEntry(VerdictError):
 
 class TipMismatch(VerdictError):
     """The tip to queue is not the branch's head (or the branch does not exist)."""
+
+
+class OtherBranch(VerdictError):
+    """The file for the branch named holds another branch's entry."""
 
 
 def utc(when=None):
@@ -215,9 +237,57 @@ def _load(path, branch):
     if why:
         raise VerdictError('%s is not a verdict entry: %s' % (path, why))
     if entry['branch'] != branch:
-        raise VerdictError('%s holds the entry of %s, not %s (names that differ only in case share '
-                           'one file on Windows)' % (path, entry['branch'], branch))
+        raise OtherBranch('%s holds the entry of %s, not %s (names that differ only in case share '
+                          'one file on Windows)' % (path, entry['branch'], branch))
     return entry
+
+
+def _clear_stale(path):
+    """Remove the lock file `path` when it was last written more than LOCK_STALE_S ago."""
+    try:
+        if time.time() - os.path.getmtime(path) > LOCK_STALE_S:
+            os.remove(path)
+    except OSError:                      # gone already, or its holder is removing it
+        pass
+
+
+@contextlib.contextmanager
+def _locked(common_dir):
+    """Hold the queue lock (the module docstring says how) for the `with` body."""
+    folder = queue_dir(common_dir)
+    lock = os.path.join(folder, LOCK_NAME)
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError as e:
+        raise VerdictError('cannot make %s: %s' % (folder, e))
+    deadline = time.monotonic() + LOCK_WAIT_S
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            _clear_stale(lock)
+        except PermissionError:          # Windows: the lock file is being removed
+            pass
+        except OSError as e:
+            raise VerdictError('cannot take the queue lock %s: %s' % (lock, e))
+        if time.monotonic() >= deadline:
+            raise VerdictError('the verdict queue stayed locked for %.0f s (%s); it is removed by '
+                               'the next call once %.0f s old' % (LOCK_WAIT_S, lock, LOCK_STALE_S))
+        time.sleep(LOCK_POLL_S)
+    try:
+        try:
+            os.write(fd, ('pid %d at %s\n' % (os.getpid(), utc())).encode('ascii'))
+        except OSError:                  # the note is for a reader; the file is the lock
+            pass
+        finally:
+            os.close(fd)
+        yield
+    finally:
+        try:
+            _retry(os.remove, lock)
+        except OSError:                  # left to the stale-lock rule
+            pass
 
 
 def _write(path, entry):
@@ -260,26 +330,35 @@ def add(common_dir, entry, now=None):
         raise TipMismatch('there is no branch %s' % branch)
     if head != tip:
         raise TipMismatch('%s is at %s, not the tip given %s' % (branch, head, tip))
-    _load(path, branch)                  # an unreadable entry, or another branch's, is not replaced
     stored = dict(entry, records=list(entry['records']), queued_utc=utc(now), state=QUEUED,
                   last_result=None)
-    return _write(path, stored), stored
+    with _locked(common_dir):
+        _load(path, branch)              # an unreadable entry, or another branch's, is not replaced
+        return _write(path, stored), stored
 
 
 def scan(common_dir):
     """`(entries, bad)`: every well-formed entry, oldest first, and `[(path, why)]` for each file
-    in the queue folder that is not one (temp files left out)."""
+    in the queue folder that is not one, a temp file a dead write left among them."""
     folder = queue_dir(common_dir)
-    try:
-        names = sorted(os.listdir(folder))
-    except FileNotFoundError:
+    if not os.path.isdir(folder):
         return [], []
-    except OSError as e:
-        raise VerdictError('cannot list %s: %s' % (folder, e))
+    with _locked(common_dir):
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError as e:
+            raise VerdictError('cannot list %s: %s' % (folder, e))
+        return _scan(folder, names)
+
+
+def _scan(folder, names):
     good, bad = [], []
     for name in names:
         path = os.path.join(folder, name)
+        if name == LOCK_NAME:                # ours: scan holds it
+            continue
         if name.startswith('.') and name.endswith('.tmp'):
+            bad.append((path, 'a temp file a write that died left behind; remove it by hand'))
             continue
         branch = branch_of(name)
         if branch is None:
@@ -317,19 +396,30 @@ def order(items):
 def drop(common_dir, branch, tip=None):
     """Remove `branch`'s entry: True when one was removed, False when none is queued (or, with
     `tip`, the entry queued is for another tip and is kept). Without `tip` an unreadable entry
-    file is removed too."""
+    file is removed too. OtherBranch, and nothing removed, when the file holds another branch's
+    entry or, unreadable, has another branch's name in another case."""
     path = entry_path(common_dir, branch)
-    if tip is not None:
-        entry = _load(path, branch)
-        if entry is None or entry['tip'] != tip:
+    with _locked(common_dir):
+        try:
+            entry = _load(path, branch)
+        except OtherBranch:
+            raise
+        except VerdictError:
+            if tip is not None:
+                raise
+            if os.path.basename(path) not in os.listdir(os.path.dirname(path)):
+                raise OtherBranch('%s is not named for %s (names that differ only in case share '
+                                  'one file on Windows): nothing removed' % (path, branch))
+        else:
+            if entry is None or (tip is not None and entry['tip'] != tip):
+                return False
+        try:
+            _retry(os.remove, path)
+        except FileNotFoundError:
             return False
-    try:
-        _retry(os.remove, path)
-    except FileNotFoundError:
-        return False
-    except OSError as e:
-        raise VerdictError('cannot remove %s: %s' % (path, e))
-    return True
+        except OSError as e:
+            raise VerdictError('cannot remove %s: %s' % (path, e))
+        return True
 
 
 def mark_failed(common_dir, branch, why, tip=None):
@@ -339,12 +429,13 @@ def mark_failed(common_dir, branch, why, tip=None):
     if not isinstance(why, str) or not why.strip():
         raise VerdictError('say why the landing failed')
     path = entry_path(common_dir, branch)
-    entry = _load(path, branch)
-    if entry is None or (tip is not None and entry['tip'] != tip):
-        return False
-    entry.update(state=FAILED, last_result=why.strip())
-    _write(path, entry)
-    return True
+    with _locked(common_dir):
+        entry = _load(path, branch)
+        if entry is None or (tip is not None and entry['tip'] != tip):
+            return False
+        entry.update(state=FAILED, last_result=why.strip())
+        _write(path, entry)
+        return True
 
 
 def ready(items, tip_of, strict_hits, batch_max):
@@ -355,9 +446,9 @@ def ready(items, tip_of, strict_hits, batch_max):
     Checked in this order, the first that holds naming the reason: not well-formed (invalid);
     state failed (failed); tip_of(branch) is not the queued tip (stale: the branch moved, or
     tip_of gave None because it is gone or git could not say); risk High (high); strict_hits(entry)
-    is a non-empty list of paths (strict) or None, which means it cannot be told (strict too);
-    the batch already holds batch_max (later). Nothing here calls git: the caller's tip_of and
-    strict_hits do."""
+    is a non-empty list of paths (strict), or not a list at all (None, False, '' ...), which means
+    it cannot be told (strict too); the batch already holds batch_max (later). Only an empty list
+    lets an entry in. Nothing here calls git: the caller's tip_of and strict_hits do."""
     if isinstance(batch_max, bool) or not isinstance(batch_max, int) or batch_max < 1:
         raise ValueError('batch_max is a whole number of at least 1, not %r' % (batch_max,))
     batch, skipped = [], []
@@ -380,7 +471,7 @@ def ready(items, tip_of, strict_hits, batch_max):
             skipped.append(Skip(branch, SKIP_HIGH, 'High risk lands alone', e))
             continue
         hits = strict_hits(e)
-        if hits is None:
+        if not isinstance(hits, list):
             skipped.append(Skip(branch, SKIP_STRICT,
                                 'cannot tell whether it touches a strict path: lands alone', e))
             continue
