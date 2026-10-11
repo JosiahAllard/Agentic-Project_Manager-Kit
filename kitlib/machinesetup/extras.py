@@ -1,12 +1,11 @@
 """Machine extras (docs/machine-setup.md "Extras"): the machine schedule shortcut, the agents' temp
 folder permissions and the comfy entry point's lock tool (not in fresh mode: the plugin's lock tool
 is used). Each is read first and planned only when it differs; Host is the Windows side (also the
-`claude plugin` CLI that kitlib.machinesetup.plugin runs), and tests pass a fake.
+`claude` runner that kitlib.machinesetup.plugin migrates each account with), and tests pass a fake.
 """
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 
@@ -30,7 +29,7 @@ def _ps_quote(s):
 
 class Host(object):
     """The real machine: PowerShell for shortcuts and the user environment, icacls, guard.py, the
-    `claude plugin` CLI."""
+    `claude` runner."""
 
     def _ps(self, script):
         r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
@@ -87,25 +86,40 @@ class Host(object):
             raise ValueError('guard.py --settings-entry printed no {event: [groups]} object')
         return entry
 
-    def claude(self):
-        """The `claude` CLI on PATH, or None."""
-        return shutil.which('claude')
+    def plugin_runner(self, home, claude=None, timeout=None, environ=None):
+        """The `claude` runner of the plugin step: kitlib.pluginsource.claude.Runner (the claude on
+        PATH unless `claude` names one; CLAUDE_CONFIG_DIR set to the folder, removed for ~/.claude,
+        by its env_for), with run_tree as its subprocess.run."""
+        from kitlib.pluginsource import claude as pclaude
+        return pclaude.Runner(home, claude=claude, run_proc=run_tree,
+                              timeout=timeout or pclaude.TIMEOUT, environ=environ)
 
-    def plugin_install(self, config_dir, kit, plugin_id):
-        """docs/install.md "Plugin install (local marketplace)" for one account: `claude plugin
-        marketplace add <kit>`, then `claude plugin install <plugin_id>`, with CLAUDE_CONFIG_DIR set to
-        `config_dir` so the CLI writes that account's settings.json and plugins folder."""
-        exe = self.claude()
-        if not exe:
-            raise RuntimeError('no claude CLI on PATH')
-        env = dict(os.environ, CLAUDE_CONFIG_DIR=config_dir)
-        for args in (['plugin', 'marketplace', 'add', kit], ['plugin', 'install', plugin_id]):
-            r = subprocess.run([exe] + args, capture_output=True, text=True, encoding='utf-8',
-                               errors='replace', env=env, timeout=300, stdin=subprocess.DEVNULL,
-                               creationflags=_NOWIN)
-            if r.returncode != 0:
-                raise RuntimeError('claude %s exit %d: %s' % (' '.join(args), r.returncode,
-                                                              (r.stderr or r.stdout or '').strip()))
+
+KILL_GRACE = 10
+
+
+def run_tree(cmd, timeout=None, **kw):
+    """subprocess.run for kitlib.pluginsource.claude.Runner, the command's whole process tree in a
+    job (kitlib.proc.job.Job): past `timeout` the job ends every process in it, then
+    subprocess.TimeoutExpired. subprocess.run kills only its direct child, then reads the pipes to
+    their end: a claude installed through npm is a .cmd shim, so that child is cmd.exe and node is
+    its child, which holds the pipe open and keeps run waiting for it. Returns CompletedProcess."""
+    from kitlib.proc import job as kjob
+    j = kjob.Job(kill_on_close=False)
+    try:
+        p = j.start(cmd, **kw)
+        try:
+            out, err = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            j.terminate()
+            try:
+                p.communicate(timeout=KILL_GRACE)
+            except subprocess.TimeoutExpired:
+                pass
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+    finally:
+        j.close()
 
 
 def pythonw():
