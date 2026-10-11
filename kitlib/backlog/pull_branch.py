@@ -1,5 +1,5 @@
-"""`pull` never records the main branch as `pulled_by` (KIT-PULL-MAIN-CHECKOUT-BRANCH;
-docs/backlog-store.md "Lifecycle changes").
+"""`pull` never records the main branch as `pulled_by` (docs/backlog-store.md
+"Lifecycle changes").
 
 A pull records the branch it was made from (plan.Context.current_branch: `--as`, else the branch
 checked out in -C). Made in the main checkout, that is the main branch, which never lands, so the

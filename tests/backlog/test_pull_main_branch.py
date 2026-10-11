@@ -1,4 +1,4 @@
-"""A pull that would record the main branch as `pulled_by` is refused (KIT-PULL-MAIN-CHECKOUT-BRANCH):
+"""A pull that would record the main branch as `pulled_by` is refused:
 a landing closes only what the landed branch holds pulled, and the main branch never lands, so such
 a record would stay pulled for ever. kitlib.backlog.pull_branch, end to end through Store.write on
 a ref store whose repository has `main` checked out (the main checkout)."""

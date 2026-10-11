@@ -1,5 +1,5 @@
-"""A landing closes the records a branch commit names in a `Closes:` trailer, whoever pulled them
-(KIT-PULL-MAIN-CHECKOUT-BRANCH): a record pulled from the main checkout holds `pulled_by: main`,
+"""A landing closes the records a branch commit names in a `Closes:` trailer, whoever pulled them:
+a record pulled from the main checkout holds `pulled_by: main`,
 which no landing matches. kitlib.backlog.at_landing.close_landed with the tip and base that
 kitlib.gate.land.Lander.close_pulled passes, on a ref store in a scratch repository."""
 import unittest
@@ -97,9 +97,9 @@ class ClosesByTrailer(StoreLandCase):
 class TrailerValues(unittest.TestCase):
 
     def test_ids_are_the_first_word_of_each_comma_separated_value(self):
-        self.assertEqual(at_landing.closes_ids(['D002-43', 'A, B (both)', 'kit.x_y', '#12, (C)',
+        self.assertEqual(at_landing.closes_ids(['EX-43', 'A, B (both)', 'kit.x_y', '#12, (C)',
                                                 '  ', 'E done']),
-                         ['D002-43', 'A', 'B', 'kit.x_y', 'E'])
+                         ['EX-43', 'A', 'B', 'kit.x_y', 'E'])
 
 
 if __name__ == '__main__':
