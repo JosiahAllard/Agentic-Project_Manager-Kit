@@ -310,6 +310,18 @@ class ContextTest(unittest.TestCase):
         self.assertIn("could not check rulings: LookupError", self.build({}, cwd=ROOT + "/zzz"))
         self.assertIn("could not check rulings: ValueError", self.build({}, cwd="C:/elsewhere"))
 
+    def test_default_read_takes_a_bom_sessions_file(self):
+        # regression-only: the default _read is utf-8-sig, so a PowerShell-saved sessions file loads
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "sessions.json")
+            with open(p, "wb") as f:
+                f.write(b"\xef\xbb\xbf" + json.dumps({"alpha": ENTRY}).encode("utf-8"))
+            text = coordinatorstart.context(
+                {"ledger": "L.md", "repos_root": ROOT, "cap": {"alpha": [{"cap": 4}]}},
+                env={}, cwd=ROOT + "/alpha", now=NOW, procs=[], run=lambda a, timeout=10: "G",
+                home="H", pid=1, pm_cfg={"sessions_file": p})
+        self.assertIn("- agent cap 4", text)
+
     def test_repos_root_and_ledger_come_from_the_config(self):
         self.assertIn("could not check rulings: repos_root not configured", self.build({"repos_root": None}))
         self.assertIn("could not check rulings: ledger not configured",
