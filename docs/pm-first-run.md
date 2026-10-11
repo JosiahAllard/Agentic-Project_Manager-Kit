@@ -33,6 +33,13 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    Success: it prints the layout (threads, cpu and gpu slots) and what holds each slot. Never run
    `division`: that is the owner's choice (docs/lock-api.md).
 
+5a. **Set up the agents' temp folder.** Run `python <kit>/tools/agent_temp_init.py`; the dry run
+   prints the plan for the temp folder alone: the `AGENT_TEMP` folder, the `agent_temp_sweep` config
+   key, the folder's permissions and the sweep task line (docs/machine-setup.md "Agent temp init").
+   It refuses a folder the sweep would refuse, such as `%LOCALAPPDATA%\Temp`. The owner applies it
+   with `--apply`, and registers the sweep task with `--register-sweep-task --apply`. Success: the
+   PM checklist prints no `agent_temp` lines (docs/pm-start.md "Agent temp (`agent_temp`)").
+
 6. **Turn on the guard** (hand step): the PreToolUse entry that
    `python <kit>/claude/hooks/guard.py --settings-entry` prints goes in the account's settings
    (docs/guard.md "Go-live (after the joint review)").
