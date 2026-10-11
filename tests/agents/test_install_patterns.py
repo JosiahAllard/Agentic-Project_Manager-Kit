@@ -57,9 +57,9 @@ class InstallPatternsTest(unittest.TestCase):
 
 
 class RealScrubPatternsTest(unittest.TestCase):
-    """tests.real_scrub_patterns, the home fence's one exception, with the home it records before
+    """tests.real_install_config, the home fence's one exception, with the home it records before
     the fence pointed at a temp folder: it opens the machine config only and returns its
-    scrub_patterns only; install_patterns() with no home uses it and skips by name without one.
+    install-name keys only; install_patterns() with no home uses it and skips by name without them.
     The process stays fenced, so any other home lookup would raise HomeFenced."""
 
     write_config = InstallPatternsTest.write_config
@@ -80,19 +80,32 @@ class RealScrubPatternsTest(unittest.TestCase):
         with mock.patch('builtins.open', spy):
             return fn(), seen
 
-    def test_reads_only_scrub_patterns(self):
-        self.write_config(json.dumps({'scrub_patterns': ['acme', 'widgetco'],
-                                      'pm_start': {'hub_url': 'https://example.invalid/a/hubid'},
-                                      'coordinator_start': {'cap': {'alpha': 2}}}))
-        got, seen = self.opened(tests.real_scrub_patterns)
-        self.assertEqual(got, (['acme', 'widgetco'], None))
+    def test_reads_only_the_install_name_keys(self):
+        sessions = os.path.join(self.home, 'sessions.json')
+        self.write_config(json.dumps({
+            'scrub_patterns': ['acme', 'widgetco'],
+            'temp_dir': self.home,                                     # unlisted: left out
+            'pm_start': {'hub_url': 'https://example.invalid/a/hubid', 'sessions_file': sessions,
+                         'repos': ['alpha'], 'standing': ['unlisted']},
+            'coordinator_start': {'cap': {'beta': 2}},
+            'conductor_start': {'cap': {'gamma': 1}}}))           # shadowed, as install_names reads
+        got, seen = self.opened(tests.real_install_config)
+        self.assertEqual(got, ({'scrub_patterns': ['acme', 'widgetco'],
+                                'pm_start': {'hub_url': 'https://example.invalid/a/hubid',
+                                             'sessions_file': sessions, 'repos': ['alpha']},
+                                'cap': {'beta': 2}}, None))
         self.assertEqual(seen, [os.path.normcase(kuser.config_file(self.home))])
         pats = shipped.install_patterns()
         self.assertEqual([rx.pattern for rx, _what in pats], ['acme', 'widgetco'])
 
+    def test_conductor_start_cap_when_coordinator_start_is_unset(self):
+        self.write_config(json.dumps({'conductor_start': {'cap': {'gamma': 1}}}))
+        cfg, _why = tests.real_install_config()
+        self.assertEqual(cfg, {'scrub_patterns': None, 'pm_start': {}, 'cap': {'gamma': 1}})
+
     def test_no_config_file_is_a_named_skip(self):
-        pats, why = tests.real_scrub_patterns()
-        self.assertIsNone(pats)
+        cfg, why = tests.real_install_config()
+        self.assertIsNone(cfg)
         self.assertIn('no machine config file', why)
         with self.assertRaises(unittest.SkipTest) as cm:
             shipped.install_patterns()
@@ -100,16 +113,16 @@ class RealScrubPatternsTest(unittest.TestCase):
 
     def test_no_scrub_patterns_key_is_a_named_skip(self):
         self.write_config(json.dumps({'pm_start': {'hub_url': 'https://example.invalid/a/hubid'}}))
-        pats, why = tests.real_scrub_patterns()
-        self.assertIsNone(pats)
-        self.assertIn('sets no scrub_patterns', why)
-        with self.assertRaises(unittest.SkipTest):
+        cfg, why = tests.real_install_config()
+        self.assertIsNone(cfg['scrub_patterns'])
+        with self.assertRaises(unittest.SkipTest) as cm:
             shipped.forbidden()
+        self.assertIn('sets no scrub_patterns', str(cm.exception))
 
     def test_a_malformed_real_config_fails(self):
         self.write_config('{"scrub_patterns": ["(unclosed"]}')
         with self.assertRaises(ConfigError):
-            tests.real_scrub_patterns()
+            tests.real_install_config()
 
 
 if __name__ == '__main__':

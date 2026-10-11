@@ -15,15 +15,18 @@ def install_patterns(home=None):
     """The install's own names (repositories, owner, accounts) from the machine config's
     `scrub_patterns`, case-insensitive. Under `home` when given (none when it sets none); with no
     home, the real machine config's through the home fence's one exception
-    (tests.real_scrub_patterns), and when that has none the calling test is skipped
+    (tests.real_install_config), and when that has none the calling test is skipped
     (unittest.SkipTest, NO_INSTALL_NAMES) rather than passing without them. Read at call time,
     never at import, so a malformed machine config fails the test that reads it (ConfigError)
     instead of breaking test collection."""
     if home is None:
-        from tests import real_scrub_patterns
-        pats, why = real_scrub_patterns()
-        if pats is None:
+        from tests import real_install_config
+        cfg, why = real_install_config()
+        if cfg is not None and not cfg['scrub_patterns']:
+            why = 'the machine config sets no scrub_patterns'
+        if cfg is None or why:
             raise unittest.SkipTest(NO_INSTALL_NAMES % why)
+        pats = cfg['scrub_patterns']
     else:
         from kitlib.config.user import user_config
         pats = user_config(home)["scrub_patterns"] or []
