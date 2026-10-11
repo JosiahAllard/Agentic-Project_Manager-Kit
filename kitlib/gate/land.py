@@ -586,11 +586,23 @@ class Lander(object):
     def not_on_remote(self, why):
         """Before an undo: raises _Stuck when the remote's main already holds a merge of this
         landing (someone pushed main while the gate ran), or may hold it and git cannot tell even
-        after a fetch. A remote main that ls-remote cannot read, or that is the base, lets the undo
-        go on (its own checks still apply)."""
+        after a fetch. A remote main that is the base lets the undo go on (its own checks still
+        apply). One that ls-remote cannot read is judged by the tracking ref (a push from this
+        checkout sets it): the undo goes on only when that does not hold a merge of this landing."""
         remote, main_b = self.cfg.remote, self.cfg.main_branch
-        pushed, _ = refs.ls_remote(remote, 'refs/heads/%s' % main_b, self.root)
-        if not pushed or pushed == self.expect_main:
+        pushed, unread = refs.ls_remote(remote, 'refs/heads/%s' % main_b, self.root)
+        if not pushed:
+            tracking = self.ref(self.origin_ref)
+            on = self.on_remote(tracking)
+            if on is False:
+                return
+            raise _Stuck('%s, and %s/%s could not be read (%s) while the tracking ref %s (%s) %s: '
+                         'the merge may be on %s, so it is left as it is' % (
+                             why, remote, main_b, unread or 'ls-remote failed', self.origin_ref,
+                             (tracking or '?')[:10],
+                             'holds the merge' if on else 'may hold the merge (git cannot tell)',
+                             remote))
+        if pushed == self.expect_main:
             return
         on = self.on_remote(pushed)
         if on is None:              # not fetched yet: fetch, then ask again
@@ -786,7 +798,9 @@ class Lander(object):
     def landed_anyway(self, what):
         """`what` stopped the landing after its push was verified (phase pushed): it is landed.
         Release the lock (a failure is a WARNING with the break command) and say what was skipped:
-        an OK Outcome, never STUCK. Each step is guarded against BaseException, so a second
+        an OK Outcome (LANDED_UNGATED with its WARNING while self.ungated, which adopt() sets
+        before phase pushed and clears only once the commits on top select no gate step), never
+        STUCK. Each step is guarded against BaseException, so a second
         Ctrl+C or failure here is one more WARNING, never a STUCK for a landed merge."""
         lines = list(self.gate_out.lines) if self.gate_out is not None else []
         at = self.landed_at or self.merge   # what ls-remote showed: the merge, or one on top
@@ -946,13 +960,20 @@ class Lander(object):
         if text is None or not n or len(chain) < n or chain[len(chain) - n:] != list(
                 reversed(self.merges)):
             return None
-        self.landed_at = pushed
-        self.phase = 'pushed'       # on the remote: landed, whatever stops it from here
         log, _ = cmd.run_text(['log', '--first-parent', '--reverse', '--format=%H %s',
                                '%s..%s' % (self.merge, pushed)], self.root)
         on_top = [l for l in (log or '').splitlines() if l.strip()] or chain[:len(chain) - n]
         said = '; '.join(l[:10] + l[40:] for l in on_top[:10]) + (
             '; and %d more' % (len(on_top) - 10) if len(on_top) > 10 else '')
+        gate_cmd = 'python "%s" -C "%s" --full' % (os.path.join(S.KIT_ROOT, 'tools', 'gate.py'),
+                                                   self.root)
+        # Fail closed: until unseen() shows the commits on top select no gate step, anything that
+        # stops the landing from here (landed_anyway) still says main was not gated whole.
+        self.ungated = ('WARNING: %s landed, and main was not gated whole: %s, made while the '
+                        'merged gate ran, were not checked against the gate steps; gate it with: '
+                        '%s' % (self.branch, ', '.join(l[:10] for l in on_top[:10]), gate_cmd))
+        self.landed_at = pushed
+        self.phase = 'pushed'       # on the remote: landed, whatever stops it from here
         landed = ['LANDED %s on %s at %s (already on %s: %s/%s %s has it, with %d commit(s) on top '
                   'made while the merged gate ran: %s)' % (
                       self.branch, main_b, self.merge, remote, remote, main_b, pushed[:10],
@@ -960,6 +981,7 @@ class Lander(object):
         paths, steps, why = self.unseen(pushed)
         if steps == []:
             code = G.OK
+            self.ungated = None
             try:
                 self.say('gate-OK record: %s' % self.write_record(started, out.facts.get('results')))
             except gate_ok.RecordError as e:
@@ -970,12 +992,11 @@ class Lander(object):
             shown = ', '.join(paths[:10]) + (' and %d more' % (len(paths) - 10)
                                              if len(paths) > 10 else '')
             self.ungated = ('WARNING: %s landed, and main was not gated whole: %s %s, which %s; '
-                            'gate it with: python "%s" -C "%s" --full' % (
+                            'gate it with: %s' % (
                                 self.branch, ', '.join(l[:10] for l in on_top[:10]),
                                 'change %s' % shown if paths else 'change paths git cannot list',
                                 'select %s' % ', '.join(steps) if steps else
-                                'may select a gate step (%s)' % why,
-                                os.path.join(S.KIT_ROOT, 'tools', 'gate.py'), self.root))
+                                'may select a gate step (%s)' % why, gate_cmd))
             landed.append(self.ungated)
         try:
             self.release()
@@ -1146,13 +1167,26 @@ class Lander(object):
     def clear_steps(self, left):
         """`[(what, [commands])]` that fit what is left: never a reset that moves a branch other
         than main, drops commits nobody else holds, or runs before an unknown push is checked, and
-        none at all when the remote's main holds the merge (on_origin_steps)."""
+        none at all when the remote's main (or, when ls-remote cannot read it, the tracking ref)
+        holds the merge (on_origin_steps) or may hold it and git cannot tell (check_first)."""
         main_b, remote = self.cfg.main_branch, self.cfg.remote
         g = 'git -C "%s"' % self.root
         tracking = 'refs/remotes/%s/%s' % (remote, main_b)
         steps = []
         pushed = left['pushed']
         if pushed is None:
+            on = self.on_remote(left['tracking'])
+            if on:                  # a push from this checkout set it: the merge is landed
+                return [('the push may have landed: %s/%s could not be read (%s), and the '
+                         'tracking ref %s (%s) holds the merge %s, so it is on %s and nothing '
+                         'here undoes it. Fetch, then check what %s/%s is' % (
+                             remote, main_b, left['pushed_why'] or 'ls-remote failed', tracking,
+                             left['tracking'][:10], (self.merge or '?')[:10], remote, remote,
+                             main_b),
+                         ['%s fetch %s' % (g, remote), '%s rev-parse %s' % (g, tracking)])
+                        ] + self.on_origin_steps(left, left['tracking'])
+            if on is None:
+                return [self.check_first(left['tracking'])]
             steps.append(('the push may have landed: %s/%s could not be read (%s). Fetch, then '
                           'check what %s/%s is, before any reset' % (
                               remote, main_b, left['pushed_why'] or 'ls-remote failed', remote,
@@ -1165,15 +1199,8 @@ class Lander(object):
             on = self.on_remote(pushed)
             if on:
                 return self.on_origin_steps(left, pushed)
-            if on is None:
-                steps.append(('%s/%s is at %s, which this checkout does not have, so whether it '
-                              'holds the merge %s cannot be told here. Fetch, then list the '
-                              'branches that hold the merge: if the list names %s/%s, the merge is '
-                              'landed: skip to the last step, no reset. If not, go on' % (
-                                  remote, main_b, pushed[:10], (self.merge or '?')[:10], remote,
-                                  main_b),
-                              ['%s fetch %s' % (g, remote),
-                               '%s branch -r --contains %s' % (g, self.merge)]))
+            if on is None:          # may be landed: nothing is undone until that is known
+                return [self.check_first(pushed)]
             if pushed != self.expect_main:
                 steps.append(('%s/%s is at %s, neither the base (--expect-main %s) nor the merge: '
                               'someone else pushed. Settle %s with them by hand; the steps below '
@@ -1202,12 +1229,32 @@ class Lander(object):
                           ['%s reset --keep %s' % (g, self.expect_main)]))
         return steps
 
+    def check_first(self, pushed):
+        """clear_steps when git cannot tell whether the remote's main (`pushed`, or the tracking
+        ref when ls-remote could not be read) holds the merge: one step that finds out, and
+        nothing that undoes the merge (no reset, no branch kept for one) until it is known."""
+        main_b, remote = self.cfg.main_branch, self.cfg.remote
+        g = 'git -C "%s"' % self.root
+        upstream = '%s/%s' % (remote, main_b)
+        return ('%s is at %s, which this checkout cannot place against the merge %s, so whether '
+                'it holds the merge cannot be told here, and nothing is undone until it can. '
+                'Fetch, then list the remote branches that hold the merge. If the list names %s, '
+                'the merge is landed and nothing is to be undone: bring the checkout to %s by hand '
+                '(HEAD on %s, no tracked change or untracked file, %s fast-forwarded to %s), then '
+                'go to the last step. If it does not, the merge is not on %s: settle %s with '
+                'whoever pushed it, put %s back at its base (--expect-main %s) by hand, keeping '
+                'any commits beyond the merge on a branch first, then go to the last step' % (
+                    upstream, (pushed or '?')[:10], (self.merge or '?')[:10], upstream, upstream,
+                    main_b, main_b, upstream, remote, upstream, main_b, self.base_text()),
+                ['%s fetch %s' % (g, remote), '%s branch -r --contains %s' % (g, self.merge)])
+
     def on_origin_steps(self, left, pushed):
         """clear_steps when the remote's main (`pushed`) is a merge of this landing or descends
         from one: the merge is landed, so no step undoes it and none says reset. The steps bring
         the main checkout to the remote's main (fetch, switch back, a fast-forward), leave
         anything only the checkout has to a person, and say how a merge that reached the remote
-        without a passing merged gate is taken back (a revert by hand, never run here)."""
+        without a passing merged gate is taken back (a revert by hand, never run here). Commits
+        on the remote's main on top of the landing are named, with the full gate to run."""
         main_b, remote = self.cfg.main_branch, self.cfg.remote
         g = 'git -C "%s"' % self.root
         upstream = '%s/%s' % (remote, main_b)
@@ -1226,6 +1273,19 @@ class Lander(object):
                               ', '.join(m[:10] for m in merges), upstream,
                               ', newest first' if len(merges) > 1 else '',
                               '; '.join('`git revert -m 1 %s`' % m for m in merges)), []))
+        known = [self.expect_main] + self.tips + self.merges
+        out, _ = cmd.run_text(['log', '--format=%H %s', pushed, '--not'] + known, self.root)
+        on_top = ([l for l in (out or '').splitlines() if l.strip()] if out is not None
+                  else left['extra'])
+        if on_top:
+            steps.append(('%s has %d commit(s) on top of the merge that no merged gate saw: %s. '
+                          'Once the lock is broken, gate %s whole: `python "%s" -C "%s" --full`' % (
+                              upstream, len(on_top),
+                              '; '.join(l[:10] + l[40:] for l in on_top[:10]) + (
+                                  '; and %d more' % (len(on_top) - 10) if len(on_top) > 10
+                                  else ''),
+                              main_b, os.path.join(S.KIT_ROOT, 'tools', 'gate.py'), self.root),
+                          []))
         if left['current'] != main_b:
             steps.append(('HEAD is on %s, not %s: switch back to %s first%s' % (
                 left['current'] or 'no branch (detached)', main_b, main_b,
