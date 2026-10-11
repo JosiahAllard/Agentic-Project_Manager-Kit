@@ -238,9 +238,6 @@ def j(*parts):
 class BuiltIn(unittest.TestCase):
     def test_no_new_owner_text_in_a_tracked_file(self):
         found, unused = scrub.scan(tracked_files(), read_text, ALLOWED)
-        for glob, cls, text, why in unused:
-            print('scrub: stale allow entry (nothing matches; remove it): %s %s %r (%s)'
-                  % (glob, cls, text, why))
         over, under = scrub.ratchet(found, PENDING)
         for cls, path, n, base in under:
             print('scrub: %s has %d %s hit(s), baseline %d: lower the baseline in tests/scrub/'
@@ -249,10 +246,15 @@ class BuiltIn(unittest.TestCase):
         lines = ['%s (%s: %d hit(s), baseline %d)' % (p, c, n, b) for c, p, n, b in over]
         lines += ['  %s:%d: %s (%s)' % (h.path, h.line, h.text, h.cls) for h in found
                   if (h.cls, h.path) in keys]
-        self.assertEqual(over, [], 'owner-specific text in tracked files (write it generically; '
+        stale = ['  %s %s %r (%s)' % entry for entry in unused]
+        # One assertion, so a stale entry and a new hit are both reported in the same run.
+        self.assertEqual((over, unused), ([], []),
+                         'owner-specific text in tracked files (write it generically; '
                          'an invented record id starts with %s; a permanent exception is an '
-                         'ALLOWED entry with its reason):\n%s'
-                         % (scrub.MADE_UP_ID_PREFIX, '\n'.join(lines)))
+                         'ALLOWED entry with its reason):\n%s\nstale ALLOWED entries (nothing '
+                         'matches them; remove each):\n%s'
+                         % (scrub.MADE_UP_ID_PREFIX, '\n'.join(lines) or '  none',
+                            '\n'.join(stale) or '  none'))
 
     def test_pending_blocks_do_not_share_a_key(self):
         seen = {}
@@ -404,6 +406,16 @@ class TheChecks(unittest.TestCase):
             me.BuiltIn('test_no_new_owner_text_in_a_tracked_file').run(result)
         self.assertEqual(len(result.failures), 1, result.errors)
         self.assertIn(extra + ':1: ' + j('h', 'im') + ' (gender)', result.failures[0][1])
+
+    def test_a_stale_allow_entry_turns_the_gate_check_red(self):
+        from unittest import mock
+        from tests.scrub import test_builtin as me
+        stale = ('docs/zz-gone.md', 'gender', 'nothing here', 'an invented entry no file matches')
+        result = unittest.TestResult()
+        with mock.patch.object(me, 'ALLOWED', me.ALLOWED + (stale,)):
+            me.BuiltIn('test_no_new_owner_text_in_a_tracked_file').run(result)
+        self.assertEqual(len(result.failures), 1, result.errors)
+        self.assertIn("docs/zz-gone.md gender 'nothing here'", result.failures[0][1])
 
     def test_a_hashed_name_is_found_without_being_written_down(self):
         name = 'quillfernow'                      # invented; NAME_STORE does not hold it
