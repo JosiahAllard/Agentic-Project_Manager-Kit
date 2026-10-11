@@ -238,7 +238,9 @@ def _read_text(path):
         st = os.stat(path)
     except OSError:
         return None
-    key = (os.path.normcase(os.path.abspath(path)), st.st_mtime_ns, st.st_size)
+    # st_ino (the file id on Windows) changes with every replace, so a same-size rewrite in the
+    # same clock tick still misses (KIT-VCS-REMOTE-EXISTS-FLAKE).
+    key = (os.path.normcase(os.path.abspath(path)), st.st_mtime_ns, st.st_size, st.st_ino)
     with _CACHE_LOCK:
         got = _CACHE.get(key)
     if got is not None:
@@ -433,6 +435,10 @@ def _write(path, text):
     finally:
         os.close(fd)
     os.replace(lock, path)
+    norm = os.path.normcase(os.path.abspath(path))
+    with _CACHE_LOCK:
+        for k in [k for k in _CACHE if k[0] == norm]:
+            del _CACHE[k]
 
 
 def _section_header(section, sub):

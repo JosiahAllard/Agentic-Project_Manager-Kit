@@ -93,7 +93,8 @@ def packed(repo):
         st = os.stat(path)
     except OSError:
         return {}
-    key = (os.path.normcase(path), st.st_mtime_ns, st.st_size)
+    # st_ino changes with every replace: a same-size rewrite in the same clock tick still misses.
+    key = (os.path.normcase(path), st.st_mtime_ns, st.st_size, st.st_ino)
     with _PACKED_LOCK:
         got = _PACKED_CACHE.get(key)
     if got is not None:
@@ -461,6 +462,14 @@ def _rewrite_packed(repo, drop):
         if not skip:
             out.append(line)
     lk.commit(''.join(out).encode('utf-8'))
+    _forget_packed(path)
+
+
+def _forget_packed(path):
+    norm = os.path.normcase(path)
+    with _PACKED_LOCK:
+        for k in [k for k in _PACKED_CACHE if k[0] == norm]:
+            del _PACKED_CACHE[k]
 
 
 def rename(repo, old, new):
