@@ -272,7 +272,8 @@ def gate_checks(module):
     checks = getattr(module, 'GATE_CHECKS', None)
     if checks is None:
         return {}
-    where = getattr(module, '__file__', 'the hook module')
+    # A module loaded from a commit (kitlib.gate.hookrev) is named as `<rev10>:<rel>`.
+    where = getattr(module, '__kit_where__', None) or getattr(module, '__file__', 'the hook module')
     if not isinstance(checks, dict):
         raise ConfigError('%s: GATE_CHECKS must be a dict of check name -> callable' % where)
     errs = []

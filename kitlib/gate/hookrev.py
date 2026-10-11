@@ -48,6 +48,7 @@ def load_module_at(cfg, root, rev):
     # os.path.dirname(__file__) gets a real directory. Tracebacks and compile errors still name
     # the commit: `where` is the compile filename.
     module.__file__ = os.path.join(root, *rel.split('/'))
+    module.__kit_where__ = where    # what policy.gate_checks names in its errors
     sys.modules[name] = module
     try:
         with policy.no_bytecode():    # as the work-tree loader: an import writes no __pycache__
