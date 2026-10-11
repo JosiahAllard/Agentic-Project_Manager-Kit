@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from kitlib import config
+from kitlib import config, lockmcp
 from kitlib.config import policy
 from tests.config.helpers import TempTree
 
@@ -112,6 +112,20 @@ class RolesTest(TreeCase):
         self.assertFalse(policy.permissions({'agent_id': 'a', 'agent_type': 'records'}, table)['edit_main_checkout'])
         self.assertFalse(policy.permissions({}, table)['edit_main_checkout'])
         self.assertEqual(policy.role_name({'agent_id': 'a', 'agent_type': 'worker'}, table), 'subagent')
+
+    def test_the_plugin_prefixed_agent_type_names_the_same_role(self):
+        # docs/guard.md "Agent names": the kit plugin bundles its agents as <plugin>:<name>
+        # (kitlib.agentname.PREFIX; tests/agentname pins it to this value)
+        p = lockmcp.CLAUDE_PLUGIN_NAME + ':'
+        table = policy.roles(self.load({'roles': {'lander': {'edit_main_checkout': True, 'why': 'merges'}}}))
+        self.assertEqual(policy.role_name({'agent_id': 'a', 'agent_type': p + 'lander'}, table), 'lander')
+        self.assertTrue(policy.permissions({'agent_id': 'a', 'agent_type': p + 'lander'}, table)['edit_main_checkout'])
+        for kind in ('other:lander', p + p + 'lander', p.upper() + 'lander', p, p + 'main',
+                     p.rstrip(':') + 'lander', 'x' + p + 'lander', p[1:] + 'lander'):
+            with self.subTest(kind):
+                self.assertEqual(policy.role_name({'agent_id': 'a', 'agent_type': kind}, table), 'subagent')
+                self.assertFalse(policy.permissions({'agent_id': 'a', 'agent_type': kind}, table)['edit_main_checkout'])
+        self.assertEqual(policy.role_name({'agent_type': p + 'lander'}, table), 'main')
 
     def test_a_role_with_an_unknown_permission_refuses(self):
         t = TempTree({'roles': {'lander': {'edit_main': True}}})

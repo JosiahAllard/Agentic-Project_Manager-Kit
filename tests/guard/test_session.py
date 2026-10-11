@@ -9,6 +9,7 @@ from unittest import mock
 from kitlib import sessionmark
 from kitlib.guard import context, decide, rules
 from kitlib.lock import api
+from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
 from kitlib.lockmcp import server as lockmcp
 
 from . import world as W
@@ -19,6 +20,7 @@ COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 PM = {context.ROLE_ENV: 'pm'}
 PLAIN = {context.ROLE_ENV: 'plain'}          # a launcher mark no agent-session rule holds by default
 OWNER_EMAIL = 'owner@example.com'
+P = CLAUDE_PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
 
 
 class Mark(unittest.TestCase):
@@ -40,6 +42,22 @@ class Mark(unittest.TestCase):
         self.assertEqual(role({'agent_id': 'a1'}, {}), context.SUBAGENT)
         self.assertEqual(role({'agent_id': 'a1'}, COORDINATOR), context.SUBAGENT)
         self.assertEqual(role({}, {sessionmark.ENV: 'owner'}), 'marked-owner')
+
+    def test_the_plugin_prefix_is_read_off_before_the_reserved_check(self):
+        # docs/guard.md "Agent names": a mark with the kit plugin's prefix is the bare mark
+        for value, out in ((P + 'coordinator', 'coordinator'), (P.upper() + 'Deep-Worker', 'Deep-Worker'),
+                           (' %s pm ' % P, 'pm'), (P + 'owner', 'marked-owner'), (P + P + 'OWNER', 'marked-OWNER'),
+                           (P + 'subagent', 'marked-subagent'), ('other:owner', 'other:owner')):
+            with self.subTest(value):
+                self.assertEqual(sessionmark.mark({sessionmark.ENV: value}), out)
+        self.assertEqual(context.default_session_role({}, {sessionmark.ENV: P + 'owner'}), 'marked-owner')
+
+    def test_a_mark_that_is_all_prefix_stays_marked(self):
+        # emptied, it would read as unmarked: the owner's own session
+        for value in (P, P + P, P.upper()):
+            with self.subTest(value):
+                self.assertEqual(sessionmark.mark({sessionmark.ENV: value}), value)
+                self.assertNotEqual(context.default_session_role({}, {sessionmark.ENV: value}), context.OWNER)
 
 
 class OwnerCheck(unittest.TestCase):
@@ -150,6 +168,22 @@ class AgentSessions(unittest.TestCase):
     def test_old_conductor_mark_is_still_held(self):
         # the live launcher sets the old mark until go-live renames it
         self.assertEqual(self.kill({context.ROLE_ENV: 'conductor'}).kind, 'deny')
+
+    def test_a_plugin_prefixed_mark_is_held_as_the_bare_mark(self):
+        # docs/guard.md "Agent names": without the strip these sessions would pass as unheld marks
+        for check in (self.kill, self.edit_state):
+            for mark in (P + 'deep-worker', P + 'coordinator', P.upper() + 'PM', P + 'consultant'):
+                with self.subTest(check.__name__, mark=mark):
+                    self.assertEqual(check({context.ROLE_ENV: mark}).kind, 'deny')
+            with self.subTest(check.__name__, mark='plain'):
+                self.assertIsNone(check({context.ROLE_ENV: P + 'plain'}))
+
+    def test_a_resolver_that_keeps_the_prefix_still_fails_closed(self):
+        # a role_resolver other than sessionmark's: agent_session strips the prefix itself
+        ctx = self.w.ctx(environ={}, role_resolver=lambda ev, env: P + 'deep-worker')
+        self.assertTrue(rules.agent_session(ps('x', self.w.wt), ctx))
+        ctx = self.w.ctx(environ={}, role_resolver=lambda ev, env: 'other:deep-worker')
+        self.assertFalse(rules.agent_session(ps('x', self.w.wt), ctx))
 
     def test_lock_state_names_the_rule_and_the_status_command(self):
         d = self.edit_state(COORDINATOR)

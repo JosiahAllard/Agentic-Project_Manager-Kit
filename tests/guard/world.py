@@ -113,6 +113,11 @@ class World(object):
         return context.Ctx(**args)
 
 
+# test_prefix_parity.py sets this to a function that renames every subagent's agent_type, so the
+# whole guard suite runs again with the plugin-prefixed names; None leaves agent_type as given.
+AGENT_TYPE = None
+
+
 def event(tool, tool_input, cwd, sub=False, agent_type='opus-worker'):
     """A PreToolUse payload as Claude Code sends it; a subagent's carries agent_id and agent_type."""
     ev = {'session_id': '8f5c9cf4-0000-4000-8000-000000000000',
@@ -121,7 +126,7 @@ def event(tool, tool_input, cwd, sub=False, agent_type='opus-worker'):
           'tool_name': tool, 'tool_input': tool_input}
     if sub:
         ev['agent_id'] = 'a0335183081908f5a'
-        ev['agent_type'] = agent_type
+        ev['agent_type'] = AGENT_TYPE(agent_type) if AGENT_TYPE else agent_type
     return ev
 
 

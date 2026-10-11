@@ -146,6 +146,17 @@ class Classify(unittest.TestCase):
                                  proc(901, 502, "python.exe", "python gate.py", age=MIN)], 3.0))
         self.assertEqual(ps[901]["origin"], "coordinator claude.exe repo-b")
 
+    def test_a_plugin_prefixed_agent_name_is_still_the_coordinator(self):
+        explorer = proc(4180, 1, "explorer.exe", image=r"C:\Windows\explorer.exe", age=30 * HOUR)
+        for agent, want in (("some-plugin:coordinator", "coordinator claude.exe repo-c"),
+                            ("some.plugin_2:conductor", "coordinator claude.exe repo-c"),
+                            ("some-plugin:reviewer", "claude.exe 503 session")):
+            with self.subTest(agent):
+                claude = proc(503, 4180, "claude.exe", f'"claude.exe" --agent {agent} -n repo-c', age=8 * HOUR)
+                ps = by_pid(PW.classify([explorer, claude, proc(901, 503, "python.exe", "python gate.py", age=MIN)],
+                                        3.0))
+                self.assertEqual(ps[901]["origin"], want)
+
     def test_origin_names_the_coordinator(self):
         ps = by_pid(world(proc(900, 501, "python.exe", "python gate.py", age=MIN)))
         self.assertEqual(ps[900]["origin"], "coordinator claude.exe repo-a")

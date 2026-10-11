@@ -40,6 +40,7 @@ import os
 import posixpath
 import re
 
+from kitlib import agentname
 from kitlib import config as kconfig
 from kitlib import pmdata
 from kitlib.git import repo
@@ -188,11 +189,13 @@ def agent_session(event, ctx):
     """True for a subagent, or a session whose mark is one of guard_agent_marks (default
     AGENT_MARKS: coordinator, its old name conductor, deep-worker, consultant and pm), case
     ignored; a guard_agent_marks value replaces the default list. The rules only agents are held to (kill by name, lock state,
-    kit-json, the write jail) use it."""
+    kit-json, the write jail) use it. The mark is compared without the kit plugin's prefix
+    (kitlib.agentname.bare_mark), so a role_resolver that does not strip it fails closed too."""
     if (event or {}).get('agent_id'):
         return True
     marks = ctx.user().get('guard_agent_marks') or AGENT_MARKS
-    return str(ctx.session_role(event) or '').lower() in {str(m).lower() for m in marks}
+    who = agentname.bare_mark(str(ctx.session_role(event) or ''))
+    return who.lower() in {str(m).lower() for m in marks}
 
 
 # every session kind the kit launcher marks but `plain` and other agents' names; 'conductor' is the
@@ -558,11 +561,11 @@ def kit_json(event, ctx, target, role, what):
 
 
 def session_mark(event, ctx):
-    """The launcher mark of a main session (guard_mark_roots looks it up), or None for a subagent
-    and the owner's unmarked session."""
+    """The launcher mark of a main session without the kit plugin's prefix (guard_mark_roots looks
+    it up), or None for a subagent and the owner's unmarked session."""
     if (event or {}).get('agent_id'):
         return None
-    who = ctx.session_role(event)
+    who = agentname.bare_mark(ctx.session_role(event))
     return None if who in (context.OWNER, context.SUBAGENT) else who
 
 
@@ -1993,7 +1996,7 @@ def lander_check(event, ctx, cmd, inv, gc):
     from a worktree. (False, <the first test that failed>) when one fails. (False, None) for any
     other session, verb or place: the other rules judge it as before."""
     ev = event or {}
-    if not ev.get('agent_id') or ev.get('agent_type') != LANDER:
+    if not ev.get('agent_id') or agentname.bare(ev.get('agent_type')) != LANDER:
         return False, None
     if gc.unknown or gc.sub not in LANDER_VERBS or not gc.dir or ctx.place(gc.dir).kind != repo.MAIN:
         return False, None

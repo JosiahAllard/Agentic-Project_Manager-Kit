@@ -9,8 +9,14 @@ lock MCP server, which the client starts with the session's environment. The loc
 read it: an agent sets the environment of every command it runs, so `PM_KIT_ROLE= python ...`
 would unmark it. A subagent shares its session's environment, so only the guard (agent_id) tells
 it apart.
+
+A mark that carries the kit plugin's agent prefix (kitlib.agentname.bare_mark) is read without it,
+before the reserved check: `<plugin>:coordinator` is the coordinator's mark, `<plugin>:owner` is
+'marked-owner'.
 """
 import os
+
+from kitlib import agentname
 
 ENV = 'PM_KIT_ROLE'
 # Mark values that would read as a role the guard grants by other means: a launcher that sets one
@@ -19,11 +25,13 @@ RESERVED = ('owner', 'subagent')
 
 
 def mark(environ=None):
-    """The session's mark (stripped), or None when the session is unmarked."""
+    """The session's mark (stripped, the kit plugin's prefix removed), or None when the session is
+    unmarked."""
     env = os.environ if environ is None else environ
     value = (env.get(ENV) or '').strip()
     if not value:
         return None
+    value = agentname.bare_mark(value)          # never empty: a value that is all prefix stays as it is
     return 'marked-' + value if value.lower() in RESERVED else value
 
 

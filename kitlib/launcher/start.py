@@ -13,6 +13,7 @@ import os
 import re
 import sys
 
+from kitlib import agentname
 from kitlib.launcher import accounts as A
 from kitlib.launcher import lookup, state, window
 from kitlib.launcher.settings import LaunchError
@@ -26,7 +27,8 @@ DEFAULT_AUTOCOMPACT = 170000   # a coordinator, another agent or a plain session
 DEEP_AUTOCOMPACT = 500000
 CONSULTANT_AUTOCOMPACT = (100000, 500000)
 CONSULTANT_DEFAULT_AUTOCOMPACT = 350000
-ROLE_AUTOCOMPACT = {'consultant': CONSULTANT_DEFAULT_AUTOCOMPACT, 'deep-worker': DEEP_AUTOCOMPACT}  # a sessions.json entry of that agent
+# a sessions.json entry of that agent, bare or with the kit plugin's prefix (kitlib.agentname)
+ROLE_AUTOCOMPACT = {'consultant': CONSULTANT_DEFAULT_AUTOCOMPACT, 'deep-worker': DEEP_AUTOCOMPACT}
 LONG_MODEL = 'opus[1m]'
 NOTES_DEFAULT = 'docs/ops/consultant-notes.local.md'
 DIGEST = os.path.join('docs', 'conventions-digest.md')
@@ -103,7 +105,7 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
     if predecessor:
         prompt = predecessor_text(predecessor) + prompt
     repo_label = repo or os.path.basename(os.path.normpath(folder))
-    name = name or '%s-%s-%s' % (repo_label.lower(), agent or 'session', tag)
+    name = name or '%s-%s-%s' % (repo_label.lower(), agentname.bare(agent) or 'session', tag)
     role = window.role_for(agent, settings.coordinator_agent)
     command = window.claude_command(name, prompt, agent, model, effort, autocompact)
     text = window_text(settings, host, name, role, folder, command, config_dir)
@@ -123,8 +125,9 @@ def entry_start_args(settings, key, entry, account, prompt, predecessor=None, na
     if entry.get('agent'):
         if isinstance(entry['agent'], str):
             args['agent'] = entry['agent']
-            if entry['agent'] in ROLE_AUTOCOMPACT:
-                args['autocompact'] = ROLE_AUTOCOMPACT[entry['agent']]
+            role = agentname.bare(entry['agent'])
+            if role in ROLE_AUTOCOMPACT:
+                args['autocompact'] = ROLE_AUTOCOMPACT[role]
     else:
         args['no_agent'] = True
     if entry.get('brief') and (entry.get('agent') or any_brief):
