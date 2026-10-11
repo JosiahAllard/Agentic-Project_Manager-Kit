@@ -82,6 +82,7 @@ A `settings.json` that is a symbolic link or has more than one hard link is refu
 
 - **A fresh machine.** One with no old kit is not handled: `-OldKit` is required (the wrapper exits 2 without it). There, the plugin, guard.py's PreToolUse entry and the PM SessionStart hook are hand steps (docs/pm-first-run.md steps 3, 6 and 7).
 - **Other old-kit links.** For example `agents` and `hooks` are noted and left: the plugin replaces agents (go-live.md "Switches"), and the launcher starts the agent `launcher.coordinator_agent` names (docs/launcher.md "Settings").
+- **The plugin install.** `machine_setup.py` installs no plugin. `tools/plugin_refresh.py --migrate --apply` adds the export of pushed kit main as the `pm-kit` marketplace in every account folder and installs the plugin from it; `--folder DIR` migrates one folder first (docs/plugin-source.md "Migrating").
 - **Scheduled tasks.** Ones that run old-kit scripts are not scanned.
 - **Skills as a plugin.** go-live.md "Skills, templates, optional tools, knowledge" is a separate switch. These links keep skills loading until the plugin is enabled. Remove them then, or each skill appears twice (docs/install.md, "After the plugin install").
 
