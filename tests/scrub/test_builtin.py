@@ -184,6 +184,7 @@ PENDING_HISTORY = {
     ('record-id', 'tests/backlog/test_store.py'): 2,
     ('record-id', 'tests/docs/test_install_junctions.py'): 1,
     ('record-id', 'tests/forbidden/test_forbidden.py'): 1,
+    ('record-id', 'tests/gate/test_already_landed.py'): 1,
     ('record-id', 'tests/gate/test_land_cleanup.py'): 1,
     ('record-id', 'tests/git/test_git.py'): 2,
     ('record-id', 'tests/guard/test_pmdata_fixes.py'): 1,
