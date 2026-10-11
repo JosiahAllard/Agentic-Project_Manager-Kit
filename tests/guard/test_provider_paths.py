@@ -41,6 +41,16 @@ class ProviderItems(unittest.TestCase):
                 d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
                 self.assertIsNone(d, d and d.reason)
 
+    def test_beside_a_plain_git_call(self):
+        # git.exe cannot remap a PowerShell drive, and its words meet the git rules
+        g = 'git -C "%s" status' % W.fwd(self.w.wt)
+        for text in ('Set-Content env:FOO x; %s' % g,
+                     'Rename-Item env:FOO BAR; Set-Content "$env:TEMP\\x.txt" hi; %s' % g,
+                     'New-Item -Path env:FOO -Value x\ngit.exe -C "%s" status' % W.fwd(self.w.wt)):
+            with self.subTest(text):
+                d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
+                self.assertIsNone(d, d and d.reason)
+
     def test_other_non_file_drives_in_the_main_checkout(self):
         for text in ('New-Item -Path variable:foo -Value x',
                      'Set-Content Variable:\\foo x',
@@ -128,7 +138,8 @@ class NativePrograms(unittest.TestCase):
         text = 'cd "%s"; xcopy a env:FOO' % W.fwd(self.w.plain)
         d = self.decide(text, self.w.wt)
         self.assertIsNotNone(d, 'allowed: %s' % text)
-        self.assertEqual(d.rule, 'write-jail', d.reason)
+        # write-jail today; main-checkout once every other provider or long-drive word is refused
+        self.assertIn(d.rule, ('write-jail', 'main-checkout'), d.reason)
 
 
 class NarrowSkip(unittest.TestCase):
@@ -168,7 +179,13 @@ class NarrowSkip(unittest.TestCase):
                     "$o = New-Object -TypeName System.Object",
                     "Add-Type -TypeDefinition $t",
                     "using namespace System.IO",
-                    "Get-Process"):
+                    "Get-Process",
+                    "& git status",
+                    "$g = 'git'; & $g status",
+                    "git -C $p status",
+                    "Write-Output \"$env:TEMP$(Remove-PSDrive env)\"",
+                    "Write-Output $env:TEMP.Length",
+                    "where.exe git"):
             for text in ('%s; %s' % (pre, item), '%s\n%s' % (item, pre)):
                 with self.subTest(text):
                     d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
