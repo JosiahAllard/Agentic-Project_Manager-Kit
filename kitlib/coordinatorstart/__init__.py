@@ -227,7 +227,7 @@ def landing_lock(entry, run=_run, read=_read, root=None, lock_file=None):
 
 def machine(entry, run=_run, read=_read, now=None, home=None, root=None, lock_file=None):
     """Owner reservations and bookings in force or starting within 4 h, free gpu and cpu slots, landing lock."""
-    home = home or os.path.expanduser("~")
+    home = home or kuser.home_dir()
     now = now or datetime.datetime.now().astimezone()
     s = json.loads(run([sys.executable, os.path.join(home, ".claude", "tools", "machine_lock", "machine_lock.py"),
                         "status", "--json"]))
