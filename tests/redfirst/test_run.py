@@ -117,6 +117,24 @@ class Refusals(Case):
             self.assertEqual(tool.main(['--help']), V.EXIT_USAGE)
 
 
+class Arguments(unittest.TestCase):
+    def test_tests_repeat_accumulates(self):
+        a = tool.parse_args(['--tests', 'tests/a.py', '--tests', 'tests/b.py::f'])
+        self.assertEqual(a.tests, ['tests/a.py', 'tests/b.py::f'])
+
+    def test_tests_one_flag_many_values(self):
+        a = tool.parse_args(['--tests', 'tests/a.py', 'tests/b.py'])
+        self.assertEqual(a.tests, ['tests/a.py', 'tests/b.py'])
+
+    def test_tests_mixed_forms(self):
+        a = tool.parse_args(['--tests', 'a', 'b', '--tests', 'c'])
+        self.assertEqual(a.tests, ['a', 'b', 'c'])
+
+    def test_also_repeat_accumulates(self):
+        a = tool.parse_args(['--tests', 't', '--also', 'x', '--also', 'y'])
+        self.assertEqual(a.also, ['x', 'y'])
+
+
 class AKilledGitIsNoAnswer(Case):
     """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no such commit" as exit 1 with
     no output, which a git ended from outside also leaves. Both ways git is started here are
