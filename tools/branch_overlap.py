@@ -13,7 +13,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib.git import overlap                                      # noqa: E402
-from kitlib.git import repo as gitrepo                              # noqa: E402
 
 USAGE = 2
 
@@ -47,16 +46,12 @@ def parser():
 def main(argv=None):
     p = parser()
     a = p.parse_args(argv)
-    if not os.path.isdir(a.root):
-        p.error('-C: %s is not a directory' % a.root)
-    place = gitrepo.classify(a.root)
-    if place.kind == gitrepo.NONE:
-        p.error('-C: %s is in no git work tree (%s)' % (a.root, place.detail))
-    if place.kind not in (gitrepo.MAIN, gitrepo.LINKED) or not place.top:
-        print('CANNOT ANSWER: -C %s: git could not name its work tree (%s: %s)'
-              % (a.root, place.kind, place.detail), flush=True)
+    top, fail, why = overlap.work_tree(a.root)
+    if fail == 'usage':
+        p.error(why)
+    if fail:
+        print('CANNOT ANSWER: %s' % why, flush=True)
         return overlap.CANNOT
-    top = place.top
     files = a.files
     if a.files_from is not None:
         try:

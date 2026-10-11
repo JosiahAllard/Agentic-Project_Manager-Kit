@@ -123,7 +123,22 @@ class Overlap(unittest.TestCase):
             self.assertIn('2 ref(s) of --branch itself left out', out, rev)
         self.fx.git('switch', '-q', 'kit/c')
         code, out = self.look(branch='HEAD')
+        self.assertEqual(code, overlap.OVERLAP, out)
         self.assertNotIn('origin/kit/c', out)
+        self.assertNotIn('names no branch', out)
+        self.assertIn('2 ref(s) of --branch itself left out', out)
+
+    def test_another_branch_at_the_same_tip_is_checked_not_left_out(self):
+        self.fx.git('branch', 'kit/c2', 'kit/c')
+        code, out = self.look(branch='kit/c')
+        self.assertEqual(code, overlap.OVERLAP, out)
+        self.assertIn('kit/c2  [kit/c2 ', out)
+        self.assertIn('2 ref(s) of --branch itself left out', out)
+        code, out = self.look(branch=self.tip('kit/c'))      # a bare commit: named in notes
+        for name in ('kit/c', 'kit/c2'):
+            self.assertIn('note      --branch %s names no branch; %s is at its tip'
+                          % (self.tip('kit/c'), name), out)
+        self.assertIn('3 ref(s) of --branch itself left out', out)
 
     def test_no_overlap_is_clear(self):
         code, out = self.look(files=['README.md', 'docs/other.md'])
@@ -160,6 +175,12 @@ class Overlap(unittest.TestCase):
         self.assertEqual(len(got), 1, got)
         self.assertEqual(got[0][0], 'tools/x.py')
         self.assertIn('undecidable, so counted', got[0][1])
+        for odd in ('odd/a\x01b.md', 'c:x'):        # another control character; a drive letter
+            got = overlap.matches(odd, ['tools/x.py'])
+            self.assertEqual(len(got), 1, (odd, got))
+            self.assertIn('undecidable, so counted', got[0][1], odd)
+        self.assertEqual(overlap.matches('odd/a\tb.md', ['odd/**']), [('odd/**', '')])
+        self.assertEqual(overlap.matches('odd/a\tb.md', ['tools/x.py']), [])  # a tab is ordinary
 
     def test_local_main_ahead_of_the_base_is_not_listed_as_work(self):
         self.fx.write('tools/local.py', 'unpushed\n')
@@ -182,15 +203,16 @@ class Overlap(unittest.TestCase):
 
     def test_a_malformed_ref_line_cannot_answer(self):
         real = cmd.call
-
-        def call(args, cwd, **kw):
-            if args[:2] == ['for-each-ref', '--format=%(objectname) %(symref) %(refname)']:
-                return cmd.Result(0, b'garbage\n', '')
-            return real(args, cwd, **kw)
-        with mock.patch.object(cmd, 'call', call):
-            code, out = self.look(files=['README.md'])
-        self.assertEqual(code, overlap.CANNOT, out)
-        self.assertIn("printed 'garbage', not a ref line", out)
+        sha = self.tip('kit/a')
+        for bad in ('garbage', '%s  refs/tags/v1' % sha, 'nothex  refs/heads/kit/x'):
+            def call(args, cwd, bad=bad, **kw):
+                if args[:2] == ['for-each-ref', '--format=%(objectname) %(symref) %(refname)']:
+                    return cmd.Result(0, (bad + '\n').encode(), '')
+                return real(args, cwd, **kw)
+            with mock.patch.object(cmd, 'call', call):
+                code, out = self.look(files=['README.md'])
+            self.assertEqual(code, overlap.CANNOT, (bad, out))
+            self.assertIn('printed %r, not a ref line' % bad, out)
 
     def test_git_failing_mid_run_cannot_answer(self):
         real = cmd.run
@@ -254,6 +276,20 @@ class Overlap(unittest.TestCase):
             self.assertIn('USAGE:', out, args)
         code, out = self.cli('--files-from', empty)
         self.assertIn('the file set is empty', out)
+
+    def test_cli_c_not_a_directory_or_outside_a_work_tree_is_usage(self):
+        outside = os.path.join(self.fx.base, 'plain')
+        os.makedirs(outside)
+        for root, says in ((os.path.join(self.fx.base, 'missing'), 'is not a directory'),
+                           (outside, 'is in no git work tree')):
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                with self.assertRaises(SystemExit) as caught:
+                    _cli().main(['-C', root, '--files', 'README.md'])
+            self.assertEqual(caught.exception.code, 2, err.getvalue())
+            self.assertIn('USAGE: -C: ', err.getvalue())
+            self.assertIn(says, err.getvalue())
+            self.assertNotIn('CANNOT ANSWER', out.getvalue())
 
     def test_cli_git_unable_to_name_the_tree_cannot_answer_not_usage(self):
         unknown = gitrepo.Place(gitrepo.UNKNOWN, None, 'git did not answer', None, None)

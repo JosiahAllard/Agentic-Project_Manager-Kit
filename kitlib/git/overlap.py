@@ -7,25 +7,29 @@ path or `<path>/**`), or the files one branch changed since its merge base with 
 branch's changes are `git diff --name-only --no-renames <merge base> <tip>`, so a rename counts
 as both its old and its new path. A changed file overlaps a set member when the backlog pull
 collision check would call them colliding: kitlib.backlog.scope.members_collide, component by
-component and case-blind, one a prefix of the other. A comparison that matcher cannot decide (a
-name holding a comma, a control character, leading or trailing space, a backslash or a wildcard
-character) counts as an overlap, as it does there. One difference: here `none` (in any case) is
-the root file of that name, never the backlog's empty-scope sentinel, so it is compared as a path.
+component and case-blind, one a prefix of the other. A comparison that matcher cannot decide
+counts as an overlap, as it does there: a name holding a comma, a control character other than a
+tab (a tab is an ordinary character, tab_ok=True), leading or trailing whitespace, a backslash or
+a wildcard character (`*?[]{}`), or one starting with a drive letter (`c:x`). One difference: here
+`none` (in any case) is the root file of that name, never the backlog's empty-scope sentinel, so
+it is compared as a path.
 
 A ref is every one under refs/heads/ and refs/remotes/ except a symbolic one (`origin/HEAD`); it
 is merged, and skipped, when its tip is an ancestor of the base. Refs that carry one branch name
 (`kit/x` and `origin/kit/x`) are one branch: counted once, reported in one block. Left out: the
 base's own branch (the local `main` when the base is `origin/main`; it is named in a note when it
-holds commits the base lacks) and, with --branch, every ref of that branch or at its tip. Anything
+holds commits the base lacks) and, with --branch, every ref of that branch's name. Anything
 git gives no answer for makes the whole answer CANNOT: "no overlap" is only said after every ref
 was read.
 """
 import collections
+import os
 
 from kitlib.backlog import scope as smod
 from kitlib.config import ConfigError, load as load_config
 
 from . import batch, cmd, refs
+from . import repo as gitrepo
 
 CLEAR, OVERLAP, CANNOT = 0, 1, 2
 
@@ -64,6 +68,21 @@ def parse_list(text):
         if s and not s.startswith('#'):
             out.append(normalise(s))
     return out
+
+
+def work_tree(root):
+    """`(top, None, None)` for the work tree holding directory `root`; else `(None, kind, why)`,
+    kind 'usage' (not a directory, or in no git work tree: the caller's to fix) or 'cannot' (git
+    could not name the work tree: no answer)."""
+    if not os.path.isdir(root):
+        return None, 'usage', '-C: %s is not a directory' % root
+    place = gitrepo.classify(root)
+    if place.kind == gitrepo.NONE:
+        return None, 'usage', '-C: %s is in no git work tree (%s)' % (root, place.detail)
+    if place.kind not in (gitrepo.MAIN, gitrepo.LINKED) or not place.top:
+        return None, 'cannot', ('-C %s: git could not name its work tree (%s: %s)'
+                                % (root, place.kind, place.detail))
+    return place.top, None, None
 
 
 def short_name(ref):
@@ -186,14 +205,24 @@ def look(root, files=None, branch=None, base=None, cfg=None):
             return Outcome(CANNOT, lines + ['CANNOT ANSWER: --branch %s: %s' % (branch, why)])
         lines.append('set       %d file(s) %s changed since its merge base with %s'
                      % (len(members), branch, base))
-        # The branch's names: the ref it was given as, and every ref at its tip (HEAD or a commit
-        # names no ref itself); each of their refs, an older pushed copy included, is left out.
-        own = {stem(b.ref) for b in every if b.tip == tip}
+        # The branch's name: the ref it was given as, or the branch HEAD is on. Only refs of that
+        # name (local and pushed copies, an older one included) are left out; another branch at
+        # the same tip is checked. A bare commit names no branch: the branches at its tip are
+        # taken as it, each named in a note.
         full = _full_ref(branch, every)
+        if full is None and branch == 'HEAD':
+            r = cmd.call(['symbolic-ref', '-q', 'HEAD'], root)
+            on = cmd.text(r.out).strip() if r.rc == 0 else ''
+            full = _full_ref(on, every) if on else None
         if full:
-            own.add(stem(full))
+            own = {stem(full)}
+        else:
+            own = {stem(b.ref) for b in every if b.tip == tip}
+            for name in sorted(own):
+                lines.append('note      --branch %s names no branch; %s is at its tip, so its '
+                             'refs are left out as --branch' % (branch, name))
         for b in every:
-            if b.tip == tip or stem(b.ref) in own:
+            if stem(b.ref) in own:
                 excluded[b.ref] = '--branch'
     else:
         lines.append('set       %d path(s) given' % len(members))
