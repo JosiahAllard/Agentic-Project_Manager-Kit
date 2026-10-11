@@ -1,18 +1,23 @@
 """kitlib.hubsite.auth: who a request on the LOCAL listener is.
 
   folder(home=None)                 <machine config dir>/hub, where the token files live
-  ensure_tokens(folder)             make the folder and the two token files when absent
+  ensure_tokens(folder)             make the folder and the two token files when absent;
+                                    TokenFileError for one that exists and cannot serve
   read_token(folder, role)          a role's token as a client sends it, or None
   parse_cookies(text)               a Cookie header as {name: value}
-  cookie_header(value)              the Set-Cookie value of a paired browser
-  Credentials(folder)               .role_for(headers, cookies) -> OWNER, AGENT or None
+  cookie_name(port)                 the session cookie's name on that listener
+  cookie_header(value, port)        the Set-Cookie value of a paired browser
+  Credentials(folder, port=port)    .role_for(headers, cookies) -> OWNER, AGENT or None
                                     .new_pairing_code() / .pair(code) for the PC's browser
+                                    .end_sessions() ends every session and code
 
 Two roles, each a token file: OWNER_FILE and AGENT_FILE, sent as `Authorization: Bearer <token>`.
 A browser cannot send that header from a link, so the owner's browser pairs once: an owner-only
 caller asks for a pairing code, the browser redeems it once, and gets a session cookie
 (HttpOnly, SameSite=Strict). Codes and sessions live in this process's memory only: a server
-restart ends every session, and the owner pairs again.
+restart ends every session, and the owner pairs again. Browsers send this cookie to any server
+on the loopback address whatever its port, so the session is short (SESSION_TTL_S) and
+`end_sessions()` ends them all.
 
 Every comparison of a secret is hmac.compare_digest. Whatever cannot be checked is no role:
 an absent, short or unreadable token file, two token files holding the same token, a second
@@ -39,12 +44,17 @@ OWNER_FILE = 'owner.token'
 AGENT_FILE = 'agent.token'
 TOKEN_FILES = {OWNER: OWNER_FILE, AGENT: AGENT_FILE}
 COOKIE = 'hub_session'
-MIN_TOKEN = 32               # characters; a shorter token file grants nothing
+TOKEN_BYTES = 32             # the random bytes of a generated token
+MIN_TOKEN = 43               # characters, a generated token's length; a shorter file grants nothing
 MAX_TOKEN = 512
 PAIR_TTL_S = 300             # a pairing code not redeemed by then is gone
-SESSION_TTL_S = 30 * 86400
+SESSION_TTL_S = 12 * 3600    # a session's life: the server-side expiry and the cookie's Max-Age
 MAX_CODES = 8                # outstanding pairing codes; the oldest goes first
 MAX_SESSIONS = 32
+
+
+class TokenFileError(Exception):
+    """A token file exists and cannot serve as a credential. The message names the file."""
 
 
 def folder(home=None):
@@ -53,18 +63,39 @@ def folder(home=None):
     return os.path.join(os.path.dirname(user.locate(home).new), FOLDER_NAME)
 
 
+def cookie_name(port=None):
+    """The session cookie's name on the listener at `port`: COOKIE_<port>, so two hubs on one
+    host (cookies are not split by port) do not overwrite each other. None: COOKIE."""
+    return COOKIE if port is None else '%s_%d' % (COOKIE, port)
+
+
 def ensure_tokens(folder):
     """Make `folder` and each token file that is absent, with a fresh random token, and return
-    {role: path}. A file that exists is left as it is, whatever it holds. OSError propagates."""
+    {role: path}. A token file that exists and read_token cannot use (empty, shorter than
+    MIN_TOKEN, not ASCII, a directory) is a TokenFileError naming it: it is never replaced and
+    never adopted. A new file is written whole beside its place and renamed in, so a crash
+    leaves no empty token file; the rename never replaces a file another process made first.
+    OSError propagates."""
     os.makedirs(folder, exist_ok=True)
     out = {}
     for role in ROLES:
         path = os.path.join(folder, TOKEN_FILES[role])
-        try:
-            with open(path, 'x', encoding='ascii', newline='\n') as f:
-                f.write(secrets.token_urlsafe(32) + '\n')
-        except FileExistsError:
-            pass
+        if not os.path.lexists(path):
+            tmp = '%s.%s.tmp' % (path, secrets.token_hex(8))
+            try:
+                with open(tmp, 'x', encoding='ascii', newline='\n') as f:
+                    f.write(secrets.token_urlsafe(TOKEN_BYTES) + '\n')
+                os.rename(tmp, path)       # Windows: fails when `path` exists, never replaces
+            except FileExistsError:
+                pass
+            finally:
+                if os.path.lexists(tmp):
+                    os.remove(tmp)
+        if read_token(folder, role) is None:
+            raise TokenFileError(
+                'the hub token file %s holds no usable token (one line of %d to %d ASCII '
+                'characters, no spaces): delete it to have a new one made, or put a token in it'
+                % (path, MIN_TOKEN, MAX_TOKEN))
         out[role] = path
     return out
 
@@ -87,10 +118,15 @@ def read_token(folder, role):
 
 
 def _same(a, b):
-    """True when the two strings are equal, compared in constant time; False for a non-string."""
+    """True when the two strings are equal, compared in constant time; False for a non-string
+    and for a string that has no UTF-8 form (a lone surrogate), which no secret here is."""
     if not isinstance(a, str) or not isinstance(b, str):
         return False
-    return hmac.compare_digest(a.encode('utf-8'), b.encode('utf-8'))
+    try:
+        a, b = a.encode('utf-8'), b.encode('utf-8')
+    except UnicodeEncodeError:
+        return False
+    return hmac.compare_digest(a, b)
 
 
 def _values(headers, name):
@@ -129,18 +165,23 @@ def parse_cookies(text):
     return out
 
 
-def cookie_header(value):
-    """The Set-Cookie header value that gives a browser the session `value` (Credentials.pair)."""
-    return '%s=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Strict' % (COOKIE, value, SESSION_TTL_S)
+def cookie_header(value, port=None):
+    """The Set-Cookie header value that gives a browser the session `value` (Credentials.pair)
+    on the listener at `port` (cookie_name)."""
+    return '%s=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Strict' % (
+        cookie_name(port), value, SESSION_TTL_S)
 
 
 class Credentials(object):
     """The local listener's credentials: the token files in `folder`, read at every request (a
     replaced token file takes effect at once), and this process's pairing codes and sessions.
-    `clock` is a monotonic clock in seconds. Safe to call from several threads."""
+    `clock` is a monotonic clock in seconds. `port` is the listener's: `.cookie` is
+    cookie_name(port), the one cookie role_for reads. Safe to call from several threads."""
 
-    def __init__(self, folder, clock=time.monotonic):
+    def __init__(self, folder, clock=time.monotonic, port=None):
         self.folder = folder
+        self.port = port
+        self.cookie = cookie_name(port)
         self._clock = clock
         self._lock = threading.Lock()
         self._codes = collections.OrderedDict()       # code -> expiry
@@ -153,7 +194,7 @@ class Credentials(object):
         present, token = _bearer(headers)
         if present:
             return self._token_role(token) if token else None
-        value = cookies.get(COOKIE) if cookies else None
+        value = cookies.get(self.cookie) if cookies else None
         if isinstance(value, str) and value and self._live(self._sessions, value):
             return OWNER
         return None
@@ -196,8 +237,16 @@ class Credentials(object):
         return self._add(self._codes, PAIR_TTL_S, MAX_CODES)
 
     def pair(self, code):
-        """Redeem `code`: the session value to send as cookie_header(value), or None when the
-        code is unknown, expired or already redeemed. A code works once."""
+        """Redeem `code`: the session value to send as cookie_header(value, self.port), or None
+        when the code is unknown, expired or already redeemed. A code works once. Past
+        MAX_SESSIONS the oldest session ends."""
         if not isinstance(code, str) or not code or not self._live(self._codes, code, take=True):
             return None
         return self._add(self._sessions, SESSION_TTL_S, MAX_SESSIONS)
+
+    def end_sessions(self):
+        """End every session and drop every outstanding pairing code: each paired browser is
+        no role until it pairs again. The token files are untouched."""
+        with self._lock:
+            self._sessions.clear()
+            self._codes.clear()

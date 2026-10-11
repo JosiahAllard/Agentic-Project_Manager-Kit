@@ -53,9 +53,38 @@ class TokenFileTest(Case):
         self.assertEqual(auth.read_token(self.folder, auth.OWNER), self.owner)
         self.assertEqual(auth.read_token(self.folder, auth.AGENT), self.agent)
 
+    def test_an_existing_token_file_that_cannot_serve_is_an_error_naming_it(self):
+        path = self.paths[auth.OWNER]
+        for text in ('', '\n', 'x' * (len(self.owner) - 1), 'é' * 60, 'a' * 30 + ' ' + 'b' * 30):
+            self.put(auth.OWNER, text)
+            with self.assertRaises(auth.TokenFileError, msg=repr(text[:12])) as cm:
+                auth.ensure_tokens(self.folder)
+            self.assertIn(path, str(cm.exception))
+            with open(path, encoding='utf-8') as f:
+                self.assertEqual(f.read(), text)             # neither replaced nor adopted
+        os.remove(path)
+        os.mkdir(path)
+        with self.assertRaises(auth.TokenFileError) as cm:
+            auth.ensure_tokens(self.folder)
+        self.assertIn(path, str(cm.exception))
+        self.assertTrue(os.path.isdir(path))
+        os.rmdir(path)
+        self.assertEqual(auth.ensure_tokens(self.folder), self.paths)
+        self.assertNotEqual(auth.read_token(self.folder, auth.OWNER), self.owner)
+        self.assertEqual(auth.read_token(self.folder, auth.AGENT), self.agent)
+
+    def test_a_token_is_written_whole_and_leaves_no_temp_file(self):
+        with open(self.paths[auth.AGENT], 'rb') as f:
+            raw = f.read()
+        self.assertEqual(raw, self.agent.encode('ascii') + b'\n')
+        self.assertEqual(len(self.agent), auth.MIN_TOKEN)
+        os.remove(self.paths[auth.AGENT])
+        auth.ensure_tokens(self.folder)
+        self.assertEqual(sorted(os.listdir(self.folder)), ['agent.token', 'owner.token'])
+
     def test_a_token_file_that_cannot_serve_reads_as_none(self):
-        for text in ('', '\n', 'short', 'x' * (auth.MAX_TOKEN + 1), 'a' * 20 + ' ' + 'b' * 20,
-                     'é' * 40):
+        for text in ('', '\n', 'short', 'x' * (auth.MIN_TOKEN - 1), 'x' * (auth.MAX_TOKEN + 1),
+                     'a' * 30 + ' ' + 'b' * 30, 'é' * 60):
             self.put(auth.OWNER, text)
             self.assertIsNone(auth.read_token(self.folder, auth.OWNER), repr(text[:12]))
         os.remove(self.paths[auth.OWNER])
@@ -110,6 +139,23 @@ class BearerTest(Case):
     def test_one_token_in_both_files_grants_neither_role(self):
         self.put(auth.AGENT, self.owner)
         self.assertIsNone(self.creds.role_for(bearer(self.owner), {}))
+
+    def test_a_string_with_no_utf8_form_resolves_to_no_role(self):
+        for bad in ('\ud800', self.owner + '\udfff'):
+            self.assertIsNone(self.creds.role_for(bearer(bad), {}), ascii(bad))
+            self.assertIsNone(self.creds.role_for({}, {self.creds.cookie: bad}), ascii(bad))
+
+    def test_the_owner_token_in_the_access_header_alone_is_no_role(self):
+        cf = 'Cf-Access-Jwt-Assertion'
+        self.assertEqual(self.creds.role_for({'Authorization': 'Bearer ' + self.owner}, {}),
+                         auth.OWNER)                      # the token is the valid one
+        m = email.message.Message()
+        m[cf] = self.owner
+        for headers in ({cf: self.owner}, {cf.lower(): self.owner}, {cf: 'Bearer ' + self.owner}, m):
+            self.assertIsNone(self.creds.role_for(headers, {}))
+            self.assertIsNone(self.creds.role_for(headers, None))
+        session = self.creds.pair(self.creds.new_pairing_code())
+        self.assertIsNone(self.creds.role_for({cf: session}, {}))
 
     def test_the_access_header_is_ignored(self):
         cf = 'Cf-Access-Jwt-Assertion'
@@ -178,12 +224,69 @@ class PairingTest(Case):
         self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
 
     def test_the_cookie_is_http_only_and_same_site_strict(self):
-        parts = [p.strip() for p in auth.cookie_header('v').split(';')]
-        self.assertEqual(parts[0], auth.COOKIE + '=v')
-        self.assertIn('HttpOnly', parts)
-        self.assertIn('SameSite=Strict', parts)
-        self.assertIn('Path=/', parts)
-        self.assertFalse([p for p in parts if p.lower().startswith('domain')])
+        self.assertEqual(auth.cookie_header('v'),
+                         'hub_session=v; Path=/; Max-Age=%d; HttpOnly; SameSite=Strict'
+                         % auth.SESSION_TTL_S)
+        self.assertEqual(auth.SESSION_TTL_S, 12 * 3600)
+        self.assertEqual(auth.cookie_header('v', 8790),
+                         'hub_session_8790=v; Path=/; Max-Age=%d; HttpOnly; SameSite=Strict'
+                         % auth.SESSION_TTL_S)
+
+    def test_a_session_lives_exactly_the_session_length(self):
+        value = self.creds.pair(self.creds.new_pairing_code())
+        self.clock.now += auth.SESSION_TTL_S - 1
+        self.assertEqual(self.creds.role_for({}, self.cookie(value)), auth.OWNER)
+        self.clock.now += 2
+        self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+
+    def test_the_cookie_and_the_server_follow_the_one_constant(self):
+        old = auth.SESSION_TTL_S
+        self.addCleanup(setattr, auth, 'SESSION_TTL_S', old)
+        auth.SESSION_TTL_S = 77
+        self.assertIn('; Max-Age=77;', auth.cookie_header('v'))
+        value = self.creds.pair(self.creds.new_pairing_code())
+        self.clock.now += 76
+        self.assertEqual(self.creds.role_for({}, self.cookie(value)), auth.OWNER)
+        self.clock.now += 2
+        self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+
+    def test_the_cookie_is_named_for_its_port(self):
+        self.assertEqual(auth.cookie_name(), auth.COOKIE)
+        self.assertEqual(self.creds.cookie, auth.COOKIE)
+        a = auth.Credentials(self.folder, clock=self.clock, port=8790)
+        b = auth.Credentials(self.folder, clock=self.clock, port=9001)
+        self.assertEqual((a.cookie, b.cookie), ('hub_session_8790', 'hub_session_9001'))
+        value = a.pair(a.new_pairing_code())
+        other = b.pair(b.new_pairing_code())
+        cookies = auth.parse_cookies('; '.join(h.split(';')[0] for h in (
+            auth.cookie_header(value, a.port), auth.cookie_header(other, b.port))))
+        self.assertEqual(a.role_for({}, cookies), auth.OWNER)     # one jar, two hubs
+        self.assertEqual(b.role_for({}, cookies), auth.OWNER)
+        self.assertIsNone(a.role_for({}, {auth.COOKIE: value}))
+        self.assertIsNone(a.role_for({}, {b.cookie: value}))
+
+    def test_a_code_with_no_utf8_form_pairs_nothing_and_spends_nothing(self):
+        code = self.creds.new_pairing_code()
+        self.assertIsNone(self.creds.pair('\ud800'))
+        self.assertIsNone(self.creds.pair(code + '\ud800'))
+        self.assertIsNotNone(self.creds.pair(code))
+
+    def test_only_the_newest_sessions_are_kept(self):
+        values = [self.creds.pair(self.creds.new_pairing_code())
+                  for _ in range(auth.MAX_SESSIONS + 1)]
+        self.assertIsNone(self.creds.role_for({}, self.cookie(values[0])))
+        for value in values[1:]:
+            self.assertEqual(self.creds.role_for({}, self.cookie(value)), auth.OWNER)
+
+    def test_ending_the_sessions_drops_every_session_and_code(self):
+        value = self.creds.pair(self.creds.new_pairing_code())
+        code = self.creds.new_pairing_code()
+        self.creds.end_sessions()
+        self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+        self.assertIsNone(self.creds.pair(code))
+        self.assertEqual(self.creds.role_for(bearer(self.owner), {}), auth.OWNER)
+        again = self.creds.pair(self.creds.new_pairing_code())
+        self.assertEqual(self.creds.role_for({}, self.cookie(again)), auth.OWNER)
 
 
 class ParseCookiesTest(unittest.TestCase):

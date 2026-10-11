@@ -49,7 +49,9 @@ HUB = Obj({
     'tunnel_port': Field(Int(1, 65535), TUNNEL_PORT, 'the tunnel listener, loopback only'),
     'store': Field(user.AbsPath(), None, 'the store folder; unset: <pm_data.path>/%s' % STORE_DIR),
     'commit_every_s': Field(Int(1, 3600), COMMIT_EVERY_S, 'the least seconds between two store commits'),
-    'push': Field(Bool(), None, 'push the store after a commit; unset: on when pm_data is set'),
+    'push': Field(Bool(), None, 'push the store after a commit; unset: on only when `store` is '
+                                'unset and pm_data is set (an explicit store may be no part of '
+                                'the data worktree)'),
     'backlog_refresh_s': Field(Int(30, 86400), BACKLOG_REFRESH_S, 'seconds between two backlog fetches'),
     'access': Field(ACCESS, None, 'what the tunnel listener requires of an Access token'),
     'relay': Field(RELAY, None, 'the artifact relay; unset: off'),
@@ -61,14 +63,28 @@ def normalise_email(text):
     return text.strip().casefold() if isinstance(text, str) else ''
 
 
+def normalise_emails(items):
+    """`items` as the allow-list holds them: each normalise_email'd, blanks and repeats dropped,
+    first-seen order kept, as a tuple."""
+    out = []
+    for e in (normalise_email(x) for x in items or ()):
+        if e and e not in out:
+            out.append(e)
+    return tuple(out)
+
+
 class Access(collections.namedtuple('Access', 'team aud emails')):
     """What the tunnel listener requires: `team` and `aud` ('' when unset) and `emails`, the
-    allow-list as written (a tuple). Compare a token's email through `allowed_emails`."""
+    allow-list. `emails` is always the normalised tuple (normalise_emails), however the Access
+    was made, so `x in access.emails` and `allows(x)` cannot disagree for a normalised x."""
+
+    def __new__(cls, team='', aud='', emails=()):
+        return super(Access, cls).__new__(cls, team, aud, normalise_emails(emails))
 
     @property
     def allowed_emails(self):
-        """The allow-list normalised (normalise_email), as a frozenset without blanks."""
-        return frozenset(e for e in (normalise_email(x) for x in self.emails) if e)
+        """`emails` as a frozenset."""
+        return frozenset(self.emails)
 
     def allows(self, email):
         """True when `email`, normalised the same way, is on the allow-list. An empty list
@@ -110,7 +126,8 @@ def settings(obj, pm_data=None, where=KEY):
         raise ConfigError('; '.join(errs))
     obj = obj or {}
     store = obj.get('store')
-    if not store and pm_data:
+    derived = not store and bool(pm_data)      # the store is the data worktree's own folder
+    if derived:
         store = os.path.join(pm_data['path'], STORE_DIR)
     push = obj.get('push')
     access = obj.get('access') or {}
@@ -120,7 +137,7 @@ def settings(obj, pm_data=None, where=KEY):
         tunnel_port=_value(obj, 'tunnel_port', TUNNEL_PORT),
         store=os.path.normpath(store) if store else None,
         commit_every_s=_value(obj, 'commit_every_s', COMMIT_EVERY_S),
-        push=bool(pm_data) if push is None else push,
+        push=derived if push is None else push,
         backlog_refresh_s=_value(obj, 'backlog_refresh_s', BACKLOG_REFRESH_S),
         access=Access(access.get('team') or '', access.get('aud') or '',
                       tuple(access.get('emails') or ())),

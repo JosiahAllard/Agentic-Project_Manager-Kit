@@ -111,11 +111,37 @@ class ValuesTest(HomeCase):
     def test_the_email_allow_list_is_normalised_for_comparison(self):
         a = settings.settings({'access': {'emails': ['  Owner@Example.INVALID ', 'b@example.invalid',
                                                      'owner@example.invalid']}}).access
-        self.assertEqual(a.emails, ('  Owner@Example.INVALID ', 'b@example.invalid',
-                                    'owner@example.invalid'))
-        self.assertEqual(a.allowed_emails, frozenset(['owner@example.invalid', 'b@example.invalid']))
+        self.assertEqual(a.emails, ('owner@example.invalid', 'b@example.invalid'))
+        self.assertEqual(a.allowed_emails, frozenset(a.emails))
         self.assertTrue(a.allows('OWNER@example.invalid\n'))
         self.assertFalse(a.allows('c@example.invalid'))
+
+    def test_an_access_made_by_hand_holds_the_normalised_emails_too(self):
+        a = settings.Access('t', 'a', [' B@Example.invalid', 'b@example.invalid', '', 7, 'A@example.invalid'])
+        self.assertEqual(a.emails, ('b@example.invalid', 'a@example.invalid'))
+        self.assertEqual(a._replace(team='u').emails, a.emails)
+        for e in a.emails:
+            self.assertTrue(a.allows(e))
+
+    def test_push_defaults_on_only_for_the_store_in_the_data_worktree(self):
+        store = os.path.join(self.home, 'elsewhere')
+        self.write({'pm_data': {'path': self.data}})
+        self.assertIs(settings.load(home=self.home).push, True)
+        self.write({'pm_data': {'path': self.data}, 'hub': {'store': store}})
+        self.assertIs(settings.load(home=self.home).push, False)
+        self.write({'pm_data': {'path': self.data}, 'hub': {'store': store, 'push': True}})
+        self.assertIs(settings.load(home=self.home).push, True)
+        self.write({'pm_data': {'path': self.data}, 'hub': {'push': False}})
+        self.assertIs(settings.load(home=self.home).push, False)
+        self.write({'hub': {'store': store}})
+        self.assertIs(settings.load(home=self.home).push, False)
+
+    def test_the_timer_bounds_are_exact(self):
+        for key, lo, hi in (('commit_every_s', 1, 3600), ('backlog_refresh_s', 30, 86400)):
+            for ok in (lo, hi):
+                self.assertEqual(getattr(settings.settings({key: ok}), key), ok)
+            for bad in (lo - 1, hi + 1):
+                self.refused({key: bad}, '%s must be a whole number from %d to %d' % (key, lo, hi))
 
     def test_an_empty_allow_list_allows_nobody(self):
         a = settings.settings(None).access
