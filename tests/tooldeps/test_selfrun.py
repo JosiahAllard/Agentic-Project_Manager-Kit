@@ -17,6 +17,7 @@ from kitlib.config import user
 from kitlib.proc import shield
 from kitlib.tooldeps import selfrun
 from tests.gitfixture import rmtree
+from tests.home import TempHomeCase
 
 
 def fake_unit(log, lock, status=None, ran=3, pause=0.4):
@@ -101,7 +102,9 @@ SKIP_OK = 'Ran 3 tests in 0.1s\n\nOK (skipped=2)\n'
 NO_SKIP = 'Ran 3 tests in 0.1s\n\nOK\n'
 
 
-class Skips(unittest.TestCase):
+class Skips(TempHomeCase):
+    # TempHomeCase (tests/home.py): selfrun.run makes its run folder through
+    # kitlib.config.user.make_temp, which reads temp_dir from an empty machine config.
     MODS = ['tests.a.test_1', 'tests.a.test_2']
 
     def run_texts(self, texts, skip_fails=()):
@@ -162,7 +165,8 @@ class Skips(unittest.TestCase):
         self.assertEqual(rc, 0, out)
 
 
-class Order(unittest.TestCase):
+class Order(TempHomeCase):
+    # TempHomeCase: selfrun.run's run folder comes from user.make_temp (an empty machine config).
     MODS = ['tests.a.test_1', 'tests.a.test_2', 'tests.b.test_1', 'tests.b.test_2',
             'tests.c.test_1', 'tests.c.test_2']
 
@@ -347,10 +351,11 @@ def read_only_repo(parent):
     return repo
 
 
-class RmtreeForce(unittest.TestCase):
+class RmtreeForce(TempHomeCase):
     """A temp git repository with read-only object files is removed, not left in TEMP."""
 
     def setUp(self):
+        super().setUp()         # TempHomeCase: the run case's folder comes from user.make_temp
         self.parent = tempfile.mkdtemp(prefix='kit-rmforce-')
         self.addCleanup(selfrun.rmtree_force, self.parent, True)
 
@@ -512,8 +517,9 @@ class Plan(unittest.TestCase):
         self.assertEqual(selfrun.module_of('tests.a.test_big'), 'tests.a.test_big')
 
 
-class Times(unittest.TestCase):
+class Times(TempHomeCase):
     def setUp(self):
+        super().setUp()         # TempHomeCase: selfrun.run's run folder comes from user.make_temp
         self.dir = tempfile.mkdtemp(prefix='kit-selfrun-')
         self.addCleanup(rmtree, self.dir)
         self.path = os.path.join(self.dir, selfrun.TIMES_FILE)
@@ -610,8 +616,9 @@ class Imported(unittest.TestCase):
 '''
 
 
-class Empty(unittest.TestCase):
+class Empty(TempHomeCase):
     def setUp(self):
+        super().setUp()         # TempHomeCase: selfrun.run's run folder comes from user.make_temp
         self.root = tempfile.mkdtemp(prefix='kit-selfrun-')
         self.addCleanup(rmtree, self.root)
         write(self.root, {
@@ -660,8 +667,9 @@ class Empty(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == 'nt', 'units run in Windows job objects')
-class RealUnits(unittest.TestCase):
+class RealUnits(TempHomeCase):
     def setUp(self):
+        super().setUp()         # TempHomeCase: the run folder (user.make_temp); units inherit it
         self.root = tempfile.mkdtemp(prefix='kit-selfrun-')
         self.addCleanup(rmtree, self.root)
         write(self.root, {'tests/__init__.py': '', 'tests/p/__init__.py': ''})
