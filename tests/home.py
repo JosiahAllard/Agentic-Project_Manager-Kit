@@ -10,6 +10,10 @@
                      test run without the fence reads an empty temp folder, not the real home.
   TempHomeCase       a TestCase whose every test runs under temp_home (self.home). A subclass
                      with its own setUp calls super().setUp() first.
+  unmarked_env(env)  a copy of `env` (default: os.environ) without the fence's marker (FENCE_ENV):
+                     the environment of a child that must run as a real run does, unfenced. Its
+                     home is the caller's business: a temp folder, unless the child only computes
+                     the home's path.
 """
 import os
 import tempfile
@@ -18,6 +22,17 @@ from unittest import mock
 
 from kitlib.config import user as kuser
 from tests import gitfixture
+
+# The marker the fence's children read (kitlib.config.user.FENCE_ENV), spelled here so that a
+# renamed constant fails a test instead of following it.
+FENCE_ENV = 'KIT_HOME_FENCE'
+
+
+def unmarked_env(env=None):
+    """A copy of `env` (default: os.environ) without the home fence's marker."""
+    out = dict(os.environ if env is None else env)
+    out.pop(FENCE_ENV, None)
+    return out
 
 
 def temp_home(case, prefix='kit-home-'):
