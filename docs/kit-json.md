@@ -24,7 +24,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `repo.push_block` (bool, default false): pre-push refuses a push to main without a gate-OK record
 - `owner.email` (email): author email of the owner's own commits; unset: no owner commit is provable
 - `owner.agent_emails` (list of email, default []): author emails known to be agents', never the owner's
-- `owner.paths` (list of string, default ["CLAUDE.md", ".claude/", ".github/workflows/", ".kit.json", "tools/gate.json"]): owner-only paths; an entry ending / locks a directory; replaces the default
+- `owner.paths` (list of string, default ["CLAUDE.md", ".claude/", ".github/workflows/", ".kit.json", "tools/gate.json", "kitlib/gate/strict_defaults.py"]): owner-only paths; an entry ending / locks a directory; replaces the default
 - `owner.paths_except` (list of string, default [".claude/worktrees/"]): what under a locked directory is not locked
 - `owner.trailer` (a trailer key, default "Owner-Approved"): the trailer key approving an owner-only change
 - `hook.module` (a module name): the one repo hook module, <tools_dir>/<module>.py
