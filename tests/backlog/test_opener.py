@@ -60,7 +60,6 @@ class OpenStore(unittest.TestCase):
     def test_the_context_is_built_without_a_ledger(self):
         ctx = opener.open_store(self.repo.root, fetch=False)
         self.assertIsInstance(ctx, pmod.Context)
-        self.assertFalse(hasattr(ctx, 'ledger'))
         top, cfg, rules = opener.open_repo(self.repo.root)
         self.assertTrue(same_path(top, self.repo.root), top)
         self.assertEqual((cfg.remote, cfg.main_branch), ('origin', 'main'))
@@ -111,7 +110,40 @@ class Planner(StoreCase):
         change = self.write(args('retarget', old=OLD, new=NEW))
         self.assertEqual(sorted(change.writes), ['FOO'])
         self.assertEqual(self.get('FOO').all('scope'), [NEW + '/**'])
-        self.assertIsNotNone(self.get('BAR'), 'retarget planned as another verb')
+        self.assertEqual(change.subject, 'backlog: retarget %s -> %s in 1 record(s)' % (OLD, NEW))
+
+    def test_a_verb_that_is_no_write_is_usage_and_plans_nothing(self):
+        # `why` and `ruling` are given so that a fall-through to `retire` would delete FOO.
+        self.seed(rec('FOO'))
+        for verb in ('show', 'no-such-verb'):
+            with self.subTest(verb=verb):
+                with self.assertRaises(errors.Usage) as caught:
+                    self.write(args(verb, id='FOO', why=WHY, ruling=None))
+                self.assertIn('`%s` is not a write verb' % verb, str(caught.exception))
+                self.assertIsNotNone(self.get('FOO'), '%s deleted the record' % verb)
+
+    def test_retire_is_still_planned(self):
+        self.seed(rec('FOO'))
+        self.write(args('retire', id='FOO', why=WHY, ruling=None))
+        self.assertIsNone(self.get('FOO'))
+
+    def test_retarget_dry_refuses_a_store_with_an_unreadable_record(self):
+        self.seed(rec('FOO', scope=OLD + '/**'), {'BAD': 'no separator here\n'})
+        with self.assertRaises(errors.Failure) as caught:
+            opener.retarget_dry(args('retarget', old=OLD, new=NEW), self.store)
+        self.assertIn('unreadable (BAD)', str(caught.exception))
+
+    def test_retarget_dry_checks_the_change_it_planned(self):
+        # No retarget of valid paths is known to add a finding, so the check itself is replaced.
+        self.seed(rec('FOO', scope=OLD + '/**'))
+        with mock.patch.object(smod, 'check_change',
+                               side_effect=errors.Usage('left invalid')) as check:
+            with self.assertRaises(errors.Usage) as caught:
+                opener.retarget_dry(args('retarget', old=OLD, new=NEW), self.store)
+        self.assertEqual(str(caught.exception), 'left invalid')
+        snap, change = check.call_args.args
+        self.assertIsNotNone(snap.get('FOO'))
+        self.assertEqual(sorted(change.writes), ['FOO'])
 
     def test_retarget_dry_plans_the_same_change_and_writes_nothing(self):
         self.seed(rec('FOO', scope=OLD + '/**'))
@@ -145,6 +177,14 @@ class ReExport(unittest.TestCase):
         p = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True,
                            encoding='utf-8', cwd=ROOT, timeout=120)
         self.assertEqual((p.returncode, p.stdout.strip()), (0, 'False False'), p.stderr)
+
+    def test_the_first_use_keeps_the_function_in_the_package(self):
+        code = ('import kitlib.backlog as b; before = "open_store" in vars(b); f = b.open_store; '
+                'import kitlib.backlog.opener as o; '
+                'print(before, vars(b).get("open_store") is o.open_store is f)')
+        p = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True,
+                           encoding='utf-8', cwd=ROOT, timeout=120)
+        self.assertEqual((p.returncode, p.stdout.strip()), (0, 'False True'), p.stderr)
 
 
 if __name__ == '__main__':

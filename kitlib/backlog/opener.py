@@ -5,7 +5,8 @@ docs/backlog.md).
   open_repo(root)   -> (top, cfg, rules); Failure when `root` is no repository or its `.kit.json`
                        cannot be read
   open_store(root, fetch=True, session=None, branch=None) -> plan.Context over the store
-  planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, or `retarget`)
+  planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, or `retarget`);
+                       Usage for any other verb, raised before a plan exists
   retarget_dry(args, store) -> the Change `retarget` would write, checked as a write would be;
                        nothing is published
 
@@ -19,7 +20,7 @@ from . import plan as pmod
 from . import record as rmod
 from . import retarget as retmod
 from . import store as smod
-from .errors import Failure
+from .errors import Failure, Usage
 
 # `set --<field>` for every field but hold_ruling, whose `--hold-ruling` is the recite.
 FIELD_FLAGS = [k for k in rmod.FIELDS if k != 'hold_ruling']
@@ -81,7 +82,10 @@ def planner(args, ctx):
         return lambda s: pmod.plan_set_status(s, ctx, args.id, args.status, args.q)
     if v == 'unpark':
         return lambda s: pmod.plan_unpark(s, ctx, args.id, args.ruling)
-    return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling)
+    if v == 'retire':
+        return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling)
+    # The caller's mistake, so Usage (errors.py); raised here, before any plan could run.
+    raise Usage('`%s` is not a write verb: `planner` plans %s' % (v, ', '.join(WRITES + ('retarget',))))
 
 
 def retarget_dry(args, store):
