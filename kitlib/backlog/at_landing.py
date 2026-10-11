@@ -10,8 +10,8 @@ branch checked out) takes part too: the PM's records of this repository live the
   close_landed      after the push is verified: close every record the landed branch still holds
                     pulled, in the configured store (one commit each, "closes <ID>: landed <merge
                     sha>") and in the PM data store (the record file deleted in that worktree, not
-                    committed); and every record a `Closes: <ID>[, <ID>]` trailer of the branch's
-                    commits names (closes_trailers), while pulled, whoever pulled it (a holder
+                    committed); and every record a `Closes: <ID>[, <ID>]` line in the messages of
+                    the branch's commits names (closes_trailers), while pulled, whoever pulled it (a holder
                     that is a live branch other than main is a WARNING: tell its builder). What
                     cannot be closed is a WARNING line naming the command, and the landing
                     stands; trailer ids no store holds are one NOTE line
@@ -179,16 +179,37 @@ def closes_ids(values):
     return out
 
 
+CLOSES_KEY = 'Closes:'
+
+
+def closes_values(message):
+    """The values of the `Closes:` lines of one commit message, anywhere in it: a line that
+    starts with `Closes:` (the key case-sensitive, at the line's start), its value unfolded, so
+    each following line that starts with a space or tab joins it. Prose (`closes D2`, or `Closes:
+    D2` inside a sentence) is not such a line. Not git's trailer parser, which reads only the
+    last paragraph: tools/commit.py writes the attribution as a paragraph of its own. Pure."""
+    out = []
+    for line in message.splitlines():
+        if out and out[-1] is not None and line[:1] in (' ', '\t'):
+            out[-1] += ' ' + line.strip()
+        elif line.startswith(CLOSES_KEY):
+            out.append(line[len(CLOSES_KEY):].strip())
+        else:
+            out.append(None)
+    return [v for v in out if v is not None]
+
+
 def closes_trailers(root, tip, base):
-    """`(ids, None)`: the ids the `Closes:` trailers name (git's trailer parser, so only the
-    message's last paragraph counts; the key in any case) in the commits `tip` has and `base` does
-    not, merges included; or `(None, why)`. Values are read unfolded, so a value wrapped onto a
-    continuation line is one value, not a second one starting with a stray word."""
-    out, why = cmd.run_text(['log', '--format=%(trailers:key=Closes,valueonly,unfold)', tip,
-                             '--not', base, '--'], root)
+    """`(ids, None)`: the ids the `Closes:` lines name (closes_values, closes_ids) in the messages
+    of the commits `tip` has and `base` does not, merges included; or `(None, why)`."""
+    out, why = cmd.run_text(['log', '--format=%B%x00', tip, '--not', base, '--'], root,
+                            strip=False)
     if out is None:
         return None, why
-    return closes_ids(out.splitlines()), None
+    values = []
+    for message in out.split('\0'):
+        values.extend(closes_values(message))
+    return closes_ids(values), None
 
 
 def _close_plan(ctx, rid, branch, reason, named=False):

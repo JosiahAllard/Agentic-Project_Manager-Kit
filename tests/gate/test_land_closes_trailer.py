@@ -49,13 +49,13 @@ class ClosesByTrailer(StoreLandCase):
         self.assertIn('named by a Closes trailer of %s; it was pulled by main' % BRANCH, d2[0])
         self.assertEqual(self.warnings(out), [])
 
-    def test_one_trailer_may_name_several_records_in_any_case_of_the_key(self):
+    def test_one_trailer_may_name_several_records(self):
         # BBB's holder is a live branch: closed, and its builder must be told. DDD's holder has
         # no branch left (a dead pull) and AAA's is main: closed with nothing to tell.
         self.repo.git('branch', 'kit/other', self.main)
         self.seed(pulled('AAA', by='main'), pulled('BBB', by='kit/other'),
                   pulled('DDD', by='kit/gone'), pulled('CCC', by='main'))
-        out = self.land(self.branch_with('fix\n\ncloses: AAA, BBB (both done), DDD\n%s\n'
+        out = self.land(self.branch_with('fix\n\nCloses: AAA, BBB (both done), DDD\n%s\n'
                                          % TRAILERS))
         self.assertEqual(self.stems(), ['CCC'])
         warn = self.warnings(out)
@@ -135,12 +135,27 @@ class ClosesByTrailer(StoreLandCase):
         self.assertIn('NOPE, d2', notes[0])
         self.assertIn('no backlog store', notes[0])
 
-    def test_a_closes_line_that_is_not_a_trailer_closes_nothing(self):
-        before = self.seed(pulled('D2', by='main'))
-        out = self.land(self.branch_with('fix\n\nCloses: D2\n\nmore words after it\n'))
-        self.assertEqual(self.remote_store(), before)
-        self.assertEqual(self.stems(), ['D2'])
+    def test_a_closes_line_above_a_separate_attribution_paragraph_closes(self):
+        # tools/commit.py's shape: the attribution is its own last paragraph, so the Closes line
+        # is not in git's trailer block; it still closes the record.
+        self.seed(pulled('D2', by='main'), pulled('KEEP', by='main'))
+        out = self.land(self.branch_with('fix\n\nCloses: D2\n\n%s\nClaude-Session: test-session\n'
+                                         % TRAILERS))
+        self.assertEqual(self.stems(), ['KEEP'])
+        self.assertTrue(any(l.startswith('closed D2 ') for l in out.lines), out.lines)
         self.assertEqual(self.warnings(out), [])
+        self.assertEqual(self.notes(out), [])
+
+    def test_prose_that_mentions_closes_closes_nothing(self):
+        before = self.seed(pulled('D2', by='main'), pulled('D3', by='main'),
+                           pulled('D4', by='main'), pulled('D5', by='main'))
+        out = self.land(self.branch_with(
+            'fix\n\nThis closes D2 at last, and the old code said Closes: D3 too.\n'
+            'closes: D4\n  Closes: D5\n\n%s\n' % TRAILERS))
+        self.assertEqual(self.remote_store(), before)
+        self.assertEqual(self.stems(), ['D2', 'D3', 'D4', 'D5'])
+        self.assertEqual(self.warnings(out), [])
+        self.assertEqual(self.notes(out), [])
 
     def test_a_trailer_already_on_main_is_not_read(self):
         self.seed(pulled('OLD', by='kit/other'))
@@ -191,6 +206,13 @@ class TrailerValues(unittest.TestCase):
         self.assertEqual(at_landing.closes_ids(['EX-43', 'A, B (both)', 'kit.x_y', '#12, (C)',
                                                 '  ', 'E done']),
                          ['EX-43', 'A', 'B', 'kit.x_y', 'E'])
+
+    def test_closes_lines_are_read_anywhere_in_the_message_and_unfolded(self):
+        message = ('subject Closes: NO1\n\nCloses: EX-1\n\tand more\nprose closes: NO2\n'
+                   'closes: NO3\n  Closes: NO4\nCLOSES: NO5\nCloses:EX-2\n\n'
+                   'Co-Authored-By: someone\n')
+        self.assertEqual(at_landing.closes_values(message), ['EX-1 and more', 'EX-2'])
+        self.assertEqual(at_landing.closes_values(''), [])
 
 
 if __name__ == '__main__':
