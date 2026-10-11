@@ -7,7 +7,7 @@ launch.py start (--repo NAME | --repo-path DIR | --session KEY) (--account N | -
 launch.py deep --repo-path DIR (--brief FILE | --brief-text TEXT) --requester NAME --slug SLUG [--account N|auto] [--force] [--plan]
 launch.py consultant --repo-path DIR [--repo SLUG] [--account N|auto] [--notes-path P] [--force] [--replace] [--plan]
 launch.py stop --name NAME [--successor NAME] [--pid N] [--dry-run]
-launch.py handoff (--session KEY | --all) [--account N|auto] [--recycle] [--stem NEW] [--what-if]
+launch.py handoff (--session KEY | --all) [--account N|auto] [--recycle] [--stem NEW] [--state FILE] [--what-if]
 launch.py pick-account [--limit 95] [--explain]
 launch.py usage
 launch.py after-reboot [--test] [--dry-run]
@@ -88,7 +88,7 @@ Only the launcher's PM resume carries the `pm` mark; no settings file sets `PM_K
 
 ## Hand-off
 
-`handoff --session KEY --account N|auto` starts the successor `<stem>-a<N>` once the session has replied "ready to hand off"; `--recycle` starts `<stem>-a<N>-r<k>` on the same account and prints the `stop` line for the old one. `--all` hands off every entry, agent sessions first, skipping one already on the target. `--stem NEW` (one `--session` only; letters, digits, `_` and `-`) hands off under a new stem: the successor is `NEW-a<N>`, with no `-r<k>` even on a recycle, and sessions.json's `stem` becomes `NEW`; it is how a running session moves to a new stem. A not-signed-in account, and without `--recycle` the account the session is already on, is refused, and so is coordinators.json under its old name, before anything starts. sessions.json (and coordinators.json for a repo's main coordinator) is rewritten only after the start succeeds; the old window stays open until the PM stops it.
+`handoff --session KEY --account N|auto` starts the successor `<stem>-a<N>` once the session has replied "ready to hand off"; `--recycle` starts `<stem>-a<N>-r<k>` on the same account and prints the `stop` line for the old one. `--all` hands off every entry, agent sessions first, skipping one already on the target. `--stem NEW` (one `--session` only; letters, digits, `_` and `-`) hands off under a new stem: the successor is `NEW-a<N>`, with no `-r<k>` even on a recycle, and sessions.json's `stem` becomes `NEW`; it is how a running session moves to a new stem. `--state FILE` (one `--session` only; an existing file) names the note the successor is told to read, in place of the entry's `state`: the path the session gave in its ready reply. The predecessor lands nothing after it replies ready: the successor's first message (`start.predecessor_text`) tells it to land every LAND verdict the state note lists at once and never to wait on the old session, and there is no landing order between the two. A not-signed-in account, and without `--recycle` the account the session is already on, is refused, and so is coordinators.json under its old name, before anything starts. sessions.json (and coordinators.json for a repo's main coordinator) is rewritten only after the start succeeds; the old window stays open until the PM stops it.
 
 ## After a reboot
 
