@@ -9,8 +9,8 @@ The PM moves long-running sessions between Claude accounts and recycles coordina
 
 ## Old session (told to checkpoint and stand down)
 
-1. Dispatch nothing new. Let landings in flight finish, or note them as in flight.
-2. Write your state file (the path the repo's profile names; coordinators usually `docs/ops/state.local.md` in the repo). Open items, holds and the next step only; landed history goes in the repo's records (landing notes), not the note. Include: what is running; branches; worktrees and where each is; the landing queue; pending owner items; sequencing notes.
+1. Dispatch nothing new. A landing already running finishes; start no other.
+2. Write your state file (the path the repo's profile names; coordinators usually `docs/ops/state.local.md` in the repo). Open items, holds and the next step only; landed history goes in the repo's records (landing notes), not the note. Include: what is running; branches; worktrees and where each is; every LAND verdict as branch, tip, reviewer and range (the successor lands them all at once); pending owner items; sequencing notes.
 3. For every running agent, say whether the successor should wait for its report or re-dispatch from its branch. Running agents report to you, the old session, not to the successor.
 4. Detached background runs (machine lock runs, containers) keep going. Record each id so the successor can find them.
 5. Reply to the PM exactly `ready to hand off: <state file path>` (after a work-set wind-down: `ready to restart: <state file path>`).
@@ -30,4 +30,4 @@ Never mid-landing, never during a live session or an exclusive window.
 1. The PM sends "checkpoint and stand down", or the coordinator winds down its finished work set unasked; either way it writes its state note and replies `ready to hand off: <state file>` or `ready to restart: <state file>` (steps above).
 2. The PM runs its launcher's hand-off for that session (`launch.py handoff`, `--what-if` first; `--recycle` for a restart). The successor is named by the launcher.
 3. The successor reads the state note, verifies it, and confirms to the PM that it did.
-4. A coordinator that wound down a work set keeps landing its own branches beside the successor and sends `done: <state file>` when finished; wait for that. Then the PM stops the old session and closes its window, and tells the owner. It stops only that exact session.
+4. The old session lands nothing after it replies ready. Once the successor has checked in, the PM stops the old session and closes its window, and tells the owner; the successor lands the LAND verdicts the note lists. It stops only that exact session.
