@@ -4,6 +4,7 @@ import unittest
 
 from kitlib import pmstart
 from kitlib.pmstart import fglock
+from tests.home import temp_home
 from tests.pmstart import keep_off_launcher_repos
 
 CFG = {}
@@ -58,6 +59,7 @@ class FgLockTest(unittest.TestCase):
             fglock.read_live(FakeUser32(0, ok=0))
 
     def test_in_checklist_last_and_failure_isolated(self):
+        temp_home(self)     # the hub check's current account reads an empty machine config
         txt = pmstart.checklist(dict(CFG, standing=["x"]), NOW, procs=[],
                                 foreground_lock={"read": lambda: 5}, **FAKES)
         lines = txt.splitlines()
