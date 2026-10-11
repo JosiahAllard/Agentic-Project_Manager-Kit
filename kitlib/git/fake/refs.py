@@ -93,7 +93,9 @@ def packed(repo):
         st = os.stat(path)
     except OSError:
         return {}
-    # st_ino changes with every replace: a same-size rewrite in the same clock tick still misses.
+    # st_ino: on NTFS a replace gives the path a new one, so a same-size rewrite in the same clock
+    # tick still misses. That is filesystem-dependent: where the id is reused or reported as 0 the
+    # key degrades to mtime+size, and _forget_packed is the guard for _rewrite_packed's rewrite.
     key = (os.path.normcase(path), st.st_mtime_ns, st.st_size, st.st_ino)
     with _PACKED_LOCK:
         got = _PACKED_CACHE.get(key)

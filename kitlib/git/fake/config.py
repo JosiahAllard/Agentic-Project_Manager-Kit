@@ -238,8 +238,10 @@ def _read_text(path):
         st = os.stat(path)
     except OSError:
         return None
-    # st_ino (the file id on Windows) changes with every replace, so a same-size rewrite in the
-    # same clock tick still misses (tests/git/test_fake_cache.py).
+    # st_ino (the file id on Windows): on NTFS a replace gives the path a new one, so a same-size
+    # rewrite in the same clock tick still misses. That is filesystem-dependent: where the id is
+    # reused or reported as 0 the key degrades to mtime+size, and the eviction in _write is the
+    # guard for the fake's own rewrites (tests/git/test_fake_cache.py).
     key = (os.path.normcase(os.path.abspath(path)), st.st_mtime_ns, st.st_size, st.st_ino)
     with _CACHE_LOCK:
         got = _CACHE.get(key)
