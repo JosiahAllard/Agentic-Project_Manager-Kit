@@ -14,12 +14,18 @@ Default: one row per model, one column per view (front, 3/4, side).
   _2, _3 ... after the later ones' names so no tile overwrites another; a model named twice is
   rendered once.
 
+The render takes a render-kind machine-lock slot itself: it re-runs Blender under
+tools/machine_lock.py (KIT_MACHINE_LOCK overrides the path) and refuses, exit 2, if that is missing.
+
 The sheet itself has no text on it; the TILE lines this prints give the labels in sheet order
 (left to right, top to bottom).
 """
 import argparse
 import math
 import os
+import re
+import shutil
+import subprocess
 import sys
 
 try:
@@ -126,8 +132,37 @@ def _setup_scene():
     return scene
 
 
+# the kit's machine lock entry point: <plugin root>/tools/machine_lock.py, or KIT_MACHINE_LOCK to override
+MACHINE_LOCK_TOOL = os.environ.get("KIT_MACHINE_LOCK") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools", "machine_lock.py")
+
+RERUN_ENV = "RENDER_GLB_LOCKED"     # set only for the Blender run machine_lock_rerun starts
+
+
+def machine_lock_rerun(opts, argv, binary):
+    """Re-run this script in Blender (`binary`) under the machine-wide lock (kind render), then
+    exit with its code. Returns without re-running only in that re-run itself (RERUN_ENV, consumed
+    here so nothing it starts inherits it). Inside another locked run (MACHINE_LOCK_RUN) it still
+    goes through the tool, which runs it directly when that run holds gpu and takes gpu when it
+    holds only cpu. With no tool it refuses (exit 2) rather than render on a slot nobody holds."""
+    if os.environ.pop(RERUN_ENV, None) and os.environ.get("MACHINE_LOCK_RUN"):
+        return
+    if not os.path.isfile(MACHINE_LOCK_TOOL):
+        print(f"[machine-lock] refused: no machine lock tool at {MACHINE_LOCK_TOOL}, and a render "
+              "takes a render slot. Install the kit's tools/machine_lock.py or set "
+              "KIT_MACHINE_LOCK to it. Exit 2.", file=sys.stderr)
+        sys.exit(2)
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", os.path.splitext(os.path.basename(opts.out))[0]).strip("-")[:48]
+    # inside Blender sys.executable may be Blender itself, so the lock tool runs under a python on PATH
+    cmd = [shutil.which("python") or sys.executable, "-B", MACHINE_LOCK_TOOL, "run", "--repo", "comfy",
+           "--slug", "render-" + (stem or "glb"), "--kind", "render", "--max-wait", "540s", "--",
+           binary, "--background", "--python", os.path.abspath(__file__), "--"] + list(argv)
+    sys.exit(subprocess.call(cmd, env=dict(os.environ, **{RERUN_ENV: "1"})))
+
+
 def main(argv):
     opts = parse_args(argv)
+    machine_lock_rerun(opts, argv, bpy.app.binary_path)
     opts.files = unique_models(opts.files)
     stems = model_stems(opts.files)
     planned, cols, rows = plan(opts.files, opts.grid, opts.view)

@@ -4,9 +4,12 @@ The module imports bpy only when Blender runs it; here the pure parts are import
 
 usage: python -m unittest tests.optional.comfy.test_render_glb -v
 """
+import io
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CODE = os.path.join(HERE, '..', '..', '..', 'optional', 'comfy')
@@ -91,6 +94,77 @@ class Names(unittest.TestCase):
 
     def test_label(self):
         self.assertEqual(R.label('m/sword.glb', '3/4', 12345), 'sword.glb 3/4 12k tris')
+
+
+class MachineLockRerun(unittest.TestCase):
+    """A render re-runs Blender under the machine lock (kind render); only its own re-run skips."""
+
+    ARGV = ['--grid', '2', 'out dir/sheet.png', 'a.glb']
+
+    def rerun(self, env):
+        opts = R.parse_args(self.ARGV)
+        with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as f:
+            tool = f.name
+        self.addCleanup(os.remove, tool)
+        clean = {k: v for k, v in os.environ.items() if k not in ("MACHINE_LOCK_RUN", R.RERUN_ENV)}
+        with mock.patch.dict(os.environ, dict(clean, **env), clear=True), \
+                mock.patch.object(R, "MACHINE_LOCK_TOOL", tool), \
+                mock.patch.object(R.subprocess, "call", return_value=0) as call, \
+                mock.patch.object(R.sys, "exit") as exit_:
+            R.machine_lock_rerun(opts, self.ARGV, "blender.exe")
+            left = os.environ.get(R.RERUN_ENV)
+        return call, exit_, left
+
+    def test_no_enclosing_run_takes_a_render_slot(self):
+        call, exit_, _ = self.rerun({})
+        self.assertEqual(call.call_count, 1)
+        cmd = call.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--kind") + 1], "render")
+        self.assertEqual(cmd[cmd.index("--slug") + 1], "render-sheet")
+        self.assertEqual(call.call_args[1]["env"][R.RERUN_ENV], "1")
+        exit_.assert_called_once_with(0)
+
+    def test_the_rerun_is_blender_on_this_script_with_the_same_arguments(self):
+        call, _, _ = self.rerun({})
+        cmd = call.call_args[0][0]
+        run = cmd[cmd.index("--") + 1:]
+        self.assertEqual(run[:4], ["blender.exe", "--background", "--python", os.path.abspath(R.__file__)])
+        self.assertEqual(run[4:], ["--"] + self.ARGV)
+
+    def test_an_enclosing_run_still_goes_through_the_tool(self):
+        call, exit_, _ = self.rerun({"MACHINE_LOCK_RUN": "r-cpu-run"})
+        self.assertEqual(call.call_count, 1)
+        exit_.assert_called_once_with(0)
+
+    def test_its_own_rerun_skips_and_consumes_the_marker(self):
+        call, exit_, left = self.rerun({"MACHINE_LOCK_RUN": "r-render", R.RERUN_ENV: "1"})
+        call.assert_not_called()
+        exit_.assert_not_called()
+        self.assertIsNone(left)
+
+    def test_no_tool_refuses_rather_than_render_unlocked(self):
+        opts = R.parse_args(self.ARGV)
+        clean = {k: v for k, v in os.environ.items() if k not in ("MACHINE_LOCK_RUN", R.RERUN_ENV)}
+        with mock.patch.dict(os.environ, clean, clear=True), \
+                mock.patch.object(R, "MACHINE_LOCK_TOOL", os.path.join(HERE, "no-such-tool.py")), \
+                mock.patch.object(R.subprocess, "call") as call, \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            with self.assertRaises(SystemExit) as e:
+                R.machine_lock_rerun(opts, self.ARGV, "blender.exe")
+        self.assertEqual(e.exception.code, 2)
+        call.assert_not_called()
+        self.assertIn("refused", err.getvalue())
+
+    def test_main_asks_for_the_slot_before_rendering(self):
+        fake_bpy = mock.MagicMock()
+        fake_bpy.app.binary_path = "blender.exe"
+        with mock.patch.object(R, "bpy", fake_bpy), \
+                mock.patch.object(R, "machine_lock_rerun", side_effect=SystemExit(0)) as rerun:
+            with self.assertRaises(SystemExit):
+                R.main(self.ARGV)
+        rerun.assert_called_once()
+        self.assertEqual(rerun.call_args[0][1:], (self.ARGV, "blender.exe"))
+        fake_bpy.ops.wm.read_factory_settings.assert_not_called()
 
 
 if __name__ == '__main__':
