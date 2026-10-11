@@ -76,6 +76,7 @@ Known limits:
 - A background run (`kitlib/lock/background.py` `end_child`) still ends its whole job, a shared daemon included.
 - A descendant of a spared daemon whose own parent has exited no longer shows as the daemon's descendant, so it is ended.
 - A process started after the last pass by one being ended runs on, unpinned.
+- A left daemon whose creation time cannot be read (`process.proc_ctime` gives None) and whose pid a process this user cannot open (another user's, or a protected one) takes during the passes still counts as alive (`process.alive` cannot tell them apart), so `Slot._end_others` spares that pid and, through `process.descendants`, the dead daemon's orphaned workers; they run on, unpinned. Processes can leak this way; nothing shared is killed.
 - The stamp test rests on Windows stamping a process's creation time from the same system clock `GetSystemTimeAsFileTime` reads (inferred from the documented clocks, not measured); a clock set back during the passes voids it.
 
 Tests: tests/lock/test_release_daemons.py (`ReleaseLeavesASharedDaemon`: the errored and cancelled gates, `Launcher.kill`, a second Ctrl+C mid-kill in wait and in release, a second kill keeping the first's record, a worker started between the reads, a reused pid, a listed pid gone by the last pass, a daemon whose creation time cannot be read, a process table that cannot be read, a judgement that raised, the two kill-path controls, and a control on the harness: an outside client that exited fails as the test's setup).

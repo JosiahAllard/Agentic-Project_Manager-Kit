@@ -42,7 +42,8 @@
   "always": ["scrub"],
   "serial": [],
   "skip_fails": [
-    ["tests.lock.test_slot_treekill", "the proof that kill_retry is not needed; its confine() skips when no fake cpu slot fits the gate's affinity, which would silently void it"]
+    ["tests.lock.test_slot_treekill", "the proof that kill_retry is not needed; its confine() skips when no fake cpu slot fits the gate's affinity, which would silently void it"],
+    ["tests.lock.test_release_daemons", "the only proof that the kill path and the release spare a shared build daemon; ReleaseCase.setUp's confine() skips when no fake cpu slot fits the gate's affinity, which would silently void it"]
   ],
   "long": [
     "tests.docs.test_budget",
