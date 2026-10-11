@@ -1,7 +1,8 @@
 """`retarget OLD NEW`: rewrite a moved path across every record in one store commit
 (docs/backlog.md "Retarget").
 
-OLD and NEW are plain repo-relative paths: no glob, not `none`, no machine path, not the same
+OLD and NEW are plain repo-relative paths: no glob, not `none` in any case, no control character,
+no machine path, not the same
 path, and neither under the other (a move into or out of its own folder would rewrite a member
 twice over).
 
@@ -38,8 +39,12 @@ CASE = 'case'               # one that matches OLD only when case is ignored
 
 
 def _path_error(p, flag):
-    if p == smod.NONE:
-        return '`%s none` is the empty-scope sentinel, not a path' % flag
+    if (p or '').casefold() == smod.NONE:
+        return '`%s %s` is (or casefolds into) the empty-scope sentinel `none`, not a path' \
+               % (flag, p)
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in p or ''):
+        return '`%s %r` holds a control character (a line break would split a record line)' \
+               % (flag, p)
     if any(ch in smod.WILDCARD_CHARS for ch in p or ''):
         return '`%s %s` is a glob; give the moved path itself (a folder retargets everything ' \
                'under it, `/**` members included)' % (flag, p)

@@ -52,6 +52,18 @@ class Rewrites(unittest.TestCase):
             with self.assertRaises(Usage, msg=(old, new)):
                 retmod.check_paths(old, new)
 
+    def test_none_in_any_case_is_usage(self):
+        for old, new in (('NONE', NEW), (OLD, 'NONE'), (OLD, 'None'), ('nOnE', NEW)):
+            with self.assertRaises(Usage, msg=(old, new)) as ctx:
+                retmod.check_paths(old, new)
+            self.assertIn('sentinel', str(ctx.exception))
+
+    def test_a_control_character_is_usage(self):
+        for old, new in ((OLD, 'b\npin: 1'), (OLD, 'b\rc'), ('a\tb', NEW), (OLD, 'b\x7fc')):
+            with self.assertRaises(Usage, msg=(old, new)) as ctx:
+                retmod.check_paths(old, new)
+            self.assertIn('control character', str(ctx.exception))
+
     def test_one_path_under_the_other_is_usage(self):
         for old, new in (('a', 'a/b'), ('a/b', 'a'), ('A', 'a/b')):
             with self.assertRaises(Usage, msg=(old, new)) as ctx:
@@ -121,6 +133,16 @@ class Plan(StoreCase):
         self.assertIn('not rewritten: CCC `summary: make the tools faster, see tools/y.py` has '
                       '`tools` with no `/` after it', text)
 
+    def test_none_in_any_case_never_reaches_ref_text(self):
+        # Only `ref:` names a/x, so no scope line would trip the schema's casefold check.
+        self.seed(rec('AAA', scope='tools/x.py', ref='a/x'))
+        tip = self.remote_tip()
+        for new in ('NONE', 'None'):
+            with self.assertRaises(Usage, msg=new):
+                self.store.write(lambda s, n=new: retmod.plan_retarget(s, 'a/x', n))
+        self.assertEqual(self.remote_tip(), tip)
+        self.assertEqual(self.get('AAA').get('ref'), 'a/x')
+
     def test_nothing_matches_writes_nothing(self):
         self.seed(rec('CCC', scope='tools/y.py'))
         tip = self.remote_tip()
@@ -147,16 +169,17 @@ class RetargetCli(unittest.TestCase):
         log = self.repo.git('log', '--format=%s', smod.STORE_REF)
         self.assertEqual(log.split('\n')[0], 'backlog: retarget %s -> %s in 1 record(s)' % (OLD, NEW))
 
-    def test_a_dry_run_runs_the_write_checks(self):
-        # `NONE` is a path shape, but as a scope member it casefolds into the `none` sentinel: a
-        # schema FAIL, which store.check_change refuses before anything is written.
-        self.ok('add', 'FOO', '--summary', 'a thing to move', '--scope', 'a/x')
+    def test_a_none_new_is_usage_in_a_dry_run_and_an_apply(self):
+        self.ok('add', 'FOO', '--summary', 'a thing to move', '--scope', 'tools/x.py',
+                '--ref', 'a/x')
         tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)
-        rc, out = self.run_tool('retarget', 'a/x', 'NONE')
-        self.assertEqual(rc, 2, out)
-        self.assertIn('the write would leave the store invalid', out)
-        self.assertNotIn('DRY RUN', out)
+        for extra in ((), ('--apply',)):
+            rc, out = self.run_tool('retarget', 'a/x', 'NONE', *extra)
+            self.assertEqual(rc, 2, out)
+            self.assertIn('USAGE: ', out)
+            self.assertNotIn('DRY RUN', out)
         self.assertEqual(self.repo.git('ls-remote', 'origin', smod.STORE_REF), tip)
+        self.assertIn('ref: a/x', self.ok('show', 'FOO'))
 
     def test_a_glob_old_is_usage(self):
         rc, out = self.run_tool('retarget', OLD + '/**', NEW)
