@@ -1,6 +1,7 @@
 """SessionStart hook: prints the coordinator standing rules as additionalContext.
 
-Prints nothing unless PM_KIT_ROLE is "coordinator" (or the old "conductor"). Always exits 0. The live checks come later.
+Prints nothing unless PM_KIT_ROLE is "coordinator" (or the old "conductor"), read as kitlib.sessionmark
+reads it: a mark carrying the kit plugin's agent prefix counts. Always exits 0. The live checks come later.
 """
 import json
 import os
@@ -19,8 +20,18 @@ def stdin_cwd():
         return None
 
 
+def session_role():
+    """PM_KIT_ROLE as kitlib.sessionmark.mark reads it (the kit plugin's prefix removed); the raw
+    value when kitlib cannot be imported."""
+    try:
+        from kitlib import sessionmark
+        return sessionmark.mark()
+    except Exception:
+        return os.environ.get("PM_KIT_ROLE")
+
+
 def main():
-    if os.environ.get("PM_KIT_ROLE") not in ("coordinator", "conductor"):
+    if session_role() not in ("coordinator", "conductor"):
         return
     try:
         from kitlib import coordinatorstart

@@ -8,9 +8,11 @@ import unittest
 
 from kitlib import coordinatorstart
 from kitlib.config import user as kuser
+from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
 
 HOOK = os.path.join(os.path.dirname(__file__), "..", "..", "claude", "hooks", "coordinator_session_start.py")
 COND = {"PM_KIT_ROLE": "coordinator"}
+P = CLAUDE_PLUGIN_NAME + ":"          # the kit plugin's agent prefix (kitlib.agentname.PREFIX)
 
 
 def write(path, text):
@@ -25,6 +27,15 @@ class RenderTest(unittest.TestCase):
             p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": {"standing": ["a"]}}))
             self.assertIsNone(coordinatorstart.render(env={}, path=p))
             self.assertIsNone(coordinatorstart.render(env={"PM_KIT_ROLE": "pm"}, path=p))
+
+    def test_a_plugin_prefixed_mark_is_the_coordinator_and_no_other_prefix(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": {"standing": ["one"]}}))
+            for role in (P + "coordinator", P.upper() + "coordinator", P + "conductor"):
+                self.assertEqual(coordinatorstart.render(env={"PM_KIT_ROLE": role}, path=p, live=False),
+                                 "Coordinator session start:\n- one", role)
+            for role in ("some-plugin:coordinator", P + "pm", P):
+                self.assertIsNone(coordinatorstart.render(env={"PM_KIT_ROLE": role}, path=p), role)
 
     def test_role_set_lists_lines(self):
         with tempfile.TemporaryDirectory() as d:
@@ -397,6 +408,15 @@ class HookTest(unittest.TestCase):
         out = json.loads(r.stdout)["hookSpecificOutput"]
         self.assertEqual(out["hookEventName"], "SessionStart")
         self.assertIn("- wind down", out["additionalContext"])
+
+    def test_a_plugin_prefixed_mark_still_fires(self):
+        r = self.run_hook(P + "coordinator", json.dumps({"coordinator_start": {"standing": ["wind down"]}}))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("- wind down", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
+
+    def test_another_plugins_prefix_stays_silent(self):
+        r = self.run_hook("some-plugin:coordinator", json.dumps({"coordinator_start": {"standing": ["a"]}}))
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
 
     def test_role_coordinator_checks_run_and_never_fail_the_hook(self):
         # temp HOME: no pm_start config, no machine_lock.py -> one could-not line per check

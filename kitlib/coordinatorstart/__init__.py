@@ -19,7 +19,7 @@ import os
 import re
 import sys
 
-from kitlib import pmstart, stubs
+from kitlib import pmstart, sessionmark, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
 from kitlib.ledger import safepath
@@ -55,7 +55,9 @@ PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch: run 
 
 
 def is_coordinator(env=None):
-    return (os.environ if env is None else env).get(ROLE_VAR) in (ROLE, LEGACY_ROLE)
+    """The session mark (ROLE_VAR, read by kitlib.sessionmark: the kit plugin's prefix removed) is
+    the coordinator's or its old name."""
+    return sessionmark.mark(os.environ if env is None else env) in (ROLE, LEGACY_ROLE)
 
 
 def load_config(path=None):
