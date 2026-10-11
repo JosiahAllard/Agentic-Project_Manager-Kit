@@ -163,7 +163,11 @@ Each account folder installs the plugin from the kit's export of pushed main, no
 checkout (docs/plugin-source.md). `python tools/plugin_refresh.py --migrate --apply` adds the
 export root as the marketplace `pm-kit` and installs `pm-kit@pm-kit` in every account folder; after
 each kit landing `python tools/plugin_refresh.py --apply` refreshes them. Each is a dry run without
-`--apply`. Adding the checkout itself as a marketplace (its `.claude-plugin/marketplace.json` lists
+`--apply`. Migrate one folder first (`--folder DIR`, repeatable), check a session there, then the
+rest; `--apply` refuses a folder that is not migrated (docs/plugin-source.md "Migrating"). The
+exact `claude plugin` subcommands and flags these run, and the claim that an old session's MCP
+server holds files open in the folder it loaded, are inferences (docs/plugin-source.md "Open
+questions"). Adding the checkout itself as a marketplace (its `.claude-plugin/marketplace.json` lists
 the plugin with `"source": "./"`) is the old way, which `--migrate` replaces. Whether Claude Code loads a relative-path plugin of a local marketplace in
 place or copies it into its plugin cache is not settled: the plugins reference
 (https://code.claude.com/docs/en/plugins/loading, "In-place and copied plugins") says in place, and

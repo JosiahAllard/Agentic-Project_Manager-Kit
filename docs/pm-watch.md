@@ -26,7 +26,7 @@ Every pass except a `--once` run writes `<state file>.beat`, holding `{"pid", "b
 
 ## Plugin export
 
-Kit-only: the `PLUGIN` event, when the pm-kit plugin export is behind the kit's `refs/remotes/<remote>/main`, once per main sha (state key `plugin_main`), and with the machine config's `plugin.auto_refresh` on, the detached start of `tools/plugin_refresh.py --apply` (docs/plugin-source.md "Behind warnings"). Code: `kitlib.pmwatch` `plugin_check` and `Watcher`; tests: `tests/pmwatch/test_plugin.py`. `tools/pm_watch.py` `main(plugin=False)` runs without it, for tests.
+Kit-only: the `PLUGIN` event, when the pm-kit plugin export is behind the kit's `refs/remotes/<remote>/main`, once per main sha (state key `plugin_main`), and with the machine config's `plugin.auto_refresh` on, the detached start of `tools/plugin_refresh.py --apply` (docs/plugin-source.md "Behind warnings"). With no export, or an account folder not migrated, the event names `python tools/plugin_refresh.py --migrate --apply` and starts nothing. A tracking ref or export state that cannot be read is a failed check. Code: `kitlib.pmwatch` `plugin_check` and `Watcher`; tests: `tests/pmwatch/test_plugin.py`. `tools/pm_watch.py` `main(plugin=False)` runs without it, for tests.
 
 ## Switch-over for the PM repo
 
