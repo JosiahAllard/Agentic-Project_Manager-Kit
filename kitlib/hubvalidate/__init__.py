@@ -138,10 +138,14 @@ def _known_repos(repos):
 def _check_pages(docs, out):
     pages, html = docs.get('pages'), docs.get('page_html')
     for doc_id, d in sorted((pages or {}).items()):
+        if not isinstance(d, dict):
+            continue                        # validate reports it as not-object
         if not _text(d.get('title')):
             out.append(_f(WARN, 'pages', doc_id, 'title', 'pages-schema',
                           'a page needs a non-empty string title'))
     for doc_id, d in sorted((html or {}).items()):
+        if not isinstance(d, dict):
+            continue
         if not isinstance(d.get('html'), str):
             out.append(_f(WARN, 'page_html', doc_id, 'html', 'pages-schema',
                           'page_html needs a string html field'))

@@ -37,7 +37,8 @@ repository.
   strings, an unknown `status`, bad `options` or `recommended`, an unreadable batch entry). A
   warning (a ref to an id that is not in the hub, a repo tag that is no repos/ name or alias, an
   open PM to-do without `commands`, a `pages`/`page_html` document without a title or `html`) exits
-  0, or 1 with `--strict`. Refs and repo tags are judged only with `--against`. `--dir <folder>`
+  0, or 1 with `--strict`; exit 2 is a usage error or an unreadable folder or batch. Refs, repo
+  tags and `page_html` ids are judged only with `--against`. `--dir <folder>`
   checks a whole out_dir or mirror folder. Nothing in this repository calls ArtifactData, so the
   PM runs it itself.
 - Inbox section: one button with two tabs, Questions (questions/) and Answers (inbox/). Its badge

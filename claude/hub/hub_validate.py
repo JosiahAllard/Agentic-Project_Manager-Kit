@@ -56,9 +56,11 @@ def main(argv=None):
             else:
                 findings = findings + [
                     f for f in V.validate(docs, only=only)
-                    if f.code not in ("ref-dangling", "repo-alias")]
+                    if f.code not in ("ref-dangling", "repo-alias")
+                    and not (f.code == "pages-schema" and f.field == "id")]
                 findings.append(V.Finding(V.NOTE, "", "", "ref-dangling",
-                                          "refs and repo tags not judged: no --against"))
+                                          "refs, repo tags and page_html ids not judged: "
+                                          "no --against"))
     except hubmirror.Refused as e:
         print("REFUSED: %s" % e, file=sys.stderr)
         return 2

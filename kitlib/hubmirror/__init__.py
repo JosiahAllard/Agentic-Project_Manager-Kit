@@ -175,7 +175,10 @@ def validation_notes(found, repos=None):
     docs = dict(found)
     if repos is not None:
         docs['repos'] = repos
-    findings = hubvalidate.validate(docs)
+    try:
+        findings = hubvalidate.validate(docs)
+    except Exception as e:      # a bug in a check must never abort a save
+        return ['VALIDATE skipped: %s' % e]
     if not findings:
         return []
     lines = ['VALIDATE %s' % hubvalidate.format_line(f) for f in findings]

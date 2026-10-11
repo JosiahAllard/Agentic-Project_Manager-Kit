@@ -193,6 +193,28 @@ class CliTest(unittest.TestCase):
         h = self.hub(todos={'T-1': todo(repo='old')}, repos={'pm': {'name': 'pm', 'aliases': ['old']}})
         self.assertEqual(self.run_tool(['--dir', h, '--strict'])[0], 0)
 
+    def test_batch_with_a_non_object_pages_document_is_an_error_not_a_traceback(self):
+        batch = os.path.join(self.d, 'b.json')
+        write_json(batch, [{'op': 'set', 'collection': 'pages', 'doc_id': 'p1', 'data': 'text'},
+                           {'op': 'set', 'collection': 'page_html', 'doc_id': 'p1', 'data': 'text'}])
+        code, out, _ = self.run_tool(['--batch', batch])
+        self.assertEqual(code, 1)
+        self.assertIn('ERROR pages/p1', out)
+        self.assertIn('ERROR page_html/p1', out)
+
+    def test_batch_without_against_does_not_judge_page_html_ids(self):
+        batch = os.path.join(self.d, 'b.json')
+        write_json(batch, [{'op': 'set', 'collection': 'pages', 'doc_id': 'p1', 'data': {'title': 't'}},
+                           {'op': 'set', 'collection': 'page_html', 'doc_id': 'p2',
+                            'data': {'html': '<p>'}}])
+        code, out, _ = self.run_tool(['--batch', batch, '--strict'])
+        self.assertEqual(code, 0, out)
+        self.assertIn('page_html ids not judged', out)
+        against = self.hub(pages={'p1': {'title': 't'}})
+        code, out, _ = self.run_tool(['--batch', batch, '--against', against, '--strict'])
+        self.assertEqual(code, 1)
+        self.assertIn('no pages/p2', out)
+
     def test_batch_with_and_without_against(self):
         batch = os.path.join(self.d, 'b.json')
         write_json(batch, [{'op': 'set', 'collection': 'todos', 'doc_id': 'T-1',
@@ -219,6 +241,25 @@ class SaveTest(unittest.TestCase):
         _, notes = hubmirror.read_source(self.src)
         self.assertTrue(any(n.startswith('VALIDATE ERROR todos/T-1 commands') for n in notes), notes)
         self.assertIn('VALIDATE 1 error(s), 0 warning(s) (saved anyway)', notes)
+
+    def test_a_crashing_check_never_aborts_the_save(self):
+        spec = importlib.util.spec_from_file_location('hub_mirror_tool',
+                                                      os.path.join(KIT, 'tools', 'hub_mirror.py'))
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+        mirror = os.path.join(self.d, 'mirror')
+        out = io.StringIO()
+        with mock.patch('sys.stdout', out), \
+                mock.patch.object(hubmirror.hubvalidate, 'validate', side_effect=KeyError('boom')), \
+                mock.patch.object(tool, '_settings', return_value=(None, {'hub_mirror': mirror})):
+            code = tool.main(['save', '--from', self.src])
+        self.assertEqual(code, 0)
+        self.assertIn('VALIDATE skipped:', out.getvalue())
+        self.assertTrue(os.path.isfile(os.path.join(mirror, 'todos', 'T-1.json')))
+
+    def test_a_non_object_pages_document_is_not_object_not_a_crash(self):
+        f = V.validate({'pages': {'p': 'x'}, 'page_html': {'p': 3}})
+        self.assertEqual(codes(f), [('page_html/p', 'not-object'), ('pages/p', 'not-object')])
 
     def test_clean_source_adds_no_notes(self):
         write_json(os.path.join(self.src, 'todos', 'T-1.json'), todo())
