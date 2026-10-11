@@ -29,7 +29,7 @@ Globals: `-C DIR`, `--session S` (the offer and the commit body), `--as BRANCH` 
 | `check` | Schema, store and pull checks; no check reads the rulings ledger (below). RED exits 1 |
 | `landable BRANCH...` | 0 LANDABLE, 1 CANNOT TELL, 2 NOT LANDABLE (it holds a pull) |
 | `stale [--days N]` | Read-only, default 30 days. Lists records whose last store commit is N+ days old, backticked body paths with no file, and `files` entries changed or gone since `files_at`. A record a test could not judge is NOT CHECKED, never current; the SWEPT line counts skips. Age is the last commit that wrote the record: after `migrate` it is the migrate date until the next write, and an uncommitted `main`-store edit ages by its last commit |
-| `add ID --summary S --scope P...` | One record, always `priority: -`; `--reopen` to reuse a closed id |
+| `add ID --summary S --scope P... --found-on BRANCH\|none --why-not-folded T` | One record, always `priority: -`; `--reopen` to reuse a closed id; `--ref R` with a machine path is USAGE. Both fold-in flags are required and checked by the fold-in guard (below) |
 | `set ID --<field> V ... [--unset K] [--ruling R] [--body-file F]` | Edits fields; `--body-file F` replaces the whole body (an empty file is refused; the kit has no body-line keys, so no `edit-body`); `set ID --hold-ruling R` alone re-cites the hold ruling |
 | `block ID --on M... [--owner-ask Q] [--reason T]`, `unblock ID [--on M] [--reason T] [--ruling R]` | `block` replaces `blocked_on`. `block --reason T` puts the reason in the commit subject (`backlog: block ID on M: T`) and appends one line to the record's body, `Blocked on M (date): T`, which `show` prints; no header key is written, and a reason under 12 characters is USAGE (`plan.py` `plan_block`; `tests/backlog/test_block_reason.py`). `unblock` clears one blocker: a lone one opens the record (`--on`, `--reason` optional); with several, `--on M --reason T` removes M only and the record stays blocked on the rest, and a bare `unblock` is REFUSED with the blockers and the command for each. The reason goes into the commit subject (`backlog: unblock ID from M: T`). Clearing `owner` needs `--ruling`. Tests: `tests/backlog/test_unblock_one.py` |
 | `pull ID [--reason T] [--ruling R]`, `release ID --reason T` | Written at once; `pull` records the branch; outside the offer it needs `--reason` |
@@ -41,6 +41,16 @@ Globals: `-C DIR`, `--session S` (the offer and the commit body), `--as BRANCH` 
 Exit codes (kitlib/backlog/errors.py): 0 OK; 1 `NOT FOUND:`, `ERROR:`, a RED check; 2 `USAGE:`, `REFUSED:`, or bad arguments. Every write refusal leaves the store untouched. By kind: `Usage` 2, `Refusal` 2, `NotFound` 1, `Failure` 1; a bad id shape and an unblock of a record that is not blocked are `USAGE:`, an id already taken is `REFUSED:`. `tests/backlog/test_refusal_kinds.py` pins the codes and audits the guard sites by AST.
 
 A record passed over on a scope collision (in `next`, and in a `pull` refused as out of order) names both colliding paths and the holder: `already taken by ID (in flight on BRANCH)` for a live pull, `by ID (session S)` for another session's record, `by ID (offered above)` for one already in the offer (kitlib/backlog/offer.py `next_offer`). A pulled record holds its current `scope:` lines, never its branch's diff, so narrowing them with `set ID --scope P` frees the rest (`tests/backlog/test_pull_holder.py`).
+
+### The fold-in guard
+
+A finding is fixed on the branch that found it unless it cannot be, so `add` names where it came from and why it was not folded (kitlib/backlog/plan.py `plan_add`, `_fold_arguments`, `_fold_overlap`; `tests/backlog/test_add_found_on.py`). `--found-on` is the branch the finding was made on, or `none` when no branch found it; `--why-not-folded` is at least 12 characters with no machine path. Both are appended to the summary, `S (found on BRANCH; not folded: T)` (`no branch` for `none`), and the commit subject is `backlog: add ID, found on BRANCH`.
+
+- USAGE: either flag missing, a short reason or one holding a machine path, a malformed branch name, or `--found-on` naming the code main (`backlog.code_main`, default `repo.main_branch`): a finding on main has no branch, so write `none`.
+- REFUSED: a scope member that overlaps (`kitlib/backlog/scope.py` `members_collide`) a path the branch changed since its merge base with the code main (`git diff --no-renames --name-only`), or the scope of a record the branch holds pulled. A member that cannot be compared counts as an overlap. The refusal lists each pair and says: fold it into the branch, or file it after the branch lands. There is no override flag.
+- A branch that does not exist prints `NOTE: branch B not found; its diff was not compared`; the scopes of records it holds pulled are still checked.
+- ERROR: a code main that does not resolve, no merge base with it, a git that does not answer, or an unreadable record. The ERROR for a missing base names `backlog.code_main` (docs/kit-json.md).
+- `--found-on none` skips the overlap check.
 
 ### Retarget
 

@@ -5,7 +5,8 @@
   reads   next [--cap N | --all] [--with ID]...     show ID     check     landable BRANCH...
           list [--blocked [--on M]] [--needs-priority] [--status S] [--area A]
           stale [--days N]
-  writes  add ID --summary S --scope P... [--effort s|m|l] [--ref R] [--reopen]
+  writes  add ID --summary S --scope P... --found-on BRANCH|none --why-not-folded T
+              [--effort s|m|l] [--ref R] [--reopen]
           set ID [--<field> V]... [--unset K]... [--ruling R] [--body-file F] [--hold-ruling R]
           block ID --on M... [--reason T] [--owner-ask Q] [--ruling R]
           retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
@@ -91,6 +92,10 @@ def build_parser():
     v.add_argument('--effort', default=None)
     v.add_argument('--ref', default=None)
     v.add_argument('--reopen', action='store_true')
+    v.add_argument('--found-on', dest='found_on', required=True,
+                   help='the branch the finding was made on, or none')
+    v.add_argument('--why-not-folded', dest='why_not_folded', required=True,
+                   help='why the finding is not fixed on that branch')
     v = sub.add_parser('set')
     v.add_argument('id')
     for key in FIELD_FLAGS:
@@ -294,7 +299,8 @@ def planner(args, ctx):
     v = args.verb
     if v == 'add':
         return lambda s: pmod.plan_add(s, ctx, args.id, args.summary, args.scope, args.effort,
-                                       args.ref, args.reopen, session=ctx.session)
+                                       args.ref, args.reopen, session=ctx.session,
+                                       found_on=args.found_on, why_not_folded=args.why_not_folded)
     if v == 'set':
         body = pmod.read_body_file(args.body_file) if args.body_file else None
         changes = set_changes(args)
@@ -398,7 +404,7 @@ def main(argv=None):
         backend = smod.open_backend(top, cfg, fetch=not args.no_fetch)
         store = smod.Store(backend, rules, session=args.session)
         ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
-                           branch=args.branch)
+                           branch=args.branch, code_main=section['code_main'] or cfg.main_branch)
         if args.verb in WRITES or (args.verb == 'retarget' and args.apply):
             return do_write(args, ctx, store)
         if args.verb == 'retarget':

@@ -139,6 +139,7 @@ SECTIONS = {
         'phases': Field(Strs, [], 'phase names in order'),
         'id_grammar': Field(Enum('upper', 'mixed'), 'upper', 'item id spelling'),
         'ledger_repo': Field(Str(), None, 'the ledger repo column; default the repo name'),
+        'code_main': Field(Str(), None, 'the branch code lands on, which `add --found-on` measures a branch\'s diff from; default repo.main_branch'),
     },
     'board': {
         'state_file': Field(RelPath(), None, 'the board state file, under the git dir (default <git common dir>/kit/board-state.md)'),

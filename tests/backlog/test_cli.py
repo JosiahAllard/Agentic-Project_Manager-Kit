@@ -9,6 +9,7 @@ import unittest
 
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
+from tests.backlog.helpers import ADD_FLAGS
 from tests.gitfixture import TempRepo, fixture_env, rmtree
 from kitlib.config import user as kuser
 
@@ -37,7 +38,7 @@ class Cli(unittest.TestCase):
         return out
 
     def test_a_record_through_its_life(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         self.ok('set', 'FOO', '--priority', '2', '--priority-by', 'agent', '--effort', 's')
         self.repo.git('checkout', '-b', 'tools/wk')
         out = self.ok('next')
@@ -58,11 +59,11 @@ class Cli(unittest.TestCase):
         self.assertEqual(log.split('\n')[0], 'closes FOO: the work is finished')
 
     def test_refusals_exit_2_and_write_nothing(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)
         for args in (('set', 'FOO', '--priority', '2', '--priority-by', 'pm'),
-                     ('add', 'FOO', '--summary', 'again', '--scope', 'tools/y.py'),
-                     ('add', 'BAR', '--summary', 'bad', '--scope', '*.py'),
+                     ('add', 'FOO', '--summary', 'again', '--scope', 'tools/y.py', *ADD_FLAGS),
+                     ('add', 'BAR', '--summary', 'bad', '--scope', '*.py', *ADD_FLAGS),
                      ('pull', 'FOO'),
                      ('block', 'FOO', '--on', 'item:NOPE')):
             rc, out = self.run_tool(*args)
@@ -76,7 +77,7 @@ class Cli(unittest.TestCase):
             self.assertEqual(rc, 2, (args, out))
 
     def test_retire_owner_said_is_refused_and_points_at_ruling(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)
         rc, out = self.run_tool('retire', 'FOO', '--why', 'no longer wanted at all',
                                 '--owner-said', 'go ahead')
@@ -88,18 +89,18 @@ class Cli(unittest.TestCase):
         self.assertEqual(self.run_tool('show', 'FOO')[0], 0)
 
     def test_set_flags_take_underscored_and_dashed_spellings(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         self.ok('set', 'FOO', '--priority', '3', '--priority_by', 'agent')
         self.ok('set', 'FOO', '--priority-by', 'agent', '--priority', '4')
         self.assertIn('priority: 4', self.ok('show', 'FOO'))
 
     def test_check_and_the_list_filters(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
-        self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'docs/y.md')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
+        self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'docs/y.md', *ADD_FLAGS)
         self.ok('block', 'BAR', '--on', 'item:FOO')
         self.assertIn('GREEN', self.ok('check'))
         self.assertIn('BAR', self.ok('list', '--blocked', '--on', 'item:FOO'))
-        self.ok('add', 'BAZ', '--summary', 'a third thing', '--scope', 'tools/z.py')
+        self.ok('add', 'BAZ', '--summary', 'a third thing', '--scope', 'tools/z.py', *ADD_FLAGS)
         out = self.ok('list', '--needs-priority')
         self.assertLess(out.index('BAZ'), out.index('FOO'))
         self.assertNotIn('BAR', out)
@@ -108,8 +109,8 @@ class Cli(unittest.TestCase):
         self.assertNotIn('FOO', out)
 
     def test_park_list_parked_and_unpark(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
-        self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'docs/y.md')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
+        self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'docs/y.md', *ADD_FLAGS)
         rc, out = self.run_tool('set-status', 'FOO', 'parked')
         self.assertEqual(rc, 2, out)
         self.ok('set-status', 'FOO', 'parked', '--q', 'Q-001')
@@ -124,7 +125,7 @@ class Cli(unittest.TestCase):
         self.assertIn('GREEN', self.ok('check'))
 
     def test_an_invalid_record_on_the_ref_makes_check_red(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         backend = smod.RefBackend(self.repo.root, 'origin', smod.STORE_REF, smod.STORE_REF)
         snap = smod.Store(backend, rmod.Rules()).load()
         backend.publish(snap,{'BAD': 'id: BAD\nstate: open\n'}, 'hand edit\n')
@@ -132,7 +133,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(rc, 1, out)
         self.assertIn('RED', out)
         # a write is refused only for findings it adds, so the store can still be repaired
-        rc, out = self.run_tool('add', 'BAZ', '--summary', 'more', '--scope', 'x/**')
+        rc, out = self.run_tool('add', 'BAZ', '--summary', 'more', '--scope', 'x/**', *ADD_FLAGS)
         self.assertEqual(rc, 0, out)
 
     def test_migrate_dry_run_then_copy_then_refuse(self):
@@ -190,7 +191,8 @@ class RulingCitesUnchecked(unittest.TestCase):
     def test_check_stays_green_over_cites_the_ledger_does_not_hold(self):
         # priced before the ledger is configured; R-9999 is absent from it, R-9007 is retired
         for rid, ruling in (('FOO', 'R-9999'), ('BAR', 'R-9007')):
-            self.ok('add', rid, '--summary', 'a thing to do', '--scope', 'tools/%s.py' % rid.lower())
+            self.ok('add', rid, '--summary', 'a thing to do', '--scope', 'tools/%s.py' % rid.lower(),
+                    *ADD_FLAGS)
             self.ok('set', rid, '--priority', '1', '--priority-by', 'owner', '--ruling', ruling)
         self.configure()
         rc, out = self.run_tool('--no-fetch', 'check')
@@ -201,7 +203,7 @@ class RulingCitesUnchecked(unittest.TestCase):
 
     def test_a_ruled_write_takes_an_id_the_ledger_does_not_hold(self):
         self.configure()
-        self.ok('add', 'BAZ', '--summary', 'a thing to do', '--scope', 'tools/baz.py')
+        self.ok('add', 'BAZ', '--summary', 'a thing to do', '--scope', 'tools/baz.py', *ADD_FLAGS)
         rc, out = self.run_tool('set', 'BAZ', '--priority', '2', '--priority-by', 'owner',
                                 '--ruling', 'R-9999')
         self.assertEqual(rc, 0, out)
@@ -209,7 +211,7 @@ class RulingCitesUnchecked(unittest.TestCase):
 
     def test_the_standing_delegation_id_is_not_refused(self):
         self.configure(standing_delegation='R-9168')
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         rc, out = self.run_tool('set', 'FOO', '--priority', '1', '--priority-by', 'owner',
                                 '--ruling', 'R-9168')
         self.assertEqual(rc, 0, out)

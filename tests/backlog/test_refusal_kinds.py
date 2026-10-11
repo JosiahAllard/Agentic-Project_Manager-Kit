@@ -7,6 +7,7 @@ import unittest
 
 from kitlib.backlog import errors
 from tests.backlog import test_cli
+from tests.backlog.helpers import ADD_FLAGS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 KINDS = ('Usage', 'Refusal', 'NotFound', 'Failure')
@@ -63,18 +64,20 @@ class CliCodes(unittest.TestCase):
     ok = test_cli.Cli.ok
 
     def test_bad_id_shape_is_usage(self):
-        rc, out = self.run_tool('add', 'lower', '--summary', 'x thing here', '--scope', 'tools/x.py')
+        rc, out = self.run_tool('add', 'lower', '--summary', 'x thing here', '--scope', 'tools/x.py',
+                                *ADD_FLAGS)
         self.assertEqual(rc, 2, out)
         self.assertRegex(out, r'^USAGE: ')
 
     def test_id_collision_is_refused(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
-        rc, out = self.run_tool('add', 'FOO', '--summary', 'again', '--scope', 'tools/y.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
+        rc, out = self.run_tool('add', 'FOO', '--summary', 'again', '--scope', 'tools/y.py',
+                                *ADD_FLAGS)
         self.assertEqual(rc, 2, out)
         self.assertRegex(out, r'^REFUSED: ')
 
     def test_unblock_of_a_record_that_is_not_blocked_is_usage(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         rc, out = self.run_tool('unblock', 'FOO')
         self.assertEqual(rc, 2, out)
         self.assertRegex(out, r'^USAGE: ')

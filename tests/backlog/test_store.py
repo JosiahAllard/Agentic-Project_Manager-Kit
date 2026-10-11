@@ -12,7 +12,7 @@ from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Failure, Usage
 from kitlib.git import cmd
 
-from tests.backlog.helpers import BRANCH, StoreCase, priced, race, rec
+from tests.backlog.helpers import ADD_NONE, BRANCH, StoreCase, priced, race, rec
 from tests.gitfixture import TempRepo, fixture_env
 from tests.realgit import real_git
 
@@ -31,7 +31,12 @@ def clone(case, name):
 def add(store, rid, scope=None):
     ctx = pmod.Context(store, store.backend.root, branch=BRANCH)
     return store.write(lambda s: pmod.plan_add(s, ctx, rid, 'summary of %s' % rid,
-                                               [scope or 'area/%s/**' % rid.lower()]))
+                                               [scope or 'area/%s/**' % rid.lower()], **ADD_NONE))
+
+
+def added(rid):
+    """The subject `add` writes for a record filed with ADD_NONE."""
+    return 'backlog: add %s, found on no branch' % rid
 
 
 def wrap_git(case, on):
@@ -96,7 +101,7 @@ class CompareAndSwap(StoreCase):
         self.assertEqual(snap.get('FOO').get('effort'), 's')
         self.assertIsNotNone(snap.get('BAR'), 'the other writer\'s record was overwritten')
         log = self.repo.git('log', '--format=%s', smod.STORE_REF, '--').split('\n')
-        self.assertEqual(log, ['backlog: set FOO', 'backlog: add BAR', 'seed'])
+        self.assertEqual(log, ['backlog: set FOO', added('BAR'), 'seed'])
         self.assertEqual(self.repo.git('rev-list', '--count', '%s..%s' % (before, snap.tip)), '2')
 
     def test_two_writers_on_one_record_both_changes_survive(self):
@@ -119,7 +124,7 @@ class CompareAndSwap(StoreCase):
             if attempt == 0:
                 add(other, 'BAR')          # creates the ref we expected to be absent
         self.store.before_publish = interfere
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         snap = self.store.load()
         self.assertEqual(sorted(r.id for r in snap.records), ['BAR', 'FOO'])
 
@@ -170,7 +175,7 @@ class CompareAndSwap(StoreCase):
         self.assertEqual([c for _, changes in history for c in changes if c[0] != 'A'], [],
                          'a write deleted or changed another record:\n' + shown)
         self.assertEqual(sorted(subject for subject, _ in history),
-                         sorted('backlog: add %s' % n for n in names),
+                         sorted(added(n) for n in names),
                          'a linear history, one commit per write:\n' + shown)
 
     def test_concurrent_writers_all_survive(self):
@@ -220,7 +225,7 @@ class CompareAndSwap(StoreCase):
         chain(0)
         self.assertEqual(attempts, {'W0': [0, 1], 'W1': [0, 1], 'W2': [0, 1], 'W3': [0]})
         self.assertEqual([subject for subject, _ in store_history(self)],
-                         ['backlog: add W0', 'backlog: add W1', 'backlog: add W2', 'backlog: add W3'])
+                         [added('W%d' % i) for i in range(4)])
         self.assert_every_write_survives(['W0', 'W1', 'W2', 'W3'])
 
     def test_a_push_to_a_remote_that_cannot_be_read_fails_without_a_retry(self):
@@ -260,7 +265,7 @@ class HookRejectedPush(StoreCase):
         attempts = []
         self.store.before_publish = attempts.append
         with self.assertRaises(Failure) as cm:
-            self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+            self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertIn('push to origin failed', str(cm.exception))
         self.assertEqual(attempts, [0])
         self.assertEqual(self.remote_tip(), '')
@@ -292,9 +297,9 @@ class PushFailures(StoreCase):
 
     def test_a_push_reported_failed_that_landed_is_a_success(self):
         attempts = self.fail_first_push()
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertEqual(attempts, [0])
-        self.assertEqual(remote_log(self), ['backlog: add FOO'])
+        self.assertEqual(remote_log(self), [added('FOO')])
 
     def test_a_push_reported_failed_that_landed_under_a_later_write_is_a_success(self):
         """Our commit landed and another writer pushed on top before we looked: ours is an
@@ -302,9 +307,9 @@ class PushFailures(StoreCase):
         would refuse `add FOO` as a duplicate of itself)."""
         other, _ = clone(self, 'other')
         attempts = self.fail_first_push(then=lambda: add(other, 'BAR'))
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertEqual(attempts, [0])
-        self.assertEqual(remote_log(self), ['backlog: add BAR', 'backlog: add FOO'])
+        self.assertEqual(remote_log(self), [added('BAR'), added('FOO')])
         self.assertEqual(self.repo.git('rev-parse', smod.STORE_REF), self.remote_tip(),
                          'the local cache follows the remote forward')
 
@@ -314,9 +319,9 @@ class PushFailures(StoreCase):
                   b"lock ref 'refs/backlog/main': reference already exists)\nDone\n")
         attempts = self.fail_first_push(really_push=False, out=status,
                                         err='error: failed to push some refs to origin')
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertEqual(attempts, [0, 1])
-        self.assertEqual(remote_log(self), ['backlog: add FOO'])
+        self.assertEqual(remote_log(self), [added('FOO')])
 
     def test_the_local_cache_never_moves_backwards(self):
         """A second writer in the same repository moves the shared cache past our new tip between
@@ -331,11 +336,12 @@ class PushFailures(StoreCase):
                 return None
             done.append(1)
             r = real()
-            second.write(lambda s: pmod.plan_add(s, sctx, 'BAR', 'other', ['area/bar/**']))
+            second.write(lambda s: pmod.plan_add(s, sctx, 'BAR', 'other', ['area/bar/**'],
+                                                           **ADD_NONE))
             return r
         wrap_git(self, on)
         self.verb('set', 'FOO', [('effort', ['s'])])
-        self.assertEqual(remote_log(self), ['backlog: add BAR', 'backlog: set FOO', 'seed'])
+        self.assertEqual(remote_log(self), [added('BAR'), 'backlog: set FOO', 'seed'])
         self.assertEqual(self.repo.git('rev-parse', smod.STORE_REF), self.remote_tip())
 
     def test_a_failed_verification_fetch_says_the_write_may_have_landed(self):
@@ -360,11 +366,11 @@ class PushFailures(StoreCase):
         attempts = []
         self.store.before_publish = attempts.append
         with self.assertRaises(Failure) as cm:
-            self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+            self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertIn('may have landed', str(cm.exception))
         self.assertIn('backlog.py check', str(cm.exception))
         self.assertEqual(attempts, [0])
-        self.assertEqual(remote_log(self), ['backlog: add BAR', 'backlog: add FOO'])
+        self.assertEqual(remote_log(self), [added('BAR'), added('FOO')])
 
     def test_a_remote_that_cannot_be_read_after_a_failed_push_says_the_write_may_have_landed(self):
         state = []
@@ -380,9 +386,9 @@ class PushFailures(StoreCase):
             return None
         wrap_git(self, on)
         with self.assertRaises(Failure) as cm:
-            self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+            self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertIn('may have landed', str(cm.exception))
-        self.assertEqual(remote_log(self), ['backlog: add FOO'])
+        self.assertEqual(remote_log(self), [added('FOO')])
 
     def failed_push_then(self, step, result):
         """The push lands, another writer pushes on top, the push is reported failed, and the
@@ -407,10 +413,10 @@ class PushFailures(StoreCase):
         attempts = []
         self.store.before_publish = attempts.append
         with self.assertRaises(Failure) as cm:
-            self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+            self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertEqual(state[-1], 'faked')
         self.assertEqual(attempts, [0])
-        self.assertEqual(remote_log(self), ['backlog: add BAR', 'backlog: add FOO'])
+        self.assertEqual(remote_log(self), [added('BAR'), added('FOO')])
         return str(cm.exception)
 
     def test_an_unreadable_tip_after_the_verification_fetch_says_the_write_may_have_landed(self):
@@ -462,7 +468,7 @@ class RemoteDetection(StoreCase):
         self.seed(priced('FOO'))
         self.repo.git('update-ref', '-d', smod.STORE_REF, cwd=self.repo.remote)
         with self.assertRaises(Failure) as cm:
-            self.verb('add', 'BAR', 'a summary', ['area/bar/**'])
+            self.verb('add', 'BAR', 'a summary', ['area/bar/**'], **ADD_NONE)
         self.assertIn(smod.STORE_REF, str(cm.exception))
         self.assertEqual(self.remote_tip(), '')
 
@@ -491,7 +497,7 @@ class NoRemoteSha256(StoreCase):
                 seen.append(args)
             return None
         wrap_git(self, on)
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertEqual([a[-1] for a in seen], ['0' * 64])
         snap = self.store.load()
         self.assertEqual(([r.id for r in snap.records], len(snap.tip)), (['FOO'], 64))
@@ -568,7 +574,7 @@ class NoRemote(StoreCase):
     remote = False
 
     def test_a_write_moves_the_local_ref_with_update_ref(self):
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         tip = self.repo.git('rev-parse', smod.STORE_REF)
         self.assertEqual(self.store.load().tip, tip)
         self.assertEqual(self.backend.describe(), smod.STORE_REF)
@@ -581,7 +587,8 @@ class NoRemote(StoreCase):
 
         def interfere(attempt):
             if attempt == 0:
-                second.write(lambda s: pmod.plan_add(s, sctx, 'BAR', 'other', ['area/bar/**']))
+                second.write(lambda s: pmod.plan_add(s, sctx, 'BAR', 'other', ['area/bar/**'],
+                                                           **ADD_NONE))
         self.store.before_publish = interfere
         self.verb('set', 'FOO', [('effort', ['s'])])
         snap = self.store.load()
@@ -594,9 +601,10 @@ class NoRemote(StoreCase):
 
         def interfere(attempt):
             if attempt == 0:
-                second.write(lambda s: pmod.plan_add(s, sctx, 'BAR', 'other', ['area/bar/**']))
+                second.write(lambda s: pmod.plan_add(s, sctx, 'BAR', 'other', ['area/bar/**'],
+                                                           **ADD_NONE))
         self.store.before_publish = interfere
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertEqual(sorted(r.id for r in self.store.load().records), ['BAR', 'FOO'])
 
     def test_an_update_ref_that_timed_out_after_the_ref_moved_is_a_success(self):
@@ -614,7 +622,7 @@ class NoRemote(StoreCase):
         wrap_git(self, on)
         attempts = []
         self.store.before_publish = attempts.append
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertEqual(attempts, [0])
         self.assertEqual([r.id for r in self.store.load().records], ['FOO'])
 
@@ -629,7 +637,7 @@ class NoRemote(StoreCase):
             return None
         wrap_git(self, on)
         with self.assertRaises(Failure) as cm:
-            self.verb('add', 'BAR', 'a summary', ['area/bar/**'])
+            self.verb('add', 'BAR', 'a summary', ['area/bar/**'], **ADD_NONE)
         self.assertIn('timed out', str(cm.exception))
         self.assertEqual(self.repo.git('rev-parse', smod.STORE_REF), tip)
         self.assertEqual([r.id for r in self.store.load().records], ['FOO'])
@@ -756,14 +764,14 @@ class TheRefAndTheCheckout(StoreCase):
 
     def test_writes_never_touch_the_working_tree(self):
         before = worktree_state(self.repo)
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.verb('set', 'FOO', [('priority', ['2']), ('priority_by', ['agent'])])
         self.verb('pull', 'FOO')
         self.verb('close', 'FOO', 'done and landed, closes it')
         self.assertEqual(worktree_state(self.repo), before)
 
     def test_the_store_shares_no_history_with_main(self):
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         r = cmd.subprocess_run(['git', 'merge-base', 'main', smod.STORE_REF], cwd=self.repo.root,
                                capture_output=True, env=fixture_env())
         self.assertEqual(r.returncode, 1)
@@ -822,7 +830,7 @@ class BranchStoreBase(StoreCase):
 class BranchStore(BranchStoreBase):
 
     def test_landed_is_the_remote_tracking_branch_after_a_write(self):
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertEqual(self.landed_ids(), ('refs/remotes/origin/backlog', 'backlog', ['FOO']))
         out = self.repo.git('ls-remote', 'origin', 'refs/heads/backlog')
         self.assertEqual(out.split('\t')[0], self.repo.git('rev-parse', 'refs/remotes/origin/backlog'))
@@ -834,7 +842,7 @@ class BranchStoreNoRemote(BranchStoreBase):
     remote = False
 
     def test_landed_is_the_local_branch_without_a_remote(self):
-        self.verb('add', 'FOO', 'a summary', ['area/foo/**'])
+        self.verb('add', 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE)
         self.assertEqual(self.landed_ids(), ('refs/heads/backlog', 'backlog', ['FOO']))
 
 
@@ -870,10 +878,11 @@ class OtherBackends(unittest.TestCase):
     def test_the_main_backend_writes_files_and_commits_nothing(self):
         repo, root, store, ctx = self.main_store()
         head = repo.git('rev-parse', 'HEAD', cwd=root)
-        store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary', ['area/foo/**']))
+        store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                                     **ADD_NONE))
         self.assertTrue(os.path.isfile(os.path.join(root, 'docs', 'backlog', 'FOO.md')))
         self.assertEqual(repo.git('rev-parse', 'HEAD', cwd=root), head)
-        self.assertEqual(store.load().get('FOO').get('summary'), 'a summary')
+        self.assertTrue(store.load().get('FOO').get('summary').startswith('a summary (found on'))
 
     def test_the_main_backend_refuses_to_write_in_a_main_checkout(self):
         """It has no compare-and-swap, so it writes only where one agent works: a linked
@@ -883,13 +892,15 @@ class OtherBackends(unittest.TestCase):
         store = smod.Store(smod.MainBackend(repo.root, 'docs/backlog'), rmod.Rules())
         ctx = pmod.Context(store,repo.root, branch=BRANCH)
         with self.assertRaises(Failure) as cm:
-            store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary', ['area/foo/**']))
+            store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                                     **ADD_NONE))
         self.assertIn('main checkout', str(cm.exception))
         self.assertFalse(os.path.exists(repo.path('docs', 'backlog')))
 
     def test_the_main_backend_re_plans_when_a_record_changed_under_it(self):
         repo, root, store, ctx = self.main_store()
-        store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary', ['area/foo/**']))
+        store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                                     **ADD_NONE))
         path = os.path.join(root, 'docs', 'backlog', 'FOO.md')
         attempts = []
 

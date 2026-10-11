@@ -13,7 +13,7 @@ from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Failure, NotFound, Usage
 from kitlib.git import cmd
-from tests.backlog.helpers import BRANCH, StoreCase, rec, record_text
+from tests.backlog.helpers import ADD_FLAGS, BRANCH, StoreCase, rec, record_text
 from tests.gitfixture import NAME, TempRepo, fixture_env, rmtree
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -219,7 +219,7 @@ class Cli(StoreCase):
                                capture_output=True, text=True, encoding='utf-8', env=env,
                                timeout=120)
             return p.returncode, p.stdout + p.stderr
-        rc, out = run('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        rc, out = run('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         self.assertEqual(rc, 0, out)
         rc, out = run('--session', 'cli-session', 'close', 'FOO', '--reason', 'it is all done')
         self.assertEqual(rc, 0, out)
