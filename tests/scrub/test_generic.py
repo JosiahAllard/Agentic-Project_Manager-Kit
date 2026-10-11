@@ -125,15 +125,23 @@ def install_names(home=None, kit_dir=ROOT, toplevel=None, common_dir=_common_dir
     """([(regex, source)], [notes]) for this install's own names, read from the machine config
     under home (default the user's) and the files it points at. A source that is absent or
     unreadable adds a note instead of a pattern. A known repository sharing the kit's git common
-    dir (its main checkout, any worktree of it) is the kit itself and adds no name."""
-    from kitlib.config.user import user_config
+    dir (its main checkout, any worktree of it) is the kit itself and adds no name. With no home
+    the machine config is the real one, read through the home fence's one exception
+    (tests.real_install_config); a machine with no config file skips the calling test by name."""
     from kitlib import pmstart
-    from tests.shipped import install_patterns
+    from tests import install_config, real_install_config
+    from tests.shipped import NO_INSTALL_NAMES
     if toplevel is None:
         toplevel = pmstart._toplevel
-    pats = [(rx, 'scrub_patterns') for rx, _ in install_patterns(home)]
+    if home is None:
+        cfg, why = real_install_config()
+        if cfg is None:
+            raise unittest.SkipTest(NO_INSTALL_NAMES % why)
+    else:
+        from kitlib.config.user import user_config
+        cfg = install_config(user_config(home))
+    pats = [(re.compile(p, re.I), 'scrub_patterns') for p in cfg['scrub_patterns'] or []]
     notes = [] if pats else ['scrub_patterns is not set']
-    cfg = user_config(home)
     named = {}
 
     def add(name, source):
@@ -172,7 +180,7 @@ def install_names(home=None, kit_dir=ROOT, toplevel=None, common_dir=_common_dir
     url = pm.get('hub_url')
     if isinstance(url, str) and url.rstrip('/'):
         add(url.rstrip('/').rsplit('/', 1)[-1], 'pm_start.hub_url artifact id')
-    for repo in ((cfg['coordinator_start'] or cfg['conductor_start'] or {}).get('cap') or {}):
+    for repo in (cfg['cap'] or {}):
         add(repo, 'coordinator_start.cap key')
     pats += [(name_pattern(n), src) for n, src in sorted(named.values())]
     return pats, notes
