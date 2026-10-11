@@ -187,7 +187,13 @@ skills, hooks and agents the plugin now loads. Remove them in stages, in this or
 
    The second command must print nothing. Then `ListSkills` shows each of the 12 names once.
 
-The ~/.claude/agents junction stays: agents are user-level (not bundled in the plugin).
+1b. Gated on the KIT-AGENTS-IN-PLUGIN rename landing; do not do this before.
+
+Remove ~/.claude/agents only after the plugin providing pm-kit agents is installed and the launcher uses pm-kit:coordinator.
+
+   ```powershell
+   cmd /c rmdir "$env:USERPROFILE\.claude\agents"
+   ```
 
 2. Remove the `~/.claude/hooks` junction only after the plugin's SessionStart hook is live and
    `settings.json` no longer calls a guard through `~/.claude/hooks`. Check by searching

@@ -6,7 +6,8 @@ import unittest
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PATH = os.path.join(KIT, 'docs', 'install.md')
 HEADING = '### After the plugin install: remove the per-item junctions'
-AGENTS = 'The ~/.claude/agents junction stays: agents are user-level (not bundled in the plugin).'
+AGENTS = ('Remove ~/.claude/agents only after the plugin providing pm-kit agents is installed '
+          'and the launcher uses pm-kit:coordinator.')
 
 
 class InstallJunctionsSection(unittest.TestCase):
@@ -25,6 +26,7 @@ class InstallJunctionsSection(unittest.TestCase):
 
     def test_agents_sentence_is_one_standalone_line(self):
         self.assertIn('\n' + AGENTS + '\n', self.text)
+        self.assertIn('KIT-AGENTS-IN-PLUGIN', self.text)
 
 
 if __name__ == '__main__':
