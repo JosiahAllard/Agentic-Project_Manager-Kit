@@ -94,7 +94,7 @@ The definitions review read all 15 files. It found 13 cross-cutting findings, ga
 | A9 | Do not re-emit other agents' text; point to a file or hash | M by the coordinator in the A/B run: a model retyping other agents' output was stopped by the classifier (one run lost); a runner lost its brief; reports that look like instructions drew warning banners. Whether production agents hit this is I | Engineering call |
 | A10 | worker.md:30 "gate green" on every commit becomes targeted runs between commits and the full gate once on the branch's last commit (and again after a sync or fix changes the tip) | M, not second-read: a gate-speed study in another repository counted 8 gates on one branch = 52 min, 104 slot-min, and put the saving at up to 7 gates x 389 s = 45 min, 91 slot-min. C: the phrase is only in worker.md:30 | Owner decision |
 
-A10 risk: each commit is no longer individually gated, so a bad middle commit is found later. The owner is reported to have approved it for one repository only (reported in the review notes, not recorded in this repository); the definition is kit-wide. A line in that repository's profile would leave the kit default unchanged (I).
+A10 risk: each commit is no longer individually gated, so a bad middle commit is found later. The review notes report an approval for one repository only; no decision was found for it, so treat that as unconfirmed. The definition is kit-wide. A line in that repository's profile would leave the kit default unchanged (I).
 
 ### Rules that repeat or contradict each other
 
@@ -117,7 +117,7 @@ Dropped on check: the definitions review said the state note is not git-ignored 
 |---|---|---|---|
 | C1 | Decide where tier overrides come from before editing any tier line. Either record a reason per dispatch, or list the owner's decided default in the tier table and treat overrides as exceptions the coordinator says aloud | M for counts; source I | Owner decision |
 | C2 | Lander: keep haiku, medium. No definition change; the gap is in dispatch. Even a full switch saves little (1.7% of wu) | M, computed | None needed |
-| C3 | Reviewer: reviewer.md says Sonnet default and the caller may raise to Opus (I, not reopened). The reported split (see model-ab.md) is not in the file or roster. Do not edit the tier text until the split is built | Computed: Opus reviews 44M of 705M wu (6.2%) | Owner decision when built |
+| C3 | Reviewer: reviewer.md says Sonnet default and the caller may raise to Opus (I, not reopened). The owner's split (decided 2026-10-10; see model-ab.md) is not in the file or roster. Do not edit the tier text until the split is built | Computed: Opus reviews 44M of 705M wu (6.2%) | Owner decision when built |
 | C4 | Plan-shaped work on the Opus coders: fix the wording first (D1, D2); any tier move for plans should be a trial, not a switch | M, upper bound (see above) | Owner for any tier move |
 | C5 | Trim unused tools: AskUserQuestion and Artifact on the coordinator (C: AskUserQuestion appears only on the tools line), Agent and EnterWorktree on the art trio and test-runner, Write without a path limit on the researcher | C for coordinator; I for the rest | Owner decision |
 | C6 | Deep-worker auto-compact window: definition says 500k, the earlier review saw about 366k. Deep-worker has no subagent runs now | I, not re-checked | Owner decision |
@@ -199,4 +199,4 @@ What a firmer test would cost (estimate from the per-run figures in model-ab.md;
 
 ## Open A/B work
 
-Not started: reviewer split build and the one-month re-check (the record was held until after go-live; go-live has since happened and whether the record was released was not checked), the Haiku helper cost measure, a live coordinator pilot (the owner has not decided), an opus-worker trial for plan and sync first dispatches (I). Sync on Haiku: decision open.
+Not started: reviewer split build and the one-month re-check (owner decision, 2026-10-10: the item is held until go-live and is the first after it; read on 2026-10-11 from the project manager's backlog store, it is still held, and the kit's own store has no such record), the Haiku helper cost measure, a live coordinator pilot (the owner has not decided), an opus-worker trial for plan and sync first dispatches (I). Sync on Haiku: decision open.
