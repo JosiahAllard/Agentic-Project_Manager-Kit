@@ -32,7 +32,7 @@ def load_config(path=None):
 
 
 def default_state_file():
-    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    base = os.environ.get("LOCALAPPDATA") or kuser.home_dir()
     return os.path.join(base, "pm_watch", "state.json")
 
 

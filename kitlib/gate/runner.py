@@ -87,7 +87,14 @@ def kit_identity():
     """{'commit': the kit checkout's HEAD ('unknown' when git cannot say), 'python': the
     interpreter running the gate, 'clean': True when the kit checkout has no uncommitted or
     untracked file (None when git cannot say)}. A landing reuses a branch gate's steps only under
-    the same identity, and a clean one (kitlib.gate.reuse)."""
+    the same identity, and a clean one (kitlib.gate.reuse). Run from a pinned export of pushed
+    main (kitlib.gate.pin), the export's commit, clean: an export holds exactly that commit's
+    tracked files."""
+    from kitlib import pluginsource
+    marker = pluginsource.read_marker(S.KIT_ROOT)
+    if marker is not None and refs.is_sha(marker.get('sha')):
+        return {'commit': marker['sha'],
+                'python': os.path.normcase(os.path.abspath(sys.executable)), 'clean': True}
     out, _ = cmd.run_text(['rev-parse', 'HEAD'], S.KIT_ROOT)
     status, _ = cmd.run_text(['--no-optional-locks', 'status', '--porcelain'], S.KIT_ROOT)
     return {'commit': out if refs.is_sha(out) else 'unknown',
