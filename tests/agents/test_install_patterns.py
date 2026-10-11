@@ -132,9 +132,12 @@ class RealScrubPatternsTest(unittest.TestCase):
 
     def test_base_patterns_run_with_no_config_file(self):
         folder = self.shipped_folder()
-        self.assertEqual(shipped.violations(folder, root=Path(self.home)),
-                         [('shipped/a.md', 'ruling id'), ('shipped/a.md', 'Windows user path'),
-                          ('shipped/a.md', 'machine path')])
+        try:                                    # a skip here would hide the base patterns: fail
+            found = shipped.violations(folder, root=Path(self.home))
+        except unittest.SkipTest:
+            self.fail('base patterns were skipped')
+        self.assertEqual(found, [('shipped/a.md', 'ruling id'), ('shipped/a.md', 'Windows user path'),
+                                 ('shipped/a.md', 'machine path')])
         (folder / 'a.md').unlink()
         with self.assertRaises(unittest.SkipTest) as cm:          # clean base scan: the named skip
             shipped.violations(folder, root=Path(self.home))
@@ -143,8 +146,11 @@ class RealScrubPatternsTest(unittest.TestCase):
     def test_base_patterns_run_with_no_scrub_patterns_key(self):
         self.write_config(json.dumps({'pm_start': {}}))
         folder = self.shipped_folder()
-        self.assertEqual(shipped.scan([('a', (folder / 'a.md').read_text(encoding='utf-8'))]),
-                         [('a', 'ruling id'), ('a', 'Windows user path'), ('a', 'machine path')])
+        try:                                    # a skip here would hide the base patterns: fail
+            found = shipped.scan([('a', (folder / 'a.md').read_text(encoding='utf-8'))])
+        except unittest.SkipTest:
+            self.fail('base patterns were skipped')
+        self.assertEqual(found, [('a', 'ruling id'), ('a', 'Windows user path'), ('a', 'machine path')])
         with self.assertRaises(unittest.SkipTest) as cm:
             shipped.scan([('b', 'Nothing specific.')])
         self.assertIn('sets no scrub_patterns', str(cm.exception))
