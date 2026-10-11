@@ -6,6 +6,7 @@ usage: python -m unittest tests.optional.comfy.test_render_glb -v
 """
 import io
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -101,19 +102,63 @@ class MachineLockRerun(unittest.TestCase):
 
     ARGV = ['--grid', '2', 'out dir/sheet.png', 'a.glb']
 
-    def rerun(self, env):
+    def fake_file(self, *parts):
+        """A real empty file at tmp/parts..., so os.path.isfile is true for it."""
+        path = os.path.join(self.tmp, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
+        return path
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.python = self.fake_file("bin", "python.exe")
+
+    def rerun(self, env, python=None, binary="blender.exe"):
         opts = R.parse_args(self.ARGV)
-        with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as f:
-            tool = f.name
-        self.addCleanup(os.remove, tool)
+        tool = self.fake_file("tool", "machine_lock.py")
         clean = {k: v for k, v in os.environ.items() if k not in ("MACHINE_LOCK_RUN", R.RERUN_ENV)}
         with mock.patch.dict(os.environ, dict(clean, **env), clear=True), \
                 mock.patch.object(R, "MACHINE_LOCK_TOOL", tool), \
+                mock.patch.object(R.shutil, "which", return_value=python or self.python), \
                 mock.patch.object(R.subprocess, "call", return_value=0) as call, \
                 mock.patch.object(R.sys, "exit") as exit_:
-            R.machine_lock_rerun(opts, self.ARGV, "blender.exe")
+            R.machine_lock_rerun(opts, self.ARGV, binary)
             left = os.environ.get(R.RERUN_ENV)
         return call, exit_, left
+
+    def refused(self, python, binary="blender.exe"):
+        opts = R.parse_args(self.ARGV)
+        tool = self.fake_file("tool", "machine_lock.py")
+        with mock.patch.object(R, "MACHINE_LOCK_TOOL", tool), \
+                mock.patch.object(R.shutil, "which", return_value=python), \
+                mock.patch.object(R.subprocess, "call") as call, \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            with self.assertRaises(SystemExit) as e:
+                R.machine_lock_rerun(opts, self.ARGV, binary)
+        self.assertEqual(e.exception.code, 2)
+        call.assert_not_called()
+        self.assertIn("refused: no usable python", err.getvalue())
+
+    def test_a_missing_python_refuses(self):
+        self.refused(os.path.join(self.tmp, "nope", "python.exe"))
+
+    def test_a_windowsapps_stub_refuses(self):
+        self.refused(self.fake_file("Microsoft", "WindowsApps", "python.exe"))
+
+    def test_blender_as_the_python_refuses(self):
+        self.refused(self.python, binary=self.python)
+
+    def test_a_real_python_is_used_to_run_the_tool(self):
+        call, _, _ = self.rerun({})
+        self.assertEqual(call.call_args[0][0][0], self.python)
+
+    def test_a_script_error_in_blender_exits_nonzero(self):
+        call, _, _ = self.rerun({})
+        cmd = call.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--python-exit-code") + 1], "1")
+        self.assertGreater(cmd.index("--python-exit-code"), cmd.index("--"))
+        self.assertLess(cmd.index("--python-exit-code"), cmd.index("--python"))
 
     def test_no_enclosing_run_takes_a_render_slot(self):
         call, exit_, _ = self.rerun({})
@@ -128,8 +173,9 @@ class MachineLockRerun(unittest.TestCase):
         call, _, _ = self.rerun({})
         cmd = call.call_args[0][0]
         run = cmd[cmd.index("--") + 1:]
-        self.assertEqual(run[:4], ["blender.exe", "--background", "--python", os.path.abspath(R.__file__)])
-        self.assertEqual(run[4:], ["--"] + self.ARGV)
+        self.assertEqual(run[:6], ["blender.exe", "--background", "--python-exit-code", "1",
+                                   "--python", os.path.abspath(R.__file__)])
+        self.assertEqual(run[6:], ["--"] + self.ARGV)
 
     def test_an_enclosing_run_still_goes_through_the_tool(self):
         call, exit_, _ = self.rerun({"MACHINE_LOCK_RUN": "r-cpu-run"})

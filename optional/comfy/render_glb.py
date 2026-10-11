@@ -139,6 +139,17 @@ MACHINE_LOCK_TOOL = os.environ.get("KIT_MACHINE_LOCK") or os.path.join(
 RERUN_ENV = "RENDER_GLB_LOCKED"     # set only for the Blender run machine_lock_rerun starts
 
 
+def usable_python(python, binary):
+    """True when `python` is a real file, not under a WindowsApps folder (the Store stub) and not
+    the Blender binary itself."""
+    if not python or not os.path.isfile(python):
+        return False
+    path = os.path.normcase(os.path.abspath(python))
+    if "windowsapps" in path.split(os.sep):
+        return False
+    return not binary or path != os.path.normcase(os.path.abspath(binary))
+
+
 def machine_lock_rerun(opts, argv, binary):
     """Re-run this script in Blender (`binary`) under the machine-wide lock (kind render), then
     exit with its code. Returns without re-running only in that re-run itself (RERUN_ENV, consumed
@@ -152,11 +163,18 @@ def machine_lock_rerun(opts, argv, binary):
               "takes a render slot. Install the kit's tools/machine_lock.py or set "
               "KIT_MACHINE_LOCK to it. Exit 2.", file=sys.stderr)
         sys.exit(2)
-    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", os.path.splitext(os.path.basename(opts.out))[0]).strip("-")[:48]
     # inside Blender sys.executable may be Blender itself, so the lock tool runs under a python on PATH
-    cmd = [shutil.which("python") or sys.executable, "-B", MACHINE_LOCK_TOOL, "run", "--repo", "comfy",
+    python = shutil.which("python") or sys.executable
+    if not usable_python(python, binary):
+        print(f"[machine-lock] refused: no usable python to run the lock tool (got {python!r}: missing, "
+              "a WindowsApps Store stub, or Blender itself). Put a real python first on PATH. Exit 2.",
+              file=sys.stderr)
+        sys.exit(2)
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", os.path.splitext(os.path.basename(opts.out))[0]).strip("-")[:48]
+    cmd = [python, "-B", MACHINE_LOCK_TOOL, "run", "--repo", "comfy",
            "--slug", "render-" + (stem or "glb"), "--kind", "render", "--max-wait", "540s", "--",
-           binary, "--background", "--python", os.path.abspath(__file__), "--"] + list(argv)
+           binary, "--background", "--python-exit-code", "1", "--python", os.path.abspath(__file__),
+           "--"] + list(argv)
     sys.exit(subprocess.call(cmd, env=dict(os.environ, **{RERUN_ENV: "1"})))
 
 

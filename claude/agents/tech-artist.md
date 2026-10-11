@@ -88,8 +88,8 @@ A render you have not seen is an untested change.
 1. Render a frame the way the project allows - a headless run that saves a
    screenshot, or an existing test scene - under the profile's lock, after the
    orphan sweep (end only processes you started, by pid; read preflight's leftover lines).
-   A Blender frame rendered through `render_glb.py` takes its own render slot; any other
-   render still needs the lock.
+   A GLB contact sheet rendered through `render_glb.py` takes its own render slot; any
+   other render still needs the lock.
 2. **Read the image file back and look at it.** Say what you see: colour,
    contrast, edges, whether the element reads at the size it will be used.
 3. Compare against the direction's own words, and against a before image where you
