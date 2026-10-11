@@ -5,14 +5,20 @@ diff, rev-parse); nothing fetches, writes a file or moves a ref.
 The set is either paths the caller names, in the backlog scope language (a literal repo-relative
 path or `<path>/**`), or the files one branch changed since its merge base with the base. A
 branch's changes are `git diff --name-only --no-renames <merge base> <tip>`, so a rename counts
-as both its old and its new path. A changed file overlaps a set member exactly when the backlog
-pull collision check would call them colliding: kitlib.backlog.scope.members_collide, component by
+as both its old and its new path. A changed file overlaps a set member when the backlog pull
+collision check would call them colliding: kitlib.backlog.scope.members_collide, component by
 component and case-blind, one a prefix of the other. A comparison that matcher cannot decide (a
-changed file whose name holds a wildcard character) counts as an overlap, as it does there.
+name holding a comma, a control character, leading or trailing space, a backslash or a wildcard
+character) counts as an overlap, as it does there. One difference: here `none` (in any case) is
+the root file of that name, never the backlog's empty-scope sentinel, so it is compared as a path.
 
-A branch is every ref under refs/heads/ and refs/remotes/ except a symbolic one (`origin/HEAD`);
-it is merged, and skipped, when its tip is an ancestor of the base. Anything git gives no answer
-for makes the whole answer CANNOT: "no overlap" is only said after every branch was read.
+A ref is every one under refs/heads/ and refs/remotes/ except a symbolic one (`origin/HEAD`); it
+is merged, and skipped, when its tip is an ancestor of the base. Refs that carry one branch name
+(`kit/x` and `origin/kit/x`) are one branch: counted once, reported in one block. Left out: the
+base's own branch (the local `main` when the base is `origin/main`; it is named in a note when it
+holds commits the base lacks) and, with --branch, every ref of that branch or at its tip. Anything
+git gives no answer for makes the whole answer CANNOT: "no overlap" is only said after every ref
+was read.
 """
 import collections
 
@@ -26,6 +32,8 @@ CLEAR, OVERLAP, CANNOT = 0, 1, 2
 Outcome = collections.namedtuple('Outcome', 'code lines')
 Branch = collections.namedtuple('Branch', 'ref name tip')     # full refname, short name, commit
 
+_HIDE = 'x/'      # a component put before both sides so `none` is compared as a path
+
 
 class Usage(Exception):
     """A set or argument the caller must fix (the entry point's exit 2)."""
@@ -33,13 +41,15 @@ class Usage(Exception):
 
 def normalise(member):
     """`member` as a scope member: backslashes read as slashes, a leading `./` dropped. Raises
-    Usage when the result is not a legal scope member (the only wildcard is a trailing `/**`)."""
+    Usage when the result is not a legal scope member (the only wildcard is a trailing `/**`).
+    `none` in any case is the root file of that name here, not the backlog's empty-scope sentinel."""
     m = member.strip().replace('\\', '/')
     while m.startswith('./'):
         m = m[2:]
-    err = smod.scope_member_error(m)
-    if err is None and m == smod.NONE:
-        err = '`none` names no file'
+    if m.casefold() == smod.NONE:
+        err = smod.path_shape_error(m)
+    else:
+        err = smod.scope_member_error(m)
     if err is not None:
         raise Usage('%r: %s' % (member, err))
     return m
@@ -73,21 +83,25 @@ def stem(ref):
 def branches(root):
     """`([Branch], None)`: every local and remote-tracking branch, symbolic refs left out; or
     `(None, why)`."""
+    what = 'for-each-ref refs/heads/ refs/remotes/'
     r = cmd.call(['for-each-ref', '--format=%(objectname) %(symref) %(refname)',
                   'refs/heads/', 'refs/remotes/'], root)
     if r.rc != 0:
-        return None, 'git for-each-ref failed: %s' % (r.err or 'exit %s' % r.rc)
+        return None, 'git %s failed: %s' % (what, r.err or 'exit %s' % r.rc)
+    # GOTCHA (as kitlib.git.refs.ref_commit): for-each-ref leaves a broken ref out with exit 0 and
+    # "warning: ignoring broken ref <ref>" on stderr; skipping it quietly would hide a branch. So
+    # stderr that names a ref, or says broken or ignoring, is no answer.
+    if r.err and any(w in r.err for w in ('refs/', 'broken', 'ignoring')):
+        return None, 'git %s said: %s' % (what, r.err.strip()[:200])
     out = []
     for line in cmd.text(r.out).splitlines():
         parts = line.split(' ', 2)
-        if len(parts) != 3:
-            continue
+        if (len(parts) != 3 or not refs.is_sha(parts[0])
+                or not parts[2].startswith(('refs/heads/', 'refs/remotes/'))):
+            return None, 'git %s printed %r, not a ref line' % (what, line[:80])
         sha, sym, ref = parts
-        if sym:
-            continue
-        if not refs.is_sha(sha):
-            return None, 'git for-each-ref printed %r, not a ref line' % line[:80]
-        out.append(Branch(ref, short_name(ref), sha))
+        if not sym:
+            out.append(Branch(ref, short_name(ref), sha))
     return out, None
 
 
@@ -109,12 +123,23 @@ def matches(path, members):
     """[(member, note)] of the set members `path` collides with; note is '' or why it counts."""
     hits = []
     for m in members:
+        a, b = path, m
+        if smod.NONE in (a.casefold(), b.casefold()):
+            a, b = _HIDE + a, _HIDE + b
         try:
-            if smod.members_collide(path, m):
+            if smod.members_collide(a, b):
                 hits.append((m, ''))
         except smod.UndecidableScope as exc:
             hits.append((m, 'undecidable, so counted: %s' % exc))
     return hits
+
+
+def _full_ref(rev, every):
+    """The refname of `every` that `rev` names (full, short, `heads/x` or `remotes/o/x`), or None."""
+    for b in every:
+        if rev in (b.ref, b.name) or b.ref == 'refs/' + rev:
+            return b.ref
+    return None
 
 
 def look(root, files=None, branch=None, base=None, cfg=None):
@@ -131,19 +156,28 @@ def look(root, files=None, branch=None, base=None, cfg=None):
             return Outcome(CANNOT, ['CANNOT ANSWER: kit configuration: %s' % exc])
         base, note = refs.default_base(root, c.remote, c.main_branch)
         if note:
-            lines.append(note)
+            lines.append('note      %s' % note)
     why = refs.bad_rev(base)
     if why:
         raise Usage('--base: %s' % why)
-    base_sha, why = refs.resolve(base, root)
-    if not base_sha:
-        return Outcome(CANNOT, lines + ['CANNOT ANSWER: base %s: %s' % (base, why)])
-    lines.append('base      %s (%s)' % (base, base_sha[:10]))
-
     if branch is not None:
         why = refs.bad_rev(branch)
         if why:
             raise Usage('--branch: %s' % why)
+    if files is not None:
+        members = [normalise(f) for f in files]
+        if not members:
+            raise Usage('the file set is empty')
+    base_sha, why = refs.resolve(base, root)
+    if not base_sha:
+        return Outcome(CANNOT, lines + ['CANNOT ANSWER: base %s: %s' % (base, why)])
+    lines.append('base      %s (%s)' % (base, base_sha[:10]))
+    every, why = branches(root)
+    if every is None:
+        return Outcome(CANNOT, lines + ['CANNOT ANSWER: %s' % why])
+
+    excluded = {}                                       # ref -> why it is left out
+    if branch is not None:
         tip, why = refs.resolve(branch, root)
         if not tip:
             return Outcome(CANNOT, lines + ['CANNOT ANSWER: --branch %s: %s' % (branch, why)])
@@ -152,28 +186,39 @@ def look(root, files=None, branch=None, base=None, cfg=None):
             return Outcome(CANNOT, lines + ['CANNOT ANSWER: --branch %s: %s' % (branch, why)])
         lines.append('set       %d file(s) %s changed since its merge base with %s'
                      % (len(members), branch, base))
+        # The branch's names: the ref it was given as, and every ref at its tip (HEAD or a commit
+        # names no ref itself); each of their refs, an older pushed copy included, is left out.
+        own = {stem(b.ref) for b in every if b.tip == tip}
+        full = _full_ref(branch, every)
+        if full:
+            own.add(stem(full))
+        for b in every:
+            if b.tip == tip or stem(b.ref) in own:
+                excluded[b.ref] = '--branch'
     else:
-        members = [normalise(f) for f in files]
-        if not members:
-            raise Usage('the file set is empty')
         lines.append('set       %d path(s) given' % len(members))
     if not members:
         lines.append('no overlap: the set is empty, so no branch can overlap it')
         return Outcome(CLEAR, lines)
 
-    every, why = branches(root)
-    if every is None:
-        return Outcome(CANNOT, lines + ['CANNOT ANSWER: %s' % why])
     got, why = batch.ancestry(base_sha, root)
     if got is None:
         return Outcome(CANNOT, lines + ['CANNOT ANSWER: the ancestry of %s: %s' % (base, why)])
     merged_set = got[1]
-    excluded = set()
-    if branch is not None:
-        own = stem(_full_ref(branch, every) or branch)
-        excluded = {b.ref for b in every if b.tip == tip or stem(b.ref) == own}
+    base_full = _full_ref(base, every)
+    if base_full:
+        for b in every:
+            if (b.ref != base_full and b.ref not in excluded and b.tip not in merged_set
+                    and stem(b.ref) == stem(base_full)):
+                excluded[b.ref] = 'base'
+                lines.append('note      %s (%s) has commits the base %s lacks; it is the '
+                                 "base's own branch, so it is left out and those commits are "
+                                 'not checked' % (b.name, b.tip[:10], base))
 
-    blocks, failed, merged, checked = [], [], 0, 0
+    groups = collections.OrderedDict()                  # stem -> [(Branch, [hit line])]
+    failed, cache = [], {}
+    merged = checked = 0
+    stems = set()
     for b in every:
         if b.ref in excluded:
             continue
@@ -181,7 +226,10 @@ def look(root, files=None, branch=None, base=None, cfg=None):
             merged += 1
             continue
         checked += 1
-        changed, why = changed_files(base_sha, b.tip, root)
+        stems.add(stem(b.ref))
+        if b.tip not in cache:
+            cache[b.tip] = changed_files(base_sha, b.tip, root)
+        changed, why = cache[b.tip]
         if changed is None:
             failed.append('CANNOT READ %s (%s): %s' % (b.name, b.tip[:10], why))
             continue
@@ -190,27 +238,28 @@ def look(root, files=None, branch=None, base=None, cfg=None):
             for m, note in matches(path, members):
                 hit_lines.append('  %s  (matches %s%s)' % (path, m, '; ' + note if note else ''))
         if hit_lines:
-            blocks.append(['%s (%s): %d overlapping' % (b.name, b.tip[:10], len(hit_lines))]
-                          + hit_lines)
-    for block in blocks:
-        lines += block
+            groups.setdefault(stem(b.ref), []).append((b, hit_lines))
+
+    for name, entries in groups.items():
+        union = list(collections.OrderedDict.fromkeys(h for _, hl in entries for h in hl))
+        lines.append('%s  [%s]: %d overlapping' % (
+            name, ', '.join('%s %s' % (b.name, b.tip[:10]) for b, _ in entries), len(union)))
+        for h in union:
+            some = [b.name for b, hl in entries if h in hl]
+            lines.append(h if len(some) == len(entries) else '%s  [only %s]' % (h, ', '.join(some)))
     lines += failed
-    summary = ('%d unmerged branch(es) checked, %d merged skipped%s'
-               % (checked, merged, ', %d excluded as --branch itself' % len(excluded)
-                  if branch is not None else ''))
+    kinds = collections.Counter(excluded.values())
+    summary = '%d unmerged branch(es) checked (%d ref(s)), %d merged ref(s) skipped' % (
+        len(stems), checked, merged)
+    if kinds['--branch']:
+        summary += ', %d ref(s) of --branch itself left out' % kinds['--branch']
+    if kinds['base']:
+        summary += ", %d ref(s) of the base's own branch left out" % kinds['base']
     if failed:
-        lines.append('CANNOT ANSWER: %d branch(es) could not be read; %s' % (len(failed), summary))
+        lines.append('CANNOT ANSWER: %d ref(s) could not be read; %s' % (len(failed), summary))
         return Outcome(CANNOT, lines)
-    if blocks:
-        lines.append('OVERLAP: %d branch(es) change files in the set; %s' % (len(blocks), summary))
+    if groups:
+        lines.append('OVERLAP: %d branch(es) change files in the set; %s' % (len(groups), summary))
         return Outcome(OVERLAP, lines)
     lines.append('no overlap: no unmerged branch changes a file in the set; %s' % summary)
     return Outcome(CLEAR, lines)
-
-
-def _full_ref(rev, every):
-    """The refname of `every` that `rev` names as given (full, short, or `heads/`-less), or None."""
-    for b in every:
-        if rev in (b.ref, b.name):
-            return b.ref
-    return None

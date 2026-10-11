@@ -47,9 +47,16 @@ def parser():
 def main(argv=None):
     p = parser()
     a = p.parse_args(argv)
-    top, why = gitrepo.toplevel(a.root)
-    if top is None:
-        p.error('-C: %s' % why)
+    if not os.path.isdir(a.root):
+        p.error('-C: %s is not a directory' % a.root)
+    place = gitrepo.classify(a.root)
+    if place.kind == gitrepo.NONE:
+        p.error('-C: %s is in no git work tree (%s)' % (a.root, place.detail))
+    if place.kind not in (gitrepo.MAIN, gitrepo.LINKED) or not place.top:
+        print('CANNOT ANSWER: -C %s: git could not name its work tree (%s: %s)'
+              % (a.root, place.kind, place.detail), flush=True)
+        return overlap.CANNOT
+    top = place.top
     files = a.files
     if a.files_from is not None:
         try:
