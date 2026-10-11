@@ -24,6 +24,14 @@ class InstallJunctionsSection(unittest.TestCase):
         section = self.text.split(HEADING, 1)[1]
         self.assertIn('cmd /c rmdir', section)
 
+    def test_skills_removal_is_limited_to_the_kit_skill_names(self):
+        section = self.text.split(HEADING, 1)[1]
+        self.assertIn('$_.Name -in $kit', section)
+        names = sorted(n for n in os.listdir(os.path.join(KIT, 'claude', 'skills'))
+                       if os.path.isdir(os.path.join(KIT, 'claude', 'skills', n)))
+        for name in names:
+            self.assertIn("'%s'" % name, section)
+
     def test_agents_sentence_is_one_standalone_line(self):
         self.assertIn('\n' + AGENTS + '\n', self.text)
         self.assertIn('KIT-AGENTS-IN-PLUGIN', self.text)

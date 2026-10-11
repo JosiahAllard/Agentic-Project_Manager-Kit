@@ -175,32 +175,35 @@ plugin name as reserved (a `claude-` prefix); the name is unchanged and installs
 An account set up by `machine_setup.py` has per-item junctions under `~/.claude` that load the same
 skills, hooks and agents the plugin now loads. Remove them in stages, in this order.
 
-1. At install, remove the `~/.claude/skills/*` junctions, or each skill appears twice. `cmd /c rmdir`
-   removes the link only, never the target:
+**Stage 1.** At install, remove the kit's `~/.claude/skills/*` junctions, or each skill appears twice.
+Only the 12 kit skill names are touched (the directories under `claude/skills`); any other link stays.
+`cmd /c rmdir` removes the link only, never the target:
 
-   ```powershell
-   Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force |
-     Where-Object { $_.LinkType -eq 'Junction' } |
-     ForEach-Object { cmd /c rmdir "$($_.FullName)" }
-   Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force | Where-Object { $_.LinkType }
-   ```
+```powershell
+$kit = 'backlog-ops','branch-review','branch-sync','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch'
+Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force |
+  Where-Object { $_.LinkType -eq 'Junction' -and $_.Name -in $kit } |
+  ForEach-Object { cmd /c rmdir "$($_.FullName)" }
+Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force | Where-Object { $_.LinkType -and $_.Name -in $kit }
+```
 
-   The second command must print nothing. Then `ListSkills` shows each of the 12 names once.
+The last command must print nothing. Then `ListSkills` shows each of the 12 names once.
 
-1b. Gated on the KIT-AGENTS-IN-PLUGIN rename landing; do not do this before.
+**Stage 1b.** Gated on the KIT-AGENTS-IN-PLUGIN rename landing; do not do this before.
 
 Remove ~/.claude/agents only after the plugin providing pm-kit agents is installed and the launcher uses pm-kit:coordinator.
 
-   ```powershell
-   cmd /c rmdir "$env:USERPROFILE\.claude\agents"
-   ```
+```powershell
+cmd /c rmdir "$env:USERPROFILE\.claude\agents"
+```
 
-2. Remove the `~/.claude/hooks` junction only after the plugin's SessionStart hook is live and
-   `settings.json` no longer calls a guard through `~/.claude/hooks`. Check by searching
-   `$env:USERPROFILE\.claude\settings.json` for `\.claude\\hooks`: it must have no hit.
-3. The `tools/*` and `knowledge/*` junctions stay for now: `~/.claude/tools/machine_lock` is the live
-   lock path, and `machine_setup.py --apply` recreates those links. Record KIT-JUNCTIONS-TOOLS-KNOWLEDGE
-   retires them.
+**Stage 2.** Remove the `~/.claude/hooks` junction only after the plugin's SessionStart hook is live and
+`settings.json` no longer calls a guard through `~/.claude/hooks`. Check by searching
+`$env:USERPROFILE\.claude\settings.json` for `\.claude\\hooks`: it must have no hit.
+
+**Stage 3.** The `tools/*` and `knowledge/*` junctions stay for now: `~/.claude/tools/machine_lock` is the live
+lock path, and `machine_setup.py --apply` recreates those links. Record KIT-JUNCTIONS-TOOLS-KNOWLEDGE
+retires them.
 
 `tools/backlog.py add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md).
