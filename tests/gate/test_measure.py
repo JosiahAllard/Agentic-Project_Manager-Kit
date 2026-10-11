@@ -33,7 +33,7 @@ class Propose(unittest.TestCase):
         self.assertIn('engine-test: warn_min 30 -> 15; cpu medium -> heavy (3 runs)', notes)
 
     def test_unsaturated_runs_stay_medium_and_warn_is_at_least_one(self):
-        hist = [run('cpu-eval', 12, peak=2) for _ in range(3)]     # under 10 s: no cpu sample
+        hist = [run('cpu-eval', 12, peak=2) for _ in range(3)]     # 12 s: long enough to be a cpu sample
         new, _ = measure.propose(TABLE, hist, medium_cores=8)
         self.assertEqual(new['cpu-eval']['cpu'], 'medium')
         self.assertEqual(new['cpu-eval']['warn_min'], 1)
@@ -100,8 +100,8 @@ class IntegerSizes(unittest.TestCase):
         self.assertEqual(self.prop(by_entry, table=sized)[0]['engine-test']['cpu'], 2)
 
     def test_at_least_one_core_and_never_past_the_cap(self):
-        idle = [booked('engine-test', 60, 0.0, cores=6) for _ in range(3)]
-        self.assertEqual(self.prop(idle)[0]['engine-test']['cpu'], 1)
+        light = [booked('engine-test', 60, 0.2, cores=6) for _ in range(3)]
+        self.assertEqual(self.prop(light)[0]['engine-test']['cpu'], 1)
         wide = {'engine-test': {'cpu': 9, 'gpu': 0, 'warn_min': 30}}
         full = [booked('engine-test', 60, 5.9, cores=6) for _ in range(3)]
         self.assertEqual(self.prop(full, table=wide)[0]['engine-test']['cpu'], 6)
@@ -136,7 +136,7 @@ SIZED = {'engine-test': {'cpu': 'medium', 'gpu': 0, 'warn_min': 30},
 IDLE = "under 0.1 cpu thread busy (work outside the run's job, or idle)"
 SHORT = 'held under 10 s (no peak window)'
 PARTIAL = 'partial (docker exec: use partly outside the job)'
-NO_FIGURES = 'without cpu figures'
+NO_FIGURES = 'without cpu figures (none, or a peak of 0)'
 
 
 def line(kind, held, cpu_s, peak, cores=6, partial=False):
@@ -168,7 +168,8 @@ class OutOfJob(unittest.TestCase):
         self.assertEqual(new['cpu-eval'], {'cpu': 6, 'gpu': 0, 'warn_min': 120})
         self.assertEqual(self.note(notes, 'cpu-eval'),
                          'cpu-eval: kept (0 cpu sample(s) of 5 finished run(s); 3 needed; '
-                         'skipped: 5 %s); cpu heavy -> 6 (its size on this layout)' % IDLE)
+                         'skipped: 4 %s, 1 %s); cpu heavy -> 6 (its size on this layout)'
+                         % (NO_FIGURES, IDLE))
 
     def test_a_run_too_short_for_a_peak_window_is_not_a_sample(self):
         # 0.4 cpu seconds in 1 second is work in the job, and the peak is still 0.
@@ -200,7 +201,7 @@ class OutOfJob(unittest.TestCase):
 
     def test_a_kind_is_sized_from_its_cpu_samples_only_and_says_what_it_skipped(self):
         real = [line('engine-test', 60, 300, p) for p in (2.1, 2.5, 2.9)]
-        blind = [line('engine-test', 600, 0.5, 0.0) for _ in range(20)]
+        blind = [line('engine-test', 600, 0.5, 0.01) for _ in range(20)]
         new, notes = self.prop(real + blind)
         e = new['engine-test']
         self.assertEqual(e['cpu'], 3)                  # ceil(2.9), not the 1 of all 23 lines
@@ -222,7 +223,7 @@ class OutOfJob(unittest.TestCase):
 
     def test_too_few_cpu_samples_keep_the_entry_however_many_runs_finished(self):
         real = [line('engine-test', 60, 300, p) for p in (2.1, 2.9)]
-        blind = [line('engine-test', 600, 0.5, 0.0) for _ in range(20)]
+        blind = [line('engine-test', 600, 0.5, 0.01) for _ in range(20)]
         new, notes = self.prop(real + blind)
         self.assertEqual(new['engine-test'], {'cpu': 2, 'gpu': 0, 'warn_min': 30})
         self.assertEqual(self.note(notes, 'engine-test'),
@@ -231,7 +232,7 @@ class OutOfJob(unittest.TestCase):
 
     def test_the_minimum_is_the_callers_min_runs(self):
         real = [line('engine-test', 60, 300, 2.9) for _ in range(4)]
-        blind = [line('engine-test', 600, 0.5, 0.0) for _ in range(20)]
+        blind = [line('engine-test', 600, 0.5, 0.01) for _ in range(20)]
         new, notes = self.prop(real + blind, min_runs=5)
         self.assertNotIn('_measured', new['engine-test'])
         self.assertIn('kept (4 cpu sample(s) of 24 finished run(s); 5 needed;',
@@ -245,11 +246,49 @@ class OutOfJob(unittest.TestCase):
         self.assertFalse(sampled(9, 9.0))              # too short, however busy
         self.assertTrue(sampled(100, 10.0))
         self.assertFalse(sampled(100, 9.9))
+        # The edge is exact on the figures as written, not on their binary products.
+        self.assertTrue(sampled(12, 1.2))
+        self.assertFalse(sampled(12, 1.1))
+        self.assertTrue(sampled(57, 5.7))
+        self.assertTrue(sampled(10.3, 1.03))
+
+    def test_a_peak_of_zero_is_not_a_figure(self):
+        # A busy line whose peak was never measured must not size a kind to 1.
+        hist = [line('engine-test', 60, 300, 0.0) for _ in range(3)]
+        new, notes = self.prop(hist)
+        self.assertEqual(new['engine-test'], {'cpu': 2, 'gpu': 0, 'warn_min': 30})
+        self.assertIn('skipped: 3 %s)' % NO_FIGURES, self.note(notes, 'engine-test'))
+        self.assertEqual(measure.skip_reason(line('engine-test', 60, 300, 0.0)), 'no_figures')
+        self.assertIsNone(measure.skip_reason(line('engine-test', 60, 300, 0.01)))
+
+    def test_a_line_without_a_held_time_is_short_not_an_error(self):
+        for bad in (None, 'x', True, -1):
+            d = dict(line('engine-test', 60, 300, 2.5), held_s=bad)
+            self.assertEqual(measure.skip_reason(d), 'short', bad)
+        d = line('engine-test', 60, 300, 2.5)
+        del d['held_s']
+        self.assertEqual(measure.skip_reason(d), 'short')
+
+    def test_the_first_reason_wins_when_two_apply(self):
+        why = measure.skip_reason
+        self.assertEqual(why(line('k', 5, 300, None)), 'short')            # short and no figures
+        self.assertEqual(why(line('k', 5, 0.1, 2.5)), 'short')             # short and idle
+        self.assertEqual(why(line('k', 60, 0.5, None)), 'no_figures')      # no figures and idle
+        self.assertEqual(why(line('k', 60, 0.5, 0.0)), 'no_figures')
+        self.assertEqual(why(dict(line('k', 60, 0.5, 2.5), cpu_s=None)), 'no_figures')
+        self.assertEqual(why(line('k', 5, 0.1, None, partial=True)), 'partial')
+
+    def test_the_bookings_are_those_of_the_cpu_samples(self):
+        # Skipped runs booked 2 slots, the samples 6: a peak of 1.9 fills a third of a sample's
+        # booking, so the kind is its peak rounded up, not the cap of a filled booking.
+        blind = [line('engine-test', 600, 0.5, 0.01, cores=2) for _ in range(3)]
+        real = [line('engine-test', 60, 300, 1.9, cores=6) for _ in range(3)]
+        self.assertEqual(self.prop(blind + real)[0]['engine-test']['cpu'], 2)
 
     def test_each_skipped_run_is_counted_once_under_its_first_reason(self):
         hist = ([line('cpu-eval', 1, 0.0, 0.0, partial=True) for _ in range(25)]
                 + [line('cpu-eval', 1, 0.4, 0.0) for _ in range(40)]
-                + [line('cpu-eval', 300, 0.5, 0.0) for _ in range(18)]
+                + [line('cpu-eval', 300, 0.5, 0.01) for _ in range(18)]
                 + [line('cpu-eval', 60, 300, None)])
         new, notes = self.prop(hist)
         self.assertEqual(new['cpu-eval'], {'cpu': 6, 'gpu': 0, 'warn_min': 120})
@@ -270,7 +309,7 @@ class OutOfJob(unittest.TestCase):
                          'cpu-eval: warn_min 120 -> 61; cpu heavy -> 6 (6 runs)')
 
     def test_the_rule_before_whole_core_sizes_skips_the_same_lines(self):
-        hist = [line('cpu-eval', 1800, 0.7, 0.0) for _ in range(5)]
+        hist = [line('cpu-eval', 1800, 0.7, 0.01) for _ in range(5)]
         new, notes = self.prop(hist, agent_cap=None)
         self.assertEqual(new['cpu-eval'], SIZED['cpu-eval'])
         self.assertEqual(self.note(notes, 'cpu-eval'),
