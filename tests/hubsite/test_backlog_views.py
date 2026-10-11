@@ -375,9 +375,10 @@ class AnErrorIsAFixedPhrase(Case):
 
     def test_git_that_exited_non_zero_gives_the_code_and_none_of_its_words(self):
         said = self.error(128, STDERR)
-        self.assertEqual(said, backlog.GIT_EXITED % 128)
         for secret in (PROFILE, HOST, "Users", "gitconfig", "fatal"):
             self.assertNotIn(secret, said)
+        self.assertEqual(said, "git exited 128")
+        self.assertEqual(said, backlog.GIT_EXITED % 128)
 
     def test_a_folder_that_is_no_repository(self):
         said = self.error(128, "fatal: not a git repository (or any of the parent directories): .git\n"
