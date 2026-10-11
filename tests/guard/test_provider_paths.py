@@ -87,6 +87,9 @@ class FileWritesStillJudged(unittest.TestCase):
                      'New-PSDrive -Name Q -PSProvider FileSystem -Root .; New-Item -Path env:FOO',
                      'Remove-PSDrive env; New-Item -Path env:\\x.txt',
                      'ndr env FileSystem .; New-Item -Path env:\\x.txt',
+                     'Remove-PSDrive env; & { New-Item -Path env:\\x.txt }',
+                     '& { Remove-PSDrive env }; New-Item -Path env:\\x.txt',
+                     '$(Remove-PSDrive env); New-Item -Path env:\\x.txt',
                      'Invoke-Expression $s; New-Item -Path env:\\x.txt',
                      'Import-Module .\\m.psm1; New-Item -Path env:\\x.txt',
                      '. .\\setup.ps1; New-Item -Path env:\\x.txt'):

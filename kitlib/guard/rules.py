@@ -1268,6 +1268,30 @@ def into_folder(target, w, into, cwd):
     return out
 
 
+# A PowerShell item on a built-in drive that holds no files: env:FOO, Env:\FOO, variable:x,
+# function:f, alias:a, HKCU:\x, HKLM:/x, Cert:\x, WSMan:\x, or the provider spelled out
+# (Environment::FOO, Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\x). Temp: and
+# FileSystem:: hold files and are not here.
+PS_PROVIDER_ITEM_RE = re.compile(
+    r'(?i)^(?:(?:env|variable|function|alias|hkcu|hklm|cert|wsman):'
+    r'|(?:microsoft\.(?:powershell\.(?:core|security)|wsman\.management)\\)?'
+    r'(?:environment|variable|function|alias|registry|certificate|wsman)::)')
+DOTDOT_RE = re.compile(r'(?:^|[\\/:])\.\.(?:[\\/]|$)')
+# A line that may remap a drive name to a folder (New-PSDrive env FileSystem C:\x) or run code
+# the text does not show: there env:x may be a file, so it is judged as one.
+PS_DRIVE_REMAP_RE = re.compile(r'(?i)drive|\b(?:ndr|rdr|mount|iex|ipmo)\b|invoke-expression|import-module'
+                               r'|\.ps1\b|\.psm1\b|scriptblock|sessionstate|(?:^|[;&|({]\s*)\.\s')
+
+
+def ps_provider_item(cmd, w):
+    """True when the PowerShell Word `w` names an item on a built-in drive that holds no files
+    (PS_PROVIDER_ITEM_RE): a literal word, no `..` part, on a line that cannot remap the drive
+    (PS_DRIVE_REMAP_RE). Writing such an item writes no file."""
+    if cmd.shell != sh.PS or w.dyn or not PS_PROVIDER_ITEM_RE.match(w.text):
+        return False
+    return not DOTDOT_RE.search(w.text) and not PS_DRIVE_REMAP_RE.search(cmd.source)
+
+
 BASH_DEVICE_RE = re.compile(r'^/dev/')         # /dev/stderr, /dev/tty, /dev/fd/3: no file
 BASH_TMP_RE = re.compile(r'^/tmp(?:/|$)')        # Git Bash mounts /tmp on a temp folder: jail.bash_tmp
 
@@ -1280,6 +1304,8 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
     for w in write_targets(cmd, inv):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
             continue
+        if ps_provider_item(cmd, w):
+            continue                            # New-Item -Path env:FOO: no file
         if w.dyn:
             target, why = None, 'a target that is not literal: %s' % w.text
         elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
