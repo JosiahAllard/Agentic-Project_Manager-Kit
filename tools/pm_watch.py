@@ -16,6 +16,11 @@ Events:
   IDLE <name> <N>m since <iso>  a session in sessions.json (named, not autostart=false) has its own
                                 main and subagent transcripts all older than --idle-minutes, found by
                                 the custom-title record; once per quiet spell
+  PLUGIN pm-kit plugin behind kit main <sha12>: python tools/plugin_refresh.py --apply
+                                the plugin export is not at the kit's refs/remotes/<remote>/main;
+                                once per main sha, reported on the first run too; with
+                                plugin.auto_refresh on it also starts the refresh
+                                (docs/plugin-source.md "Behind warnings")
   ERROR <what>                  a check failed 3 times running
 State lives in the state file, so a relaunch never repeats an event it already reported. The first
 run only records a baseline.
@@ -76,7 +81,8 @@ def parse(argv, cfg, launcher_set=None):
     return a
 
 
-def main(argv=None, sleep=time.sleep, launcher_set=None):
+def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None):
+    """`plugin`: the PLUGIN check (None: W.plugin_check() over the machine config; False: none)."""
     try:
         cfg = W.load_config()
     except kuser.ConfigError as e:
@@ -87,7 +93,8 @@ def main(argv=None, sleep=time.sleep, launcher_set=None):
                   W.usage, a.alerts_dir, a.sessions,
                   claude_host.newest_finder(), idle_minutes=a.idle_minutes,
                   branch_poll=a.branch_poll, usage_poll=a.usage_poll, idle_poll=a.idle_poll,
-                  notice_dir=a.notice_dir)
+                  notice_dir=a.notice_dir,
+                  plugin=W.plugin_check() if plugin is None else (plugin or None))
     beat, started = W.heartbeat_file(a.state), W.own_start_time()
     return W.run(w, time.time, sleep, lambda s: W.save_state(a.state, s),
                  lambda text: print(text, flush=True),
