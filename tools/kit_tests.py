@@ -226,7 +226,7 @@ def main(argv=None, out=None):
 def run_pass(args, top, cfg, jobs, fake, out, hold, give_back=True, record_times=True):
     """One run of `args` (FULL or test modules) with the units' KIT_FAKE_GIT set to `fake`,
     writing to `out`; its exit status. The units' environment also carries the home fence's
-    marker (kitlib.config.user.fence_env), for the reason given in main: a pool worker replaces
+    marker (kitlib.config.user.fence_env): a pool worker (kitlib/tooldeps/pool_worker.py) replaces
     its environment for each unit, so tests/__init__.py's marker would not reach it."""
     def say(line):
         out.write(line + '\n')
