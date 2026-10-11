@@ -41,11 +41,11 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    exists -> read it too, and again after every compaction.
 5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
    processes, every lock and port the profile names.
-6. Pricing pass and backlog audit: `python tools/backlog.py list --needs-priority`. Check each
-   unpriced open record for duplicates, size and fit; price it 2-5 under the standing valuation
-   rules (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
-   pre-emption, an owner-held area, a question only the owner can answer) goes to the PM as one
-   question; never ask the owner directly.
+6. No pricing pass. A new follow-up record stays unpriced and held: `next` never offers it.
+   Price one 2-5 (`--priority-by agent`) only when it enters a work set, or duplicates or
+   replaces a priced one. Record a report note only if it matters.
+   One that needs the owner (priority 1, a pre-emption, an owner-held area, a question only the
+   owner can answer) goes to the PM as one question; never ask the owner directly.
 7. Take a work set (below) and dispatch. Worktrees and branches you did not create may be live:
    ask before landing, reusing or removing any.
 8. `CronList`; no fill check yet -> `CronCreate` one, recurring, `17,47 * * * *`:

@@ -43,21 +43,28 @@ class RenderTest(unittest.TestCase):
             out = coordinatorstart.render(env=COND, path=p, live=False)
         self.assertEqual(out, "Coordinator session start:\n- one\n- two")
 
-    def test_pricing_pass_line_names_the_needs_priority_listing(self):
+    def test_pricing_line_holds_unpriced_records_and_orders_no_startup_pass(self):
         with tempfile.TemporaryDirectory() as d:
             p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": {"pricing_pass": True}}))
             out = coordinatorstart.render(env=COND, path=p, live=False)
+        self.assertEqual(len(out.splitlines()), 2, out)   # the heading and one line
         line = out.splitlines()[1]
-        self.assertTrue(line.startswith("- Pricing pass and backlog audit"), line)
-        for want in ("python tools/backlog.py list --needs-priority", "--priority-by agent",
+        self.assertTrue(line.startswith("- No start-up pricing pass"), line)
+        for want in ("stays unpriced", "`next` never offers it", "only when you put it into a work set",
+                     "duplicates or replaces a priced one", "--priority-by agent",
                      "goes to the PM", "never ask him directly"):
             self.assertIn(want, line)
+        # The retired rule: list every unpriced record at start and price each.
+        for gone in ("--needs-priority", "before your first dispatch", "each unpriced"):
+            self.assertNotIn(gone, line)
 
-    def test_pricing_pass_line_is_off_unless_the_config_switches_it_on(self):
+    def test_pricing_line_is_off_unless_the_config_switches_it_on(self):
         with tempfile.TemporaryDirectory() as d:
             for cfg in ({"standing": ["x"]}, {"pricing_pass": False}, {"pricing_pass": "yes"}):
                 p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": cfg}))
-                self.assertNotIn("Pricing pass", coordinatorstart.render(env=COND, path=p, live=False))
+                out = coordinatorstart.render(env=COND, path=p, live=False)
+                self.assertNotIn(coordinatorstart.PRICING_LINE, out)
+                self.assertNotIn("pricing pass", out.lower())
 
     def test_missing_key_or_file_skipped(self):
         with tempfile.TemporaryDirectory() as d:
