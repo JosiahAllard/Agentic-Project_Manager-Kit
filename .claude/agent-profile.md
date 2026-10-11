@@ -43,18 +43,24 @@ High: `claude/hooks/`, `kitlib/guard/`, `kitlib/gate/`, `kitlib/lock/`, `kitlib/
 Behaviour-preserving only; old paths keep a stub until go-live (docs/go-live.md).
 
 Equivalence check, in full, for every move or rename:
-1. Before any change, on the branch's merge base: run the full gate
-   (`python tools/gate.py -C <worktree> --full`) and keep its suite log.
-2. After the change, on the branch tip: run the full gate again and keep its suite log.
-3. Compare the two logs: the same test count on the `Ran N tests` line, the same skip count, and
-   no test name gone (a test moved with its module keeps its name under the new module path; list
-   every such pair in the report).
+1. Whitelist: the brief lists every old -> new name. Every changed line in
+   `git diff <base>..<tip>` is one of those substitutions, a moved block unchanged
+   (`git diff -M --color-moved`), or a stub at an old path. Report any other changed line; each
+   one is a finding, not part of the move.
+2. Full gate on both: run `python tools/gate.py -C <worktree> --full` on the merge base and on
+   the tip, and keep both suite logs. The `Ran N tests` count and the skip count must match, and no
+   test name may be gone (a test that moved with its module keeps its name under the new path; list
+   each pair in the report).
+3. Guard parity: when the move touches kitlib/guard, claude/hooks, or any path or name the guard
+   matches, run the guard's `decide()` over every row in tests/guard on the base and on the tip.
+   Every decision must be identical (rows whose expected text names the old path change only by the
+   whitelisted substitution).
 4. Grep the old name across the tree: zero hits, or each remaining hit explained (the stub itself,
-   tests/oldpaths, history in docs/go-live.md).
-5. The stub left at the old path still runs and names the new one (tests/oldpaths covers it).
+   tests/oldpaths, history in docs/go-live.md). The stub left at the old path still runs and names
+   the new one (tests/oldpaths).
 
-A difference in step 3 is a hard stop, not a re-baseline: report both logs and stop. No tie is
-known in this repo, so no rerun is allowed.
+Any difference in steps 2 or 3 is a hard stop, not a re-baseline: report both sides and stop. No
+known tie in this repo allows a rerun.
 
 ## Records
 The configured backlog store (docs/backlog-store.md), written with
