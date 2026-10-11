@@ -83,7 +83,9 @@ def require(snap, rid):
 
 def require_shown(snap, ctx, rid):
     """require() for `show`: a missing id's NotFound also says which store commit removed it
-    (sha, date, session, subject; never an author name), or that none ever did. An id that is
+    (sha, date, session, subject; never an author name), or that none ever did. A main store's
+    record whose file HEAD tracks and the worktree no longer holds says so (closed or retired
+    here - MainBackend writes commit nothing - or removed by hand). An id that is
     not plain (a glob or path character) is not looked up, and a history git cannot read (an
     unborn HEAD, a failing git) still leaves the plain NOT FOUND, with a line saying so."""
     rec = snap.get(rid)
@@ -93,10 +95,14 @@ def require_shown(snap, ctx, rid):
     if not PLAIN_ID.match(rid):
         raise NotFound('%s\n  history not searched: `%s` is not a plain id' % (plain, rid))
     try:
-        gone = ctx.store.removal(rid, snap)
+        pending = ctx.store.uncommitted_removal(rid)
+        gone = None if pending else ctx.store.removal(rid, snap)
     except Failure as exc:
         raise NotFound('%s\n  the store\'s history could not be read: %s' % (plain, exc))
-    if gone is None:
+    if pending:
+        then = ('its file is tracked at HEAD but missing from this worktree (closed or retired '
+                'here, or removed by hand); no commit names it yet')
+    elif gone is None:
         then = 'no commit in the store\'s history removed it: the id is unknown'
     else:
         then = 'removed by %s on %s (session %s): %s' % (gone.sha, gone.when, gone.session or '-',
@@ -351,10 +357,18 @@ def _plan_recite(snap, ctx, rec, ruling):
 
 # --- block / unblock ------------------------------------------------------------------------------
 
-def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None):
+def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None):
     """`block` REPLACES `blocked_on`; leaving `owner` out on a record blocked on him releases his
-    hold, as `unblock` does, and takes the same `--ruling`."""
+    hold, as `unblock` does, and takes the same `--ruling`. `reason`, when given, goes into the
+    commit subject and onto one line appended to the body (`Blocked on M (date): T`), so `show`
+    says why the record is held; no header key is written for it."""
     refuse_machine_paths('--owner-ask', owner_ask)
+    if reason is not None:
+        refuse_machine_paths('--reason', reason)
+        bad = reason_error(reason, '--reason')
+        if bad:
+            raise Usage(bad)
+        reason = ' '.join(reason.split())
     rec = require(snap, rid)
     if not members:
         raise Usage('`block` requires at least one `--on <member>`')
@@ -394,7 +408,14 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None):
     subject = 'backlog: block %s on %s' % (rid, ', '.join(members))
     if ruling is not None:
         subject += ', releasing the owner hold'
-    return Change({rid: _text(pairs, rec.body)}, subject, lines, ruling=ruling)
+    body = rec.body
+    if reason is not None:
+        subject += ': %s' % reason
+        note = 'Blocked on %s (%s): %s' % (', '.join(members), ctx.date(), reason)
+        body = (body or '').rstrip('\n')
+        body = (body + '\n\n' if body.strip() else '') + note + '\n'
+        lines.append('  reason (in the body): %s' % reason)
+    return Change({rid: _text(pairs, body)}, subject, lines, ruling=ruling)
 
 
 def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
