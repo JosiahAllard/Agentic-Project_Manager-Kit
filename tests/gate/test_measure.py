@@ -8,8 +8,11 @@ TABLE = {'engine-test': {'cpu': 'medium', 'gpu': 'none', 'warn_min': 30},
          'cpu-eval': {'cpu': 'medium', 'gpu': 'none', 'warn_min': 10}}
 
 
-def run(kind, held, peak=None, how='done', mem=100):
-    return {'kind': kind, 'how': how, 'held_s': held, 'peak_cpu_cores': peak, 'peak_mem_mb': mem}
+def run(kind, held, peak=None, how='done', mem=100, cpu_s=None):
+    # Every real history line carries cpu_s (kitlib/lock/store.py HISTORY_KEYS); the default is
+    # one cpu thread busy for the whole run.
+    return {'kind': kind, 'how': how, 'held_s': held, 'peak_cpu_cores': peak, 'peak_mem_mb': mem,
+            'cpu_s': held if cpu_s is None else cpu_s}
 
 
 class Propose(unittest.TestCase):
@@ -123,6 +126,159 @@ class IntegerSizes(unittest.TestCase):
         for kind, e in new.items():
             self.assertIs(type(e['cpu']), int, kind)
             self.assertTrue(1 <= e['cpu'] <= 6, kind)
+
+
+SIZED = {'engine-test': {'cpu': 'medium', 'gpu': 0, 'warn_min': 30},
+         'cpu-eval': {'cpu': 'heavy', 'gpu': 0, 'warn_min': 120}}
+IDLE = "under 0.1 cpu thread busy (work outside the run's job, or idle)"
+SHORT = 'held under 10 s (no peak window)'
+PARTIAL = 'partial (docker exec: use partly outside the job)'
+NO_FIGURES = 'without cpu figures'
+
+
+def line(kind, held, cpu_s, peak, cores=6, partial=False):
+    """A history line as the lock writes it: the run held `cores` slots for `held` seconds and
+    its job used `cpu_s` cpu seconds, `peak` busy slots in its busiest sample window."""
+    d = run(kind, held, peak=peak, cpu_s=cpu_s)
+    d.update(cores=list(range(cores)), partial=partial)
+    return d
+
+
+class OutOfJob(unittest.TestCase):
+    """The lock measures a run's job object only. A run whose work happens outside it (a
+    container), or that ended before a sample window closed, shows a peak of about 0 whatever it
+    did: such a line is not a cpu sample, and a kind without enough cpu samples is kept whole,
+    with a note that says why."""
+
+    def prop(self, hist, table=SIZED, **kw):
+        kw.setdefault('agent_cap', 6)
+        return measure.propose(table, hist, medium_cores=2, **kw)
+
+    def note(self, notes, kind):
+        return [n for n in notes if n.startswith(kind + ':')][0]
+
+    def test_runs_whose_work_is_outside_the_job_keep_the_whole_entry(self):
+        hist = [line('cpu-eval', h, c, p) for h, c, p in (
+            (1582, 0.6, 0.0), (1786, 0.7, 0.0), (2053, 0.7, 0.0), (2014, 1.0, 0.01),
+            (1662, 0.6, 0.0))]
+        new, notes = self.prop(hist)
+        self.assertEqual(new['cpu-eval'], {'cpu': 6, 'gpu': 0, 'warn_min': 120})
+        self.assertEqual(self.note(notes, 'cpu-eval'),
+                         'cpu-eval: kept (0 cpu sample(s) of 5 finished run(s); 3 needed; '
+                         'skipped: 5 %s); cpu heavy -> 6 (its size on this layout)' % IDLE)
+
+    def test_a_run_too_short_for_a_peak_window_is_not_a_sample(self):
+        # 0.4 cpu seconds in 1 second is work in the job, and the peak is still 0.
+        new, notes = self.prop([line('engine-test', 1, 0.4, 0.0) for _ in range(5)])
+        self.assertEqual(new['engine-test'], {'cpu': 2, 'gpu': 0, 'warn_min': 30})
+        self.assertEqual(self.note(notes, 'engine-test'),
+                         'engine-test: kept (0 cpu sample(s) of 5 finished run(s); 3 needed; '
+                         'skipped: 5 %s); cpu medium -> 2 (its size on this layout)' % SHORT)
+
+    def test_a_partial_run_is_not_a_sample(self):
+        hist = [line('engine-test', 60, 300, 2.5, partial=True) for _ in range(3)]
+        new, notes = self.prop(hist)
+        self.assertEqual(new['engine-test'], {'cpu': 2, 'gpu': 0, 'warn_min': 30})
+        self.assertIn('skipped: 3 %s)' % PARTIAL, self.note(notes, 'engine-test'))
+
+    def test_a_line_without_cpu_figures_is_not_a_sample(self):
+        no_key = [line('engine-test', 60, 300, 2.5) for _ in range(3)]
+        for d in no_key:
+            del d['cpu_s']
+        new, notes = self.prop(no_key)
+        self.assertEqual(new['engine-test'], {'cpu': 2, 'gpu': 0, 'warn_min': 30})
+        self.assertIn('skipped: 3 %s)' % NO_FIGURES, self.note(notes, 'engine-test'))
+        for bad in (None, True, -1, 'x'):
+            hist = [line('engine-test', 60, bad, 2.5) for _ in range(3)]
+            self.assertNotIn('_measured', self.prop(hist)[0]['engine-test'], bad)
+        no_peak = [line('engine-test', 60, 300, None) for _ in range(3)]
+        self.assertIn('skipped: 3 %s)' % NO_FIGURES,
+                      self.note(self.prop(no_peak)[1], 'engine-test'))
+
+    def test_a_kind_is_sized_from_its_cpu_samples_only_and_says_what_it_skipped(self):
+        real = [line('engine-test', 60, 300, p) for p in (2.1, 2.5, 2.9)]
+        blind = [line('engine-test', 600, 0.5, 0.0) for _ in range(20)]
+        new, notes = self.prop(real + blind)
+        e = new['engine-test']
+        self.assertEqual(e['cpu'], 3)                  # ceil(2.9), not the 1 of all 23 lines
+        self.assertEqual(e['warn_min'], 15)            # held time: every finished run, as before
+        self.assertEqual(e['_measured']['runs'], 23)
+        self.assertEqual(e['_measured']['cpu_samples'], 3)
+        self.assertEqual(e['_measured']['cpu_skipped'], {'idle': 20})
+        self.assertEqual(e['_measured']['peak_cpu_slots_p90'], 2.9)
+        self.assertEqual(self.note(notes, 'engine-test'),
+                         'engine-test: warn_min 30 -> 15; cpu medium -> 3 '
+                         '(23 runs; cpu from 3, skipped: 20 %s)' % IDLE)
+
+    def test_nothing_skipped_leaves_the_note_and_the_record_plain(self):
+        new, notes = self.prop([line('engine-test', 60, 300, p) for p in (2.1, 2.5, 2.9)])
+        self.assertEqual(self.note(notes, 'engine-test'),
+                         'engine-test: warn_min 30 -> 2; cpu medium -> 3 (3 runs)')
+        self.assertEqual(new['engine-test']['_measured']['cpu_samples'], 3)
+        self.assertNotIn('cpu_skipped', new['engine-test']['_measured'])
+
+    def test_too_few_cpu_samples_keep_the_entry_however_many_runs_finished(self):
+        real = [line('engine-test', 60, 300, p) for p in (2.1, 2.9)]
+        blind = [line('engine-test', 600, 0.5, 0.0) for _ in range(20)]
+        new, notes = self.prop(real + blind)
+        self.assertEqual(new['engine-test'], {'cpu': 2, 'gpu': 0, 'warn_min': 30})
+        self.assertEqual(self.note(notes, 'engine-test'),
+                         'engine-test: kept (2 cpu sample(s) of 22 finished run(s); 3 needed; '
+                         'skipped: 20 %s); cpu medium -> 2 (its size on this layout)' % IDLE)
+
+    def test_the_minimum_is_the_callers_min_runs(self):
+        real = [line('engine-test', 60, 300, 2.9) for _ in range(4)]
+        blind = [line('engine-test', 600, 0.5, 0.0) for _ in range(20)]
+        new, notes = self.prop(real + blind, min_runs=5)
+        self.assertNotIn('_measured', new['engine-test'])
+        self.assertIn('kept (4 cpu sample(s) of 24 finished run(s); 5 needed;',
+                      self.note(notes, 'engine-test'))
+
+    def test_the_edges_of_the_rule(self):
+        def sampled(held, cpu_s):
+            hist = [line('engine-test', held, cpu_s, 0.5) for _ in range(3)]
+            return '_measured' in self.prop(hist)[0]['engine-test']
+        self.assertTrue(sampled(10, 1.0))              # ten seconds held, a tenth of a thread
+        self.assertFalse(sampled(9, 9.0))              # too short, however busy
+        self.assertTrue(sampled(100, 10.0))
+        self.assertFalse(sampled(100, 9.9))
+
+    def test_each_skipped_run_is_counted_once_under_its_first_reason(self):
+        hist = ([line('cpu-eval', 1, 0.0, 0.0, partial=True) for _ in range(25)]
+                + [line('cpu-eval', 1, 0.4, 0.0) for _ in range(40)]
+                + [line('cpu-eval', 300, 0.5, 0.0) for _ in range(18)]
+                + [line('cpu-eval', 60, 300, None)])
+        new, notes = self.prop(hist)
+        self.assertEqual(new['cpu-eval'], {'cpu': 6, 'gpu': 0, 'warn_min': 120})
+        self.assertEqual(self.note(notes, 'cpu-eval'),
+                         'cpu-eval: kept (0 cpu sample(s) of 84 finished run(s); 3 needed; '
+                         'skipped: 25 %s, 40 %s, 1 %s, 18 %s); cpu heavy -> 6 '
+                         '(its size on this layout)' % (PARTIAL, SHORT, NO_FIGURES, IDLE))
+
+    def test_runs_that_work_in_the_job_are_sized_as_before(self):
+        # A daily-run shape: long, mostly idle on average, full in its busiest window.
+        hist = [line('cpu-eval', h, c, p) for h, c, p in (
+            (2270, 5185.0, 5.94), (2298, 3593.1, 5.93), (2418, 3725.6, 5.94),
+            (2146, 1462.4, 3.5), (93, 700.9, 4.76), (2419, 3164.4, 5.43))]
+        new, notes = self.prop(hist)
+        self.assertEqual(new['cpu-eval']['cpu'], 6)
+        self.assertEqual(new['cpu-eval']['_measured']['cpu_samples'], 6)
+        self.assertEqual(self.note(notes, 'cpu-eval'),
+                         'cpu-eval: warn_min 120 -> 61; cpu heavy -> 6 (6 runs)')
+
+    def test_the_rule_before_whole_core_sizes_skips_the_same_lines(self):
+        hist = [line('cpu-eval', 1800, 0.7, 0.0) for _ in range(5)]
+        new, notes = self.prop(hist, agent_cap=None)
+        self.assertEqual(new['cpu-eval'], SIZED['cpu-eval'])
+        self.assertEqual(self.note(notes, 'cpu-eval'),
+                         'cpu-eval: kept (0 cpu sample(s) of 5 finished run(s); 3 needed; '
+                         'skipped: 5 %s)' % IDLE)
+
+    def test_a_wrapper_that_is_itself_busy_still_counts(self):
+        # The limit of the rule: a wrapper that keeps a tenth of a thread busy while the work
+        # runs outside the job cannot be told from a light kind, and is sized by its own peak.
+        hist = [line('cpu-eval', 600, 90, 0.05) for _ in range(3)]
+        self.assertEqual(self.prop(hist)[0]['cpu-eval']['cpu'], 1)
 
 
 if __name__ == '__main__':
