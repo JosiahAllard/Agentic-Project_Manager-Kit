@@ -31,7 +31,7 @@ The message is the subject, then the body, then the trailers:
 - An `--owner-authored` commit carries `Owner-Authored: yes` instead of `Co-Authored-By`.
 - The model comes from `--model`, else `CLAUDE_AGENT_MODEL`. A blank value counts as unset.
 - `"Claude "` is added unless the name is a `"commit".coauthor_families` family, or starts with one followed by a space, `.` or `-`.
-- The body comes from `-b TEXT`, where a typed `\n` becomes a newline, or from `--body-file FILE`, read as UTF-8 with CRLF changed to LF.
+- The body comes from `-b TEXT`, where a typed `\n` becomes a newline (`~~` also becomes a newline; for a literal `~~` use --body-file), or from `--body-file FILE`, read as UTF-8 with CRLF changed to LF.
   - `-m` takes the subject once; a second `-m` is a usage error (exit 2) pointing at `-b` / `--body-file`, and nothing is committed.
   - A `-b` whose whole value names an existing file, or looks like an absolute path, is a usage error.
 
