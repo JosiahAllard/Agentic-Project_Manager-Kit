@@ -43,7 +43,15 @@ RAN = re.compile(r'(?m)^Ran (\d+) tests? in ')
 PID_HOLD_FLAG = '--pid-hold'    # kitlib.pytests.runner.PID_HOLD_FLAG (the gate imports no runner)
 PID_HOLD_WHY = 'the pid hold is opt-in for agent test runs only, never in the gate'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-KIT_TOOLS = os.path.join(KIT_ROOT, 'tools')
+KIT_TOOLS = os.path.join(KIT_ROOT, 'tools')     # the gate's own runs: an export when pinned
+
+
+def kit_live():
+    """The kit checkout a printed command names (kitlib.pluginsource.live_root): when this code
+    runs from a pinned export of pushed main (kitlib.gate.pin), the checkout that started it,
+    since a later prune may remove the export."""
+    from kitlib import pluginsource
+    return pluginsource.live_root(KIT_ROOT)
 
 Step = collections.namedtuple('Step', 'name cmd check cwd passes fails ok_exits cont warn requires '
                                       'requires_strict')
