@@ -1,8 +1,8 @@
-"""The launcher's machine settings: the `launcher` object of ~/.claude-pm-kit/config.json
+"""The launcher's machine settings: the `launcher` object of the machine config
 (docs/launcher.md "Settings"). Nothing here names a machine path, an account folder or a repo:
 each comes from this object, and a missing one is an error that says which key to set.
 
-  state_dir           absolute folder holding sessions.json and conductors.json (the launched
+  state_dir           absolute folder holding sessions.json and coordinators.json (the launched
                       sessions and the PM's record of them) and the launcher's logs
   repos               {name: absolute folder}: what a sessions.json entry's "repo" and
                       `launch.py start --repo` resolve to
@@ -149,7 +149,7 @@ class Settings(object):
     def state_dir(self):
         if not self._state_dir:
             raise LaunchError('launcher.state_dir is not set in %s: the folder holding sessions.json '
-                              'and conductors.json (docs/launcher.md "Settings")' % kuser.config_file(self.home))
+                              'and coordinators.json (docs/launcher.md "Settings")' % kuser.config_file(self.home))
         return self._state_dir
 
     def repo_path(self, name):

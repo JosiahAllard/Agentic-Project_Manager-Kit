@@ -121,6 +121,11 @@ def propose(table, history, medium_cores, min_runs=3, agent_cap=None):
     return out, notes
 
 
-def document(kinds, note):
-    """The kinds file object for a proposal: the live file's shape with its note replaced."""
-    return {'_note': note, 'kinds': kinds}
+def document(kinds, note, aliases=None):
+    """The kinds file object for a proposal: the live file's shape with its note replaced; the
+    live file's `aliases` object, when it has one, is carried over as it is, so committing a
+    proposal never drops an alias."""
+    doc = {'_note': note, 'kinds': kinds}
+    if aliases:
+        doc['aliases'] = copy.deepcopy(aliases)
+    return doc

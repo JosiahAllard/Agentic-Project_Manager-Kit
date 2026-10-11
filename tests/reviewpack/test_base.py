@@ -122,6 +122,14 @@ class ShallowClone(PackCase):
         self.assertIsNone(mb)
         self.assertIn('shallow', why)
 
+    def test_refs_merge_base_in_a_shallow_clone_is_no_answer_not_none(self):
+        # The cut-off commits read as roots there, so disjoint "roots" prove nothing.
+        self.clone()
+        from kitlib.git import refs
+        mb, why = refs.merge_base('origin/main', 'origin/phase/e', self.shallow)
+        self.assertIsNone(mb, 'a shallow clone was read as "no common history"')
+        self.assertIn('shallow clone', why)
+
 
 class TheBaseNoteAndTheDiffOption(WithOrigin):
     NOTE = 'review_pack: base: local main '
@@ -180,6 +188,24 @@ class BranchCommitsWithAFullRefBase(WithOrigin):
         commits, probes = self.probes('main')
         self.assertEqual(probes, ['refs/remotes/origin/main'])
         self.assertEqual([c.subject for c in commits], ['phase work'])
+
+
+    def test_a_killed_tracking_probe_is_no_answer_not_no_tracking_ref(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no tracking ref" as exit 1
+        with no output, the shape a git ended from outside leaves; the remote's newer base commits
+        were then counted as the branch's own."""
+        self.phase()
+        real = trailers.gitcmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] == 'rev-parse' and argv[-1] == 'refs/remotes/origin/main':
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(trailers.gitcmd, '_run', side_effect=run):
+            commits, why = trailers.branch_commits('main', self.root, head='phase/g')
+        self.assertIsNone(commits, 'a killed probe was read as "no tracking ref"')
+        self.assertIn('cannot read refs/remotes/origin/main', why)
+        self.assertIn('printed nothing', why)
 
 
 class ADiffRunThatStops(WithOrigin):

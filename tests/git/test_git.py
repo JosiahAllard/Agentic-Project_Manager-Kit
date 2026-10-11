@@ -323,6 +323,392 @@ class RefsTest(RepoFixture):
     def test_merge_base(self):
         self.assertEqual(git.merge_base('main', 'kit/feature', self.r.root), (self.r.initial, None))
 
+    def test_a_tree_or_blob_is_no_ancestor_answer(self):
+        # rev-list alone answers YES for a tree; the ^{commit} peel refuses it, as merge-base did.
+        for rev in ('%s^{tree}' % self.feature, '%s:' % self.feature):
+            self.assertIsNone(git.is_ancestor(rev, self.feature, self.r.root)[0], rev)
+            self.assertIsNone(git.is_ancestor(self.feature, rev, self.r.root)[0], rev)
+
+
+class AKilledGitIsNoAncestryAnswer(RepoFixture):
+    """A git ended from outside (a stale `taskkill /PID <n> /T /F`
+    that reached a reused pid, kitlib.proc.shield's GOTCHA) exits 1 having printed nothing, the
+    shape `merge-base --is-ancestor` gives for NO. refs.is_ancestor must give no answer for it,
+    never a NO git did not say. The pair asked is a real NO (feature is not in initial), so an
+    answer of False could only come from reading the kill as one."""
+
+    def test_exit_1_with_no_output_is_no_answer(self):
+        calls = []
+
+        def killed(argv, cwd=None, input=None, timeout=None, env=None):
+            calls.append(argv)
+            return 1, b'', b''
+        with mock.patch.object(cmd, '_run', side_effect=killed):
+            got, why = refs.is_ancestor(self.feature, self.r.initial, self.r.root)
+        self.assertEqual(len(calls), 1, calls)
+        self.assertIsNone(got, 'a killed git was read as an answer')
+        self.assertIn('printed nothing', why)
+
+
+class ANoIsConfirmed(RepoFixture):
+    """rev-list's NO can be wrong (its walk stops early under skewed commit dates, refs.is_ancestor
+    GOTCHA), so refs.is_ancestor confirms every NO with `merge-base --independent`; a confirmation
+    that fails is no answer, never a NO. git is a stub here, by subcommand; rev-list always says NO."""
+
+    def ask(self, independent, rev_parse=None):
+        a, d = self.feature, self.r.initial
+        calls = []
+
+        def stub(argv, cwd=None, input=None, timeout=None, env=None):
+            calls.append(argv[1])
+            if argv[1] == 'rev-list':
+                return 0, (a + '\n').encode(), b''
+            if argv[1] == 'rev-parse':
+                return rev_parse or (0, (a + '\n').encode(), b'')
+            if argv[1] == 'merge-base':
+                self.assertEqual(argv[2:], ['--independent', a, d + '^{commit}'])
+                return independent
+            raise AssertionError(argv)
+        with mock.patch.object(cmd, '_run', side_effect=stub):
+            got = refs.is_ancestor(a, d, self.r.root)
+        return got, calls
+
+    def test_a_confirmed_no_is_a_no(self):
+        both = (0, ('%s\n%s\n' % (self.feature, self.r.initial)).encode(), b'')
+        self.assertEqual(self.ask(both), ((False, None), ['rev-list', 'rev-parse', 'merge-base']))
+
+    def test_a_no_the_exact_walk_overturns_is_a_yes(self):
+        # Only the descendant is independent: it reaches the ancestor, whatever rev-list printed.
+        self.assertEqual(self.ask((0, (self.r.initial + '\n').encode(), b''))[0], (True, None))
+
+    def test_a_confirmation_that_fails_is_no_answer(self):
+        for independent, rev_parse, words in (
+                ((1, b'', b''), None, 'printed nothing'),                   # killed
+                ((128, b'', b'fatal: boom'), None, 'fatal: boom'),
+                ((0, b'', b''), None, 'not one or two commits'),
+                ((0, b'abc\n', b''), None, 'not one or two commits'),
+                # rev-parse killed: no answer, no longer "does not name a commit" (refs.resolve)
+                (None, (1, b'', b''), 'rev-parse --verify %s^{commit} exited 1 and printed nothing'
+                 % self.feature)):
+            with self.subTest(words=words):
+                (got, why), _ = self.ask(independent, rev_parse)
+                self.assertIsNone(got)
+                self.assertIn('confirming a NO', why)
+                self.assertIn(words, why)
+
+    def test_a_yes_needs_no_confirmation(self):
+        calls = []
+
+        def stub(argv, cwd=None, input=None, timeout=None, env=None):
+            calls.append(argv[1])
+            return 0, b'', b''
+        with mock.patch.object(cmd, '_run', side_effect=stub):
+            self.assertEqual(refs.is_ancestor(self.r.initial, self.feature, self.r.root),
+                             (True, None))
+        self.assertEqual(calls, ['rev-list'])
+
+
+@real_git('rev-list\'s early stop under skewed commit dates is real git\'s walk; the fake is exact')
+class SkewedDates(unittest.TestCase):
+    """A root dated AFTER the 8 commits built on it: rev-list's limited walk stops before it
+    reaches the root and prints it - a NO that is wrong (measured on real git 2026-10-10, no
+    commit-graph). refs.is_ancestor's confirmation turns it into the right YES."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(gitfixture.rmtree, self.dir)
+        self.git('init', '-q')
+        self.root = self.commit('root', '2000000000 +0000')
+        for n in range(8):
+            self.tip = self.commit('c%d' % n, '1000000000 +0000')
+
+    def git(self, *args, date=None):
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.invalid')
+        if date:
+            env['GIT_AUTHOR_DATE'] = env['GIT_COMMITTER_DATE'] = date
+        r = subprocess.run(['git'] + list(args), cwd=self.dir, env=env, capture_output=True,
+                           text=True, check=True)
+        return r.stdout.strip()
+
+    def commit(self, message, date):
+        self.git('-c', 'commit.gpgSign=false', 'commit', '-q', '--allow-empty', '-m', message,
+                 date=date)
+        return self.git('rev-parse', 'HEAD')
+
+    def test_rev_lists_wrong_no_is_confirmed_away(self):
+        # The premise: rev-list alone says NO here (else this test proves nothing).
+        self.assertEqual(self.git('rev-list', '-n', '1', '%s..%s' % (self.tip, self.root)),
+                         self.root)
+        self.assertEqual(refs.is_ancestor(self.root, self.tip, self.dir), (True, None))
+        self.assertEqual(refs.is_ancestor(self.tip, self.root, self.dir), (False, None))
+
+    def test_unrelated_histories_are_a_confirmed_no(self):
+        # pmdata's case: a data branch's root against main shares no commit. `merge-base` would
+        # exit 1 with no output there (a kill's shape); `--independent` prints both: a NO.
+        orphan = self.git('-c', 'commit.gpgSign=false', 'commit-tree', '-m', 'orphan',
+                          '4b825dc642cb6eb9a060e54bf8d69288fbee4904')
+        self.assertEqual(refs.is_ancestor(orphan, self.tip, self.dir), (False, None))
+        self.assertEqual(refs.is_ancestor(self.tip, orphan, self.dir), (False, None))
+
+
+@real_git('the git process itself: a real git ended by taskkill, and the rev-list form on real git')
+class AKilledRealGitIsNoAncestryAnswer(RepoFixture):
+    """AKilledGitIsNoAncestryAnswer with the real killer on a real git, and the same answers from
+    real git as RefsTest gets from the fake."""
+
+    def test_real_git_answers(self):
+        self.assertEqual(refs.is_ancestor(self.r.initial, self.feature, self.r.root), (True, None))
+        self.assertEqual(refs.is_ancestor(self.feature, self.r.initial, self.r.root), (False, None))
+        self.assertEqual(refs.is_ancestor(self.feature, self.feature, self.r.root), (True, None))
+        for rev in ('f' * 40, '%s^{tree}' % self.feature, '%s:' % self.feature):
+            self.assertIsNone(refs.is_ancestor(rev, self.feature, self.r.root)[0], rev)
+            self.assertIsNone(refs.is_ancestor(self.feature, rev, self.r.root)[0], rev)
+
+    @unittest.skipUnless(os.name == 'nt', 'taskkill is Windows-only')
+    def test_a_git_ended_by_taskkill_is_no_answer(self):
+        # The real killer on a real git: started suspended (it runs nothing), ended by taskkill /F
+        # by its pid while this process holds its handle (so the pid cannot be anyone else's).
+        seen = []
+
+        def killed(argv, cwd=None, input=None, timeout=None, env=None):
+            p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 creationflags=0x00000004)              # CREATE_SUSPENDED
+            try:
+                tk = subprocess.run(['taskkill', '/PID', str(p.pid), '/F'], capture_output=True)
+                out, err = p.communicate(timeout=60)
+            finally:
+                if p.poll() is None:
+                    p.kill()
+                    p.wait()
+            seen.append((tk.returncode, p.returncode, out, err))
+            return p.returncode, out, err
+        with mock.patch.object(cmd, '_run', side_effect=killed):
+            got, why = refs.is_ancestor(self.feature, self.r.initial, self.r.root)
+        self.assertEqual(seen, [(0, 1, b'', b'')])          # killed: exit 1, nothing printed
+        self.assertIsNone(got, 'a git ended by taskkill was read as an answer')
+        self.assertIn('printed nothing', why)
+
+
+def kill_git(match):
+    """A patch of cmd._run under which each git argv `match(argv)` picks exits 1 having printed
+    nothing (a git ended from outside, refs.KILLED_SHAPE) and every other one runs as before (the
+    spawner captured before the patch: the fake, or real git)."""
+    real = cmd.spawner()
+
+    def run(argv, cwd=None, input=None, timeout=None, env=None):
+        if match(argv):
+            return 1, b'', b''
+        return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+    return mock.patch.object(cmd, '_run', side_effect=run)
+
+
+STRAY = b"warning: unable to access 'nowhere/.config/git/attributes': Permission denied\n"
+
+
+def stray_warning():
+    """A patch of cmd._run under which every git runs as before (the spawner captured before the
+    patch) and its stderr starts with STRAY, a warning about something other than the ref."""
+    real = cmd.spawner()
+
+    def run(argv, cwd=None, input=None, timeout=None, env=None):
+        rc, out, err = real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        return rc, out, STRAY + (err or b'')
+    return mock.patch.object(cmd, '_run', side_effect=run)
+
+
+class AKilledGitIsNoBranchOrBaseAnswer(RepoFixture):
+    """KIT-GIT-EXIT1-ANSWERS: `symbolic-ref --quiet` (detached) and `merge-base` (no common
+    commit) answer with exit 1 and no output, the shape a git ended from outside leaves. Each read
+    must give no answer for a kill, never "detached" or "no merge base"."""
+
+    def test_a_killed_branch_read_is_no_answer_not_a_detached_head(self):
+        with kill_git(lambda argv: True):
+            got, why = refs.current_branch(self.r.root)
+        self.assertIsNone(got, 'a killed git was read as a detached HEAD')
+        self.assertIn('printed nothing', why)
+
+    def test_a_killed_merge_base_is_no_answer_when_the_histories_share_a_root(self):
+        with kill_git(lambda argv: argv[1] == 'merge-base'):
+            got, why = refs.merge_base('main', 'kit/feature', self.r.root)
+        self.assertIsNone(got, 'a killed merge-base was read as "no common history"')
+        self.assertIn('confirming no merge base', why)
+        self.assertIn(self.r.initial[:10], why)
+
+    def test_a_merge_base_none_whose_confirmation_is_killed_is_no_answer(self):
+        with kill_git(lambda argv: argv[1] in ('merge-base', 'rev-list')):
+            got, why = refs.merge_base('main', 'kit/feature', self.r.root)
+        self.assertIsNone(got)
+        self.assertIn('confirming no merge base', why)
+        self.assertIn('printed nothing', why)
+
+
+class PositiveForms(RepoFixture):
+    """The answers the positive forms give where git really answers (KIT-GIT-EXIT1-ANSWERS)."""
+
+    def test_unrelated_histories_have_no_merge_base(self):
+        orphan = self.r.git('commit-tree', self.r.git('rev-parse', 'HEAD^{tree}'), '-m', 'orphan')
+        self.assertEqual(refs.merge_base(orphan, 'main', self.r.root), ('', None))
+        self.assertEqual(refs.merge_base('main', orphan, self.r.root), ('', None))
+
+    def test_ref_commit(self):
+        self.assertEqual(refs.ref_commit('refs/heads/kit/feature', self.r.root), (self.feature, None))
+        self.assertEqual(refs.ref_commit('refs/heads/no-such', self.r.root), ('', None))
+        # for-each-ref's pattern also matches the refs below it: only the exact name answers.
+        self.assertEqual(refs.ref_commit('refs/heads/kit', self.r.root), ('', None))
+        for bad in ('main', '-x', 'refs/heads/a\nb'):
+            got, why = refs.ref_commit(bad, self.r.root)
+            self.assertIsNone(got, bad)
+            self.assertTrue(why)
+
+    def test_a_killed_ref_read_is_no_answer_not_no_ref(self):
+        with kill_git(lambda argv: True):
+            got, why = refs.ref_commit('refs/heads/kit/feature', self.r.root)
+        self.assertIsNone(got, 'a killed git was read as "no such ref"')
+        self.assertIn('printed nothing', why)
+
+    def test_no_line_with_a_warning_is_no_answer_not_no_ref(self):
+        # for-each-ref skips a broken loose ref with exit 0, no line and a warning on stderr.
+        said = b'warning: ignoring broken ref refs/backlog/main'
+        with mock.patch.object(cmd, '_run', return_value=(0, b'', said)):
+            got, why = refs.ref_commit('refs/backlog/main', self.r.root)
+        self.assertIsNone(got, 'a broken ref git skipped with a warning was read as "no such ref"')
+        self.assertIn('ignoring broken ref', why)
+
+    def test_a_killed_resolve_is_no_answer_not_no_such_rev(self):
+        with kill_git(lambda argv: True):
+            got, why = refs.resolve('refs/heads/kit/feature', self.r.root)
+        self.assertIsNone(got)
+        self.assertNotIn('does not name', why, 'a killed git was read as "no such rev"')
+        self.assertIn('printed nothing', why)
+        with kill_git(lambda argv: True):
+            got, why = refs.resolve('refs/heads/kit/feature', self.r.root, known=True)
+        self.assertIsNone(got, 'a killed git was read as "no such rev"')
+        self.assertIn('printed nothing', why)
+
+    def test_a_stray_warning_leaves_no_such_ref_an_answer(self):
+        # A config deprecation warning, "unable to access", GIT_TRACE: stderr that is not about
+        # the ref. "No such ref" must stay "no such ref", not become "git cannot tell".
+        with stray_warning():
+            self.assertEqual(refs.resolve('refs/heads/no-such', self.r.root, known=True), ('', None))
+            self.assertEqual(refs.resolve('refs/heads/no-such', self.r.root),
+                             (None, 'refs/heads/no-such does not name a commit'))
+            self.assertEqual(refs.ref_commit('refs/heads/no-such', self.r.root), ('', None))
+            self.assertEqual(refs.ref_commit('refs/heads/kit/feature', self.r.root),
+                             (self.feature, None))
+
+    def test_a_stray_warning_whose_confirmation_is_killed_is_no_answer(self):
+        with stray_warning(), kill_git(lambda argv: argv[1] == 'rev-parse'):
+            got, why = refs.ref_commit('refs/heads/no-such', self.r.root)
+        self.assertIsNone(got, 'an unconfirmed "no ref" was given')
+        self.assertIn('confirming no ref', why)
+
+    def test_a_warning_that_names_the_rev_is_no_answer(self):
+        said = b'warning: ignoring broken ref refs/heads/x\nfatal: Needed a single revision'
+        with mock.patch.object(cmd, '_run', return_value=(128, b'', said)):
+            got, why = refs.resolve('refs/heads/x', self.r.root, known=True)
+        self.assertIsNone(got, 'a broken ref was read as "no such rev"')
+        self.assertIn('ignoring broken ref', why)
+
+    def test_a_warning_that_names_a_short_rev_by_its_full_ref_is_no_answer(self):
+        # Asked as `main`, git's warning names refs/heads/main.
+        said = b'warning: ignoring broken ref refs/heads/main\nfatal: Needed a single revision'
+        with mock.patch.object(cmd, '_run', return_value=(128, b'', said)):
+            got, why = refs.resolve('main', self.r.root, known=True)
+        self.assertIsNone(got, 'a broken refs/heads/main was read as "no such rev" for main')
+        self.assertIn('ignoring broken ref refs/heads/main', why)
+
+    def test_a_ref_that_differs_only_in_case_is_no_answer(self):
+        # rev-parse opens a loose refs/heads/KIT/feature as kit/feature's file on a
+        # case-insensitive file system; for-each-ref lists only the name git wrote.
+        got, why = refs.ref_commit('refs/heads/KIT/feature', self.r.root)
+        self.assertIsNone(got, 'a case variant of an existing ref was read as "no ref"')
+        self.assertIn('refs/heads/kit/feature', why)
+        self.assertIn('differ only in case', why)
+
+
+class _Parity(object):
+    """What the fake prints for the positive forms is what real git prints (each check runs on
+    the fake in FakeParity and on real git in RealGitParity)."""
+
+    def setUp(self):
+        self.r = gitfixture.TempRepo()
+        self.addCleanup(self.r.cleanup)
+
+    def test_config_list_z_puts_a_newline_between_key_and_value(self):
+        self.r.git('config', 'kit.probe', 'a b')
+        with open(os.path.join(self.r.common_dir(), 'config'), 'a', encoding='utf-8',
+                  newline='\n') as fh:
+            fh.write('[kit "Sub"]\n\tflag\n')
+        out, why = cmd.run(['config', '--local', '--list', '-z'], self.r.root)
+        self.assertIsNone(why)
+        items = out.split(b'\0')
+        self.assertIn(b'kit.probe\na b', items)
+        self.assertIn(b'kit.Sub.flag', items)          # no value: the key alone
+
+    def test_branch_show_current(self):
+        self.assertEqual(refs.current_branch(self.r.root), ('main', None))
+        self.r.git('checkout', '-q', '--detach')
+        self.assertEqual(refs.current_branch(self.r.root), ('', None))
+
+    def test_a_head_outside_refs_heads_is_no_branch_answer(self):
+        self.r.git('symbolic-ref', 'HEAD', 'refs/remotes/origin/main')
+        got, why = refs.current_branch(self.r.root)
+        self.assertIsNone(got)
+        self.assertIn('refs/heads', why)            # git's wording varies by version
+
+    def test_an_annotated_tag_ref_peels_to_its_commit(self):
+        self.r.git('tag', '-a', '-m', 'v', 'v1')
+        self.assertEqual(refs.ref_commit('refs/tags/v1', self.r.root), (self.r.initial, None))
+
+    def test_a_broken_loose_ref_is_no_answer_and_its_siblings_still_answer(self):
+        with open(os.path.join(self.r.common_dir(), 'refs', 'heads', 'broken'), 'w') as f:
+            f.write('garbage\n')
+        got, why = refs.ref_commit('refs/heads/broken', self.r.root)
+        self.assertIsNone(got, 'a broken ref was read as "no such ref"')
+        self.assertIn('printed no line', why)              # exit 0: the shape of "no such ref"
+        self.assertIn('ignoring broken ref refs/heads/broken', why)      # git's own warning
+        self.assertEqual(refs.ref_commit('refs/heads/main', self.r.root), (self.r.initial, None))
+
+    def test_a_broken_loose_ref_is_no_answer_from_resolve_either(self):
+        with open(os.path.join(self.r.common_dir(), 'refs', 'heads', 'broken'), 'w') as f:
+            f.write('garbage\n')
+        got, why = refs.resolve('refs/heads/broken', self.r.root, known=True)
+        self.assertIsNone(got, 'a broken ref was read as "no such rev": %s' % why)
+        # git 2.55 (observed): exit 128, the warning, then refs.NO_SUCH_REV as the last line
+        self.assertIn('exited 128: warning: ignoring broken ref refs/heads/broken\n'
+                      'fatal: Needed a single revision', why)
+
+    def test_a_case_variant_of_a_loose_ref_is_no_answer(self):
+        got, why = refs.ref_commit('refs/heads/MAIN', self.r.root)
+        self.assertIsNone(got, 'a case variant of main was read as "no ref"')
+        self.assertIn('differ only in case', why)
+
+    def test_branch_show_current_on_an_unborn_branch_and_through_a_symref_chain(self):
+        self.r.git('symbolic-ref', 'HEAD', 'refs/heads/unborn')
+        self.assertEqual(refs.current_branch(self.r.root), ('unborn', None))
+        self.r.git('symbolic-ref', 'refs/heads/alias', 'refs/heads/main')
+        self.r.git('symbolic-ref', 'HEAD', 'refs/heads/alias')
+        self.assertEqual(refs.current_branch(self.r.root), ('main', None))   # the chain's end
+
+    def test_resolve_tells_no_such_rev_from_no_answer(self):
+        # rev-parse --verify without --quiet: "no such rev" is exit 128 and refs.NO_SUCH_REV.
+        self.assertEqual(refs.resolve('refs/heads/no-such', self.r.root, known=True), ('', None))
+        self.assertEqual(refs.resolve('refs/heads/no-such', self.r.root),
+                         (None, 'refs/heads/no-such does not name a commit'))
+        self.assertEqual(refs.resolve('main', self.r.root, known=True), (self.r.initial, None))
+
+
+class FakeParity(_Parity, unittest.TestCase):
+    pass
+
+
+@real_git('parity: the fake\'s `config --list -z`, `branch --show-current`, for-each-ref\'s '
+          'broken-ref warning and `rev-parse --verify`\'s "no such rev" against real git')
+class RealGitParity(_Parity, unittest.TestCase):
+    pass
+
 
 class WorkTreeStateTest(unittest.TestCase):
 

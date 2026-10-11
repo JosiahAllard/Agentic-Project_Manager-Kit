@@ -11,7 +11,8 @@ def main():
         from kitlib import pmstart
         cfg = pmstart.load_config()
         if cfg is None:
-            text = "PM session start: no pm_start config in ~/.claude-pm-kit/config.json; checklist skipped."
+            from kitlib.config import user
+            text = "PM session start: no pm_start config in %s; checklist skipped." % user.display()
         else:
             text = pmstart.checklist(cfg)
     except Exception as e:

@@ -3,7 +3,10 @@ that: the branch gate (`gate.py`) and the merged-tree gate a landing runs (kitli
 
 Every step runs in the slot's job (its launcher): pinned to the run's cores, measured, and ended
 as a tree when the run is cancelled. A step's output goes to `<log dir>/<step>.log`; the step is
-judged from that log (kitlib.gate.steps.judge).
+judged from that log (kitlib.gate.steps.judge). No Python the gate runs writes bytecode into the
+tree: a step's child process (a cmd, a requires probe, a check's run()) gets
+PYTHONDONTWRITEBYTECODE=1 added to the slot's environment (child_env), and a check itself runs
+under kitlib.config.policy.no_bytecode.
 
 A check step calls the repo hook module's GATE_CHECKS[<check>](ctx). ctx is a dict:
   root      the checkout gated          base     the base commit (hash)
@@ -213,6 +216,17 @@ def default_base(cfg, root):
 
 # ---------------------------------------------------------------- running steps
 
+def child_env(launcher):
+    """The environment a step's child process gets: the slot's (launcher.env; os.environ for a
+    launcher without one) with PYTHONDONTWRITEBYTECODE=1 added. A child Python does not inherit
+    sys.dont_write_bytecode, and a `__pycache__` it writes beside the repo's scripts is an
+    untracked file in the gated tree, which costs the gate-OK record (policy.no_bytecode)."""
+    base = getattr(launcher, 'env', None)
+    env = dict(os.environ if base is None else base)
+    env['PYTHONDONTWRITEBYTECODE'] = '1'
+    return env
+
+
 def unmet(step, launcher):
     """The requirements of `step` that are missing: a command name not on PATH, or a probe argv
     that does not exit 0 within PROBE_TIMEOUT (run in the slot's job)."""
@@ -225,7 +239,8 @@ def unmet(step, launcher):
         ok = False
         try:
             p = launcher.start(list(r), cwd=step.cwd, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               env=child_env(launcher))
             ctime = process.proc_ctime(p.pid)
             try:
                 ok = p.wait(PROBE_TIMEOUT) == 0
@@ -248,7 +263,7 @@ def _run_cmd(step, launcher, log_path, give_back=False):
     with open(log_path, 'wb') as log:
         try:
             p = launcher.start(step.cmd, cwd=step.cwd, stdin=subprocess.DEVNULL, stdout=log,
-                               stderr=subprocess.STDOUT, **more)
+                               stderr=subprocess.STDOUT, env=child_env(launcher), **more)
         except (OSError, JobError, LockError) as e:
             log.write(('gate: could not start %s: %s\n' % (step.cmd, e)).encode('utf-8'))
             return None
@@ -265,10 +280,11 @@ def _run_check(step, launcher, log_path, ctx, checks):
         def run(argv, cwd=None):
             log.flush()
             p = launcher.start(list(argv), cwd=cwd or ctx['root'], stdin=subprocess.DEVNULL,
-                               stdout=log, stderr=subprocess.STDOUT)
+                               stdout=log, stderr=subprocess.STDOUT, env=child_env(launcher))
             return launcher.wait(p)
         try:
-            got = fn(dict(ctx, name=step.name, log=log, run=run))
+            with policy.no_bytecode():   # a lazy sibling import writes no __pycache__ in the tree
+                got = fn(dict(ctx, name=step.name, log=log, run=run))
         except KeyboardInterrupt:
             raise
         except SystemExit as e:     # a check never ends the gate, whatever code it exits with
@@ -380,8 +396,8 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
     """Runs `chosen` in a slot of `kind`: `(results, None)`, or `(None, Outcome)` when the hook
     module or the booking refuses. The hook module's checks come from the work tree, or from
     commit `checks_rev` when given (a landing: --expect-main). `chosen` is never empty. The slot
-    is booked as a gate run, so the build daemons the gate leaves are stopped at its end
-    (kitlib.lock.site, machine_lock.daemons)."""
+    is booked as a gate run, so the build daemons the gate leaves that serve nothing outside its
+    job are stopped at its end (kitlib.lock.site, machine_lock.daemons; kitlib.proc.daemons)."""
     checks, options = {}, {}
     if any(s.check for s in chosen):
         try:

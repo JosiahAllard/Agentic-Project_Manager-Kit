@@ -4,6 +4,8 @@
   "commit": {"merge_fold": true},
   "doc_index": {"enabled": false},
   "daily_full": {"enabled": true},
+  "preflight": {"report_hooks": ["daily_full:summary_lines"]},
+  "worktree_remove": {"build_output": ["__pycache__"]},
   "gate": {
     "steps": [
       {
@@ -11,6 +13,7 @@
         "always": true,
         "cmd": ["{python}", "tools/kit_tests.py", "--select", "-C", "{root}"],
         "full_cmd": ["{python}", "tools/kit_tests.py", "--full", "-C", "{root}"],
+        "daily_cmd": ["{python}", "tools/kit_tests.py", "--full", "--both-tiers", "-C", "{root}"],
         "pass": ["kit_tests: OK"]
       }
     ]

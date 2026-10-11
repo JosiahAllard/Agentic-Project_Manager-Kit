@@ -28,8 +28,8 @@ class Derive(unittest.TestCase):
         self.assertEqual(L["gpus"], 1)
         self.assertTrue(lay.valid_layout(L))
 
-    # The installed PM-kit machine_lock.py's key for this machine (24 threads, 12 SMT-2 cores,
-    # one card), copied from its refusal on 2026-10-10 (KIT-LOCK-LAYOUT-KEY-MISMATCH). It refuses
+    # The older kit's installed machine_lock.py key for this machine (24 threads, 12 SMT-2 cores,
+    # one card), copied from its refusal on 2026-10-10. It refuses
     # every run while a live record carries another string.
     LIVE_TOOL_KEY = "t24 g1 cpu 12 x 2 gpu 2 m9b5a6751"
 

@@ -16,7 +16,7 @@ from . import offer as omod
 from . import record as rmod
 from . import scope as smod
 from .errors import Failure, NotFound, Refusal, Usage
-from .store import Change, id_refusal
+from .store import PLAIN_ID, Change, id_refusal
 
 MIN_REASON = 12
 RULED_PRICE_BY = ('owner', 'pm')
@@ -81,6 +81,29 @@ def require(snap, rid):
     if rec is None:
         raise NotFound('no record with `id: %s` in %s' % (rid, snap.where))
     return rec
+
+
+def require_shown(snap, ctx, rid):
+    """require() for `show`: a missing id's NotFound also says which store commit removed it
+    (sha, date, session, subject; never an author name), or that none ever did. An id that is
+    not plain (a glob or path character) is not looked up, and a history git cannot read (an
+    unborn HEAD, a failing git) still leaves the plain NOT FOUND, with a line saying so."""
+    rec = snap.get(rid)
+    if rec is not None:
+        return rec
+    plain = 'no record with `id: %s` in %s' % (rid, snap.where)
+    if not PLAIN_ID.match(rid):
+        raise NotFound('%s\n  history not searched: `%s` is not a plain id' % (plain, rid))
+    try:
+        gone = ctx.store.removal(rid, snap)
+    except Failure as exc:
+        raise NotFound('%s\n  the store\'s history could not be read: %s' % (plain, exc))
+    if gone is None:
+        then = 'no commit in the store\'s history removed it: the id is unknown'
+    else:
+        then = 'removed by %s on %s (session %s): %s' % (gone.sha, gone.when, gone.session or '-',
+                                                       gone.subject)
+    raise NotFound('%s\n  %s' % (plain, then))
 
 
 def _text(pairs, body):
@@ -373,26 +396,56 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None):
     return Change({rid: _text(pairs, rec.body)}, subject, lines, ruling=ruling)
 
 
-def plan_unblock(snap, ctx, rid, ruling=None):
+def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
+    """Clear one blocker. A record with one blocker opens, `on` and `reason` optional; one with
+    several needs `on` (the member to clear) and `reason`, and keeps the rest blocked. The reason
+    goes into the commit subject, as `release`'s does."""
     rec = require(snap, rid)
     if rec.get('state') != 'blocked':
         raise Usage('`%s` is `state: %s`, not `blocked`: there is nothing to unblock'
                     % (rid, rec.get('state')))
-    unheld = clears_owner_blocker(rec, ['-'])
+    members = rec.all('blocked_on')
+    several = len(members) > 1
+    if on is None and several:
+        raise Refusal('`%s` is blocked on %s; `unblock` clears one blocker, named, with a reason:\n%s'
+                      % (rid, ', '.join(members), '\n'.join(
+                          '  python tools/backlog.py unblock %s --on %s --reason "<why>"%s'
+                          % (rid, m, ' --ruling R-nnnn' if m == 'owner' else '') for m in members)))
+    if on is not None and on not in members:
+        raise Usage('`--on %s` is not a blocker of `%s`; it is blocked on %s'
+                    % (on, rid, ', '.join(members)))
+    if reason is not None or several:
+        refuse_machine_paths('--reason', reason)
+        bad = reason_error(reason, '--reason')
+        if bad:
+            raise Usage(bad)
+    left = [m for m in members if m != on] if several else []
+    unheld = clears_owner_blocker(rec, left)
     if unheld and ruling is None:
         raise Refusal('`%s` is blocked on the owner, so unblocking it needs `--ruling R-nnnn`' % rid)
     if ruling is not None:
-        if not unheld:
+        if not unheld and not several:
             raise Usage('`--ruling %s` was given, and `%s` is not blocked on the owner' % (ruling, rid))
+        if not unheld:
+            raise Usage('`--ruling %s` was given, and clearing `%s` from `%s` releases no hold of '
+                        'the owner\'s' % (ruling, on, rid))
         lmod.check_ruling(ctx.ledger, rid, rec, ruling, 'unblock', hold_only=True)
-    drop = 'owner' in rec.all('blocked_on') and rec.get('priority') != rmod.OWNER_PRIORITY
+    drop = unheld and rec.get('priority') != rmod.OWNER_PRIORITY
     pairs = [(k, v) for k, v in rec.pairs() if not (drop and k == 'owner_ask')]
-    pairs = rmod.apply_changes(pairs, [('state', ['open']), ('blocked_on', ['-'])]
+    changes = [('blocked_on', left)] if left else [('state', ['open']), ('blocked_on', ['-'])]
+    pairs = rmod.apply_changes(pairs, changes
                                + ([('hold_ruling', [ruling])] if ruling is not None else []))
-    lines = ['UNBLOCKED %s - state: open, blocked_on: -' % rid]
+    if left:
+        lines = ['UNBLOCKED %s - `%s` removed -> %s' % (rid, on, ', '.join(left))]
+    else:
+        lines = ['UNBLOCKED %s - state: open, blocked_on: -' % rid]
     if drop and rec.has('owner_ask'):
         lines.append('  owner_ask dropped: nothing waits on him now. It was: %s' % rec.get('owner_ask'))
-    return Change({rid: _text(pairs, rec.body)}, 'backlog: unblock %s' % rid, lines, ruling=ruling)
+    subject = 'backlog: unblock %s' % rid
+    if reason is not None:
+        named = next((m for m in ([on] if on else members) if m != '-'), None)
+        subject += '%s: %s' % (' from %s' % named if named else '', ' '.join(reason.split()))
+    return Change({rid: _text(pairs, rec.body)}, subject, lines, ruling=ruling)
 
 
 # --- park / unpark -----------------------------------------------------------------------

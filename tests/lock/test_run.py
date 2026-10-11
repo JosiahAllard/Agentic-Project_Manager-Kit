@@ -99,7 +99,7 @@ class Slot(StoreCase):
         self.assertEqual((self.store.read("queue.json") or {}).get("entries", []), [])
 
     def test_a_held_runs_record_carries_the_installed_tools_layout_key(self):
-        # KIT-LOCK-LAYOUT-KEY-MISMATCH: the installed PM-kit machine_lock.py refuses every run
+        # The older kit's installed machine_lock.py refuses every run
         # while a live record's `layout` is not its own key. On this store's machine (24 threads,
         # SMT 2, one card) that key is the string below (lay.slot_key), not layout_key's.
         self.confine(1)
@@ -252,6 +252,23 @@ class CoreRequests(StoreCase):
         self.everything_held()
         self.assertEqual(self.code(kind="three", cores=2, no_wait=True), 11)
         self.assertEqual(self.ended_need(), 2)
+
+    def test_an_aliased_kind_books_the_canonical_kinds_slots_and_is_recorded_as_it(self):
+        # `worldgraph` is a retired name kinds.json maps to graph-build (an `aliases` entry).
+        self.use_kinds({"kinds": {"graph-build": {"cpu": 3, "gpu": 0, "warn_min": 120}},
+                        "aliases": {"worldgraph": {"to": "graph-build", "why": "retired name"}}})
+        self.everything_held()
+        self.assertEqual(self.code(kind="worldgraph", no_wait=True), 11)
+        self.assertEqual(self.ended_need(), 3)
+        self.assertEqual(self.ended()[0]["kind"], "graph-build")
+        self.assertEqual(self.code(kind="no-such-kind", no_wait=True), 2)
+
+    def test_the_kits_worldgraph_alias_resolves_to_graph_build(self):
+        from kitlib.lock import kinds
+        table = kinds.load()
+        self.assertEqual(kinds.resolve("worldgraph", table), "graph-build")
+        self.assertEqual(kinds.resolve("graph-build", table), "graph-build")
+        self.assertEqual(kinds.resolve("nope", table), "nope")
 
     def test_the_kinds_full_size_may_be_asked_for(self):
         self.everything_held()

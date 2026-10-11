@@ -38,7 +38,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `backlog.ledger_repo` (string): the ledger repo column; default the repo name
 - `backlog.retired_docs` (list of repo path, default []): docs the backlog replaced
 - `backlog.rename_script` (string, may be empty, default ""): priority rename helper
-- `board.state_file` (repo path): the board state file
+- `board.state_file` (repo path): the board state file, under the git dir (default <git common dir>/kit/board-state.md)
 - `checkout_guard.rule_pointer` (string): where a refusal points for the rule
 - `commit.merge_fold` (bool, default false): commit.py folds a merge commit
 - `commit.coauthor_families` (list of string, default []): accepted Co-Authored-By families beyond Claude
@@ -84,6 +84,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `landing.batch_max` (int from 1 to 20, default 3): most branches one tools/land.py landing merges and gates together
 - `landing.reuse_max_age_h` (int from 0 to 168, default 24): hours a branch gate-OK record serves a landing's gate reuse; 0: never reused
 - `landing.reuse_never` (list of string, default []): globs of paths whose change makes a landing reuse no step
+- `landing.in_flight` ({wait_s, command}): how tools/new_worktree.py and tools/sync_base.py see a landing in flight before they fetch, and wait for it (unset: off; {}: the kit landing lock; wait_s unset: 100, inferred not measured; docs/new-worktree.md "Waiting for a landing in flight")
 - `ledger.pre_commit_check` (bool, default false): githooks/pre-commit runs tools/ledger.py check --base HEAD before each commit that changes the ledger file or its standing digest (opt-in; docs/ledger.md "Pre-commit check")
 - `machine_paths.allow` (list of {glob, line, hit, why, temporary}, default []): machine-path hits allowed
 - `machine_paths.fixtures` (list of {glob, hits, line, why}, default []): test fixtures that name machine paths
@@ -133,9 +134,9 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `worktree_remove.archive_next_free` (bool, default false): archive under the next free name
 - `worktree_remove.branch_template` (a branch name holding {slug} once): branch name for a slug
 
-## `~/.claude-pm-kit/config.json` keys
+## Machine config keys
 
-The machine's own settings, read by `kitlib.config.user`. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config.
+The machine's own settings, read by `kitlib.config.user`: `config.json` in the folder `kitlib.config.user.DIR_NAME` names under the home folder, or, while that folder has none, in the retired folder ("Moving the machine config folder"); `python -c "from kitlib.config import user; print(user.config_file())"`, run in the kit, prints the path of the file read. Messages name the file read (`user.display()`), help text `user.DISPLAY`, and this page and the others write `<config-dir>` for that folder. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config.
 
 - `ledger_path` (absolute path): the rulings ledger file; set here only
 - `ledger_repos` (list of a lower-case repo name): the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)
@@ -145,11 +146,12 @@ The machine's own settings, read by `kitlib.config.user`. No `.kit.json` key and
 - `scrub_patterns` (list of regex): case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse
 - `guard_mcp_prefix` (string): the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")
 - `guard_mcp_tools` (list of string): more full tool names the guard treats as the lock MCP's owner-only tools, as a PreToolUse payload names them (docs/guard.md "Lock MCP")
-- `guard_agent_marks` (list of string): the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json and write-jail rules; unset: coordinator and conductor (docs/guard.md "Session mark")
+- `guard_agent_marks` (list of string): the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json and write-jail rules; it replaces the default list, so it names every mark it holds; unset: coordinator, conductor (removed after the switch), deep-worker, consultant and pm (docs/guard.md "Session mark")
+- `guard_mark_roots` (map mark -> list of {path, mode, why}): more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside either machine config folder, the current or the retired one, is ignored unless it is read-only (docs/guard.md "Write jail")
 - `pm_data` (object, checked by kitlib.pmdata): the worktree of the PM data branch: {path, branch, remote} (docs/pm-data-branch.md "Layout")
-- `pm_start` (object, checked by kitlib.pmstart): the PM session-start checklist settings
+- `pm_start` (object, checked by kitlib.pmstart): the PM session-start checklist settings (docs/pm-start.md "Config"); among them hub_urls: account label -> Action Hub URL, one copy per account; hub_url: the single copy, read only while hub_urls has no entry; hub_mirror: the absolute mirror folder for an install without pm_data (docs/action-hub.md "One copy per account")
 - `coordinator_start` (object, checked by kitlib.coordinatorstart): the coordinator session-start settings
-- `conductor_start` (object, checked by kitlib.coordinatorstart): the old name of coordinator_start, read when coordinator_start is absent
+- `conductor_start` (object, checked by kitlib.coordinatorstart): the old name of coordinator_start, read when coordinator_start is absent; removed after the switch
   Its install values (`kitlib.coordinatorstart`; nothing in the code supplies them):
   - `repos_root` (path): the folder whose top-level folders are the repositories; the session's cwd picks the repo under it. Unset: every check that needs the coordinator's repo prints "could not check ...: repos_root not configured".
   - `ledger` (path): the rulings ledger the "rulings newer than" check reads; unset: the machine `ledger_path`; neither: "could not check rulings: ledger not configured".
@@ -160,3 +162,16 @@ The machine's own settings, read by `kitlib.config.user`. No `.kit.json` key and
 - `machine_lock` (object, checked by kitlib.lock.site): the machine lock settings: build daemons at release, lock-window notices
 - `temp_dir` (absolute path): the folder the kit's own temp files go in (test run folders, gate logs); unset: `AgentTemp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md "Temp folders"); older kit copies reject the key
 - `agent_temp_sweep` (object, checked by optional/agenttemp/agent_temp_sweep.py): the agents' temp folder to sweep and the age past which an unused entry goes
+
+## Moving the machine config folder
+
+The machine config folder was renamed: `kitlib.config.user.DIR_NAME` is the new name, `kitlib.config.migration.OLD_DIR_NAME` the retired one. The kit moves no file; the owner does, once.
+
+- **Which file is read:** `kitlib.config.user.locate` decides on the new folder's `config.json`, never on the folder alone (another writer, the hub backlog state say, may make the folder first). New file present: it is read, and the old one is ignored, never merged. New file absent: the old folder's file is read (the fallback). Neither: an empty config, named at the new folder.
+- **Fail closed:** a new folder that is not a folder, a new `config.json` that is not a file, or a path that cannot be examined (an error other than not-found) is `BAD`: a `ConfigError` for every reader, never the fallback, and the guard denies every subagent write (docs/guard.md "State", User config). That includes the modules that open the file themselves through `user.readable_file`: `kitlib.pmstart`, `kitlib.coordinatorstart` and `kitlib.pmwatch` raise `ConfigError`, `kitlib.backloglint` `LintConfigError`, `optional/agenttemp/agent_temp_sweep.py` `SweepConfigError`; `tools/pm_watch.py` and `claude/hub/hub_repos.py`, `hub_backlog.py` and `hub_notices.py` print `machine config: <why>` and exit 2, `tools/backlog_lint.py` and the sweep exit 2 with the reason too, and the PM and coordinator session-start hooks print it as a check that failed.
+- **Writers** write the new folder's file only (`user.writable_file`): `tools/pm_data.py init` (`kitlib.pmdata.init.write_machine`) refuses, before any write, while the config is still only in the old folder, since a new file holding one key would hide every other key.
+- **The `config` line of `tools/preflight.py`** (`kitlib.preflight.configline`) says which file is read: the new file, `FALLBACK` (the old one), `WARN both` with `same content` or `DIFFERENT (keys: ...)`, `none`, or `BROKEN`. It names keys, never values: a file the strict reader refuses is `BROKEN <file>: bad key(s): <names>` (`user.failing_keys`), `not valid JSON`, `not a JSON object` or `a key written twice in one object`, never the reader's own message, which quotes the refused value.
+- **Both present:** the new file decides alone, so the guard protects the new file's `ledger_path` only; an old file naming another ledger leaves that file unprotected (docs/guard.md "Known limits").
+- **Other kit files in the folder:** `hub_backlog_state.json` (`claude/hub/hub_backlog.py`; docs/action-hub.md "backlog/<repo> and completed/<repo>") is read from the old folder while the new one has none and always written to the new one (`kitlib.config.migration.state_paths`), so its first run after the move keeps every document pinned to the store's version.
+- **The owner's move:** write the new folder's `config.json` from the old one (a copy, plus any new keys), check that the preflight `config` line names the new file, copy `hub_backlog_state.json` across too if the old folder has one and the new one does not, move any file the config points into the old folder (and its path), then retire the old folder by moving it out of the home folder's `.claude-*` names: `tools/machine_setup.py` takes every other `.claude-*` folder for a Claude account folder.
+- `machine_setup.py` skips both folder names (`kitlib.machinesetup.default_config_dirs`). The modules that use `OLD_DIR_NAME` are listed in tests/scrub/test_old_config_name.py, so retiring the fallback finds each.

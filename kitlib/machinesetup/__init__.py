@@ -14,6 +14,9 @@ Nothing here prints or exits; run() gives the exit code and the lines.
 import datetime
 import os
 
+from kitlib.config import user
+from kitlib.config.migration import OLD_DIR_NAME
+
 from . import extras, links, settings
 from .common import Change, Plan
 
@@ -37,14 +40,16 @@ class Context(object):
 
 
 def default_config_dirs(home):
-    """`<home>/.claude` and every `<home>/.claude-*` folder, the kit's own machine folder excepted."""
+    """`<home>/.claude` and every `<home>/.claude-*` folder, the kit's own machine config folders
+    excepted: the current one and the retired one (kitlib.config.migration.OLD_DIR_NAME), which
+    starts `.claude-` and is no Claude account folder."""
     out = []
     try:
         names = sorted(os.listdir(home))
     except OSError:
         return out
     for n in names:
-        if (n == '.claude' or n.startswith('.claude-')) and n != '.claude-pm-kit' \
+        if (n == '.claude' or n.startswith('.claude-')) and n not in (user.DIR_NAME, OLD_DIR_NAME) \
                 and os.path.isdir(os.path.join(home, n)):
             out.append(os.path.join(home, n))
     return out

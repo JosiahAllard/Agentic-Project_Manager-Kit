@@ -7,7 +7,8 @@
           stale [--days N]
   writes  add ID --summary S --scope P... [--effort s|m|l] [--ref R] [--reopen]
           set ID [--<field> V]... [--unset K]... [--ruling R] [--body-file F] [--hold-ruling R]
-          block ID --on M... [--owner-ask Q] [--ruling R]      unblock ID [--ruling R]
+          block ID --on M... [--owner-ask Q] [--ruling R]
+          unblock ID [--on M] [--reason T] [--ruling R]      (several blockers: --on and --reason)
           pull ID [--reason T] [--ruling R] [--blocker ID]   release ID --reason T
           close ID --reason T [--ruling R]                   retire ID --why T [--ruling R]
           set-status ID parked --q Q-nnn                     unpark ID --ruling R
@@ -104,6 +105,8 @@ def build_parser():
     v.add_argument('--ruling', default=None)
     v = sub.add_parser('unblock')
     v.add_argument('id')
+    v.add_argument('--on', default=None)
+    v.add_argument('--reason', default=None)
     v.add_argument('--ruling', default=None)
     v = sub.add_parser('pull')
     v.add_argument('id')
@@ -177,7 +180,7 @@ def do_next(args, ctx, snap):
 
 
 def do_show(args, ctx, snap):
-    rec = pmod.require(snap, args.id)
+    rec = pmod.require_shown(snap, ctx, args.id)
     ranks = omod.ranked(snap)
     bucket, _ = omod.classify(rec)
     say('%s  rank %s  %s  (%s)' % (rec.id, omod.rank_label(rec, ranks), bucket, rec.path))
@@ -285,7 +288,7 @@ def planner(args, ctx):
     if v == 'block':
         return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask, args.ruling)
     if v == 'unblock':
-        return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling)
+        return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling, args.on, args.reason)
     if v == 'pull':
         return lambda s: pmod.plan_pull(s, ctx, args.id, args.reason, args.ruling, args.blocker)
     if v == 'release':
@@ -362,7 +365,7 @@ def main(argv=None):
         rules = rmod.Rules(section['id_grammar'], section['phases'])
         if args.verb == 'migrate':
             return do_migrate(args, top, cfg, rules)
-        ledger = lmod.Ledger(ledger_file, [section['ledger_repo'] or cfg.repo.get('name') or ''], standing)
+        ledger = lmod.Ledger.for_repo(ledger_file, cfg, standing)
         backend = smod.open_backend(top, cfg, fetch=not args.no_fetch)
         store = smod.Store(backend, rules, session=args.session)
         ctx = pmod.Context(store, ledger, top, remote=cfg.remote, main_branch=cfg.main_branch,

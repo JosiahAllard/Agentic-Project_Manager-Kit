@@ -61,8 +61,9 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   their headings are the ones the agents read, and `tests/templates` checks them.
 - `templates/stacks/{dotnet,godot,java,python}`: `stack.json` (build and test commands,
   gitignore, gitattributes; `new-repo.ps1 -Stack` applies the two lists), `tools/gate.json` (a `"gate"` section of `.kit.json`; point to it
-  with `"gate": "tools/gate.json"`) and `.github/workflows/{quick,full}.yml`. Godot also carries
-  `tools/godot.cmd` and `.claude/skills/godot-render-check/SKILL.md`.
+  with `"gate": "tools/gate.json"`) and `.github/workflows/{quick,full}.yml`. Some also carry a
+  stack runner under `tools/`: `dotnet_each.py` (dotnet), `godot.cmd` (godot), `js_tests.py` (python). Godot also carries
+  `.claude/skills/godot-render-check/SKILL.md` (its `{kit_root}` is filled in at install).
 - The Java dependency-pin check is a hook-module check, not a gate key (the schema has none).
 
 ## Optional machine-wide tools (`optional/`, tests in `tests/optional`)
@@ -78,7 +79,7 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   (`;`-separated regexes).
 - `usage`: usage reports and the statusline (`statusline-usage.ps1`, `write-usage-status.ps1`).
 - `agenttemp`: `agent_temp_sweep.py` clears old entries from the agents' shared temp folder,
-  set by `agent_temp_sweep` in `~/.claude-pm-kit/config.json` (docs/kit-json.md).
+  set by `agent_temp_sweep` in the machine config (docs/kit-json.md).
 
 ## Knowledge (`knowledge/asset-generation`)
 

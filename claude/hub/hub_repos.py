@@ -15,6 +15,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from kitlib import pmstart                                          # noqa: E402
+from kitlib.config import ConfigError                              # noqa: E402
 
 
 def main(argv=None):
@@ -22,7 +23,11 @@ def main(argv=None):
     ap.add_argument("--have", nargs="*", default=[], help="repo names already in repos/")
     ap.add_argument("--out", help="write an ArtifactData batch for the missing ones here")
     a = ap.parse_args(argv)
-    cfg = pmstart.load_config()
+    try:
+        cfg = pmstart.load_config()
+    except ConfigError as e:
+        print("machine config: %s" % e, file=sys.stderr)
+        return 2
     if cfg is None:
         print("no pm_start config", file=sys.stderr)
         return 2

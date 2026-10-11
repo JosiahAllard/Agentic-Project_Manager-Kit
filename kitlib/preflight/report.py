@@ -9,7 +9,7 @@ import sys
 from kitlib import verdict
 from kitlib.docs import callers as doc_callers
 from kitlib.git import cmd, refs, repo, stray
-from kitlib.preflight import hooks, leftovers, lockline, machine, nextblock, settings as st
+from kitlib.preflight import configline, hooks, leftovers, lockline, machine, nextblock, settings as st
 
 MAX_LISTED = 12
 LIST_INDENT = ' ' * 12
@@ -30,10 +30,12 @@ def _worktree_line(w):
     return '%s  %s %s' % (w.path, head, where)
 
 
-def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read_snapshot):
+def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read_snapshot,
+           home=None):
     """The report's lines for the work tree whose top level is `top`. `cfg` is its loaded
     kitlib.config Config (kitlib.config.ConfigError for a "preflight" value preflight cannot
-    use). `base` is --base (any revision), else the configured or guessed base branch."""
+    use). `base` is --base (any revision), else the configured or guessed base branch. `home` is
+    the home folder the `config` line reads the machine config under (default the user's)."""
     s = st.settings(cfg)
     out = []
     remote = cfg.remote
@@ -96,9 +98,12 @@ def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read
     out.extend(stray_lines)
     out.extend(hooks.lines(os.path.join(top, cfg.tools_dir), s['report_hooks']))
     out.extend(machine.preflight_lines(s))
+    out.append(configline.line(home))
     out.append('traps     %s' % s['traps'])
-    out.append('index     docs: %s | a doc section: python %s/doc_index.py '
-               '--section "<title>"' % (cfg.section('doc_index')['index'], tools))
+    index = cfg.section('doc_index')['index']
+    gone = '' if os.path.isfile(os.path.join(top, index)) else ' (missing)'
+    out.append('index     docs: %s%s | a doc section: python %s/doc_index.py '
+               '--section "<title>"' % (index, gone, tools))
     out.extend(nextblock.lines(top, tools, branch, base, cfg.main_branch, behind, dirty or [],
                                in_main))
     out.append('lock      %s' % lockline.line_for(kit_root, lock_reader))

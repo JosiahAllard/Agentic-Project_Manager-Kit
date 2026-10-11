@@ -59,6 +59,7 @@ import re
 import time
 
 from kitlib.config import ConfigError, load, load_at
+from kitlib.docs import budget
 from kitlib.git import batch, cmd
 
 INDEX = 'docs/INDEX.md'          # the schema default of "doc_index".index
@@ -550,8 +551,9 @@ def run(root, out, section=None, find=None, tools=False, stale=False, role=None,
         return print_find(text, find, out, di['find_match'], index)
     # EVERY mode below is a function of this listing, so an unread one is a run that measured
     # nothing, never a finding of "no problems".
-    listing = git(root, 'ls-tree', '-r', '--name-only', head)
-    files = listing.stdout.splitlines() if listing.returncode == 0 else []
+    listing = git(root, 'ls-tree', '-r', '--name-only', '-z', head)
+    # -z: raw NUL-separated paths; without it git C-quotes a non-ASCII, quoted or newline name
+    files = budget.names_from(listing.stdout) if listing.returncode == 0 else []
     if listing.returncode != 0 or not files:
         out('doc_index: cannot list %s (git exit %s): %s' % (
             head, listing.returncode, first_line(listing.stderr) or 'no tracked files'))

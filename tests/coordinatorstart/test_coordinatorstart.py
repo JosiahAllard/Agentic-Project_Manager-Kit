@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from kitlib import coordinatorstart
+from kitlib.config import user as kuser
 
 HOOK = os.path.join(os.path.dirname(__file__), "..", "..", "claude", "hooks", "coordinator_session_start.py")
 COND = {"PM_KIT_ROLE": "coordinator"}
@@ -174,15 +175,6 @@ class CapReviewTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             coordinatorstart.cap({"cap": {}}, "alpha", TODAY)
 
-    def test_review_session(self):
-        f = coordinatorstart.review_session
-        self.assertEqual(f({"review_session": {"date": "2026-10-06", "name": "rev-1"}}, TODAY),
-                         ["review session today: rev-1"])
-        self.assertIn("fresh reviewers", f({"review_session": {"date": "2026-10-06", "name": None}}, TODAY)[0])
-        self.assertIn("ask the PM", f({"review_session": {"date": "2026-10-05", "name": "x"}}, TODAY)[0])
-        with self.assertRaises(KeyError):
-            f({}, TODAY)
-
 
 STATUS = {"reservations": {"active": [], "upcoming": [
               {"start": "2026-10-06T20:00:00Z", "end": "2026-10-06T22:00:00Z", "start_local": "16:00",
@@ -282,11 +274,10 @@ class ContextTest(unittest.TestCase):
         return coordinatorstart.context(dict(dict(ledger="L.md", repos_root=ROOT), **cfg), **base)
 
     def test_standing_first_then_checks(self):
-        cfg = {"standing": ["wind down"], "cap": {"alpha": [{"cap": 4}]},
-               "review_session": {"date": "2026-10-06", "name": "rv"}}
+        cfg = {"standing": ["wind down"], "cap": {"alpha": [{"cap": 4}]}}
         text = self.build(cfg)
         self.assertEqual(text.split("\n")[:2], ["Coordinator session start:", "- wind down"])
-        for want in ("- rulings newer than R-9010", "- R-9016: d", "- agent cap 4", "- review session today: rv",
+        for want in ("- rulings newer than R-9010", "- R-9016: d", "- agent cap 4",
                      "- machine: free gpu slots 1 of 2"):
             self.assertIn(want, text)
         self.assertNotIn("also running", text)
@@ -310,7 +301,6 @@ class ContextTest(unittest.TestCase):
     def test_missing_config_gives_one_line_per_check(self):
         text = self.build({})
         self.assertIn("could not check cap: cap not configured", text)
-        self.assertIn("could not check review session: review_session not configured", text)
         self.assertNotIn("usage", text.lower())
 
     def test_no_sessions_file_and_no_cwd_match_isolated(self):
@@ -320,17 +310,76 @@ class ContextTest(unittest.TestCase):
         self.assertIn("could not check rulings: LookupError", self.build({}, cwd=ROOT + "/zzz"))
         self.assertIn("could not check rulings: ValueError", self.build({}, cwd="C:/elsewhere"))
 
+    def test_default_read_takes_a_bom_sessions_file(self):
+        # regression-only: the default _read is utf-8-sig, so a PowerShell-saved sessions file loads
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "sessions.json")
+            with open(p, "wb") as f:
+                f.write(b"\xef\xbb\xbf" + json.dumps({"alpha": ENTRY}).encode("utf-8"))
+            text = coordinatorstart.context(
+                {"ledger": "L.md", "repos_root": ROOT, "cap": {"alpha": [{"cap": 4}]}},
+                env={}, cwd=ROOT + "/alpha", now=NOW, procs=[], run=lambda a, timeout=10: "G",
+                home="H", pid=1, pm_cfg={"sessions_file": p})
+        self.assertIn("- agent cap 4", text)
+
     def test_repos_root_and_ledger_come_from_the_config(self):
         self.assertIn("could not check rulings: repos_root not configured", self.build({"repos_root": None}))
         self.assertIn("could not check rulings: ledger not configured",
                       self.build({"ledger": None}))
 
 
+class StubsLineTest(unittest.TestCase):
+
+    def test_silent_when_current_and_one_line_when_not(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "alpha"))
+            seen = []
+
+            def check(p):
+                seen.append(p)
+                return None
+            self.assertEqual(coordinatorstart.stubs_line(ENTRY, d, check), [])
+            self.assertEqual(seen, [os.path.join(d, "alpha")])
+            self.assertEqual(coordinatorstart.stubs_line(ENTRY, d, lambda p: "stubs (alpha): 1 missing/stale: gate"),
+                             ["stubs (alpha): 1 missing/stale: gate"])
+
+    def test_missing_folder_is_could_not_check_not_a_traceback(self):
+        self.assertEqual(coordinatorstart.stubs_line(ENTRY, "D:/no/such/root", lambda p: None),
+                         ["could not check stubs: no repository folder %s" % os.path.join("D:/no/such/root", "alpha")])
+
+    def test_no_repos_root_is_a_key_error(self):
+        with self.assertRaises(KeyError):
+            coordinatorstart.stubs_line(ENTRY, None)
+
+    def test_context_prints_the_check_last_and_isolates_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "alpha"))
+            text = ContextTest().build({"repos_root": d, "cap": {"alpha": [{"cap": 4}]}},
+                                       cwd=d + "/alpha", stubs_check=lambda p: "stubs (alpha): 2 missing/stale: a, b")
+            self.assertEqual(text.splitlines()[-1], "- stubs (alpha): 2 missing/stale: a, b")
+
+    def test_context_has_no_stubs_line_when_current(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "alpha"))
+            t = ContextTest()
+            text = t.build({"repos_root": d, "cap": {"alpha": [{"cap": 4}]}}, cwd=d + "/alpha", stubs_check=lambda p: None)
+            self.assertNotIn("stubs", text)
+
+    def test_a_raising_check_is_a_could_not_check_stubs_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "alpha"))
+
+            def boom(p):
+                raise OSError("disk gone")
+            text = ContextTest().build({"repos_root": d, "cap": {"alpha": [{"cap": 4}]}}, cwd=d + "/alpha", stubs_check=boom)
+            self.assertIn("could not check stubs: OSError: disk gone", text)
+
+
 class HookTest(unittest.TestCase):
     def run_hook(self, role, config):
         with tempfile.TemporaryDirectory() as d:
-            os.makedirs(os.path.join(d, ".claude-pm-kit"))
-            write(os.path.join(d, ".claude-pm-kit", "config.json"), config)
+            os.makedirs(kuser.config_dir(d))
+            write(kuser.config_file(d), config)
             env = {k: v for k, v in os.environ.items() if k != "PM_KIT_ROLE"}
             env.update(USERPROFILE=d, HOME=d)
             if role:
@@ -355,7 +404,7 @@ class HookTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         text = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(text.split("\n")[1], "- s")
-        for name in ("rulings", "cap", "review session"):
+        for name in ("rulings", "cap"):
             self.assertIn("could not check %s:" % name, text)
 
     def test_old_role_and_old_config_key_still_work(self):

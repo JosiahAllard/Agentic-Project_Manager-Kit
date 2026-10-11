@@ -72,7 +72,7 @@ class Redirect(object):
 class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
-                 'pipe_from', 'git_env')
+                 'pipe_from', 'git_env', 'home_env')
 
     def __init__(self, source, shell, depth):
         self.words, self.redirects, self.subs = [], [], []
@@ -85,6 +85,7 @@ class Command(object):
         self.pipe_from = None       # the Command piping into this one
         self.nested_in = None       # the Command whose word held this one ($(), a nested shell)
         self.git_env = False        # the GIT_DIR-like variable some command of the line sets (commands.mark_git_env), else False
+        self.home_env = False       # the variable naming git's user config folder the line sets (HOME, ...), else False
 
     @property
     def grouped(self):
@@ -265,6 +266,15 @@ class _Scan(object):
                 # the call operator: `& prog args` runs prog
                 self.toks.append(('w', Word('&', False, self.i, self.i + 1), []))
                 self.i += 1
+                j = self.i
+                while j < self.n and self.s[j] in ' \t':
+                    j += 1
+                if j < self.n and self.s[j] == '(':
+                    # `& (Get-Command git) args`: the program is what the ( ) computes, one word
+                    # (not literal) whose commands are read as nested ones
+                    self.i = j + 1
+                    cmds = self.sub_until()
+                    self.toks.append(('w', Word(self.s[j:self.i], True, j, self.i), cmds))
                 return '&'
             if c == ',':
                 self.i += 1                     # an array: each element is an argument

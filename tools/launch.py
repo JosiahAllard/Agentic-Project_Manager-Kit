@@ -4,14 +4,14 @@
   launch.py deep --repo-path DIR (--brief FILE | --brief-text TEXT) --requester NAME --slug SLUG [...]
   launch.py consultant --repo-path DIR [--repo SLUG] [...]
   launch.py stop --name NAME [--successor NAME] [--pid N] [--dry-run]
-  launch.py handoff (--session KEY | --all) [--account N|auto] [--recycle] [--what-if]
+  launch.py handoff (--session KEY | --all) [--account N|auto] [--recycle] [--stem NEW] [--what-if]
   launch.py pick-account [--limit 95] [--explain]
   launch.py usage
   launch.py after-reboot [--test] [--dry-run]
   launch.py install-autostart [--what-if]
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.launcher, prints and exits.
-Settings come from the `launcher` object of ~/.claude-pm-kit/config.json. Every launched session
+Settings come from the `launcher` object of the machine config. Every launched session
 gets a PM_KIT_ROLE mark. Exit codes: 0 done; 1 refused or failed; 2 a stop refused (REFUSED:) or
 usage; 130 Ctrl+C.
 """
@@ -44,7 +44,8 @@ def parser():
     s.add_argument('--repo', help='a name in launcher.repos')
     s.add_argument('--repo-path', help='a repo folder')
     s.add_argument('--session', help='a sessions.json key: its repo, agent, stem and brief')
-    s.add_argument('--account')
+    s.add_argument('--account', help='an account number; with --session also "current" (the account this '
+                   'process runs on, else pick-account\'s) or "auto" (pick-account\'s)')
     s.add_argument('--org')
     s.add_argument('--prompt')
     s.add_argument('--brief', help="a standing brief the first message says to read first")
@@ -95,6 +96,7 @@ def parser():
     h.add_argument('--account')
     h.add_argument('--all', action='store_true')
     h.add_argument('--recycle', action='store_true')
+    h.add_argument('--stem', help="the session's new stem: the successor is NEW-a<N> and sessions.json says NEW")
     h.add_argument('--what-if', action='store_true')
 
     k = sub.add_parser('pick-account', help='the account whose week resets soonest, with headroom')
@@ -146,7 +148,7 @@ def run(a, settings, host):
         return stop.stop(settings, host, a.name, a.successor, a.pid, a.dry_run,
                          warn=lambda msg: print('launch.py stop: %s' % msg, file=sys.stderr))
     if a.cmd == 'handoff':
-        return handoff.handoff(settings, host, a.session, a.account, a.all, a.recycle, a.what_if)
+        return handoff.handoff(settings, host, a.session, a.account, a.all, a.recycle, a.what_if, stem=a.stem)
     if a.cmd == 'pick-account':
         n, rows = accounts.pick(settings, host.now(), a.limit)
         return (accounts.explain(rows) if a.explain else []) + [n]

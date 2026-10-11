@@ -802,21 +802,28 @@ class Slot:
         """The build daemons (kitlib.proc.daemons) still in the run's job are stopped with their
         children when the machine config's machine_lock.daemons says so (kitlib.lock.site
         stops_daemons: by default only after a gate run); each is said and listed in the record's
-        `daemons`. A nested slot leaves them to the run it is nested in, unless it is a gate: then
-        it stops those in its own job and records none. Never raises: what it cannot read or stop
-        runs on, unpinned."""
+        `daemons`. A daemon that serves a client outside the run's job (another run's build is
+        using it), or whose clients cannot be told, is left running and its result says why
+        (kitlib.proc.daemons stop). A nested slot leaves them to the run it is nested in, unless
+        it is a gate: then it stops those in its own job and records none. Never raises: what it
+        cannot read or stop runs on, unpinned."""
         try:
             if not site.stops_daemons(self.store, self.gate):
                 return
             found = daemons.find(self.job.pids())
             if not found:
                 return
-            done = daemons.stop(found)
+            done = daemons.stop(found, self.job.contains)
         except Exception as e:
             self.store.say("WARNING: run %s: build daemons not checked: %s" % (self.id, e))
             return
         for pid, label, res in done:
-            self.store.say("run %s: stopped the %s (pid %d) it left: %s" % (self.id, label, pid, res))
+            if res.startswith("left: "):
+                self.store.say("run %s: left the %s (pid %d) running: %s"
+                               % (self.id, label, pid, res[len("left: "):]))
+            else:
+                self.store.say("run %s: stopped the %s (pid %d) it left: %s"
+                               % (self.id, label, pid, res))
         if self.run is not None:
             self.run.rec["daemons"] = [{"pid": pid, "what": label, "result": res}
                                        for pid, label, res in done]
@@ -891,6 +898,10 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     env = dict(os.environ if env is None else env)
     try:
         table = kinds_table or kinds_mod.load(store.kinds_path)
+    except kinds_mod.KindsError as e:
+        raise LockError(EXIT_REQUIRE, "require-lock: %s; the command was not run" % e)
+    try:
+        kind = kinds_mod.resolve(kind, table, store.kinds_path)
     except kinds_mod.KindsError as e:
         raise LockError(EXIT_REQUIRE, "require-lock: %s; the command was not run" % e)
     if kind not in table:

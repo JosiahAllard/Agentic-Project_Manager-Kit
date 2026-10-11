@@ -39,6 +39,10 @@ class Case(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
+    def scratch_home(self):
+        """A home folder with no machine config, so preflight's `config` line never reads the user's."""
+        return os.path.join(self.repo.base, 'home')
+
     def config(self, **sections):
         self.repo.write('.kit.json', json.dumps(dict({'doc_budget': {'budgets': {'docs/a.md': 100}}},
                                                      **sections)))
@@ -57,7 +61,7 @@ class Preflight(Case):
         with contextlib.redirect_stdout(buf), \
                 mock.patch.object(preflight, 'KIT', KIT), \
                 mock.patch.object(report.stray, 'check', return_value=(0, [])):
-            preflight.main(['-C', self.root], lock_reader=free_reader)
+            preflight.main(['-C', self.root], lock_reader=free_reader, home=self.scratch_home())
         return buf.getvalue()
 
     def line(self, out):
@@ -315,7 +319,7 @@ class NotCheckedAndTimeout(Case):
             for p in patches:
                 stack.enter_context(p)
             stack.enter_context(contextlib.redirect_stdout(buf))
-            preflight.main(['-C', self.root], lock_reader=free_reader)
+            preflight.main(['-C', self.root], lock_reader=free_reader, home=self.scratch_home())
         [found] = [l for l in buf.getvalue().splitlines() if l.startswith('doc index')]
         return found
 

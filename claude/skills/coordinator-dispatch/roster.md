@@ -35,9 +35,9 @@ Read from skill `coordinator-dispatch`, "Which agent, which model". A repo's own
   failed at or plainly cannot do). opus-worker not installed ->
   `worker` + `model: opus`. Never `general-purpose` for code. An escalation = reassign upward
   with its findings, not a failure.
-- Model and effort per agent are pinned in each agent file's frontmatter (the kit sets them in its docs/ROSTER.md).
+- Model and effort per agent are pinned in each agent file's frontmatter (the kit sets them in its ROSTER.md doc; SKILL.md gives its path).
   Built-ins pin nothing -> pass `model` every dispatch. Override only upward for risk, and say so
-  in status. **Never `fable`** for any agent, reviews included, unless he asks on that task:
+  in status. **Never `fable`** for any agent, reviews included, unless the owner asks on that task:
   `opus` is the ceiling, `deep-worker` the step up.
 - Effort is not settable per dispatch: pick the agent for it. High risk -> `opus-worker`, or
   `strong-worker` for the kinds the ladder names. Only when `strong-worker` has been defeated, or
@@ -52,7 +52,7 @@ Read from skill `coordinator-dispatch`, "Which agent, which model". A repo's own
 - The repo has a running `consultant` session (`consultant-<repo>` in ListAgents): SendMessage
   engineering questions there before the PM; owner matters still go to the PM, which logs the
   consultant's calls as delegated.
-- `researcher` = ideas, modes, mechanics, prior art; read-only. Output = concepts for him to pick;
+- `researcher` = ideas, modes, mechanics, prior art; read-only. Output = concepts for the owner to pick;
   the chosen one -> `spec-writer` before any builder sees it.
 - Pass/fail checks whose log nobody needs -> the cheapest agent type the profile lists; none
   listed -> the worker.

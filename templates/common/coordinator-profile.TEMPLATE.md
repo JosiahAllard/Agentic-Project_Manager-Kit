@@ -19,5 +19,5 @@ The agent types this repository actually has, which kind of work goes to which, 
 must not be used here. The coordinator uses only the types listed.
 
 ## Owner
-How the owner is reached, which questions go to him and through whom, what needs his explicit go
-(deploying, spending, persisting data outside the repository), and how often he wants a digest.
+How the owner is reached, which questions go to the owner and through whom, what needs the owner's explicit go
+(deploying, spending, persisting data outside the repository), and how often the owner wants a digest.

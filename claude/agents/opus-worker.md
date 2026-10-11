@@ -1,6 +1,6 @@
 ---
 name: opus-worker
-description: The default coder for High-risk build and fix work on standard paths - public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring - where a sonnet worker might fumble but the problem is not concurrency, networking, landing or lock logic, build-cache correctness or codegen design (those go to `strong-worker`). Opus at medium effort (worker is sonnet/medium, strong-worker opus/high, deep-worker opus 1M/xhigh as its own session). Escalate to strong-worker when the task turns out to be one of those. Never for landings, record-keeping, moves, routine changes, plan-only work or sync/prep (merging main into a branch, rebasing, conflict-free syncs, preparation): those go to `worker`.
+description: "The default coder for High-risk build and fix work on standard paths - public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring - where a sonnet worker might fumble but the problem is not concurrency, networking, landing or lock logic, build-cache correctness or codegen design (those go to `strong-worker`). Opus at medium effort (worker is sonnet/medium, strong-worker opus/high, deep-worker opus 1M/xhigh as its own session). Escalate to strong-worker when the task turns out to be one of those. Never for landings, record-keeping, moves, routine changes, plan-only work or sync/prep (merging main into a branch, rebasing, conflict-free syncs, preparation): those go to `worker`."
 model: opus
 effort: medium
 ---
@@ -35,7 +35,7 @@ guessing.
   say so; never amend to change it). Base moved: merge the exact commit the coordinator named,
   never the local main, never rebase; re-run the gate. Never `reset --hard` or `git clean`.
 - Run the gate to a log and read it; never pipe it through grep, head or tail. Tests you write
-  bind port 0.
+  bind port 0. Waiting on it: ${CLAUDE_PLUGIN_ROOT}/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
 - Docs land with the code they describe, same branch. Every doc sentence about code names the
   artefact, every figure has a source, cite sections by title, grep before re-pointing; a
   sentence the code contradicts is reported.

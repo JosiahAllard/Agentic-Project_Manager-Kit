@@ -3,7 +3,11 @@
   gate.py [-C DIR] [--base REV] [--full | --only STEP ...] [--plan] [--slug S] [--log-dir D]
       gate the checkout under the machine lock; on a pass of a clean tree, the gate-OK record.
       Through a stub run from outside its checkout, refused (4) when the caller is in another
-      checkout, unless an absolute -C names the tree (kitlib.gate.caller)
+      checkout, unless an absolute -C names the tree; with no stub and no -C or a relative one,
+      refused (4) when this gate.py is in another checkout of the gated tree's repository; a
+      relative --log-dir
+      outside the gated checkout is USAGE (2) (kitlib.gate.caller). From another directory:
+      python <worktree>/tools/gate.py -C <worktree> (docs/gate.md "The caller's checkout")
   gate.py land BRANCH --expect-main SHA --expect-tip SHA [-C DIR] [--lane L] [--summary TEXT]
                       [--full] [--fresh] [--wait SECONDS] [--log-dir D] [--keep-branch]
       land BRANCH from the main checkout: merge, gate the merged tree, push, verify, then delete
@@ -26,7 +30,9 @@ import os
 import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# The checkout this gate.py is in: in the kit's own repository, the checkout whose code gates.
+KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, KIT)
 
 from kitlib import gate as G                                        # noqa: E402
 from kitlib.config import policy                                   # noqa: E402
@@ -55,7 +61,9 @@ def gate_parser():
     p = Parser(prog='gate.py', description='Gate this checkout under the machine lock.')
     p.add_argument('-C', dest='root', help='the checkout (default: here; through a stub run from '
                    'outside its checkout, refused when the caller is in another checkout unless '
-                   '-C is an absolute path)')
+                   '-C is an absolute path; with no stub, refused when a relative or absent -C names '
+                   'another checkout of this gate.py\'s repository). From another directory: python '
+                   '<worktree>/tools/gate.py -C <worktree>')
     p.add_argument('--base', help='compare against this rev (default <remote>/<main>)')
     sel = p.add_mutually_exclusive_group()
     sel.add_argument('--full', action='store_true', help='every step that is not manual')
@@ -166,7 +174,8 @@ def do_measure(a):
         return G.REFUSED
     try:
         with open(live, encoding='utf-8') as f:
-            table = json.load(f)['kinds']
+            live_doc = json.load(f)
+        table, aliases = live_doc['kinds'], live_doc.get('aliases')
         store = Store(say=say)
         layout = lay.in_force(store)['layout']
         history = store.history_records(a.days)
@@ -176,7 +185,8 @@ def do_measure(a):
     kinds, notes = measure.propose(table, history, layout['medium_cores'],
                                    store.settings.history_min_runs, agent_cap=layout['agent_cap'])
     doc = measure.document(kinds, 'PROPOSED by gate.py --measure from %d day(s) of history; '
-                                  'review, then commit to kitlib/lock/kinds.json.' % a.days)
+                                  'review, then commit to kitlib/lock/kinds.json.' % a.days,
+                           aliases)
     try:
         with open(out, 'w', encoding='utf-8') as f:
             f.write(json.dumps(doc, indent=1) + '\n')
@@ -221,6 +231,15 @@ def main(argv):
             refused = caller.refusal(root, here)
             if refused is not None:
                 return emit(refused)
+        # No stub, and no -C or a relative one: this gate.py on another checkout of its own
+        # repository. An absolute -C names the tree on purpose.
+        if here is None and not (a.root and os.path.isabs(a.root)):
+            refused = caller.own_copy_refusal(root, KIT, rel=a.root)
+            if refused is not None:
+                return emit(refused)
+        refused = caller.log_dir_refusal(a.log_dir, root, os.getcwd())
+        if refused is not None:
+            return emit(refused)
         book_kw = {'store': Store(say=say)}
         return emit(guarded(runner.branch_gate, root, base=a.base, full=a.full,
                             only=a.only, plan=a.plan, slug=a.slug, log_dir=a.log_dir,

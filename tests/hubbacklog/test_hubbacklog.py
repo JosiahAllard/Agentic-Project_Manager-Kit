@@ -62,8 +62,8 @@ class SnapshotTest(unittest.TestCase):
         run(self.root, "init", "-q", "-b", "main")
         run(self.root, "config", "user.email", "t@t")
         run(self.root, "config", "user.name", "t")
-        write(self.root, "OPEN-1.md", "id: OPEN-1\nsummary: first open\npriority: 2\nstate: blocked\n")
-        write(self.root, "OPEN-2.md", "id: OPEN-2\nsummary: second\npriority: -\n")
+        write(self.root, "EX-OPEN-1.md", "id: EX-OPEN-1\nsummary: first open\npriority: 2\nstate: blocked\n")
+        write(self.root, "EX-OPEN-2.md", "id: EX-OPEN-2\nsummary: second\npriority: -\n")
         write(self.root, "SHUT.md", "id: SHUT\nsummary: closed in place\nclosed: 2026-10-05\n")
         write(self.root, "OLD.md", "id: OLD\nsummary: closed long ago\nclosed: 2026-01-01\n")
         write(self.root, "GONE.md", "id: GONE\nsummary: closed by deletion\n")
@@ -82,8 +82,8 @@ class SnapshotTest(unittest.TestCase):
     def test_snapshot(self):
         b, c = hubbacklog.snapshot("r", self.root, now=NOW)
         self.assertEqual(b, {"repo": "r", "items": [
-            {"id": "OPEN-1", "t": "first open", "p": 2, "s": "blocked"},
-            {"id": "OPEN-2", "t": "second", "p": None, "s": "open"}]})
+            {"id": "EX-OPEN-1", "t": "first open", "p": 2, "s": "blocked"},
+            {"id": "EX-OPEN-2", "t": "second", "p": None, "s": "open"}]})
         self.assertEqual([(i["id"], i["t"]) for i in c["items"]],
                          [("GONE", "closed by deletion"), ("SHUT", "closed in place")])
         self.assertTrue(c["items"][0]["d"].startswith("2026-10-06T10:00:00"))
@@ -126,7 +126,7 @@ class RefStoreTest(unittest.TestCase):
         run(self.root, "init", "-q", "-b", "main")
         run(self.root, "config", "user.email", "t@t")
         run(self.root, "config", "user.name", "t")
-        write(self.root, "ON-MAIN.md", "id: ON-MAIN\nsummary: not the store\n")
+        write(self.root, "EX-ON-MAIN.md", "id: EX-ON-MAIN\nsummary: not the store\n")
         run(self.root, "add", "-A")
         run(self.root, "commit", "-qm", "docs/backlog on main is not the store")
 
@@ -138,11 +138,11 @@ class RefStoreTest(unittest.TestCase):
         backend = store.RefBackend(self.root, "origin", store.STORE_REF, store.STORE_REF)
         rules = record.Rules()
         backend.publish(backend.load(rules), {
-            "OPEN-1": "id: OPEN-1\nsummary: first open\npriority: 2\n",
+            "EX-OPEN-1": "id: EX-OPEN-1\nsummary: first open\npriority: 2\n",
             "GONE": "id: GONE\nsummary: closed by deletion\n"}, "seed\n")
         backend.publish(backend.load(rules), {"GONE": None}, "retires GONE: gone\n")
         b, c = hubbacklog.snapshot("r", self.root, now=NOW)
-        self.assertEqual(b["items"], [{"id": "OPEN-1", "t": "first open", "p": 2, "s": "open"}])
+        self.assertEqual(b["items"], [{"id": "EX-OPEN-1", "t": "first open", "p": 2, "s": "open"}])
         self.assertEqual([(i["id"], i["t"]) for i in c["items"]], [("GONE", "closed by deletion")])
 
     def test_no_store_yet_is_empty(self):

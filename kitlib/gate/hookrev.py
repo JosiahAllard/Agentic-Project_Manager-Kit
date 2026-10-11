@@ -44,7 +44,8 @@ def load_module_at(cfg, root, rev):
     module.__file__ = where
     sys.modules[name] = module
     try:
-        exec(compile(data, where, 'exec'), module.__dict__)
+        with policy.no_bytecode():    # as the work-tree loader: an import writes no __pycache__
+            exec(compile(data, where, 'exec'), module.__dict__)
     except BaseException as e:    # the repo's code: any failure is a config failure
         if sys.modules.get(name) is module:
             del sys.modules[name]

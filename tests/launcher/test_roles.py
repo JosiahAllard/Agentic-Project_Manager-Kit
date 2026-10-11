@@ -86,7 +86,7 @@ class EveryKind(unittest.TestCase):
                       'name': 'alpha-coord-a1'},
             'helper': {'repo': 'alpha', 'agent': False, 'stem': 'alpha-helper', 'brief': 'b.md', 'state': 's.md',
                        'account': 1, 'name': 'alpha-helper-a1'}})
-        self.h.write_state('conductors.json', {'alpha': 1, 'pm_session_id': 'abc-123', 'pm_folder': self.h.root,
+        self.h.write_state('coordinators.json', {'alpha': 1, 'pm_session_id': 'abc-123', 'pm_folder': self.h.root,
                                                'pm_account': 2})
         reboot.run(self.h.settings, self.host)
         roles = sorted(role_of(t) for t in self.host.opened)

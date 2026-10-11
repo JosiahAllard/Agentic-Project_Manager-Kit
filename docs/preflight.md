@@ -20,6 +20,7 @@ One rule runs through all three: a reading that failed is printed as `?`, `UNKNO
 - **stray lines**: from `kitlib.git.stray.check`.
 - **report hooks**.
 - **engines and ports**: only when configured.
+- **config**: which machine config file is read, from `kitlib.preflight.configline` (docs/kit-json.md "Moving the machine config folder"): the file, `FALLBACK`, `WARN both`, `none` or `BROKEN`; keys are named, values never.
 - **traps**.
 - **index**.
 - **next**: the kit commands with this session's values, from `kitlib/preflight/nextblock.py`. In the main checkout this is only `new_worktree.py`. In a worktree it is `commit.py`, `review_pack.py` and `codemap.py`, plus `sync_base.py` when the branch is behind its base.
@@ -57,11 +58,10 @@ In a row, `?` means git could not answer. `-` means "no owner-only paths", and `
 
 A worktree that git cannot read as its own work tree is a row of `?`, ending `? (not its own work tree: git cannot read it)`. The check is `kitlib.board.report._own_tree`. The case it guards against is a half-deleted worktree under `.claude/worktrees/`: git, asked inside it, walks up and answers for the main checkout.
 
-`--write-state` writes the board into the state file and changes nothing else. kitlib/board/state.py chooses the file, in the main checkout:
+`--write-state` writes the board into the state file and changes nothing else. kitlib/board/state.py chooses the file, in the main checkout's git common dir, so that no untracked file is left in the work tree (a dirty main checkout refuses `gate.py land`):
 
-1. `.kit.json` `board.state_file`, when set.
-2. Otherwise `docs/ops/state.local.md`.
-3. Otherwise `ops/state.local.md`, when the main checkout has `ops/` and no `docs/ops/`.
+1. `<git common dir>/kit/board-state.md` by default.
+2. `.kit.json` `board.state_file`, when set and when it lies under the git dir (for example `.git/kit/board-state.md`). Any other value is in the work tree: `board: refused: "board".state_file <path> is inside the work tree...`, exit 2, nothing written.
 
 Only the block between `<!-- board:begin -->` and `<!-- board:end -->` is rewritten. A missing file is created from a template.
 
@@ -93,7 +93,7 @@ All of these keys are in docs/kit-json.md.
   - `worktrees_dir`: used in the NOTE.
 - `preflight`:
   - `traps`.
-  - `report_hooks`: `module:function` entries, loaded from `<tools_dir>/<module>.py`. A hook that fails is one `hook NOT CHECKED` line. While a hook runs, `<tools_dir>` is first on `sys.path`, so a sibling it imports resolves to the repo's own file even when a kit tool has the same name (`kitlib/preflight/hooks.py`, `_repo_first`); afterwards `sys.path` and `sys.modules` are put back as they were.
+  - `report_hooks`: `module:function` entries, loaded from `<tools_dir>/<module>.py`. A hook that fails is one `hook NOT CHECKED` line, a `SystemExit` from the hook or a sibling it imports included; a `KeyboardInterrupt` is not caught (`kitlib/preflight/hooks.py`, `lines`). While a hook runs, `<tools_dir>` is first on `sys.path`, so a sibling it imports resolves to the repo's own file even when a kit tool has the same name (`kitlib/preflight/hooks.py`, `_repo_first`). A sibling is a `.py`, `.pyw` or `.pyd` file or a folder; a loaded module of that name, and its submodules, is set aside only when it came from outside `<tools_dir>`, so a builtin stays. Afterwards `sys.path` is put back, the modules the hook loaded from `<tools_dir>` are dropped, the ones set aside are restored, and modules the hook pulled in from elsewhere (the stdlib, `kitlib`) stay loaded - unless a module loaded from `<tools_dir>` has a stdlib name or a set-aside name, when a module pulled in meanwhile may be bound to the repo's copy and every module first imported during the hook is dropped. These changes are process-global: preflight runs hooks on one thread, and no other thread may import while a hook runs.
   - `engines`: process-name prefixes, matched case-blind.
   - `udp_ports`: `[low, high]`.
   

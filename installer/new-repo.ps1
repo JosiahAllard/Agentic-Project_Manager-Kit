@@ -1,14 +1,17 @@
 # Bootstraps a repository onto the kit (docs/install.md; ported from the PM kit's new-repo.ps1).
 #
 #   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner>
-#                                -AgentEmail <agents> [-MainBranch main] [-Stack python]
-#                                [-PmData <folder> [-PrivateRemote <url>]] [-Apply]
+#                                -AgentEmail <agents> [-MainBranch main] [-RepoName <name>]
+#                                [-Stack python] [-PmData <folder> [-PrivateRemote <url>]] [-Apply]
 #
 # The target is an existing git checkout (`git init -b main` first for a new one); the folder -Target
 # names must be its top level. It writes these and nothing else (a repository holds stubs only,
 # never a copy of the kit):
-#   <Target>\.kit.json            "repo".main_branch, "owner".email, "owner".agent_emails, and with
-#                                -Stack "gate": "tools/gate.json"
+#   <Target>\.kit.json            "repo".main_branch, "repo".name, "owner".email, "owner".agent_emails,
+#                                and with -Stack "gate": "tools/gate.json"
+# "repo".name is the repository's column in the rulings ledger (backlog `check` is red without one when
+# the machine has a ledger): -RepoName, else the target folder's name lower-cased. Either must be a
+# lower-case ledger name ([a-z0-9][a-z0-9-]*); a folder name that is not one refuses, asking for -RepoName.
 #   <Target>\<tools_dir>\<n>.py   the kit tool stubs, by `tools\kit_stubs.py write -C <Target>`
 #   <Target>\.gitignore, .gitattributes   templates\common's lines (.claude/worktrees/ and .codex/worktrees/
 #                                keep the agents' worktrees out of the main checkout's status) plus the
@@ -17,8 +20,11 @@
 #   <Target>\docs\INDEX.md        a starter doc index (templates\common\INDEX.md), only if absent
 #   <Target>\tools\gate.json      with -Stack: templates\stacks\<Stack>\tools\gate.json, only if absent
 #   <Target>\tools\<file>        with -Stack: the stack's other files under templates\stacks\<Stack>\tools
-#                                (Godot: godot.cmd), each only if absent; one already there is kept
-# It does not install the stack's CI workflows or its other files outside tools\, templates\common\CLAUDE.md,
+#                                (dotnet: dotnet_each.py, godot: godot.cmd, python: js_tests.py), each only if absent; one already there is kept
+#   <Target>\.claude\skills\...  with -Stack: the stack's skills, by `tools\stack_skill.py install` (Godot:
+#                                godot-render-check), the kit's absolute path written over {kit_root};
+#                                one already there is kept; a kit path it cannot write refuses
+# It does not install the stack's CI workflows or its other files outside tools\ and .claude\skills\, templates\common\CLAUDE.md,
 # the agent profiles, or .claude\settings.json (docs/install.md "What the script does not install").
 # -OwnerEmail and -AgentEmail are required and must differ: an owner commit (Owner-Approved:) counts
 # only when its author email is "owner".email, so an empty or shared identity would let an agent's
@@ -36,7 +42,11 @@
 # Its result is reported as pm_data.py gives it: its lines, then its exit code as this script's.
 #
 # A write that fails (a read-only or locked file, a full disk) stops the script at once: it prints
-# "FAILED", what was already written, and exits 1. It never prints "wrote" for a file it did not write.
+# "FAILED", what was already written (and the target that failed, which may be partly written), and exits 1.
+# It never prints "wrote" for a file it did not write. Every kit template (stack.json, gate.json,
+# common\.gitignore, gitattributes, INDEX.md) and an existing .gitignore / .gitattributes is read at
+# plan time: one that cannot be read, a stub plan that cannot be read, or a stack tools file named
+# like a stub, refuses before any write.
 #
 # Exit: 0 dry run printed or files written, 1 refused or a write failed, 2 usage; with -PmData and -Apply, a non-zero
 # exit of pm_data.py init (1 refused, 2 configuration, 3 made locally but the push failed, 4 stopped
@@ -46,6 +56,7 @@ param(
     [Parameter(Mandatory = $true)][string]$OwnerEmail,
     [Parameter(Mandatory = $true)][string]$AgentEmail,
     [string]$MainBranch = 'main',
+    [string]$RepoName = '',
     [string]$Stack = '',
     [string]$PmData = '',
     [string]$PrivateRemote = '',
@@ -63,10 +74,15 @@ function Fail([string]$msg, [int]$code = 1) { Write-Host "new-repo: REFUSED - $m
 # call only prints an error and the script goes on to say "wrote". Here a failure stops it, with the
 # files already written named so they can be undone.
 $written = New-Object System.Collections.Generic.List[string]
+# A file that was there already and only had lines appended is not the script's to delete: kept apart.
+$appended = New-Object System.Collections.Generic.List[string]
 function Stop-Write([string]$path, $err, [string]$verb = 'write') {
     Write-Host "new-repo: FAILED - cannot $verb $path - $($err.Exception.Message)"
     if ($written.Count) { Write-Host "  already written (delete them to undo): $($written -join ' , ')" }
-    else { Write-Host "  nothing had been written before it" }
+    elseif (-not $appended.Count) { Write-Host "  nothing had been written before it" }
+    foreach ($a in $appended) { Write-Host "  appended to $a : remove the '# Added by the kit installer' block to undo (the file is yours, do not delete it)" }
+    # The target that failed is not in the list above: a write can fail part-way.
+    if ($verb -eq 'write') { Write-Host "  $path may be partly written (the write that failed; delete it too if the script made it, check it if it was there before)" }
     exit 1
 }
 function Put-File([string]$path, [string]$text, [string]$how = 'wrote') {
@@ -75,7 +91,7 @@ function Put-File([string]$path, [string]$text, [string]$how = 'wrote') {
         if ($how -eq 'appended') { [IO.File]::AppendAllText($path, $text, $utf8) }
         else { [IO.File]::WriteAllText($path, $text, $utf8) }
     } catch { Stop-Write $path $_ }
-    $written.Add($path)
+    if ($how -eq 'appended') { $appended.Add($path) } else { $written.Add($path) }
 }
 function Copy-NewFile([string]$src, [string]$dst) {
     try {
@@ -119,6 +135,18 @@ if (($targetFull + '\').StartsWith($kitFull, [StringComparison]::OrdinalIgnoreCa
     Fail "the target $targetFull is inside the kit itself"
 }
 if (-not (Test-Path -LiteralPath $targetFull -PathType Container)) { Fail "$targetFull is not a folder" }
+# "repo".name: the ledger column (kitlib/backlog/ledger.py ledger_name), checked with the grammar of the
+# machine config's ledger_repos. -cnotmatch: PowerShell's -notmatch ignores case.
+$RepoName = $RepoName.Trim()
+$nameRx = '^[a-z0-9][a-z0-9-]*$'
+if ($RepoName) {
+    if ($RepoName -cnotmatch $nameRx) { Fail "-RepoName '$RepoName' is not a lower-case ledger name ([a-z0-9][a-z0-9-]*)" 2 }
+} else {
+    $RepoName = (Split-Path $targetFull -Leaf).ToLowerInvariant()
+    if ($RepoName -cnotmatch $nameRx) {
+        Fail "the folder name '$RepoName' is not a lower-case ledger name ([a-z0-9][a-z0-9-]*); give -RepoName <the repo column of the rulings ledger>" 2
+    }
+}
 # Native calls run under Continue: Windows PowerShell 5.1 turns a native stderr line into an error
 # record, which Stop would throw on.
 $ErrorActionPreference = 'Continue'
@@ -127,6 +155,9 @@ if ($LASTEXITCODE -ne 0 -or -not $top) { Fail "$targetFull is not a git checkout
 $topFull = [IO.Path]::GetFullPath(($top | Select-Object -First 1).Trim()).TrimEnd('\')
 if ($topFull -ine $targetFull) { Fail "$targetFull is inside the checkout $topFull; name its top level" }
 if (-not (Test-Path -LiteralPath $stubTool)) { Fail "the kit at $kit has no tools\kit_stubs.py" 2 }
+# Every kit tool this script runs is a python script: with no python on PATH a call would only print an
+# error and the plan would look empty. Refuse here, before anything is written.
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) { Fail "python is not on PATH; the kit's tools need it (nothing was written)" 2 }
 # The PM-data command: argv for the call, and the same quoted for the printed line.
 $pmArgs = @()
 $pmLine = ''
@@ -158,11 +189,17 @@ if ($Stack) {
         $known = (Get-ChildItem -LiteralPath (Join-Path $kit 'templates\stacks') -Directory | ForEach-Object { $_.Name }) -join ', '
         Fail "-Stack '$Stack' is not a stack the kit has ($known)" 2
     }
-    $meta = Get-Content -LiteralPath (Join-Path $stackDir 'stack.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    # Every kit template is read here, at plan time, under Stop (the script runs under Continue, where a
+    # failed read only prints an error and goes on): an unreadable one refuses before anything is written.
+    $stackJson = Join-Path $stackDir 'stack.json'
+    try { $meta = Get-Content -LiteralPath $stackJson -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop }
+    catch { Fail "cannot read $stackJson - $($_.Exception.Message); nothing was written" }
     foreach ($k in 'gitignore', 'gitattributes') { if ($meta.$k) { $stackLines[$k] = @($meta.$k) } }
     $gateSrc = Join-Path $stackDir 'tools\gate.json'
     if (-not (Test-Path -LiteralPath $gateSrc)) { Fail "the kit has no $gateSrc" 2 }
-    # The stack's other tools files (Godot: godot.cmd); gate.json is handled apart (it must exist before
+    try { $gateText = [IO.File]::ReadAllText($gateSrc, $utf8) }
+    catch { Fail "cannot read $gateSrc - $($_.Exception.Message); nothing was written" }
+    # The stack's other tools files (dotnet_each.py, godot.cmd, js_tests.py, by stack); gate.json is handled apart (it must exist before
     # the stubs are written, and one already there refuses).
     $toolFiles = @(Get-ChildItem -LiteralPath (Join-Path $stackDir 'tools') -File | Where-Object { $_.Name -ine 'gate.json' } |
         ForEach-Object { [pscustomobject]@{ Name = $_.Name; Src = $_.FullName; Dst = (Join-Path $targetFull "tools\$($_.Name)") } })
@@ -170,7 +207,7 @@ if ($Stack) {
 }
 $gateLine = if ($Stack) { "  `"gate`": `"tools/gate.json`",`n" } else { '' }
 $text = "{`n" +
-        "  `"repo`": {`"main_branch`": `"$MainBranch`"},`n" +
+        "  `"repo`": {`"main_branch`": `"$MainBranch`", `"name`": `"$RepoName`"},`n" +
         $gateLine +
         "  `"owner`": {`"email`": `"$OwnerEmail`", `"agent_emails`": [`"$AgentEmail`"]}`n" +
         "}`n"
@@ -182,12 +219,19 @@ function Plan-LineFile([string]$name, [string[]]$stackWant) {
     # The kit ships the attributes template as "gitattributes": a tracked .gitattributes would apply to
     # the kit's own checkout (and the fake git of its tests refuses one).
     $tplName = if ($name -eq '.gitattributes') { 'gitattributes' } else { $name }
-    $tpl = @(Get-Content -LiteralPath (Join-Path $kit "templates\common\$tplName") -Encoding UTF8)
+    $tplPath = Join-Path $kit "templates\common\$tplName"
+    try { $tpl = @(Get-Content -LiteralPath $tplPath -Encoding UTF8 -ErrorAction Stop) }
+    catch { Fail "cannot read $tplPath - $($_.Exception.Message); nothing was written" }
     $stackWant = @($stackWant | Where-Object { $_ -and $_.Trim() -and -not $_.TrimStart().StartsWith('#') })
     $want = @($tpl | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') }) + @($stackWant)
     $new = -not (Test-Path -LiteralPath $path)
     $have = @()
-    if (-not $new) { $have = @(Get-Content -LiteralPath $path -Encoding UTF8 | ForEach-Object { Norm $_ }) }
+    # Under Continue a failed read only prints an error and leaves $have empty: read it under Stop and
+    # refuse here, before anything is written.
+    if (-not $new) {
+        try { $have = @(Get-Content -LiteralPath $path -Encoding UTF8 -ErrorAction Stop | ForEach-Object { Norm $_ }) }
+        catch { Fail "cannot read $path - $($_.Exception.Message); nothing was written" }
+    }
     $missing = @($want | Where-Object { $have -notcontains (Norm $_) })
     $body = @()
     if ($new) {
@@ -207,8 +251,26 @@ $indexNew = -not (Test-Path -LiteralPath $indexDst)
 # one named on an entry line). Only when the starter is what gets written; never a refusal.
 $unindexed = @()
 if ($indexNew) {
-    $named = @([regex]::Matches((Get-Content -LiteralPath $indexSrc -Raw -Encoding UTF8), '`([^`]+)`') | ForEach-Object { $_.Groups[1].Value })
-    $unindexed = @(& git -C $targetFull ls-files -- '*.md' 2>$null | Where-Object { $_ -and ($named -notcontains $_) })
+    try { $indexText = [IO.File]::ReadAllText($indexSrc, $utf8) }
+    catch { Fail "cannot read $indexSrc - $($_.Exception.Message); nothing was written" }
+    $named = @([regex]::Matches($indexText, '`([^`]+)`') | ForEach-Object { $_.Groups[1].Value })
+    # -z with core.quotePath=false gives the names raw (git otherwise quotes a non-ASCII name as "\303\251"),
+    # NUL-separated and UTF-8; read the bytes as UTF-8 through a process, not the console's code page.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'git'
+    $psi.Arguments = "-C `"$targetFull`" -c core.quotePath=false ls-files -z -- `"*.md`""
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = $utf8
+    $lsOut = ''
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $lsOut = $proc.StandardOutput.ReadToEnd()
+        $null = $proc.StandardError.ReadToEnd()
+        $proc.WaitForExit()
+    } catch { $lsOut = '' }
+    $unindexed = @($lsOut.Split([char]0) | Where-Object { $_ -and ($named -notcontains $_) })
 }
 
 # The stubs the kit would write, from kit_stubs itself (it reads the target's .kit.json, which is
@@ -217,6 +279,13 @@ $plan = & python $stubTool write -C $targetFull --dry-run 2>&1
 $planCode = $LASTEXITCODE
 
 # The default remote name: .kit.json "repo".remote is not set by this script.
+$skillTool = Join-Path $kit 'tools\stack_skill.py'
+$skillPlan = @()
+if ($Stack) {
+    if (-not (Test-Path -LiteralPath $skillTool)) { Fail "the kit at $kit has no tools\stack_skill.py" 2 }
+    $skillPlan = @(& python $skillTool install --stack $Stack -C $targetFull 2>&1 | ForEach-Object { "$_" })
+    if ($LASTEXITCODE -ne 0) { Fail "stack_skill.py refused the $Stack stack's skills ($($skillPlan -join ' ')); nothing was written" }
+}
 $remoteUrl = & git -C $targetFull remote get-url origin 2>$null
 $hasOrigin = ($LASTEXITCODE -eq 0 -and $remoteUrl)
 
@@ -249,6 +318,7 @@ foreach ($t in $toolFiles) {
     if (Test-Path -LiteralPath $t.Dst) { Write-Host "  kept          $($t.Dst)   (exists)" }
     else { Write-Host "  would create  $($t.Dst)   (from templates\stacks\$Stack\tools\$($t.Name))" }
 }
+foreach ($l in $skillPlan) { Write-Host "  $l   (stack skill, kit path written in)" }
 Write-Host ""
 if ($hasOrigin) { Write-Host "remote:   origin -> $(@($remoteUrl)[0])" }
 else {
@@ -262,11 +332,37 @@ if ($PmData) {
     Write-Host "  $when after the files above:  $pmLine"
 }
 if ($planCode -ne 0) { Fail "kit_stubs.py refused the stubs above (exit $planCode); nothing was written" }
+# A stack tools file that has a stub's name would be copied first and then be a file "that is not a
+# stub" where the stub goes. Refuse now, in the dry run too.
+$stubNames = @(@($plan) | ForEach-Object { if ("$_" -match '[\\/]([^\\/]+\.py)\s*$') { $Matches[1] } })
+if (@($plan | Where-Object { "$_".Trim() }).Count -and -not $stubNames.Count) {
+    Fail "cannot read the stub plan (kit_stubs.py printed lines with no stub file name in them, shown above); nothing was written"
+}
+foreach ($t in $toolFiles) {
+    if (@($stubNames | Where-Object { $_ -ieq $t.Name }).Count) {
+        Fail "the $Stack stack's tools file $($t.Name) has the name of a kit tool stub; nothing was written"
+    }
+}
 if (-not $Apply) { exit 0 }
 
+# The stack's skills go before anything else, with the kit's absolute path written in; a refusal
+# stops here, before .kit.json (the plan-time run above makes one unlikely).
+$skillWritten = New-Object System.Collections.Generic.List[string]
+if ($Stack) {
+    $skillOut = @(& python $skillTool install --stack $Stack -C $targetFull --apply 2>&1 | ForEach-Object { "$_" })
+    foreach ($l in $skillOut) {
+        Write-Host "  $l"
+        if ($l -match '^wrote\s+(.+)$') { $written.Add($Matches[1].Trim()); $skillWritten.Add($Matches[1].Trim()) }
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "new-repo: STOPPED - stack_skill.py exited $LASTEXITCODE; .kit.json was not written."
+        if ($written.Count) { Write-Host "  already written (delete them to undo): $($written -join ' , ')" }
+        exit 1
+    }
+}
 # The gate file goes first: kit_stubs reads .kit.json and refuses a "gate" path that is not there.
 if ($Stack) {
-    Put-File $gateDst ([IO.File]::ReadAllText($gateSrc, $utf8))
+    Put-File $gateDst $gateText
     Write-Host "  wrote    $gateDst"
     foreach ($t in $toolFiles) {
         if (Test-Path -LiteralPath $t.Dst) { continue }
@@ -286,7 +382,7 @@ $out = & python $stubTool write -C $targetFull 2>&1
 $code = $LASTEXITCODE
 foreach ($line in @($out)) { Write-Host "  $line" }
 if ($code -ne 0) {
-    $wrote = if ($Stack) { (@(".kit.json", $gateDst) + @($toolFiles | Where-Object { $written -contains $_.Dst } | ForEach-Object { $_.Dst })) -join ', ' } else { ".kit.json" }
+    $wrote = if ($Stack) { (@(".kit.json", $gateDst) + @($toolFiles | Where-Object { $written -contains $_.Dst } | ForEach-Object { $_.Dst }) + @($skillWritten)) -join ', ' } else { ".kit.json" }
     Write-Host "new-repo: STOPPED - kit_stubs.py write exited $code after $wrote were written, and any stubs listed above."
     Write-Host "  The .gitignore, .gitattributes and docs/INDEX.md were not touched. To undo: delete $wrote and the stubs listed, then run again."
     exit 1
@@ -307,7 +403,7 @@ foreach ($f in $lineFiles) {
     }
 }
 if ($indexNew) {
-    Put-File $indexDst ([IO.File]::ReadAllText($indexSrc, $utf8))
+    Put-File $indexDst $indexText
     Write-Host "  wrote    $indexDst"
 }
 Write-Host ""
@@ -338,9 +434,11 @@ if ($PmData) {
     }
 }
 Write-Host "Next:"
+$asUsual = @('.gitattributes', 'docs/INDEX.md') + @($toolFiles | ForEach-Object { "tools/$($_.Name)" })
+$asUsual = ($asUsual[0..($asUsual.Count - 2)] -join ', ') + ' and ' + $asUsual[-1]
 Write-Host "  1. review .kit.json (docs/kit-json.md names every key). Commit .kit.json and tools/gate.json under the"
 Write-Host "     owner's identity (owner-only paths: tools/commit.py refuses an agent's); commit the stubs, .gitignore,"
-Write-Host "     .gitattributes and docs/INDEX.md as usual"
+Write-Host "     $asUsual as usual"
 Write-Host "  2. python `"$stubTool`" check -C `"$targetFull`"   (exit 0: every stub current)"
 if ($Stack) {
     Write-Host "  3. tools/gate.json is the $Stack gate: edit its globs and test command to the project."

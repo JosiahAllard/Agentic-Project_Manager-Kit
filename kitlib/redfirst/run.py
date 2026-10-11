@@ -30,6 +30,7 @@ from kitlib.config import load as load_config
 from kitlib.config.types import ConfigError
 from kitlib.gate import runner as grunner
 from kitlib.git import batch, cmd
+from kitlib.git import refs as gitrefs
 from kitlib.git import repo as gitrepo
 from kitlib.redfirst import verdict as V
 from kitlib.worktree import holders, remove
@@ -52,9 +53,17 @@ def git(cwd, *args):
 
 
 def rev(cwd, name):
-    rc, out, err = git(cwd, 'rev-parse', '--verify', '--quiet', name + '^{commit}')
-    if rc != 0 or not out:
-        raise V.Usage('usage: %s does not name a commit in %s%s' % (name, cwd, ': ' + err if err else ''))
+    """`name`'s commit; V.Usage when it names none or git gives no answer.
+
+    GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - this asked `rev-parse --verify --quiet`, whose "no such
+    commit" is exit 1 with no output, a killed git's shape (gitrefs.KILLED_SHAPE), so a kill read
+    as "does not name a commit". gitrefs.resolve(known=True) tells the two apart."""
+    out, why = gitrefs.resolve(name, cwd, known=True)
+    if out is None:
+        raise V.Usage('refused: whether %s names a commit in %s could not be read: %s'
+                      % (name, cwd, why))
+    if not out:
+        raise V.Usage('usage: %s does not name a commit in %s' % (name, cwd))
     return out
 
 
@@ -322,10 +331,12 @@ def prepare(where, tests, also=(), base=None, head='HEAD', log_dir=None):
         base = out
     if base == head:
         raise V.Usage('refused: --base and --head are the same commit %s' % base[:10])
-    rc, _, err = git(top, 'merge-base', '--is-ancestor', base, head)
-    if rc != 0:
-        raise V.Usage('refused: base %s is not an ancestor of head %s%s'
-                      % (base[:10], head[:10], ': ' + err if err else ''))
+    inside, why = gitrefs.is_ancestor(base, head, top)
+    if inside is None:
+        raise V.Usage('refused: whether base %s is an ancestor of head %s cannot be told: %s'
+                      % (base[:10], head[:10], why))
+    if not inside:
+        raise V.Usage('refused: base %s is not an ancestor of head %s' % (base[:10], head[:10]))
     sels = [V.parse_selector(t, section['runners']) for t in tests]
     files = []
     for f in [s.path for s in sels] + [p.replace('\\', '/') for p in also]:
@@ -348,11 +359,13 @@ def prepare(where, tests, also=(), base=None, head='HEAD', log_dir=None):
         if out:
             raise V.Usage('refused: uncommitted changes to the files under test (commit them '
                           'first; the evidence must be about a commit):\n%s' % out)
-    rc, _, _ = git(top, 'merge-base', '--is-ancestor', base, upstream)
+    # No answer counts as not landed: the leftover line then names the --abandon command, which
+    # keeps the tree's commits under a tag (the safe advice when it cannot be told).
+    landed = gitrefs.is_ancestor(base, upstream, top)[0] is True
     if not log_dir:
         log_dir = default_log_dir(cfg, main)
     return Plan(top=top, main=main, base=base, head=head, sels=sels, files=files, new=new, had=had,
-                landed=rc == 0, log_dir=os.path.abspath(log_dir),
+                landed=landed, log_dir=os.path.abspath(log_dir),
                 worktrees_dir=os.path.normpath(cfg.repo['worktrees_dir']),
                 tools_dir=cfg.tools_dir, hold_wait=section['hold_wait'])
 

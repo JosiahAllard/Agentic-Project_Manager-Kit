@@ -85,8 +85,7 @@ class UserConfigTest(unittest.TestCase):
                                  'pm_watch_cmd': 'python pm_watch.py', 'memory_dir': self.home,
                                  'handoff_glob': 'handoff-*.md', 'reminders_file': 'r.json',
                                  'sessions_file': 's.json', 'standing': ['a rule']},
-                    'coordinator_start': {'standing': ['a rule'], 'cap': {'items': 5},
-                                        'review_session': {'name': 'review'}},
+                    'coordinator_start': {'standing': ['a rule'], 'cap': {'items': 5}},
                     'pm_watch': {'repos': ['kit']},
                     'backlog_lint': {'repos': {'kit': {'root': self.home}}}})
         got = user.user_config(self.home)
@@ -106,15 +105,47 @@ class UserConfigTest(unittest.TestCase):
                 user.user_config(self.home)
             self.assertIn(why, str(cm.exception))
 
+    def test_guard_mark_roots_takes_marks_to_absolute_or_home_paths(self):
+        roots = {'pm': [{'path': self.home, 'mode': 'open', 'why': 'test'},
+                        {'path': '~/notes', 'mode': 'add-only'}, {'path': '~\\memo', 'mode': 'read-only'}],
+                 'deep-worker': [], '_about': 'notes allowed'}
+        self.write({'guard_mark_roots': roots})
+        self.assertEqual(user.user_config(self.home)['guard_mark_roots'], roots)
+        self.assertEqual(user.expand_home('~/notes', self.home), os.path.join(self.home, 'notes'))
+        self.assertEqual(user.expand_home(self.home, 'elsewhere'), self.home)
+
+    def test_the_reserved_marks_are_the_session_marks_reserved_values(self):
+        from kitlib import sessionmark
+        self.assertEqual(user.RESERVED_MARKS, sessionmark.RESERVED)
+
+    def test_guard_mark_roots_refuses_a_reserved_mark_a_relative_path_or_an_unknown_mode(self):
+        ok = {'path': self.home, 'mode': 'open'}
+        for body, why in (({'owner': [ok]}, "'owner' is not a session mark"),
+                          ({'Subagent': [ok]}, "'Subagent' is not a session mark"),
+                          ({'pm': [{'path': 'memory', 'mode': 'open'}]}, 'must be an absolute path or ~/<path>'),
+                          ({'pm': [{'path': '~memory', 'mode': 'open'}]}, 'must be an absolute path or ~/<path>'),
+                          ({'pm': [{'path': self.home, 'mode': 'write'}]}, 'must be one of'),
+                          ({'pm': [{'path': self.home}]}, 'needs "mode"'),
+                          ({'pm': [dict(ok, roles=['pm'])]}, 'unknown key(s) roles'),
+                          ({'pm': ok}, 'must be a list'),
+                          ([ok], 'guard_mark_roots must be an object')):
+            with self.subTest(why):
+                self.write({'guard_mark_roots': body})
+                with self.assertRaises(config.ConfigError) as cm:
+                    user.user_config(self.home)
+                self.assertIn(why, str(cm.exception))
+
     def test_the_default_home_is_the_user_profile(self):
-        self.assertEqual(user.config_file(), os.path.join(os.path.expanduser('~'), '.claude-pm-kit',
-                                                          'config.json'))
+        # a scratch profile: the real one may still hold the old folder (locate's fallback)
+        with mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home}):
+            self.assertEqual(user.config_file(), os.path.join(os.path.expanduser('~'), user.DIR_NAME,
+                                                              'config.json'))
 
     def test_home_follows_userprofile_on_windows_and_home_elsewhere(self):
         var = 'USERPROFILE' if os.name == 'nt' else 'HOME'
         self.write({'ledger_path': self.ledger})
         with mock.patch.dict(os.environ, {var: self.home}):
-            self.assertEqual(user.config_file(), os.path.join(self.home, '.claude-pm-kit', 'config.json'))
+            self.assertEqual(user.config_file(), os.path.join(self.home, user.DIR_NAME, 'config.json'))
             self.assertEqual(user.ledger_path(), self.ledger)
 
 
@@ -137,7 +168,7 @@ class DocTest(unittest.TestCase):
         self.assertEqual(self.field_lines().get('`.kit.json` keys'), schema.doc_lines())
 
     def test_the_machine_config_section_is_its_schema(self):
-        self.assertEqual(self.field_lines().get('`~/.claude-pm-kit/config.json` keys'), user.doc_lines())
+        self.assertEqual(self.field_lines().get('Machine config keys'), user.doc_lines())
 
     def test_every_schema_section_is_documented(self):
         lines = '\n'.join(schema.doc_lines())

@@ -29,7 +29,7 @@ Harness traps (Plan cannot write, output files are no rescue path): skill `subag
 
 ## The brief
 
-- Holds: role; his words verbatim where they matter; verified facts; **exact files and sections
+- Holds: role; the owner's words verbatim where they matter; verified facts; **exact files and sections
   to read**; scope + files *not* theirs + their owners; shared resources assigned; test gate;
   report wanted; no land, merge or push; for code work the entry files and symbols you know
   (path:Symbol) - a brief with no paths costs the worker about 35 calls. Brief names doc topics
@@ -48,26 +48,27 @@ Harness traps (Plan cannot write, output files are no rescue path): skill `subag
 
 Read `roster.md` in this skill's folder (beside this file): the agent types and what each is for,
 the cheap/strong split, the coding ladder, model and effort rules, `deep-worker` requests, the
-`consultant`, `researcher` and pass/fail-check routing.
+`consultant`, `researcher` and pass/fail-check routing. The kit's roster doc (the pinned models) is
+`${CLAUDE_PLUGIN_ROOT}/docs/ROSTER.md`.
 
 ## Creative dispatches
 
 - `tech-artist` (art that is code), `asset-smith` (scripted 3D), `sound-smith` (sound; it cannot
-  hear, so its report ends in a question you put to him): via his local models, against an art
-  direction he has decided or, where none exists, `tech-artist` proposes strongly different looks
-  for him to pick; none hand-sculpts, rigs or animates. An asset generation cannot supply -> him,
-  not another agent.
+  hear, so its report ends in a question you put to the owner): via the owner's local models,
+  against an art direction the owner has decided or, where none exists, `tech-artist` proposes
+  strongly different looks for the owner to pick; none hand-sculpts, rigs or animates. An asset
+  generation cannot supply -> the owner, not another agent.
 - Every creative brief carries this block, filled in:
 
   > FEEL: one sentence. REFERENCES: one to three (a game and what specifically, or an image path,
-  > including any inspiration images he sent). AVOID: one line. SCOPE OF CHOICE: the agent may
+  > including any inspiration images the owner sent). AVOID: one line. SCOPE OF CHOICE: the agent may
   > propose X, may not change Y.
 
-  Cannot fill FEEL: ask him once, through the PM, using the agent's options as the question.
+  Cannot fill FEEL: ask the owner once, through the PM, using the agent's options as the question.
 - Anything new with a creative choice runs options first, one dispatch per step: Step 0, a cheap
-  sheet of 5-10 very different designs (or designs from his inspiration images) -> he narrows ->
-  about three takes -> he picks, through the PM -> a polish dispatch on the pick only. A fix to
-  something he already approved skips to the fix.
+  sheet of 5-10 very different designs (or designs from the owner's inspiration images) -> the
+  owner narrows -> about three takes -> the owner picks, through the PM -> a polish dispatch on
+  the pick only. A fix to something the owner already approved skips to the fix.
 - Visual output: as the repo profile says; default a self-contained HTML (images inlined base64)
   in the agent's scratch folder, report leading with its absolute path. Never relay a bare
   worktree image path; an image nobody opened has not been reviewed.
@@ -105,5 +106,5 @@ the cheap/strong split, the coding ladder, model and effort rules, `deep-worker`
   state -> `docs/ops/state.local.md`. `.claude/worktrees/` is unaffected: create and remove
   worktrees as the profile says.
 - **Grow the tool set.** Weekly, run the repetition report on the repo (the kit's
-  `optional/usage/repetition_report.py`, installed under `~/.claude/tools/usage/`): repeated shell shapes, or a scratch script written twice, become lines in the repo's
+  `${CLAUDE_PLUGIN_ROOT}/optional/usage/repetition_report.py`, installed under `~/.claude/tools/usage/`): repeated shell shapes, or a scratch script written twice, become lines in the repo's
   `docs/ops/tool-requests.md`; build the top one as ordinary work (`tools/` is High risk).

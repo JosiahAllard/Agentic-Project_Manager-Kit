@@ -23,7 +23,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 
 ## Details
 
-- The ledger path comes only from the user-profile `~/.claude-pm-kit/config.json` (`ledger_path`), which the installer writes once. Nothing overrides it, not `.kit.json` and not env, and guard.py denies agent edits to it. The kit holds no machine paths.
+- The ledger path comes only from the user-profile machine config (`ledger_path`; docs/kit-json.md "Machine config keys"), which the installer writes once. Nothing overrides it, not `.kit.json` and not env, and guard.py denies agent edits to it. The kit holds no machine paths.
 - `slot()` takes the lock's Win32 mutex on the thread that releases it (the owning thread). It prints nothing; entry points print.
 - Tests target the library directly; the entry-point tests cover only arguments and exit codes.
 - Tests run on an in-process fake git (kitlib/git/fake), except the classes marked `real_git` (docs/test-tools.md "Fake git").
@@ -39,8 +39,8 @@ The shape every kit tool follows. Change this file only with the owner's approva
 
 ## Packaging
 The kit ships as a Claude Code plugin, which the owner installs once.
-- **Hooks:** guard.py and the startup alarm.
-- **Bundled:** the agent definitions and slash commands.
+- **Hooks:** the coordinator SessionStart hook (claude/hooks/hooks.json); guard.py stays in each account's settings.
+- **Bundled:** skills, the agent definitions, the lock MCP server and the coordinator SessionStart hook.
 - **Skills:** landing, red-first, ledger, backlog, machine-lock, refusal, handoff and action-hub. Profiles and CLAUDE.md become pointers to these skills.
 - **Code:** tools and kitlib stay Python. Skills explain them, and enforcement stays in the hooks and the gate.
 - **Build order:** after kitlib and guard.
@@ -54,8 +54,8 @@ The kit ships as a Claude Code plugin, which the owner installs once.
 
 ## What comes from ~/.claude
 - **Into the plugin:**
-  - agents
-  - hooks, folded into guard.py
+  - agents, named pm-kit:<name> once KIT-AGENTS-IN-PLUGIN lands
+  - hooks: the coordinator SessionStart hook; guard.py stays in each account's settings
   - tools: the lock goes into kitlib; the rest become optional packages
   - generic skills: backlog-ops, branch-review, branch-sync, coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch, machine-lock-run, mutation-testing, session-handoff, shell-and-worktree-traps, subagent-dispatch
 - **Into the repos' .claude/skills:** a skill tied to one repository's engine, models or worktree tools stays in that repository.

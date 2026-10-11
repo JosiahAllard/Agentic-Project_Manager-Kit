@@ -69,7 +69,7 @@ python tools/doc_index.py [-C DIR] [--find WORD... | --section HEADING [--doc PA
 - **`--stale`.** A report of state docs (`doc_budget.state_docs`) not touched for `--days`, or `stale_days`, default 14. It never fails.
 - **`--role`.** Prints every section a role reads (`doc_index.roles`, or `roles_doc` + `roles_marker`), capped at `role_lines`.
 
-The index file is `doc_index.index` (default `docs/INDEX.md`). `--find` and `--tools` read it from the working tree.
+The index file is `doc_index.index` (default `docs/INDEX.md`). `--find` and `--tools` read it from the working tree and fail (exit 2, "cannot read") when it is absent, even with `doc_index.enabled` false; `--section` does not read it. Preflight's `index` line marks a configured index file that is absent with `(missing)` (`kitlib/preflight/report.py`); the kit's own is `docs/INDEX.md`, pinned by `tests/docs/test_kit_index.py`.
 
 The no-mode check is run by preflight (`kitlib/preflight/report.py`), commit (`kitlib.commit.doc_index_check`, after a commit holding a `.md` or an owner-only file) and review_pack (`kitlib.reviewpack.index_line`, with `--head <branch> --config-ref <base>`) as `[sys.executable, <kit>/tools/doc_index.py, -C, <repo>]`, beside doc_budget and judged the same way (`kitlib.docs.callers.line`: exit 0, a `DOC INDEX OK` line, no `DOC INDEX FAILED`). It prints as a `doc index` line; a failure is a failing line in preflight, the follow-up-commit notice in commit, and a failed pack in review_pack. `doc_index.enabled` false runs nothing and prints nothing (review_pack reads it, and every other doc index setting, from the base's `.kit.json`, so a branch can neither switch its own check off nor rename the index it is checked against; preflight and commit read the working tree's, being advisory); a kit with no `tools/doc_index.py` prints NOT CHECKED. `tests/docs/test_index_callers.py` pins each caller.
 
@@ -98,7 +98,7 @@ It reads tracked and untracked-but-not-ignored files (`git ls-files -co --exclud
 
 - **The `-C` hand-off** (`chdir_main`, `KIT_CALLER_CWD`, `OWN_COPY`) and `_repo_guard.check_same_repo`. There is one kit copy, so `-C` is a plain path.
 - **`KIT_REPO_ROOT`, `KIT_CONFIG` and every env override**. codemap's `KIT_REPO_ROOT` test went with it.
-- **`tools/doc_budget.json`** and its keys `owner_only`, `owner_only_except`, `owner_email` and `agent_emails`. They are now `.kit.json` `doc_budget` and `owner` (docs/kit-json.md), and no old spelling is read.
+- **`tools/doc_budget.json`** and its keys `owner_only`, `owner_only_except`, `owner_email` and `agent_emails`. They are now `.kit.json` `owner.paths`, `owner.paths_except`, `owner.email` and `owner.agent_emails`; `doc_budget` keeps its other keys (docs/kit-json.md). No old spelling is read.
 - **The legacy config reader** and its tests (`cfgs_at`, `KIT_JSON`, `DuplicateKey`, the one-git-process config read). Config reads belong to `kitlib.config.load` and `load_at`. A key written twice is their `ConfigError`.
 - **trace2 git process counts.** `tests/docs/test_budget.py` counts `budget.git` calls instead.
 - **The unparseable `cat-file` reply test.** `kitlib.git.batch` tests its own parsing.

@@ -3,7 +3,7 @@
   agent_temp_sweep.py [--apply]
 
 Without --apply it only lists what it would remove (a dry run); with it, it removes. The folder and
-the age come from the "agent_temp_sweep" key of ~/.claude-pm-kit/config.json, never from code or
+the age come from the "agent_temp_sweep" key of the machine config, never from code or
 the command line: {"dir": <absolute folder>, "max_age_days": <number, default 3>}. An entry (a
 top-level file or folder of dir) is removed only when all of these hold:
 - the newest time anywhere in it (written or created, links not followed) is older than the age;
@@ -15,7 +15,7 @@ top-level file or folder of dir) is removed only when all of these hold:
 - every part of it can be removed. A removal that fails part-way puts what is left back under its
   own name.
 Links are removed as links; their targets are never entered. dir may not be a filesystem root, the
-home folder or a folder holding it, or a link. Standard library only.
+home folder or a folder holding it, or a link. Standard library and the kit's own kitlib only.
 
 Exit codes: 0 done (or nothing to do); 1 some old entry could not be removed (in use or failed);
 2 no config, a bad config or an unsafe dir.
@@ -26,6 +26,17 @@ import os
 import stat
 import sys
 import time
+
+# The machine config's place comes from the kit library (kitlib.config.user), found at the kit's
+# root through the real path: an installed junction (~/.claude/tools/agenttemp) resolves into the kit.
+# Without it nothing is swept: load() refuses (exit 2), never a traceback (exit 1 means a partial sweep).
+KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+sys.path.insert(0, KIT_ROOT)
+try:
+    from kitlib.config import user as kuser                         # noqa: E402
+    KITLIB_ERROR = None
+except ImportError as e:
+    kuser, KITLIB_ERROR = None, e
 
 KEY = "agent_temp_sweep"
 DEFAULT_MAX_AGE_DAYS = 3
@@ -54,7 +65,14 @@ def check(cfg):
 def load(home=None):
     """(dir, max_age_days) from the machine config, or None when it has no "agent_temp_sweep".
     A bad value or an unreadable config raises SweepConfigError."""
-    path = os.path.join(home or os.path.expanduser("~"), ".claude-pm-kit", "config.json")
+    if kuser is None:
+        raise SweepConfigError("the kit library (kitlib) is not in the kit root %s (%s), so the machine "
+                               "config cannot be found; run the copy inside the kit or its installed "
+                               "junction" % (KIT_ROOT, KITLIB_ERROR))
+    try:
+        path = kuser.readable_file(home)       # a BAD location is never "no config"
+    except kuser.ConfigError as e:
+        raise SweepConfigError(str(e))
     try:
         with open(path, encoding="utf-8-sig") as f:
             data = json.load(f)

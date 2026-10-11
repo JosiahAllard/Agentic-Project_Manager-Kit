@@ -20,6 +20,12 @@ a constructor argument, and the defaults read this machine.
                      the machine config's pm_data does not read (any path), or path's place is a
                      linked worktree whose repository's record or HEAD does not; else None. The
                      rules then deny the subagent write (fail closed).
+  pm_data_named()    the machine config names pm_data (or cannot be read)
+  pm_data_path()     the machine config's pm_data.path, or None
+  pm_root()          the root commit in the record of the machine config's pm_data repository
+                     ((None, None) when it names none or that repository has no record;
+                     (None, why) when either cannot be read)
+  gitread            kitlib.guard.gitread (alias, has_commit, is_shallow), or a test's fake
   config(path)       the .kit.json of the main checkout `path` belongs to (never a worktree's own:
                      an agent cannot loosen the rules from its branch; the PM data worktree,
                      answered as MAIN, is the one worktree whose own .kit.json is read); None
@@ -29,13 +35,16 @@ a constructor argument, and the defaults read this machine.
                      variable alone is never proof.
   gate_ok(root, sha) kitlib.gate.runner.verify_record: the record must name a config_rev in
                      sha's history and hash the gate config that commit holds
-  user()             ~/.claude-pm-kit/config.json (ledger_path and the guard_* keys), read
+  user()             the machine config (ledger_path and the guard_* keys), read
                      tolerantly: a file the strict reader refuses only for keys this kit does not
                      know still yields its absolute ledger_path and its string or string-list
                      values. A file that cannot be read, is
                      not a JSON object, or whose ledger_path is not an absolute path string sets
                      'broken' (why), and the ledger rule then denies every subagent write. A
-                     missing file is an empty config, not a broken one.
+                     missing file is an empty config, not a broken one. The file is the one
+                     config_location() names; a BAD location sets 'broken' too (fail closed).
+  config_location()  kitlib.config.user.locate(home), taken once per Ctx, so every read of
+                     the machine config in one hook call reads the same file.
   session_role(ev)   who runs the session (kitlib.sessionmark): 'subagent' when the payload has
                      agent_id, else the launcher's mark (PM_KIT_ROLE), else 'owner': a session
                      nothing marks is the owner's own. Replaceable (role_resolver).
@@ -52,6 +61,7 @@ from kitlib import pmdata
 from kitlib import sessionmark
 from kitlib.config import user as kuser
 from kitlib.git import refs, repo
+from kitlib.guard import gitread as fsgitread
 from kitlib.guard import place as fsplace
 
 ROLE_ENV = sessionmark.ENV
@@ -83,15 +93,18 @@ def _default_lock_held(environ, store):
     return (True, None) if parent else (False, why)
 
 
-def _machine_pm_data(home):
+def _machine_pm_data(home, location=None):
     """kitlib.pmdata.machine_settings(home). When the strict reader refuses the machine config,
     its pm_data key alone is read and checked with the same rules, so another key's fault does
-    not hide the PM data worktree; a file that cannot be read or parsed raises, and the guard
-    fails closed."""
+    not hide the PM data worktree; a file that cannot be read or parsed, or a BAD `location`
+    (kitlib.config.user.locate), raises, and the guard fails closed."""
+    loc = location or kuser.locate(home)
     try:
-        return pmdata.machine_settings(home)
+        return pmdata.machine_settings(home, location=loc)
     except kconfig.ConfigError as e:
-        path = kuser.config_file(home)
+        if loc.error:
+            raise
+        path = loc.path
         try:
             with open(path, encoding='utf-8-sig') as f:
                 data = json.load(f)
@@ -109,7 +122,7 @@ def _same_dir(a, b):
 class Ctx(object):
     def __init__(self, environ=None, home=None, store=None, classify=None, load=None,
                  gate_ok=None, git=None, lock_held=None, role_resolver=None, tempdir=None,
-                 pm_data=None):
+                 pm_data=None, gitread=None):
         self.environ = dict(os.environ if environ is None else environ)
         self.home = home or kuser.home_dir()
         self.store = store
@@ -117,12 +130,14 @@ class Ctx(object):
         self._load = load or kconfig.load
         self._gate_ok = gate_ok
         self.git = git or refs
+        self.gitread = gitread or fsgitread
         self._lock_held = lock_held
         self._role = role_resolver or default_session_role
         self.tempdir = tempdir or self.environ.get('TEMP') or tempfile.gettempdir()
         self._places, self._configs, self._config_errors = {}, {}, {}
         self._user = None
-        self._pm_data = pm_data or (lambda: _machine_pm_data(self.home))
+        self._location = None
+        self._pm_data = pm_data or (lambda: _machine_pm_data(self.home, self.config_location()))
         self._pm_settings = None                 # (settings or None, error or None), read once
         self._pm_records = {}                    # normcase(common) -> (Record or None, error or None)
         self._pm_places = {}                     # key of a place answered as the PM data worktree -> its branch
@@ -175,6 +190,38 @@ class Ctx(object):
             return None
         self.place(path)
         return self._pm_place_errors.get(os.path.normcase(os.path.abspath(path)))
+
+    def pm_data_named(self):
+        """True when the machine config names pm_data, or cannot be read (fail closed)."""
+        settings, why = self._pm_machine()
+        return bool(settings) or bool(why)
+
+    def pm_data_path(self):
+        """The machine config's pm_data.path, or None (none named, or it cannot be read)."""
+        settings, _why = self._pm_machine()
+        return settings['path'] if settings else None
+
+    def pm_root(self):
+        """The machine's PM data record as (root sha, None); (None, None) when the machine config
+        names no pm_data or its repository has no record; (None, why) when the machine config or
+        the record cannot be read, or pm_data.path is no checkout git can place. The record is the
+        one in the git common dir of pm_data.path."""
+        settings, why = self._pm_machine()
+        if why:
+            return None, why
+        if not settings:
+            return None, None
+        p = self.place(settings['path'])
+        if p.kind not in (repo.MAIN, repo.LINKED) or not p.common:
+            return None, 'the PM data worktree %s is not a checkout git can place (%s)' % (
+                settings['path'], p.detail or p.kind)
+        try:
+            record = pmdata.read(p.common)
+        except pmdata.PmDataError as e:
+            return None, str(e)
+        if record is None:
+            return None, None                   # no record yet: no data branch to guard
+        return record.root, None
 
     def _pm_machine(self):
         if self._pm_settings is None:
@@ -265,10 +312,15 @@ class Ctx(object):
 
     # ------------------------------------------------------------ the machine config
 
+    def config_location(self):
+        if self._location is None:
+            self._location = kuser.locate(self.home)
+        return self._location
+
     def user(self):
         if self._user is None:
             try:
-                self._user = kuser.user_config(self.home)
+                self._user = kuser.user_config(self.home, location=self.config_location())
             except kconfig.ConfigError as e:
                 self._user = self._tolerant(str(e))
         return self._user
@@ -276,7 +328,11 @@ class Ctx(object):
     def _tolerant(self, why):
         out = {k: None for k in kuser.SCHEMA}
         out['error'] = why
-        path = kuser.config_file(self.home)
+        loc = self.config_location()
+        if loc.error:
+            out['broken'] = loc.error
+            return out
+        path = loc.path
         try:
             with open(path, encoding='utf-8-sig') as f:
                 text = f.read()

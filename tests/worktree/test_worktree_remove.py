@@ -10,9 +10,11 @@ import os
 import subprocess
 import sys
 import time
+import types
 import unittest
 from unittest import mock
 
+from kitlib.git import cmd
 from kitlib.worktree import holders, remove
 from tests import gitfixture
 from tests.realgit import real_git
@@ -373,6 +375,46 @@ class Abandon(RemoveCase):
         self.assertIn('is also checked out at', out)
 
 
+class NoAncestryAnswer(RemoveCase):
+    """kitlib.git.refs.is_ancestor gives no answer (None) for a git ended from outside,
+    where `merge-base --is-ancestor` gave exit 1, a NO. Every verb
+    refuses on no answer and changes nothing: an abandon must not tag and remove work it was told,
+    by a killed git, has not landed."""
+
+    WHY = 'git rev-list exited 1 and printed nothing'
+
+    def unknown(self):
+        return mock.patch.object(remove.refs, 'is_ancestor', return_value=(None, self.WHY))
+
+    def test_remove_refuses(self):
+        path = self.workstream('done')
+        self.land('kit/done')
+        with self.unknown():
+            rc, out = self.run_verb('remove', 'done')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('the merge check failed (%s); nothing was removed' % self.WHY, out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn('kit/done', self.branches())
+
+    def test_abandon_refuses(self):
+        path = self.workstream('drop')
+        with self.unknown():
+            rc, out = self.run_verb('abandon', 'drop', 'superseded')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('the merge check failed (%s); nothing was tagged or removed' % self.WHY, out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+
+    def test_abandon_branch_refuses(self):
+        self.orphan('gone')
+        with self.unknown():
+            rc, out = self.run_verb('abandon_branch', 'kit/gone', 'superseded')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('the merge check failed (%s); nothing was tagged or deleted' % self.WHY, out)
+        self.assertIn('kit/gone', self.branches())
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+
+
 class AbandonNextFree(RemoveCase):
 
     CONFIG = {'worktree_remove': {'archive_next_free': True}}
@@ -383,6 +425,86 @@ class AbandonNextFree(RemoveCase):
         rc, out = self.run_verb('abandon', 'nf', 'retry')
         self.assertEqual(rc, 0, out)
         self.assertIn('tagged    archive/nf-2 ->', out)
+
+
+def kill_reads_of(prefix):
+    """A patch of cmd._run under which a `rev-parse` whose last argument starts with `prefix`
+    exits 1 having printed nothing (a git ended from outside, refs.KILLED_SHAPE); every other git
+    runs as before (the fake, or real git)."""
+    real = cmd.spawner()
+
+    def run(argv, cwd=None, input=None, timeout=None, env=None):
+        if argv[1] == 'rev-parse' and argv[-1].startswith(prefix):
+            return 1, b'', b''
+        return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+    return mock.patch.object(cmd, '_run', side_effect=run)
+
+
+class KilledTagAndBranchReads(RemoveCase):
+    """KIT-GIT-EXIT1-ANSWERS: tag_tip and branch_tip asked `rev-parse -q --verify`, whose "no such
+    ref" is exit 1 with no output, the shape a git ended from outside leaves. A killed read is no
+    answer, never a free tag name or a branch that is gone."""
+
+    CONFIG = {'worktree_remove': {'archive_next_free': True}}
+
+    def test_a_killed_tag_read_is_never_a_free_tag_name(self):
+        self.workstream('nf')
+        self.git('tag', 'archive/nf', 'main')
+        with kill_reads_of('refs/tags/archive/nf'):
+            rc, out = self.run_verb('abandon', 'nf', 'retry')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('cannot read tag archive/nf', out)
+        self.assertIn('printed nothing', out)
+        self.assertEqual(self.git('tag', '-l', 'archive/*').split(), ['archive/nf'])
+        self.assertIn('kit/nf', self.branches())
+
+    def test_a_killed_branch_read_is_never_reported_as_no_branch(self):
+        tip = self.orphan('kept')
+        self.git('tag', 'archive/kept', tip)
+        said = []
+        ctx = types.SimpleNamespace(main=self.repo, say=lambda *lines: said.extend(lines))
+        with kill_reads_of('refs/heads/kit/kept'):
+            remove.left_after(ctx, None, 'kit/kept', 'archive/kept')
+        out = '\n'.join(said)
+        self.assertNotIn('kept at (none)', out, 'a killed git was read as "no branch"')
+        self.assertIn('branch kit/kept kept at (unknown: git could not tell', out)
+        self.assertIn('tag archive/kept holds %s' % tip[:10], out)
+
+    def test_a_tag_unreadable_after_it_is_made_refuses_the_removal(self):
+        path = self.workstream('drop')
+        tip = self.git('rev-parse', 'kit/drop')
+        made = []
+        real = cmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if 'tag' in argv and '-a' in argv:
+                made.append(argv)
+            elif made and argv[1] == 'rev-parse' and argv[-1].startswith('refs/tags/archive/drop'):
+                return 1, b'', b''                      # killed, once the tag is made
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(cmd, '_run', side_effect=run):
+            rc, out = self.run_verb('abandon', 'drop', 'superseded')
+        self.assertEqual(rc, 1, out)
+        self.assertTrue(made, out)
+        self.assertIn('refused   tag archive/drop could not be read (', out)
+        self.assertIn('after it was made; nothing was removed', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn('kit/drop', self.branches())
+        self.assertEqual(self.git('rev-parse', 'archive/drop^{commit}'), tip)
+
+    def test_a_tag_unreadable_before_the_delete_keeps_the_branch(self):
+        tip = self.orphan('kb')
+        self.git('tag', 'archive/kb', tip)
+        said = []
+        ctx = types.SimpleNamespace(main=self.repo, say=lambda *lines: said.extend(lines))
+        with kill_reads_of('refs/tags/archive/kb'):
+            code = remove.drop_branch(ctx, None, 'kit/kb', tip, 'archive/kb', False)
+        out = '\n'.join(said)
+        self.assertEqual(code, remove.REFUSED, out)
+        self.assertIn('failed    tag archive/kb could not be read (', out)
+        self.assertIn('so branch kit/kb was not deleted', out)
+        self.assertIn('tag archive/kb holds (unknown: git could not tell', out)
+        self.assertIn('kit/kb', self.branches())
 
 
 class AbandonPulled(RemoveCase):
@@ -603,17 +725,13 @@ class RemoveBranch(RemoveCase):
     def test_a_merge_check_that_errors_refuses(self):
         self.orphan('done')
         self.land('kit/done')
-        real = remove.git
-
-        def failing(cwd, *args, **kw):
-            if args[:2] == ('merge-base', '--is-ancestor'):
-                return 128, '', 'fatal: boom'
-            return real(cwd, *args, **kw)
-        with mock.patch.object(remove, 'git', failing):
+        # No answer (kitlib.git.refs.is_ancestor: a failed git, or one ended from outside) is no
+        # NO and no YES: the verb refuses.
+        with mock.patch.object(remove.refs, 'is_ancestor', return_value=(None, 'fatal: boom')):
             rc, out = self.run_verb('remove_branch', 'kit/done')
         self.assertEqual(rc, 1, out)
-        self.assertIn('refused   kit/done: the merge check failed (git merge-base exited 128:'
-                      ' fatal: boom); nothing was deleted', out)
+        self.assertIn('refused   kit/done: the merge check failed (fatal: boom); nothing was'
+                      ' deleted', out)
         self.assertIn('kit/done', self.branches())
 
     def test_an_unreadable_worktree_list_refuses(self):
@@ -658,6 +776,40 @@ class RemoveBranchPulled(RemoveCase):
         self.assertEqual(rc, 1, out)
         self.assertIn('a backlog record is still pulled by kit/claim (an open claim): T-001', out)
         self.assertIn('kit/claim', self.branches())
+
+
+class RemoveBranchKilledStoreRead(RemoveCase):
+    """KIT-GIT-EXIT1-ANSWERS: a git ended from outside exits 1 having printed nothing, the shape
+    `rev-parse --verify --quiet` gives for "no such ref". The open-claim check of a ref store must
+    refuse on it, never read the store as holding no records."""
+
+    CONFIG = {'backlog': {'store': 'ref'}}
+
+    def test_a_killed_store_ref_read_refuses(self):
+        from kitlib.git import cmd
+        self.workstream('claim')
+        self.git('worktree', 'remove', '--force', os.path.join(self.home, 'claim'))
+        self.land('kit/claim')
+        real = cmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] in ('rev-parse', 'for-each-ref') and any('refs/backlog/' in a for a in argv):
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(cmd, '_run', side_effect=run):
+            rc, out = self.run_verb('remove_branch', 'kit/claim')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('the open-claim check failed', out)
+        self.assertIn('kit/claim', self.branches())
+
+    def test_an_absent_store_ref_holds_no_claim(self):
+        # The premise of the test above: unkilled, the same branch is removed.
+        self.workstream('claim')
+        self.git('worktree', 'remove', '--force', os.path.join(self.home, 'claim'))
+        self.land('kit/claim')
+        rc, out = self.run_verb('remove_branch', 'kit/claim')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('kit/claim', self.branches())
 
 
 class Holders(RemoveCase):

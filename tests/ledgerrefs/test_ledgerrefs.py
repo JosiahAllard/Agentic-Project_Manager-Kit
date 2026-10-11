@@ -14,6 +14,7 @@ from kitlib.config import user
 from kitlib.config.types import ConfigError
 from tests.gitfixture import TempRepo, fixture_env
 from tests.realgit import real_git
+from kitlib.config import user as kuser
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     'tools', 'ledger_refs.py')
@@ -89,8 +90,8 @@ class FindTest(unittest.TestCase):
 
     def test_machine_config_shape_is_checked(self):
         home = self.tmp.name
-        os.makedirs(os.path.join(home, '.claude-pm-kit'))
-        path = os.path.join(home, '.claude-pm-kit', 'config.json')
+        os.makedirs(kuser.config_dir(home))
+        path = kuser.config_file(home)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump({'ledger_refs': {'repos': {'alpha': {'path': self.repo.root}}}}, f)
         with self.assertRaises(ConfigError):
@@ -101,8 +102,8 @@ class FindTest(unittest.TestCase):
 
     def run_tool(self, *args):
         home = os.path.join(self.tmp.name, 'home')
-        os.makedirs(os.path.join(home, '.claude-pm-kit'), exist_ok=True)
-        with open(os.path.join(home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+        os.makedirs(kuser.config_dir(home), exist_ok=True)
+        with open(kuser.config_file(home), 'w', encoding='utf-8') as f:
             json.dump({'ledger_path': self.ledger, 'ledger_refs': self.settings}, f)
         env = fixture_env({'USERPROFILE': home, 'HOME': home})
         return subprocess.run([sys.executable, TOOL] + list(args), capture_output=True, text=True,

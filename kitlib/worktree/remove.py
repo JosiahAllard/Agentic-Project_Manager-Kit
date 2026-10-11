@@ -35,7 +35,7 @@ import re
 from kitlib.backlog import store as backlog_store
 from kitlib.backlog.errors import Failure as BacklogFailure
 from kitlib.config import ConfigError, load
-from kitlib.git import cmd
+from kitlib.git import cmd, refs
 
 from . import holders
 from .holders import canon
@@ -222,13 +222,13 @@ def merge_check(ctx, key, registered_path):
     if base is None:
         return ['refused   %s: cannot read %s (%s), so whether %s has landed is'
                 ' unknown; nothing was removed' % (registered_path, up, why, name)]
-    rc, _, err = git(main, 'merge-base', '--is-ancestor', tip, base)
-    if rc == 0:
+    merged, why = refs.is_ancestor(tip, base, main)
+    if merged:
         ctx.say('merged    %s is in %s %s' % (name, up, base[:10]))
         return None
-    if rc != 1:
-        return ['refused   %s: the merge check failed (git merge-base exited %s: %s); nothing was'
-                ' removed' % (registered_path, rc, err or '?')]
+    if merged is None:
+        return ['refused   %s: the merge check failed (%s); nothing was removed'
+                % (registered_path, why)]
     rc, count, err = git(main, 'rev-list', '--count', '%s..%s' % (base, tip))
     count = count if rc == 0 and count else 'an unknown number of'
     slug = os.path.basename(registered_path)
@@ -636,8 +636,8 @@ def _remove_branch(ctx, branch):
         ctx.say('refused   %s: cannot read %s (%s), so whether it has landed is unknown; nothing'
                 ' was deleted' % (branch, up, err))
         return REFUSED
-    rc, _, err = git(main, 'merge-base', '--is-ancestor', tip, base)
-    if rc == 1:
+    merged, why = refs.is_ancestor(tip, base, main)
+    if merged is False:
         rc, count, _ = git(main, 'rev-list', '--count', '%s..%s' % (base, tip))
         ctx.say('refused   branch %s holds UNLANDED work: %s commit(s) not in %s %s; nothing was'
                 ' deleted' % (branch, count if rc == 0 and count else 'an unknown number of',
@@ -647,9 +647,8 @@ def _remove_branch(ctx, branch):
                 '  note     %s was read as it stands, not fetched: if the branch has landed'
                 ' since, `git fetch %s` and run this again.' % (up, s['remote']))
         return REFUSED
-    if rc != 0:
-        ctx.say('refused   %s: the merge check failed (git merge-base exited %s: %s); nothing was'
-                ' deleted' % (branch, rc, err or '?'))
+    if merged is None:
+        ctx.say('refused   %s: the merge check failed (%s); nothing was deleted' % (branch, why))
         return REFUSED
     ctx.say('merged    %s is in %s %s' % (branch, up, base[:10]))
     ids, why = pulled_by(ctx, base, branch)
@@ -668,9 +667,13 @@ def _remove_branch(ctx, branch):
 # --- abandon ------------------------------------------------------------------------------------
 
 def tag_tip(main, tag):
-    """The commit `refs/tags/<tag>` peels to, or None."""
-    rc, out, _ = git(main, 'rev-parse', '-q', '--verify', 'refs/tags/%s^{commit}' % tag)
-    return out if rc == 0 and out else None
+    """`(commit, None)` `refs/tags/<tag>` peels to, `('', None)` when there is no such tag, or
+    `(None, why)` when git cannot tell.
+
+    GOTCHA: KIT-GIT-EXIT1-ANSWERS - this asked `rev-parse -q --verify`, whose "no such tag" is exit
+    1 with no output, a killed git's shape (refs.KILLED_SHAPE): a kill read as a free tag name.
+    refs.resolve(known=True) tells the two apart."""
+    return refs.resolve('refs/tags/%s' % tag, main, known=True)
 
 
 def make_tag(main, tag, tip, message):
@@ -681,23 +684,25 @@ def make_tag(main, tag, tip, message):
 
 
 def pick_tag(ctx, slug, tip):
-    """`(tag, commit it holds or None)`: archive/<slug>; with archive_next_free the first of
-    archive/<slug>, -2, -3, ... that is free or already on `tip`."""
+    """`(tag, commit it holds or '', None)`: archive/<slug>; with archive_next_free the first of
+    archive/<slug>, -2, -3, ... that is free or already on `tip`. `(tag, None, why)` when git
+    cannot tell what `tag` holds: never taken for a free name."""
     tag = ARCHIVE + slug
-    held = tag_tip(ctx.main, tag)
-    if not ctx.s['archive_next_free']:
-        return tag, held
+    held, why = tag_tip(ctx.main, tag)
+    if held is None or not ctx.s['archive_next_free']:
+        return tag, held, why
     n = 1
-    while held is not None and held != tip:
+    while held and held != tip:
         n += 1
         tag = '%s%s-%d' % (ARCHIVE, slug, n)
-        held = tag_tip(ctx.main, tag)
-    return tag, held
+        held, why = tag_tip(ctx.main, tag)
+    return tag, held, why
 
 
 def branch_tip(main, branch):
-    rc, out, _ = git(main, 'rev-parse', '-q', '--verify', 'refs/heads/' + branch)
-    return out if rc == 0 and out else None
+    """`(commit, None)` of `refs/heads/<branch>`, `('', None)` when there is no such branch, or
+    `(None, why)` when git cannot tell (a kill is never "no branch": tag_tip's GOTCHA)."""
+    return refs.resolve('refs/heads/' + branch, main, known=True)
 
 
 def same_name(a, b):
@@ -747,13 +752,12 @@ def pulled_by(ctx, rev, branch):
         records, _, why = backlog_store.records_in_tree(ctx.main, rev, backend.rel)
         where = '%s at %s' % (backend.rel, rev[:10])
     else:
-        rc, tip, err = git(ctx.main, 'rev-parse', '--verify', '--quiet',
-                           backend.local_ref + '^{commit}')
-        if rc == 1 and not tip and not err:
+        # refs.ref_commit: a git ended from outside is no answer, never "no store ref".
+        tip, why = refs.ref_commit(backend.local_ref, ctx.main)
+        if tip is None:
+            return None, 'cannot read %s (%s)' % (backend.local_ref, why)
+        if not tip:
             return [], None
-        if rc != 0 or not tip:
-            return None, 'cannot read %s (%s)' % (backend.local_ref, failure(
-                ('rev-parse', backend.local_ref), rc, err))
         records, _, why = backlog_store.records_in_tree(ctx.main, tip, backlog_store.STORE_DIR)
         where = '%s at %s' % (backend.local_ref, tip[:10])
     if records is None:
@@ -765,12 +769,20 @@ def pulled_by(ctx, rev, branch):
                   if r.get('state') == 'pulled' and r.get('pulled_by') == branch), None
 
 
+def _shown(answer, none):
+    """A tag_tip or branch_tip answer for a line: the short hash, `none` for no such ref, or that
+    git could not tell."""
+    sha, why = answer
+    if sha is None:
+        return '(unknown: git could not tell: %s)' % why
+    return sha[:10] if sha else none
+
+
 def left_after(ctx, path, branch, tag):
     now, held = branch_tip(ctx.main, branch), tag_tip(ctx.main, tag)
     ctx.say('  left     %s; branch %s kept at %s; tag %s holds %s. Nothing was'
             ' forced.' % ('worktree %s is gone' % path if path else 'there was no worktree',
-                          branch, now[:10] if now else '(none)', tag,
-                          held[:10] if held else '(nothing)'),
+                          branch, _shown(now, '(none)'), tag, _shown(held, '(nothing)')),
             '  next     tell the coordinator; do not run git branch -D')
 
 
@@ -785,9 +797,11 @@ def drop_branch(ctx, path, branch, tip, tag, keep):
         ctx.say('kept      branch %s (--keep-branch); its commits are also under tag %s'
                 % (branch, tag))
         return OK
-    if tag_tip(main, tag) != tip:
-        ctx.say('failed    tag %s no longer holds %s, so branch %s was not deleted'
-                % (tag, tip[:10], branch))
+    held, why = tag_tip(main, tag)
+    if held != tip:
+        ctx.say('failed    tag %s %s, so branch %s was not deleted'
+                % (tag, 'no longer holds %s' % tip[:10] if held is not None else
+                   'could not be read (%s)' % why, branch))
         left_after(ctx, path, branch, tag)
         return REFUSED
     rc, _, err = git(main, 'update-ref', '-d', 'refs/heads/' + branch, tip)
@@ -842,15 +856,15 @@ def _abandon(ctx, argument, why, keep_branch, today):
     if base is None:
         ctx.say('refused   %s: cannot read %s (%s); nothing was tagged or removed' % (path, up, err))
         return REFUSED
-    rc, _, err = git(main, 'merge-base', '--is-ancestor', tip, base)
-    if rc == 0:
+    merged, why_not = refs.is_ancestor(tip, base, main)
+    if merged:
         ctx.say('refused   %s: %s is already in %s %s - nothing to abandon. Remove it'
                 ' with `%s %s`; nothing was tagged or removed'
                 % (path, name, up, base[:10], s['tool'], slug))
         return REFUSED
-    if rc != 1:
-        ctx.say('refused   %s: the merge check failed (git merge-base exited %s: %s); nothing was'
-                ' tagged or removed' % (path, rc, err or '?'))
+    if merged is None:
+        ctx.say('refused   %s: the merge check failed (%s); nothing was tagged or removed'
+                % (path, why_not))
         return REFUSED
     rerun = '%s %s --abandon "<why>"%s' % (s['tool'], slug, ' --keep-branch' if keep_branch else '')
     if dirty_refusal(ctx, path, 'nothing was tagged or removed', rerun):
@@ -864,7 +878,11 @@ def _abandon(ctx, argument, why, keep_branch, today):
         ctx.say('refused   %s is held; nothing was tagged and git was NOT run' % path)
         ctx.describe(path, held)
         return REFUSED
-    tag, existing = pick_tag(ctx, slug, tip)
+    tag, existing, why_tag = pick_tag(ctx, slug, tip)
+    if existing is None:
+        ctx.say('refused   %s: cannot read tag %s (%s); nothing was tagged or removed'
+                % (path, tag, why_tag))
+        return REFUSED
     if existing and existing != tip:
         ctx.say('refused   tag %s already exists on %s, not on %s (%s); nothing was tagged or'
                 ' removed' % (tag, existing[:10], tip[:10], name))
@@ -880,9 +898,11 @@ def _abandon(ctx, argument, why, keep_branch, today):
             ctx.say('refused   could not create tag %s: git tag exited %s: %s; nothing was removed'
                     % (tag, rc, err or '?'))
             return REFUSED
-        if tag_tip(main, tag) != tip:
-            ctx.say('refused   tag %s does not hold %s after it was made; nothing was removed'
-                    % (tag, tip[:10]))
+        held, why_tag = tag_tip(main, tag)
+        if held != tip:
+            ctx.say('refused   tag %s %s after it was made; nothing was removed'
+                    % (tag, 'does not hold %s' % tip[:10] if held is not None else
+                       'could not be read (%s)' % why_tag))
             return REFUSED
         ctx.say('tagged    %s -> %s (%s): abandoned: %s' % (tag, tip[:10], name, why))
     if not clear_disposable(ctx, path) or not git_remove(ctx, path, registered_path):
@@ -947,17 +967,21 @@ def _abandon_branch(ctx, branch, why, today):
         ctx.say('refused   %s: cannot read %s (%s); nothing was tagged or deleted'
                 % (branch, up, err))
         return REFUSED
-    rc, _, err = git(main, 'merge-base', '--is-ancestor', tip, base)
-    if rc == 0:
+    merged, why_not = refs.is_ancestor(tip, base, main)
+    if merged:
         ctx.say('refused   %s is already in %s %s - nothing to abandon. Delete it with `%s %s'
                 ' --branch` (or the landing cleanup, land.py --sweep-landed); nothing was tagged'
                 ' or deleted' % (branch, up, base[:10], s['tool'], branch))
         return REFUSED
-    if rc != 1:
-        ctx.say('refused   %s: the merge check failed (git merge-base exited %s: %s); nothing was'
-                ' tagged or deleted' % (branch, rc, err or '?'))
+    if merged is None:
+        ctx.say('refused   %s: the merge check failed (%s); nothing was tagged or deleted'
+                % (branch, why_not))
         return REFUSED
-    tag, existing = pick_tag(ctx, branch_slug(ctx, branch), tip)
+    tag, existing, why_tag = pick_tag(ctx, branch_slug(ctx, branch), tip)
+    if existing is None:
+        ctx.say('refused   %s: cannot read tag %s (%s); nothing was tagged or deleted'
+                % (branch, tag, why_tag))
+        return REFUSED
     if existing and existing != tip:
         ctx.say('refused   tag %s already exists on %s, not on %s (%s); nothing was tagged or'
                 ' deleted' % (tag, existing[:10], tip[:10], branch))
@@ -972,9 +996,11 @@ def _abandon_branch(ctx, branch, why, today):
             ctx.say('refused   could not create tag %s: git tag exited %s: %s; nothing was deleted'
                     % (tag, rc, err or '?'))
             return REFUSED
-        if tag_tip(main, tag) != tip:
-            ctx.say('refused   tag %s does not hold %s after it was made; nothing was deleted'
-                    % (tag, tip[:10]))
+        held, why_tag = tag_tip(main, tag)
+        if held != tip:
+            ctx.say('refused   tag %s %s after it was made; nothing was deleted'
+                    % (tag, 'does not hold %s' % tip[:10] if held is not None else
+                       'could not be read (%s)' % why_tag))
             return REFUSED
         ctx.say('tagged    %s -> %s (%s): abandoned: %s' % (tag, tip[:10], branch, why))
     status = drop_branch(ctx, None, branch, tip, tag, False)

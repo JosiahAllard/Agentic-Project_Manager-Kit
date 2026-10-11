@@ -1,6 +1,6 @@
 # daily_full
 
-`tools/daily_full.py [-C DIR] [--plan | --summary] [--force] [--out DIR]` runs every non-manual gate step in full (each step's `full_cmd` when it has one, else its `cmd`; docs/gate.md "Steps"), on `"daily_full".ref` (default `<remote>/<main branch>`), in a detached worktree of its own (default `<worktrees_dir>/daily-full`). Logic: `kitlib/dailyfull`.
+`tools/daily_full.py [-C DIR] [--plan | --summary] [--force] [--out DIR]` runs every non-manual gate step in full (each step's `daily_cmd` when it has one, else its `full_cmd`, else its `cmd`; docs/gate.md "Steps"), on `"daily_full".ref` (default `<remote>/<main branch>`), in a detached worktree of its own (default `<worktrees_dir>/daily-full`). Logic: `kitlib/dailyfull`.
 
 - Opt-in: it refuses (exit 2) unless `.kit.json` "daily_full".enabled is true. The kit never schedules it. A repository that wants it daily registers the schedule itself.
 - It moves only a clean linked worktree of its own. A worktree of `.` or the main checkout, a folder that is not a registered linked worktree, or a tree with uncommitted files is recorded red `infra` with the reason (for a dirty tree, the file names). Nothing is cleaned, reset or switched.

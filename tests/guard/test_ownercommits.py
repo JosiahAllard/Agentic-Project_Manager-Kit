@@ -3,6 +3,7 @@ violation unless its AUTHOR email is the owner's, for the paths that landing the
 change (NetChange); a merge is judged by what it changes beyond the clean merge of its parents;
 commits already on main are not judged."""
 import unittest
+from unittest import mock
 
 from kitlib.config import owner
 from kitlib.guard import ownercommits as oc
@@ -159,6 +160,120 @@ class NetChange(OwnerCommitsCase):
         edit = self.commit_as(AGENT, 'agent edits CLAUDE.md', {'CLAUDE.md': 'agent\n'})
         tip = self.revert(edit)
         self.assertEqual(sorted(v.sha for v in self.bad(tip, exclude=[])), sorted([edit, tip]))
+
+
+class NetChangeGitFailures(OwnerCommitsCase):
+    """Every git failure inside net_change is `(None, why)`, never an empty set (which would pass):
+    the real git on a revision it does not have, and a git that answers wrongly (a fake for one
+    subcommand; every other call goes to the real git)."""
+
+    def setUp(self):
+        OwnerCommitsCase.setUp(self)
+        self.tip = self.commit_as(AGENT, 'agent work', {'a.py': 'a\n'})
+        self.real_call = oc.cmd.call
+
+    def fake_git(self, subcommand, rc, out='', err=''):
+        real = self.real_call
+        calls = []
+
+        def call(args, *a, **kw):
+            if subcommand in args:
+                calls.append(list(args))
+                return oc.cmd.Result(rc, out.encode(), err)       # out bytes, err text, as cmd.call
+            return real(args, *a, **kw)
+        patcher = mock.patch.object(oc.cmd, 'call', call)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def net(self, targets=None):
+        return oc.net_change(self.repo.root, self.tip, [self.main] if targets is None else targets)
+
+    def test_a_target_git_does_not_have_is_an_error_not_an_empty_net_change(self):
+        found, why = self.net(['1' * 40])
+        self.assertIsNone(found)
+        self.assertIn('git merge-tree failed', why)
+
+    def test_merge_tree_exiting_with_an_error_status_is_an_error(self):
+        self.fake_git('merge-tree', 128, err='fatal: boom')
+        found, why = self.net()
+        self.assertIsNone(found)
+        self.assertIn('git merge-tree failed', why)
+        self.assertIn('rc 128', why)
+        self.assertIn('fatal: boom', why)
+
+    def test_git_that_cannot_run_or_times_out_is_an_error(self):
+        for sub in ('merge-tree', 'diff'):
+            with self.subTest(sub=sub):
+                self.fake_git(sub, None, err='git %s timed out after 120 seconds' % sub)
+                found, why = self.net()
+                self.assertIsNone(found)
+                self.assertIn('timed out', why)
+
+    def test_merge_tree_printing_no_tree_is_an_error(self):
+        for rc in (0, 1):
+            with self.subTest(rc=rc):
+                self.fake_git('merge-tree', rc, out='')
+                found, why = self.net()
+                self.assertIsNone(found)
+                self.assertIn('no output', why)
+
+    def test_merge_tree_printing_something_that_is_not_a_tree_id_is_an_error(self):
+        self.fake_git('merge-tree', 0, out='not-a-tree\0a.py\0')
+        found, why = self.net()
+        self.assertIsNone(found)
+        self.assertIn('git merge-tree failed', why)
+
+    def test_a_failing_diff_against_the_merged_tree_is_an_error(self):
+        calls = self.fake_git('diff', 128, err='fatal: bad object')
+        found, why = self.net()
+        self.assertEqual(calls[0][1], 'diff')                 # reached, after merge-tree succeeded
+        self.assertIsNone(found)
+        self.assertEqual(why, 'git diff failed: fatal: bad object')
+
+    def test_a_failing_diff_without_stderr_names_its_exit_status(self):
+        self.fake_git('diff', 3)
+        self.assertEqual(self.net(), (None, 'git diff failed: exit 3'))
+
+    def test_one_failing_target_among_several_fails_the_whole(self):
+        found, why = self.net([self.main, '1' * 40])
+        self.assertIsNone(found)
+        self.assertIn('git merge-tree failed', why)
+
+    def test_violations_refuses_when_the_net_change_cannot_be_read(self):
+        self.fake_git('merge-tree', 128, err='fatal: boom')
+        found, why = oc.violations(self.repo.root, self.rules, self.tip, [self.main])
+        self.assertIsNone(found)
+        self.assertIn('git merge-tree failed', why)
+
+
+class PushWithOwnerMainCommits(OwnerCommitsCase):
+    """docs/guard.md "Owner-only commits", Known limits, "One net change per push"."""
+
+    def test_known_over_refusal_an_undone_agent_edit_counts_when_an_owner_commit_shares_the_push(self):
+        # Pins a documented limit: if the over-refusal is ever fixed, update this test; it is not a regression.
+        remote_main = self.main
+        wt = self.repo.worktree('x')                          # the branch, forked at the remote main
+        edit = self.commit_as(AGENT, 'agent edits CLAUDE.md', {'CLAUDE.md': 'agent\n'}, cwd=wt)
+        self.repo.git('-c', 'user.email=%s' % AGENT, 'revert', '--no-edit', edit, cwd=wt)
+        branch_tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        self.assertEqual(self.bad(branch_tip, exclude=[remote_main]), [])     # alone: allowed
+        self.commit_as(OWNER, 'owner edits CLAUDE.md', {'CLAUDE.md': 'owner\n'})   # unpushed, local main
+        self.repo.git('-c', 'user.email=%s' % AGENT, 'merge', '-q', '--no-ff', '--no-edit', branch_tip)
+        push = self.repo.git('rev-parse', 'HEAD')
+        self.assertEqual(sorted(self.bad(push, exclude=[remote_main])),
+                         sorted([oc.Violation(edit, AGENT, ['CLAUDE.md']),
+                                 oc.Violation(branch_tip, AGENT, ['CLAUDE.md'])]))
+
+    def test_pushing_the_owners_commits_first_avoids_the_over_refusal(self):
+        wt = self.repo.worktree('x')
+        edit = self.commit_as(AGENT, 'agent edits CLAUDE.md', {'CLAUDE.md': 'agent\n'}, cwd=wt)
+        self.repo.git('-c', 'user.email=%s' % AGENT, 'revert', '--no-edit', edit, cwd=wt)
+        branch_tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        owner_edit = self.commit_as(OWNER, 'owner edits CLAUDE.md', {'CLAUDE.md': 'owner\n'})
+        self.repo.git('-c', 'user.email=%s' % AGENT, 'merge', '-q', '--no-ff', '--no-edit', branch_tip)
+        push = self.repo.git('rev-parse', 'HEAD')
+        self.assertEqual(self.bad(push, exclude=[owner_edit]), [])
 
 
 class Merges(OwnerCommitsCase):

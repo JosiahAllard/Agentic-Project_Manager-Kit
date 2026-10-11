@@ -1,11 +1,16 @@
-"""This machine's lock settings: the "machine_lock" object of ~/.claude-pm-kit/config.json
+"""This machine's lock settings: the "machine_lock" object of the machine config
 (kitlib.config.user). Every key is optional; an absent file or key is the defaults below.
 
   "daemons": "gates" (default), "stop" or "leave". At the release of a gate run (one booked with
       book(gate=True), as kitlib.gate.runner books every branch and merged gate) that ended
-      "done", the build daemons still in its job (kitlib.proc.daemons: Gradle, Kotlin, MSBuild
-      nodes, the compiler server) are stopped with their children; any other run leaves them
-      running, unpinned, for the next build. "stop" stops them after every run, "leave" after none.
+      "done", the Gradle and Kotlin daemons still in its job are stopped with their children,
+      each only when every client on this machine (kitlib.proc.tcp peers: over a loopback
+      address or one of the machine's own) of every process in its tree is in the run's job
+      (kitlib.proc.daemons stop); one that serves a client outside it, or whose clients cannot
+      be told, is left running and the reason said. MSBuild nodes and the compiler server
+      (named pipes, whose client cannot be told) are always left. Any other run leaves them all
+      running, unpinned, for the next build. "stop" applies the same test after every run,
+      "leave" stops none.
   "notice": {"dir": <absolute folder>, "kinds": [<kind>, ...]}. Set, a run that holds a heavy or
       exclusive window writes a start notice there when it starts and an end notice when it ends
       (kitlib.lock.notice). Unset: none (the default). "kinds" unset means every kind whose cpu

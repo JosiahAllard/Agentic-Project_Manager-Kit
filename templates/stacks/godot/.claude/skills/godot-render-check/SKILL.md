@@ -15,12 +15,12 @@ Repo values change: look them up in the repo, do not trust this text over them. 
 4. A relative `tools\godot.cmd` resolves from the caller's cwd: run with the worktree as cwd or pass absolute paths. Give a preview a timeout of about 180 s.
 5. Open the PNG and look at it. A validator proves size, never shape.
 6. Hand-off to the owner is a file: write the contact sheet as HTML in your scratch folder and lead the report with its full path, unless the repo's profile says to publish a page.
-7. A Blender render or bake is heavy: run it under the lock, `python tools/machine_lock.py run --repo <repo> --slug <you> --kind render -- <blender shim> ...` (skill machine-lock-run).
+7. A Blender render or bake is heavy: run it under the lock, `python "{kit_root}/tools/machine_lock.py" run --repo <repo> --slug <you> --kind render -- <blender shim> ...` (skill machine-lock-run).
 
 ## E2E tier (heavy)
 
 1. The coordinator starts e2e once per batch of landings. A flaky e2e is a backlog item unless it is a clear regression. Lossy-network runs are parked: never unless the owner asks.
-2. Run the repo's e2e entry point (the one `--find e2e` names). If it takes the machine lock itself, never wrap it in another lock call; otherwise `python tools/machine_lock.py run --repo <repo> --slug <you> --kind engine-run -- <e2e command>`. Lock exits and reservations: skill machine-lock-run.
+2. Run the repo's e2e entry point (the one `--find e2e` names). If it takes the machine lock itself, never wrap it in another lock call; otherwise `python "{kit_root}/tools/machine_lock.py" run --repo <repo> --slug <you> --kind engine-run -- <e2e command>`. Lock exits and reservations: skill machine-lock-run.
 3. Ports: pick your block from the repo's ports doc (`--find ports`); never another session's block. The e2e entry exits non-zero if a port is bound or an orphan holds one.
 4. Sweep before and after: the repo's orphan check (`--find orphan`). Stop only a process tree you started, by pid. A leftover engine gives "Couldn't create an ENet host".
 5. Results are strings, not exit codes (godot.cmd's exit status lies). Read the pass strings the repo's CLAUDE.md names (for a stock template: the test scene's `ENGINE_TEST_PASS_STRING`, `UNIT TESTS OK`).

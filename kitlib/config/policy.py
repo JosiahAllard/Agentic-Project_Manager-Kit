@@ -19,7 +19,10 @@ Repo hook module: `<root>/<tools_dir>/<module>.py`, named by `.kit.json` "hook".
   `GATE_CHECKS` is a dict of check name -> callable; a gate step `{"check": name}` runs one.
   Repo grammar (a Gradle pin check, dotnet result regexes, the py-drops list) lives there, with
   its settings in "hook".options. How a check is called and what it returns is gate.py's contract.
+  It loads, and its checks run, with sys.dont_write_bytecode set (no_bytecode): no
+  `__pycache__` is written into the repo's tree.
 """
+import contextlib
 import copy
 import fnmatch
 import hashlib
@@ -144,11 +147,53 @@ def kinds_table(path=None):
         raise ConfigError('cannot read the kinds table %s: %s' % (path, e))
     if not isinstance(data, dict):
         raise ConfigError('the kinds table %s must hold a JSON object' % path)
-    table = data.get('kinds', data) if isinstance(data.get('kinds'), dict) else data
-    out = {k: v for k, v in table.items() if not is_note(k)}
+    wrapped = isinstance(data.get('kinds'), dict)
+    table = data['kinds'] if wrapped else data
+    if wrapped and 'aliases' in table:
+        raise ConfigError('the kinds table %s: aliases belongs at the top level, beside kinds, '
+                          'not inside it' % path)
+    out = {k: v for k, v in table.items() if not is_note(k) and k != 'aliases'}   # a reserved key
     bad = sorted(k for k, v in out.items() if not isinstance(v, dict))
     if bad:
         raise ConfigError('the kinds table %s: entries %s must be objects' % (path, ', '.join(bad)))
+    return out
+
+
+def kinds_aliases(path=None):
+    """{alias: canonical kind} from the `aliases` object of the kinds table ({"alias": {"to": kind,
+    "why": text}}); {} when the file is missing or names none. ConfigError when the file cannot
+    be read, an alias is not an object with a `to` kind and a `why`, an alias is itself a kind,
+    or its `to` is not a kind (so no chain or cycle). `aliases` is a reserved key, never a kind,
+    in the flat form of the table too."""
+    path = path or KINDS_FILE
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        raise ConfigError('cannot read the kinds table %s: %s' % (path, e))
+    aliases = data.get('aliases') if isinstance(data, dict) else None
+    if aliases is None:
+        return {}
+    if not isinstance(aliases, dict):
+        raise ConfigError('the kinds table %s: aliases must be an object' % path)
+    out = {}
+    for name, a in aliases.items():
+        if is_note(name):
+            continue
+        if not (isinstance(a, dict) and isinstance(a.get('to'), str) and a['to']
+                and isinstance(a.get('why'), str) and a['why']):
+            raise ConfigError('the kinds table %s: alias %s needs a "to" kind and a "why"'
+                              % (path, name))
+        out[name] = a['to']
+    kinds = kinds_table(path)
+    for name, to in sorted(out.items()):
+        if name in kinds:
+            raise ConfigError('the kinds table %s: alias %s is a kind of its own' % (path, name))
+        if to not in kinds:
+            raise ConfigError('the kinds table %s: alias %s names %s, which is not a kind'
+                              % (path, name, to))
     return out
 
 
@@ -160,6 +205,28 @@ def hook_path(cfg):
     if not h:
         return None
     return os.path.join(cfg.root, cfg.tools_dir, h['module'] + '.py'), h['options']
+
+
+@contextlib.contextmanager
+def no_bytecode():
+    """sys.dont_write_bytecode set while the repo's code runs, put back afterwards. The hook
+    module and the siblings it imports are files in the work tree being gated: a
+    `__pycache__/*.pyc` written beside them is an untracked file in that tree, and a gate that
+    sees the tree change writes no gate-OK record (kitlib/gate/runner.py). Used to load the
+    module (exec_without_bytecode) and to run its GATE_CHECKS (runner._run_check), where a
+    check may import a sibling lazily."""
+    saved = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        yield
+    finally:
+        sys.dont_write_bytecode = saved
+
+
+def exec_without_bytecode(spec, module):
+    """`spec.loader.exec_module(module)` under no_bytecode()."""
+    with no_bytecode():
+        spec.loader.exec_module(module)
 
 
 def load_hook_module(cfg):
@@ -181,7 +248,7 @@ def load_hook_module(cfg):
         spec = importlib.util.spec_from_file_location(name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module
-        spec.loader.exec_module(module)
+        exec_without_bytecode(spec, module)
     except BaseException as e:    # the repo's code: any failure, SystemExit too, is a config
         # failure, named; no half-loaded module is left behind in sys.modules
         if module is not None and sys.modules.get(name) is module:

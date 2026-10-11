@@ -22,7 +22,7 @@ from kitlib.reviewpack import trailers
 
 OK, FAILED, REFUSED = 0, 1, 2
 RECOVERY = ('never amend or rewrite it: redo the work on a fresh branch from the base through '
-            'tools/commit.py, and report it to the conductor')
+            'tools/commit.py, and report it to the coordinator')
 
 Outcome = collections.namedtuple('Outcome', 'code lines')
 

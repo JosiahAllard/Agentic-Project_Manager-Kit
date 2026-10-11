@@ -10,7 +10,7 @@ python tools/machine_setup.py --old-kit DIR [--config-dir DIR]... [--agent-temp 
 Run it from the kit's main checkout, not a worktree: `--kit` defaults to the checkout the tool is in, and every link, hook path and shortcut names that folder.
 
 - **Dry run by default.** It prints every change, with each `settings.json` change as a unified diff, and changes nothing. `--apply` (`-Apply`) makes the same changes, in the printed order.
-- **Config folders.** Defaults to `~/.claude` and every `~/.claude-*` folder except `~/.claude-pm-kit`. `--config-dir` (repeatable) names them instead; the wrapper's `-ConfigDir a,b` is split on commas, so a folder name with a comma cannot be passed there. A folder that is a link to one already listed is read once.
+- **Config folders.** Defaults to `~/.claude` and every `~/.claude-*` folder except the machine config's own, current and retired (`kitlib.config.user.DIR_NAME`, `kitlib.config.migration.OLD_DIR_NAME`). `--config-dir` (repeatable) names them instead; the wrapper's `-ConfigDir a,b` is split on commas, so a folder name with a comma cannot be passed there. A folder that is a link to one already listed is read once.
 - **Idempotent.** A second run prints `nothing to do` in every section and exits 0.
 - **Refusals.** Any refusal stops both modes before anything changes: an old-kit path in a settings file that this step neither removes nor re-points, a hook path it cannot resolve, a settings file it cannot read or must not replace, a kit file a link or path would need, a file where a link goes, a missing config folder, or `--kit` equal to `--old-kit`. Each refusal names the file and path.
 - **Part-way failure.** If a change fails under `--apply`, whatever the error, it stops there. It prints the change, the error, how to restore that change by hand, and the changes already made. Every line is printed as it is produced.
@@ -43,13 +43,21 @@ A path it cannot resolve to an absolute one (a relative path, a script name, ano
 A path that resolves into the old kit, into `<kit>/hooks` or to `<kit>/tools/guard.py` (the pre-move paths, go-live.md "Switches") gets one of three outcomes:
 - **Removed.** `no_root_search.py` and `main_checkout_redirect_guard.py`: the hook goes. A group or event that removal empties goes too; one that was already empty stays.
 - **Re-pointed.** The file is rewritten to the kit's copy with forward slashes, quotes kept:
-  - `pm_session_start.py` and `coordinator_session_start.py` (`conductor_session_start.py` too) go to `claude/hooks/`.
+  - `pm_session_start.py` and `coordinator_session_start.py` go to `claude/hooks/`.
   - `statusline-usage.ps1` and `write-usage-status.ps1` go to `optional/usage/`.
 - **Refused.** Any other old-kit path, named.
 
 A path through `<config>/tools/<link>` stays as written: the links step points it at the kit. It is refused when the kit has no file there.
 
 When no PreToolUse hook names `<kit>/claude/hooks/guard.py`, the entry `guard.py --settings-entry` prints is appended (docs/guard.md).
+
+A SessionStart hook in shell form whose command is exactly a Python interpreter (`python`, `python.exe`, `pythonw`, `pythonw.exe`, by base name) and one `.py` file under `<kit>/claude/hooks/` is written in exec form: `command` becomes the interpreter of the guard entry `guard.py --settings-entry` prints, and `args` holds the script with forward slashes. Exec form starts no shell. Any other command, a hook that already has `args`, and every other event are left as they are.
+
+When the kit's `.claude-plugin/plugin.json` names a `hooks` file, a settings hook that runs one of that file's scripts for the same event is noted (`${CLAUDE_PLUGIN_ROOT}` read as the kit): once the plugin is enabled the hook runs twice, so the settings entry is removed in the same step as the plugin install (docs/install.md "Plugin install"). The note changes nothing.
+
+`statusLine` stays in shell form. Claude Code gives it no `args` field: "The `command` field runs in a shell", and "On Windows, Claude Code runs status line commands through Git Bash when Git Bash is installed, or through PowerShell when Git Bash is absent" (https://code.claude.com/docs/en/statusline).
+
+Each of these is a planned change or a note: a dry run writes nothing, and `--apply` writes through the backup below.
 
 The file is edited as JSON and written back in its own layout: indent, ASCII escaping, CRLF, BOM and final newline. Only the changed lines differ. A layout `json.dumps` cannot reproduce is noted, and the diff then shows the whole rewrite.
 
@@ -72,9 +80,10 @@ A `settings.json` that is a symbolic link or has more than one hard link is refu
 
 ## Not done here
 
-- **Other old-kit links.** For example `agents` and `hooks` are noted and left: the plugin replaces agents (go-live.md "Switches"), and the launcher still starts `--agent conductor`.
+- **A fresh machine.** One with no old kit is not handled: `-OldKit` is required (the wrapper exits 2 without it). There, the plugin, guard.py's PreToolUse entry and the PM SessionStart hook are hand steps (docs/pm-first-run.md steps 3, 6 and 7).
+- **Other old-kit links.** For example `agents` and `hooks` are noted and left: the plugin replaces agents (go-live.md "Switches"), and the launcher starts the agent `launcher.coordinator_agent` names (docs/launcher.md "Settings").
 - **Scheduled tasks.** Ones that run old-kit scripts are not scanned.
-- **Skills as a plugin.** go-live.md "Skills, templates, optional tools, knowledge" is a separate switch. These links keep skills loading until the plugin is enabled. Remove them then, or each skill appears twice.
+- **Skills as a plugin.** go-live.md "Skills, templates, optional tools, knowledge" is a separate switch. These links keep skills loading until the plugin is enabled. Remove them then, or each skill appears twice (docs/install.md, "After the plugin install").
 
 ## Code and tests
 

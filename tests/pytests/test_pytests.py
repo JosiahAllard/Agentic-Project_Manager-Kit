@@ -159,7 +159,7 @@ class Verdicts(Fakes):
         self.assertIn('no_such_module_anywhere', out)
 
     def test_a_unit_that_dies_without_output_is_named_with_its_exit_code(self):
-        # PYTESTS-SILENT-CHILD-EXIT: the log said only `(0 tests, 0s, FAILED)`; now it says how.
+        # The log once said only `(0 tests, 0s, FAILED)`; now it says how.
         self.write('test_silent', 'import os\nos._exit(1)\n')
         code, out = self.run_modules(['test_silent'])
         self.assertEqual(code, 1, out)
@@ -169,7 +169,7 @@ class Verdicts(Fakes):
                               r'at all: no test ran')
 
     def test_a_unit_that_runs_no_test_fails_named(self):
-        # GriffBall's py_select rule: an empty unit proves nothing.
+        # a repository's py_select rule: an empty unit proves nothing.
         self.write('test_p1', PASSING)
         self.write('test_empty', 'import unittest\n')
         code, out = self.run_modules(['test_p1', 'test_empty'])
@@ -242,15 +242,15 @@ class Verdicts(Fakes):
             body += textwrap.dedent('''
                 class C%d(unittest.TestCase):
                     def test_it(self):
-                        print('RAN-C%d')
+                        print('EX-RAN-C%d')
                 ''' % (i, i))
         self.write('test_many', body)
         code, out = self.run_modules(['test_many'], cfg=cfg(shards={'test_many': 3}))
         self.assertEqual(code, 0, out)
         self.assertEqual([h.split()[1] for h in self.headers(out)],
                          ['test_many[1/3]', 'test_many[2/3]', 'test_many[3/3]'])
-        ran = sorted(re.findall(r'RAN-C\d', out))
-        self.assertEqual(ran, ['RAN-C%d' % i for i in range(7)])
+        ran = sorted(re.findall(r'EX-RAN-C\d', out))
+        self.assertEqual(ran, ['EX-RAN-C%d' % i for i in range(7)])
 
     def test_split_classes_runs_one_unit_per_class(self):
         self.write('test_two_classes', '''
@@ -279,7 +279,7 @@ class Verdicts(Fakes):
         self.assertEqual([h.split()[1] for h in self.headers(out)], ['test_two_classes'])
 
     def test_a_unit_runs_with_auto_gc_and_maintenance_off(self):
-        # TOOLS-GIT-SPAWN-DIET: the child sets it itself (kitlib.git.batch.fixture_env), so a
+        # The child sets it itself (kitlib.git.batch.fixture_env), so a
         # module that sets nothing still makes no `maintenance run --auto` per fixture commit.
         self.write('test_env', 'import os, unittest\nclass E(unittest.TestCase):\n'
                                '    def test_e(self):\n'
@@ -460,7 +460,7 @@ class Timeouts(Fakes):
 
 
 class TheShield(Fakes):
-    """PYTESTS-SILENT-CHILD-EXIT: a unit's own process refuses a kill by its pid (shield_unit) - a
+    """A unit's own process refuses a kill by its pid (shield_unit) - a
     stale `taskkill /PID <n> /T /F` meant for a dead shell cannot end it - while the runner's job
     still does (TerminateJobObject: Timeouts above; KILL_ON_JOB_CLOSE: here)."""
 
@@ -690,7 +690,7 @@ class ThePidHold(Fakes):
         self.assertEqual(steps.PID_HOLD_FLAG, runner.PID_HOLD_FLAG)
 
 
-# The fixture checkout the audit reads: its tables are what the Retribution tables held for the
+# The fixture checkout the audit reads: its tables are what a repository's tables held for the
 # same cases (a pinned doc, a README read by backlog's tests, a whole-tree class).
 AUDIT_TABLES = {
     'pinned': [['docs/reference/BACKLOG_STORE.md', ['test_backlog']]],
@@ -1010,7 +1010,7 @@ def ok_runner(log=None, ran=1, status='OK'):
 
 
 class Summary(unittest.TestCase):
-    """The lines a gate step reads at the end of a run (GriffBall's pysel summary, merged)."""
+    """The lines a gate step reads at the end of a run (a repository's pysel summary, merged)."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix='pytests_floor_')
@@ -1116,7 +1116,7 @@ class ChangedPaths(Repo):
         return str(cm.exception)
 
     def test_a_git_failure_refuses_naming_the_command(self):
-        # GriffBall gate-git-fail-refuse: py_select used to return None and run every module, a
+        # A repository's gate-git-fail-refuse: py_select used to return None and run every module, a
         # silent degrade (py-select-git-fail).
         msg = self.refusal(git_run({'merge-base': (0, 'abc123\n', ''),
                                     'diff': (128, '', 'hint: x\nfatal: bad revision\n')}))
@@ -1318,7 +1318,7 @@ class Usage(unittest.TestCase):
                          [2, 2, 2, 3, 6, 6])
 
     def test_jobs_max_and_divisor_set_the_default(self):
-        # GriffBall's py_select: min(8, max(2, cpus // 2)).
+        # a repository's py_select: min(8, max(2, cpus // 2)).
         c = cfg(jobs_max=8, jobs_divisor=2)
         self.assertEqual([runner.default_jobs(n, c, environ={}) for n in (1, 4, 8, 12, 24, 64)],
                          [2, 2, 4, 6, 8, 8])

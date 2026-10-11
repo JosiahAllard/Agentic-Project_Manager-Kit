@@ -17,6 +17,7 @@ from kitlib.githooks import precommit as dispatch
 from kitlib.ledger import precommit
 from tests import gitfixture
 from tests.realgit import real_git
+from kitlib.config import user as kuser
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOKS = os.path.join(KIT_ROOT, 'githooks')
@@ -51,11 +52,11 @@ class PreCommitTest(unittest.TestCase):
         self.ledger = self.repo.write('rulings/LEDGER.md', HEADER + ENTRY % (rid(1), 'Keep.'))
         self.repo.commit('ledger', 'rulings/LEDGER.md')
         self.home = os.path.join(self.repo.base, 'home')
-        os.makedirs(os.path.join(self.home, '.claude-pm-kit'))
+        os.makedirs(kuser.config_dir(self.home))
         self.machine_config({'ledger_path': self.ledger})
 
     def machine_config(self, obj):
-        with open(os.path.join(self.home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
             json.dump(obj, f)
 
     def opt_in(self, value=True):
@@ -252,13 +253,13 @@ class TargetsTest(unittest.TestCase):
         self.addCleanup(gitfixture.rmtree, self.tmp)
         self.root = os.path.join(self.tmp, 'repo')
         self.home = os.path.join(self.tmp, 'home')
-        os.makedirs(os.path.join(self.home, '.claude-pm-kit'))
+        os.makedirs(kuser.config_dir(self.home))
         os.makedirs(self.root)
         with open(os.path.join(self.root, '.kit.json'), 'w', encoding='utf-8') as f:
             json.dump({'ledger': {'pre_commit_check': True}}, f)
 
     def ledger_at(self, path):
-        with open(os.path.join(self.home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
             json.dump({'ledger_path': path}, f)
 
     def test_the_ledger_and_its_digest_are_targets(self):
@@ -330,7 +331,7 @@ class TargetsTest(unittest.TestCase):
         self.assertEqual(precommit.check(mock.Mock(root=self.root), self.home), (0, None))
 
     def test_an_unreadable_machine_config_refuses(self):
-        with open(os.path.join(self.home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
             f.write('{')
         code, message = precommit.check(FakeCommit(self.root, ['a.txt']), self.home)
         self.assertEqual(code, 1)

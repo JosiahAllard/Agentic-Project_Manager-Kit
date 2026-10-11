@@ -7,6 +7,8 @@ import sys
 import tempfile
 import unittest
 
+from kitlib.config import user as kuser
+
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     'tools', 'ledger.py')
 ADD = ['add', '--repo', 'alpha', '--prov', 'selected', '--q', 'Which?', '--a', 'This',
@@ -26,8 +28,8 @@ class CliWriterTest(unittest.TestCase):
         self.config({'ledger_path': self.ledger, 'ledger_repos': ['alpha']})
 
     def config(self, data):
-        os.makedirs(os.path.join(self.home, '.claude-pm-kit'), exist_ok=True)
-        with open(os.path.join(self.home, '.claude-pm-kit', 'config.json'), 'w', encoding='utf-8') as f:
+        os.makedirs(kuser.config_dir(self.home), exist_ok=True)
+        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
             f.write(data if isinstance(data, str) else json.dumps(data))
 
     def run_tool(self, *args):

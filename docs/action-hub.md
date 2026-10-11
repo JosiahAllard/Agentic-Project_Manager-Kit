@@ -8,7 +8,8 @@ steps when it suits you. Nobody waits on it.
 - **Inbox.** Questions from the PM, each with options and a recommendation; pick one and add a
   note if you like. The Answers tab holds the PM's replies to questions you asked in a note.
 - **To PM.** Write the PM a question or an FYI. Add keeps it queued; Send all sends every queued
-  item and alerts the PM.
+  item and alerts the PM. Send all is blocked, with the reason shown, while no PM session is
+  watching (your queued items stay saved).
 - **To-do.** Hand steps for you, each with the exact commands and a Copy button. Tick one when
   done. You can add your own.
 - **Parked.** Work a coordinator has paused until you answer something.
@@ -16,7 +17,9 @@ steps when it suits you. Nobody waits on it.
   closed recently.
 - **Info.** Account usage and which model each agent runs on.
 - **Alert the PM** (header button) tells a watching PM session that something waits on it.
-  With no PM watching, the PM picks it up at its next turn.
+  The page also alerts by itself, 20 seconds after you answer a question, tick or add a to-do, or
+  submit a story. With no PM watching, the PM picks it up at its next hub check.
+- **Banners.** A red banner at the top names any collection that failed to load; reload the page.
 
 Links ending `#todo`, `#topm`, `#parked`, `#backlog` or `#info` open that section;
 `#questions` and `#inbox` open the Inbox's Questions and Answers tabs; `#usage` and `#agents`
@@ -27,13 +30,83 @@ repository.
 
 - Page: `claude/hub/action-hub.html`. Publish it once with the Artifact tool, declaring
   `capabilities: {db: {rules: [{path: "parked", read: "view", write: "admin"}]}, user: {}, comments: {}}`
-  (the rule: "parked/<generated id>"), and pin it. Each owner keeps one copy; record its URL as
-  `pm_start.hub_url` (docs/pm-start.md).
+  (the rule: "parked/<generated id>"), and pin it. Each account keeps one copy, filled from the
+  mirror ("One copy per account" below).
 - The PM reads and writes the store with the ArtifactData tool. Coordinators never write to it;
   they send questions and hand steps to the PM.
+- Questions with a status other than open, answered or logged show in an Other tab, which appears only when there are any.
+- Before sending a batch with ArtifactData, run `python claude/hub/hub_validate.py --batch <file>
+  [--against <folder of the hub as last read>]` (`kitlib.hubvalidate`): it checks the hub data
+  against the field tables below and exits 1 on an error (a `commands` that is not a list of
+  strings, an unknown `status`, bad `options` or `recommended`, an unreadable batch entry). A
+  warning (a ref to an id that is not in the hub, a repo tag that is no repos/ name or alias, an
+  open PM to-do without `commands`, a `pages`/`page_html` document without a title or `html`) exits
+  0, or 1 with `--strict`; exit 2 is a usage error or an unreadable folder or batch. Refs, repo
+  tags and `page_html` ids are judged only with `--against`. `--dir <folder>`
+  checks a whole out_dir or mirror folder. Nothing in this repository calls ArtifactData, so the
+  PM runs it itself.
 - Inbox section: one button with two tabs, Questions (questions/) and Answers (inbox/). Its badge
   counts open questions plus unread answers; the button reopens the last tab used.
 - The repo filter lists every known repo; see repos/ below.
+- At each start, resume and compact, the PM session-start checklist (docs/pm-start.md) prints the hub steps:
+  republish (or publish and record a copy), start the ArtifactComments watch on the copy, check the
+  `backlog` collection and refill the regenerated collections when it is empty, then process the hub.
+
+### One copy per account
+
+A page belongs to the Claude account that published it, so each account the PM runs on has its
+own copy. `pm_start.hub_urls` maps an account label to its copy (docs/pm-start.md "Config"). The
+label (`kitlib.launcher.accounts.current_account`; `python tools/hub_mirror.py account` prints
+it) is the `launcher.accounts` entry listing this session's `CLAUDE_CONFIG_DIR` (unset:
+`~/.claude`), else `default`.
+
+The data of record is a mirror in git, `hub/<collection>/<doc_id>.json` in the PM data worktree
+(`pm_data.path`, docs/pm-data-branch.md), else in the absolute folder `pm_start.hub_mirror`;
+`tools/hub_mirror.py` refuses with neither. Mirrored (`kitlib.hubmirror.MIRRORED`): questions,
+inbox, to_pm, todos, parked, stories, pages, page_html. Not mirrored (`REGENERATED`), refilled on
+a new copy: backlog/ and completed/ (`hub_backlog.py --force`), repos/ (`hub_repos.py`, then any
+aliases again), usage/ and agents/ (posted as at session start).
+
+- **Save** after each time the PM processes the hub, and before it ends a session: read every
+  mirrored collection with ArtifactData into one `out_dir` folder, every page of each (a
+  collection read in part loses the rest from the mirror), then
+  `python tools/hub_mirror.py save --from <folder> --commit --push`. Save also runs the checks of
+  `kitlib.hubvalidate` on what it read (repos/, when `<folder>` has it, only to judge repo tags;
+  it is never mirrored) and prints each finding as a `VALIDATE` line; it saves anyway and its exit
+  code is unchanged. A collection folder present
+  replaces that collection in the mirror; one absent is left alone. An empty collection needs its
+  empty folder: if the read of a collection with no documents leaves no folder in `out_dir`,
+  create it before saving, or the documents deleted from the hub stay in the mirror and a
+  restore brings them back. `--commit` commits this save's changed mirror paths through
+  `kitlib.commit` (tools/commit.py's checks: never a main checkout, refused when anything else is
+  already staged or a staged file names a machine path), so the mirror must be in a linked work
+  tree on its `.kit.json` main branch, as the PM data worktree is; a work tree of the kit itself
+  (its code, or the kit's repository on any branch but the recorded data branch) is refused, as
+  the kit is public. Mirror paths an earlier save left uncommitted are counted, not committed.
+  A hub document that quotes a machine path is refused by that scan, stays uncommitted and is
+  lost on a restore from another machine, unless the data work tree's `.kit.json`
+  `"machine_paths".allow` has an entry for it, its glob naming the mirror folder (`{"glob": "hub/*", "line": "<regex>", "why": "..."}`;
+  `kitlib/machinepaths` docstring, docs/commit.md "`.kit.json` keys read").
+  A mirror path git ignores is skipped silently: `git status` does not list it, so it is never
+  committed, and a save whose only changes are ignored prints `nothing to commit`.
+  `--push` pushes that branch to `pm_data.remote` with an explicit refspec.
+- **New copy:** publish the page as above, record it with
+  `python tools/hub_mirror.py set-url --account <label> <url>`, then
+  `python tools/hub_mirror.py restore --out <file>` writes ArtifactData batch files (`<file>`,
+  `<stem>-2.json`, ...; at most 50 `set` entries and under 1 MiB each; each document's fields in
+  its own file under `<stem>.docs/`, named by the entry's `file_path`). Send each with ArtifactData.
+  An empty mirror writes none; a document too big for one batch (`kitlib.hubmirror.BATCH_BUDGET`,
+  960 KiB with its entry, most likely a large page_html) refuses the restore before anything is
+  written. Numbered batch files a longer earlier restore left are removed. Then refill the
+  regenerated collections.
+- `pm_start.hub_url` is the one copy of an install that has not moved to `hub_urls`; it is read
+  only while `hub_urls` has no entry. To move, set-url the old URL under its account first;
+  set-url prints a NOTE when its first `hub_urls` entry leaves a different `hub_url` unread (it
+  does not move it: which account published that copy is not known).
+- The JSON ArtifactData writes under `out_dir` has not been seen: save reads either a wrapped
+  document (a `data` object plus only `kitlib.hubmirror.WRAPPER_KEYS`) or bare fields, and keeps
+  neither `id` nor `version` (a document's id is its file name). A `data` object beside any other
+  key is refused and nothing is saved: it cannot be told from a document with a `data` field.
 
 ## questions/Q-NNN
 | Field | Written by | Meaning |
@@ -93,7 +166,7 @@ Send all sets every queued item to `sent` with `sent_at`, then fires the Alert-t
 
 | Field | Written by | Meaning |
 |---|---|---|
-| id | page | `P-001`, `P-002`, ...: the next number after the highest in the collection |
+| (doc id) | page | `P-001`, `P-002`, ...: the next number after the highest in the collection; the document's id, not a field |
 | kind | page | `question` or `fyi` |
 | repo | page | a repo name, `pm`, `all`, or empty |
 | urgent | page | true marks it Urgent and makes the badge hot |
@@ -106,14 +179,14 @@ Send all sets every queued item to `sent` with `sent_at`, then fires the Alert-t
 
 PM steps: on an alert (or at session start) list `to_pm` where `status` is `sent`; each is also listed under "To PM" in the alert text. Answer a Question with `reply`, and log any ruling it makes first (provenance `typed`) and put its id in `ruling`; for an FYI set `reply` to a short acknowledgement or leave it empty. Then `update` the doc with `status: done`, `done_at`, `reply`, `ruling`. The owner can write to the collection; the PM may restrict `done` writes by a db rule if wanted (the page only writes queued and sent).
 
-Logic: the pure functions (`pmNextId`, `pmRows`, `pmBadge`, `pmSendAll`, `pmAlertLines`) sit between the `pm-pure:begin` and `pm-pure:end` markers in `claude/hub/action-hub.html`; `tests/hubtopm` runs that block under node.
+Logic: the pure functions (`pmNextId`, `pmRows`, `pmBadge`, `pmSendAll`, `pmAlertLines`, and the alert, status and freshness helpers `pmAlertText`, `pmAutoAlert`, `pmAlertWhy`, `pmCommands`, `pmQBucket`, `pmFresh`) sit between the `pm-pure:begin` and `pm-pure:end` markers in `claude/hub/action-hub.html`; `tests/hubtopm` runs that block under node.
 
 ## todos/T-NNN (or a generated id for the owner's own items)
 | Field | Meaning |
 |---|---|
 | status | `open` or `done` (the owner ticks it) |
 | title, detail | what to do and why |
-| commands | the exact PowerShell commands, each with a Copy button, on every item that involves running something; to edit a file by hand, a command that opens it |
+| commands | a list of strings (a bare string is an error in `hub_validate.py`, though the page shows a lone string as a one-command list): the exact PowerShell commands, each with a Copy button, on every item that involves running something; to edit a file by hand, a command that opens it |
 | repo, from, added_at, refs | provenance |
 | done_at | set by the page when ticked |
 | urgent | true sorts it to the top; the owner can set it on their own items |
@@ -124,12 +197,14 @@ The owner can add items (`from: "you"`). The PM checks the done items and follow
 ## Backlog section
 Three tabs: New story (the form, then the owner's stories in progress and filed), Current backlog, and Completed (1, 7, 30 or 90 days).
 
+Freshness: an empty Current backlog or Completed tab says "Never filled on this copy" (the page cannot tell that from nothing being open); a tab whose newest `posted_at` is more than 3 days old says "Stale since" that time (`pmFresh`).
+
 One backlog dropdown at the top (All backlogs, then every repo) is shared by all three tabs and remembered. It filters each tab; the story form shows the chosen backlog as read-only text and submits only when one is chosen.
 
 Current backlog filters, each remembered per viewer: priority chips P1 to P5 and Unpriced (P1 to P3 on by default), status chips Open, Blocked, Parked and Pulled (all on), and a search over titles and ids. Each chip shows how many items it would add under the other filters.
 
 ### backlog/<repo> and completed/<repo>
-One document per repository, written by `claude/hub/hub_backlog.py --out <file>` (`kitlib.hubbacklog`), never by hand: {repo, posted_at, items: [{id, t: title, p: priority or null, s: state}]} for every open record, and {repo, posted_at, days: 90, items: [{id, t, d: closed date}]} for every record closed in the last 90 days, newest first. Both read the store `.kit.json` backlog.store names, resolved by the store itself (`kitlib.hubbacklog.store_at` over `open_backend`): by default the local copy of `refs/backlog/main`, unfetched; for `main` or a folder, that folder on the main branch. So only published records show, and a repository with no store yet shows none. A record closes by a `closed:` line or by its file being deleted from the store (the deleting commit's date, the summary from before). The tool covers every repository `known_repos` lists that has a folder (`pm_start.repo_paths`, else the PM repository's sibling); it writes a document only when it changed since the last run (`--force` writes all), keeping each document's digest and store version in ~/.claude-pm-kit/hub_backlog_state.json and pinning each write to that version. Each document goes to its own file beside the batch, which names it by `file_path`. A document over 200 KiB has its titles shortened, then its last items dropped (`cut` counts them). The PM sends the batch file with ArtifactData.
+One document per repository, written by `claude/hub/hub_backlog.py --out <file>` (`kitlib.hubbacklog`), never by hand: {repo, posted_at, items: [{id, t: title, p: priority or null, s: state}]} for every open record, and {repo, posted_at, days: 90, items: [{id, t, d: closed date}]} for every record closed in the last 90 days, newest first. Both read the store `.kit.json` backlog.store names, resolved by the store itself (`kitlib.hubbacklog.store_at` over `open_backend`): by default the local copy of `refs/backlog/main`, unfetched; for `main` or a folder, that folder on the main branch. So only published records show, and a repository with no store yet shows none. A record closes by a `closed:` line or by its file being deleted from the store (the deleting commit's date, the summary from before). The tool covers every repository `known_repos` lists that has a folder (`pm_start.repo_paths`, else the PM repository's sibling); it writes a document only when it changed since the last run (`--force` writes all), keeping each document's digest and store version in a state file and pinning each write to that version. The state file is `--state` when given, else `hub_backlog_state.json` in the folder `kitlib.config.user.DIR_NAME` names under the home folder (`hub_backlog.STATE`); while that file is absent the retired folder's `hub_backlog_state.json` is read instead, and the new one is always the one written (`kitlib.config.migration.state_paths`; docs/kit-json.md "Moving the machine config folder"). Each document goes to its own file beside the batch, which names it by `file_path`. A document over 200 KiB has its titles shortened, then its last items dropped (`cut` counts them). The PM sends the batch file with ArtifactData.
 
 
 ### repos/<name>
@@ -159,7 +234,9 @@ PM steps:
 The coordinator files the record itself with its own backlog tool, citing the story; pricing follows that repo's usual rules.
 
 ## Alert the PM
-The header button sends the PM session a "Send to Claude" comment summarising what waits on it: answered questions, submitted stories, and to-dos ticked done or added by the owner without `pm_ack`, and every To PM item with status `sent`. Send all in the To PM section fires this same alert. It works only while a PM session watches the artifact with auto-replies armed; otherwise the page says so and the PM picks things up at its next turn. A relaunched PM runs `ArtifactComments watch` on the hub URL. On an alert, the PM processes the hub, replies in the thread with what it did, and resolves it.
+The header button sends the PM session a "Send to Claude" comment summarising what waits on it: answered questions, submitted stories, and to-dos ticked done or added by the owner without `pm_ack`, and every To PM item with status `sent`. Send all in the To PM section fires this same alert. It works only while a PM session watches the artifact with auto-replies armed; otherwise the page says so, blocks Send all (queued items stay saved) and the PM picks up what was already sent at its next hub check. With no `comments` capability (an email invitee, or a page published without it) the bar stays visible and says why.
+
+Automatic alerts: 20 seconds after the last owner action (answer submitted, to-do ticked done, to-do added, story submitted) the page sends one alert (`pmAutoAlert`), unless nothing waits or the text equals the last one sent; a rate-limited send is retried once after 60 seconds. Every item line carries its id, including to-dos the owner added. The text is capped at 3900 bytes: whole lines are dropped from the end and a "(+N more not shown" line says how many, so the PM then reads the hub itself (`pmAlertText`). A relaunched PM runs `ArtifactComments watch` on the hub URL. On an alert, the PM processes the hub, replies in the thread with what it did, and resolves it.
 
 ## Info section
 Reference material in two tabs, Usage and Agents. The Info button shows the usage of the account in use now: its higher of five-hour and weekly, hot at 90%.

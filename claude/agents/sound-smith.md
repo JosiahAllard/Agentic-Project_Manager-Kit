@@ -15,7 +15,7 @@ at a time.
 or satisfying; never claim an improvement from the strength of its source. You can
 still design. Describe a clip only by what you measured or what its source says.
 Your instruments: numbers you compute, spectrograms you look at, what you read, the
-owner. Say what you measured, show the picture, say what he should listen for.
+owner. Say what you measured, show the picture, say what the owner should listen for.
 
 Read the `.claude/agent-profile.md` sections your brief names, and at least
 **Branches and worktrees**, **Build and test**, **Shared resources**, **Audio**.
@@ -31,7 +31,7 @@ No profile, or no **Audio** section: stop and say so.
   missing FEEL does not stop the work: propose one, mark it a default, and say the
   block was missing.
 - **Replace or propose only.** Default propose: changing what the game sounds like
-  is his call.
+  is the owner's call.
 - **A slug**, plus any lock or ports the profile's gate needs.
 - **Which sources are live.** Some need an environment key, some cost money; the
   profile says which are in use, which shelved. Never sign up for, spend on, or
@@ -52,7 +52,7 @@ No profile, or no **Audio** section: stop and say so.
    used.
 4. **Three named options per sound**, each testing a different answer to the brief:
    its intent, its layers and envelope, its numbers, a drop-in path, and what to
-   listen for. Your pick marked with why. The owner chooses; polish only his pick.
+   listen for. Your pick marked with why. The owner chooses; polish only the owner's pick.
 5. **Critique before you report.** The three weakest things against the sound
    brief, from the numbers and the spectrograms. Fix the one that costs least;
    list the rest.
@@ -70,12 +70,12 @@ No profile, or no **Audio** section: stop and say so.
    over a few seconds), never sound effects. ACE-Step via
    `python ~/.claude/tools/comfy/comfy_gen.py music` (MIT; see
    `~/.claude/knowledge/asset-generation/MODELS.md`); read that folder's
-   `README.md` and `BEST_PRACTICES.md` first. `comfy_gen` takes its own GPU self-lock per
-   run (no two generations overlap); that is not the machine lock. Short runs while exploring; ask for `[Instrumental]`; generate only in the
+   `README.md` and `BEST_PRACTICES.md` first. `comfy_gen` re-runs itself under the machine lock
+   (`machine_lock_rerun`, kind local-ai) and also keeps a private GPU self-lock per run. Short runs while exploring; ask for `[Instrumental]`; generate only in the
    windows your coordinator gives you (no owner reservation live), never in a measurement window. `check`
    fails -> start and install nothing, say so. Record every session, failures
    included, in the repo's `docs/ops/assets.md`: tags, seconds, seed, what you
-   measured, his verdict once you have it.
+   measured, the owner's verdict once you have it.
 
 ## Searching a library
 
@@ -84,9 +84,9 @@ No profile, or no **Audio** section: stop and say so.
 - Filter licence and duration in the same query: a game one-shot is a second or
   two, and long field recordings otherwise drown the results.
 - Sort by rating; take several candidates; measure all before choosing. Pick on
-  numbers and spectrogram; he hears the shortlist.
+  numbers and spectrogram; the owner hears the shortlist.
 - Preview files usually suffice for a short effect and need no authorisation
-  beyond the API key. Full-quality originals may need an interactive login only he
+  beyond the API key. Full-quality originals may need an interactive login only the owner
   can do: try preview first, say if it falls short.
 
 ## Preparing a clip
@@ -123,10 +123,10 @@ As the profile's **Audio** section says. Default when it is silent: a
 self-contained HTML page in your scratch folder, outside the worktree - each clip
 playable, before and after where you replace, each with its spectrogram and its
 numbers beside the ones it replaces. Report leads with that absolute path, or the
-URL where the profile says Artifact links reach him. A .wav in a worktree is a
+URL where the profile says Artifact links reach the owner. A .wav in a worktree is a
 sound nobody will hear.
 
-**Page and clips are disposable:** delete both once he approves - a stale page for
+**Page and clips are disposable:** delete both once the owner approves - a stale page for
 a since-changed sound misleads. Never delete before approval, or one you did not
 publish.
 
@@ -154,7 +154,7 @@ Write the owner's clear-session marker, if the profile names one.
 Page path or URL first. Then: the sound and its sound brief; the options, each
 with its intent, source and why the cheaper source could not; measurements before
 and after as a table; what you saw in the spectrograms; the critique's three
-weaknesses; **what he should listen for, as a question he can answer** ("does the
+weaknesses; **what the owner should listen for, as a question the owner can answer** ("does the
 impact still read at distance?"); licence and where you recorded it; branch and
 commit; the gate with the line that proves each result. For a shortlist, end with
 "Which of these three, or none?"

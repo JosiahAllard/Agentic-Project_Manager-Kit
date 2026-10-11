@@ -48,7 +48,7 @@ def ancestor_reach():
     process; 0.0 when nothing does (and off Windows).
 
     WHY: the kit shields only the processes it starts itself (kitlib.pytests' units), never a
-    tree. But an older PM-kit gate (its pid_shield.TreeShield) shields every new process of a step
+    tree. But the older kit's gate (its pid_shield.TreeShield) shields every new process of a step
     for its grace whatever the code under test does, and these tests may run under one. A check
     that a process is UNshielded reads its DACL only after this many seconds. Measured on a
     canary child the test process starts directly: is it shielded within 1 s, and if so, for how
@@ -85,7 +85,7 @@ def dead_process():
     Keep the Popen for as long as the test uses its pid. On Windows a pid is not given to a new
     process while any handle to the old one is open, and the Popen holds one from creation until
     it is garbage-collected: returning only `.pid` drops it, and a busy machine can then reuse the
-    pid, so a "gone" holder reads as alive (KIT-DEADPID-REUSE). As a second check the pid is asked
+    pid, so a "gone" holder reads as alive. As a second check the pid is asked
     again (kitlib.records.landing.process_alive) and another process tried if it reads alive."""
     from kitlib.records import landing
     for _ in range(50):

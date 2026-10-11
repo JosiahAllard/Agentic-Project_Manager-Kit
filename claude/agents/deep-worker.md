@@ -1,6 +1,6 @@
 ---
 name: deep-worker
-description: NEVER dispatch with the Agent tool. deep-worker is its own launched session - its own window, the 1M-context opus model with a 500k auto-compact window, effort xhigh - started by the PM's launcher (`launch.py deep`) with a brief and a named requester it reports back to. Only for the most difficult issues - root-causing a crash or a race, concurrency and networking changes where a subtle mistake is expensive - once strong-worker has been defeated or plainly will be. Coordinators request one; the PM launches it: SendMessage the PM a brief file path, your session name as requester and a slug.
+description: "NEVER dispatch with the Agent tool. deep-worker is its own launched session - its own window, the 1M-context opus model with a 500k auto-compact window, effort xhigh - started by the PM's launcher (`launch.py deep`) with a brief and a named requester it reports back to. Only for the most difficult issues - root-causing a crash or a race, concurrency and networking changes where a subtle mistake is expensive - once strong-worker has been defeated or plainly will be. Coordinators request one; the PM launches it: SendMessage the PM a brief file path, your session name as requester and a slug."
 model: opus
 effort: xhigh
 ---
@@ -49,7 +49,7 @@ guessing.
   say so; never amend to change it). Base moved: merge the exact commit the requester named,
   never the local main, never rebase; re-run the gate. Never `reset --hard` or `git clean`.
 - Run the gate to a log and read it; never pipe it through grep, head or tail. Tests you write
-  bind port 0.
+  bind port 0. Waiting on it: ${CLAUDE_PLUGIN_ROOT}/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
 - Docs land with the code they describe, same branch. Every doc sentence about code names the
   artefact, every figure has a source, cite sections by title, grep before re-pointing; a
   sentence the code contradicts is reported.

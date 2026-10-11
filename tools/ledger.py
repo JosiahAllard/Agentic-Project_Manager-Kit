@@ -1,4 +1,4 @@
-"""ledger.py: the rulings ledger named by ~/.claude-pm-kit/config.json `ledger_path` (docs/ledger.md).
+"""ledger.py: the rulings ledger named by the machine config's `ledger_path` (docs/ledger.md).
 
   ledger.py add --repo REPO --prov PROV --q Q --a A --decides D --source S [--supersedes R-nnnn]
                 [--items A,B] [--when 'YYYY-MM-DD HH:MMZ'] [--commit | --push] [--title T]
@@ -36,7 +36,7 @@ from kitlib import ledger                                          # noqa: E402
 from kitlib.backlog import ledger as backlog_ledger                # noqa: E402
 from kitlib.config import user                                     # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
-from kitlib.ledger import fmt, standing, vcs, write                # noqa: E402
+from kitlib.ledger import fmt, safepath, standing, vcs, write      # noqa: E402
 from kitlib.ledger.errors import Refused, Usage                    # noqa: E402
 
 
@@ -92,6 +92,9 @@ def fail(msg, code=1):
 
 def run(a, p, path, repos):
     if a.cmd == 'list':
+        why = safepath.refusal(path)
+        if why is not None:
+            return fail(why)
         try:
             with open(path, encoding='utf-8-sig') as f:
                 text = f.read()
@@ -169,7 +172,7 @@ def main(argv=None):
     except ConfigError as e:
         return fail(str(e))
     if not path:
-        return fail('no ledger_path in ~/.claude-pm-kit/config.json')
+        return fail('no ledger_path in %s' % user.display())
     try:
         return run(a, p, path, repos)
     except Usage as e:
