@@ -489,6 +489,24 @@ def stubs(repos=None, check=None):
     return lines
 
 
+def plugin_settings():
+    """The machine config's plugin Settings (kitlib.pluginsource.load)."""
+    from kitlib import pluginsource
+    return pluginsource.load()
+
+
+def plugin_current(settings=None, kit=None):
+    """Lines when the pm-kit plugin export is behind the kit's refs/remotes/<remote>/main (which
+    kit_sync, just before, has fetched) or an account folder's last refresh failed
+    (kitlib.pluginsource.current_lines; docs/plugin-source.md "Behind warnings"). None for
+    `settings` reads the machine config; a loader that gives None checks nothing."""
+    from kitlib import pluginsource
+    s = plugin_settings() if settings is None else settings
+    if s is None:
+        return []
+    return pluginsource.current_lines(kit or pluginsource.kit_root(), s)
+
+
 def checklist(cfg, now=None, procs=None, **fakes):
     """The full session-start text. A failed check is one "could not check X: reason" line."""
     today = (now or datetime.datetime.now()).date()
@@ -509,6 +527,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("reminders", lambda: reminders(cfg, today, **fakes.get("reminders", {}))),
         ("liveness", lambda: liveness(cfg, procs_once(), **fakes.get("liveness", {}))),
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
+        ("plugin_current", lambda: plugin_current(**fakes.get("plugin_current", {}))),
         ("stubs", lambda: stubs(**fakes.get("stubs", {}))),
         ("foreground_lock", lambda: fglock.check(cfg, **fakes.get("foreground_lock", {}))),
     ]
