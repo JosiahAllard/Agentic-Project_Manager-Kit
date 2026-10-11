@@ -6,11 +6,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
-from kitlib.backlog.errors import NotFound, Usage
+from kitlib.backlog.errors import Failure, NotFound, Usage
+from kitlib.git import cmd
 from tests.backlog.helpers import BRANCH, StoreCase, rec, record_text
 from tests.gitfixture import NAME, TempRepo, fixture_env, rmtree
 
@@ -119,6 +121,69 @@ class MainStoreSideBranch(StoreCase):
         self.assertIn('removed by %s ' % r.git('rev-parse', '--short', deleted), said)
         self.assertIn('(session side-session): closes FOO: done on the side', said)
         self.assertNotIn(r.git('rev-parse', '--short', merge), said)
+
+
+class MainStoreUncommittedClose(StoreCase):
+    """A main store's `close` deletes the file and commits nothing (store.MainBackend.publish), so
+    no commit in HEAD's history removed it yet: `show` says the file is tracked at HEAD and
+    missing here, not that the id is unknown; a git that does not answer fails closed."""
+
+    def main_store(self):
+        r = TempRepo()
+        self.addCleanup(r.cleanup)
+        root = r.worktree('w')
+        r.write('docs/backlog/FOO.md', record_text(id='FOO'), root=root)
+        r.commit('adds FOO', 'docs/backlog/FOO.md', cwd=root)
+        store = smod.Store(smod.MainBackend(root, 'docs/backlog'), rmod.Rules())
+        return r, root, store, pmod.Context(store, root, branch=BRANCH)
+
+    def shown(self, store, ctx, rid):
+        with self.assertRaises(NotFound) as cm:
+            pmod.require_shown(store.load(), ctx, rid)
+        return str(cm.exception)
+
+    def test_a_record_closed_and_not_yet_committed_reports_as_closed(self):
+        r, root, store, ctx = self.main_store()
+        store.write(lambda s: pmod.plan_close(s, ctx, 'FOO', 'the work is finished'))
+        self.assertFalse(os.path.exists(os.path.join(root, 'docs', 'backlog', 'FOO.md')))
+        said = self.shown(store, ctx, 'FOO')
+        self.assertIn('no record with `id: FOO`', said)
+        self.assertIn('tracked at HEAD but missing from this worktree (closed or retired here, '
+                      'or removed by hand); no commit names it yet', said)
+        self.assertNotIn('the id is unknown', said)
+
+    def test_a_file_removed_by_hand_reads_the_same_and_claims_no_close(self):
+        r, root, store, ctx = self.main_store()
+        os.remove(os.path.join(root, 'docs', 'backlog', 'FOO.md'))
+        said = self.shown(store, ctx, 'FOO')
+        self.assertIn('or removed by hand', said)
+        self.assertNotIn('closed or retired in this worktree', said)
+
+    def test_a_git_that_does_not_answer_fails_closed(self):
+        r, root, store, ctx = self.main_store()
+        os.remove(os.path.join(root, 'docs', 'backlog', 'FOO.md'))
+        dead = cmd.Result(None, b'', 'git did not answer within 30 s')
+        with mock.patch.object(smod.cmd, 'call', return_value=dead):
+            with self.assertRaises(Failure) as cm:
+                store.uncommitted_removal('FOO')
+            self.assertIn('did not answer', str(cm.exception))
+            said = self.shown(store, ctx, 'FOO')
+        self.assertIn("the store's history could not be read: git did not answer", said)
+        self.assertNotIn('the id is unknown', said)
+
+    def test_once_committed_it_names_the_closing_commit(self):
+        r, root, store, ctx = self.main_store()
+        store.write(lambda s: pmod.plan_close(s, ctx, 'FOO', 'the work is finished'))
+        r.git('add', '-A', '--', 'docs/backlog', cwd=root)
+        r.git('commit', '-q', '-m', 'closes FOO: the work is finished\n\nSession: wt-session',
+              cwd=root)
+        said = self.shown(store, ctx, 'FOO')
+        self.assertIn('removed by %s ' % r.git('rev-parse', '--short', 'HEAD', cwd=root), said)
+        self.assertNotIn('no commit names it yet', said)
+
+    def test_an_id_never_tracked_is_still_unknown(self):
+        r, root, store, ctx = self.main_store()
+        self.assertIn('the id is unknown', self.shown(store, ctx, 'NOPE'))
 
 
 class BackslashFolder(StoreCase):
