@@ -143,7 +143,7 @@ Cases 01, 05, 06, 07, 11, 12 and 16 to 19 had no miss in any cell.
 - The candidates were general-purpose agents reading the coordinator rules from a file. This tests rule-following from a file, not a live coordinator session with tools, long context and compaction.
 - The cases come from sessions on 2026-10-03 to 2026-10-11 and can differ from the current claude/agents/coordinator.md. Cases 08, 10 and 12 are older peer traffic.
 - The scorer was a blind Opus agent. The rubric check for cases 02 and 06 could not be done, because the scorer was not given the written rules.
-- Case 07: all 7 cells match if "hold, no lander while the lock is held" is the whole action. All would miss if the ping to the combat lane were required.
+- Case 07: all 7 cells match if "hold, no lander while the lock is held" is the whole action. All would miss if the ping to the peer lane were required.
 - Cases 14 and 16 to 20 took lenient readings: later fresh landers or re-gates conditional on proof, refill from the work set, and a go on the internal parts of case 20's plan. Under a full-go reading of case 20, three more answers would miss.
 - Warning banners: hand-backs drew auto-mode warnings, not refusals. Main batch: sonnet medium 2, haiku medium 1, haiku max 1, opus medium 1. Two more in the pilot (haiku high, sonnet medium). No main-batch run was lost to one. One row (sonnet high, case 18) is a re-run, because the first answer was lost in the pilot when the safety classifier stopped the agent that was retyping it. The re-run is the one counted.
 
