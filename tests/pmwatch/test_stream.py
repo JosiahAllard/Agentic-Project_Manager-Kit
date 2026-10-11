@@ -125,14 +125,14 @@ class HeartbeatTest(unittest.TestCase):
 class CliTest(unittest.TestCase):
 
     def test_stream_flag_parses(self):
-        a = cli.parse(["--sessions", "s.json", "--usage-script", "u.ps1", "--stream"], {})
+        a = cli.parse(["--sessions", "s.json", "--stream"], {}, launcher_set=True)
         self.assertTrue(a.stream)
         self.assertFalse(a.once)
 
     def test_stream_and_once_together_exit_2(self):
         err = io.StringIO()
         with redirect_stderr(err), self.assertRaises(SystemExit) as c:
-            cli.parse(["--sessions", "s.json", "--usage-script", "u.ps1", "--stream", "--once"], {})
+            cli.parse(["--sessions", "s.json", "--stream", "--once"], {}, launcher_set=True)
         self.assertEqual(c.exception.code, 2)
         self.assertIn("not allowed with", err.getvalue())
 

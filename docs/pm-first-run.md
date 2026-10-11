@@ -49,8 +49,8 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    repository (`claude/hub/hub_backlog.py` finds the repository from the sessions file's folder
    and fails outside a git repo). Fill `pm_start` in the user config with their paths, and
    `pm_watch_cmd` (docs/pm-start.md "Config"); set `pm_watch.sessions_file` to the same file
-   (docs/pm-watch.md "Config"). `usage_script` is optional: without it `pm_watch.py` reads usage
-   in-process from the machine config's `launcher` key, and exits 2 only when neither is set.
+   (docs/pm-watch.md "Config"). `pm_watch.py` reads usage
+   in-process from the machine config's `launcher` key and exits 2 without it; `usage_script` is refused.
    Then, as a hand step, the owner adds the SessionStart hook from docs/pm-start.md to the
    settings only the PM session loads.
    Success: the next PM session starts with "PM session start checklist", not "no pm_start
