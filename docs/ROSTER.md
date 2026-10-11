@@ -2,8 +2,15 @@
 
 The kit's plugin ships these agent definitions in `claude/agents/`. Each is a generic copy of the live
 definition; repo specifics live in the repo's `.claude/agent-profile.md` (every agent) and
-`.claude/coordinator-profile.md` (coordinator only). A repo can override any agent with a same-name
-file in its own `.claude/agents/`.
+`.claude/coordinator-profile.md` (coordinator only). The plugin registers each one under its prefix:
+dispatch a row as `pm-kit:<row>` (`subagent_type`, `--agent`). A repo's own `.claude/agents/<row>.md`
+is a separate agent named `<row>`; it does not replace `pm-kit:<row>`. A repo that ships its own
+file lists that agent type in its `.claude/coordinator-profile.md` and is dispatched by the bare
+name; every other row is dispatched as `pm-kit:<row>` (tests/agents/test_override.py,
+tests/agents/test_dispatch_names.py). That bare-name dispatch is for the Agent tool only: the launcher
+qualifies every bare kit agent name, so it always starts the kit's version, and a repo's own file for a
+launched row (coordinator, consultant, deep-worker) cannot be started by the launcher under that name
+(docs/launcher.md "The window").
 
 This table is the one place to set which agent runs at which model and effort, and when to use it.
 Edit a row, then `python tools/agent_roster.py --write` pins model and effort into that agent's
@@ -13,11 +20,11 @@ unless the owner asks; override a dispatch only upward.
 | agent | model | effort | use for |
 |---|---|---|---|
 | asset-smith | opus | high | 3D assets as Blender Python scripts against a decided art direction, validated against budgets, with a contact sheet for the owner. No rigging or animation. |
-| coordinator | opus | medium | Main session (`claude --agent coordinator`), never a subagent. Splits work, dispatches agents, reviews branches, serialises landings, brings decisions to the owner. Writes no code. |
+| coordinator | opus | medium | Main session (`claude --agent pm-kit:coordinator`), never a subagent. Splits work, dispatches agents, reviews branches, serialises landings, brings decisions to the owner. Writes no code. |
 | consultant | opus | high | Own long-lived launched session per repository (never an Agent dispatch; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked. |
 | deep-worker | opus | xhigh | Own launched session (never an Agent dispatch; 1M via launcher). Root cause or concurrency work strong-worker failed at or plainly cannot do; never builds or plans. |
 | lander | haiku | medium | Lands one reviewed branch (or a batch) on main on the coordinator's go. Never edits code. |
-| opus-worker | opus | medium | High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (`worker`). |
+| opus-worker | opus | medium | High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (`pm-kit:worker`). |
 | records | sonnet | low | Writes settled facts into docs only: decisions, landing notes, plan ticks. |
 | researcher | sonnet | high | Read-only ideas and prior art; proposes concepts for the owner to choose from, builds nothing. |
 | reviewer | sonnet | high | Read-only review of one branch against its brief; reports defects, scope creep and untested changes. |

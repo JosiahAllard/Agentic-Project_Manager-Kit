@@ -61,7 +61,7 @@ on `main` and is never worked in; only the lander writes to it.
 
 ## Landing
 
-Standing owner-approved work: the `lander` merges reviewed branches into `main` and pushes
+Standing owner-approved work: the `pm-kit:lander` merges reviewed branches into `main` and pushes
 without asking each time. Only the lander, only with the coordinator's review verdict, one at a
 time, by ONE bare call from the main checkout:
 `python tools/gate.py land <branch> --expect-main <sha> --expect-tip <sha>` (skill land-branch).
@@ -72,7 +72,7 @@ Any denial: stop and report it.
 
 ## Owner decisions
 
-- Recorded in `docs/DECISIONS.md` (line format in its header) by a `records` agent as
+- Recorded in `docs/DECISIONS.md` (line format in its header) by a `pm-kit:records` agent as
   `<one-line summary, the agent's paraphrase>`; the owner's words stay with the PM, never
   quoted here (quoting relayed words into an authority file is what the safety check refuses as
   instruction injection). Words the owner types in this repo's own session are quoted as `typed`. Never

@@ -1,6 +1,6 @@
 # Coordinator profile: <repo>
 
-Read by the `coordinator` on start; the coordinator's alone. Keep every heading (write "Not
+Read by the `pm-kit:coordinator` on start; the coordinator's alone. Keep every heading (write "Not
 applicable." under one that does not apply). Owner-only: the coordinator drafts it, marks every
 inference, and the owner approves and commits it. It holds this repository's own rules for the
 coordinator; point to the repository's docs and tools rather than copying them.

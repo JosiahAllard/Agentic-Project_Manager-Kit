@@ -61,8 +61,8 @@ ALLOWED = (
     ('docs/launcher.md', 'any entry a session under its old conductor stem runs for', W2B),
     # procwatch matching the old agent name.
     ('optional/procwatch/procwatch.py', '(?:coordinator|conductor)")', W2B),
-    # go-live's launcher switch line: the agent setting and marks until the rename.
-    ('docs/go-live.md', '`coordinator_agent` `conductor` until the coordinator rename', W2B),
+    # go-live's launcher switch line: the old task name and the marks until the rename.
+    ('docs/go-live.md', 'unregisters the old `Claude conductors after reboot`', W2B),
     # The go-live migration record of the rename.
     ('docs/go-live.md', 'These live names still say conductor', HISTORY),
     ('docs/go-live.md', '- Launcher: the old `start-conductor.ps1`', W2B),
