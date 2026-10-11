@@ -265,6 +265,36 @@ class Manifest(unittest.TestCase):
         self.assertEqual(list(m["mcpServers"]), [lockmcp.SERVER_NAME])
         self.assertEqual(lockmcp.claude_tool_prefix("p", "s"), "mcp__plugin_p_s__")
 
+    def _manifest(self, name):
+        with open(os.path.join(REPO, ".claude-plugin", name), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_the_plugin_name_has_no_reserved_claude_prefix(self):
+        # `claude plugin validate` reports a name starting with "claude-" as reserved.
+        self.assertFalse(self._manifest("plugin.json")["name"].startswith("claude-"))
+
+    def test_the_marketplace_lists_the_plugin_by_its_manifest_name(self):
+        self.assertEqual(self._manifest("marketplace.json")["plugins"][0]["name"],
+                         self._manifest("plugin.json")["name"])
+
+    def test_the_guard_prefix_is_built_from_the_manifest_name(self):
+        from kitlib import lockmcp
+        self.assertEqual(lockmcp.claude_tool_prefix(),
+                         "mcp__plugin_%s_machine-lock__" % self._manifest("plugin.json")["name"])
+
+    def test_the_plugin_name_is_no_kit_name(self):
+        # The plugin's name is neutral: tests/scrub reads no kit name from plugin.json.
+        import shutil
+        import tempfile
+        from tests.scrub.test_generic import kit_names
+        root = tempfile.mkdtemp(prefix="plugin-name-")
+        self.addCleanup(shutil.rmtree, root, True)
+        os.makedirs(os.path.join(root, ".claude-plugin"))
+        with open(os.path.join(root, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as f:
+            f.write('{"name": "host-kit"}')
+        _kit, pats = kit_names(root)
+        self.assertFalse([src for rx, src in pats if rx.search("host-kit")])
+
 
 if __name__ == "__main__":
     unittest.main()

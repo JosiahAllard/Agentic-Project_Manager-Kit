@@ -6,7 +6,7 @@ file for ruling ids, repository names, user paths and the owner's name.
 
 ## The Claude Code plugin (`.claude-plugin/plugin.json`)
 
-- **Agents** (`claude/agents/`): the agent definitions; docs/ROSTER.md says which model and
+- **Agents** (`claude/agents/`): the agent definitions, which come through the user-level agents link, not the plugin; docs/ROSTER.md says which model and
   effort each runs at and what it is for.
 - **Skills** (`claude/skills/<name>/SKILL.md`): backlog-ops, branch-review, branch-sync,
   coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch (uses

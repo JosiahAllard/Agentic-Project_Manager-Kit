@@ -1,6 +1,6 @@
 # Agent roster
 
-The kit's plugin ships these agent definitions in `claude/agents/`. Each is a generic copy of the live
+The kit ships these agent definitions in `claude/agents/`; they come through the user-level agents link, not the plugin. Each is a generic copy of the live
 definition; repo specifics live in the repo's `.claude/agent-profile.md` (every agent) and
 `.claude/coordinator-profile.md` (coordinator only). A repo can override any agent with a same-name
 file in its own `.claude/agents/`.

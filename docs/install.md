@@ -161,14 +161,13 @@ the `kit_stubs.py write -C <repo>` command, for a repository whose stubs are not
 
 `.claude-plugin/marketplace.json` lists the plugin with `"source": "./"`, so a kit checkout is a
 marketplace of its own. Add it by path and install from it: `claude plugin marketplace add <kit>`,
-then `claude plugin install <plugin name in .claude-plugin/plugin.json>@pm-kit`. A relative-path plugin of a local marketplace
+then `claude plugin install pm-kit@pm-kit`. A relative-path plugin of a local marketplace
 loads in place, so `${CLAUDE_PLUGIN_ROOT}` is the checkout the stubs run: the skills and agents write
 every kit-only path (the tools above, `kitlib/`, `optional/`, the kit's docs) as
 `${CLAUDE_PLUGIN_ROOT}/<path>` (tests/skills checks it), and only stub tools repo-relative. Source:
 https://code.claude.com/docs/en/plugin-marketplaces. That `${CLAUDE_PLUGIN_ROOT}` is substituted in
 agent and skill text is unverified: confirm it in one real loaded session before the first install.
-`claude plugin validate` still reports the
-plugin name as reserved (a `claude-` prefix); the name is unchanged and installs.
+`claude plugin validate` passes.
 
 `tools/backlog.py add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md).
