@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
@@ -11,11 +12,14 @@ PAYLOAD = json.dumps({"hook_event_name": "SessionStart", "source": "startup", "c
 
 
 def run(path, role):
+    """Run a stub with an empty temp home, so it never reads the live machine config (~/.pm-kit)."""
     env = dict(os.environ)
     env.pop("PM_KIT_ROLE", None)
     if role:
         env["PM_KIT_ROLE"] = role
-    r = subprocess.run([sys.executable, path], input=PAYLOAD, capture_output=True, text=True, env=env, timeout=60)
+    with tempfile.TemporaryDirectory() as home:
+        env["USERPROFILE"] = env["HOME"] = home
+        r = subprocess.run([sys.executable, path], input=PAYLOAD, capture_output=True, text=True, env=env, timeout=60)
     return r.returncode, r.stdout
 
 
