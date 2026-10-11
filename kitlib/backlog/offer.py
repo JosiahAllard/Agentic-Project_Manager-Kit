@@ -242,7 +242,10 @@ class PassedOver(object):
 def next_offer(snap, holding, cap=5, seeds=(), session=None, unmet=None):
     """`((offers, passed), refusals, ranks)`. `holding` are the live pulls whose scopes are taken
     first. `unmet(rec)` -> `[(member, why)]` gates `requires:`. Only records whose `session:`
-    equals `session` are offered; another session's record takes its scope silently."""
+    equals `session` are offered; another session's record takes its scope silently. A record
+    passed over on a collision names the holder: a live pull by id and branch, another session's
+    record by id and session, a record already in this offer as `(offered above)`. Scopes are each record's current `scope:` lines, so a pulled record
+    narrowed with `set --scope` frees what it gave up."""
     ranks = ranked(snap)
     occupied = []
     for rec in holding:
@@ -265,6 +268,9 @@ def next_offer(snap, holding, cap=5, seeds=(), session=None, unmet=None):
     ordered.extend(r for r in candidates if r not in ordered)
 
     offers, passed, reached, holders = [], [], set(), {}
+    for rec in holding:
+        for m in rec.all('scope'):
+            holders.setdefault(m, '%s (in flight on %s)' % (rec.id, rec.get('pulled_by') or '?'))
     for rec in ordered:
         reached.add(id(rec))
         rid = rec.id
@@ -289,8 +295,8 @@ def next_offer(snap, holding, cap=5, seeds=(), session=None, unmet=None):
             if own(rec):
                 holder = holders.get(hit[0][1])
                 passed.append(PassedOver(rec, ranks.get(rid, '-'), 'scope %s collides with %s '
-                                         'already taken%s' % (hit[0][0], hit[0][1], ' by %s '
-                                         '(session %s)' % holder if holder else '')))
+                                         'already taken%s' % (hit[0][0], hit[0][1], ' by %s'
+                                         % holder if holder else '')))
             continue
         if own(rec) and unmet is not None:
             missing = unmet(rec)
@@ -301,8 +307,10 @@ def next_offer(snap, holding, cap=5, seeds=(), session=None, unmet=None):
         occupied.extend(scopes)
         if not own(rec):
             for m in scopes:
-                holders.setdefault(m, (rid, rec.get('session') or 'none'))
+                holders.setdefault(m, '%s (session %s)' % (rid, rec.get('session') or 'none'))
             continue
+        for m in scopes:
+            holders.setdefault(m, '%s (offered above)' % rid)
         offers.append(Offer(rec, ranks.get(rid, '-'), id(rec) in seeded))
         if len(offers) >= cap:
             break
