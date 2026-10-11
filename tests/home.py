@@ -6,9 +6,12 @@
   fence_decoy(case)  temp_home(case), recorded as the fenced home: home_dir() refuses it as it
                      refuses the real one. A test of the fence itself uses it, so that the same
                      test run without the fence reads an empty temp folder, not the real home.
+  TempHomeCase       a TestCase whose every test runs under temp_home (self.home). A subclass
+                     with its own setUp calls super().setUp() first.
 """
 import os
 import tempfile
+import unittest
 from unittest import mock
 
 from kitlib.config import user as kuser
@@ -23,6 +26,14 @@ def temp_home(case, prefix='kit-home-'):
     patch.start()
     case.addCleanup(patch.stop)
     return home
+
+
+class TempHomeCase(unittest.TestCase):
+    """Every test runs under temp_home: code that reads the machine config reads an empty one."""
+
+    def setUp(self):
+        super().setUp()
+        self.home = temp_home(self)
 
 
 def fence_decoy(case):
