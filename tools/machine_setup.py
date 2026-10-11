@@ -7,7 +7,9 @@ kit checkout, or set up a fresh machine that has none, as one reviewed command (
                                                      guard.py's entry, the PM hook in FILE, the kit plugin
                                                      per account
   machine_setup.py --fresh ... --apply               make them
-  options: --config-dir DIR (repeatable; default: ~/.claude and every ~/.claude-* folder)
+  options: --config-dir DIR (repeatable; default: ~/.claude and every ~/.claude-* folder but the
+                             machine config's own; with --fresh, the plugin's account folders:
+                             those plus each folder of the launcher's accounts and orgs)
            --kit DIR (default: the checkout this file is in)   --home DIR (default: the user's home)
            --agent-temp DIR (default: the machine config's agent_temp_sweep.dir)
            --desktop DIR (default: the user's Desktop)
