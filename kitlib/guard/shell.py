@@ -813,11 +813,53 @@ def msys_to_win(p):
     return (m.group(1).upper() + ':' + (m.group(2) or '/')) if m else p
 
 
-def resolve_path(p, cwd):
+# A PowerShell provider-qualified path: [<module>\]<provider>::<rest>. FileSystem (bare or from
+# its own module) holds files, so its <rest>, when absolute, is the file; any other provider, or
+# a module the guard does not know, is a place it cannot tell.
+PS_PROVIDER_RE = re.compile(r'^(?:([^\\/:]+)\\)?([^\\/:]+)::(.*)$', re.S)
+PS_FILESYSTEM_MODULES = (None, 'microsoft.powershell.core')
+# A PowerShell drive whose name is longer than one letter (Main:\x, Temp:\x, env:FOO): a drive
+# the session may have made with New-PSDrive, so the text cannot tell its folder.
+PS_LONG_DRIVE_RE = re.compile(r'^[^\\/:]{2,}:')
+_ABS_RE = re.compile(r'^(?:[A-Za-z]:[\\/]|\\\\|//)')
+
+
+def ps_filesystem_path(p):
+    """The file path a PowerShell `FileSystem::<abs>` (or
+    `Microsoft.PowerShell.Core\\FileSystem::<abs>`) spells, else None."""
+    m = PS_PROVIDER_RE.match(p or '')
+    if not m or m.group(2).lower() != 'filesystem':
+        return None
+    module = m.group(1).lower() if m.group(1) is not None else None
+    if module not in PS_FILESYSTEM_MODULES or not _ABS_RE.match(m.group(3)):
+        return None
+    return m.group(3)
+
+
+def ps_unplaceable(p):
+    """True when PowerShell reads the text `p` as a place the guard cannot tell: a
+    provider-qualified path other than an absolute FileSystem:: one, or a drive whose name is
+    longer than one letter. A one-letter drive (C:\\x, C:x) and a relative path are not."""
+    if not p or p[:2] in ('\\\\', '//'):
+        return False
+    if PS_PROVIDER_RE.match(p):
+        return ps_filesystem_path(p) is None
+    return bool(PS_LONG_DRIVE_RE.match(p))
+
+
+def resolve_path(p, cwd, shell=None):
     """`p` (a word's text) as an absolute normalised path, or None when the text cannot tell (a
-    drive-relative C:x, ~user, a rooted \\x with no cwd to take the drive from)."""
+    drive-relative C:x, ~user, a rooted \\x with no cwd to take the drive from). With `shell` PS,
+    `FileSystem::<abs>` is <abs> and any other provider or a drive named by more than one letter
+    is None (ps_unplaceable); bash and cmd text is read as it always was."""
     if not p:
         return None
+    if shell == PS:
+        fs = ps_filesystem_path(p)
+        if fs is not None:
+            p = fs
+        elif ps_unplaceable(p):
+            return None
     if p.startswith('~'):
         if p == '~' or p[1:2] in ('/', '\\'):
             p = os.path.expanduser('~') + p[1:]
@@ -857,7 +899,7 @@ def cd_target(cmd, cwd):
     p = rest[0].text
     if p in ('-', '+') or p.startswith('-') or any(ch in p for ch in '*?'):
         return True, None
-    return True, resolve_path(p, cwd)
+    return True, resolve_path(p, cwd, cmd.shell)
 
 
 BASH_PREFIX_WORDS = {'if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', 'time'}

@@ -1280,15 +1280,19 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
     for w in write_targets(cmd, inv):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
             continue
+        ps_drive = False                        # a PowerShell drive or provider it cannot place
         if w.dyn:
             target, why = None, 'a target that is not literal: %s' % w.text
         elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
             target, why = os.path.normpath(os.path.join(jail.bash_tmp(ctx), w.text[5:])), None
+        elif cmd.shell == sh.PS and sh.ps_unplaceable(w.text):
+            ps_drive = True
+            target, why = None, 'a PowerShell drive or provider path the guard cannot place: %s' % w.text
         else:
-            target = sh.resolve_path(w.text, cmd.cwd)
+            target = sh.resolve_path(w.text, cmd.cwd, cmd.shell)
             why = None if target else 'the directory it runs in is unknown' if cmd.cwd is None \
                 else 'a path the text cannot place: %s' % w.text
-        if target is None and cmd.cwd is not None and \
+        if target is None and cmd.cwd is not None and not ps_drive and \
                 ctx.place(cmd.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
             continue                            # a target it cannot place, from a worktree or elsewhere
         what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in')
@@ -1299,7 +1303,27 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
             d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd))
             if d:
                 return d
+        if ps_drive:
+            d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
+            if d:
+                return d
     return None
+
+
+def ps_drive_jail(event, ctx, cwd, role, what, why, rewrite):
+    """An agent session's PowerShell write to a drive or provider path the guard cannot place
+    (shell.ps_unplaceable: Main:\\x after New-PSDrive, Registry::x), by a role main_checkout lets
+    through (it may edit a main checkout): the jail cannot judge a place it cannot tell, so it
+    refuses, as git_jail_unknown does for git."""
+    if not agent_session(event, ctx):
+        return None
+    dest = jail.destination(jail_roots(event, ctx, cwd))
+    head = '%s: the guard cannot tell where it writes (%s). Write to a literal path inside the folders an ' \
+           'agent session may write.' % (what, why)
+    if dest is not None and rewrite is not None:
+        return refuse('write-jail', role, head + ' The same write in %s:' % fwd(dest.path),
+                      rewrite(fwd(dest.path) + '/<file>'))
+    return refuse('write-jail', role, head + ' To see where this session runs:', 'pwd')
 
 
 DUPS_RE = re.compile(r'(?:[ \t]*[0-9]*[<>]&[0-9-]+)+')
@@ -1360,15 +1384,15 @@ ROOT_VAR_RE = re.compile(r'(?i)^%s{1,2}[\\/]?$' % _ROOT_VAR)       # $env:HOMEDR
 WILD = re.compile(r'[*?\[]')
 
 
-def is_root(text, cwd, ctx=None):
+def is_root(text, cwd, ctx=None, shell=None):
     """True when `text` names a drive or filesystem root, the user's home, or a variable that is
-    one of those."""
+    one of those; `shell` the shell whose word it is (sh.resolve_path: FileSystem::C:\\ in PS)."""
     t = text.strip()
     if not t:
         return False
     if ROOT_VAR_RE.match(t):
         return True
-    p = sh.resolve_path(t, cwd)
+    p = sh.resolve_path(t, cwd, shell)
     if not p:
         return False
     if ctx is not None and getattr(ctx, 'home', None) and same_dir(p, ctx.home):
@@ -1457,7 +1481,7 @@ def root_search(event, ctx, cmd, inv, cwd, role):
     where = cmd.cwd
     for w in paths:
         parent, leaf = split_wild(w.text)
-        if ROOT_VAR_RE.match(parent.strip()) or (not w.dyn and is_root(parent, where, ctx)):
+        if ROOT_VAR_RE.match(parent.strip()) or (not w.dyn and is_root(parent, where, ctx, cmd.shell)):
             what = '`%s` searches the whole drive or profile from %s.' % (cmd.text, w.text)
             if cwd and not is_root(cwd, None, ctx):
                 new = quote(cwd + '/' + leaf) if leaf else quote(cwd)
