@@ -128,7 +128,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `tool_tests.unit_timeout` (int >= 1, default 3600): pytests: seconds per unit
 - `worktree_remove.exempt` (map folder -> string, default {}): worktree folder -> the ruling exempting it
 - `worktree_remove.disposable_untracked` (list of string, default []): untracked file globs removal may discard
-- `worktree_remove.build_output` (list of string, default []): build output path globs
+- `worktree_remove.build_output` (list of string or {piece, path}, default []): build output path globs, or {piece, path} folders resolved through the pieces table
 - `worktree_remove.keepers` (list of string, default []): file globs that refuse a removal, added to the kit list
 - `worktree_remove.archive_next_free` (bool, default false): archive under the next free name
 - `worktree_remove.branch_template` (a branch name holding {slug} once): branch name for a slug

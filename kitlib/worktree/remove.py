@@ -12,7 +12,9 @@ lines). Nothing here prints. The checks, in order, are the PM tool's:
   never fetched (`merge_check`); UNLANDED work is the owner's to remove and the refusal prints his
   commands and the `--abandon` verb, running none of them;
 - holders (`holders.blockers`), then work (`dirty`: anything uncommitted or untracked, and any
-  git-IGNORED file outside `build_output` or a keeper inside it), then links or junctions inside;
+  git-IGNORED file outside `build_output` or a keeper inside it; a `{piece, path}` entry is the
+  folder the pieces table puts there, and one that cannot be resolved holds nothing), then links
+  or junctions inside;
 - only then the `disposable_untracked` files are deleted, `git worktree remove` runs (never
   forced, never retried) and the branch goes with `git branch -d` (never -D).
 
@@ -29,9 +31,11 @@ after the removal); CONFIG 2 (the kit configuration was refused).
 import collections
 import datetime
 import fnmatch
+import json
 import os
 import re
 
+from kitlib import pieces
 from kitlib.backlog import store as backlog_store
 from kitlib.backlog.errors import Failure as BacklogFailure
 from kitlib.config import ConfigError, load
@@ -107,10 +111,38 @@ class Ctx(object):
         return Outcome(code, list(self.out))
 
 
+def piece_dirs(cfg, entries):
+    """`(dirs, None)`: each `{piece, path}` build_output entry as the literal repo-relative folder
+    the pieces table puts it at (no trailing `/`), or `([], why)` when any of them cannot be
+    resolved - no table, a malformed one, an unknown piece, a path that is empty, absolute,
+    `..`-climbing, backslashed or a glob. Never raises: a caller refuses on `why` (fail closed)."""
+    if not entries:
+        return [], None
+    try:
+        table = pieces.load_repo(None, cfg)
+    except (pieces.TableError, ConfigError) as e:
+        return [], 'the pieces table cannot be read (%s)' % e
+    dirs = []
+    for ent in entries:
+        rel = ent['path']
+        parts = rel.rstrip('/').split('/')
+        if (not rel.rstrip('/') or rel.startswith('/') or '\\' in rel or ':' in rel
+                or any(c in rel for c in '*?[]') or '..' in parts or '' in parts or '.' in parts):
+            return [], ('build_output entry %s: "path" must be a folder relative to the piece,'
+                        ' `/`-separated, with no glob, `..` or empty part' % json.dumps(ent))
+        try:
+            dirs.append(table.path(ent['piece'], rel).rstrip('/'))
+        except KeyError as k:
+            return [], 'build_output entry %s: %s' % (json.dumps(ent), k.args[0])
+    return dirs, None
+
+
 def settings(main, cfg):
     """This repository's values (the schema has already checked their shapes)."""
     wr = cfg.section(TOOL)
     tools = cfg.tools_dir.replace('\\', '/').rstrip('/')
+    build = list(wr.get('build_output') or [])
+    dirs, dirs_error = piece_dirs(cfg, [b for b in build if isinstance(b, dict)])
     return {
         'base': cfg.main_branch, 'remote': cfg.remote,
         'upstream': '%s/%s' % (cfg.remote, cfg.main_branch),
@@ -119,7 +151,8 @@ def settings(main, cfg):
         'name': cfg.repo.get('name') or os.path.basename(os.path.normpath(main)),
         'exempt': dict(wr.get('exempt') or {}),
         'disposable_untracked': list(wr.get('disposable_untracked') or []),
-        'build_output': list(wr.get('build_output') or []),
+        'build_output': [b for b in build if isinstance(b, str)],
+        'build_dirs': dirs, 'build_dirs_error': dirs_error,
         'keepers': list(KEEPERS) + list(wr.get('keepers') or []),
         'archive_next_free': bool(wr.get('archive_next_free')),
         'branch_template': wr.get('branch_template'),
@@ -437,9 +470,12 @@ def registered_target(ctx, argument):
 def dirty(ctx, path):
     """`(work, disposable, ignored, None)`: status lines that are work, the untracked files
     `disposable_untracked` names, and `!! ` lines of ignored files outside build output (or keepers
-    inside it); `(None, None, None, why)` when the status cannot be read (never a clean tree)."""
+    inside it); `(None, None, None, why)` when the status cannot be read (never a clean tree).
+    When a `{piece, path}` build_output entry cannot be resolved, no file counts as inside it and
+    the first `!! ` line outside the globs says why (fail closed: the tree stays)."""
     s = ctx.s
-    globs, build = s['disposable_untracked'], s['build_output']
+    globs, build, dirs = s['disposable_untracked'], s['build_output'], s['build_dirs']
+    unresolved = s['build_dirs_error']
     # --branch puts a `## ` header first, so the strip cannot eat the first entry's leading space.
     rc, out, err = git(path, *STATUS_ARGS)
     if rc != 0 or not out:
@@ -451,7 +487,9 @@ def dirty(ctx, path):
         if line.startswith('!! '):
             rel = line[3:]
             # A quoted path is never matched: it is named in the refusal instead (fail closed).
-            if rel.startswith('"') or not holders.is_build_output(rel, build):
+            if rel.startswith('"') or not holders.is_build_output(rel, build, dirs):
+                if unresolved:
+                    line, unresolved = '%s (%s)' % (line, unresolved), None
                 ignored.append(line)
             else:
                 ignored.extend(holders.keepers_in(path, rel, s['keepers'], budget))
