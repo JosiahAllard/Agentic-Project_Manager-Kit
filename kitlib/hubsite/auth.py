@@ -9,15 +9,13 @@
   cookie_header(value, port)        the Set-Cookie value of a paired browser
   Credentials(folder, port=port)    .role_for(headers, cookies) -> OWNER, AGENT or None
                                     .new_pairing_code() / .pair(code) for the PC's browser
-                                    .end_sessions() ends every session and code
 
 Two roles, each a token file: OWNER_FILE and AGENT_FILE, sent as `Authorization: Bearer <token>`.
 A browser cannot send that header from a link, so the owner's browser pairs once: an owner-only
 caller asks for a pairing code, the browser redeems it once, and gets a session cookie
 (HttpOnly, SameSite=Strict). Codes and sessions live in this process's memory only: a server
 restart ends every session, and the owner pairs again. Browsers send this cookie to any server
-on the loopback address whatever its port, so the session is short (SESSION_TTL_S) and
-`end_sessions()` ends them all.
+on the loopback address whatever its port; that limit is accepted.
 
 Every comparison of a secret is hmac.compare_digest. Whatever cannot be checked is no role:
 an absent, short or unreadable token file, two token files holding the same token, a second
@@ -48,7 +46,7 @@ TOKEN_BYTES = 32             # the random bytes of a generated token
 MIN_TOKEN = 43               # characters, a generated token's length; a shorter file grants nothing
 MAX_TOKEN = 512
 PAIR_TTL_S = 300             # a pairing code not redeemed by then is gone
-SESSION_TTL_S = 12 * 3600    # a session's life: the server-side expiry and the cookie's Max-Age
+SESSION_TTL_S = 30 * 86400   # a session's life: the server-side expiry and the cookie's Max-Age
 MAX_CODES = 8                # outstanding pairing codes; the oldest goes first
 MAX_SESSIONS = 32
 
@@ -243,10 +241,3 @@ class Credentials(object):
         if not isinstance(code, str) or not code or not self._live(self._codes, code, take=True):
             return None
         return self._add(self._sessions, SESSION_TTL_S, MAX_SESSIONS)
-
-    def end_sessions(self):
-        """End every session and drop every outstanding pairing code: each paired browser is
-        no role until it pairs again. The token files are untouched."""
-        with self._lock:
-            self._sessions.clear()
-            self._codes.clear()

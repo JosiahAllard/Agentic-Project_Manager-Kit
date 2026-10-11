@@ -227,7 +227,7 @@ class PairingTest(Case):
         self.assertEqual(auth.cookie_header('v'),
                          'hub_session=v; Path=/; Max-Age=%d; HttpOnly; SameSite=Strict'
                          % auth.SESSION_TTL_S)
-        self.assertEqual(auth.SESSION_TTL_S, 12 * 3600)
+        self.assertEqual(auth.SESSION_TTL_S, 30 * 86400)
         self.assertEqual(auth.cookie_header('v', 8790),
                          'hub_session_8790=v; Path=/; Max-Age=%d; HttpOnly; SameSite=Strict'
                          % auth.SESSION_TTL_S)
@@ -277,16 +277,6 @@ class PairingTest(Case):
         self.assertIsNone(self.creds.role_for({}, self.cookie(values[0])))
         for value in values[1:]:
             self.assertEqual(self.creds.role_for({}, self.cookie(value)), auth.OWNER)
-
-    def test_ending_the_sessions_drops_every_session_and_code(self):
-        value = self.creds.pair(self.creds.new_pairing_code())
-        code = self.creds.new_pairing_code()
-        self.creds.end_sessions()
-        self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
-        self.assertIsNone(self.creds.pair(code))
-        self.assertEqual(self.creds.role_for(bearer(self.owner), {}), auth.OWNER)
-        again = self.creds.pair(self.creds.new_pairing_code())
-        self.assertEqual(self.creds.role_for({}, self.cookie(again)), auth.OWNER)
 
 
 class ParseCookiesTest(unittest.TestCase):
