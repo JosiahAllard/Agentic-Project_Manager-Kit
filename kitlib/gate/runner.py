@@ -86,10 +86,10 @@ def verify_record(root, commit):
 def kit_identity():
     """{'commit': the kit checkout's HEAD ('unknown' when git cannot say), 'python': the
     interpreter running the gate, 'clean': True when the kit checkout has no uncommitted or
-    untracked file (None when git cannot say)}. A landing reuses a branch gate's steps only under
-    the same identity, and a clean one (kitlib.gate.reuse). Run from a pinned export of pushed
-    main (kitlib.gate.pin), the export's commit, clean: an export holds exactly that commit's
-    tracked files."""
+    untracked file (None when git cannot say)}, as a gate-OK record holds it. Run from a pinned
+    export of pushed main (kitlib.gate.pin), the export's commit, clean: an export holds exactly
+    that commit's tracked files. The gate cache (kitlib.gate.reuse) keys steps on reuse.kit_identity instead:
+    the kit's file hashes, never its commit."""
     from kitlib import pluginsource
     marker = pluginsource.read_marker(S.KIT_ROOT)
     if marker is not None and refs.is_sha(marker.get('sha')):
@@ -390,6 +390,63 @@ def record_steps(results):
             for r in results]
 
 
+# ---------------------------------------------------------------- gate reuse (kitlib.gate.reuse)
+
+def _reuse_log(logs, lines, say, mode):
+    path = os.path.join(logs, 'reuse.log')
+    try:
+        with open(path, mode, encoding='utf-8') as f:
+            f.write(''.join(line + '\n' for line in lines))
+    except OSError as e:
+        say('WARNING: %s could not be written: %s' % (path, e))
+
+
+def _say_plan(plan, chosen, logs, say):
+    """Say a reuse.Plan's lines and keep them in `<logs>/reuse.log`: {reused step: why}."""
+    if plan is None:
+        return {}
+    reused = plan.reused
+    lines = plan.lines + ['%-5s %s: %s' % ('REUSED', s.name, reused[s.name])
+                          for s in chosen if s.name in reused]
+    for line in lines:
+        say(line)
+    if lines:                       # no lines: no step asks for reuse, nothing to keep
+        _reuse_log(logs, lines, say, 'w')
+    return reused
+
+
+def _to_run(chosen, reused):
+    run = [s for s in chosen if s.name not in reused]
+    if reused and all(s.name == 'setup' for s in run):
+        run = []                    # setup prepares for steps, and every step is reused
+    return run
+
+
+def _with_reused(results, chosen, reused):
+    """`results` with a REUSED result for each reused step, in the order of `chosen`."""
+    if not reused:
+        return results
+    by_name = {r['name']: r for r in results}
+    return [by_name[s.name] if s.name in by_name else dict(
+        {'name': s.name, 'status': 'REUSED', 'seconds': None, 'log': None},
+        reasons=[reused[s.name]]) for s in chosen if s.name in by_name or s.name in reused]
+
+
+def _keep(plan, results, logs, say):
+    """Store the results a reuse.Plan asks for (its keep never raises); say its lines and add
+    them to `<logs>/reuse.log`. A failure here never changes the gate's verdict."""
+    if plan is None or plan.keep is None:
+        return
+    try:
+        lines = plan.keep(results)
+    except Exception as e:          # noqa: BLE001 - storing never fails the gate
+        lines = ['gate: reuse: NOT STORED: %s: %s' % (type(e).__name__, e)]
+    for line in lines:
+        say(line)
+    if lines:
+        _reuse_log(logs, lines, say, 'a')
+
+
 def plan_lines(chosen, why, all_steps, base_text, changed):
     lines = ['base %s; %d changed path(s)' % (base_text, len(changed))]
     lines += ['RUN   %s (%s)' % (s.name, why[s.name]) for s in chosen]
@@ -553,10 +610,19 @@ def _branch_gate(root, base=None, full=False, only=None, plan=False, slug=None, 
     logs = new_log_dir(cfg, top, name, branch or head[:10], log_dir)
     say('gate %s at %s, base %s: %s' % (branch or '(detached)', head[:10], base_text,
                                         ', '.join(s.name for s in chosen)))
-    results, refused = gated(cfg, top, mb, changed, chosen, gate['kind'], name,
-                             slug or slug_of(branch or head[:10]), logs, say, book_kw)
-    if refused is not None:
-        return refused
+    from kitlib.gate import reuse   # reuse imports this module
+    plan = reuse.branch_plan(top, cfg, chosen, mb, changed, full=full, only=only, head=head,
+                             branch=branch)
+    reused = _say_plan(plan, chosen, logs, say)
+    run = _to_run(chosen, reused)
+    results = []
+    if run:
+        results, refused = gated(cfg, top, mb, changed, run, gate['kind'], name,
+                                 slug or slug_of(branch or head[:10]), logs, say, book_kw)
+        if refused is not None:
+            return refused
+    results = _with_reused(results, chosen, reused)
+    _keep(plan, results, logs, say)
     ok, line = verdict(results)
     lines = [line, 'logs: %s' % logs]
     facts = dict(verdict=line, results=results, record=None, no_record=None, head=head, base=mb,
@@ -610,8 +676,9 @@ def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None
     read from it (kitlib.gate.hookrev), never the merged tree's.
 
     `reuse(chosen) -> (reuse.Plan)` (kitlib.gate.reuse.planner): the steps it names are not run
-    and count as REUSED; its lines are said and kept in `<log dir>/reuse.log`. `setup` runs only
-    when some step runs, and no slot is booked when none does."""
+    and count as REUSED; its lines, then the lines of its keep (the results it stores in the gate
+    cache), are said and kept in `<log dir>/reuse.log`. `setup` runs only when some step runs,
+    and no slot is booked when none does."""
     say = say or _quiet
     gate = cfg.section('gate')
     head, why = refs.head(root)
@@ -632,34 +699,17 @@ def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None
     logs = new_log_dir(cfg, root, name, 'land-' + slug, log_dir)
     say('merged-tree gate at %s against %s: %s' % (
         head[:10], base[:10], ', '.join(s.name for s in chosen)))
-    reused = {}
-    if reuse is not None:
-        plan = reuse(chosen)
-        reused = plan.reused
-        lines = plan.lines + ['%-5s %s: %s' % ('REUSED', s.name, reused[s.name])
-                              for s in chosen if s.name in reused]
-        for line in lines:
-            say(line)
-        if lines:                       # no lines: no step asks for reuse, nothing to keep
-            try:
-                with open(os.path.join(logs, 'reuse.log'), 'w', encoding='utf-8') as f:
-                    f.write(''.join(line + '\n' for line in lines))
-            except OSError as e:
-                say('WARNING: %s could not be written: %s' % (os.path.join(logs, 'reuse.log'), e))
-    run = [s for s in chosen if s.name not in reused]
-    if reused and all(s.name == 'setup' for s in run):
-        run = []                    # setup prepares for steps, and every step is reused
+    plan = reuse(chosen) if reuse is not None else None
+    reused = _say_plan(plan, chosen, logs, say)
+    run = _to_run(chosen, reused)
     results = []
     if run:
         results, refused = gated(cfg, root, base, changed, run, gate['kind'], name, slug_of(slug),
                                  logs, say, book_kw, merged=True, checks_rev=base)
         if refused is not None:
             return refused
-    if reused:
-        by_name = {r['name']: r for r in results}
-        results = [by_name[s.name] if s.name in by_name else dict(
-            {'name': s.name, 'status': 'REUSED', 'seconds': None, 'log': None},
-            reasons=[reused[s.name]]) for s in chosen if s.name in by_name or s.name in reused]
+    results = _with_reused(results, chosen, reused)
+    _keep(plan, results, logs, say)
     ok, line = verdict(results)
     refused = nothing_ran(results) if ok else None
     if refused:

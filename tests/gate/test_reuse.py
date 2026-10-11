@@ -380,6 +380,23 @@ class Warned(ReuseCase):
                          r'\(key [0-9a-f]{12}\)$' % (re.escape(reuse.PREFIX), STAMP))
         self.assert_ran(out.log_dir, 'shaky')
 
+    def test_a_kit_edited_while_the_gate_ran_is_not_stored(self):
+        wt, _ = self.branch('feature', dict(SRC))
+        real = reuse.kit_identity
+        seen = []
+
+        def kit():                  # the plan sees one kit, its keep another
+            seen.append(1)
+            return dict(real(), files='%064d' % len(seen))
+        with mock.patch.object(reuse, 'kit_identity', side_effect=kit):
+            out = self.gate(wt)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(len(seen), 2, self.said)
+        self.assertEqual(self.lines('NOT STORED'), [
+            reuse.PREFIX + 'NOT STORED shaky: its key changed while the gate ran (the kit, a '
+            'program or the config)'], self.said)
+        self.assertEqual(self.entries(), [])
+
 
 WRITER = {'name': 'writer', 'always': True, 'globs': ['src/*'], 'pass': '^ok$', 'reuse': True,
           'cmd': ['{python}', '-c', 'open("src/a.py", "a").write("#\\n"); print("ok")']}
@@ -560,6 +577,13 @@ class Store(unittest.TestCase):
         self.assertIsNone(hit)
         self.assertEqual(why, 'failed or warned on these inputs at %s (key %s)'
                          % (gate_ok.utc(hours(2)), KEY[:12]))
+
+    def test_a_fail_from_the_future_still_counts(self):
+        self.put('fail', NOW + datetime.timedelta(hours=1))
+        self.put('pass', hours(1))
+        hit, why = reuse.lookup(self.folder, KEY, 24, NOW)
+        self.assertIsNone(hit)
+        self.assertTrue(why.startswith('failed or warned on these inputs at '), why)
 
     def test_a_fail_before_the_window_is_forgotten(self):
         self.put('fail', hours(30))
