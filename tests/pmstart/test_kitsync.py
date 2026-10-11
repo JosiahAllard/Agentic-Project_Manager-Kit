@@ -10,6 +10,7 @@ from kitlib.pmstart import fglock
 from kitlib.git import cmd as gitcmd
 from kitlib.records import landing
 from tests import gitfixture
+from tests.pmstart import keep_off_launcher_repos
 from tests.realgit import real_git
 
 
@@ -21,6 +22,7 @@ def setUpModule():
     global _orig_beat
     _orig_beat = pmstart.read_heartbeat
     pmstart.read_heartbeat = lambda: None     # nor this machine's pm_watch heartbeat
+    keep_off_launcher_repos()
 
 
 def tearDownModule():

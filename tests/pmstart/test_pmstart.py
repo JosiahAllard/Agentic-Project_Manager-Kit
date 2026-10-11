@@ -8,6 +8,7 @@ import unittest
 
 from kitlib import pmstart
 from kitlib.pmstart import fglock
+from tests.pmstart import keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 CFG = {"hub_url": "https://claude.ai/artifact/X", "hub_source": "claude/hub/action-hub.html",
@@ -26,6 +27,7 @@ def setUpModule():
     global _orig_beat
     _orig_beat = pmstart.read_heartbeat
     pmstart.read_heartbeat = lambda: None     # nor this machine's pm_watch heartbeat
+    keep_off_launcher_repos()   # nor this machine's launcher.repos (the stubs check)
 
 
 def tearDownModule():
