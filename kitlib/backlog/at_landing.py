@@ -10,8 +10,9 @@ branch checked out) takes part too: the PM's records of this repository live the
   close_landed      after the push is verified: close every record the landed branch still holds
                     pulled, in the configured store (one commit each, "closes <ID>: landed <merge
                     sha>") and in the PM data store (the record file deleted in that worktree, not
-                    committed); what cannot be closed is a WARNING line naming the command, and
-                    the landing stands
+                    committed); and every record a `Closes: <ID>[, <ID>]` trailer of the branch's
+                    commits names (closes_trailers), while pulled, whoever pulled it. What cannot
+                    be closed is a WARNING line naming the command, and the landing stands
   landable_commands the `backlog.py landable` command of each store that takes part
 
 Neither creates a store or adds the store's fetch refspec when the remote has no store, and
@@ -162,13 +163,39 @@ def ancestry_refusal(root, cfg, tip, env=None):
     return None
 
 
-def _close_plan(ctx, rid, branch, reason):
-    """plan_close, run only while `rid` is still pulled by `branch` in the fresh snapshot."""
+def closes_ids(values):
+    """The record ids in `Closes:` trailer values: each value split on commas, the first word of
+    each part, kept when it is a plain id (store.PLAIN_ID), so `A, B (both done)` is A and B and
+    `#12` is nothing. Pure."""
+    out = []
+    for value in values:
+        for part in value.split(','):
+            words = part.split()
+            if words and smod.PLAIN_ID.match(words[0]) and words[0] not in out:
+                out.append(words[0])
+    return out
+
+
+def closes_trailers(root, tip, base):
+    """`(ids, None)`: the ids the `Closes:` trailers name (git's trailer parser, so only the
+    message's last paragraph counts; the key in any case) in the commits `tip` has and `base` does
+    not, merges included; or `(None, why)`."""
+    out, why = cmd.run_text(['log', '--format=%(trailers:key=Closes,valueonly)', tip, '--not',
+                             base, '--'], root)
+    if out is None:
+        return None, why
+    return closes_ids(out.splitlines()), None
+
+
+def _close_plan(ctx, rid, branch, reason, named=False):
+    """plan_close, run only while `rid` is still pulled by `branch` in the fresh snapshot; or, when
+    a `Closes:` trailer of the branch names it (`named`), while it is still pulled by anyone."""
     def plan(snap):
         rec = snap.get(rid)
-        if rec is None or rec.get('state') != 'pulled' or rec.get('pulled_by') != branch:
-            return smod.Change({}, '', ['%s is no longer pulled by %s; left as it is'
-                                        % (rid, branch)])
+        if rec is None or rec.get('state') != 'pulled' or (
+                not named and rec.get('pulled_by') != branch):
+            return smod.Change({}, '', ['%s is no longer pulled%s; left as it is'
+                                        % (rid, '' if named else ' by %s' % branch)])
         return pmod.plan_close(snap, ctx, rid, reason)
     return plan
 
@@ -223,16 +250,28 @@ def _pm_data_store(root, configured):
     return pm_root, pm_cfg, backend, None
 
 
-def close_landed(root, cfg, branch, merge, session=SESSION):
+def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None):
     """Close every record `branch`, which landed as `merge`, holds pulled: in the configured store
-    when it is a `ref` or `branch` store, and in the PM data branch's store (_pm_data_store). The
-    lines to print (`closed ...`, and a `WARNING: ...` naming the command for each record or store
-    that could not be closed). [] when neither store takes part or nothing is pulled."""
-    lines = []
+    when it is a `ref` or `branch` store, and in the PM data branch's store (_pm_data_store). With
+    `tip` and `base` (the branch tip merged and the main it was merged onto), every record a
+    `Closes:` trailer in `tip --not base` names (closes_trailers) is closed too while it is
+    pulled, whoever pulled it: a pull made in the main checkout records the main branch, which no
+    landing matches. The lines to print (`closed ...`, and a `WARNING: ...` naming the command for
+    each record or store that could not be closed, or trailers that could not be read). [] when
+    neither store takes part and no trailer names a record, or nothing is pulled."""
+    lines, named = [], []
+    if tip and base:
+        named, why = closes_trailers(root, tip, base)
+        if named is None:
+            named = []
+            lines.append('WARNING: %s landed, and the Closes trailers of its commits could not be '
+                         'read (%s), so only the records it holds pulled are closed; see the '
+                         'trailers with: git log --format=%%(trailers:key=Closes,valueonly) %s '
+                         '--not %s' % (branch, _one_line(why), tip, base))
     backend = ref_store(root, cfg, fetch=True)
     if backend is not None:
         lines.extend(_close_in(backend, root, cfg, branch, merge, session,
-                               lambda *args: close_command(root, *args)))
+                               lambda *args: close_command(root, *args), named))
     pm_root, pm_cfg, pm_backend, why = _pm_data_store(
         root, backend.describe() if backend is not None else None)
     if why:
@@ -243,13 +282,15 @@ def close_landed(root, cfg, branch, merge, session=SESSION):
                                                             branch)))
     elif pm_backend is not None:
         lines.extend(_close_in(pm_backend, pm_root, pm_cfg, branch, merge, session,
-                               lambda *args: backlog_command(pm_root, *args)))
+                               lambda *args: backlog_command(pm_root, *args), named))
     return lines
 
 
-def _close_in(backend, root, cfg, branch, merge, session, command):
+def _close_in(backend, root, cfg, branch, merge, session, command, named=()):
     """close_landed for one store: `backend` of the repository or worktree `root` with `cfg`;
-    `command(*args)` is the printed command line for a write the landing could not make."""
+    `command(*args)` is the printed command line for a write the landing could not make. `named`:
+    the ids the branch's `Closes:` trailers name; one this store does not hold is another store's
+    or none, and says nothing; one it holds and not pulled is a WARNING naming the command."""
     reason = 'landed %s' % merge
     unread = backlog_command(root, 'landable', branch)
     if getattr(backend, 'remote', None):
@@ -268,33 +309,53 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
         smod.require_readable(snap)
     except Refusal as exc:
         return [_store_unread(branch, '%s: %s' % (exc.label, exc), unread)]
-    held = sorted(r.stem for r in snap.readable           # the store's lookup key (Snapshot.by_id)
-                  if r.get('state') == 'pulled' and r.get('pulled_by') == branch)
+    held = set(r.stem for r in snap.readable               # the store's lookup key (Snapshot.by_id)
+               if r.get('state') == 'pulled' and r.get('pulled_by') == branch)
+
+    def close_args(rid):
+        args = ['close', rid, '--reason', '"%s"' % reason]
+        rec = snap.get(rid)
+        if rec is not None and rmod.is_owner_held(rec):
+            args += ['--ruling', 'R-nnnn']          # his ruling ends the hold (plan_close)
+        return args
+
+    lines = []
+    by_trailer = {}                         # id -> its pulled_by, for a record held by another
+    for rid in named:
+        rec = snap.get(rid)
+        if rec is None or rid in held:
+            continue
+        if rec.get('state') != 'pulled':
+            lines.append('WARNING: %s landed, and a Closes trailer of its commits names %s, which '
+                         'is %s, not pulled, so it was not closed; close it with: %s'
+                         % (branch, rid, rec.get('state') or '?', command(*close_args(rid))))
+            continue
+        by_trailer[rid] = rec.get('pulled_by') or '?'
     ctx = pmod.Context(store, root, remote=cfg.remote, main_branch=cfg.main_branch, branch=branch)
     folder = isinstance(backend, smod.MainBackend)
-    lines = []
-    for rid in held:
+    for rid in sorted(held | set(by_trailer)):
+        how = (', which a Closes trailer of its commits names' if rid in by_trailer
+               else ', which it holds pulled')
         try:
-            change, tip = store.write(_close_plan(ctx, rid, branch, reason))
+            change, tip = store.write(_close_plan(ctx, rid, branch, reason,
+                                                  named=rid in by_trailer))
         except Exception as exc:            # one record's failure never stops the others
             what = ('%s: %s' % (exc.label, exc) if isinstance(exc, Refusal)
                     else '%s: %s' % (type(exc).__name__, exc))
-            args = ['close', rid, '--reason', '"%s"' % reason]
-            rec = snap.get(rid)
-            if rec is not None and rmod.is_owner_held(rec):
-                args += ['--ruling', 'R-nnnn']      # his ruling ends the hold (plan_close)
-            lines.append('WARNING: %s landed, and %s, which it holds pulled, was not closed (%s); '
-                         'close it with: %s' % (branch, rid, _one_line(what), command(*args)))
+            lines.append('WARNING: %s landed, and %s%s, was not closed (%s); close it with: %s'
+                         % (branch, rid, how, _one_line(what), command(*close_args(rid))))
             continue
         if not change.writes:
             lines.extend(change.lines)
             continue
+        whose = ('; named by a Closes trailer of %s; it was pulled by %s' % (branch, by_trailer[rid])
+                 if rid in by_trailer else '')
         if folder:
             lines.append('closed %s in the backlog store %s: %s (the record file is deleted, '
-                         'not committed)' % (rid, backend.describe(), reason))
+                         'not committed)%s' % (rid, backend.describe(), reason, whose))
         else:
-            lines.append('closed %s in the backlog store: %s (store at %s)'
-                         % (rid, reason, (tip or '?')[:10]))
+            lines.append('closed %s in the backlog store: %s (store at %s)%s'
+                         % (rid, reason, (tip or '?')[:10], whose))
         lines.extend('  ' + line for line in change.lines if line != 'CLOSED %s' % rid)
     return lines
 

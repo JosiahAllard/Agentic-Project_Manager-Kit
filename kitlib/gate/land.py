@@ -55,7 +55,9 @@ tools/land.py).
                  is fetched, the lock released: OK (LANDED)
   11 close       after the lock: every record the `ref` or `branch` store still holds pulled by
                  the branch is closed with reason `landed <merge>`, one store commit each
-                 (kitlib.backlog.at_landing). A close that fails, or an exception or Ctrl+C here,
+                 (kitlib.backlog.at_landing), and so is every pulled record a `Closes: <ID>`
+                 trailer in `<tip> --not <base>` names, whoever pulled it (a pull made in the
+                 main checkout records main). A close that fails, or an exception or Ctrl+C here,
                  is a WARNING naming the command to finish it; the landing stands
   12 cleanup     then each landed branch goes (kitlib.gate.cleanup; docs/gate.md "Branch
                  cleanup"): its remote branch, its worktree (kitlib.worktree.remove, never
@@ -1046,9 +1048,10 @@ class Lander(object):
         every failure, Ctrl+C included, is a WARNING line and never reaches recover()."""
         self.phase = 'landed'
         lines = []
-        for b in self.branches:
+        for b, t in self.pairs:
             try:
-                lines.extend(at_landing.close_landed(self.root, self.cfg, b, self.merge))
+                lines.extend(at_landing.close_landed(self.root, self.cfg, b, self.merge, tip=t,
+                                                     base=self.expect_main))
             except BaseException as e:
                 what = 'Ctrl+C' if isinstance(e, KeyboardInterrupt) else '%s: %s' % (
                     type(e).__name__, e)
