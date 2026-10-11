@@ -25,7 +25,8 @@ SYSTEM = 'S-1-5-18'
 _MISSING = (FileNotFoundError, NotADirectoryError)
 
 
-REPARSE_FIX = 'point ledger_path at the real target'
+REPARSE_FIX = ('point ledger_path at the real target, or move the ledger off OneDrive (a cloud '
+               'placeholder)')
 OWNER_FIX = 'check the owner (takeown, or icacls /setowner)'
 LINK_FIX = 'remove the other links (fsutil hardlink list), or copy the file to a new one'
 
@@ -41,7 +42,7 @@ def refusal(path):
         except _MISSING:
             st = None
         except OSError as exc:
-            return head + 'cannot check %s (%s); %s' % (p, exc, REPARSE_FIX)
+            return head + 'cannot check %s (%s): check that this user may read it' % (p, exc)
         if st is not None and getattr(st, 'st_file_attributes', 0) & REPARSE_POINT:
             return head + ('%s is a reparse point (a junction, symlink or other tag); the ledger '
                            'file and every folder above it must be plain: %s' % (p, REPARSE_FIX))
@@ -57,7 +58,7 @@ def refusal(path):
             return head + 'cannot read the owner of %s (%s): %s' % (p, why, OWNER_FIX)
         me, why = user_sid()
         if me is None:
-            return head + 'cannot read this process\'s user (%s): %s' % (why, OWNER_FIX)
+            return head + 'cannot read this process\'s user (%s)' % why
         if sid not in (me, ADMINISTRATORS, SYSTEM):
             return head + ('%s is owned by %s, not by this user (%s), Administrators or SYSTEM: '
                            '%s' % (p, sid, me, OWNER_FIX))

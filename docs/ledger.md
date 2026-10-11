@@ -57,7 +57,7 @@ python tools/ledger_refs.py R-nnnn [R-nnnn ...] | --from-json FILE [FILE ...]
 Before the ledger, or the standing digest beside it, is read or written, `kitlib/ledger/safepath.py` (`refusal`) checks its path. This is defence in depth beside the guard, which refuses only a direct edit of the ledger file. It is not a lock: the check and the open are separate calls, so a swap made between them is not caught. Three checks:
 
 - **Reparse points.** The file and every existing folder above it, except the drive root, must not be a reparse point (a junction, a symlink or any other tag; `os.lstat` `st_file_attributes`).
-- **Hard links.** The file must have one link (`st_nlink`). Through another name, an edit would reach the ledger by a path the guard does not watch. The writer's atomic replace leaves one link.
+- **Hard links.** The file must have one link (`st_nlink`). Through another name, an edit would reach the ledger by a path the guard does not watch. The writer's atomic replace leaves one link. Only a link present when the check runs is seen.
 - **Owner.** The file and its own folder, where they exist, must be owned by this process's user, Administrators or SYSTEM (`GetNamedSecurityInfoW` through ctypes). An owner that cannot be read is refused.
 
 A part that does not exist yet is skipped, so the first `add` can still create the ledger. A refused path is never opened, and the refusal names the fix:
@@ -67,9 +67,9 @@ A part that does not exist yet is skipped, so the first `add` can still create t
 
 Cases that lock a ledger out, and the fix for each:
 
-- A FAT or exFAT volume has no owner to read, and a network share's owner is not a local account. Keep the ledger on a local NTFS disk.
+- A FAT or exFAT volume has no owner to read, and a network share may report an owner that is not you. Keep the ledger on a local NTFS disk.
 - A folder copied or restored from elsewhere can keep a foreign owner. Run `takeown /f <path>`, or `icacls <path> /setowner <you>`.
-- OneDrive placeholders, mount points and folders relocated through a junction are reparse points. Point `ledger_path` at the real target.
+- Mount points and folders relocated through a junction are reparse points: point `ledger_path` at the real target. OneDrive placeholders are too: move the ledger off OneDrive.
 - A hard-linked ledger: remove the other names (`fsutil hardlink list <path>`), or copy the file to a new one.
 
 Not a path check: a configured `ledger_path` that names no file makes the backlog skip its ruling checks, rather than refuse (`kitlib.backlog.ledger` `Ledger.configured`). A separate record covers it.
