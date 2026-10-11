@@ -1300,14 +1300,20 @@ PS_PROVIDER_CMDLETS = frozenset(('new-item', 'set-content', 'add-content', 'clea
 # Read-only cmdlets a line of provider items may also hold
 PS_READ_CMDLETS = frozenset(('get-item', 'gi', 'get-content', 'gc', 'get-childitem', 'gci', 'test-path',
                              'get-location', 'gl', 'pwd', 'write-output', 'echo', 'write-host'))
+# The one native program such a line may also run: git, named literally (git.exe cannot remap a
+# PowerShell drive, and its words meet the git rules)
+PS_PLAIN_GIT = ('git', 'git.exe')
+# A word that only reads an environment variable, with a literal tail: $env:TEMP, "$env:TEMP\x.txt"
+PS_ENV_READ_WORD_RE = re.compile(r'(?i)^\$(?:env:[A-Za-z_]\w*|\{env:[A-Za-z_]\w*\})(?:[\\/][^$`()\[\]{}]*)?$')
 
 
 def ps_line_plain(cmd):
     """True when every command on the PowerShell line `cmd` comes from is a plain call: the parser
     reads the line cleanly; each command's first word is a literal name of a cmdlet in
-    PS_PROVIDER_CMDLETS or PS_READ_CMDLETS (no call or dot-source operator, no assignment or other
-    expression statement, no computed name, no Start-Process); every word is literal (no variable,
-    member call or subexpression); and neither the raw line nor any decoded word matches
+    PS_PROVIDER_CMDLETS or PS_READ_CMDLETS, or git (PS_PLAIN_GIT) (no call or dot-source operator,
+    no assignment or other expression statement, no computed name, no Start-Process); every word is
+    literal or only reads an environment variable (PS_ENV_READ_WORD_RE; no other variable, member
+    call or subexpression); and neither the raw line nor any decoded word matches
     PS_DRIVE_REMAP_RE, commands.PS_SCRIPT_TEXT_RE or PS_DOTNET_RE. Anything else may remap a drive."""
     src = cmd.source
     if any(r.search(src) for r in (PS_DRIVE_REMAP_RE, cm.PS_SCRIPT_TEXT_RE, PS_DOTNET_RE)):
@@ -1319,11 +1325,13 @@ def ps_line_plain(cmd):
         if not c.words:
             return False
         inv = cm.invocation(c)
-        if inv is None or inv.dyn or inv.via is not None or inv.index != 0 or \
-                inv.name not in PS_PROVIDER_CMDLETS | PS_READ_CMDLETS:
+        if inv is None or inv.dyn or inv.via is not None or inv.index != 0 or c.words[0].dyn:
+            return False
+        git = inv.name == 'git' and c.words[0].text.lower() in PS_PLAIN_GIT
+        if not git and inv.name not in PS_PROVIDER_CMDLETS | PS_READ_CMDLETS:
             return False
         for w in c.words:
-            if w.dyn or any(r.search(w.text) for r in (PS_DRIVE_REMAP_RE, cm.PS_SCRIPT_TEXT_RE, PS_DOTNET_RE)):
+            if w.dyn and not PS_ENV_READ_WORD_RE.match(w.text) or any(r.search(w.text) for r in (PS_DRIVE_REMAP_RE, cm.PS_SCRIPT_TEXT_RE, PS_DOTNET_RE)):
                 return False
     return True
 
