@@ -196,6 +196,12 @@ class LandingLock(object):
             raise LockError('lane must be one of %s' % ', '.join(self.lanes))
         if not branches or not all(isinstance(b, str) and b for b in branches):
             raise LockError('a landing lock names the branches it lands')
+        # A lock already there is Busy before the record is built: a waiter's look then asks git
+        # nothing and looks up no process. The record is still built before the create, so the
+        # file is empty only for the write itself (readers take an empty file as held). The
+        # exclusive create below stays the only arbiter: a lock made after this look loses there.
+        if os.path.exists(self.path):
+            self._busy()
         record = {
             'lane': lane, 'branches': list(branches), 'pid': pid,
             'pid_start': self.start_of(pid) if pid is not None else None,
@@ -206,11 +212,7 @@ class LandingLock(object):
         try:
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
-            try:
-                holder = self.read()
-            except LockError as e:
-                holder = {'lane': '?', 'phase': '?', 'error': str(e)}
-            raise Busy(holder or {'lane': '?', 'phase': 'released while we looked'})
+            self._busy()
         except OSError as e:
             raise LockError('cannot create %s: %s' % (self.path, e))
         data = (json.dumps(record, sort_keys=True) + '\n').encode('utf-8')
@@ -227,6 +229,15 @@ class LandingLock(object):
                 pass
             raise LockError('cannot write %s: %s' % (self.path, e))
         return record
+
+    def _busy(self):
+        """Raise Busy naming the holder: lane '?' when the file is not a record, 'released while
+        we looked' when it is gone again."""
+        try:
+            holder = self.read()
+        except LockError as e:
+            holder = {'lane': '?', 'phase': '?', 'error': str(e)}
+        raise Busy(holder or {'lane': '?', 'phase': 'released while we looked'})
 
     def _held_by(self, token):
         rec = self.read()
