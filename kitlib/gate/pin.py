@@ -190,14 +190,34 @@ def read_lease(path):
     return data if isinstance(data, dict) else None
 
 
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _malformed(data):
+    """True when the lease is not what _write_lease writes: a pid that is not a positive int a
+    process id can be, a child_pid that is neither that nor absent, or a ctime that is neither an
+    int nor absent (process.alive would raise on it: ValueError, ctypes.ArgumentError)."""
+    if not (_is_int(data.get('pid')) and 0 < data['pid'] <= 0xFFFFFFFF):
+        return True
+    child = data.get('child_pid')
+    if child is not None and not (_is_int(child) and 0 < child <= 0xFFFFFFFF):
+        return True
+    return any(data.get(k) is not None and not _is_int(data.get(k))
+               for k in ('ctime', 'child_ctime'))
+
+
 def lease_live(data, alive=None):
-    """True while the pinned tool's process, or the tool it started, still runs."""
+    """True while the pinned tool's process, or the tool it started, still runs. A malformed lease
+    (_malformed) is dead."""
+    if _malformed(data):
+        return False
     if alive is None:
         from kitlib.proc import process
         alive = process.alive
     for pid_key, ctime_key in (('pid', 'ctime'), ('child_pid', 'child_ctime')):
         pid = data.get(pid_key)
-        if isinstance(pid, int) and pid > 0 and alive(pid, data.get(ctime_key)):
+        if pid is not None and alive(pid, data.get(ctime_key)):
             return True
     return False
 
