@@ -171,11 +171,11 @@ class _Editor(object):
             return
         try:
             exe = self.guard_entry()['PreToolUse'][0]['hooks'][0]['command']
+            if not isinstance(exe, str) or not exe.strip():
+                raise ValueError('its command is %r' % (exe,))
         except (OSError, RuntimeError, ValueError, KeyError, IndexError, TypeError) as e:
             self.plan.refuse('%s: cannot write the %s %s in exec form: guard.py --settings-entry gave no '
                              'interpreter (%s)' % (self.path, where, os.path.basename(p), e))
-            return
-        if not isinstance(exe, str) or not exe:
             return
         h['command'] = exe
         h['args'] = [p.replace('\\', '/')]
