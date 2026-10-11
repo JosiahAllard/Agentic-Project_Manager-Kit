@@ -3,7 +3,7 @@ prints one line per event and exits. The PM runs it as a background command and 
 after handling the event, so no model turn is spent while nothing happens. With --stream it
 never exits on an event: it prints each one and keeps polling, for a run under Monitor (one
 notification per line). Every pass but a --once one writes a heartbeat, <state>.beat
-({pid, beat, stream}), that the PM session-start check reads (docs/pm-start.md).
+({pid, beat, stream, started}), that the PM session-start check reads (docs/pm-start.md).
 
 Events:
   BRANCH <repo> <ref> <hash>    a watched remote branch got a new tip (--branch, repeatable)
@@ -82,10 +82,10 @@ def main(argv=None, sleep=time.sleep, launcher_set=None):
                   claude_host.newest_finder(), idle_minutes=a.idle_minutes,
                   branch_poll=a.branch_poll, usage_poll=a.usage_poll, idle_poll=a.idle_poll,
                   notice_dir=a.notice_dir)
-    beat = W.heartbeat_file(a.state)
+    beat, started = W.heartbeat_file(a.state), W.own_start_time()
     return W.run(w, time.time, sleep, lambda s: W.save_state(a.state, s),
                  lambda text: print(text, flush=True),
-                 lambda now: W.write_heartbeat(beat, os.getpid(), now, a.stream),
+                 lambda now: W.write_heartbeat(beat, os.getpid(), now, a.stream, started),
                  once=a.once, stream=a.stream)
 
 

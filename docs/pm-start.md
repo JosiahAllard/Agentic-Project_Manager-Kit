@@ -17,8 +17,12 @@ copy), start the ArtifactComments watch on it (again after a resume or compact),
 process the hub. Tests: `tests/pmstart/test_hub_line.py`. `pm_watch.py` counts as running when its
 heartbeat (docs/pm-watch.md "Stream mode and heartbeat") is at most 5 minutes old
 (`kitlib.pmstart` `BEAT_STALE`) and names the pid of a running `python` process whose command line
-holds `pm_watch.py`. Otherwise the line says whether it stopped polling, is an older copy with no
-heartbeat, or is not running, and gives the command to start it under Monitor. Tests:
+holds `pm_watch.py` and that started at the time the heartbeat records (within 2 seconds,
+`START_SLACK`; skipped when either start time is unknown), so a reused pid does not count.
+Otherwise the line says whether it stopped polling, is an older copy with no heartbeat, or is not
+running, and gives the command to start it under Monitor. A running watcher whose heartbeat says it
+does not stream gets a line to restart it with `--stream`, and a `pm_watch_cmd` without `--stream`
+gets a line too: either watcher exits after one batch of events. Tests:
 `tests/pmstart/test_pmstart.py` `WatcherTest`. The last check, always on and with no config key, is the live foreground lock timeout (docs/windows-token-leak.md): a line while it is not 0, with the command the owner runs in their own PowerShell window. Code: `kitlib/pmstart/fglock.py`; tests: `tests/pmstart/test_fglock.py`.
 
 ## Kit currency (`kit_sync`)
@@ -67,13 +71,15 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
   `hub_url` (one URL) is read only while `hub_urls` has no entry; when both are set the checklist
   says `hub_url` is ignored. `hub_source`: the page to publish, absolute or relative to the kit
   (default `claude/hub/action-hub.html`); the hub lines name it as an absolute path, and a file
-  that does not exist replaces the publish step with a line saying so. `hub_mirror`: the absolute
+  that does not exist, or a value that is not a string, replaces the publish step with a line
+  saying so; the watch and process lines still print. `hub_mirror`: the absolute
   mirror folder for an install without `pm_data`. Code: `kitlib/pmstart` `hub`, `hub_source`;
   tests: `tests/pmstart/test_hub_accounts.py`, `tests/pmstart/test_hub_line.py`.
 - `reminders_file`: `[{"due": "YYYY-MM-DD", "text": "..."}]`.
 - `sessions_file`: `{"<key>": {"name": "<remote-control name>", "repo": "<repo>"}}`; an entry
   with `autostart: false` is not checked.
-- `pm_watch_cmd`: the command the watcher line prints, as written (docs/pm-watch.md). Unset, it is
+- `pm_watch_cmd`: the command the watcher line prints, as written (docs/pm-watch.md); without
+  `--stream` the checklist adds a line saying so. Unset, it is
   the kit's own `python -u "<kit>/tools/pm_watch.py" --stream` (`kitlib.pmstart`
   `PM_WATCH_DEFAULT_CMD`).
 - `eng_review` (optional, list of strings): the owner's design-review flags

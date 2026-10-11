@@ -12,7 +12,7 @@ from tests.pmstart import keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 CFG = {"hub_url": "https://claude.ai/artifact/X", "hub_source": "claude/hub/action-hub.html",
-       "pm_watch_cmd": "python launcher/pm_watch.py", "memory_dir": "M",
+       "pm_watch_cmd": "python launcher/pm_watch.py --stream", "memory_dir": "M",
        "reminders_file": "r.json", "sessions_file": "s.json"}
 
 
@@ -91,13 +91,52 @@ class WatcherTest(unittest.TestCase):
         hb = {"pid": 42, "beat": self.T - pmstart.BEAT_STALE - 120, "stream": True}
         (s,) = self.run_it([wproc(42)], hb)
         self.assertIn("pm_watch.py (pid 42) has not polled for 7m: stop that pid", s)
-        self.assertIn("python launcher/pm_watch.py", s)
+        self.assertIn("python launcher/pm_watch.py --stream", s)
 
     def test_fresh_heartbeat_with_pid_gone_is_not_running(self):
         hb = {"pid": 42, "beat": self.T - 10, "stream": False}
         (s,) = self.run_it([wproc(43, name="code.exe")], hb)
         self.assertEqual(s, "pm_watch.py is not running (it last polled 10s ago): start it under "
-                            "Monitor: python launcher/pm_watch.py")
+                            "Monitor: python launcher/pm_watch.py --stream")
+
+    def test_a_live_watcher_without_stream_says_it_exits_after_one_batch(self):
+        hb = {"pid": 42, "beat": self.T - 30, "stream": False}
+        (s,) = self.run_it([wproc(42, cmd="python pm_watch.py")], hb)
+        self.assertEqual(s, "pm_watch.py (pid 42) runs without --stream: it exits after one batch of "
+                            "events; stop that pid and start it under Monitor with --stream: "
+                            "python launcher/pm_watch.py --stream")
+
+    def test_a_pm_watch_cmd_without_stream_is_kept_and_warned_about(self):
+        cfg = dict(CFG, pm_watch_cmd="python launcher/pm_watch.py")
+        start, warn = self.run_it([], None, cfg)
+        self.assertEqual(start, "pm_watch.py is not running: start it under Monitor: "
+                                "python launcher/pm_watch.py")     # as configured, not rewritten
+        self.assertEqual(warn, "pm_start.pm_watch_cmd has no --stream: a watcher started with it exits "
+                               "after one batch of events; add --stream to run it under Monitor")
+        hb = {"pid": 42, "beat": self.T - 30, "stream": True}
+        self.assertEqual(self.run_it([wproc(42)], hb, cfg), [warn])  # even while one streams
+        for ok in ("python w.py --stream", "python w.py --stream --branch a=b"):
+            self.assertEqual(self.run_it([wproc(42)], hb, dict(CFG, pm_watch_cmd=ok)), [])
+        self.assertEqual(len(self.run_it([wproc(42)], hb, dict(CFG, pm_watch_cmd="w.py --streams"))), 1)
+
+    def test_a_reused_pid_started_at_another_time_is_not_the_watcher(self):
+        created = "2026-10-06T09:00:00.1234567+00:00"         # list_processes' CreationDate 'o' form
+        at = datetime.datetime(2026, 10, 6, 9, 0, tzinfo=datetime.timezone.utc).timestamp()
+        procs = [dict(wproc(42), Created=created)]
+        hb = {"pid": 42, "beat": self.T - 30, "stream": True, "started": at + 1}
+        self.assertEqual(self.run_it(procs, hb), [])                 # same start, within START_SLACK
+        (s,) = self.run_it(procs, dict(hb, started=at - 600))        # pid 42 is now another process
+        self.assertIn("running without a heartbeat", s)
+        # either start time unknown: the pid alone decides
+        self.assertEqual(self.run_it(procs, dict(hb, started=None)), [])
+        self.assertEqual(self.run_it([wproc(42)], hb), [])
+        self.assertEqual(self.run_it([dict(wproc(42), Created="garbled")], dict(hb, started=0.0)), [])
+
+    def test_the_heartbeat_start_time_matches_the_process_lists(self):
+        """pm_watch's own start time (kernel32) and list_processes' CreationDate agree for one pid."""
+        from kitlib import pmwatch
+        (me,) = [p for p in pmstart.list_processes() if p.get("ProcessId") == os.getpid()]
+        self.assertLessEqual(abs(pmwatch.own_start_time() - pmstart._created(me)), pmstart.START_SLACK)
 
     def test_a_pm_watch_process_without_a_heartbeat_is_an_older_copy(self):
         for hb in (None, {"pid": 7, "beat": self.T}):     # none, or another process's
@@ -108,7 +147,8 @@ class WatcherTest(unittest.TestCase):
     def test_nothing_running_gives_start_step(self):
         # a non-python process mentioning pm_watch.py (e.g. an editor) does not count
         (s,) = self.run_it([wproc(42, name="code.exe", cmd="code pm_watch.py")], None)
-        self.assertEqual(s, "pm_watch.py is not running: start it under Monitor: python launcher/pm_watch.py")
+        self.assertEqual(s, "pm_watch.py is not running: start it under Monitor: "
+                            "python launcher/pm_watch.py --stream")
 
     def test_no_pm_watch_cmd_names_the_kits_stream_command(self):
         cfg = dict(CFG)
@@ -119,8 +159,8 @@ class WatcherTest(unittest.TestCase):
         self.assertTrue(s.endswith('python -u "%s" --stream' % tool), s)
 
     def test_the_configured_command_is_used_as_written(self):
-        (s,) = self.run_it([], None, dict(CFG, pm_watch_cmd="run the watcher"))
-        self.assertTrue(s.endswith("Monitor: run the watcher"), s)
+        (s,) = self.run_it([], None, dict(CFG, pm_watch_cmd="run the watcher --stream"))
+        self.assertTrue(s.endswith("Monitor: run the watcher --stream"), s)
 
     def test_checklist_passes_the_watcher_fake(self):
         hb = {"pid": 42, "beat": 0}
@@ -141,7 +181,9 @@ class WatcherTest(unittest.TestCase):
             try:
                 self.assertIsNone(_orig_beat())
                 pmwatch.write_heartbeat(pmwatch.heartbeat_file(state), 42, 5.0, True)
-                self.assertEqual(_orig_beat(), {"pid": 42, "beat": 5.0, "stream": True})
+                self.assertEqual(_orig_beat(), {"pid": 42, "beat": 5.0, "stream": True, "started": None})
+                pmwatch.write_heartbeat(pmwatch.heartbeat_file(state), 42, 5.0, True, 3.5)
+                self.assertEqual(_orig_beat()["started"], 3.5)
             finally:
                 pmwatch.load_config = orig
 

@@ -143,12 +143,16 @@ def hub(cfg, account=None, isfile=os.path.isfile):
     A URL: republish the page to it, the watch step, the refill check and the process step.
     None: publish a copy on this account, record it (hub_mirror.py set-url), fill it from the mirror
     (hub_mirror.py restore) and refill it, then the watch and process steps. A page source that
-    is not there (hub_source) replaces the republish or publish step with a line saying so; the
-    watch and process steps still print. `account` is a callable giving the label (default
+    is not there, or a hub_source that is not a string, replaces the republish or publish step
+    with a line saying so; the watch and process steps still print. `account` is a callable giving the label (default
     current_account); it is called only when the label is needed. The hook cannot see the
     session's watch or the live hub, so watch and refill are steps the PM runs, not checks."""
     from kitlib import hubmirror
-    src, exists = hub_source(cfg, isfile)
+    try:
+        src, exists = hub_source(cfg, isfile)
+        bad_src = None
+    except TypeError as e:
+        src, exists, bad_src = None, False, e
     urls = hub_urls(cfg)
     label = None
     if urls:
@@ -160,9 +164,13 @@ def hub(cfg, account=None, isfile=os.path.isfile):
     if urls and cfg.get("hub_url"):
         lines.append("hub: pm_start.hub_url is ignored because hub_urls is set; remove it from the "
                      "machine config")
-    if not exists:
+    default_src = os.path.join(KIT_ROOT, os.path.normpath(HUB_SOURCE))
+    if bad_src is not None:
+        lines.append("hub: pm_start.hub_source is %s, not a path string: fix it in the machine "
+                     "config, or remove it to use %s" % (type(cfg.get("hub_source")).__name__, default_src))
+    elif not exists:
         lines.append("hub: the page source %s does not exist (pm_start.hub_source); point it at %s"
-                     % (src, os.path.join(KIT_ROOT, os.path.normpath(HUB_SOURCE))))
+                     % (src, default_src))
     elif url:
         lines.append("hub: republish the kit's Action Hub page %s to %s with the Artifact tool, "
                      "restating the capabilities in docs/action-hub.md (For the PM), to arm the alert"
@@ -188,7 +196,7 @@ def hub(cfg, account=None, isfile=os.path.isfile):
 
 
 def read_heartbeat():
-    """The pm_watch heartbeat ({pid, beat, stream}) at the state file pm_watch uses, or None
+    """The pm_watch heartbeat ({pid, beat, stream, started}) at the state file pm_watch uses, or None
     (kitlib.pmwatch.heartbeat_file, read_heartbeat)."""
     from kitlib import pmwatch
     state = pmwatch.load_config().get("state_file") or pmwatch.default_state_file()
@@ -200,27 +208,58 @@ def _pm_watch_cmd(cfg):
     return cfg.get("pm_watch_cmd") or PM_WATCH_DEFAULT_CMD
 
 
-def watcher(cfg, procs, beat=None, now=None):
-    """Steps: empty while pm_watch is alive, else the step that starts it.
+_STREAM_FLAG = re.compile(r"(?:^|\s)--stream(?:\s|$)")
+START_SLACK = 2       # seconds: heartbeat and process list may round the same start time apart
 
-    Alive means both: the heartbeat pm_watch writes every pass (beat(), default read_heartbeat)
-    is younger than BEAT_STALE, and its pid is a running python process whose command line has
-    pm_watch.py. A pid alone accepts a hung watcher, a --once check or a reused pid; a heartbeat
-    alone stays fresh for a while after a watcher has exited on an event."""
-    running = set()
+
+def _created(p):
+    """A process dict's Created (list_processes, ISO 8601) as epoch seconds; None when absent or unreadable."""
+    try:
+        return datetime.datetime.fromisoformat(p.get("Created") or "").timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def watcher(cfg, procs, beat=None, now=None):
+    """Steps: empty while pm_watch is alive and streaming, else the step that (re)starts it.
+
+    Alive means all of: the heartbeat pm_watch writes every pass (beat(), default read_heartbeat)
+    is younger than BEAT_STALE, its pid is a running python process whose command line has
+    pm_watch.py, and that process started when the heartbeat says (within START_SLACK; skipped
+    when either start time is unknown), so a reused pid does not pass. A pid alone accepts a
+    hung watcher or a --once check; a heartbeat alone stays fresh for a while after a watcher has
+    exited on an event. A live watcher whose heartbeat says it is not streaming, and a
+    pm_watch_cmd without --stream, each add a line: such a watcher exits after one batch. The
+    configured command is printed as written, never changed."""
+    running = {}
     for p in procs:
         name = (p.get("Name") or "").lower()
         if name.startswith("python") and "pm_watch.py" in (p.get("CommandLine") or ""):
-            running.add(p.get("ProcessId"))
+            running[p.get("ProcessId")] = _created(p)
     hb = (beat or read_heartbeat)()
     now = time.time() if now is None else now
     cmd = _pm_watch_cmd(cfg)
+    lines = _watcher_state(hb, running, now, cmd)
+    if not _STREAM_FLAG.search(cmd):
+        lines.append("pm_start.pm_watch_cmd has no --stream: a watcher started with it exits after "
+                     "one batch of events; add --stream to run it under Monitor")
+    return lines
+
+
+def _watcher_state(hb, running, now, cmd):
+    if hb is not None and hb["pid"] in running:
+        started, created = hb.get("started"), running[hb["pid"]]
+        if started is not None and created is not None and abs(started - created) > START_SLACK:
+            hb = None              # the pid now belongs to another pm_watch.py
     if hb is not None and hb["pid"] in running:
         age = now - hb["beat"]
-        if age <= BEAT_STALE:
-            return []
-        return ["pm_watch.py (pid %d) has not polled for %dm: stop that pid and start it under "
-                "Monitor: %s" % (hb["pid"], age // 60, cmd)]
+        if age > BEAT_STALE:
+            return ["pm_watch.py (pid %d) has not polled for %dm: stop that pid and start it under "
+                    "Monitor: %s" % (hb["pid"], age // 60, cmd)]
+        if hb.get("stream") is False:
+            return ["pm_watch.py (pid %d) runs without --stream: it exits after one batch of events; "
+                    "stop that pid and start it under Monitor with --stream: %s" % (hb["pid"], cmd)]
+        return []
     if running:
         return ["pm_watch.py is running without a heartbeat (an older copy, or another --state): "
                 "restart it under Monitor: %s" % cmd]

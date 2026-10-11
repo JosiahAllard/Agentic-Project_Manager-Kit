@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr
 
@@ -62,6 +63,23 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(beats), 2)
         self.assertEqual(saved[-1], {"n": 2})            # the state is saved before the exit
 
+    def test_a_failed_heartbeat_write_never_stops_the_stream(self):
+        w, emitted, slept, tries = FakeWatcher([["A 1"], ["B 1"]]), [], [], []
+
+        def beat(now):
+            tries.append(now)
+            raise PermissionError(13, "Access is denied")   # os.replace onto a beat file held open
+
+        def sleep(s):
+            slept.append(s)
+            if len(slept) >= 3:
+                raise Stop()
+        with self.assertRaises(Stop):
+            W.run(w, iter(range(100, 10000)).__next__, sleep, lambda s: None, emitted.append, beat,
+                  stream=True)
+        self.assertEqual(emitted, ["A 1", "B 1"])
+        self.assertEqual(len(tries), 3)                  # tried again every pass
+
     def test_once_polls_once_and_writes_no_heartbeat(self):
         rc, emitted, beats, _saved, slept = self.go([["A 1"]], once=True)
         self.assertEqual((rc, emitted, beats, slept), (0, ["A 1"], [], []))
@@ -77,14 +95,28 @@ class HeartbeatTest(unittest.TestCase):
             p = os.path.join(d, "sub", "state.json.beat")
             self.assertIsNone(W.read_heartbeat(p))
             W.write_heartbeat(p, 42, 12.5, True)
-            self.assertEqual(W.read_heartbeat(p), {"pid": 42, "beat": 12.5, "stream": True})
+            self.assertEqual(W.read_heartbeat(p), {"pid": 42, "beat": 12.5, "stream": True, "started": None})
+            W.write_heartbeat(p, 42, 12.5, False, 1700000000.25)
+            self.assertEqual(W.read_heartbeat(p), {"pid": 42, "beat": 12.5, "stream": False,
+                                                   "started": 1700000000.25})
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"pid": 42, "beat": 1}, f)     # an older watcher's heartbeat
+            self.assertIsNone(W.read_heartbeat(p)["started"])
+
+    def test_own_start_time_is_this_process_start(self):
+        t = W.own_start_time()
+        self.assertIsInstance(t, float)
+        self.assertLessEqual(t, time.time())
+        self.assertGreater(t, time.time() - 2 * 86400)   # this test process began within the run
 
     def test_malformed_reads_as_none(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "b")
             for bad in ("{not json", "[1]", json.dumps({"pid": "42", "beat": 1}),
                         json.dumps({"pid": 42}), json.dumps({"pid": 42, "beat": True}),
-                        json.dumps({"pid": True, "beat": 1})):
+                        json.dumps({"pid": True, "beat": 1}),
+                        json.dumps({"pid": 42, "beat": 1, "started": "noon"}),
+                        json.dumps({"pid": 42, "beat": 1, "started": True})):
                 with open(p, "w", encoding="utf-8") as f:
                     f.write(bad)
                 self.assertIsNone(W.read_heartbeat(p), bad)
