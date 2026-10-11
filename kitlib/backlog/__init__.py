@@ -14,4 +14,14 @@ docs/backlog-store.md). Logic only: no argparse, no printing, no exit.
   at_landing  the store at `gate.py land`: the ancestry refusal and closing the landed pulls
   migrate   `backlog.py migrate`: main's records become a new store's root commit
   opener    open_repo, open_store (the configured store from a worktree), planner (verb -> plan)
+
+`open_store` is also `kitlib.backlog.open_store`: opener's own function, imported on first use so
+that importing another module of this package does not load the config and plan code.
 """
+
+
+def __getattr__(name):
+    if name == 'open_store':
+        from .opener import open_store
+        return open_store
+    raise AttributeError('module %r has no attribute %r' % (__name__, name))

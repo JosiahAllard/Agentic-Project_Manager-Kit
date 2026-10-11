@@ -1,19 +1,23 @@
 """Open the configured backlog store from a worktree, and map a write verb to its plan (moved
-from tools/backlog.py `main` and `planner`, behaviour unchanged; docs/backlog.md).
+from tools/backlog.py `main`, `planner` and `do_retarget_dry`, behaviour unchanged;
+docs/backlog.md).
 
-  open_repo(root)   -> (top, cfg, rules, ledger_file, standing); Failure when `root` is no
-                       repository or its `.kit.json` or the machine config cannot be read
+  open_repo(root)   -> (top, cfg, rules); Failure when `root` is no repository or its `.kit.json`
+                       cannot be read
   open_store(root, fetch=True, session=None, branch=None) -> plan.Context over the store
-  planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES)
+  planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, or `retarget`)
+  retarget_dry(args, store) -> the Change `retarget` would write, checked as a write would be;
+                       nothing is published
 
-`planner` takes an object with tools/backlog.py's argument names (`verb`, `id`, `f_<field>`...).
+`planner` and `retarget_dry` take an object with tools/backlog.py's argument names (`verb`, `id`,
+`f_<field>`, `old`, `new`...).
 """
-from kitlib.config import ConfigError, ledger_path, load as load_config, standing_delegation
+from kitlib.config import ConfigError, load as load_config
 from kitlib.git import repo as gitrepo
 
-from . import ledger as lmod
 from . import plan as pmod
 from . import record as rmod
+from . import retarget as retmod
 from . import store as smod
 from .errors import Failure
 
@@ -29,21 +33,18 @@ def open_repo(root):
         raise Failure(why)
     try:
         cfg = load_config(top)
-        ledger_file = ledger_path()
-        standing = standing_delegation()
     except ConfigError as exc:
         raise Failure(str(exc))
     section = cfg.section('backlog')
     rules = rmod.Rules(section['id_grammar'], section['phases'])
-    return top, cfg, rules, ledger_file, standing
+    return top, cfg, rules
 
 
 def open_store(root, fetch=True, session=None, branch=None):
-    top, cfg, rules, ledger_file, standing = open_repo(root)
-    ledger = lmod.Ledger.for_repo(ledger_file, cfg, standing)
+    top, cfg, rules = open_repo(root)
     backend = smod.open_backend(top, cfg, fetch=fetch)
     store = smod.Store(backend, rules, session=session)
-    ctx = pmod.Context(store, ledger, top, remote=cfg.remote, main_branch=cfg.main_branch,
+    ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
                        branch=branch)
     return ctx
 
@@ -64,9 +65,12 @@ def planner(args, ctx):
         return lambda s: pmod.plan_set(s, ctx, args.id, changes, args.unset, args.ruling, body,
                                        args.hold_ruling)
     if v == 'block':
-        return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask, args.ruling)
+        return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask, args.ruling,
+                                         reason=args.reason)
+    if v == 'retarget':
+        return lambda s: retmod.plan_retarget(s, args.old, args.new)
     if v == 'unblock':
-        return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling)
+        return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling, args.on, args.reason)
     if v == 'pull':
         return lambda s: pmod.plan_pull(s, ctx, args.id, args.reason, args.ruling, args.blocker)
     if v == 'release':
@@ -78,3 +82,14 @@ def planner(args, ctx):
     if v == 'unpark':
         return lambda s: pmod.plan_unpark(s, ctx, args.id, args.ruling)
     return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling)
+
+
+def retarget_dry(args, store):
+    """`retarget` without `--apply`: the change it would write, planned against a fresh read and
+    checked as a write would be; nothing is published."""
+    snap = store.load()
+    smod.require_readable(snap)
+    change = retmod.plan_retarget(snap, args.old, args.new)
+    if change.writes:
+        smod.check_change(snap, change)
+    return change

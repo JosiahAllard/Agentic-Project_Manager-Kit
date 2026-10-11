@@ -31,11 +31,11 @@ from kitlib.backlog import migrate as mmod                          # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
 from kitlib.backlog import record as rmod                           # noqa: E402
-from kitlib.backlog import retarget as retmod                       # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
 from kitlib.backlog.errors import Failure, Refusal, Usage           # noqa: E402
-from kitlib.backlog.opener import FIELD_FLAGS, WRITES, open_repo, open_store, planner  # noqa: E402
+from kitlib.backlog.opener import (FIELD_FLAGS, WRITES, open_repo, open_store, planner,  # noqa: E402
+                                   retarget_dry)
 
 
 def say(line=''):
@@ -292,13 +292,9 @@ def do_write(args, ctx, store):
 
 
 def do_retarget_dry(args, store):
-    """`retarget` without `--apply`: the change it would write, planned against a fresh read and
-    checked as a write would be; nothing is published."""
-    snap = store.load()
-    smod.require_readable(snap)
-    change = retmod.plan_retarget(snap, args.old, args.new)
-    if change.writes:
-        smod.check_change(snap, change)
+    """`retarget` without `--apply`: prints the change it would write (kitlib/backlog/opener.py
+    `retarget_dry`); nothing is published."""
+    change = retarget_dry(args, store)
     for line in change.lines:
         say(line)
     say('DRY RUN: nothing was written%s' % ('; `--apply` writes it as one store commit'
@@ -344,7 +340,7 @@ def main(argv=None):
                         'Retiring an owner-held record takes `--ruling R-nnnn`')
         root = os.path.abspath(args.root or os.getcwd())
         if args.verb == 'migrate':
-            top, cfg, rules, _, _ = open_repo(root)
+            top, cfg, rules = open_repo(root)
             return do_migrate(args, top, cfg, rules)
         ctx = open_store(root, fetch=not args.no_fetch, session=args.session, branch=args.branch)
         store = ctx.store
