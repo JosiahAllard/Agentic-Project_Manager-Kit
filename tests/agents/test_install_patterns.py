@@ -10,6 +10,7 @@ from unittest import mock
 
 from kitlib.config import user as kuser
 from kitlib.config.types import ConfigError
+import tests
 from tests import shipped
 
 
@@ -53,6 +54,62 @@ class InstallPatternsTest(unittest.TestCase):
         with mock.patch.object(kuser, 'user_config', side_effect=ConfigError('malformed')):
             importlib.reload(shipped)          # importing reads no machine config
         importlib.reload(shipped)
+
+
+class RealScrubPatternsTest(unittest.TestCase):
+    """tests.real_scrub_patterns, the home fence's one exception, with the home it records before
+    the fence pointed at a temp folder: it opens the machine config only and returns its
+    scrub_patterns only; install_patterns() with no home uses it and skips by name without one.
+    The process stays fenced, so any other home lookup would raise HomeFenced."""
+
+    write_config = InstallPatternsTest.write_config
+
+    def setUp(self):
+        InstallPatternsTest.setUp(self)
+        p = mock.patch.object(tests, '_REAL_HOME', self.home)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def opened(self, fn):
+        """(fn's result, [every file it opened])."""
+        seen, real = [], open
+
+        def spy(file, *a, **kw):
+            seen.append(os.path.normcase(os.path.abspath(file)))
+            return real(file, *a, **kw)
+        with mock.patch('builtins.open', spy):
+            return fn(), seen
+
+    def test_reads_only_scrub_patterns(self):
+        self.write_config(json.dumps({'scrub_patterns': ['acme', 'widgetco'],
+                                      'pm_start': {'hub_url': 'https://example.invalid/a/hubid'},
+                                      'coordinator_start': {'cap': {'alpha': 2}}}))
+        got, seen = self.opened(tests.real_scrub_patterns)
+        self.assertEqual(got, (['acme', 'widgetco'], None))
+        self.assertEqual(seen, [os.path.normcase(kuser.config_file(self.home))])
+        pats = shipped.install_patterns()
+        self.assertEqual([rx.pattern for rx, _what in pats], ['acme', 'widgetco'])
+
+    def test_no_config_file_is_a_named_skip(self):
+        pats, why = tests.real_scrub_patterns()
+        self.assertIsNone(pats)
+        self.assertIn('no machine config file', why)
+        with self.assertRaises(unittest.SkipTest) as cm:
+            shipped.install_patterns()
+        self.assertEqual(str(cm.exception), shipped.NO_INSTALL_NAMES % why)
+
+    def test_no_scrub_patterns_key_is_a_named_skip(self):
+        self.write_config(json.dumps({'pm_start': {'hub_url': 'https://example.invalid/a/hubid'}}))
+        pats, why = tests.real_scrub_patterns()
+        self.assertIsNone(pats)
+        self.assertIn('sets no scrub_patterns', why)
+        with self.assertRaises(unittest.SkipTest):
+            shipped.forbidden()
+
+    def test_a_malformed_real_config_fails(self):
+        self.write_config('{"scrub_patterns": ["(unclosed"]}')
+        with self.assertRaises(ConfigError):
+            tests.real_scrub_patterns()
 
 
 if __name__ == '__main__':

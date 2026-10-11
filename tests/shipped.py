@@ -2,19 +2,32 @@
 paths, and none of the install's own names: the machine config's `scrub_patterns`) and the
 frontmatter parse, as in tests/agents/test_agents.py."""
 import re
+import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+NO_INSTALL_NAMES = "no install names to scrub for: %s"
+
+
 def install_patterns(home=None):
     """The install's own names (repositories, owner, accounts) from the machine config's
-    `scrub_patterns` (under `home`, default the user's), case-insensitive; none when it sets none.
-    Read at call time, never at import, so a malformed machine config fails the test that reads
-    it (ConfigError) instead of breaking test collection."""
-    from kitlib.config.user import user_config
-    return [(re.compile(p, re.I), "install name")
-            for p in user_config(home)["scrub_patterns"] or []]
+    `scrub_patterns`, case-insensitive. Under `home` when given (none when it sets none); with no
+    home, the real machine config's through the home fence's one exception
+    (tests.real_scrub_patterns), and when that has none the calling test is skipped
+    (unittest.SkipTest, NO_INSTALL_NAMES) rather than passing without them. Read at call time,
+    never at import, so a malformed machine config fails the test that reads it (ConfigError)
+    instead of breaking test collection."""
+    if home is None:
+        from tests import real_scrub_patterns
+        pats, why = real_scrub_patterns()
+        if pats is None:
+            raise unittest.SkipTest(NO_INSTALL_NAMES % why)
+    else:
+        from kitlib.config.user import user_config
+        pats = user_config(home)["scrub_patterns"] or []
+    return [(re.compile(p, re.I), "install name") for p in pats]
 
 
 BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),
