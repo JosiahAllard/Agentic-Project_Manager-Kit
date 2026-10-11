@@ -4,7 +4,7 @@
   launch.py deep --repo-path DIR (--brief FILE | --brief-text TEXT) --requester NAME --slug SLUG [...]
   launch.py consultant --repo-path DIR [--repo SLUG] [...]
   launch.py stop --name NAME [--successor NAME] [--pid N] [--dry-run]
-  launch.py handoff (--session KEY | --all) [--account N|auto] [--recycle] [--stem NEW] [--what-if]
+  launch.py handoff (--session KEY | --all) [--account N|auto] [--recycle] [--stem NEW] [--state FILE] [--what-if]
   launch.py pick-account [--limit 95] [--explain]
   launch.py usage
   launch.py after-reboot [--test] [--dry-run]
@@ -34,6 +34,12 @@ class Parser(argparse.ArgumentParser):
         self.print_usage(sys.stderr)
         sys.stderr.write('USAGE: %s\n' % message)
         sys.exit(USAGE)
+
+
+def existing_file(path):
+    if not os.path.isfile(path):
+        raise argparse.ArgumentTypeError('no such file: %s' % path)
+    return os.path.abspath(path)
 
 
 def parser():
@@ -98,6 +104,8 @@ def parser():
     h.add_argument('--all', action='store_true')
     h.add_argument('--recycle', action='store_true')
     h.add_argument('--stem', help="the session's new stem: the successor is NEW-a<N> and sessions.json says NEW")
+    h.add_argument('--state', type=existing_file, help="the hand-off note the successor reads, in place of "
+                   "the entry's state (an existing file)")
     h.add_argument('--what-if', action='store_true')
 
     k = sub.add_parser('pick-account', help='the account whose week resets soonest, with headroom')
@@ -149,7 +157,8 @@ def run(a, settings, host):
         return stop.stop(settings, host, a.name, a.successor, a.pid, a.dry_run,
                          warn=lambda msg: print('launch.py stop: %s' % msg, file=sys.stderr))
     if a.cmd == 'handoff':
-        return handoff.handoff(settings, host, a.session, a.account, a.all, a.recycle, a.what_if, stem=a.stem)
+        return handoff.handoff(settings, host, a.session, a.account, a.all, a.recycle, a.what_if, stem=a.stem,
+                               state=a.state)
     if a.cmd == 'pick-account':
         n, rows = accounts.pick(settings, host.now(), a.limit)
         return (accounts.explain(rows) if a.explain else []) + [n]
