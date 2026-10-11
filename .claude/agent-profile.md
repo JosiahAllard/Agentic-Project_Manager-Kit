@@ -64,8 +64,9 @@ known tie in this repo allows a rerun.
 
 ## Records
 The configured backlog store (docs/backlog-store.md), written with
-`tools/backlog.py`. A builder sets and closes its own record. No ruling ids, owner names or
-machine paths in tracked kit files (the scrub test enforces it).
+`tools/backlog.py`. A builder sets its own record and names it in a `Closes:` trailer in its
+last commit; it never runs `backlog.py close` (land.py closes it at landing). No ruling ids,
+owner names or machine paths in tracked kit files (the scrub test enforces it).
 
 ## Art
 Not applicable.
