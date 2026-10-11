@@ -596,13 +596,16 @@ class MainBackend(object):
 
     def uncommitted_removal(self, rid):
         """True when HEAD tracks `<dir>/<rid>.md` and the worktree no longer holds it: a write
-        here deleted it (`close`, `retire`) and commits nothing. False on an unborn HEAD."""
+        here deleted it (`close`, `retire`, which commit nothing) or a hand removed it. False on
+        an unborn HEAD. Failure when git did not answer (killed, timed out): fail closed."""
         if not PLAIN_ID.match(rid):
             raise Usage('`%s` is not a plain id: as a git pathspec it could match other files' % rid)
         if os.path.exists(os.path.join(self.dir, rid + '.md')):
             return False
         r = cmd.call(['cat-file', '-e', 'HEAD:%s/%s.md' % (self.rel.replace('\\', '/'), rid)],
                      self.root)
+        if r.rc is None:
+            raise Failure(r.err)
         return r.rc == 0
 
     def touched(self, snap):

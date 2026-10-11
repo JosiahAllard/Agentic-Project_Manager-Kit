@@ -6,11 +6,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
-from kitlib.backlog.errors import NotFound, Usage
+from kitlib.backlog.errors import Failure, NotFound, Usage
+from kitlib.git import cmd
 from tests.backlog.helpers import BRANCH, StoreCase, rec, record_text
 from tests.gitfixture import NAME, TempRepo, fixture_env, rmtree
 
@@ -123,8 +125,8 @@ class MainStoreSideBranch(StoreCase):
 
 class MainStoreUncommittedClose(StoreCase):
     """A main store's `close` deletes the file and commits nothing (store.MainBackend.publish), so
-    no commit in HEAD's history removed it yet: `show` says it was closed or retired here and the
-    deletion is uncommitted, not that the id is unknown."""
+    no commit in HEAD's history removed it yet: `show` says the file is tracked at HEAD and
+    missing here, not that the id is unknown; a git that does not answer fails closed."""
 
     def main_store(self):
         r = TempRepo()
@@ -146,8 +148,27 @@ class MainStoreUncommittedClose(StoreCase):
         self.assertFalse(os.path.exists(os.path.join(root, 'docs', 'backlog', 'FOO.md')))
         said = self.shown(store, ctx, 'FOO')
         self.assertIn('no record with `id: FOO`', said)
-        self.assertIn('closed or retired in this worktree', said)
-        self.assertIn('not committed yet', said)
+        self.assertIn('tracked at HEAD but missing from this worktree (closed or retired here, '
+                      'or removed by hand); no commit names it yet', said)
+        self.assertNotIn('the id is unknown', said)
+
+    def test_a_file_removed_by_hand_reads_the_same_and_claims_no_close(self):
+        r, root, store, ctx = self.main_store()
+        os.remove(os.path.join(root, 'docs', 'backlog', 'FOO.md'))
+        said = self.shown(store, ctx, 'FOO')
+        self.assertIn('or removed by hand', said)
+        self.assertNotIn('closed or retired in this worktree', said)
+
+    def test_a_git_that_does_not_answer_fails_closed(self):
+        r, root, store, ctx = self.main_store()
+        os.remove(os.path.join(root, 'docs', 'backlog', 'FOO.md'))
+        dead = cmd.Result(None, b'', 'git did not answer within 30 s')
+        with mock.patch.object(smod.cmd, 'call', return_value=dead):
+            with self.assertRaises(Failure) as cm:
+                store.uncommitted_removal('FOO')
+            self.assertIn('did not answer', str(cm.exception))
+            said = self.shown(store, ctx, 'FOO')
+        self.assertIn("the store's history could not be read: git did not answer", said)
         self.assertNotIn('the id is unknown', said)
 
     def test_once_committed_it_names_the_closing_commit(self):
@@ -158,7 +179,7 @@ class MainStoreUncommittedClose(StoreCase):
               cwd=root)
         said = self.shown(store, ctx, 'FOO')
         self.assertIn('removed by %s ' % r.git('rev-parse', '--short', 'HEAD', cwd=root), said)
-        self.assertNotIn('not committed yet', said)
+        self.assertNotIn('no commit names it yet', said)
 
     def test_an_id_never_tracked_is_still_unknown(self):
         r, root, store, ctx = self.main_store()
