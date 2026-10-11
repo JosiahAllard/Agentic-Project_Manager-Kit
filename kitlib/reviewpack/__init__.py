@@ -165,7 +165,8 @@ def rules_from_lines(lines, isdir):
         if not m:
             continue
         for tok in _TOKEN.findall(m.group(2)):
-            if '/' in tok or '.' in tok or isdir(tok):
+            tok = tok.rstrip('?')  # a `?` after a path is prose punctuation, not a wildcard
+            if tok and ('/' in tok or '.' in tok or isdir(tok)):
                 out.append((m.group(1), tok.rstrip('/')))
     return out
 
@@ -231,18 +232,26 @@ def _matches(path, rule):
 
 
 def level(path, levels):
-    """The risk level of `path`: the most specific matching rule (a plain rule is a path prefix; a
-    glob is read by _glob_regex); unlisted is High, except a `.md`."""
-    best, best_len = 'unlisted (= High)', 0
+    """The risk level of `path`. The longest matching plain prefix decides; a matching glob (read
+    by _glob_regex) may only raise that. With no plain match the most specific glob decides. Equal
+    specificity goes to the higher level, whatever the line order. A rule with no literal text is
+    ignored. Otherwise unlisted is High, except a `.md`."""
+    plain, plain_len, globs = None, 0, []
     for lv, rule in levels:
         hit, size = _matches(path, rule)
-        # equally specific rules: the higher risk level wins, whatever the line order
-        if hit and (size > best_len or (size == best_len and
-                                        _RANK.get(lv, 0) > _RANK.get(best, 0))):
-            best, best_len = lv, size
-    if path.endswith('.md') and best_len == 0:
-        return 'Low'
-    return best
+        if not hit or size == 0:
+            continue
+        if _is_glob(rule):
+            globs.append((size, _RANK.get(lv, 0), lv))
+        elif size > plain_len or (size == plain_len and _RANK.get(lv, 0) > _RANK.get(plain, 0)):
+            plain, plain_len = lv, size
+    if plain is not None:
+        raised = max((g for g in globs if g[1] > _RANK.get(plain, 0)), key=lambda g: g[1],
+                     default=None)
+        return raised[2] if raised else plain
+    if globs:
+        return max(globs)[2]
+    return 'Low' if path.endswith('.md') else 'unlisted (= High)'
 
 
 # --- owner-only paths ---------------------------------------------------------------------------

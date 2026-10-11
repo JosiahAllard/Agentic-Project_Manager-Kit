@@ -40,7 +40,7 @@ class Matching(unittest.TestCase):
         body = ('Low', 'docs/*.{md,txt}')
         self.assertEqual(lv('docs/a.txt', body), 'Low')
         self.assertEqual(lv('docs/a.md', body), 'Low')
-        self.assertEqual(lv('docs/a.py', body),'unlisted (= High)')
+        self.assertEqual(lv('docs/a.py', body), 'unlisted (= High)')
         self.assertEqual(lv('b/x.py', ('Medium', '{a,b}/x.py')), 'Medium')
 
     def test_double_star_crosses_directories(self):
@@ -67,10 +67,39 @@ class Matching(unittest.TestCase):
         self.assertEqual(lv('net/x.py', ('High', 'net/')), 'High')
         self.assertEqual(lv('network/x.py', ('High', 'net/')), 'High')
 
-    def test_the_more_specific_rule_wins_across_forms(self):
-        body = [('High', 'ui/'), ('Low', 'ui/*.md')]
-        self.assertEqual(reviewpack.level('ui/a.md', rules(*body)), 'Low')
-        self.assertEqual(reviewpack.level('ui/a.gd', rules(*body)), 'High')
+    def test_a_question_mark_matches_one_character_within_a_segment(self):
+        body = ('Medium', 'a/x?.py')
+        self.assertEqual(lv('a/x1.py', body), 'Medium')
+        self.assertEqual(lv('a/x.py', body), 'unlisted (= High)')
+        self.assertEqual(lv('a/x12.py', body), 'unlisted (= High)')
+        self.assertEqual(lv('a/x/.py', body), 'unlisted (= High)')
+
+    def test_a_double_star_in_the_middle_spans_zero_or_more_directories(self):
+        body = ('Low', 'a/**/b')
+        for p in ('a/b', 'a/x/b', 'a/x/y/b'):
+            self.assertEqual(lv(p, body), 'Low', p)
+        self.assertEqual(lv('c/x/b', body), 'unlisted (= High)')
+
+    def test_a_question_mark_after_a_path_is_prose(self):
+        self.assertEqual(rules(('Low', 'docs/ (what about net/? no)')),
+                         [('Low', 'docs'), ('Low', 'net')])
+
+    def test_a_rule_with_no_literal_text_is_ignored(self):
+        levels = [('Low', '**'), ('Medium', '{*,?}')]
+        self.assertEqual(reviewpack.level('x/a.py', levels), 'unlisted (= High)')
+        self.assertEqual(reviewpack.level('x/a.md', [('High', '*')]), 'Low')
+
+    def test_a_glob_never_lowers_a_matching_plain_rule(self):
+        self.assertEqual(lv('net/readme.md', ('Low', '**/*.md'), ('High', 'net/')), 'High')
+        self.assertEqual(lv('ui/a.tscn', ('High', 'ui/'), ('Medium', '**/*.tscn')), 'High')
+        self.assertEqual(lv('ui/a.md', ('High', 'ui/'), ('Low', 'ui/*.md')), 'High')
+
+    def test_a_glob_can_raise_a_matching_plain_rule(self):
+        self.assertEqual(lv('docs/x.gdshader', ('Low', 'docs/'), ('High', '**/*.gdshader')),
+                         'High')
+
+    def test_a_glob_alone_can_lower_an_unlisted_file(self):
+        self.assertEqual(lv('a/x.txt', ('Low', '**/*.txt')), 'Low')
 
 
 if __name__ == '__main__':
