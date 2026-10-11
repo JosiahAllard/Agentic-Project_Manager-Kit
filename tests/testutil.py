@@ -85,7 +85,7 @@ def dead_process():
     Keep the Popen for as long as the test uses its pid. On Windows a pid is not given to a new
     process while any handle to the old one is open, and the Popen holds one from creation until
     it is garbage-collected: returning only `.pid` drops it, and a busy machine can then reuse the
-    pid, so a "gone" holder reads as alive (KIT-DEADPID-REUSE). As a second check the pid is asked
+    pid, so a "gone" holder reads as alive. As a second check the pid is asked
     again (kitlib.records.landing.process_alive) and another process tried if it reads alive."""
     from kitlib.records import landing
     for _ in range(50):

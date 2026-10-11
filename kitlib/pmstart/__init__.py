@@ -11,6 +11,7 @@ import re
 import subprocess
 
 from kitlib.config import user as kuser
+from kitlib.pmstart import fglock
 
 KEY = "pm_start"
 TIMEOUT = 4
@@ -70,13 +71,77 @@ def eng_review(cfg):
             "check the list is current" % ", ".join(flags)]
 
 
-def hub(cfg):
-    url = cfg.get("hub_url")
-    if not url:
-        raise KeyError("hub_url not configured")
-    src = cfg.get("hub_source", "claude/hub/action-hub.html")
-    return ["republish %s to %s to arm the alert, then process the hub "
-            "(answers, stories, to-dos, pm_ack)" % (src, url)]
+HUB_SOURCE = "claude/hub/action-hub.html"
+# tools/hub_mirror.py in this kit, absolute: the PM session's directory is not the kit.
+HUB_MIRROR_TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "tools", "hub_mirror.py")
+# The capabilities docs/action-hub.md "For the PM" declares on every publish of the hub page.
+HUB_CAPABILITIES = ('{db: {rules: [{path: "parked", read: "view", write: "admin"}]}, '
+                    'user: {}, comments: {}}')
+
+
+def machine_config(path=None):
+    """The whole machine config as a dict ({} when the file is missing or is not a JSON object),
+    read as load_config reads it: unchecked, so one bad key elsewhere does not stop the hub line.
+    ConfigError when its location cannot be told (kitlib.config.user.readable_file)."""
+    p = os.path.expanduser(path) if path else kuser.readable_file()
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def current_account():
+    """This session's account label (kitlib.launcher.accounts.current_account over the machine
+    config and the environment); "default" for a machine with no launcher accounts."""
+    from kitlib.launcher import accounts
+    return accounts.current_account(machine_config())
+
+
+def hub_urls(cfg):
+    """cfg["hub_urls"] ({account label: artifact URL}), or None when unset. TypeError for
+    anything but an object of non-empty strings."""
+    urls = cfg.get("hub_urls")
+    if urls is None:
+        return None
+    if not isinstance(urls, dict) or not all(isinstance(k, str) and k.strip() and isinstance(v, str)
+                                             and v.strip() for k, v in urls.items()):
+        raise TypeError("hub_urls must be an object of account label: artifact URL")
+    return urls
+
+
+def hub(cfg, account=None):
+    """The hub line. The URL is hub_urls[<this account>] when hub_urls holds any entry (then
+    hub_url is not read); with no hub_urls (or an empty one) it is hub_url, the single-copy
+    setting of an install that has not moved to the map. A URL: republish the page to it. None:
+    publish a copy on this account, record it (hub_mirror.py set-url) and fill it from the mirror
+    (hub_mirror.py restore). `account` is a callable giving the label (default current_account);
+    it is called only when the label is needed."""
+    from kitlib import hubmirror
+    src = cfg.get("hub_source", HUB_SOURCE)
+    urls = hub_urls(cfg)
+    label = None
+    if urls:
+        label = (account or current_account)()
+        url = urls.get(label)
+    else:
+        url = cfg.get("hub_url")
+    if url:
+        return ["hub: republish the kit's Action Hub page %s to %s with the Artifact tool, "
+                "restating the capabilities in docs/action-hub.md (For the PM), to arm the alert; "
+                "then process the hub (answers, stories, to-dos, pm_ack)" % (src, url)]
+    if label is None:
+        label = (account or current_account)()
+    return ["hub: no Action Hub copy is recorded for account %s: publish the kit's page %s with "
+            "the Artifact tool declaring capabilities %s (docs/action-hub.md, For the PM) and pin "
+            "it; record its URL with `python \"%s\" set-url --account %s <url>`; fill "
+            "it from the mirror with `python \"%s\" restore --out <file>` and send "
+            "every batch file it names with ArtifactData (an empty mirror gives none); refill the "
+            "regenerated collections (%s); then ArtifactComments watch on the URL and process the hub"
+            % (label, src, HUB_CAPABILITIES, HUB_MIRROR_TOOL, label, HUB_MIRROR_TOOL,
+               hubmirror.regenerate_text())]
 
 
 def watcher(cfg, procs):
@@ -139,7 +204,7 @@ def live_session_names(procs):
     return names
 
 
-def liveness(cfg, procs, read=None):
+def liveness(cfg, procs, read=None, account=None):
     path = cfg.get("sessions_file")
     if not path:
         raise KeyError("sessions_file not configured")
@@ -147,13 +212,19 @@ def liveness(cfg, procs, read=None):
         read = _read
     sessions = json.loads(read(path))
     alive = live_session_names(procs)
+    label = None
     out = []
     for key, e in sessions.items():
         if not isinstance(e, dict) or not e.get("name") or e.get("autostart") is False:
             continue
         if e["name"] not in alive:  # exact, case-sensitive, as kitlib.launcher.lookup.find_exact
-            out.append("coordinator %s (%s) is not running: launch.py start --session %s"
-                       % (key, e["name"], key))
+            if label is None:     # read once, and only when something is down
+                from kitlib.launcher import accounts
+                label = (account or current_account)()
+                # an unidentified account is left to the launcher's pick-account
+                label = "auto" if label == accounts.DEFAULT_LABEL else label
+            out.append("coordinator %s (%s) is not running: launch.py start --session %s --account %s"
+                       % (key, e["name"], key, label))
     return out
 
 
@@ -291,12 +362,13 @@ def checklist(cfg, now=None, procs=None, **fakes):
     checks = [
         ("standing", lambda: standing(cfg)),
         ("eng_review", lambda: eng_review(cfg)),
-        ("hub", lambda: hub(cfg)),
+        ("hub", lambda: hub(cfg, **fakes.get("hub", {}))),
         ("watcher", lambda: watcher(cfg, procs_once())),
         ("handoff", lambda: handoff(cfg, **fakes.get("handoff", {}))),
         ("reminders", lambda: reminders(cfg, today, **fakes.get("reminders", {}))),
         ("liveness", lambda: liveness(cfg, procs_once(), **fakes.get("liveness", {}))),
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
+        ("foreground_lock", lambda: fglock.check(cfg, **fakes.get("foreground_lock", {}))),
     ]
     for name, fn in checks:
         try:

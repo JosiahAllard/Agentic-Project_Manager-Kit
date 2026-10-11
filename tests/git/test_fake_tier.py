@@ -383,7 +383,7 @@ class FakeUnreadableObjects(unittest.TestCase):
     another holder excludes readers) is waited for, and a tree that is missing ends the command
     as git's does. Taking either for an empty tree made `read-tree` drop the records under it:
     the store write built on that index lost every earlier record (backlog test_store
-    CompareAndSwap, KIT-FLAKY-STORE-CAS)."""
+    CompareAndSwap)."""
 
     def setUp(self):
         if not cmd.fake_active():

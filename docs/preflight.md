@@ -58,11 +58,10 @@ In a row, `?` means git could not answer. `-` means "no owner-only paths", and `
 
 A worktree that git cannot read as its own work tree is a row of `?`, ending `? (not its own work tree: git cannot read it)`. The check is `kitlib.board.report._own_tree`. The case it guards against is a half-deleted worktree under `.claude/worktrees/`: git, asked inside it, walks up and answers for the main checkout.
 
-`--write-state` writes the board into the state file and changes nothing else. kitlib/board/state.py chooses the file, in the main checkout:
+`--write-state` writes the board into the state file and changes nothing else. kitlib/board/state.py chooses the file, in the main checkout's git common dir, so that no untracked file is left in the work tree (a dirty main checkout refuses `gate.py land`):
 
-1. `.kit.json` `board.state_file`, when set.
-2. Otherwise `docs/ops/state.local.md`.
-3. Otherwise `ops/state.local.md`, when the main checkout has `ops/` and no `docs/ops/`.
+1. `<git common dir>/kit/board-state.md` by default.
+2. `.kit.json` `board.state_file`, when set and when it lies under the git dir (for example `.git/kit/board-state.md`). Any other value is in the work tree: `board: refused: "board".state_file <path> is inside the work tree...`, exit 2, nothing written.
 
 Only the block between `<!-- board:begin -->` and `<!-- board:end -->` is rewritten. A missing file is created from a template.
 

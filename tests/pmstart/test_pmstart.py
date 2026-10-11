@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from kitlib import pmstart
+from kitlib.pmstart import fglock
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 CFG = {"hub_url": "https://claude.ai/artifact/X", "hub_source": "claude/hub/action-hub.html",
@@ -19,10 +20,14 @@ def setUpModule():
     global _orig_settings
     _orig_settings = pmstart.pm_data_settings
     pmstart.pm_data_settings = lambda: None
+    global _orig_read_live
+    _orig_read_live = fglock.read_live
+    fglock.read_live = lambda user32=None: 0
 
 
 def tearDownModule():
     pmstart.pm_data_settings = _orig_settings
+    fglock.read_live = _orig_read_live
 
 
 def proc(name, cmd, exe=""):
@@ -53,7 +58,10 @@ class StandingTest(unittest.TestCase):
 class HubTest(unittest.TestCase):
     def test_step_names_url(self):
         (s,) = pmstart.hub(CFG)
-        self.assertIn("republish claude/hub/action-hub.html to https://claude.ai/artifact/X", s)
+        self.assertIn("republish the kit's Action Hub page claude/hub/action-hub.html "
+                      "to https://claude.ai/artifact/X with the Artifact tool", s)
+        self.assertIn("docs/action-hub.md (For the PM)", s)
+        self.assertNotIn("republish claude/hub/action-hub.html to", s)  # the old bare line
         self.assertIn("pm_ack", s)
 
 
@@ -100,14 +108,31 @@ class LivenessTest(unittest.TestCase):
     def test_dead_listed_exact_match_store_app_ignored(self):
         procs = [proc("claude.exe", "claude --remote-control al-a2-n5", "C:/bin/claude.exe"),
                  proc("claude.exe", "claude --remote-control be-a2", "C:/X" + chr(92) + "WindowsApps" + chr(92) + "claude.exe")]
-        out = pmstart.liveness(CFG, procs, read=lambda p: self.SESS)
+        out = pmstart.liveness(CFG, procs, read=lambda p: self.SESS, account=lambda: "2")
         self.assertEqual(len(out), 1)
         self.assertIn("launch.py start --session Beta", out[0])
 
     def test_prefix_name_not_a_match(self):
         procs = [proc("claude.exe", "claude --remote-control al-a2-n5-x", "C:/bin/claude.exe")]
-        out = pmstart.liveness(CFG, procs, read=lambda p: self.SESS)
+        out = pmstart.liveness(CFG, procs, read=lambda p: self.SESS, account=lambda: "2")
         self.assertEqual(len(out), 2)
+
+    def test_the_start_line_names_the_account_this_session_is_on_not_the_entrys(self):
+        sess = json.dumps({"kit": {"name": "kit-a1", "account": 1}})
+        (line,) = pmstart.liveness(CFG, [], read=lambda p: sess, account=lambda: "10")
+        self.assertTrue(line.endswith("launch.py start --session kit --account 10"), line)
+
+    def test_an_unidentified_account_is_left_to_pick_account(self):
+        sess = json.dumps({"kit": {"name": "kit-a1", "account": 1}})
+        (line,) = pmstart.liveness(CFG, [], read=lambda p: sess, account=lambda: "default")
+        self.assertTrue(line.endswith("--session kit --account auto"), line)
+
+    def test_the_account_is_not_read_when_every_coordinator_runs(self):
+        def never():
+            raise AssertionError("the account was read although nothing is down")
+        procs = [proc("claude.exe", "claude --remote-control be-a2", "C:/bin/claude.exe")]
+        sess = json.dumps({"Beta": {"name": "be-a2"}})
+        self.assertEqual(pmstart.liveness(CFG, procs, read=lambda p: sess, account=never), [])
 
 
 class ChecklistTest(unittest.TestCase):
@@ -235,9 +260,9 @@ class EngReviewTest(unittest.TestCase):
     """pm_start.eng_review: the owner's design-review flags."""
 
     def test_set_lists_every_flag_and_says_to_hub_them(self):
-        out = pmstart.eng_review(dict(CFG, eng_review=["SCRIPT-API-*", "gamma"]))
+        out = pmstart.eng_review(dict(CFG, eng_review=["EX-API-*", "gamma"]))
         self.assertEqual(len(out), 1)
-        self.assertIn("SCRIPT-API-*, gamma", out[0])
+        self.assertIn("EX-API-*, gamma", out[0])
         self.assertIn("hub", out[0])
 
     def test_unset_or_empty_gives_no_line(self):
@@ -247,13 +272,13 @@ class EngReviewTest(unittest.TestCase):
         self.assertNotIn("eng_review", pmstart.checklist(CFG, NOW, procs=[], **fakes))
 
     def test_bad_value_raises(self):
-        for bad in ("SCRIPT-API-*", "", [1], [""], 5, 0, False, {}, None):
+        for bad in ("EX-API-*", "", [1], [""], 5, 0, False, {}, None):
             with self.assertRaises(TypeError):
                 pmstart.eng_review(dict(CFG, eng_review=bad))
 
     def test_in_checklist_and_bad_value_isolated(self):
         fakes = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"}, liveness={"read": lambda p: "{}"})
-        self.assertIn("SCRIPT-API-*", pmstart.checklist(dict(CFG, eng_review=["SCRIPT-API-*"]), NOW, procs=[], **fakes))
+        self.assertIn("EX-API-*", pmstart.checklist(dict(CFG, eng_review=["EX-API-*"]), NOW, procs=[], **fakes))
         txt = pmstart.checklist(dict(CFG, eng_review="x"), NOW, procs=[], **fakes)
         self.assertIn("could not check eng_review:", txt)
         self.assertIn("republish", txt)

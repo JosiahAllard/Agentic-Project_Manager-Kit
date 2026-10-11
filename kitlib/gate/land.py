@@ -1050,16 +1050,22 @@ def land(root, branch, expect_main, expect_tip, **kw):
 
 def queue(root, store=None):
     """Read-only: the repository's landing lock and landing queue, as an OK Outcome (one line for
-    the lock, one per queue entry in turn order); REFUSED when either cannot be read."""
+    the lock, one per queue entry in turn order). A lock file that is not a record is shown held,
+    lane ?, with the read error: that is when an operator checks here before clearing it by hand.
+    REFUSED when the config, the lock's place or the queue cannot be read."""
     try:
         cfg = kconfig.load(root)
         lock = landing.LandingLock.for_config(root, cfg, sorted(cfg.section('landing')['lanes']))
-        rec = lock.read()
+        try:
+            rec, unreadable = lock.read(), None
+        except landing.LockError as e:
+            rec, unreadable = {'lane': '?', 'phase': '?'}, str(e)
         entries = lockres.entries(store or Store(), queue_key(lock.common))
     except (ConfigError, landing.LockError, lockres.ResourceError) as e:
         return G.Outcome(G.REFUSED, ['REFUSED: the landing queue of %s cannot be read: %s' % (
             root, e)])
-    lines = [landing.describe(rec), 'landing queue: %s' % (
+    held = landing.describe(rec) + ('; unreadable: %s' % unreadable if unreadable else '')
+    lines = [held, 'landing queue: %s' % (
         '%d waiting or holding' % len(entries) if entries else 'empty')]
     lines.extend('  %d. %s %s' % (n, e['state'], lockres.text(e)) for n, e in enumerate(entries, 1))
     return G.Outcome(G.OK, lines)

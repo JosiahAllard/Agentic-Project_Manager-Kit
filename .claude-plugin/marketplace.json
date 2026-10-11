@@ -1,0 +1,14 @@
+{
+  "name": "pm-kit",
+  "description": "The PM kit's plugin, loaded in place from a kit checkout (docs/install.md, Plugin install).",
+  "owner": {
+    "name": "PM kit"
+  },
+  "plugins": [
+    {
+      "name": "claude-pm-kit",
+      "source": "./",
+      "description": "The PM kit: agents, skills and the machine lock MCP server."
+    }
+  ]
+}

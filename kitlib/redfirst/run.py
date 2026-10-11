@@ -53,9 +53,17 @@ def git(cwd, *args):
 
 
 def rev(cwd, name):
-    rc, out, err = git(cwd, 'rev-parse', '--verify', '--quiet', name + '^{commit}')
-    if rc != 0 or not out:
-        raise V.Usage('usage: %s does not name a commit in %s%s' % (name, cwd, ': ' + err if err else ''))
+    """`name`'s commit; V.Usage when it names none or git gives no answer.
+
+    GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - this asked `rev-parse --verify --quiet`, whose "no such
+    commit" is exit 1 with no output, a killed git's shape (gitrefs.KILLED_SHAPE), so a kill read
+    as "does not name a commit". gitrefs.resolve(known=True) tells the two apart."""
+    out, why = gitrefs.resolve(name, cwd, known=True)
+    if out is None:
+        raise V.Usage('refused: whether %s names a commit in %s could not be read: %s'
+                      % (name, cwd, why))
+    if not out:
+        raise V.Usage('usage: %s does not name a commit in %s' % (name, cwd))
     return out
 
 
