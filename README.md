@@ -27,9 +27,8 @@ test and land code at the same time. The kit lays the rails they run on:
   pre-push hook refuses any push to main that is not a fast-forward.
 - **Worktrees.** Every task gets its own branch in its own folder, so agents never share a
   checkout.
-- **Backlog and rulings.** Each repository keeps its task list (the backlog) in git, on a hidden
-  ref beside main. The owner's decisions (rulings) go in one append-only file for the whole
-  machine.
+- **Backlog and owner decisions.** Each repository keeps its task list (the backlog) in git, on a
+  hidden ref beside main. The PM keeps the owner's decisions in its own private record.
 - **Action Hub.** One private web page where you, the owner, answer the PM's questions, tick off
   hand steps and write new stories. Nobody waits on it: you answer when it suits you.
 
@@ -123,5 +122,5 @@ it in place.
 | The machine lock | docs/lock-api.md, skill `machine-lock-run` |
 | The guard and pre-push hook | docs/guard.md |
 | The backlog | docs/backlog.md |
-| The rulings ledger | docs/ledger.md |
+| The PM's private ledger | docs/ledger.md |
 | How the kit is built | ARCHITECTURE.md |

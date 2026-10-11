@@ -29,7 +29,7 @@ class TemplateFilesTest(unittest.TestCase):
 
     def test_common_claude_md_keeps_its_placeholders(self):
         text = (TEMPLATES / "common" / "CLAUDE.md").read_text(encoding="utf-8")
-        for ph in ("<PROJECT_NAME>", "<BUILD_COMMAND>", "<PM_LEDGER_PATH>", "<OWNER_EMAIL>"):
+        for ph in ("<PROJECT_NAME>", "<BUILD_COMMAND>","<OWNER_EMAIL>"):
             self.assertIn(ph, text)
 
     def test_godot_template_ships_the_render_check_skill(self):
