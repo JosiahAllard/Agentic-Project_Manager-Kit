@@ -9,11 +9,11 @@ import atexit
 import os
 import re
 import shutil
-import stat
 import tempfile
 
 from kitlib.git import batch, cmd as gitcmd
 from kitlib.git import cache as gitcache
+from kitlib.tooldeps import selfrun
 
 # A test process keeps kitlib.git.cache's answers; this module forgets them whenever its own git
 # runs or a repository is copied in. Nothing outside the tests turns the memo on.
@@ -40,14 +40,11 @@ def fixture_env(extra=None):
     return env
 
 
-def _rm_readonly(func, path, _exc):
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
-
-
 def rmtree(path):
+    """Remove a fixture folder, git's read-only object files included (selfrun.rmtree_force,
+    which the test runner also removes its kit-tests-* folders with)."""
     if os.path.isdir(path):
-        shutil.rmtree(path, onerror=_rm_readonly)
+        selfrun.rmtree_force(path)
 
 
 # Built repositories this process copies instead of building again: {key: TempRepo}. Starting a
