@@ -2,7 +2,7 @@
 
 `claude/hooks/guard.py` is the kit's one PreToolUse hook (ARCHITECTURE.md "Layers": Guards). `githooks/pre-push` is the kit's guard git hook. Both are thin entries over `kitlib/guard/`. `githooks/` also holds `pre-commit`, the ledger check, inert unless a repository opts in (docs/ledger.md "Pre-commit check").
 
-**Not live:** none is registered in any settings file or `core.hooksPath`.
+**Live and enforcing:** `claude/hooks/guard.py` is registered as the PreToolUse hook in the user settings ("Go-live", step 1), and subagent calls are refused by it (observed: rules `main-checkout` and `write-jail`). `githooks/pre-push` is live only in a repository whose `core.hooksPath` names `githooks/` ("Go-live", step 2).
 
 ## Output
 
