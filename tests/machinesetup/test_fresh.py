@@ -417,6 +417,39 @@ class Fresh(FreshBase):
                 settings._create(path, b'{}\n')
         self.assertEqual(os.listdir(self.c1), [])
 
+    def test_a_failed_replace_leaves_no_tmp(self):
+        bak = self.s2 + '.machine-setup-%s.bak' % T.TODAY
+        with mock.patch.object(settings.os, 'replace', side_effect=PermissionError('denied')):
+            with self.assertRaises(PermissionError):
+                settings._write(self.s2, self.raw2, b'{}\n', bak)
+        self.assertEqual(sorted(os.listdir(self.c2)), sorted(['settings.json', os.path.basename(bak)]))
+        self.assertEqual(T.readb(self.s2), self.raw2)
+
+    def test_fresh_config_dir_outside_the_refresh_set_is_a_note_not_an_install(self):
+        """A --config-dir folder that is not one of pluginsource.claude.account_folders: neither
+        tools/plugin_refresh.py nor pm_start would ever update its plugin, so it is not installed;
+        the note gives the hand commands and the export is still made for them."""
+        other = os.path.join(self.root, 'other-config')
+        os.makedirs(other)
+        self.assertNotIn(other, pclaude.account_folders(self.home))
+        code, out = self.run_it(apply=True, config_dirs=[self.c1, other])
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertIn('note: %s is outside the plugin refresh set' % other, out)
+        self.assertIn('CLAUDE_CONFIG_DIR=%s: claude plugin marketplace remove pm-kit; claude plugin '
+                      'marketplace add %s; claude plugin install %s -s user' % (other, self.export, PID), out)
+        self.assertIn('claude plugin marketplace update pm-kit; claude plugin update %s' % PID, out)
+        self.assertNotIn('%s: enable the kit plugin' % other, out)
+        self.assertEqual(self.host.fake.calls, self.migrate_calls(self.c1, None))
+        self.assertTrue(guard_in(load(os.path.join(other, 'settings.json')), self.kit))
+        self.assertNotIn('enabledPlugins', load(os.path.join(other, 'settings.json')))
+        self.assertFalse(pluginsource.migrated(self.state(), other))
+        shutil.rmtree(self.export)
+        code, out = self.run_it(apply=True, config_dirs=[other])          # only the outside folder
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertIn('done: export ', out)
+        self.assertEqual(len(self.host.fake.calls), 3)                   # no claude run for it
+        self.assertTrue(os.path.isfile(os.path.join(self.export, pluginsource.STATE)))
+
     def test_fresh_runs_shortcut_and_acl_but_not_the_lock_env(self):
         self.host.env[extras.LOCK_ENV] = 'somewhere-else'
         code, out = self.run_it(apply=True)
@@ -496,13 +529,60 @@ class RealRunner(unittest.TestCase):
         self.assertFalse(process.alive(pid, ctime), 'the .cmd\'s python child outlived the timeout')
 
 
+ALIASES = ('python', 'pythonw', 'py', 'python3')
+
+
 class FreshTool(FreshBase):
-    def ps1(self, args, env=None):
+    def ps1(self, args, env=None, python=True):
+        """The wrapper, given this interpreter as -Python unless `python` is False: never the
+        `python` alias, which with a temp LOCALAPPDATA makes the Python install manager install."""
         ps = os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32', 'WindowsPowerShell', 'v1.0',
                           'powershell.exe')
         ps1 = os.path.join(T.KIT, 'installer', 'machine-setup.ps1')
+        args = list(args) + (['-Python', sys.executable] if python else [])
         return subprocess.run([ps, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ps1] + args,
                               capture_output=True, text=True, env=env)
+
+    def alias_trap(self):
+        """(a PATH whose python, pythonw, py and python3 are .cmd fakes that append their name to a
+        mark file and exit 97, with every PATH folder holding a real one of those .exe left out;
+        the mark file)."""
+        fake = os.path.join(self.root, 'fake-python')
+        os.makedirs(fake)
+        mark = os.path.join(self.root, 'alias-started.txt')
+        for n in ALIASES:
+            with open(os.path.join(fake, n + '.cmd'), 'w', encoding='ascii', newline='\r\n') as fh:
+                fh.write('@echo off\n>>"%s" echo %%~n0 %%*\nexit /b 97\n' % mark)
+        keep = [d for d in os.environ.get('PATH', '').split(os.pathsep)
+                if d.strip() and not any(os.path.lexists(os.path.join(d, n + '.exe')) for n in ALIASES)]
+        return os.pathsep.join([fake] + keep), mark
+
+    def test_no_python_alias_is_started(self):
+        """The wrapper with -Python and the tool's whole dry run (guard.py --settings-entry, the
+        shortcut read) under a temp LOCALAPPDATA start no python, pythonw or py from PATH: a
+        .cmd fake would leave the mark, and a bare 'python' to CreateProcess finds no .exe and
+        fails the run. Without -Python the wrapper runs the PATH python, which the fake catches."""
+        path, mark = self.alias_trap()
+        lad = os.path.join(self.root, 'localappdata')
+        desk = os.path.join(self.root, 'desktop-2')
+        os.makedirs(lad)
+        os.makedirs(desk)
+        env = dict(os.environ, PATH=path, USERPROFILE=self.home, HOME=self.home, LOCALAPPDATA=lad)
+        env.pop('CLAUDE_CONFIG_DIR', None)
+        args = ['-Fresh', '-PmSettings', self.pm, '-HomeDir', self.home, '-Desktop', desk]
+        r = self.ps1(args, env=env)
+        self.assertEqual(r.returncode, M.EXIT_OK, r.stdout + r.stderr)
+        self.assertIn('DRY RUN', r.stdout)
+        self.assertIn('config folders: %s, %s' % (self.c1, self.c2), r.stdout)
+        self.assertFalse(os.path.exists(mark), 'a python alias was started: %s' % (
+            T.readb(mark) if os.path.exists(mark) else b''))
+        self.assertEqual(os.listdir(lad), [])
+        r = self.ps1(args, env=env, python=False)
+        self.assertEqual(r.returncode, 97, r.stdout + r.stderr)
+        self.assertTrue(os.path.exists(mark))
+        r = self.ps1(args + ['-Python', os.path.join(self.root, 'none.exe')], env=env, python=False)
+        self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
+        self.assertIn('is not a file', r.stdout)
 
     def test_fresh_and_old_kit_together_or_neither_is_usage(self):
         r = subprocess.run([sys.executable, T.TOOL], capture_output=True, text=True)
