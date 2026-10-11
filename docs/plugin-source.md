@@ -2,6 +2,8 @@
 
 Every account folder's Claude Code installs the `pm-kit` plugin from an export of pushed kit main, never from the kit checkout. `tools/plugin_refresh.py` makes the export and runs `claude plugin` in each account folder; logic in `kitlib/pluginsource` (export, marketplace, prune, state, the refresh lock) and `kitlib/pluginsource/claude.py` (the account folders and the `claude` runner). Tests: `tests/pluginsource`, `tests/pmstart/test_plugin_current.py`, `tests/pmwatch/test_plugin.py`.
 
+With no `home`, `claude.account_folders` and `claude.Runner` find the user's home through `kitlib.config.user.home_dir()`, which the kit's tests fence (docs/test-tools.md "Home fence"), so a test passes a temp home or the folders themselves.
+
 ## Layout
 
 The export root is the machine config's `plugin.export_dir`, by default `%LOCALAPPDATA%\pm-kit\plugin` (docs/kit-json.md "Machine config keys"; `kitlib.pluginsource` `settings`). A root inside the kit checkout, or under the agent temp sweep root (`agent_temp_sweep.dir`, whose sweep removes unused entries), is refused (`kitlib.pluginsource` `placement_errors`, checked by `check` and `settings`). It holds:
