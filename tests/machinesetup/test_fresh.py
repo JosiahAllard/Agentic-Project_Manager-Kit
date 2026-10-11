@@ -24,6 +24,7 @@ from kitlib.machinesetup import extras, settings
 from kitlib.config import user as kuser
 from kitlib.pluginsource import claude as pclaude
 from tests import gitfixture
+from tests.home import temp_home
 from tests.machinesetup import test_machinesetup as T
 
 PID = 'pm-kit@pm-kit'
@@ -619,24 +620,31 @@ class FreshTool(FreshBase):
         self.assertIn('pm settings:    %s' % self.pm, r.stdout)
         self.assertIn('DRY RUN', r.stdout)
 
-    def test_the_real_account_settings_are_untouched(self):
-        """The real ~/.claude/settings.json and every real account folder's settings.json keep their
-        size and mtime across a --fresh --apply run on temp folders and a --fresh dry run whose home
-        and LOCALAPPDATA are temp. Stat only: their content is never read."""
-        real_home = os.path.expanduser('~')
+    def test_the_default_home_account_settings_are_untouched(self):
+        """The home the process would fall back to (USERPROFILE and HOME: a seeded temp_home under
+        the home fence, never the real one) keeps its ~/.claude/settings.json and every account
+        folder's settings.json byte for byte, size and mtime, across a --fresh --apply run on temp
+        folders and a --fresh dry run whose home and LOCALAPPDATA are other temp folders."""
+        default_home = temp_home(self, prefix='kit-default-home-')
+        for n in ('.claude', '.claude-acct'):
+            os.makedirs(os.path.join(default_home, n))
+            with open(os.path.join(default_home, n, 'settings.json'), 'wb') as f:
+                f.write(b'{"model": "opus"}\r\n')
+        self.assertEqual(os.path.expanduser('~'), default_home)
 
         def stats():
             out = {}
-            for d in M.dedupe([os.path.join(real_home, '.claude')] + M.default_config_dirs(real_home)):
+            for d in M.dedupe([os.path.join(default_home, '.claude')] + M.default_config_dirs(default_home)):
                 p = os.path.join(d, 'settings.json')
                 try:
                     st = os.stat(p)
-                    out[p] = (st.st_size, st.st_mtime_ns)
+                    out[p] = (st.st_size, st.st_mtime_ns, T.readb(p))
                 except OSError:
                     out[p] = None
             return out
         before = stats()
-        self.assertIn(os.path.join(real_home, '.claude', 'settings.json'), before)
+        self.assertEqual(sorted(before), sorted(os.path.join(default_home, n, 'settings.json')
+                                                for n in ('.claude', '.claude-acct')))
         sys.path.insert(0, os.path.dirname(T.TOOL))
         self.addCleanup(sys.path.remove, os.path.dirname(T.TOOL))
         import machine_setup

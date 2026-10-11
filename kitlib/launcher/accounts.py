@@ -11,6 +11,7 @@ import json
 import os
 import re
 
+from kitlib.config import user as kuser
 from kitlib.launcher.settings import LaunchError
 
 CREDENTIALS = '.credentials.json'
@@ -200,7 +201,7 @@ def current_account(machine, environ=None, home=None):
     if not isinstance(accts, dict) or not accts:
         return DEFAULT_LABEL
     env = os.environ if environ is None else environ
-    h = home or os.path.expanduser('~')
+    h = home or kuser.home_dir()
     cur = env.get(CONFIG_DIR_ENV) or ''
     here = _same_folder_key(cur if cur.strip() else '~/.claude', h)
     # Numbered labels in number order ("2" before "10"), as the launcher lists them; others after.
