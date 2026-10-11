@@ -29,6 +29,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import machinesetup                                     # noqa: E402
+from kitlib.config import user as kuser                             # noqa: E402
 
 
 def main(argv=None):
@@ -41,7 +42,7 @@ def main(argv=None):
                    help='with --fresh: the settings file the PM session loads, for its SessionStart hook')
     p.add_argument('--kit', default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     p.add_argument('--config-dir', action='append', default=None)
-    p.add_argument('--home', default=os.path.expanduser('~'))
+    p.add_argument('--home', default=None)
     p.add_argument('--agent-temp', default=None)
     p.add_argument('--desktop', default=None)
     p.add_argument('--register-sweep-task', action='store_true',
@@ -57,8 +58,9 @@ def main(argv=None):
     if a.old_kit is not None and not os.path.isdir(a.old_kit):
         sys.stderr.write('machine_setup.py: no old kit folder at %s\n' % a.old_kit)
         return machinesetup.EXIT_USAGE
+    home = a.home if a.home is not None else kuser.home_dir()       # the home fence applies to the default
     safe_stdout()
-    ctx = machinesetup.Context(a.home, a.kit, a.old_kit, config_dirs=a.config_dir,
+    ctx = machinesetup.Context(home, a.kit, a.old_kit, config_dirs=a.config_dir,
                                agent_temp=a.agent_temp, desktop=a.desktop,
                                fresh=a.fresh, pm_settings=a.pm_settings,
                                register_sweep_task=a.register_sweep_task)
