@@ -3,6 +3,7 @@ shape, versions, the views it borrows, wait, pending, snapshot and health. Who m
 is tests/hubsite/test_api_roles.py."""
 import inspect
 import json
+import os
 import shutil
 import tempfile
 import threading
@@ -556,7 +557,7 @@ class ViewsTest(ApiCase):
         self.refused('internal', None, 'GET', '/notices', OWNER)
         obj = self.ok('GET', '/snapshot', OWNER)
         self.assertEqual(obj['views']['backlog'], None)
-        self.assertEqual(obj['unavailable'], list(api.VIEWS))
+        self.assertEqual(sorted(obj['unavailable']), sorted(api.VIEWS))
 
 
 class ReadTest(ApiCase):
@@ -575,16 +576,17 @@ class ReadTest(ApiCase):
         self.assertEqual(obj['revision'], self.store.revision)
         self.assertEqual(obj['collections']['questions'][qid]['title'], 't')
         self.assertEqual([p['id'] for p in obj['pending']], [sid])
-        self.assertEqual(obj['unavailable'], list(api.VIEWS))
+        self.assertEqual(obj['unavailable'], dict.fromkeys(api.VIEWS, 'unavailable'))
         self.assertEqual(obj['views'], dict.fromkeys(api.VIEWS))
         self.api = api.Api(self.store, views=Views(), clock=CLOCK)
         obj = self.ok('GET', '/snapshot', OWNER)
         self.assertEqual(obj['views']['notices'], [{'text': 'n'}])
         self.assertEqual(obj['views']['backlog'], [{'repo': 'r', 'items': []}])
-        self.assertEqual(obj['unavailable'], ['repos', 'usage', 'agents'])
+        self.assertEqual(obj['unavailable'], dict.fromkeys(('repos', 'usage', 'agents'),
+                                                           'unavailable'))
 
     def test_health(self):
-        obj = self.ok('GET', '/health', AGENT)
+        obj = self.ok('GET', '/health', OWNER)
         self.assertEqual((obj['ok'], obj['version'], obj['revision'], obj['store'], obj['git'],
                           obj['backlog']),
                          (True, 'v1', self.store.revision, self.store.root, None, None))
@@ -646,6 +648,340 @@ class ReadTest(ApiCase):
         status, obj = out[0]
         self.assertEqual((status, obj['timed_out'], [p['id'] for p in obj['pending']]),
                          (200, False, [sid]))
+
+
+def seeded(case, files):
+    """A Store opened on a folder that already holds files ({'coll/name.json': document}): the
+    way to have a document the store itself would refuse to write."""
+    root = tempfile.mkdtemp(prefix='kit-hubapi-')
+    case.addCleanup(shutil.rmtree, root, True)
+    for rel, doc in files.items():
+        path = os.path.join(root, *rel.split('/'))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(doc, f)
+    store = Store.open(root, clock=CLOCK)
+    case.addCleanup(store.close)
+    return store
+
+
+class FixTest(ApiCase):
+    """The behaviours the first review asked for."""
+
+    def note(self, **kw):
+        body = {'text': 'one'}
+        body.update(kw)
+        return self.ok('POST', '/to_pm', OWNER, body)['id']
+
+    # ---- the revision of a read
+    def test_a_read_revision_is_never_later_than_its_data(self):
+        self.question()
+        for path, name in (('/questions', 'docs'), ('/pending', 'pending')):
+            with self.subTest(path=path):
+                real = getattr(self.store, name)
+
+                def late(*a, _real=real):
+                    out = _real(*a)             # the data is copied ...
+                    self.store.add('inbox', {'text': 'late'})   # ... and another writer gets in
+                    return out
+                setattr(self.store, name, late)
+                obj = self.ok('GET', path, AGENT)
+                setattr(self.store, name, real)
+                self.assertLess(obj['revision'], self.store.revision)
+                # so a client waiting since that revision is told of the write it did not see
+                got = self.ok('GET', '/wait', AGENT, None, {'since': str(obj['revision']),
+                                                            'timeout': '0'})
+                self.assertEqual([c['collection'] for c in got['changes']], ['inbox'])
+                self.assertIs(got['timed_out'], False)
+
+    # ---- wait on a closed store
+    def test_wait_on_a_closed_store_is_the_stores_refusal(self):
+        self.question()
+        self.store.close()
+        for query in ({'timeout': '0'}, {'timeout': '30'}, {'timeout': '0', 'pending': '1'},
+                      {'since': '0', 'timeout': '0'}):
+            with self.subTest(query=query):
+                status, obj = self.call('GET', '/wait', AGENT, None, query)
+                self.assertEqual((status, obj['error']['code']), (503, 'store'))
+                self.assertNotIn('timed_out', obj)
+
+    # ---- health
+    def test_health_gives_the_store_folder_to_the_owner_only(self):
+        class Leaky(object):
+            def health(self):
+                return {'git': 'ok', 'store': 'the folder, from a view'}
+        for views in (None, Views(), Leaky()):
+            self.api = api.Api(self.store, views=views, clock=CLOCK)
+            with self.subTest(views=views):
+                self.assertEqual(self.ok('GET', '/health', OWNER)['store'], self.store.root)
+                obj = self.ok('GET', '/health', AGENT)
+                self.assertNotIn('store', obj)
+                self.assertNotIn(json.dumps(self.store.root), json.dumps(obj))
+                self.assertEqual((obj['ok'], obj['version'], obj['revision']),
+                                 (True, 'v1', self.store.revision))
+
+    def test_health_with_a_view_that_raises_says_so_briefly(self):
+        class Gone(object):
+            def health(self):
+                raise OSError('cannot read a-folder-on-this-machine')
+
+        class Refused(object):
+            def health(self):
+                raise HubError('store', 'the backlog store in a-folder-on-this-machine is gone')
+        for views, why in ((Gone(), 'OSError'), (Refused(), 'store'), (None, 'unavailable')):
+            self.api = api.Api(self.store, views=views, clock=CLOCK)
+            for role in (OWNER, AGENT):
+                with self.subTest(why=why, role=role):
+                    obj = self.ok('GET', '/health', role)
+                    self.assertEqual(obj['unavailable'], {'health': why})
+                    self.assertEqual((obj['ok'], obj['git'], obj['backlog']), (True, None, None))
+                    self.assertNotIn('a-folder-on-this-machine', json.dumps(obj))
+        self.api = api.Api(self.store, views=Views(), clock=CLOCK)
+        self.assertEqual(self.ok('GET', '/health', AGENT)['unavailable'], {})
+
+    # ---- snapshot
+    def test_snapshot_with_views_that_raise_names_each_with_a_short_reason(self):
+        class Broken(Views):
+            def backlog(self, **kw):
+                raise HubError('store', 'the backlog store in a-folder-on-this-machine is gone')
+
+            def notices(self):
+                raise OSError('cannot read a-folder-on-this-machine')
+
+            def repos(self):
+                return 1 / 0
+
+            def usage(self):
+                return [{'n': 1}]
+        self.api = api.Api(self.store, views=Broken(), clock=CLOCK)
+        qid = self.question()
+        obj = self.ok('GET', '/snapshot', AGENT)
+        self.assertEqual(obj['unavailable'], {'backlog': 'store', 'notices': 'OSError',
+                                              'repos': 'ZeroDivisionError',
+                                              'agents': 'unavailable'})
+        self.assertEqual((obj['views']['backlog'], obj['views']['notices'], obj['views']['repos'],
+                          obj['views']['usage']), (None, None, None, [{'n': 1}]))
+        self.assertEqual(obj['collections']['questions'][qid]['title'], 't')
+        self.assertNotIn('a-folder-on-this-machine', json.dumps(obj))
+
+    # ---- to_pm: the reply's ruling
+    def test_a_reply_carries_its_ruling(self):
+        pid = self.note()
+        self.ok('POST', '/to_pm/send', OWNER)
+        path = '/to_pm/%s/reply' % pid
+        self.refused('invalid', 'ruling', 'POST', path, AGENT, {'reply': 'r', 'ruling': 7})
+        obj = self.ok('POST', path, AGENT, {'reply': 'r', 'ruling': ' decision-7 '})
+        d = self.store.get('to_pm', pid)
+        self.assertEqual((obj['status'], d['status'], d['reply'], d['ruling']),
+                         ('done', 'done', 'r', 'decision-7'))
+        other = self.note()
+        self.ok('POST', '/to_pm/send', OWNER)
+        self.ok('POST', '/to_pm/%s/reply' % other, AGENT, {'reply': 'r'})
+        self.assertNotIn('ruling', self.store.get('to_pm', other))
+        # the owner's routes still take no ruling
+        self.refused('invalid', 'ruling', 'POST', '/to_pm', OWNER,
+                     {'text': 'x', 'ruling': 'decision-7'})
+
+    # ---- via
+    def test_every_write_records_the_path_it_came_by(self):
+        tid = self.ok('POST', '/todos', OWNER, {'title': 't'}, via='web')['id']
+        self.assertEqual(self.store.get('todos', tid)['via'], 'web')
+        self.ok('POST', '/todos/%s/done' % tid, OWNER, via='desktop-mcp')
+        self.assertEqual(self.store.get('todos', tid)['via'], 'desktop-mcp')
+        self.ok('POST', '/todos/%s/ack' % tid, AGENT, via='cli')
+        self.assertEqual(self.store.get('todos', tid)['via'], 'cli')
+        sid = self.ok('POST', '/stories', OWNER, {'repo': 'kit', 'title': 't', 'story': 's'},
+                      via='web')['id']
+        self.assertEqual(self.store.get('stories', sid)['via'], 'web')
+        self.ok('POST', '/stories/%s' % sid, AGENT, {'status': 'review', 'if_version': 1})
+        self.assertEqual(self.store.get('stories', sid)['via'], 'api')     # none given
+        qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS},
+                      via='cli')['id']
+        self.assertEqual(self.store.get('questions', qid)['via'], 'cli')
+        self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0}, via='web')
+        d = self.store.get('questions', qid)
+        self.assertEqual((d['via'], d['answer']['via']), ('web', 'web'))
+        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'ruling': 'decision-7',
+                                                           'if_version': 2}, via='cli')
+        d = self.store.get('questions', qid)
+        self.assertEqual((d['via'], d['answer']['via']), ('cli', 'web'))
+        mid = self.ok('POST', '/inbox', AGENT, {'text': 'x'}, via='cli')['id']
+        self.assertEqual(self.store.get('inbox', mid)['via'], 'cli')
+        self.ok('POST', '/inbox/%s/read' % mid, OWNER, via='web')
+        self.assertEqual(self.store.get('inbox', mid)['via'], 'web')
+        pid = self.note()
+        self.assertEqual(self.store.get('to_pm', pid)['via'], 'api')
+        self.ok('POST', '/to_pm/send', OWNER, via='web')
+        self.assertEqual(self.store.get('to_pm', pid)['via'], 'web')
+        self.ok('POST', '/to_pm/%s/reply' % pid, AGENT, {'reply': 'r'}, via='cli')
+        self.assertEqual(self.store.get('to_pm', pid)['via'], 'cli')
+
+    def test_via_is_the_callers_never_the_bodys(self):
+        tid = self.ok('POST', '/todos', OWNER, {'title': 't'})['id']
+        for method, path, role, body in (
+                ('POST', '/todos', OWNER, {'title': 't', 'via': 'web'}),
+                ('POST', '/todos/%s/done' % tid, OWNER, {'via': 'web'}),
+                ('POST', '/inbox', AGENT, {'text': 'x', 'via': 'web'}),
+                ('POST', '/to_pm', OWNER, {'text': 'x', 'via': 'web'})):
+            with self.subTest(path=path):
+                self.refused('invalid', 'via', method, path, role, body)
+
+    # ---- to_pm: send all or none
+    def test_send_with_one_bad_note_sends_none(self):
+        self.store.close()
+        self.store = seeded(self, {
+            'to_pm/P-001.json': {'status': 'queued', 'kind': 'fyi', 'text': 'good'},
+            'to_pm/P-002.json': {'status': 'queued', 'kind': 'fyi'},        # no text
+            'to_pm/P-003.json': {'status': 'queued', 'kind': 'fyi', 'text': 'good too'}})
+        self.api = api.Api(self.store, clock=CLOCK)
+        obj = self.refused('invalid', 'text', 'POST', '/to_pm/send', OWNER)
+        self.assertIn('to_pm/P-002', obj['error']['message'])
+        self.assertEqual([d['status'] for d in self.store.docs('to_pm').values()], ['queued'] * 3)
+        self.assertEqual(self.ok('GET', '/pending', AGENT)['items'], [])
+        # mended, they all go
+        self.store.update('to_pm', 'P-002', {'text': 'now it has one'})
+        self.assertEqual(self.ok('POST', '/to_pm/send', OWNER)['sent'],
+                         ['P-001', 'P-002', 'P-003'])
+
+    # ---- from: you
+    def test_an_agent_cannot_spell_you_with_characters_nobody_sees(self):
+        for name in ('you​', ' YOU ', 'y‍ou', '﻿you', 'Y o u', '‎you‏',
+                     'yo­u', '\tyou\n', 'YOU⁠'):
+            with self.subTest(name=ascii(name)):
+                self.refused('invalid', 'from', 'POST', '/todos', AGENT,
+                             {'title': 't', 'commands': ['dir'], 'from': name})
+        self.assertEqual(self.store.docs('todos'), {})
+        # a name that only holds the word is somebody else
+        obj = self.ok('POST', '/todos', AGENT, {'title': 't', 'commands': ['dir'],
+                                                'from': 'younger-agent'})
+        self.assertEqual(self.store.get('todos', obj['id'])['from'], 'younger-agent')
+
+    # ---- ids with a digit that is not 0-9
+    def test_a_list_orders_an_id_with_a_digit_that_is_not_ascii(self):
+        self.assertEqual(api._natural('Q-1²'), ['q-', 1, '²'])
+        self.assertEqual(api._natural('Q-٣'), ['q-٣'])
+        self.assertEqual(api._natural('Q-010'), ['q-', 10, ''])
+        self.store.close()
+        doc = {'status': 'open', 'title': 't'}
+        self.store = seeded(self, {'questions/Q-1².json': doc, 'questions/Q-002.json': doc,
+                                   'questions/Q-٣.json': doc, 'questions/Q-001.json': doc})
+        self.api = api.Api(self.store, clock=CLOCK)
+        self.assertEqual([d['id'] for d in self.ok('GET', '/questions', OWNER)['items']],
+                         ['Q-001', 'Q-1²', 'Q-002', 'Q-٣'])
+
+    # ---- a flag that is null
+    def test_a_null_flag_is_refused_not_read_as_true(self):
+        tid = self.ok('POST', '/todos', OWNER, {'title': 't'})['id']
+        self.refused('invalid', 'done', 'POST', '/todos/%s/done' % tid, OWNER, {'done': None})
+        self.assertEqual(self.store.get('todos', tid)['status'], 'open')
+        mid = self.ok('POST', '/inbox', AGENT, {'text': 'x'})['id']
+        self.refused('invalid', 'read', 'POST', '/inbox/%s/read' % mid, OWNER, {'read': None})
+        self.assertIs(self.store.get('inbox', mid)['read'], False)
+        # no field at all still means yes
+        self.assertEqual(self.ok('POST', '/todos/%s/done' % tid, OWNER, {})['status'], 'done')
+        self.assertEqual(self.ok('POST', '/todos/%s/done' % tid, OWNER,
+                                 {'if_version': None})['status'], 'done')
+
+    # ---- to_pm: the owner edits or deletes a queued note
+    def test_the_owner_edits_a_queued_note(self):
+        pid = self.note()
+        path = '/to_pm/%s/edit' % pid
+        obj = self.ok('POST', path, OWNER, {'text': 'new', 'urgent': True, 'kind': 'fyi',
+                                            'repo': 'kit'}, via='web')
+        self.assertEqual((obj['id'], obj['status'], obj['version']), (pid, 'queued', 2))
+        d = self.store.get('to_pm', pid)
+        self.assertEqual((d['text'], d['urgent'], d['kind'], d['repo'], d['status'], d['via'],
+                          d['created_at']), ('new', True, 'fyi', 'kit', 'queued', 'web', NOW))
+        self.ok('POST', path, OWNER, {'urgent': False, 'if_version': 2})
+        d = self.store.get('to_pm', pid)
+        self.assertEqual((d['text'], d['urgent']), ('new', False))
+        self.refused('invalid', 'body', 'POST', path, OWNER, {})
+        self.refused('invalid', 'body', 'POST', path, OWNER, {'if_version': 3})
+        self.refused('invalid', 'text', 'POST', path, OWNER, {'text': '  '})
+        self.refused('invalid', 'text', 'POST', path, OWNER, {'text': 3})
+        self.refused('invalid', 'urgent', 'POST', path, OWNER, {'urgent': None})
+        self.refused('invalid', 'kind', 'POST', path, OWNER, {'kind': 'order'})
+        self.refused('conflict', 'if_version', 'POST', path, OWNER, {'text': 'x', 'if_version': 1})
+        for name in ('status', 'reply', 'ruling', 'sent_at', 'done_at', 'created_at', 'via'):
+            with self.subTest(field=name):
+                self.refused('invalid', name, 'POST', path, OWNER, {'text': 'x', name: 'sent'})
+
+    def test_the_owner_deletes_a_queued_note(self):
+        pid, keep = self.note(), self.note(text='two')
+        obj = self.ok('POST', '/to_pm/%s/delete' % pid, OWNER, via='web')
+        self.assertEqual((obj['id'], obj['deleted'], obj['revision']),
+                         (pid, True, self.store.revision))
+        self.assertIsNone(self.store.get('to_pm', pid))
+        self.assertEqual(list(self.store.docs('to_pm')), [keep])
+        self.refused('not_found', 'id', 'POST', '/to_pm/%s/delete' % pid, OWNER)
+        self.refused('invalid', 'text', 'POST', '/to_pm/%s/delete' % keep, OWNER, {'text': 'x'})
+        self.refused('conflict', 'if_version', 'POST', '/to_pm/%s/delete' % keep, OWNER,
+                     {'if_version': 5})
+        self.ok('POST', '/to_pm/%s/delete' % keep, OWNER, {'if_version': 1})
+        self.assertEqual(self.ok('POST', '/to_pm/send', OWNER)['sent'], [])
+
+    def test_an_agent_cannot_edit_or_delete_a_note(self):
+        pid = self.note()
+        self.refused('forbidden', 'role', 'POST', '/to_pm/%s/edit' % pid, AGENT, {'text': 'x'})
+        self.refused('forbidden', 'role', 'POST', '/to_pm/%s/delete' % pid, AGENT)
+        self.assertEqual(self.store.get('to_pm', pid)['text'], 'one')
+
+    def test_a_note_the_pm_has_is_not_edited_or_deleted(self):
+        pid = self.note()
+        self.ok('POST', '/to_pm/send', OWNER)
+        for status in ('sent', 'done'):
+            with self.subTest(status=status):
+                obj = self.refused('conflict', 'status', 'POST', '/to_pm/%s/edit' % pid, OWNER,
+                                   {'text': 'changed'})
+                self.assertIn(status, obj['error']['message'])
+                self.refused('conflict', 'status', 'POST', '/to_pm/%s/delete' % pid, OWNER)
+                self.assertEqual(self.store.get('to_pm', pid)['text'], 'one')
+            self.store.update('to_pm', pid, {'status': 'done', 'reply': 'r'})
+
+    def test_edit_or_delete_of_a_note_that_is_not_there(self):
+        self.refused('not_found', 'id', 'POST', '/to_pm/P-404/edit', OWNER, {'text': 'x'})
+        self.refused('not_found', 'id', 'POST', '/to_pm/P-404/delete', OWNER)
+
+    def test_a_delete_is_pinned_to_the_version_the_check_read(self):
+        # the note is sent between this module's read and its delete: it is not deleted
+        pid = self.note()
+        real = self.store.get
+
+        def get(coll, doc_id):
+            d = real(coll, doc_id)
+            self.store.get = real
+            self.store.update(coll, doc_id, {'status': 'sent'})
+            return d
+        self.store.get = get
+        status, obj = self.call('POST', '/to_pm/%s/delete' % pid, OWNER)
+        self.assertEqual((status, obj['error']['code']), (409, 'conflict'))
+        self.assertEqual(self.store.get('to_pm', pid)['status'], 'sent')
+
+
+class IdGuardTest(ApiCase):
+    """Api.doc asks schema.check_id before the store: an id that could not be a file name is
+    never looked up. (The store answers None for one today; the guard is what keeps that from
+    being the only thing between a path and a file.)"""
+
+    def test_an_id_that_is_no_file_name_never_reaches_the_store(self):
+        seen = []
+        real = self.store.get
+        self.store.get = lambda coll, doc_id: seen.append(doc_id) or real(coll, doc_id)
+        for bad in ('..', '..\\..\\x', 'a\\b', '..\\_meta', '.hidden', 'nul', 'x.', 'a b'):
+            for method, tail, role, body in (('POST', '/inbox/%s/read', OWNER, None),
+                                             ('POST', '/to_pm/%s/delete', OWNER, None),
+                                             ('POST', '/questions/%s/answer', OWNER,
+                                              {'choice': 0})):
+                with self.subTest(id=bad, route=tail):
+                    self.refused('not_found', 'id', method, tail % bad, role, body)
+        # a `/` makes it another path, which no route has
+        for bad in ('../x', 'a/b', '../../_meta'):
+            with self.subTest(id=bad):
+                self.refused('not_found', 'path', 'POST', '/inbox/%s/read' % bad, OWNER)
+        self.assertEqual(seen, [], 'an id that is no file name was looked up in the store')
+        mid = self.ok('POST', '/inbox', AGENT, {'text': 'x'})['id']
+        self.ok('POST', '/inbox/%s/read' % mid, OWNER)
+        self.assertEqual(seen, [mid])
 
 
 if __name__ == '__main__':

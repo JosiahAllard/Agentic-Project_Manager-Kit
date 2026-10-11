@@ -77,6 +77,8 @@ ROWS = {
     ('POST', '/to_pm'): (None, {'text': 'x'}, None),
     ('POST', '/to_pm/send'): (lambda s: seed_to_pm(s, 'queued'), None, None),
     ('POST', '/to_pm/{id}/reply'): (seed_to_pm, {'reply': 'r'}, None),
+    ('POST', '/to_pm/{id}/edit'): (lambda s: seed_to_pm(s, 'queued'), {'text': 'y'}, None),
+    ('POST', '/to_pm/{id}/delete'): (lambda s: seed_to_pm(s, 'queued'), None, None),
     ('POST', '/inbox'): (None, {'text': 'x'}, None),
     ('POST', '/inbox/{id}/read'): (seed_inbox, None, None),
     ('GET', '/backlog'): (None, None, None),
@@ -141,6 +143,7 @@ class RolesCase(unittest.TestCase):
                 ('POST', '/stories'): OWNER, ('POST', '/stories/{id}'): AGENT,
                 ('POST', '/stories/{id}/withdraw'): OWNER, ('POST', '/to_pm'): OWNER,
                 ('POST', '/to_pm/send'): OWNER, ('POST', '/to_pm/{id}/reply'): AGENT,
+                ('POST', '/to_pm/{id}/edit'): OWNER, ('POST', '/to_pm/{id}/delete'): OWNER,
                 ('POST', '/inbox'): AGENT, ('POST', '/inbox/{id}/read'): OWNER}
         have = {key(r): r.role for r in api.ROUTES}
         for k, role in sorted(want.items()):

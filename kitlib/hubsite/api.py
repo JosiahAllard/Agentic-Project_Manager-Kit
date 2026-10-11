@@ -6,6 +6,9 @@ hub site design, section 2 "HTTP API" and section 9).
              AGENT or ANY: who may call it.
   Api(store, views=None, clock=None)
              .call(method, path, role, body=None, query=None, via='') -> (status, object)
+             via names the transport (web, desktop-mcp, cli, ...); every write records it
+             as the document's `via` (`api` when none is given), an answer in `answer.via`
+             too. A delete leaves no document to carry it.
   match(method, path)    (Route, {name: segment}) or None
   sample_path(route)     the pattern with every `{name}` filled in, for a test that walks ROUTES
 
@@ -27,8 +30,10 @@ store's HubError codes plus `forbidden`, `unavailable` (a view this server does 
 `internal` (anything unexpected).
 
 Views. The live backlog and the derived views are other modules; `views` is any object with some
-of these methods, each one optional (a missing one answers `unavailable`, and the snapshot lists
-it under `unavailable`):
+of these methods, each one optional. A missing one answers `unavailable` on its own route. GET
+snapshot and GET health never fail for a view: the part is null and `unavailable` maps its name
+to a short reason (a HubError's code, else the exception's class name; never a message or a
+path):
   backlog(repo='', state='', fresh=False)   [{repo, tip, fetched_at, items}]
   completed(repo='', days=None)             [{repo, tip, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
@@ -36,16 +41,21 @@ it under `unavailable`):
 
 Nothing here opens a socket, starts a thread, prints, parses arguments or exits. GET wait blocks
 in Store.wait for at most WAIT_MAX_S; how many may wait at once is the listener's rule.
+
+Revision. A read's `revision` is taken before the data is copied, so it is never later than the
+data: a client that waits `since` it is told of any write the copy missed. GET health gives the
+store's folder to the owner only.
 """
 import collections
 import datetime
 import math
 import re
+import unicodedata
 
 from kitlib import hubvalidate
 
 from . import schema
-from .store import HubError
+from .store import REFUSED, HubError
 
 BASE = '/api/v1'
 API_VERSION = 'v1'
@@ -66,7 +76,7 @@ Request = collections.namedtuple('Request', 'role params body query via')
 
 _TRUE = ('1', 'true', 'yes', 'on')
 _FALSE = ('', '0', 'false', 'no', 'off')
-_ID_SPLIT = re.compile(r'(\d+)')
+_ID_SPLIT = re.compile(r'([0-9]+)')
 
 
 def error_body(code, message, field=''):
@@ -78,7 +88,8 @@ def _invalid(message, field=''):
 
 
 def _natural(doc_id):
-    return [int(p) if p.isdigit() else p.lower() for p in _ID_SPLIT.split(doc_id)]
+    # split on a group: text at the even places, ASCII digits at the odd ones
+    return [int(p) if i % 2 else p.lower() for i, p in enumerate(_ID_SPLIT.split(doc_id))]
 
 
 def _version(doc):
@@ -122,9 +133,10 @@ def sample_path(route, value='X-1'):
 
 
 # ------------------------------------------------------------------ reading a request
-def _fields(req, allowed, required=()):
-    """The body's fields: an object holding only `allowed` names, a null one read as absent,
-    every `required` one present."""
+def _fields(req, allowed, required=(), flags=()):
+    """The body's fields: an object holding only `allowed` names, a null one read as absent
+    (refused for a name in `flags`: null is neither true nor false), every `required` one
+    present."""
     body = req.body
     if body is None:
         body = {}
@@ -134,6 +146,11 @@ def _fields(req, allowed, required=()):
         if name not in allowed:
             raise _invalid('this route takes no %r field (it takes: %s)'
                            % (name, ', '.join(allowed) or 'none'), str(name))
+    for name in flags:
+        if name in body and not isinstance(body[name], bool):
+            raise _invalid('%s must be true or false, not %s'
+                           % (name, 'null' if body[name] is None else type(body[name]).__name__),
+                           name)
     out = {k: v for k, v in body.items() if v is not None}
     for name in required:
         v = out.get(name)
@@ -211,6 +228,23 @@ def _when(text, field):
     return t
 
 
+def _via(req):
+    return req.via or 'api'
+
+
+def _reason(e):
+    """Why a view gave nothing, short and with no path in it: a HubError's code, else the
+    exception's class name."""
+    return e.code if isinstance(e, HubError) else type(e).__name__
+
+
+def _plain(text):
+    """text with its white space and its invisible (Unicode format, Cf) characters dropped,
+    casefolded: what a reader takes two spellings of one word to be."""
+    return ''.join(c for c in text if not c.isspace()
+                   and unicodedata.category(c) != 'Cf').casefold()
+
+
 # ------------------------------------------------------------------ the Api
 class Api(object):
     """The hub's verbs over `store` (a kitlib.hubsite.store.Store). `views` gives the derived
@@ -225,15 +259,17 @@ class Api(object):
     def call(self, method, path, role, body=None, query=None, via=''):
         """(status, object) for one request. role is OWNER or AGENT as the caller resolved it;
         body is the decoded JSON body or None; query is {name: value}; via names the transport
-        (web, cli, ...) and is recorded on an answer."""
+        (web, cli, ...) and is recorded on every write."""
+        # read before the handler copies any data: a write in between then has a later
+        # revision, so a client waiting since this one is told of it
+        revision = self.store.revision
         try:
             status, obj = 200, self._call(method, path, role, body, query, via)
         except HubError as e:
             status, obj = STATUS.get(e.code, 500), error_body(e.code, e.message, e.field)
         except Exception as e:      # noqa: BLE001 - a transport gets an answer, never a traceback
             status, obj = 500, error_body('internal', '%s: %s' % (type(e).__name__, e))
-        if 'revision' not in obj:
-            obj['revision'] = self.store.revision
+        obj.setdefault('revision', revision)
         return status, obj
 
     def _call(self, method, path, role, body, query, via):
@@ -271,10 +307,16 @@ class Api(object):
                            % (coll, doc_id, _version(d), pin), 'if_version')
         return d
 
-    def change(self, coll, doc_id, doc, changes, extra=None):
+    def add(self, coll, fields, req, extra=None):
+        """A new document of fields, with the path the write came by (`via`)."""
+        return self.written(self.store.add(coll, dict(fields, via=_via(req))), extra)
+
+    def change(self, coll, doc_id, doc, changes, req, extra=None):
         """Merge changes into the document, pinned to the version of `doc` (the copy the
-        handler judged), and give the write's result object."""
-        r = self.store.update(coll, doc_id, changes, if_version=_version(doc))
+        handler judged), record the path the write came by (`via`), and give the write's
+        result object."""
+        r = self.store.update(coll, doc_id, dict(changes, via=_via(req)),
+                              if_version=_version(doc))
         return self.written(r, extra)
 
     def written(self, r, extra=None):
@@ -332,7 +374,7 @@ def questions_add(api, req):
     _typed(b, 'options', (list,), 'a list of {label, description}')
     b.setdefault('options', [])
     b.update(status='open', asked_at=api.clock())
-    return api.written(api.store.add('questions', b))
+    return api.add('questions', b, req)
 
 
 def questions_answer(api, req):
@@ -357,8 +399,8 @@ def questions_answer(api, req):
         raise _invalid('choice is an index into the %d option(s) or "other", not %r'
                        % (len(options), choice), 'choice')
     answer = {'choice': choice, 'label': label, 'note': note, 'at': api.clock(),
-              'via': req.via or 'api'}
-    return api.change('questions', doc_id, d, {'status': 'answered', 'answer': answer},
+              'via': _via(req)}
+    return api.change('questions', doc_id, d, {'status': 'answered', 'answer': answer}, req,
                       {'status': 'answered', 'answer': answer})
 
 
@@ -371,7 +413,7 @@ def questions_log(api, req):
     if d.get('status') != 'answered':
         raise _invalid('%s is %s: only an answered question is logged'
                        % (doc_id, d.get('status')), 'status')
-    return api.change('questions', doc_id, d, {'status': 'logged', 'ruling': ruling},
+    return api.change('questions', doc_id, d, {'status': 'logged', 'ruling': ruling}, req,
                       {'status': 'logged'})
 
 
@@ -389,21 +431,21 @@ def todos_add(api, req):
         b['from'] = OWNER_FROM
     else:
         b['from'] = (b.get('from') or '').strip() or AGENT_FROM
-        if b['from'].lower() == OWNER_FROM:
+        if _plain(b['from']) == OWNER_FROM:
             raise _invalid('from: %s marks a to-do the owner wrote; an agent cannot use it'
                            % OWNER_FROM, 'from')
     b.update(status='open', added_at=api.clock())
-    return api.written(api.store.add('todos', b))
+    return api.add('todos', b, req)
 
 
 def todos_done(api, req):
-    b = _fields(req, ('done', 'if_version'))
+    b = _fields(req, ('done', 'if_version'), flags=('done',))
     _pin(b)
     done = _flag(b, 'done', True)
     doc_id = req.params['id']
     d = api.doc('todos', doc_id, b)
     changes = {'status': 'done' if done else 'open', 'done_at': api.clock() if done else None}
-    return api.change('todos', doc_id, d, changes, changes)
+    return api.change('todos', doc_id, d, changes, req, changes)
 
 
 def todos_ack(api, req):
@@ -411,7 +453,7 @@ def todos_ack(api, req):
     _pin(b)
     doc_id = req.params['id']
     d = api.doc('todos', doc_id, b)
-    return api.change('todos', doc_id, d, {'pm_ack': True}, {'pm_ack': True})
+    return api.change('todos', doc_id, d, {'pm_ack': True}, req, {'pm_ack': True})
 
 
 def stories_list(api, req):
@@ -423,7 +465,7 @@ def stories_add(api, req):
     for name in ('repo', 'title', 'story'):
         _text(b, name)
     b.update({'status': 'submitted', 'from': OWNER_FROM, 'submitted_at': api.clock()})
-    return api.written(api.store.add('stories', b), {'status': 'submitted'})
+    return api.add('stories', b, req, {'status': 'submitted'})
 
 
 def stories_set(api, req):
@@ -445,7 +487,7 @@ def stories_set(api, req):
         changes['added_at'] = api.clock()
     if status == 'declined':
         changes['closed_at'] = api.clock()
-    return api.change('stories', doc_id, d, changes, {'status': status})
+    return api.change('stories', doc_id, d, changes, req, {'status': status})
 
 
 def stories_withdraw(api, req):
@@ -457,7 +499,7 @@ def stories_withdraw(api, req):
         raise _invalid('%s is %s: only a submitted story can be withdrawn'
                        % (doc_id, d.get('status')), 'status')
     return api.change('stories', doc_id, d, {'status': 'withdrawn', 'closed_at': api.clock()},
-                      {'status': 'withdrawn'})
+                      req, {'status': 'withdrawn'})
 
 
 def to_pm_list(api, req):
@@ -470,32 +512,97 @@ def to_pm_add(api, req):
         _text(b, name)
     b.setdefault('kind', 'question')
     b.update(status='queued', created_at=api.clock(), sent_at=None, reply=None, done_at=None)
-    return api.written(api.store.add('to_pm', b), {'status': 'queued'})
+    return api.add('to_pm', b, req, {'status': 'queued'})
+
+
+def _queued(doc_id, d, what):
+    if d.get('status') != 'queued':
+        raise HubError('conflict', '%s is %s: only a queued note, one not yet sent to the PM, '
+                       'can be %s' % (doc_id, d.get('status'), what), 'status')
+
+
+def to_pm_edit(api, req):
+    b = _fields(req, ('kind', 'repo', 'urgent', 'text', 'if_version'), flags=('urgent',))
+    _pin(b)
+    for name in ('kind', 'repo', 'text'):
+        _text(b, name)
+    changes = {k: v for k, v in b.items() if k != 'if_version'}
+    if not changes:
+        raise _invalid('give at least one of kind, repo, urgent, text to change', 'body')
+    if 'text' in changes and not changes['text'].strip():
+        raise _invalid('text cannot be made empty', 'text')
+    doc_id = req.params['id']
+    d = api.doc('to_pm', doc_id, b)
+    _queued(doc_id, d, 'edited')
+    return api.change('to_pm', doc_id, d, changes, req, {'status': 'queued'})
+
+
+def to_pm_delete(api, req):
+    b = _fields(req, ('if_version',))
+    _pin(b)
+    doc_id = req.params['id']
+    d = api.doc('to_pm', doc_id, b)
+    _queued(doc_id, d, 'deleted')
+    r = api.store.delete('to_pm', doc_id, if_version=_version(d))
+    return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
+
+
+def _finding_key(f):
+    return (f.level, f.rel, f.field, f.code, f.message)
+
+
+def _refusal(docs, coll, doc_id, changes):
+    """Why the store would refuse to merge changes into coll/doc_id of docs (a snapshot's
+    collections), as a HubError, or None. It is the store's own rule (Store._validate: a schema
+    error, a new hubvalidate error, a new finding whose code is in REFUSED), asked before
+    anything is written."""
+    new = dict(docs[coll][doc_id], **changes)
+    rel = '%s/%s' % (coll, doc_id)
+    errors = schema.check(coll, new, doc_id)
+    if errors:
+        return HubError('invalid', '%s: %s' % (rel, '; '.join(f.message for f in errors)),
+                        errors[0].field)
+    before = {_finding_key(f) for f in hubvalidate.validate(docs, only={rel})}
+    after = dict(docs)
+    after[coll] = dict(docs[coll])
+    after[coll][doc_id] = new
+    bad = [f for f in hubvalidate.validate(after, only={rel})
+           if _finding_key(f) not in before
+           and (f.level == hubvalidate.ERROR or f.code in REFUSED)]
+    if bad:
+        return HubError('invalid', '%s: %s' % (rel, '; '.join('%s [%s]' % (f.message, f.code)
+                                                               for f in bad)), bad[0].field)
+    return None
 
 
 def to_pm_send(api, req):
     _fields(req, ())
-    sent, at = [], api.clock()
-    for d in api.items('to_pm', Request(req.role, {}, None, {'status': 'queued'}, req.via)):
-        doc_id = d.pop('id')
-        api.store.update('to_pm', doc_id, {'status': 'sent', 'sent_at': at},
-                         if_version=_version(d))
-        sent.append(doc_id)
-    return {'ok': True, 'sent': sent, 'sent_at': at if sent else None}
+    at = api.clock()
+    changes = {'status': 'sent', 'sent_at': at, 'via': _via(req)}
+    _, docs = api.store.snapshot()
+    queued = sorted((i for i, d in docs['to_pm'].items() if d.get('status') == 'queued'),
+                    key=_natural)
+    for doc_id in queued:           # every one is checked before any is sent: a bad one sends none
+        why = _refusal(docs, 'to_pm', doc_id, changes)
+        if why:
+            raise why
+    for doc_id in queued:
+        api.store.update('to_pm', doc_id, changes, if_version=_version(docs['to_pm'][doc_id]))
+    return {'ok': True, 'sent': queued, 'sent_at': at if queued else None}
 
 
 def to_pm_reply(api, req):
-    b = _fields(req, ('reply', 'if_version'))
+    b = _fields(req, ('reply', 'ruling', 'if_version'))
     _pin(b)
-    reply = _text(b, 'reply')
+    changes = {'status': 'done', 'done_at': api.clock(), 'reply': _text(b, 'reply')}
+    if _text(b, 'ruling') is not None:
+        changes['ruling'] = b['ruling'].strip()
     doc_id = req.params['id']
     d = api.doc('to_pm', doc_id, b)
     if d.get('status') != 'sent':
         raise _invalid('%s is %s: only a sent item is replied to' % (doc_id, d.get('status')),
                        'status')
-    return api.change('to_pm', doc_id, d,
-                      {'status': 'done', 'done_at': api.clock(), 'reply': reply},
-                      {'status': 'done'})
+    return api.change('to_pm', doc_id, d, changes, req, {'status': 'done'})
 
 
 def inbox_add(api, req):
@@ -504,17 +611,17 @@ def inbox_add(api, req):
     for name in ('ref', 'asked', 'text', 'title', 'repo', 'from'):
         _text(b, name)
     b.update(at=api.clock(), read=False)
-    return api.written(api.store.add('inbox', b))
+    return api.add('inbox', b, req)
 
 
 def inbox_read(api, req):
-    b = _fields(req, ('read', 'if_version'))
+    b = _fields(req, ('read', 'if_version'), flags=('read',))
     _pin(b)
     read = _flag(b, 'read', True)
     doc_id = req.params['id']
     d = api.doc('inbox', doc_id, b)
     changes = {'read': read, 'read_at': api.clock() if read else None}
-    return api.change('inbox', doc_id, d, changes, changes)
+    return api.change('inbox', doc_id, d, changes, req, changes)
 
 
 def backlog(api, req):
@@ -551,12 +658,16 @@ def wait(api, req):
         raise _invalid('timeout is a number of seconds from 0 to %d, not %r' % (WAIT_MAX_S, raw),
                        'timeout')
     want = _q_flag(req, 'pending')
-    items = api.pending() if want else []
+    # pending is read whether asked for or not: it is the read that refuses a closed store,
+    # which Store.wait answers at once and with nothing (a client would loop on it)
+    found = api.pending()
+    items = found if want else []
     if items:
         ch = api.store.changes_since(since)
     else:
         ch = api.store.wait(since, min(timeout, WAIT_MAX_S))
-        items = api.pending() if want else []
+        found = api.pending()
+        items = found if want else []
     return {'revision': ch.revision, 'reset': ch.reset,
             'timed_out': not ch.events and not ch.reset and not items,
             'changes': [{'collection': e.collection, 'id': e.id, 'op': e.op, 'status': e.status}
@@ -566,27 +677,30 @@ def wait(api, req):
 
 def snapshot(api, req):
     revision, docs = api.store.snapshot()
-    views, missing = {}, []
+    views, missing = {}, {}
     for name in VIEWS:
         try:
             views[name] = api.view(name)
-        except Exception:           # noqa: BLE001 - the first paint shows what there is
+        except Exception as e:      # noqa: BLE001 - the first paint shows what there is
             views[name] = None
-            missing.append(name)
+            missing[name] = _reason(e)
     return {'revision': revision, 'collections': docs,
             'pending': [p._asdict() for p in api.store.pending()],
             'views': views, 'unavailable': missing}
 
 
 def health(api, req):
-    out = {'git': None, 'backlog': None}
+    out, missing = {'git': None, 'backlog': None}, {}
     try:
         extra = api.view('health')
-    except HubError:
-        extra = None
+    except Exception as e:          # noqa: BLE001 - health answers whatever a view does
+        extra, missing = None, {'health': _reason(e)}
     if isinstance(extra, dict):
         out.update(extra)
-    out.update(ok=True, version=API_VERSION, revision=api.store.revision, store=api.store.root)
+    out.pop('store', None)
+    out.update(ok=True, version=API_VERSION, revision=api.store.revision, unavailable=missing)
+    if req.role == OWNER:           # where the store is on this machine is the owner's to know
+        out['store'] = api.store.root
     return out
 
 
@@ -611,6 +725,8 @@ ROUTES = (
     _r('POST', '/to_pm', OWNER, to_pm_add),
     _r('POST', '/to_pm/send', OWNER, to_pm_send),
     _r('POST', '/to_pm/{id}/reply', AGENT, to_pm_reply),
+    _r('POST', '/to_pm/{id}/edit', OWNER, to_pm_edit),
+    _r('POST', '/to_pm/{id}/delete', OWNER, to_pm_delete),
     _r('POST', '/inbox', AGENT, inbox_add),
     _r('POST', '/inbox/{id}/read', OWNER, inbox_read),
     _r('GET', '/backlog', ANY, backlog),
