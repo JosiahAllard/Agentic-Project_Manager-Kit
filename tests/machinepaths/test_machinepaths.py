@@ -120,7 +120,7 @@ class APlantedHitFails(PlantedTree):
 
     def test_the_research_tree_and_agent_temp_are_caught(self):
         self.write('notes.md', 'a %s\nb %s\nc tools%sresearch and %%DEV_ROOT%%%sresearch\n'
-                   % ('Z' + ':' + BS + 'research' + BS + 'delta', 'Z' + ':' + BS + BS + 'AgentTemp',
+                   % ('D' + ':' + BS + 'research' + BS + 'notes', 'D' + ':' + BS + BS + 'AgentTemp',
                       BS, BS))
         rc, out = self.run_guard()
         self.assertEqual(rc, 1, out)
@@ -229,13 +229,13 @@ class TheAllowListIsLineScoped(PlantedTree):
 
     def test_the_ledger_constant_passes_on_the_moved_drive(self):
         # The entry follows the line, not the drive.
-        moved = BS.join(('Z' + ':', 'GitHub', 'pm-repo', 'rulings', 'LEDGER.md'))
+        moved = BS.join(('D' + ':', 'GitHub', 'pm-repo', 'rulings', 'LEDGER.md'))
         self.write('tools/backlog.py', "RULINGS_LEDGER = r'%s'\n" % moved)
         rc, out = self.run_guard()
         self.assertEqual(rc, 0, out)
 
     def test_the_settings_entry_follows_the_hook_not_the_root(self):
-        for root in (DRIVE + '/GitHub/beta', 'Z' + ':/GitHub/beta'):
+        for root in (DRIVE + '/GitHub/beta', 'D' + ':/GitHub/beta'):
             self.write('.claude/settings.json',
                        '"command": "python \\"hooks/worktree_guard.py\\" \\"%s\\""\n' % root)
             rc, out = self.run_guard()
@@ -268,7 +268,7 @@ class TheAllowListIsLineScoped(PlantedTree):
 
     def test_a_real_agent_temp_in_a_fixture_file_is_caught(self):
         invented = DRIVE + BS + 'Users' + BS + 'u' + BS + 'AppData'
-        real = 'Z' + ':' + BS + 'AgentTemp' + BS + 'claude' + BS + 'x'
+        real = 'D' + ':' + BS + 'AgentTemp' + BS + 'claude' + BS + 'x'
         self.write('tools/test_paths.py', "A = r'%s'\n" % invented)
         rc, out = self.run_guard()
         self.assertEqual(rc, 0, out)
@@ -302,7 +302,7 @@ class NoBuiltInEntries(PlantedTree):
     and backlog.py ledger) are not ported: with no config those lines are hits like any other."""
 
     def test_a_pm_kit_fallback_line_is_a_hit_without_config(self):
-        self.write('tools/_paths.py', "DEV_ROOT_FALLBACK = '%s'\n" % ('Z' + ':' + BS + BS + 'GitHub'))
+        self.write('tools/_paths.py', "DEV_ROOT_FALLBACK = '%s'\n" % ('D' + ':' + BS + BS + 'GitHub'))
         rc, out = self.run_guard()
         self.assertEqual(rc, 1, out)
         self.assertIn('tools/_paths.py:1:', out)
@@ -424,8 +424,8 @@ class FindNeedsNoConfig(unittest.TestCase):
     def test_every_spelling_is_caught(self):
         D = DRIVE
         for s in (D + '\\GitHub\\Gamma', D + '\\\\GitHub\\\\Gamma', 'c:' + '/github/x',
-                  D + '\\Users\\someone\\AppData', D + '\\\\Users\\\\someone', 'Z:' + '\\AgentTemp\\x',
-                  'z:' + '/GitHub'):
+                  D + '\\Users\\someone\\AppData', D + '\\\\Users\\\\someone', 'D:' + '\\AgentTemp\\x',
+                  'd:' + '/GitHub'):
             self.assertTrue(M.find(s), s)
 
     def test_variables_are_not_caught(self):

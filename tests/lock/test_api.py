@@ -10,13 +10,14 @@ import threading
 import time
 import unittest
 
-from .helpers import OWNER, REPO, StoreCase, agent, claude_of, under_agent_host
+from .helpers import OWNER, REPO, StoreCase, agent, claude_of, clean_env, under_agent_host
 
 if os.name == "nt":
     from kitlib.lock import api
     from kitlib.lock import game
     from kitlib.lock import holds as hl
     from kitlib.lock import layout as lay
+    from kitlib.lock import run as rm
     from kitlib.lock import status as st
     from kitlib.lock import store as st_mod
     from kitlib.lock.store import iso, utc_now
@@ -319,6 +320,24 @@ class Holds(ApiCase):
         self.ok(self.agent_hold(kind="cpu-eval"))
         self.ok(self.agent_hold(kind="cpu-eval"))
         self.err(self.agent_hold(), "busy")
+
+    def test_a_kind_that_is_not_text_is_refused_not_raised(self):
+        for odd in (["x"], {"x": 1}):
+            res = self.agent_hold(kind=odd)
+            self.assertFalse(res["ok"], odd)
+            self.err(res, "invalid")
+
+    def test_an_aliased_kind_makes_a_hold_of_the_canonical_kind_a_run_can_claim(self):
+        with open(self.kinds_path, "w", encoding="utf-8") as f:
+            json.dump({"kinds": {"graph-build": {"cpu": 2, "gpu": 0, "warn_min": 30}},
+                       "aliases": {"worldgraph": {"to": "graph-build", "why": "retired name"}}}, f)
+        h = self.ok(self.agent_hold(kind="worldgraph"))["hold"]
+        self.assertEqual(h["kind"], "graph-build")
+        with rm.slot("worldgraph", "kit", "t", cores=1, hold=h["id"], store=self.store,
+                     wait_s=30, env=clean_env()) as launch:
+            rec = self.store.read("active/%s.json" % launch.id)
+            self.assertEqual(rec["kind"], "graph-build")
+        self.assertEqual(self.store.read("ended/%s.json" % h["id"])["how"], "claimed")
 
     def test_a_bad_kinds_table_is_a_store_error(self):
         with open(self.kinds_path, "w", encoding="utf-8") as f:

@@ -28,7 +28,7 @@ Hold keywords are matched only in the header fields `summary`, `requires` and `e
 
 In the example config the gamma and pm rules match by path and text as well as id, so a new record id is still caught: gamma by `scope:` under `artifacts/models/` or `research/gamma/`, pm by scope on `tools/new_worktree.py` or `tools/sync_base.py` or a summary saying "kit tool" or "the PM takes it". One incident record is caught only by its id:
 
-- BIND-HOPCYCLE (hold live-client). Its text never says it needs a live client ("dispatch margin unmeasured"), so no keyword matches. Its scope also covers unit-tested binding code, and a path rule on `worker/binding/.../binding/client/` would claim other records that need no client (BIND-OVERHEADICON, BINDING-CHILD-SLOTS on the 10-07 store) while missing it, because its scope spans three trees.
+- EX-LINK-CYCLECOST (hold live-client). Its text never says it needs a live client ("dispatch margin unmeasured"), so no keyword matches. Its scope also covers unit-tested link code, and a path rule on `worker/link/.../link/client/` would claim other records that need no client (EX-LINK-ICON, EX-LINK-CHILD-SLOTS on the 10-07 store) while missing it, because its scope spans three trees.
 
 ## Config
 
@@ -38,7 +38,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `backlog_lint`.
 - `repos.<name>.store` (optional): a folder to read instead of the repo's own store; absent, the store the repo's `.kit.json` names (above), so the lint has no default of its own. `ref` (default `.kit.json` `repo.main_branch`, else main or master): the branch a folder store is read on. A `.kit.json` the store cannot load, or a store not in the clone, is a read error, exit 2.
 - `repos.<name>.backlog_cmd` (optional): how a printed fix starts; default `python tools/backlog.py -C <worktree>`.
 - `repos.<name>.rules` (list, first match wins per kind): each has exactly one of `session` (a session name) or `hold` (`owner` or `live-client`), an optional `name`, and at least one selector:
-  - `ids`: fnmatch patterns on the record id (`PVM-*`);
+  - `ids`: fnmatch patterns on the record id (`EX-SIM-*`);
   - `paths`: prefixes; matches when every `scope:` member starts with one of them (`artifacts/models/`), so a record that also touches other areas is not claimed;
   - `areas`: exact `area:` values;
   - `text`: case-insensitive regexes over the text fields (`\bkit tool\b`).

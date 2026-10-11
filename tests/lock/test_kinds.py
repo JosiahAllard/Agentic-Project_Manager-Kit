@@ -57,6 +57,21 @@ class KindsTest(unittest.TestCase):
             kinds.load(self.write({'kinds': {'b': 3}}))
 
 
+class Aliases(KindsTest):
+    def test_load_rejects_a_bad_alias_at_load_time(self):
+        kinds_ = {'a': {'cpu': 1}, 'b': {'cpu': 1}}
+        for aliases in ({'a': {'to': 'b', 'why': 'w'}}, {'x': {'to': 'nope', 'why': 'w'}}):
+            with self.assertRaises(kinds.KindsError):
+                kinds.load(self.write({'kinds': kinds_, 'aliases': aliases}))
+        path = self.write({'kinds': kinds_, 'aliases': {'x': {'to': 'a', 'why': 'w'}}})
+        self.assertEqual(sorted(kinds.load(path)), ['a', 'b'])
+        self.assertEqual(kinds.resolve('x', kinds.load(path), path), 'a')
+
+    def test_a_kind_that_is_not_text_comes_back_unchanged(self):
+        for odd in (['x'], {'x': 1}, None, 3):
+            self.assertEqual(kinds.resolve(odd, {'a': {}}), odd)
+
+
 class GpuValues(KindsTest):
     def test_a_bool_gpu_fails_closed(self):
         # False == 0 and True == 1 in Python: only the int 0 and "pool" are gpu values.

@@ -266,30 +266,30 @@ class ACallerWrongAboutTheBranchIsTold(WorktreeCase):
 
 
 class UppercaseRecordIdBranches(WorktreeCase):
-    """`--existing` resumes `codex/<RECORD-ID>` branches; a new branch stays lowercase; case
+    """`--existing` resumes `codex/` branches named by an uppercase record id; a new branch stays lowercase; case
     twins (folder or branch) are refused, never resolved."""
 
-    BRANCH = 'codex/TOOLS-RECORD-ID'
+    BRANCH = 'codex/EX-RECORD-ID'
 
     def test_existing_resumes_an_uppercase_record_id_branch(self):
         tip = self.make_branch_with_work(self.BRANCH)
         rc, out = self.tool('--existing', self.BRANCH)
         self.assertEqual(rc, 0, out)
-        path = self.slug_path('TOOLS-RECORD-ID')
+        path = self.slug_path('EX-RECORD-ID')
         self.assertEqual(self.run_git(path, 'rev-parse', 'HEAD')[1], tip, out)
         self.assertEqual(self.run_git(path, 'rev-parse', '--abbrev-ref', 'HEAD')[1], self.BRANCH)
-        self.assertEqual([os.path.basename(p) for p in self.worktree_paths()], ['TOOLS-RECORD-ID'])
+        self.assertEqual([os.path.basename(p) for p in self.worktree_paths()], ['EX-RECORD-ID'])
 
     def test_a_new_branch_still_has_to_be_lowercase_first(self):
-        self.assertFalse(new.branch_ok('codex/TOOLS-NEW-ID', existing=False))
-        rc, out = self.cli('codex/TOOLS-NEW-ID')
+        self.assertFalse(new.branch_ok('codex/EX-NEW-ID', existing=False))
+        rc, out = self.cli('codex/EX-NEW-ID')
         self.assertEqual(rc, 2, out)
         self.assertIn('usage:', out)
-        self.assertFalse(new.branch_exists(self.repo, 'codex/TOOLS-NEW-ID'), out)
+        self.assertFalse(new.branch_exists(self.repo, 'codex/EX-NEW-ID'), out)
 
     def test_existing_in_the_wrong_case_is_refused_and_names_the_real_branch(self):
         self.make_branch_with_work(self.BRANCH)
-        rc, out = self.tool('--existing', 'codex/tools-record-id')
+        rc, out = self.tool('--existing', 'codex/ex-record-id')
         self.assertEqual(rc, 1, out)
         self.assertIn('differs only in case', out)
         self.assertIn(self.BRANCH, out)
@@ -304,7 +304,7 @@ class UppercaseRecordIdBranches(WorktreeCase):
         self.assertEqual(self.worktree_paths(), [])
 
     def test_a_folder_that_differs_only_in_case_is_refused_on_any_filesystem(self):
-        os.makedirs(self.slug_path('tools-record-id'))
+        os.makedirs(self.slug_path('ex-record-id'))
         self.make_branch_with_work(self.BRANCH)
         rc, out = self.tool('--existing', self.BRANCH)
         self.assertEqual(rc, 1, out)
@@ -314,7 +314,7 @@ class UppercaseRecordIdBranches(WorktreeCase):
     def test_branch_exists_is_case_exact(self):
         self.make_branch_with_work(self.BRANCH)
         self.assertTrue(new.branch_exists(self.repo, self.BRANCH))
-        self.assertFalse(new.branch_exists(self.repo, 'codex/tools-record-id'))
+        self.assertFalse(new.branch_exists(self.repo, 'codex/ex-record-id'))
 
 
 class BranchExistsProbeIsExact(WorktreeCase):

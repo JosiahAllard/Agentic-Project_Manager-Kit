@@ -34,7 +34,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
   "handoff_glob": "pm-handoff-*.md",
   "reminders_file": "<config-dir>/reminders.json",
   "sessions_file": "<launcher state_dir>/sessions.json",
-  "eng_review": ["SCRIPT-API-*"]
+  "eng_review": ["EX-API-*"]
 }}
 ```
 

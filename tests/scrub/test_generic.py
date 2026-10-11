@@ -271,7 +271,7 @@ class TheChecks(unittest.TestCase):
 
     def test_a_drive_path_in_parentheses_is_found(self):
         old = re.compile(r'(?<![A-Za-z0-9_?(%$])[A-Za-z]:(?:\|/)')
-        line = '(' + 'Z:' + '/GitHub/x)'
+        line = '(' + 'Q:' + '/Projects/demo)'
         self.assertIsNone(old.search(line))
         self.assertIsNotNone(DRIVE.search(line))
         self.assertIsNone(DRIVE.search('(?i:/x)'))

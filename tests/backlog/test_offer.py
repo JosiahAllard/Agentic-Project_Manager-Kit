@@ -89,16 +89,16 @@ class NextOffer(unittest.TestCase):
         self.assertEqual(offer_ids(s)[0], ['AAA'])
 
     def test_a_live_pull_occupies_its_scope(self):
-        s = snap(priced('AAA', scope='binding/**'), priced('BBB', scope='worker/**'),
+        s = snap(priced('AAA', scope='link/**'), priced('BBB', scope='worker/**'),
                  priced('HOLD', state='pulled', pulled_at='2026-10-01', pulled_by='b',
-                        scope='binding/src/X.java'))
+                        scope='link/src/X.java'))
         ids, passed = offer_ids(s, holding=[s.get('HOLD')])
         self.assertEqual(ids, ['BBB'])
         self.assertIn('collides', passed['AAA'])
 
     def test_offers_do_not_collide_with_each_other(self):
-        s = snap(priced('AAA', priority='1', scope='binding/**'),
-                 priced('BBB', priority='2', scope='binding/x/**'),
+        s = snap(priced('AAA', priority='1', scope='link/**'),
+                 priced('BBB', priority='2', scope='link/x/**'),
                  priced('CCC', priority='3', scope='worker/**'))
         ids, passed = offer_ids(s)
         self.assertEqual(ids, ['AAA', 'CCC'])
@@ -118,8 +118,8 @@ class NextOffer(unittest.TestCase):
         self.assertTrue(refusals)
 
     def test_session_filter_and_another_sessions_scope(self):
-        s = snap(priced('AAA', priority='1', scope='binding/**', session='gamma'),
-                 priced('BBB', priority='2', scope='binding/x/**', session='kit'),
+        s = snap(priced('AAA', priority='1', scope='link/**', session='gamma'),
+                 priced('BBB', priority='2', scope='link/x/**', session='kit'),
                  priced('CCC', priority='3', scope='worker/**', session='kit'))
         ids, passed = offer_ids(s, session='kit')
         self.assertEqual(ids, ['CCC'])
@@ -128,8 +128,8 @@ class NextOffer(unittest.TestCase):
         self.assertIn('session `gamma`', omod.not_offered_why(s.get('AAA'), [], 'kit'))
 
     def test_a_seed_goes_first_and_takes_its_scope(self):
-        s = snap(priced('AAA', priority='1', scope='binding/**'),
-                 priced('BBB', priority='5', scope='binding/x/**'))
+        s = snap(priced('AAA', priority='1', scope='link/**'),
+                 priced('BBB', priority='5', scope='link/x/**'))
         (offers, _), _, _ = omod.next_offer(s, [], seeds=['BBB'])
         self.assertEqual([(o.rec.id, o.seeded) for o in offers], [('BBB', True)])
 
