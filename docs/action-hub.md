@@ -31,6 +31,16 @@ repository.
   mirror ("One copy per account" below).
 - The PM reads and writes the store with the ArtifactData tool. Coordinators never write to it;
   they send questions and hand steps to the PM.
+- Before sending a batch with ArtifactData, run `python claude/hub/hub_validate.py --batch <file>
+  [--against <folder of the hub as last read>]` (`kitlib.hubvalidate`): it checks the hub data
+  against the field tables below and exits 1 on an error (a `commands` that is not a list of
+  strings, an unknown `status`, bad `options` or `recommended`, an unreadable batch entry). A
+  warning (a ref to an id that is not in the hub, a repo tag that is no repos/ name or alias, an
+  open PM to-do without `commands`, a `pages`/`page_html` document without a title or `html`) exits
+  0, or 1 with `--strict`; exit 2 is a usage error or an unreadable folder or batch. Refs, repo
+  tags and `page_html` ids are judged only with `--against`. `--dir <folder>`
+  checks a whole out_dir or mirror folder. Nothing in this repository calls ArtifactData, so the
+  PM runs it itself.
 - Inbox section: one button with two tabs, Questions (questions/) and Answers (inbox/). Its badge
   counts open questions plus unread answers; the button reopens the last tab used.
 - The repo filter lists every known repo; see repos/ below.
@@ -53,7 +63,10 @@ aliases again), usage/ and agents/ (posted as at session start).
 - **Save** after each time the PM processes the hub, and before it ends a session: read every
   mirrored collection with ArtifactData into one `out_dir` folder, every page of each (a
   collection read in part loses the rest from the mirror), then
-  `python tools/hub_mirror.py save --from <folder> --commit --push`. A collection folder present
+  `python tools/hub_mirror.py save --from <folder> --commit --push`. Save also runs the checks of
+  `kitlib.hubvalidate` on what it read (repos/, when `<folder>` has it, only to judge repo tags;
+  it is never mirrored) and prints each finding as a `VALIDATE` line; it saves anyway and its exit
+  code is unchanged. A collection folder present
   replaces that collection in the mirror; one absent is left alone. An empty collection needs its
   empty folder: if the read of a collection with no documents leaves no folder in `out_dir`,
   create it before saving, or the documents deleted from the hub stay in the mirror and a
@@ -166,7 +179,7 @@ Logic: the pure functions (`pmNextId`, `pmRows`, `pmBadge`, `pmSendAll`, `pmAler
 |---|---|
 | status | `open` or `done` (the owner ticks it) |
 | title, detail | what to do and why |
-| commands | the exact PowerShell commands, each with a Copy button, on every item that involves running something; to edit a file by hand, a command that opens it |
+| commands | a list of strings (a bare string is an error in `hub_validate.py`): the exact PowerShell commands, each with a Copy button, on every item that involves running something; to edit a file by hand, a command that opens it |
 | repo, from, added_at, refs | provenance |
 | done_at | set by the page when ticked |
 | urgent | true sorts it to the top; the owner can set it on their own items |
