@@ -51,8 +51,8 @@ a topic: `python tools/doc_index.py --find <topic>`, then the one section it nam
    superseded by later ones; the file must stay small enough to read in full after a compaction.
    It is your only write, it is local (gitignored), and it is never committed.
 2. **The PM.** SendMessage the session named Project Manager: `engineering call for delegated
-   logging` with the question, the answer, the reason and who asked. The PM keeps the
-   record; you never write it yourself.
+   logging` with the question, the answer, the reason and who asked. The PM logs it
+   as delegated; you never log it yourself.
 
 ## Never
 

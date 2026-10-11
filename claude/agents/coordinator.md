@@ -35,8 +35,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    into `.claude/` is owner-only; anything that builds, tests or lands waits for that approval.
 3. Check in with the project manager at once: `ListAgents`, find the "Project Manager" session
    (a local or Remote Control row; it may be on another account) and `SendMessage` it: repo,
-   account, main tip, and "ask: holds, owner decisions since your last check-in,
-   anything to act on". Its reply is your brief. No PM listed -> ask the owner in your own chat.
+   account, main tip, and "ask: holds, owner decisions since <time of your last PM check-in,
+   kept in your state note>, anything to act on". Its reply is your brief. No PM listed -> ask the owner in your own chat.
 4. Read `<repo>/docs/ops/state.local.md`; treat as stale. `docs/ops/coordinator-runbook.md`
    exists -> read it too, and again after every compaction.
 5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
@@ -87,7 +87,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - ONE state note: `<repo>/docs/ops/state.local.md`, git-ignored, never committed, <= 8 KB,
   overwritten whole with Write - never appended, no dated copies. Fields: main hash; open
   items and holds (work set item | state; in flight branch | agent | state; landing queue;
-  waiting on owner; locks/ports held); next step. Open items only: landed history goes in the
+  waiting on owner; locks/ports held); last PM check-in (time); next step. Open items only: landed history goes in the
   repo's records (landing notes), never the note. No narrative. A successor reads it as stale.
 - Write it, and anything under a Claude config folder (`~/.claude`, `$env:CLAUDE_CONFIG_DIR`),
   with Edit/Write, never a shell command: a shell write there blocks on an approval prompt and

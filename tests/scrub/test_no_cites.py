@@ -13,7 +13,7 @@ import unittest
 
 from tests.scrub.test_scrub import read_text, tracked_files
 
-PATTERN = re.compile(r'R-[0-9]{3,}|R-nnn|R-<id>|<PM_LEDGER_PATH>|PM R-|--ruling\b')
+PATTERN = re.compile(r'\bR-[0-9]{3,}\b|\bR-nnn|\bR-<id>|<PM_LEDGER_PATH>|\bPM R-|--ruling\b')
 
 PRIVATE = 'the ledger, the PM\'s private record'
 SELF = 'spells the pattern to test it'
@@ -87,7 +87,7 @@ class NoCitesTest(unittest.TestCase):
     def test_the_check_catches_a_new_line_and_a_stale_entry(self):
         files = {'AGENTS.md': 'Rulings are cited as PM ' + RID + '.\n', 'a/b.md': 'fine\n',
                  'templates/x.md': 'R-<id> | text\n', 'docs/ledger.md': RID + ' private\n',
-                 'kitlib/ledger/x.py': 'R-nnnn\n'}
+                 'kitlib/ledger/x.py': 'R-nnnn\n', 'docs/near.md': 'PR-2026 and ERR-1000 and XR-nnn\n'}
         bad, stale = findings(sorted(files), files.get,
                               (('docs/ledger.md', PRIVATE), ('kitlib/ledger/', PRIVATE),
                                ('docs/gone.md', GOING), ('kitlib/gone/', GOING)))
