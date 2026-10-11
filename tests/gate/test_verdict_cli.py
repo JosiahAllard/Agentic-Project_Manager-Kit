@@ -48,7 +48,7 @@ class VerdictCli(GateRepoCase):
         for k, v in a.items():
             if v is not None:
                 args += [k, v]
-        return args + ['--record', 'KIT-X', '--record', 'KIT-Y']
+        return args + ['--record', 'EX-1', '--record', 'EX-2']
 
     def assert_usage(self, got):
         code, out, err = got
@@ -64,7 +64,7 @@ class VerdictCli(GateRepoCase):
         self.assertEqual(code, 0)
         self.assertRegex(out.strip(), r'^QUEUED kit/a %s Low LAND_WITH_FOLLOW-UP \S+Z '
                                       r'reviewer=reviewer/opus reviewer_id=agent-r1 '
-                                      r'records=KIT-X,KIT-Y$' % self.tip)
+                                      r'records=EX-1,EX-2$' % self.tip)
         code, out, _ = self.run_tool('drop', 'kit/a', '--tip', self.tip)
         self.assertEqual((code, out.strip()), (0, 'DROPPED kit/a'))
         code, out, _ = self.run_tool('drop', 'kit/a')

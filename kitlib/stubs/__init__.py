@@ -44,7 +44,8 @@ SHARED = (
     'backlog', 'board', 'checkout_guard', 'codemap', 'commit', 'daily_full', 'doc_budget',
     'doc_index', 'forbidden', 'gate', 'land', 'landed', 'ledger', 'machine_paths', 'new_worktree',
     'pieces', 'preflight', 'pytests', 'redfirst', 'review_pack', 'ruling_cites', 'stack_skill',
-    'sync_base', 'testlist', 'tool_deps', 'trailers', 'worktree_paths', 'worktree_remove',
+    'sync_base', 'testlist', 'tool_deps', 'trailers', 'verdict', 'worktree_paths',
+    'worktree_remove',
 )
 # The kit tools that get no stub: they act on the machine, the owner's files or the kit itself,
 # not on a repository checkout named by -C or the current directory. Every `tools/*.py` command

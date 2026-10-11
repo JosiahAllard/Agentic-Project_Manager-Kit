@@ -14,7 +14,7 @@ def given(branch, tip, base='0' * 10, **over):
     """An entry as the coordinator states it."""
     e = {'branch': branch, 'tip': tip, 'verdict': 'LAND', 'risk': 'Low', 'reviewer': 'reviewer',
          'reviewer_model': 'opus', 'reviewer_id': 'agent-r1', 'author': 'Kit Test / worker',
-         'range': '%s..%s' % (base, tip[:10]), 'session': 'coord-1', 'records': ['KIT-X']}
+         'range': '%s..%s' % (base, tip[:10]), 'session': 'coord-1', 'records': ['EX-1']}
     e.update(over)
     return e
 
