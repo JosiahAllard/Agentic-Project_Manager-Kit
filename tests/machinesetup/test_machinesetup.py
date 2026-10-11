@@ -17,6 +17,7 @@ from unittest import mock
 from kitlib import machinesetup as M
 from kitlib.machinesetup import common, extras, settings
 from kitlib.config import user as kuser
+from tests.home import fence_decoy, temp_home
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'machine_setup.py')
@@ -765,6 +766,25 @@ class Tool(Base):
             with contextlib.redirect_stdout(buf):
                 self.assertEqual(machine_setup.main(argv), 0)
             self.assertIn('machine-setup: nothing to do', buf.getvalue())
+
+    def run_main_capturing_home(self, argv):
+        """machine_setup.main with run mocked out: the Context home it built (or the exception)."""
+        sys.path.insert(0, os.path.dirname(TOOL))
+        self.addCleanup(sys.path.remove, os.path.dirname(TOOL))
+        import machine_setup
+        seen = []
+        with mock.patch.object(M, 'run', lambda ctx, apply=False, out=None: (seen.append(ctx.home), (0, None))[1]):
+            machine_setup.main(argv)
+        return seen
+
+    def test_default_home_is_the_user_home(self):
+        home = temp_home(self)
+        self.assertEqual(self.run_main_capturing_home(['--old-kit', self.old]), [home])
+
+    def test_default_home_goes_through_the_home_fence(self):
+        fence_decoy(self)
+        with self.assertRaises(kuser.HomeFenced):
+            self.run_main_capturing_home(['--old-kit', self.old])
 
 
 if __name__ == '__main__':
