@@ -362,7 +362,7 @@ def main(argv=None):
         rules = rmod.Rules(section['id_grammar'], section['phases'])
         if args.verb == 'migrate':
             return do_migrate(args, top, cfg, rules)
-        ledger = lmod.Ledger(ledger_file, [section['ledger_repo'] or cfg.repo.get('name') or ''], standing)
+        ledger = lmod.Ledger.for_repo(ledger_file, cfg, standing)
         backend = smod.open_backend(top, cfg, fetch=not args.no_fetch)
         store = smod.Store(backend, rules, session=args.session)
         ctx = pmod.Context(store, ledger, top, remote=cfg.remote, main_branch=cfg.main_branch,

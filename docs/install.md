@@ -40,13 +40,15 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 2. **Dry run** `installer/new-repo.ps1` from the kit checkout:
 
    ```
-   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner> -AgentEmail <agents> [-MainBranch main] [-Stack python]
+   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner> -AgentEmail <agents> [-MainBranch main] [-RepoName <name>] [-Stack python]
    ```
 
-   It prints what it would write: `.kit.json` (`"repo".main_branch`, `"owner".email`,
+   It prints what it would write: `.kit.json` (`"repo".main_branch`, `"repo".name`, `"owner".email`,
    `"owner".agent_emails`), the stubs (by `kit_stubs.py write -C <target>`), `.gitignore` and
    `.gitattributes`, a starter `docs/INDEX.md`, and with `-Stack` the stack's `tools/gate.json`.
-   The target must be a checkout's top level. Both emails are required and must differ, or an
+   `"repo".name` is the repository's rulings-ledger column (docs/backlog.md "Owner gates"): `-RepoName`,
+   else the target folder's name lower-cased; either must match `[a-z0-9][a-z0-9-]*` or the script
+   refuses (exit 2). The target must be a checkout's top level. Both emails are required and must differ, or an
    agent's commit could pass as the owner's.
    - `.gitignore` and `.gitattributes` start from `templates/common` (`.claude/worktrees/` and `.codex/worktrees/`
      are the lines that matter: without them the first agent worktree dirties the main checkout and a
