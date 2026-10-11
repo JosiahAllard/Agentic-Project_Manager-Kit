@@ -121,9 +121,43 @@ class TheViewFollowsTheStore(Case):
                                        q="Q-012", parked_at=RECENT),
                               O=record("O", "plain"))
         entry = self.views(("r", repo.root)).get()["repos"][0]
-        self.assertEqual(entry["parked"], [{"id": "P", "t": "waits", "q": "Q-012", "parked_at": RECENT,
-                                            "session": "pm-one"}])
-        self.assertEqual([(o["id"], o["s"]) for o in entry["open"]], [("O", "open"), ("P", "parked")])
+        parked = {"id": "P", "t": "waits", "p": 3, "s": "parked", "q": "Q-012",
+                  "parked_at": RECENT + "T00:00:00+00:00", "parked_at_from": "status",
+                  "branch": None, "session": "pm-one"}
+        self.assertEqual(entry["open"], [{"id": "O", "t": "plain", "p": None, "s": "open"}, parked])
+        self.assertEqual(entry["parked"], [parked])             # the open items with s == "parked"
+
+    def test_a_parked_record_with_no_question_or_session_says_none(self):
+        # Never pulled, added with no session: the keys stay, each None.
+        repo = self.main_repo(P=record("P", "waits", priority="-", state="parked", parked_at=RECENT))
+        item = self.views(("r", repo.root)).get()["repos"][0]["open"][0]
+        self.assertEqual(item, {"id": "P", "t": "waits", "p": None, "s": "parked", "q": None,
+                                "parked_at": RECENT + "T00:00:00+00:00", "parked_at_from": "status",
+                                "branch": None, "session": None})
+
+    def test_a_parked_record_that_still_holds_its_pull_names_the_branch(self):
+        repo = self.main_repo(P=record("P", "waits", priority="2", state="parked", session="pm-one",
+                                       pulled_at=LONG_AGO, pulled_by="kit/some-branch", q="Q-012",
+                                       parked_at=RECENT))
+        item = self.views(("r", repo.root)).get()["repos"][0]["parked"][0]
+        self.assertEqual((item["branch"], item["session"], item["q"]),
+                         ("kit/some-branch", "pm-one", "Q-012"))
+
+    def test_with_no_parked_at_line_the_time_is_the_record_s_last_change(self):
+        repo = self.main_repo(O=record("O", "plain"))
+        self.put(repo, "park P by hand", _when="2026-03-04T05:06:07+00:00",
+                 P=record("P", "waits", state="parked", q="Q-012"))
+        self.put(repo, "another record moves", _when="2026-03-09T00:00:00+00:00", O=record("O", "plainer"))
+        item = self.views(("r", repo.root)).get()["repos"][0]["parked"][0]
+        self.assertEqual((item["parked_at_from"], datetime.datetime.fromisoformat(item["parked_at"])),
+                         ("updated", datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=datetime.timezone.utc)))
+
+    def test_a_git_that_cannot_tell_the_last_change_is_an_error(self):
+        repo = self.main_repo(P=record("P", "waits", state="parked", q="Q-012"))
+        with no_answer("log"):
+            entry = self.views(("r", repo.root)).get()["repos"][0]
+        self.assertIn("last changed", entry["error"])
+        self.assertEqual(entry["open"], [])
 
     def test_two_hub_clients_see_the_same_view(self):
         repo = self.main_repo(A=record("A", "first"))

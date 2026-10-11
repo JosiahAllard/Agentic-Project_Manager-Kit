@@ -2,7 +2,7 @@
 
 Per repository three lists: `open` (every record that is not closed, as kitlib.hubbacklog.snapshot
 gives it), `completed` (closed in the last `days` days: a `closed:` line, or the file deleted) and
-`parked` (the `state: parked` records with their question). Nothing is kept on disk and nothing
+`parked` (the open items whose state is `parked`, with their question: `parked_item`). Nothing is kept on disk and nothing
 here writes to a repository or a store: a view is built from git, and the only memory is this
 process's (`Views`).
 
@@ -27,6 +27,7 @@ from kitlib import config as kconfig
 from kitlib import hubbacklog
 from kitlib.backlog import store as bstore
 from kitlib.backlog.errors import Refusal
+from kitlib.git import cmd as gitcmd
 from kitlib.git import refs
 
 DAYS = hubbacklog.DAYS
@@ -37,6 +38,7 @@ FETCH_FAILED = "the fetch failed"
 _MAIN = object()    # handed to a backend's landed(): a main store answers with it
 _URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+|\S+@[\w.-]+:\S+")
 _EXITED = re.compile(r"\bexited (-?\d+)\b")
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}$")
 
 
 def say(exc, name, root):
@@ -111,13 +113,39 @@ def window(now, days=DAYS):
     return (now.astimezone(datetime.timezone.utc).date() - datetime.timedelta(days=days)).isoformat()
 
 
+def parked_item(rec, root, commit, path):
+    """What a parked record (`rec`, kitlib.hubbacklog.parse's; its file `path` at `commit`) adds to
+    its open item. Every key is always there, None when the record does not hold it:
+
+    - "q": the question it is parked on (the record's `q:` line).
+    - "parked_at", an ISO timestamp, and "parked_at_from": "status" when it is the record's own
+      `parked_at:` line (the day `set-status parked` wrote, given as that day's midnight UTC; the
+      record keeps a day, not a time), else "updated": the committer date of the last commit at or
+      before `commit` that changed the record's file (one `git log -1` through kitlib.git.cmd,
+      with its time limit; RuntimeError when git gives no answer). Both None when neither is known.
+    - "branch" (the record's `pulled_by:`) and "session" (its `session:`). Parking gives up the
+      pull, so a record parked by tools/backlog.py holds no branch."""
+    day = hubbacklog.first(rec, "parked_at")
+    if _DAY.match(day):
+        when, how = day + "T00:00:00+00:00", "status"
+    else:
+        when, why = gitcmd.run_text(["log", "-1", "--format=%cI", commit, "--", path], root)
+        if when is None:
+            raise RuntimeError("cannot read when %s last changed: %s" % (path, why))
+        when, how = (when, "updated") if when else (None, None)
+    return {"q": hubbacklog.first(rec, "q") or None, "parked_at": when, "parked_at_from": how,
+            "branch": hubbacklog.first(rec, "pulled_by") or None,
+            "session": hubbacklog.first(rec, "session") or None}
+
+
 def read_at(name, root, commit, folder, since, days=DAYS):
     """One repository's view from the store at `commit`: {"repo", "days", "open", "completed",
     "parked"}. `since` (YYYY-MM-DD, `window`) is the first closing day `completed` keeps: a
     `closed:` line of that day or later, or a file deleted at or after that day's midnight UTC
     (git is given the full timestamp; a bare date would mean "that day at this time of day").
 
-    A parked entry names no branch: parking gives up the pull, and the record keeps none."""
+    An open item whose state is `parked` also carries `parked_item`'s keys, and "parked" lists
+    those same items: the open items with "s" == "parked"."""
     out = {"repo": name, "days": days, "open": [], "completed": [], "parked": []}
     if commit is None:
         return out
@@ -132,11 +160,11 @@ def read_at(name, root, commit, folder, since, days=DAYS):
                 out["completed"].append({"id": rid, "t": hubbacklog.title(rec), "d": closed})
             continue
         state = hubbacklog.first(rec, "state", "open")
-        out["open"].append({"id": rid, "t": hubbacklog.title(rec), "p": hubbacklog.prio(rec), "s": state})
+        item = {"id": rid, "t": hubbacklog.title(rec), "p": hubbacklog.prio(rec), "s": state}
+        out["open"].append(item)
         if state == "parked":
-            out["parked"].append({"id": rid, "t": hubbacklog.title(rec), "q": hubbacklog.first(rec, "q"),
-                                  "parked_at": hubbacklog.first(rec, "parked_at"),
-                                  "session": hubbacklog.first(rec, "session")})
+            item.update(parked_item(rec, root, commit, "%s/%s.md" % (folder, rid)))
+            out["parked"].append(dict(item))
     for rid, when, t in hubbacklog.deleted(root, commit, folder, since + "T00:00:00+00:00"):
         if rid not in records:  # deleted and later re-added: still in the store
             out["completed"].append({"id": rid, "t": t, "d": when})
