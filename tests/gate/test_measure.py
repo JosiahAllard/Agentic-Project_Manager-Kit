@@ -33,7 +33,7 @@ class Propose(unittest.TestCase):
         self.assertIn('engine-test: warn_min 30 -> 15; cpu medium -> heavy (3 runs)', notes)
 
     def test_unsaturated_runs_stay_medium_and_warn_is_at_least_one(self):
-        hist = [run('cpu-eval', 1, peak=2) for _ in range(3)]
+        hist = [run('cpu-eval', 12, peak=2) for _ in range(3)]     # under 10 s: no cpu sample
         new, _ = measure.propose(TABLE, hist, medium_cores=8)
         self.assertEqual(new['cpu-eval']['cpu'], 'medium')
         self.assertEqual(new['cpu-eval']['warn_min'], 1)
@@ -118,7 +118,10 @@ class IntegerSizes(unittest.TestCase):
 
     def test_runs_without_a_peak_keep_the_size_as_an_integer(self):
         hist = [booked('engine-test', 60, None, cores=2) for _ in range(3)]
-        self.assertEqual(self.prop(hist)[0]['engine-test']['cpu'], 2)
+        new, notes = self.prop(hist)
+        self.assertEqual(new['engine-test']['cpu'], 2)
+        self.assertIn('engine-test: kept (0 cpu sample(s) of 3 finished run(s); 3 needed; skipped: '
+                      '3 without cpu figures); cpu medium -> 2 (its size on this layout)', notes)
 
     def test_every_kind_in_the_proposal_is_a_whole_number(self):
         hist = [booked('engine-test', 60, 2.5, cores=6) for _ in range(3)]
@@ -189,7 +192,7 @@ class OutOfJob(unittest.TestCase):
         self.assertEqual(new['engine-test'], {'cpu': 2, 'gpu': 0, 'warn_min': 30})
         self.assertIn('skipped: 3 %s)' % NO_FIGURES, self.note(notes, 'engine-test'))
         for bad in (None, True, -1, 'x'):
-            hist = [line('engine-test', 60, bad, 2.5) for _ in range(3)]
+            hist = [dict(line('engine-test', 60, 300, 2.5), cpu_s=bad) for _ in range(3)]
             self.assertNotIn('_measured', self.prop(hist)[0]['engine-test'], bad)
         no_peak = [line('engine-test', 60, 300, None) for _ in range(3)]
         self.assertIn('skipped: 3 %s)' % NO_FIGURES,
