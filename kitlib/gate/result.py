@@ -22,8 +22,9 @@ The record (SCHEMA 1), every key always present:
   run_id          one run's id: the running record and its final record share it
   started_at      when the run started; finished_at when it ended, or null while running
                   (UTC, YYYY-MM-DDTHH:MM:SSZ)
-  verdict         running; or final: pass, fail, refused, stuck, busy, usage, not-run (a machine
-                  lock refusal), error (an exception or Ctrl+C ended the run)
+  verdict         running; or final: pass, fail, refused, stuck, busy, usage, landed-ungated (a
+                  landing that landed with commits on top no gate saw; exit LANDED_UNGATED),
+                  not-run (a machine lock refusal), error (an exception or Ctrl+C ended the run)
   code            the exit code gate.py gives that outcome; null for running and error
   log             the run's log folder, or null
   summary         the outcome's verdict line, or the exception for error
@@ -60,7 +61,7 @@ SAFE = frozenset('abcdefghijklmnopqrstuvwxyz0123456789._-')
 DEVICES = frozenset(['con', 'prn', 'aux', 'nul'] + ['com%d' % i for i in range(10)]
                     + ['lpt%d' % i for i in range(10)])
 VERDICTS = {G.OK: 'pass', G.FAILED: 'fail', G.USAGE: 'usage', G.STUCK: 'stuck',
-            G.REFUSED: 'refused', G.BUSY: 'busy'}
+            G.REFUSED: 'refused', G.BUSY: 'busy', G.LANDED_UNGATED: 'landed-ungated'}
 
 
 class ResultError(Exception):

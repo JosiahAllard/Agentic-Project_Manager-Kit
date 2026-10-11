@@ -78,7 +78,6 @@ STEP = Obj({
                           'regex': Field(Regex(), None, 'content that selects')},
                          required=('globs', 'regex'), what='{globs, regex}'),
                      None, 'select by changed file content'),
-    'kill_retry': Field(Bool(), None, 'retry once after killing a hung run'),
     'requires': Field(ListOf(Either(Str(), Argv), nonempty=True), None, 'commands or probe argvs; missing: skip'),
     'requires_strict': Field(Bool(), None, 'a missing requirement fails instead of skipping'),
     'reuse': Field(Either(Bool(), Str(pattern=NAME_RE, what='a group name')), None, 'a landing may reuse its pass from the branch gate of the exact tree; a group name: its group is reused together or not at all'),
