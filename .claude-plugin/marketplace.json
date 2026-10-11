@@ -6,7 +6,7 @@
   },
   "plugins": [
     {
-      "name": "claude-pm-kit",
+      "name": "pm-kit",
       "source": "./",
       "description": "The PM kit: agents, skills and the machine lock MCP server."
     }
