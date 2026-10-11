@@ -589,20 +589,25 @@ def _collisions(rec, holding):
     return lines
 
 
-def landing_merge(root, main_branch, branch):
+def landing_merge(root, main_branch, branch, since=None):
     """The landing merge of `branch` on `main_branch` (`<short sha> <subject>`, the subject
     `Merge <branch>` or `Merge <branch>: <summary>` as kitlib/gate/land.py writes it), or None
-    when its history has none. Failure when git cannot say."""
+    when its history has none. `since` (a `YYYY-MM-DD` day, the record's `pulled_at`) skips a
+    merge committed on an earlier day: an older landing of a branch whose name was later reused.
+    A merge on that day still counts. Failure when git cannot say."""
     want = 'Merge %s' % branch
-    out, why = cmd.run_text(['log', '--merges', '--format=%h %s', '-F', '--grep', want,
+    out, why = cmd.run_text(['log', '--merges', '--format=%h %cs %s', '-F', '--grep', want,
                              'refs/heads/%s' % main_branch, '--'], root)
     if out is None:
         raise Failure('cannot read the history of %s to see whether %s landed: %s'
                       % (main_branch, branch, why))
     for line in out.split('\n'):
-        _sha, _, subject = line.partition(' ')
+        sha, _, rest = line.partition(' ')
+        day, _, subject = rest.partition(' ')
+        if since and day < since:
+            continue
         if subject == want or subject.startswith(want + ': '):
-            return line
+            return '%s %s' % (sha, subject)
     return None
 
 
@@ -613,8 +618,8 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     pull moves to this branch, `pulled_at` restamped, any pre-emption lines kept as the first pull
     wrote them, with the scope-collision warnings a pre-empting pull prints. A failed git probe
     holds the pull (fail closed). A `pulled_by` that landed on the main branch (a `Merge <branch>`
-    merge in its history) is not dead but unclosed: that refuses, and a git that cannot say
-    fails."""
+    merge in its history, committed on or after the `pulled_at` day) is not dead but unclosed:
+    that refuses, and a git that cannot say fails."""
     rid, old = rec.id, rec.get('pulled_by')
     busy = Refusal('`%s` is already in flight - pulled %s by %s'
                    % (rid, rec.get('pulled_at'), old))
@@ -628,7 +633,7 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     if given:
         raise Usage('`%s` is a dead pull of this session (pulled_by %s has no branch): `pull %s` '
                     'takes it over as it stands, with no %s' % (rid, old, rid, ', '.join(given)))
-    merge = landing_merge(ctx.root, ctx.main_branch, old)
+    merge = landing_merge(ctx.root, ctx.main_branch, old, since=rec.get('pulled_at'))
     if merge:
         raise Refusal('`%s` was pulled by %s, which has landed on %s (%s): close the record, do '
                       'not take it over' % (rid, old, ctx.main_branch, merge))

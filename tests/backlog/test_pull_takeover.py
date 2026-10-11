@@ -1,6 +1,7 @@
 """`pull` of a pulled record (plan._plan_takeover): the record's own session takes over a dead
 pull (no branch by its `pulled_by`) without `release --reason`; another session, a live
 `pulled_by` branch, or no session refuses `already in flight` as before."""
+import os
 from unittest import mock
 
 from kitlib.backlog import offer as omod
@@ -84,24 +85,34 @@ class PullTakeover(StoreCase):
         self.assertIn('already in flight', str(cm.exception))
         self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
 
-    def land(self, branch):
-        """A `--no-ff` merge of `branch` on main with the subject a landing writes, then the
-        branch deleted, as a landing and its cleanup leave it."""
+    def land(self, branch, day=EARLIER):
+        """A `--no-ff` merge of `branch` on main with the subject a landing writes, committed at
+        noon UTC on `day`, then the branch deleted, as a landing and its cleanup leave it."""
         self.repo.git('checkout', '-q', '-b', branch)
         self.repo.write('landed/%s.txt' % branch.replace('/', '-'), 'x\n')
         self.repo.commit('work', 'landed')
         self.repo.git('checkout', '-q', 'main')
-        self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge %s: its summary' % branch, branch)
+        when = '%sT12:00:00+0000' % day
+        with mock.patch.dict(os.environ, GIT_COMMITTER_DATE=when, GIT_AUTHOR_DATE=when):
+            self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge %s: its summary' % branch,
+                          branch)
         self.repo.git('branch', '-D', branch)
 
     def test_a_landed_pull_is_refused_not_taken_over(self):
-        self.land(GONE)
+        self.land(GONE)          # on the pulled_at day itself: that still counts as landed
         self.seed(self.pulled('DEAD', GONE))
         with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'DEAD')
         self.assertIn('which has landed on main', str(cm.exception))
         self.assertIn('close the record', str(cm.exception))
         self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
+
+    def test_an_older_landing_of_a_reused_branch_name_does_not_count(self):
+        self.land(GONE, day='2026-09-30')
+        self.seed(self.pulled('DEAD', GONE))
+        change = self.verb('pull', 'DEAD')
+        self.assertIn('took over a dead pull from %s' % GONE, '\n'.join(change.lines))
+        self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
 
     def test_a_landed_branch_of_a_longer_name_does_not_count(self):
         self.land(GONE + '-two')
