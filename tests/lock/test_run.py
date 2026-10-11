@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -59,6 +60,8 @@ def one_usable_slot(case):
                                         "gpu": []}}, OWNER, None)
     return ok[0]
 
+
+WAIT_S = 3600           # a --max-wait no test waits out: Settling ends it on run.py's clock
 
 WRITE_ENV = ("import os,sys; open(sys.argv[1], 'w').write(os.environ.get('MACHINE_LOCK_RUN', '')"
              " + '|' + os.environ.get('MACHINE_LOCK_CPUMASK', ''))")
@@ -413,6 +416,20 @@ class Settling(StoreCase):
         self.assertEqual((self.store.read("queue.json") or {}).get("entries", []), [])
         self.assertEqual(self.store.history_records(), [])
 
+    def waiting(self):
+        """The slugs of the runs waiting in the queue, as queue.json has them."""
+        return [e["slug"] for e in (self.store.read("queue.json") or {}).get("entries", [])
+                if e["state"] == "waiting"]
+
+    def pauses(self, pause, skip=(0.0,)):
+        """Patches kitlib.lock.run's clock while a run books: acquire's pause between looks calls
+        pause(seconds) and does not sleep, and its monotonic clock reads skip[0] seconds ahead.
+        acquire pauses only after a look that left the run in the queue, so what a test does in
+        its first pause happens once the run has joined, however long booking took to get
+        there (no timer to race on a loaded machine)."""
+        return mock.patch.object(rm, "time", types.SimpleNamespace(
+            monotonic=lambda: time.monotonic() + skip[0], sleep=pause, time=time.time))
+
     def test_ctrl_c_while_it_waits_in_the_queue(self):
         one_usable_slot(self)
         with rm.slot("engine-test", "kit", "first", cores=1, store=self.store,
@@ -436,24 +453,30 @@ class Settling(StoreCase):
 
     def test_holds_unreadable_after_it_joined_keep_its_place_until_its_wait_runs_out(self):
         # A run already queued is not refused 10: it takes nothing and looks again, then leaves
-        # the queue at its --max-wait (8).
+        # the queue at its --max-wait (8). The holds go bad at its first pause, and its wait ends
+        # when the clock is moved on after a look that found them bad.
         one_usable_slot(self)
+        said, steps, skip = [], [], [0.0]
+        self.store.say = said.append
+        bad = self.store.path("holds", "h-20261006T120000Z-abcd.json")
 
-        def spoil():
-            with open(self.store.path("holds", "h-20261006T120000Z-abcd.json"), "w") as f:
-                f.write("{")
+        def pause(seconds):
+            steps.append((os.path.exists(bad), self.waiting()))
+            if not os.path.exists(bad):
+                with open(bad, "w") as f:
+                    f.write("{")
+            elif any("it keeps its place and looks again" in text for text in said):
+                skip[0] = WAIT_S
         with rm.slot("engine-test", "kit", "first", cores=1, store=self.store,
                      env=clean_env()):
-            t = threading.Timer(0.5, spoil)
-            t.start()
-            try:
+            with self.pauses(pause, skip):
                 with self.assertRaises(LockError) as cm:
                     rm.book("engine-test", "kit", "second", cores=1, store=self.store,
-                            env=clean_env(), wait_s=2)
-            finally:
-                t.cancel()
+                            env=clean_env(), wait_s=WAIT_S)
         self.assertEqual(cm.exception.code, store_mod.EXIT_TIMEOUT)
         self.assertIn("the holds are unreadable", str(cm.exception))
+        self.assertEqual(steps[0], (False, ["second"]))     # the holds were good until it joined
+        self.assertEqual(steps[-1], (True, ["second"]))     # bad holds seen, and its place kept
         self.assertEqual((self.store.read("queue.json") or {}).get("entries", []), [])
 
     def test_ctrl_c_in_acquire(self):
