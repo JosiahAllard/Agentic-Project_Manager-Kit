@@ -112,10 +112,10 @@ On kit main, none live. Each repo reaches them through stubs.
 
 Per Claude account, once reviewed. Nothing here has been run.
 
-1. Skills: the account's skills currently come from the old kit. Remove that link (junction or copy) from
-   `~/.claude/skills`, then enable the plugin so skills load from `<kit>/skills`
-   (`claude plugin install` from the kit checkout, or add the kit as the account's plugin source).
-   Check with `ListSkills` that the ten names in docs/shipping.md appear once each.
+1. Skills: the account's skills currently come from the old kit. Enable the plugin so skills load from
+   `claude/skills` (`claude plugin install` from the kit checkout, or add the kit as the account's plugin source),
+   then remove the per-skill links as docs/install.md "After the plugin install: remove the per-item junctions" says.
+   Check with `ListSkills` that the twelve names in docs/shipping.md appear once each.
 2. Statusline: in the account's `settings.json`, point `statusLine.command` at
    `optional/usage/statusline-usage.ps1` in the kit checkout (it was the old kit's copy), and
    any scheduled call of `write-usage-status.ps1` at the kit's copy. Confirm the line renders.
