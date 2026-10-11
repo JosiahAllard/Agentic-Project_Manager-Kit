@@ -55,6 +55,20 @@ class AlertTextTest(unittest.TestCase):
         self.assertLessEqual(len(t.encode("utf-8")), 1000)
         self.assertIn("more not shown", t)
 
+    def test_trim_leaves_no_empty_header_or_blank_before_note(self):
+        s = state(topm=[{"id": "P-001", "status": "sent", "kind": "question", "text": "q"}],
+                  todos=[{"id": "T-%03d" % i, "status": "done", "title": "x" * 60} for i in range(30)])
+        full = text(s)
+        first_todo = full.index("To-dos ticked done:")
+        # Room for the To PM section and the note, but for no ticked to-do.
+        mx = len(full[:first_todo].rstrip("\n").encode("utf-8")) + 80
+        t = text(s, mx)
+        self.assertLessEqual(len(t.encode("utf-8")), mx)
+        self.assertNotIn("To-dos ticked done:", t)
+        self.assertIn("P-001", t)
+        self.assertNotIn("\n\n(+", t)
+        self.assertRegex(t, r"\(\+30 more not shown")
+
     def test_short_text_is_not_marked(self):
         self.assertNotIn("more not shown", text(state(todos=[{"id": "T-1", "status": "done", "title": "a"}])))
 
@@ -96,6 +110,18 @@ class SmallFunctionsTest(unittest.TestCase):
         self.assertIn("comment access", js('pmAlertWhy("off", false)', []))
         self.assertIn("editor", js('pmAlertWhy("writers_only", true)', []))
         self.assertTrue(js('pmAlertWhy("surprise", true)', []))
+
+    def test_every_blocked_reason_says_queued_items_are_saved(self):
+        for code, has in [("off", False), ("off", True), ("writers_only", True), ("surprise", True)]:
+            self.assertIn("Your queued items are saved.", js('pmAlertWhy("%s", %s)' % (code, "true" if has else "false"), []), code)
+        self.assertEqual(js('pmAlertWhy("no_session", true)', []),
+                         "No PM session is watching right now, so Send all is blocked. Your queued items are saved; the PM sees sent items at its next hub check.")
+
+    def test_load_banner_lists_only_collections_still_failing(self):
+        self.assertEqual(js("pmLoadBanner(items)", {}), "")
+        t = js("pmLoadBanner(items)", {"todos": "denied", "usage": "offline"})
+        self.assertIn("todos, usage (denied; offline)", t)
+        self.assertNotIn("todos", js("pmLoadBanner(items)", {"usage": "offline"}))
 
     def test_auto_alert_skips_repeat_and_empty(self):
         s = state(todos=[{"id": "T-1", "status": "done", "title": "a"}])

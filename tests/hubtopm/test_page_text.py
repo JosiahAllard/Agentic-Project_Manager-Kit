@@ -20,6 +20,13 @@ class WiringTest(unittest.TestCase):
         n = src.count(".onSnapshot(")
         self.assertEqual(len(re.findall(r"snapFail\(\"\w+\"", src)), n)
 
+    def test_every_good_snapshot_clears_its_banner_entry(self):
+        src = page()
+        for name in re.findall(r"db\.collection\(\"(\w+)\"\)\.onSnapshot\(snap => \{ snapOk\(\"(\w+)\"\);", src):
+            self.assertEqual(name[0], name[1])
+        self.assertEqual(len(re.findall(r"onSnapshot\(snap => \{ snapOk\(", src)), src.count(".onSnapshot("))
+        self.assertIn("delete loadErr[name]", src)
+
     def test_owner_actions_schedule_an_alert(self):
         self.assertGreaterEqual(page().count("ownerActed();"), 4)
 
