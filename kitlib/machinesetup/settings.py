@@ -187,6 +187,8 @@ def survey_pm(plan, ctx):
             plan.refuse('--pm-settings %s is an account settings.json; the PM hook goes only in settings '
                         'the PM session loads' % path)
             return
+    if not _pm_hook_elsewhere(plan, path, ctx):
+        return
     got = _load(plan, path)
     if got is None:
         return
@@ -218,6 +220,55 @@ def survey_pm(plan, ctx):
         {'type': 'command', 'command': exe, 'args': [want.replace('\\', '/')]}]}]}
     if _append(plan, path, data, entry):
         _plan_write(plan, ctx, path, raw, layout, data, ['add the PM SessionStart hook pm_session_start.py'])
+
+
+PM_SETTINGS_PAIR = ('settings.json', 'settings.local.json')
+
+
+def _pm_hook_elsewhere(plan, path, ctx):
+    """False after a refusal: a hook of any event already runs a pm_session_start.py in the other
+    file of path's .claude/settings.json and settings.local.json pair (the PM session loads both)
+    or in an account settings.json (every session on that account loads it). The PM checklist
+    would then run twice in a PM session. An account settings.json that cannot be read is skipped
+    (the settings step refuses it); a sibling that cannot be read is refused."""
+    found = []
+    for name in PM_SETTINGS_PAIR:
+        other = os.path.join(os.path.dirname(path), name)
+        if norm(other) == norm(path) or not os.path.lexists(other):
+            continue
+        try:
+            with open(other, 'rb') as f:
+                _layout, data = read(f.read())
+        except (OSError, ValueError) as e:
+            plan.refuse('--pm-settings %s: cannot read %s to check it runs no PM hook already: %s'
+                        % (path, other, e))
+            return False
+        found += [(other, t) for t in _pm_tokens(data)]
+    for d in ctx.config_dirs:
+        acct = os.path.join(d, 'settings.json')
+        try:
+            with open(acct, 'rb') as f:
+                _layout, data = read(f.read())
+        except (OSError, ValueError):
+            continue
+        found += [(acct, t) for t in _pm_tokens(data)]
+    if not found:
+        return True
+    for where, tok in found:
+        plan.refuse('%s already runs %s; with --pm-settings the PM checklist would run twice in a PM '
+                    'session (remove it there by hand, or leave out --pm-settings)' % (where, tok))
+    return False
+
+
+def _pm_tokens(data):
+    """Every pm_session_start.py a hook of any event in `data` runs."""
+    hooks = data.get('hooks') if isinstance(data, dict) else None
+    out = []
+    for event in sorted(hooks) if isinstance(hooks, dict) else []:
+        for h in _hooks(data, event):
+            out += [t for t in _tokens(h)
+                    if os.path.basename(t.replace('\\', '/')).lower() == 'pm_session_start.py']
+    return out
 
 
 def _load(plan, path):
@@ -274,14 +325,23 @@ def _tokens(h):
 
 
 def _create(path, new):
+    """A new settings.json: written to a .tmp, then renamed onto `path`, which must not exist. The
+    .tmp is removed on any failure."""
     tmp = path + '.machine-setup.tmp'
-    with open(tmp, 'wb') as f:
-        f.write(new)
     try:
-        os.rename(tmp, path)                                         # Windows: refuses an existing file
-    except FileExistsError:
-        os.remove(tmp)
-        raise RuntimeError('%s appeared since the survey; not replaced (run again)' % path)
+        with open(tmp, 'wb') as f:
+            f.write(new)
+        try:
+            os.rename(tmp, path)                                     # Windows: refuses an existing file
+        except FileExistsError:
+            raise RuntimeError('%s appeared since the survey; not replaced (run again)' % path)
+    except BaseException:
+        if os.path.lexists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        raise
 
 
 class _Editor(object):
