@@ -2,17 +2,31 @@
 finding is folded into the branch that found it unless it cannot be; `add` refuses a record whose
 scope overlaps that branch's diff or the scope of a record the branch holds pulled, and records
 where the finding came from and why it was not folded."""
+import json
 import os
 import unittest
+from unittest import mock
 
 from kitlib.backlog import plan as pmod
 from kitlib.backlog.errors import Failure, Refusal, Usage
+from kitlib.git import cmd, refs
 
 from tests.backlog import test_cli, test_verbs
 from tests.backlog.helpers import ADD_FLAGS, TODAY, StoreCase, priced
 
 FOO = 'kit/foo'
 WHY = 'it needs the owner to choose between two formats'
+
+
+class _Wrap(object):
+    """A module stand-in: the functions given override, every other name is the real module's."""
+
+    def __init__(self, real, **over):
+        self._real = real
+        self.__dict__.update(over)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
 
 
 class FoundOn(StoreCase):
@@ -129,6 +143,72 @@ class FoundOn(StoreCase):
             self.add(['docs/y.md'], found_on='kit/a..b')
         self.assertIn('not a branch name', str(cm.exception))
 
+    def test_a_ref_spelling_or_a_case_variant_of_the_code_main_is_usage(self):
+        for name in ('Main', 'MAIN', 'refs/heads/main', 'origin/main', 'refs/remotes/origin/main'):
+            with self.subTest(name=name):
+                with self.assertRaises(Usage) as cm:
+                    self.add(['docs/y.md'], found_on=name)
+                self.assertIn('names the code main', str(cm.exception))
+                self.assertIn('write none', str(cm.exception))
+        for name in ('refs/heads/kit/foo', 'origin/kit/foo', 'refs/remotes/origin/kit/foo',
+                     'remotes/origin/kit/foo'):
+            with self.subTest(name=name):
+                with self.assertRaises(Usage) as cm:
+                    self.add(['docs/y.md'], found_on=name)
+                self.assertIn('write the local branch name `kit/foo`', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
+    def test_a_plain_branch_that_does_not_exist_is_a_note(self):
+        change = self.add(['docs/y.md'], found_on='kit/nowhere')
+        self.assertIn('NOTE: branch kit/nowhere not found; its diff was not compared', change.lines)
+        self.assertIsNotNone(self.get('NEW'))
+
+    def test_an_unreadable_record_fails_the_pulled_scope_check(self):
+        # Store.write refuses an unreadable store first (store.require_readable); the guard's own
+        # check is reached by planning directly.
+        self.seed({'BAD': 'no separator here\n'})
+        with self.assertRaises(Failure) as cm:
+            pmod.plan_add(self.store.load(), self.ctx, 'NEW', 'a defect found while working',
+                          ['docs/y.md'], found_on=FOO, why_not_folded=WHY)
+        self.assertIn('cannot tell which records kit/foo holds pulled', str(cm.exception))
+        self.assertIn('BAD', str(cm.exception))
+
+    def failing(self, module, **over):
+        """Patch plan.py's own `module` (refs or cmd) so the named functions answer as `over`
+        says; every other call goes to the real module."""
+        patch = mock.patch.object(pmod, module, _Wrap(getattr(pmod, module), **over))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def assert_git_failure(self):
+        with self.assertRaises(Failure) as cm:
+            self.add(['docs/y.md'])
+        self.assertIn('git broke', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
+    def test_a_branch_git_cannot_read_fails(self):
+        real = refs.resolve
+        self.failing('refs', resolve=lambda ref, root, **kw: (None, 'git broke')
+                     if ref == 'refs/heads/' + FOO else real(ref, root, **kw))
+        self.assert_git_failure()
+
+    def test_a_code_main_git_cannot_read_fails(self):
+        real = refs.resolve
+        base = refs.default_base(self.repo.root, 'origin', 'main')[0]
+        self.failing('refs', resolve=lambda ref, root, **kw: (None, 'git broke')
+                     if ref == base else real(ref, root, **kw))
+        self.assert_git_failure()
+
+    def test_a_merge_base_git_cannot_find_fails(self):
+        self.failing('refs', merge_base=lambda a, b, root: (None, 'git broke'))
+        self.assert_git_failure()
+
+    def test_a_failed_diff_fails(self):
+        real = cmd.run
+        self.failing('cmd', run=lambda args, root, **kw: (None, 'git broke')
+                     if args[:2] == ['diff', '--no-renames'] else real(args, root, **kw))
+        self.assert_git_failure()
+
     def test_a_machine_path_ref_is_usage(self):
         for d in test_verbs.MachinePaths.DRIVES:
             with self.assertRaises(Usage) as cm:
@@ -165,6 +245,23 @@ class FoundOnCli(unittest.TestCase):
                                 '--found-on', 'kit/orphan', '--why-not-folded', WHY)
         self.assertEqual(rc, 1, out)
         self.assertRegex(out, r'^ERROR: ')
+        self.assertIn('backlog.code_main', out)
+
+    def test_the_code_main_comes_from_backlog_code_main(self):
+        with open(os.path.join(self.repo.root, '.kit.json'), 'w', encoding='utf-8') as f:
+            json.dump({'backlog': {'code_main': 'trunk'}}, f)
+        self.repo.git('add', '.kit.json')
+        self.repo.git('commit', '-q', '-m', 'kit config')
+        rc, out = self.run_tool('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py',
+                                '--found-on', 'Trunk', '--why-not-folded', WHY)
+        self.assertEqual(rc, 2, out)
+        self.assertIn('names the code main', out)
+        # main is an ordinary branch now, measured from trunk, which does not exist
+        rc, out = self.run_tool('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py',
+                                '--found-on', 'main', '--why-not-folded', WHY)
+        self.assertEqual(rc, 1, out)
+        self.assertRegex(out, r'^ERROR: ')
+        self.assertIn('`trunk`', out)
         self.assertIn('backlog.code_main', out)
 
     def test_add_none_is_ok(self):

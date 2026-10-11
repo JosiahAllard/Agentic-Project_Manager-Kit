@@ -242,10 +242,24 @@ def _fold_arguments(ctx, found_on, why_not_folded):
         bad = branch_name_error(found_on, ctx.root)
         if bad:
             raise Usage('bad `--found-on`: %s; write a branch, or `none`' % bad)
-        if found_on == ctx.code_main:
+        bare = _bare_branch(ctx, found_on)
+        if bare.lower() == ctx.code_main.lower():
             raise Usage('`--found-on %s` names the code main: a finding on main has no branch: '
                         'write none' % found_on)
+        if bare != found_on:
+            raise Usage('`--found-on %s` is a ref, not a branch name: write the local branch '
+                        'name `%s`' % (found_on, bare))
     return found_on, text
+
+
+def _bare_branch(ctx, name):
+    """`name` without a `refs/heads/`, `refs/remotes/<remote>/`, `remotes/<remote>/` or
+    `<remote>/` prefix: the local branch a ref spelling means."""
+    for prefix in ('refs/heads/', 'refs/remotes/%s/' % ctx.remote, 'remotes/%s/' % ctx.remote,
+                   '%s/' % ctx.remote):
+        if name.startswith(prefix) and len(name) > len(prefix):
+            return name[len(prefix):]
+    return name
 
 
 def _fold_overlap(snap, ctx, rid, branch, scopes):
