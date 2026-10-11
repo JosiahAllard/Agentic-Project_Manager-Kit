@@ -213,6 +213,17 @@ def current_account(machine, environ=None, home=None):
     return DEFAULT_LABEL
 
 
+def resolve_current(settings, now, environ=None):
+    """(account, note) for `--account current`: current_account over this machine's launcher
+    accounts (`settings.accounts`, `settings.home`). A session whose folder no account lists
+    (DEFAULT_LABEL) falls back to pick, and note says so. LaunchError when no account is signed in."""
+    label = current_account({'launcher': {'accounts': settings.accounts}}, environ=environ, home=settings.home)
+    if label in settings.accounts:
+        return label, None
+    n, _ = pick(settings, now)
+    return n, 'current account not identified; picked %s' % n
+
+
 def explain(rows):
     return ['account %s: %d%% of week, resets %s' % (n, pct, reset.astimezone().strftime('%a %b %d %H:%M'))
             for n, pct, reset in rows]

@@ -44,7 +44,8 @@ def parser():
     s.add_argument('--repo', help='a name in launcher.repos')
     s.add_argument('--repo-path', help='a repo folder')
     s.add_argument('--session', help='a sessions.json key: its repo, agent, stem and brief')
-    s.add_argument('--account')
+    s.add_argument('--account', help='an account number; with --session also "current" (the account this '
+                   'process runs on, else pick-account\'s) or "auto" (pick-account\'s)')
     s.add_argument('--org')
     s.add_argument('--prompt')
     s.add_argument('--brief', help="a standing brief the first message says to read first")
