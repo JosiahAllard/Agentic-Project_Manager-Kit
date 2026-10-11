@@ -175,15 +175,6 @@ class CapReviewTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             coordinatorstart.cap({"cap": {}}, "alpha", TODAY)
 
-    def test_review_session(self):
-        f = coordinatorstart.review_session
-        self.assertEqual(f({"review_session": {"date": "2026-10-06", "name": "rev-1"}}, TODAY),
-                         ["review session today: rev-1"])
-        self.assertIn("fresh reviewers", f({"review_session": {"date": "2026-10-06", "name": None}}, TODAY)[0])
-        self.assertIn("ask the PM", f({"review_session": {"date": "2026-10-05", "name": "x"}}, TODAY)[0])
-        with self.assertRaises(KeyError):
-            f({}, TODAY)
-
 
 STATUS = {"reservations": {"active": [], "upcoming": [
               {"start": "2026-10-06T20:00:00Z", "end": "2026-10-06T22:00:00Z", "start_local": "16:00",
@@ -283,11 +274,10 @@ class ContextTest(unittest.TestCase):
         return coordinatorstart.context(dict(dict(ledger="L.md", repos_root=ROOT), **cfg), **base)
 
     def test_standing_first_then_checks(self):
-        cfg = {"standing": ["wind down"], "cap": {"alpha": [{"cap": 4}]},
-               "review_session": {"date": "2026-10-06", "name": "rv"}}
+        cfg = {"standing": ["wind down"], "cap": {"alpha": [{"cap": 4}]}}
         text = self.build(cfg)
         self.assertEqual(text.split("\n")[:2], ["Coordinator session start:", "- wind down"])
-        for want in ("- rulings newer than R-9010", "- R-9016: d", "- agent cap 4", "- review session today: rv",
+        for want in ("- rulings newer than R-9010", "- R-9016: d", "- agent cap 4",
                      "- machine: free gpu slots 1 of 2"):
             self.assertIn(want, text)
         self.assertNotIn("also running", text)
@@ -311,7 +301,6 @@ class ContextTest(unittest.TestCase):
     def test_missing_config_gives_one_line_per_check(self):
         text = self.build({})
         self.assertIn("could not check cap: cap not configured", text)
-        self.assertIn("could not check review session: review_session not configured", text)
         self.assertNotIn("usage", text.lower())
 
     def test_no_sessions_file_and_no_cwd_match_isolated(self):
@@ -356,7 +345,7 @@ class HookTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         text = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(text.split("\n")[1], "- s")
-        for name in ("rulings", "cap", "review session"):
+        for name in ("rulings", "cap"):
             self.assertIn("could not check %s:" % name, text)
 
     def test_old_role_and_old_config_key_still_work(self):
