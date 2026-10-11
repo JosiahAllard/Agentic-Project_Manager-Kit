@@ -4,7 +4,7 @@ account folder's install from it (docs/plugin-source.md).
   plugin_refresh.py                     DRY RUN: print what --apply would do; writes nothing
   plugin_refresh.py --apply             export, point the marketplace at it, prune, then per account
                                         folder: claude plugin marketplace update pm-kit,
-                                        claude plugin update pm-kit@pm-kit
+                                        claude plugin update pm-kit@pm-kit, in that order
   plugin_refresh.py --migrate [--apply] once per machine, from an install of the kit checkout: per
                                         folder marketplace remove, marketplace add <export root>,
                                         install; lists the old caches (never removes them)
