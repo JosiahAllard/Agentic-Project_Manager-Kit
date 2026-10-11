@@ -56,6 +56,10 @@ _EXITED = re.compile(r"\bexited (-?\d{1,5})\b")
 _TIMED = re.compile(r"\btimed out after \d+ seconds\b")
 _GIT_SAID = re.compile(r"git [\w-]+: ")     # kitlib.hubbacklog.git's and the store's failures
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}$")
+PHRASES = (NO_CHECKOUT, NO_FOLDER, NOT_A_REPO, GIT_NOT_STARTED, GIT_TIMED_OUT, GIT_FAILED, BAD_REF,
+           BAD_STORE, FETCH_FAILED, READ_FAILED)
+_CODED = re.compile("(?:%s|%s)$" % tuple(re.escape(p).replace("%s", r"-?\d{1,5}")
+                                         for p in (GIT_EXITED, FETCH_EXITED)))
 
 
 class ReadError(RuntimeError):
@@ -64,6 +68,11 @@ class ReadError(RuntimeError):
     def __init__(self, said):
         RuntimeError.__init__(self, said)
         self.said = said
+
+
+def fixed(text):
+    """True when `text` is one of PHRASES, whole, or GIT_EXITED / FETCH_EXITED with a number."""
+    return isinstance(text, str) and (text in PHRASES or bool(_CODED.match(text)))
 
 
 def kind(text, default):
@@ -81,9 +90,10 @@ def kind(text, default):
 
 
 def say(exc, root=None):
-    """Why a read of the repository at `root` failed, as a view may show it: a fixed phrase."""
+    """Why a read of the repository at `root` failed, as a view may show it: a fixed phrase. A
+    ReadError's `said` is shown only when it is one (`fixed`); any other text reads READ_FAILED."""
     if isinstance(exc, ReadError):
-        return exc.said
+        return exc.said if fixed(exc.said) else READ_FAILED
     if root and not os.path.isdir(root):
         return NO_FOLDER
     if isinstance(exc, subprocess.TimeoutExpired):
@@ -177,10 +187,11 @@ def parked_day(rec):
 def last_change(root, commit, path=None):
     """The committer date (ISO, with its offset) of the last commit at or before `commit` that
     changed `path`, or of `commit` itself with no path: one `git log -1` through kitlib.git.cmd,
-    with its time limit. None when git gives no answer or names no commit: never an exception."""
+    with its time limit. Never an exception: None when git gives no answer (it could not start,
+    timed out, failed), "" when it answered and named no commit."""
     when, _why = gitcmd.run_text(["log", "-1", "--format=%cI", commit] + (["--", path] if path else []),
                                  root)
-    return when or None
+    return when if when is None else when.strip()
 
 
 def parked_item(rec, changed):
@@ -188,26 +199,30 @@ def parked_item(rec, changed):
     always there, None when the record does not hold it:
 
     - "q": the question it is parked on (the record's `q:` line).
-    - "parked_at" and "parked_at_from". "status": the record's own `parked_at:` line, given as it
-      stands, a bare day YYYY-MM-DD. A bare day means "day only": it is the local calendar day
-      `set-status parked` ran, with no time and no zone, so a page shows the age in whole days.
-      "updated" (no `parked_at:` line, or not a real date): what `changed()` answers, a full ISO
-      timestamp of the record's update (`read_at` gives the one it uses). Both None when
-      `changed()` answers None.
+    - "parked_at" and "parked_at_from", the time and where it is from, one of three:
+      "status": the record's own `parked_at:` line, given as it stands, a bare day YYYY-MM-DD. A
+      bare day means "day only": it is the local calendar day `set-status parked` ran, with no
+      time and no zone, so a page shows the age in whole days.
+      "updated" (no `parked_at:` line, or not a real date): a full ISO timestamp, when the
+      record's own file last changed.
+      "store": a full ISO timestamp, when the store itself last changed. An upper bound only:
+      the record was parked at or before it, so its age is at least what this gives.
+      For the last two `changed()` answers (time, from) (`read_at` gives the one it uses); both
+      None when it has no time.
     - "branch" (the record's `pulled_by:`) and "session" (its `session:`). Parking gives up the
       pull, so a record parked by tools/backlog.py holds no branch."""
     day = parked_day(rec)
     if day:
         when, how = day, "status"
     else:
-        when = changed()
-        how = "updated" if when else None
+        when, how = changed()
+        when, how = (when, how) if when else (None, None)
     return {"q": hubbacklog.first(rec, "q") or None, "parked_at": when, "parked_at_from": how,
             "branch": hubbacklog.first(rec, "pulled_by") or None,
             "session": hubbacklog.first(rec, "session") or None}
 
 
-def read_at(name, root, commit, folder, since, days=DAYS):
+def read_at(name, root, commit, folder, since, days=DAYS, flaws=None):
     """One repository's view from the store at `commit`: {"repo", "days", "open", "completed",
     "parked"}. `since` (YYYY-MM-DD, `window`) is the first closing day `completed` keeps: a
     `closed:` line of that day or later, or a file deleted at or after that day's midnight UTC
@@ -216,26 +231,36 @@ def read_at(name, root, commit, folder, since, days=DAYS):
     An open item whose state is `parked` also carries `parked_item`'s keys, and "parked" lists
     those same items: the open items with "s" == "parked".
 
-    A parked record with no usable `parked_at:` day gets its update time from `last_change` of
-    its own file, for the first PARKED_LOOKUPS such records (in id order) of this build. Past
-    that, and whenever that lookup gives no answer, its time is the store commit's own date
-    (`last_change` with no path, asked once a build): the latest the record can have changed.
-    Still "updated"; None only when git cannot tell that either. No lookup fails the view."""
+    A parked record with no usable `parked_at:` day gets a time from git (`last_change`). The
+    store commit's own date is asked first, once a build, when the first such record is met: the
+    latest any record can have changed, the "store" time. Then the record's own file is asked
+    ("updated"), for the first PARKED_LOOKUPS such records (in id order). The first lookup that
+    gives no answer is the last lookup of this build: one hung git costs one time limit, and
+    every record after it takes the "store" time (None when it was the store's lookup that gave
+    none). No lookup fails the view; one that gave no answer adds a word to `flaws` (a list,
+    the caller's), which says the view is not one to keep for the next read."""
     out = {"repo": name, "days": days, "open": [], "completed": [], "parked": []}
     if commit is None:
         return out
-    spent, store_when = [0], []
+    spent, store_when, failed = [0], [], []
+
+    def ask(path=None):
+        when = last_change(root, commit, path)
+        if when is None:
+            failed.append(True)
+            if flaws is not None:
+                flaws.append("a parked record's time")
+        return when
 
     def changed(path):
-        when = None
-        if spent[0] < PARKED_LOOKUPS:
+        if not store_when:
+            store_when.append(ask())
+        if not failed and spent[0] < PARKED_LOOKUPS:
             spent[0] += 1
-            when = last_change(root, commit, path)
-        if when is None:
-            if not store_when:
-                store_when.append(last_change(root, commit))
-            when = store_when[0]
-        return when
+            when = ask(path)
+            if when:
+                return when, "updated"
+        return store_when[0], "store"
 
     records = hubbacklog.read_store(root, commit, folder)
     for rid, text in sorted(records.items()):
@@ -265,8 +290,10 @@ def repo_view(name, root, now, opener=open_read, fetch=False, days=DAYS, cache=N
     one of this module's fixed phrases, `say`) and "stale". A failed read keeps the lists of the last good read `cache` holds for this
     repository, with "stale": True; with none to keep the lists are empty.
 
-    `cache` ({name: (key, view)}, the caller's) spares the read while the store is at the same
-    commit and the window on the same day. `opened`: what `opener` already answered for this
+    `cache` ({name: (key, view, whole)}, the caller's) spares the read while the store is at the
+    same commit and the window on the same day, when the view it holds is whole: one built while
+    a parked record's lookup gave no answer (`read_at`'s `flaws`) is kept only as the last good
+    lists, and the next read builds it again. `opened`: what `opener` already answered for this
     repository (a fetch round's open), so it is not opened again."""
     view = {"repo": name, "days": days, "open": [], "completed": [], "parked": [], "error": None,
             "stale": False}
@@ -278,12 +305,13 @@ def repo_view(name, root, now, opener=open_read, fetch=False, days=DAYS, cache=N
     try:
         commit, folder = (opened if opened is not None else opener(root, fetch))[:2]
         key = (root, commit, folder, since, days)
-        if held and held[0] == key:
+        if held and held[0] == key and held[2]:
             got = held[1]
         else:
-            got = read_at(name, root, commit, folder, since, days)
+            flaws = []
+            got = read_at(name, root, commit, folder, since, days, flaws)
             if cache is not None:
-                cache[name] = (key, got)
+                cache[name] = (key, got, not flaws)
     except Exception as exc:  # one repository's failure must not hide the others
         if held and held[0][0] == root:
             view.update(copy.deepcopy(held[1]))
@@ -381,18 +409,20 @@ class Views(object):
         return at is not None and 0 <= (self.clock() - at).total_seconds() < self.reuse_s
 
     def _read(self, name, root, now, opened=None):
-        """Read one repository, never beside another read of it: a caller that waited through a
-        read which began after it arrived takes that read's entry and starts no git of its own
-        (a round's read, which brings what it `opened`, always reads). The entry is stamped with
-        the clock after the read, so a slow read does not use up its own `reuse_s`."""
+        """Read one repository, never beside another read of it: a caller takes the entry of a
+        read of this repository that ENDED after the caller arrived (it may have begun before),
+        and starts no git of its own (a round's read, which brings what it `opened`, always
+        reads). The entry is stamped with the clock after the read, so a slow read does not use
+        up its own `reuse_s`; the clock is read before the read is counted, so a clock that
+        raises leaves the waiting callers to read for themselves."""
         seen = self._reads.get(name, 0)
         with self._lock(name):
             held = self._held.get(name)
             if opened is None and held and held[0] == root and self._reads.get(name, 0) != seen:
                 return held[2]
             entry = repo_view(name, root, now, self.opener, False, self.days, self._cache, opened)
-            self._reads[name] = self._reads.get(name, 0) + 1
             self._held[name] = (root, self.clock(), entry)
+            self._reads[name] = self._reads.get(name, 0) + 1
             return entry
 
     def get(self, fresh=False):

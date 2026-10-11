@@ -185,25 +185,54 @@ class TheViewFollowsTheStore(Case):
         self.assertIsNone(entry["error"])
         # The first two (id order) get their own file's day; the rest the store commit's.
         self.assertEqual(self.days_of(entry), [("P1", "updated", 4), ("P2", "updated", 4),
-                                               ("P3", "updated", 9), ("P4", "updated", 9)])
+                                               ("P3", "store", 9), ("P4", "store", 9)])
         paths = [c[0][2] if len(c[0]) > 2 else None for c in looked.call_args_list]
-        self.assertEqual(paths, ["docs/backlog/P1.md", "docs/backlog/P2.md", None])    # None: once
+        self.assertEqual(paths, [None, "docs/backlog/P1.md", "docs/backlog/P2.md"])    # None: once
 
-    def test_a_lookup_that_fails_falls_back_for_that_record_only(self):
-        repo = self.parked_store()
-        real = gitcmd.call
+    def hung(self, *paths):
+        """(patch, asked): under the patch `git log` of each of `paths` (None: the store commit's
+        own) times out; `asked` lists the path of every `git log` run."""
+        real, asked = gitcmd.call, []
 
         def call(args, cwd, *a, **kw):
-            if args[0] == "log" and args[-1] == "docs/backlog/P2.md":
-                return gitcmd.Result(None, b"", "git log timed out after 30 seconds")
+            if args[0] == "log":
+                path = args[-1] if "--" in args else None
+                asked.append(path)
+                if path in paths:
+                    return gitcmd.Result(None, b"", "git log timed out after 30 seconds")
             return real(args, cwd, *a, **kw)
+        return mock.patch.object(gitcmd, "call", call), asked
 
-        with mock.patch.object(gitcmd, "call", call):
+    def test_the_first_lookup_that_gives_no_answer_is_the_last_of_that_read(self):
+        repo = self.parked_store()
+        patch, asked = self.hung("docs/backlog/P2.md")
+        with patch:
             entry = self.views(("r", repo.root)).get()["repos"][0]
         self.assertEqual((entry["error"], entry["stale"], [o["id"] for o in entry["open"]]),
                          (None, False, ["O", "P1", "P2", "P3", "P4"]))
-        self.assertEqual(self.days_of(entry), [("P1", "updated", 4), ("P2", "updated", 9),
-                                               ("P3", "updated", 4), ("P4", "updated", 4)])
+        self.assertEqual(self.days_of(entry), [("P1", "updated", 4), ("P2", "store", 9),
+                                               ("P3", "store", 9), ("P4", "store", 9)])
+        self.assertEqual(asked, [None, "docs/backlog/P1.md", "docs/backlog/P2.md"])    # one time limit
+
+    def test_a_store_lookup_that_gives_no_answer_is_the_only_lookup(self):
+        repo = self.parked_store()
+        patch, asked = self.hung(None)
+        with patch:
+            entry = self.views(("r", repo.root)).get()["repos"][0]
+        self.assertEqual((entry["error"], asked), (None, [None]))
+        self.assertEqual([(p["parked_at"], p["parked_at_from"]) for p in entry["parked"]], [(None, None)] * 4)
+
+    def test_a_view_built_on_a_failed_lookup_is_built_again_on_the_next_read(self):
+        repo = self.parked_store()
+        v = self.views(("r", repo.root))
+        patch, _asked = self.hung("docs/backlog/P1.md")
+        with patch:
+            self.assertEqual(self.days_of(v.get()["repos"][0])[0], ("P1", "store", 9))
+        with mock.patch.object(hubbacklog, "read_store", wraps=hubbacklog.read_store) as read:
+            entry = v.get()["repos"][0]                 # the store did not move; git answers now
+            self.assertEqual(self.days_of(entry), [(p, "updated", 4) for p in ("P1", "P2", "P3", "P4")])
+            self.assertEqual(v.get()["repos"][0], entry)
+            self.assertEqual(read.call_count, 1)        # the whole view is kept as before
 
     def test_a_git_that_cannot_tell_any_change_leaves_the_time_none_not_an_error(self):
         repo = self.main_repo(P=record("P", "waits", state="parked", q="Q-012"))
@@ -295,10 +324,11 @@ STDERR = ("fatal: bad config line 3 in file %s/.gitconfig\n"
 
 def fixed(error):
     """True when `error` is one of the module's fixed phrases, whole, or one with an exit code."""
-    phrases = (backlog.NO_CHECKOUT, backlog.NO_FOLDER, backlog.NOT_A_REPO, backlog.GIT_NOT_STARTED,
-               backlog.GIT_TIMED_OUT, backlog.GIT_FAILED, backlog.BAD_REF, backlog.BAD_STORE,
-               backlog.FETCH_FAILED, backlog.READ_FAILED)
-    codes = [p % n for p in (backlog.GIT_EXITED, backlog.FETCH_EXITED) for n in (1, 128, 129)]
+    phrases = ("no checkout of this repository on this machine", "the repository's folder is missing",
+               "the folder is not a git repository", "git could not be started", "git timed out",
+               "git failed", "the store's ref or the main branch could not be read",
+               "the backlog store could not be opened", "the fetch failed", "the read failed")
+    codes = [p % n for p in ("git exited %s", "the fetch failed (git exited %s)") for n in (1, 128, 129)]
     return error in phrases or error in codes
 
 
@@ -412,10 +442,10 @@ class AnErrorIsAFixedPhrase(Case):
 
     def test_every_error_of_a_broken_machine_is_a_fixed_phrase(self):
         """Whatever git says and wherever it says it, the view holds a phrase of the module's."""
-        for sub in ("for-each-ref", "rev-parse", "log", "config"):
+        for err in (STDERR, "", "git for-each-ref timed out after 30 seconds in %s" % HOME_OF):
             for rc in (None, 1, 128, 129):
-                said = self.error(rc, STDERR, sub)
-                self.assertTrue(said is None or fixed(said), (sub, rc, said))
+                said = self.error(rc, err)      # for-each-ref: every read of a main store asks it
+                self.assertTrue(said is not None and fixed(said), (err, rc, said))
 
 
 class TheCompletedWindow(Case):
@@ -720,15 +750,35 @@ class Fetching(unittest.TestCase):
 
     def test_a_fetch_error_never_carries_the_words_of_what_was_raised(self):
         """Even a stand-in opener that raises git's own words: the class, and an exit code."""
-        self.opener.fail.add("/one")
-        for error, phrase in ((RuntimeError(STDERR), backlog.NO_FOLDER),     # /one is no folder
+        here = tempfile.mkdtemp(prefix="kit-hub-views-there-")      # a folder that is there
+        self.addCleanup(shutil.rmtree, here, True)
+        v = backlog.Views([("one", here)], clock=self.clock, opener=self.opener, reuse_s=0)
+        self.opener.fail.add(here)
+        for error, phrase in ((RuntimeError(STDERR), backlog.READ_FAILED),
+                              (RuntimeError("git fetch: " + STDERR), backlog.GIT_FAILED),
+                              (RuntimeError(STDERR + ": git fetch exited 128"), backlog.GIT_EXITED % 128),
                               (backlog.ReadError(backlog.FETCH_EXITED % 128), backlog.FETCH_EXITED % 128),
                               (backlog.ReadError(backlog.BAD_STORE), backlog.BAD_STORE)):
             self.opener.error = error
-            self.assertEqual(self.v.get(fresh=True)["repos"][0]["fetch_error"], phrase)
-        self.assertEqual(backlog.fetch_say(RuntimeError(STDERR + ": git fetch exited 128")),
-                         backlog.GIT_EXITED % 128)
-        self.assertEqual(backlog.fetch_say(RuntimeError(STDERR)), backlog.READ_FAILED)
+            self.assertEqual(v.get(fresh=True)["repos"][0]["fetch_error"], phrase)
+
+    def test_a_read_error_s_own_words_are_shown_only_when_they_are_a_fixed_phrase(self):
+        here = tempfile.mkdtemp(prefix="kit-hub-views-there-")
+        self.addCleanup(shutil.rmtree, here, True)
+
+        def opener(root, fetch):
+            raise backlog.ReadError(words[0])
+
+        v = backlog.Views([("one", here)], clock=self.clock, opener=opener, reuse_s=0)
+        for said, shown in ((STDERR, "the read failed"),
+                            ("git exited 128 in %s" % HOME_OF, "the read failed"),
+                            ("the fetch failed (git exited %s)" % HOST, "the read failed"),
+                            ("git exited 128", "git exited 128"),
+                            ("the fetch failed (git exited -1)", "the fetch failed (git exited -1)"),
+                            ("git timed out", "git timed out")):
+            words = [said]
+            entry = v.get(fresh=True)["repos"][0]
+            self.assertEqual((entry["error"], entry["fetch_error"]), (shown, shown))
 
     def test_an_opener_that_answers_two_members_is_read_as_not_fetched(self):
         v = backlog.Views([("one", "/one")], clock=self.clock, reuse_s=0,
