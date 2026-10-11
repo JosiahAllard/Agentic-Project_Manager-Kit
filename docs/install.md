@@ -61,8 +61,8 @@ down the longer the machine stays up: docs/windows-token-leak.md.
      (under "add these to docs/INDEX.md"; advice only, never a refusal), for you to add.
    - `-Stack dotnet|godot|java|python` copies `templates/stacks/<stack>/tools/gate.json` to
      `tools/gate.json` (refused if one is there) and adds `"gate": "tools/gate.json"` to
-     `.kit.json`, and copies the stack's other `tools/` files (only Godot has one, `tools/godot.cmd`),
-     keeping any that is there already. It also runs `tools/stack_skill.py install` for the stack's
+     `.kit.json`, and copies the stack's other `tools/` files (dotnet: `tools/dotnet_each.py`; godot:
+     `tools/godot.cmd`; python: `tools/js_tests.py`; java has none), keeping any that is there already. It also runs `tools/stack_skill.py install` for the stack's
      `.claude/skills/**` (only Godot has one, `godot-render-check`): each `.md` has `{kit_root}`
      replaced by the kit's absolute path with forward slashes (the template quotes it, so a space
      is safe), a file already there is kept, and a kit root it cannot write (no
@@ -119,8 +119,8 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 ### What the script does not install
 
 - The stack's other files: `.github/workflows/{quick,full}.yml` (owner-only paths; copy them by
-  hand). `tools/godot.cmd` and the stack's skills (Godot: `.claude/skills/godot-render-check/SKILL.md`,
-  with the kit path written in) are installed.
+  hand). The stack's `tools/` files (see above) and its skills (only Godot has one:
+  `.claude/skills/godot-render-check/SKILL.md`, with the kit path written in) are installed.
 - `templates/common/CLAUDE.md` and the two profile templates (`agent-profile.TEMPLATE.md`,
   `coordinator-profile.TEMPLATE.md`): the repository's rules file and profiles are drafted from
   them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates").
@@ -207,5 +207,5 @@ paths must allow it (`machine_paths.allow`, docs/kit-json.md).
   libraries are `kitlib` modules); the warnings those modes needed. The old tool had no tests.
 - new-repo.ps1: copying `kit\tools\**`, `templates\common` and `templates\stacks\<Stack>`
   wholesale, with placeholder substitution (a repository holds stubs only; `-Stack` installs
-  only the stack's `tools/` files (`gate.json`, and Godot's `godot.cmd`) and its ignore lines); writing the identities
+  only the stack's `tools/` files (`gate.json` and the runners above), its skills and its ignore lines); writing the identities
   into `tools\doc_budget.json` (they go to `.kit.json` "owner").

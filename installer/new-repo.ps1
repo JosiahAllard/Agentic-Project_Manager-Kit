@@ -20,7 +20,7 @@
 #   <Target>\docs\INDEX.md        a starter doc index (templates\common\INDEX.md), only if absent
 #   <Target>\tools\gate.json      with -Stack: templates\stacks\<Stack>\tools\gate.json, only if absent
 #   <Target>\tools\<file>        with -Stack: the stack's other files under templates\stacks\<Stack>\tools
-#                                (Godot: godot.cmd), each only if absent; one already there is kept
+#                                (dotnet: dotnet_each.py, godot: godot.cmd, python: js_tests.py), each only if absent; one already there is kept
 #   <Target>\.claude\skills\...  with -Stack: the stack's skills, by `tools\stack_skill.py install` (Godot:
 #                                godot-render-check), the kit's absolute path written over {kit_root};
 #                                one already there is kept; a kit path it cannot write refuses
@@ -199,7 +199,7 @@ if ($Stack) {
     if (-not (Test-Path -LiteralPath $gateSrc)) { Fail "the kit has no $gateSrc" 2 }
     try { $gateText = [IO.File]::ReadAllText($gateSrc, $utf8) }
     catch { Fail "cannot read $gateSrc - $($_.Exception.Message); nothing was written" }
-    # The stack's other tools files (Godot: godot.cmd); gate.json is handled apart (it must exist before
+    # The stack's other tools files (dotnet_each.py, godot.cmd, js_tests.py, by stack); gate.json is handled apart (it must exist before
     # the stubs are written, and one already there refuses).
     $toolFiles = @(Get-ChildItem -LiteralPath (Join-Path $stackDir 'tools') -File | Where-Object { $_.Name -ine 'gate.json' } |
         ForEach-Object { [pscustomobject]@{ Name = $_.Name; Src = $_.FullName; Dst = (Join-Path $targetFull "tools\$($_.Name)") } })
