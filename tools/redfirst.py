@@ -5,8 +5,9 @@ they go red there - red-first evidence with no in-place mutant (docs/redfirst.md
               [--log-dir DIR]
 
   --tests   a committed test file of --head, repo-relative, optionally ::<filter>; the runner that
-            takes it is the first `.kit.json` "redfirst".runners entry whose glob matches; may be
-            repeated, the values accumulate
+            takes it is the first `.kit.json` "redfirst".runners entry whose glob matches (none
+            written: tests/*test_*.py, then <tools_dir>/*test_*.py run with the tools folder as
+            PYTHONPATH); may be repeated, the values accumulate
   --also    a further committed file of --head checked out with the tests (a new fixture); never run;
             may be repeated
   --base    the pre-change commit; default the merge-base of --head with <remote>/<main branch>
