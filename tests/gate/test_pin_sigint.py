@@ -1,4 +1,4 @@
-"""kitlib.gate.pin and Ctrl+C around the start of the pinned tool (KIT-PIN-CTRLC-POPEN-GAP).
+"""kitlib.gate.pin and Ctrl+C around the start of the pinned tool (docs/gate.md "Pinned tools").
 
 pin._run ignores SIGINT from just before it starts the child until the child exits, so a Ctrl+C
 inside Popen, or between its return and the assignment, cannot give 130 ("the tool did not run")
