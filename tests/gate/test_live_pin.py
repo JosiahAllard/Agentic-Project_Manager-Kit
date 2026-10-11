@@ -230,9 +230,9 @@ class Ensure(unittest.TestCase):
         self.assertEqual(len(slept), 1)
         self.assertTrue(os.path.isdir(folder))
 
-    def test_a_malformed_lease_is_dead_and_the_pin_still_made(self):
-        """A lease with a ctime or pid process.alive cannot take (ValueError, ctypes.ArgumentError)
-        neither stops the pin (it would fail open on every later run) nor holds its export."""
+    def assert_malformed_lease_is_dead(self, **fields):
+        """A lease of another export with `fields` neither stops the pin (it would fail open on
+        every later run) nor holds that export: the real process.alive judges it."""
         pin = _pin()
         other = '0123456789ab'
         stale = os.path.join(self.root, other)
@@ -241,17 +241,25 @@ class Ensure(unittest.TestCase):
             json.dump({'sha': other}, fh)
         leases = os.path.join(self.root, 'leases')
         os.makedirs(leases)
-        bad = {'%s-1.json' % other: {'sha': other * 3 + '0123', 'pid': os.getpid(),
-                                     'ctime': 'not a time'},
-               '%s-2.json' % other: {'sha': other * 3 + '0123', 'pid': 2 ** 40, 'ctime': 1}}
-        for name, data in bad.items():
-            with open(os.path.join(leases, name), 'w', encoding='utf-8') as fh:
-                json.dump(data, fh)
+        with open(os.path.join(leases, '%s-1.json' % other), 'w', encoding='utf-8') as fh:
+            json.dump(dict({'sha': other * 3 + '0123'}, **fields), fh)
         folder, lease, why = pin.ensure(self.k.kit, self.sha, self.root)
         self.assertIsNone(why)
         self.assertTrue(os.path.isdir(folder))
         self.assertEqual(os.listdir(leases), [os.path.basename(lease)])
         self.assertFalse(os.path.exists(stale))
+
+    def test_a_malformed_lease_is_dead_and_the_pin_still_made(self):
+        # process.alive's int(ctime) would raise ValueError out of ensure.
+        self.assert_malformed_lease_is_dead(pid=os.getpid(), ctime='not a time')
+
+    def test_a_lease_pid_past_a_process_id_is_dead(self):
+        # ctypes masks 2**32 + 4 to pid 4, which cannot be opened (access denied): it would read
+        # as live and hold the export for ever.
+        self.assert_malformed_lease_is_dead(pid=2 ** 32 + 4, ctime=1)
+
+    def test_a_lease_with_a_malformed_child_pid_is_dead(self):
+        self.assert_malformed_lease_is_dead(pid=os.getpid(), ctime=None, child_pid='x')
 
     def test_a_lock_held_past_the_wait_is_a_reason_not_an_export(self):
         self.hold_lock()

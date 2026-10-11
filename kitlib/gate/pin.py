@@ -108,7 +108,8 @@ def _run(checkout, tool_file, argv, env, wait_s):
         child_env = dict(env)
         child_env[PINNED_ENV] = sha
         child_env[pluginsource.LIVE_ROOT_ENV] = checkout
-        flags = subprocess._args_from_interpreter_flags()   # this run's -X utf8, -B, -I, -W ...
+        # This run's -X utf8, -B, -I, -W ...: a private helper, so none when it is gone.
+        flags = getattr(subprocess, '_args_from_interpreter_flags', list)()
         if getattr(sys.__stdout__, 'write_through', False):
             flags.append('-u')                              # ... and -u, which that leaves out
         proc = subprocess.Popen([sys.executable] + flags + [tool] + list(argv), env=child_env)
@@ -200,8 +201,9 @@ def _is_int(value):
 
 def _malformed(data):
     """True when the lease is not what _write_lease writes: a pid that is not a positive int a
-    process id can be, a child_pid that is neither that nor absent, or a ctime that is neither an
-    int nor absent (process.alive would raise on it: ValueError, ctypes.ArgumentError)."""
+    process id can be (past 32 bits ctypes masks it to another process's pid, which may read as
+    live), a child_pid that is neither that nor absent, or a ctime that is neither an int nor
+    absent (process.alive's int(ctime) would raise ValueError or TypeError)."""
     if not (_is_int(data.get('pid')) and 0 < data['pid'] <= 0xFFFFFFFF):
         return True
     child = data.get('child_pid')
