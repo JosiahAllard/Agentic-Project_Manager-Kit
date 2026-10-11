@@ -687,7 +687,8 @@ class Tool(Base):
         config folder) proves -OldKit, -HomeDir and -ConfigDir reach the tool; a missing old kit is 2."""
         ps1 = os.path.join(KIT, 'installer', 'machine-setup.ps1')
         missing = os.path.join(self.home, '.claude-none')
-        cmd = ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ps1]
+        cmd = ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ps1,
+               '-Python', sys.executable]
         r = subprocess.run(cmd + ['-OldKit', self.old, '-HomeDir', self.home, '-ConfigDir', missing],
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, M.EXIT_REFUSED, r.stdout + r.stderr)
@@ -696,10 +697,13 @@ class Tool(Base):
         r = subprocess.run(cmd + ['-OldKit', os.path.join(self.root, 'none')], capture_output=True, text=True)
         self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
 
-    def ps1(self, args, env=None):
+    def ps1(self, args, env=None, python=True):
+        """The wrapper, given this interpreter as -Python unless `python` is False (never the
+        `python` alias: tests/machinesetup/test_fresh.py test_no_python_alias_is_started)."""
         ps = os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32', 'WindowsPowerShell', 'v1.0',
                           'powershell.exe')
         ps1 = os.path.join(KIT, 'installer', 'machine-setup.ps1')
+        args = list(args) + (['-Python', sys.executable] if python else [])
         return subprocess.run([ps, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ps1] + args,
                               capture_output=True, text=True, env=env)
 
@@ -719,7 +723,7 @@ class Tool(Base):
         self.assertIn('-OldKit', r.stdout)
         sysdir = os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32')
         env = dict(os.environ, PATH=sysdir + ';' + os.path.join(sysdir, 'WindowsPowerShell', 'v1.0'))
-        r = self.ps1(['-OldKit', self.old], env=env)
+        r = self.ps1(['-OldKit', self.old], env=env, python=False)
         self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
         self.assertIn('no python on PATH', r.stdout)
 

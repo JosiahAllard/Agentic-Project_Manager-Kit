@@ -1,6 +1,7 @@
 """Machine extras (docs/machine-setup.md "Extras"): the machine schedule shortcut, the agents' temp
-folder permissions and the comfy entry point's lock tool. Each is read first and planned only when
-it differs; Host is the Windows side, and tests pass a fake.
+folder permissions and the comfy entry point's lock tool (not in fresh mode: the plugin's lock tool
+is used). Each is read first and planned only when it differs; Host is the Windows side (also the
+`claude` runner that kitlib.machinesetup.plugin migrates each account with), and tests pass a fake.
 """
 import json
 import os
@@ -27,7 +28,8 @@ def _ps_quote(s):
 
 
 class Host(object):
-    """The real machine: PowerShell for shortcuts and the user environment, icacls, guard.py."""
+    """The real machine: PowerShell for shortcuts and the user environment, icacls, guard.py, the
+    `claude` runner."""
 
     def _ps(self, script):
         r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
@@ -84,6 +86,41 @@ class Host(object):
             raise ValueError('guard.py --settings-entry printed no {event: [groups]} object')
         return entry
 
+    def plugin_runner(self, home, claude=None, timeout=None, environ=None):
+        """The `claude` runner of the plugin step: kitlib.pluginsource.claude.Runner (the claude on
+        PATH unless `claude` names one; CLAUDE_CONFIG_DIR set to the folder, removed for ~/.claude,
+        by its env_for), with run_tree as its subprocess.run."""
+        from kitlib.pluginsource import claude as pclaude
+        return pclaude.Runner(home, claude=claude, run_proc=run_tree,
+                              timeout=timeout or pclaude.TIMEOUT, environ=environ)
+
+
+KILL_GRACE = 10
+
+
+def run_tree(cmd, timeout=None, **kw):
+    """subprocess.run for kitlib.pluginsource.claude.Runner, the command's whole process tree in a
+    job (kitlib.proc.job.Job): past `timeout` the job ends every process in it, then
+    subprocess.TimeoutExpired. subprocess.run kills only its direct child, then reads the pipes to
+    their end: a claude installed through npm is a .cmd shim, so that child is cmd.exe and node is
+    its child, which holds the pipe open and keeps run waiting for it. Returns CompletedProcess."""
+    from kitlib.proc import job as kjob
+    j = kjob.Job(kill_on_close=False)
+    try:
+        p = j.start(cmd, **kw)
+        try:
+            out, err = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            j.terminate()
+            try:
+                p.communicate(timeout=KILL_GRACE)
+            except subprocess.TimeoutExpired:
+                pass
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+    finally:
+        j.close()
+
 
 def pythonw():
     """The windowless python beside this one (python.exe -> pythonw.exe), else this one."""
@@ -95,7 +132,10 @@ def pythonw():
 def survey(plan, ctx):
     _shortcut(plan, ctx)
     _acl(plan, ctx)
-    _comfy(plan, ctx)
+    if ctx.fresh:
+        plan.note('extras', '%s left as is in fresh mode: the plugin\'s lock tool is used' % LOCK_ENV)
+    else:
+        _comfy(plan, ctx)
 
 
 def _shortcut(plan, ctx):
@@ -133,7 +173,8 @@ def _shortcut(plan, ctx):
         except (OSError, RuntimeError, ValueError):
             continue
         text = ' '.join(str(other.get(k) or '') for k in ('target', 'args', 'workdir'))
-        if norm(ctx.old_kit) in os.path.normcase(text.replace('/', '\\')) or 'reserve_shortcut.ps1' in text.lower():
+        old = ctx.old_kit and norm(ctx.old_kit) in os.path.normcase(text.replace('/', '\\'))
+        if old or 'reserve_shortcut.ps1' in text.lower():
             plan.note('extras', 'desktop shortcut %s still runs %s; left as is (delete it by hand once '
                                 '"%s" works)' % (n, text.strip(), SHORTCUT[:-4]))
 
