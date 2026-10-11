@@ -1367,6 +1367,11 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
             target, why = None, 'a target that is not literal: %s' % w.text
         elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
             target, why = os.path.normpath(os.path.join(jail.bash_tmp(ctx), w.text[5:])), None
+        elif cmd.shell == sh.PS and PS_PROVIDER_ITEM_RE.match(w.text) and sh.ps_unplaceable(w.text):
+            ps_drive = True                     # ps_provider_item did not skip it: the line may remap the drive
+            target, why = None, ('a PowerShell provider item (%s) on a line that is not only plain cmdlet calls, '
+                                 'so the drive may be remapped to a folder; run the item write in a call of '
+                                 'its own' % w.text)
         elif cmd.shell == sh.PS and sh.ps_unplaceable(w.text):
             ps_drive = True
             target, why = None, 'a PowerShell drive or provider path the guard cannot place: %s' % w.text
@@ -1374,6 +1379,9 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
             target = sh.resolve_path(w.text, cmd.cwd, cmd.shell)
             why = None if target else 'the directory it runs in is unknown' if cmd.cwd is None \
                 else 'a path the text cannot place: %s' % w.text
+            if target is None and cmd.cwd is None and cmd.cwd_ps_drive:
+                ps_drive = True                 # after cd Main:\ or cd Registry::x
+                why = 'the directory it runs in is a PowerShell drive or provider path the guard cannot place'
         if target is None and cmd.cwd is not None and not ps_drive and \
                 ctx.place(cmd.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
             continue                            # a target it cannot place, from a worktree or elsewhere
@@ -1468,7 +1476,7 @@ WILD = re.compile(r'[*?\[]')
 
 def is_root(text, cwd, ctx=None, shell=None):
     """True when `text` names a drive or filesystem root, the user's home, or a variable that is
-    one of those; `shell` the shell whose word it is (sh.resolve_path: FileSystem::C:\\ in PS)."""
+    one of those; `shell` the shell whose word it is (sh.resolve_path: FileSystem::<drive root> in PS)."""
     t = text.strip()
     if not t:
         return False

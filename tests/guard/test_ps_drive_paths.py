@@ -1,8 +1,9 @@
 """PowerShell provider and drive paths (shell.resolve_path with shell PS, shell.ps_unplaceable,
 rules.shell_writes, rules.ps_drive_jail): from a worktree, a write PowerShell sends into the main
-checkout through FileSystem::, a module-qualified FileSystem::, a drive named by more than one
-letter (New-PSDrive Main FileSystem <main>) or another provider is refused, never read as a file
-in the worktree. Bash and cmd words, one-letter drives and relative paths are read as before."""
+checkout through FileSystem::, a module-qualified FileSystem::, a drive named by anything but one
+ASCII letter (New-PSDrive Main FileSystem <main>, 1:, _:) or another provider, or after a cd into
+such a place, is refused, never read as a file in the worktree. Bash and cmd words, one-letter
+drives and relative paths are read as before."""
 import os
 import unittest
 
@@ -73,7 +74,40 @@ class IntoMain(Base):
 
     def test_cd_multi_letter_drive_then_relative_write(self):
         d = self.denied(self.run_ps(r'cd Main:\; New-Item x.txt'), 'main-checkout')
-        self.assertIn('the directory it runs in is unknown', d.reason)
+        self.assertIn('the directory it runs in is a PowerShell drive', d.reason)
+
+    def test_drive_named_by_anything_but_one_ascii_letter(self):
+        # New-PSDrive takes names such as 1, _ or a non-ASCII letter: not a one-letter drive
+        for text in (r'New-Item 1:\x.txt', r'New-Item _:\x.txt', 'New-Item é:\\x.txt',
+                     r'New-PSDrive 1 FileSystem {main}; New-Item 1:\x.txt'):
+            with self.subTest(text):
+                d = self.denied(self.run_ps(text), 'main-checkout')
+                self.assertIn('cannot place', d.reason)
+
+    def test_cd_drive_named_by_anything_but_one_ascii_letter_then_write(self):
+        for text in (r'cd 1:\; New-Item x.txt', r'cd _:\; New-Item x.txt', 'cd é:\\; New-Item x.txt'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+
+    def test_literal_path_filesystem_provider(self):
+        d = self.denied(self.run_ps(r'New-Item -LiteralPath FileSystem::{main}\x.txt'), 'main-checkout')
+        self.assertIn('is in the main checkout', d.reason)
+
+    def test_set_location_and_push_location_filesystem_provider_then_write(self):
+        for text in (r'Set-Location FileSystem::{main}; New-Item x.txt',
+                     r'Set-Location -LiteralPath FileSystem::{main}; New-Item x.txt',
+                     r'Push-Location FileSystem::{main}; New-Item x.txt'):
+            with self.subTest(text):
+                d = self.denied(self.run_ps(text), 'main-checkout')
+                self.assertIn('is in the main checkout', d.reason)
+
+    def test_jailed_session_cd_into_unplaceable_place_then_write(self):
+        # cwd and target are both None after the cd: the jail still refuses (track's cwd_ps_drive)
+        for text in (r'cd Main:\; New-Item x.txt', r'cd Registry::HKCU\x; New-Item x',
+                     r'Set-Location -Path Main:\; New-Item x.txt', r'Push-Location 1:\; New-Item x.txt'):
+            with self.subTest(text):
+                d = self.denied(self.run_ps(text, env=COORDINATOR, sub=False), 'write-jail')
+                self.assertIn('PowerShell drive or provider path', d.reason)
 
     def test_unknown_provider(self):
         # a provider the guard does not know (a module's own, or FileSystem from another module)
@@ -114,6 +148,10 @@ class Unchanged(Base):
 
     def test_owner_session_is_not_refused(self):
         self.allowed(self.run_ps(r'New-Item Main:\x.txt', sub=False))
+        self.allowed(self.run_ps(r'cd Main:\; New-Item x.txt', sub=False))
+
+    def test_jailed_session_cd_back_to_a_known_place_writes_as_before(self):
+        self.allowed(self.run_ps(r'cd Main:\; cd {wt}; New-Item x.txt', env=COORDINATOR, sub=False))
 
     def test_bash_colon_words_are_files_in_the_worktree(self):
         self.allowed(self.run_bash('echo 1 > Main:x.txt'))
@@ -158,7 +196,8 @@ class ResolvePath(unittest.TestCase):
                 self.assertEqual(sh.resolve_path(text, self.CWD, sh.PS), want)
 
     def test_unplaceable(self):
-        for text in ('Main:\\x', 'Main:x', 'Registry::x', 'Foo\\Bar::x', 'FileSystem::rel', 'env:FOO'):
+        for text in ('Main:\\x', 'Main:x', 'Registry::x', 'Foo\\Bar::x', 'FileSystem::rel', 'env:FOO',
+                     '1:\\x', '_:x', 'é:\\x', '12:\\x'):
             with self.subTest(text):
                 self.assertTrue(sh.ps_unplaceable(text))
         for text in ('', 'C:\\x', 'C:x', 'x.txt', '.\\a:b', '\\\\srv\\s', '//srv/s',
