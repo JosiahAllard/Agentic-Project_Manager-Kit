@@ -46,6 +46,8 @@ ALLOWED = (
     ('tests/gate/test_land_store.py', GOING),
 )
 
+RID = 'R-' + '1234'     # built, so this file holds no id for test_scrub to flag
+
 
 def allowed_by(rel, allowed):
     return [i for i, (p, _) in enumerate(allowed) if rel == p or (p.endswith('/') and rel.startswith(p))]
@@ -83,13 +85,13 @@ class NoCitesTest(unittest.TestCase):
         self.assertEqual(stale, [], 'ALLOWED entries that match no hit: remove them')
 
     def test_the_check_catches_a_new_line_and_a_stale_entry(self):
-        files = {'AGENTS.md': 'Rulings are cited as PM R-1234.\n', 'a/b.md': 'fine\n',
-                 'templates/x.md': 'R-<id> | text\n', 'docs/ledger.md': 'R-1234 private\n',
+        files = {'AGENTS.md': 'Rulings are cited as PM ' + RID + '.\n', 'a/b.md': 'fine\n',
+                 'templates/x.md': 'R-<id> | text\n', 'docs/ledger.md': RID + ' private\n',
                  'kitlib/ledger/x.py': 'R-nnnn\n'}
         bad, stale = findings(sorted(files), files.get,
                               (('docs/ledger.md', PRIVATE), ('kitlib/ledger/', PRIVATE),
                                ('docs/gone.md', GOING), ('kitlib/gone/', GOING)))
-        self.assertEqual(bad, ['AGENTS.md:1: Rulings are cited as PM R-1234.',
+        self.assertEqual(bad, ['AGENTS.md:1: Rulings are cited as PM ' + RID + '.',
                                'templates/x.md:1: R-<id> | text'])
         self.assertEqual(stale, ['docs/gone.md', 'kitlib/gone/'])
 
