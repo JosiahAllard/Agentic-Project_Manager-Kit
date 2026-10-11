@@ -29,10 +29,10 @@ whose `reason` is one of REASONS. Checks, in this order; the first that fails is
                         email-not-allowed (stripped and casefolded, not in `emails`)
 
 The signature check never parses the padding. It computes pow(s, e, n), builds the one
-EMSA-PKCS1-v1_5 block that is correct for the key size and the SHA-256 digest of
-`header.payload` as received (00 01, FF to fill, 00, DIGEST_INFO, the digest) and compares the
-two whole with hmac.compare_digest. A block with a short FF run, bytes after the digest or
-another DigestInfo encoding is therefore just a different block.
+PKCS #1 v1.5 encoded block (RFC 8017, section 9.2) that is correct for the key size and the
+SHA-256 digest of `header.payload` as received (00 01, FF to fill, 00, DIGEST_INFO, the digest)
+and compares the two whole with hmac.compare_digest. A block with a short FF run, bytes after
+the digest or another DigestInfo encoding is therefore just a different block.
 
 `keys` is anything with get(kid) giving a JWK object or None: a KeyCache, or a dict in tests.
 
@@ -78,7 +78,7 @@ KEY_TTL_S = 3600                # a good fetch is fresh this long
 REFETCH_S = 60                  # at most one fetch attempt in this long
 STALE_LIMIT_S = 24 * 3600       # cached keys serve this long after the last good fetch
 # DER of DigestInfo{sha256, NULL} up to the 32 digest bytes (RFC 8017, section 9.2, note 1).
-DIGEST_INFO = bytes.fromhex('3031300d060960864801650304020105000420')
+DIGEST_INFO = bytes.fromhex('30 31 30 0d 06 09 60 86 48 01 65 03 04 02 01 05 00 04 20')
 
 REASONS = (
     'bad-team', 'no-audience', 'bad-allow-list', 'no-allowed-emails', 'bad-clock',
@@ -192,7 +192,7 @@ def rsa_key(jwk):
 
 
 def _check_signature(n, e, message, signature):
-    """Raise AccessError unless `signature` is the RSASSA-PKCS1-v1_5 SHA-256 signature of
+    """Raise AccessError unless `signature` is the RS256 (PKCS #1 v1.5, SHA-256) signature of
     `message` under (n, e), a key rsa_key accepted (so the block has room for its FF run). The
     expected block is built and compared whole, never parsed."""
     size = (n.bit_length() + 7) // 8

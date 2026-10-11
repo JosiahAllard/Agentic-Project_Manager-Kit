@@ -113,7 +113,7 @@ def document(*keys):
 
 
 def block(key, message, fill=None, prefix=SHA256_PREFIX, lead=b'', after=b''):
-    """An EMSA-PKCS1-v1_5 block for `message`, as long as the modulus: lead, 00 01, `fill` FF
+    """A PKCS #1 v1.5 encoded block for `message`, as long as the modulus: lead, 00 01, `fill` FF
     bytes (None: as many as fill the block), 00, prefix, the SHA-256 digest, after. The
     defaults give the one correct block; the tests pass the others to build forgeries."""
     tail = b'\x00' + prefix + hashlib.sha256(message).digest() + after

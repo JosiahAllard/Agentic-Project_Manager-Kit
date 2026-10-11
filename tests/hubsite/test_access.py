@@ -162,7 +162,7 @@ class VerifyTest(Case):
             tail = b'\x00' + SHA384_PREFIX + hashlib.sha384(message).digest()
             return K.sign_block(key, b'\x00\x01' + b'\xff' * (K.size(key) - 2 - len(tail)) + tail)
         self.refused('bad-alg', K.token(A, head=K.header(A, alg='RS384'), signer=rs384))
-        self.refused('bad-signature', K.token(A, signer=rs384))     # nor does RS256 take SHA-384
+        self.refused('bad-signature', K.token(A, signer=rs384))     # nor does RS256 take sha384
         for alg in ('RS384', 'RS512', 'PS256', 'ES256', 'HS384', 'EdDSA'):
             with self.subTest(alg=alg):
                 self.refused('bad-alg', K.token(A, head=K.header(A, alg=alg)))
@@ -583,7 +583,7 @@ class VerifyTest(Case):
                          'keys-fetch: status 503')
 
     def test_a_refusal_never_repeats_what_the_client_sent(self):
-        mark = 'ZQXJ-MARK'
+        mark = 'ZQXJ_MARK'
         for text in (mark, mark + '.' + mark, mark + '.' + mark + '.' + mark,
                      K.token(A, head=K.header(A, alg=mark)), K.token(A, head=K.header(A, kid=mark)),
                      K.token(A, K.claims(iss=mark)), K.token(A, K.claims(aud=mark)),
