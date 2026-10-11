@@ -37,7 +37,18 @@ def fixture_env(extra=None):
     env['GIT_CONFIG_GLOBAL'] = os.devnull
     env['GIT_CONFIG_NOSYSTEM'] = '1'
     env.update(extra or {})
+    if 'USERPROFILE' in (extra or {}):
+        env.update(ps_cache_env(env['USERPROFILE']))
     return env
+
+
+def ps_cache_env(home):
+    """{PSModuleAnalysisCachePath: a file under `home`}. Windows PowerShell 5.1 looks the cache
+    up under LOCALAPPDATA, and with a temp home that has none it can write
+    Microsoft/Windows/PowerShell/ModuleAnalysisCache relative to the cwd: a worktree's root, an
+    untracked file that costs the gate its record. Any env that gives a real powershell a temp
+    USERPROFILE carries this."""
+    return {'PSModuleAnalysisCachePath': os.path.join(home, 'PSModuleAnalysisCache')}
 
 
 def rmtree(path):
