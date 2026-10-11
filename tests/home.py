@@ -10,7 +10,15 @@
                      test run without the fence reads an empty temp folder, not the real home.
   TempHomeCase       a TestCase whose every test runs under temp_home (self.home). A subclass
                      with its own setUp calls super().setUp() first.
+  unmarked_env(env)  a copy of `env` (default: os.environ) without the fence's marker (FENCE_ENV):
+                     the environment of a child that must run as a real run does, unfenced. Its
+                     home is the caller's business: a temp folder, unless the child only computes
+                     the home's path.
+  child_home()       a temp folder to be the home of the processes tests start, for a helper that
+                     builds a child's environment and has no test case to clean up with: one per
+                     process, removed at exit.
 """
+import atexit
 import os
 import tempfile
 import unittest
@@ -18,6 +26,17 @@ from unittest import mock
 
 from kitlib.config import user as kuser
 from tests import gitfixture
+
+# The marker the fence's children read (kitlib.config.user.FENCE_ENV), spelled here so that a
+# renamed constant fails a test instead of following it.
+FENCE_ENV = 'KIT_HOME_FENCE'
+
+
+def unmarked_env(env=None):
+    """A copy of `env` (default: os.environ) without the home fence's marker."""
+    out = dict(os.environ if env is None else env)
+    out.pop(FENCE_ENV, None)
+    return out
 
 
 def temp_home(case, prefix='kit-home-'):
@@ -28,6 +47,21 @@ def temp_home(case, prefix='kit-home-'):
     patch.start()
     case.addCleanup(patch.stop)
     return home
+
+
+_CHILD_HOME = []
+
+
+def child_home():
+    """A temp folder for a child's USERPROFILE and HOME: made on first use, and again when a
+    runner has removed it with the unit's temp folder; removed at exit. Every test of this
+    process shares it, so a test whose child writes under its home gives it one of its own
+    (temp_home)."""
+    if not (_CHILD_HOME and os.path.isdir(_CHILD_HOME[0])):
+        home = tempfile.mkdtemp(prefix='kit-child-home-')
+        atexit.register(gitfixture.rmtree, home)
+        _CHILD_HOME[:] = [home]
+    return _CHILD_HOME[0]
 
 
 class TempHomeCase(unittest.TestCase):

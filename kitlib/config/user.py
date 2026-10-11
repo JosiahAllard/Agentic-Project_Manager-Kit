@@ -152,38 +152,142 @@ SCHEMA = {
 
 
 class HomeFenced(BaseException):
-    """home_dir() resolved the real home folder in a process that fence_home() fenced (the kit's
-    tests). A BaseException, so the `except Exception` that isolates a check (pmstart's "could not
-    check" lines, pmwatch's third failure) cannot turn the refusal into a line a test may miss."""
+    """home_dir() resolved a real home folder in a fenced process (the kit's tests and their
+    children): one fence_home() fenced, or one whose environment carries FENCE_ENV. A
+    BaseException, so the `except Exception` that isolates a check (pmstart's "could not check"
+    lines, pmwatch's third failure) cannot turn the refusal into a line a test may miss."""
 
 
 FENCE_MESSAGE = ('home lookup refused under the kit\'s tests: it resolved the real home folder; '
                  'give it an explicit home or folders (a temp folder), or patch USERPROFILE/HOME '
                  'to one (docs/test-tools.md "Home fence")')
-# The real home folder (_home_key) recorded by fence_home(); None: no fence, home_dir() as ever.
+UNPROVEN_MESSAGE = ('home lookup refused under the kit\'s tests: Windows did not name the profile '
+                    'folder (%s), so no home can be shown to be a temp folder (docs/test-tools.md '
+                    '"Home fence")')
+# The fence's marker: the home folder the kit's test run started with, in the environment of the
+# test units (tools/kit_tests.py run_pass) and of a process that imports the tests package
+# (tests/__init__.py), so the tools a test starts inherit it. Set by fence_env only; read by
+# home_dir() only, at each call. Unset or empty: no marker. A real run never has it.
+FENCE_ENV = 'KIT_HOME_FENCE'
+# The real home folder (_home_key) recorded by fence_home(); None: fence_home() was not called.
 _FENCED_HOME = None
+# (real_profile()'s folder, its _real_key) once Windows was asked; None before.
+_PROFILE = None
 
 
 def _home_key(path):
-    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+    """The key two spellings of one folder path share: absolute, normalised, case folded, and
+    without the extended-length prefix (`\\\\?\\`, or `\\\\?\\UNC\\` before a share), which
+    os.path.abspath and os.path.realpath both keep. A share that names a folder of this machine
+    keeps its own key: nothing here resolves it."""
+    path = os.path.abspath(path)
+    if path.startswith('\\\\?\\'):
+        rest = path[4:]
+        path = '\\\\' + rest[4:] if rest[:4].lower() == 'unc\\' else rest
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _real_key(path):
+    """_home_key of the folder `path` really is (os.path.realpath), so a junction, a symlink or a
+    short (8.3) name of a folder has that folder's key. A path that is not there keeps its
+    spelling."""
+    try:
+        return _home_key(os.path.realpath(path))
+    except (OSError, ValueError):
+        return _home_key(path)
+
+
+def _windows_profile():
+    """The user's profile folder as Windows reports it (SHGetKnownFolderPath, FOLDERID_Profile);
+    OSError when it does not. kitlib.lock.store.profile_dir is the same lookup."""
+    import ctypes
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [('d1', wintypes.DWORD), ('d2', wintypes.WORD), ('d3', wintypes.WORD),
+                    ('d4', ctypes.c_ubyte * 8)]
+    folder = GUID(0x5E6C858F, 0x0E22, 0x4760,
+                  (ctypes.c_ubyte * 8)(0x9A, 0xFE, 0xEA, 0x33, 0x17, 0xB6, 0x71, 0x73))
+    get = ctypes.WinDLL('shell32').SHGetKnownFolderPath
+    get.argtypes = [ctypes.POINTER(GUID), wintypes.DWORD, wintypes.HANDLE,
+                    ctypes.POINTER(ctypes.c_wchar_p)]
+    get.restype = ctypes.c_long
+    free = ctypes.WinDLL('ole32').CoTaskMemFree
+    free.argtypes = [ctypes.c_void_p]
+    path = ctypes.c_wchar_p()
+    hr = get(ctypes.byref(folder), 0, None, ctypes.byref(path))
+    try:
+        if hr != 0 or not path.value:
+            raise OSError('SHGetKnownFolderPath(FOLDERID_Profile) failed: 0x%08X' % (hr & 0xFFFFFFFF))
+        return path.value
+    finally:
+        free(path)
+
+
+def _profile():
+    global _PROFILE
+    if _PROFILE is None:
+        path = _windows_profile()
+        _PROFILE = (path, _real_key(path))
+    return _PROFILE
+
+
+def real_profile():
+    """The user's profile folder from Windows, never from the environment: no USERPROFILE or HOME
+    moves it. Asked once per process. It names the folder and reads nothing in it; the fence
+    compares against it, so it is not itself fenced. OSError when Windows does not answer."""
+    return _profile()[0]
+
+
+def fence_env(env):
+    """Mark the environment mapping `env` for the home fence, and return it: FENCE_ENV becomes the
+    home folder this process resolves now, unless `env` already carries a marker (an outer test
+    run's home is kept, so a nested run under a temp home never records the temp home as real) or
+    the home does not expand to an absolute path. A path computation: nothing is read."""
+    if not env.get(FENCE_ENV):
+        h = os.path.expanduser('~')
+        if os.path.isabs(h):
+            env[FENCE_ENV] = os.path.abspath(h)
+    return env
 
 
 def fence_home():
     """Fence this process's home lookups: record the home folder resolved now, after which
     home_dir() raises HomeFenced whenever it resolves to that folder again. tests/__init__.py calls
-    it once, before any test patches the environment; kitlib never does, so a real run is unfenced.
-    Returns the recorded key."""
+    it once, before any test patches the environment; kitlib never does, and a real run carries no
+    FENCE_ENV either, so a real run is unfenced. Returns the recorded key."""
     global _FENCED_HOME
     _FENCED_HOME = _home_key(os.path.expanduser('~'))
     return _FENCED_HOME
 
 
+def _refused(h, marker):
+    """Whether the home `h` is a real one: the folder fence_home() recorded, the one `marker`
+    names, or the profile folder Windows reports, each compared as spelled and as the folder it
+    really is (_real_key). HomeFenced when Windows does not answer: without its profile folder no
+    home is shown to be a temp one."""
+    try:
+        profile, profile_real = _profile()
+    except Exception as e:
+        raise HomeFenced(UNPROVEN_MESSAGE % e)
+    keys = {_home_key(profile), profile_real}
+    for path in (_FENCED_HOME, marker):
+        if path and _home_key(path) not in keys:
+            keys.update((_home_key(path), _real_key(path)))
+    return _home_key(h) in keys or _real_key(h) in keys
+
+
 def home_dir():
     """The user's home folder (os.path.expanduser: USERPROFILE on Windows, HOME elsewhere).
-    HomeFenced when the process is fenced (fence_home) and it resolves to the recorded real home:
-    a test gives an explicit home, or points USERPROFILE/HOME at a temp folder."""
+    HomeFenced in a fenced process (fence_home, or FENCE_ENV in the environment) when it resolves
+    to a real home (_refused): a test gives an explicit home, or points USERPROFILE/HOME at a temp
+    folder, for itself and for the tools it starts. An unfenced process gets the folder as ever:
+    one environment read more, and Windows is not asked."""
     h = os.path.expanduser('~')
-    if _FENCED_HOME is not None and _home_key(h) == _FENCED_HOME:
+    marker = os.environ.get(FENCE_ENV)
+    if _FENCED_HOME is None and not marker:
+        return h
+    if _refused(h, marker):
         raise HomeFenced(FENCE_MESSAGE)
     return h
 
