@@ -151,6 +151,14 @@ agent and skill text is unverified: confirm it in one real loaded session before
 `claude plugin validate` still reports the
 plugin name as reserved (a `claude-` prefix); the name is unchanged and installs.
 
+The plugin carries one hook: the coordinator SessionStart hook, `claude/hooks/hooks.json` (named by
+`"hooks"` in `.claude-plugin/plugin.json`), run in exec form as `pythonw` with
+`${CLAUDE_PLUGIN_ROOT}/claude/hooks/coordinator_session_start.py` as its argument. Each account's
+settings already run that script, so the owner removes the settings SessionStart entry in the same
+step as the install, or it runs twice (`tools/machine_setup.py` notes it, docs/machine-setup.md
+"Settings"). guard.py stays in each account's settings and is never in the plugin (docs/guard.md
+"Go-live"); the PM repo's `pm_session_start.py` stays in that repo's settings.
+
 `tools/backlog.py add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md).
 
