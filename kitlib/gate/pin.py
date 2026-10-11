@@ -109,10 +109,11 @@ def _run(checkout, tool_file, argv, env, wait_s):
         child_env[PINNED_ENV] = sha
         child_env[pluginsource.LIVE_ROOT_ENV] = checkout
         proc = subprocess.Popen([sys.executable, tool] + list(argv), env=child_env)
-        # From here the tool runs: nothing may fail open (that would run it twice).
+        # From here the tool runs: nothing may fail open (that would run it twice), and a Ctrl+C
+        # (the child has it too) only waits for the child: the lease holds until it exits.
         try:
             _write_lease(lease, sha, child=proc.pid)
-        except Exception:               # noqa: BLE001 - this process's lease holds the export
+        except (Exception, KeyboardInterrupt):  # noqa: BLE001 - this process's lease holds it
             pass
         return _wait(proc), None
     finally:

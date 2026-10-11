@@ -22,11 +22,15 @@ from tests.pluginsource import Kit
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DROP = ('KIT_PINNED', 'KIT_LIVE_ROOT')
 
-PROBE = '''import json, os, sys
+PROBE = '''import json, os, sys, time
+if '--slow' in sys.argv:
+    time.sleep(0.5)
+leases = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'pm-kit', 'plugin', 'pins', 'leases')
 with open(sys.argv[1], 'w', encoding='utf-8') as fh:
     json.dump({'file': os.path.abspath(__file__), 'argv': sys.argv[2:],
                'pinned': os.environ.get('KIT_PINNED'),
-               'live': os.environ.get('KIT_LIVE_ROOT')}, fh)
+               'live': os.environ.get('KIT_LIVE_ROOT'),
+               'leases': sorted(os.listdir(leases)) if os.path.isdir(leases) else None}, fh)
 sys.exit(7)
 '''
 
@@ -289,6 +293,24 @@ class Run(unittest.TestCase):
         self.assertEqual(pluginsource.read_marker(folder)['made_by'], pin.MADE_BY)
         self.assertEqual(os.listdir(os.path.join(pins_root(self.places), 'leases')), [])
         self.assertNotIn(pin.PINNED_ENV, self.env)
+
+    def test_ctrl_c_once_the_tool_started_waits_for_it_and_keeps_the_lease(self):
+        """A Ctrl+C after the child started (here: while its lease is rewritten) is not the pin's
+        130: the child has it too, so the pin waits, returns the child's code, and the export's
+        lease holds until the child exits."""
+        pin = _pin()
+        real = pin._write_lease
+
+        def write_lease(path, sha, child=None):
+            if child is not None:
+                raise KeyboardInterrupt
+            return real(path, sha)
+        with mock.patch.object(pin, '_write_lease', side_effect=write_lease):
+            code, said = pin.run(self.tool, [self.out, '--slow'], environ=self.env)
+        self.assertEqual((code, said), (7, None))
+        got = self.read_probe()
+        self.assertEqual(len(got['leases']), 1, got['leases'])
+        self.assertEqual(os.listdir(os.path.join(pins_root(self.places), 'leases')), [])
 
     def test_no_remote_tracking_main_runs_live_without_a_warning(self):
         self.k.repo.git('update-ref', '-d', 'refs/remotes/origin/main')
