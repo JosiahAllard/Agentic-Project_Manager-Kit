@@ -8,7 +8,7 @@ the command line: {"dir": <absolute folder>, "max_age_days": <number, default 3>
 "keep" (default empty) lists relative paths under dir that the sweep never removes: a top-level
 name, or claude/<project>/<session>; * and ? match within one name; case-insensitive. A unit (below)
 is kept when an item names it, a folder holding it, or anything inside it: the sweep never enters a
-unit, so "kit-conductor/r2" keeps all of kit-conductor, and "*/x" keeps every top-level folder.
+unit, so "kit-coordinator/r2" keeps all of kit-coordinator, and "*/x" keeps every top-level folder.
 
 The units are the top-level files and folders of dir, except a folder named "claude": Claude Code
 keeps each session's scratch at claude/<project>/<session>, so each entry of claude/<project> is its
@@ -313,7 +313,7 @@ def _projects(d):
 def is_kept(rel, keep):
     """A keep item names rel ("/"-joined, under dir), a folder holding it, or something inside it:
     name by name over the shorter of the two, case-insensitive, * and ? within one name. The sweep
-    never enters a unit, so an item inside one (kit-conductor/r2) keeps the whole unit."""
+    never enters a unit, so an item inside one (kit-coordinator/r2) keeps the whole unit."""
     parts = rel.lower().split("/")
     for k in keep or ():
         pat = [x for x in k.lower().replace("\\", "/").split("/") if x]
