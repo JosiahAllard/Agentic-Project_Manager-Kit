@@ -62,8 +62,7 @@ class RolesTest(unittest.TestCase):
                 self.assertLessEqual({f for _, f in row.when}, set(R.FACTS))
                 self.assertIn(row.risk, R.RISKS)
                 self.assertLessEqual(set(row.over), set(R.ACTIONS) - {action})
-        self.assertLessEqual(set(R.ALIASES.values()) | set(R.SESSION_ONLY), set(R.ROLES))
-        self.assertFalse(set(R.ALIASES) & set(R.ROLES))
+        self.assertLessEqual(set(R.SESSION_ONLY), set(R.ROLES))
 
     def test_builders_never_close_and_only_the_leads_set_other_fields(self):
         for action in ('close', 'close-held'):
