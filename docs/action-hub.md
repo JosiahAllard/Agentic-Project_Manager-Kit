@@ -74,10 +74,13 @@ aliases again), usage/ and agents/ (posted as at session start).
   `kitlib.hubvalidate` on what it read (repos/, when `<folder>` has it, only to judge repo tags;
   it is never mirrored) and prints each finding as a `VALIDATE` line; it saves anyway and its exit
   code is unchanged. A collection folder present
-  replaces that collection in the mirror; one absent is left alone. An empty collection needs its
+  is brought into the mirror (documents added and changed); a mirror document its folder lacks
+  is kept, and deleted only when save is given `--prune`; a collection folder absent is left
+  alone. Save is refused (exit 1) when the mirror folder holds the hub site's store file
+  (`kitlib.hubsite.store.META_NAME`): the site is the only writer there. An empty collection needs its
   empty folder: if the read of a collection with no documents leaves no folder in `out_dir`,
-  create it before saving, or the documents deleted from the hub stay in the mirror and a
-  restore brings them back. `--commit` commits this save's changed mirror paths through
+  create it and save with `--prune`, or the documents deleted from the hub stay in the mirror
+  and a restore brings them back. `--commit` commits this save's changed mirror paths through
   `kitlib.commit` (tools/commit.py's checks: never a main checkout, refused when anything else is
   already staged or a staged file names a machine path), so the mirror must be in a linked work
   tree on its `.kit.json` main branch, as the PM data worktree is; a work tree of the kit itself
