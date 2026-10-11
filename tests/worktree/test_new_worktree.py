@@ -8,14 +8,16 @@ git children run with the fixture's environment (no global or system git config)
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
 
 from kitlib.config import load
-from kitlib.records import landing
+from kitlib.records import inflight, landing
 from kitlib.worktree import new
 from kitlib.git import cmd as gitcmd
 from tests import gitfixture
@@ -774,6 +776,222 @@ class TheDefaultLock(LandingCase):
         self.assert_refused(*self.tool('fix/fresh'), why='nobody holds the landing lock')
 
 
+class FakeTime(object):
+    """time.sleep and time.monotonic for create(): sleep moves the clock, then runs `on_sleep`
+    (what happens elsewhere while the tool waits)."""
+
+    def __init__(self, on_sleep=None):
+        self.now, self.slept, self.on_sleep = 0.0, [], on_sleep
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, s):
+        self.slept.append(s)
+        self.now += s
+        if self.on_sleep is not None:
+            self.on_sleep()
+
+
+def in_flight_config(**in_flight):
+    return {'repo': {'main_branch': 'master'},
+            'landing': {'lock_file': 'git:' + LOCK_NAME, 'in_flight': in_flight}}
+
+
+class InFlightCase(LandingCase):
+    CONFIG = in_flight_config()
+
+    def create(self, wait=True, on_sleep=None, branch='fix/fresh'):
+        """new.create on a fake clock: `(code, output, said while waiting, FakeTime)`."""
+        t, said = FakeTime(on_sleep), []
+        got = new.create(self.repo, branch, wait=wait, say=said.append, sleep=t.sleep,
+                         clock=t.clock)
+        return got.code, '\n'.join(got.lines), said, t
+
+
+class InFlightWait(InFlightCase):
+    """"landing".in_flight {}: the kit landing lock held before the fetch is waited for, so a
+    landing that pushes meanwhile is in the new branch; the bound and --no-wait go on with a line."""
+
+    def test_waits_for_a_held_lock_then_bases_on_the_pushed_landing(self):
+        merge = self.land('one')
+        record = self.hold()
+
+        def the_lander_pushes_and_releases():
+            self.assertEqual(self.git('push', '-q', 'origin', 'master')[0], 0)
+            self.lock().release(record['token'])
+        rc, out, said, t = self.create(on_sleep=the_lander_pushes_and_releases)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.git('rev-parse', 'fix/fresh')[1], merge)
+        self.assertEqual(len(said), 1, said)
+        self.assertTrue(said[0].startswith('landing   in flight: the landing lock %s is held: '
+                                           % self.lock_path()), said)
+        self.assertIn('waiting up to 100s (--no-wait goes on now)', said[0])
+        self.assertIn('landing   done after 10s', out)
+        self.assertIn('branch    fix/fresh from master @ %s' % merge[:7], out)
+        self.assertNotIn('landing   in progress', out)
+        self.assertEqual(t.slept, [10])
+
+    def test_at_the_bound_it_goes_on_from_pushed_and_names_the_holder(self):
+        pushed = self.origin()
+        self.land('one')
+        self.hold()
+        rc, out, said, t = self.create()
+        self.assert_based_on_origin(rc, out, pushed)
+        self.assertIn('landing   still in flight after 100s, going on without it: the landing lock ',
+                      out)
+        self.assertIn('feat/landing', out)
+        self.assertEqual(sum(t.slept), 100)
+        self.assertTrue(any(l.startswith('landing   still waiting after 60s of 100s: ')
+                            for l in said), said)
+
+    def test_no_wait_says_so_and_never_sleeps(self):
+        pushed = self.origin()
+        self.land('one')
+        self.hold()
+        rc, out, said, t = self.create(wait=False)
+        self.assert_based_on_origin(rc, out, pushed)
+        self.assertIn('landing   in flight, not waited for (--no-wait): the landing lock ', out)
+        self.assertEqual((said, t.slept), ([], []))
+
+    def test_nothing_in_flight_never_waits_and_says_nothing(self):
+        rc, out, said, t = self.create()
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('landing ', out)
+        self.assertEqual((said, t.slept), ([], []))
+
+    def test_the_wait_s_bound_is_read(self):
+        self.configure(in_flight_config(wait_s=30))
+        self.hold()
+        out, said, t = self.create()[1:]
+        self.assertIn('waiting up to 30s', said[0])
+        self.assertIn('still in flight after 30s', out)
+        self.assertEqual(sum(t.slept), 30)
+
+    def test_a_run_the_branch_checks_refuse_never_waits(self):
+        self.hold()
+        self.git('branch', 'fix/taken')
+        for branch, existing, why in (('fix/taken', False, 'branch exists already: fix/taken'),
+                                      ('fix/absent', True, 'no such branch: fix/absent')):
+            t, said = FakeTime(), []
+            got = new.create(self.repo, branch, existing=existing, say=said.append,
+                             sleep=t.sleep, clock=t.clock)
+            out = '\n'.join(got.lines)
+            self.assertEqual(got.code, new.REFUSED, out)
+            self.assertIn(why, out)
+            self.assertNotIn('landing ', out)
+            self.assertEqual((said, t.slept), ([], []))
+
+    def test_the_cli_takes_no_wait(self):
+        self.land('one')
+        self.hold()
+        rc, out = self.cli('--no-wait', 'fix/fresh')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('landing   in flight, not waited for (--no-wait): ', out)
+        self.assertIn('branch    fix/fresh from pushed origin/master', out)
+
+
+class InFlightUnsetNeverWaits(LandingCase):
+    """No "landing".in_flight (the default): a held lock is read as before and nothing waits."""
+
+    def test_a_held_lock_is_not_waited_for(self):
+        pushed = self.origin()
+        self.land('one')
+        self.hold()
+
+        def never(_s):
+            raise AssertionError('slept with "landing".in_flight unset')
+        got = new.create(self.repo, 'fix/fresh', sleep=never)
+        out = '\n'.join(got.lines)
+        self.assert_based_on_origin(got.code, out, pushed)
+        self.assertNotIn('in flight', out)
+
+
+class InFlightCommand(InFlightCase):
+    """"landing".in_flight.command: a repository's own landing lock. Asked again after the fetch, a
+    command that says (or cannot tell) a landing is in flight takes the landing exception, as a held
+    kit lock does; exit 1 leaves the refusal as it was. --no-wait keeps these runs off the clock."""
+
+    def use(self, code):
+        self.configure(in_flight_config(command=['{python}', '-c', code]))
+
+    def test_in_flight_takes_the_landing_exception(self):
+        self.use('print("lander: feat/x merging")')
+        pushed = self.origin()
+        merge = self.land('one')
+        rc, out, _said, _t = self.create(wait=False)
+        self.assert_based_on_origin(rc, out, pushed)
+        self.assertIn('landing   in flight, not waited for (--no-wait): lander: feat/x merging', out)
+        self.assertIn('landing   in progress: landing.in_flight.command: lander: feat/x merging', out)
+        self.assertNotEqual(self.git('merge-base', '--is-ancestor', merge, 'fix/fresh')[0], 0)
+
+    def test_cannot_tell_is_in_flight(self):
+        self.use('import sys; sys.exit(3)')
+        pushed = self.origin()
+        self.land('one')
+        rc, out, _said, _t = self.create(wait=False)
+        self.assert_based_on_origin(rc, out, pushed)
+        self.assertIn('cannot tell: ', out)
+        self.assertIn('exited 3, treated as in flight', out)
+
+    def test_none_in_flight_still_refuses_and_says_what_it_asked(self):
+        self.use('print("no landing"); raise SystemExit(1)')
+        self.land('one')
+        rc, out, said, t = self.create()
+        self.assert_refused(rc, out, why='nobody holds the landing lock')
+        self.assertIn('; landing.in_flight.command: no landing, so the difference is no landing', out)
+        self.assertEqual((said, t.slept), ([], []))
+
+    def test_in_flight_but_origin_does_not_resolve_refuses_naming_the_landing(self):
+        self.use('print("lander")')
+        self.run_git(self.origin_dir, 'config', 'receive.denyDeleteCurrent', 'ignore')
+        self.assertEqual(self.git('push', '-q', 'origin', '--delete', 'master')[0], 0)
+        self.git('update-ref', '-d', 'refs/remotes/origin/master')
+        rc, out, _said, _t = self.create(wait=False)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('refused   a landing is in flight, but origin/master did not resolve', out)
+        self.assertFalse(os.path.exists(self.slug_path('fresh')), out)
+
+    def counted(self, code):
+        """use(code) with every run of the command counted: returns a function giving the count."""
+        tally = os.path.join(tempfile.mkdtemp(), 'runs.txt')
+        self.addCleanup(shutil.rmtree, os.path.dirname(tally), True)
+        self.use('open(r"%s", "a").write("x"); %s' % (tally, code))
+
+        def runs():
+            if not os.path.exists(tally):
+                return 0
+            with open(tally, encoding='utf-8') as fh:
+                return len(fh.read())
+        return runs
+
+    def test_equal_refs_never_ask_the_command_after_the_fetch(self):
+        runs = self.counted('print("lander: feat/x merging")')
+        tip = self.origin()
+        rc, out, _said, _t = self.create(wait=False)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(runs(), 1, 'asked once before the fetch, never after: refs equal')
+        self.assertNotIn('landing   in progress', out)
+        self.assertNotIn('(none)', out)
+        self.assertIn('branch    fix/fresh from master @ %s' % tip[:7], out)
+
+    def test_each_look_gets_only_what_is_left_of_wait_s(self):
+        self.configure(in_flight_config(command=['{python}', '-c', 'print("lander")'], wait_s=20))
+        self.land('one')
+        given = []
+        real = inflight.run
+
+        def run(argv, cwd, timeout):
+            given.append(timeout)
+            return real(argv, cwd, timeout)
+        with mock.patch.object(inflight, 'run', run):
+            rc, out, _said, t = self.create()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(sum(t.slept), 20)
+        # before the fetch: 20 s left, then 10, then none (the minimum); after it, the minimum
+        self.assertEqual(given, [20, 10, inflight.LOOK_MIN_S, inflight.LOOK_MIN_S])
+
+
 class BehindCountOnAKilledGit(unittest.TestCase):
     def test_a_killed_ancestor_check_is_not_behind(self):
         from kitlib.git import cmd
@@ -825,7 +1043,7 @@ class ChooseBase(unittest.TestCase):
 
 class ConfigKeys(WorktreeCase):
     """The `.kit.json` keys it reads: "repo".remote / worktrees_dir / tools_dir / main_branch and
-    "landing".lock_file. "new_worktree" takes no key. A refused configuration exits 2, nothing made."""
+    "landing".lock_file / in_flight. "new_worktree" takes no key. A refused configuration exits 2, nothing made."""
 
     def assert_config_refused(self, data, why):
         self.configure(data)
@@ -848,6 +1066,14 @@ class ConfigKeys(WorktreeCase):
 
     def test_an_unknown_key_refuses(self):
         self.assert_config_refused({'new_worktree': {'landing_minutes': 90}}, 'landing_minutes')
+
+    def test_in_flight_shapes_that_refuse(self):
+        for bad, why in (({'wait_s': 3601}, 'wait_s'), ({'wait_s': -1}, 'wait_s'),
+                         ({'wait_s': '100'}, 'wait_s'), ({'command': []}, 'command'),
+                         ({'command': 'python x.py'}, 'command'), ({'wait': 5}, 'wait'),
+                         ([], 'in_flight')):
+            with self.subTest(bad=bad):
+                self.assert_config_refused({'landing': {'in_flight': bad}}, why)
 
     def test_the_remote_defaults_to_origin(self):
         self.git('remote', 'rename', 'origin', 'upstream')

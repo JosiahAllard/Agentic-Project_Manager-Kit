@@ -4,6 +4,7 @@ Ported from the PM kit's test_sync_base.py. The fixture is a MAIN checkout parke
 branch, a LINKED worktree every case works in, and a real bare remote the base is pushed to:
 sync_base fetches <remote> <base> itself and merges only a hash on the fetched branch (P27).
 """
+import importlib.util
 import json
 import os
 import subprocess
@@ -12,7 +13,9 @@ import unittest
 from unittest import mock
 
 from kitlib import syncbase
+from kitlib.config import load as load_config
 from kitlib.git import cmd as gitcmd
+from kitlib.records import landing
 from tests.gitfixture import NAME, EMAIL, TempRepo, fixture_env
 from tests.realgit import real_git
 
@@ -663,6 +666,128 @@ class ConfiguredToolsDir(SyncCase):
         target = self.stage_clean()
         self.write('docs/rows.md', 'dirty\n')
         self.assertIn('python devtools/commit.py', self.out(self.sync(target)))
+
+
+class FakeTime(object):
+    """time.sleep and time.monotonic for sync(): sleep moves the clock, then runs `on_sleep`."""
+
+    def __init__(self, on_sleep=None):
+        self.now, self.slept, self.on_sleep = 0.0, [], on_sleep
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, s):
+        self.slept.append(s)
+        self.now += s
+        if self.on_sleep is not None:
+            self.on_sleep()
+
+
+class WaitsForALandingInFlight(SyncCase):
+    """"landing".in_flight {}: a held kit landing lock before the fetch is waited for; still
+    exactly the named hash is merged, and one note says the fetched base is past it."""
+
+    CONFIG = {'repo': {'main_branch': 'master'}, 'landing': {'in_flight': {}}}
+
+    def lock(self):
+        return landing.LandingLock.for_config(self.main, load_config(self.main))
+
+    def stage_a_landing(self):
+        """`work` behind a pushed target; a lander's merge on master after it, unpushed, its lock
+        held. Returns (target, the landing merge, the lock record)."""
+        target = self.stage_clean()
+        self.git('switch', '-q', '-c', 'landing', self.BASE)
+        self.add_commit('docs/landed.md', 'landed\n', 'the landed branch')
+        self.git('switch', '-q', self.BASE)
+        self.git('merge', '-q', '--no-ff', '-m', 'lander merge, not pushed yet', 'landing')
+        merge = self.head()
+        self.git('switch', '-q', 'work')
+        return target, merge, self.lock().take('full', ['landing'])
+
+    def sync_on(self, target, t, wait=True):
+        said = []
+        done = syncbase.sync(self.repo, target, self.MODEL, '--model', None, wait=wait,
+                             say=said.append, sleep=t.sleep, clock=t.clock)
+        return done, self.out(done), said
+
+    def test_it_waits_merges_exactly_the_target_and_notes_the_base_moved_past_it(self):
+        target, merge, record = self.stage_a_landing()
+
+        def the_lander_pushes_and_releases():
+            self.push_base()
+            self.lock().release(record['token'])
+        t = FakeTime(the_lander_pushes_and_releases)
+        done, text, said = self.sync_on(target, t)
+        self.assertEqual(done.code, syncbase.OK, text)
+        self.assertEqual(len(said), 1, said)
+        self.assertTrue(said[0].startswith('landing   in flight: the landing lock '), said)
+        self.assertIn('landing   done after 10s', text)
+        self.assertEqual(self.git('rev-parse', 'HEAD^2'), target)
+        self.assertFalse(self.merged(merge), 'only the named hash is merged')
+        self.assertIn('note      origin/master is at %s, past %s: ask the coordinator whether to '
+                      'sync to it' % (merge[:7], target[:7]), text)
+        self.assertEqual(t.slept, [10])
+
+    def test_at_the_bound_it_goes_on_and_names_the_holder(self):
+        target, _merge, _record = self.stage_a_landing()
+        t = FakeTime()
+        done, text, _said = self.sync_on(target, t)
+        self.assertEqual(done.code, syncbase.OK, text)
+        self.assertIn('landing   still in flight after 100s, going on without it: the landing '
+                      'lock ', text)
+        self.assertTrue(self.merged(target))
+        self.assertNotIn('note      ', text)          # the landing never pushed
+        self.assertEqual(sum(t.slept), 100)
+
+    def test_no_wait_says_so_and_never_sleeps(self):
+        target, _merge, _record = self.stage_a_landing()
+        t = FakeTime()
+        done, text, said = self.sync_on(target, t, wait=False)
+        self.assertEqual(done.code, syncbase.OK, text)
+        self.assertIn('landing   in flight, not waited for (--no-wait): the landing lock ', text)
+        self.assertEqual((said, t.slept), ([], []))
+
+    def test_the_cli_takes_no_wait(self):
+        target, _merge, _record = self.stage_a_landing()
+        done = self.cli(target, '--model', self.MODEL, '--no-wait')
+        text = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 0, text)
+        self.assertIn('landing   in flight, not waited for (--no-wait): ', text)
+        self.assertTrue(self.merged(target))
+
+
+class CtrlCWhileWaiting(unittest.TestCase):
+    """A Ctrl+C in the wait (or anywhere in sync) is exit 130, not a traceback."""
+
+    def test_keyboard_interrupt_exits_130(self):
+        spec = importlib.util.spec_from_file_location('kit_sync_base_entry_for_tests', SCRIPT)
+        entry = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(entry)
+        with mock.patch.object(entry.syncbase, 'sync', side_effect=KeyboardInterrupt) as sync:
+            self.assertEqual(entry.main(['abc1234', '--model', 'Test Model']), 130)
+        self.assertEqual(sync.call_count, 1)
+
+class InFlightUnsetNeverWaits(SyncCase):
+    """No "landing".in_flight (the default): a held lock is not read, nothing waits, and the
+    past-target note is not printed."""
+
+    def test_a_held_lock_is_not_waited_for(self):
+        target = self.stage_clean()
+        self.git('switch', '-q', self.BASE)
+        later = self.add_commit('docs/later.md', 'later\n', 'the base moved again')
+        self.push_base()
+        self.git('switch', '-q', 'work')
+        landing.LandingLock.for_config(self.main, load_config(self.main)).take('full', ['x'])
+
+        def never(_s):
+            raise AssertionError('slept with "landing".in_flight unset')
+        done = syncbase.sync(self.repo, target, self.MODEL, sleep=never)
+        text = self.out(done)
+        self.assertEqual(done.code, syncbase.OK, text)
+        self.assertNotIn('landing ', text)
+        self.assertNotIn('past %s' % target[:7], text)
+        self.assertFalse(self.merged(later))
 
 
 class BadConfiguration(SyncCase):

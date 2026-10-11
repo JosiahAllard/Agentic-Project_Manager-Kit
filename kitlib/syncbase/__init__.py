@@ -19,6 +19,10 @@ PM kit's tools/sync_base.py; docs/sync-base.md).
   a lander's unpushed merge that is later undone. The refusal names the hash to use instead: the
   fetched <remote>/<base> (`git ls-remote <remote> <base>`), never local <base>. A dirty tree is
   refused; a <target> that is not a commit here is NOT FOUND.
+- With `.kit.json` "landing".in_flight set (kitlib.records.inflight), a landing in flight is
+  waited for before the fetch, up to its wait_s (`wait` False: not at all); at the bound a line
+  says so and the merge goes on. Still exactly <target>: when the fetched <remote>/<base> is past
+  it, one `note` line says so and names the tip, for the coordinator to decide.
 - Conflicts: lists them, writes the `Co-Authored-By:` trailer into the message git prepared (so
   the resolution commit carries it whether it is finished with the commit tool (tools/commit.py,
   "commit".merge_fold) or an editor - git's auto-generated message never carried one), and stops
@@ -42,6 +46,7 @@ USAGE 2 the checkout, the configuration or the main-checkout refusal.
 """
 import collections
 import os
+import time
 
 from kitlib.config import ConfigError, load as load_config
 from kitlib.git import checkout as gitcheckout
@@ -49,6 +54,7 @@ from kitlib.git import cmd as gitcmd
 from kitlib.git import refs as gitrefs
 from kitlib.git import repo as gitrepo
 from kitlib.git.batch import CatFile
+from kitlib.records import inflight, landing
 
 TOOL = 'sync_base'
 MODEL_ENV = 'CLAUDE_AGENT_MODEL'
@@ -216,13 +222,30 @@ def not_on_remote(target, upstream, remote, base, tip):
                                      base))
 
 
+def in_flight_reader(top, cfg):
+    """kitlib.records.inflight's reader for the repository `top` is in, or None when `.kit.json`
+    "landing".in_flight is unset. Its command runs in the main checkout. Raises ConfigError or
+    kitlib.records.landing.LockError for a lock_file or a git common dir that cannot be used."""
+    if cfg.section('landing').get('in_flight') is None:
+        return None
+    common, why = gitrepo.common_dir(top)
+    if not common:
+        raise landing.LockError('no git common dir for %s: %s' % (top, why))
+    main = os.path.realpath(os.path.abspath(os.path.dirname(common)))
+    lanes = tuple(cfg.section('landing').get('lanes') or ())
+    return inflight.reader(main, cfg, landing.LandingLock.for_config(main, cfg, lanes=lanes))
+
+
 def _size(cat, rev, path):
     got = cat.size(rev, path)
     return got if got is not None else 0
 
 
-def sync(path, target, model, model_source='--model', base=None):
-    """The whole command for the checkout `path` is in. Returns an Outcome; never prints."""
+def sync(path, target, model, model_source='--model', base=None, wait=True, say=None,
+         sleep=time.sleep, clock=time.monotonic):
+    """The whole command for the checkout `path` is in. Returns an Outcome; never prints. `wait`
+    False is --no-wait; `say(line)` gets the lines said while waiting for a landing in flight
+    (None: they go in the Outcome's lines); `sleep` and `clock` are time's, for tests."""
     lines = []
 
     def done(code, *more):
@@ -255,6 +278,12 @@ def sync(path, target, model, model_source='--model', base=None):
     for name in (remote, base):
         if gitrefs.bad_rev(name):
             return done(USAGE, '%s: refused: %s' % (TOOL, gitrefs.bad_rev(name)))
+    try:
+        reader = in_flight_reader(top, cfg)
+    except (ConfigError, landing.LockError) as e:
+        return done(USAGE, '%s: refused: kit configuration: %s' % (TOOL, e))
+    if reader is not None:                    # before the fetch: a landing that pushes is fetched
+        lines.extend(inflight.settle(reader, wait, say, sleep, clock)[1])
     rc, _, err = _git(top, 'fetch', '--quiet', remote,
                       '+refs/heads/%s:refs/remotes/%s' % (base, upstream), timeout=FETCH_TIMEOUT,
                       env=dict(gitcmd.scrubbed_env(), GIT_TERMINAL_PROMPT='0'))
@@ -280,6 +309,9 @@ def sync(path, target, model, model_source='--model', base=None):
                     % (target, upstream, why))
     if not on:
         return done(FAILED, not_on_remote(target, upstream, remote, base, tip))
+    if reader is not None and tip != full:
+        lines.append('note      %s is at %s, past %s: ask the coordinator whether to sync to it'
+                     % (upstream, tip[:7], full[:7]))
     dirty, why = gitrefs.status(top, untracked='no')
     if dirty is None:
         return done(FAILED, 'refused: could not read the work tree status (%s).' % why)
