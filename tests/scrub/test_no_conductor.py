@@ -60,7 +60,7 @@ ALLOWED = (
     ('docs/launcher.md', "a session under the entry's old conductor stem", W2B),
     ('docs/launcher.md', 'any entry a session under its old conductor stem runs for', W2B),
     # procwatch matching the old agent name.
-    ('optional/procwatch/procwatch.py', '"--agent conductor" in c', W2B),
+    ('optional/procwatch/procwatch.py', '(?:coordinator|conductor)")', W2B),
     # go-live's launcher switch line: the agent setting and marks until the rename.
     ('docs/go-live.md', '`coordinator_agent` `conductor` until the coordinator rename', W2B),
     # The go-live migration record of the rename.

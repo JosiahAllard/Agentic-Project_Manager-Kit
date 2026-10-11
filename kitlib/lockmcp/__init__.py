@@ -5,7 +5,7 @@ The names here import nothing, so the guard can read them without loading the se
 
 # The Claude plugin's name, as .claude-plugin/plugin.json gives it (tests/lockmcp checks the two
 # agree). Claude-specific: another host's plugin has its own name over the same kit.
-CLAUDE_PLUGIN_NAME = 'claude-pm-kit'
+CLAUDE_PLUGIN_NAME = 'pm-kit'
 # The lock MCP server's key under the plugin's mcpServers, and the name it reports.
 SERVER_NAME = 'machine-lock'
 

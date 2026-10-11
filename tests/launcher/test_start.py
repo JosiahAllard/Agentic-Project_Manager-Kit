@@ -9,6 +9,7 @@ import unittest
 
 from kitlib.launcher import start, window
 from kitlib.launcher import settings as S
+from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
 from tests.launcher.fakes import EXE, NOW, FakeHost, Home, role_of, session
 
 DAY = datetime.timedelta(days=1)
@@ -417,6 +418,23 @@ class Start(Base):
                                                        'state': 's.md', 'account': 2}})
             out = '\n'.join(start.start_entry(self.h.settings, self.host, 'k', whatif=True))
             self.assertIn('--autocompact %d ' % window_, out)
+
+    def test_a_plugin_prefixed_agent_is_named_bare_and_keeps_its_roles_window(self):
+        p = CLAUDE_PLUGIN_NAME + ':'
+        out = self.go(agent=p + 'deep-worker')
+        self.assertIn('--agent %sdeep-worker ' % p, out)
+        self.assertIn("-n 'alpha-deep-worker-a1'", out)
+        for agent, window_ in ((p + 'consultant', 350000), (p + 'deep-worker', 500000), (p + 'reviewer', 170000),
+                               ('other:consultant', 170000)):
+            with self.subTest(agent):
+                args = start.entry_start_args(self.h.settings, 'k', {'repo': 'alpha', 'agent': agent,
+                                                                     'stem': 'alpha-x'}, '2', None)
+                self.assertEqual(args.get('autocompact', start.DEFAULT_AUTOCOMPACT), window_)
+                self.assertEqual(args['agent'], agent)
+        for bad in ('other:deep-worker', 'a:b:c', ':x', p, p + p + 'x'):
+            with self.subTest(bad):
+                with self.assertRaisesRegex(S.LaunchError, 'is not an agent name'):
+                    self.go(agent=bad)
 
     def rec(self, **kw):
         e = {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord', 'state': 's.md', 'account': 1,
