@@ -79,10 +79,9 @@ class Host(object):
         self._ps('[Environment]::SetEnvironmentVariable(%s, %s, "User")' % (_ps_quote(name), _ps_quote(value)))
 
     def task_exists(self, name):
-        """Whether the scheduled task `name` is registered (schtasks /Query)."""
-        r = subprocess.run(['schtasks', '/Query', '/TN', name], capture_output=True, text=True,
-                           creationflags=_NOWIN)
-        return r.returncode == 0
+        """Whether the scheduled task `name` is registered (agenttemp.task_registered: False only
+        when schtasks says it does not exist; RuntimeError on a timeout or another failure)."""
+        return agenttemp.task_registered(name)
 
     def task_register(self, line):
         """Run the PowerShell line that registers a scheduled task (agenttemp.task_line)."""

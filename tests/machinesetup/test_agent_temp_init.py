@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -28,6 +29,48 @@ class DefaultFolder(unittest.TestCase):
         for kit, drive in (('C:\\x\\kit', 'C:'), ('D:\\kit', 'D:'), ('Z:\\src\\kit', 'Z:')):
             self.assertEqual(at().default_agent_temp(kit), drive + '\\AgentTemp', kit)
         self.assertIsNone(at().default_agent_temp('\\\\server\\share\\kit'))
+
+
+class TaskRegistered(unittest.TestCase):
+    """agenttemp.task_registered against a fake subprocess.run: schtasks is never run."""
+
+    def query(self, rc=0, out='', err='', raises=None):
+        seen = {}
+
+        def run(cmd, **kw):
+            seen.update(kw, cmd=cmd)
+            if raises:
+                raise raises
+            return subprocess.CompletedProcess(cmd, rc, out, err)
+        return seen, run
+
+    def test_exit_0_is_registered_and_a_timeout_is_passed(self):
+        seen, run = self.query(0)
+        self.assertTrue(at().task_registered('agent-temp-sweep', run=run))
+        self.assertEqual(seen['cmd'], ['schtasks', '/Query', '/TN', 'agent-temp-sweep'])
+        self.assertEqual(seen['timeout'], at().TASK_TIMEOUT)
+
+    @unittest.skipUnless(os.name == 'nt', 'the not-found text is Windows\' own')
+    def test_not_found_is_not_registered(self):
+        import ctypes
+        _, run = self.query(1, err='ERROR: %s\n' % ctypes.FormatError(2))
+        self.assertFalse(at().task_registered('agent-temp-sweep', run=run))
+
+    def test_access_denied_is_a_named_failure_not_unregistered(self):
+        _, run = self.query(1, err='ERROR: Access is denied.\n')
+        with self.assertRaises(RuntimeError) as c:
+            at().task_registered('agent-temp-sweep', run=run)
+        self.assertIn('Access is denied', str(c.exception))
+
+    def test_a_timeout_is_a_named_failure(self):
+        _, run = self.query(raises=subprocess.TimeoutExpired('schtasks', 30))
+        with self.assertRaises(RuntimeError) as c:
+            at().task_registered('agent-temp-sweep', timeout=30, run=run)
+        self.assertIn('timed out after 30 s', str(c.exception))
+
+    def test_the_hosts_task_exists_uses_it(self):
+        with mock.patch.object(at(), 'task_registered', lambda name: ('asked', name)):
+            self.assertEqual(extras.Host().task_exists('agent-temp-sweep'), ('asked', 'agent-temp-sweep'))
 
 
 class Init(T.Base):
@@ -126,7 +169,7 @@ class Init(T.Base):
         inside = os.path.join(self.root, 'repo', 'temp')
         code, out = self.run_new(apply=True, agent_temp=inside)
         self.assertEqual(code, M.EXIT_REFUSED, out)
-        self.assertIn('inside the git checkout', out)
+        self.assertIn('inside a git checkout or worktree', out)
         self.assertFalse(os.path.exists(inside))
 
     def assert_refused_untouched(self, out, code, folder):

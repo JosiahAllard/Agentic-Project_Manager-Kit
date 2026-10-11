@@ -255,6 +255,56 @@ class SessionDirs(Case):
         self.assertEqual(acts['old.log'][0], 'removed')         # outside claude/ the sweep goes on
         self.assertTrue(os.path.isdir(s))
 
+    def test_the_default_lister_gives_the_process_list_30_seconds(self):
+        seen = {}
+
+        def fake(**kw):
+            seen.update(kw)
+            return []
+        with mock.patch('kitlib.pmstart.list_processes', fake):
+            self.assertEqual(S.default_lister(), [])
+        self.assertEqual(seen, {'timeout': S.LIST_TIMEOUT})
+        self.assertEqual(S.LIST_TIMEOUT, 30)
+
+    def test_a_project_folder_that_cannot_be_listed_is_skipped_and_the_rest_goes_on(self):
+        self.session('bad', SID_OLD)
+        good = self.session('good', SID_OLD)
+        gone = os.path.join(self.dir, 'claude', 'gone')
+        os.makedirs(gone)
+        put(os.path.join(self.dir, 'old.log'))
+        bad = os.path.normcase(os.path.join(self.dir, 'claude', 'bad'))
+        real = os.scandir
+
+        def scandir(path='.'):
+            p = os.path.normcase(os.fspath(path))
+            if p == bad:
+                raise PermissionError(13, 'Access is denied', path)
+            if p == os.path.normcase(gone):
+                raise FileNotFoundError(2, 'The system cannot find the path specified', path)
+            return real(path)
+        with mock.patch.object(S.os, 'scandir', scandir):
+            got = S.sweep(self.dir, 3, apply=True, now=LATER, home=self.home, lister=procs())
+        acts = {e.name: (e.action, e.why) for e in got}
+        self.assertEqual(acts['claude/bad'][0], 'skipped')
+        self.assertIn('Access is denied', acts['claude/bad'][1])
+        self.assertEqual(acts['claude/gone'][0], 'skipped')
+        self.assertEqual(acts['claude/good/' + SID_OLD][0], 'removed')
+        self.assertEqual(acts['old.log'][0], 'removed')
+        self.assertFalse(os.path.exists(good))
+        self.assertTrue(os.path.isdir(os.path.join(self.dir, 'claude', 'bad', SID_OLD)))
+        self.assertTrue(os.path.isdir(gone))
+
+    def test_a_dir_that_cannot_be_listed_is_a_config_error_not_a_traceback(self):
+        real, d = os.scandir, os.path.normcase(self.dir)
+
+        def scandir(path='.'):
+            if os.path.normcase(os.fspath(path)) == d:
+                raise PermissionError(13, 'Access is denied', path)
+            return real(path)
+        with mock.patch.object(S.os, 'scandir', scandir):
+            with self.assertRaises(S.SweepConfigError):
+                S.sweep(self.dir, 3, apply=True, now=LATER, home=self.home, lister=procs())
+
     def test_keep_names_are_never_removed(self):
         put(os.path.join(self.dir, 'kit-conductor', 'plan.md'))
         pinned = self.session('proj', 'pinned-notes')
@@ -433,6 +483,21 @@ class Cli(Case):
         self.assertIn('removed  old.log', text)
         self.assertIn('3 entries, 2 kept', text)
         self.assertEqual(sorted(os.listdir(self.dir)), ['claude', 'pinned'])
+
+    def test_an_unreadable_process_list_prints_one_line_and_exits_3(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        put(os.path.join(self.dir, 'claude', 'proj', SID_OLD, 'a.txt'))
+        put(os.path.join(self.dir, 'old.log'))
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, 'stderr', err):
+            code = S.main(['--apply'], home=self.home, out=out, now=LATER, lister=unreadable)
+        text = out.getvalue()
+        self.assertEqual(code, S.EXIT_LIST_UNAVAILABLE, text)
+        self.assertEqual(S.EXIT_LIST_UNAVAILABLE, 3)
+        self.assertEqual(text.count('kept every claude/ folder: process list unavailable: '
+                                    'RuntimeError: powershell exit 1: access denied\n'), 1, text)
+        self.assertIn('removed  old.log', text)
+        self.assertTrue(os.path.isdir(os.path.join(self.dir, 'claude', 'proj', SID_OLD)))
 
     def test_dry_run_then_apply(self):
         self.config({S.KEY: {'dir': self.dir, 'max_age_days': 2}})

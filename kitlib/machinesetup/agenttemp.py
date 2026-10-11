@@ -7,6 +7,7 @@ carries the PowerShell line that registers it. Nothing here prints or exits.
 """
 import json
 import os
+import subprocess
 
 from kitlib.config import ConfigError
 from kitlib.config import user as kuser
@@ -48,6 +49,39 @@ def task_line(kit):
                quoted('daily sweep of the agents\' temp folder')))
 
 
+TASK_TIMEOUT = 30
+
+
+def _not_found_text():
+    """Windows' localised text for ERROR_FILE_NOT_FOUND (2), which schtasks /Query prints for a
+    task that does not exist; None off Windows."""
+    try:
+        import ctypes
+        return ctypes.FormatError(2).strip() or None
+    except (ImportError, AttributeError, OSError):
+        return None
+
+
+def task_registered(name, timeout=TASK_TIMEOUT, run=None):
+    """Whether the scheduled task `name` is registered (`schtasks /Query /TN name`): True on exit 0,
+    False only when schtasks says the task does not exist (its output holds Windows' text for error
+    2, file not found). Any other failure (access denied, a timeout after `timeout` seconds) raises
+    RuntimeError, never False; OSError when schtasks cannot be run. run: the tests' subprocess.run."""
+    run = run or subprocess.run
+    try:
+        r = run(['schtasks', '/Query', '/TN', name], capture_output=True, text=True, timeout=timeout,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('schtasks /Query timed out after %s s' % timeout)
+    if r.returncode == 0:
+        return True
+    said = ' '.join(((r.stderr or '') + ' ' + (r.stdout or '')).split())
+    gone = _not_found_text()
+    if gone and ' '.join(gone.split()).lower() in said.lower():
+        return False
+    raise RuntimeError('schtasks /Query exit %d: %s' % (r.returncode, said[:200] or 'no output'))
+
+
 def _config(home):
     """(the machine config's agent_temp_sweep value or None, why it could not be read or None)."""
     try:
@@ -82,9 +116,67 @@ def in_checkout(path):
         p = up
 
 
+def is_any_link(path):
+    """A symlink, a junction or any other reparse point (os.lstat's st_reparse_tag)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return os.path.islink(path) or bool(getattr(st, 'st_reparse_tag', 0)) or is_link(path)
+
+
+def _forms(path):
+    """[path] as written (absolute), then its real path (os.path.realpath: every link or junction
+    in it resolved) when that differs."""
+    a = os.path.abspath(path)
+    try:
+        r = os.path.realpath(a)
+    except (OSError, ValueError):
+        return [a]
+    return [a] if norm(r) == norm(a) else [a, r]
+
+
+def _holds(a, b):
+    """a is b or lies under it (normcase, no links resolved)."""
+    a, b = norm(a), norm(b)
+    return a == b or a.startswith(b.rstrip('\\/') + os.sep)
+
+
+def unsafe_dir(d, home, kit=None):
+    """Why the agents' temp folder `d` may not be swept (optional/agenttemp/agent_temp_sweep.py)
+    or set up by machine setup, or None. d is refused when it is a link itself, or when, as written
+    or by its real path (os.path.realpath, so a junction in a folder above d cannot point it into a
+    repository), it is a drive or filesystem root; the home folder, a folder in it or a folder holding
+    it; the kit checkout `kit` or the machine config folder, in one or holding one; or inside a git
+    checkout or worktree (a .git folder or file in it or any folder above it). Whether d exists is
+    the caller's to check."""
+    d = os.path.abspath(d)
+    if is_any_link(d):
+        return '%s is a link' % d
+    h = os.path.abspath(home)
+    roots = (('the home folder', h), ('the kit checkout', kit),
+             ('the machine config folder', kuser.config_dir(h)))
+    for p in _forms(d):
+        shown = d if p == d else '%s (real path %s)' % (d, p)
+        if os.path.dirname(p) == p:
+            return '%s is a filesystem root' % shown
+        for name, root in roots:
+            if not root:
+                continue
+            for r in _forms(root):
+                if _holds(p, r) or _holds(r, p):
+                    return '%s is %s %s, in it or holds it' % (shown, name, root)
+        top = in_checkout(p)
+        if top:
+            return '%s is inside a git checkout or worktree (%s has .git)' % (shown, top)
+    return None
+
+
 def survey(plan, ctx):
     """Plan the folder, AGENT_TEMP, the config key and the task. (folder, made): the folder the ACL
-    step sets up (None when there is none or a step refused), and whether this run makes it."""
+    step sets up (None when there is none or a step refused), and whether this run makes it. Every
+    source of the folder passes the sweep's refusals (unsafe_dir) first: the folder gets the config
+    key and an ACL with inheritance removed."""
     folder, source = choose(ctx)
     if not folder:
         plan.note('extras', 'agent temp init skipped: the kit %s is on no drive letter; pass '
@@ -93,10 +185,9 @@ def survey(plan, ctx):
     if not os.path.isabs(folder):
         plan.refuse('the agent temp folder %s (from %s) is not an absolute path' % (folder, source))
         return None, False
-    top = in_checkout(folder)
-    if top:
-        plan.refuse('the agent temp folder %s is inside the git checkout %s: the sweep refuses to '
-                    'sweep it' % (folder, top))
+    why = unsafe_dir(folder, ctx.home, ctx.kit)
+    if why:
+        plan.refuse('the agent temp folder %s (from %s) may not be swept: %s' % (folder, source, why))
         return None, False
     made = _folder(plan, folder)
     if made is None:

@@ -6,8 +6,9 @@ Without --apply it only lists what it would remove (a dry run); with it, it remo
 the age come from the "agent_temp_sweep" key of the machine config, never from code or
 the command line: {"dir": <absolute folder>, "max_age_days": <number, default 3>, "keep": [...]}.
 "keep" (default empty) lists relative paths under dir that the sweep never removes: a top-level
-name, or claude/<project>/<session>; * and ? match within one name; case-insensitive; a kept folder
-keeps everything in it.
+name, or claude/<project>/<session>; * and ? match within one name; case-insensitive. A unit (below)
+is kept when an item names it, a folder holding it, or anything inside it: the sweep never enters a
+unit, so "kit-conductor/r2" keeps all of kit-conductor, and "*/x" keeps every top-level folder.
 
 The units are the top-level files and folders of dir, except a folder named "claude": Claude Code
 keeps each session's scratch at claude/<project>/<session>, so each entry of claude/<project> is its
@@ -16,8 +17,9 @@ only once it is empty and itself older than the age. A unit on the keep-list is 
 never aged, claimed or entered. A unit is removed only when all of these hold:
 - the newest time anywhere in it (written or created, links not followed) is older than the age;
 - under claude/ only: no running process has the unit's name (a session id) in its command line.
-  The process list is read once per run; when it cannot be read, no unit under claude/ is removed
-  that run ("live"). A Claude Code process normally carries no session id in its command line
+  The process list is read once per run (LIST_TIMEOUT, 30 s); when it cannot be read, no unit
+  under claude/ is removed that run ("live"), the run prints "kept every claude/ folder: process
+  list unavailable: <why>" and exits 3. A Claude Code process normally carries no session id in its command line
   (only --resume <id> or --session-id <id> does), so this rarely holds a session back; the age and
   the claim below carry the safety, and a session left idle and with no open handle in its folder
   for longer than the age loses its scratch (the keep-list is the remedy);
@@ -28,13 +30,18 @@ never aged, claimed or entered. A unit is removed only when all of these hold:
   listing and the claim keeps it, put back under its own name);
 - every part of it can be removed. A removal that fails part-way puts what is left back under its
   own name.
-Links are removed as links; their targets are never entered. dir may not be a filesystem root, the
-home folder or a folder holding it, a link, inside a git checkout or worktree (a .git folder or file
-in it or any folder above it), or the machine config folder or the kit checkout, a folder inside one
-or a folder holding one. Standard library and the kit's own kitlib only.
+A claude/ or claude/<project> folder that cannot be listed (gone since, or no permission) is
+reported "skipped" and left alone; the rest of the run goes on.
+Links are removed as links; their targets are never entered. dir may not be a link, and may not,
+as written or by its real path (every junction or link above it resolved), be a filesystem root,
+the home folder, a folder in it or a folder holding it, inside a git checkout or worktree (a .git
+folder or file in it or any folder above it), or the machine config folder or the kit checkout, a
+folder inside one or a folder holding one (kitlib.machinesetup.agenttemp.unsafe_dir, which machine
+setup applies to the folder it sets up too). Standard library and the kit's own kitlib only.
 
 Exit codes: 0 done (or nothing to do); 1 some old entry could not be removed (in use or failed);
-2 no config, a bad config or an unsafe dir.
+2 no config, a bad config, an unsafe dir or a dir that cannot be listed; 3 the process list could
+not be read, so every old unit under claude/ was kept (3 wins over 1).
 """
 import argparse
 import collections
@@ -53,9 +60,10 @@ KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__fi
 sys.path.insert(0, KIT_ROOT)
 try:
     from kitlib.config import user as kuser                         # noqa: E402
+    from kitlib.machinesetup import agenttemp as kagenttemp         # noqa: E402
     KITLIB_ERROR = None
 except ImportError as e:
-    kuser, KITLIB_ERROR = None, e
+    kuser, kagenttemp, KITLIB_ERROR = None, None, e
 
 KEY = "agent_temp_sweep"
 DEFAULT_MAX_AGE_DAYS = 3
@@ -63,7 +71,8 @@ CLAIM = ".sweeping-"            # the name an entry is renamed to while it is re
 DAY = 86400.0
 SESSIONS = "claude"             # Claude Code's scratch: <dir>/claude/<project>/<session>
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
-KEPT = ("young", "kept", "live")    # actions that leave a unit in place by design
+KEPT = ("young", "kept", "live", "skipped")    # actions that leave a unit in place by design
+EXIT_LIST_UNAVAILABLE = 3       # the process list could not be read: every old claude/ unit was kept
 
 Config = collections.namedtuple("Config", "dir max_age_days keep")
 
@@ -131,42 +140,20 @@ def load_config(home=None):
     return Config(cfg["dir"], cfg.get("max_age_days", DEFAULT_MAX_AGE_DAYS), list(cfg.get("keep", [])))
 
 
-def _norm(path):
-    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
-
-
-def _within(path, root):
-    """path is root or lies under it."""
-    p, r = _norm(path), _norm(root)
-    return p == r or p.startswith(r.rstrip("\\/") + os.sep)
-
-
 def unsafe_dir(d, home=None):
-    """Why d may not be swept, or None: it must be an existing folder that is not a drive or
-    filesystem root, not the home folder or above it, not a link, not in a git checkout or
-    worktree, and not the machine config folder or the kit checkout, in one or holding one."""
+    """Why d may not be swept, or None: kitlib.machinesetup.agenttemp.unsafe_dir with this kit
+    (KIT_ROOT), the refusals machine setup applies to the folder it sets up (a root, the home folder
+    or in it, the kit or the machine config folder, a git checkout, a link; as written and by its
+    real path); and d must be an existing folder."""
+    if kagenttemp is None:
+        return "the kit library (kitlib) is not in the kit root %s (%s)" % (KIT_ROOT, KITLIB_ERROR)
     d = os.path.abspath(d)
-    if os.path.dirname(d) == d:
-        return "%s is a filesystem root" % d
-    h = os.path.abspath(home or os.path.expanduser("~"))
-    if _within(h, d):
-        return "%s is the home folder or holds it" % d
-    if is_link(d):
-        return "%s is a link" % d
+    why = kagenttemp.unsafe_dir(d, os.path.abspath(home or os.path.expanduser("~")), KIT_ROOT)
+    if why:
+        return why
     if not os.path.isdir(d):
         return "%s is not a folder" % d
-    for name, root in (("the kit checkout", KIT_ROOT),
-                       ("the machine config folder", kuser.config_dir(h) if kuser else None)):
-        if root and (_within(d, root) or _within(root, d)):
-            return "%s is %s %s, in it or holds it" % (d, name, root)
-    a = d
-    while True:
-        if os.path.lexists(os.path.join(a, ".git")):
-            return "%s is inside a git checkout or worktree (%s has .git)" % (d, a)
-        up = os.path.dirname(a)
-        if up == a:
-            return None
-        a = up
+    return None
 
 
 def is_link(path):
@@ -274,48 +261,76 @@ def _entries(path):
     return sorted(os.scandir(path), key=lambda e: e.name)
 
 
-def units(d):
+def _top(d):
+    """The top-level entries of d; SweepConfigError when d itself cannot be listed."""
+    try:
+        return _entries(d)
+    except OSError as e:
+        raise SweepConfigError("%s cannot be listed: %s" % (d, e.strerror or e))
+
+
+def _listing(rel, path, skipped):
+    """The entries of the folder `path` (rel under dir), or [] after adding rel to skipped when it
+    cannot be listed (gone since, or no permission): that folder is left alone, the rest goes on."""
+    try:
+        return _entries(path)
+    except OSError as e:
+        skipped.append((rel, "cannot be listed (%s)" % (e.strerror or e)))
+        return []
+
+
+def units(d, skipped=None):
     """[(relpath, parent, name)] of the sweep's units, relpath "/"-joined: every top-level entry of
     d but a real folder named claude; for that, every entry of each claude/<project> folder, and
-    each file or link straight in claude/. Every path is d joined with names os.scandir gave."""
+    each file or link straight in claude/. Every path is d joined with names os.scandir gave.
+    skipped: a list that gets (relpath, why) for each claude/ or claude/<project> folder that
+    cannot be listed; nothing in it is a unit."""
+    skipped = [] if skipped is None else skipped
     out = []
-    for e in _entries(d):
+    for e in _top(d):
         if not _is_sessions(e):
             out.append((e.name, d, e.name))
             continue
-        for p in _entries(e.path):
+        for p in _listing(e.name, e.path, skipped):
             if not _real_dir(p):
                 out.append(("%s/%s" % (e.name, p.name), e.path, p.name))
                 continue
-            for s in _entries(p.path):
-                out.append(("%s/%s/%s" % (e.name, p.name, s.name), p.path, s.name))
+            rel = "%s/%s" % (e.name, p.name)
+            for s in _listing(rel, p.path, skipped):
+                out.append(("%s/%s" % (rel, s.name), p.path, s.name))
     return out
 
 
 def _projects(d):
     """[(relpath, path)] of the claude/<project> folders (real folders only)."""
-    for e in _entries(d):
+    for e in _top(d):
         if _is_sessions(e):
-            return [("%s/%s" % (e.name, p.name), p.path) for p in _entries(e.path) if _real_dir(p)]
+            return [("%s/%s" % (e.name, p.name), p.path) for p in _listing(e.name, e.path, [])
+                    if _real_dir(p)]
     return []
 
 
 def is_kept(rel, keep):
-    """rel ("/"-joined, under dir) or a folder holding it matches a keep item: name by name,
-    case-insensitive, * and ? within one name."""
+    """A keep item names rel ("/"-joined, under dir), a folder holding it, or something inside it:
+    name by name over the shorter of the two, case-insensitive, * and ? within one name. The sweep
+    never enters a unit, so an item inside one (kit-conductor/r2) keeps the whole unit."""
     parts = rel.lower().split("/")
     for k in keep or ():
         pat = [x for x in k.lower().replace("\\", "/").split("/") if x]
-        if pat and len(pat) <= len(parts) and \
-                all(fnmatch.fnmatchcase(n, p) for n, p in zip(parts, pat)):
+        if pat and all(fnmatch.fnmatchcase(n, p) for n, p in zip(parts, pat)):
             return True
     return False
 
 
+LIST_TIMEOUT = 30       # seconds for the process list; the session start's 4 s is too short at 04:00
+UNREADABLE = "the process list could not be read"
+
+
 def default_lister():
-    """The running processes as dicts with a CommandLine (kitlib.pmstart.list_processes)."""
+    """The running processes as dicts with a CommandLine (kitlib.pmstart.list_processes, given
+    LIST_TIMEOUT seconds)."""
     from kitlib.pmstart import list_processes
-    return list_processes()
+    return list_processes(timeout=LIST_TIMEOUT)
 
 
 def live_ids(procs):
@@ -330,7 +345,8 @@ def sweep(d, max_age_days, apply=False, now=None, home=None, keep=(), lister=Non
     """[Entry] for every unit of d (units()) and every claude/<project> folder it removes, oldest
     first. action: "young" (too new), "kept" (keep-list), "live" (under claude/: a running process
     names it, or the process list could not be read), "would" (old; apply not set), "removed", or
-    "in-use" / "failed" (kept). lister gives the processes (default_lister); it is called only
+    "in-use" / "failed" (kept), or "skipped" (a claude/ or claude/<project> folder that could not
+    be listed; its units are not in the list). lister gives the processes (default_lister); it is called only
     when an old unit under claude/ is met. Raises SweepConfigError when d may not be swept
     (unsafe_dir)."""
     why = unsafe_dir(d, home)
@@ -349,14 +365,17 @@ def sweep(d, max_age_days, apply=False, now=None, home=None, keep=(), lister=Non
             except Exception as e:                # fail closed: nothing under claude/ goes
                 box["ids"], box["err"] = set(), "%s: %s" % (type(e).__name__, e)
         if box["err"]:
-            return "the process list could not be read (%s)" % box["err"]
+            return "%s (%s)" % (UNREADABLE, box["err"])
         if name.lower() in box["ids"]:
             return "a running process names it"
         return None
 
     projects = [(rel, p, _own_time(p)) for rel, p in _projects(d)]
-    out = []
-    for rel, parent, name in units(d):
+    skipped = []
+    found = units(d, skipped)
+    out = [Entry(rel, 0.0, "skipped", why) for rel, why in skipped]
+    projects = [x for x in projects if x[0] not in {rel for rel, _ in skipped}]
+    for rel, parent, name in found:
         if is_kept(rel, keep):
             out.append(Entry(rel, 0.0, "kept"))
             continue
@@ -451,9 +470,15 @@ def main(argv=None, home=None, out=None, now=None, lister=None):
         if e.action != "young":
             print(e.line(), file=out)
     old = [e for e in entries if e.action not in KEPT]
-    print("%s: %d entries, %d kept (newer than %g days, on the keep-list or a live session), %d %s" % (
-        d, len(entries), len(entries) - len(old), age, len(old),
-        "old" if a.apply else "old (dry run: --apply removes them)"), file=out)
+    print("%s: %d entries, %d kept (newer than %g days, on the keep-list, a live session or not "
+          "listable), %d %s" % (
+              d, len(entries), len(entries) - len(old), age, len(old),
+              "old" if a.apply else "old (dry run: --apply removes them)"), file=out)
+    blind = [e for e in entries if e.action == "live" and e.why.startswith(UNREADABLE)]
+    if blind:
+        print("agent_temp_sweep: kept every claude/ folder: process list unavailable: %s"
+              % blind[0].why[len(UNREADABLE) + 2:-1], file=out)    # UNREADABLE (<why>)
+        return EXIT_LIST_UNAVAILABLE
     return 1 if any(e.action in ("in-use", "failed") for e in old) else 0
 
 

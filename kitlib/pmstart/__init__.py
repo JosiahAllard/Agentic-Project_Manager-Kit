@@ -41,10 +41,11 @@ def _read(path):
         return f.read()
 
 
-def list_processes():
-    """All processes as dicts with Name, CommandLine, ExecutablePath, ProcessId, ParentProcessId, Created (PowerShell Get-CimInstance)."""
+def list_processes(timeout=TIMEOUT):
+    """All processes as dicts with Name, CommandLine, ExecutablePath, ProcessId, ParentProcessId, Created (PowerShell Get-CimInstance).
+    subprocess.TimeoutExpired after `timeout` seconds (the session start's TIMEOUT by default)."""
     r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS],
-                       capture_output=True, text=True, timeout=TIMEOUT)
+                       capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError("powershell exit %d: %s" % (r.returncode, r.stderr.strip()[:200]))
     data = json.loads(r.stdout or "[]")
@@ -528,17 +529,19 @@ def agent_temp_sweep_key():
 
 
 def agent_temp_task_exists(name=AGENT_TEMP_TASK):
-    """Whether the scheduled task `name` is registered (`schtasks /Query /TN`, exit 0). OSError or
-    subprocess.TimeoutExpired when schtasks cannot be run."""
-    r = subprocess.run(["schtasks", "/Query", "/TN", name], capture_output=True, text=True, timeout=TIMEOUT,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    return r.returncode == 0
+    """Whether the scheduled task `name` is registered (kitlib.machinesetup.agenttemp.task_registered,
+    TIMEOUT seconds): False only when schtasks says it does not exist; RuntimeError or OSError when
+    schtasks fails another way (access denied, a timeout) or cannot be run."""
+    from kitlib.machinesetup.agenttemp import task_registered
+    return task_registered(name, TIMEOUT)
 
 
 def agent_temp_lines(env=None, sweep_key=None, task_exists=None):
     """Warnings for the agents' temp folder set-up (docs/machine-setup.md "Agent temp init"): AGENT_TEMP
     unset, the machine config without agent_temp_sweep, the sweep task not registered. None when all
-    three are in place. A reader that raises is the checklist's "could not check agent_temp" line."""
+    three are in place. A task check that fails is its own "could not check the agent temp sweep task"
+    line, after the other two; a failing env or config reader is the checklist's "could not check
+    agent_temp" line."""
     env, sweep_key = env or agent_temp_env, sweep_key or agent_temp_sweep_key
     task_exists = task_exists or agent_temp_task_exists
     lines = []
@@ -546,7 +549,13 @@ def agent_temp_lines(env=None, sweep_key=None, task_exists=None):
         lines.append("%s is not set (machine_setup.py plans it)" % AGENT_TEMP_ENV)
     if not sweep_key():
         lines.append("agent_temp_sweep is not set in the machine config (machine_setup.py plans it)")
-    if not task_exists(AGENT_TEMP_TASK):
+    try:
+        there = task_exists(AGENT_TEMP_TASK)
+    except Exception as e:      # access denied, a timeout, no schtasks: unknown, never "not registered"
+        lines.append("could not check the agent temp sweep task %s: %s: %s"
+                     % (AGENT_TEMP_TASK, type(e).__name__, e))
+        return lines
+    if not there:
         lines.append("agent temp sweep task %s is not registered (machine_setup.py --register-sweep-task "
                      "--apply, the owner's act)" % AGENT_TEMP_TASK)
     return lines
