@@ -24,11 +24,21 @@ TIMEOUT = 60
 
 
 def git(root, *args, input=None):
-    r = gitcmd.subprocess_run(["git", "-C", root, *args], capture_output=True, timeout=TIMEOUT,
-                              input=input)
-    if r.returncode != 0:
-        raise RuntimeError("git %s: %s" % (args[0], r.stderr.decode("utf-8", "replace").strip()[:200]))
-    return r.stdout
+    """git's stdout bytes. Runs through kitlib.git.cmd, which ends the whole process tree at
+    TIMEOUT (a subprocess timeout does not when a child holds the pipes); a failed or timed-out
+    call raises RuntimeError."""
+    out, why = gitcmd.run(list(args), root, stdin=input, timeout=TIMEOUT)
+    if out is None:
+        raise RuntimeError("git %s: %s" % (args[0], why[:200]))
+    return out
+
+
+def has_rev(root, rev):
+    """True when `rev` resolves in root; a timed-out or failed git raises RuntimeError."""
+    r = gitcmd.call(["rev-parse", "--verify", "-q", rev], root, timeout=TIMEOUT)
+    if r.rc is None:
+        raise RuntimeError("git rev-parse: %s" % r.err[:200])
+    return r.rc == 0
 
 
 def parse(text):
@@ -71,8 +81,7 @@ def main_branch(root, cfg):
     if b:
         return b
     for b in ("main", "master"):
-        if gitcmd.subprocess_run(["git", "-C", root, "rev-parse", "--verify", "-q", b],
-                                 capture_output=True).returncode == 0:
+        if has_rev(root, b):
             return b
     raise RuntimeError("no main branch in " + root)
 
@@ -145,9 +154,7 @@ def store_at(root, main):
     except (kconfig.ConfigError, Refusal) as exc:
         raise RuntimeError("backlog store: %s" % exc)
     rev, folder = backend.landed(main)
-    there = gitcmd.subprocess_run(["git", "-C", root, "rev-parse", "--verify", "-q", rev + "^{commit}"],
-                                  capture_output=True, timeout=TIMEOUT).returncode == 0
-    return (rev if there else None), folder
+    return (rev if has_rev(root, rev + "^{commit}") else None), folder
 
 
 def snapshot(name, root, now=None, days=DAYS):
