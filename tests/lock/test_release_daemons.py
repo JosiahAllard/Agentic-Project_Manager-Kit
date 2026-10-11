@@ -592,6 +592,9 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
                 with self.assertRaises(KeyboardInterrupt):
                     s.wait(p)
             s.release(130, "interrupted")
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            p.wait(10)
+        self.assertIsNotNone(p.poll(), "the command outlived the kill")
         self.assertEqual(len(judged), 2, "the release did not judge the daemons again")
         self.assertIn(first, self.results(), "the second kill dropped what the first recorded")
         self.assertTrue(self.wait_gone(plain, self.recorded()[plain]),
@@ -616,6 +619,28 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
         with mock.patch.object(process, "proc_ctime", unreadable):
             self.errored(s, p)
         self.spared(daemon, plain, c)
+
+    def test_a_process_table_that_cannot_be_read_in_the_passes_ends_the_whole_job(self):
+        """process.snapshot raises in the passes: the job is ended whole, fail closed, the daemon
+        it had left among them, and that is said."""
+        c = self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain")
+        daemon, _, plain = self.shared_pids()
+        real = process.snapshot
+
+        def unreadable():
+            if self.judged():
+                raise OSError("no snapshot")
+            return real()
+        with mock.patch.object(process, "snapshot", unreadable):
+            self.errored(s, p)
+        self.connected(c)
+        cts = self.recorded()
+        self.assertTrue(self.wait_gone(plain, cts[plain]), "a plain leftover outlived the kill")
+        self.assertTrue(self.wait_gone(daemon, cts[daemon]),
+                        "the daemon outlived a kill whose passes could not read the table")
+        self.assertTrue(any("could not be read while its tree was ended (no snapshot)" in x
+                            for x in self.said), self.said)
 
     def test_an_errored_gate_ends_a_daemon_only_its_own_client_uses(self):
         """Control: a daemon serving the run's own client dies on the kill path as it always
