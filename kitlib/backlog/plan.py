@@ -83,7 +83,9 @@ def require(snap, rid):
 
 def require_shown(snap, ctx, rid):
     """require() for `show`: a missing id's NotFound also says which store commit removed it
-    (sha, date, session, subject; never an author name), or that none ever did. An id that is
+    (sha, date, session, subject; never an author name), or that none ever did. A main store's
+    record whose file HEAD tracks and the worktree no longer holds was closed or retired here and
+    not committed yet (MainBackend writes commit nothing): it says so. An id that is
     not plain (a glob or path character) is not looked up, and a history git cannot read (an
     unborn HEAD, a failing git) still leaves the plain NOT FOUND, with a line saying so."""
     rec = snap.get(rid)
@@ -93,10 +95,14 @@ def require_shown(snap, ctx, rid):
     if not PLAIN_ID.match(rid):
         raise NotFound('%s\n  history not searched: `%s` is not a plain id' % (plain, rid))
     try:
-        gone = ctx.store.removal(rid, snap)
+        pending = ctx.store.uncommitted_removal(rid)
+        gone = None if pending else ctx.store.removal(rid, snap)
     except Failure as exc:
         raise NotFound('%s\n  the store\'s history could not be read: %s' % (plain, exc))
-    if gone is None:
+    if pending:
+        then = ('closed or retired in this worktree: the deletion of its file is not committed '
+                'yet, so no commit names it')
+    elif gone is None:
         then = 'no commit in the store\'s history removed it: the id is unknown'
     else:
         then = 'removed by %s on %s (session %s): %s' % (gone.sha, gone.when, gone.session or '-',

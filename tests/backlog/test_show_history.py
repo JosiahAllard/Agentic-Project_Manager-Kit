@@ -121,6 +121,50 @@ class MainStoreSideBranch(StoreCase):
         self.assertNotIn(r.git('rev-parse', '--short', merge), said)
 
 
+class MainStoreUncommittedClose(StoreCase):
+    """A main store's `close` deletes the file and commits nothing (store.MainBackend.publish), so
+    no commit in HEAD's history removed it yet: `show` says it was closed or retired here and the
+    deletion is uncommitted, not that the id is unknown."""
+
+    def main_store(self):
+        r = TempRepo()
+        self.addCleanup(r.cleanup)
+        root = r.worktree('w')
+        r.write('docs/backlog/FOO.md', record_text(id='FOO'), root=root)
+        r.commit('adds FOO', 'docs/backlog/FOO.md', cwd=root)
+        store = smod.Store(smod.MainBackend(root, 'docs/backlog'), rmod.Rules())
+        return r, root, store, pmod.Context(store, root, branch=BRANCH)
+
+    def shown(self, store, ctx, rid):
+        with self.assertRaises(NotFound) as cm:
+            pmod.require_shown(store.load(), ctx, rid)
+        return str(cm.exception)
+
+    def test_a_record_closed_and_not_yet_committed_reports_as_closed(self):
+        r, root, store, ctx = self.main_store()
+        store.write(lambda s: pmod.plan_close(s, ctx, 'FOO', 'the work is finished'))
+        self.assertFalse(os.path.exists(os.path.join(root, 'docs', 'backlog', 'FOO.md')))
+        said = self.shown(store, ctx, 'FOO')
+        self.assertIn('no record with `id: FOO`', said)
+        self.assertIn('closed or retired in this worktree', said)
+        self.assertIn('not committed yet', said)
+        self.assertNotIn('the id is unknown', said)
+
+    def test_once_committed_it_names_the_closing_commit(self):
+        r, root, store, ctx = self.main_store()
+        store.write(lambda s: pmod.plan_close(s, ctx, 'FOO', 'the work is finished'))
+        r.git('add', '-A', '--', 'docs/backlog', cwd=root)
+        r.git('commit', '-q', '-m', 'closes FOO: the work is finished\n\nSession: wt-session',
+              cwd=root)
+        said = self.shown(store, ctx, 'FOO')
+        self.assertIn('removed by %s ' % r.git('rev-parse', '--short', 'HEAD', cwd=root), said)
+        self.assertNotIn('not committed yet', said)
+
+    def test_an_id_never_tracked_is_still_unknown(self):
+        r, root, store, ctx = self.main_store()
+        self.assertIn('the id is unknown', self.shown(store, ctx, 'NOPE'))
+
+
 class BackslashFolder(StoreCase):
     """A main store configured as `docs\\items` (a valid RelPath) is looked up as `docs/items`."""
 
