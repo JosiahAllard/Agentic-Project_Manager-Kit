@@ -352,6 +352,18 @@ def plugin_check(kit=None, settings=None, spawn=None, alive=None, folders=None):
     return check
 
 
+def preload():
+    """Load, at start, every kit module a check imports on its first pass, so a landing that writes
+    this checkout later cannot give the running watcher a mix of old and new modules
+    (kitlib.pluginsource.claude after the first PLUGIN difference, kitlib.launcher.usage at the
+    first usage read). The function-level imports stay where they are; they find these loaded."""
+    import kitlib.launcher.settings
+    import kitlib.launcher.usage
+    import kitlib.machinesetup.extras
+    import kitlib.pluginsource
+    import kitlib.pluginsource.claude
+
+
 class Watcher:
     """One watcher run. start() records baselines; poll(now) runs the checks that are due and
     returns their event lines. The caller saves state after each poll and stops at the first
@@ -366,6 +378,7 @@ class Watcher:
     def __init__(self, state, branches, usage_reader, alerts_dir, sessions, newest,
                  idle_minutes=20, branch_poll=300, usage_poll=600, idle_poll=300, tip=branch_tip,
                  notice_dir=None, plugin=None):
+        preload()
         self.s = state
         self.branches = branches
         self.usage_reader = usage_reader
