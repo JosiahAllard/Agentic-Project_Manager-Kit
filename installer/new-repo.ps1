@@ -9,9 +9,9 @@
 # never a copy of the kit):
 #   <Target>\.kit.json            "repo".main_branch, "repo".name, "owner".email, "owner".agent_emails,
 #                                and with -Stack "gate": "tools/gate.json"
-# "repo".name is the repository's column in the rulings ledger (backlog `check` is red without one when
-# the machine has a ledger): -RepoName, else the target folder's name lower-cased. Either must be a
-# lower-case ledger name ([a-z0-9][a-z0-9-]*); a folder name that is not one refuses, asking for -RepoName.
+# "repo".name is the repository's short name: -RepoName, else the target folder's name lower-cased.
+# Either must be a lower-case repo name ([a-z0-9][a-z0-9-]*); a folder name that is not one refuses,
+# asking for -RepoName.
 #   <Target>\<tools_dir>\<n>.py   the kit tool stubs, by `tools\kit_stubs.py write -C <Target>`
 #   <Target>\.gitignore, .gitattributes   templates\common's lines (.claude/worktrees/ and .codex/worktrees/
 #                                keep the agents' worktrees out of the main checkout's status) plus the
@@ -135,16 +135,16 @@ if (($targetFull + '\').StartsWith($kitFull, [StringComparison]::OrdinalIgnoreCa
     Fail "the target $targetFull is inside the kit itself"
 }
 if (-not (Test-Path -LiteralPath $targetFull -PathType Container)) { Fail "$targetFull is not a folder" }
-# "repo".name: the ledger column (kitlib/backlog/ledger.py ledger_name), checked with the grammar of the
-# machine config's ledger_repos. -cnotmatch: PowerShell's -notmatch ignores case.
+# "repo".name: the repository's short name, checked with the lower-case grammar below.
+# -cnotmatch: PowerShell's -notmatch ignores case.
 $RepoName = $RepoName.Trim()
 $nameRx = '^[a-z0-9][a-z0-9-]*$'
 if ($RepoName) {
-    if ($RepoName -cnotmatch $nameRx) { Fail "-RepoName '$RepoName' is not a lower-case ledger name ([a-z0-9][a-z0-9-]*)" 2 }
+    if ($RepoName -cnotmatch $nameRx) { Fail "-RepoName '$RepoName' is not a lower-case repo name ([a-z0-9][a-z0-9-]*)" 2 }
 } else {
     $RepoName = (Split-Path $targetFull -Leaf).ToLowerInvariant()
     if ($RepoName -cnotmatch $nameRx) {
-        Fail "the folder name '$RepoName' is not a lower-case ledger name ([a-z0-9][a-z0-9-]*); give -RepoName <the repo column of the rulings ledger>" 2
+        Fail "the folder name '$RepoName' is not a lower-case repo name ([a-z0-9][a-z0-9-]*); give -RepoName <the repository's short name>" 2
     }
 }
 # Native calls run under Continue: Windows PowerShell 5.1 turns a native stderr line into an error
