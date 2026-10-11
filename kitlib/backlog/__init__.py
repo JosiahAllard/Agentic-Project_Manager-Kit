@@ -12,4 +12,5 @@ docs/backlog-store.md). Logic only: no argparse, no printing, no exit.
   landable  may a branch land without leaving a dead pull
   at_landing  the store at `gate.py land`: the ancestry refusal and closing the landed pulls
   migrate   `backlog.py migrate`: main's records become a new store's root commit
+  opener    open_repo, open_store (the configured store from a worktree), planner (verb -> plan)
 """

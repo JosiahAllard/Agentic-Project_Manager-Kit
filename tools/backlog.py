@@ -25,7 +25,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib.backlog import check as checkmod                        # noqa: E402
 from kitlib.backlog import landable as landmod                      # noqa: E402
-from kitlib.backlog import ledger as lmod                           # noqa: E402
 from kitlib.backlog import migrate as mmod                          # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
@@ -33,13 +32,7 @@ from kitlib.backlog import record as rmod                           # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
 from kitlib.backlog.errors import Failure, Refusal, Usage           # noqa: E402
-from kitlib.config import ConfigError, ledger_path, load as load_config, standing_delegation  # noqa: E402
-from kitlib.git import repo as gitrepo                              # noqa: E402
-
-# `set --<field>` for every field but hold_ruling, whose `--hold-ruling` is the recite.
-FIELD_FLAGS = [k for k in rmod.FIELDS if k != 'hold_ruling']
-WRITES = ('add', 'set', 'block', 'unblock', 'pull', 'release', 'close', 'retire', 'set-status',
-          'unpark')
+from kitlib.backlog.opener import FIELD_FLAGS, WRITES, open_repo, open_store, planner  # noqa: E402
 
 
 def say(line=''):
@@ -267,38 +260,6 @@ def do_landable(args, ctx, snap, backend):
 
 # --- writes ---------------------------------------------------------------------------------------
 
-def set_changes(args):
-    return [(key, getattr(args, 'f_' + key)) for key in FIELD_FLAGS
-            if getattr(args, 'f_' + key) is not None]
-
-
-def planner(args, ctx):
-    v = args.verb
-    if v == 'add':
-        return lambda s: pmod.plan_add(s, ctx, args.id, args.summary, args.scope, args.effort,
-                                       args.ref, args.reopen, session=ctx.session)
-    if v == 'set':
-        body = pmod.read_body_file(args.body_file) if args.body_file else None
-        changes = set_changes(args)
-        return lambda s: pmod.plan_set(s, ctx, args.id, changes, args.unset, args.ruling, body,
-                                       args.hold_ruling)
-    if v == 'block':
-        return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask, args.ruling)
-    if v == 'unblock':
-        return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling)
-    if v == 'pull':
-        return lambda s: pmod.plan_pull(s, ctx, args.id, args.reason, args.ruling, args.blocker)
-    if v == 'release':
-        return lambda s: pmod.plan_release(s, ctx, args.id, args.reason)
-    if v == 'close':
-        return lambda s: pmod.plan_close(s, ctx, args.id, args.reason, args.ruling)
-    if v == 'set-status':
-        return lambda s: pmod.plan_set_status(s, ctx, args.id, args.status, args.q)
-    if v == 'unpark':
-        return lambda s: pmod.plan_unpark(s, ctx, args.id, args.ruling)
-    return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling)
-
-
 def do_write(args, ctx, store):
     change, tip = store.write(planner(args, ctx))
     for line in change.lines:
@@ -349,29 +310,16 @@ def main(argv=None):
                         'Retiring an owner-held record takes `--ruling R-nnnn`, a ledger entry whose '
                         '`Items:` line names it')
         root = os.path.abspath(args.root or os.getcwd())
-        top, why = gitrepo.toplevel(root)
-        if not top:
-            raise Failure(why)
-        try:
-            cfg = load_config(top)
-            ledger_file = ledger_path()
-            standing = standing_delegation()
-        except ConfigError as exc:
-            raise Failure(str(exc))
-        section = cfg.section('backlog')
-        rules = rmod.Rules(section['id_grammar'], section['phases'])
         if args.verb == 'migrate':
+            top, cfg, rules, _, _ = open_repo(root)
             return do_migrate(args, top, cfg, rules)
-        ledger = lmod.Ledger.for_repo(ledger_file, cfg, standing)
-        backend = smod.open_backend(top, cfg, fetch=not args.no_fetch)
-        store = smod.Store(backend, rules, session=args.session)
-        ctx = pmod.Context(store, ledger, top, remote=cfg.remote, main_branch=cfg.main_branch,
-                           branch=args.branch)
+        ctx = open_store(root, fetch=not args.no_fetch, session=args.session, branch=args.branch)
+        store = ctx.store
         if args.verb in WRITES:
             return do_write(args, ctx, store)
         snap = store.load()
         if args.verb == 'landable':
-            return do_landable(args, ctx, snap, backend)
+            return do_landable(args, ctx, snap, store.backend)
         return {'next': do_next, 'show': do_show, 'list': do_list,
                 'check': do_check, 'stale': do_stale}[args.verb](args, ctx, snap)
     except omod.PartitionError as exc:
