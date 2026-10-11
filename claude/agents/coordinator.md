@@ -63,7 +63,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - **Keep the slots full.** After every agent report, landing or owner answer, before anything
   else: count agents in flight against your cap and fill free slots from your work set,
   engine-free work beside lock-bound work. In flight = ListAgents `running`; an agent stopped on
-  its own background gate is waiting, not in flight, and wakes when the gate exits (docs/gate.md
+  its own background gate is waiting, not in flight, and wakes when the gate exits (${CLAUDE_PLUGIN_ROOT}/docs/gate.md
   "Waiting on a gate: who arms what"). A gate whose
   process is gone with no report -> fresh agent re-gates the branch. Nothing re-wakes you later.
 - Nothing startable left in the set and 2 or fewer items being built -> wind down (skill

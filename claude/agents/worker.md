@@ -36,7 +36,7 @@ No profile: stop, say so.
   re-run the gate. Never `reset --hard`, never `git clean`. Resolve merge conflicts with the Edit
   tool only, never a scratch script that rewrites a tracked file; one command per call.
 - Run the gate to a log and read the log; never pipe it through grep, head or tail. Waiting on
-  it: docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
+  it: ${CLAUDE_PLUGIN_ROOT}/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
 - Docs land with the code they describe, on the same branch. Every doc sentence about code names
   the artefact, and every figure has a source; grep before re-pointing a reference; cite sections
   by title. A sentence the code contradicts is reported.
