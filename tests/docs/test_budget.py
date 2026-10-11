@@ -309,6 +309,16 @@ class BranchSize(BudgetRepo):
         self.assertIn(name, out)
         self.assertIn('50000', out)
 
+    def test_a_non_ascii_name_is_listed_in_worktree_mode(self):
+        # Without -z, ls-files C-quotes the name, os.path.isfile misses it and the file is unmeasured.
+        name = 'docs/café notes.md'
+        self.size(GOTCHAS, 100)
+        self.git('checkout', '-q', '-b', 'branch-a')
+        self.size(name, 50000)
+        code, out = self.run_budget('--worktree')
+        self.assertEqual(code, 1, out)
+        self.assertIn(name, out)
+
     def test_an_over_budget_file_that_shrinks_on_the_branch_passes(self):
         self.size(GOTCHAS, 9000)
         self.git('checkout', '-q', '-b', 'branch-a')

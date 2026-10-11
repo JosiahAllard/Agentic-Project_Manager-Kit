@@ -59,6 +59,7 @@ import re
 import time
 
 from kitlib.config import ConfigError, load, load_at
+from kitlib.docs import budget
 from kitlib.git import batch, cmd
 
 INDEX = 'docs/INDEX.md'          # the schema default of "doc_index".index
@@ -552,7 +553,7 @@ def run(root, out, section=None, find=None, tools=False, stale=False, role=None,
     # nothing, never a finding of "no problems".
     listing = git(root, 'ls-tree', '-r', '--name-only', '-z', head)
     # -z: raw NUL-separated paths; without it git C-quotes a non-ASCII, quoted or newline name
-    files = [p for p in listing.stdout.split('\0') if p] if listing.returncode == 0 else []
+    files = budget.names_from(listing.stdout) if listing.returncode == 0 else []
     if listing.returncode != 0 or not files:
         out('doc_index: cannot list %s (git exit %s): %s' % (
             head, listing.returncode, first_line(listing.stderr) or 'no tracked files'))
