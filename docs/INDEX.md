@@ -18,6 +18,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog
 - `docs/backlog-lint.md` | backlog lint | checking backlog records | kw: backlog-lint, lint
 - `docs/backlog-store.md` | backlog store design | changing the store | kw: backlog-store, store
+- `docs/branch-overlap.md` | branch overlap: unmerged branches touching a file set | checking a sweep's exclusions | kw: branch_overlap, overlap
 - `docs/commit.md` | commit.py and machine_paths.py | committing | kw: commit, machine_paths
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
@@ -81,6 +82,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/review_pack.py` | review pack (`docs/review-pack.md`) | kw: review_pack
 - `tools/land.py` | land a reviewed branch (`docs/shipping.md`) | kw: land
 - `tools/landed.py` | has a branch landed (`docs/landed.md`) | kw: landed
+- `tools/branch_overlap.py` | unmerged branches that change files in a set (`docs/branch-overlap.md`) | kw: branch_overlap, overlap
 - `tools/machine_lock.py` | machine lock (`docs/lock-api.md`) | kw: machine_lock, lock
 - `tools/lock_release_check.py` | lock release pre-check (`docs/lock-release.md`) | kw: lock_release_check
 - `tools/worktree_remove.py` | remove a worktree (`docs/worktree-remove.md`) | kw: worktree_remove
