@@ -7,7 +7,7 @@ import unittest
 from kitlib import pmstart
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
-FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+FAKES = dict(pm_data=lambda: None, handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"})
 
 
