@@ -19,7 +19,6 @@ DOCS = ('records', 'spec-writer')
 READ_ONLY = ('reviewer', 'test-runner', 'researcher', 'consultant')
 ROLES = (OWNER, PM, COORDINATOR, DEEP_WORKER) + BUILDERS + (LANDER,) + DOCS + READ_ONLY
 SESSION_ONLY = (OWNER, PM, COORDINATOR, DEEP_WORKER, 'consultant')
-ALIASES = {'conductor': COORDINATOR}
 LEADS = (OWNER, PM, COORDINATOR)
 TOP = (OWNER, PM)
 
@@ -73,7 +72,6 @@ ACTIONS = collections.OrderedDict([
 
 def role_of(name, subagent):
     """The role for a session mark, or a subagent's bare agent_type; None: unlisted."""
-    name = ALIASES.get(name, name)
     if name not in ROLES or (subagent and name in SESSION_ONLY):
         return None
     return name
