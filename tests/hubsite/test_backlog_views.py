@@ -291,15 +291,15 @@ HOME_WIN = HOME_OF.replace("/", "\\")
 STDERR = ("fatal: bad config line 3 in file %s/.gitconfig\n"
           "fatal: unable to access 'https://%s/team/repo.git/': Could not resolve host: %s"
           % (HOME_OF, HOST, HOST))
-PHRASES = (backlog.NO_CHECKOUT, backlog.NO_FOLDER, backlog.NOT_A_REPO, backlog.GIT_NOT_STARTED,
-           backlog.GIT_TIMED_OUT, backlog.GIT_FAILED, backlog.BAD_REF, backlog.BAD_STORE,
-           backlog.FETCH_FAILED, backlog.READ_FAILED)
 
 
 def fixed(error):
     """True when `error` is one of the module's fixed phrases, whole, or one with an exit code."""
+    phrases = (backlog.NO_CHECKOUT, backlog.NO_FOLDER, backlog.NOT_A_REPO, backlog.GIT_NOT_STARTED,
+               backlog.GIT_TIMED_OUT, backlog.GIT_FAILED, backlog.BAD_REF, backlog.BAD_STORE,
+               backlog.FETCH_FAILED, backlog.READ_FAILED)
     codes = [p % n for p in (backlog.GIT_EXITED, backlog.FETCH_EXITED) for n in (1, 128, 129)]
-    return error in PHRASES or error in codes
+    return error in phrases or error in codes
 
 
 class AFailureIsNeverAnEmptyStore(Case):
@@ -614,7 +614,7 @@ class FakeOpener(object):
     def __init__(self):
         self.calls = []
         self.fail = set()
-        self.error = backlog.ReadError(backlog.FETCH_FAILED)    # what a failing fetch raises
+        self.error = None               # what a failing fetch raises; None: as open_read does
         self.fetched = True             # what a fetch answers as `fetched`
         self.hold = None                # an Event a fetch waits on
         self.entered = threading.Semaphore(0)
@@ -641,7 +641,7 @@ class FakeOpener(object):
             if self.hold is not None and not self.hold.wait(WAIT):
                 raise AssertionError("the fetch was never released")
             if root in self.fail:
-                raise self.error
+                raise self.error or backlog.ReadError(backlog.FETCH_FAILED)
         finally:
             with self.guard:
                 self.active -= 1
