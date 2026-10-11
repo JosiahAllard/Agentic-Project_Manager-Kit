@@ -118,11 +118,47 @@ class JsTestsTest(unittest.TestCase):
             self.assertEqual(cli(JS_TESTS, "--glob", "*.cjs", "t", cwd=tmp).returncode, 1)
             self.assertEqual(cli(JS_TESTS, "t", cwd=tmp).returncode, 2)
 
+    def node_run(self, rc, tap):
+        """run_js_tests against one test file with a fake node that exits `rc` printing `tap`."""
+        lines = []
+
+        def run(cmd, **kw):
+            return SimpleNamespace(returncode=rc, stdout="v20\n" if "--version" in cmd else tap, stderr="")
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "t").mkdir()
+            (Path(tmp) / "t" / "a.test.cjs").write_text("", encoding="utf-8")
+            status = self.mod.run_js_tests(["t"], "*.test.cjs", root=tmp, which=lambda n: "node", run=run,
+                                           out=lines.append)
+        return status, lines
+
+    def test_cancelled_line_after_a_pass_is_a_fail(self):
+        tap = "# pass 3\n# cancelled 1\n# fail 0\n"
+        self.assertFalse(self.mod.verdict(0, tap)[0])
+        status, lines = self.node_run(0, tap)
+        self.assertEqual(status, 1)
+        self.assertIn("js-tests: FAIL - 1 test(s) cancelled", lines)
+
+    def test_node_exit_1_or_a_tap_failure_reaches_run_js_tests_fail(self):
+        status, lines = self.node_run(1, "# pass 2\n# fail 0\n")
+        self.assertEqual(status, 1)
+        self.assertIn("js-tests: FAIL - node --test exited 1", lines)
+        status, lines = self.node_run(0, "# pass 2\n# fail 1\n")
+        self.assertEqual(status, 1)
+        self.assertIn("js-tests: FAIL - 1 test(s) failed", lines)
+        self.assertFalse(any(ln.startswith(self.mod.PASS_MARK) for ln in lines))
+
     def test_python_gate_documents_the_unwired_step(self):
         gate = json.loads((STACKS / "python" / "tools" / "gate.json").read_text(encoding="utf-8"))
         self.assertEqual([s["name"] for s in gate["steps"]], ["unit-tests"])
-        self.assertIn("js_tests.py", gate["comment"])
-        self.assertIn('"warn": true', gate["comment"])
+        comment = gate["comment"]
+        self.assertIn("js_tests.py", comment)
+        start = comment.index('{"name": "js-tests"')
+        step, _end = json.JSONDecoder().raw_decode(comment[start:])
+        fields = {"name", "globs", "exclude", "cmd", "full_cmd", "merged_args", "check", "cwd", "pass",
+                  "fail", "ok_exits", "continue", "warn", "requires", "requires_strict"}
+        self.assertLessEqual(set(step), fields)
+        self.assertNotIn("warn", step)
+        self.assertIn("warn_lines", comment)
 
 
 class RunnerShapeTest(unittest.TestCase):
