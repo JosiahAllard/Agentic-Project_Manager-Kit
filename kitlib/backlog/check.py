@@ -2,7 +2,9 @@
 tools/backlog.py; decision cites, anchors, ruling orphans and the UNBUILT lines cut).
 
 A check that looked at nothing over a store that was read is vacuous (an answer); one with no
-population at all is red (it never ran). Ruling checks run only when the ledger is configured.
+population at all is red (it never ran). Ruling checks run only when the ledger is configured;
+a configured ledger with no repo name for this repository (`Ledger.name_error`) makes each one
+red with a single CONFIG ERROR line.
 """
 from . import ledger as lmod
 from . import offer as omod
@@ -19,7 +21,7 @@ HOLD_RULINGS = 'hold rulings'
 
 class CheckResult(object):
     def __init__(self, name, subject, findings, unit='records', warnings=(), proxy=None,
-                 population=None, skipped=None):
+                 population=None, skipped=None, error=None):
         self.name = name
         self.subject = subject
         self.findings = list(findings)
@@ -28,6 +30,7 @@ class CheckResult(object):
         self.proxy = proxy
         self.population = population
         self.skipped = skipped          # why the check did not run (not red)
+        self.error = error              # why the check cannot run although it must (red)
 
     @property
     def failing_subjects(self):
@@ -47,11 +50,14 @@ class CheckResult(object):
 
     @property
     def red(self):
-        return self.empty or bool(self.findings)
+        return self.error is not None or self.empty or bool(self.findings)
 
     def line(self):
         if self.skipped is not None:
             return '%-16s SKIPPED - %s' % (self.name, self.skipped)
+        if self.error is not None:
+            return '%-16s CONFIG ERROR - %s (%d %s not checked)' % (
+                self.name, self.error, self.subject, self.unit)
         if self.empty:
             return '%-16s 0 ok, 0 FAILED, SUBJECT EMPTY - nothing was read' % self.name
         if self.vacuous:
@@ -127,6 +133,9 @@ def _check_rulings(snap, ledger, name, key, kinds, skip=None):
     if not ledger.configured:
         return CheckResult(name, len(subjects), (), unit='ruled records',
                            skipped='no ledger configured (%s ledger_path)' % kuser.display())
+    if ledger.name_error is not None:
+        # one error for the check, not a FAIL per record; red even with no ruled record yet
+        return CheckResult(name, len(subjects), (), unit='ruled records', error=ledger.name_error)
     found, warned = [], []
     if subjects:
         entries, why = ledger.entries()

@@ -12,8 +12,8 @@ rem Notes for this stack:
 rem  - This shim deliberately does NOT take the machine lock: the owner's editor and play runs
 rem    go through it, and so do the several engines of one multi-process test, which belong
 rem    under one lock, not several. The gate (tools/gate.py) books the lock for its own runs; any
-rem    other test run takes it through the kit's lock tool:
-rem      python tools/machine_lock.py run --repo <repo> --slug <you> --kind engine-test -- tools\godot.cmd <args>
+rem    other test run takes it through the kit's lock tool (in the kit's folder, not in this repo):
+rem      python "<kit folder>/tools/machine_lock.py" run --repo <repo> --slug <you> --kind engine-test -- tools\godot.cmd <args>
 rem  - Check for an engine left behind by a killed test run before the next one: a leftover engine
 rem    keeps its ports and files ("Couldn't create an ENet host"); an open editor, whose command
 rem    line names no test scene, is not one.

@@ -19,6 +19,10 @@ PM kit's tools/sync_base.py; docs/sync-base.md).
   a lander's unpushed merge that is later undone. The refusal names the hash to use instead: the
   fetched <remote>/<base> (`git ls-remote <remote> <base>`), never local <base>. A dirty tree is
   refused; a <target> that is not a commit here is NOT FOUND.
+- With `.kit.json` "landing".in_flight set (kitlib.records.inflight), a landing in flight is
+  waited for before the fetch, up to its wait_s (`wait` False: not at all); at the bound a line
+  says so and the merge goes on. Still exactly <target>: when the fetched <remote>/<base> is past
+  it, one `note` line says so and names the tip, for the coordinator to decide.
 - Conflicts: lists them, writes the `Co-Authored-By:` trailer into the message git prepared (so
   the resolution commit carries it whether it is finished with the commit tool (tools/commit.py,
   "commit".merge_fold) or an editor - git's auto-generated message never carried one), and stops
@@ -42,6 +46,7 @@ USAGE 2 the checkout, the configuration or the main-checkout refusal.
 """
 import collections
 import os
+import time
 
 from kitlib.config import ConfigError, load as load_config
 from kitlib.git import checkout as gitcheckout
@@ -49,6 +54,7 @@ from kitlib.git import cmd as gitcmd
 from kitlib.git import refs as gitrefs
 from kitlib.git import repo as gitrepo
 from kitlib.git.batch import CatFile
+from kitlib.records import inflight, landing
 
 TOOL = 'sync_base'
 MODEL_ENV = 'CLAUDE_AGENT_MODEL'
@@ -129,8 +135,10 @@ def arm_merge_msg(root, model):
 
     Returns True when the message now carries the trailer. Changes nothing about what is merged.
     """
-    if _git(root, 'rev-parse', '--verify', '--quiet', 'MERGE_HEAD')[0] != 0:
-        return False           # no merge in progress: there is no prepared message to arm
+    # Not `rev-parse --verify --quiet MERGE_HEAD`: its "none" is a killed git's shape
+    # (gitrefs.KILLED_SHAPE). A merge that cannot be seen is not armed, and the advice says so.
+    if not gitrefs.merge_in_progress(root)[0]:
+        return False           # no merge in progress, or none git could show: nothing to arm
     line = trailer(model)
     path = merge_msg_path(root)
     if not path or not os.path.isfile(path):
@@ -214,13 +222,30 @@ def not_on_remote(target, upstream, remote, base, tip):
                                      base))
 
 
+def in_flight_reader(top, cfg):
+    """kitlib.records.inflight's reader for the repository `top` is in, or None when `.kit.json`
+    "landing".in_flight is unset. Its command runs in the main checkout. Raises ConfigError or
+    kitlib.records.landing.LockError for a lock_file or a git common dir that cannot be used."""
+    if cfg.section('landing').get('in_flight') is None:
+        return None
+    common, why = gitrepo.common_dir(top)
+    if not common:
+        raise landing.LockError('no git common dir for %s: %s' % (top, why))
+    main = os.path.realpath(os.path.abspath(os.path.dirname(common)))
+    lanes = tuple(cfg.section('landing').get('lanes') or ())
+    return inflight.reader(main, cfg, landing.LandingLock.for_config(main, cfg, lanes=lanes))
+
+
 def _size(cat, rev, path):
     got = cat.size(rev, path)
     return got if got is not None else 0
 
 
-def sync(path, target, model, model_source='--model', base=None):
-    """The whole command for the checkout `path` is in. Returns an Outcome; never prints."""
+def sync(path, target, model, model_source='--model', base=None, wait=True, say=None,
+         sleep=time.sleep, clock=time.monotonic):
+    """The whole command for the checkout `path` is in. Returns an Outcome; never prints. `wait`
+    False is --no-wait; `say(line)` gets the lines said while waiting for a landing in flight
+    (None: they go in the Outcome's lines); `sleep` and `clock` are time's, for tests."""
     lines = []
 
     def done(code, *more):
@@ -253,6 +278,12 @@ def sync(path, target, model, model_source='--model', base=None):
     for name in (remote, base):
         if gitrefs.bad_rev(name):
             return done(USAGE, '%s: refused: %s' % (TOOL, gitrefs.bad_rev(name)))
+    try:
+        reader = in_flight_reader(top, cfg)
+    except (ConfigError, landing.LockError) as e:
+        return done(USAGE, '%s: refused: kit configuration: %s' % (TOOL, e))
+    if reader is not None:                    # before the fetch: a landing that pushes is fetched
+        lines.extend(inflight.settle(reader, wait, say, sleep, clock)[1])
     rc, _, err = _git(top, 'fetch', '--quiet', remote,
                       '+refs/heads/%s:refs/remotes/%s' % (base, upstream), timeout=FETCH_TIMEOUT,
                       env=dict(gitcmd.scrubbed_env(), GIT_TERMINAL_PROMPT='0'))
@@ -261,8 +292,11 @@ def sync(path, target, model, model_source='--model', base=None):
                             'judged (%s). Fix the remote, then retry once; if still refused, tell '
                             'the coordinator.' % (remote, base, target,
                                                 err or 'git fetch exited %s' % rc))
-    full, _ = gitrefs.resolve(target, top)
-    if full is None:
+    full, why = gitrefs.resolve(target, top, known=True)
+    if full is None and not gitrefs.bad_rev(target):
+        return done(FAILED, 'refused: whether %s is a commit here could not be read (%s). Retry '
+                            'once; if still refused, tell the coordinator.' % (target, why))
+    if not full:
         return done(FAILED, 'NOT FOUND: %s is not a commit in this repository, even after fetching '
                             '%s. Do not substitute another hash: tell the coordinator.'
                     % (target, upstream))
@@ -275,6 +309,9 @@ def sync(path, target, model, model_source='--model', base=None):
                     % (target, upstream, why))
     if not on:
         return done(FAILED, not_on_remote(target, upstream, remote, base, tip))
+    if reader is not None and tip != full:
+        lines.append('note      %s is at %s, past %s: ask the coordinator whether to sync to it'
+                     % (upstream, tip[:7], full[:7]))
     dirty, why = gitrefs.status(top, untracked='no')
     if dirty is None:
         return done(FAILED, 'refused: could not read the work tree status (%s).' % why)
@@ -305,10 +342,27 @@ def sync(path, target, model, model_source='--model', base=None):
         lines.append('CONFLICTS (%d), merge left in progress:' % len(conflicted))
         lines.extend('  ' + f for f in conflicted)
         return done(FAILED, conflict_advice(base, full, model, arm_merge_msg(top, model)))
-    if _git(top, 'rev-parse', '--verify', '--quiet', 'MERGE_HEAD')[0] == 0:
+    # GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - this asked `rev-parse --verify --quiet MERGE_HEAD`, whose
+    # "no MERGE_HEAD" is exit 1 with no output, a killed git's shape (gitrefs.KILLED_SHAPE): a kill
+    # read as a fast-forward, so the merge was left uncommitted and reported merged.
+    merging, why = gitrefs.merge_in_progress(top)
+    if merging is None:
+        return done(FAILED, 'refused: git merge --no-commit %s exited 0, but whether it left a '
+                            'merge to commit could not be read (%s). Nothing was committed and the '
+                            'merge may be in progress: `git status` says which. Tell the '
+                            'coordinator.' % (full[:7], why))
+    if merging:
         # A real merge commit is needed (not a fast-forward): --no-commit stopped short of
         # making it so the message can carry the Co-Authored-By trailer.
-        with open(merge_msg_path(top), 'r', encoding='utf-8', errors='replace') as f:
+        path = merge_msg_path(top)
+        if not path:
+            # '' is no answer from `rev-parse --git-path` (a git ended from outside included):
+            # opening it would raise. The merge stands uncommitted; say so.
+            return done(FAILED, 'refused: git merge --no-commit %s left a merge to commit, but '
+                                'where git keeps its message (MERGE_MSG) could not be read. '
+                                'Nothing was committed and the merge is left in progress: '
+                                '`git status` shows it. Tell the coordinator.' % full[:7])
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
             merge_msg = f.read().rstrip('\n')
         msg = merge_msg + '\n\n' + trailer(model) + '\n'
         rc, out, err = _git(top, 'commit', '-q', '-F', '-',

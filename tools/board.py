@@ -9,8 +9,8 @@ touched; then the machine lock (the kit lock's own status), the stale-doc count 
 or `unknown`, never a value (docs/preflight.md "board.py").
 
 --write-state rewrites ONLY the block between `<!-- board:begin -->` and `<!-- board:end -->` in
-the state file ("board".state_file, else docs/ops/state.local.md, else ops/state.local.md) of the
-MAIN checkout. Exit 0; 2 on a usage error, a directory in no git work tree, or a `.kit.json` the
+the state file of the MAIN checkout: <git common dir>/kit/board-state.md, or "board".state_file when
+that lies under the git dir (a path in the work tree is refused: it would block a landing). Exit 0; 2 on a usage error, a directory in no git work tree, or a `.kit.json` the
 board cannot use.
 
 A thin entry point (ARCHITECTURE.md, Layers): kitlib.board does the work.
@@ -81,7 +81,10 @@ def main(argv=None, lock_reader=None):
     text = '\n'.join(lines)
     print_safe(text)
     if a.write_state:
-        where = state.path(repo.main_checkout_toplevel(top) or top, rel)
+        where, why = state.path(repo.main_checkout_toplevel(top) or top, rel)
+        if where is None:
+            print_safe('board: refused: %s' % why)
+            return USAGE
         size = state.write(where, time.strftime('%Y-%m-%d %H:%M'), text)
         print_safe('state written: %s (%d bytes)' % (where, size))
     return 0

@@ -56,7 +56,7 @@ Missing any: say what you need, do nothing.
 5. Run the landing tool from the main checkout, with output to a log file in your
    scratch folder:
    `python tools/land.py <branch> --expect-main <sha> --expect-tip <tip> [--lane <lane>] [--summary <text>]`
-   (the repo's stub; the kit checkout's `tools/land.py` where the repo has none).
+   (the repo's stub; `${CLAUDE_PLUGIN_ROOT}/tools/land.py` where the repo has none).
    It waits for its turn in the repo's landing queue (`"landing".wait_s`, or
    `--wait <s>`), merges with `--no-ff`, gates the merged tree, pushes, verifies
    with `ls-remote`, and undoes the merge on red; `python tools/land.py --queue`
@@ -66,7 +66,8 @@ Missing any: say what you need, do nothing.
    fakes a non-zero exit code. A landing can outlast the tool's default timeout
    (10 min), and a killed landing orphans its jobs and can leave a half-landed
    merge. So run it with `run_in_background` and wait for the task notification,
-   never a polling loop (the classifier denies it).
+   never a polling loop (the classifier denies it); no Monitor either (${CLAUDE_PLUGIN_ROOT}/docs/gate.md
+   "Waiting on a gate: who arms what").
 6. Verify, whatever the exit code said (0 LANDED, 1 NOT LANDED, 3 STUCK, 4
    REFUSED, 5 BUSY). At minimum: main and its remote match, and the branch tip is
    an ancestor of the remote main. Its verdict is the log's `LANDED` /

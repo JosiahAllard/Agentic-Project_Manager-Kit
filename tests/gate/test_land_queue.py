@@ -158,7 +158,7 @@ class FirstComeFirstServed(QueueCase):
 class GoneHolder(QueueCase):
     @unittest.skipUnless(os.name == 'nt', 'pid reuse is checked on Windows')
     def test_a_dead_pid_stays_unused_until_the_test_ends(self):
-        # KIT-DEADPID-REUSE: the helper kept only the pid, the Popen's handle closed with it,
+        # The helper once kept only the pid, the Popen's handle closed with it,
         # and Windows could give the pid to a live process mid-test
         pid = self.dead_pid()
         gc.collect()

@@ -85,8 +85,7 @@ class UserConfigTest(unittest.TestCase):
                                  'pm_watch_cmd': 'python pm_watch.py', 'memory_dir': self.home,
                                  'handoff_glob': 'handoff-*.md', 'reminders_file': 'r.json',
                                  'sessions_file': 's.json', 'standing': ['a rule']},
-                    'coordinator_start': {'standing': ['a rule'], 'cap': {'items': 5},
-                                        'review_session': {'name': 'review'}},
+                    'coordinator_start': {'standing': ['a rule'], 'cap': {'items': 5}},
                     'pm_watch': {'repos': ['kit']},
                     'backlog_lint': {'repos': {'kit': {'root': self.home}}}})
         got = user.user_config(self.home)

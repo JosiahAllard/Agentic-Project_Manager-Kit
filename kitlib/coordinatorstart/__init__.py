@@ -188,13 +188,6 @@ def cap(cfg, repo, today):
     return ["agent cap: every configured period for %s has ended; ask the PM" % repo]
 
 
-def review_session(cfg, today):
-    rs = _need(cfg, "review_session")
-    if rs.get("date") == today.isoformat():
-        return ["review session today: %s" % (rs.get("name") or "none named today: fresh reviewers")]
-    return ["review session not set today: ask the PM"]
-
-
 def lock_file_for(cfg, repo):
     """The landing lock's file name the config's "landing_lock" gives repo, or None."""
     locks = (cfg or {}).get("landing_lock") or {}
@@ -307,7 +300,6 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
         checks = [
             ("rulings", lambda: rulings(entry_once(), ledger_file(cfg, home), read)),
             ("cap", lambda: cap(cfg, entry_once()["repo"], now.date())),
-            ("review session", lambda: review_session(cfg, now.date())),
             ("machine state", lambda: machine(entry_once(), run, read, now, home, cfg.get("repos_root"),
                                               lock_file_for(cfg, entry_once().get("repo")))),
             ("other coordinators", lambda: others(entry_once(), procs_once(), env, pid)),

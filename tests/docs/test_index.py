@@ -204,7 +204,7 @@ class ProseLeadEntryTests(unittest.TestCase):
 
 class PathRefs(unittest.TestCase):
     def test_a_double_dot_segment_is_dropped(self):
-        self.assertEqual(index.path_refs('See `binding/.../adapter/Foo.java`.'), [])
+        self.assertEqual(index.path_refs('See `link/.../adapter/Foo.java`.'), [])
 
     def test_a_bare_double_dot_segment_is_also_dropped(self):
         self.assertEqual(index.path_refs('See `foo/../bar.md`.'), [])
@@ -213,7 +213,7 @@ class PathRefs(unittest.TestCase):
         self.assertEqual(index.path_refs('See `docs/ops/flakes..md`.'), ['docs/ops/flakes..md'])
 
     def test_a_backslash_ref_is_normalised_and_checked_by_segment(self):
-        self.assertEqual(index.path_refs(r'See `binding\...\adapter\Foo.java`.'), [])
+        self.assertEqual(index.path_refs(r'See `link\...\adapter\Foo.java`.'), [])
         self.assertEqual(index.path_refs(r'See `tools\gate.py:12`.'), ['tools/gate.py'])
 
     def test_globs_and_placeholders_are_not_paths(self):
@@ -264,8 +264,7 @@ class RepoCase(unittest.TestCase):
 
 
 class IndexCheck(RepoCase):
-    """The index check reads every tracked .md at `head` with ONE `git cat-file --batch`
-    (TOOLS-GIT-BATCH)."""
+    """The index check reads every tracked .md at `head` with ONE `git cat-file --batch`."""
 
     def add_docs(self, first, n):
         for i in range(first, first + n):
@@ -288,6 +287,14 @@ class IndexCheck(RepoCase):
         self.assertEqual(code, 1, out)
         self.assertIn('notes/doc02.md: section "Unindexed" is not in its index block', out)
         self.assertIn('Fix: add the index line in the same commit as the shard or section.', out)
+
+    def test_a_doc_with_a_non_ascii_name_is_listed_and_read(self):
+        # Without -z, git lists "notes/d\303\266c.md" in C-quotes: not ending in .md, never read.
+        self.write('notes/döc.md', '# Doc\n\n## Index\n\n- Body\n\n## Body\n\ntext\n\n## Unindexed\n\nmore\n')
+        self.commit('a non-ASCII name')
+        code, out = self.capture()
+        self.assertEqual(code, 1, out)
+        self.assertIn('notes/döc.md: section "Unindexed" is not in its index block', out)
 
     def test_a_failed_batch_read_is_a_failure_not_a_pass_over_empty_docs(self):
         self.add_docs(1, 2)
@@ -451,7 +458,7 @@ class StaleReportMissingRefs(RepoCase):
 
     def test_an_elided_ref_on_a_state_doc_line_is_skipped_not_reported_missing(self):
         self.write('docs/STATE.md',
-                   'row | present `binding/.../adapter/Foo.java` and `tools/gone.py` too |\n')
+                   'row | present `link/.../adapter/Foo.java` and `tools/gone.py` too |\n')
         self.commit()
         out = self.stale({'state_docs': ['docs/STATE.md']}, 9999)
         self.assertIn('missing ref `tools/gone.py`', out)
@@ -459,7 +466,7 @@ class StaleReportMissingRefs(RepoCase):
 
 
 class ProxyCheckCase(RepoCase):
-    """A repo with an index and one state doc on main, for the PROXY-CHECK-UNLABELLED tests."""
+    """A repo with an index and one state doc on main, for the labelled-listing tests."""
 
     def build(self):
         self.write('.kit.json', json.dumps({'doc_budget': {'state_docs': ['docs/STATE.md']}}))
@@ -470,7 +477,7 @@ class ProxyCheckCase(RepoCase):
 
 
 class ProxyCheckLabels(ProxyCheckCase):
-    """PROXY-CHECK-UNLABELLED: every listing-based mode says which tree it read, and
+    """Every listing-based mode says which tree it read, and
     nothing it was asked to read is skipped in silence."""
 
     def test_the_ok_line_names_the_ref_and_the_md_count(self):
@@ -531,7 +538,7 @@ class ProxyCheckLabels(ProxyCheckCase):
 
 @real_git('git blame')
 class ProxyCheckBlame(ProxyCheckCase):
-    """PROXY-CHECK-UNLABELLED, the stale report: it blames the listed head."""
+    """The stale report: it blames the listed head."""
 
     def test_stale_blames_the_listed_head_and_names_it_on_the_summary(self):
         self.r.git('checkout', '-q', '-b', 'side')

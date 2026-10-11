@@ -5,7 +5,7 @@ description: Use when you need to read or change a repo's backlog store with too
 
 # Backlog operations
 
-The store is read and written only through `python tools/backlog.py` (docs/backlog.md; the store's place comes from the repo's `.kit.json` `"backlog".store`). It is the only tracker. `python tools/backlog.py` with no arguments prints usage. Never edit a record file by hand.
+The store is read and written only through `python tools/backlog.py` (`${CLAUDE_PLUGIN_ROOT}/docs/backlog.md`; the store's place comes from the repo's `.kit.json` `"backlog".store`). It is the only tracker. `python tools/backlog.py` with no arguments prints usage. Never edit a record file by hand.
 
 ## Rules for every call
 

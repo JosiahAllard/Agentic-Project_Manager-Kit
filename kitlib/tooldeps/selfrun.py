@@ -362,7 +362,7 @@ def plan_units(modules, root, jobs, classes=None, times=None, hint=()):
 
 def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, environ=None,
         label='selected', counts=None, classes=None, times_path=None, hint=(), give_back=None,
-        hold=None):
+        hold=None, record_times=True):
     """Run `modules` (checkout `root`), up to `jobs` at once, then the `serial` ones ({module:
     why}) one at a time; write the log to `out`; return (exit status 0, 1 or INTERRUPTED, the
     summary line). `counts` {module: tests} skips the count_tests child (tests use it), and
@@ -371,7 +371,9 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
     while unrecorded. `give_back(units still running)`: called as the pool drains (Giving back).
     `hold`: the run's opted-in pid hold (kitlib.pytests.runner.PidHoldRun), already started by the
     caller before it copied `environ`, so its beacon reaches the units; its end line is written
-    before the summary. None: no hold."""
+    before the summary. None: no hold. `record_times` False: the times at `times_path` still
+    order and split the run, but this run's are not written back (kit_tests --both-tiers'
+    real-git pass, so the file keeps the landing tier's times)."""
     out = out or sys.stdout
     injected = run_unit
     timeout = timeout or UNIT_TIMEOUT
@@ -495,7 +497,8 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
     if hold is not None:
         say('kit_tests: %s' % hold.end())
     wall = time.time() - start
-    save_times(times_path, done, split)
+    if record_times:
+        save_times(times_path, done, split)
     return report(done, wall, jobs, len(alone), out, label,
                   not_run=(total[0] - len(done)) if interrupted else None)
 

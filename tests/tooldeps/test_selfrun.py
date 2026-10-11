@@ -397,6 +397,22 @@ class Times(unittest.TestCase):
             'tests.a.test_m.B': 20.0})                  # a timeout is no measure of the unit
         self.assertEqual(os.listdir(self.dir), [selfrun.TIMES_FILE])     # no temp file left
 
+    def test_a_run_that_does_not_record_still_plans_by_the_recorded_times(self):
+        # kit_tests --both-tiers' real-git pass: ordered by the recorded times, writes none.
+        text = '{"tests.a.test_m": 1.0, "tests.b.test_n": 50.0}'
+        write(self.dir, {selfrun.TIMES_FILE: text})
+        log, out = [], io.StringIO()
+        mods = ['tests.a.test_m', 'tests.b.test_n']
+        rc, _ = selfrun.run(mods, tempfile.gettempdir(), 1, out=out,
+                            run_unit=fake_unit(log, threading.Lock(), pause=0),
+                            counts={m: 3 for m in mods}, times_path=self.path,
+                            record_times=False)
+        self.assertEqual(rc, 0, out.getvalue())
+        started = [m for w, m, _t in log if w == 'start']
+        self.assertEqual(started, ['tests.b.test_n', 'tests.a.test_m'])     # longest first
+        with open(self.path, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), text)
+
     def test_a_split_run_reports_modules_not_units_and_records_times(self):
         log, out = [], io.StringIO()
         mods = ['tests.a.test_m', 'tests.b.test_n']

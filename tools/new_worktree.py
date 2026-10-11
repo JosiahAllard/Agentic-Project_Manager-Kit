@@ -3,6 +3,7 @@
   new_worktree.py [-C DIR] <area>/<slug>                   a NEW branch off the main branch
   new_worktree.py [-C DIR] --existing <area>/<slug>        an EXISTING branch, resumed
                   [--base BRANCH]                          another base than the main branch
+                  [--no-wait]                              do not wait for a landing in flight
 
 -C names the repository by any of its work trees (default: here); the new worktree is always the
 MAIN checkout's. A thin entry point (ARCHITECTURE.md, Layers): it parses, calls
@@ -36,6 +37,8 @@ def parser():
     p.add_argument('-C', dest='root', default='.', help='any work tree of the repository (default: here)')
     p.add_argument('--existing', action='store_true', help='resume a branch that exists')
     p.add_argument('--base', help='the base branch (default: "repo".main_branch)')
+    p.add_argument('--no-wait', dest='wait', action='store_false',
+                   help='do not wait for a landing in flight ("landing".in_flight); say so and go on')
     return p
 
 
@@ -53,7 +56,8 @@ def main(argv=None):
     if top is None:
         p.error('-C: %s' % why)
     try:
-        outcome = new.create(top, a.branch, existing=a.existing, base=a.base)
+        outcome = new.create(top, a.branch, existing=a.existing, base=a.base, wait=a.wait,
+                             say=lambda line: print(line, flush=True))
     except KeyboardInterrupt:
         return 130
     for line in outcome.lines:

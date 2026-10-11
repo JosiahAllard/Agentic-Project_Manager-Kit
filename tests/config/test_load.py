@@ -131,6 +131,17 @@ class GateRulesTest(TreeCase):
         step = {'name': 'a', 'always': True, 'cmd': ['x', '--select'], 'full_cmd': ['x', '--full']}
         self.assertEqual(self.load({'gate': {'steps': [step]}}).section('gate')['steps'], [step])
 
+    def test_daily_cmd_is_a_cmd_step_argv_with_known_placeholders(self):
+        self.assertIn('"daily_cmd": unknown placeholder(s) {repo}',
+                      self.steps({'name': 'a', 'always': True, 'cmd': ['x'], 'daily_cmd': ['{repo}']}))
+        why = self.refused({'hook': {'module': 'gate_hook'},
+                            'gate': {'steps': [{'name': 'a', 'always': True, 'check': 'pins',
+                                                'daily_cmd': ['x']}]}})
+        self.assertIn('daily_cmd only apply to a "cmd" step', why)
+        step = {'name': 'a', 'always': True, 'cmd': ['x', '--select'], 'full_cmd': ['x', '--full'],
+                'daily_cmd': ['x', '--full', '--both-tiers']}
+        self.assertEqual(self.load({'gate': {'steps': [step]}}).section('gate')['steps'], [step])
+
     def test_a_step_needs_globs_or_a_reason_to_run(self):
         self.assertIn('needs "globs"', self.steps({'name': 'a', 'cmd': ['x']}))
 
