@@ -253,11 +253,11 @@ def _fold_arguments(ctx, found_on, why_not_folded):
 
 
 def _bare_branch(ctx, name):
-    """`name` without a `refs/heads/`, `refs/remotes/<remote>/`, `remotes/<remote>/` or
-    `<remote>/` prefix: the local branch a ref spelling means."""
-    for prefix in ('refs/heads/', 'refs/remotes/%s/' % ctx.remote, 'remotes/%s/' % ctx.remote,
-                   '%s/' % ctx.remote):
-        if name.startswith(prefix) and len(name) > len(prefix):
+    """`name` without a `refs/heads/`, `heads/`, `refs/remotes/<remote>/`, `remotes/<remote>/` or
+    `<remote>/` prefix, matched in any letter case: the local branch a ref spelling means."""
+    for prefix in ('refs/heads/', 'heads/', 'refs/remotes/%s/' % ctx.remote,
+                   'remotes/%s/' % ctx.remote, '%s/' % ctx.remote):
+        if name.lower().startswith(prefix.lower()) and len(name) > len(prefix):
             return name[len(prefix):]
     return name
 
@@ -282,7 +282,7 @@ def _fold_overlap(snap, ctx, rid, branch, scopes):
         raise Failure('cannot tell which records %s holds pulled: unreadable record(s): %s'
                       % (branch, ', '.join(unread)))
     for r in snap.readable:
-        if r.get('state') == 'pulled' and r.get('pulled_by') == branch:
+        if r.get('state') == 'pulled' and (r.get('pulled_by') or '').lower() == branch.lower():
             hits += _overlaps(scopes, r.all('scope'), '(scope of %s, pulled by %s)'
                               % (r.stem, branch))
     if hits:

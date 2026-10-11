@@ -90,6 +90,14 @@ class FoundOn(StoreCase):
         self.assertIn('tools/z/a.py vs tools/z/** (scope of BAR, pulled by kit/foo)',
                       str(cm.exception))
 
+    def test_a_differently_cased_branch_still_finds_what_it_holds_pulled(self):
+        self.seed(priced('BAR', state='pulled', pulled_at=TODAY, pulled_by=FOO, scope='tools/z/**'))
+        with self.assertRaises(Refusal) as cm:
+            self.add(['tools/z/a.py'], found_on='KIT/FOO')
+        self.assertIn('tools/z/a.py vs tools/z/** (scope of BAR, pulled by KIT/FOO)',
+                      str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
     def test_a_record_another_branch_holds_does_not_count(self):
         self.seed(priced('BAR', state='pulled', pulled_at=TODAY, pulled_by='kit/other',
                          scope='tools/z/**'))
@@ -144,14 +152,15 @@ class FoundOn(StoreCase):
         self.assertIn('not a branch name', str(cm.exception))
 
     def test_a_ref_spelling_or_a_case_variant_of_the_code_main_is_usage(self):
-        for name in ('Main', 'MAIN', 'refs/heads/main', 'origin/main', 'refs/remotes/origin/main'):
+        for name in ('Main', 'MAIN', 'refs/heads/main', 'origin/main', 'refs/remotes/origin/main',
+                     'heads/main', 'Origin/main', 'Refs/Heads/Main'):
             with self.subTest(name=name):
                 with self.assertRaises(Usage) as cm:
                     self.add(['docs/y.md'], found_on=name)
                 self.assertIn('names the code main', str(cm.exception))
                 self.assertIn('write none', str(cm.exception))
         for name in ('refs/heads/kit/foo', 'origin/kit/foo', 'refs/remotes/origin/kit/foo',
-                     'remotes/origin/kit/foo'):
+                     'remotes/origin/kit/foo', 'heads/kit/foo', 'Origin/kit/foo'):
             with self.subTest(name=name):
                 with self.assertRaises(Usage) as cm:
                     self.add(['docs/y.md'], found_on=name)
