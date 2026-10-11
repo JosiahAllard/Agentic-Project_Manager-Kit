@@ -440,6 +440,77 @@ class Refusals(SyncCase):
         self.assertFalse(self.merged(target))
 
 
+def kill_git(match):
+    """A patch of cmd._run under which each git argv `match(argv)` picks exits 1 having printed
+    nothing (a git ended from outside, kitlib.git.refs.KILLED_SHAPE); every other git runs as
+    before (the spawner captured before the patch: the fake, or real git)."""
+    real = gitcmd.spawner()
+
+    def run(argv, cwd=None, input=None, timeout=None, env=None):
+        if match(argv):
+            return 1, b'', b''
+        return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+    return mock.patch.object(gitcmd, '_run', side_effect=run)
+
+
+def reads_merge_head(argv):
+    return argv[1] == 'rev-parse' and 'MERGE_HEAD' in argv
+
+
+class AKilledGitIsNoAnswer(SyncCase):
+    """KIT-GIT-EXIT1-ANSWERS-2: a git ended from outside exits 1 having printed nothing, the shape
+    `rev-parse --verify --quiet` gave for "no such ref"; such a kill is no answer, never one."""
+
+    def test_a_killed_merge_head_read_after_a_clean_merge_is_refused_not_a_fast_forward(self):
+        target = self.stage_clean()
+        before = self.head()
+        with kill_git(reads_merge_head):
+            done = self.sync(target)
+        text = self.out(done)
+        self.assertEqual(done.code, syncbase.FAILED, text)
+        self.assertNotIn('merged %s' % target[:7], text, 'reported merged with nothing committed')
+        self.assertNotIn('no regrowth', text)
+        self.assertIn('could not be read', text)
+        self.assertIn('Nothing was committed', text)
+        self.assertEqual(self.head(), before, 'no commit was made')
+        self.assertTrue(os.path.isfile(self.git_path('MERGE_HEAD')),
+                        'the merge is left in progress, as the refusal says')
+
+    def test_a_killed_merge_msg_path_read_is_refused_and_the_merge_left_as_is(self):
+        """MERGE_HEAD is there (a merge to commit) but `rev-parse --git-path MERGE_MSG` is killed:
+        merge_msg_path gives '', which open('') would raise on."""
+        target = self.stage_clean()
+        before = self.head()
+        with kill_git(lambda argv: argv[1] == 'rev-parse' and 'MERGE_MSG' in argv):
+            done = self.sync(target)
+        text = self.out(done)
+        self.assertEqual(done.code, syncbase.FAILED, text)
+        self.assertIn('MERGE_MSG', text)
+        self.assertIn('Nothing was committed and the merge is left in progress', text)
+        self.assertNotIn('merged %s' % target[:7], text)
+        self.assertEqual(self.head(), before, 'no commit was made')
+        self.assertTrue(os.path.isfile(self.git_path('MERGE_HEAD')))
+
+    def test_a_killed_merge_head_read_while_arming_says_the_trailer_was_not_written(self):
+        # Not red-first: the old read gave the same False for a kill. Kept as a guard.
+        with kill_git(reads_merge_head):
+            done = self.sync(self.stage_a_conflict())
+        text = self.out(done)
+        self.assertEqual(done.code, syncbase.FAILED, text)
+        self.assertIn('CONFLICTS', text)
+        self.assertIn('could NOT be written', text)
+
+    def test_a_killed_read_of_the_target_is_refused_not_reported_not_found(self):
+        target = self.stage_clean()
+        with kill_git(lambda argv: argv[1] == 'rev-parse' and argv[-1].startswith(target)):
+            done = self.sync(target)
+        text = self.out(done)
+        self.assertEqual(done.code, syncbase.FAILED, text)
+        self.assertNotIn('NOT FOUND', text)
+        self.assertIn('whether %s is a commit here could not be read' % target, text)
+        self.assertFalse(self.merged(target))
+
+
 class DeadCat:
     """A CatFile whose reader died."""
     dead = True

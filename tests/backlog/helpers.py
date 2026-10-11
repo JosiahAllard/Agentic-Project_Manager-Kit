@@ -15,13 +15,13 @@ from tests.gitfixture import TempRepo, fixture_env, rmtree
 
 BASE = [
     ('id', 'FOO'),
-    ('area', 'wg'),
+    ('area', 'xx'),
     ('priority', '-'),
     ('priority_by', '-'),
     ('effort', '-'),
     ('state', 'open'),
     ('blocked_on', '-'),
-    ('scope', 'worldgraph/**'),
+    ('scope', 'routegraph/**'),
     ('summary', 'a thing that is wrong and should be fixed'),
 ]
 BRANCH = 'tools/some-branch'

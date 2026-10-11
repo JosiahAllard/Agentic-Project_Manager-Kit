@@ -38,7 +38,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `backlog.ledger_repo` (string): the ledger repo column; default the repo name
 - `backlog.retired_docs` (list of repo path, default []): docs the backlog replaced
 - `backlog.rename_script` (string, may be empty, default ""): priority rename helper
-- `board.state_file` (repo path): the board state file
+- `board.state_file` (repo path): the board state file, under the git dir (default <git common dir>/kit/board-state.md)
 - `checkout_guard.rule_pointer` (string): where a refusal points for the rule
 - `commit.merge_fold` (bool, default false): commit.py folds a merge commit
 - `commit.coauthor_families` (list of string, default []): accepted Co-Authored-By families beyond Claude
@@ -148,7 +148,7 @@ The machine's own settings, read by `kitlib.config.user`: `config.json` in the f
 - `guard_agent_marks` (list of string): the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json and write-jail rules; it replaces the default list, so it names every mark it holds; unset: coordinator, conductor, deep-worker, consultant and pm (docs/guard.md "Session mark")
 - `guard_mark_roots` (map mark -> list of {path, mode, why}): more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside either machine config folder, the current or the retired one, is ignored unless it is read-only (docs/guard.md "Write jail")
 - `pm_data` (object, checked by kitlib.pmdata): the worktree of the PM data branch: {path, branch, remote} (docs/pm-data-branch.md "Layout")
-- `pm_start` (object, checked by kitlib.pmstart): the PM session-start checklist settings
+- `pm_start` (object, checked by kitlib.pmstart): the PM session-start checklist settings (docs/pm-start.md "Config"); among them hub_urls: account label -> Action Hub URL, one copy per account; hub_url: the single copy, read only while hub_urls has no entry; hub_mirror: the absolute mirror folder for an install without pm_data (docs/action-hub.md "One copy per account")
 - `coordinator_start` (object, checked by kitlib.coordinatorstart): the coordinator session-start settings
 - `conductor_start` (object, checked by kitlib.coordinatorstart): the old name of coordinator_start, read when coordinator_start is absent
   Its install values (`kitlib.coordinatorstart`; nothing in the code supplies them):

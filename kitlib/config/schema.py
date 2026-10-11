@@ -137,7 +137,7 @@ SECTIONS = {
         'rename_script': Field(Str(nonempty=False), '', 'priority rename helper'),
     },
     'board': {
-        'state_file': Field(RelPath(), None, 'the board state file'),
+        'state_file': Field(RelPath(), None, 'the board state file, under the git dir (default <git common dir>/kit/board-state.md)'),
     },
     'checkout_guard': {
         'rule_pointer': Field(Str(), None, 'where a refusal points for the rule'),

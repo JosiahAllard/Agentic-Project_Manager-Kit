@@ -380,62 +380,57 @@ class TheStateFile(Fixture):
         with open(os.path.join(self.root, *parts), encoding='utf-8') as fh:
             return fh.read()
 
-    def test_the_default_is_docs_ops_created_when_missing(self):
+    def state(self):
+        return os.path.join(self.root, '.git', 'kit', 'board-state.md')
+
+    def read_state(self):
+        with open(self.state(), encoding='utf-8') as fh:
+            return fh.read()
+
+    def test_the_default_is_under_the_git_dir_and_leaves_the_tree_clean(self):
         code, out = self.run_board('--write-state')
         self.assertEqual(code, 0, out)
-        body = self.read('docs', 'ops', 'state.local.md')
+        body = self.read_state()
         self.assertIn('feature |', body)
         self.assertIn('## Landing queue', body)
-        self.assertFalse(os.path.exists(os.path.join(self.root, 'ops')))
-        self.assertIn('state written: %s' % os.path.join(self.root, 'docs', 'ops',
-                                                         'state.local.md'), out)
+        self.assertIn(('state written: %s' % os.path.normpath(self.state())).lower(), out.lower())
+        for folder in ('ops', 'docs'):
+            self.assertFalse(os.path.exists(os.path.join(self.root, folder)))
+        self.assertNotIn('state', self.git('status', '--porcelain'))
 
     def test_without_the_flag_nothing_is_written(self):
         self.run_board()
-        self.assertFalse(os.path.exists(os.path.join(self.root, 'docs')))
-
-    def test_an_ops_folder_without_docs_ops_takes_the_state(self):
-        os.makedirs(os.path.join(self.root, 'ops'))
-        self.run_board('--write-state')
-        self.assertIn('feature |', self.read('ops', 'state.local.md'))
-        self.assertFalse(os.path.exists(os.path.join(self.root, 'docs')))
-
-    def test_docs_ops_wins_when_both_exist(self):
-        os.makedirs(os.path.join(self.root, 'ops'))
-        os.makedirs(os.path.join(self.root, 'docs', 'ops'))
-        self.run_board('--write-state')
-        self.assertIn('feature |', self.read('docs', 'ops', 'state.local.md'))
-        self.assertFalse(os.path.exists(os.path.join(self.root, 'ops', 'state.local.md')))
+        self.assertFalse(os.path.exists(self.state()))
 
     def test_write_state_fills_only_the_marked_block(self):
-        os.makedirs(os.path.join(self.root, 'docs', 'ops'))
-        with open(os.path.join(self.root, 'docs', 'ops', 'state.local.md'), 'w',
-                  encoding='utf-8') as fh:
+        os.makedirs(os.path.dirname(self.state()))
+        with open(self.state(), 'w', encoding='utf-8') as fh:
             fh.write(self.BLOCK)
         self.run_board('--write-state')
-        body = self.read('docs', 'ops', 'state.local.md')
+        body = self.read_state()
         self.assertTrue(body.startswith('# state\n\n<!-- board:begin -->\n'), body)
         self.assertTrue(body.endswith('<!-- board:end -->\n\n## Next\nkeep me\n'), body)
         self.assertNotIn('\nold\n', body)
         self.assertIn('feature |', body)
 
-    def test_a_configured_state_file_is_written_and_only_its_block(self):
-        os.makedirs(os.path.join(self.root, 'docs', 'ops'))
-        os.makedirs(os.path.join(self.root, 'notes'))
-        with open(os.path.join(self.root, 'notes', 'board.md'), 'w', encoding='utf-8') as fh:
-            fh.write(self.BLOCK)
-        self.config(board={'state_file': 'notes/board.md'})
+    def test_a_configured_state_file_under_the_git_dir_is_used(self):
+        self.config(board={'state_file': '.git/notes/board.md'})
         code, out = self.run_board('--write-state')
         self.assertEqual(code, 0, out)
-        body = self.read('notes', 'board.md')
-        self.assertIn('keep me', body)
-        self.assertNotIn('\nold\n', body)
-        self.assertIn('feature |', body)
-        self.assertFalse(os.path.exists(os.path.join(self.root, 'docs', 'ops', 'state.local.md')))
+        with open(os.path.join(self.root, '.git', 'notes', 'board.md'), encoding='utf-8') as fh:
+            self.assertIn('feature |', fh.read())
+        self.assertFalse(os.path.exists(self.state()))
+
+    def test_a_configured_state_file_in_the_work_tree_refuses(self):
+        self.config(board={'state_file': 'notes/board.md'})
+        code, out = self.run_board('--write-state')
+        self.assertEqual(code, 2, out)
+        self.assertIn('board: refused: "board".state_file notes/board.md is inside the work tree', out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'notes')))
 
     def test_the_state_goes_to_the_main_checkout_from_a_worktree(self):
         self.run_board('--write-state', where=self.wt)
-        self.assertIn('feature |', self.read('docs', 'ops', 'state.local.md'))
+        self.assertIn('feature |', self.read_state())
         self.assertFalse(os.path.exists(os.path.join(self.wt, 'docs')))
 
     def test_fill(self):

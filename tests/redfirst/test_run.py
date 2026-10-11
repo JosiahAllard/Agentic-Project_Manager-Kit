@@ -7,10 +7,12 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
+from kitlib.git import cmd
 from kitlib.redfirst import run as R
 from kitlib.redfirst import verdict as V
 from tests import gitfixture
@@ -131,6 +133,40 @@ class Arguments(unittest.TestCase):
     def test_also_repeat_accumulates(self):
         a = tool.parse_args(['--tests', 't', '--also', 'x', '--also', 'y'])
         self.assertEqual(a.also, ['x', 'y'])
+
+
+class AKilledGitIsNoAnswer(Case):
+    """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no such commit" as exit 1 with
+    no output, which a git ended from outside also leaves. Both ways git is started here are
+    stubbed (cmd._run, and cmd.subprocess_run, which rev() used), so the old code meets the kill
+    too and fails on what it says, not because real git answered."""
+
+    def test_a_killed_read_of_a_rev_is_refused_as_unread_not_no_commit(self):
+        real_run, real_sp = cmd.spawner(), cmd.subprocess_run
+        spec = 'HEAD^{commit}'
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] == 'rev-parse' and argv[-1] == spec:
+                return 1, b'', b''
+            return real_run(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+
+        def sp(argv, **kw):
+            if 'rev-parse' in argv and argv[-1] == spec:
+                return subprocess.CompletedProcess(argv, 1, '', '')
+            return real_sp(argv, **kw)
+        with mock.patch.object(cmd, '_run', side_effect=run), \
+                mock.patch.object(cmd, 'subprocess_run', side_effect=sp):
+            with self.assertRaises(V.Usage) as cm:
+                R.rev(self.wt, 'HEAD')
+        said = str(cm.exception)
+        self.assertNotIn('does not name a commit', said)
+        self.assertIn('whether HEAD names a commit in %s could not be read' % self.wt, said)
+        self.assertIn('printed nothing', said)
+
+    def test_a_rev_that_names_nothing_is_still_a_usage_error(self):
+        with self.assertRaises(V.Usage) as cm:
+            R.rev(self.wt, 'no-such-branch')
+        self.assertIn('usage: no-such-branch does not name a commit', str(cm.exception))
 
 
 class Runs(Case):

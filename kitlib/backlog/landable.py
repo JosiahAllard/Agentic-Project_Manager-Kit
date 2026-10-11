@@ -7,7 +7,7 @@ store snapshot; with a main store, from the branch's own tip. Reads git only, wr
 """
 import collections
 
-from kitlib.git import cmd
+from kitlib.git import refs
 
 from .plan import branch_name_error
 from .store import MainBackend, records_in_tree
@@ -27,12 +27,18 @@ def check(backend, snap, root, branches):
         if bad:
             out.append(Verdict(branch, CANNOT_TELL, (), bad))
             continue
-        r = cmd.call(['rev-parse', '--verify', '--quiet', 'refs/heads/%s^{commit}' % branch], root)
-        if r.rc != 0:
+        # known=True: a git ended from outside is no answer, never "no such branch"
+        # (KIT-GIT-EXIT1-ANSWERS-2; `rev-parse --verify --quiet` said both as exit 1).
+        tip, why = refs.resolve('refs/heads/%s' % branch, root, known=True)
+        if tip is None:
+            out.append(Verdict(branch, CANNOT_TELL, (), 'cannot read refs/heads/%s: %s'
+                               % (branch, why)))
+            continue
+        if not tip:
             out.append(Verdict(branch, CANNOT_TELL, (), 'no local branch of that name'))
             continue
         if isinstance(backend, MainBackend):
-            records, _, why = records_in_tree(root, cmd.text(r.out).strip(), backend.rel)
+            records, _, why = records_in_tree(root, tip, backend.rel)
             if records == []:
                 why = 'no record under %s/ at its tip' % backend.rel
             if not records:
