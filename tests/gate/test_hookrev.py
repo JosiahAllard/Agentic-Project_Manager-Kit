@@ -7,7 +7,7 @@ import sys
 import traceback
 import unittest
 
-from kitlib.config import load_at
+from kitlib.config import ConfigError, load_at
 from kitlib.gate import hookrev
 from tests import gitfixture
 
@@ -51,6 +51,16 @@ class LoadModuleAtTest(unittest.TestCase):
         except RuntimeError:
             text = traceback.format_exc()
         self.assertIn('%s:tools/repo_hook.py' % self.rev[:10], text)
+
+    def test_bad_gate_checks_error_names_the_commit(self):
+        self.repo.write('tools/repo_hook.py', HOOK + '\nGATE_CHECKS = {"unit": 1}\n')
+        rev = self.repo.commit('bad checks', 'tools/repo_hook.py')
+        cfg = load_at(self.repo.root, rev)
+        names = set(sys.modules)
+        self.addCleanup(lambda: [sys.modules.pop(n) for n in set(sys.modules) - names])
+        with self.assertRaises(ConfigError) as cm:
+            hookrev.load_gate_checks_at(cfg, self.repo.root, rev)
+        self.assertIn('%s:tools/repo_hook.py' % rev[:10], str(cm.exception))
 
 
 if __name__ == '__main__':
