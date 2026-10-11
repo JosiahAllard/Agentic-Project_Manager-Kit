@@ -1193,8 +1193,16 @@ class Lander(object):
                               main_b), ['%s fetch %s' % (g, remote), '%s rev-parse %s' % (
                                   g, tracking)]))
             steps.append(('if that printed the merge %s, the landing is done: skip to the last '
-                          'step, no reset. If it printed %s, the push did not land: go on' % (
-                              self.merge or '(none)', self.expect_main), []))
+                          'step, no reset. If it printed %s, the push did not land: go on. If '
+                          'the fetch failed, stop: what it printed is stale, and main is not '
+                          'moved' % (self.merge or '(none)', self.expect_main), []))
+            if self.merge:          # neither: someone pushed, maybe on top of the merge
+                steps.append(('if it printed anything else, list the remote branches that hold '
+                              'the merge (as in the check when git cannot tell) before any reset: '
+                              'if the list names %s/%s, the merge is landed: skip to the last '
+                              'step, no reset; if it does not, settle %s/%s with whoever pushed it '
+                              'before going on' % (remote, main_b, remote, main_b),
+                              ['%s branch -r --contains %s' % (g, self.merge)]))
         else:
             on = self.on_remote(pushed)
             if on:
@@ -1238,13 +1246,15 @@ class Lander(object):
         upstream = '%s/%s' % (remote, main_b)
         return ('%s is at %s, which this checkout cannot place against the merge %s, so whether '
                 'it holds the merge cannot be told here, and nothing is undone until it can. '
-                'Fetch, then list the remote branches that hold the merge. If the list names %s, '
+                'Fetch, then list the remote branches that hold the merge. If the fetch failed, '
+                'the list is stale: stop here and do not move %s. If the list names %s, '
                 'the merge is landed and nothing is to be undone: bring the checkout to %s by hand '
                 '(HEAD on %s, no tracked change or untracked file, %s fast-forwarded to %s), then '
                 'go to the last step. If it does not, the merge is not on %s: settle %s with '
                 'whoever pushed it, put %s back at its base (--expect-main %s) by hand, keeping '
                 'any commits beyond the merge on a branch first, then go to the last step' % (
-                    upstream, (pushed or '?')[:10], (self.merge or '?')[:10], upstream, upstream,
+                    upstream, (pushed or '?')[:10], (self.merge or '?')[:10], main_b, upstream,
+                    upstream,
                     main_b, main_b, upstream, remote, upstream, main_b, self.base_text()),
                 ['%s fetch %s' % (g, remote), '%s branch -r --contains %s' % (g, self.merge)])
 
