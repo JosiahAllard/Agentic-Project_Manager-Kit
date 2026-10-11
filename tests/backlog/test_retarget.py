@@ -8,6 +8,7 @@ from kitlib.backlog import store as smod
 
 from tests.backlog import test_cli
 from tests.backlog.helpers import StoreCase, rec
+from tests.backlog import test_verbs
 
 OLD, NEW = 'docs/guide', 'docs/design/guide'
 
@@ -16,17 +17,22 @@ class Rewrites(unittest.TestCase):
     """The pure path rules."""
 
     def test_scope_exact_under_and_glob(self):
-        self.assertEqual(retmod.scope_member(OLD, OLD, NEW), (NEW, False))
-        self.assertEqual(retmod.scope_member(OLD + '/a.md', OLD, NEW), (NEW + '/a.md', False))
-        self.assertEqual(retmod.scope_member(OLD + '/**', OLD, NEW), (NEW + '/**', False))
+        self.assertEqual(retmod.scope_member(OLD, OLD, NEW), (NEW, None))
+        self.assertEqual(retmod.scope_member(OLD + '/a.md', OLD, NEW), (NEW + '/a.md', None))
+        self.assertEqual(retmod.scope_member(OLD + '/**', OLD, NEW), (NEW + '/**', None))
 
     def test_scope_is_component_wise(self):
-        self.assertEqual(retmod.scope_member('docs/guidebook.md', OLD, NEW), (None, False))
-        self.assertEqual(retmod.scope_member('docs/guide2/**', OLD, NEW), (None, False))
-        self.assertEqual(retmod.scope_member('none', OLD, NEW), (None, False))
+        self.assertEqual(retmod.scope_member('docs/guidebook.md', OLD, NEW), (None, None))
+        self.assertEqual(retmod.scope_member('docs/guide2/**', OLD, NEW), (None, None))
+        self.assertEqual(retmod.scope_member('none', OLD, NEW), (None, None))
 
-    def test_a_glob_above_old_covers_it_and_is_left(self):
-        self.assertEqual(retmod.scope_member('docs/**', OLD, NEW), (None, True))
+    def test_a_glob_or_folder_above_old_covers_it_and_is_left(self):
+        self.assertEqual(retmod.scope_member('docs/**', OLD, NEW), (None, retmod.COVERS))
+        self.assertEqual(retmod.scope_member('docs', OLD, NEW), (None, retmod.COVERS))
+
+    def test_a_case_only_match_is_flagged_never_rewritten(self):
+        for member in ('Docs/Guide', 'docs/GUIDE/a.md', 'DOCS/**'):
+            self.assertEqual(retmod.scope_member(member, OLD, NEW), (None, retmod.CASE), member)
 
     def test_text_whole_paths_only(self):
         t = retmod.text_value
@@ -36,11 +42,28 @@ class Rewrites(unittest.TestCase):
                          'docs/guidebook.md, docs/guide.md, x/docs/guide')
         self.assertEqual(t('`docs/guide`', OLD, NEW), '`docs/design/guide`')
 
+    def test_a_one_component_old_rewrites_only_where_a_slash_follows(self):
+        self.assertEqual(retmod.text_rewrite('the tools in tools/x.py; tools', 'tools', 'bin'),
+                         ('the tools in bin/x.py; tools', 2))
+
     def test_bad_paths_are_usage(self):
         for old, new in ((OLD + '/**', NEW), (OLD, NEW + '/*'), (OLD, OLD), ('/abs', NEW),
-                         (OLD, 'a\\b'), ('', NEW)):
+                         (OLD, 'a\\b'), ('', NEW), ('none', NEW), (OLD, 'none')):
             with self.assertRaises(Usage, msg=(old, new)):
                 retmod.check_paths(old, new)
+
+    def test_one_path_under_the_other_is_usage(self):
+        for old, new in (('a', 'a/b'), ('a/b', 'a'), ('A', 'a/b')):
+            with self.assertRaises(Usage, msg=(old, new)) as ctx:
+                retmod.check_paths(old, new)
+            self.assertIn('lies under', str(ctx.exception))
+
+    def test_a_machine_path_is_usage(self):
+        for drive in test_verbs.MachinePaths.DRIVES:
+            for old, new in ((drive, NEW), (OLD, drive)):
+                with self.assertRaises(Usage, msg=(old, new)) as ctx:
+                    retmod.check_paths(old, new)
+                self.assertIn('machine path', str(ctx.exception))
 
 
 class Plan(StoreCase):
@@ -83,6 +106,21 @@ class Plan(StoreCase):
         self.assertEqual(self.get('AAA').all('scope'), [NEW + '/a.md'])
         self.assertIn('(dropped: the record already has the new path)', '\n'.join(change.lines))
 
+    def test_lines_left_alone_are_listed(self):
+        self.seed(rec('AAA', scope=['docs', 'tools/x.py']),
+                  rec('BBB', scope='Docs/Guide/a.md'),
+                  rec('CCC', scope='tools/y.py', summary='make the tools faster, see tools/y.py'))
+        text = '\n'.join(retmod.plan_retarget(self.store.load(), OLD, NEW).lines)
+        self.assertIn('not rewritten: AAA `scope: docs` covers %s from above' % OLD, text)
+        self.assertIn('not rewritten: BBB `scope: Docs/Guide/a.md` matches %s only when case is '
+                      'ignored' % OLD, text)
+        change = retmod.plan_retarget(self.store.load(), 'tools', 'bin')
+        text = '\n'.join(change.lines)
+        self.assertIn('summary: make the tools faster, see tools/y.py -> make the tools faster, '
+                      'see bin/y.py', text)
+        self.assertIn('not rewritten: CCC `summary: make the tools faster, see tools/y.py` has '
+                      '`tools` with no `/` after it', text)
+
     def test_nothing_matches_writes_nothing(self):
         self.seed(rec('CCC', scope='tools/y.py'))
         tip = self.remote_tip()
@@ -108,6 +146,17 @@ class RetargetCli(unittest.TestCase):
         self.assertIn('scope: %s/a.md' % NEW, self.ok('show', 'FOO'))
         log = self.repo.git('log', '--format=%s', smod.STORE_REF)
         self.assertEqual(log.split('\n')[0], 'backlog: retarget %s -> %s in 1 record(s)' % (OLD, NEW))
+
+    def test_a_dry_run_runs_the_write_checks(self):
+        # `NONE` is a path shape, but as a scope member it casefolds into the `none` sentinel: a
+        # schema FAIL, which store.check_change refuses before anything is written.
+        self.ok('add', 'FOO', '--summary', 'a thing to move', '--scope', 'a/x')
+        tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)
+        rc, out = self.run_tool('retarget', 'a/x', 'NONE')
+        self.assertEqual(rc, 2, out)
+        self.assertIn('the write would leave the store invalid', out)
+        self.assertNotIn('DRY RUN', out)
+        self.assertEqual(self.repo.git('ls-remote', 'origin', smod.STORE_REF), tip)
 
     def test_a_glob_old_is_usage(self):
         rc, out = self.run_tool('retarget', OLD + '/**', NEW)
