@@ -373,26 +373,53 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None):
     return Change({rid: _text(pairs, rec.body)}, subject, lines, ruling=ruling)
 
 
-def plan_unblock(snap, ctx, rid, ruling=None):
+def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
+    """Clear one blocker. A record with one blocker opens, `on` and `reason` optional; one with
+    several needs `on` (the member to clear) and `reason`, and keeps the rest blocked. The reason
+    goes into the commit subject, as `release`'s does."""
     rec = require(snap, rid)
     if rec.get('state') != 'blocked':
         raise Usage('`%s` is `state: %s`, not `blocked`: there is nothing to unblock'
                     % (rid, rec.get('state')))
-    unheld = clears_owner_blocker(rec, ['-'])
+    members = rec.all('blocked_on')
+    several = len(members) > 1
+    if on is None and several:
+        raise Refusal('`%s` is blocked on %s; `unblock` clears one blocker, named, with a reason:\n%s'
+                      % (rid, ', '.join(members), '\n'.join(
+                          '  python tools/backlog.py unblock %s --on %s --reason "<why>"%s'
+                          % (rid, m, ' --ruling R-nnnn' if m == 'owner' else '') for m in members)))
+    if on is not None and on not in members:
+        raise Usage('`--on %s` is not a blocker of `%s`; it is blocked on %s'
+                    % (on, rid, ', '.join(members)))
+    if reason is not None or several:
+        refuse_machine_paths('--reason', reason)
+        bad = reason_error(reason, '--reason')
+        if bad:
+            raise Usage(bad)
+    left = [m for m in members if m != on] if several else []
+    unheld = clears_owner_blocker(rec, left)
     if unheld and ruling is None:
         raise Refusal('`%s` is blocked on the owner, so unblocking it needs `--ruling R-nnnn`' % rid)
     if ruling is not None:
         if not unheld:
-            raise Usage('`--ruling %s` was given, and `%s` is not blocked on the owner' % (ruling, rid))
+            raise Usage('`--ruling %s` was given, and this unblock of `%s` releases no hold of the '
+                        'owner\'s' % (ruling, rid))
         lmod.check_ruling(ctx.ledger, rid, rec, ruling, 'unblock', hold_only=True)
-    drop = 'owner' in rec.all('blocked_on') and rec.get('priority') != rmod.OWNER_PRIORITY
+    drop = unheld and rec.get('priority') != rmod.OWNER_PRIORITY
     pairs = [(k, v) for k, v in rec.pairs() if not (drop and k == 'owner_ask')]
-    pairs = rmod.apply_changes(pairs, [('state', ['open']), ('blocked_on', ['-'])]
+    changes = [('blocked_on', left)] if left else [('state', ['open']), ('blocked_on', ['-'])]
+    pairs = rmod.apply_changes(pairs, changes
                                + ([('hold_ruling', [ruling])] if ruling is not None else []))
-    lines = ['UNBLOCKED %s - state: open, blocked_on: -' % rid]
+    if left:
+        lines = ['UNBLOCKED %s - `%s` removed -> %s' % (rid, on, ', '.join(left))]
+    else:
+        lines = ['UNBLOCKED %s - state: open, blocked_on: -' % rid]
     if drop and rec.has('owner_ask'):
         lines.append('  owner_ask dropped: nothing waits on him now. It was: %s' % rec.get('owner_ask'))
-    return Change({rid: _text(pairs, rec.body)}, 'backlog: unblock %s' % rid, lines, ruling=ruling)
+    subject = 'backlog: unblock %s' % rid
+    if reason is not None:
+        subject += ' from %s: %s' % (on or members[0], ' '.join(reason.split()))
+    return Change({rid: _text(pairs, rec.body)}, subject, lines, ruling=ruling)
 
 
 # --- park / unpark -----------------------------------------------------------------------
