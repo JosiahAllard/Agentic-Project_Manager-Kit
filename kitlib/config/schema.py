@@ -135,7 +135,7 @@ SECTIONS = {
         'ledger_repo': Field(Str(), None, 'the ledger repo column; default the repo name'),
     },
     'board': {
-        'state_file': Field(RelPath(), None, 'the board state file'),
+        'state_file': Field(RelPath(), None, 'the board state file, under the git dir (default <git common dir>/kit/board-state.md)'),
     },
     'checkout_guard': {
         'rule_pointer': Field(Str(), None, 'where a refusal points for the rule'),

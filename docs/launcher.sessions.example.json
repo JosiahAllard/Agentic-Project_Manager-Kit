@@ -18,6 +18,14 @@
         "name": "lane-coordinator-a1",
         "autostart": false
     },
+    "kit": {
+        "repo": "kit",
+        "agent": true,
+        "stem": "kit-coordinator",
+        "state": "<kit repo>/docs/ops/state.local.md",
+        "account": 1,
+        "name": "kit-coordinator-a1"
+    },
     "research": {
         "repo": "app",
         "agent": false,

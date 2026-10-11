@@ -129,8 +129,10 @@ def arm_merge_msg(root, model):
 
     Returns True when the message now carries the trailer. Changes nothing about what is merged.
     """
-    if _git(root, 'rev-parse', '--verify', '--quiet', 'MERGE_HEAD')[0] != 0:
-        return False           # no merge in progress: there is no prepared message to arm
+    # Not `rev-parse --verify --quiet MERGE_HEAD`: its "none" is a killed git's shape
+    # (gitrefs.KILLED_SHAPE). A merge that cannot be seen is not armed, and the advice says so.
+    if not gitrefs.merge_in_progress(root)[0]:
+        return False           # no merge in progress, or none git could show: nothing to arm
     line = trailer(model)
     path = merge_msg_path(root)
     if not path or not os.path.isfile(path):
@@ -261,8 +263,11 @@ def sync(path, target, model, model_source='--model', base=None):
                             'judged (%s). Fix the remote, then retry once; if still refused, tell '
                             'the coordinator.' % (remote, base, target,
                                                 err or 'git fetch exited %s' % rc))
-    full, _ = gitrefs.resolve(target, top)
-    if full is None:
+    full, why = gitrefs.resolve(target, top, known=True)
+    if full is None and not gitrefs.bad_rev(target):
+        return done(FAILED, 'refused: whether %s is a commit here could not be read (%s). Retry '
+                            'once; if still refused, tell the coordinator.' % (target, why))
+    if not full:
         return done(FAILED, 'NOT FOUND: %s is not a commit in this repository, even after fetching '
                             '%s. Do not substitute another hash: tell the coordinator.'
                     % (target, upstream))
@@ -305,10 +310,27 @@ def sync(path, target, model, model_source='--model', base=None):
         lines.append('CONFLICTS (%d), merge left in progress:' % len(conflicted))
         lines.extend('  ' + f for f in conflicted)
         return done(FAILED, conflict_advice(base, full, model, arm_merge_msg(top, model)))
-    if _git(top, 'rev-parse', '--verify', '--quiet', 'MERGE_HEAD')[0] == 0:
+    # GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - this asked `rev-parse --verify --quiet MERGE_HEAD`, whose
+    # "no MERGE_HEAD" is exit 1 with no output, a killed git's shape (gitrefs.KILLED_SHAPE): a kill
+    # read as a fast-forward, so the merge was left uncommitted and reported merged.
+    merging, why = gitrefs.merge_in_progress(top)
+    if merging is None:
+        return done(FAILED, 'refused: git merge --no-commit %s exited 0, but whether it left a '
+                            'merge to commit could not be read (%s). Nothing was committed and the '
+                            'merge may be in progress: `git status` says which. Tell the '
+                            'coordinator.' % (full[:7], why))
+    if merging:
         # A real merge commit is needed (not a fast-forward): --no-commit stopped short of
         # making it so the message can carry the Co-Authored-By trailer.
-        with open(merge_msg_path(top), 'r', encoding='utf-8', errors='replace') as f:
+        path = merge_msg_path(top)
+        if not path:
+            # '' is no answer from `rev-parse --git-path` (a git ended from outside included):
+            # opening it would raise. The merge stands uncommitted; say so.
+            return done(FAILED, 'refused: git merge --no-commit %s left a merge to commit, but '
+                                'where git keeps its message (MERGE_MSG) could not be read. '
+                                'Nothing was committed and the merge is left in progress: '
+                                '`git status` shows it. Tell the coordinator.' % full[:7])
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
             merge_msg = f.read().rstrip('\n')
         msg = merge_msg + '\n\n' + trailer(model) + '\n'
         rc, out, err = _git(top, 'commit', '-q', '-F', '-',

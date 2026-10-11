@@ -8,15 +8,15 @@ Held for the joint review: no repository runs it yet.
 python tools/landed.py [-C DIR] <branch or commit>
 ```
 
-Exit 0 `LANDED`; 1 `NOT YET`; 2 `FAILED`, `CANNOT ANSWER` (the ref does not resolve), the kit configuration refused, or usage; 130 Ctrl+C.
+Exit 0 `LANDED`; 1 `NOT YET`; 2 `FAILED`, `CANNOT ANSWER` (the ref does not resolve, or git gives no answer for it or for whether the remote exists), the kit configuration refused, or usage; 130 Ctrl+C.
 
 ## What it decides on
 
 LANDED means the tip is an ancestor of `<remote>/<main_branch>`, read with `git ls-remote`.
 
-- No such remote: the local main branch decides.
+- No remote at all (`git remote get-url` exits 2 and `git remote` lists none): the local main branch decides. The remote missing while others exist is a misnamed `"repo".remote`, and that is `CANNOT ANSWER` naming the remotes there are (the rule of kitlib/backlog/store.py `find_remote`; `test_a_misnamed_remote_cannot_answer_and_names_the_remotes_there_are`). Any other failure of that lookup, a git ended from outside included, is `CANNOT ANSWER` (tests/landed/test_landed.py `test_a_killed_remote_lookup_cannot_answer_never_lets_the_local_main_decide`). A local main git gives no answer for is `local ... (UNKNOWN: <why>)` and `contained  UNKNOWN`, never "no such branch here" (`refs.resolve(known=True)`; tests/landed/test_landed.py `test_a_killed_read_of_the_local_main_is_unknown_not_no_such_branch`).
 - The remote is unreachable: the last fetched `refs/remotes/<remote>/<main>` decides, and the output says so.
-- The remote's sha is not in this clone: `contained  UNKNOWN`, with the fetch to run first.
+- The remote's sha is not in this clone: `contained  UNKNOWN`, with the fetch to run first. An ancestry read git gives no answer for is `contained  UNKNOWN` with the why, never `no`.
 
 When the branch has not landed, it prints three more lines:
 

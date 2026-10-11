@@ -24,7 +24,7 @@ The asker keeps working: an engineering question never parks an item for long.
 3. Send it to the PM instead when unsure, when the change is hard to reverse, or when it crosses repos.
 
 ## How the owner keeps oversight
-- **Review flags:** the owner names an item, area or record prefix ("review designs: SCRIPT-API-*"). The PM keeps the list in config `eng_review`. Matching questions go to the hub instead of being decided, by the consultant or the PM.
+- **Review flags:** the owner names an item, area or record prefix ("review designs: EX-API-*"). The PM keeps the list in config `eng_review`. Matching questions go to the hub instead of being decided, by the consultant or the PM.
 - **Daily digest:** a hub inbox note listing the day's delegated rulings, one line each with its R-id. The owner can overturn any of them; an overturn is a new ruling by the owner that supersedes it.
 
 ## Kit pieces (built on kit/eng-rulings; live after the joint review)

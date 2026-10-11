@@ -205,12 +205,14 @@ def _check(root, out, base, head, worktree, report, failures):
         out('doc_budget: %s' % base_note)
 
     # A base that does not resolve would make every comparison below empty, and an empty one passes.
-    verified = g('rev-parse', '--verify', '--quiet', base + '^{commit}')
-    # `--quiet` makes exit 1 git's "no such commit"; any other non-zero exit is a failed read.
-    if verified.returncode == 1:
+    # known=True: '' is git's "no such commit"; None is no answer, a git ended from outside
+    # included (KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no such commit" as exit
+    # 1 with no output, a killed git's shape, gitrefs.KILLED_SHAPE).
+    verified, why = gitrefs.resolve(base, root, known=True)
+    if verified == '':
         stop('doc_budget: base ref %s does not exist here. Pass --base <ref>.' % base)
-    if verified.returncode != 0:
-        stop('doc_budget: could not read base ref %s (%s).' % (base, failure(verified)))
+    if verified is None:
+        stop('doc_budget: could not read base ref %s (%s).' % (base, why))
 
     def sizes_or_why(ref):
         r = g('ls-tree', '-r', '--long', '-z', ref)
@@ -260,7 +262,7 @@ def _check(root, out, base, head, worktree, report, failures):
         stop('doc_budget: cannot find the merge base of %s and %s (%s).'
              % (base, head_ref, failure(mb_read) if mb_read.returncode
                 else 'git exit 0, but it printed nothing'))
-    base_sha = verified.stdout.strip()
+    base_sha = verified
     touched = None                      # None: up to date with the base, so every file is the branch's
     if mb not in (base_sha, base):
         mb_sizes, why = sizes_or_why(mb)

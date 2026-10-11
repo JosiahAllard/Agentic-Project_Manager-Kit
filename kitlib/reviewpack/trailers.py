@@ -79,7 +79,12 @@ def branch_commits(base, root, head='HEAD', remote='origin', approved_key=OWNER_
     exclude = [base]
     if not base.startswith('refs/'):         # a full ref has no tracking ref of its own
         tracking = 'refs/remotes/%s/%s' % (remote, base)
-        if gitcmd.call(['rev-parse', '--verify', '--quiet', tracking], root).rc == 0:
+        # known=True: a git ended from outside is no answer, never "no tracking ref", which
+        # counted the remote's newer base commits as the branch's (KIT-GIT-EXIT1-ANSWERS-2).
+        got, why = gitrefs.resolve(tracking, root, peel=None, known=True)
+        if got is None:
+            return None, 'cannot read %s: %s' % (tracking, why)
+        if got:
             exclude.append(tracking)
     r = gitcmd.call(['log', '--format=' + log_format(approved_key), head, '--not'] + exclude
                     + ['--'], root)

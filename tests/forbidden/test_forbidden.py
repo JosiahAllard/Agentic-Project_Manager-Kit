@@ -544,6 +544,21 @@ class DefaultBase(GitRepo):
         self.cli()
         self.assertEqual(self.bases, ['master'])
 
+    def test_a_killed_read_of_main_is_no_base_never_master(self):
+        """KIT-GIT-EXIT1-ANSWERS-2: a git ended from outside exits 1 having printed nothing, the
+        shape `rev-parse --verify --quiet` gave for "no such ref"; it picked master."""
+        real = gitcmd.spawner()
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            if argv[1] == 'rev-parse' and argv[-1].startswith('refs/heads/main'):
+                return 1, b'', b''
+            return real(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+        with mock.patch.object(gitcmd, '_run', side_effect=run):
+            with self.assertRaises(F.ForbiddenError) as cm:
+                F.default_base(self.root)
+        self.assertIn('cannot tell whether the branch main exists', str(cm.exception))
+        self.assertIn('printed nothing', str(cm.exception))
+
     def test_a_configured_main_branch_wins(self):
         self.repo.git('branch', 'trunk')
         self.config(repo={'main_branch': 'trunk'})

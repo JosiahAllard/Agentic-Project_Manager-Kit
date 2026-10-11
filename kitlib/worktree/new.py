@@ -57,6 +57,10 @@ FETCH_TIMEOUT = 300                  # seconds
 Outcome = collections.namedtuple('Outcome', 'code lines')
 
 
+class _Unread(Exception):
+    """A base ref git gave no answer for (create's refs())."""
+
+
 def branch_ok(branch, existing):
     """True when `branch` is a name this mode takes."""
     return bool((EXISTING_BRANCH if existing else NEW_BRANCH).match(branch or ''))
@@ -206,13 +210,25 @@ def create(root, branch, existing=False, base=None):
     pushed = '%s/%s' % (remote, base)
 
     def refs():
-        # --verify --quiet: a ref that does not resolve reads as '', not as its own name echoed
-        return (git(main, 'rev-parse', '--verify', '--quiet', base + '^{commit}')[1],
-                git(main, 'rev-parse', '--verify', '--quiet',
-                    'refs/remotes/%s^{commit}' % pushed)[1])
-    m, om = refs()
-    held, line = lock_line(lock)          # after the refs: see choose_base
-    start, m, om, why = choose_base(m, om, held, refs, free_why=line)
+        """(m, om): each a commit, or '' when the ref names none; _Unread when git gives no answer.
+
+        GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - this asked `rev-parse --verify --quiet`, whose "no such
+        ref" is exit 1 with no output, a killed git's shape (gitrefs.KILLED_SHAPE): a kill read as
+        "did not resolve". resolve(known=True) tells the two apart; a str or a raise, never None,
+        so `m[:7]` below always has a string."""
+        got = []
+        for rev in (base, 'refs/remotes/%s' % pushed):
+            sha, why = gitrefs.resolve(rev, main, known=True)
+            if sha is None:
+                raise _Unread('%s could not be read (%s)' % (rev, why))
+            got.append(sha)
+        return got[0], got[1]
+    try:
+        m, om = refs()
+        held, line = lock_line(lock)          # after the refs: see choose_base
+        start, m, om, why = choose_base(m, om, held, refs, free_why=line)
+    except _Unread as e:
+        return refuse('refused   %s; nothing was created. %s' % (e, REFUSAL))
     if held:
         out.append('landing   in progress: %s' % line)
     behind = None if held or start is not None else behind_count(main, m, om)
