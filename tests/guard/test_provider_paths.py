@@ -32,7 +32,11 @@ class ProviderItems(unittest.TestCase):
                      "Set-Content -Path 'Env:\\FOO' -Value x",
                      'Add-Content -Path env:FOO -Value x',
                      'New-Item -Path Environment::FOO -Value x',
-                     'New-Item -Path Microsoft.PowerShell.Core\\Environment::FOO -Value x'):
+                     'New-Item -Path Microsoft.PowerShell.Core\\Environment::FOO -Value x',
+                     'ni env:FOO; sc env:BAR x',
+                     'Remove-Item env:FOO',
+                     'Rename-Item env:FOO BAR',
+                     'Get-Item env:FOO; Clear-Content env:FOO'):
             with self.subTest(text):
                 d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
                 self.assertIsNone(d, d and d.reason)
@@ -125,6 +129,51 @@ class NativePrograms(unittest.TestCase):
         d = self.decide(text, self.w.wt)
         self.assertIsNotNone(d, 'allowed: %s' % text)
         self.assertEqual(d.rule, 'write-jail', d.reason)
+
+
+class NarrowSkip(unittest.TestCase):
+    """Only the provider-aware item and content cmdlets skip, and only on a line of plain calls:
+    a script function (Compress-Archive takes the folder of env:FOO.zip as '.'), the file-only
+    writers, and a line with an expression or member call are judged as files."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def test_file_only_writers_stay_judged(self):
+        for text in ('Compress-Archive -Path README.md -DestinationPath env:FOO.zip',
+                     'Out-File -FilePath env:x',
+                     '"x" | Out-File env:x',
+                     'Invoke-WebRequest https://example.invalid/x -OutFile env:x',
+                     'Invoke-RestMethod https://example.invalid/x -OutFile env:x',
+                     '"x" | Tee-Object -FilePath env:x',
+                     'Get-Process | Export-Csv env:x',
+                     'Get-Process | Export-Clixml env:x',
+                     'Start-Transcript -Path env:x',
+                     'mkdir env:x'):
+            with self.subTest(text):
+                d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
+                self.assertIsNotNone(d, 'allowed: %s' % text)
+                self.assertEqual(d.rule, 'main-checkout', d.reason)
+
+    def test_lines_that_are_not_plain_calls_stay_judged(self):
+        item = 'New-Item env:\\x.txt'
+        for pre in ("$d=$ExecutionContext.('Session'+'State').('Dri'+'ve'); $d.Remove('env', $true, 'local'); "
+                    "$d.New($p, 'local')",
+                    "$s = $ExecutionContext.SessionState",
+                    "$x = 1",
+                    "Write-Output $x.Remove()",
+                    "[IO.Directory]::CreateDirectory('x')",
+                    "$h = $Host",
+                    "$o = New-Object -TypeName System.Object",
+                    "Add-Type -TypeDefinition $t",
+                    "using namespace System.IO",
+                    "Get-Process"):
+            for text in ('%s; %s' % (pre, item), '%s\n%s' % (item, pre)):
+                with self.subTest(text):
+                    d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
+                    self.assertIsNotNone(d, 'allowed: %s' % text)
+                    self.assertIn(d.rule, ('main-checkout', 'unreadable'), d.reason)
 
 
 class RemapForms(unittest.TestCase):
