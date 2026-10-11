@@ -87,7 +87,7 @@ Kit tools run from the kit checkout; in a repository they run through the stubs,
 1. **Start the PM.** Open Claude Code in the PM's own folder. A session-start hook prints a
    checklist of what needs doing (docs/pm-start.md).
 2. **Start a coordinator** in each repository you want worked on, with the environment variable
-   `PM_KIT_ROLE` set to `coordinator`: `claude --agent coordinator --remote-control "<name>"`, or let
+   `PM_KIT_ROLE` set to `coordinator`: `claude --agent pm-kit:coordinator --remote-control "<name>"`, or let
    `tools/launch.py start` do it (docs/launcher.md).
    Use exactly the name its entry in the PM's sessions file has (docs/pm-start.md), or the PM's
    checklist reports it as not running. On its first start it drafts the repository's profiles

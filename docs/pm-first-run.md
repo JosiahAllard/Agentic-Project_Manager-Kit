@@ -84,7 +84,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
     `"<key>": {"name": "<name>", "repo": "<repo name>"}` (docs/pm-start.md). Start the coordinator
     with `python <kit>/tools/launch.py start --session <key> --account <n>` (the entry then also needs
     `stem` and `agent`, docs/launcher.md "State files"; it sets `PM_KIT_ROLE` to `coordinator`), or by hand in the repository with `PM_KIT_ROLE` set to `coordinator`:
-    `claude --agent coordinator --remote-control "<name>"`. The name must match the entry
+    `claude --agent pm-kit:coordinator --remote-control "<name>"`. The name must match the entry
     exactly, case included: the checklist finds a coordinator only by that flag. On its first
     start it drafts the repository's profiles for the owner to approve.
     `--account current` starts it on the account you are on. Add the kit's own coordinator the same way

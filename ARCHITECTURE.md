@@ -54,7 +54,7 @@ The kit ships as a Claude Code plugin, which the owner installs once.
 
 ## What comes from ~/.claude
 - **Into the plugin:**
-  - agents, named pm-kit:<name> once KIT-AGENTS-IN-PLUGIN lands
+  - agents, named pm-kit:<name>
   - hooks: the coordinator SessionStart hook; guard.py stays in each account's settings
   - tools: the lock goes into kitlib; the rest become optional packages
   - generic skills: backlog-ops, branch-review, branch-sync, coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch, machine-lock-run, mutation-testing, session-handoff, shell-and-worktree-traps, subagent-dispatch

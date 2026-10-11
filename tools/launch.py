@@ -52,7 +52,8 @@ def parser():
     s.add_argument('--name')
     s.add_argument('--predecessor', help='the session this one replaces, named in the first message')
     s.add_argument('--no-agent', action='store_true', help='a plain session')
-    s.add_argument('--agent', help='the agent file (default: launcher.coordinator_agent)')
+    s.add_argument('--agent', help='the agent (pm-kit:<name>; a bare kit agent name is qualified; '
+                   'default: launcher.coordinator_agent)')
     s.add_argument('--model')
     s.add_argument('--effort')
     s.add_argument('--autocompact', type=int, default=None,
