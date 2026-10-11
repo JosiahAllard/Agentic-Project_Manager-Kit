@@ -244,13 +244,18 @@ python tools/kit_stubs.py write [-C DIR] [--tools a,b,...] [--replace] [--dry-ru
 python tools/kit_stubs.py check [-C DIR] [--tools a,b,...]
 ```
 
-Logic: `kitlib/stubs/__init__.py`; tests: `tests/stubs/test_kit_stubs.py`.
+Logic: `kitlib/stubs/__init__.py`; tests: `tests/stubs/test_kit_stubs.py`,
+`tests/stubs/test_live_root.py`.
 
 A stub is `<checkout>/<tools_dir>/<name>.py`. It runs `<kit>/tools/<name>.py` in a child Python
 with the stub's arguments.
 
 - The kit's location is written into the stub. No environment variable names the kit, the
   repository or its config.
+- That location is the live kit checkout (`kitlib.stubs.kit_root`). When `kit_stubs.py` runs
+  from a pinned export of pushed main (a gate's `kit-stubs` step under a pinned gate.py or
+  land.py, docs/gate.md "Pinned tools"), it is `KIT_LIVE_ROOT` (`kitlib.pluginsource.live_root`), never the
+  export: `write` names the main checkout and `check` holds stubs that name it current.
 - The child runs in the caller's directory when that is inside the stub's checkout, else in the
   stub's checkout. So a kit tool's default `-C .` names the stub's checkout, and a linked
   worktree's stub acts on that worktree.

@@ -54,10 +54,13 @@ def stop_cmd(name, successor=None, pid=None):
     return cli(*parts)
 
 
-def predecessor_text(old):
-    return ("You succeed %s, which has checkpointed and starts nothing new. After a work-set wind-down it is "
-            "still landing its own branches: leave those branches and the landing slot to it until it hands them "
-            "over; otherwise don't wait on it. " % old)
+def predecessor_text(old, coordinator=True):
+    """The first-message opening for a successor. Only a coordinator's successor lands: the landing
+    sentence is left out for any other role (a consultant, a deep-worker, a plain session)."""
+    if not coordinator:
+        return "You succeed %s, which has checkpointed and does nothing more; never wait on it. " % old
+    return ("You succeed %s, which has checkpointed and lands nothing more. Land every LAND verdict its state "
+            "note lists at once; never wait on it. " % old)
 
 
 def _check_common(model, effort, autocompact, lo_hi=AUTOCOMPACT):
@@ -113,11 +116,11 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
                   'with the PM (the session named %s), and begin.' % (brief, PM_NAME)) if brief else default_prompt
     elif brief:
         prompt = 'Read your standing brief %s first. ' % brief + prompt
+    role = window.role_for(agent, settings.coordinator_agent)
     if predecessor:
-        prompt = predecessor_text(predecessor) + prompt
+        prompt = predecessor_text(predecessor, role == window.COORDINATOR) + prompt
     repo_label = repo or os.path.basename(os.path.normpath(folder))
     name = name or '%s-%s-%s' % (repo_label.lower(), agentname.bare(agent) or 'session', tag)
-    role = window.role_for(agent, settings.coordinator_agent)
     command = window.claude_command(name, prompt, run_as(agent), model, effort, autocompact)
     text = window_text(settings, host, name, role, folder, command, config_dir)
     if whatif:
