@@ -11,8 +11,11 @@ kit checkout, or set up a fresh machine that has none, as one reviewed command (
                              machine config's own; with --fresh, the plugin's account folders:
                              those plus each folder of the launcher's accounts and orgs)
            --kit DIR (default: the checkout this file is in)   --home DIR (default: the user's home)
-           --agent-temp DIR (default: the machine config's agent_temp_sweep.dir)
+           --agent-temp DIR (default: the machine config's agent_temp_sweep.dir, then the user
+                             environment's AGENT_TEMP, then AgentTemp at the root of the kit's drive)
            --desktop DIR (default: the user's Desktop)
+           --register-sweep-task  with --apply, register the agent-temp-sweep scheduled task (the
+                             owner's act; without it the plan prints the line that registers it)
   Exactly one of --old-kit and --fresh; --pm-settings goes with --fresh only.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.machinesetup.run, prints and
@@ -41,6 +44,8 @@ def main(argv=None):
     p.add_argument('--home', default=os.path.expanduser('~'))
     p.add_argument('--agent-temp', default=None)
     p.add_argument('--desktop', default=None)
+    p.add_argument('--register-sweep-task', action='store_true',
+                   help="register the agents' temp sweep task (the owner's act)")
     p.add_argument('--apply', action='store_true')
     try:
         a = p.parse_args(argv)
@@ -55,7 +60,8 @@ def main(argv=None):
     safe_stdout()
     ctx = machinesetup.Context(a.home, a.kit, a.old_kit, config_dirs=a.config_dir,
                                agent_temp=a.agent_temp, desktop=a.desktop,
-                               fresh=a.fresh, pm_settings=a.pm_settings)
+                               fresh=a.fresh, pm_settings=a.pm_settings,
+                               register_sweep_task=a.register_sweep_task)
     code, _ = machinesetup.run(ctx, apply=a.apply, out=lambda line: print(line, flush=True))
     return code
 
