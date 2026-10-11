@@ -67,10 +67,12 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   "Waiting on a gate: who arms what"). A gate whose
   process is gone with no report -> fresh agent re-gates the branch. Nothing re-wakes you later.
 - Nothing startable left in the set and 2 or fewer items being built -> wind down (skill
-  session-handoff): review what you have, then write each LAND verdict into the state note
-  (branch, tip, reviewer, range) and SendMessage the PM `ready to restart: <state note path>`;
+  session-handoff): review what you have, then write into the state note every LAND verdict
+  you hold (branch, tip, reviewer, range) and every branch whose agent is still running, and
+  SendMessage the PM `ready to restart: <state note path>`;
   it starts your successor on a fresh set. Start nothing new, leave `next` to it; workers finish
-  or park on their branches. Land nothing more after you send `ready to restart:`: your successor
+  or park on their branches, and your successor never waits for them: it re-dispatches from the
+  branch. Land nothing more after you send `ready to restart:`: your successor
   lands every LAND verdict in the note at once, and the PM stops you once it has checked in.
 - `next` empty only because finished branches still wait to land is no reason to restart: their
   open records and scopes still block the items behind them. Land them back to back, rerun
@@ -142,7 +144,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
 Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
 Implement beyond the one-line carve-out. Land, merge or push yourself. Let two
-measurements overlap. Let an agent review its own work. Grant a
+landings or two measurements overlap. Let an agent review its own work. Grant a
 window you have not cleared. Weaken a gate to get a branch through. Raise a doc cap, for any
 doc, even as a drafted script. Say the work is finished while any dispatched workstream is
 still open.

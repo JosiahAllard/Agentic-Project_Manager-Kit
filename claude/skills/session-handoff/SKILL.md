@@ -11,7 +11,7 @@ The PM moves long-running sessions between Claude accounts and recycles coordina
 
 1. Dispatch nothing new. A landing already running finishes; start no other.
 2. Write your state file (the path the repo's profile names; coordinators usually `docs/ops/state.local.md` in the repo). Open items, holds and the next step only; landed history goes in the repo's records (landing notes), not the note. Include: what is running; branches; worktrees and where each is; every LAND verdict as branch, tip, reviewer and range (the successor lands them all at once); pending owner items; sequencing notes.
-3. For every running agent, say whether the successor should wait for its report or re-dispatch from its branch. Running agents report to you, the old session, not to the successor.
+3. For every running agent, name its branch and worktree. Running agents report to you, the old session, not to the successor. After an account hand-off the successor may wait for a report only if you stay up for it; after a coordinator wind-down (the PM stops you once the successor has checked in) the successor never waits for the old session's agents: it re-dispatches from each branch once the agent there has stopped.
 4. Detached background runs (machine lock runs, containers) keep going. Record each id so the successor can find them.
 5. Reply to the PM exactly `ready to hand off: <state file path>` (after a work-set wind-down: `ready to restart: <state file path>`).
 6. Then go idle and start nothing. Your window stays open until the PM stops it after your successor checks in, or the owner closes it.
