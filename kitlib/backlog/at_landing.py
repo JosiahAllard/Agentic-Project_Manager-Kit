@@ -11,8 +11,10 @@ branch checked out) takes part too: the PM's records of this repository live the
                     pulled, in the configured store (one commit each, "closes <ID>: landed <merge
                     sha>") and in the PM data store (the record file deleted in that worktree, not
                     committed); and every record a `Closes: <ID>[, <ID>]` trailer of the branch's
-                    commits names (closes_trailers), while pulled, whoever pulled it. What cannot
-                    be closed is a WARNING line naming the command, and the landing stands
+                    commits names (closes_trailers), while pulled, whoever pulled it (a holder
+                    that is a live branch other than main is a WARNING: tell its builder). What
+                    cannot be closed is a WARNING line naming the command, and the landing
+                    stands; trailer ids no store holds are one NOTE line
   landable_commands the `backlog.py landable` command of each store that takes part
 
 Neither creates a store or adds the store's fetch refspec when the remote has no store, and
@@ -25,6 +27,7 @@ from kitlib import pluginsource, pmdata
 from kitlib.git import cmd, refs
 from kitlib.git import repo as gitrepo
 
+from . import offer
 from . import plan as pmod
 from . import record as rmod
 from . import store as smod
@@ -179,9 +182,10 @@ def closes_ids(values):
 def closes_trailers(root, tip, base):
     """`(ids, None)`: the ids the `Closes:` trailers name (git's trailer parser, so only the
     message's last paragraph counts; the key in any case) in the commits `tip` has and `base` does
-    not, merges included; or `(None, why)`."""
-    out, why = cmd.run_text(['log', '--format=%(trailers:key=Closes,valueonly)', tip, '--not',
-                             base, '--'], root)
+    not, merges included; or `(None, why)`. Values are read unfolded, so a value wrapped onto a
+    continuation line is one value, not a second one starting with a stray word."""
+    out, why = cmd.run_text(['log', '--format=%(trailers:key=Closes,valueonly,unfold)', tip,
+                             '--not', base, '--'], root)
     if out is None:
         return None, why
     return closes_ids(out.splitlines()), None
@@ -250,6 +254,14 @@ def _pm_data_store(root, configured):
     return pm_root, pm_cfg, backend, None
 
 
+class _Seen(object):
+    """What the stores close_landed reads say about the ids the trailers name: `held`, the ids
+    some store holds; `read`, how many stores were read; `unread`, whether one could not be."""
+
+    def __init__(self):
+        self.held, self.read, self.unread = set(), 0, False
+
+
 def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None):
     """Close every record `branch`, which landed as `merge`, holds pulled: in the configured store
     when it is a `ref` or `branch` store, and in the PM data branch's store (_pm_data_store). With
@@ -257,9 +269,10 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None)
     `Closes:` trailer in `tip --not base` names (closes_trailers) is closed too while it is
     pulled, whoever pulled it: a pull made in the main checkout records the main branch, which no
     landing matches. The lines to print (`closed ...`, and a `WARNING: ...` naming the command for
-    each record or store that could not be closed, or trailers that could not be read). [] when
-    neither store takes part and no trailer names a record, or nothing is pulled."""
-    lines, named = [], []
+    each record or store that could not be closed, or trailers that could not be read; one
+    `NOTE: ...` naming the trailer ids no store read holds, when every store taking part was read).
+    [] when neither store takes part and no trailer names a record, or nothing is pulled."""
+    lines, named, seen = [], [], _Seen()
     if tip and base:
         named, why = closes_trailers(root, tip, base)
         if named is None:
@@ -271,10 +284,11 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None)
     backend = ref_store(root, cfg, fetch=True)
     if backend is not None:
         lines.extend(_close_in(backend, root, cfg, branch, merge, session,
-                               lambda *args: close_command(root, *args), named))
+                               lambda *args: close_command(root, *args), named, seen))
     pm_root, pm_cfg, pm_backend, why = _pm_data_store(
         root, backend.describe() if backend is not None else None)
     if why:
+        seen.unread = True
         lines.append('WARNING: %s landed, and the PM data branch\'s backlog store was not read '
                      '(%s), so no record it holds pulled there was closed; see which from that '
                      'worktree with: %s' % (branch, _one_line(why),
@@ -282,24 +296,36 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None)
                                                             branch)))
     elif pm_backend is not None:
         lines.extend(_close_in(pm_backend, pm_root, pm_cfg, branch, merge, session,
-                               lambda *args: backlog_command(pm_root, *args), named))
+                               lambda *args: backlog_command(pm_root, *args), named, seen))
+    unknown = [rid for rid in named if rid not in seen.held]
+    if unknown and seen.read and not seen.unread:
+        lines.append('NOTE: %s landed, and a Closes trailer of its commits names %s, which no '
+                     'backlog store this landing reads holds (a typo, or a case that differs from '
+                     'the record\'s file name?), so nothing was closed for %s'
+                     % (branch, ', '.join(unknown), 'it' if len(unknown) == 1 else 'them'))
     return lines
 
 
-def _close_in(backend, root, cfg, branch, merge, session, command, named=()):
+def _close_in(backend, root, cfg, branch, merge, session, command, named=(), seen=None):
     """close_landed for one store: `backend` of the repository or worktree `root` with `cfg`;
     `command(*args)` is the printed command line for a write the landing could not make. `named`:
     the ids the branch's `Closes:` trailers name; one this store does not hold is another store's
-    or none, and says nothing; one it holds and not pulled is a WARNING naming the command."""
+    or none (close_landed's NOTE, from `seen`, a _Seen); one it holds and not pulled is a WARNING
+    naming the command; one pulled by a branch that is neither main nor a dead pull (no local,
+    remote-tracking or worktree branch by that name: offer.live_branches) is closed, with a
+    WARNING that the holder's builder must be told."""
+    seen = seen if seen is not None else _Seen()
     reason = 'landed %s' % merge
     unread = backlog_command(root, 'landable', branch)
     if getattr(backend, 'remote', None):
         remote_tip, why = refs.ls_remote(backend.remote, backend.remote_ref, root,
                                          timeout=FETCH_TIMEOUT)
         if remote_tip is None:
+            seen.unread = True
             return [_store_unread(branch, '%s on %s: %s' % (backend.remote_ref, backend.remote,
                                                             why), unread)]
         if not remote_tip:
+            seen.read += 1                  # no store, so it holds none of them
             return []                       # no store: create none, add no refspec
     section = cfg.section('backlog')
     store = smod.Store(backend, rmod.Rules(section['id_grammar'], section['phases']),
@@ -308,7 +334,10 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=()):
         snap = store.load()
         smod.require_readable(snap)
     except Refusal as exc:
+        seen.unread = True
         return [_store_unread(branch, '%s: %s' % (exc.label, exc), unread)]
+    seen.read += 1
+    seen.held.update(rid for rid in named if snap.get(rid) is not None)
     held = set(r.stem for r in snap.readable               # the store's lookup key (Snapshot.by_id)
                if r.get('state') == 'pulled' and r.get('pulled_by') == branch)
 
@@ -333,6 +362,7 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=()):
         by_trailer[rid] = rec.get('pulled_by') or '?'
     ctx = pmod.Context(store, root, remote=cfg.remote, main_branch=cfg.main_branch, branch=branch)
     folder = isinstance(backend, smod.MainBackend)
+    live = []                               # offer.live_branches' answer, once it is needed
     for rid in sorted(held | set(by_trailer)):
         how = (', which a Closes trailer of its commits names' if rid in by_trailer
                else ', which it holds pulled')
@@ -357,7 +387,28 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=()):
             lines.append('closed %s in the backlog store: %s (store at %s)%s'
                          % (rid, reason, (tip or '?')[:10], whose))
         lines.extend('  ' + line for line in change.lines if line != 'CLOSED %s' % rid)
+        if rid in by_trailer:
+            lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root))
     return lines
+
+
+def _live_holder_warning(branch, rid, holder, cfg, live, root):
+    """[] when `holder`, who had `rid` pulled before a Closes trailer of `branch` closed it, is
+    the landed branch, the main branch (a pull made in the main checkout), unnamed, or a dead
+    pull (git answered and no branch has that name); else the WARNING that the holder's builder
+    must be told. `live`: offer.live_branches' answer, filled on first use; a probe that fails
+    counts the holder live (fail toward telling)."""
+    if holder in (branch, cfg.main_branch, '?', ''):
+        return []
+    if not live:
+        live.extend(offer.live_branches(root, cfg.remote))
+    names, why = live
+    if names is not None and holder not in names:
+        return []
+    probe = ('' if names is not None else
+             ' (git could not tell whether that branch is still live: %s)' % _one_line(why))
+    return ['WARNING: %s landed, and its Closes trailer closed %s while %s holds it pulled%s; '
+            'tell the builder of %s that %s is closed' % (branch, rid, holder, probe, holder, rid)]
 
 
 def landable_commands(root, cfg, branch):
