@@ -36,7 +36,7 @@ from kitlib.backlog import record as rmod                           # noqa: E402
 from kitlib.backlog import retarget as retmod                       # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
-from kitlib.backlog.errors import Failure, Refusal, Usage           # noqa: E402
+from kitlib.backlog.errors import Failure, IndexStale, Refusal, Usage  # noqa: E402
 from kitlib.config import ConfigError, load as load_config          # noqa: E402
 from kitlib.git import repo as gitrepo                              # noqa: E402
 
@@ -325,15 +325,35 @@ def planner(args, ctx):
     return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling)
 
 
+def index_stale(exc):
+    """The WARNING line for a write that is committed with the worktree's index left stale
+    (errors.IndexStale): the write stands, so the verb still reports it and exits 0."""
+    say('WARNING: %s' % ' '.join(str(exc).split()))
+
+
 def do_write(args, ctx, store):
-    change, tip = store.write(planner(args, ctx))
+    made = []
+
+    def plan(snap):                              # the change, kept for an IndexStale report
+        made[:] = [planner(args, ctx)(snap)]
+        return made[0]
+    stale = None
+    try:
+        change, tip = store.write(plan)
+    except IndexStale as exc:                    # committed: report it as written
+        stale, change, tip = exc, made[0], exc.commit
     for line in change.lines:
         say(line)
     if not change.writes:
         say('nothing changed; nothing was written')
         return 0
-    say('WROTE %s -> %s' % (store.backend.describe(), tip[:10] if tip else 'the worktree'))
+    if stale is not None and not tip:
+        say('WROTE %s -> HEAD already held it' % store.backend.describe())
+    else:
+        say('WROTE %s -> %s' % (store.backend.describe(), tip[:10] if tip else 'the worktree'))
     say('  %s' % change.subject)
+    if stale is not None:
+        index_stale(stale)
     return 0
 
 
@@ -357,9 +377,15 @@ def do_catch_up(args, store):
     with `--apply PATH...` commit the named record paths (kitlib.backlog.store.catch_up)."""
     backend = store.backend
     if args.apply is not None:
-        tip = smod.catch_up(backend, args.apply, store.session)
+        stale = None
+        try:
+            tip = smod.catch_up(backend, args.apply, store.session)
+        except IndexStale as exc:                # committed: report it as caught up
+            stale, tip = exc, exc.commit
         say('CAUGHT UP %d record path(s) in %s -> %s'
             % (len(set(args.apply)), backend.describe(), tip[:10] if tip else 'nothing to commit'))
+        if stale is not None:
+            index_stale(stale)
         return 0
     if not isinstance(backend, smod.MainBackend):
         raise Usage('`catch-up` is for a folder store; %s commits its own writes'
@@ -376,7 +402,7 @@ def do_catch_up(args, store):
     records = [p for kind, p in found if kind != 'not a record']
     if records:
         say('DRY RUN: nothing was committed; commit the record paths with: catch-up --apply %s'
-            % ' '.join(records))
+            % smod.quoted(records))
     else:
         say('DRY RUN: no uncommitted record path')
     return 0

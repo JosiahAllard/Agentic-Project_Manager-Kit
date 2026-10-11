@@ -29,7 +29,7 @@ from kitlib.git import batch, cmd, refs
 from kitlib.git import repo as gitrepo
 
 from . import record as rmod
-from .errors import Failure, IndexStale, Uncommitted, Usage
+from .errors import Failure, IndexStale, Overtaken, Uncommitted, Usage
 
 STORE_REF = 'refs/backlog/main'
 STORE_DIR = 'backlog'
@@ -539,6 +539,12 @@ CATCH_UP = 'backlog.py catch-up'
 _UNSET = object()
 
 
+def quoted(paths):
+    """`paths` as the arguments of a printed command line: each in double quotes, so a store
+    folder with a space in its name stays one argument."""
+    return ' '.join('"%s"' % p for p in paths)
+
+
 def _store_env():
     """The environment of the main backend's git children: cmd.scrubbed_env() (no GIT_DIR,
     GIT_WORK_TREE, GIT_COMMON_DIR, GIT_CEILING_DIRECTORIES) without GIT_INDEX_FILE too, so an index
@@ -555,10 +561,11 @@ class MainBackend(object):
 
     In the PM data branch's worktree (commit_branch) the write also commits exactly the record
     paths it wrote, as one commit on HEAD by compare-and-swap (`update-ref HEAD <new> <old>`,
-    rebuilt on a HEAD that moved unless the move changed one of those paths), and sets those
-    paths in the real index; nothing else in that worktree is staged or committed. A commit that
-    fails is Uncommitted (the files stay written); an index left stale after the commit is
-    IndexStale. Its git calls drop an inherited GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE
+    rebuilt on a HEAD that moved unless the move changed one of those paths since publish read
+    HEAD, before it checked the files: Overtaken), and sets those paths in the real index; nothing
+    else in that worktree is staged or committed. A commit that fails is Uncommitted (the files
+    stay written); an index left stale after the commit is IndexStale. Its git calls drop an
+    inherited GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE
     (_store_env). Elsewhere it commits nothing."""
 
     def __init__(self, root, rel):
@@ -624,6 +631,9 @@ class MainBackend(object):
                           % (self.root, 'the main checkout' if place.kind == gitrepo.MAIN
                              else 'not one (%s)' % (place.detail or place.kind)))
         branch = self.commit_branch(place)
+        # HEAD before the files are checked: a commit of one of these paths that lands after the
+        # check and before the first commit attempt is then seen by _publish_commit's compare.
+        base = self._head() if branch else None
         now = self._read()
         for stem in writes:
             if now.get(stem) != snap.raw.get(stem):
@@ -637,7 +647,7 @@ class MainBackend(object):
         self._write_files(writes, now, paths, branch)
         if not branch:
             return None
-        return self._commit(blobs, message, paths)
+        return self._commit(blobs, message, paths, base)
 
     def _write_files(self, writes, before, paths, branch):
         """Write `writes`; on an OSError put back the files already written (`before`: their
@@ -687,7 +697,17 @@ class MainBackend(object):
         return Uncommitted('%s written but not committed in %s: %s. `%s` lists the uncommitted '
                            'record paths and `%s --apply %s` commits them'
                            % (', '.join(paths), self.root, why, CATCH_UP, CATCH_UP,
-                              ' '.join(paths)), paths)
+                              quoted(paths)), paths)
+
+    def _overtaken(self, paths, changed, head):
+        compare = 'git -C "%s" diff HEAD -- %s' % (self.root, quoted(changed))
+        return Overtaken(
+            '%s written but not committed in %s: another commit changed %s on HEAD since this '
+            'write began (HEAD is now %s), and committing the files would overwrite that commit. '
+            'Compare each with HEAD first (%s); `%s --apply` commits the worktree\'s files as they '
+            'are, so run it only for a path whose file is what HEAD should hold'
+            % (', '.join(paths), self.root, ', '.join(changed), head[:10], compare, CATCH_UP),
+            paths, changed, compare)
 
     def _git(self, args, paths, **kw):
         kw.setdefault('env', _store_env())
@@ -737,15 +757,16 @@ class MainBackend(object):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def _commit(self, blobs, message, paths):
+    def _commit(self, blobs, message, paths, base=None):
         """Commit `blobs` ({path: blob id, or None to delete}) on HEAD as one commit: built in a
         temporary index, published by `update-ref HEAD <new> <old>` and rebuilt on a HEAD another
         commit moved (ATTEMPTS times). Then the real index takes the same entries for those paths
         alone. Returns the new commit, or None when HEAD already holds them. No ref moves until the
         whole commit exists, so a failure leaves no commit holding part of the write; it is
-        raised as Uncommitted, never swallowed."""
+        raised as Uncommitted, never swallowed. `base`: HEAD when the write began (publish reads
+        it before it checks the files), or None for the HEAD the first attempt finds."""
         try:
-            new, lines = self._publish_commit(blobs, message, paths)
+            new, lines = self._publish_commit(blobs, message, paths, base)
         except Uncommitted:
             raise
         except Failure as exc:                       # HEAD unreadable: the files are still written
@@ -753,14 +774,13 @@ class MainBackend(object):
         self._sync_index(lines, new, paths)
         return new
 
-    def _publish_commit(self, blobs, message, paths):
-        """`(new commit or None, index lines)`: _commit's compare-and-swap loop. A retry builds on
-        the HEAD another commit moved only while that commit left this write's paths as the first
-        attempt found them; one that changed any of them stops the loop (Uncommitted), so that
-        commit is never overwritten."""
+    def _publish_commit(self, blobs, message, paths, base=None):
+        """`(new commit or None, index lines)`: _commit's compare-and-swap loop. Every attempt,
+        the first included, builds on a HEAD other than `base` only while the commits between
+        left this write's paths as `base` held them; one that changed any of them stops the loop
+        (Overtaken), so that commit is never overwritten."""
         subject = message.split('\n', 1)[0]
         last = ''
-        base = None
         for attempt in range(ATTEMPTS):
             head = self._head()
             zero = '0' * len(head)
@@ -775,11 +795,7 @@ class MainBackend(object):
                 was, now = self._entries(base, paths), self._entries(head, paths)
                 changed = [p for p in paths if was.get(p) != now.get(p)]
                 if changed:
-                    raise self._uncommitted(
-                        paths, 'another commit changed %s on HEAD since this write began (HEAD '
-                        'is now %s); not committed, so that commit is not overwritten: compare '
-                        'each file with HEAD before committing it' % (', '.join(changed),
-                                                                       head[:10]))
+                    raise self._overtaken(paths, changed, head)
             new = self._git(['commit-tree', tree, '-p', head, '-F', '-'], paths,
                             stdin=message.encode('utf-8'))
             r = cmd.call(['update-ref', '-m', 'backlog: ' + subject, 'HEAD', new, head], self.root,
@@ -809,7 +825,7 @@ class MainBackend(object):
             if 'index.lock' not in why:
                 break
             time.sleep(random.uniform(0.05, 0.25) * (attempt + 1))
-        repair = 'git -C "%s" reset -q -- %s' % (self.root, ' '.join(paths))
+        repair = 'git -C "%s" reset -q -- %s' % (self.root, quoted(paths))
         raise IndexStale(
             '%s committed in %s: HEAD %s, but the real index of that worktree was not updated '
             '(%s), so it is stale for them and a plain `git commit` there would revert them. '

@@ -3,6 +3,7 @@
 import contextlib
 import io
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -171,17 +172,19 @@ class PmDataStore(unittest.TestCase):
         self.assertTrue(os.path.isfile(self.path('FOO')))
 
     def test_a_retry_never_overwrites_another_writers_commit_of_the_same_record(self):
-        """Two writers on BAR: the other commits while this one is between its first HEAD read
-        and its update-ref. The retry sees HEAD's BAR changed since its first base and stops,
-        Uncommitted, naming the path; the other writer's commit stands."""
+        """Two writers on BAR: the other commits while this one is between its first attempt's
+        HEAD read and its update-ref. The retry sees HEAD's BAR changed since its base and stops,
+        Overtaken (an Uncommitted), naming the path; the other writer's commit stands."""
         other = smod.Store(smod.MainBackend(self.wt, DIR), rmod.Rules(), session='kit-other')
         other_ctx = pmod.Context(other, self.wt, branch=BRANCH)
         real = self.backend._head
         theirs = []
+        calls = []
 
         def head_then_the_other_writes():
             sha = real()
-            if not theirs:
+            calls.append(sha)
+            if len(calls) == 2:                       # 1: publish's base; 2: the first attempt
                 theirs.append(other.write(lambda s: pmod.plan_set(
                     s, other_ctx, 'BAR', [('summary', ['theirs'])]))[1])
             return sha
@@ -194,6 +197,38 @@ class PmDataStore(unittest.TestCase):
         self.assertIn('summary: theirs', self.git('show', 'HEAD:%s/BAR.md' % DIR))
         self.assertEqual(cm.exception.paths, [DIR + '/BAR.md'])
         self.assertIn('another commit changed %s/BAR.md' % DIR, str(cm.exception))
+        self.assertIsInstance(cm.exception, errors.Overtaken)
+
+    def test_a_commit_between_the_read_and_the_first_attempt_is_never_overwritten(self):
+        """Two writers on BAR: this one has checked the files against what it read, then the
+        other writes and commits BAR before this one's first commit attempt reads HEAD. The base
+        is HEAD from before the check, so the first attempt sees BAR changed and stops, Overtaken;
+        the other writer's commit stands and the error names the compare, not a blind catch-up."""
+        other = smod.Store(smod.MainBackend(self.wt, DIR), rmod.Rules(), session='kit-other')
+        other_ctx = pmod.Context(other, self.wt, branch=BRANCH)
+        real = self.backend._write_files
+        theirs = []
+
+        def the_other_writes_then_write(*args):
+            theirs.append(other.write(lambda s: pmod.plan_set(
+                s, other_ctx, 'BAR', [('summary', ['theirs'])]))[1])
+            return real(*args)
+        with mock.patch.object(self.backend, '_write_files',
+                               side_effect=the_other_writes_then_write), \
+                mock.patch.object(smod.time, 'sleep'):
+            with self.assertRaises(Uncommitted) as cm:
+                self.store.write(lambda s: pmod.plan_set(s, self.ctx, 'BAR', [('summary', ['mine'])]))
+        self.assertEqual(len(theirs), 1)
+        self.assertIsNotNone(theirs[0])
+        self.assertEqual(self.head(), theirs[0])
+        self.assertIn('summary: theirs', self.git('show', 'HEAD:%s/BAR.md' % DIR))
+        exc = cm.exception
+        self.assertIsInstance(exc, errors.Overtaken)
+        self.assertEqual((exc.paths, exc.changed), ([DIR + '/BAR.md'], [DIR + '/BAR.md']))
+        self.assertEqual(exc.compare, 'git -C "%s" diff HEAD -- "%s/BAR.md"' % (self.wt, DIR))
+        self.assertIn('another commit changed %s/BAR.md' % DIR, str(exc))
+        self.assertIn(exc.compare, str(exc))
+        self.assertNotIn('--apply "', str(exc))          # no ready-made catch-up command
 
     def worktree_index(self):
         """The worktree's own index file (its admin folder's `index`)."""
@@ -225,7 +260,7 @@ class PmDataStore(unittest.TestCase):
         self.assertEqual(self.git('rev-parse', tip + '^'), before)
         self.assertEqual(self.changed_in(tip), [('A', DIR + '/FOO.md')])
         self.assertEqual((exc.commit, exc.paths), (tip, [DIR + '/FOO.md']))
-        self.assertEqual(exc.repair, 'git -C "%s" reset -q -- %s/FOO.md' % (self.wt, DIR))
+        self.assertEqual(exc.repair, 'git -C "%s" reset -q -- "%s/FOO.md"' % (self.wt, DIR))
         msg = str(exc)
         self.assertIn('HEAD has the commit %s' % tip[:10], msg)
         self.assertIn('a plain `git commit` there would revert', msg)
@@ -234,6 +269,35 @@ class PmDataStore(unittest.TestCase):
         self.git('reset', '-q', '--', DIR + '/FOO.md')    # the repair, as it names it
         self.assertEqual(self.status(), [])
         self.assertEqual(self.head(), tip)
+
+    def test_the_printed_commands_quote_a_store_folder_with_a_space(self):
+        """A store under `kit/back log`: the IndexStale repair, split as a shell splits it, makes
+        status clean, and the Uncommitted message's catch-up command quotes the path."""
+        spaced = 'kit/back log'
+        backend = smod.MainBackend(self.wt, spaced)
+        store = smod.Store(backend, rmod.Rules(), session='kit-test')
+        ctx = pmod.Context(store, self.wt, branch=BRANCH)
+        lock = self.worktree_index() + '.lock'
+        with open(lock, 'w') as f:
+            f.write('')
+        try:
+            with mock.patch.object(smod.time, 'sleep'):
+                with self.assertRaises(errors.IndexStale) as cm:
+                    store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary',
+                                                        ['area/foo/**']))
+        finally:
+            os.remove(lock)
+        repair = cm.exception.repair
+        self.assertEqual(repair, 'git -C "%s" reset -q -- "%s/FOO.md"' % (self.wt, spaced))
+        self.assertNotEqual(self.status(), [])
+        words = [a or b for a, b in re.findall(r'"([^"]*)"|(\S+)', repair)]   # as a shell splits
+        self.assertEqual(words[0], 'git')
+        done = cmd.call(words[1:], self.repo.root, env=smod._store_env())
+        self.assertEqual(done.rc, 0, done.err)
+        self.assertEqual(self.status(), [])
+        self.assertEqual(smod.quoted(['a b/C.md', 'd/E.md']), '"a b/C.md" "d/E.md"')
+        self.assertTrue(str(backend._uncommitted([spaced + '/FOO.md'], 'why')).endswith(
+            '`backlog.py catch-up --apply "%s/FOO.md"` commits them' % spaced))
 
     def test_an_inherited_git_index_file_is_not_the_one_a_write_updates(self):
         """GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE inherited from the caller (a hook's
@@ -340,7 +404,8 @@ class PmDataStore(unittest.TestCase):
         self.assertIn('  deleted      %s/BAR.md\n' % DIR, out)
         self.assertIn('  not a record %s/notes.txt\n' % DIR, out)
         self.assertIn('4 path(s), 1 added, 1 deleted, 1 modified, 1 not a record\n', out)
-        self.assertIn('catch-up --apply %s/BAR.md %s/BAZ.md %s/NEW.md\n' % (DIR, DIR, DIR), out)
+        self.assertIn('catch-up --apply "%s/BAR.md" "%s/BAZ.md" "%s/NEW.md"\n' % (DIR, DIR, DIR),
+                      out)
         before = self.head()
         rc, out = self.tool('catch-up', '--apply', DIR + '/notes.txt')
         self.assertEqual(rc, 2, out)
@@ -351,6 +416,44 @@ class PmDataStore(unittest.TestCase):
         self.assertIn('CAUGHT UP 2 record path(s)', out)
         self.assertEqual(self.changed_in(self.head()), [('D', DIR + '/BAR.md'),
                                                         ('M', DIR + '/BAZ.md')])
+
+    def test_a_write_committed_with_a_stale_index_is_reported_written_and_exits_0(self):
+        """The index is locked: `add` and `catch-up --apply` still commit, so each prints its
+        WROTE / CAUGHT UP line with the commit, then a WARNING carrying the repair; exit 0."""
+        self.tool('catch-up')                             # writes .kit.json
+        self.repo.write('%s/NEW.md' % DIR, priced('NEW')['NEW'], root=self.wt)
+        lock = self.worktree_index() + '.lock'
+        with open(lock, 'w') as f:
+            f.write('')
+        try:
+            with mock.patch.object(smod.time, 'sleep'):
+                rc, out = self.tool('add', 'FOO', '--summary', 'a summary', '--scope',
+                                    'area/foo/**')
+                added = self.head()
+                rc2, out2 = self.tool('catch-up', '--apply', DIR + '/NEW.md')
+        finally:
+            os.remove(lock)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.changed_in(added), [('A', DIR + '/FOO.md')])
+        lines = out.splitlines()
+        self.assertIn('WROTE %s -> %s' % (self.backend.describe(), added[:10]), lines)
+        self.assertFalse([l for l in lines if l.startswith('ERROR')], out)
+        warn = [l for l in lines if l.startswith('WARNING: ')]
+        self.assertEqual(len(warn), 1, out)
+        self.assertGreater(lines.index(warn[0]), lines.index(
+            'WROTE %s -> %s' % (self.backend.describe(), added[:10])))
+        self.assertIn('HEAD has the commit %s' % added[:10], warn[0])
+        self.assertTrue(warn[0].endswith(
+            'git -C "%s" reset -q -- "%s/FOO.md"' % (self.wt, DIR)), warn[0])
+        tip = self.head()
+        self.assertEqual(rc2, 0, out2)
+        self.assertEqual(self.changed_in(tip), [('A', DIR + '/NEW.md')])
+        lines = out2.splitlines()
+        self.assertIn('CAUGHT UP 1 record path(s) in %s -> %s'
+                      % (self.backend.describe(), tip[:10]), lines)
+        self.assertTrue(lines[-1].startswith('WARNING: '), out2)
+        self.assertTrue(lines[-1].endswith(
+            'git -C "%s" reset -q -- "%s/NEW.md"' % (self.wt, DIR)), out2)
 
 
 if __name__ == '__main__':

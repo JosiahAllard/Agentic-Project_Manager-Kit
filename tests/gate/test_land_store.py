@@ -401,8 +401,44 @@ class PmDataClose(StoreLandCase):
         self.assertEqual(len(warn), 1, out.lines)
         self.assertIn('FOO was closed in the backlog store kit/backlog in ', warn[0])
         self.assertIn('but not committed', warn[0])
-        self.assertIn('backlog.py" -C "%s" catch-up --apply kit/backlog/FOO.md'
-                      % self.pm_root(wt), warn[0])
+        self.assertIn('; commit it with: python "', warn[0])
+        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" catch-up --apply "kit/backlog/FOO.md"'
+                                         % self.pm_root(wt)), warn[0])
+        self.assertNotIn('compare each path with HEAD', warn[0])
+        self.assertEqual(self.main_now(), out.merge)
+
+    def test_a_close_another_commit_overtook_names_the_compare_not_catch_up(self):
+        """Another session commits FOO in the PM data worktree after the close checked the files
+        and before its first commit attempt: the WARNING says not to commit over that commit and
+        gives the compare with HEAD; it never prints a catch-up command to run as it is."""
+        wt = self.pm_worktree(pulled('FOO'))
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        real = smod.MainBackend._write_files
+        theirs = []
+
+        def another_commit_then_write(backend, writes, before, paths, branch):
+            if branch and not theirs:
+                with open(self.record(wt, 'FOO'), 'a', encoding='utf-8', newline='\n') as f:
+                    f.write('\nanother session wrote this\n')
+                theirs.append(self.repo.commit('another session', 'kit/backlog/FOO.md', cwd=wt))
+            return real(backend, writes, before, paths, branch)
+        with mock.patch.object(smod.MainBackend, '_write_files', another_commit_then_write):
+            out = self.land()
+        self.assertEqual(len(theirs), 1)
+        self.assertEqual(self.repo.git('rev-parse', 'HEAD', cwd=wt), theirs[0])
+        self.assertIn('another session wrote this',
+                      self.repo.git('show', 'HEAD:kit/backlog/FOO.md', cwd=wt))
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertIn('FOO was closed in the backlog store kit/backlog in ', warn[0])
+        self.assertIn('but not committed', warn[0])
+        self.assertIn('another commit changed kit/backlog/FOO.md on HEAD', warn[0])
+        self.assertTrue(warn[0].endswith(
+            '; do not commit it over that commit: compare each path with HEAD first: '
+            'git -C "%s" diff HEAD -- "kit/backlog/FOO.md"' % self.pm_root(wt)), warn[0])
+        self.assertNotIn('commit it with', warn[0])
+        self.assertNotIn('catch-up --apply "', warn[0])
+        self.assertNotIn('catch-up --apply kit', warn[0])
         self.assertEqual(self.main_now(), out.merge)
 
     def test_catch_up_after_a_failed_close_names_every_path_the_close_wrote(self):
@@ -418,8 +454,8 @@ class PmDataClose(StoreLandCase):
         warn = [l for l in out.lines if l.startswith('WARNING')]
         self.assertEqual(len(warn), 1, out.lines)
         command = warn[0].split('; commit it with: ', 1)[-1]   # the printed command, not the error
-        self.assertIn('backlog.py" -C "%s" catch-up --apply kit/backlog/BAR.md kit/backlog/FOO.md'
-                      % self.pm_root(wt), command)
+        self.assertIn('backlog.py" -C "%s" catch-up --apply "kit/backlog/BAR.md" '
+                      '"kit/backlog/FOO.md"' % self.pm_root(wt), command)
 
     def test_a_close_committed_with_a_stale_index_is_not_reported_unclosed(self):
         """The close commits but the PM worktree's index is locked: the WARNING says it was
@@ -444,7 +480,7 @@ class PmDataClose(StoreLandCase):
         self.assertNotIn('close it with', warn[0])
         self.assertIn('FOO was closed in the backlog store kit/backlog in ', warn[0])
         self.assertIn('HEAD has the commit %s' % tip[:10], warn[0])
-        self.assertIn('reset -q -- kit/backlog/FOO.md', warn[0])
+        self.assertIn('reset -q -- "kit/backlog/FOO.md"', warn[0])
 
     def test_a_record_the_pm_data_store_cannot_close_names_the_command_and_the_landing_stands(self):
         wt = self.pm_worktree(pulled('FOO', priority='-1', priority_by='-',

@@ -27,7 +27,7 @@ from kitlib.git import repo as gitrepo
 from . import plan as pmod
 from . import record as rmod
 from . import store as smod
-from .errors import IndexStale, Refusal, Uncommitted
+from .errors import IndexStale, Overtaken, Refusal, Uncommitted
 
 SESSION = 'gate-land'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -276,12 +276,18 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
     for rid in held:
         try:
             change, tip = store.write(_close_plan(ctx, rid, branch, reason))
+        except Overtaken as exc:            # another commit changed the record: never blind
+            lines.append('WARNING: %s landed, and %s was closed in the backlog store %s but not '
+                         'committed (%s); do not commit it over that commit: compare each path '
+                         'with HEAD first: %s'
+                         % (branch, rid, backend.describe(), _one_line(str(exc)), exc.compare))
+            continue
         except Uncommitted as exc:          # deleted in the PM data worktree, its commit failed
             lines.append('WARNING: %s landed, and %s was closed in the backlog store %s but not '
                          'committed (%s); commit it with: %s'
                          % (branch, rid, backend.describe(), _one_line(str(exc)),
                             command('catch-up', '--apply',
-                                    *(exc.paths or [backend.path_of(rid)]))))
+                                    smod.quoted(exc.paths or [backend.path_of(rid)]))))
             continue
         except IndexStale as exc:           # committed; only that worktree's index is behind
             lines.append('WARNING: %s landed, and %s was closed in the backlog store %s (%s); '
