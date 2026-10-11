@@ -1,6 +1,6 @@
 # Launcher
 
-`tools/launch.py` starts, hands off and stops the PM's long-running Claude sessions, each in its own minimized window. Logic: `kitlib/launcher` (no argparse, print or exit); the machine-facing calls (process list, registry with `REG_EXPAND_SZ` values expanded as .NET did, window, stopping a process) sit in `kitlib/launcher/host.py` so tests fake them (`tests/launcher/fakes.py`). Ported from the PM repo's `launcher/*.ps1`; the old-to-new map is in "Ported from" below.
+`tools/launch.py` starts, hands off and stops the PM's long-running Claude sessions, each in its own minimized window. Logic: `kitlib/launcher` (no argparse, print or exit); the machine-facing calls (process list, registry with `REG_EXPAND_SZ` values expanded as .NET did, window, stopping a process) sit in `kitlib/launcher/host.py` so tests fake them (`tests/launcher/fakes.py`). Ported from the PM repo's `launcher/*.ps1`; the old-to-new map is in "History: ported from" below.
 
 ```
 launch.py start (--repo NAME | --repo-path DIR | --session KEY) (--account N | --org N) [--agent A | --no-agent] [--brief F] [--prompt P] [--name N] [--predecessor N] [--model M] [--effort E] [--autocompact T] [--what-if]
@@ -51,7 +51,7 @@ An account is signed in when one of its folders holds `.credentials.json`; a lau
 
 ## Usage
 
-`launch.py usage` prints one line per account (`account N: five_hour=X% (resets ddd HH:mm)  seven_day=Y% (...)  [updated M min ago]`, or `no usage file`), `current account: N` for the file written in the last 15 minutes, and Codex's weekly window from its newest session log. `kitlib/pmwatch` parses these lines; with no `usage_script` set, `pm_watch.py` reads them in-process (docs/pm-watch.md).
+`launch.py usage` prints one line per account (`account N: five_hour=X% (resets ddd HH:mm)  seven_day=Y% (...)  [updated M min ago]`, or `no usage file`), `current account: N` for the file written in the last 15 minutes, and Codex's weekly window from its newest session log. `kitlib/pmwatch` parses these lines; `pm_watch.py` reads them in-process (docs/pm-watch.md).
 
 ## Lookup
 
@@ -108,7 +108,9 @@ In `launcher.state_dir`, machine state outside git; copy the examples to start:
 
 JSON is read with or without a BOM and written UTF-8 without one.
 
-## Ported from
+## History: ported from
+
+The old scripts are superseded; this table is the record of where each went.
 
 | PM repo `launcher/` | Kit |
 |---|---|
