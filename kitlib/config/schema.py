@@ -293,7 +293,7 @@ SECTIONS = {
     'worktree_remove': {
         'exempt': Field(MapOf(Str(), 'folder'), {}, 'worktree folder -> the ruling exempting it'),
         'disposable_untracked': Field(Strs, [], 'untracked file globs removal may discard'),
-        'build_output': Field(Strs, [], 'build output path globs'),
+        'build_output': Field(ListOf(Either(Str(), Obj({'piece': Field(Str(), None, 'piece id'), 'path': Field(Str(), None, 'folder in the piece')}, required=('piece', 'path'), what='{piece, path}'))), [], 'build output path globs, or {piece, path} folders resolved through the pieces table'),
         'keepers': Field(Strs, [], 'file globs that refuse a removal, added to the kit list'),
         'archive_next_free': Field(Bool(), False, 'archive under the next free name'),
         'branch_template': Field(Str(pattern=r'[^{}]*\{slug\}[^{}]*', what='a branch name holding {slug} once'), None, 'branch name for a slug'),

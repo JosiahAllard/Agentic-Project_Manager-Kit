@@ -362,11 +362,14 @@ def keepers_in(root, rel, keepers, budget=None):
     return hits
 
 
-def is_build_output(rel, globs):
+def is_build_output(rel, globs, dirs=()):
     """True when the `!! ` entry `rel` (as `git status --ignored=matching` prints it, a directory
     ending in `/`) matches a build_output glob on its full path or its own final component - never
-    a leading directory of a deeper entry."""
+    a leading directory of a deeper entry - or is one of `dirs` (literal repo-relative folders, no
+    trailing `/`; a `{piece, path}` entry resolved through the pieces table) or lies under one."""
     rel = rel.rstrip('/')
+    if any(rel == d or rel.startswith(d + '/') for d in dirs):
+        return True
     name = rel.rsplit('/', 1)[-1]
     for g in globs:
         pattern = path_glob(g.rstrip('/'))
