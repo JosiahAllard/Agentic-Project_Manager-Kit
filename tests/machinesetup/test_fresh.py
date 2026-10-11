@@ -1,7 +1,10 @@
 """machine_setup --fresh (docs/machine-setup.md "Fresh machine (--fresh)"): a machine with no older
-kit clone. Against a fake home, a fake PM repo and a fake kit in a temp folder; the Windows side and the
-`claude plugin` CLI are a FreshHost, so no claude process starts. One test stats (never reads) the
-real account settings.json files around a run, to show none of this touches them.
+kit clone. Against a fake home, a fake PM repo and a kit that is a temp git repository with a bare
+remote (the plugin is installed from the export of its pushed main, kitlib.pluginsource); the
+Windows side is a FreshHost whose `claude` runner is kitlib.pluginsource.claude.Runner over a fake
+subprocess.run, so no claude process starts. RealRunner runs Host.plugin_runner's real path against
+a fake claude.cmd. One test stats (never reads) the real account settings.json files around a run,
+to show none of this touches them.
 """
 import contextlib
 import io
@@ -11,15 +14,38 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
 from kitlib import machinesetup as M
+from kitlib import pluginsource
 from kitlib.machinesetup import extras, settings
 from kitlib.config import user as kuser
+from kitlib.pluginsource import claude as pclaude
+from tests import gitfixture
 from tests.machinesetup import test_machinesetup as T
 
 PID = 'pm-kit@pm-kit'
+MANIFEST = b'{\n  "name": "pm-kit",\n  "version": "0.1.0"\n}\n'
+MARKETPLACE = ('{\n  "name": "pm-kit",\n  "owner": {"name": "x"},\n'
+               '  "plugins": [{"name": "pm-kit", "source": "./"}]\n}\n')
+
+
+def _prepare_kit(repo):
+    """What a fresh survey and the export read of a kit: the hooks, reserve_ui.pyw, plugin.json and
+    marketplace.json; committed and pushed."""
+    rels = ['claude/hooks/guard.py', 'claude/hooks/pm_session_start.py',
+            'claude/hooks/coordinator_session_start.py', 'reserve_ui.pyw',
+            '.claude-plugin/marketplace.json']
+    for rel in rels[:-1]:
+        repo.write(rel, 'x\n')
+    repo.write('.claude-plugin/marketplace.json', MARKETPLACE)
+    path = os.path.join(repo.root, '.claude-plugin', 'plugin.json')
+    with open(path, 'wb') as fh:
+        fh.write(MANIFEST)
+    repo.commit('kit shape', '.claude-plugin/plugin.json', *rels)
+    repo.git('push', '-q', 'origin', 'main')
 
 
 def load(path):
@@ -33,31 +59,47 @@ def guard_in(data, kit):
     return any(want in h.get('args', []) for g in hooks for h in g.get('hooks', []))
 
 
-class FreshHost(T.FakeHost):
-    """FakeHost plus the plugin CLI: plugin_install writes what the real CLI was seen to write
-    (enabledPlugins and extraKnownMarketplaces) and records whether guard.py's entry was already in
-    that settings.json, which shows the plugin step runs after the settings step."""
+class FakeClaude(object):
+    """subprocess.run for claude.Runner. Records (folder, CLAUDE_CONFIG_DIR or None, args, guard.py's
+    entry already in that folder's settings.json); `plugin install` writes what the real CLI was
+    seen to write (enabledPlugins, extraKnownMarketplaces) unless `enables` is False. `fail` maps
+    (folder basename, first three args joined) to a return code."""
 
-    def __init__(self, kit):
+    def __init__(self, home, kit):
+        self.home, self.kit = home, kit
+        self.calls, self.fail, self.enables = [], {}, True
+
+    def __call__(self, cmd, env=None, **_kw):
+        args = list(cmd[1:])
+        cfg = env.get('CLAUDE_CONFIG_DIR')
+        folder = cfg or os.path.join(self.home, '.claude')
+        path = os.path.join(folder, 'settings.json')
+        layout, data = dict(settings.NEW_LAYOUT), {}
+        if os.path.isfile(path):
+            with open(path, 'rb') as f:
+                layout, data = settings.read(f.read())
+        self.calls.append((folder, cfg, args, guard_in(data, self.kit)))
+        rc = self.fail.get((os.path.basename(folder), ' '.join(args[:3])), 0)
+        if rc == 0 and args[:2] == ['plugin', 'install'] and self.enables:
+            data.setdefault('enabledPlugins', {})[args[2]] = True
+            data.setdefault('extraKnownMarketplaces', {})['pm-kit'] = {'source': {'source': 'directory',
+                                                                                   'path': 'x'}}
+            with open(path, 'wb') as f:
+                f.write(settings.write(layout, data))
+        return subprocess.CompletedProcess(cmd, rc, b'fake claude\n')
+
+
+class FreshHost(T.FakeHost):
+    """FakeHost plus the `claude` runner: the real claude.Runner (so env_for decides the
+    environment) over FakeClaude. `cli` False: no claude on PATH."""
+
+    def __init__(self, kit, home):
         super(FreshHost, self).__init__(kit)
         self.cli = True
-        self.installs = []
-        self.enables = True
+        self.fake = FakeClaude(home, kit)
 
-    def claude(self):
-        return 'claude.exe' if self.cli else None
-
-    def plugin_install(self, config_dir, kit, plugin_id):
-        path = os.path.join(config_dir, 'settings.json')
-        with open(path, 'rb') as f:
-            layout, data = settings.read(f.read())
-        self.installs.append((config_dir, plugin_id, guard_in(data, kit)))
-        if not self.enables:
-            return
-        data.setdefault('enabledPlugins', {})[plugin_id] = True
-        data.setdefault('extraKnownMarketplaces', {})['pm-kit'] = {'source': {'source': 'directory', 'path': kit}}
-        with open(path, 'wb') as f:
-            f.write(settings.write(layout, data))
+    def plugin_runner(self, home):
+        return pclaude.Runner(home, claude='claude.cmd' if self.cli else '', run_proc=self.fake)
 
 
 @unittest.skipUnless(sys.platform == 'win32', 'the wrapper and the kit are Windows only')
@@ -65,23 +107,23 @@ class FreshBase(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix='machinesetup-fresh-')
         self.addCleanup(shutil.rmtree, self.root, True)
+        self.repo = gitfixture.TempRepo(bare_remote=True, prepare=_prepare_kit,
+                                        prepare_key='machinesetup-fresh-kit-v1')
+        self.addCleanup(self.repo.cleanup)
+        self.kit = self.repo.root
         self.home = os.path.join(self.root, 'home')
-        self.kit = os.path.join(self.root, 'kit')
         self.desk = os.path.join(self.root, 'desktop')
         self.temp = os.path.join(self.root, 'agent-temp')
         self.pmrepo = os.path.join(self.root, 'pmrepo')
+        self.export = os.path.join(self.root, 'export')
         for d in (self.desk, self.temp, os.path.join(self.pmrepo, '.claude')):
             os.makedirs(d)
-        for rel in ('claude/hooks/guard.py', 'claude/hooks/pm_session_start.py',
-                    'claude/hooks/coordinator_session_start.py', 'reserve_ui.pyw'):
-            T.touch(os.path.join(self.kit, *rel.split('/')))
-        T.touch(os.path.join(self.kit, '.claude-plugin', 'marketplace.json'),
-                json.dumps({'name': 'pm-kit', 'plugins': [{'name': 'pm-kit', 'source': './'}]}))
         self.c1 = os.path.join(self.home, '.claude')                  # a new account: no settings.json
         self.c2 = os.path.join(self.home, '.claude-two')              # an account with its own hooks
         os.makedirs(self.c1)
         os.makedirs(self.c2)
         os.makedirs(kuser.config_dir(self.home))
+        self.machine_config({'plugin': {'export_dir': self.export}})
         self.s1 = os.path.join(self.c1, 'settings.json')
         self.s2 = os.path.join(self.c2, 'settings.json')
         self.pm = os.path.join(self.pmrepo, '.claude', 'settings.local.json')
@@ -98,7 +140,11 @@ class FreshBase(unittest.TestCase):
         self.raw2 = (json.dumps(self.doc2, indent=4) + '\n').replace('\n', '\r\n').encode('utf-8')
         with open(self.s2, 'wb') as f:
             f.write(self.raw2)
-        self.host = FreshHost(self.kit)
+        self.host = FreshHost(self.kit, self.home)
+
+    def machine_config(self, data):
+        with open(os.path.join(kuser.config_dir(self.home), kuser.FILE_NAME), 'w', encoding='utf-8') as f:
+            json.dump(data, f)
 
     def ctx(self, **kw):
         return M.Context(self.home, self.kit, fresh=True, agent_temp=self.temp, desktop=self.desk,
@@ -110,15 +156,22 @@ class FreshBase(unittest.TestCase):
 
     def snapshot(self):
         out = {}
-        for top in (self.home, self.pmrepo, self.desk):
+        for top in (self.home, self.pmrepo, self.desk, self.export):
             for dirpath, _, files in os.walk(top):
                 for n in files:
                     out[os.path.join(dirpath, n)] = T.readb(os.path.join(dirpath, n))
-        out['host'] = (dict(self.host.env), list(self.host.calls), self.host.acl_fixed, list(self.host.installs))
+        out['host'] = (dict(self.host.env), list(self.host.calls), self.host.acl_fixed,
+                       list(self.host.fake.calls))
         return out
 
     def guard_groups(self):
         return self.host.guard_entry(self.kit)['PreToolUse']
+
+    def state(self):
+        return pluginsource.read_state(self.export)
+
+    def migrate_calls(self, folder, cfg):
+        return [(folder, cfg, list(st), True) for st in pluginsource.migrate_steps(self.export)]
 
 
 class Fresh(FreshBase):
@@ -130,8 +183,9 @@ class Fresh(FreshBase):
         want = json.dumps({'hooks': {'PreToolUse': self.guard_groups()}}, indent=2) + '\n'
         self.assertEqual(T.readb(self.s1), want.encode('utf-8'))     # indent 2, LF, no BOM, final newline
         self.assertEqual([n for n in os.listdir(self.c1) if n.endswith('.bak')], [])
-        self.assertIn('no claude CLI is on PATH', out)
-        self.assertIn('claude plugin install %s' % PID, out)
+        self.assertIn('%s: the kit plugin is not enabled and no claude CLI is on PATH; once it is, run %s'
+                      % (self.c1, pluginsource.migrate_cmd(self.c1)), out)
+        self.assertFalse(os.path.exists(self.export))                # no claude: no export either
 
     def test_fresh_appends_and_never_removes_or_rewrites(self):
         code, out = self.run_it(apply=True)
@@ -167,9 +221,14 @@ class Fresh(FreshBase):
         self.assertIn(' kit:        none (--fresh)', out)                 # the old-kit header line
         self.assertIn('change(s) to make', out)
         self.assertIn('+        "matcher": "startup|resume|compact"', out)  # the PM hook's diff
+        self.assertIn('kitlib.pluginsource.ensure_export', out)
+        tolerated = "-s user, the remove's failure tolerated; "
+        self.assertIn('claude plugin install %s %sCLAUDE_CONFIG_DIR unset' % (PID, tolerated), out)
+        self.assertIn('claude plugin install %s %sCLAUDE_CONFIG_DIR=%s' % (PID, tolerated, self.c2), out)
         self.assertEqual(self.snapshot(), before)
         self.assertFalse(os.path.exists(self.s1))
-        self.assertEqual(self.host.installs, [])
+        self.assertFalse(os.path.exists(self.export))
+        self.assertEqual(self.host.fake.calls, [])
 
     def test_fresh_pm_hook_goes_only_to_pm_settings_and_is_noted_without_it(self):
         code, out = self.run_it(apply=True)
@@ -201,19 +260,57 @@ class Fresh(FreshBase):
         self.assertIn('machine-setup: nothing changed', out)
         self.assertEqual(self.snapshot(), before)
 
-    def test_fresh_plugin_enabled_once_per_account_after_settings_writes(self):
+    def test_fresh_refuses_the_pm_hook_already_in_the_sibling_or_an_account_settings(self):
+        """The kit's own pm_session_start.py in the PM repo's .claude/settings.json (the PM session
+        loads it next to settings.local.json), or in an account settings.json under any event: the
+        checklist would run twice, so --pm-settings is refused."""
+        script = T.fwd(os.path.join(self.kit, 'claude', 'hooks', 'pm_session_start.py'))
+        sibling = os.path.join(self.pmrepo, '.claude', 'settings.json')
+        T.touch(sibling, json.dumps({'hooks': {'SessionStart': [{'hooks': [
+            {'type': 'command', 'command': T.PYW, 'args': [script]}]}]}}, indent=2) + '\n')
+        before = self.snapshot()
+        code, out = self.run_it(apply=True, pm_settings=self.pm)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('%s already runs %s; with --pm-settings the PM checklist would run twice' % (sibling, script),
+                      out)
+        self.assertEqual(self.snapshot(), before)
+        os.remove(sibling)
+        doc = dict(self.doc2, hooks=dict(self.doc2['hooks'], UserPromptSubmit=[{'hooks': [
+            {'type': 'command', 'command': 'python "%s"' % script}]}]))
+        with open(self.s2, 'w', encoding='utf-8') as f:
+            json.dump(doc, f, indent=2)
+        before = self.snapshot()
+        code, out = self.run_it(apply=True, pm_settings=self.pm)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('%s already runs %s; with --pm-settings' % (self.s2, script), out)
+        self.assertEqual(self.snapshot(), before)
+        code, out = self.run_it(apply=True)                          # without --pm-settings: no refusal
+        self.assertEqual(code, M.EXIT_OK, out)
+
+    def test_fresh_plugin_from_the_export_once_per_account_after_settings_writes(self):
         code, out = self.run_it(apply=True)
         self.assertEqual(code, M.EXIT_OK, out)
-        self.assertEqual(self.host.installs, [(self.c1, PID, True), (self.c2, PID, True)])
+        self.assertEqual(self.host.fake.calls,                       # ~/.claude: CLAUDE_CONFIG_DIR unset
+                         self.migrate_calls(self.c1, None) + self.migrate_calls(self.c2, self.c2))
+        self.assertEqual(pluginsource.migrate_steps(self.export)[2],
+                         ['plugin', 'install', PID, '-s', 'user'])
+        state = self.state()
+        sha = self.repo.git('rev-parse', 'refs/remotes/origin/main')
+        self.assertEqual(state['sha'], sha)
+        self.assertTrue(pluginsource.migrated(state, self.c1))
+        self.assertTrue(pluginsource.migrated(state, self.c2))
+        self.assertEqual(pluginsource.current_folder(self.export), sha[:12])
         done = [l for l in out.splitlines() if l.startswith('done: ')]
         settings_done = max(i for i, l in enumerate(done) if 'guard.py' in l)
+        export_done = min(i for i, l in enumerate(done) if 'ensure_export' in l)
         plugin_done = min(i for i, l in enumerate(done) if 'enable the kit plugin' in l)
-        self.assertLess(settings_done, plugin_done)
+        self.assertLess(settings_done, export_done)
+        self.assertLess(export_done, plugin_done)
         for s in (self.s1, self.s2):
             self.assertIs(load(s)['enabledPlugins'][PID], True)
-        code, out = self.run_it(apply=True)                          # true: skipped
+        code, out = self.run_it(apply=True)                          # true and migrated: skipped
         self.assertEqual(code, M.EXIT_OK, out)
-        self.assertEqual(len(self.host.installs), 2)
+        self.assertEqual(len(self.host.fake.calls), 6)
         doc = load(self.s2)
         doc['enabledPlugins'][PID] = False                           # the owner turned it off
         with open(self.s2, 'w', encoding='utf-8') as f:
@@ -224,13 +321,101 @@ class Fresh(FreshBase):
         self.assertIn('%s: enabledPlugins["%s"] is false; left as is' % (self.s2, PID), out)
         self.assertEqual(self.snapshot(), before)
 
+    def test_fresh_reinstalls_a_plugin_enabled_from_the_kit_checkout(self):
+        """enabledPlugins true with no migrated record (installed from the checkout, the retired way:
+        plugin_refresh --apply refuses such a folder) is installed again from the export."""
+        doc = dict(self.doc2, enabledPlugins={PID: True})
+        with open(self.s2, 'w', encoding='utf-8') as f:
+            json.dump(doc, f, indent=2)
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertIn('%s: the kit plugin is enabled but was not installed from the export' % self.c2, out)
+        self.assertEqual(self.host.fake.calls,
+                         self.migrate_calls(self.c1, None) + self.migrate_calls(self.c2, self.c2))
+        self.assertTrue(pluginsource.migrated(self.state(), self.c2))
+
     def test_fresh_plugin_install_that_does_not_enable_stops(self):
-        self.host.enables = False
+        self.host.fake.enables = False
         code, out = self.run_it(apply=True)
         self.assertEqual(code, M.EXIT_REFUSED, out)
         self.assertIn('machine-setup: STOPPED at: %s: enable the kit plugin' % self.c1, out)
         self.assertIn('is not true', out)
-        self.assertIn('claude plugin uninstall %s' % PID, out)
+        self.assertIn('restore: copy "', out)
+        self.assertIn('to run it again: %s (it removes the marketplace first, its failure tolerated)'
+                      % pluginsource.migrate_cmd(self.c1), out)
+
+    def test_fresh_tolerates_a_failed_marketplace_remove(self):
+        self.host.fake.fail[('.claude-two', 'plugin marketplace remove')] = 1
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(len(self.host.fake.calls), 6)
+        self.assertTrue(pluginsource.migrated(self.state(), self.c2))
+
+    def test_fresh_failed_install_stops_with_the_rerun_and_a_rerun_finishes(self):
+        self.host.fake.fail[('.claude-two', 'plugin install pm-kit@pm-kit')] = 1
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('machine-setup: STOPPED at: %s: enable the kit plugin' % self.c2, out)
+        self.assertIn('FAILED %s: claude plugin install %s -s user exited 1: fake claude' % (self.c2, PID), out)
+        self.assertIn(pluginsource.migrate_cmd(self.c2), out)
+        state = self.state()
+        self.assertTrue(pluginsource.migrated(state, self.c1))
+        self.assertFalse(pluginsource.migrated(state, self.c2))
+        self.host.fake.fail.clear()
+        n = len(self.host.fake.calls)
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(self.host.fake.calls[n:], self.migrate_calls(self.c2, self.c2))
+        self.assertTrue(pluginsource.migrated(self.state(), self.c2))
+
+    def test_fresh_refuses_a_bad_export_root_or_state(self):
+        self.machine_config({'plugin': {'export_dir': os.path.join(self.kit, 'export')}})
+        before = self.snapshot()
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('REFUSED - the plugin export (docs/plugin-source.md): ', out)
+        self.assertEqual(self.snapshot(), before)
+        self.machine_config({'plugin': {'export_dir': self.export}})
+        T.touch(os.path.join(self.export, pluginsource.STATE), 'not json\n')
+        before = self.snapshot()
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('REFUSED - the plugin export (docs/plugin-source.md): cannot read', out)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.host.fake.calls, [])
+
+    def test_fresh_default_folders_are_the_account_folders_and_config_dir_limits_them(self):
+        backup = os.path.join(self.home, '.claude-backup')
+        os.makedirs(backup)
+        code, out = self.run_it()
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertIn('config folders: %s' % ', '.join(pclaude.account_folders(self.home)), out)
+        self.assertIn(backup, out.splitlines()[3])
+        self.assertIn('note: config folders: every ~/.claude and ~/.claude-* folder (a backup copy too)', out)
+        code, out = self.run_it(config_dirs=[self.c1, self.c2])
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertNotIn(backup, out)
+        self.assertNotIn('a backup copy too', out)
+
+    def test_no_account_folder_refuses_in_both_modes(self):
+        shutil.rmtree(self.c1)
+        shutil.rmtree(self.c2)
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('REFUSED - no Claude account folder under %s' % self.home, out)
+        old = os.path.join(self.root, 'old-kit')
+        os.makedirs(old)
+        code, lines = M.run(M.Context(self.home, self.kit, old_kit=old, agent_temp=self.temp,
+                                      desktop=self.desk, host=self.host, today=T.TODAY), apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, lines)
+        self.assertIn('machine-setup: REFUSED - no Claude account folder under %s' % self.home, lines[-2])
+
+    def test_a_failed_create_leaves_no_tmp(self):
+        path = os.path.join(self.c1, 'settings.json')
+        with mock.patch.object(settings.os, 'rename', side_effect=PermissionError('denied')):
+            with self.assertRaises(PermissionError):
+                settings._create(path, b'{}\n')
+        self.assertEqual(os.listdir(self.c1), [])
 
     def test_fresh_runs_shortcut_and_acl_but_not_the_lock_env(self):
         self.host.env[extras.LOCK_ENV] = 'somewhere-else'
@@ -241,6 +426,74 @@ class Fresh(FreshBase):
         self.assertEqual(self.host.env, {extras.LOCK_ENV: 'somewhere-else'})
         self.assertNotIn('env', [c[0] for c in self.host.calls])
         self.assertIn('KIT_MACHINE_LOCK left as is in fresh mode', out)
+
+
+SLEEPER = '''import os, sys, time
+sys.path.insert(0, sys.argv[2])
+from kitlib.proc import process
+with open(sys.argv[1], 'w') as f:
+    f.write('%d %d' % (os.getpid(), process.proc_ctime(os.getpid())))
+time.sleep(60)
+'''
+
+
+@unittest.skipUnless(sys.platform == 'win32', 'the kit is Windows only')
+class RealRunner(unittest.TestCase):
+    """extras.Host.plugin_runner, the path --apply runs (claude.Runner over extras.run_tree), against
+    fake claude .cmd files: the argv, the environment (no CLAUDE_CONFIG_DIR for ~/.claude, even
+    when the caller's has one), the return code, and a timeout that ends the .cmd's child too."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='machinesetup-runner-')
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.home = os.path.join(self.root, 'home')
+        self.c1 = os.path.join(self.home, '.claude')
+        self.c2 = os.path.join(self.home, '.claude-two')
+        for d in (self.c1, self.c2):
+            os.makedirs(d)
+        self.log = os.path.join(self.root, 'claude.log')
+        self.environ = dict(os.environ, CLAUDE_CONFIG_DIR=os.path.join(self.root, 'inherited'))
+
+    def cmd(self, name, body):
+        path = os.path.join(self.root, name)
+        with open(path, 'w', encoding='ascii', newline='\r\n') as fh:
+            fh.write('@echo off\n' + body)
+        return path
+
+    def runner(self, claude, timeout=None):
+        return extras.Host().plugin_runner(self.home, claude=claude, timeout=timeout, environ=self.environ)
+
+    def test_argv_env_and_return_code(self):
+        ok = self.cmd('claude.cmd', '>>"%s" echo [%%CLAUDE_CONFIG_DIR%%] %%*\nexit /b 0\n' % self.log)
+        r = self.runner(ok)
+        self.assertEqual(r.run_proc, extras.run_tree)
+        self.assertEqual(r.run(['plugin', 'install', PID, '-s', 'user'], self.c1), (0, ''))
+        self.assertEqual(r.run(['plugin', 'marketplace', 'add', self.root], self.c2), (0, ''))
+        with open(self.log, encoding='ascii') as fh:
+            self.assertEqual(fh.read().splitlines(), [
+                '[] plugin install %s -s user' % PID,
+                '[%s] plugin marketplace add %s' % (self.c2, self.root)])
+        bad = self.cmd('fail.cmd', 'echo it broke\nexit /b 3\n')
+        self.assertEqual(self.runner(bad).run(['plugin', 'install', PID], self.c2), (3, 'it broke\r\n'))
+
+    def test_a_timeout_ends_the_whole_tree(self):
+        pidfile = os.path.join(self.root, 'pid.txt')
+        sleeper = os.path.join(self.root, 'sleeper.py')
+        with open(sleeper, 'w', encoding='utf-8') as fh:
+            fh.write(SLEEPER)
+        slow = self.cmd('slow.cmd', '"%s" "%s" "%s" "%s"\n' % (sys.executable, sleeper, pidfile, T.KIT))
+        t0 = time.monotonic()
+        rc, text = self.runner(slow, timeout=8).run(['plugin', 'install', PID], self.c2)
+        took = time.monotonic() - t0
+        self.assertEqual((rc, text), (None, 'claude ran past 8 s'))
+        self.assertLess(took, 40)                                    # not the sleeper's 60 s
+        with open(pidfile, encoding='ascii') as fh:
+            pid, ctime = (int(x) for x in fh.read().split())
+        from kitlib.proc import process
+        end = time.monotonic() + 10
+        while process.alive(pid, ctime) and time.monotonic() < end:
+            time.sleep(0.2)
+        self.assertFalse(process.alive(pid, ctime), 'the .cmd\'s python child outlived the timeout')
 
 
 class FreshTool(FreshBase):
@@ -289,7 +542,7 @@ class FreshTool(FreshBase):
     def test_the_real_account_settings_are_untouched(self):
         """The real ~/.claude/settings.json and every real account folder's settings.json keep their
         size and mtime across a --fresh --apply run on temp folders and a --fresh dry run whose home
-        is temp. Stat only: their content is never read."""
+        and LOCALAPPDATA are temp. Stat only: their content is never read."""
         real_home = os.path.expanduser('~')
 
         def stats():
@@ -311,8 +564,10 @@ class FreshTool(FreshBase):
                 '--desktop', self.desk, '--pm-settings', self.pm, '--apply']
         with mock.patch.object(extras, 'Host', lambda: self.host), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(machine_setup.main(argv), M.EXIT_OK)
-        self.assertEqual(len(self.host.installs), 2)
-        env = dict(os.environ, USERPROFILE=self.home, HOME=self.home)
+        self.assertEqual(len(self.host.fake.calls), 6)
+        lad = os.path.join(self.root, 'localappdata')
+        os.makedirs(lad)
+        env = dict(os.environ, USERPROFILE=self.home, HOME=self.home, LOCALAPPDATA=lad)
         env.pop('CLAUDE_CONFIG_DIR', None)
         desk = os.path.join(self.root, 'desktop-2')                  # the real Host reads its shortcuts
         os.makedirs(desk)
