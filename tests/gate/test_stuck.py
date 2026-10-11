@@ -7,6 +7,7 @@ Scratch repositories with a bare remote in temp and the scratch lock store only.
 import os
 import re
 import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -193,6 +194,26 @@ class PushUnknown(_Stuck):
         self.assert_broken(self.sh(cmds[-1]))
         self.assertEqual(self.main_now(), out.merge)
         self.assertEqual(self.remote_main(), out.merge)
+
+    def test_a_remote_main_neither_base_nor_merge_is_checked_before_any_reset(self):
+        # The tracking ref is known not to hold the merge, so the reset steps are printed; but
+        # what the fetch shows may be neither the merge nor the base (someone else pushed on
+        # top of it), so the remote branches holding the merge are listed before any reset.
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        real = land.Lander.on_remote
+
+        def on_remote(lander, pushed):
+            if sys._getframe(1).f_code.co_name == 'clear_steps':
+                return False
+            return real(lander, pushed)
+        with mock.patch.object(land.Lander, 'on_remote', on_remote):
+            out = self.land_unreadable(tip)
+        cmds = self.assert_fetch_first(out)
+        self.assertIn('if it printed anything else', joined(out))
+        contains = [i for i, c in enumerate(cmds) if ' branch -r --contains %s' % out.merge in c]
+        undo = [i for i, c in enumerate(cmds) if ' reset ' in c or ' branch kit-stuck' in c]
+        self.assertEqual(len(contains), 1, cmds)
+        self.assertTrue(undo and contains[0] < undo[0], cmds)
 
 
 @real_git('pre-receive hook')
