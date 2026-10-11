@@ -42,9 +42,6 @@ def _path_error(p, flag):
     if (p or '').casefold() == smod.NONE:
         return '`%s %s` is (or casefolds into) the empty-scope sentinel `none`, not a path' \
                % (flag, p)
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in p or ''):
-        return '`%s %r` holds a control character (a line break would split a record line)' \
-               % (flag, p)
     if any(ch in smod.WILDCARD_CHARS for ch in p or ''):
         return '`%s %s` is a glob; give the moved path itself (a folder retargets everything ' \
                'under it, `/**` members included)' % (flag, p)

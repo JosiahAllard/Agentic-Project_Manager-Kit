@@ -19,6 +19,9 @@ def path_shape_error(p, what='path'):
         return 'an empty %s' % what
     if p != p.strip():
         return 'a %s with leading or trailing whitespace' % what
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in p):
+        return ('a control character in the %s %r - a line break would split a record line'
+                % (what, p))
     if ',' in p:
         return 'a comma in a %s - a set is one `%s:` line per member' % (what, what)
     if '\\' in p:
