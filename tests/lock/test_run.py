@@ -13,7 +13,6 @@ import os
 import shutil
 import subprocess
 import sys
-import threading
 import time
 import types
 import unittest
@@ -431,18 +430,23 @@ class Settling(StoreCase):
             monotonic=lambda: time.monotonic() + skip[0], sleep=pause, time=time.time))
 
     def test_ctrl_c_while_it_waits_in_the_queue(self):
+        # Ctrl+C lands in the run's first pause between two looks, so once it has joined.
         one_usable_slot(self)
+        steps = []
+
+        def pause(seconds):
+            steps.append(self.waiting())
+            self.assertEqual(len(steps), 1, "Ctrl+C did not reach the waiting run")
+            _thread.interrupt_main()            # the main thread runs the test
+            time.sleep(seconds)
         with rm.slot("engine-test", "kit", "first", cores=1, store=self.store,
                      env=clean_env()) as launch:
             first = launch.id
-            t = threading.Timer(1.0, _thread.interrupt_main)
-            t.start()
-            try:
+            with self.pauses(pause):
                 with self.assertRaises(KeyboardInterrupt):
                     rm.book("engine-test", "kit", "second", cores=1, store=self.store,
-                            env=clean_env(), wait_s=30)
-            finally:
-                t.cancel()
+                            env=clean_env(), wait_s=WAIT_S)
+        self.assertEqual(steps, [["second"]])               # it was waiting when Ctrl+C came
         hist = [d for d in self.store.history_records() if d["id"] != first]
         ended = [self.store.read("ended/" + n) for n in os.listdir(self.store.path("ended"))
                  if n.startswith("r-") and n != first + ".json"]
