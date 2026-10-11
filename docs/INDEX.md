@@ -25,7 +25,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/gate.md` | gate.py | running the gate | kw: gate, test
 - `docs/go-live.md` | go-live list | switching a repo to the kit | kw: go-live
 - `docs/guard.md` | shell guard and git hooks | a command is refused | kw: guard, hooks, refusal
-- `docs/install.md` | installing the kit in a repository | setting up a repo | kw: install, installer
+- `docs/install.md` | installing the kit in a repository | setting up a repo | kw: install, installer, junctions, plugin
 - `docs/kit-json.md` | `.kit.json` keys, types and defaults | configuring | kw: kit-json, config
 - `docs/landed.md` | landed: has a branch landed | checking a branch | kw: landed
 - `docs/launcher.md` | launcher | starting sessions | kw: launcher, launch
