@@ -5,6 +5,7 @@ import datetime
 import hashlib
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -122,7 +123,7 @@ class TheViewFollowsTheStore(Case):
                               O=record("O", "plain"))
         entry = self.views(("r", repo.root)).get()["repos"][0]
         parked = {"id": "P", "t": "waits", "p": 3, "s": "parked", "q": "Q-012",
-                  "parked_at": RECENT + "T00:00:00+00:00", "parked_at_from": "status",
+                  "parked_at": RECENT, "parked_at_from": "status",    # the bare day: day only
                   "branch": None, "session": "pm-one"}
         self.assertEqual(entry["open"], [{"id": "O", "t": "plain", "p": None, "s": "open"}, parked])
         self.assertEqual(entry["parked"], [parked])             # the open items with s == "parked"
@@ -132,7 +133,7 @@ class TheViewFollowsTheStore(Case):
         repo = self.main_repo(P=record("P", "waits", priority="-", state="parked", parked_at=RECENT))
         item = self.views(("r", repo.root)).get()["repos"][0]["open"][0]
         self.assertEqual(item, {"id": "P", "t": "waits", "p": None, "s": "parked", "q": None,
-                                "parked_at": RECENT + "T00:00:00+00:00", "parked_at_from": "status",
+                                "parked_at": RECENT, "parked_at_from": "status",
                                 "branch": None, "session": None})
 
     def test_a_parked_record_that_still_holds_its_pull_names_the_branch(self):
@@ -152,12 +153,66 @@ class TheViewFollowsTheStore(Case):
         self.assertEqual((item["parked_at_from"], datetime.datetime.fromisoformat(item["parked_at"])),
                          ("updated", datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=datetime.timezone.utc)))
 
-    def test_a_git_that_cannot_tell_the_last_change_is_an_error(self):
+    def test_a_parked_at_that_is_no_day_falls_back_to_the_last_change(self):
+        repo = self.main_repo(O=record("O", "plain"))
+        self.put(repo, "park by hand", _when="2026-03-04T05:06:07+00:00",
+                 WORD=record("WORD", "waits", state="parked", parked_at="soon"),
+                 NODAY=record("NODAY", "waits", state="parked", parked_at="2026-13-45"),
+                 STAMP=record("STAMP", "waits", state="parked", parked_at="2026-03-01T10:00:00"))
+        parked = self.views(("r", repo.root)).get()["repos"][0]["parked"]
+        self.assertEqual([p["id"] for p in parked], ["NODAY", "STAMP", "WORD"])
+        for item in parked:
+            self.assertEqual((item["parked_at_from"], datetime.datetime.fromisoformat(item["parked_at"])),
+                             ("updated", datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=datetime.timezone.utc)))
+
+    def parked_store(self):
+        """Four parked records with no day, last changed on 03-04, in a store last moved 03-09."""
+        repo = self.main_repo(O=record("O", "plain"))
+        self.put(repo, "park four by hand", _when="2026-03-04T05:06:07+00:00",
+                 **{rid: record(rid, "waits", state="parked") for rid in ("P1", "P2", "P3", "P4")})
+        self.put(repo, "another record moves", _when="2026-03-09T00:00:00+00:00", O=record("O", "plainer"))
+        return repo
+
+    def days_of(self, entry):
+        return [(p["id"], p["parked_at_from"], datetime.datetime.fromisoformat(p["parked_at"]).day)
+                for p in entry["parked"]]
+
+    def test_a_view_build_spends_no_more_than_the_cap_on_last_change_lookups(self):
+        repo = self.parked_store()
+        with mock.patch.object(backlog, "PARKED_LOOKUPS", 2), \
+                mock.patch.object(backlog, "last_change", wraps=backlog.last_change) as looked:
+            entry = self.views(("r", repo.root)).get()["repos"][0]
+        self.assertIsNone(entry["error"])
+        # The first two (id order) get their own file's day; the rest the store commit's.
+        self.assertEqual(self.days_of(entry), [("P1", "updated", 4), ("P2", "updated", 4),
+                                               ("P3", "updated", 9), ("P4", "updated", 9)])
+        paths = [c[0][2] if len(c[0]) > 2 else None for c in looked.call_args_list]
+        self.assertEqual(paths, ["docs/backlog/P1.md", "docs/backlog/P2.md", None])    # None: once
+
+    def test_a_lookup_that_fails_falls_back_for_that_record_only(self):
+        repo = self.parked_store()
+        real = gitcmd.call
+
+        def call(args, cwd, *a, **kw):
+            if args[0] == "log" and args[-1] == "docs/backlog/P2.md":
+                return gitcmd.Result(None, b"", "git log timed out after 30 seconds")
+            return real(args, cwd, *a, **kw)
+
+        with mock.patch.object(gitcmd, "call", call):
+            entry = self.views(("r", repo.root)).get()["repos"][0]
+        self.assertEqual((entry["error"], entry["stale"], [o["id"] for o in entry["open"]]),
+                         (None, False, ["O", "P1", "P2", "P3", "P4"]))
+        self.assertEqual(self.days_of(entry), [("P1", "updated", 4), ("P2", "updated", 9),
+                                               ("P3", "updated", 4), ("P4", "updated", 4)])
+
+    def test_a_git_that_cannot_tell_any_change_leaves_the_time_none_not_an_error(self):
         repo = self.main_repo(P=record("P", "waits", state="parked", q="Q-012"))
         with no_answer("log"):
             entry = self.views(("r", repo.root)).get()["repos"][0]
-        self.assertIn("last changed", entry["error"])
-        self.assertEqual(entry["open"], [])
+        self.assertEqual((entry["error"], entry["stale"]), (None, False))
+        self.assertEqual(entry["parked"], [{"id": "P", "t": "waits", "p": None, "s": "parked", "q": "Q-012",
+                                            "parked_at": None, "parked_at_from": None,
+                                            "branch": None, "session": None}])
 
     def test_two_hub_clients_see_the_same_view(self):
         repo = self.main_repo(A=record("A", "first"))
@@ -175,7 +230,7 @@ class TheViewFollowsTheStore(Case):
         bad.write(".kit.json", '{"backlog": ')
         got = self.views(("bad", bad.root), ("good", good.root), ("absent", None)).get()["repos"]
         self.assertEqual([r["repo"] for r in got], ["bad", "good", "absent"])
-        self.assertIn("backlog store", got[0]["error"])
+        self.assertEqual(got[0]["error"], backlog.BAD_STORE)
         self.assertEqual((got[0]["open"], got[0]["completed"], got[0]["parked"], got[0]["stale"]),
                          ([], [], [], False))                   # a first read that failed
         self.assertEqual((got[1]["error"], [o["id"] for o in got[1]["open"]]), (None, ["A"]))
@@ -210,16 +265,41 @@ class TheViewFollowsTheStore(Case):
                          ["completed", "days", "error", "open", "parked", "repo", "stale"])
 
 
-def no_answer(*subcommands):
-    """A stand-in for kitlib.git.cmd.call under which git gives no answer to `subcommands`: exit 1
-    and no output, as a git ended from outside leaves."""
+def git_says(rc, err, *subcommands):
+    """A stand-in for kitlib.git.cmd.call under which git answers `subcommands` with exit `rc`
+    (None: it never ran), no output and `err`."""
     real = gitcmd.call
 
     def call(args, cwd, *a, **kw):
         if args and args[0] in subcommands:
-            return gitcmd.Result(1, b"", "")
+            return gitcmd.Result(rc, b"", err)
         return real(args, cwd, *a, **kw)
     return mock.patch.object(gitcmd, "call", call)
+
+
+def no_answer(*subcommands):
+    """Git gives no answer to `subcommands`: exit 1 and no output, as a git ended from outside
+    leaves."""
+    return git_says(1, "", *subcommands)
+
+
+# What a real git prints, with what must never reach a view: a profile folder and a host.
+PROFILE, HOST = "some.person", "git.host.invalid"
+# The profile folder is joined from its parts: the scrub refuses the spelt-out path in a tracked file.
+HOME_OF = "/".join(("C:", "Users", PROFILE))
+HOME_WIN = HOME_OF.replace("/", "\\")
+STDERR = ("fatal: bad config line 3 in file %s/.gitconfig\n"
+          "fatal: unable to access 'https://%s/team/repo.git/': Could not resolve host: %s"
+          % (HOME_OF, HOST, HOST))
+PHRASES = (backlog.NO_CHECKOUT, backlog.NO_FOLDER, backlog.NOT_A_REPO, backlog.GIT_NOT_STARTED,
+           backlog.GIT_TIMED_OUT, backlog.GIT_FAILED, backlog.BAD_REF, backlog.BAD_STORE,
+           backlog.FETCH_FAILED, backlog.READ_FAILED)
+
+
+def fixed(error):
+    """True when `error` is one of the module's fixed phrases, whole, or one with an exit code."""
+    codes = [p % n for p in (backlog.GIT_EXITED, backlog.FETCH_EXITED) for n in (1, 128, 129)]
+    return error in PHRASES or error in codes
 
 
 class AFailureIsNeverAnEmptyStore(Case):
@@ -233,7 +313,7 @@ class AFailureIsNeverAnEmptyStore(Case):
                     backlog.open_read(repo.root, False)
             got = self.views(("main", main.root), ("hidden", hidden.root)).get()["repos"]
         for entry in got:
-            self.assertIn("exited 1", entry["error"])
+            self.assertEqual(entry["error"], backlog.GIT_EXITED % 1)
             self.assertEqual((entry["open"], entry["stale"]), ([], False))
         self.assertEqual(backlog.open_read(hidden.root, False), (None, bstore.STORE_DIR, False))
 
@@ -241,7 +321,7 @@ class AFailureIsNeverAnEmptyStore(Case):
         repo = self.main_repo(A=record("A", "first"))
         repo.write(".kit.json", '{"backlog": {"store": "main"}, "repo": {"main_branch": "trunk"}}')
         entry = self.views(("r", repo.root)).get()["repos"][0]
-        self.assertIn("trunk", entry["error"])
+        self.assertEqual(entry["error"], backlog.BAD_REF)       # the class "bad ref"
         self.assertEqual(entry["open"], [])
 
     def test_a_failed_read_keeps_the_last_good_lists_and_says_stale(self):
@@ -253,8 +333,18 @@ class AFailureIsNeverAnEmptyStore(Case):
             bad = v.get()["repos"][0]
         self.assertEqual((bad["stale"], bad["open"], bad["completed"], bad["parked"]),
                          (True, good["open"], good["completed"], good["parked"]))
-        self.assertIn("exited 1", bad["error"])
+        self.assertEqual(bad["error"], backlog.GIT_EXITED % 1)
         self.assertEqual(v.get()["repos"][0], good)             # and it mends on the next good read
+
+    def test_a_failed_read_never_shows_the_lists_of_another_folder(self):
+        good, broken = self.main_repo(A=record("A", "first")), self.main_repo(B=record("B", "second"))
+        broken.write(".kit.json", '{"backlog": ')
+        known = [("r", good.root)]
+        v = backlog.Views(lambda: known, clock=lambda: NOW, reuse_s=0)
+        self.assertEqual(ids(v.get(), "r", "open"), ["A"])
+        known[0] = ("r", broken.root)                           # the same name, another folder
+        entry = v.get()["repos"][0]
+        self.assertEqual((entry["error"], entry["stale"], entry["open"]), (backlog.BAD_STORE, False, []))
 
     def test_no_error_names_a_folder_of_this_machine(self):
         repo = self.main_repo(A=record("A", "first"))
@@ -262,17 +352,69 @@ class AFailureIsNeverAnEmptyStore(Case):
         gone = os.path.join(self.home, "no-such-repo")
         got = self.views(("named", repo.root), ("lost", gone)).get()["repos"]
         for entry, root in zip(got, (repo.root, gone)):
-            self.assertTrue(entry["error"])
             for spelt in (root, root.replace("\\", "/"), os.path.basename(root)):
                 self.assertNotIn(spelt.lower(), entry["error"].lower())
-        self.assertIn("named", got[0]["error"])
+        self.assertEqual([e["error"] for e in got], [backlog.BAD_STORE, backlog.NO_FOLDER])
 
-    def test_say_puts_the_name_for_the_folder_and_hides_an_address(self):
-        said = backlog.say(RuntimeError("git ls-tree in c:/Work\\Repo/.git: no; see https://host.invalid/a/b.git "
-                                        "and git@host.invalid:a/b.git"), "kit", "C:\\work\\repo")
-        self.assertEqual(said, "git ls-tree in kit/.git: no; see <address> and <address>")
-        self.assertEqual(backlog.say(ValueError(), "kit", None), "ValueError")
-        self.assertEqual(backlog.fetch_say(RuntimeError("anything at all")), backlog.FETCH_FAILED)
+
+class AnErrorIsAFixedPhrase(Case):
+    """One phrase per class of failure; none of git's words, no path, no host."""
+
+    def error(self, rc, err, *subcommands):
+        repo = self.main_repo(A=record("A", "first"))
+        with git_says(rc, err, *(subcommands or ("for-each-ref",))):
+            return self.views(("r", repo.root)).get()["repos"][0]["error"]
+
+    def test_git_that_did_not_start(self):
+        said = self.error(None, "could not run git in %s\\repo: [WinError 2] not found" % HOME_WIN)
+        self.assertEqual(said, backlog.GIT_NOT_STARTED)
+
+    def test_git_that_timed_out(self):
+        self.assertEqual(self.error(None, "git for-each-ref --format=x refs/heads/main timed out after 30 seconds"),
+                         backlog.GIT_TIMED_OUT)
+
+    def test_git_that_exited_non_zero_gives_the_code_and_none_of_its_words(self):
+        said = self.error(128, STDERR)
+        self.assertEqual(said, backlog.GIT_EXITED % 128)
+        for secret in (PROFILE, HOST, "Users", "gitconfig", "fatal"):
+            self.assertNotIn(secret, said)
+
+    def test_a_folder_that_is_no_repository(self):
+        said = self.error(128, "fatal: not a git repository (or any of the parent directories): .git\n"
+                               "in %s/work" % HOME_OF)
+        self.assertEqual(said, backlog.NOT_A_REPO)
+
+    def test_a_missing_folder(self):
+        gone = os.path.join(self.home, "Users", PROFILE, "repo")
+        self.assertEqual(self.views(("r", gone)).get()["repos"][0]["error"], backlog.NO_FOLDER)
+        with self.assertRaises(backlog.ReadError) as raised:
+            backlog.open_read(gone, False)
+        self.assertEqual((raised.exception.said, str(raised.exception)), (backlog.NO_FOLDER,) * 2)
+
+    def test_a_bad_ref(self):
+        said = self.error(0, "")        # git lists no main branch at all
+        self.assertEqual(said, backlog.BAD_REF)
+
+    def test_a_failure_while_the_records_are_read(self):
+        """kitlib.hubbacklog's reads raise with git's stderr in the text, or as subprocess does."""
+        repo = self.main_repo(A=record("A", "first"))
+        cases = [(RuntimeError("git ls-tree: fatal: detected dubious ownership in repository at "
+                               "'%s/work/repo'" % HOME_OF), backlog.GIT_FAILED),
+                 (RuntimeError("git log: " + STDERR), backlog.GIT_FAILED),
+                 (subprocess.TimeoutExpired(["git", "-C", repo.root, "ls-tree"], 60), backlog.GIT_TIMED_OUT),
+                 (FileNotFoundError(2, "No such file", HOME_WIN + "\\git.exe"), backlog.GIT_NOT_STARTED),
+                 (ValueError("%s at %s" % (HOME_WIN, HOST)), backlog.READ_FAILED)]
+        for exc, phrase in cases:
+            with mock.patch.object(hubbacklog, "read_store", side_effect=exc):
+                said = self.views(("r", repo.root)).get()["repos"][0]["error"]
+            self.assertEqual(said, phrase)
+
+    def test_every_error_of_a_broken_machine_is_a_fixed_phrase(self):
+        """Whatever git says and wherever it says it, the view holds a phrase of the module's."""
+        for sub in ("for-each-ref", "rev-parse", "log", "config"):
+            for rc in (None, 1, 128, 129):
+                said = self.error(rc, STDERR, sub)
+                self.assertTrue(said is None or fixed(said), (sub, rc, said))
 
 
 class TheCompletedWindow(Case):
@@ -407,6 +549,28 @@ class ARefStore(Case):
         self.assertEqual((entry["error"], entry["fetched"], [o["id"] for o in entry["open"]]),
                          (None, None, ["A"]))
 
+    def said(self, failure):
+        """What open_read says when the store's own load raises `failure` during a fetch."""
+        with mock.patch.object(bstore.RefBackend, "load", side_effect=failure):
+            with self.assertRaises(backlog.ReadError) as raised:
+                backlog.open_read(self.repo.root, True)
+        return raised.exception.said
+
+    def test_a_fetch_that_failed_is_told_with_git_s_exit_code_and_nothing_else(self):
+        words = "cannot fetch the backlog store from origin: "
+        self.assertEqual(self.said(bstore.Failure(words + "git fetch exited 128")), backlog.FETCH_EXITED % 128)
+        self.assertEqual(self.said(bstore.Failure(words + STDERR)), backlog.FETCH_FAILED)
+
+    def test_a_load_that_failed_before_any_fetch_is_not_told_as_a_fetch(self):
+        self.assertEqual(self.said(bstore.Failure("git config: " + STDERR)), backlog.BAD_STORE)
+
+    def test_a_store_that_cannot_be_opened_is_not_told_as_a_failed_fetch(self):
+        with open(os.path.join(self.repo.root, ".kit.json"), "w", encoding="utf-8") as f:
+            f.write('{"backlog": ')
+        entry = self.views_.get(fresh=True)["repos"][0]
+        self.assertEqual((entry["fetch_error"], entry["error"], entry["fetched"]),
+                         (backlog.BAD_STORE, backlog.BAD_STORE, None))
+
 
 class Clock(object):
     """A clock a test moves: `now`, and `fail` to make the next readings raise."""
@@ -450,16 +614,24 @@ class FakeOpener(object):
     def __init__(self):
         self.calls = []
         self.fail = set()
-        self.words = "backlog store: cannot fetch from origin"
+        self.error = backlog.ReadError(backlog.FETCH_FAILED)    # what a failing fetch raises
         self.fetched = True             # what a fetch answers as `fetched`
         self.hold = None                # an Event a fetch waits on
         self.entered = threading.Semaphore(0)
         self.active = self.most = 0
         self.guard = threading.Lock()
+        self.on_read = None             # run inside every plain read
+        self.hold_read = None           # an Event a plain read waits on
+        self.reading = threading.Semaphore(0)
 
     def __call__(self, root, fetch):
         self.calls.append((root, fetch))
         if not fetch:
+            self.reading.release()
+            if self.on_read:
+                self.on_read()
+            if self.hold_read is not None and not self.hold_read.wait(WAIT):
+                raise AssertionError("the read was never released")
             return None, "backlog", False
         with self.guard:
             self.active += 1
@@ -469,7 +641,7 @@ class FakeOpener(object):
             if self.hold is not None and not self.hold.wait(WAIT):
                 raise AssertionError("the fetch was never released")
             if root in self.fail:
-                raise RuntimeError(self.words)
+                raise self.error
         finally:
             with self.guard:
                 self.active -= 1
@@ -545,12 +717,106 @@ class Fetching(unittest.TestCase):
         self.assertEqual(self.opener.most, 1)
         self.assertEqual(self.opener.fetches(), ["/one", "/two"] * 2)
 
-    def test_a_fetch_error_never_carries_git_s_words(self):
+    def test_a_fetch_error_never_carries_the_words_of_what_was_raised(self):
+        """Even a stand-in opener that raises git's own words: the class, and an exit code."""
         self.opener.fail.add("/one")
-        self.opener.words = ("backlog store: cannot fetch the backlog store from origin: fatal: unable "
-                             "to access 'https://host.invalid/team/repo.git/': git fetch exited 128")
-        entry = self.v.get(fresh=True)["repos"][0]
-        self.assertEqual(entry["fetch_error"], backlog.FETCH_FAILED + " (git exited 128)")
+        for error, phrase in ((RuntimeError(STDERR), backlog.NO_FOLDER),     # /one is no folder
+                              (backlog.ReadError(backlog.FETCH_EXITED % 128), backlog.FETCH_EXITED % 128),
+                              (backlog.ReadError(backlog.BAD_STORE), backlog.BAD_STORE)):
+            self.opener.error = error
+            self.assertEqual(self.v.get(fresh=True)["repos"][0]["fetch_error"], phrase)
+        self.assertEqual(backlog.fetch_say(RuntimeError(STDERR + ": git fetch exited 128")),
+                         backlog.GIT_EXITED % 128)
+        self.assertEqual(backlog.fetch_say(RuntimeError(STDERR)), backlog.READ_FAILED)
+
+    def test_an_opener_that_answers_two_members_is_read_as_not_fetched(self):
+        v = backlog.Views([("one", "/one")], clock=self.clock, reuse_s=0,
+                          opener=lambda root, fetch: (None, "backlog"))
+        got = v.get(fresh=True)
+        self.assertEqual([(r["fetched"], r["fetch_error"], r["error"]) for r in got["repos"]],
+                         [(None, None, None)])
+
+    def test_a_second_fresh_read_inside_reuse_s_of_a_round_does_not_fetch_again(self):
+        self.v.reuse_s = 5
+        first = self.v.get(fresh=True)
+        self.clock.now += datetime.timedelta(seconds=4)
+        self.assertEqual(self.v.get(fresh=True)["repos"], first["repos"])
+        self.assertEqual(self.opener.fetches(), ["/one", "/two"])           # one round
+        self.clock.now += datetime.timedelta(seconds=2)
+        self.v.refresh()
+        self.assertEqual(self.opener.fetches(), ["/one", "/two"] * 2)       # the floor has passed
+        self.clock.now -= datetime.timedelta(seconds=60)                    # the clock went back:
+        self.v.refresh()                                                    # nothing is "recent"
+        self.assertEqual(self.opener.fetches(), ["/one", "/two"] * 3)
+
+    def one(self):
+        return backlog.Views([("one", "/one")], clock=self.clock, opener=self.opener, reuse_s=5)
+
+    def test_an_entry_is_stamped_after_its_read(self):
+        v = self.one()
+
+        def slow():
+            self.clock.now += datetime.timedelta(seconds=3)     # the read took three seconds
+
+        self.opener.on_read = slow
+        v.get()
+        self.opener.on_read = None
+        self.clock.now += datetime.timedelta(seconds=4)         # four since the read ended
+        v.get()
+        self.assertEqual(self.opener.calls, [("/one", False)])
+        self.clock.now += datetime.timedelta(seconds=1)         # five: read again
+        v.get()
+        self.assertEqual(self.opener.calls, [("/one", False)] * 2)
+
+    def test_two_readers_of_a_slow_repo_start_one_read(self):
+        v, arrived, real = self.one(), threading.Semaphore(0), None
+        v.reuse_s = 0                                           # nothing is reused for its age
+        real = v._lock
+
+        def lock(name):
+            arrived.release()
+            return real(name)
+
+        v._lock = lock
+        self.opener.hold_read = threading.Event()
+        got, errors = [], []
+
+        def read():
+            try:
+                got.append(v.get())
+            except BaseException as exc:        # a thread cannot fail a test
+                errors.append(repr(exc))
+
+        threads = [threading.Thread(target=read, daemon=True) for _ in range(2)]
+        threads[0].start()
+        self.assertTrue(self.opener.reading.acquire(timeout=WAIT))      # the first is inside its read
+        threads[1].start()
+        for _ in threads:
+            self.assertTrue(arrived.acquire(timeout=WAIT))              # the second is at the lock
+        self.opener.hold_read.set()
+        for t in threads:
+            t.join(WAIT)
+        self.assertEqual(([t.is_alive() for t in threads], errors), ([False] * 2, []))
+        self.assertEqual(self.opener.calls, [("/one", False)])          # one read, shared
+        self.assertEqual(got[0], got[1])
+        v.get()                                                         # a later reader reads
+        self.assertEqual(self.opener.calls, [("/one", False)] * 2)
+
+    def test_a_clock_that_went_back_reads_again(self):
+        v = self.one()
+        v.get()
+        self.clock.now -= datetime.timedelta(seconds=60)
+        v.get()
+        self.assertEqual(self.opener.calls, [("/one", False)] * 2)
+
+    def test_a_repo_whose_folder_changed_is_read_again_at_the_new_one(self):
+        known = [("one", "/one")]
+        v = backlog.Views(lambda: known, clock=self.clock, opener=self.opener, reuse_s=5)
+        v.get()
+        known[0] = ("one", "/moved")
+        v.get()
+        v.get()
+        self.assertEqual(self.opener.calls, [("/one", False), ("/moved", False)])
 
     def test_fetched_is_stamped_only_when_a_fetch_ran(self):
         self.opener.fetched = False         # a main store, or a store with no remote
@@ -632,6 +898,42 @@ class Fetching(unittest.TestCase):
         self.assertIs(self.v._thread, thread)
         self.parked()
         self.assertEqual(self.opener.fetches(), ["/one", "/two"])
+
+    def test_many_starts_at_once_run_one_thread(self):
+        gate, answers = threading.Barrier(8), []
+
+        def start():
+            gate.wait(WAIT)
+            answers.append(self.v.start())
+
+        threads = [threading.Thread(target=start, daemon=True) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(WAIT)
+        self.assertEqual(sorted(answers), [False] * 7 + [True])
+        self.parked()
+        self.assertEqual(self.opener.fetches(), ["/one", "/two"])       # one timer, one round
+        self.assertEqual(len([t for t in threading.enumerate() if t is self.v._thread]), 1)
+        self.assertFalse(self.pause.parked.acquire(timeout=0))          # no second timer paused
+
+    def test_reads_beside_the_timer_s_rounds_all_answer_whole(self):
+        self.pause.ticks = 40                                   # forty rounds, one after the other
+        self.assertTrue(self.v.start())
+        seen = []
+        while not self.pause.parked.acquire(timeout=0) and len(seen) < 100000:
+            seen.append(self.v.get())
+        self.assertLess(len(seen), 100000, "the timer never reached its pause")
+        seen.append(self.v.get())
+        for got in seen:
+            self.assertEqual((got["error"], [r["repo"] for r in got["repos"]]),
+                             (None, ["one", "two", "absent"]))
+            self.assertEqual([(r["error"], r["stale"], r["fetch_error"]) for r in got["repos"]],
+                             [(None, False, None), (None, False, None), (backlog.NO_CHECKOUT, False, None)])
+            self.assertTrue(all(r["fetched"] in (None, NOW.isoformat()) for r in got["repos"]))
+        self.assertIsNone(self.v.timer_error)
+        self.assertEqual(len(self.opener.fetches()), 41 * 2)
+        self.assertEqual(self.v.get(), self.v.get())            # at rest: one view
 
     def test_stop_before_start_and_stop_twice(self):
         self.assertTrue(self.v.stop())                          # nothing to stop

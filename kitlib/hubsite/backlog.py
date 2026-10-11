@@ -15,12 +15,15 @@ round at a time, one repository after the other.
 Against the documents kitlib.hubbacklog posted: there is no size cap here, so no `cut` count (a
 view is an answer, not a stored document), and no `posted_at` (the answer's `at` is its time).
 
-No error text in a view names a folder of this machine or a remote's address: `say` puts the
-repository's name where its folder stood, and a failed fetch is told in fixed words (`fetch_say`).
+No text of git's, of an exception or of a path ever reaches a view: an "error" or a "fetch_error"
+is one of the fixed phrases below, chosen by the class of the failure (`say`), with at most git's
+exit code, a number.
 """
 import copy
 import datetime
+import os
 import re
+import subprocess
 import threading
 
 from kitlib import config as kconfig
@@ -31,49 +34,85 @@ from kitlib.git import cmd as gitcmd
 from kitlib.git import refs
 
 DAYS = hubbacklog.DAYS
-REUSE_S = 5         # seconds `Views.get()` answers from what it read last, starting no git
+REUSE_S = 5         # seconds `Views.get()` answers from what it read last, starting no git; a
+                    # fresh read inside as many seconds of the last full round starts no fetch
+PARKED_LOOKUPS = 20     # most `git log -1` runs one view build spends on parked records' times
 NO_CHECKOUT = "no checkout of this repository on this machine"
 NO_REPOS = "the repository list could not be read"
+# The failure classes: every "error" and "fetch_error" is one of these, whole.
+NO_FOLDER = "the repository's folder is missing"
+NOT_A_REPO = "the folder is not a git repository"
+GIT_NOT_STARTED = "git could not be started"
+GIT_TIMED_OUT = "git timed out"
+GIT_EXITED = "git exited %s"                # with the exit code
+GIT_FAILED = "git failed"                   # non-zero, the code not known
+BAD_REF = "the store's ref or the main branch could not be read"
+BAD_STORE = "the backlog store could not be opened"
 FETCH_FAILED = "the fetch failed"
+FETCH_EXITED = FETCH_FAILED + " (git exited %s)"
+READ_FAILED = "the read failed"
 _MAIN = object()    # handed to a backend's landed(): a main store answers with it
-_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+|\S+@[\w.-]+:\S+")
-_EXITED = re.compile(r"\bexited (-?\d+)\b")
+_EXITED = re.compile(r"\bexited (-?\d{1,5})\b")
+_TIMED = re.compile(r"\btimed out after \d+ seconds\b")
+_GIT_SAID = re.compile(r"git [\w-]+: ")     # kitlib.hubbacklog.git's and the store's failures
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}$")
 
 
-def say(exc, name, root):
-    """Why something failed, as a view may show it: `exc`'s text with the repository's `name` in
-    place of its folder `root` (either slash, any case) and `<address>` in place of a URL."""
-    text = str(exc) or exc.__class__.__name__
-    if root:
-        parts = [re.escape(p) for p in re.split(r"[\\/]+", root) if p]
-        if parts:
-            folder = (r"[\\/]+" if root[0] in "\\/" else "") + r"[\\/]+".join(parts)
-            text = re.sub(folder, lambda m: name, text, flags=re.IGNORECASE)
-    return _URL.sub("<address>", text)
+class ReadError(RuntimeError):
+    """A read that failed, already put in its class: `said` is the fixed phrase (also its text)."""
+
+    def __init__(self, said):
+        RuntimeError.__init__(self, said)
+        self.said = said
 
 
-def fetch_say(exc):
-    """A failed fetch in fixed words: FETCH_FAILED, with git's exit code when the failure names
-    one. Never git's own words: they can carry the remote's address."""
-    m = _EXITED.search(str(exc))
-    return "%s (git exited %s)" % (FETCH_FAILED, m.group(1)) if m else FETCH_FAILED
+def kind(text, default):
+    """The fixed phrase for a failure whose own words are `text` (kitlib.git's `why`, an exception's
+    text). The words only choose the class; none of them is returned, bar an exit code's digits."""
+    text = text or ""
+    if "could not run git" in text:
+        return GIT_NOT_STARTED
+    if _TIMED.search(text):
+        return GIT_TIMED_OUT
+    if "not a git repository" in text.lower():
+        return NOT_A_REPO
+    m = _EXITED.search(text)
+    return GIT_EXITED % m.group(1) if m else default
+
+
+def say(exc, root=None):
+    """Why a read of the repository at `root` failed, as a view may show it: a fixed phrase."""
+    if isinstance(exc, ReadError):
+        return exc.said
+    if root and not os.path.isdir(root):
+        return NO_FOLDER
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return GIT_TIMED_OUT
+    if isinstance(exc, OSError):
+        return GIT_NOT_STARTED      # the one OSError a read meets: no git to start
+    text = str(exc)
+    return kind(text, GIT_FAILED if _GIT_SAID.match(text) else READ_FAILED)
+
+
+def fetch_say(exc, root=None):
+    """Why a fetch round's open of a repository failed, as a view may show it: FETCH_FAILED (with
+    git's exit code when known) only when the fetch itself failed; a store that could not be
+    opened at all is told as that (`say`)."""
+    return say(exc, root)
 
 
 def main_commit(root):
     """The commit of the main branch of the repository at `root`: the branch `.kit.json` names
-    (repo.main_branch), else `main`, else `master`. RuntimeError when it is not there (a misnamed
+    (repo.main_branch), else `main`, else `master`. ReadError when it is not there (a misnamed
     main branch is a failure, never an empty store) or git cannot tell."""
     named = (hubbacklog.kit_json(root).get("repo") or {}).get("main_branch")
     for branch in ([named] if named else ["main", "master"]):
         commit, why = refs.ref_commit("refs/heads/%s" % branch, root)
         if commit is None:
-            raise RuntimeError("cannot read the main branch `%s`: %s" % (branch, why))
+            raise ReadError(kind(why, BAD_REF))
         if commit:
             return commit
-    if named:
-        raise RuntimeError("the main branch `%s` (.kit.json repo.main_branch) does not exist" % named)
-    raise RuntimeError("no main branch: neither `main` nor `master` exists")
+    raise ReadError(BAD_REF)
 
 
 def open_read(root, fetch=False):
@@ -83,18 +122,28 @@ def open_read(root, fetch=False):
     fetch=True first brings a remote ref store into its local ref; a main store, and a ref store
     in a repository with no remote, have nothing to fetch.
 
-    RuntimeError when the store cannot be opened or fetched, and whenever git gives no answer (it
-    could not start, timed out, was ended, or refused the repository): only "no such ref" reads as
-    empty (kitlib.git.refs ref_commit). Every git here runs through kitlib.git.cmd.call: scrubbed
-    environment, a time limit, its own job."""
+    ReadError (a RuntimeError holding its fixed phrase) when the folder is missing, the store
+    cannot be opened or fetched, and whenever git gives no answer (it could not start, timed out,
+    was ended, or refused the repository): only "no such ref" reads as empty (kitlib.git.refs
+    ref_commit). Every git here runs through kitlib.git.cmd.call: scrubbed environment, a time
+    limit, its own job."""
+    if not os.path.isdir(root):
+        raise ReadError(NO_FOLDER)
     fetched = False
     try:
         backend = bstore.open_backend(root, kconfig.load(root), fetch=fetch)
-        if fetch and isinstance(backend, bstore.RefBackend) and backend.remote:
-            backend.load(None)
-            fetched = True
     except (kconfig.ConfigError, Refusal) as exc:
-        raise RuntimeError("backlog store: %s" % exc)
+        raise ReadError(kind(str(exc), BAD_STORE))
+    if fetch and isinstance(backend, bstore.RefBackend) and backend.remote:
+        try:
+            backend.load(None)
+        except Refusal as exc:
+            text = str(exc)
+            if not text.startswith("cannot fetch"):
+                raise ReadError(kind(text, BAD_STORE))
+            m = _EXITED.search(text)
+            raise ReadError(FETCH_EXITED % m.group(1) if m else FETCH_FAILED)
+        fetched = True
     rev, folder = backend.landed(_MAIN)
     if rev is _MAIN:
         return main_commit(root), folder, fetched
@@ -103,7 +152,7 @@ def open_read(root, fetch=False):
     else:
         commit, why = refs.resolve(rev, root, known=True)
     if commit is None:
-        raise RuntimeError("cannot read the backlog store at %s: %s" % (rev, why))
+        raise ReadError(kind(why, BAD_REF))
     return (commit or None), folder, fetched
 
 
@@ -113,26 +162,46 @@ def window(now, days=DAYS):
     return (now.astimezone(datetime.timezone.utc).date() - datetime.timedelta(days=days)).isoformat()
 
 
-def parked_item(rec, root, commit, path):
-    """What a parked record (`rec`, kitlib.hubbacklog.parse's; its file `path` at `commit`) adds to
-    its open item. Every key is always there, None when the record does not hold it:
+def parked_day(rec):
+    """The record's `parked_at:` day, YYYY-MM-DD, or "" when it holds none or not a real date."""
+    day = hubbacklog.first(rec, "parked_at")
+    if not _DAY.match(day):
+        return ""
+    try:
+        datetime.date(int(day[:4]), int(day[5:7]), int(day[8:]))
+    except ValueError:
+        return ""
+    return day
+
+
+def last_change(root, commit, path=None):
+    """The committer date (ISO, with its offset) of the last commit at or before `commit` that
+    changed `path`, or of `commit` itself with no path: one `git log -1` through kitlib.git.cmd,
+    with its time limit. None when git gives no answer or names no commit: never an exception."""
+    when, _why = gitcmd.run_text(["log", "-1", "--format=%cI", commit] + (["--", path] if path else []),
+                                 root)
+    return when or None
+
+
+def parked_item(rec, changed):
+    """What a parked record (`rec`, kitlib.hubbacklog.parse's) adds to its open item. Every key is
+    always there, None when the record does not hold it:
 
     - "q": the question it is parked on (the record's `q:` line).
-    - "parked_at", an ISO timestamp, and "parked_at_from": "status" when it is the record's own
-      `parked_at:` line (the day `set-status parked` wrote, given as that day's midnight UTC; the
-      record keeps a day, not a time), else "updated": the committer date of the last commit at or
-      before `commit` that changed the record's file (one `git log -1` through kitlib.git.cmd,
-      with its time limit; RuntimeError when git gives no answer). Both None when neither is known.
+    - "parked_at" and "parked_at_from". "status": the record's own `parked_at:` line, given as it
+      stands, a bare day YYYY-MM-DD. A bare day means "day only": it is the local calendar day
+      `set-status parked` ran, with no time and no zone, so a page shows the age in whole days.
+      "updated" (no `parked_at:` line, or not a real date): what `changed()` answers, a full ISO
+      timestamp of the record's update (`read_at` gives the one it uses). Both None when
+      `changed()` answers None.
     - "branch" (the record's `pulled_by:`) and "session" (its `session:`). Parking gives up the
       pull, so a record parked by tools/backlog.py holds no branch."""
-    day = hubbacklog.first(rec, "parked_at")
-    if _DAY.match(day):
-        when, how = day + "T00:00:00+00:00", "status"
+    day = parked_day(rec)
+    if day:
+        when, how = day, "status"
     else:
-        when, why = gitcmd.run_text(["log", "-1", "--format=%cI", commit, "--", path], root)
-        if when is None:
-            raise RuntimeError("cannot read when %s last changed: %s" % (path, why))
-        when, how = (when, "updated") if when else (None, None)
+        when = changed()
+        how = "updated" if when else None
     return {"q": hubbacklog.first(rec, "q") or None, "parked_at": when, "parked_at_from": how,
             "branch": hubbacklog.first(rec, "pulled_by") or None,
             "session": hubbacklog.first(rec, "session") or None}
@@ -145,10 +214,29 @@ def read_at(name, root, commit, folder, since, days=DAYS):
     (git is given the full timestamp; a bare date would mean "that day at this time of day").
 
     An open item whose state is `parked` also carries `parked_item`'s keys, and "parked" lists
-    those same items: the open items with "s" == "parked"."""
+    those same items: the open items with "s" == "parked".
+
+    A parked record with no usable `parked_at:` day gets its update time from `last_change` of
+    its own file, for the first PARKED_LOOKUPS such records (in id order) of this build. Past
+    that, and whenever that lookup gives no answer, its time is the store commit's own date
+    (`last_change` with no path, asked once a build): the latest the record can have changed.
+    Still "updated"; None only when git cannot tell that either. No lookup fails the view."""
     out = {"repo": name, "days": days, "open": [], "completed": [], "parked": []}
     if commit is None:
         return out
+    spent, store_when = [0], []
+
+    def changed(path):
+        when = None
+        if spent[0] < PARKED_LOOKUPS:
+            spent[0] += 1
+            when = last_change(root, commit, path)
+        if when is None:
+            if not store_when:
+                store_when.append(last_change(root, commit))
+            when = store_when[0]
+        return when
+
     records = hubbacklog.read_store(root, commit, folder)
     for rid, text in sorted(records.items()):
         rec = hubbacklog.parse(text)
@@ -163,7 +251,7 @@ def read_at(name, root, commit, folder, since, days=DAYS):
         item = {"id": rid, "t": hubbacklog.title(rec), "p": hubbacklog.prio(rec), "s": state}
         out["open"].append(item)
         if state == "parked":
-            item.update(parked_item(rec, root, commit, "%s/%s.md" % (folder, rid)))
+            item.update(parked_item(rec, lambda: changed("%s/%s.md" % (folder, rid))))
             out["parked"].append(dict(item))
     for rid, when, t in hubbacklog.deleted(root, commit, folder, since + "T00:00:00+00:00"):
         if rid not in records:  # deleted and later re-added: still in the store
@@ -173,8 +261,8 @@ def read_at(name, root, commit, folder, since, days=DAYS):
 
 
 def repo_view(name, root, now, opener=open_read, fetch=False, days=DAYS, cache=None, opened=None):
-    """One repository's view: `read_at`'s keys plus "error" (None, or why it could not be read)
-    and "stale". A failed read keeps the lists of the last good read `cache` holds for this
+    """One repository's view: `read_at`'s keys plus "error" (None, or why it could not be read:
+    one of this module's fixed phrases, `say`) and "stale". A failed read keeps the lists of the last good read `cache` holds for this
     repository, with "stale": True; with none to keep the lists are empty.
 
     `cache` ({name: (key, view)}, the caller's) spares the read while the store is at the same
@@ -200,7 +288,7 @@ def repo_view(name, root, now, opener=open_read, fetch=False, days=DAYS, cache=N
         if held and held[0][0] == root:
             view.update(copy.deepcopy(held[1]))
             view["stale"] = True
-        view["error"] = say(exc, name, root)
+        view["error"] = say(exc, root)
         return view
     view.update(copy.deepcopy(got))
     return view
@@ -234,13 +322,17 @@ class Views(object):
     repository appears on its own). `refresh_s`: seconds between the timer's rounds (None or 0:
     no timer). `clock`: gives an aware datetime. `opener`: `open_read`, or a stand-in with its
     signature and answer. `reuse_s`: seconds a repository's last read answers `get()` with no git
-    started (0: every `get()` opens the store again). `wait`: `event_wait`, or a stand-in (tests).
+    started (0: every `get()` opens the store again), and seconds a full round answers a fresh
+    read with no fetch started (0: every fresh read fetches). `wait`: `event_wait`, or a stand-in
+    (tests).
 
-    `get()` never fetches. `refresh()` runs a round: each repository in turn is fetched and read
-    again (the local copy when its fetch failed); `get(fresh=True)` is the same. Only one round
-    runs at a time: a call that waited through a round started after it arrived takes that round's
-    result instead of fetching again. `start()` runs a round at once and then every `refresh_s`,
-    on a daemon thread, until `stop()`.
+    `get()` never fetches. A repository is read by one caller at a time (`_read`): a hung
+    repository costs the caller that started its read git's time limit, and the callers that
+    arrive meanwhile wait for that one read instead of starting their own. `refresh()` runs a
+    round: each repository in turn is fetched and read again (the local copy when its fetch
+    failed); `get(fresh=True)` is the same. Only one round runs at a time: a call that waited
+    through a round started after it arrived takes that round's result instead of fetching again.
+    `start()` runs a round at once and then every `refresh_s`, on a daemon thread, until `stop()`.
 
     The answer is {"at", "repos", "error"}: "error" None, or NO_REPOS with the list's failure when
     the `repos` callable raised ("repos" is then the last good answer's). Each repository's entry
@@ -260,7 +352,11 @@ class Views(object):
         self.wait = wait
         self.timer_error = None        # the class of what the timer's last round raised, or None
         self._cache = {}               # repo_view's: {name: (key, last good view)}
-        self._held = {}                # {name: (root, read at, entry)}
+        self._held = {}                # {name: (root, the clock after its read, entry)}
+        self._reads = {}               # {name: reads done}, counted under the name's lock
+        self._locks = {}               # {name: its read lock}
+        self._guard = threading.Lock()      # _locks
+        self._round_at = None          # the clock when the last full round ended
         self._last = None              # the last answer whose repository list could be read
         self._fetched = {}
         self._fetch_error = {}
@@ -274,10 +370,30 @@ class Views(object):
         got = self._repos() if callable(self._repos) else self._repos
         return [(name, root) for name, root in got]
 
+    def _lock(self, name):
+        """The lock that makes a repository's read single-flight: one per name, made once."""
+        with self._guard:
+            return self._locks.setdefault(name, threading.Lock())
+
+    def _recent(self, at):
+        """True when `at` (a clock reading, or None) is under `reuse_s` seconds old. A clock that
+        went backwards (a negative age) is not recent."""
+        return at is not None and 0 <= (self.clock() - at).total_seconds() < self.reuse_s
+
     def _read(self, name, root, now, opened=None):
-        entry = repo_view(name, root, now, self.opener, False, self.days, self._cache, opened)
-        self._held[name] = (root, now, entry)
-        return entry
+        """Read one repository, never beside another read of it: a caller that waited through a
+        read which began after it arrived takes that read's entry and starts no git of its own
+        (a round's read, which brings what it `opened`, always reads). The entry is stamped with
+        the clock after the read, so a slow read does not use up its own `reuse_s`."""
+        seen = self._reads.get(name, 0)
+        with self._lock(name):
+            held = self._held.get(name)
+            if opened is None and held and held[0] == root and self._reads.get(name, 0) != seen:
+                return held[2]
+            entry = repo_view(name, root, now, self.opener, False, self.days, self._cache, opened)
+            self._reads[name] = self._reads.get(name, 0) + 1
+            self._held[name] = (root, self.clock(), entry)
+            return entry
 
     def get(self, fresh=False):
         """The view now: {"at", "repos": [...], "error"}. The caller owns what it gets."""
@@ -293,7 +409,7 @@ class Views(object):
         entries = []
         for name, root in pairs:
             held = self._held.get(name)
-            if held and held[0] == root and 0 <= (now - held[1]).total_seconds() < self.reuse_s:
+            if held and held[0] == root and self._recent(held[1]):
                 entry = held[2]
             else:
                 entry = self._read(name, root, now)
@@ -306,10 +422,11 @@ class Views(object):
         return out
 
     def refresh(self):
-        """Run a round (or take the one that began while this call waited), then `get()`."""
+        """Run a round, then `get()`. No round is run when one began while this call waited, or
+        when the last full round ended under `reuse_s` seconds ago: that round's result serves."""
         seen = self._rounds
         with self._fetching:
-            if self._rounds == seen:       # else: a round began after this call arrived
+            if self._rounds == seen and not self._recent(self._round_at):
                 self._round(None)
         return self.get()
 
@@ -329,12 +446,13 @@ class Views(object):
                 try:
                     opened = self.opener(root, True)
                 except Exception as exc:
-                    self._fetch_error[name] = fetch_say(exc)
+                    self._fetch_error[name] = fetch_say(exc, root)
                 else:
                     self._fetch_error.pop(name, None)
-                    if opened[2]:
+                    if len(opened) > 2 and opened[2]:   # a two-member answer: not fetched
                         self._fetched[name] = self.clock().isoformat()
             self._read(name, root, self.clock(), opened)
+        self._round_at = self.clock()       # a round cut short is not one a fresh read may reuse
 
     def start(self):
         """Start the timer: True when this call started its thread. False when there is no
