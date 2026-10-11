@@ -52,10 +52,16 @@ class RenderTest(unittest.TestCase):
         self.assertTrue(line.startswith("- No start-up pricing pass"), line)
         for want in ("stays unpriced", "`next` never offers it", "only when you put it into a work set",
                      "duplicates or replaces a priced one", "--priority-by agent",
+                     "held is not waiting for the owner",
+                     "When `next` offers fewer items than the set needs, read "
+                     "`python tools/backlog.py list --needs-priority`",
+                     "check each for duplicates, size and fit",
+                     "price only those you are putting into this set",
+                     "never a sweep of all unpriced records, the rest stay held",
                      "goes to the PM", "never ask him directly"):
             self.assertIn(want, line)
-        # The retired rule: list every unpriced record at start and price each.
-        for gone in ("--needs-priority", "before your first dispatch", "each unpriced"):
+        # The retired rule: price every unpriced record at start.
+        for gone in ("before your first dispatch", "each unpriced", "Pricing pass and backlog audit"):
             self.assertNotIn(gone, line)
 
     def test_pricing_line_is_off_unless_the_config_switches_it_on(self):

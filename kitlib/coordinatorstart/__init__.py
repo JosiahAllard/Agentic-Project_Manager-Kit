@@ -46,10 +46,14 @@ ENG_LINE = ("ENG rulings: an engineering question (API shape, class versus recor
             "game accounts, bans); Priority and pre-empts (one owner entry per change); Go-live and live-client "
             "runs, and removals of owner files; anything the owner flagged for review (eng_review).")
 # When a coordinator prices a record (claude/agents/coordinator.md, On start): no start-up pricing pass.
-# Emitted only when coordinator_start.pricing_pass is true, so merging changes no live session.
+# Emitted only when coordinator_start.pricing_pass is true.
 PRICING_LINE = ("No start-up pricing pass: a new follow-up record stays unpriced, and an unpriced record is "
-                "held (`next` never offers it). Price a record 2-5 (`set <ID> --priority <n> --priority-by "
-                "agent`) only when you put it into a work set, or when it duplicates or replaces a priced one. "
+                "held (`next` never offers it); held is not waiting for the owner. Price a record 2-5 (`set <ID> "
+                "--priority <n> --priority-by agent`) only when you put it into a work set, or when it "
+                "duplicates or replaces a priced one. When `next` offers fewer items than the set needs, read "
+                "`python tools/backlog.py list --needs-priority`, pick the records worth doing now, check each "
+                "for duplicates, size and fit, and price only those you are putting into this set; never a "
+                "sweep of all unpriced records, the rest stay held. "
                 "A record that needs the owner (priority 1, a pre-emption, an owner-held area, a question only "
                 "he can answer) goes to the PM as one question; never ask him directly.")
 
