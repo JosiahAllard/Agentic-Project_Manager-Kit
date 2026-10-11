@@ -14,7 +14,11 @@
                      the environment of a child that must run as a real run does, unfenced. Its
                      home is the caller's business: a temp folder, unless the child only computes
                      the home's path.
+  child_home()       a temp folder to be the home of the processes tests start, for a helper that
+                     builds a child's environment and has no test case to clean up with: one per
+                     process, removed at exit.
 """
+import atexit
 import os
 import tempfile
 import unittest
@@ -43,6 +47,21 @@ def temp_home(case, prefix='kit-home-'):
     patch.start()
     case.addCleanup(patch.stop)
     return home
+
+
+_CHILD_HOME = []
+
+
+def child_home():
+    """A temp folder for a child's USERPROFILE and HOME: made on first use, and again when a
+    runner has removed it with the unit's temp folder; removed at exit. Every test of this
+    process shares it, so a test whose child writes under its home gives it one of its own
+    (temp_home)."""
+    if not (_CHILD_HOME and os.path.isdir(_CHILD_HOME[0])):
+        home = tempfile.mkdtemp(prefix='kit-child-home-')
+        atexit.register(gitfixture.rmtree, home)
+        _CHILD_HOME[:] = [home]
+    return _CHILD_HOME[0]
 
 
 class TempHomeCase(unittest.TestCase):

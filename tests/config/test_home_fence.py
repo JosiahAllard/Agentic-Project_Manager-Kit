@@ -20,7 +20,7 @@ import tests
 from kitlib.config import user
 from kitlib.lock import store as lockstore
 from tests import gitfixture
-from tests.home import fence_decoy, temp_home, unmarked_env
+from tests.home import child_home, fence_decoy, temp_home, unmarked_env
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MARK = 'KIT_HOME_FENCE'
@@ -37,7 +37,7 @@ RESOLVE = '''\
         print('fenced', e)
     else:
         print('passed', ascii(os.path.normcase(got)))
-    print('asked' if getattr(user, '_PROFILE', None) is not None else 'not asked')
+    print('asked' if user._PROFILE is not None else 'not asked')
     '''
 
 
@@ -48,6 +48,15 @@ def same(a, b):
 def shown(path):
     """How a child prints a folder: ascii() of its normcase, whatever the console encodes."""
     return ascii(os.path.normcase(path))
+
+
+def extended(path):
+    """The extended-length spelling of the folder `path`: the `?` prefix before a drive path, or
+    its UNC form before a share's."""
+    path, bs = os.path.abspath(path), chr(92)
+    if path.startswith(bs * 2):
+        return bs * 2 + '?' + bs + 'UNC' + bs + path[2:]
+    return bs * 2 + '?' + bs + path
 
 
 class ChildCase(unittest.TestCase):
@@ -159,7 +168,7 @@ class RealRunTest(ChildCase):
         resolved = mock.Mock(side_effect=os.path.realpath)
         with mock.patch.dict(os.environ), \
                 mock.patch.object(user, '_FENCED_HOME', None), \
-                mock.patch.object(user, '_windows_profile', asked, create=True), \
+                mock.patch.object(user, '_windows_profile', asked), \
                 mock.patch.object(os.path, 'realpath', resolved):
             os.environ.pop(MARK, None)
             got = user.home_dir()
@@ -213,9 +222,8 @@ class FailClosedTest(unittest.TestCase):
         marker = tempfile.mkdtemp(prefix='kit-fenced-home-')
         self.addCleanup(gitfixture.rmtree, marker)
         with mock.patch.dict(os.environ, {MARK: marker}), \
-                mock.patch.object(user, '_PROFILE', None, create=True), \
-                mock.patch.object(user, '_windows_profile', side_effect=OSError('no answer'),
-                                  create=True):
+                mock.patch.object(user, '_PROFILE', None), \
+                mock.patch.object(user, '_windows_profile', side_effect=OSError('no answer')):
             with self.assertRaises(user.HomeFenced) as cm:
                 user.home_dir()
         self.assertIn('Home fence', str(cm.exception))
@@ -255,6 +263,54 @@ class SpellingTest(ChildCase):
         with mock.patch.dict(os.environ, {'USERPROFILE': short, 'HOME': short}):
             with self.assertRaises(user.HomeFenced):
                 user.home_dir()
+
+    def test_the_extended_length_spelling_of_the_fenced_home_is_refused(self):
+        long = extended(fence_decoy(self))
+        with mock.patch.dict(os.environ, {'USERPROFILE': long, 'HOME': long}):
+            with self.assertRaises(user.HomeFenced):
+                user.home_dir()
+
+    def test_a_marked_child_refuses_the_extended_length_spelling_of_the_recorded_home(self):
+        decoy = self.folder('kit-fenced-home-')
+        rc, out = self.child(RESOLVE, extended(decoy), marker=decoy)
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out[0].startswith('fenced '), out)
+
+    def test_a_marked_child_refuses_the_home_when_the_marker_has_the_extended_length_spelling(self):
+        decoy = self.folder('kit-fenced-home-')
+        rc, out = self.child(RESOLVE, decoy, marker=extended(decoy))
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out[0].startswith('fenced '), out)
+
+    def test_the_extended_length_spelling_of_a_temp_home_passes(self):
+        # a guard (green before the spelling was handled too): only a refused folder is refused
+        fence_decoy(self)
+        long = extended(self.folder('kit-home-'))
+        with mock.patch.dict(os.environ, {'USERPROFILE': long, 'HOME': long}):
+            self.assertEqual(user.home_dir(), long)
+
+
+class HelperHomeTest(unittest.TestCase):
+    """The shared helpers that build a child's environment give the child a temp home: a kit tool
+    it starts reads no real machine config, and the fence never refuses it."""
+
+    def test_child_home_is_a_temp_folder_made_again_when_it_is_gone(self):
+        home = child_home()
+        self.assertTrue(os.path.isdir(home), home)
+        self.assertEqual(child_home(), home)
+        with mock.patch.dict(os.environ, {'USERPROFILE': home, 'HOME': home}):
+            self.assertTrue(same(user.home_dir(), home))        # not a real home: it passes
+        gitfixture.rmtree(home)
+        self.assertTrue(os.path.isdir(child_home()))
+
+    def test_the_gate_fixtures_environment_carries_a_temp_home(self):
+        from tests.gate import fixtures
+        env = fixtures.test_env()
+        with mock.patch.dict(os.environ, {'USERPROFILE': env['USERPROFILE']}):
+            os.environ.pop('HOME', None)
+            self.assertTrue(same(user.home_dir(), env['USERPROFILE']))      # the real one is refused
+        self.assertEqual(env['HOME'], env['USERPROFILE'])
+        self.assertTrue(same(env['USERPROFILE'], child_home()))
 
 
 class MarkerTest(ChildCase):
