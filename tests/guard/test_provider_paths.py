@@ -97,5 +97,58 @@ class FileWritesStillJudged(unittest.TestCase):
                 self.refused(text, self.w.main)
 
 
+class NativePrograms(unittest.TestCase):
+    """A native program reads env:FOO as the stream FOO of a file named env in the directory it
+    runs in: a file write, judged as one. Only a PowerShell cmdlet's item is skipped."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def decide(self, text, cwd):
+        return decide(ps(text, cwd, sub=True), self.w.ctx())
+
+    def test_native_writers_in_the_main_checkout(self):
+        for text in ('curl.exe -o env:FOO https://example.invalid/x',
+                     'curl -o env:FOO https://example.invalid/x',
+                     'wget -O env:FOO https://example.invalid/x',
+                     'xcopy a env:FOO',
+                     'robocopy a env:FOO x.txt',
+                     'Start-Process curl.exe -ArgumentList "-o", "env:FOO", "https://example.invalid/x"'):
+            with self.subTest(text):
+                d = self.decide(text, self.w.main)
+                self.assertIsNotNone(d, 'allowed: %s' % text)
+                self.assertEqual(d.rule, 'main-checkout', d.reason)
+
+    def test_native_writer_outside_the_roots(self):
+        text = 'cd "%s"; xcopy a env:FOO' % W.fwd(self.w.plain)
+        d = self.decide(text, self.w.wt)
+        self.assertIsNotNone(d, 'allowed: %s' % text)
+        self.assertEqual(d.rule, 'write-jail', d.reason)
+
+
+class RemapForms(unittest.TestCase):
+    """A line that may remap a drive or run code the text does not show, however it is spelled
+    (backticks, concatenation, a computed or called command, a dot-source after a newline, the
+    script-running APIs): env:x there may be a file, so it is judged as one."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def test_hidden_remaps_stay_judged(self):
+        item = 'New-Item -Path env:\\x.txt'
+        for pre in ('n`dr env FileSystem .', 'r`dr env', 'New-PSDr`ive -Name env -PSProvider FileSystem -Root .',
+                    "& ('New-PSDr'+'ive') env FileSystem .", '& (gcm *-PSDr*) env FileSystem .',
+                    '$c = "ndr"; & $c env FileSystem .', '$x = 1\n. .\\setup', '. .\\setup', '& .\\script',
+                    '$p = [powershell]::Create()', '$ExecutionContext.InvokeCommand.InvokeScript($s)',
+                    '$p.AddScript($s)'):
+            text = '%s%s%s' % (pre, '\n' if '\n' in pre else '; ', item)
+            with self.subTest(text):
+                d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
+                self.assertIsNotNone(d, 'allowed: %s' % text)
+                self.assertEqual(d.rule, 'main-checkout', d.reason)
+
+
 if __name__ == '__main__':
     unittest.main()
