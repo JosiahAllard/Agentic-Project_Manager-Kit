@@ -27,7 +27,8 @@ class FoundOn(StoreCase):
         self.repo.git('checkout', '-q', '--orphan' if orphan else '-b', branch)
         for p in paths:
             self.repo.write(p, 'x\n')
-        self.repo.commit('work on %s' % branch, *paths)
+        self.repo.git('add', '-A')      # not by name: `[a]` in a pathspec is a glob
+        self.repo.git('commit', '-q', '-m', 'work on %s' % branch)
         self.repo.git('checkout', '-q', '-f', 'main')
 
     def add(self, scopes, found_on=FOO, why=WHY, rid='NEW', **kw):
