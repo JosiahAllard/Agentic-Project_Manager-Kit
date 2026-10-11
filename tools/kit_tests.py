@@ -166,7 +166,11 @@ def main(argv=None, out=None):
             return USAGE
         # --full is the escape hatch: it needs no table, so a broken one cannot stop it.
         say('kit_tests: WARNING: %s; --full runs every module, none serial' % e)
-        cfg = {'serial': []}
+        cfg = {'serial': [], 'skip_fails': []}
+    stale = selftree.stale_skip_fails(cfg.get('skip_fails', ()), selftree.all_test_modules(top))
+    for m in stale:
+        say('kit_tests: WARNING: skip_fails names %s, which is not a test module; its entry guards '
+            'nothing (fix tests/selection.json)' % m)
     if a.full:
         say('kit_tests: full suite (--full)')
         args = FULL
@@ -247,7 +251,8 @@ def run_pass(args, top, cfg, jobs, fake, out, hold, give_back=True, record_times
         say('kit_tests: give back: off for this pass (a later tier runs on the same slots)')
     rc, _summary = selfrun.run(modules, top, jobs, serial=cfg['serial'], out=out, label=label,
                                times_path=times, hint=cfg.get('long', ()), environ=env,
-                               give_back=give, hold=hold, record_times=record_times)
+                               give_back=give, hold=hold, record_times=record_times,
+                               skip_fails=cfg.get('skip_fails', ()))
     return rc
 
 
