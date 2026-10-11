@@ -26,6 +26,7 @@ process for the same reason. Nothing here prints or exits.
 """
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -112,16 +113,49 @@ def _run(checkout, tool_file, argv, env, wait_s):
         flags = getattr(subprocess, '_args_from_interpreter_flags', list)()
         if getattr(sys.__stdout__, 'write_through', False):
             flags.append('-u')                              # ... and -u, which that leaves out
-        proc = subprocess.Popen([sys.executable] + flags + [tool] + list(argv), env=child_env)
-        # From here the tool runs: nothing may fail open (that would run it twice), and a Ctrl+C
-        # (the child has it too) only waits for the child: the lease holds until it exits.
+        # From the start the tool runs: nothing may fail open (that would run it twice). Ctrl+C
+        # reaches the child too (the same console; a child does not inherit SIG_IGN,
+        # tests/gate/test_pin_sigint.py) and it stops itself; this process ignores it from just
+        # before Popen until the child exits, so a Ctrl+C inside Popen, or before `proc` is
+        # assigned, cannot give 130 and drop the lease while the child runs on.
+        code = None
+        before = _ignore_ctrl_c()
         try:
-            _write_lease(lease, sha, child=proc.pid)
-        except (Exception, KeyboardInterrupt):  # noqa: BLE001 - this process's lease holds it
-            pass
-        return _wait(proc), None
+            proc = subprocess.Popen([sys.executable] + flags + [tool] + list(argv),
+                                    env=child_env)
+            try:
+                _write_lease(lease, sha, child=proc.pid)
+            except (Exception, KeyboardInterrupt):  # noqa: BLE001 - this process's lease holds it
+                pass
+            code = _wait(proc)
+        finally:
+            try:
+                _restore_ctrl_c(before)
+            except (Exception, KeyboardInterrupt):  # noqa: BLE001 - the tool has run: a Ctrl+C
+                if code is None:        # as the handler comes back, or a restore that fails,
+                    raise               # keeps its code (an error would fail open: a second run)
+        return code, None
     finally:
         _remove(lease)
+
+
+def _ignore_ctrl_c():
+    """Set SIGINT to SIG_IGN; the handler it replaced, or None when nothing changed: off the main
+    thread (signal.signal raises ValueError there, and Ctrl+C never raises there either), or a
+    handler not set from Python (getsignal None), which could not be put back."""
+    try:
+        before = signal.getsignal(signal.SIGINT)
+        if before is None:
+            return None
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except ValueError:
+        return None
+    return before
+
+
+def _restore_ctrl_c(before):
+    if before is not None:
+        signal.signal(signal.SIGINT, before)
 
 
 def _wait(proc):
