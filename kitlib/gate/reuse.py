@@ -26,9 +26,9 @@ Fail closed. Anything that raises means every step runs. Nothing is read or stor
   - in a landing: --fresh; a result record that cannot be read; a land record of a tip (it got
     past its locked checks and did not land); a gate record of a tip that did not pass; a main
     checkout that is not clean.
-A step's result is stored only when its inputs are the same after the run as before it: PASS as
-pass, FAIL or WARN as fail; a skipped or unrun step stores nothing. Storing or pruning that fails
-says one line and never fails the gate.
+A step's result is stored only when its key (inputs, kit, program, config) is the same after the
+run as before it: PASS as pass, FAIL or WARN as fail; a skipped or unrun step stores nothing.
+Storing or pruning that fails says one line and never fails the gate.
 
 Entries live in `<git common dir>/kit-gate-cache/<key>/<YYYYmmddTHHMMSSZ>-<pid>-<hex8>.<pass|fail>.json`,
 written to a temp file and renamed. Entries older than PRUNE_H hours are pruned; only names

@@ -49,7 +49,7 @@ kitlib/gate/steps.py. A step has a `cmd` (argv with `{python} {root} {base} {her
 
 - **Selection.** In diff mode a step runs when it is `always`, or when a changed path (tracked diff from the merge base, plus untracked files git does not ignore) matches its `globs` and none of its `exclude`, or when its `content` regex is in a changed file. `--full` runs every step that is not `manual`. `--only` runs exactly the named steps. `skip_if_selected` drops a step. Order: `setup`, then stages `first`, `main`, `last`, then `defer`.
 - **Judging.** A step passes only when its exit code is in `ok_exits`, every `pass` pattern matches, no `fail` pattern matches, a cmd step's log is not empty, and it did not run zero tests (`Ran 0 tests` or a `zero_tests` pattern). The `errors` policy must also find no unexplained line. A `warn` step that fails, or a `warn_lines` hit, is WARN. A FAIL stops the rest unless the step has `continue`. A `requires` entry is a command name (looked up on PATH) or an argv probe that must exit 0 within 60 s (`PROBE_TIMEOUT`; on timeout its whole process tree is ended). One that is missing is SKIP, or FAIL with `requires_strict`. A gate whose selected steps were all skipped did not run anything, so it is REFUSED, not OK.
-- **Reuse.** A cmd step with `reuse` (`true`, or a group name: a group is reused whole or not at all) may be counted as passed in a landing without running (see Gate reuse). A check step never is.
+- **Reuse.** A cmd step with `reuse` (`true`, or a group name: a group is reused whole or not at all) and declared inputs (`globs` or `content`.globs) may be counted as passed without running, in a branch-gate rerun or a landing, when a pass of the same inputs, argv, config and kit is in the gate cache (see Gate reuse). A check step never is.
 - **Check contract.** `GATE_CHECKS[name](ctx)`; ctx has `root base merged changed options name log run`. `run(argv, cwd=None)` runs in the slot's job and returns the exit code. A check returns 0/True to pass. Raising fails the check, and the traceback goes in the log. Calling `sys.exit` (any code, 0 included) also fails it, and the code goes in the log. Ctrl+C is not caught: it stops the gate.
 
 ## Build daemons
@@ -169,7 +169,7 @@ A landing merges into the main checkout it runs from. A tool running there would
 - **Environment.** The child gets `KIT_PINNED=<sha>` and `KIT_LIVE_ROOT=<the main checkout>`. Any `KIT_PINNED` value means run live, so the child, and every tool it starts, never pins again. A command the tool prints (the gate, sweep, lock-break and backlog commands) names `KIT_LIVE_ROOT`, never the export, which a later prune may remove (`kitlib.pluginsource` `live_root`, honoured only when the running kit folder holds the export marker; `steps.kit_live`, `at_landing.backlog_py`, `kitlib.stubs.kit_root`). The gate's own `{here}` runs (`steps.KIT_TOOLS`) use the export; `{here}/kit_stubs.py` runs from it but checks and writes stubs against `KIT_LIVE_ROOT`. `gate.py`'s own-copy refusal (The caller's checkout) compares against `KIT_LIVE_ROOT`.
 - **Runs live.** A run with `KIT_PINNED` set, a linked worktree (its `.git` is a file), an export (it has no `.git`), and a checkout with no remote-tracking main run the code they are in, with no line.
 - **Fails open.** When the pin cannot be made (the export root refused, the tracking ref unreadable, the lock busy past its wait, the export failing, no `tools/<name>.py` in it), stderr gets `WARNING: pin: running the live checkout's code: <why>`, `KIT_PINNED=live` is set, and the tool runs from the main checkout as before. Once the child has started nothing fails open, so the tool never runs twice. Ctrl+C while pinning exits 130 with the tool not run. A Ctrl+C inside `Popen`, or after it returns and before its result is assigned, still exits 130 and drops the lease while the child runs (a known gap). Once `Popen` has returned the child (the rewrite of the lease that names it included), the parent goes on waiting for it, exits with its code and keeps the lease until it exits (`test_ctrl_c_once_the_tool_started_waits_for_it_and_keeps_the_lease`), and Ctrl+C reaches the child through the shared console (an inference, not tested here), which stops itself as the tool does unpinned.
-- **Identity.** Run from an export, `runner.kit_identity` is the marker's commit, clean (see Gate reuse).
+- **Identity.** Run from an export, `runner.kit_identity` (the gate-OK record's `kit`) is the marker's commit, clean. The gate cache keys on the kit's file hashes instead (`reuse.kit_identity`, Gate reuse), so an export and a checkout of the same files are one kit.
 
 Tests: tests/gate/test_live_pin.py. The gate tests' environment sets `KIT_PINNED=live` (tests/gate/fixtures.py `test_env`), so a tool a test starts in a main checkout runs that tree's code, never an export under the real export root.
 
@@ -193,16 +193,41 @@ An unreadable `resources.json` (kitlib/lock/resource.py `ResourceUnreadable`) is
 
 ### Gate reuse
 
-kitlib/gate/reuse.py, ported from one repo's gate reuse. In a landing of one branch, a step with `reuse` is not run when the branch gate passed it on exactly the tree the landing merged. It is fail-closed: any doubt or error runs every step, and `gate: reuse: none: <why>` says why. Nothing is reused with `--fresh`, `--full` or a batch, or unless all of these hold (`reuse.landing_why`):
+kitlib/gate/reuse.py: a per-step cache of gate results, read and written by a branch gate (a rerun reuses) and by a landing's merged-tree gate, a batch landing included (`reuse.branch_plan`, `reuse.planner`). The opt-in and the never-list are ported from one repo's gate reuse. A step with `reuse` is not run when a pass of its key is stored within `"landing".reuse_max_age_h` hours and no fail or warn of that key is. It is fail-closed: any doubt or error runs the step, and its `gate: reuse:` line says why.
 
-- the result records name this tip with no `land` record (an earlier landing that did not land) and no `gate` verdict but `pass`; the branch's own `gate` record is `pass` and names the gate-OK record;
-- that record verifies (`runner.verify_record`) with `config_rev` the tip, `gate_config` that of `--expect-main`'s config, `base` `--expect-main`, `tree` the merge's tree, and `kit` (`runner.kit_identity`: commit, python, clean) the running kit's, a clean commit;
-- it ended at most `"landing".reuse_max_age_h` hours ago (0: never reuse);
-- the merge changes no `.kit.json`, section file, hook module or `"landing".reuse_never` path, and the main checkout is clean.
+**The key** (`reuse.step_key`) is the sha256 of the canonical JSON of:
 
-Then a step is reused when the record has it as `pass` and its merged-gate argv and cwd equal its branch-gate ones (its `merged_args`, or the lane's, make it run). A reused step's result is `reused` (`REUSED` with its reason in the output, `reused: <steps>` in the verdict); the lines go to `reuse.log` in the log folder. When every selected step is reused, nothing is booked and `setup` does not run.
+- the step's name, argv and cwd, with the checkout's root written `<root>` and the kit's `<kit>` (so a worktree and the main checkout make one key, and the landing's `merged_args` another);
+- the sha256 of its program (`shutil.which` of argv[0]; not found: no reuse) and of every argv element that names a file relative to its cwd;
+- `gate_ok.config_hash` of the gate config (`runner.gate_config`);
+- the kit's identity, `reuse.kit_identity`: the hash of every file under the kit's `kitlib/` and `tools/` (bytecode left out), the interpreter's path and `sys.version`. Never the kit's commit: two commits with the same files are one kit;
+- its inputs (`reuse.inputs`): every file `git ls-files -c -o --exclude-standard` shows in the work tree (tracked, or untracked and not ignored) that matches its `globs` or its `content`.globs (its `exclude` is not subtracted), by sha256; a tracked file deleted in the work tree is `absent`. An input that is a link or a folder (a nested repository or submodule) means no reuse.
 
-A reused step does not run, so nothing it would leave behind (a build output, a file a later step reads) exists in the merged gate: give a step whose output a later step needs the same group as that step. In the kit's own repository reuse never fires: the branch gate runs the worktree's kit (`kit.commit` is the tip, when the worktree's own gate.py runs, as The caller's checkout documents; `runner.kit_identity` reads the checkout of the gate.py that ran) and the landing runs an export of pushed main (`kit.commit` is the remote-tracking main it was pinned to; see Pinned tools), or, when the pin failed open, the main checkout's (the merge), so the kit identities differ.
+**The opt-in's contract.** `reuse` is a promise that the step's result depends on nothing outside its key. A step that asks for it must therefore:
+
+- read only files its `globs` or `content`.globs match. A file git ignores, or one an earlier step or the build generates, is never an input: a step that reads one must not ask for reuse (tests/gate/test_reuse.py `test_an_ignored_file_under_the_globs_is_not_an_input` shows such a file changing and the step still reused);
+- not depend on environment variables, installed SDKs, packages or tools other than its program and the files its argv names, the network or the clock: none of these is in the key;
+- not need what it leaves behind: a reused step does not run, so nothing it would leave (a build output, a file a later step reads) exists. Give a step whose output a later step needs the same group as that step.
+
+**Never cached**: nothing is read or stored, every asking step runs and says `NONE <step>: <why>`:
+
+- for one step: a check step, a step with no `globs` and no `content`.globs, a step whose `cmd`, `full_cmd`, `daily_cmd` or `merged_args` names `{base}` (it reads git history), or whose argv holds the base commit (`reuse.undeclared`); an input that is not a plain file, or a program not found (`reuse.NotCacheable`);
+- for the whole gate: `--full`, a branch gate's `--only`, `"landing".reuse_max_age_h` 0, a change (the branch gate's changed paths, or a landing's `--expect-main..merge`) touching `.kit.json`, a config section file, the hook module or a `"landing".reuse_never` path, or a strict path (kitlib/gate/strict_defaults.py `STRICT_DEFAULTS`, imported, plus `"landing".strict_paths` when set; `reuse.strict_hits`);
+- in a landing also (`reuse.landing_why`): `--fresh`; a result record that cannot be read; a `land` record of a tip (an earlier landing that did not land: its tree is gated again); a `gate` record of a tip whose verdict is not `pass`; a main checkout that is not clean;
+- anything that raises while planning: `NONE <step>: <Type>: <message>`.
+
+**The lines**, one per asking step, in order, each starting `gate: reuse: `:
+
+- `HIT <step>: key <first 12 hex>, stored <UTC time it was stored>`, then `REUSED <step>: passed on the same inputs (key ..., stored ...)`;
+- `MISS <step>: <why>`: `no result stored for key ...`, `no pass within "landing".reuse_max_age_h (<h>) for key ...`, `failed or warned on these inputs at <time> (key ...)`, an entry that cannot be read, or `<steps> of its group <group> runs` (a group is reused whole or not at all);
+- `NONE <step>: <why>` as above;
+- after the run, for each step that missed: `STORED <step>: pass|fail, key ...` (PASS is stored as pass, FAIL and WARN as fail; a skipped step stores nothing), or `NOT STORED <step>: its inputs changed while the gate ran`, or `NOT STORED <step>: its key changed while the gate ran (the kit, a program or the config)` (the key is made again after the run and must be the same: a step that writes its own inputs, or a kit edited meanwhile, stores nothing), or `NOT STORED <step>: <Type>: <message>`. A failure to store never fails the gate.
+
+The lines go to `reuse.log` in the log folder. A reused step's result is `reused` (in the verdict `reused: <steps>`, and in the gate-OK record's `steps`). When every selected step is reused, nothing is booked and `setup` does not run. A step that asks for no reuse says nothing, and no `reuse.log` is written.
+
+**Storage.** `<git common dir>/kit-gate-cache/<key>/<YYYYmmddTHHMMSSZ>-<pid>-<hex8>.<pass|fail>.json` (`reuse.cache_dir`, `reuse.ENTRY_RE`), shared by every checkout of the repository, written to a temp file and renamed into place. An entry whose body does not match its name (schema, key, result, time) is a miss. A pass stored more than 60 s in the future (`reuse.SKEW_S`) is not counted; a fail is. After each gate that could store (one with an asking step that was keyed), entries older than 168 hours (`reuse.PRUNE_H`) are pruned (`reuse.prune`): only names matching `ENTRY_RE`, as plain files, in folders named by a key that are plain folders inside the cache; a link or junction is never followed, and other files are left. Key folders left empty are removed. A prune that fails says one `gate: reuse: prune: ...` line and the gate goes on.
+
+In the kit's own repository no step asks for reuse (`.kit.json` "gate", its one step `kit-suite`, has no `globs`). Tests: tests/gate/test_reuse.py.
 
 ### Branch cleanup
 
@@ -241,7 +266,7 @@ The one documented way to gate a worktree from another directory is that worktre
 python <worktree>/tools/gate.py -C <worktree> --full
 ```
 
-Running the worktree's own gate.py matters in the kit's repository: the gate records the identity of the kit that ran it (`kit.commit`, Gate reuse), and the code under test is the code that gates.
+Running the worktree's own gate.py matters in the kit's repository: the gate records the identity of the kit that ran it (the gate-OK record's `kit.commit`, `runner.kit_identity`), and the code under test is the code that gates.
 
 Landings, `wait-result` and `--measure` apply neither rule. Tests: tests/gate/test_caller_checkout.py (`Refusal` and `ThroughAStub` for the stub rule; `OwnCopy`, `LogDir` and `RunByPath` for the no-stub rule and `--log-dir`).
 
@@ -270,7 +295,7 @@ These are general behaviour the kit gate leaves out, or repo-specific behaviour,
 | PM kit gate.py | worktree removal after landing | ported as the branch cleanup (Landing, Branch cleanup), which runs the `worktree_remove.py` code |
 | a repo's land.py | review-pack precondition, records-only rule | repo policy; a lane or a check step |
 | a repo's land.py | land_scope classify | now data: `.kit.json` "landing".lanes |
-| a repo's gate reuse | log hashes, forecast, stale-base notes, `--force` names | the gate-OK record is the evidence; `--fresh`, `--full` and `merged_args` force a run |
+| a repo's gate reuse | log hashes, forecast, stale-base notes, `--force` names | the per-step cache key is the evidence (Gate reuse); `--fresh`, `--full` and `--only` force a run, and `merged_args` makes another key |
 
 ## Go-live notes
 
