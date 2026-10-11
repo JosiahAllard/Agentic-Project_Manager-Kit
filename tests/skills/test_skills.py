@@ -1,5 +1,7 @@
 import re
+import tempfile
 import unittest
+from pathlib import Path
 
 from kitlib.stubs import SHARED
 from tests.shipped import ROOT, frontmatter, violations
@@ -23,6 +25,17 @@ DOC_RX = re.compile(r"(?<![\w/}.~-])docs/([\w-]+\.md)")
 TEMPLATE_RX = re.compile(r"(?<![\w/}.~-])templates/[\w./-]+")
 # files a repo supplies itself, not the kit (the skills say so beside each)
 REPO_FILES = {"tools/gate.json"}
+
+
+# docs every repo writes for itself (agents read the repo's own copy). The kit may also carry a file
+# of the same name (e.g. its own docs/INDEX.md); that must not make `docs/INDEX.md` in an agent
+# a "kit doc" that has to be written with the plugin root.
+REPO_OWNED_DOCS = {"INDEX.md", "DECISIONS.md", "conventions-digest.md"}
+
+
+def _repo_relative_kit_docs(text, kit_docs):
+    """Names of kit docs (files in `kit_docs`) that `text` writes repo-relative, repo-owned names excepted."""
+    return [n for n in DOC_RX.findall(text) if n not in REPO_OWNED_DOCS and (kit_docs / n).exists()]
 
 
 def _shipped_text_files():
@@ -77,11 +90,18 @@ class SkillFilesTest(unittest.TestCase):
                 continue
             text = p.read_text(encoding="utf-8")
             where = f"{p.parent.name}/{p.name}"
-            for name in DOC_RX.findall(text):
-                self.assertFalse((ROOT / "docs" / name).exists(),
-                                 f"{where} names docs/{name}: a kit doc; write ${{CLAUDE_PLUGIN_ROOT}}/docs/{name}")
+            for name in _repo_relative_kit_docs(text, ROOT / "docs"):
+                self.fail(f"{where} names docs/{name}: a kit doc; write ${{CLAUDE_PLUGIN_ROOT}}/docs/{name}")
             self.assertEqual(TEMPLATE_RX.findall(text), [], f"{where}: a kit template; write ${{CLAUDE_PLUGIN_ROOT}}/templates/...")
             self.assertNotIn("kit checkout's", text, where)
+
+    def test_repo_owned_doc_name_passes_though_kit_has_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            kit_docs = Path(d)
+            for name in ("INDEX.md", "DECISIONS.md", "conventions-digest.md", "lock-api.md"):
+                (kit_docs / name).write_text("x", encoding="utf-8")
+            text = "read docs/INDEX.md, docs/DECISIONS.md, docs/conventions-digest.md and docs/lock-api.md"
+            self.assertEqual(_repo_relative_kit_docs(text, kit_docs), ["lock-api.md"])
 
 
 if __name__ == "__main__":
