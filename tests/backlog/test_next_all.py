@@ -62,6 +62,18 @@ class NextAllCli(unittest.TestCase):
         self.assertNotIn('not reached', out)
         self.assertIn('NEXT (5 offered)', self.ok('next'))
 
+    def test_a_dead_pull_names_its_session_as_the_taker(self):
+        backend = smod.RefBackend(self.repo.root, 'origin', smod.STORE_REF, smod.STORE_REF)
+        snap = smod.Store(backend, rmod.Rules()).load()
+        dead = dict(state='pulled', pulled_by='tools/gone-branch', pulled_at='2026-10-07')
+        backend.publish(snap, {'FOO': record_text(id='FOO', session='sess-a', **dead),
+                               'BAR': record_text(id='BAR', scope='a/bar/**', **dead)}, 'seed\n')
+        out = self.ok('next')
+        self.assertIn('DEAD PULL FOO (pulled_by tools/gone-branch has no branch): a pull by '
+                      'session sess-a takes it over; otherwise `release FOO --reason ...`', out)
+        self.assertIn('DEAD PULL BAR (pulled_by tools/gone-branch has no branch): '
+                      '`release BAR --reason ...`', out)
+
     def test_all_with_cap_is_usage(self):
         rc, out = self.run_tool('next', '--all', '--cap', '3')
         self.assertEqual(rc, 2, out)

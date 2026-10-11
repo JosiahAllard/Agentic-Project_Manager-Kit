@@ -173,8 +173,12 @@ def do_next(args, ctx, snap):
     if why:
         say('in flight: cannot read the branches (%s); every pull holds its scope' % why)
     for rec in dead:
-        say('DEAD PULL %s (pulled_by %s has no branch): `release %s --reason "..."`'
-            % (rec.id, rec.get('pulled_by'), rec.id))
+        # The record's own session takes a dead pull over with a plain `pull` (plan_pull);
+        # anyone else releases it first.
+        taker = ('a pull by session %s takes it over; otherwise ' % rec.get('session')
+                 if rec.get('session') else '')
+        say('DEAD PULL %s (pulled_by %s has no branch): %s`release %s --reason ...`'
+            % (rec.id, rec.get('pulled_by'), taker, rec.id))
     result, refusals, ranks = omod.next_offer(snap, holding, cap=cap, seeds=args.seeds,
                                               session=ctx.session, unmet=ctx.unmet(snap))
     if refusals:
