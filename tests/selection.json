@@ -35,6 +35,8 @@
     ["tests/**", ["tooldeps"]],
     ["reserve_ui.pyw", ["lockui"]],
     ["tools/*.py", ["skills", "stubs"]],
+    ["kitlib/hubsite/**", ["hubsite"]],
+    ["tests/hubsite/**", ["hubsite"]],
     ["kitlib/**", ["skills"]]
   ],
   "by_name": ["claude/**", "githooks/**", "mcp/**", "installer/**", ".claude-plugin/**"],
