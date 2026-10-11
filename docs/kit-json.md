@@ -11,6 +11,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `gate.kind` names the kind a gate run books; the lock books that kind's size (kitlib/lock/kinds.json). A size is a whole number of cpu slots 1..the layout's agent_cap (`medium` and `heavy` remain as aliases), set only by `gate.py --measure` and a reviewed commit. No `.kit.json` key sets a gate's core count.
 - A `landing.lanes` entry is keyed by the lane name and has four keys (`LANE` in `kitlib/config/schema.py`): `branch_prefix` (list of string; a branch on the lane starts with one), `paths` (list of glob; every path the branch changes matches one), `why` (string; the ruling that made the lane) and `merged_args` (list of string; added to every step command of the lane's merged-tree gate, after the step's own `merged_args`, with the same `{root}`-style substitutions). `tools/land.py` reads `main_branch` and `remote` from `repo`, the lanes, `wait_s` and `batch_max` from `landing`, and the gate steps from `gate` (docs/gate.md, Landing).
 - No old spelling is read: the hook module is the top-level `hook` (not `gate.hook`), and owner settings are `owner` (not `doc_budget` keys).
+- Retired keys are still accepted and ignored, so an older install loads: `backlog` may still carry `retired_docs` and `rename_script` (`RETIRED` in `kitlib/config/schema.py`); nothing reads them.
 - A repo lists its own heavy programs in `heavy.programs`; the kit defaults are general tools only (godot, blender, dotnet, gradle). For example `{"program": "run_tests.bat", "kind": "engine-test", "why": "runs the engine test suite"}`, `{"program": "graph_build*", "kind": "worldgraph", "why": "rebuilds the world graph"}` and `{"program": "local_model*", "kind": "local-ai", "unless_args": ["--help"], "why": "loads a model onto the gpu"}`.
 
 ## `.kit.json` keys
@@ -36,8 +37,6 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `backlog.phases` (list of string, default []): phase names in order
 - `backlog.id_grammar` (upper|mixed, default "upper"): item id spelling
 - `backlog.ledger_repo` (string): the ledger repo column; default the repo name
-- `backlog.retired_docs` (list of repo path, default []): docs the backlog replaced
-- `backlog.rename_script` (string, may be empty, default ""): priority rename helper
 - `board.state_file` (repo path): the board state file, under the git dir (default <git common dir>/kit/board-state.md)
 - `checkout_guard.rule_pointer` (string): where a refusal points for the rule
 - `commit.merge_fold` (bool, default false): commit.py folds a merge commit

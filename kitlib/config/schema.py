@@ -139,8 +139,6 @@ SECTIONS = {
         'phases': Field(Strs, [], 'phase names in order'),
         'id_grammar': Field(Enum('upper', 'mixed'), 'upper', 'item id spelling'),
         'ledger_repo': Field(Str(), None, 'the ledger repo column; default the repo name'),
-        'retired_docs': Field(Paths, [], 'docs the backlog replaced'),
-        'rename_script': Field(Str(nonempty=False), '', 'priority rename helper'),
     },
     'board': {
         'state_file': Field(RelPath(), None, 'the board state file, under the git dir (default <git common dir>/kit/board-state.md)'),
@@ -307,6 +305,11 @@ FILE_OK = frozenset(SECTIONS) - {'repo', 'owner', 'hook', 'guard'}
 OPAQUE = frozenset(('forbidden', 'pieces'))
 # Sections that are a map of one entry type: role name -> permissions, over policy.ROLE_DEFAULTS.
 MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, over the kit defaults')}
+
+
+# Keys no tool reads any more, per section. A config that still carries one loads: the key is
+# dropped unchecked (not an unknown-key refusal), so an install written before the removal works.
+RETIRED = {'backlog': ('retired_docs', 'rename_script')}
 
 
 def section_type(name):
