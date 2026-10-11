@@ -71,8 +71,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   you hold (branch, tip, reviewer, range) and every branch whose agent is still running, and
   SendMessage the PM `ready to restart: <state note path>`;
   it starts your successor on a fresh set. Start nothing new, leave `next` to it; workers finish
-  or park on their branches, and your successor never waits for them: it re-dispatches from the
-  branch. Land nothing more after you send `ready to restart:`: your successor
+  or park on their branches, and your successor never waits for their reports: it re-dispatches from the
+  branch once the agent there has stopped. Land nothing more after you send `ready to restart:`: your successor
   lands every LAND verdict in the note at once, and the PM stops you once it has checked in.
 - `next` empty only because finished branches still wait to land is no reason to restart: their
   open records and scopes still block the items behind them. Land them back to back, rerun
