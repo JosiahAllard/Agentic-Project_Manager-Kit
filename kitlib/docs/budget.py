@@ -77,6 +77,12 @@ def sizes_from(stdout):
     return out
 
 
+def names_from(stdout):
+    """The paths in one `-z` name listing (`ls-tree --name-only -z`, `ls-files -z`): NUL-separated
+    and raw, so a name with a quote, a newline or non-ASCII characters is not C-quoted. Pure."""
+    return [p for p in stdout.split('\0') if p]
+
+
 def is_glob(key):
     return any(c in key for c in '*?[')
 
@@ -227,8 +233,8 @@ def _check(root, out, base, head, worktree, report, failures):
         return sizes
 
     if worktree:
-        listing = g('ls-files', '-co', '--exclude-standard')
-        files = [p for p in listing.stdout.splitlines() if os.path.isfile(os.path.join(root, p))]
+        listing = g('ls-files', '-co', '--exclude-standard', '-z')
+        files = [p for p in names_from(listing.stdout) if os.path.isfile(os.path.join(root, p))]
 
         def size(path):
             # LF-normalised, so a CRLF checkout measures like the committed blob
@@ -236,8 +242,8 @@ def _check(root, out, base, head, worktree, report, failures):
                 return len(fh.read().replace(b'\r\n', b'\n'))
         where = 'the working tree'
     else:
-        listing = g('ls-tree', '-r', '--name-only', head)
-        files = listing.stdout.splitlines()
+        listing = g('ls-tree', '-r', '--name-only', '-z', head)
+        files = names_from(listing.stdout)
         head_sizes = sizes_or_refuse(head) if listing.returncode == 0 else {}
 
         def size(path):

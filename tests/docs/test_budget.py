@@ -255,6 +255,19 @@ class Pure(unittest.TestCase):
         self.assertEqual(budget.sizes_from(listing), {'a b.md': 12})
         self.assertEqual(budget.sizes_from(''), {})
 
+    def test_sizes_from_keeps_non_ascii_quote_and_newline_names_raw(self):
+        listing = '\x00'.join(
+            ['100644 blob %s     7\tdocs/café ü.md' % ('1' * 40),
+             '100644 blob %s     9\ta"q.md' % ('2' * 40),
+             '100644 blob %s    11\tline\nbreak.md' % ('3' * 40), ''])
+        self.assertEqual(budget.sizes_from(listing),
+                         {'docs/café ü.md': 7, 'a"q.md': 9, 'line\nbreak.md': 11})
+
+    def test_names_from_splits_on_nul_only(self):
+        self.assertEqual(budget.names_from('a b.md\0café.md\0line\nbreak.md\0'),
+                         ['a b.md', 'café.md', 'line\nbreak.md'])
+        self.assertEqual(budget.names_from(''), [])
+
     def test_section_of_drops_note_keys_from_the_section_and_its_budgets(self):
         class Conf:
             def raw(self, name):
@@ -284,6 +297,27 @@ class BranchSize(BudgetRepo):
         code, out = self.run_budget('--base', 'master', '--head', 'branch-a')
         self.assertEqual(code, 1, out)
         self.assertIn('9000', out)
+
+    def test_a_non_ascii_name_is_measured_at_its_real_size(self):
+        # Without -z the listing C-quotes the name, the size lookup misses and reads 0.
+        name = 'docs/café notes.md'
+        self.size(GOTCHAS, 100)
+        self.git('checkout', '-q', '-b', 'branch-a')
+        self.size(name, 50000)
+        code, out = self.run_budget('--base', 'master', '--head', 'branch-a')
+        self.assertEqual(code, 1, out)
+        self.assertIn(name, out)
+        self.assertIn('50000', out)
+
+    def test_a_non_ascii_name_is_listed_in_worktree_mode(self):
+        # Without -z, ls-files C-quotes the name, os.path.isfile misses it and the file is unmeasured.
+        name = 'docs/café notes.md'
+        self.size(GOTCHAS, 100)
+        self.git('checkout', '-q', '-b', 'branch-a')
+        self.size(name, 50000)
+        code, out = self.run_budget('--worktree')
+        self.assertEqual(code, 1, out)
+        self.assertIn(name, out)
 
     def test_an_over_budget_file_that_shrinks_on_the_branch_passes(self):
         self.size(GOTCHAS, 9000)
