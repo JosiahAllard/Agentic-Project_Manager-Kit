@@ -562,9 +562,10 @@ class MainBackend(object):
     In the PM data branch's worktree (commit_branch) the write also commits exactly the record
     paths it wrote, as one commit on HEAD by compare-and-swap (`update-ref HEAD <new> <old>`,
     rebuilt on a HEAD that moved unless the move changed one of those paths since publish read
-    HEAD, before it checked the files: Overtaken), and sets those paths in the real index; nothing
-    else in that worktree is staged or committed. A commit that fails is Uncommitted (the files
-    stay written); an index left stale after the commit is IndexStale. Its git calls drop an
+    HEAD, before it checked the files: Overtaken, and the files the write wrote are put back to
+    HEAD's content, _put_back), and sets those paths in the real index; nothing
+    else in that worktree is staged or committed. Any other commit that fails is Uncommitted (the
+    files stay written); an index left stale after the commit is IndexStale. Its git calls drop an
     inherited GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE
     (_store_env). Elsewhere it commits nothing."""
 
@@ -633,7 +634,12 @@ class MainBackend(object):
         branch = self.commit_branch(place)
         # HEAD before the files are checked: a commit of one of these paths that lands after the
         # check and before the first commit attempt is then seen by _publish_commit's compare.
-        base = self._head() if branch else None
+        base = None
+        if branch:
+            try:
+                base = self._head()
+            except Failure as exc:
+                raise Failure('%s; nothing was written' % exc)
         now = self._read()
         for stem in writes:
             if now.get(stem) != snap.raw.get(stem):
@@ -647,7 +653,46 @@ class MainBackend(object):
         self._write_files(writes, now, paths, branch)
         if not branch:
             return None
-        return self._commit(blobs, message, paths, base)
+        try:
+            return self._commit(blobs, message, paths, base)
+        except Overtaken as exc:                     # the files must not outlive the refusal
+            raise self._overtaken(paths, exc.changed, exc.head, self._put_back(exc.head, blobs))
+
+    def _put_back(self, head, blobs):
+        """After an Overtaken refusal, give each path of `blobs` ({path: the blob id this write
+        wrote, or None for a file it deleted}) the content `head` holds, removing a file `head`
+        lacks, so that no reader and no later write sees the refused content. Only a path whose
+        file still holds exactly what this write wrote is touched (blob ids compared). Returns
+        the paths left as they are: changed since, or git or the disk failed."""
+        paths = sorted(blobs)
+        try:
+            held = self._entries(head, paths)
+        except Failure:
+            return paths
+        left = []
+        for path in paths:
+            full = os.path.join(self.root, *path.split('/'))
+            try:
+                mine = None
+                if os.path.lexists(full):
+                    with open(full, 'rb') as f:
+                        out, _ = cmd.run(['hash-object', '--stdin'], self.root, stdin=f.read(),
+                                         env=_store_env())
+                    mine = cmd.text(out).strip() if out is not None else ''
+                kind, theirs = (held.get(path, '').split() + [''] * 3)[1:3]
+                data = None
+                if mine == blobs[path] and kind == 'blob':
+                    data, _ = cmd.run(['cat-file', 'blob', theirs], self.root, env=_store_env())
+                if mine != blobs[path] or (data is None and path in held):
+                    left.append(path)
+                elif data is not None:
+                    with open(full, 'wb') as f:
+                        f.write(data)
+                elif mine is not None:
+                    os.remove(full)
+            except OSError:
+                left.append(path)
+        return left
 
     def _write_files(self, writes, before, paths, branch):
         """Write `writes`; on an OSError put back the files already written (`before`: their
@@ -699,15 +744,33 @@ class MainBackend(object):
                            % (', '.join(paths), self.root, why, CATCH_UP, CATCH_UP,
                               quoted(paths)), paths)
 
-    def _overtaken(self, paths, changed, head):
-        compare = 'git -C "%s" diff HEAD -- %s' % (self.root, quoted(changed))
+    def _overtaken(self, paths, changed, head, left=None):
+        """The Overtaken for `paths`. `left` None: nothing was put back (as _publish_commit
+        raises it, which is how `catch-up --apply` ends); else the paths _put_back left."""
+        why = ('another commit changed %s on HEAD since this write began (HEAD is now %s)'
+               % (', '.join(changed), head[:10]))
+        if left is not None and not left:
+            return Overtaken(
+                '%s not written in %s: %s, so the write was refused and each file it had written '
+                'was put back to what HEAD holds; nothing of it remains. Read the record again '
+                'and repeat the write if it is still wanted'
+                % (', '.join(paths), self.root, why), paths, changed, '', head, left)
+        compare = 'git -C "%s" diff HEAD -- %s' % (self.root, quoted(changed if left is None
+                                                                     else left))
+        if left is None:
+            said = ('%s written but not committed in %s: %s, and committing the files would '
+                    'overwrite that commit. Compare each with HEAD first (%s)'
+                    % (', '.join(paths), self.root, why, compare))
+        else:
+            said = ('%s refused in %s: %s, and committing the files would overwrite that commit. '
+                    'Each file the write had written was put back to what HEAD holds, except %s. '
+                    'Left as it is, because it no longer held what this write wrote or could not '
+                    'be put back: compare it with HEAD first (%s)'
+                    % (', '.join(paths), self.root, why, ', '.join(left), compare))
         return Overtaken(
-            '%s written but not committed in %s: another commit changed %s on HEAD since this '
-            'write began (HEAD is now %s), and committing the files would overwrite that commit. '
-            'Compare each with HEAD first (%s); `%s --apply` commits the worktree\'s files as they '
-            'are, so run it only for a path whose file is what HEAD should hold'
-            % (', '.join(paths), self.root, ', '.join(changed), head[:10], compare, CATCH_UP),
-            paths, changed, compare)
+            '%s; `%s --apply` commits the worktree\'s files as they are, so run it only for a '
+            'path whose file is what HEAD should hold' % (said, CATCH_UP),
+            paths, changed, compare, head, left)
 
     def _git(self, args, paths, **kw):
         kw.setdefault('env', _store_env())

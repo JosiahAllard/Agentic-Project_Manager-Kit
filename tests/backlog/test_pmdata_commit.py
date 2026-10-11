@@ -203,7 +203,7 @@ class PmDataStore(unittest.TestCase):
         """Two writers on BAR: this one has checked the files against what it read, then the
         other writes and commits BAR before this one's first commit attempt reads HEAD. The base
         is HEAD from before the check, so the first attempt sees BAR changed and stops, Overtaken;
-        the other writer's commit stands and the error names the compare, not a blind catch-up."""
+        the other writer's commit stands and the error names no catch-up to run."""
         other = smod.Store(smod.MainBackend(self.wt, DIR), rmod.Rules(), session='kit-other')
         other_ctx = pmod.Context(other, self.wt, branch=BRANCH)
         real = self.backend._write_files
@@ -225,10 +225,107 @@ class PmDataStore(unittest.TestCase):
         exc = cm.exception
         self.assertIsInstance(exc, errors.Overtaken)
         self.assertEqual((exc.paths, exc.changed), ([DIR + '/BAR.md'], [DIR + '/BAR.md']))
-        self.assertEqual(exc.compare, 'git -C "%s" diff HEAD -- "%s/BAR.md"' % (self.wt, DIR))
+        self.assertEqual((exc.head, exc.left, exc.compare), (theirs[0], [], ''))  # all put back
         self.assertIn('another commit changed %s/BAR.md' % DIR, str(exc))
+        self.assertIn('nothing of it remains', str(exc))
+        self.assertNotIn('catch-up', str(exc))           # no catch-up command at all
+
+    def overtaken(self, theirs, mine, after_my_files=None):
+        """The Overtaken of this store's write `mine(snap, ctx)`, another store's `theirs(snap,
+        ctx)` having been written and committed after this one checked the files and before its
+        first commit attempt. `after_my_files()` runs once this write's files are on disk."""
+        other = smod.Store(smod.MainBackend(self.wt, DIR), rmod.Rules(), session='kit-other')
+        other_ctx = pmod.Context(other, self.wt, branch=BRANCH)
+        real = self.backend._write_files
+
+        def the_other_writes_then_write(*args):
+            self.winner = other.write(lambda s: theirs(s, other_ctx))[1]
+            real(*args)
+            if after_my_files is not None:
+                after_my_files()
+        with mock.patch.object(self.backend, '_write_files',
+                               side_effect=the_other_writes_then_write), \
+                mock.patch.object(smod.time, 'sleep'):
+            with self.assertRaises(errors.Overtaken) as cm:
+                self.store.write(lambda s: mine(s, self.ctx))
+        self.assertIsNotNone(self.winner)
+        self.assertEqual(self.head(), self.winner)
+        return cm.exception
+
+    def test_an_overtaken_write_is_put_back_so_a_read_and_the_next_write_keep_the_winner(self):
+        """The refused write's file goes back to HEAD's content: `load` returns the winner's
+        record, the worktree is clean, and the next ordinary write to that record (which finds
+        HEAD where it began, so no compare runs) carries the winner's change, not the loser's."""
+        exc = self.overtaken(
+            lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['theirs'])]),
+            lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['mine'])]))
+        self.assertEqual(self.store.load().get('BAR').get('summary'), 'theirs')
+        self.assertEqual(self.status(), [])
+        _, tip = self.store.write(lambda s: pmod.plan_pull(s, self.ctx, 'BAR'))
+        self.assert_committed(self.winner, tip, [('M', DIR + '/BAR.md')])
+        after = self.git('show', 'HEAD:%s/BAR.md' % DIR)
+        self.assertIn('summary: theirs', after)
+        self.assertNotIn('summary: mine', after)
+        self.assertEqual((exc.paths, exc.changed, exc.left), ([DIR + '/BAR.md'],) * 2 + ([],))
+        self.assertIn('put back to what HEAD holds', str(exc))
+        self.assertNotIn('catch-up', str(exc))
+
+    def test_an_overtaken_write_of_a_record_the_winner_deleted_removes_its_file(self):
+        """HEAD lacks the path (the winner closed the record): the refused write's file is
+        removed, so the record does not come back."""
+        exc = self.overtaken(
+            lambda s, ctx: pmod.plan_close(s, ctx, 'BAR', REASON),
+            lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['mine'])]))
+        self.assertFalse(os.path.exists(self.path('BAR')))
+        self.assertIsNone(self.store.load().get('BAR'))
+        self.assertEqual(self.status(), [])
+        self.assertEqual(exc.left, [])
+
+    def test_an_overtaken_file_changed_since_it_was_written_is_left_and_named(self):
+        """The file no longer holds what the refused write wrote (a hand edit after it): it is
+        left exactly as it is and the error names it, with the compare against HEAD."""
+        def edit_by_hand():
+            with open(self.path('BAR'), 'ab') as f:
+                f.write(b'\nedited by hand\n')
+        exc = self.overtaken(
+            lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['theirs'])]),
+            lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['mine'])]),
+            after_my_files=edit_by_hand)
+        with open(self.path('BAR'), 'rb') as f:
+            on_disk = f.read()
+        self.assertIn(b'summary: mine', on_disk)
+        self.assertTrue(on_disk.endswith(b'\nedited by hand\n'))
+        self.assertIn('summary: theirs', self.git('show', 'HEAD:%s/BAR.md' % DIR))
+        self.assertEqual(exc.left, [DIR + '/BAR.md'])
+        self.assertEqual(exc.compare, 'git -C "%s" diff HEAD -- "%s/BAR.md"' % (self.wt, DIR))
+        self.assertIn('Left as it is', str(exc))
         self.assertIn(exc.compare, str(exc))
-        self.assertNotIn('--apply "', str(exc))          # no ready-made catch-up command
+
+    def test_an_unreadable_head_writes_nothing_and_says_so(self):
+        """publish reads HEAD before it checks or writes any file: when git cannot give it, the
+        ERROR says nothing was written, and no file, commit or index entry changed."""
+        real = cmd.run_text
+
+        def no_head(args, *rest, **kw):
+            if list(args[:1]) == ['rev-parse'] and 'HEAD^{commit}' in args:
+                return None, 'git ended from outside'
+            return real(args, *rest, **kw)
+        before = self.head()
+        with open(self.path('BAR'), 'rb') as f:
+            bar = f.read()
+        with mock.patch.object(smod.cmd, 'run_text', side_effect=no_head):
+            with self.assertRaises(Failure) as cm:
+                self.store.write(lambda s: pmod.plan_set(s, self.ctx, 'BAR',
+                                                         [('summary', ['mine'])]))
+        self.assertNotIsInstance(cm.exception, Uncommitted)
+        self.assertEqual(str(cm.exception), 'cannot read HEAD in %s: git ended from outside; '
+                         'nothing was written' % self.wt)
+        with open(self.path('BAR'), 'rb') as f:
+            self.assertEqual(f.read(), bar)
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.path('BAR')))),
+                         ['BAR.md', 'BAZ.md'])
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.status(), [])
 
     def worktree_index(self):
         """The worktree's own index file (its admin folder's `index`)."""

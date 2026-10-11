@@ -277,10 +277,17 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
         try:
             change, tip = store.write(_close_plan(ctx, rid, branch, reason))
         except Overtaken as exc:            # another commit changed the record: never blind
-            lines.append('WARNING: %s landed, and %s was closed in the backlog store %s but not '
-                         'committed (%s); do not commit it over that commit: compare each path '
-                         'with HEAD first: %s'
-                         % (branch, rid, backend.describe(), _one_line(str(exc)), exc.compare))
+            if exc.left:                    # a file the close could not put back to HEAD
+                lines.append('WARNING: %s landed, and the close of %s in the backlog store %s was '
+                             'refused (%s); do not commit it over that commit: compare each path '
+                             'left with HEAD first: %s'
+                             % (branch, rid, backend.describe(), _one_line(str(exc)),
+                                exc.compare))
+            else:                           # put back: the record is as that commit left it
+                lines.append('WARNING: %s landed, and %s, which it holds pulled, was not closed '
+                             '(%s: %s); close it with: %s'
+                             % (branch, rid, exc.label, _one_line(str(exc)),
+                                command('close', rid, '--reason', '"%s"' % reason)))
             continue
         except Uncommitted as exc:          # deleted in the PM data worktree, its commit failed
             lines.append('WARNING: %s landed, and %s was closed in the backlog store %s but not '

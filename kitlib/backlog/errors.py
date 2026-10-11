@@ -1,6 +1,6 @@
 """The four ways a backlog verb stops (ported from an earlier tools/backlog.py). Each fixes the
 label the CLI prints and its exit code; nothing was written when one is raised, except
-Uncommitted and IndexStale (each a Failure). IndexStale's write is committed, so tools/backlog.py
+Uncommitted (an Overtaken only for the paths in its `left`) and IndexStale (each a Failure). IndexStale's write is committed, so tools/backlog.py
 reports it as written, with a WARNING line and exit 0, not by this label and code."""
 
 
@@ -34,7 +34,8 @@ class Failure(Refusal):
 class Uncommitted(Failure):
     """The write's record files are on disk in the PM data worktree but its commit failed
     (kitlib.backlog.store.MainBackend): `backlog.py catch-up --apply` commits them (not after an
-    Overtaken). `paths`: every record path the write wrote, as git spells it."""
+    Overtaken, which puts them back). `paths`: every record path the write wrote, as git spells
+    it."""
 
     def __init__(self, message, paths=()):
         Failure.__init__(self, message)
@@ -42,15 +43,20 @@ class Uncommitted(Failure):
 
 
 class Overtaken(Uncommitted):
-    """Uncommitted because another commit changed one of the write's paths on HEAD after the write
-    began (`changed`: those paths): committing the worktree's files now would overwrite that
-    commit, so `catch-up --apply` is not the next step; comparing each path with HEAD is
-    (`compare`: the command that shows the difference)."""
+    """Refused because another commit changed one of the write's paths on HEAD (`head`) after the
+    write began (`changed`: those paths): committing the files would overwrite that commit.
+    `left` is a list after a write (MainBackend.publish), which puts each file it wrote back to
+    what `head` holds: the paths it left as they are (the file no longer held what the write
+    wrote, or could not be put back), empty when nothing of the write remains on disk. `left` is None for `catch-up --apply`, whose files
+    are not its own and are all left. `compare`: the command that shows each path left against
+    HEAD ('' when none is), the step before any `catch-up --apply`."""
 
-    def __init__(self, message, paths=(), changed=(), compare=''):
+    def __init__(self, message, paths=(), changed=(), compare='', head='', left=None):
         Uncommitted.__init__(self, message, paths)
         self.changed = list(changed)
         self.compare = compare
+        self.head = head
+        self.left = None if left is None else list(left)
 
 
 class IndexStale(Failure):

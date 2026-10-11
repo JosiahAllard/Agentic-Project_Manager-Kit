@@ -407,39 +407,71 @@ class PmDataClose(StoreLandCase):
         self.assertNotIn('compare each path with HEAD', warn[0])
         self.assertEqual(self.main_now(), out.merge)
 
-    def test_a_close_another_commit_overtook_names_the_compare_not_catch_up(self):
-        """Another session commits FOO in the PM data worktree after the close checked the files
-        and before its first commit attempt: the WARNING says not to commit over that commit and
-        gives the compare with HEAD; it never prints a catch-up command to run as it is."""
+    def overtaken_close(self, after_my_files=None):
+        """`(wt, their commit, the landing)`: another session commits FOO in the PM data worktree
+        after the close checked the files and before its first commit attempt.
+        `after_my_files()` runs once the close's own file change is on disk."""
         wt = self.pm_worktree(pulled('FOO'))
         self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
         real = smod.MainBackend._write_files
         theirs = []
 
         def another_commit_then_write(backend, writes, before, paths, branch):
-            if branch and not theirs:
+            first = branch and not theirs
+            if first:
                 with open(self.record(wt, 'FOO'), 'a', encoding='utf-8', newline='\n') as f:
                     f.write('\nanother session wrote this\n')
                 theirs.append(self.repo.commit('another session', 'kit/backlog/FOO.md', cwd=wt))
-            return real(backend, writes, before, paths, branch)
+            real(backend, writes, before, paths, branch)
+            if first and after_my_files is not None:
+                after_my_files(wt)
         with mock.patch.object(smod.MainBackend, '_write_files', another_commit_then_write):
             out = self.land()
         self.assertEqual(len(theirs), 1)
         self.assertEqual(self.repo.git('rev-parse', 'HEAD', cwd=wt), theirs[0])
+        self.assertEqual(self.main_now(), out.merge)
+        return wt, theirs[0], out
+
+    def test_a_close_another_commit_overtook_is_put_back_and_reported_unclosed(self):
+        """The close's deletion is put back to that commit's FOO, so the record is still there:
+        the WARNING says it was not closed and gives the close command, never a catch-up."""
+        wt, _, out = self.overtaken_close()
+        with open(self.record(wt, 'FOO'), encoding='utf-8') as f:
+            self.assertIn('another session wrote this', f.read())
+        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'kit/backlog', cwd=wt), '')
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertIn('FOO, which it holds pulled, was not closed (ERROR: ', warn[0])
+        self.assertIn('another commit changed kit/backlog/FOO.md on HEAD', warn[0])
+        self.assertIn('put back to what HEAD holds', warn[0])
+        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" close FOO --reason "landed %s"'
+                                         % (self.pm_root(wt), out.merge)), warn[0])
+        self.assertNotIn('catch-up', warn[0])
+        self.assertNotIn('was closed', warn[0])
+
+    def test_a_close_another_commit_overtook_names_the_compare_for_a_file_it_left(self):
+        """FOO is written again by hand after the close deleted it: the close leaves that file,
+        and the WARNING says not to commit it over that commit and gives the compare with HEAD;
+        it never prints a catch-up command to run as it is."""
+        def write_by_hand(wt):
+            with open(self.record(wt, 'FOO'), 'w', encoding='utf-8', newline='\n') as f:
+                f.write('written by hand\n')
+        wt, _, out = self.overtaken_close(write_by_hand)
+        with open(self.record(wt, 'FOO'), encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'written by hand\n')
         self.assertIn('another session wrote this',
                       self.repo.git('show', 'HEAD:kit/backlog/FOO.md', cwd=wt))
         warn = [l for l in out.lines if l.startswith('WARNING')]
         self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('FOO was closed in the backlog store kit/backlog in ', warn[0])
-        self.assertIn('but not committed', warn[0])
+        self.assertIn('the close of FOO in the backlog store kit/backlog in ', warn[0])
+        self.assertIn('was refused', warn[0])
         self.assertIn('another commit changed kit/backlog/FOO.md on HEAD', warn[0])
         self.assertTrue(warn[0].endswith(
-            '; do not commit it over that commit: compare each path with HEAD first: '
+            '; do not commit it over that commit: compare each path left with HEAD first: '
             'git -C "%s" diff HEAD -- "kit/backlog/FOO.md"' % self.pm_root(wt)), warn[0])
-        self.assertNotIn('commit it with', warn[0])
+        self.assertNotIn('close it with', warn[0])
         self.assertNotIn('catch-up --apply "', warn[0])
         self.assertNotIn('catch-up --apply kit', warn[0])
-        self.assertEqual(self.main_now(), out.merge)
 
     def test_catch_up_after_a_failed_close_names_every_path_the_close_wrote(self):
         """The close also rewrites BAR, which FOO blocked: the catch-up command names both."""
