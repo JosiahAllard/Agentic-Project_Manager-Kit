@@ -9,8 +9,11 @@ quotes the placeholder, so a space in the path stays one argument. `install` wri
 already in the target is kept, never overwritten (as with the stack's tools files).
 
 Refused, before anything is written (StackSkillRefused): a kit root that is not absolute, that lacks
-tools/machine_lock.py or kitlib/, or that holds a quote, a brace or a line break (the placeholder
-would be written broken); a stack the kit has not; a rendered file that still has a placeholder.
+tools/machine_lock.py or kitlib/, or that holds a double quote, a brace, a dollar sign, a backtick
+or a line break (inside a bash double-quoted command the last two expand, the others break the
+quoting or the placeholder); a stack the kit has no folder for; any skill file, .md or not, that has
+the placeholder after rendering (a non-.md file is copied as it is, so it must have none).
+A stack with a folder but no `.claude/skills` has nothing to copy and is not a refusal.
 """
 import os
 import re
@@ -31,9 +34,10 @@ def resolve_kit_root(kit_root=None):
     root = KIT_ROOT if kit_root is None else kit_root
     if not isinstance(root, str) or not os.path.isabs(root):
         raise StackSkillRefused('the kit root %r is not an absolute path' % (root,))
-    if any(c in root for c in '"{}\r\n'):
-        raise StackSkillRefused('the kit root %r holds a quote, a brace or a line break, so it cannot be '
-                                'written into a quoted command' % (root,))
+    if any(c in root for c in '"{}$`\r\n'):
+        raise StackSkillRefused('the kit root %r holds a double quote, a brace, a dollar sign, a backtick '
+                                'or a line break, so it cannot be written into a double-quoted command'
+                                % (root,))
     for rel in (os.path.join('tools', 'machine_lock.py'), 'kitlib'):
         if not os.path.exists(os.path.join(root, rel)):
             raise StackSkillRefused('the kit root %s has no %s' % (root, rel))
@@ -52,6 +56,8 @@ def plan(stack, target, kit_root=None):
     if not _STACK.match(stack or ''):
         raise StackSkillRefused('%r is not a stack name' % (stack,))
     src_root = os.path.join(os.path.normpath(kit), 'templates', 'stacks', stack, SKILLS_REL)
+    if not os.path.isdir(os.path.join(os.path.normpath(kit), 'templates', 'stacks', stack)):
+        raise StackSkillRefused('the kit has no stack %r (no templates/stacks/%s)' % (stack, stack))
     out = []
     if not os.path.isdir(src_root):
         return out
@@ -76,14 +82,20 @@ def plan(stack, target, kit_root=None):
                 if KIT_ROOT_PLACEHOLDER in text:
                     raise StackSkillRefused('%s still has %s after rendering' % (src, KIT_ROOT_PLACEHOLDER))
                 raw = text.encode('utf-8')
+            if KIT_ROOT_PLACEHOLDER.encode('ascii') in raw:
+                raise StackSkillRefused('%s has %s and is not a file that gets it filled in'
+                                        % (src, KIT_ROOT_PLACEHOLDER))
             out.append((dst, raw, False))
     return sorted(out)
 
 
-def install(stack, target, kit_root=None, apply=False):
-    """Plan, and with `apply` write; the report lines. Raises StackSkillRefused before any write."""
+def install(stack, target, kit_root=None, apply=False, written=None):
+    """Plan, and with `apply` write; the report lines. Raises StackSkillRefused before any write.
+    Each file written is appended to `written` (a list) as it is, so a caller that meets an OSError
+    part-way can name what is already there."""
     steps = plan(stack, target, kit_root)
     lines = []
+    written = [] if written is None else written
     for dst, raw, kept in steps:
         if kept:
             lines.append('kept     %s   (exists)' % dst)
@@ -92,6 +104,7 @@ def install(stack, target, kit_root=None, apply=False):
         else:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             with open(dst, 'xb') as fh:
+                written.append(dst)
                 fh.write(raw)
             lines.append('wrote    %s' % dst)
     return lines

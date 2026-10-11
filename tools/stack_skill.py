@@ -41,10 +41,17 @@ def main(argv=None):
     root = os.path.abspath(a.root)
     if not os.path.isdir(root):
         parser().error('-C: %s is not a folder' % root)
+    written = []
     try:
-        lines = stackskill.install(a.stack, root, apply=a.apply)
+        lines = stackskill.install(a.stack, root, apply=a.apply, written=written)
     except stackskill.StackSkillRefused as e:
         print('stack_skill: REFUSED - %s; nothing was written' % e, flush=True)
+        return 1
+    except OSError as e:
+        for w in written:
+            print('wrote    %s' % w, flush=True)
+        print('stack_skill: FAILED - %s; %s' % (e, 'already written (delete to undo): %s' % ' , '.join(written)
+                                                 if written else 'nothing had been written before it'), flush=True)
         return 1
     except KeyboardInterrupt:
         return 130

@@ -63,7 +63,8 @@ class RenderTest(unittest.TestCase):
     def test_refuses_a_kit_root_it_cannot_use_and_writes_nothing(self):
         kit = make_kit(self.tmp.name)
         (kit / "tools" / "machine_lock.py").unlink()
-        bad = [str(kit), "relative/kit", str(Path(self.tmp.name) / 'a"b'), str(Path(self.tmp.name) / "a{b}")]
+        bad = [str(kit), "relative/kit", str(Path(self.tmp.name) / 'a"b'), str(Path(self.tmp.name) / "a{b}"),
+               str(Path(self.tmp.name) / "a$b"), str(Path(self.tmp.name) / "a`b")]
         for root in bad:
             with self.assertRaises(stackskill.StackSkillRefused, msg=repr(root)):
                 stackskill.install("godot", str(self.target), kit_root=root, apply=True)
@@ -80,6 +81,34 @@ class RenderTest(unittest.TestCase):
         with self.assertRaises(stackskill.StackSkillRefused):
             stackskill.install("../x", str(self.target), kit_root=str(kit))
 
+    def test_a_stack_the_kit_has_no_folder_for_is_refused_but_one_without_skills_is_not(self):
+        kit = make_kit(self.tmp.name)
+        with self.assertRaises(stackskill.StackSkillRefused):
+            stackskill.install("nosuch", str(self.target), kit_root=str(kit))
+        (kit / "templates" / "stacks" / "bare").mkdir()
+        self.assertEqual(stackskill.install("bare", str(self.target), kit_root=str(kit), apply=True), [])
+
+    def test_a_non_md_skill_file_with_the_placeholder_is_refused(self):
+        kit = make_kit(self.tmp.name)
+        (kit / "templates" / "stacks" / "godot" / SKILL_REL.parent / "run.cmd").write_text(
+            "python {kit_root}/x\n", encoding="utf-8")
+        with self.assertRaises(stackskill.StackSkillRefused):
+            stackskill.install("godot", str(self.target), kit_root=str(kit), apply=True)
+        self.assertFalse((self.target / ".claude").exists())
+
+    def test_a_write_error_part_way_leaves_the_written_files_named(self):
+        kit = make_kit(self.tmp.name)
+        second = kit / "templates" / "stacks" / "godot" / ".claude" / "skills" / "zeta" / "SKILL.md"
+        second.parent.mkdir()
+        second.write_text("x\n", encoding="utf-8")
+        skills = self.target / ".claude" / "skills"
+        skills.mkdir(parents=True)
+        (skills / "zeta").write_text("a file where the folder goes", encoding="utf-8")
+        written = []
+        with self.assertRaises(OSError):
+            stackskill.install("godot", str(self.target), kit_root=str(kit), apply=True, written=written)
+        self.assertEqual(written, [str(self.target / SKILL_REL)])
+
 
 class RealTemplateTest(unittest.TestCase):
     def test_godot_template_uses_the_placeholder_not_a_repo_relative_path(self):
@@ -89,8 +118,8 @@ class RealTemplateTest(unittest.TestCase):
 
     def test_only_the_godot_template_carries_a_placeholder(self):
         for p in (ROOT / "templates").rglob("*"):
-            if p.is_file() and p != TEMPLATE and p.suffix in {".md", ".json", ".yml", ".cmd"}:
-                self.assertNotIn("{kit_root}", p.read_text(encoding="utf-8"), p)
+            if p.is_file() and p != TEMPLATE:
+                self.assertNotIn(b"{kit_root}", p.read_bytes(), p)
 
     def test_the_real_kit_installs_the_godot_skill_with_a_machine_lock_that_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -118,6 +147,24 @@ class ToolExitCodesTest(unittest.TestCase):
             sys.argv = old
         return None, out.getvalue()
 
+    def test_an_oserror_exits_1_and_names_what_was_written(self):
+        import importlib.util
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("stack_skill_tool", str(sys_path_tool))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        def boom(stack, target, apply=False, written=None):
+            written.append("C:/t/one")
+            raise OSError("disk full")
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(mod.stackskill, "install", boom), \
+                contextlib.redirect_stdout(out):
+            code = mod.main(["install", "--stack", "godot", "-C", tmp, "--apply"])
+        self.assertEqual(code, 1)
+        self.assertIn("disk full", out.getvalue())
+        self.assertIn("already written (delete to undo): C:/t/one", out.getvalue())
+
     def test_exit_codes(self):
         with tempfile.TemporaryDirectory() as tmp:
             code, out = self.run_tool("install", "--stack", "godot", "-C", tmp)
@@ -125,7 +172,11 @@ class ToolExitCodesTest(unittest.TestCase):
             self.assertIn("would create", out)
             self.assertFalse((Path(tmp) / ".claude").exists())
             code, out = self.run_tool("install", "--stack", "nosuch", "-C", tmp)
-            self.assertEqual(code, 0)          # a stack without skills: nothing to copy
+            self.assertEqual(code, 1)          # no such stack folder: a refusal
+            self.assertIn("REFUSED", out)
+            code, out = self.run_tool("install", "--stack", "python", "-C", tmp)
+            self.assertEqual(code, 0)          # a stack with no skills: nothing to copy
+            self.assertEqual(out, "")
             code, out = self.run_tool("install", "--stack", "Bad/Name", "-C", tmp)
             self.assertEqual(code, 1)
             self.assertIn("REFUSED", out)

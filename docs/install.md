@@ -64,8 +64,9 @@ down the longer the machine stays up: docs/windows-token-leak.md.
      `.claude/skills/**` (only Godot has one, `godot-render-check`): each `.md` has `{kit_root}`
      replaced by the kit's absolute path with forward slashes (the template quotes it, so a space
      is safe), a file already there is kept, and a kit root it cannot write (no
-     `tools/machine_lock.py` under it, or a quote or brace in the path) refuses the whole run
-     before anything is written. Edit the gate's globs and test command to the project.
+     `tools/machine_lock.py` under it, or a double quote, brace, `$` or backtick in the path) refuses
+     the whole run before anything is written, as does a stack the kit has no folder for, and so does
+     no python on PATH. Edit the gate's globs and test command to the project.
      The python gate runs
      `unittest discover -s tests` and needs one test: its pass check wants a `Ran N tests` line
      with N of 1 or more, so a run of none fails on every Python version. It runs without

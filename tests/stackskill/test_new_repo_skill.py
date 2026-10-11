@@ -65,6 +65,37 @@ class NewRepoSkill(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(self.root, '.claude')))
             self.assertFalse(os.path.exists(os.path.join(self.root, 'tools', 'godot.cmd')))
 
+    def test_no_python_on_path_refuses_before_anything_is_written(self):
+        git_dir = os.path.dirname(shutil.which('git'))
+        ps_dir = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32', 'WindowsPowerShell', 'v1.0')
+        env = gitfixture.fixture_env({'PATH': os.pathsep.join([ps_dir, git_dir])})
+        self.assertIsNone(shutil.which('python', path=env['PATH']), 'python is beside git on this machine')
+        argv = ['powershell', '-NoProfile', '-NonInteractive', '-File',
+                os.path.join(self.kit, 'installer', 'new-repo.ps1'), '-Target', self.root,
+                '-OwnerEmail', 'owner@example.invalid', '-AgentEmail', 'agent@example.invalid',
+                '-Apply', '-Stack', 'godot']
+        done = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              env=env, timeout=300)
+        out = (done.stdout or '') + (done.stderr or '')
+        self.assertEqual(done.returncode, 2, out)
+        self.assertIn('python is not on PATH', out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
+        self.assertFalse(os.path.exists(os.path.join(self.root, '.claude')))
+
+    def test_a_stub_failure_names_the_skill_files_in_the_undo_list(self):
+        with open(os.path.join(self.kit, 'tools', 'kit_stubs.py'), 'w', encoding='utf-8') as fh:
+            fh.write("import sys\n"
+                     "if '--dry-run' in sys.argv:\n"
+                     "    print('would write  C:\\\\x\\\\tools\\\\landed.py')\n"
+                     "    sys.exit(0)\n"
+                     "sys.exit(3)\n")
+        code, out = self.ps('-Apply', '-Stack', 'godot')
+        self.assertEqual(code, 1, out)
+        undo = [l for l in out.splitlines() if 'To undo: delete' in l]
+        self.assertEqual(len(undo), 1, out)
+        self.assertIn(os.path.join(self.root, SKILL), undo[0])
+        self.assertIn(os.path.join(self.root, SKILL), [l for l in out.splitlines() if 'STOPPED' in l][0])
+
     def test_a_stack_without_skills_writes_none(self):
         code, out = self.ps('-Apply', '-Stack', 'python')
         self.assertEqual(code, 0, out)
