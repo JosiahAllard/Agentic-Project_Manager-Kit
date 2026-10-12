@@ -252,8 +252,12 @@ button.danger{color:var(--warn)}
   // transport (the same four methods) can replace it. The session cookie the pairing link set is the page's
   // only credential; the browser adds Origin to a write. A refusal is an Error with status, code, field and
   // retryAfter (seconds, when the server named one). A call that got no answer at all has status 0 and code
-  // "network". unpaired is true when the server no longer knows this browser: a 401, or a 403 on a read.
+  // "network": so has an answer that said yes and whose body was cut off or timed out. unpaired is true when
+  // the server no longer knows this browser: a 403 that names the field `role` (what the server answers a
+  // call with no session, a read or a write), any 403 on a read, or a 401. A 403 on a write that names
+  // another field (the Origin rule) is a plain refusal, shown in the server's words.
   const PAIR_AGAIN = "this browser is no longer paired with the hub; run `hub open` on the PC to pair it again";
+  const noAnswer = () => { const err = new Error("the hub server did not answer"); err.status = 0; err.code = "network"; err.field = ""; err.retryAfter = 0; err.unpaired = false; return err; };
   const hub = {
     base: "/api/v1",
     async call(method, path, body, ms){
@@ -265,14 +269,12 @@ button.danger{color:var(--warn)}
       try {
         r = await fetch(this.base + path, init);
         try { j = await r.json(); } catch (e) {}
-      } catch (e) {
-        const err = new Error("the hub server did not answer");
-        err.status = 0; err.code = "network"; err.field = ""; err.retryAfter = 0; err.unpaired = false;
-        throw err;
-      } finally { clearTimeout(timer); }
-      if (r.ok && j && j.ok !== false) return j;
+      } catch (e) { throw noAnswer(); }
+      finally { clearTimeout(timer); }
+      if (r.ok && !j) throw noAnswer();
+      if (r.ok && j.ok !== false) return j;
       const er = (j && j.error) || {};
-      const unpaired = r.status === 401 || (r.status === 403 && method === "GET");
+      const unpaired = r.status === 401 || (r.status === 403 && (method === "GET" || er.field === "role"));
       const err = new Error(unpaired ? PAIR_AGAIN : er.message || "the hub server answered " + r.status);
       err.status = r.status; err.code = er.code || ""; err.field = er.field || ""; err.retryAfter = Number(r.headers.get("Retry-After")) || 0; err.unpaired = unpaired;
       throw err;
@@ -315,7 +317,8 @@ button.danger{color:var(--warn)}
     ...(state.gone[v] ? [el("p", {class:"gone", role:"status", text: "The " + v + " view is unavailable: " + state.gone[v]})] : []),
     ...(state.partial[v] || []).map(t => el("p", {class:"gone", role:"status", text: "Part of the " + v + " view could not be read (" + t + ")."})),
     // A repository whose last read failed still shows the items of its last good read: said here, above them.
-    ...(state.stale[v] || []).map(o => el("p", {class:"gone", role:"status", text: "Out of date: the " + o.repo + " part of the " + v + " view could not be read again" + (o.reason ? " (" + o.reason + ")" : "") + ". Its items are the ones last read" + (o.since ? ", " + when(o.since) : "") + "."}))]);
+    // since is the time the server last fetched the repository, which is not the time of that read.
+    ...(state.stale[v] || []).map(o => el("p", {class:"gone", role:"status", text: "Out of date: the " + o.repo + " part of the " + v + " view could not be read again" + (o.reason ? " (" + o.reason + ")" : "") + ". Its items are those of an earlier read" + (o.since ? "; the hub server last fetched that repository " + when(o.since) : "") + "."}))]);
   // The list is brought to `kids` in place: a node that stays is not taken out and put back, so a card
   // being edited keeps its fields, its focus and its caret while the cards around it are redrawn.
   function place(parent, kids){
@@ -326,6 +329,8 @@ button.danger{color:var(--warn)}
   function show(views, ...kids){ place($("#list"), [...goneNote(...views), ...kids.flat().filter(k => k != null)]); }
   // One card: a document the card cannot draw (a store file written by hand, with a part of the wrong shape)
   // becomes a plain card that says so, and every other card is still drawn.
+  // The rows of the agents and backlog tables are not drawn through it: a row is one text per cell, which
+  // reads no part of a part, and a card cannot stand in a table.
   function drawn(make, d, ...more){
     try { return make(d, ...more); }
     catch (e) {
@@ -384,7 +389,7 @@ button.danger{color:var(--warn)}
     const rows = state.usage.filter(u => u.account).sort((a,b) => String(a.account).localeCompare(String(b.account), [], {numeric:true}));
     if (!rows.length) { show(["usage"], state.gone.usage ? null : el("div", {class:"empty"}, el("strong", {text: ready ? "No usage to show" : "Usage needs the hub server"}), "Each account's five-hour and weekly usage is read on this machine when the page loads.")); return; }
     const now = Date.now();
-    const cards = rows.map(u => {
+    const cards = rows.map(row => drawn(u => {
       const age = u.measured_at ? Math.round((now - new Date(u.measured_at)) / 60000) : null;
       const stale = age == null || age > 120;
       return el("article", {class: "acct", id: "u-" + u.account},
@@ -392,7 +397,7 @@ button.danger{color:var(--warn)}
         meter("Five-hour", u.five_hour),
         meter("Weekly", u.seven_day),
         el("div", {class: "foot" + (stale ? " stale" : ""), text: u.measured_at ? "Measured " + when(u.measured_at) + (age != null && age > 120 ? " (" + (age >= 1440 ? Math.round(age / 1440) + " d" : Math.round(age / 60) + " h") + " old)" : "") : "Measurement time unknown"}));
-    });
+    }, row));
     show(["usage"], el("p", {class:"unote", text: "Read on this machine by the hub server; 90% is amber, 95% red."}), el("div", {class:"usage"}, cards));
   }
 
@@ -426,16 +431,16 @@ button.danger{color:var(--warn)}
     const out = [];
     for (const g of groups) {
       out.push(el("h3", {class:"pk-h", text: g.repo}));
-      for (const p of g.items) {
+      for (const item of g.items) out.push(drawn(p => {
         const q = p.q ? state.docs.find(d => d.id === p.q) : null, age = ageOf(p.parked_at);
-        out.push(el("article", {class:"pk", id: "pk-" + p.id},
+        return el("article", {class:"pk", id: "pk-" + p.id},
           el("div", {class:"meta"}, el("span", {class:"id", text: p.item || p.id}),
             age ? el("span", {class:"age" + (p.old ? " old" : ""), title: "Parked " + when(p.parked_at) + (PARKED_FROM[p.parked_at_from] || ""), text: age}) : el("span", {class:"age", text: "parked, time unknown"}),
             p.session ? el("span", {text: "session " + p.session}) : null),
           p.title ? el("h2", {text: p.title}) : null,
           p.q ? el("div", {class:"links"}, q ? el("button", {class:"link", type:"button", text: q.id + ": " + (q.title || ""), onclick: () => goQuestion(q.id)}) : el("span", {class:"refs", text: p.q})) : el("div", {class:"refs", text: "No question linked"}),
-          p.branch ? el("div", {class:"br", text: "branch " + p.branch}) : null));
-      }
+          p.branch ? el("div", {class:"br", text: "branch " + p.branch}) : null);
+      }, item));
     }
     show(["backlog"], out);
   }
@@ -583,8 +588,8 @@ button.danger{color:var(--warn)}
       stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents };
   }
-  // The wait before the next try after `fails` failures in a row: the server's Retry-After when it gave one, else 2 s doubling to 60 s.
-  const hubRetryMs = (fails, retryAfter) => { const r = Number(retryAfter); return r > 0 ? Math.min(r, 300) * 1000 : Math.min(60000, 1000 * 2 ** Math.min(Math.max(fails, 1), 6)); };
+  // The wait before the next try after `fails` failures in a row: the server's Retry-After when it gave one (1 s to 300 s), else 2 s doubling to 60 s.
+  const hubRetryMs = (fails, retryAfter) => { const r = Number(retryAfter); return r > 0 ? Math.max(1, Math.min(r, 300)) * 1000 : Math.min(60000, 1000 * 2 ** Math.min(Math.max(fails, 1), 6)); };
   // pm-pure:end
 
   function pmFields(init){
@@ -630,6 +635,8 @@ button.danger{color:var(--warn)}
   $("#pm-sendall").addEventListener("click", async () => {
     const b = $("#pm-sendall"), st = $("#pm-sendstatus");
     if (!state.topm.some(x => x.status === "queued")) return;
+    // Send all sends what the server holds: an edit not yet saved would go out as the old text.
+    if ([...state.pmEdit.values()].some(ed => !ed.gone)) { st.className = "status err"; st.textContent = "Not sent: save or cancel the open edit first."; return; }
     b.disabled = true; st.className = "status"; st.textContent = "Sending…";
     try {
       const r = await write("/to_pm/send", {});
@@ -640,16 +647,35 @@ button.danger{color:var(--warn)}
   // An edit names the version it was made on, so the server refuses it when the item changed meanwhile.
   const pinAt = v => Number.isInteger(v) ? { if_version: v } : {};
   const pin = d => pinAt(d.version);
-  // An open edit is {node, version}: the card's node is built once and shown again on every redraw, so what
-  // the owner typed is never rebuilt from the server's values, and version is the one a Save will name.
-  // What to say when a Save was refused. A 409 means the item changed meanwhile: the lists are read again and
-  // the edit takes the item's new version, so the next Save is made on what the server holds now.
-  async function refused(err, ed, find){
+  // An open edit is {node, version, note, theirs, acts}: the card's node is built once and shown again on
+  // every redraw, so what the owner typed is never rebuilt from the server's values, and version is the one
+  // a Save will name. note, theirs and acts are parts of the card: a notice above the fields, what the
+  // server holds now below them, and the row of buttons.
+  const editParts = ed => {
+    ed.note = el("p", {class:"gone", role:"status", hidden: true}); ed.theirs = el("div", {hidden: true}); ed.acts = el("div", {class:"act"});
+  };
+  // An edit whose item is gone (sent, deleted or handed on meanwhile, in another tab or by an agent) keeps
+  // its card: the fields stay as the owner left them, a notice says so, and the only button takes the card away.
+  const LOST = "This item is gone; your text is below, copy it. Dismiss removes this card and the text in it.";
+  function loseEdit(map, id){
+    const ed = map.get(id);
+    if (!ed || ed.gone) return;
+    if (!ed.node) { map.delete(id); return; }           // never drawn, so nothing was typed in it
+    ed.gone = true; ed.node.id = "lost-" + ed.node.id;   // the item may still have a card of its own (a sent item)
+    ed.note.textContent = LOST; ed.note.hidden = false; ed.theirs.replaceChildren(); ed.theirs.hidden = true;
+    ed.acts.replaceChildren(el("button", {class:"link", type:"button", text:"Dismiss", onclick: () => { map.delete(id); render(); }}));
+  }
+  const lostCards = map => [...map.values()].filter(ed => ed.gone).map(ed => ed.node);
+  // What to say when a Save was refused. A 409 means the item changed meanwhile: the lists are read again,
+  // the edit takes the item's new version, so the next Save is made on what the server holds now, and
+  // `theirs(cur)` gives what the server holds now as nodes, shown under the fields.
+  async function refused(err, ed, find, theirs){
     if (err.status !== 409) return "Not saved: " + why(err) + ". Your text is kept.";
     await refresh().catch(() => {});
     const cur = find();
-    if (!cur) return "Not saved: this item is no longer on the hub server.";
+    if (ed.gone || !cur) return "Not saved: this item is no longer on the hub server. Your text is kept.";   // a lost card says it in its notice
     ed.version = cur.version;
+    ed.theirs.replaceChildren(el("div", {class:"ans"}, el("b", {text: "The hub server now holds:"}), theirs(cur))); ed.theirs.hidden = false;
     return "Not saved: this item changed on the hub server while you were editing. Your text is kept; press Save again to put it in place of what the server holds now.";
   }
   // A delete asks twice: the first press arms the button, the second sends.
@@ -674,14 +700,15 @@ button.danger{color:var(--warn)}
       const v = fl.get(); if (!v.text) { st.className = "status err"; st.textContent = "The text cannot be empty."; return; }
       save.disabled = true; st.className = "status"; st.textContent = "Saving…";
       try { await hub.post("/to_pm/" + seg(x.id) + "/edit", { ...v, ...pinAt(ed.version) }); state.pmEdit.delete(x.id); await refresh().catch(() => {}); render(); }
-      catch (err) { const t = await refused(err, ed, () => state.topm.find(y => y.id === x.id)); st.className = "status err"; st.textContent = t; save.disabled = false; }
+      catch (err) { const t = await refused(err, ed, () => state.topm.find(y => y.id === x.id), cur => [el("p", {class:"reply", text: cur.text || ""})]); st.className = "status err"; st.textContent = t; save.disabled = false; }
     });
-    return el("article", {class: "q queued" + (x.urgent ? " urgent" : ""), id: "pm-" + x.id}, pmMeta(x, "queued"), fl.node,
-      el("div", {class:"act"}, save, el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.pmEdit.delete(x.id); render(); }}), st));
+    editParts(ed);
+    ed.acts.append(save, el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.pmEdit.delete(x.id); render(); }}), st);
+    return el("article", {class: "q queued" + (x.urgent ? " urgent" : ""), id: "pm-" + x.id}, pmMeta(x, "queued"), ed.note, fl.node, ed.theirs, ed.acts);
   }
   function pmCard(x, tab){
     const ed = tab === "queued" ? state.pmEdit.get(x.id) : null;
-    if (ed) return ed.node || (ed.node = pmEditCard(x, ed));
+    if (ed && !ed.gone) return ed.node || (ed.node = pmEditCard(x, ed));
     const parts = [pmMeta(x, tab), el("p", {class:"ctx", text: x.text || ""})];
     if (tab === "queued") {
       const st = el("span", {class:"status", role:"status"});
@@ -698,12 +725,14 @@ button.danger{color:var(--warn)}
     document.querySelectorAll("#pmtabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.pf === state.pfilter)));
     const sb = $("#pm-sendall"); sb.textContent = c.queued ? "Send all (" + c.queued + ")" : "Send all"; sb.disabled = !c.queued || !ready;
     const { rows, hidden } = pmRows(state.topm, state.pfilter, Date.now(), state.pmOlder);
-    if (!rows.length && !hidden) {
+    // The card of an edit whose item is gone stays at the top of Queued, where the edit was made.
+    const lost = state.pfilter === "queued" ? lostCards(state.pmEdit) : [];
+    if (!rows.length && !hidden && !lost.length) {
       const m = { queued: ["Nothing queued", "Write a question or an FYI above. It waits here, unsent, until you press Send all."], sent: ["Nothing waiting on the PM", "Items you send move here until the PM replies."], done: ["Nothing answered yet", "The PM's replies show here."] }[state.pfilter];
       show([], el("div", {class:"empty"}, el("strong", {text: ready ? m[0] : NOT_READY}), ready ? m[1] : NOT_READY_WHY));
       return;
     }
-    const out = rows.map(x => drawn(pmCard, x, state.pfilter));
+    const out = [...lost, ...rows.map(x => drawn(pmCard, x, state.pfilter))];
     if (state.pfilter === "done" && hidden) out.push(el("button", {class:"link", type:"button", text: "Show older (" + hidden + ")", onclick: () => { state.pmOlder = true; render(); }}));
     else if (state.pfilter === "done" && state.pmOlder) out.push(el("button", {class:"link", type:"button", text:"Show only the last " + PM_DONE_DAYS + " days", onclick: () => { state.pmOlder = false; render(); }}));
     show([], out);
@@ -716,19 +745,21 @@ button.danger{color:var(--warn)}
     document.querySelectorAll("#ttabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.tf === state.tfilter)));
     let rows = (state.tfilter === "done" ? done : open).filter(inR);
     rows.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || (state.tfilter === "done" ? String(b.done_at||"").localeCompare(String(a.done_at||"")) : String(a.added_at||"").localeCompare(String(b.added_at||""))));
-    if (!rows.length) {
+    // The card of an edit whose to-do is gone stays at the top of both tabs: its to-do has no tab any more.
+    const lost = lostCards(state.todoEdit);
+    if (!rows.length && !lost.length) {
       const m = state.tfilter === "done" ? ["Nothing ticked off yet", "Items you mark done move here, and the PM follows up on them."] : ["Nothing to do", "Steps only you can do (commands to run, settings to change, files to delete) appear here, each with its exact command."];
       show([], el("div", {class:"empty"}, el("strong", {text: ready ? m[0] : NOT_READY}), ready ? m[1] : NOT_READY_WHY));
       return;
     }
-    show([], rows.map(t => drawn(todoCard, t)));
+    show([], lost, rows.map(t => drawn(todoCard, t)));
   }
 
   // A to-do the owner wrote (from "you") is the owner's to mark urgent, edit and delete; anyone's can be ticked.
   function todoCard(t){
     const isDone = t.status === "done", mine = t.from === "you";
     const ed = mine ? state.todoEdit.get(t.id) : null;
-    if (ed) return ed.node || (ed.node = todoEditCard(t, ed));
+    if (ed && !ed.gone) return ed.node || (ed.node = todoEditCard(t, ed));
     const box = el("input", {type:"checkbox", class:"chk", id:"t-" + t.id, checked: isDone, "aria-label": isDone ? "Mark not done" : "Mark done"});
     const status = el("span", {class:"status", role:"status"});
     box.addEventListener("change", async () => {
@@ -778,11 +809,16 @@ button.danger{color:var(--warn)}
       if (!ti.value.trim()) { status.className = "status err"; status.textContent = "The title cannot be empty."; return; }
       save.disabled = true; status.className = "status"; status.textContent = "Saving…";
       try { await hub.post("/todos/" + seg(t.id) + "/edit", { title: ti.value.trim(), detail: de.value.trim(), urgent: ur.checked, ...pinAt(ed.version) }); state.todoEdit.delete(t.id); await refresh().catch(() => {}); render(); }
-      catch (e) { const msg = await refused(e, ed, () => state.todos.find(y => y.id === t.id)); status.className = "status err"; status.textContent = msg; save.disabled = false; }
+      catch (e) {
+        const msg = await refused(e, ed, () => state.todos.find(y => y.id === t.id && y.from === "you"), cur => [el("p", {class:"reply", text: cur.title || "(untitled)"}), cur.detail ? el("p", {class:"reply", text: cur.detail}) : null]);
+        status.className = "status err"; status.textContent = msg; save.disabled = false;
+      }
     });
+    editParts(ed);
+    ed.acts.append(el("label", {class:"urg"}, ur, " Urgent"), save, el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.todoEdit.delete(t.id); render(); }}), status);
     return el("article", {class: "t" + (isDone ? " done" : "") + (t.urgent ? " urgent" : ""), id: "todo-" + t.id},
       el("input", {type:"checkbox", class:"chk", id:"t-" + t.id, checked: isDone, disabled: true, "aria-label": "Save or cancel the edit before ticking this"}),
-      el("div", {class:"body"}, ti, de, el("div", {class:"act"}, el("label", {class:"urg"}, ur, " Urgent"), save, el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.todoEdit.delete(t.id); render(); }}), status)));
+      el("div", {class:"body"}, ed.note, ti, de, ed.theirs, ed.acts));
   }
 
   const ACTIVE = ["submitted", "review", "questions"];
@@ -1045,7 +1081,7 @@ button.danger{color:var(--warn)}
         }
       });
       const acts = el("div", {class:"act"}, btn, status);
-      if (d.status === "answered") acts.append(el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.editing.delete(d.id); clearDraft(d.id); render(); }}));
+      if (d.status === "answered") acts.append(el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.editing.delete(d.id); clearDraft(d.id); said.delete(d.id); render(); }}));
       parts.push(fs, note, acts);
     } else if (d.answer) {
       const a = d.answer;
@@ -1145,13 +1181,14 @@ button.danger{color:var(--warn)}
     rev = next.revision;
     const first = !ready; ready = true;
     for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "gone", "partial", "stale", "seen"]) state[k] = next[k];
-    // An edit ends with its item: one that is gone, or no longer the owner's to edit, has no card to hold it.
-    for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) state.pmEdit.delete(id);
-    for (const id of [...state.todoEdit.keys()]) if (!state.todos.some(t => t.id === id && t.from === "you")) state.todoEdit.delete(id);
-    // What the lists show, without what moves on every read (the revision, and the time of each read of a
-    // backlog or of the usage): when only those moved and the owner is typing, the lists are left alone.
+    // An edit outlasts its item: one that is gone, or no longer the owner's to edit, keeps its card (loseEdit).
+    for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) loseEdit(state.pmEdit, id);
+    for (const id of [...state.todoEdit.keys()]) if (!state.todos.some(t => t.id === id && t.from === "you")) loseEdit(state.todoEdit, id);
+    // What the lists show, without what moves on every read (the revision, and the time of each read or fetch
+    // of a backlog or of the usage): when only those moved and the owner is typing, the lists are left alone.
     const untimed = rows => rows.map(r => ({ ...r, posted_at: null }));
-    const key = JSON.stringify({ ...next, revision: 0, seen: null, usage: next.usage.map(u => ({ ...u, measured_at: null })), backlog: untimed(next.backlog), completed: untimed(next.completed), parked: untimed(next.parked) });
+    const unsince = Object.fromEntries(Object.entries(next.stale).map(([v, rows]) => [v, rows.map(o => ({ ...o, since: null }))]));
+    const key = JSON.stringify({ ...next, revision: 0, seen: null, stale: unsince, usage: next.usage.map(u => ({ ...u, measured_at: null })), backlog: untimed(next.backlog), completed: untimed(next.completed), parked: untimed(next.parked) });
     const same = key === lastKey; lastKey = key;
     if (first || !same || !typing()) render(); else seenLine();
   }
@@ -1162,7 +1199,7 @@ button.danger{color:var(--warn)}
     let again = true;
     for (;;) {
       try {
-        if (again) { await refresh(); again = false; fails = 0; loadSay(""); }
+        if (again) { await refresh(); again = false; loadSay(""); }    // fails is kept: only a wait that answers ends the run of failures
         const w = await hub.wait(rev);
         if (w.reset) rev = 0;                           // the server's history does not reach back to rev: take whatever it holds now
         await refresh();

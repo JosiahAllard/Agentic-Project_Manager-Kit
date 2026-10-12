@@ -7,7 +7,8 @@ has the parts the page uses (elements, text, attributes, events that bubble, a f
 so it shows what the script does with what the server sends, and nothing about layout or style.
 
 The server is scripted: `server.snap` is what GET /snapshot answers, a GET /wait hangs until the test
-answers it (`wake`, `answerWait`), and `server.route` may answer any call itself. Timers do not run by
+answers it (`wake`, `answerWait`) or the page ends it through the call's signal, and `server.route` may
+answer any call itself (`cut: true` in its answer is a body that never arrives). Timers do not run by
 themselves: `timers` lists the pending ones and `fireTimers()` runs them, so a test sees a retry wait
 without waiting for it.
 """
@@ -133,15 +134,21 @@ function build(markup){
 
 // The scripted server.
 const server = { snap: null, route: null };
-const answer = (status, bodyOf, headers) => ({ ok: status >= 200 && status < 300, status,
-  headers: { get: k => (headers && k in headers ? String(headers[k]) : null) }, json: async () => JSON.parse(JSON.stringify(bodyOf)) });
+// `cut` is an answer whose status came and whose body did not: reading it fails, as on a dropped connection.
+const answer = (status, bodyOf, headers, cut) => ({ ok: status >= 200 && status < 300, status,
+  headers: { get: k => (headers && k in headers ? String(headers[k]) : null) },
+  json: async () => { if (cut) throw new Error("the body was cut off"); return JSON.parse(JSON.stringify(bodyOf)); } });
 globalThis.fetch = (url, init) => {
   const path = url.replace(/^\/api\/v1/, ""), call = { method: init.method, path, body: init.body ? JSON.parse(init.body) : null };
   calls.push(call);
   const own = server.route ? server.route(call) : undefined;
   if (own instanceof Error) return Promise.reject(own);
-  if (own) return Promise.resolve(answer(own.status, own.body, own.headers));
-  if (path.startsWith("/wait")) return new Promise(done => waits.push(done));
+  if (own) return Promise.resolve(answer(own.status, own.body, own.headers, own.cut));
+  // A long-poll hangs until the test answers it, or until the page gives up on it through its signal.
+  if (path.startsWith("/wait")) return new Promise((done, fail) => {
+    waits.push(done);
+    if (init.signal) init.signal.addEventListener("abort", () => { const i = waits.indexOf(done); if (i >= 0) waits.splice(i, 1); fail(new Error("aborted")); });
+  });
   if (path === "/snapshot") return Promise.resolve(answer(200, server.snap));
   return Promise.resolve(answer(200, { ok: true, id: "EX-1" }));
 };
