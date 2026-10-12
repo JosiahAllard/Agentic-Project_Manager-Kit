@@ -247,7 +247,7 @@ SECTIONS = {
         'udp_ports': Field(ListOf(Int(0, 65535), length=2), None, '[low, high] ports checked free'),
     },
     'redfirst': {
-        'runners': Field(ListOf(RUNNER), [{'glob': 'tests/*test_*.py', 'kind': 'python'}], 'which runner takes a test file, first match wins; a runner\'s lock is the kinds-table kind the run books around its command (unset: the kind of the heavy-list entry the command matches)'),
+        'runners': Field(ListOf(RUNNER), [{'glob': 'tests/*test_*.py', 'kind': 'python'}], 'which runner takes a test file, first match wins; none written: this default, then <tools_dir>/*test_*.py as python with the tools folder as pythonpath, unless tools_dir is . or that glob is listed (docs/redfirst.md); a runner\'s lock is the kinds-table kind the run books around its command (unset: the kind of the heavy-list entry the command matches)'),
         'hold_wait': Field(Int(0), 60, 'seconds a held throwaway tree is re-checked before it is left'),
     },
     'review_pack': {
