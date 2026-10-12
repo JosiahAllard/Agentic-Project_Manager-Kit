@@ -15,7 +15,11 @@ launched row (coordinator, consultant, deep-worker) cannot be started by the lau
 This table is the one place to set which agent runs at which model and effort, and when to use it.
 Edit a row, then `python tools/agent_roster.py --write` pins model and effort into that agent's
 frontmatter; `--check` (the default) lists any disagreement. `-` = no effort key. Never `fable`
-unless the owner asks; override a dispatch only upward.
+unless the owner asks; override a dispatch only upward, and never the lander's. The per-dispatch
+rules have one home, claude/skills/coordinator-dispatch/roster.md, "Choosing": which reviews run
+on opus (from the review pack's printed risk groups and the strict landing paths), and the
+built-in agent types (`general-purpose`, `Explore`, `Plan`), which this table cannot pin, on
+`model: sonnet`.
 
 | agent | model | effort | use for |
 |---|---|---|---|
@@ -23,11 +27,11 @@ unless the owner asks; override a dispatch only upward.
 | coordinator | opus | medium | Main session (`claude --agent pm-kit:coordinator`), never a subagent. Splits work, dispatches agents, reviews branches, lands every LAND verdict as soon as the lane is free, brings decisions to the owner. Writes no code. |
 | consultant | opus | high | Own long-lived launched session per repository (never an Agent dispatch; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked. |
 | deep-worker | opus | xhigh | Own launched session (never an Agent dispatch; 1M via launcher). Root cause or concurrency work strong-worker failed at or plainly cannot do; never builds or plans. |
-| lander | haiku | medium | Lands one reviewed branch (or a batch) on main on the coordinator's go. Never edits code. |
-| opus-worker | opus | medium | High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (`pm-kit:worker`). |
+| lander | haiku | medium | Lands one reviewed branch (or a batch) on main on the coordinator's go. Never edits code. Dispatched with no `model`: never overridden. |
+| opus-worker | opus | medium | High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (`pm-kit:worker`). The one row with a one-hour prompt cache: see "The one-hour prompt cache" below. |
 | records | sonnet | low | Writes settled facts into docs only: decisions, landing notes, plan ticks. |
 | researcher | sonnet | high | Read-only ideas and prior art; proposes concepts for the owner to choose from, builds nothing. |
-| reviewer | sonnet | high | Read-only review of one branch against its brief; reports defects, scope creep and untested changes. |
+| reviewer | sonnet | high | Read-only review of one branch against its brief; reports defects, scope creep and untested changes. Raised to opus per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file. |
 | sound-smith | sonnet | medium | Sound effects from synthesis, free libraries, text-to-speech and local music generation; measures clips, the owner judges. Mechanical work at this row; design dispatches override to opus/high (upward only). |
 | spec-writer | sonnet | high | Extends a named design or spec document from the owner's answers. Docs only. |
 | strong-worker | opus | high | High-risk changes: networking, concurrency, simulation or ordering, landing or lock tools, migrations, CI config, known-area crash fixes. |
@@ -36,6 +40,29 @@ unless the owner asks; override a dispatch only upward.
 | worker | sonnet | medium | Default coder for routine low and medium risk work: additive content, UI, pure logic with tests, small fixes with a known cause, behaviour-neutral moves and renames; plan-only and sync or prep work (merging main into a branch, rebasing, conflict-free syncs, preparation). |
 
 Model choices rest on measured A/B runs: docs/model-ab.md.
+
+## The one-hour prompt cache
+
+claude/agents/opus-worker.md carries a second frontmatter setting, outside this table and untouched
+by `agent_roster.py --write` (tests/roster/test_roster.py, `test_write_leaves_a_frontmatter_map_alone`):
+
+```yaml
+experimental:
+  cacheTtl: 1h
+```
+
+- What it does: the client keeps that agent type's prompt cache for one hour instead of five
+  minutes, so a continuation after a long gate or a slow review re-reads the cache instead of
+  writing it again. Source for the key, its place (inside the `experimental` map, never at the top
+  level), its values (`5m`, `1h`) and its limits: the client's subagent documentation.
+- Limits, same source: client 2.1.248 or later; ignored while the subscription draws on usage
+  credits; read only from subagent files. That a plugin's agent file is read like a project's is
+  inferred, not stated there.
+- Only this row has it (tests/agents/test_agents.py,
+  `test_only_opus_worker_asks_for_the_one_hour_prompt_cache`). Why this row: the untested pricing
+  computation in docs/agent-review.md, "Context and cache findings".
+- Check it took: in one opus-worker run's usage block, the cache-creation split counts tokens
+  in the one-hour field and none in the five-minute field. Not yet observed for this file.
 
 ## Changes versus the live files
 

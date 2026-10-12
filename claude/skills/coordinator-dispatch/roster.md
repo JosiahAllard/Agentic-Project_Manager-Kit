@@ -36,9 +36,25 @@ Read from skill `coordinator-dispatch`, "Which agent, which model". A repo's own
   `pm-kit:worker` + `model: opus`. Never `general-purpose` for code. An escalation = reassign upward
   with its findings, not a failure.
 - Model and effort per agent are pinned in each agent file's frontmatter (the kit sets them in its ROSTER.md doc; SKILL.md gives its path).
-  Built-ins pin nothing -> pass `model` every dispatch. Override only upward for risk, and say so
-  in status. **Never `fable`** for any agent, reviews included, unless the owner asks on that task:
-  `opus` is the ceiling, `pm-kit:deep-worker` the step up.
+  A kit agent is dispatched with no `model`. Override only upward for risk, and say so
+  in status; never `pm-kit:lander` (haiku as pinned, whatever is being landed), and
+  `pm-kit:reviewer` only by the reviewer rule below. **Never `fable`** for any agent, reviews
+  included, unless the owner asks on that task: `opus` is the ceiling, `pm-kit:deep-worker` the step up.
+- Built-ins (`general-purpose`, `Explore`, `Plan`) pin nothing -> pass `model: sonnet` on every
+  dispatch, never `opus`. Work that needs opus is coding or design work: it goes to a typed agent
+  on the ladder above. An `Explore` or `Plan` answer that reads thin is asked once more with
+  `model: opus`; say so in status.
+- **Reviewer model** (this is the rule's one home). Read the groups printed under the `files` line
+  of `python tools/review_pack.py <branch>`: `High (N)`, `unlisted (= High) (N)`, `Medium (N)`,
+  `Low (N)`; a group with no file is not printed. The first row that fits:
+  1. A `High` group is printed, or a changed path matches a strict landing path
+     (`STRICT_DEFAULTS` in `${CLAUDE_PLUGIN_ROOT}/kitlib/gate/strict_defaults.py`: guard, lock,
+     gate, proc and hook code, agent definitions) whatever group it is printed in -> `model: opus`.
+  2. Only a `Low` group is printed -> no `model`: sonnet as pinned, never raised.
+  3. Otherwise (a `Medium` or `unlisted (= High)` group, no `High` group) -> no `model`; you may
+     raise to `opus` for a risk you name in status, never must.
+
+  No review pack in the repo -> the same rows on the risk level the brief states.
 - Effort is not settable per dispatch: pick the agent for it. High risk -> `pm-kit:opus-worker`, or
   `pm-kit:strong-worker` for the kinds the ladder names. Only when `pm-kit:strong-worker` has been defeated, or
   plainly will be, on a race or crash root-cause or subtle concurrency (never a build or a

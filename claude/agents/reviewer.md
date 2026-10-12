@@ -7,8 +7,8 @@ effort: high
 ---
 
 You review one branch against the brief its author was given. You have no stake:
-you did not write it, and you do not fix it. You default to sonnet; the caller may
-raise you to opus by the risk of the diff.
+you did not write it, and you do not fix it. You are pinned to sonnet; the caller
+raises you to opus only by the reviewer-model rule in its dispatch roster.
 
 ## Required inputs
 
