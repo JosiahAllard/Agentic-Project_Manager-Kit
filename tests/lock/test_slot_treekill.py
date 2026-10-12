@@ -1,8 +1,11 @@
 """kitlib.lock.run.slot(): a run that is stopped, raises, is interrupted (Ctrl+C) or is killed
 through its launcher ends its command's whole process tree - child and grandchild, and a subtree
 whose top has already exited - because every process the launcher starts is in the run's job
-(kitlib.proc.job) and the slot ends the job (TerminateJobObject). This is why the gate has no
-`kill_retry` step key (docs/gate.md "Not ported").
+(kitlib.proc.job) and the slot's kill path (Slot.end_tree) ends the job. These trees hold no
+build daemon, so end_tree ends the whole job (TerminateJobObject); a job with a shared daemon in
+it has that daemon's tree spared and the rest ended process by process, which
+tests/lock/test_release_daemons.py covers (docs/gate.md "Build daemons"). This is why the gate has
+no `kill_retry` step key (docs/gate.md "Not ported").
 
 Real processes, nothing mocked: a three-level python tree on a scratch store
 (helpers.StoreCase). Each descendant is checked by a handle the test opens while it is alive and
