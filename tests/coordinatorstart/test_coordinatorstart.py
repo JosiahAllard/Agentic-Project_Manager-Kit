@@ -43,25 +43,30 @@ class RenderTest(unittest.TestCase):
             out = coordinatorstart.render(env=COND, path=p, live=False)
         self.assertEqual(out, "Coordinator session start:\n- one\n- two")
 
-    def test_pricing_line_holds_unpriced_records_and_orders_no_startup_pass(self):
+    def test_pricing_line_prices_at_start_and_leaves_follow_ups_unpriced(self):
         with tempfile.TemporaryDirectory() as d:
             p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": {"pricing_pass": True}}))
             out = coordinatorstart.render(env=COND, path=p, live=False)
         self.assertEqual(len(out.splitlines()), 2, out)   # the heading and one line
         line = out.splitlines()[1]
-        self.assertTrue(line.startswith("- No start-up pricing pass"), line)
-        for want in ("stays unpriced", "`next` never offers it", "only when you put it into a work set",
-                     "duplicates or replaces a priced one", "--priority-by agent",
-                     "held is not waiting for the owner",
-                     "When `next` offers fewer items than the set needs, read "
-                     "`python tools/backlog.py list --needs-priority`",
-                     "check each for duplicates, size and fit",
-                     "price only those you are putting into this set",
-                     "never a sweep of all unpriced records, the rest stay held",
+        self.assertTrue(line.startswith("- Pricing pass and backlog audit before your first dispatch, "
+                                        "follow-up records excepted"), line)
+        for want in ("python tools/backlog.py list --needs-priority",
+                     "A follow-up record (filed from a finding on a branch, a review or a worker's report) "
+                     "stays unpriced until you or the PM promote it",
+                     "Check every other unpriced open record (an owner story, a record from the PM's brief) "
+                     "for duplicates, size and fit",
+                     "--priority-by agent",
+                     "Promote a follow-up at any time it enters a work set", "price before pull",
+                     "When `next --all` lists fewer startable records than the set needs",
+                     "price only those going into this set; never a sweep",
+                     "`next` never offers an unpriced record",
+                     "under `unprioritised+open`, not under `held` (`held` = blocked)",
                      "goes to the PM", "never ask him directly"):
             self.assertIn(want, line)
-        # The retired rule: price every unpriced record at start.
-        for gone in ("before your first dispatch", "each unpriced", "Pricing pass and backlog audit"):
+        # Withdrawn wording: no pass at all, unpriced called held, the capped-offer and duplicate triggers.
+        for gone in ("No start-up pricing pass", "is held", "stay held", "held is not waiting",
+                     "`next` offers fewer items", "duplicates or replaces a priced one", "each unpriced"):
             self.assertNotIn(gone, line)
 
     def test_pricing_line_is_off_unless_the_config_switches_it_on(self):

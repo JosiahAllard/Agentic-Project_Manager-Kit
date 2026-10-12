@@ -3,7 +3,7 @@
 Pure functions that return data; the hook (claude/hooks/coordinator_session_start.py) prints it. The text
 comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
-filing and pricing lines (each switched on in the config), then the live checks (rulings, cap,
+filing and pricing-pass lines (each switched on in the config), then the live checks (rulings, cap,
 machine state, other coordinators, and stubs: a line only when the repo's stubs are not current),
 run as in kitlib.pmstart: each is a pure function over fakeable inputs (process list, file reads,
 a subprocess runner, now), and a failed one is one "could not check X: reason" line.
@@ -45,15 +45,19 @@ ENG_LINE = ("ENG rulings: an engineering question (API shape, class versus recor
             "classifier, credentials, hooks that guard owner files); Money and accounts (purchases, cloud credit, "
             "game accounts, bans); Priority and pre-empts (one owner entry per change); Go-live and live-client "
             "runs, and removals of owner files; anything the owner flagged for review (eng_review).")
-# When a coordinator prices a record (claude/agents/coordinator.md, On start): no start-up pricing pass.
+# When a coordinator prices a record (claude/agents/coordinator.md, On start step 6 and Work sets,
+# Follow-ups): the start-up pricing pass leaves follow-up records unpriced.
 # Emitted only when coordinator_start.pricing_pass is true.
-PRICING_LINE = ("No start-up pricing pass: a new follow-up record stays unpriced, and an unpriced record is "
-                "held (`next` never offers it); held is not waiting for the owner. Price a record 2-5 (`set <ID> "
-                "--priority <n> --priority-by agent`) only when you put it into a work set, or when it "
-                "duplicates or replaces a priced one. When `next` offers fewer items than the set needs, read "
-                "`python tools/backlog.py list --needs-priority`, pick the records worth doing now, check each "
-                "for duplicates, size and fit, and price only those you are putting into this set; never a "
-                "sweep of all unpriced records, the rest stay held. "
+PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, follow-up records excepted: run "
+                "`python tools/backlog.py list --needs-priority`. A follow-up record (filed from a finding on a "
+                "branch, a review or a worker's report) stays unpriced until you or the PM promote it. Check "
+                "every other unpriced open record (an owner story, a record from the PM's brief) for duplicates, "
+                "size and fit, then price it 2-5 under the standing valuation rules (`set <ID> --priority <n> "
+                "--priority-by agent`). Promote a follow-up at any time it enters a work set: price it 2-5; "
+                "price before pull. When `next --all` lists fewer startable records than the set needs, pick the "
+                "follow-ups worth doing now, check each for duplicates, size and fit, and price only those going "
+                "into this set; never a sweep. `next` never offers an unpriced record; its banner counts it "
+                "under `unprioritised+open`, not under `held` (`held` = blocked). "
                 "A record that needs the owner (priority 1, a pre-emption, an owner-held area, a question only "
                 "he can answer) goes to the PM as one question; never ask him directly.")
 
@@ -289,7 +293,7 @@ def others(entry, procs, env, pid):
 
 def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, home=None,
             pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line):
-    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing line (only when cfg["pricing_pass"] is true), then the live checks (the stubs check prints only when the repo's stubs are missing or stale)."""
+    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the stubs check prints only when the repo's stubs are missing or stale)."""
     env = os.environ if env is None else env
     lines = [str(t) for t in cfg.get("standing") or []]
     if cfg.get("eng_filing") is True:
