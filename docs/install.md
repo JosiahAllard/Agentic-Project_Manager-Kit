@@ -150,6 +150,8 @@ files or the kit itself:
 - `launch.py`, `machine_setup.py`, `pm_data.py`, `pm_watch.py`, `hub_mirror.py`, `pending.py`,
   `ledger_refs.py`, `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and
   the machine.
+- `no_window.py`: the carrier a scheduled task runs under `pythonw` so that no console window
+  opens (docs/daily-full.md "The schedule").
 
 A stub bakes in the kit it was written from, so one written from a kit worktree runs that
 worktree and is stale on main (`check` says `runs the kit at ...`). At session start the
