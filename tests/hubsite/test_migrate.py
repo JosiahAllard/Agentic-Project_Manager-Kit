@@ -855,6 +855,8 @@ class LabelCase(Case):
         self.assertEqual(docs_of(self.root), before)
         self.assertEqual((r.added, r.conflicts, r.kept, r.turned), ([], [], [], []))
         self.assertIn('questions/Q-030', r.same)
+        self.assertEqual(self.stored('questions', 'Q-030'), self.number,
+                         'the store holds the number and the source the label: one document')
         lines = migrate.report_lines(r)
         self.assertTrue(lines[-1].startswith('nothing changed: '))
         self.assertFalse(any(x.startswith('RECOMMENDED') for x in lines))
