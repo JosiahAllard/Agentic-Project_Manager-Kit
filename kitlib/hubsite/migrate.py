@@ -22,13 +22,18 @@ What a source document becomes:
     earlier hub held is kept whole even where a new write of it would be refused, and check()
     reports what is wrong with it. An inbox document that is a lock-window notice is a document
     like any other and is copied in.
-  - One field is not copied as it is: a question's `recommended` that is a whole number written
-    as text (digits only) is written as the number, and is in `turned`. The store refuses every
-    update of a question whose `recommended` is text (schema.check), so such a question could
-    not be answered. No other field and no other text is changed. Two copies are compared with
-    this text read as the number on both sides: a store document that holds the number, or the
-    text, is the same document as a source that holds the text. The store's file is never
-    rewritten, so one that already holds the text keeps it and check() reports it.
+  - One field is not copied as it is: a question's `recommended` that is text is written as the
+    number it stands for, and is in `turned`. Text that is exactly the `label` of one of the
+    question's options (the same characters, case and spaces included; an option that is an
+    object) stands for that option's position, counted from 0 as hubvalidate's options check
+    and the page count it. Text that is a whole number (digits only) stands for that number.
+    Text that is no option's label or the label of two, and digits that are also the label of
+    one option at another position, stand for nothing: the document is copied as it is. The
+    store refuses every update of a question whose `recommended` is text (schema.check), so such
+    a question could not be answered. No other field and no other text is changed. Two copies
+    are compared with this text read as the number on both sides: a store document that holds
+    the number, or the text, is the same document as a source that holds the text. The store's
+    file is never rewritten, so one that already holds the text keeps it and check() reports it.
   - A document the store already holds with the same fields is counted in `same`.
   - A document the store already holds with other fields is never written over. When the store's
     has a `version` (a server wrote it since), the store's is the newer truth: the difference is
@@ -78,8 +83,9 @@ Kept = collections.namedtuple('Kept', 'rel sources')
 # None when the stamps do not tell.
 Conflict = collections.namedtuple('Conflict', 'rel sources later store')
 Skipped = collections.namedtuple('Skipped', 'source rel why')
-# a question written with its `recommended`, the text `old`, as the number `new`
-Turned = collections.namedtuple('Turned', 'rel old new')
+# a question written with its `recommended`, the text `old`, as the number `new`; label: `old`
+# is the label of the option at position `new`, not a number written as text
+Turned = collections.namedtuple('Turned', 'rel old new label', defaults=(False,))
 _WHOLE = re.compile(r'[0-9]+')
 
 
@@ -123,13 +129,23 @@ def _own(fields):
 
 
 def _whole(coll, fields):
-    """(fields, old): a question whose `recommended` is a whole number written as text, digits
-    only, is given back as a copy with the number, and old is that text. Any other document is
-    given back as it is, with old None."""
+    """(fields, old, label): a question whose `recommended` is text that stands for a number
+    (the module docstring) is given back as a copy with the number; old is that text and label
+    is True when it was an option's label. Any other document is given back as it is, with old
+    None."""
     old = fields.get('recommended') if coll == 'questions' else None
-    if not isinstance(old, str) or not _WHOLE.fullmatch(old):
-        return fields, None
-    return dict(fields, recommended=int(old)), old
+    if not isinstance(old, str):
+        return fields, None, False
+    options = fields.get('options')
+    at = [i for i, o in enumerate(options if isinstance(options, list) else [])
+          if isinstance(o, dict) and o.get('label') == old]
+    if _WHOLE.fullmatch(old):
+        if len(at) == 1 and at[0] != int(old):
+            return fields, None, False          # the number, or that option: it does not say
+        return dict(fields, recommended=int(old)), old, at == [int(old)]
+    if len(at) != 1:
+        return fields, None, False
+    return dict(fields, recommended=at[0]), old, True
 
 
 def _doc_files(folder):
@@ -349,7 +365,7 @@ def migrate(root, sources, dry_run=False):
         for (coll, doc_id), found in sorted(versions.items()):
             rel = '%s/%s' % (coll, doc_id)
             cur = have[coll].get(doc_id)
-            was = {s: _whole(coll, f)[1] for s, f in found}
+            was = {s: _whole(coll, f)[1:] for s, f in found}
             found = [(s, _whole(coll, f)[0]) for s, f in found]
             if cur is not None:
                 mine = _own(_whole(coll, cur)[0])       # compared as a source is: text as number
@@ -381,8 +397,8 @@ def migrate(root, sources, dry_run=False):
                     continue
                 have[coll][doc_id] = fields
                 added.append(rel)
-                if was[src] is not None:
-                    turned.append(Turned(rel, was[src], fields['recommended']))
+                if was[src][0] is not None:
+                    turned.append(Turned(rel, was[src][0], fields['recommended'], was[src][1]))
             if coll == 'inbox' and LOCK_WINDOW in (
                     [f.get('kind') for _, f in found] + [(cur or {}).get('kind')]):
                 notices.add(rel)
@@ -463,9 +479,14 @@ def report_lines(result):
                 'without editing a source: run again with the chosen source alone'
                 % (c.rel, ' and '.join(c.sources), later))
     for t in r.turned:
-        lines.append('RECOMMENDED %s: its `recommended` is the text %r; %s as the number %d; '
-                     'nothing else in the document is changed'
-                     % (t.rel, t.old, 'would be imported' if r.dry_run else 'imported', t.new))
+        wrote = 'would be imported' if r.dry_run else 'imported'
+        if t.label:
+            lines.append('RECOMMENDED %s: its `recommended` is the text %r, the label of the '
+                         'option at position %d (the first is 0); %s as the number %d; nothing '
+                         'else in the document is changed' % (t.rel, t.old, t.new, wrote, t.new))
+        else:
+            lines.append('RECOMMENDED %s: its `recommended` is the text %r; %s as the number %d; '
+                         'nothing else in the document is changed' % (t.rel, t.old, wrote, t.new))
     for s in r.skipped:
         lines.append('SKIPPED %s in %s: %s' % (s.rel, s.source, s.why))
     for x in r.left:

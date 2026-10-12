@@ -761,6 +761,122 @@ class RecommendedCase(Case):
         self.assertTrue(lines[-1].startswith('nothing changed: '))
 
 
+def labelled(recommended, labels=('Paint it', 'Leave it: as found', 'Ask again'), **kw):
+    """A question as the earlier hub's writer left it: `recommended` holds an option's label."""
+    return question(recommended=recommended, title='which one', options=[
+        {'description': 'what %s means' % x, 'label': x} for x in labels], **kw)
+
+
+class LabelCase(Case):
+    """A question's `recommended` that is exactly one option's label is imported as that
+    option's position, counted from 0."""
+
+    LINE = ("RECOMMENDED questions/Q-030: its `recommended` is the text 'Leave it: as found', "
+            "the label of the option at position 1 (the first is 0); %s as the number 1; "
+            "nothing else in the document is changed")
+
+    def setUp(self):
+        Case.setUp(self)
+        self.text = labelled('Leave it: as found')
+        self.number = dict(self.text, recommended=1)
+        self.put('Q-030', self.text)
+
+    def put(self, doc_id, fields):
+        write(os.path.join(self.mirror, 'questions', doc_id + '.json'), fields)
+
+    def test_a_label_is_imported_as_its_options_position_and_said_so(self):
+        self.put('Q-031', labelled('Paint it', labels=('Paint it', 'Leave it')))    # the first
+        self.put('Q-032', labelled('Ask again'))                                    # the last
+        before = tree(self.mirror)
+        r = self.run_both()
+        self.assertEqual(r.turned, [
+            migrate.Turned('questions/Q-030', 'Leave it: as found', 1, True),
+            migrate.Turned('questions/Q-031', 'Paint it', 0, True),
+            migrate.Turned('questions/Q-032', 'Ask again', 2, True)])
+        self.assertEqual(self.stored('questions', 'Q-030'), self.number)
+        self.assertEqual(self.stored('questions', 'Q-031')['recommended'], 0)
+        self.assertEqual(self.stored('questions', 'Q-032')['recommended'], 2)
+        self.assertEqual(tree(self.mirror), before, 'the source keeps its text')
+        self.assertEqual(r.findings, [])
+        lines = migrate.report_lines(r)
+        self.assertEqual([x for x in lines if x.startswith('RECOMMENDED')][0],
+                         self.LINE % 'imported')
+        self.assertFalse(any('the api will refuse' in x for x in lines))
+        with Store.open(self.root) as s:            # the question can now be answered
+            s.update('questions', 'Q-030', {'status': 'answered', 'answer': {'choice': 1}})
+
+    def test_a_dry_run_says_it_would_and_writes_nothing(self):
+        r = self.run_both(dry_run=True)
+        self.assertFalse(os.path.exists(self.root))
+        self.assertEqual(r.findings, [], 'the findings are of what the store would hold')
+        self.assertEqual([x for x in migrate.report_lines(r) if x.startswith('RECOMMENDED')],
+                         [self.LINE % 'would be imported'])
+
+    def test_text_that_is_not_exactly_one_options_label_stays_and_is_reported(self):
+        kept = {
+            'Q-033': labelled('Sell it'),                                   # no option's label
+            'Q-034': labelled('Paint it', labels=('Paint it', 'Leave it', 'Paint it')),   # two
+            'Q-035': labelled('paint it'),                                  # another case
+            'Q-036': labelled('Paint it '),                                 # a space more
+            'Q-037': question(recommended='Paint it', options=['Paint it', 'Leave it']),
+            'Q-038': labelled('0', labels=('Paint it', '0')),   # the number 0, or the option at 1
+        }
+        for doc_id, fields in kept.items():
+            self.put(doc_id, fields)
+        self.put('Q-039', labelled('1', labels=('Paint it', '1')))      # both say 1
+        self.put('Q-040', labelled('2', labels=('2', '2', 'Paint it')))  # no one label: the number
+        r = self.run_both()
+        self.assertEqual([(t.rel, t.new) for t in r.turned], [
+            ('questions/Q-030', 1), ('questions/Q-039', 1), ('questions/Q-040', 2)])
+        for doc_id, fields in kept.items():
+            self.assertEqual(self.stored('questions', doc_id), fields, doc_id)
+        self.assertTrue(r.complete)
+        lines = migrate.report_lines(r)
+        self.assertIn("VALIDATE ERROR questions/Q-033 recommended: recommended must be an index "
+                      "into options (3 option(s)), not 'Sell it' [options-shape]", lines)
+        self.assertIn('VALIDATE ERROR questions/Q-033 recommended: recommended must be int, not '
+                      'str [schema-field]', lines)
+        self.assertEqual(
+            [x.split(':')[0] for x in lines if 'the api will refuse' in x],
+            ['VALIDATE questions/%s' % i for i in sorted(kept)])
+
+    def test_an_answered_question_keeps_its_answer_as_it_is(self):
+        answer = {'at': AT, 'choice': 0, 'label': 'Paint it', 'note': ''}
+        fields = labelled('Paint it', status='answered', answer=answer)
+        self.put('Q-041', fields)
+        self.run_both()
+        self.assertEqual(self.stored('questions', 'Q-041'), dict(fields, recommended=0))
+        self.assertEqual(self.stored('questions', 'Q-041')['answer'], answer)
+
+    def test_a_second_run_finds_the_number_and_changes_nothing(self):
+        self.run_both()
+        before = docs_of(self.root)
+        r = self.run_both()
+        self.assertEqual(docs_of(self.root), before)
+        self.assertEqual((r.added, r.conflicts, r.kept, r.turned), ([], [], [], []))
+        self.assertIn('questions/Q-030', r.same)
+        lines = migrate.report_lines(r)
+        self.assertTrue(lines[-1].startswith('nothing changed: '))
+        self.assertFalse(any(x.startswith('RECOMMENDED') for x in lines))
+
+    def test_a_store_that_already_holds_the_label_keeps_it_and_is_reported(self):
+        r = migrate.migrate(self.mirror, [self.mirror])
+        self.assertEqual((r.added, r.conflicts, r.kept, r.turned), ([], [], [], []))
+        self.assertIn('questions/Q-030', r.same)
+        self.assertTrue(r.complete)
+        with Store.open(self.mirror) as s:
+            self.assertEqual(s.get('questions', 'Q-030'), self.text)
+        lines = migrate.report_lines(r)
+        self.assertIn('VALIDATE questions/Q-030: the api will refuse every update of this '
+                      'document until it is fixed; fix its file by hand with the server stopped '
+                      '(no api route repairs it)', lines)
+        self.assertTrue(lines[-1].startswith('nothing changed: '))
+        # a second source that holds the number is the same document: no conflict
+        fill(self.export, {'questions': {'Q-030': self.number}}, wrapped=True)
+        again = migrate.migrate(self.mirror, [self.mirror, self.export])
+        self.assertEqual(again.conflicts, [])
+
+
 class MigrateCliCase(cli.CliCase):
     def setUp(self):
         cli.CliCase.setUp(self)
