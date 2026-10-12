@@ -15,8 +15,8 @@ Harness traps (Plan cannot write, output files are no rescue path): skill `subag
   work); narrow it on main through a quick records landing right after the plan. A session-owned
   item is pulled with its session: `python tools/backlog.py -C <worktree> --session <key> pull <ID>`.
   Price before pull: an unpriced record refuses the pull, so a price set on an unlanded branch
-  must land first, or the brief has the worker set the same agent price in its worktree before
-  its pull.
+  must land first. A worker never sets a price; if its pull is refused as unpriced it stops and
+  reports to you.
 - **Bundle related work**: pull other open records in the same area onto the same branch, keeping
   it reviewable and never mixing a high-risk change with unrelated work.
 - 1 workstream = 1 branch = 1 isolated worktree, per profile. A brief that names a worktree you
