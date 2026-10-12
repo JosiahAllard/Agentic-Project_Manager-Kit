@@ -1,7 +1,7 @@
 """The hub server's web page, kitlib/hubsite/web/index.html.
 
 The page is one HTML file. Its pure functions sit between the `pm-pure:begin` and `pm-pure:end`
-markers, as in the page it was ported from, so the same node-run tests apply (tests/hubtopm) and
+markers, as in claude/hub/action-hub.html, so the same node-run tests apply (tests/hubtopm) and
 the new pure functions (the snapshot's shape, the Parked groups, the PM line, the retry delay) are
 tested the same way. What node cannot show without a browser is checked on the file's text: one
 transport, no artifact-store call, no HTML sink, no outside resource, and only the decided routes.
