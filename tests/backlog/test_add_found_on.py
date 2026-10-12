@@ -104,14 +104,22 @@ class FoundOn(StoreCase):
         self.add(['tools/z/a.py'])
         self.assertIsNotNone(self.get('NEW'))
 
-    def test_a_missing_branch_is_noted_and_its_pulled_scope_still_checked(self):
+    def remote_only(self, branch, *paths):
+        """`branch` pushed to origin with one commit adding `paths`, and no local branch."""
+        self.branch_with(branch, *paths)
+        self.repo.git('push', '-q', 'origin', branch)
+        self.repo.git('branch', '-q', '-D', branch)
+
+    def test_a_branch_only_the_remote_has_is_noted_and_its_pulled_scope_still_checked(self):
         gone = 'kit/gone'
+        self.remote_only(gone, 'kitlib/x/b.py')
         self.seed(priced('BAR', state='pulled', pulled_at=TODAY, pulled_by=gone, scope='tools/z/**'))
         with self.assertRaises(Refusal) as cm:
             self.add(['tools/z/a.py'], found_on=gone)
         self.assertIn('(scope of BAR, pulled by kit/gone)', str(cm.exception))
         change = self.add(['kitlib/x/**'], found_on=gone)
-        self.assertIn('NOTE: branch kit/gone not found; its diff was not compared', change.lines)
+        self.assertIn('NOTE: branch kit/gone is not a local branch (only on origin); its diff was '
+                      'not compared', change.lines)
 
     def test_no_merge_base_fails_closed_naming_the_key(self):
         self.branch_with('kit/orphan', 'elsewhere.txt', orphan=True)
@@ -167,10 +175,40 @@ class FoundOn(StoreCase):
                 self.assertIn('write the local branch name `kit/foo`', str(cm.exception))
         self.assertIsNone(self.get('NEW'))
 
-    def test_a_plain_branch_that_does_not_exist_is_a_note(self):
-        change = self.add(['docs/y.md'], found_on='kit/nowhere')
-        self.assertIn('NOTE: branch kit/nowhere not found; its diff was not compared', change.lines)
-        self.assertIsNotNone(self.get('NEW'))
+    def test_a_branch_that_exists_nowhere_is_refused(self):
+        before = self.remote_tip()
+        with self.assertRaises(Refusal) as cm:
+            self.add(['docs/y.md'], found_on='kit/nowhere')
+        msg = str(cm.exception)
+        self.assertIn('`--found-on kit/nowhere` names a branch that exists neither here nor on a '
+                      'remote', msg)
+        self.assertIn('pass an existing branch, or `none`', msg)
+        self.assertIsNone(self.get('NEW'))
+        self.assertEqual(self.remote_tip(), before)
+
+    def test_a_branch_that_exists_nowhere_is_refused_whatever_it_holds_pulled(self):
+        gone = 'kit/gone'
+        self.seed(priced('BAR', state='pulled', pulled_at=TODAY, pulled_by=gone, scope='tools/z/**'))
+        with self.assertRaises(Refusal) as cm:
+            self.add(['docs/y.md'], found_on=gone)
+        self.assertIn('names a branch that exists neither here nor', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
+    def test_a_remote_list_git_cannot_give_fails_and_is_not_a_missing_branch(self):
+        self.failing('cmd', run_text=lambda args, root, **kw: (None, 'git broke'))
+        with self.assertRaises(Failure) as cm:
+            self.add(['docs/y.md'], found_on='kit/nowhere')
+        self.assertIn('git broke', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
+    def test_a_remote_branch_git_cannot_read_fails_and_is_not_a_missing_branch(self):
+        real = refs.resolve
+        self.failing('refs', resolve=lambda ref, root, **kw: (None, 'git broke')
+                     if ref == 'refs/remotes/origin/kit/nowhere' else real(ref, root, **kw))
+        with self.assertRaises(Failure) as cm:
+            self.add(['docs/y.md'], found_on='kit/nowhere')
+        self.assertIn('git broke', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
 
     def test_an_unreadable_record_fails_the_pulled_scope_check(self):
         # Store.write refuses an unreadable store first (store.require_readable); the guard's own
@@ -244,6 +282,14 @@ class FoundOnCli(unittest.TestCase):
         self.assertEqual(rc, 2, out)
         self.assertRegex(out, r'^USAGE: ')
         self.assertIn('write none', out)
+
+    def test_add_found_on_a_branch_that_exists_nowhere_is_refused_exit_2(self):
+        rc, out = self.run_tool('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py',
+                                '--found-on', 'kit/nowhere', '--why-not-folded', WHY)
+        self.assertEqual(rc, 2, out)
+        self.assertRegex(out, r'^REFUSED: ')
+        self.assertIn('kit/nowhere', out)
+        self.assertIn('pass an existing branch, or `none`', out)
 
     def test_add_with_no_merge_base_is_error_exit_1(self):
         self.repo.git('checkout', '-q', '--orphan', 'kit/orphan')

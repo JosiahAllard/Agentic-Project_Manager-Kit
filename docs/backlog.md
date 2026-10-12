@@ -53,7 +53,8 @@ A finding is fixed on the branch that found it unless it cannot be, so `add` nam
 
 - USAGE: either flag missing, a short reason or one holding a machine path, a malformed branch name, `--found-on` naming the code main (`backlog.code_main`, default `repo.main_branch`) in any letter case or ref spelling: a finding on main has no branch, so write `none`; or `--found-on` spelt as a ref (`refs/heads/<x>`, `heads/<x>`, `refs/remotes/<remote>/<x>`, `remotes/<remote>/<x>`, `<remote>/<x>`, the prefix in any letter case): write the local branch name (`kitlib/backlog/plan.py` `_bare_branch`).
 - REFUSED: a scope member that overlaps (`kitlib/backlog/scope.py` `members_collide`) a path the branch changed since its merge base with the code main (`git diff --no-renames --name-only`), or the scope of a record the branch holds pulled (`pulled_by` compared in any letter case). A member that cannot be compared counts as an overlap. The refusal lists each pair and says: fold it into the branch, or file it after the branch lands. There is no override flag.
-- A branch that does not exist prints `NOTE: branch B not found; its diff was not compared`; the scopes of records it holds pulled are still checked.
+- REFUSED: a `--found-on` branch that is neither a local branch nor a branch of any remote as last fetched (kitlib/backlog/plan.py `_remotes_with`; every remote is asked, no network). The refusal names the branch and says to pass an existing branch, or `none`. A git that cannot list the remotes or read a ref is ERROR, never this refusal.
+- A branch only a remote has prints `NOTE: branch B is not a local branch (only on R); its diff was not compared`; the scopes of records it holds pulled are still checked.
 - ERROR: a code main that does not resolve, no merge base with it, a git that does not answer, or an unreadable record. The ERROR for a missing base names `backlog.code_main` (docs/kit-json.md).
 - `--found-on none` skips the overlap check.
 
