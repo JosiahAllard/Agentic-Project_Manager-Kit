@@ -10,6 +10,7 @@ the throwaway ones of tests/redfirst/test_run.py's Case.
 import io
 import json
 import os
+import re
 import signal
 import sys
 import unittest
@@ -382,6 +383,29 @@ class Stopped(LockCase):
         self.assertIn('run %s was cancelled by stop; its process tree is ended' % rec['id'], said)
         self.assertEqual((rec['how'], rec['code']), ('cancelled', 1))
         self.assertEqual((self.records('active'), self.entries(), self.throwaways()), ([], [], []))
+
+    def test_the_lock_s_stop_while_it_waits_is_undecided_never_green(self):
+        # The lock ends a stopped wait with its code 1, which as this tool's exit would read GREEN.
+        self.commit({'tests/test_lockrun.py': SHOW_RUN})
+        held = self.blocker()
+        asked = []
+
+        def say(text):
+            m = re.match(r'run (\S+) waits in the queue', text)
+            if m and not asked:
+                asked.append(m.group(1))
+                open(self.store.path('active', m.group(1) + '.stop'), 'w').close()
+        self.store.say = say
+        rc, out = self.run_locked('--tests', 'tests/test_lockrun.py', wait_s=20)
+        self.assertEqual(len(asked), 1, out)
+        self.assertEqual(rc, V.EXIT_UNDECIDED, out)
+        self.assertIn('failed    the machine lock: run %s was cancelled by stop while it waited; '
+                      'the command was not run' % asked[0], out)
+        self.assertIn('REDFIRST UNDECIDED - no tree was made', out)
+        self.assertEqual([r['id'] for r in self.ended()], asked)
+        self.assertEqual(self.entries(), [('blocker', 'held')])
+        self.assertEqual(self.records('active'), [held.id + '.json'])
+        self.nothing_made(out)
 
     def test_ctrl_c_while_it_waits_in_the_queue_ends_the_wait(self):
         self.commit({'tests/test_lockrun.py': SHOW_RUN})
