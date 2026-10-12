@@ -36,6 +36,7 @@
     ["reserve_ui.pyw", ["lockui"]],
     ["tools/*.py", ["skills", "stubs"]],
     ["kitlib/hubsite/**", ["hubsite"]],
+    ["kitlib/hubsite/web/**", ["hubsite"]],
     ["tests/hubsite/**", ["hubsite"]],
     ["tools/hub.py", ["hubsite"]],
     ["kitlib/**", ["skills"]]
