@@ -884,7 +884,9 @@ class Slot:
         job after the last pass (and END_WAIT_S more) is said, and runs on once release unpins
         the job. Sets self.spared; release then closes the job without killing it. A second
         end_tree (the release's, after a Ctrl+C) adds its results to the record's `daemons`
-        (tell_daemons), so what the first one stopped stays listed.
+        (tell_daemons), so what the first one stopped stays listed. When tell_daemons raises
+        (store.say failed), what is ended and spared is unchanged: only the record loses this
+        judgement's results, and the results after the one whose say failed are not said.
 
         Raises nothing but what is not an Exception: a KeyboardInterrupt (a second Ctrl+C) goes
         up with tree_ended and spared cleared, so the release that follows ends the tree again,
@@ -914,8 +916,11 @@ class Slot:
             # stop may have ended some before it raised: none is said to be left running.
             done = [(pid, label, "%s(%s: %s)" % (NOT_JUDGED, type(e).__name__, e))
                     for pid, _ct, label in found]
-        self.tell_daemons(done)
-        left = {pid for pid, _label, res in done if res.startswith(("left: ", NOT_JUDGED))}
+        try:
+            self.tell_daemons(done)
+        except Exception:                   # noqa: BLE001 - not said: the kill goes on as judged
+            pass
+        left ={pid for pid, _label, res in done if res.startswith(("left: ", NOT_JUDGED))}
         kept = [(pid, ct) for pid, ct, _label in found if pid in left]
         if not kept:
             job.terminate(1)

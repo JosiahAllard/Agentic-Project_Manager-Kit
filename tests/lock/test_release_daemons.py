@@ -527,6 +527,37 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
         self.assertEqual(self.results(),
                          [(daemon, "gradle-daemon", "not judged (RuntimeError: boom)")])
 
+    def test_a_result_that_cannot_be_said_changes_nothing_the_kill_ends_or_spares(self):
+        """store.say raises on the line about the left daemon (as a CLI's does once its stderr
+        has closed): the kill goes on as judged, the shared daemon's tree spared and the rest
+        ended, and the failure does not leave the release."""
+        c = self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain")
+        self.assertEqual(s.wait(p), (0, "done"))
+        daemon, _, plain = self.shared_pids()
+
+        def deaf(text):
+            self.said.append(text)
+            if "gradle-daemon" in text:
+                raise OSError("stderr has closed")
+        self.store.say = deaf
+        escaped = None
+        try:
+            s.release(1, "error")
+        except OSError as e:
+            escaped = e
+        self.assertTrue(self.judged(), self.said)       # the say that fails was reached
+        self.connected(c)
+        cts = self.recorded()
+        self.assertTrue(self.wait_gone(plain, cts[plain]), "a plain leftover outlived the kill")
+        for pid in cts:
+            if pid != plain:
+                self.assertTrue(process.alive(pid, cts[pid]),
+                                "a result that could not be said ended the tree of the daemon "
+                                "another job's client uses (pid %d)" % pid)
+        self.assertIsNone(escaped, "the say's failure left the release")
+        self.assertEqual(self.ended()["how"], "error")
+
     def test_a_client_that_exited_fails_as_the_tests_fault_not_the_kill_paths(self):
         """Control on the harness: an outside client that exits once it says it connected leaves
         the daemon serving no other job, so the kill path rightly ends it. spared() says the
