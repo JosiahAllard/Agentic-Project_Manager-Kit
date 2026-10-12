@@ -817,6 +817,40 @@ class PairCase(httpfix.ListenerCase):
         self.assertEqual(r.status, 200, r.body)
         self.assertTrue(r.json()['path'].startswith(httpd.PAIR_PATH + '?code='))
 
+    def test_a_session_gets_no_link_through_a_header_that_is_not_the_owners_bearer(self):
+        lis = self.listener()
+        path = post(lis.port, httpd.PAIR_ROUTE, None, self.owner).json()['path']
+        name, _, value = get(lis.port, path).header('Set-Cookie')[0].split(';')[0].partition('=')
+        session = ('Cookie', '%s=%s' % (name, value))
+        self.assertIn('store', get(lis.port, HEALTH, headers=[session]).json())
+        refused = (
+            ('an empty Authorization', [session, ('Authorization', '')]),
+            ('the Authorization header twice', [session, httpfix.bearer(self.owner),
+                                                httpfix.bearer(self.owner)]),
+            ('a Basic scheme', [session, ('Authorization', 'Basic ' + self.owner)]),
+            ('a Token scheme', [session, ('Authorization', 'Token ' + self.owner)]),
+            ('no scheme', [session, ('Authorization', self.owner)]),
+            ("the owner's token as the session cookie", [('Cookie', '%s=%s' % (name, self.owner))]),
+            ("the owner's token in a cookie beside the session",
+             [('Cookie', '%s=%s; token=%s' % (name, value, self.owner))]),
+            ("the owner's token in a second Cookie header",
+             [session, ('Cookie', 'Authorization=Bearer %s' % self.owner)]),
+        )
+        for what, headers in refused:
+            with self.subTest(what=what):
+                r = post(lis.port, httpd.PAIR_ROUTE, None, headers=headers)
+                self.assertEqual((r.status, r.code()), (403, 'forbidden'), r.body)
+                self.assertNotIn(b'code=', r.body)
+                self.assertNotIn(b'"path"', r.body)
+        # the owner's bearer is read whatever the case of its name and scheme and the spaces
+        # round it, with the session beside it or without
+        odd = ('aUtHoRiZaTiOn', '  bEaReR    %s  ' % self.owner)
+        for what, headers in (('beside the session', [session, odd]), ('alone', [odd])):
+            with self.subTest(what=what):
+                r = post(lis.port, httpd.PAIR_ROUTE, None, headers=headers)
+                self.assertEqual(r.status, 200, r.body)
+                self.assertTrue(r.json()['path'].startswith(httpd.PAIR_PATH + '?code='))
+
     def test_a_listener_given_no_pairing_routes_pairs_nobody(self):
         lis = self.listener(routes={})
         r = post(lis.port, httpd.PAIR_ROUTE, None, self.owner)
