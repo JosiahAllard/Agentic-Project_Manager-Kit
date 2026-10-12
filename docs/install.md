@@ -148,8 +148,7 @@ files or the kit itself:
   checkout), `backlog_lint.py`, `agent_roster.py`: run by the kit's maintainers or the PM
   (docs/test-tools.md, docs/lock-release.md, docs/backlog-lint.md, docs/ROSTER.md).
 - `launch.py`, `machine_setup.py`, `pm_data.py`, `pm_watch.py`, `hub_mirror.py`, `pending.py`,
-  `ledger_refs.py`, `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and
-  the machine.
+  `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and the machine.
 
 A stub bakes in the kit it was written from, so one written from a kit worktree runs that
 worktree and is stale on main (`check` says `runs the kit at ...`). At session start the

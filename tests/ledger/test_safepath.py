@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib import coordinatorstart, ledgerrefs
+from kitlib import coordinatorstart
 from kitlib.config import user as kuser
 from kitlib.ledger import read, safepath, standing, write
 from kitlib.ledger.errors import Refused
@@ -210,13 +210,6 @@ class ConsumerTest(Case):
         self.assertIn('reparse point', lines[0])
         self.assertIn('R-9001', ' '.join(coordinatorstart.rulings({'state': note, 'repo': 'alpha'},
                                                                   self.real)))
-
-    def test_ledger_refs_counts_no_mentions_and_says_why(self):
-        path = self.through_junction()
-        got = ledgerrefs.find('R-9001', None, path)
-        self.assertEqual(got.ledger_mentions, 0)
-        self.assertTrue(any('reparse point' in e for e in got.errors), got.errors)
-        self.assertEqual(ledgerrefs.find('R-9001', None, self.real).errors, [])
 
 
 class CliTest(Case):

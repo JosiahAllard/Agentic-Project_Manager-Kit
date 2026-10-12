@@ -137,10 +137,11 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 
 The machine's own settings, read by `kitlib.config.user`: `config.json` in the folder `kitlib.config.user.DIR_NAME` names under the home folder, or, while that folder has none, in the retired folder ("Moving the machine config folder"); `python -c "from kitlib.config import user; print(user.config_file())"`, run in the kit, prints the path of the file read. Messages name the file read (`user.display()`), help text `user.DISPLAY`, and this page and the others write `<config-dir>` for that folder. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config. One key does not follow it: `machine_lock` is read from the config under the profile folder Windows itself reports (`kitlib.lock.site.load`, through `kitlib.lock.store.machine_home`), where the machine's lock store lives, so every session that shares the store reads one `machine_lock`, whatever its USERPROFILE. Every other key is read under the environment's home.
 
+A retired key is still accepted and ignored, so an older machine config loads: `ledger_refs` (`RETIRED` in `kitlib/config/user.py`); nothing reads it. Any other unknown key still refuses.
+
 - `ledger_path` (absolute path): the rulings ledger file; set here only
 - `ledger_repos` (list of a lower-case repo name): the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)
 - `pending_path` (absolute path): the owner's pending-steps file tools/pending.py edits (docs/pending.md)
-- `ledger_refs` (object {repos: map name -> {path, ref}, folders: map name -> absolute path}): where tools/ledger_refs.py looks for citations of a ruling id; unset: the ledger file only (docs/ledger.md "ledger_refs")
 - `standing_delegation` (a ruling id R-nnnn): the ledger entry that delegates in general; the backlog refuses it as the ruling behind any one change. Unset: no id is refused for that
 - `scrub_patterns` (list of regex): case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse
 - `guard_mcp_prefix` (string): the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")

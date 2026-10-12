@@ -101,7 +101,6 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/checkout_guard.py` | is a path in the main checkout; strays in it (`docs/preflight.md`) | kw: checkout_guard, stray
 - `tools/kit_stubs.py` | write or check a repo's stubs for the kit tools (`docs/install.md`) | kw: kit_stubs, stubs
 - `tools/kit_tests.py` | run the kit test suite, whole or selected (`docs/test-tools.md`) | kw: kit_tests, tests
-- `tools/ledger_refs.py` | where each ruling id is cited (`docs/ledger.md`) | kw: ledger_refs
 - `tools/machine_paths.py` | refuse a hard-coded machine path (`docs/commit.md`) | kw: machine_paths
 - `tools/machine_setup.py` | switch Claude config folders to this kit, or set up a fresh machine (`docs/machine-setup.md`) | kw: machine_setup, fresh
 - `tools/agent_temp_init.py` | set up the agents' temp folder alone (`docs/machine-setup.md` "Agent temp init") | kw: agent_temp_init, agent temp

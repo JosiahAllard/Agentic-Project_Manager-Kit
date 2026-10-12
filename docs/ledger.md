@@ -35,7 +35,6 @@ python tools/ledger.py grep TEXT
 python tools/ledger.py check [--base REV] [--root DIR]
 python tools/ledger.py list --prov PROV --since YYYY-MM-DD
 python tools/ledger.py standing WORD
-python tools/ledger_refs.py R-nnnn [R-nnnn ...] | --from-json FILE [FILE ...]
 ```
 
 - **`add`** appends one entry and prints its id. It validates the whole ledger before and after writing, and writes the file atomically with LF line ends. A Decides over 400 characters (`fmt.DECIDES_NUDGE`) draws a warning on stderr; the entry is still written. `--when` backfills a time.
@@ -63,7 +62,7 @@ Before the ledger, or the standing digest beside it, is read or written, `kitlib
 A part that does not exist yet is skipped, so the first `add` can still create the ledger. A refused path is never opened, and the refusal names the fix:
 
 - `kitlib/ledger/read.py` `read_file` returns the refusal as its reason, and the consumers treat it as an unreadable ledger. A backlog write whose ruling must be checked fails (`kitlib.backlog.ledger.check_ruling`), `backlog.py check` reports each ruling as not checked, and `ruling_cites` prints its NOT CHECKED warning.
-- `kitlib/ledger/write.py` raises `Refused`, so every `tools/ledger.py` verb exits 1. The coordinator start's rulings line becomes the refusal, and `ledger_refs` reports it as an error.
+- `kitlib/ledger/write.py` raises `Refused`, so every `tools/ledger.py` verb exits 1. The coordinator start's rulings line becomes the refusal.
 
 Cases that lock a ledger out, and the fix for each:
 
@@ -82,7 +81,6 @@ The keys are in the machine config (docs/kit-json.md "Machine config keys"):
 
 - `ledger_path` (absolute): the ledger file.
 - `ledger_repos`: the repo columns `add --repo` accepts, besides `all`. A name outside the list is a usage error, and `check` reports an entry with one. Unset, any lower-case name is accepted.
-- `ledger_refs`: where `tools/ledger_refs.py` searches ("ledger_refs").
 
 ## A new ledger
 
@@ -123,19 +121,6 @@ Logic: `kitlib/ledger/standing.py`.
 - `check` fails on each line citing an id that is retired or not in the ledger.
 - `standing WORD` matches, ignoring case, a rule line holding the word or sitting under a heading that holds it. Each heading prints once.
 
-## ledger_refs
-
-Entry point `tools/ledger_refs.py`; logic `kitlib/ledgerrefs`; tests `tests/ledgerrefs`. Run it before retiring entries, so no citation breaks silently.
-
-It prints one block per id: `R-nnnn  refs=N  ledger-mentions=M`, then `  place:file:line` per hit. An id matches `R-nnnn` and `Rnnnn` not followed by a digit. `ledger-mentions` counts the ledger's lines naming the id, less its header.
-
-The places are the machine config's `ledger_refs` (docs/kit-json.md):
-
-- `repos`: name -> `{path, ref}`, searched with `git grep` at the committed ref.
-- `folders`: name -> a folder or file, searched on disk (`.md .py .ps1 .json .txt .cs .java .yml`).
-
-Unset, only the ledger is counted. A repository git cannot search, or a missing folder, prints `  ERROR ...` and exits 1; the other hits still print. Exit codes: 0 ok; 1 an error or a broken config; 2 usage.
-
 ## Pre-commit check
 
 Hook `githooks/pre-commit`; dispatch `kitlib/githooks/precommit.py`; ledger step `kitlib/ledger/precommit.py`; tests `tests/ledger/test_precommit.py` and `tests/githooks/test_precommit.py`.
@@ -164,4 +149,3 @@ Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` 
 
 - **The PM writer's default co-author environment variable:** replaced by `--model`, else `CLAUDE_AGENT_MODEL`, the variable `tools/commit.py` reads.
 - **The PM writer's fixed list of repository names:** replaced by `ledger_repos`.
-- **The PM `ledger_refs.py`'s fixed repositories, folders and their environment variables:** replaced by `ledger_refs`.

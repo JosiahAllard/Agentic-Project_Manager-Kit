@@ -186,6 +186,17 @@ class RetiredToolsUnchanged(StubCase):
             self.assertNotIn(name, out)
 
 
+class RemovedKitOnlyTools(StubCase):
+    """A kit-only tool the kit no longer has: it was never a default stub, so it is in no list."""
+
+    GONE = 'ledger_refs'
+
+    def test_the_kit_has_no_command_of_that_name_and_no_list_names_it(self):
+        self.assertNotIn(self.GONE, stubs.commands())
+        self.assertNotIn(self.GONE, stubs.SHARED + stubs.KIT_ONLY)
+        self.assertFalse(os.path.exists(os.path.join(KIT, 'tools', self.GONE + '.py')))
+
+
 class Partition(StubCase):
     """Every tools/*.py command is stubbed (SHARED) or kit-only (KIT_ONLY), exactly one."""
 
