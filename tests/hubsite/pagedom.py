@@ -143,7 +143,7 @@ globalThis.fetch = (url, init) => {
   if (own) return Promise.resolve(answer(own.status, own.body, own.headers));
   if (path.startsWith("/wait")) return new Promise(done => waits.push(done));
   if (path === "/snapshot") return Promise.resolve(answer(200, server.snap));
-  return Promise.resolve(answer(200, { ok: true, id: "NEW-1" }));
+  return Promise.resolve(answer(200, { ok: true, id: "EX-1" }));
 };
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(r => realImmediate(r)); };
 // Answer the waiting long-poll: wake() says "something changed", answerWait() answers it as the test says.
