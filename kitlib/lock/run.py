@@ -3,9 +3,9 @@
 book() joins the queue, waits for the run's turn and returns a Slot that holds its cpu and gpu
 slots. The Slot's launcher starts the run's commands in the run's job object (kitlib.proc.job):
 pinned to its cores, measured and, when the run is cancelled, interrupted or errs, ended as a
-tree but for a build daemon shown to serve another job (Slot.end_tree). release() frees what it
-held and records the run. slot() is book() as a context manager that yields the launcher.
-run_command() is `machine_lock.py run`: book, one command, release.
+tree but for a build daemon that serves or may serve another job (Slot.end_tree). release()
+frees what it held and records the run. slot() is book() as a context manager that yields the
+launcher. run_command() is `machine_lock.py run`: book, one command, release.
 
 Nothing here prints: progress lines go to store.say, which is the CLI's stderr and
 nowhere by default. A refusal raises LockError with the CLI's exit code.
@@ -609,9 +609,9 @@ class Launcher:
     Popen (env defaults to the run's: MACHINE_LOCK_RUN, the cpuset, the gpus); run(cmd, **kw) ->
     its exit code, waited for with the run's use sampled and a stop honoured; wait(p) -> exit
     code; pids(); usage() -> the run's use so far; kill() ends every process in the job but a
-    build daemon another job's client uses, with its tree (Slot.end_tree). id,
-    cores (cpu slots), gpus (gpu slots), mask (the global thread mask, or None) and env read the
-    run."""
+    build daemon Slot.end_tree spares (one another job's client uses or may use), with its tree.
+    id, cores (cpu slots), gpus (gpu slots), mask (the global thread mask, or None) and env read
+    the run."""
 
     def __init__(self, slot):
         self._slot = slot
@@ -866,7 +866,9 @@ class Slot:
 
     def end_tree(self):
         """The kill path (a cancel, Ctrl+C, an error, Launcher.kill): ends every process in the
-        run's job but a build daemon another job's client uses, with that daemon's tree. A
+        run's job but a build daemon another job's client uses or may use, with that daemon's
+        tree: every daemon kitlib.proc.daemons stop leaves, so any MSBuild node and the compiler
+        server (PIPE_LABELS: their clients cannot be told), with what they started. A
         daemon is shared: one this run's client started sits in this job, yet any client on the
         machine may be building on it, and TerminateJobObject would end it under that client.
         Windows cannot take a process out of a job, so the daemons are judged first
@@ -996,7 +998,7 @@ class Slot:
 
     def release(self, code=None, how=None):
         """Ends the run: its job (the tree killed when interrupted, cancelled or an error, but for
-        a build daemon another job's client uses (end_tree), which runs on, unpinned; else its
+        a build daemon end_tree spares, which runs on with its tree, unpinned; else its
         build daemons stopped when it is a gate (stop_daemons) and what else it left runs on,
         unpinned), its --on-release command, then its queue entry and record (settle). Returns
         the ended record (None for a nested slot). Once."""
