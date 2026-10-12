@@ -285,6 +285,35 @@ class RetiredKeyTest(TreeCase):
                       self.refused({'backlog': {'retired_docs': [], 'phasez': []}}))
 
 
+class RetiredSectionTest(TreeCase):
+    """A whole section no tool reads any more (schema.RETIRED_SECTIONS): a config that still
+    carries it loads, the section dropped unchecked."""
+
+    def test_a_config_still_carrying_a_retired_section_loads_without_it(self):
+        for body in ({'repo': 'r', 'skip': ['docs/old/*']}, {'no_such_key': 1}, 'tools/gone.json', 3):
+            with self.subTest(body=body):
+                cfg = self.load({'repo': {'name': 'r'}, 'ruling_cites': body})
+                self.assertEqual(cfg.section('repo')['name'], 'r')
+                self.assertFalse(cfg.has('ruling_cites'))
+                self.assertIsNone(cfg.section_file('ruling_cites'))
+
+    def test_a_retired_section_is_not_a_schema_section(self):
+        self.assertEqual(schema.RETIRED_SECTIONS, ('ruling_cites',))
+        for name in schema.RETIRED_SECTIONS:
+            self.assertNotIn(name, schema.SECTIONS)
+            self.assertNotIn(name, schema.FILE_OK)
+            self.assertFalse(any(line.startswith('- `%s' % name) for line in schema.doc_lines()))
+
+
+class RetiredSectionUnchangedTest(TreeCase):
+    """What the retirement leaves as it was."""
+
+    def test_an_unknown_section_beside_a_retired_one_still_refuses(self):
+        why = self.refused({'ruling_cites': {'repo': 'r'}, 'ruling_cite': {}, 'repos': {}})
+        self.assertIn('unknown section(s) repos, ruling_cite (known:', why)
+        self.assertNotIn('ruling_cites', why)
+
+
 class HookAndOwnerTest(TreeCase):
 
     def test_the_hook_is_read_from_the_hook_section(self):

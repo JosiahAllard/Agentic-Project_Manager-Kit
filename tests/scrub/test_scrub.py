@@ -22,7 +22,6 @@ ALLOWED = (
     'tests/backloglint/fixtures/', # a record's priority_ruling field
     'tests/coordinatorstart/',       # the session-start digest reads ledger headers
     'tests/ledger/',               # kitlib/ledger parses ledger headers
-    'tests/rulingcites/',          # kitlib/rulingcites checks `PM R-nnnn` citations
 )
 
 

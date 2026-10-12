@@ -254,10 +254,6 @@ SECTIONS = {
     'review_pack': {
         'coauthor': Field(Bool(), False, 'list the branch\'s commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks'),
     },
-    'ruling_cites': {
-        'repo': Field(Str(), None, 'the ledger repo column cited'),
-        'skip': Field(Strs, None, 'globs of paths not checked; unset: <tools_dir>/test_*.py and <tools_dir>/fixtures/*'),
-    },
     'stubs': {
         'tools': Field(Strs, None, 'kit tools stubbed into the repo'),
     },
@@ -313,6 +309,9 @@ MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, 
 # Keys no tool reads any more, per section. A config that still carries one loads: the key is
 # dropped unchecked (not an unknown-key refusal), so an install written before the removal works.
 RETIRED = {'backlog': ('retired_docs', 'rename_script')}
+# Whole sections no tool reads any more. A config that still carries one loads: the section is
+# dropped unchecked, whatever it holds. Any other unknown section still refuses.
+RETIRED_SECTIONS = ('ruling_cites',)
 
 
 def section_type(name):

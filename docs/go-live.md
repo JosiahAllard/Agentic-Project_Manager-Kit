@@ -92,7 +92,6 @@ On kit main, none live. Each repo reaches them through stubs.
 - pieces: a repo with a pieces table adds `"pieces": "tools/pieces.json"` to `.kit.json`; the file alone is not read.
 - forbidden: create the store (`{}` when `.kit.json` names one), add tokens with `forbidden.py -C <repo> --add` (token on stdin), then a gate step (docs/repo-checks.md).
 - trailers: add the `trailers.py` step with `merged_args` `--merged` and set `.kit.json` "owner".email in the same change (docs/repo-checks.md "trailers").
-- ruling_cites: the machine config `ledger_path` must be set or the step only warns; then a gate step.
 - pytests, tool_deps, testlist and kitlib.proc.shield: a repo adopts pytests through a gate step, never `python_tests` (docs/test-tools.md).
 - PM repo: its kit/tools copies of the ported tools become stubs or are dropped.
 - PM record tools: the PM repo's `tools/pending.py`, `tools/ledger_refs.py`, its ledger tool's `standing` and `check`, and `hooks/pre-commit` retire once its callers point at the kit: set `pending_path` and `ledger_refs` in the machine config (docs/pending.md, docs/ledger.md "ledger_refs"), and for the hook set `"ledger": {"pre_commit_check": true}` in its `.kit.json` and its `core.hooksPath` to `<kit>/githooks` (docs/ledger.md "Pre-commit check"). A kit older than this port refuses a `.kit.json` holding a `ledger` section (unknown sections are refused), so add it only once every kit checkout that reads that repo has the port.

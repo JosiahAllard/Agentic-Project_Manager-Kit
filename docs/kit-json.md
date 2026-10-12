@@ -12,7 +12,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - A `landing.lanes` entry is keyed by the lane name and has four keys (`LANE` in `kitlib/config/schema.py`): `branch_prefix` (list of string; a branch on the lane starts with one), `paths` (list of glob; every path the branch changes matches one), `why` (string; the ruling that made the lane) and `merged_args` (list of string; added to every step command of the lane's merged-tree gate, after the step's own `merged_args`, with the same `{root}`-style substitutions). `tools/land.py` reads `main_branch` and `remote` from `repo`, the lanes, `wait_s` and `batch_max` from `landing`, and the gate steps from `gate` (docs/gate.md, Landing).
 - No old spelling is read: the hook module is the top-level `hook` (not `gate.hook`), and owner settings are `owner` (not `doc_budget` keys).
 - `backlog.code_main` matters where the store's checkout is on a branch that shares no history with the code, as the kit's pmdata store is (its `repo.main_branch` is `pmdata`): there `backlog.py add --found-on <branch>` (`plan_add` in `kitlib/backlog/plan.py`) finds no merge base and stops with an ERROR naming the key, until the PM sets it to the code's main branch. `--found-on none` needs no base.
-- Retired keys are still accepted and ignored, so an older install loads: `backlog` may still carry `retired_docs` and `rename_script` (`RETIRED` in `kitlib/config/schema.py`); nothing reads them.
+- Retired keys are still accepted and ignored, so an older install loads: `backlog` may still carry `retired_docs` and `rename_script` (`RETIRED` in `kitlib/config/schema.py`); nothing reads them. A whole `ruling_cites` section is accepted the same way and dropped unchecked (`RETIRED_SECTIONS` there); any other unknown section still refuses.
 - A repo lists its own heavy programs in `heavy.programs`; the kit defaults are general tools only (godot, blender, dotnet, gradle). For example `{"program": "run_tests.bat", "kind": "engine-test", "why": "runs the engine test suite"}`, `{"program": "graph_build*", "kind": "worldgraph", "why": "rebuilds the world graph"}` and `{"program": "local_model*", "kind": "local-ai", "unless_args": ["--help"], "why": "loads a model onto the gpu"}`.
 
 ## `.kit.json` keys
@@ -102,8 +102,6 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `redfirst.runners` (list of {glob, kind, pythonpath, dir, project, csproj, args, lock}, default [{"glob": "tests/*test_*.py", "kind": "python"}]): which runner takes a test file, first match wins; none written: this default, then <tools_dir>/*test_*.py as python with the tools folder as pythonpath, unless tools_dir is . or that glob is listed (docs/redfirst.md); a runner's lock is the kinds-table kind the run books around its command (unset: the kind of the heavy-list entry the command matches)
 - `redfirst.hold_wait` (int >= 0, default 60): seconds a held throwaway tree is re-checked before it is left
 - `review_pack.coauthor` (bool, default false): list the branch's commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks
-- `ruling_cites.repo` (string): the ledger repo column cited
-- `ruling_cites.skip` (list of string): globs of paths not checked; unset: <tools_dir>/test_*.py and <tools_dir>/fixtures/*
 - `stubs.tools` (list of string): kit tools stubbed into the repo
 - `testlist.junit` (list of string, default ["**/build/test-results/**/*.xml"]): JUnit result globs
 - `testlist.trx` (list of string, default ["**/*.trx"]): .NET result globs

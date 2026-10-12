@@ -267,7 +267,10 @@ with the stub's arguments.
 
 Which tools get a stub: `--tools`, else `.kit.json` "stubs".tools, else every name in
 `kitlib.stubs.SHARED` that the kit has as a command (a `tools/<name>.py` with a `__main__` block,
-`kit_stubs` excepted). A name the kit has no command for is refused (exit 2).
+`kit_stubs` excepted). A name the kit has no command for is refused (exit 2), but for a tool the
+kit removed (`kitlib.stubs.RETIRED`) named in "stubs".tools: that name is dropped, and `write` and
+`check` print `retired  <path> (delete it)` for a stub of it still in the repository. The line is a
+note: no exit code changes and nothing deletes the file.
 
 - `write` creates or replaces each stub. It keeps a file that is not a stub, and reports it,
   unless `--replace`. `--dry-run` writes nothing.

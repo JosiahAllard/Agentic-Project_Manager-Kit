@@ -109,6 +109,83 @@ class WhichTools(StubCase):
         self.assertEqual(self.run_stubs('check')[0], stubs.CONFIG)
 
 
+class RetiredTools(StubCase):
+    """A tool the kit no longer has (stubs.RETIRED). A "stubs".tools list written before the
+    removal still loads, and a stub of it left in the repository is named, never deleted."""
+
+    GONE = 'ruling_cites'
+
+    def test_the_kit_has_no_command_of_a_retired_name(self):
+        self.assertNotIn(self.GONE, stubs.commands())
+        self.assertIn(self.GONE, stubs.RETIRED)
+        listed = set(stubs.SHARED) | set(stubs.KIT_ONLY) | set(stubs.commands())
+        self.assertEqual(sorted(set(stubs.RETIRED) & listed), [])
+
+    def test_a_retired_name_in_the_config_is_dropped_and_no_stub_is_written(self):
+        self.config(stubs={'tools': ['landed', self.GONE]})
+        code, out = self.run_stubs('write')
+        self.assertEqual(code, stubs.OK, out)
+        self.assertEqual(os.listdir(os.path.join(self.root, 'tools')), ['landed.py'])
+        self.assertNotIn('retired', out)
+        code, out = self.run_stubs('check')
+        self.assertEqual(code, stubs.OK, out)
+        self.assertIn('kit_stubs: 1 stub(s) current', out)
+        self.assertIsNone(stubs.problem_line(self.root))
+
+    def test_a_stub_of_it_left_behind_is_a_note_and_no_problem(self):
+        self.config(stubs={'tools': ['landed', self.GONE]})
+        left = self.stub(self.GONE)
+        self.put(left, stubs.stub_text(self.GONE))
+        for verb, last in (('write', None), ('check', 'kit_stubs: 1 stub(s) current')):
+            code, out = self.run_stubs(verb)
+            self.assertEqual(code, stubs.OK, (verb, out))
+            self.assertIn('retired  %s (delete it)' % left, out.splitlines())
+            if last:
+                self.assertEqual(out.splitlines()[-1], last)
+        self.assertEqual(self.read(left), stubs.stub_text(self.GONE))    # nothing deleted it
+        self.assertIsNone(stubs.problem_line(self.root))
+
+    def test_the_note_is_printed_whatever_names_the_tools(self):
+        left = self.stub(self.GONE)
+        self.put(left, stubs.stub_text(self.GONE))
+        code, out = self.run_stubs('write', tools=['landed'])
+        self.assertEqual(code, stubs.OK, out)
+        self.assertIn('retired  %s (delete it)' % left, out.splitlines())
+        code, out = self.run_stubs('check', tools=['landed', 'gate'])      # a problem keeps its code
+        self.assertEqual(code, stubs.PROBLEMS, out)
+        self.assertIn('retired  %s (delete it)' % left, out.splitlines())
+        self.assertEqual(out.splitlines()[-1], 'kit_stubs: 1 problem(s)')
+
+    def test_a_retired_name_given_as_the_tools_argument_is_refused(self):
+        code, out = self.run_stubs('write', tools=[self.GONE])
+        self.assertEqual(code, stubs.CONFIG, out)
+        self.assertIn(self.GONE, out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
+
+
+class RetiredToolsUnchanged(StubCase):
+    """What the retirement leaves as it was."""
+
+    def test_the_repositorys_own_file_of_a_retired_name_is_not_named(self):
+        self.config(stubs={'tools': ['landed']})
+        own = "print('the repository\\'s own copy')\n"
+        for name in stubs.RETIRED:
+            self.put(self.stub(name), own)
+        code, out = self.run_stubs('write')
+        self.assertEqual(code, stubs.OK, out)
+        self.assertNotIn('retired', out)
+        for name in stubs.RETIRED:
+            self.assertEqual(self.read(self.stub(name)), own)
+
+    def test_an_unknown_name_beside_a_retired_one_is_still_refused(self):
+        self.config(stubs={'tools': ['landed', 'no_such_tool'] + list(stubs.RETIRED)})
+        code, out = self.run_stubs('write')
+        self.assertEqual(code, stubs.CONFIG, out)
+        self.assertIn('no_such_tool', out)
+        for name in stubs.RETIRED:
+            self.assertNotIn(name, out)
+
+
 class Partition(StubCase):
     """Every tools/*.py command is stubbed (SHARED) or kit-only (KIT_ONLY), exactly one."""
 

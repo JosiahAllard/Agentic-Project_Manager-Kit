@@ -46,7 +46,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/pm-watch.md` | PM watcher | watching sessions | kw: pm-watch, watcher
 - `docs/preflight.md` | preflight, board and checkout guard | starting any task | kw: preflight, board, checkout
 - `docs/redfirst.md` | redfirst | proving a test fails first | kw: redfirst, red
-- `docs/repo-checks.md` | forbidden, ruling_cites, trailers, pieces | repo checks | kw: forbidden, ruling_cites, trailers, pieces
+- `docs/repo-checks.md` | forbidden, trailers, pieces | repo checks | kw: forbidden, trailers, pieces
 - `docs/review-pack.md` | review_pack | preparing a review | kw: review-pack, review
 - `docs/shipping.md` | what ships | changing the shipped set | kw: shipping, ships
 - `docs/sync-base.md` | sync_base | main moved | kw: sync-base, merge
@@ -108,7 +108,6 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/plugin_refresh.py` | export pushed kit main and refresh the plugin in every account folder (`docs/plugin-source.md`) | kw: plugin_refresh, plugin
 - `tools/pieces.py` | the path-to-piece table (`docs/repo-checks.md`) | kw: pieces
 - `tools/pm_data.py` | make or re-link the PM-data branch (`docs/pm-data-branch.md`) | kw: pm_data
-- `tools/ruling_cites.py` | fail an added ruling citation the ledger cannot back (`docs/repo-checks.md`) | kw: ruling_cites
 - `tools/trailers.py` | fail a commit with no agent trailer (`docs/repo-checks.md`) | kw: trailers
 - `tools/worktree_paths.py` | which path a worktree write may go to (`docs/worktree-paths.md`) | kw: worktree_paths
 - `tools/worktree_sweep_task.py` | nightly worktree sweep scheduled task (`docs/worktree-remove.md`) | kw: worktree_sweep_task, sweep
