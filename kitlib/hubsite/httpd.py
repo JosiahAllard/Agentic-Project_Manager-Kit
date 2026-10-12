@@ -1,14 +1,17 @@
 """kitlib.hubsite.httpd: one loopback HTTP listener in front of the hub's Api.
 
   Listener(addr, api, gate, static_dir=None, host_rule=None, routes=None, via='', log=None,
-           max_waits=MAX_WAITS, max_body=MAX_BODY, max_connections=MAX_CONNECTIONS)
+           max_waits=MAX_WAITS, max_body=MAX_BODY, max_connections=MAX_CONNECTIONS,
+           origin_scheme='http')
       .port .url .waiting          the bound port (addr may name port 0), its URL, waits blocked now
       .closing                     close_door() was called
       .start()                     serve on a thread; .stop(timeout) = close_door() then join()
-      .close_door()                stop accepting; requests in flight go on
+      .close_door()                stop accepting; requests being answered go on ("Closing")
       .drain(timeout)              wait for the requests in flight that are not long waits
       .join(timeout)               wait for every handler thread
       .await_waits(n, timeout)     block until n waits are counted (tests need no sleep)
+      .await_idle(n, timeout)      ... until n connections are open with no request read yet
+      .await_reads(n, timeout)     ... until n writes are having their body read
   Request   .method .target .path .query .headers .client .port, then .role .via .body
   Response(status, body=b'', content_type=JSON, headers=())
   json_response(status, obj, headers=())    refusal(status, code, message, field='', headers=())
@@ -31,11 +34,14 @@ One request, in this order, for every method and every path:
      local_hosts allows 127.0.0.1:<port> and localhost:<port>, which is what stops a page on
      another origin from reaching this server under a name it controls (DNS rebinding).
   3. The method: GET, HEAD and POST; anything else is a 405. No response carries a CORS header.
-  4. A POST is a write: Content-Type application/json (415), exactly one Origin whose host
-     equals the Host header (403), a Content-Length (411) of at most max_body bytes (413, the
-     body is not read) and a body that is JSON or empty (400). Once the door is closed
-     (close_door) a write still arriving on an open connection is a 503 `store`, its body not
-     read: after close_door() and then drain(), no write is in flight and none can begin.
+  4. A POST is a write: Content-Type application/json (415), exactly one Origin whose scheme is
+     the listener's origin_scheme (`http` for the local listener, which speaks nothing else;
+     `https` for one that only a TLS front reaches) and whose host equals the Host header (403),
+     a Content-Length (411) of at most max_body bytes (413, the body is not read) and a body
+     that is JSON or empty (400). Once the door is closed (close_door) a write that arrives on
+     an open connection, or whose body is still arriving, is a 503 `store`; the rest of its
+     body is not waited for. So after close_door() and then a drain() that answered True, no
+     write is in flight and none can begin.
   5. Routing: `routes` ({(method, path): fn(request) -> Response}), then every path under /api/
      through Api.call with the request's role, body, query and via, then for GET and HEAD a
      file of static_dir ("/" is INDEX), else 404.
@@ -55,10 +61,20 @@ it at once on one listener: the next is refused at once with 429 `busy` and a Re
 takes no slot. The counters are guarded by one lock that is held for a few statements and never
 across a wait, a body read or a response.
 
+Closing. A read on a connection waits for bytes in slices of POLL_S seconds, for at most
+SOCKET_TIMEOUT_S in all, and looks at the door between slices. After close_door() a read takes
+what has arrived already and then meets the end of the input, so a connection that never sent
+its request (a browser's spare connection) ends at once and join() is not kept waiting for it,
+and a write whose body is still arriving is refused (step 4) so drain() is not kept waiting
+either. What close_door() does not end: a request the Api is still answering, a response a
+client is slow to take (SOCKET_TIMEOUT_S a send) and the reading away after an early answer
+(LINGER_S).
+
 What a client is told. Every answer is JSON in the Api's error shape, with the Api's codes plus
 `busy`. An exception in a handler is a 500 `internal` with a fixed message: its text and its
-traceback go to `log` only. Every response closes its connection and carries SECURITY_HEADERS;
-none names the software.
+traceback go to `log` only, as one `error` line. That holds for an error the Api did not expect
+too (Api.call is asked to raise it, raise_unexpected), for the owner as for anyone else. Every
+response closes its connection and carries SECURITY_HEADERS; none names the software.
 
 log(level, text). level is 'access' (one line a request: client address, method, path, status,
 role) or 'error'. The path is logged without its query, and no header is ever logged, so a line
@@ -73,9 +89,11 @@ nothing either. A missing INDEX is a plain 404.
 Nothing here reads a setting, opens the store, prints or exits; kitlib.hubsite.serve wires it.
 """
 import http.server
+import io
 import json
 import os
 import re
+import select
 import socket
 import threading
 import time
@@ -92,7 +110,9 @@ MAX_CONNECTIONS = 128           # handler threads at once; a connection past it 
 MAX_STATIC = 8 << 20            # bytes of one static file
 MAX_QUERY_FIELDS = 64
 SOCKET_TIMEOUT_S = 30           # one read or write on a connection
-LINGER_S = 2                    # reading away what a client still sends after its answer,
+POLL_S = 0.1                    # the slice a read waits in before it looks at the door again
+ORIGIN_SCHEMES = ('http', 'https')
+LINGER_S = 2                   # reading away what a client still sends after its answer,
 LINGER_BYTES = 4 << 20          # and never more than this much of it
 METHODS = ('GET', 'HEAD', 'POST')
 JSON = 'application/json'
@@ -312,6 +332,41 @@ class _Server(http.server.ThreadingHTTPServer):
                               traceback.format_exc(limit=4).strip().splitlines()[-1]))
 
 
+class _Input(io.RawIOBase):
+    """What one connection sends, read so that a closing listener is not kept waiting (module
+    docstring, "Closing"). A read waits for bytes in slices of POLL_S seconds, `timeout` seconds
+    in all (then socket.timeout, as a plain socket read raises); once the listener's door is
+    closed it takes only what has arrived and then answers the end of the input. The read polls
+    because a shutdown() from the closing thread does not wake a read that is already waiting on
+    Windows."""
+
+    def __init__(self, sock, listener, timeout):
+        io.RawIOBase.__init__(self)
+        self._sock = sock
+        self._listener = listener
+        self._timeout = timeout
+
+    def readable(self):
+        return True
+
+    def readinto(self, into):
+        deadline = None if self._timeout is None else time.monotonic() + self._timeout
+        while True:
+            closing = self._listener.closing
+            if closing:
+                wait = 0
+            elif deadline is None:
+                wait = POLL_S
+            else:
+                wait = min(POLL_S, deadline - time.monotonic())
+                if wait <= 0:
+                    raise socket.timeout('timed out')
+            if select.select([self._sock], [], [], wait)[0]:
+                return self._sock.recv_into(into)
+            if closing:
+                return 0
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
     timeout = SOCKET_TIMEOUT_S
@@ -324,6 +379,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return self._handle
         raise AttributeError(name)
 
+    def setup(self):
+        http.server.BaseHTTPRequestHandler.setup(self)
+        listener = self.server.listener
+        self.rfile.close()          # http.server's own reader would sit in one recv for `timeout`
+        self.rfile = io.BufferedReader(_Input(self.connection, listener, self.timeout))
+        self._idle = True           # no request read yet (Listener.await_idle)
+        listener._mark('idle', 1)
+
+    def finish(self):
+        self._seen()
+        http.server.BaseHTTPRequestHandler.finish(self)
+
+    def _seen(self):
+        """This connection's request was read, or never will be: it is idle no longer."""
+        if self.__dict__.get('_idle'):
+            self._idle = False
+            self.server.listener._mark('idle', -1)
+
     def handle_expect_100(self):
         return True                 # no 100 Continue: the answer itself tells the client
 
@@ -332,11 +405,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def send_error(self, code, message=None, explain=None):
         """http.server's own refusals (a request line or headers it cannot read): a fixed body."""
+        self._seen()
         self._finish(refusal(code, 'invalid', UNREADABLE, 'request'), None)
         self._hang_up(self.server.listener)
 
     def _handle(self):
         listener = self.server.listener
+        self._seen()
         if self.request_version == 'HTTP/0.9' or not hasattr(self.headers, 'get_all'):
             # a request line with no version: it has no headers, so no gate could judge it
             return self.send_error(400)
@@ -479,7 +554,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             parts = urllib.parse.urlsplit(origin) if origin else None
         except ValueError:
             parts = None
-        if parts is None or not host or parts.scheme not in ('http', 'https') \
+        if parts is None or not host or parts.scheme != listener.origin_scheme \
                 or parts.netloc.lower() != host.lower():
             return refusal(403, 'forbidden', 'a write must carry an Origin header that names '
                            'this server, the host of its Host header', 'origin')
@@ -497,13 +572,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if size > listener.max_body:
             return refusal(413, 'invalid', 'the body is over the %d bytes one write may carry'
                            % listener.max_body, 'body')
+        listener._mark('reads', 1)
         try:
             raw = self.rfile.read(size) if size else b''
         except OSError:             # the body did not arrive within SOCKET_TIMEOUT_S
             raw = None
-        if raw is None or len(raw) != size:
+        finally:
+            listener._mark('reads', -1)
+        whole = raw is not None and len(raw) == size
+        if whole:
+            self._unread = False
+        if listener.closing:
+            # the door closed while the body was arriving (the read then ends at once): nothing
+            # is written, whatever part of it came. A write that passes here was counted by
+            # _enter() before the door closed, so drain() waits for it.
+            return refusal(503, 'store', CLOSING, 'store')
+        if not whole:
             return refusal(400, 'invalid', 'the body is shorter than its Content-Length', 'body')
-        self._unread = False
         if not raw.strip():
             return None
         try:
@@ -521,8 +606,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                            'moment' % listener.max_waits, 'wait',
                            (('Retry-After', str(RETRY_AFTER_S)),))
         try:
+            # raise_unexpected: an error the Api did not expect comes here as an exception, so
+            # _handle logs its cause and answers the fixed 500, to the owner as to anyone
             status, obj = api.call(request.method, request.path, request.role, request.body,
-                                   request.query, request.via)
+                                   request.query, request.via, raise_unexpected=True)
         finally:
             if waits:
                 listener._wait_leave()
@@ -535,7 +622,10 @@ class Listener(object):
 
     def __init__(self, addr, api, gate, static_dir=None, host_rule=None, routes=None, via='',
                  log=None, max_waits=MAX_WAITS, max_body=MAX_BODY,
-                 max_connections=MAX_CONNECTIONS):
+                 max_connections=MAX_CONNECTIONS, origin_scheme='http'):
+        if origin_scheme not in ORIGIN_SCHEMES:
+            raise ValueError('origin_scheme is one of %s, not %r'
+                             % (', '.join(ORIGIN_SCHEMES), origin_scheme))
         try:
             host, port = addr
         except (TypeError, ValueError):
@@ -554,10 +644,13 @@ class Listener(object):
         self.max_waits = max_waits
         self.max_body = max_body
         self.max_connections = max_connections
+        self.origin_scheme = origin_scheme
         self._log = log
         self._cond = threading.Condition(threading.Lock())    # the counters and _threads
         self._active = 0            # requests being answered
         self._waits = 0             # of those, the ones counted as a wait
+        # connections with no request read yet; writes whose body is being read
+        self._marks = {'idle': 0, 'reads': 0}
         self._threads = []
         self._life = threading.Lock()                         # start() and close_door()
         self._thread = None
@@ -613,6 +706,23 @@ class Listener(object):
         with self._cond:
             return self._cond.wait_for(lambda: self._waits >= n, timeout)
 
+    def _mark(self, what, by):
+        with self._cond:
+            self._marks[what] += by
+            self._cond.notify_all()
+
+    def await_idle(self, n, timeout=None):
+        """True once at least `n` connections are open whose request has not been read (none
+        sent, or its line and headers still arriving), False when `timeout` seconds pass first."""
+        with self._cond:
+            return self._cond.wait_for(lambda: self._marks['idle'] >= n, timeout)
+
+    def await_reads(self, n, timeout=None):
+        """True once at least `n` writes are having their body read, False when `timeout`
+        seconds pass first."""
+        with self._cond:
+            return self._cond.wait_for(lambda: self._marks['reads'] >= n, timeout)
+
     def drain(self, timeout=None):
         """True once no request is being answered except the counted waits (which end when the
         store closes or their time is up), False when `timeout` seconds pass first."""
@@ -656,8 +766,9 @@ class Listener(object):
             return True
 
     def close_door(self):
-        """Stop accepting and free the port; requests being answered go on. Safe to call twice,
-        and on a listener that never started."""
+        """Stop accepting and free the port; requests being answered go on, a connection whose
+        request has not arrived ends, and a write still arriving is refused (module docstring,
+        "Closing"). Safe to call twice, and on a listener that never started."""
         with self._life:
             if self._closed:
                 return

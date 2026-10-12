@@ -5,10 +5,13 @@ hub site design, section 2 "HTTP API" and section 9).
              is a full path under BASE; a `{name}` segment takes one path segment. role is OWNER,
              AGENT or ANY: who may call it.
   Api(store, views=None, clock=None)
-             .call(method, path, role, body=None, query=None, via='') -> (status, object)
+             .call(method, path, role, body=None, query=None, via='', raise_unexpected=False)
+                 -> (status, object)
              via names the transport (web, desktop-mcp, cli, ...); every write records it
              as the document's `via` (`api` when none is given), an answer in `answer.via`
-             too. A delete leaves no document to carry it.
+             too. A delete leaves no document to carry it. raise_unexpected: an exception
+             that is no HubError is raised to the caller, not answered ("What an agent is
+             told").
   match(method, path)    (Route, {name: segment}) or None
   sample_path(route)     the pattern with every `{name}` filled in, for a test that walks ROUTES
 
@@ -37,6 +40,9 @@ What an agent is told. A `store` refusal names files and the store's folder, and
 error may: the owner gets that text, any other caller gets the fixed phrase of AGENT_SAYS for a
 `store` refusal and only the exception's class name for `internal`. The store's `invalid`,
 `not_found` and `conflict` messages name a collection, an id and a field and go to both.
+A transport that has a log of its own calls with raise_unexpected=True: the unexpected error is
+then raised to it and no answer is made here, so the transport can log the cause and send a
+fixed message to every caller, the owner too (kitlib.hubsite.httpd does).
 
 Views. The live backlog and the derived views are other modules; `views` is any object with some
 of these methods, each one optional. A missing one answers `unavailable` on its own route, and
@@ -286,10 +292,11 @@ class Api(object):
         self._seen = {'waited': None, 'pulled': None}
         self._waits = {}            # one key per agent wait that is blocked right now
 
-    def call(self, method, path, role, body=None, query=None, via=''):
+    def call(self, method, path, role, body=None, query=None, via='', raise_unexpected=False):
         """(status, object) for one request. role is OWNER or AGENT as the caller resolved it;
         body is the decoded JSON body or None; query is {name: value}; via names the transport
-        (web, cli, ...) and is recorded on every write."""
+        (web, cli, ...) and is recorded on every write. With raise_unexpected an exception that
+        is no HubError is raised, not answered: the caller logs it and words its own 500."""
         # read before the handler copies any data: a write in between then has a later
         # revision, so a client waiting since this one is told of it
         revision = self.store.revision
@@ -299,6 +306,8 @@ class Api(object):
             said = e.message if role == OWNER else AGENT_SAYS.get(e.code, e.message)
             status, obj = STATUS.get(e.code, 500), error_body(e.code, said, e.field)
         except Exception as e:      # noqa: BLE001 - a transport gets an answer, never a traceback
+            if raise_unexpected:
+                raise
             said = '%s: %s' % (type(e).__name__, e) if role == OWNER else type(e).__name__
             status, obj = 500, error_body('internal', said)
         obj.setdefault('revision', revision)

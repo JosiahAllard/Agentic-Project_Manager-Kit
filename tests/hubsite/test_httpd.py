@@ -3,7 +3,10 @@ talks to it over a real socket, and stops what it started."""
 import http.client
 import json
 import os
+import socket
+import threading
 import unittest
+from unittest import mock
 
 from kitlib.hubsite import api, auth, httpd
 from kitlib.hubsite.api import AGENT, ANY, BASE, OWNER
@@ -20,10 +23,12 @@ class Recorder(object):
 
     def __init__(self):
         self.calls = []
+        self.raised = []            # the raise_unexpected of each call
 
-    def call(self, method, path, role, body=None, query=None, via=''):
+    def call(self, method, path, role, body=None, query=None, via='', raise_unexpected=False):
         self.calls.append({'method': method, 'path': path, 'role': role, 'body': body,
                            'query': query, 'via': via})
+        self.raised.append(raise_unexpected)
         return 200, {'ok': True}
 
 
@@ -332,6 +337,31 @@ class WriteCase(httpfix.ListenerCase):
         r = self.write(self.good() + [('Origin', 'http://evil.example')])
         self.assertEqual(r.status, 403, 'a doubled Origin was let through')
 
+    def test_the_origin_scheme_is_the_listeners_own_and_no_other(self):
+        ctype = self.good()[0]
+        # the local listener speaks http only: an https page is another origin
+        r = self.write([ctype, ('Origin', 'https://127.0.0.1:%d' % self.port)])
+        self.assertEqual((r.status, r.json()['error']['field']), (403, 'origin'))
+        self.assertEqual(self.lis.origin_scheme, 'http')
+        # a listener behind a TLS front takes https and nothing else
+        front = self.listener(origin_scheme='https')
+        head = [httpfix.bearer(self.owner), ctype]
+        before = self.store.revision
+        for scheme in ('http', 'HTTP', 'ftp'):
+            with self.subTest(scheme=scheme):
+                r = send(front.port, 'POST', TODOS,
+                         head + [('Origin', '%s://127.0.0.1:%d' % (scheme, front.port))], self.body)
+                self.assertEqual((r.status, r.json()['error']['field']), (403, 'origin'))
+        self.assertEqual(self.store.revision, before)
+        r = send(front.port, 'POST', TODOS,
+                 head + [('Origin', 'https://127.0.0.1:%d' % front.port)], self.body)
+        self.assertEqual(r.status, 200)
+        # a scheme that is neither is no listener at all: it could only refuse or wave through
+        for bad in ('', 'ftp', 'HTTPS', None, 'http,https'):
+            with self.subTest(origin_scheme=bad):
+                with self.assertRaises(ValueError):
+                    httpd.Listener((httpd.LOOPBACK, 0), self.api, None, origin_scheme=bad)
+
     def test_a_session_cookie_does_not_carry_a_write_from_another_origin(self):
         code = post(self.port, httpd.PAIR_ROUTE, None, self.owner).json()['path']
         cookie = get(self.port, code).header('Set-Cookie')[0].split(';')[0]
@@ -523,6 +553,41 @@ class ApiCase(httpfix.ListenerCase):
                 self.assertEqual(len(self.errors()), 1)
                 self.assertIn('Traceback', self.errors()[0])
 
+    def test_an_error_the_real_api_did_not_expect_is_the_fixed_500_for_the_owner_too(self):
+        lis = self.listener()
+        place = os.path.join(self.store.root, 'a-folder-on-this-machine')
+
+        def docs(coll):
+            raise OSError('cannot read %s' % place)
+        self.store.docs = docs
+        for role, token in ((OWNER, self.owner), (AGENT, self.agent)):
+            with self.subTest(role=role):
+                del self.lines[:]
+                r = get(lis.port, BASE + '/questions', token)
+                self.assertEqual(r.status, 500)
+                self.assertEqual(r.json(), api.error_body('internal', httpd.INTERNAL))
+                for word in (b'a-folder-on-this-machine', b'OSError', b'Traceback', b'cannot read',
+                             os.path.basename(self.root).encode('ascii')):
+                    self.assertNotIn(word, r.body)
+                # the cause is in the log, once
+                self.assertEqual(len(self.errors()), 1)
+                for word in ('GET %s/questions failed' % BASE, 'Traceback', 'OSError',
+                             'a-folder-on-this-machine'):
+                    self.assertIn(word, self.errors()[0])
+        # the Api's own refusals are still the Api's answer, and no error line
+        del self.lines[:]
+        r = get(lis.port, BASE + '/questions')
+        self.assertEqual((r.status, r.code()), (403, 'forbidden'))
+        self.assertIn('revision', r.json())
+        self.assertEqual(self.errors(), [])
+
+    def test_the_api_is_asked_to_raise_what_it_did_not_expect(self):
+        rec = Recorder()
+        lis = self.listener(rec)
+        self.assertEqual(get(lis.port, HEALTH, self.owner).status, 200)
+        self.assertEqual(post(lis.port, TODOS, {'title': 't'}, self.agent).status, 200)
+        self.assertEqual(rec.raised, [True, True])
+
     def test_a_request_http_server_cannot_read_gets_the_fixed_answer(self):
         rec = Recorder()
         lis = self.listener(rec)
@@ -535,6 +600,147 @@ class ApiCase(httpfix.ListenerCase):
                 for word in (b'Traceback', b'Python', b'BaseHTTP', b'<html'):
                     self.assertNotIn(word, answer)
         self.assertEqual(rec.calls, [])
+        self.assertEqual(self.errors(), [])
+
+
+# ------------------------------------------------------------------ closing
+class CloseCase(httpfix.ListenerCase):
+    def test_a_connection_with_no_request_does_not_keep_a_closing_listener(self):
+        lis = self.listener()
+        s = self.connect(lis)                   # a browser's spare connection: it sends nothing
+        self.assertTrue(lis.await_idle(1, TIMEOUT))
+        self.assertFalse(lis.join(0))
+        self.assertTrue(lis.drain(0), 'a connection with no request counted as one in flight')
+        lis.close_door()
+        self.assertTrue(lis.join(TIMEOUT), 'an idle connection outlived the closed door')
+        self.assertEqual(s.recv(100), b'')      # closed, with nothing said
+        self.assertFalse(lis.await_idle(1, 0))
+        self.assertEqual(self.errors(), [])
+
+    def test_a_write_still_arriving_when_the_door_closes_is_refused_and_writes_nothing(self):
+        lis = self.listener()
+        before = self.store.revision
+        self.assertFalse(lis.closing)
+        s = self.connect(lis)
+        s.sendall(httpfix.write_head(lis.port, self.owner, 40) + b'{"title":')
+        self.assertTrue(lis.await_reads(1, TIMEOUT))
+        self.assertFalse(lis.drain(0))
+        lis.close_door()
+        self.assertTrue(lis.drain(TIMEOUT), 'a body that never came kept the drain waiting')
+        answer = httpfix.read_all(s)
+        self.assertTrue(answer.startswith(b'HTTP/1.1 503 '), answer[:40])
+        self.assertIn(httpd.CLOSING.encode('ascii'), answer)
+        self.assertIn(b'"code":"store"', answer)
+        s.close()
+        self.assertTrue(lis.join(TIMEOUT))
+        self.assertFalse(lis.await_reads(1, 0))
+        self.assertEqual(self.store.revision, before)
+        self.assertEqual(self.errors(), [])
+
+    def test_a_request_that_arrived_before_the_door_closed_is_still_answered(self):
+        held, go = threading.Event(), threading.Event()
+        creds = auth.Credentials(self.tokens)
+
+        def gate(request):
+            held.set()
+            go.wait(TIMEOUT)
+            return creds.role_for(request.headers)
+        lis = self.listener(gate=gate)
+        got = []
+        t = threading.Thread(target=lambda: got.append(get(lis.port, HEALTH, self.agent)))
+        t.start()
+        self.addCleanup(t.join, TIMEOUT)
+        self.addCleanup(go.set)
+        self.assertTrue(held.wait(TIMEOUT))
+        lis.close_door()
+        self.assertFalse(lis.drain(0))
+        go.set()
+        self.assertTrue(lis.drain(TIMEOUT))
+        t.join(TIMEOUT)
+        self.assertEqual([r.status for r in got], [200])
+
+
+# ------------------------------------------------------------------ the limits
+class LimitCase(httpfix.ListenerCase):
+    def unread(self, lis):
+        """A connection whose request was answered before its body came (the host rule refuses
+        it): the answer was read to its end and the connection is still open."""
+        s = self.connect(lis)
+        s.sendall(('POST %s HTTP/1.1\r\nHost: evil.example\r\nContent-Length: 10\r\n\r\n'
+                   % TODOS).encode('ascii'))
+        answer = httpfix.read_all(s)
+        self.assertTrue(answer.startswith(b'HTTP/1.1 403 '), answer[:40])
+        return s
+
+    def test_a_connection_past_the_cap_is_closed_unanswered(self):
+        rec = Recorder()
+        lis = self.listener(rec, max_connections=1)
+        first = self.connect(lis)
+        self.assertTrue(lis.await_idle(1, TIMEOUT))
+        second = self.connect(lis)
+        self.assertEqual(second.recv(100), b'')         # closed, and nothing said
+        self.assertEqual(httpfix.http_threads().count('hub-http'), 1)
+        self.assertFalse(lis.await_idle(2, 0))
+        first.close()
+        self.assertTrue(lis.join(TIMEOUT))
+        # the slot is free again
+        self.assertEqual(get(lis.port, HEALTH, self.owner).status, 200)
+        self.assertEqual(len(rec.calls), 1)
+        self.assertEqual(httpd.MAX_CONNECTIONS, 128)
+        self.assertEqual(self.listener(start=False).max_connections, httpd.MAX_CONNECTIONS)
+
+    def test_a_wait_that_raises_gives_its_slot_back(self):
+        lis = self.listener(Broken(), max_waits=1)
+        for _ in range(3):
+            r = get(lis.port, BASE + '/wait?since=0', self.agent)
+            self.assertEqual(r.status, 500)     # never the 429 of a slot that was kept
+            self.assertEqual(lis.waiting, 0)
+        self.assertEqual(len(self.errors()), 3)
+
+    def test_the_port_is_bound_exclusively_and_no_resolver_is_asked(self):
+        with mock.patch.object(socket, 'getfqdn',
+                               side_effect=AssertionError('the resolver was asked')):
+            lis = self.listener(start=False)
+        self.assertEqual(lis._server.server_name, httpd.LOOPBACK)
+        self.assertEqual(lis._server.server_port, lis.port)
+        sock = lis._server.socket
+        self.assertEqual(sock.getsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE), 1)
+        self.assertEqual(sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR), 0)
+
+    def test_a_silent_connection_and_a_stalled_body_end_at_the_socket_timeout(self):
+        self.assertEqual((httpd._Handler.timeout, httpd.SOCKET_TIMEOUT_S), (30, 30))
+        with mock.patch.object(httpd._Handler, 'timeout', 1):
+            lis = self.listener()
+            s = self.connect(lis)
+            self.assertEqual(s.recv(100), b'')          # dropped, the door still open
+            self.assertTrue(lis.join(TIMEOUT))
+            before = self.store.revision
+            s = self.connect(lis)
+            s.sendall(httpfix.write_head(lis.port, self.owner, 40) + b'{"title":')
+            answer = httpfix.read_all(s)                # the client never closed its side
+            self.assertTrue(answer.startswith(b'HTTP/1.1 400 '), answer[:40])
+            self.assertIn(b'"field":"body"', answer)
+            s.close()
+            self.assertTrue(lis.join(TIMEOUT))
+        self.assertFalse(lis.closing)
+        self.assertEqual(self.store.revision, before)
+        self.assertEqual(self.errors(), [])
+
+    def test_the_reading_away_after_an_early_answer_ends_at_its_byte_cap(self):
+        with mock.patch.object(httpd, 'LINGER_S', 3600), mock.patch.object(httpd, 'LINGER_BYTES', 4):
+            lis = self.listener()
+            s = self.unread(lis)
+            self.assertFalse(lis.join(0))               # still reading away what may come
+            s.sendall(b'0123456789')
+            self.assertTrue(lis.join(TIMEOUT), 'more than the cap was read away')
+        self.assertEqual(self.errors(), [])
+
+    def test_the_reading_away_after_an_early_answer_ends_at_its_time_limit(self):
+        self.assertEqual((httpd.LINGER_S, httpd.LINGER_BYTES), (2, 4 << 20))
+        with mock.patch.object(httpd, 'LINGER_S', 0.05):
+            lis = self.listener()
+            self.unread(lis)                            # silent, and still connected
+            self.assertTrue(lis.join(TIMEOUT), 'a silent client kept its handler')
         self.assertEqual(self.errors(), [])
 
 

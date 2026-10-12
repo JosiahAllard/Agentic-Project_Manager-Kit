@@ -80,18 +80,30 @@ def send(port, method, path, headers=(), body=None, host=None, timeout=TIMEOUT):
         conn.close()
 
 
+def read_all(sock):
+    """Everything the listener sends on `sock` until it closes its sending side."""
+    chunks = []
+    while True:
+        got = sock.recv(65536)
+        if not got:
+            return b''.join(chunks)
+        chunks.append(got)
+
+
 def raw(port, data, timeout=TIMEOUT):
     """Send these bytes, close the sending side, and return everything the listener answers."""
-    chunks = []
     with socket.create_connection((httpd.LOOPBACK, port), timeout=timeout) as s:
         s.sendall(data)
         s.shutdown(socket.SHUT_WR)
-        while True:
-            got = s.recv(65536)
-            if not got:
-                break
-            chunks.append(got)
-    return b''.join(chunks)
+        return read_all(s)
+
+
+def write_head(port, token, length, path=None):
+    """The request line and headers of a good write of `length` body bytes, as bytes."""
+    return ('POST %s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nAuthorization: Bearer %s\r\n'
+            'Content-Type: application/json\r\nOrigin: http://127.0.0.1:%d\r\n'
+            'Content-Length: %d\r\n\r\n' % (path or api.BASE + '/todos', port, token, port,
+                                            length)).encode('ascii')
 
 
 def bearer(token):
@@ -159,6 +171,12 @@ class ListenerCase(unittest.TestCase):
         if start:
             self.assertTrue(lis.start())
         return lis
+
+    def connect(self, lis):
+        """An open connection to `lis` that has sent nothing; closed when the test ends."""
+        s = socket.create_connection((httpd.LOOPBACK, lis.port), timeout=TIMEOUT)
+        self.addCleanup(s.close)
+        return s
 
     def close(self, lis):
         """Stop `lis`: its door, then the store (which ends a wait in flight), then its threads."""
