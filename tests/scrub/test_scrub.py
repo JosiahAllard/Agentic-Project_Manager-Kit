@@ -20,7 +20,6 @@ MADE_UP = re.compile(r'R-9[0-9]{3}')
 ALLOWED = (
     'tests/backlog/',              # backlog pricing checks a ruling against a fixture ledger
     'tests/backloglint/fixtures/', # a record's priority_ruling field
-    'tests/coordinatorstart/',       # the session-start digest reads ledger headers
     'tests/ledger/',               # kitlib/ledger parses ledger headers
 )
 

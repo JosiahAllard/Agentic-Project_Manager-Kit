@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib import coordinatorstart
 from kitlib.config import user as kuser
 from kitlib.ledger import read, safepath, standing, write
 from kitlib.ledger.errors import Refused
@@ -200,16 +199,6 @@ class ConsumerTest(Case):
         path = self.through_junction()
         with self.assertRaisesRegex(Refused, 'reparse point'):
             write.read_text(path)
-
-    def test_the_coordinator_start_rulings_line_refuses(self):
-        path = self.through_junction()
-        note = os.path.join(self.d, 'state.md')
-        put(note, 'last seen R-9000\n')
-        lines = coordinatorstart.rulings({'state': note, 'repo': 'alpha'}, path)
-        self.assertEqual(len(lines), 1)
-        self.assertIn('reparse point', lines[0])
-        self.assertIn('R-9001', ' '.join(coordinatorstart.rulings({'state': note, 'repo': 'alpha'},
-                                                                  self.real)))
 
 
 class CliTest(Case):

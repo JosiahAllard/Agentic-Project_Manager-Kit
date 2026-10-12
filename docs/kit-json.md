@@ -153,7 +153,6 @@ A retired key is still accepted and ignored, so an older machine config loads: `
 - `conductor_start` (object, checked by kitlib.coordinatorstart): the old name of coordinator_start, read when coordinator_start is absent; removed after the switch
   Its install values (`kitlib.coordinatorstart`; nothing in the code supplies them):
   - `repos_root` (path): the folder whose top-level folders are the repositories; the session's cwd picks the repo under it. Unset: every check that needs the coordinator's repo prints "could not check ...: repos_root not configured".
-  - `ledger` (path): the rulings ledger the "rulings newer than" check reads; unset: the machine `ledger_path`; neither: "could not check rulings: ledger not configured".
   - `landing_lock` ({repo: file name}): the landing lock's file in that repo's git common dir, shown as the landing-lock line. A repo not named here, or an unset key, gets no landing-lock line, and nothing says it was dropped.
 - `pm_watch` (object, checked by kitlib.pmwatch): the PM watcher settings
 - `launcher` (object, checked by kitlib.launcher): the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")

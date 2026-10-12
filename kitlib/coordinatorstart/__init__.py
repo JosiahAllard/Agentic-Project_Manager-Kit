@@ -3,15 +3,16 @@
 Pure functions that return data; the hook (claude/hooks/coordinator_session_start.py) prints it. The text
 comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
-filing and pricing-pass lines (each switched on in the config), then the live checks (rulings, cap,
+filing and pricing-pass lines (each switched on in the config), then the live checks (cap,
 machine state, other coordinators, and stubs: a line only when the repo's stubs are not current),
 run as in kitlib.pmstart: each is a pure function over fakeable inputs (process list, file reads,
-a subprocess runner, now), and a failed one is one "could not check X: reason" line.
+a subprocess runner, now), and a failed one is one "could not check X: reason" line. No check
+reads the rulings ledger.
 
 Install values come from the config, never from the code: "repos_root" (the folder whose top-level
-folders are the repositories, matched against the session's cwd), "ledger" (else the machine
-config's ledger_path) and "landing_lock" ({repo: the landing lock's file name in that repo's git
-common dir}; a repo not named there gets no landing-lock line).
+folders are the repositories, matched against the session's cwd) and "landing_lock" ({repo: the
+landing lock's file name in that repo's git common dir}; a repo not named there gets no
+landing-lock line).
 """
 import datetime
 import json
@@ -22,7 +23,6 @@ import sys
 from kitlib import pmstart, sessionmark, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
-from kitlib.ledger import safepath
 
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
@@ -31,8 +31,6 @@ LEGACY_KEY = "conductor_start"   # the old names, read until the live config and
 LEGACY_ROLE = "conductor"
 NAME_VAR = "PM_KIT_SESSION_NAME"  # optional: this session's Remote Control name (else the process tree)
 TIMEOUT = 10
-LEDGER_CAP = 20
-DECIDES_CHARS = 200
 SOON_HOURS = 4
 # Engineering decisions (docs/engineering-rulings.md): the filing format, the consultant as
 # recipient, and the owner-only list.
@@ -150,47 +148,6 @@ def find_entry(sessions, cwd, name=None, root=None):
         if name and (e.get("name") == name or name.startswith(str(e.get("stem") or "\0"))):
             return e, None
     return hits[0], "%d sessions entries match repo %s; took the first (%s)" % (len(hits), top, hits[0].get("name"))
-
-
-def rulings(entry, ledger_path, read=_read):
-    """Ledger entries newer than the coordinator's state note's highest R-id, for its repo or all.
-    A ledger path the ledger's path checks refuse (kitlib.ledger.safepath) is one line saying why."""
-    note = _need(entry, "state")
-    ids = [int(m) for m in re.findall(r"R-(\d{4})", read(note))]
-    if not ids:
-        return ["no R-id in your state note %s: cannot tell which rulings are new" % note]
-    top, repo = max(ids), str(entry.get("repo", "")).lower()
-    why = safepath.refusal(ledger_path)
-    if why is not None:
-        return [why]
-    found, cur = [], None
-    for line in read(ledger_path).splitlines():
-        m = re.match(r"## R-(\d{4}) \| [^|]*\| ([^|]*) \|", line)
-        if m:
-            cur = None
-            if int(m.group(1)) > top and m.group(2).strip().lower() in (repo, "all"):
-                cur = ["R-" + m.group(1), None, None]
-                found.append(cur)
-        elif cur is not None:
-            if line.startswith("Decides:"):
-                cur[1] = line[8:].strip()
-            elif cur[2] is None and line.strip():
-                cur[2] = line.strip()
-    if not found:
-        return ["no rulings newer than R-%04d for %s or all" % (top, repo)]
-    lines = ["%s: %s" % (r[0], (r[1] or r[2] or "(no Decides)")[:DECIDES_CHARS]) for r in found]
-    if len(lines) > LEDGER_CAP:
-        more = len(lines) - LEDGER_CAP
-        lines = lines[:LEDGER_CAP] + ["... and %d more newer rulings: read %s" % (more, ledger_path)]
-    return ["rulings newer than R-%04d (your state note) for %s or all:" % (top, repo)] + lines
-
-
-def ledger_file(cfg, home=None):
-    """The config's "ledger", else the machine config's ledger_path; KeyError when neither is set."""
-    path = cfg.get("ledger") or kuser.ledger_path(home)
-    if not path:
-        raise KeyError("ledger not configured")
-    return path
 
 
 def cap(cfg, repo, today):
@@ -327,7 +284,6 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
             return box["e"][0]
 
         checks = [
-            ("rulings", lambda: rulings(entry_once(), ledger_file(cfg, home), read)),
             ("cap", lambda: cap(cfg, entry_once()["repo"], now.date())),
             ("machine state", lambda: machine(entry_once(), run, read, now, home, cfg.get("repos_root"),
                                               lock_file_for(cfg, entry_once().get("repo")))),

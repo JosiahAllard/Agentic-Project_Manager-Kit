@@ -59,7 +59,7 @@ Before the ledger, or the standing digest beside it, is read or written, `kitlib
 A part that does not exist yet is skipped, so the first `add` can still create the ledger. A refused path is never opened, and the refusal names the fix:
 
 - `kitlib/ledger/read.py` `read_file` returns the refusal as its reason, and a consumer treats it as an unreadable ledger.
-- `kitlib/ledger/write.py` raises `Refused`, so every `tools/ledger.py` verb exits 1. The coordinator start's rulings line becomes the refusal.
+- `kitlib/ledger/write.py` raises `Refused`, so every `tools/ledger.py` verb exits 1.
 
 Cases that lock a ledger out, and the fix for each:
 
