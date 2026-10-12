@@ -27,7 +27,7 @@ from kitlib.git import repo as gitrepo
 from . import plan as pmod
 from . import record as rmod
 from . import store as smod
-from .errors import Refusal
+from .errors import IndexStale, Overtaken, Refusal, Uncommitted
 
 SESSION = 'gate-land'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -247,6 +247,29 @@ def close_landed(root, cfg, branch, merge, session=SESSION):
     return lines
 
 
+def _after_put_back(store, rid, branch, command, reason):
+    """What is true of `rid` once a refused close was put back, read from the store again: the
+    other commit may have closed or removed the record, released it, or left its file
+    unreadable. The close command is given only while `branch` still holds the record
+    pulled."""
+    try:
+        now = store.load().get(rid)
+    except (Refusal, OSError) as exc:
+        return ('the store could not be read again (%s), so see whether %s is still open with: %s'
+                % (_one_line(str(exc)), rid, command('show', rid)))
+    if now is None:
+        return ('the store no longer holds %s (that commit closed or removed it), so there is '
+                'nothing to close' % rid)
+    if not now.readable:
+        return ('%s cannot be read as that commit left it, so it was not closed; see it with: %s'
+                % (rid, command('show', rid)))
+    if now.get('state') == 'pulled' and now.get('pulled_by') == branch:
+        return ('%s is still pulled by %s and was not closed; close it with: %s'
+                % (rid, branch, command('close', rid, '--reason', '"%s"' % reason)))
+    return ('%s is now %s and no longer pulled by %s, so it was not closed; see it with: %s'
+            % (rid, now.get('state') or 'in an unreadable state', branch, command('show', rid)))
+
+
 def _close_in(backend, root, cfg, branch, merge, session, command):
     """close_landed for one store: `backend` of the repository or worktree `root` with `cfg`;
     `command(*args)` is the printed command line for a write the landing could not make."""
@@ -276,6 +299,31 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
     for rid in held:
         try:
             change, tip = store.write(_close_plan(ctx, rid, branch, reason))
+        except Overtaken as exc:            # another commit changed the record: never blind
+            if exc.left:                    # a file the close could not put back to HEAD
+                lines.append('WARNING: %s landed, and the close of %s in the backlog store %s was '
+                             'refused (%s); do not commit it over that commit: compare each path '
+                             'left with HEAD first: %s'
+                             % (branch, rid, backend.describe(), _one_line(str(exc)),
+                                exc.compare))
+            else:                           # put back: the record is as that commit left it
+                lines.append('WARNING: %s landed, and the close of %s in the backlog store %s was '
+                             'refused and its files were put back (%s: %s); %s'
+                             % (branch, rid, backend.describe(), exc.label, _one_line(str(exc)),
+                                _after_put_back(store, rid, branch, command, reason)))
+            continue
+        except Uncommitted as exc:          # deleted in the PM data worktree, its commit failed
+            lines.append('WARNING: %s landed, and %s was closed in the backlog store %s but not '
+                         'committed (%s); commit it with: %s'
+                         % (branch, rid, backend.describe(), _one_line(str(exc)),
+                            command('catch-up', '--apply',
+                                    smod.quoted(exc.paths or [backend.path_of(rid)]))))
+            continue
+        except IndexStale as exc:           # committed; only that worktree's index is behind
+            lines.append('WARNING: %s landed, and %s was closed in the backlog store %s (%s); '
+                         'repair the index with: %s'
+                         % (branch, rid, backend.describe(), _one_line(str(exc)), exc.repair))
+            continue
         except Exception as exc:            # one record's failure never stops the others
             what = ('%s: %s' % (exc.label, exc) if isinstance(exc, Refusal)
                     else '%s: %s' % (type(exc).__name__, exc))
@@ -290,8 +338,10 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
             lines.extend(change.lines)
             continue
         if folder:
-            lines.append('closed %s in the backlog store %s: %s (the record file is deleted, '
-                         'not committed)' % (rid, backend.describe(), reason))
+            lines.append('closed %s in the backlog store %s: %s (%s)'
+                         % (rid, backend.describe(), reason,
+                            'committed %s' % tip[:10] if tip
+                            else 'the record file is deleted, not committed'))
         else:
             lines.append('closed %s in the backlog store: %s (store at %s)'
                          % (rid, reason, (tip or '?')[:10]))
