@@ -89,7 +89,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(self.run_tool('show', 'FOO')[0], 0)
 
     def test_release_returns_the_callers_pull_to_open(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         self.ok('set', 'FOO', '--priority', '2', '--priority-by', 'agent', '--effort', 's')
         self.repo.git('checkout', '-b', 'tools/wk')
         self.ok('pull', 'FOO')
@@ -104,8 +104,8 @@ class Cli(unittest.TestCase):
                          'backlog: release FOO from tools/wk: not this branch after all')
 
     def test_retire_deletes_the_record_and_frees_its_dependents(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
-        self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'docs/y.md')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
+        self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'docs/y.md', *ADD_FLAGS)
         self.ok('block', 'BAR', '--on', 'item:FOO')
         out = self.ok('retire', 'FOO', '--why', 'no longer wanted at all')
         self.assertIn('RETIRED FOO', out)
