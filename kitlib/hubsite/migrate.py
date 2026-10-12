@@ -26,9 +26,12 @@ What a source document becomes:
     number it stands for, and is in `turned`. Text that is exactly the `label` of one of the
     question's options (the same characters, case and spaces included; an option that is an
     object) stands for that option's position, counted from 0 as hubvalidate's options check
-    and the page count it. Text that is a whole number (digits only) stands for that number.
-    Text that is no option's label or the label of two, and digits that are also the label of
-    one option at another position, stand for nothing: the document is copied as it is. The
+    and the page count it. Text that is a whole number (one to nine of the digits 0-9 and
+    nothing else) stands for that number, in range of the options or not. These stand for
+    nothing, and the document is copied as it is: text that is not a whole number and is no
+    option's label or the label of two; a whole number that is also an option's label, unless
+    it is the label of one option only and that option is at the position the number says;
+    more than nine digits; and the empty text. The
     store refuses every update of a question whose `recommended` is text (schema.check), so such
     a question could not be answered. No other field and no other text is changed. Two copies
     are compared with this text read as the number on both sides: a store document that holds
@@ -86,7 +89,8 @@ Skipped = collections.namedtuple('Skipped', 'source rel why')
 # a question written with its `recommended`, the text `old`, as the number `new`; label: `old`
 # is the label of the option at position `new`, not a number written as text
 Turned = collections.namedtuple('Turned', 'rel old new label', defaults=(False,))
-_WHOLE = re.compile(r'[0-9]+')
+_WHOLE = re.compile(r'[0-9]{1,9}')  # a whole number small enough to be a position; more digits
+_DIGITS = re.compile(r'[0-9]+')     # than that are kept as text
 
 
 class Result(collections.namedtuple(
@@ -134,16 +138,16 @@ def _whole(coll, fields):
     is True when it was an option's label. Any other document is given back as it is, with old
     None."""
     old = fields.get('recommended') if coll == 'questions' else None
-    if not isinstance(old, str):
-        return fields, None, False
+    if not isinstance(old, str) or not old:
+        return fields, None, False              # '' names no option, whatever an option's label is
     options = fields.get('options')
     at = [i for i, o in enumerate(options if isinstance(options, list) else [])
           if isinstance(o, dict) and o.get('label') == old]
     if _WHOLE.fullmatch(old):
-        if len(at) == 1 and at[0] != int(old):
-            return fields, None, False          # the number, or that option: it does not say
-        return dict(fields, recommended=int(old)), old, at == [int(old)]
-    if len(at) != 1:
+        if at and at != [int(old)]:
+            return fields, None, False          # the number, or one of those options: it does not say
+        return dict(fields, recommended=int(old)), old, bool(at)
+    if len(at) != 1 or _DIGITS.fullmatch(old):  # too long to be a number here: left as it is
         return fields, None, False
     return dict(fields, recommended=at[0]), old, True
 

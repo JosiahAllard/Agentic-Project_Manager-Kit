@@ -820,18 +820,24 @@ class LabelCase(Case):
             'Q-036': labelled('Paint it '),                                 # a space more
             'Q-037': question(recommended='Paint it', options=['Paint it', 'Leave it']),
             'Q-038': labelled('0', labels=('Paint it', '0')),   # the number 0, or the option at 1
+            # the number 2, or one of the two options that are labelled 2: it does not say
+            'Q-040': labelled('2', labels=('2', '2', 'Paint it')),
+            'Q-043': labelled('1', labels=('Paint it', '1', '1')),  # even with one of them at 1
         }
         for doc_id, fields in kept.items():
             self.put(doc_id, fields)
         self.put('Q-039', labelled('1', labels=('Paint it', '1')))      # both say 1
-        self.put('Q-040', labelled('2', labels=('2', '2', 'Paint it')))  # no one label: the number
         r = self.run_both()
         self.assertEqual([(t.rel, t.new) for t in r.turned], [
-            ('questions/Q-030', 1), ('questions/Q-039', 1), ('questions/Q-040', 2)])
+            ('questions/Q-030', 1), ('questions/Q-039', 1)])
         for doc_id, fields in kept.items():
             self.assertEqual(self.stored('questions', doc_id), fields, doc_id)
         self.assertTrue(r.complete)
         lines = migrate.report_lines(r)
+        self.assertIn(
+            "RECOMMENDED questions/Q-039: its `recommended` is the text '1', the label of the "
+            "option at position 1 (the first is 0); imported as the number 1; nothing else in "
+            "the document is changed", lines)
         self.assertIn("VALIDATE ERROR questions/Q-033 recommended: recommended must be an index "
                       "into options (3 option(s)), not 'Sell it' [options-shape]", lines)
         self.assertIn('VALIDATE ERROR questions/Q-033 recommended: recommended must be int, not '
@@ -839,6 +845,52 @@ class LabelCase(Case):
         self.assertEqual(
             [x.split(':')[0] for x in lines if 'the api will refuse' in x],
             ['VALIDATE questions/%s' % i for i in sorted(kept)])
+
+    def test_digits_too_many_to_be_a_position_stay_as_text_and_the_run_goes_on(self):
+        endless = '9' * 5000                    # more digits than int() reads
+        kept = {
+            'Q-044': labelled('1234567890'),                                # ten digits
+            'Q-045': labelled(endless),
+            'Q-046': labelled('1234567890', labels=('Paint it', '1234567890')),  # a label too
+        }
+        for doc_id, fields in kept.items():
+            self.put(doc_id, fields)
+        self.put('Q-047', labelled('000000001'))                            # nine: the number 1
+        r = self.run_both()
+        self.assertEqual([(t.rel, t.new) for t in r.turned], [
+            ('questions/Q-030', 1), ('questions/Q-047', 1)])
+        for doc_id, fields in kept.items():
+            self.assertEqual(self.stored('questions', doc_id), fields, doc_id)
+        self.assertLessEqual({'questions/Q-0%d' % n for n in (30, 44, 45, 46, 47)}, set(r.added))
+        self.assertTrue(r.complete)
+        lines = migrate.report_lines(r)
+        self.assertIn('VALIDATE ERROR questions/Q-044 recommended: recommended must be int, not '
+                      'str [schema-field]', lines)
+        self.assertEqual(
+            [x.split(':')[0] for x in lines if 'the api will refuse' in x],
+            ['VALIDATE questions/%s' % i for i in sorted(kept)])
+
+    def test_the_empty_text_is_never_an_options_label(self):
+        fields = labelled('', labels=('', 'Paint it'))
+        self.put('Q-048', fields)
+        r = self.run_both()
+        self.assertEqual([t.rel for t in r.turned], ['questions/Q-030'])
+        self.assertEqual(self.stored('questions', 'Q-048'), fields)
+        lines = migrate.report_lines(r)
+        self.assertIn('VALIDATE ERROR questions/Q-048 recommended: recommended must be int, not '
+                      'str [schema-field]', lines)
+        self.assertFalse(any(x.startswith('RECOMMENDED questions/Q-048') for x in lines))
+
+    def test_a_number_past_the_last_option_is_imported_as_that_number_and_reported(self):
+        self.put('Q-049', labelled('7'))
+        r = self.run_both()
+        self.assertIn(migrate.Turned('questions/Q-049', '7', 7, False), r.turned)
+        self.assertEqual(self.stored('questions', 'Q-049'), labelled(7))
+        lines = migrate.report_lines(r)
+        self.assertIn("RECOMMENDED questions/Q-049: its `recommended` is the text '7'; imported "
+                      "as the number 7; nothing else in the document is changed", lines)
+        self.assertIn('VALIDATE ERROR questions/Q-049 recommended: recommended must be an index '
+                      'into options (3 option(s)), not 7 [options-shape]', lines)
 
     def test_an_answered_question_keeps_its_answer_as_it_is(self):
         answer = {'at': AT, 'choice': 0, 'label': 'Paint it', 'note': ''}

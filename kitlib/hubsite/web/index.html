@@ -641,9 +641,11 @@ button.danger{color:var(--warn)}
     // Send all sends what the server holds: an edit not yet saved would go out as the old text.
     if ([...state.pmEdit.values()].some(ed => !ed.gone)) { st.className = "status err"; st.textContent = "Not sent: save or cancel the open edit first."; return; }
     b.disabled = true; st.className = "status"; st.textContent = "Sending…";
+    // Asked before the write: the send itself ends the PM's wait, so the snapshot after it says nobody waits.
+    const heard = state.seen && Number(state.seen.waiting) > 0;
     try {
       const r = await write("/to_pm/send", {});
-      st.textContent = "Sent " + (Array.isArray(r.sent) ? r.sent.length : 0) + (state.seen && Number(state.seen.waiting) > 0 ? ". A PM is listening." : ". No PM is listening now: your message is saved and the PM gets it when one connects.");
+      st.textContent = "Sent " + (Array.isArray(r.sent) ? r.sent.length : 0) + (heard ? ". A PM is listening." :". No PM is listening now: your message is saved and the PM gets it when one connects.");
     } catch (err) { st.className = "status err"; st.textContent = "Not sent: " + why(err) + ". Your queued items are kept."; }
     render();
   });

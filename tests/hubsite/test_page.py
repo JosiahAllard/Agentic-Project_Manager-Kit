@@ -843,6 +843,21 @@ class DomTest(unittest.TestCase):
         listening = snapshot(collections=LISTS, pm_seen={"waited": NOW, "pulled": None, "waiting": 1})
         self.assertEqual(dom(body, listening, hash="#topm"), "Sent 2. A PM is listening.")
 
+    def test_send_all_says_a_pm_is_listening_when_the_send_itself_ended_the_pms_wait(self):
+        got = dom("""
+            server.route = c => {
+                if (c.path !== "/to_pm/send") return undefined;
+                server.snap.pm_seen = { waited: server.snap.pm_seen.waited, pulled: null, waiting: 0 };
+                server.snap.revision++;
+                return { status: 200, body: { ok: true, sent: ["P-1", "P-2"] } };
+            };
+            await start();
+            await click($("#pm-sendall"));
+            return { say: text($("#pm-sendstatus")), snapshots: calls.filter(c => c.path === "/snapshot").length };
+        """, snapshot(collections=LISTS, pm_seen={"waited": NOW, "pulled": None, "waiting": 1}), hash="#topm")
+        self.assertEqual(got["say"], "Sent 2. A PM is listening.")
+        self.assertGreater(got["snapshots"], 1, "the page read the snapshot again after the send")
+
     def test_an_empty_to_pm_queue_says_to_add_first(self):
         hint = "Nothing is queued. Write your message below and press Add, then Send all."
         got = dom("""
