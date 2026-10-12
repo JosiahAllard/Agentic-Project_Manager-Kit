@@ -100,8 +100,9 @@ class Rules(object):
         return any(norm(p) == v for p in paths)
 
     def canonical(self, value, paths):
-        """`value` in the spelling a landing check compares literally: the committed path it
-        names, or the blanket entry as configured; anything else as typed."""
+        """`value` in the one spelling a trailer is written in: the committed path it names, or
+        the blanket entry as configured; anything else as typed. Nothing here compares a trailer
+        literally: approved_by() and trailer_matches() read it through norm()."""
         v = norm(value)
         blanket = next((b for b in self.blankets() if norm(b) == v), None)
         if blanket:
