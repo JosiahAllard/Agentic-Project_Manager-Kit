@@ -54,6 +54,7 @@ from kitlib.git import repo as gitrepo
 from kitlib.lock import run as lockrun
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_TIMEOUT,
                                EXIT_USAGE, LockError, Store)
+from kitlib.proc import spawn
 from kitlib.redfirst import verdict as V
 from kitlib.worktree import holders, remove
 
@@ -291,8 +292,8 @@ def default_run(argv, cwd, env, log):
     full_env.update(env)
     with open(log, 'w', encoding='utf-8', errors='replace') as fh:
         try:
-            return subprocess.run(argv, cwd=cwd, env=full_env, stdout=fh,
-                                  stderr=subprocess.STDOUT).returncode
+            return spawn.run(argv, cwd=cwd, env=full_env, stdout=fh,
+                             stderr=subprocess.STDOUT).returncode
         except OSError as e:
             fh.write('redfirst: could not start %s: %s\n' % (argv[0], e))
             return 127

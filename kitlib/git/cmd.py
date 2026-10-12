@@ -39,6 +39,7 @@ import subprocess
 import threading
 
 from kitlib.proc import job as _job
+from kitlib.proc import spawn as _spawn
 
 from . import cache
 
@@ -202,12 +203,14 @@ def _fake_run(argv, cwd=None, input=None, timeout=None, env=None):
 
 def subprocess_run(argv, **kw):
     """`subprocess.run(argv, **kw)`, for kit code that starts git itself instead of through call().
-    Production gets exactly subprocess.run; under fake_active() an argv whose program is git is
-    answered by the fake as a CompletedProcess (kitlib.git.fake.completed) and nothing starts."""
+    Production gets subprocess.run through kitlib.proc.spawn.run: the same call from a parent with
+    a console, CREATE_NO_WINDOW added from one without, unless `kw` makes its own console choice.
+    Under fake_active() an argv whose program is git is answered by the fake as a CompletedProcess
+    (kitlib.git.fake.completed) and nothing starts."""
     if fake_active() and _is_git(argv):
         from kitlib.git import fake
         return fake.completed(argv, **kw)
-    return subprocess.run(argv, **kw)
+    return _spawn.run(argv, **kw)
 
 
 def _is_git(argv):

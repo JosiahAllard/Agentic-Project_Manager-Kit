@@ -25,6 +25,7 @@ import sys
 import time
 
 from kitlib.config import ConfigError, user
+from kitlib.proc import spawn
 from kitlib.records import landing
 
 from . import holders, remove
@@ -82,7 +83,7 @@ def machine_lock_path(home=None):
                         'machine_lock.py')
 
 
-def machine_lock_entries(run=subprocess.run, home=None):
+def machine_lock_entries(run=spawn.run, home=None):
     """`(entries, None)`: every record `machine_lock.py status --json` lists - its `lock.held`,
     `waiting` and `background` lists, or (the kit lock's snapshot) its `runs` and `queue.entries`;
     or `(None, why)` when it cannot be read: the sweep then defers (fail closed)."""

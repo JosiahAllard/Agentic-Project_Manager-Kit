@@ -60,6 +60,7 @@ from kitlib.git import refs as gitrefs
 from kitlib.git import repo as gitrepo
 from kitlib import verdict
 from kitlib.docs import callers as doc_callers
+from kitlib.proc import spawn
 
 from . import trailers
 
@@ -451,8 +452,8 @@ def docs_line(root, base, branch):
                 'measured'), False
     argv = [sys.executable, DOC_BUDGET, '-C', root, '--base', base, '--head', branch]
     try:
-        res = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
-                             errors='replace', timeout=DOC_BUDGET_TIMEOUT)
+        res = spawn.run(argv, capture_output=True, text=True, encoding='utf-8',
+                        errors='replace', timeout=DOC_BUDGET_TIMEOUT)
         rc, out = res.returncode, warnings_first((res.stdout or '') + (res.stderr or ''))
     except subprocess.TimeoutExpired:
         rc, out = 1, 'doc_budget.py did not finish in %d seconds' % DOC_BUDGET_TIMEOUT
@@ -472,8 +473,8 @@ def index_line(root, base, branch, base_cfg):
         return doc_callers.not_checked(), False
     argv = [sys.executable, DOC_INDEX, '-C', root, '--head', branch, '--config-ref', base]
     try:
-        res = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
-                             errors='replace', timeout=doc_callers.TIMEOUT)
+        res = spawn.run(argv, capture_output=True, text=True, encoding='utf-8',
+                        errors='replace', timeout=doc_callers.TIMEOUT)
         rc, out = res.returncode, (res.stdout or '') + (res.stderr or '')
     except subprocess.TimeoutExpired:
         rc, out = 1, 'doc_index.py did not finish in %d seconds' % doc_callers.TIMEOUT

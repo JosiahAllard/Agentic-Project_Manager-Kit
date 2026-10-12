@@ -76,6 +76,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from kitlib.config import user as kuser
+from kitlib.proc import spawn
 from kitlib.pytests import runner as unit_runner
 from kitlib.tooldeps import pool as worker_pool
 
@@ -279,9 +280,9 @@ def count_units(root, modules, environ=None, timeout=COUNT_TIMEOUT):
         return {}, {}
     env = dict(os.environ if environ is None else environ)
     try:
-        r = subprocess.run([sys.executable, '-c', _COUNT] + list(modules), cwd=root, env=env,
-                           capture_output=True, text=True, encoding='utf-8', errors='replace',
-                           timeout=timeout)
+        r = spawn.run([sys.executable, '-c', _COUNT] + list(modules), cwd=root, env=env,
+                      capture_output=True, text=True, encoding='utf-8', errors='replace',
+                      timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         return {}, {}
     counts = classes = None

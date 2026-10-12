@@ -11,16 +11,16 @@ kitlib.worktree.task, prints and exits. Exit codes: 0 printed or registered; 1 r
 PowerShell failed; 2 usage; 130 Ctrl+C.
 """
 import os
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
+from kitlib.proc import spawn                                       # noqa: E402
 from kitlib.worktree import task                                    # noqa: E402
 
 
-def main(argv=None, runner=subprocess.call, root=None, tool=None):
+def main(argv=None, runner=spawn.call, root=None, tool=None):
     """`runner`, `root` and `tool` are seams for tests (a fake PowerShell, a temporary repository,
     a tool in a temporary main checkout)."""
     argv = list(sys.argv[1:] if argv is None else argv)

@@ -13,6 +13,8 @@ import os
 import subprocess
 import sys
 
+from kitlib.proc import spawn
+
 LIST_TIMEOUT = 600
 _MARK = 'kit-tests-list: '
 _CHILD = '\n'.join([
@@ -50,9 +52,9 @@ def collect(root, modules, environ=None, timeout=LIST_TIMEOUT):
         return []
     env = dict(os.environ if environ is None else environ)
     try:
-        r = subprocess.run([sys.executable, '-c', _CHILD] + list(modules), cwd=root, env=env,
-                           capture_output=True, text=True, encoding='utf-8', errors='replace',
-                           timeout=timeout)
+        r = spawn.run([sys.executable, '-c', _CHILD] + list(modules), cwd=root, env=env,
+                      capture_output=True, text=True, encoding='utf-8', errors='replace',
+                      timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         return None
     for line in reversed(r.stdout.splitlines()):

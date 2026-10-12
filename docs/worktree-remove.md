@@ -43,6 +43,14 @@ A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` 
 
 Tests: `tests/worktree/test_remove_snapshot.py` (`IgnoredAfterTheLastStatusRead`; after `clear_disposable`, a tracked edit and delete in `FileAppearsInTheWindow`, a `disposable_untracked` file in `DisposableInTheWindow`, a junction in `JunctionAppearsInTheWindow`, a vanished folder in `FolderGoneInTheWindow`) and `tests/worktree/test_worktree_sweep.py` (`Sweep.test_an_ignored_file_written_after_the_sweeps_second_status_read_survives`).
 
+## The scheduled task
+
+`kitlib/worktree/task.py` `command` writes the one PowerShell line `tools/worktree_sweep_task.py` prints or, with `--register --owner-confirmed`, runs. The task `<repo name>-worktree-sweep` runs daily at 03:00 as the registering user (`-RunLevel Limited`, `-StartWhenAvailable`), its working directory the main checkout.
+
+- No console window opens. The task's program is the `pythonw.exe` that `Get-Command pythonw` finds when the line runs (`FIND_PYTHONW`), and its arguments are `"<kit>\tools\no_window.py" python "<kit>\tools\worktree_remove.py" -C "<main checkout>" --sweep-merged --apply` (`argument`). `tools/no_window.py` is the carrier (docs/daily-full.md "The schedule"): it starts the `python.exe` beside that `pythonw.exe` with a console that has no window and exits with the sweep's exit code.
+- The line throws, registering nothing, when there is no `pythonw` or it is the Microsoft Store alias, a path under `WindowsApps` (`NOT_THE_STORE_ALIAS`).
+- The line does not replace a task: PowerShell refuses to register a name that exists. A task registered before the carrier runs `python` directly, with a window, until the owner removes it (`Unregister-ScheduledTask -TaskName '<repo name>-worktree-sweep' -Confirm:$false`) and registers it again.
+
 ## Behaves differently from the PM copy
 
 - `-C` is a plain path option. There is no `checkout_guard` hand-off to the main checkout's copy, no `KIT_REPO_ROOT` and no `check_same_repo`; the kit has one copy. A relative path argument resolves against the process's own directory.

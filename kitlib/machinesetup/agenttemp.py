@@ -11,7 +11,7 @@ import subprocess
 
 from kitlib.config import ConfigError
 from kitlib.config import user as kuser
-from kitlib.worktree.task import NOT_THE_STORE_ALIAS, quoted
+from kitlib.worktree.task import CARRIER, FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted
 
 from . import settings
 from .common import is_link, norm
@@ -36,16 +36,19 @@ def default_agent_temp(kit):
 
 def task_line(kit):
     """The one PowerShell line that registers TASK: daily at AT as the registering user
-    (-RunLevel Limited, -StartWhenAvailable), running `python "<kit>\\SWEEP" --apply` in the kit.
-    It throws, registering nothing, when python is missing or is the Microsoft Store alias."""
+    (-RunLevel Limited, -StartWhenAvailable), running `python "<kit>\\SWEEP" --apply` in the kit
+    with no console window: the task's program is pythonw.exe running the carrier
+    `<kit>\\tools\\<CARRIER>` (kitlib.proc.spawn.carry), which starts the python.exe beside it.
+    It throws, registering nothing, when pythonw is missing or is the Microsoft Store alias."""
     kit = os.path.normpath(kit)
-    arg = '"%s" --apply' % os.path.join(kit, SWEEP)
-    return ("$py = (Get-Command python).Source; %s; Register-ScheduledTask -TaskName %s"
+    arg = '"%s" python "%s" --apply' % (os.path.join(kit, 'tools', CARRIER),
+                                        os.path.join(kit, SWEEP))
+    return ("%s; %s; Register-ScheduledTask -TaskName %s"
             " -Trigger (New-ScheduledTaskTrigger -Daily -At %s)"
             " -Action (New-ScheduledTaskAction -Execute $py -Argument %s -WorkingDirectory %s)"
             " -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)"
             " -User $env:USERNAME -RunLevel Limited -Description %s"
-            % (NOT_THE_STORE_ALIAS, quoted(TASK), AT, quoted(arg), quoted(kit),
+            % (FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted(TASK), AT, quoted(arg), quoted(kit),
                quoted('daily sweep of the agents\' temp folder')))
 
 
