@@ -72,13 +72,14 @@ class Redirect(object):
 class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
-                 'pipe_from', 'git_env', 'home_env')
+                 'pipe_from', 'git_env', 'home_env', 'cwd_ps_drive')
 
     def __init__(self, source, shell, depth):
         self.words, self.redirects, self.subs = [], [], []
         self.start = self.end = None
         self.source, self.shell, self.depth = source, shell, depth
         self.cwd = None
+        self.cwd_ps_drive = False   # cwd None after a PowerShell cd into a place ps_unplaceable names (track)
         self.piped_out = self.piped_in = False
         self.groups = ()            # the ( ) or { } groups it is inside, outermost first: (id, '(' or '{')
         self.prev_op = self.next_op = None      # the operators around it: ; && || & newline ( ) { } |
@@ -813,11 +814,54 @@ def msys_to_win(p):
     return (m.group(1).upper() + ':' + (m.group(2) or '/')) if m else p
 
 
-def resolve_path(p, cwd):
+# A PowerShell provider-qualified path: [<module>\]<provider>::<rest>. FileSystem (bare or from
+# its own module) holds files, so its <rest>, when absolute, is the file; any other provider, or
+# a module the guard does not know, is a place it cannot tell.
+PS_PROVIDER_RE = re.compile(r'^(?:([^\\/:]+)\\)?([^\\/:]+)::(.*)$', re.S)
+PS_FILESYSTEM_MODULES = (None, 'microsoft.powershell.core')
+# A PowerShell drive whose name is anything but one ASCII letter (Main:\x, Temp:\x, env:FOO, 1:\x,
+# _:\x, a non-ASCII letter): a drive the session may have made with New-PSDrive, which takes such
+# names, so the text cannot tell its folder.
+PS_LONG_DRIVE_RE = re.compile(r'^(?![A-Za-z]:)[^\\/:]+:')
+_ABS_RE = re.compile(r'^(?:[A-Za-z]:[\\/]|\\\\|//)')
+
+
+def ps_filesystem_path(p):
+    """The file path a PowerShell `FileSystem::<abs>` (or
+    `Microsoft.PowerShell.Core\\FileSystem::<abs>`) spells, else None."""
+    m = PS_PROVIDER_RE.match(p or '')
+    if not m or m.group(2).lower() != 'filesystem':
+        return None
+    module = m.group(1).lower() if m.group(1) is not None else None
+    if module not in PS_FILESYSTEM_MODULES or not _ABS_RE.match(m.group(3)):
+        return None
+    return m.group(3)
+
+
+def ps_unplaceable(p):
+    """True when PowerShell reads the text `p` as a place the guard cannot tell: a
+    provider-qualified path other than an absolute FileSystem:: one, or a drive whose name is not
+    one ASCII letter. A one-letter drive (absolute or drive-relative) and a relative path are not."""
+    if not p or p[:2] in ('\\\\', '//'):
+        return False
+    if PS_PROVIDER_RE.match(p):
+        return ps_filesystem_path(p) is None
+    return bool(PS_LONG_DRIVE_RE.match(p))
+
+
+def resolve_path(p, cwd, shell=None):
     """`p` (a word's text) as an absolute normalised path, or None when the text cannot tell (a
-    drive-relative C:x, ~user, a rooted \\x with no cwd to take the drive from)."""
+    drive-relative C:x, ~user, a rooted \\x with no cwd to take the drive from). With `shell` PS,
+    `FileSystem::<abs>` is <abs> and any other provider or a drive not named by one ASCII letter
+    is None (ps_unplaceable); bash and cmd text is read as it always was."""
     if not p:
         return None
+    if shell == PS:
+        fs = ps_filesystem_path(p)
+        if fs is not None:
+            p = fs
+        elif ps_unplaceable(p):
+            return None
     if p.startswith('~'):
         if p == '~' or p[1:2] in ('/', '\\'):
             p = os.path.expanduser('~') + p[1:]
@@ -857,7 +901,18 @@ def cd_target(cmd, cwd):
     p = rest[0].text
     if p in ('-', '+') or p.startswith('-') or any(ch in p for ch in '*?'):
         return True, None
-    return True, resolve_path(p, cwd)
+    return True, resolve_path(p, cwd, cmd.shell)
+
+
+def ps_cd_unplaceable(cmd):
+    """True when `cmd` is a PowerShell cd whose one literal place is one ps_unplaceable names
+    (cd Main:\\, Set-Location -LiteralPath Registry::x)."""
+    if cmd.shell != PS or len(cmd.words) < 2 or cmd.words[0].text.lower() not in CD_VERBS:
+        return False
+    rest = cmd.words[1:]
+    if rest[0].text.lower() in ('-path', '-literalpath', '-lp'):
+        rest = rest[1:]
+    return len(rest) == 1 and not rest[0].dyn and ps_unplaceable(rest[0].text)
 
 
 BASH_PREFIX_WORDS = {'if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', 'time'}
@@ -873,26 +928,28 @@ def _keyword_cd(c):
     return 0 < k < len(c.words) and c.words[k].text.lower() in CD_VERBS | CD_UNKNOWN
 
 
-def track(cmds, cwd):
+def track(cmds, cwd, ps_drive=False):
     """Each command's cwd, in order: a cd changes it for the commands after it. A bash ( ) group
     is a subshell: a cd inside it holds to its end, then the directory before it comes back; a
     bash { } group shares the directory. A cd the text cannot tell, one inside a PowerShell or
     cmd group, one behind a keyword, one in a pipeline, in the background or beside || makes the
     directory unknown (None) from there on. Substitutions run in the directory of the command
-    that holds them."""
-    here = cwd
-    open_ = []                  # (group, the directory before it)
+    that holds them. A command whose cwd is None after a PowerShell cd into a place
+    ps_unplaceable names (cd Main:\\) gets cwd_ps_drive, until a cd reaches a known place."""
+    here, drive = cwd, ps_drive
+    open_ = []                  # (group, the directory before it, its drive flag)
     for c in cmds:
         common = 0
         while common < len(open_) and common < len(c.groups) and open_[common][0] == c.groups[common]:
             common += 1
         while len(open_) > common:
-            g, before = open_.pop()
+            g, before, before_drive = open_.pop()
             if g[1] == '(' and c.shell == BASH:
-                here = before
+                here, drive = before, before_drive
         for g in c.groups[common:]:
-            open_.append((g, here))
+            open_.append((g, here, drive))
         c.cwd = here
+        c.cwd_ps_drive = drive and here is None
         changed, to = cd_target(c, here)
         if _keyword_cd(c):
             changed, to = True, None
@@ -900,9 +957,10 @@ def track(cmds, cwd):
             unsure = (c.piped_in or c.piped_out or '||' in (c.prev_op, c.next_op) or (c.next_op == '&' and c.shell == BASH)
                       or (c.groups and c.shell != BASH))
             here = None if unsure else to
+            drive = ps_cd_unplaceable(c) or (drive and here is None)
     for c in cmds:
         if c.subs:
-            track(c.subs, c.cwd)
+            track(c.subs, c.cwd, c.cwd_ps_drive)
     return cmds
 
 
