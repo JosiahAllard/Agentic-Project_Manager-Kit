@@ -48,8 +48,9 @@ start() and close() carry every listener in it, and a start-up that fails after 
 closes its door. Each gets a health_route of its own: the local listener's answers as it did
 with no tunnel, the tunnel's (fixed=True) answers fixed words only, so the tunnel's owner is
 told that a sync failed and not why. The tunnel listener has no pairing routes and no Host
-rule; the local listener's rules are what they were with no tunnel, and it never reads the
-Access header.
+rule, and its error answers are the agent's wording for the owner too (tunnel.start makes it
+with httpd's agent_words), so none names the store folder; the local listener's rules are what
+they were with no tunnel, and it never reads the Access header.
 
 The log. `log(level, text)` gets the listeners' lines (httpd: 'access', 'error'), the tunnel
 gate's ('note' or 'error' for a request it refused, at most one a reason a minute:
@@ -160,7 +161,12 @@ It never holds a value of the settings (no team name, audience tag or email) and
 system's words for a failed bind: those are in the console note. Health asks the gate what it
 holds: it starts no key fetch and waits for none, and the gate fetches keys only when a request
 brings a token. So a server just started says TUNNEL_BOUND until the first request with a token
-made a good fetch, and `on` does not say that a tunnel program reaches the listener.
+made a good fetch, and `on` does not say that a tunnel program reaches the listener. A key
+source with no ready() never says it has keys (tunnel.Gate.keys), so it is TUNNEL_BOUND too.
+After Hub.close() was called, `Hub.tunnel` of a hub that had a tunnel listener is TUNNEL_CLOSED,
+not TUNNEL_BOUND: the gate is stopped and its keys are no longer asked for. Only `Hub.tunnel`
+says that word; no GET health answer does (a request the close finds in flight on the local
+listener is answered from the stopped gate, so with TUNNEL_BOUND).
 
 GET health through the tunnel (health_route with fixed=True, _fixed_health). The tunnel
 listener's answer holds fixed words and no other value: {ok: true, version, store: WORD_OK,
@@ -204,6 +210,7 @@ TUNNEL_ON = 'on'                # GET health's `tunnel`, and `Hub.tunnel`
 TUNNEL_BOUND = 'bound, keys not fetched'
 TUNNEL_BOUND_WHY = 'bound, keys not fetched (%s)'   # the local listener's: one of access.REASONS
 TUNNEL_OFF = 'off: %s'
+TUNNEL_CLOSED = 'closed'        # `Hub.tunnel` once close() was called; no GET health says it
 TUNNEL_BIND = 'the tunnel port could not be bound: the server console says why'
 TUNNEL_FAILED = 'the tunnel listener could not be made: the server console says why'
 TUNNEL_OFF_NOTE = 'the tunnel listener is off: %s'
@@ -301,8 +308,9 @@ class Sources(object):
                    kitlib.hubsite.access.KeyCache, which asks Cloudflare for the team's keys
                    when a token first needs one. Called only when the tunnel listener starts.
                    What it raises turns the tunnel off (TUNNEL_FAILED). A key source may also
-                   have ready() (are there keys now: health's `tunnel`; one without it counts
-                   as having them), `error` and stop() (called first at the close)
+                   have ready() (are there keys now: health's `tunnel`; one without it never
+                   counts as having them, so health says TUNNEL_BOUND while its tokens are
+                   checked all the same), `error` and stop() (called first at the close)
       access_now   callable() -> the Unix time the tunnel gate checks a token's times against;
                    None: time.time
     """
@@ -725,8 +733,9 @@ class Hub(object):
     """One built server (build): its parts, start() and close(). `notes` are start-up lines for
     the console; `port` and `url` are the local listener's; `tunnel` is what the local listener's
     GET health says of the tunnel listener at this moment (TUNNEL_ON, TUNNEL_BOUND or
-    TUNNEL_BOUND_WHY, or TUNNEL_OFF with the reason; '' for a Hub made without build). The
-    `tunnel` given here is that text or a callable giving it."""
+    TUNNEL_BOUND_WHY, or TUNNEL_OFF with the reason; '' for a Hub made without build), and
+    TUNNEL_CLOSED from the moment close() was called when there was a tunnel listener (with
+    none it stays what it was). The `tunnel` given here is that text or a callable giving it."""
 
     def __init__(self, settings, store, api, views, creds, listeners, sync, backlog_views, notes,
                  log=None, tunnel=''):
@@ -757,7 +766,10 @@ class Hub(object):
 
     @property
     def tunnel(self):
-        return self._tunnel() if callable(self._tunnel) else self._tunnel
+        if not callable(self._tunnel):
+            return self._tunnel         # no tunnel listener: why, and the same after the close
+        # read with no lock: one flag that close() sets once, before it stops the gate
+        return TUNNEL_CLOSED if self._closed else self._tunnel()
 
     def _say(self, text, level='error'):
         """One line of the hub's own to the log, with scrub() applied."""

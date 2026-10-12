@@ -1743,6 +1743,22 @@ class ClientCase(ServeCase):
                          ['revision 1', 'git: no answer', 'backlog: not read yet'])
 
 
+class _Keys(object):
+    """A key source holding the test key: get(kid), and of itself what a test tells it to say
+    (`ready`, `error`), as tunnel.Gate.keys asks."""
+
+    def __init__(self, ready=True, error=''):
+        self._keys = {ak.KEY_A.kid: ak.jwk(ak.KEY_A)}
+        self.said = ready
+        self.error = error
+
+    def get(self, kid):
+        return self._keys.get(kid)
+
+    def ready(self):
+        return self.said
+
+
 class TunnelCase(ServeCase):
     """The tunnel listener in the server's life: built beside the local one, started with it and
     closed with it. What that listener lets in is tests.hubsite.test_tunnel's."""
@@ -1754,8 +1770,9 @@ class TunnelCase(ServeCase):
             tunnel_port=0, access=hub_settings.Access(ak.TEAM, ak.AUD, (ak.EMAIL,)))
 
     def keys(self, team):
+        # a source that says it has its keys: one with no ready() (a plain dict) is never `on`
         self.keyed.append(team)
-        return {ak.KEY_A.kid: ak.jwk(ak.KEY_A)}
+        return _Keys()
 
     def build(self, settings=None, **src):
         src.setdefault('access_keys', self.keys)
@@ -1944,7 +1961,76 @@ class TunnelCase(ServeCase):
             if thread.name == 'hub-access-keys':
                 thread.join(TIMEOUT)
                 self.assertFalse(thread.is_alive(), 'the key fetch thread never ended')
-        self.assertEqual(hub.tunnel, serve.TUNNEL_BOUND)    # a closed gate has no keys to say
+        # was assertEqual(hub.tunnel, serve.TUNNEL_BOUND): a closed hub says it is closed
+        self.assertEqual(hub.tunnel, 'closed')
+
+    def test_a_closed_hub_says_closed_of_its_tunnel_and_a_running_one_never_does(self):
+        hub = self.build()
+        self.assertEqual(hub.tunnel, 'on')          # built, not started: the gate has its keys
+        hub.start()
+        local, tunnelled = hub.listeners
+        self.assertEqual(hub.tunnel, 'on')
+        self.assertEqual(get(local.port, HEALTH, self.owner).json()['tunnel'], 'on')
+        self.assertEqual(self.through(tunnelled.port, HEALTH).json()['tunnel'], 'on')
+        self.assertIs(hub.close(), True)
+        self.assertEqual(hub.tunnel, 'closed')
+        self.assertEqual(serve.TUNNEL_CLOSED, 'closed')
+        self.assertIs(hub.close(), True)            # a second close: the same word
+        self.assertEqual(hub.tunnel, 'closed')
+        # a source with no keys yet: `bound` while it runs, `closed` after
+        bound = self.build(access_keys=lambda team: _Keys(ready=False, error='keys-fetch'))
+        self.assertEqual(bound.tunnel, 'bound, keys not fetched (keys-fetch)')
+        bound.start()
+        self.assertEqual(bound.tunnel, 'bound, keys not fetched (keys-fetch)')
+        self.assertIs(bound.close(), True)
+        self.assertEqual(bound.tunnel, 'closed')
+
+    def test_a_closed_hub_with_no_tunnel_listener_still_says_why_it_had_none(self):
+        hub = self.build(self.settings)             # no access settings: no second listener
+        said = 'off: ' + tunnel.UNSET
+        self.assertEqual(hub.tunnel, said)
+        hub.start()
+        self.assertIs(hub.close(), True)
+        self.assertEqual(hub.tunnel, said)
+        port = self.taken_port()
+        hub = self.build(self.tunnelled._replace(tunnel_port=port))
+        self.assertIs(hub.close(), True)
+        self.assertEqual(hub.tunnel, 'off: ' + serve.TUNNEL_BIND)
+
+    def test_status_lines_print_what_a_running_servers_health_says_of_the_tunnel(self):
+        # the health answer of a real hub, not a dict written here: a wrong health text for a
+        # state makes its line wrong
+        def lines(hub, token):
+            r = get(hub.port, HEALTH, token)
+            self.assertEqual(r.status, 200, r.body)
+            return serve.status_lines(r.json(), NOW)
+
+        taken = self.taken_port()
+        for src, settings, line in (
+                ({}, None, 'tunnel: on'),
+                ({'access_keys': lambda team: _Keys(ready=False)}, None,
+                 'tunnel: bound, keys not fetched'),
+                ({'access_keys': lambda team: _Keys(ready=False, error='keys-fetch')}, None,
+                 'tunnel: bound, keys not fetched (keys-fetch)'),
+                # a reason that is not one of access.REASONS is never printed
+                ({'access_keys': lambda team: _Keys(ready=False, error='a made-up reason')},
+                 None, 'tunnel: bound, keys not fetched'),
+                # no ready() at all: never `on`
+                ({'access_keys': lambda team: {ak.KEY_A.kid: ak.jwk(ak.KEY_A)}}, None,
+                 'tunnel: bound, keys not fetched'),
+                ({}, self.settings, 'tunnel: off: ' + tunnel.UNSET),
+                ({}, self.tunnelled._replace(tunnel_port=taken),
+                 'tunnel: off: ' + serve.TUNNEL_BIND)):
+            with self.subTest(line=line):
+                hub = self.build(settings, **src)
+                hub.start()
+                for token in (self.owner, self.agent):
+                    said = lines(hub, token)
+                    self.assertEqual([s for s in said if s.startswith('tunnel')], [line], said)
+                    # after the backlog line, the last line of a server with nothing missing
+                    self.assertEqual(said[-1], line, said)
+                self.assertIs(hub.close(), True)
+        self.assertEqual(self.errors(), [])
 
     def test_status_lines_say_the_tunnel_after_the_backlog_and_before_what_is_unavailable(self):
         health = {'revision': 3, 'git': {'running': False, 'off': serve.SYNC_OFF},

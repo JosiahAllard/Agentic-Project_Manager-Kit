@@ -2,7 +2,7 @@
 
   Listener(addr, api, gate, static_dir=None, host_rule=None, routes=None, via='', log=None,
            max_waits=MAX_WAITS, max_body=MAX_BODY, max_connections=MAX_CONNECTIONS,
-           origin_scheme='http', via_header=True)
+           origin_scheme='http', via_header=True, agent_words=False)
       .port .url .waiting          the bound port (addr may name port 0), its URL, waits blocked now
       .closing                     close_door() was called
       .start()                     serve on a thread; .stop(timeout) = close_door() then join()
@@ -56,7 +56,10 @@ via. A caller names its transport in the VIA_HEADER header (`web`, `cli`, `deskt
 `relay:<source>`): a short lower-case token, else the listener's own `via` is used ('' lets the
 Api record `api`). A listener made with via_header=False never reads that header: every request
 on it carries the listener's own `via`, whatever the client sent. That is the tunnel listener
-(kitlib.hubsite.tunnel), whose writes are all recorded as `tunnel`.
+(kitlib.hubsite.tunnel), whose writes are all recorded as `tunnel`. TUNNEL_VIA is that
+listener's word and no client's: a header that says exactly it is read as no header at all, so
+a listener that reads the header records its own `via` then (the local one: `api`) and only
+the tunnel listener ever records `tunnel`.
 
 Waits. GET wait blocks in the Api for up to api.WAIT_MAX_S. At most max_waits requests may be in
 it at once on one listener: the next is refused at once with 429 `busy` and a Retry-After, and
@@ -75,7 +78,12 @@ client is slow to take (SOCKET_TIMEOUT_S a send) and the reading away after an e
 What a client is told. Every answer is JSON in the Api's error shape, with the Api's codes plus
 `busy`. An exception in a handler is a 500 `internal` with a fixed message: its text and its
 traceback go to `log` only, as one `error` line. That holds for an error the Api did not expect
-too (Api.call is asked to raise it, raise_unexpected), for the owner as for anyone else. Every
+too (Api.call is asked to raise it, raise_unexpected), for the owner as for anyone else. A
+listener made with agent_words=True asks Api.call for the agent's wording of every error answer
+(agent_words), whatever the role: the Api's `store` refusal, whose own text names the store's
+folder and its files, is then the fixed phrase of api.AGENT_SAYS for the owner too, with the
+status, the code and the field unchanged. That is the tunnel listener, whose answers leave this
+machine; the local listener is made without it and tells the owner the error's own text. Every
 response closes its connection and carries SECURITY_HEADERS; none names the software.
 
 log(level, text). level is 'access' (one line a request: client address, method, path, status,
@@ -120,6 +128,7 @@ METHODS = ('GET', 'HEAD', 'POST')
 JSON = 'application/json'
 INDEX = 'index.html'
 VIA_HEADER = 'X-Hub-Via'
+TUNNEL_VIA = 'tunnel'               # the tunnel listener's own source: no VIA_HEADER may claim it
 PAIR_ROUTE = _api.BASE + '/pair'    # POST, the owner's token: a one-time link for the browser
 PAIR_PATH = '/pair'                 # GET ?code=...: redeems it and sets the session cookie
 BUSY = 'busy'
@@ -542,7 +551,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if not listener.via_header:
             return listener.via     # this port names the source itself: the client is not asked
         said = self.headers.get_all(VIA_HEADER) or ()
-        if len(said) == 1 and _VIA.match(said[0].strip()):
+        # TUNNEL_VIA is what the tunnel listener records, and that listener never comes here: a
+        # client that says it is recorded as one that said nothing
+        if len(said) == 1 and _VIA.match(said[0].strip()) and said[0].strip() != TUNNEL_VIA:
             return said[0].strip()
         return listener.via
 
@@ -609,11 +620,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return refusal(429, BUSY, 'this server already holds its %d waits: ask again in a '
                            'moment' % listener.max_waits, 'wait',
                            (('Retry-After', str(RETRY_AFTER_S)),))
+        # agent_words is passed only by a listener made with it, so the local listener's call is
+        # the one it always was
+        words = {'agent_words': True} if listener.agent_words else {}
         try:
             # raise_unexpected: an error the Api did not expect comes here as an exception, so
             # _handle logs its cause and answers the fixed 500, to the owner as to anyone
             status, obj = api.call(request.method, request.path, request.role, request.body,
-                                   request.query, request.via, raise_unexpected=True)
+                                   request.query, request.via, raise_unexpected=True, **words)
         finally:
             if waits:
                 listener._wait_leave()
@@ -626,7 +640,8 @@ class Listener(object):
 
     def __init__(self, addr, api, gate, static_dir=None, host_rule=None, routes=None, via='',
                  log=None, max_waits=MAX_WAITS, max_body=MAX_BODY,
-                 max_connections=MAX_CONNECTIONS, origin_scheme='http', via_header=True):
+                 max_connections=MAX_CONNECTIONS, origin_scheme='http', via_header=True,
+                 agent_words=False):
         if origin_scheme not in ORIGIN_SCHEMES:
             raise ValueError('origin_scheme is one of %s, not %r'
                              % (', '.join(ORIGIN_SCHEMES), origin_scheme))
@@ -646,6 +661,8 @@ class Listener(object):
         self.routes = dict(routes or {})
         self.via = via if isinstance(via, str) else ''
         self.via_header = via_header is True        # anything else: the header is never read
+        # anything but False: every error answer of the Api in the agent's words
+        self.agent_words = agent_words is not False
         self.max_waits = max_waits
         self.max_body = max_body
         self.max_connections = max_connections

@@ -16,6 +16,7 @@ import unittest
 
 from kitlib.hubsite import access, api, auth, httpd, serve, tunnel
 from kitlib.hubsite import settings as hub_settings
+from kitlib.hubsite import store as hub_store
 from tests.hubsite import access_keys as ak
 from tests.hubsite import httpfix
 from tests.hubsite.httpfix import bearer, get, post, send
@@ -111,8 +112,10 @@ class TunnelCase(unittest.TestCase):
         self.lines.append((level, text))
 
     def keys_for(self, team):
+        # a key source that says it has its keys: a plain dict has no ready() and so never
+        # counts as having any (tunnel.Gate.keys), which would make every health here `bound`
         self.asked.append(team)
-        return self.keys
+        return _Source(self.keys, ready=True)
 
     def build(self, settings=None, start=True, **src):
         src.setdefault('tokens', self.tokens)
@@ -525,6 +528,22 @@ class StartTest(TunnelCase):
         # a caller with no role is told nothing
         self.assertNotIn('tunnel', get(self.lport, HEALTH).json())
 
+    def test_a_key_source_with_no_ready_is_bound_on_both_ports_and_checks_tokens_all_the_same(self):
+        hub = self.build(access_keys=lambda team: self.keys)    # a dict: get(kid) and no more
+        good = ak.token(ak.KEY_A)
+        for _ in range(2):
+            self.assertEqual(hub.tunnel, BOUND)
+            for r in (get(self.lport, HEALTH, self.owner), get(self.lport, HEALTH, self.agent),
+                      self.ask('GET', HEALTH, token=good)):
+                self.assertEqual((r.status, r.json()['tunnel']), (200, BOUND))
+            # the dict's keys check tokens all the same: a good one writes, a forged one does not
+            r = self.ask('POST', TODOS, token=good, obj={'title': 'through the tunnel'})
+            self.assertEqual(r.status, 200, r.body)
+            self.refused('POST', TODOS, token=ak.token(ak.KEY_B, head=ak.header(ak.KEY_A)),
+                         obj={'title': 'never written'})
+        self.assertIn('tunnel: ' + BOUND,
+                      serve.status_lines(get(self.lport, HEALTH, self.owner).json()))
+
     def test_the_agent_is_told_why_it_is_off_in_fixed_words(self):
         self.build(self.settings._replace(access=self.access._replace(team='')))
         r = get(self.lport, HEALTH, self.agent)
@@ -852,7 +871,7 @@ class TunnelHealthTest(TunnelCase):
             self.assertEqual(json.loads(r.body.decode('utf-8')), {
                 'ok': True, 'version': 'v1', 'store': 'ok', 'git': word, 'tunnel': 'on'}, git)
 
-    def test_a_health_that_raises_through_the_tunnel_is_the_listeners_fixed_answer(self):
+    def test_a_health_view_that_raises_is_still_a_200_of_fixed_words_through_the_tunnel(self):
         secret = 'a secret word at X:\\made-up'
 
         def broken():
@@ -863,6 +882,29 @@ class TunnelHealthTest(TunnelCase):
         self.assertEqual(r.json(), {'ok': True, 'version': 'v1', 'store': 'ok', 'git': 'unknown',
                                     'tunnel': 'on'})
         self.assertNotIn('RuntimeError', r.body.decode('utf-8'))
+
+    def test_a_health_that_raises_through_the_tunnel_is_the_listeners_fixed_answer(self):
+        secret = 'a secret word at X:\\made-up'
+        calls = []
+
+        def broken(*args, **kw):
+            calls.append(args[:2])
+            raise RuntimeError(secret)
+
+        self.hub.api.call = broken              # the Api itself fails: there is no answer to reword
+        r = self.ask('GET', HEALTH, token=self.good)
+        self.assertEqual(calls, [('GET', HEALTH)])
+        self.assertEqual(r.status, 500)
+        self.assertEqual(r.json(), {'ok': False, 'error': {
+            'code': 'internal', 'field': '',
+            'message': 'the server could not answer this request'}})
+        text = r.body.decode('utf-8')
+        for word in (secret, 'secret', 'made-up', 'RuntimeError', 'Traceback', 'broken',
+                     os.path.basename(self.root), '"tunnel"', '"store"'):
+            self.assertNotIn(word, text)
+        # the caller was let in as the owner: the answer is the listener's, not the gate's
+        self.assertEqual(self.refusals(), [])
+        self.assertIn(('access', '127.0.0.1 GET %s 500 owner' % HEALTH), self.lines)
 
 
 class TunnelSourceTest(TunnelCase):
@@ -902,10 +944,147 @@ class TunnelSourceTest(TunnelCase):
         self.assertEqual((tunnelled.via, tunnelled.via_header), ('tunnel', False))
 
     def test_a_local_write_is_recorded_as_before(self):
-        for said, recorded in (('web', 'web'), ('cli', 'cli'), (None, 'api'), ('tunnel', 'tunnel')):
+        for said, recorded in (('web', 'web'), ('cli', 'cli'), (None, 'api'), ('tunnel', 'api')):
             with self.subTest(said=said):
                 r = post(self.lport, TODOS, {'title': 'at the PC'}, self.owner, via=said)
                 self.assertEqual(self.via(r), recorded)
+
+    def test_a_local_write_that_claims_the_tunnel_is_recorded_as_api(self):
+        # `tunnel` says a write came in through the tunnel listener: no client of the local one
+        # may claim it, in any spelling the header would be read in
+        for said in ('tunnel', ' tunnel', 'tunnel ', '\ttunnel'):
+            for token in (self.owner, self.agent):
+                with self.subTest(said=said, agent=token is self.agent):
+                    r = post(self.lport, TODOS, {'title': 'at the PC', 'commands': ['dir']},
+                             token, headers=[(httpd.VIA_HEADER, said)])
+                    self.assertEqual(self.via(r), 'api')
+        # a later change of a document claims it no better
+        tid = post(self.lport, TODOS, {'title': 'at the PC'}, self.owner, via='web').json()['id']
+        r = post(self.lport, '%s/%s/done' % (TODOS, tid), None, self.owner, via='tunnel')
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(self.hub.store.get('todos', tid)['via'], 'api')
+        # every other source a client names is recorded as it was
+        for said in ('web', 'cli', 'desktop-mcp', 'relay:phone', 'tunnels', 'tunnel:phone'):
+            with self.subTest(said=said):
+                r = post(self.lport, TODOS, {'title': 'at the PC'}, self.owner, via=said)
+                self.assertEqual(self.via(r), said)
+        # and through the tunnel listener a write is still recorded as `tunnel`
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'through the tunnel'})
+        self.assertEqual(self.via(r), 'tunnel')
+
+
+class TunnelErrorWordsTest(TunnelCase):
+    """An error answer through the tunnel listener is worded as for an agent: its caller is the
+    owner for what a request may do, and no answer there names the store folder or a file."""
+
+    STORE_SAYS = 'the hub store is not available: the owner sees why'
+
+    def setUp(self):
+        TunnelCase.setUp(self)
+        self.build()
+        self.good = ak.token(ak.KEY_A)
+        self.folder = os.path.abspath(self.settings.store)
+
+    def assertNoPath(self, r):
+        """The answer `r` names no folder and no file of this machine."""
+        text = r.body.decode('utf-8')
+        for word in (self.folder, json.dumps(self.folder)[1:-1], self.root,
+                     json.dumps(self.root)[1:-1], os.path.basename(self.root),
+                     hub_store.META_NAME, 'Errno'):
+            self.assertNotIn(word, text)
+        # and what it says in words holds nothing shaped like a path
+        said = (r.json().get('error') or {}).get('message', '')
+        for mark in ('\\', ':/'):
+            self.assertNotIn(mark, said)
+
+    def assertStoreRefusal(self, r):
+        self.assertEqual(r.status, 503, r.body)
+        error = r.json()['error']
+        self.assertEqual((error['code'], error['message']), ('store', self.STORE_SAYS))
+        self.assertIs(r.json()['ok'], False)
+        self.assertNoPath(r)
+        return error
+
+    def test_a_closed_store_is_told_in_the_agents_words_through_the_tunnel(self):
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'before the close'})
+        self.assertEqual(r.status, 200, r.body)
+        tid = r.json()['id']
+        self.hub.store.close()
+        # a read and a write, as the owner the valid token makes of the caller
+        for method, path, obj in (('GET', TODOS, None), ('GET', api.BASE + '/snapshot', None),
+                                  ('POST', TODOS, {'title': 'never written'}),
+                                  ('POST', '%s/%s/done' % (TODOS, tid), None)):
+            with self.subTest(method=method, path=path):
+                error = self.assertStoreRefusal(self.ask(method, path, token=self.good, obj=obj))
+                # the same request at the local listener: the same status, code and field, and
+                # the store's own words for the owner, which name its folder
+                if method == 'GET':
+                    local = get(self.lport, path, self.owner)
+                else:
+                    local = post(self.lport, path, obj, self.owner)
+                self.assertEqual((local.status, local.json()['error']['code'],
+                                  local.json()['error']['field']), (503, 'store', error['field']))
+                self.assertIn(self.folder, local.json()['error']['message'])
+        self.assertIn(('access', '127.0.0.1 GET %s 503 owner' % TODOS), self.lines)
+        # health on this port was fixed words already
+        r = self.ask('GET', HEALTH, token=self.good)
+        self.assertNoPath(r)
+        self.assertEqual(api.AGENT_SAYS['store'], self.STORE_SAYS)
+        self.assertNoSecret(self.good)
+
+    def test_a_store_that_cannot_be_written_is_told_in_the_agents_words_through_the_tunnel(self):
+        meta = os.path.join(self.folder, hub_store.META_NAME)
+        replace = hub_store._replace
+        failed = []
+
+        def denied(path, text):
+            failed.append(path)
+            raise OSError(13, 'Permission denied', path)
+
+        before = self.revision()
+        hub_store._replace = denied
+        try:
+            through = self.ask('POST', TODOS, token=self.good, obj={'title': 'never written'})
+            local = post(self.lport, TODOS, {'title': 'never written'}, self.owner)
+        finally:
+            hub_store._replace = replace
+        self.assertEqual(failed, [meta, meta], 'the write did not reach the failing file')
+        error = self.assertStoreRefusal(through)
+        # the local listener's owner is told the file and the system's reason, as before
+        self.assertEqual((local.status, local.json()['error']['code'],
+                          local.json()['error']['field']), (503, 'store', error['field']))
+        # (the system's text holds the path as Python writes it: repr, each backslash doubled)
+        for word in (hub_store.META_NAME, 'Permission denied', repr(meta)):
+            self.assertIn(word, local.json()['error']['message'])
+        self.assertEqual(self.revision(), before)
+        # nothing is broken for good: the next write through the tunnel is served
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'written'})
+        self.assertEqual(r.status, 200, r.body)
+
+    def test_the_caller_is_still_the_owner_and_other_errors_keep_their_own_words(self):
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'through the tunnel'})
+        self.assertEqual(r.status, 200, r.body)
+        tid = r.json()['id']
+        # owner-only passes, agent-only is refused: the wording changed nobody's role
+        r = self.ask('POST', '%s/%s/edit' % (TODOS, tid), token=self.good, obj={'title': 'edited'})
+        self.assertEqual(r.status, 200, r.body)
+        r = self.ask('POST', '%s/%s/ack' % (TODOS, tid), token=self.good)
+        self.assertEqual((r.status, r.json()['error']['code']), (403, 'forbidden'))
+        # an error with no agent wording is the answer the local listener gives its owner
+        for method, path, obj in (('POST', TODOS, {}), ('GET', api.BASE + '/no-such-route', None),
+                                  ('POST', TODOS + '/T-999/done', None)):
+            with self.subTest(method=method, path=path):
+                r = self.ask(method, path, token=self.good, obj=obj)
+                if method == 'GET':
+                    local = get(self.lport, path, self.owner)
+                else:
+                    local = post(self.lport, path, obj, self.owner)
+                self.assertGreaterEqual(r.status, 400)
+                self.assertEqual((r.status, r.json()), (local.status, local.json()))
+                self.assertNoPath(r)
+        # how: the tunnel listener asks the Api for the agent's words, the local one does not
+        local, tunnelled = self.hub.listeners
+        self.assertEqual((local.agent_words, tunnelled.agent_words), (False, True))
 
 
 class UnreadableRequestTest(TunnelCase):
@@ -1175,7 +1354,7 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.lines, [('note', tunnel.REFUSAL_LINE % tunnel.CLOSING)])
 
     def test_keys_says_whether_there_are_keys_and_fetches_none(self):
-        self.assertEqual(self.gate().keys(), (True, ''))    # a dict holds its keys already
+        self.assertEqual(self.gate().keys(), (False, ''))   # a dict has no ready(): it cannot say
         fetches, failing, clock = [], [True], [0.0]
 
         def fetch(team, timeout):
@@ -1201,7 +1380,7 @@ class GateTest(unittest.TestCase):
         self.assertEqual(gate.keys(), (False, ''))
 
     def test_keys_never_raises_and_only_true_is_ready(self):
-        self.assertEqual(self.gate(keys=_Broken()).keys(), (True, ''))  # no ready(): keys in hand
+        self.assertEqual(self.gate(keys=_Broken()).keys(), (False, ''))     # no ready(): no keys
         source = _Source(self.keys)
         gate = self.gate(keys=source)
         for said in (False, None, 1, 'yes', RuntimeError('a secret word')):
@@ -1216,6 +1395,31 @@ class GateTest(unittest.TestCase):
         source.said = True
         self.assertEqual(gate.keys(), (True, ''))
         self.assertEqual(self.lines, [])
+
+    def test_a_key_source_with_no_ready_never_says_it_has_keys(self):
+        case = self
+
+        class Plain(object):
+            """Checks tokens, and has nothing to say of itself."""
+
+            def get(self, kid):
+                return case.keys.get(kid)
+
+        class Flag(Plain):
+            ready = True                # a value, not a ready(): it says nothing either
+
+        class Failed(Plain):
+            error = 'keys-fetch'        # no ready(), and a reason: the reason is still told
+
+        for source, said in ((self.keys, (False, '')), (Plain(), (False, '')),
+                             (Flag(), (False, '')), (Failed(), (False, 'keys-fetch'))):
+            with self.subTest(source=type(source).__name__):
+                gate = self.gate(keys=source)
+                self.assertEqual(gate.keys(), said)
+                # its tokens are checked all the same, and a good one changes no word of it
+                self.assertEqual(gate(_Request(self.good)), auth.OWNER)
+                self.assertRefusal(gate(_Request(self.good + 'x')))
+                self.assertEqual(gate.keys(), said)
 
 
 if __name__ == '__main__':

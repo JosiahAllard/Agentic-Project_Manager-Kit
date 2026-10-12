@@ -1122,6 +1122,58 @@ class SecondFixTest(ApiCase):
         status, obj = self.call('GET', '/questions', 'somebody')
         self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
 
+    # ---- agent_words: a transport whose answers leave this machine
+    def test_with_agent_words_the_owner_may_do_what_an_owner_may_and_is_told_what_an_agent_is(self):
+        # the role is the owner's still: an owner-only write passes, an agent-only one does not
+        tid = self.ok('POST', '/todos', OWNER, {'title': 't'}, agent_words=True)['id']
+        self.ok('POST', '/todos/%s/done' % tid, OWNER, agent_words=True)
+        status, obj = self.call('POST', '/todos/%s/ack' % tid, OWNER, agent_words=True)
+        self.assertEqual((status, obj['error']['code'], obj['error']['field']),
+                         (403, 'forbidden', 'role'))
+        # an error that has no wording of its own for an agent is the same answer
+        for method, path, body in (('POST', '/todos', {}), ('GET', '/no-such-route', None),
+                                   ('POST', '/todos/T-999/done', None)):
+            with self.subTest(path=path):
+                plain = self.call(method, path, OWNER, body)
+                self.assertGreaterEqual(plain[0], 400)
+                self.assertEqual(self.call(method, path, OWNER, body, agent_words=True), plain)
+        root = json.dumps(self.store.root)[1:-1]
+        self.store.close()
+        for method, path, body, query in (('GET', '/todos', None, None),
+                                          ('GET', '/snapshot', None, None),
+                                          ('GET', '/wait', None, {'timeout': '0'}),
+                                          ('POST', '/todos', {'title': 't'}, None),
+                                          ('POST', '/todos/%s/delete' % tid, None, None)):
+            with self.subTest(path=path, method=method):
+                plain = self.call(method, path, OWNER, body, query)
+                self.assertIn(root, json.dumps(plain[1]))
+                status, obj = self.call(method, path, OWNER, body, query, agent_words=True)
+                self.assertEqual((status, obj['error']['code']), (503, 'store'))
+                self.assertEqual(obj['error']['message'],
+                                 'the hub store is not available: the owner sees why')
+                self.assertEqual(obj['error']['field'], plain[1]['error']['field'])
+                self.assertNotIn(root, json.dumps(obj))
+                self.assertNotIn(os.path.basename(self.store.root), json.dumps(obj))
+                # the agent's answer is the one it always was
+                self.assertEqual(self.call(method, path, AGENT, body, query, agent_words=True),
+                                 self.call(method, path, AGENT, body, query))
+        # only False gives the owner the store's own words: a value that is neither is no leak
+        for words in (None, 1, 0, 'no', ''):
+            with self.subTest(words=repr(words)):
+                status, obj = self.call('GET', '/todos', OWNER, agent_words=words)
+                self.assertEqual(obj['error']['message'], api.AGENT_SAYS['store'])
+        self.assertIn(root, json.dumps(self.call('GET', '/todos', OWNER, agent_words=False)[1]))
+
+    def test_with_agent_words_an_unexpected_error_is_its_class_name_for_the_owner_too(self):
+        def docs(coll):
+            raise OSError('cannot read a-folder-on-this-machine')
+        self.store.docs = docs
+        status, obj = self.call('GET', '/questions', OWNER, agent_words=True)
+        self.assertEqual((status, obj['error']['code'], obj['error']['message']),
+                         (500, 'internal', 'OSError'))
+        with self.assertRaises(OSError):        # a transport with a log of its own still gets it
+            self.call('GET', '/questions', OWNER, agent_words=True, raise_unexpected=True)
+
     def test_the_stores_own_invalid_still_tells_an_agent_what_is_wrong(self):
         obj = self.refused('invalid', None, 'POST', '/todos', AGENT, {'title': 't'})
         self.assertIn('handstep-commands', obj['error']['message'])

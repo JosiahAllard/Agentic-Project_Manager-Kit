@@ -43,10 +43,15 @@ a value of the settings.
 
 The listener differs from the local one in this and no more: its gate; no Host rule (the tunnel
 hands on the public host name); writes need an `https` Origin that names that Host; no pairing
-routes, as this port hands out no local session; and the source of a write. Every write through
-it is recorded with the source VIA: the listener is made with via_header=False, so the
-X-Hub-Via header a client sends on this port is never read. start() installs no route at all:
-kitlib.hubsite.serve gives it its health route, which answers fixed words only on this port.
+routes, as this port hands out no local session; the source of a write; and the wording of an
+error. Every write through it is recorded with the source VIA: the listener is made with
+via_header=False, so the X-Hub-Via header a client sends on this port is never read, and VIA is
+httpd.TUNNEL_VIA, the one source the local listener never records for a client that claims it.
+An error answer through it is worded as for an agent (the listener is made with
+agent_words=True): the valid token's caller is the owner for what a request may do, and is still
+told the fixed phrase of api.AGENT_SAYS, never the store's folder or a file path, since this
+port's answers leave the machine. start() installs no route at all: kitlib.hubsite.serve gives
+it its health route, which answers fixed words only on this port.
 
 Closing. Gate.stop() shuts the gate for good and stops its key source (access.KeyCache.stop), so
 a request held in the gate on a key fetch is refused with the one answer at once and no longer
@@ -68,7 +73,7 @@ from . import access, auth, httpd
 HEADER = 'Cf-Access-Jwt-Assertion'
 ORIGIN_SCHEME = 'https'                 # a browser reaches the tunnel's public name over https
 REFUSED = 'this listener needs a valid Cloudflare Access token'
-VIA = 'tunnel'                          # the source every write through this listener is recorded with
+VIA = httpd.TUNNEL_VIA                  # the source every write through this listener is recorded with
 NO_TOKEN = 'no-token'
 GATE_ERROR = 'gate-error'
 CLOSING = 'closing'                     # refused because Gate.stop() was called: the hub is closing
@@ -206,14 +211,15 @@ class Gate(object):
 
     def keys(self):
         """(True, '') when the key source has keys to check a token with, else (False, why).
-        `why` is one of access.REASONS (the key source's `error`, when it is one) or ''. A key
-        source with no ready() holds its keys already (a dict, in tests). It asks ready() and
-        nothing else: no fetch is started and none is waited for. Never raises."""
+        `why` is one of access.REASONS (the key source's `error`, when it is one) or ''. Only a
+        ready() that answers True says there are keys: a key source with no ready() (a dict)
+        cannot say it has any, so it is (False, why) like one that has fetched none. It asks
+        ready() and nothing else: no fetch is started and none is waited for. Never raises."""
         try:
             if self._stopped.is_set():
                 return False, ''
             ready = getattr(self._keys, 'ready', None)
-            if not callable(ready) or ready() is True:
+            if callable(ready) and ready() is True:
                 return True, ''
             why = getattr(self._keys, 'error', '')
             return False, why if isinstance(why, str) and why in access.REASONS else ''
@@ -223,7 +229,8 @@ class Gate(object):
 
 def gate(access_settings, keys, now=None, log=None, clock=None):
     """The tunnel listener's Gate for `access_settings`. `keys` has get(kid) (an access.KeyCache,
-    which also has the stop() and ready() the Gate's own stop() and keys() use); `now()` is the
+    which also has the stop() and ready() the Gate's own stop() and keys() use; with no ready()
+    the Gate checks tokens all the same and keys() never says there are keys); `now()` is the
     Unix time a token's times are checked against and `clock()` the one the log lines are spaced
     by (time.time and time.monotonic)."""
     return Gate(access_settings, keys, now=now, log=log, clock=clock)
@@ -232,14 +239,15 @@ def gate(access_settings, keys, now=None, log=None, clock=None):
 def start(settings, api, static_dir=None, log=None, keys=None, now=None):
     """The tunnel listener for `settings`: an httpd.Listener on the loopback address at
     settings.tunnel_port with gate(), bound and not started, with no route of its own. Its `via`
-    is VIA and it reads no VIA_HEADER, so every write through it is recorded as VIA.
-    TunnelConfigError, before any port is bound or key source made, when settings.access cannot
-    serve; httpd.BindRefused when the port cannot be bound. `keys(team)` makes the key source
-    (None: access.KeyCache, which fetches nothing until a token asks for a key); `now` is the
-    gate's."""
+    is VIA and it reads no VIA_HEADER, so every write through it is recorded as VIA; it is made
+    with agent_words=True, so an error answer through it is the agent's wording for the owner
+    too. TunnelConfigError, before any port is bound or key source made, when settings.access
+    cannot serve; httpd.BindRefused when the port cannot be bound. `keys(team)` makes the key
+    source (None: access.KeyCache, which fetches nothing until a token asks for a key); `now` is
+    the gate's."""
     check(settings.access)
     source = (keys or access.KeyCache)(settings.access.team)
     return httpd.Listener((httpd.LOOPBACK, settings.tunnel_port), api,
                           gate(settings.access, source, now=now, log=log),
                           static_dir=static_dir, host_rule=None, origin_scheme=ORIGIN_SCHEME,
-                          via=VIA, via_header=False, log=log)
+                          via=VIA, via_header=False, agent_words=True, log=log)
