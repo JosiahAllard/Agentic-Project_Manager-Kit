@@ -6,12 +6,14 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
 
+from kitlib.config import user as kuser
 from kitlib.git import batch, cmd
-from tests import gitfixture
+from tests import gitfixture, home
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -453,6 +455,100 @@ class FakeUnreadableObjects(unittest.TestCase):
         repo, _ = frepo.discover(self.r.root, dict(os.environ), [], None)
         self.assertEqual(revs.tree_entries(repo, empty), [])
         self.assertEqual(revs.flatten_tree(repo, empty), {})
+
+
+class FakeHomeFence(unittest.TestCase):
+    """The fake's own home lookups go through kitlib.config.user.home_dir() (docs/test-tools.md
+    "Home fence"): the global config, the default ignore and attributes files, and a `~` in
+    core.excludesfile and core.attributesfile. A home the environment names is used as given, for
+    the `~` too."""
+
+    # No system config, and a global config that is no file: neither needs a home.
+    BARE = {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull}
+
+    def setUp(self):
+        if not cmd.fake_active():
+            self.skipTest('the run is on real git (kit_tests.py --real-git)')
+        self.r = gitfixture.TempRepo()
+        self.addCleanup(self.r.cleanup)
+
+    def repo(self, env, cli_config=()):
+        from kitlib.git.fake import repo as frepo
+        repo, _ = frepo.discover(self.r.root, dict(env), list(cli_config), None)
+        return repo
+
+    def other_home(self):
+        d = tempfile.mkdtemp(prefix='kit-env-home-')
+        self.addCleanup(gitfixture.rmtree, d)
+        return d
+
+    def test_global_config_of_an_env_without_a_home_is_fenced(self):
+        from kitlib.git.fake import config as fconfig
+        home.fence_decoy(self)
+        with self.assertRaises(kuser.HomeFenced):
+            fconfig.global_files({})
+
+    def test_global_config_of_an_env_with_a_home_is_under_it(self):
+        # A guard, green before the change too: the fence must not refuse a home the env names.
+        from kitlib.git.fake import config as fconfig
+        home.fence_decoy(self)
+        d = self.other_home()
+        self.assertEqual(fconfig.global_files({'USERPROFILE': d}),
+                         [os.path.join(d, '.config', 'git', 'config'), os.path.join(d, '.gitconfig')])
+
+    def test_default_ignore_file_of_an_env_without_a_home_is_fenced(self):
+        from kitlib.git.fake import ignore
+        home.fence_decoy(self)
+        repo = self.repo(self.BARE)
+        with self.assertRaises(kuser.HomeFenced):
+            ignore.Ignore(repo)
+
+    def test_tilde_in_excludesfile_is_the_env_home(self):
+        from kitlib.git.fake import ignore
+        home.temp_home(self)                 # the process's home: empty, no rules file
+        d = self.other_home()
+        with open(os.path.join(d, 'rules'), 'w') as f:
+            f.write('*.skip\n')
+        repo = self.repo(dict(self.BARE, HOME=d, USERPROFILE=d), [('core.excludesfile', '~/rules')])
+        self.assertTrue(ignore.Ignore(repo).is_ignored('a.skip'))
+
+    def test_absolute_excludesfile_looks_up_no_home(self):
+        # A guard, green before the change too.
+        from kitlib.git.fake import ignore
+        home.fence_decoy(self)
+        d = self.other_home()
+        rules = os.path.join(d, 'rules')
+        with open(rules, 'w') as f:
+            f.write('*.skip\n')
+        repo = self.repo(self.BARE, [('core.excludesfile', rules)])
+        self.assertTrue(ignore.Ignore(repo).is_ignored('a.skip'))
+
+    def test_excludesfile_naming_a_users_home_is_unsupported(self):
+        from kitlib.git.fake import ignore
+        from kitlib.git.fake.errors import Unsupported
+        d = home.temp_home(self)
+        repo = self.repo(dict(self.BARE, HOME=d, USERPROFILE=d), [('core.excludesfile', '~someone/rules')])
+        with self.assertRaises(Unsupported):
+            ignore.Ignore(repo)
+
+    def test_default_attributes_file_of_an_env_without_a_home_is_fenced(self):
+        from kitlib.git.fake import wt
+        home.fence_decoy(self)
+        repo = self.repo(self.BARE)
+        with self.assertRaises(kuser.HomeFenced):
+            wt.Convert(repo).guard()
+
+    def test_tilde_in_attributesfile_is_the_env_home(self):
+        from kitlib.git.fake import wt
+        from kitlib.git.fake.errors import Unsupported
+        home.temp_home(self)                 # the process's home: empty, no attributes file
+        d = self.other_home()
+        with open(os.path.join(d, 'attrs'), 'w') as f:
+            f.write('* text\n')
+        repo = self.repo(dict(self.BARE, HOME=d, USERPROFILE=d), [('core.attributesfile', '~/attrs')])
+        with self.assertRaises(Unsupported) as c:
+            wt.Convert(repo).guard()
+        self.assertIn(d.replace('\\', '/'), str(c.exception))
 
 
 if __name__ == '__main__':

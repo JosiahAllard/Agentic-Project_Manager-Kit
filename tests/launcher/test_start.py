@@ -376,6 +376,24 @@ class Start(Base):
         self.assertIn("'You succeed old-a1, which has checkpointed", out)
         self.assertTrue(out.rstrip().endswith("go'\""), out[-40:])      # the what-if line closes its quote
 
+    def test_the_predecessor_text_serialises_no_landing(self):
+        text = start.predecessor_text('x')
+        for old in (r'leave .*landing slot', 'hands them over', r'(?<!never )wait'):
+            self.assertNotRegex(text, old)
+        self.assertIn('lands nothing', text)
+        self.assertIn('every LAND verdict', text)
+        self.assertIn('never wait on it', text)
+        self.assertNotIn('--auto', text)
+
+    def test_only_a_coordinators_successor_is_told_to_land(self):
+        out = self.go(prompt='go', predecessor='old-a1')
+        self.assertIn('Land every LAND verdict', out)
+        for kw in ({'agent': 'consultant'}, {'agent': 'deep-worker'}, {'no_agent': True}):
+            out = self.go(prompt='go', predecessor='old-a1', **kw)
+            self.assertIn('You succeed old-a1', out)
+            self.assertNotIn('LAND', out)
+            self.assertNotIn('lands nothing', out)
+
     def test_the_default_account_folder_removes_config_dir(self):
         default = os.path.join(self.h.root, '.claude')
         os.makedirs(default)

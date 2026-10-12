@@ -87,6 +87,36 @@ class Cli(unittest.TestCase):
         self.assertEqual(self.repo.git('ls-remote', 'origin', smod.STORE_REF), tip)
         self.assertEqual(self.run_tool('show', 'FOO')[0], 0)
 
+    def test_release_returns_the_callers_pull_to_open(self):
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        self.ok('set', 'FOO', '--priority', '2', '--priority-by', 'agent', '--effort', 's')
+        self.repo.git('checkout', '-b', 'tools/wk')
+        self.ok('pull', 'FOO')
+        out = self.ok('release', 'FOO', '--reason', 'not this branch after all')
+        self.assertIn('RELEASED FOO - state: pulled -> open', out)
+        self.assertIn('was pulled_by: tools/wk\n', out)
+        shown = self.ok('show', 'FOO')
+        self.assertIn('state: open', shown)
+        self.assertNotIn('pulled_by', shown)
+        log = self.repo.git('log', '--format=%s', smod.STORE_REF)
+        self.assertEqual(log.split('\n')[0],
+                         'backlog: release FOO from tools/wk: not this branch after all')
+
+    def test_retire_deletes_the_record_and_frees_its_dependents(self):
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'docs/y.md')
+        self.ok('block', 'BAR', '--on', 'item:FOO')
+        out = self.ok('retire', 'FOO', '--why', 'no longer wanted at all')
+        self.assertIn('RETIRED FOO', out)
+        rc, out = self.run_tool('show', 'FOO')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('NOT FOUND', out)
+        shown = self.ok('show', 'BAR')
+        self.assertIn('blocked_on: -', shown)
+        self.assertIn('state: open', shown)
+        log = self.repo.git('log', '--format=%s', smod.STORE_REF)
+        self.assertEqual(log.split('\n')[0], 'retires FOO: no longer wanted at all')
+
     def test_set_flags_take_underscored_and_dashed_spellings(self):
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
         self.ok('set', 'FOO', '--priority', '3', '--priority_by', 'agent')

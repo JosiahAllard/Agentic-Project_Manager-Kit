@@ -250,10 +250,10 @@ class Ignore:
         if ex is None:
             env = repo.env
             xdg = env.get('XDG_CONFIG_HOME')
-            home = env.get('HOME') or env.get('USERPROFILE') or os.path.expanduser('~')
-            ex = os.path.join(xdg, 'git', 'ignore') if xdg else os.path.join(home, '.config', 'git', 'ignore')
+            ex = os.path.join(xdg, 'git', 'ignore') if xdg else os.path.join(
+                _config.home_of(env), '.config', 'git', 'ignore')
         else:
-            ex = os.path.expanduser(ex)
+            ex = _config.expand_user(ex, repo.env, 'core.excludesfile')
         t = _read(ex)
         if t:
             self.base_lists.append(parse_lines(t, ''))

@@ -18,6 +18,7 @@ from kitlib.gate import runner
 from kitlib.git import cmd as gitcmd
 from kitlib.lock import store as lockstore
 from tests.gate import fixtures
+from tests.home import temp_home
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _spec = importlib.util.spec_from_file_location('kit_daily_full_entry_for_tests',
@@ -75,6 +76,9 @@ class Case(fixtures.GateRepoCase):
     KIT = {'daily_full': {'enabled': True, 'kind': 'engine-test'}}
 
     def setUp(self):
+        # A temp home (tests/home.py): the run's log folder still comes from the machine config
+        # (runner.log_base -> kitlib.config.user.work_temp), read from an empty one, never the real.
+        temp_home(self)
         fixtures.GateRepoCase.setUp(self)
         self.out = os.path.join(self.tmp, 'daily')
         self.main_dir = os.path.realpath(self.repo.root)

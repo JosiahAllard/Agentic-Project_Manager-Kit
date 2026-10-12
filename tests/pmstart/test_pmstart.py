@@ -8,6 +8,7 @@ import unittest
 
 from kitlib import pmstart
 from kitlib.pmstart import fglock
+from tests.home import temp_home
 from tests.pmstart import keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
@@ -351,6 +352,7 @@ class BomFileTest(unittest.TestCase):
         return p
 
     def test_liveness_reads_bom_sessions(self):
+        temp_home(self)     # liveness's current account reads an empty machine config
         with tempfile.TemporaryDirectory() as d:
             p = self.write(d, "sessions.json", {"alpha": {"name": "al-a2"}})
             out = pmstart.liveness(dict(CFG, sessions_file=p), [])

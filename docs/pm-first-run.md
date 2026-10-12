@@ -33,14 +33,24 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    Success: it prints the layout (threads, cpu and gpu slots) and what holds each slot. Never run
    `division`: that is the owner's choice (docs/lock-api.md).
 
+5a. **Set up the agents' temp folder.** Run `python <kit>/tools/agent_temp_init.py`; the dry run
+   prints the plan for the temp folder alone: the `AGENT_TEMP` folder, the `agent_temp_sweep` config
+   key, the folder's permissions and the sweep task line (docs/machine-setup.md "Agent temp init").
+   It refuses a folder the sweep would refuse, such as `%LOCALAPPDATA%\Temp`. The owner applies it
+   with `--apply`, and registers the sweep task with `--register-sweep-task --apply`. Success: the
+   PM checklist prints no `agent_temp` lines (docs/pm-start.md "Agent temp (`agent_temp`)").
+
 6. **Turn on the guard** (hand step): the PreToolUse entry that
    `python <kit>/claude/hooks/guard.py --settings-entry` prints goes in the account's settings
    (docs/guard.md "Go-live (after the joint review)").
    Success: a Bash search from a drive root is denied with `rule=root-search`.
 
-   Steps 3, 6 and 7's hook are hand steps on a fresh machine: `installer/machine-setup.ps1`
-   needs an old kit to switch from and does not install them (docs/machine-setup.md "Not done
-   here").
+   On a fresh machine (no older kit clone), steps 3, 6 and 7's hook are one owner command instead:
+   from `<kit>`, `powershell -NoProfile -File installer\machine-setup.ps1 -Fresh -PmSettings
+   <PM repo>\.claude\settings.local.json` prints the plan, and the same command with `-Apply`
+   makes it (docs/machine-setup.md "Fresh machine (--fresh)"). It still runs as a hand step: the
+   owner reviews the dry run and runs `-Apply`. Steps 3 and 6's success checks still apply. Step
+   7's hook needs the file's folder to exist; create the rest of step 7's files either way.
 
 7. **Turn on the PM checklist.** Create the files it reads: a sessions file, a reminders file
    holding `[]`, and a memory folder for handoff notes. The sessions file is `sessions.json` in
@@ -52,7 +62,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    (docs/pm-watch.md "Config"). `pm_watch.py` reads usage
    in-process from the machine config's `launcher` key and exits 2 without it; `usage_script` is refused.
    Then, as a hand step, the owner adds the SessionStart hook from docs/pm-start.md to the
-   settings only the PM session loads.
+   settings only the PM session loads (on a fresh machine, `-Fresh -PmSettings` above writes it).
    Success: the next PM session starts with "PM session start checklist", not "no pm_start
    config ... checklist skipped".
 

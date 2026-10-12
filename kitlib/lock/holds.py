@@ -612,6 +612,11 @@ def create(store, L, spec, actor, kinds_table=None, now=None):
     try:
         with store.lock("holds"):
             hs = records(store, L, prune=True)
+            # An id is a second stamp and a short token: one drawn twice in a second would
+            # replace a live hold here, or an ended one's record when this hold ends.
+            while (os.path.exists(_path(store, h["id"]))
+                   or os.path.exists(store.path("ended", h["id"] + ".json"))):
+                h["id"] = new_id("h")
             if owner == "agent":
                 h["slots"], notes = _agent_slots(store, L, need, start, end_, hs, store.live_runs())
             store.write("holds/%s.json" % h["id"], h)

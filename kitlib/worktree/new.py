@@ -21,7 +21,9 @@ and the output names the base's unpushed commits the branch does NOT contain. A 
 there but is not a lock record counts as held. The lock is only read. The one refusal under a held
 lock: `<remote>/<base>` does not resolve. With the lock free the base must equal the remote; the
 refs are read once more before refusing (`choose_base`), for a lander that pushed and released
-between the ref read and the lock read.
+between the ref read and the lock read. A non-main `--base` that exists locally with no pushed
+branch is refused with the lock held or free; that refusal ends with a `route` line (route_line)
+naming tools/redfirst.py, so a wait is not mistaken for the way out.
 
 The behind exception: with the lock free and local `<base>` an ancestor of `<remote>/<base>` but not
 equal to it (a pure fast-forward: no commit of its own), the new branch starts at `<remote>/<base>`
@@ -142,6 +144,17 @@ def choose_base(m, om, held, reread, free_why=''):
         return None, m, om, 'the base or its remote branch did not resolve'
     return None, m, om, (free_why or 'nobody holds the landing lock') + \
         ', so the difference is no landing'
+
+
+def route_line(base, pushed, tools, remote, main_branch):
+    """The `route` line ending a refusal of a non-main base that exists locally but has no pushed
+    branch: that refusal holds with the landing lock free or held, so waiting does not change it."""
+    return ('route     %s has no pushed %s, so this is refused with or without a landing; waiting '
+            'will not change it. For red-first evidence make no worktree: `python %s/redfirst.py '
+            '-C <your worktree> --tests <test file>` runs the committed tests at the pre-change '
+            'commit in a tree of its own (`--base <commit>` when that is not the merge-base with '
+            '%s/%s); it needs no pushed branch and waits for no landing. Otherwise push %s or tell '
+            'the coordinator.' % (base, pushed, tools, remote, main_branch, base))
 
 
 def behind_count(cwd, m, om):
@@ -269,12 +282,14 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
         start = om
         out.append('base      local %s is %d commit(s) behind %s; this branch starts at %s %s and '
                    'local %s is not updated' % (base, behind, pushed, pushed, om[:7], base))
+    route = [route_line(base, pushed, tools, remote, cfg.main_branch)] \
+        if start is None and m and not om and base != cfg.main_branch else []
     if start is None and held:
         return refuse('refused   %s, but %s %s: no pushed commit to base on. %s'
-                      % (seen, pushed, why, REFUSAL))
+                      % (seen, pushed, why, REFUSAL), *route)
     if start is None:
         return refuse('%s %s != %s %s. %s' % (base, m[:7] or '?', pushed, om[:7] or '?', REFUSAL),
-                      '  not a landing in progress: %s' % why)
+                      '  not a landing in progress: %s' % why, *route)
     if held:
         shas = unpushed_commits(main, m, om)
         if not existing:

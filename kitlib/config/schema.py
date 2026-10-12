@@ -31,7 +31,8 @@ Argv = ListOf(Str(), nonempty=True)
 Regexes = Either(Regex(), ListOf(Regex()))
 
 # Paths only the owner changes (PM kit _owner_only.DEFAULT): an entry ending `/` locks a directory.
-OWNER_PATHS = ['CLAUDE.md', '.claude/', '.github/workflows/', '.kit.json', 'tools/gate.json']
+OWNER_PATHS = ['CLAUDE.md', '.claude/', '.github/workflows/', '.kit.json', 'tools/gate.json',
+               'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']
 OWNER_PATHS_EXCEPT = ['.claude/worktrees/']
 
 # The heavy-program entry shape: kit defaults (policy.HEAVY_DEFAULTS) and `.kit.json` "heavy".programs.
@@ -80,7 +81,7 @@ STEP = Obj({
                      None, 'select by changed file content'),
     'requires': Field(ListOf(Either(Str(), Argv), nonempty=True), None, 'commands or probe argvs; missing: skip'),
     'requires_strict': Field(Bool(), None, 'a missing requirement fails instead of skipping'),
-    'reuse': Field(Either(Bool(), Str(pattern=NAME_RE, what='a group name')), None, 'a landing may reuse its pass from the branch gate of the exact tree; a group name: its group is reused together or not at all'),
+    'reuse': Field(Either(Bool(), Str(pattern=NAME_RE, what='a group name')), None, 'a branch gate rerun or a landing does not run the step again while the gate cache holds a pass of its key (its input files, command, gate config and kit files); a group name: its group is reused together or not at all'),
 }, required=('name',), what='step object')
 
 # A folder outside git an agent session may write, and how (kitlib/guard/jail.py, docs/guard.md "Write jail").
@@ -107,7 +108,8 @@ RUNNER = Obj({
     'project': Field(Str(), None, 'gradle: the project path, :core say'),
     'csproj': Field(RelPath(), None, 'dotnet: the test project file'),
     'args': Field(Strs, None, 'arguments appended to the command'),
-}, required=('glob', 'kind'), what='{glob, kind, pythonpath, dir, project, csproj, args}')
+    'lock': Field(Str(pattern=NAME_RE, what='a kind name'), None, 'the kinds-table kind booked around its command (unset: the kind of the heavy-list entry the command matches - build for gradle and dotnet, none for python)'),
+}, required=('glob', 'kind'), what='{glob, kind, pythonpath, dir, project, csproj, args, lock}')
 
 SECTIONS = {
     'repo': {
@@ -205,8 +207,8 @@ SECTIONS = {
         'lanes': Field(MapOf(LANE, 'lane'), {}, 'lanes besides full that gate.py land --lane takes'),
         'wait_s': Field(Int(0, 86400), 3600, 'seconds tools/land.py waits for its turn at the landing lock unless --wait says otherwise'),
         'batch_max': Field(Int(1, 20), 3, 'most branches one tools/land.py landing merges and gates together'),
-        'reuse_max_age_h': Field(Int(0, 168), 24, 'hours a branch gate-OK record serves a landing\'s gate reuse; 0: never reused'),
-        'reuse_never': Field(Strs, [], 'globs of paths whose change makes a landing reuse no step'),
+        'reuse_max_age_h': Field(Int(0, 168), 24, 'hours a pass stored in the gate cache serves a branch gate rerun or a landing; 0: no gate reads or stores a step result'),
+        'reuse_never': Field(Strs, [], 'globs of paths whose change makes a gate (branch or landing) read and store no step result in the gate cache'),
         'in_flight': Field(IN_FLIGHT, None, 'how tools/new_worktree.py and tools/sync_base.py see a landing in flight before they fetch, and wait for it (unset: off; {}: the kit landing lock; wait_s unset: 100, inferred not measured; docs/new-worktree.md "Waiting for a landing in flight")'),
     },
     'ledger': {
@@ -245,7 +247,7 @@ SECTIONS = {
         'udp_ports': Field(ListOf(Int(0, 65535), length=2), None, '[low, high] ports checked free'),
     },
     'redfirst': {
-        'runners': Field(ListOf(RUNNER), [{'glob': 'tests/*test_*.py', 'kind': 'python'}], 'which runner takes a test file, first match wins'),
+        'runners': Field(ListOf(RUNNER), [{'glob': 'tests/*test_*.py', 'kind': 'python'}], 'which runner takes a test file, first match wins; none written: this default, then <tools_dir>/*test_*.py as python with the tools folder as pythonpath, unless tools_dir is . or that glob is listed (docs/redfirst.md); a runner\'s lock is the kinds-table kind the run books around its command (unset: the kind of the heavy-list entry the command matches)'),
         'hold_wait': Field(Int(0), 60, 'seconds a held throwaway tree is re-checked before it is left'),
     },
     'review_pack': {

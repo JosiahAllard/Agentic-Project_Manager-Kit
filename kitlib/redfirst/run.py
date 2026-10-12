@@ -9,29 +9,51 @@ registration) and its git_remove, never forced. A tree still held after `"redfir
 seconds is left registered and intact, named with the worktree_remove command that removes it,
 and the exit is 4.
 
+The machine lock: a run whose command is heavy books it once, before the tree is made
+(lock_kind, book_slot: kitlib.lock.run.book for `<repo name>/redfirst-<base10>`), runs every
+command in the booked run's job (locked_run) and releases before the cleanup. The kind is the
+runner's `lock`, else the kind of the heavy-list entry its command matches
+(kitlib.config.heavy_match: build for gradle and dotnet, none for the python runner, which books
+nothing). Inside a run that already holds enough (MACHINE_LOCK_RUN) the booking takes nothing more;
+inside one that holds less the lock refuses it. A refusal makes no tree and runs nothing (the log
+folder, made first, stays): exit 2 for the lock's usage refusals, the lock's own exit code for the
+others (LOCK_CODES). The booked run's record ends, before the cleanup, with the code the verdicts
+give (0 every test red, 1 a test green, 3 undecided), 130 after an interrupt, 1 after an error or
+after the lock's stop ended the command.
+
 Interrupts: a Ctrl-C while the tests run stops them and goes to the cleanup; one while the tree is
-made or filled is held until that is done. The cleanup ignores Ctrl-C and runs in a child process
-on its own hidden console (a new session elsewhere), every git of it included: a console Ctrl-C
-reaches every process on the console, and a `git worktree remove` killed partway is the run that
-destroys the entry. A hard kill of this process runs no cleanup; the leftover then shows in
-`worktree_remove.py --check`.
+made or filled is held until that is done; one while the run waits in the lock's queue ends the
+wait (the lock removes the run's entry) and no tree is made. The cleanup ignores Ctrl-C and runs
+in a child process on its own hidden console (a new session elsewhere), every git of it included:
+a console Ctrl-C reaches every process on the console, and a `git worktree remove` killed partway
+is the run that destroys the entry. A hard kill of this process runs no cleanup; the leftover then
+shows in `worktree_remove.py --check`.
+
+Runners: `.kit.json` "redfirst".runners as written; unwritten, the schema default plus a glob for
+the tools folder (runners_for). A path no runner takes is refused with the globs tried (select).
 
 Output goes through `say(line)`; nothing here prints or exits.
 """
 import datetime
 import json
 import os
+import posixpath
+import re
 import signal
 import subprocess
 import sys
 import time
 
+from kitlib.config import heavy_match, heavy_programs
 from kitlib.config import load as load_config
 from kitlib.config.types import ConfigError
 from kitlib.gate import runner as grunner
 from kitlib.git import batch, cmd
 from kitlib.git import refs as gitrefs
 from kitlib.git import repo as gitrepo
+from kitlib.lock import run as lockrun
+from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_TIMEOUT,
+                               EXIT_USAGE, LockError, Store)
 from kitlib.redfirst import verdict as V
 from kitlib.worktree import holders, remove
 
@@ -76,22 +98,39 @@ def object_types(cwd, specs):
 
 
 # ---- interrupts ---------------------------------------------------------------------------------
-RAISE, HOLD, CLEAN = 'raise', 'hold', 'clean'
+RAISE, HOLD, CLEAN, BOOK = 'raise', 'hold', 'clean', 'book'
+
+
+def runs_code(frame, code):
+    """Whether `frame`, or a frame that called it, is running the code object `code`."""
+    while frame is not None:
+        if frame.f_code is code:
+            return True
+        frame = frame.f_back
+    return False
 
 
 class Interrupts(object):
     """SIGINT and SIGBREAK while a run lasts. The handler only records, and raises
-    KeyboardInterrupt only in RAISE mode (the test runs) and at most once: it drops to HOLD as it
-    raises. HOLD notes the signal for the next safe point; CLEAN counts it and carries on."""
+    KeyboardInterrupt only in RAISE mode (the test runs) or, in BOOK mode (book_slot), while the
+    lock's queue wait is running, and at most once: it drops to HOLD as it raises. HOLD notes the
+    signal for the next safe point; CLEAN counts it and carries on.
 
-    def __init__(self):
+    BOOK raises only inside `wait_code` (kitlib.lock.run.acquire): there kitlib.lock.run.book
+    removes the run's queue entry and record itself before the interrupt leaves it. Anywhere else
+    in book - before the wait, or once the slots are held and the Slot is being made and handed
+    back - a raise could drop a Slot nothing would ever release, so the signal is only noted and
+    book_slot reads `seen` when book has returned."""
+
+    def __init__(self, wait_code=None):
         self.mode, self.seen, self.during_cleanup, self.old = HOLD, 0, 0, {}
+        self.wait_code = lockrun.acquire.__code__ if wait_code is None else wait_code
 
     def handler(self, signum, frame):
         self.seen += 1
         if self.mode == CLEAN:
             self.during_cleanup += 1
-        elif self.mode == RAISE:
+        elif self.mode == RAISE or (self.mode == BOOK and runs_code(frame, self.wait_code)):
             self.mode = HOLD
             raise KeyboardInterrupt('signal %d' % signum)
 
@@ -259,6 +298,41 @@ def default_run(argv, cwd, env, log):
             return 127
 
 
+class Cancelled(RuntimeError):
+    """The machine lock's stop ended the run's command (Slot.wait's "cancelled"): no verdict."""
+
+
+def locked_run(slot, ints):
+    """default_run's twin for a run that booked the machine lock: the command starts in the booked
+    run's job (Slot.start: on its cores, with its MACHINE_LOCK_* environment, so a lock call
+    inside it nests) and Slot.wait watches it. A stop of the run (the lock's stop) ends the
+    command's tree and raises Cancelled. The start itself runs in HOLD: an interrupt between the
+    process being made and its place in the job is noted and raised once it is in."""
+    def run(argv, cwd, env, log):
+        full_env = cmd.scrubbed_env(slot.env)
+        full_env.update(env)
+        with open(log, 'w', encoding='utf-8', errors='replace') as fh:
+            p = None
+            ints.mode = HOLD
+            try:
+                p = slot.start(argv, cwd=cwd, env=full_env, stdin=subprocess.DEVNULL,
+                               stdout=fh, stderr=subprocess.STDOUT)
+            except (OSError, LockError) as e:       # JobError is an OSError
+                fh.write('redfirst: could not start %s: %s\n' % (argv[0], e))
+            finally:
+                ints.mode = RAISE
+            if ints.seen:
+                raise KeyboardInterrupt
+            if p is None:
+                return 127
+            code, how = slot.wait(p)
+        if how == 'cancelled':
+            raise Cancelled('the machine lock stopped run %s; its command was ended and gives no '
+                            'verdict' % slot.id)
+        return code
+    return run
+
+
 def run_one(sel, n, tw, log_dir, files, run):
     """(verdict, reason, log) for one selector. Its log and .trx from an earlier run in the same
     log dir are deleted first: only this run's results are read."""
@@ -337,7 +411,13 @@ def prepare(where, tests, also=(), base=None, head='HEAD', log_dir=None):
                       % (base[:10], head[:10], why))
     if not inside:
         raise V.Usage('refused: base %s is not an ancestor of head %s' % (base[:10], head[:10]))
-    sels = [V.parse_selector(t, section['runners']) for t in tests]
+    runners, written = runners_for(cfg)
+    sels = [select(t, runners, written, top, head) for t in tests]
+    try:
+        heavy = heavy_programs(cfg)
+    except ConfigError as e:
+        raise V.Usage('refused: kit configuration: %s' % e)
+    lock, lock_from = one_lock(sels, heavy)
     files = []
     for f in [s.path for s in sels] + [p.replace('\\', '/') for p in also]:
         if f not in files:
@@ -367,7 +447,181 @@ def prepare(where, tests, also=(), base=None, head='HEAD', log_dir=None):
     return Plan(top=top, main=main, base=base, head=head, sels=sels, files=files, new=new, had=had,
                 landed=landed, log_dir=os.path.abspath(log_dir),
                 worktrees_dir=os.path.normpath(cfg.repo['worktrees_dir']),
-                tools_dir=cfg.tools_dir, hold_wait=section['hold_wait'])
+                tools_dir=cfg.tools_dir, hold_wait=section['hold_wait'],
+                lock=lock, lock_from=lock_from, repo=grunner.repo_name(cfg, main))
+
+
+# ---- the machine lock ---------------------------------------------------------------------------
+# The lock's refusals a run passes through as its own exit code (kitlib.lock.store): busy with
+# --no-wait, the wait ran out, the lock could not be read, an owner or game hold, an agent hold.
+# None is 0 or 1, which would read as RED or GREEN.
+LOCK_CODES = (EXIT_BUSY, EXIT_TIMEOUT, EXIT_REQUIRE, EXIT_RESERVED, EXIT_HOLD)
+
+
+def lock_kind(sel, heavy):
+    """`(kind, where it comes from)` for the machine lock one selector's command needs, or
+    `(None, None)`: its runner's `lock`, else the kind of the first heavy-list entry (`heavy`:
+    kitlib.config.heavy_programs) its command matches - the program and arguments of V.command,
+    which do not depend on the tree."""
+    own = sel.runner.get('lock')
+    if own:
+        return own, 'the `lock` of the runner for glob %r in %s' % (sel.runner.get('glob'), KEY)
+    argv = V.command(sel, '.', '.', 1)[0]
+    entry = heavy_match(argv[0], argv[1:], heavy)
+    if entry is None:
+        return None, None
+    return entry['kind'], ('the heavy list takes `%s` as %s; a runner\'s `lock` in %s names '
+                           'another kind' % (' '.join([os.path.basename(argv[0])] + argv[1:2]),
+                                             entry['kind'], KEY))
+
+
+def one_lock(sels, heavy):
+    """`(kind, where it comes from)` of the one booking a run makes, `(None, None)` when no
+    selector needs the lock. V.Usage when two selectors need different kinds: a run books once,
+    before its tree is made, and holds that for every command."""
+    found = [(s,) + lock_kind(s, heavy) for s in sels]
+    kinds = {}
+    for _, kind, where in found:
+        if kind:
+            kinds.setdefault(kind, where)
+    if len(kinds) > 1:
+        raise V.Usage('refused: one run books the machine lock once, and these tests need '
+                      'different kinds (%s); nothing was run. Run them in separate calls:\n%s'
+                      % (', '.join(kinds), '\n'.join('  %s: %s' % (s.text, kind or 'no lock')
+                                                     for s, kind, _ in found)))
+    for kind, where in kinds.items():
+        return kind, where
+    return None, None
+
+
+def let_go(slot, say, code=None, how=None):
+    """Release the run's booking (Slot.release: once, a second call does nothing). how
+    "interrupted" or "error" ends what is left of the command's tree first. Never raises."""
+    if slot is None:
+        return
+    try:
+        slot.release(code, how)
+    except Exception as e:  # noqa: BLE001
+        say('note      releasing the machine lock failed: %s: %s' % (type(e).__name__, e))
+
+
+def book_slot(plan, say, ints, book_kw=None):
+    """`(slot, None)`: the machine lock booked for the whole run (kitlib.lock.run.book, kind
+    plan.lock, for `<repo>/redfirst-<base10>`), said as a `lock` line. Or `(None, exit code)`:
+    nothing is booked and the reason is said - 2 for the lock's usage refusals (an unknown kind;
+    a run nested in one that holds fewer slots than the kind needs; a kind with a gpu slot of its
+    own under a background run), the lock's own code for
+    LOCK_CODES, 3 for anything else and for an interrupt. A `say` that raises on the `lock` line
+    of a held slot raises on, with the slot released first (record ended 1, "error").
+
+    book_kw: further arguments of book (a test's store, env and cores). The store's lines come
+    out through `say` as `lock` lines. No wait limit is passed: the run waits its turn in the
+    queue, and a Ctrl-C ends the wait (Interrupts' BOOK mode)."""
+    if ints.seen:
+        return None, stopped(say)
+    kw = {'cmd': ['redfirst.py', '--tests'] + [s.text for s in plan.sels]}
+    kw.update(book_kw or {})
+    if kw.get('store') is None:
+        kw['store'] = Store(say=lambda text: say('lock      %s' % text))
+    slot = None
+    try:
+        ints.mode = BOOK
+        try:
+            slot = lockrun.book(plan.lock, plan.repo, PREFIX + plan.base[:10], **kw)
+        finally:
+            ints.mode = HOLD
+    except LockError as e:
+        if e.code == EXIT_USAGE:
+            say('refused: the machine lock: %s (kind %s: %s); no tree was made and nothing was run'
+                % (re.sub(r'^usage:\s*|\.?\s*Exit 2\.$', '', e.message or ''), plan.lock,
+                   plan.lock_from))
+            return None, V.EXIT_USAGE
+        if e.code in LOCK_CODES:
+            say('NOT RUN: the machine lock refused the run: %s' % e.message)
+            say('REDFIRST NOT RUN - the machine lock refused a %s run (exit %d); no tree was made '
+                'and nothing was run' % (plan.lock, e.code))
+            return None, e.code
+        say('failed    the machine lock: %s' % e.message)
+        say('REDFIRST UNDECIDED - no tree was made')
+        return None, V.EXIT_UNDECIDED
+    except KeyboardInterrupt:
+        say('stopped   interrupted while waiting for the machine lock; no tree was made')
+        say('REDFIRST UNDECIDED - nothing ran')
+        return None, V.EXIT_UNDECIDED
+    except Exception as e:  # noqa: BLE001
+        say('failed    the machine lock: %s: %s' % (type(e).__name__, e))
+        say('REDFIRST UNDECIDED - no tree was made')
+        return None, V.EXIT_UNDECIDED
+    if ints.seen:                            # noted while book held it back: give the slots back
+        let_go(slot, say, 130, 'interrupted')
+        return None, stopped(say)
+    try:
+        say('lock      %s' % slot.held_text())
+    except BaseException:                    # only this frame knows the slot: release, then raise
+        let_go(slot, lambda line: None, 1, 'error')
+        raise
+    return slot, None
+
+
+def stopped(say):
+    say('stopped   interrupted before the tree was made')
+    say('REDFIRST UNDECIDED - nothing ran')
+    return V.EXIT_UNDECIDED
+
+
+# ---- which runner -------------------------------------------------------------------------------
+KEY = '`.kit.json` "redfirst".runners'
+# Appended to the runners for one parse: a valid path that reaches it was taken by no real runner.
+_NOTHING_TOOK_IT = {'glob': '*', 'kind': 'gradle', 'dir': '.', 'project': ':'}
+
+
+def runners_for(cfg):
+    """`(runners, written)`. `written`: `.kit.json` holds "redfirst".runners, used as they are.
+    Unwritten: the schema default, then one python runner for test files of the tools folder
+    ("repo".tools_dir), which is their PYTHONPATH (the layout of kitlib/pytests/runner.py)."""
+    runners = list(cfg.section('redfirst')['runners'])
+    if cfg.raw('redfirst').get('runners') is not None:
+        return runners, True
+    tools = posixpath.normpath(cfg.tools_dir.replace('\\', '/').strip() or '.').strip('/')
+    if tools and tools != '.':
+        derived = {'glob': tools + '/*test_*.py', 'kind': 'python', 'pythonpath': tools}
+        if not any(r['glob'].lower() == derived['glob'].lower() for r in runners):
+            runners.append(derived)
+    return runners, False
+
+
+def no_runner_text(text, runners, written, head, committed):
+    """The refusal for a `--tests` path no runner takes: every glob tried, how many files
+    committed at `head` each matches (`committed`: their paths, or None when unread), and the key
+    to set."""
+    lines = ['refused: --tests %r: no runner takes it; nothing was run' % text]
+    if not runners:
+        lines.append('  %s is an empty list' % KEY)
+    for r in runners:
+        if committed is None:
+            found = ''
+        else:
+            n = sum(1 for f in committed if V.matches(f, r['glob']))
+            found = ': matches %s committed at head %s' % ('%d file(s)' % n if n else 'no file',
+                                                           head[:10])
+        lines.append('  glob %r (%s)%s' % (r['glob'], r['kind'], found))
+    if written:
+        lines.append('  these are the globs %s holds' % KEY)
+    else:
+        lines.append('  %s is not set, so these are the defaults (the tools-folder glob comes '
+                     'from "repo".tools_dir)' % KEY)
+    lines.append('  set %s to an entry whose glob takes the file (docs/redfirst.md)' % KEY)
+    return '\n'.join(lines)
+
+
+def select(text, runners, written, top, head):
+    """The Selector for one `--tests` text, or V.Usage; a path no runner takes gets no_runner_text."""
+    sel = V.parse_selector(text, list(runners) + [_NOTHING_TOOK_IT])
+    if sel.runner is not _NOTHING_TOOK_IT:
+        return sel
+    rc, out, _ = git(top, 'ls-tree', '-r', '--name-only', '-z', head)
+    committed = [f for f in out.split('\0') if f] if rc == 0 else None
+    raise V.Usage(no_runner_text(text, runners, written, head, committed))
 
 
 FINAL = {V.EXIT_RED: 'REDFIRST OK - every named test is red at %s',
@@ -376,11 +630,15 @@ FINAL = {V.EXIT_RED: 'REDFIRST OK - every named test is red at %s',
          V.EXIT_LEFTOVER: 'REDFIRST LEFTOVER - verdicts above, the throwaway tree was not removed'}
 
 
-def execute(plan, say, run=default_run, cleanup=None, ints=None):
-    """Make the tree, run every selector, clean up. Returns the exit code; never raises."""
+def execute(plan, say, run=None, cleanup=None, ints=None, book_kw=None):
+    """Book the machine lock when the plan names a kind (book_slot), make the tree, run every
+    selector, release the lock, clean up. Returns the exit code; never raises.
+
+    run: what runs one command, `run(argv, cwd, env, log)` -> its exit code; default locked_run
+    for a booked run, else default_run. book_kw: book_slot's."""
     cleanup = cleanup or cleanup_in_child
     ints = ints or Interrupts()
-    tw, cleaned = None, None
+    tw, cleaned, slot = None, None, None
     try:
         ints.install()                       # HOLD: a Ctrl-C from here waits for the tree
         try:
@@ -392,13 +650,19 @@ def execute(plan, say, run=default_run, cleanup=None, ints=None):
         say('base      %s' % plan.base)
         say('head      %s (test files from here)' % plan.head)
         say('logs      %s' % plan.log_dir)
+        if plan.lock:                        # before the tree: a refusal or a wait leaves nothing
+            slot, refused = book_slot(plan, say, ints, book_kw)
+            if slot is None:
+                return refused
+        if run is None:
+            run = locked_run(slot, ints) if slot is not None else default_run
         tw, why = make_tree(plan.main, plan.worktrees_dir, plan.base)
         if tw is None:
             say('failed    %s' % why)
             say('REDFIRST UNDECIDED - no throwaway worktree')
             return V.EXIT_UNDECIDED
         say('tree      %s (detached at the base)' % tw)
-        verdicts = []
+        verdicts, end = [], (None, None)
         try:
             try:
                 copy_in(tw, plan.head, plan.files)     # in HOLD: a killed checkout leaves index.lock
@@ -414,9 +678,16 @@ def execute(plan, say, run=default_run, cleanup=None, ints=None):
         except KeyboardInterrupt:
             say('stopped   interrupted; removing the throwaway tree')
             verdicts.append(V.ERROR)
+            end = (130, 'interrupted')
         except Exception as e:  # noqa: BLE001
             say('failed    %s' % (e if isinstance(e, RuntimeError) else '%s: %s' % (type(e).__name__, e)))
             verdicts.append(V.ERROR)
+            end = (None, None) if isinstance(e, Cancelled) else (1, 'error')
+        else:                                # the lock's record gets this run's verdict code
+            end = (V.exit_code(verdicts, True), 'done')
+        # In HOLD, and before the cleanup: after an interrupt or an error the release ends what
+        # is left of the command's tree, so nothing of it holds the throwaway tree.
+        let_go(slot, say, *end)
         ints.mode = CLEAN
         say('cleanup   putting back the base files and removing the tree; Ctrl-C is held until it ends')
         try:
@@ -442,4 +713,7 @@ def execute(plan, say, run=default_run, cleanup=None, ints=None):
         say('REDFIRST UNDECIDED - an unexpected error')
         return V.EXIT_UNDECIDED
     finally:
-        ints.restore()
+        try:
+            let_go(slot, say, 1, 'error')    # only when a path above did not release it
+        finally:
+            ints.restore()

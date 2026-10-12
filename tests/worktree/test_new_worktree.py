@@ -122,6 +122,15 @@ class WorktreeCase(unittest.TestCase):
         self.git('worktree', 'remove', scratch)
         return tip
 
+    def make_dev(self):
+        """A local branch `dev` one commit ahead of the base, never pushed."""
+        self.git('branch', 'dev')
+        self.git('switch', '-q', 'dev')
+        self.write('d.txt', 'dev\n')
+        self.git('add', 'd.txt')
+        self.git('commit', '-q', '-m', 'dev work')
+        self.git('switch', '-q', self.BASE)
+
     def slug_path(self, slug, worktrees='.claude/worktrees'):
         return os.path.join(self.repo, *(worktrees.split('/') + [slug]))
 
@@ -205,14 +214,6 @@ class NewBranchMode(WorktreeCase):
 
 class BaseOption(WorktreeCase):
     """`--base <branch>`: another base than the main branch, held to the same rule."""
-
-    def make_dev(self):
-        self.git('branch', 'dev')
-        self.git('switch', '-q', 'dev')
-        self.write('d.txt', 'dev\n')
-        self.git('add', 'd.txt')
-        self.git('commit', '-q', '-m', 'dev work')
-        self.git('switch', '-q', self.BASE)
 
     def test_a_new_branch_starts_at_the_named_base(self):
         self.make_dev()
@@ -990,6 +991,94 @@ class InFlightCommand(InFlightCase):
         self.assertEqual(sum(t.slept), 20)
         # before the fetch: 20 s left, then 10, then none (the minimum); after it, the minimum
         self.assertEqual(given, [20, 10, inflight.LOOK_MIN_S, inflight.LOOK_MIN_S])
+
+
+class ALocalOnlyBaseNamesTheRoute(LandingCase):
+    """`--base dev` with no pushed origin/dev is refused with the lock held or free; the refusal
+    ends with one `route` line naming tools/redfirst.py and saying a wait changes nothing."""
+
+    def routes(self, out):
+        lines = self.printed(out, 'route')
+        self.assertEqual(len(lines), 1, out)
+        return lines[0]
+
+    def assert_route(self, out, tools='tools'):
+        line = self.routes(out)
+        self.assertIn('dev has no pushed origin/dev', line)
+        self.assertIn('with or without a landing', line)
+        self.assertIn('python %s/redfirst.py -C' % tools, line)
+        self.assertFalse(os.path.exists(self.slug_path('fresh')), out)
+        self.assertFalse(new.branch_exists(self.repo, 'fix/fresh'), out)
+        return line
+
+    def test_held_lock_names_redfirst_and_says_waiting_will_not_help(self):
+        self.make_dev()
+        self.hold()
+        rc, out = self.tool('fix/fresh', '--base', 'dev')
+        self.assertEqual(rc, 1, out)
+        lines = out.splitlines()
+        self.assertTrue(lines[0].startswith('landing   in progress: '), out)
+        self.assertTrue(lines[1].startswith('refused   the landing lock is held, but origin/dev '
+                                            'did not resolve'), out)
+        self.assert_route(out)
+
+    def test_free_lock_gets_the_same_route_line(self):
+        self.make_dev()
+        rc, out = self.tool('fix/fresh', '--base', 'dev')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('  not a landing in progress: ', out)
+        free = self.assert_route(out)
+        self.hold()
+        self.assertEqual(self.routes(self.tool('fix/fresh', '--base', 'dev')[1]), free)
+
+    def test_the_route_spells_the_configured_tools_dir(self):
+        self.configure({'repo': {'main_branch': 'master', 'tools_dir': 'devtools'},
+                        'landing': {'lock_file': 'git:' + LOCK_NAME}})
+        self.make_dev()
+        self.hold()
+        out = self.tool('fix/fresh', '--base', 'dev')[1]
+        self.assert_route(out, tools='devtools')
+
+
+class ALocalOnlyBaseUnderAnInFlightCommand(InFlightCase):
+
+    def test_in_flight_command_gets_the_route_line(self):
+        self.configure(in_flight_config(command=['{python}', '-c', 'print("lander")']))
+        self.make_dev()
+        got = new.create(self.repo, 'fix/fresh', base='dev', wait=False)
+        out = '\n'.join(got.lines)
+        self.assertEqual(got.code, 1, out)
+        self.assertIn('refused   a landing is in flight, but origin/dev did not resolve', out)
+        self.assertEqual(len(self.printed(out, 'route')), 1, out)
+        self.assertIn('python tools/redfirst.py -C', out)
+
+
+class NoRouteLineWhereItDoesNotApply(LandingCase):
+    """Boundary guards: the line is for a local-only non-main base, nowhere else."""
+
+    def test_main_as_base_with_no_pushed_main_has_no_route(self):
+        self.run_git(self.origin_dir, 'config', 'receive.denyDeleteCurrent', 'ignore')
+        self.assertEqual(self.git('push', '-q', 'origin', '--delete', 'master')[0], 0)
+        self.git('update-ref', '-d', 'refs/remotes/origin/master')
+        self.hold()
+        rc, out = self.tool('fix/fresh')
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.printed(out, 'route'), [], out)
+
+    def test_a_pushed_base_one_commit_ahead_is_refused_without_route(self):
+        self.make_dev()
+        self.git('push', '-q', 'origin', 'dev')
+        self.git('switch', '-q', 'dev')
+        self.plain('more')
+        self.git('switch', '-q', self.BASE)
+        rc, out = self.tool('fix/fresh', '--base', 'dev')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('not a landing in progress', out)
+        self.assertEqual(self.printed(out, 'route'), [], out)
+
+    def test_a_successful_run_prints_no_route(self):
+        out = self.tool('fix/fresh')[1]
+        self.assertEqual(self.printed(out, 'route'), [], out)
 
 
 class BehindCountOnAKilledGit(unittest.TestCase):

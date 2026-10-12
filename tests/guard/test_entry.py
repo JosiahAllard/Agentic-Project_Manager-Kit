@@ -25,6 +25,10 @@ class Entry(unittest.TestCase):
         self.cwd = os.path.join(self.base, 'work')
         os.makedirs(self.home)
         os.makedirs(self.cwd)
+        # a guard started with the inherited environment gets this home too, not the real one
+        home = mock.patch.dict(os.environ, HOME=self.home, USERPROFILE=self.home)
+        home.start()
+        self.addCleanup(home.stop)
 
     def run_guard(self, payload):
         env = {k: v for k, v in os.environ.items() if not k.startswith('MACHINE_LOCK_')}

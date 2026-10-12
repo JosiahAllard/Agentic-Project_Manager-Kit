@@ -44,7 +44,7 @@ def main(argv=None):
     since = U.since_value(a.since, a.days)
     rows = costs(a.root, since)
     grand = sum(r[0] for r in rows)
-    print("%s | since %s | %d transcripts" % (os.path.expanduser(a.root), since, len(rows)))
+    print("%s | since %s | %d transcripts" % (U.expand(a.root), since, len(rows)))
     for c, at, d in rows[:a.top]:
         if c:
             print(f"{100 * c / grand:5.1f}%  {at:<15} {d[:90]}")

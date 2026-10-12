@@ -7,6 +7,10 @@ the machine setup's plugin install uses them too.
 A folder's claude runs with CLAUDE_CONFIG_DIR=<folder>, except Claude Code's own ~/.claude, for
 which the variable is removed (setting it, even to that folder, moves where claude keeps its
 .claude.json; kitlib.launcher.settings is_default).
+
+With no `home`, each reads the user's home through kitlib.config.user.home_dir(), which the kit's
+tests fence (docs/test-tools.md "Home fence"): a test passes `home` (a temp folder), or the folders
+themselves to the caller (kitlib.pluginsource `folders`).
 """
 import os
 import shutil
