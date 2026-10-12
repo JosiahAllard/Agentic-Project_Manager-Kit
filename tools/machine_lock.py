@@ -34,7 +34,7 @@ from kitlib.lock.background import run_background                  # noqa: E402
 from kitlib.lock.run import ORIGIN_ENV, run_command                # noqa: E402
 from kitlib.lock.store import (EXIT_REQUIRE, EXIT_USAGE, LockError, Store,  # noqa: E402
                                caller, iso, new_id, utc_now)
-from kitlib.proc import bash, process                              # noqa: E402
+from kitlib.proc import bash, process, spawn                       # noqa: E402
 # Not used here: loaded at start because kitlib.proc.daemons imports it inside functions that run
 # at the end of a run, and a first load then could read a checkout a landing has rewritten.
 from kitlib.proc import tcp                                        # noqa: E402, F401
@@ -275,8 +275,8 @@ def detach(argv):
         env.pop(ORIGIN_ENV, None)
     data = {"cmd": cmdline, "cwd": os.getcwd(), "env": ["%s=%s" % kv for kv in env.items()]}
     try:
-        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", DETACH_PS],
-                           input=json.dumps(data), capture_output=True, text=True, timeout=60)
+        r = spawn.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", DETACH_PS],
+                      input=json.dumps(data), capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError) as e:
         say("could not start the command: --detach failed: %s" % e)
         return 1

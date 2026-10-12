@@ -37,7 +37,7 @@ Exit codes: the unittest run's (0 passed or nothing selected, 1 failed); 2 USAGE
 """
 import argparse
 import os
-import subprocess
+import subprocess          # noqa: F401  (tests/tooldeps fake the one-process run through it)
 import sys
 import time
 
@@ -48,6 +48,7 @@ from kitlib.config import user as kuser                             # noqa: E402
 from kitlib.git import refs as gitrefs                              # noqa: E402
 from kitlib.git import repo as gitrepo                              # noqa: E402
 from kitlib.lock import giveback                                    # noqa: E402
+from kitlib.proc import spawn                                       # noqa: E402
 from kitlib.pytests import runner as unit_runner                    # noqa: E402
 from kitlib.tooldeps import selflist, selfrun, selftree, tiers              # noqa: E402
 
@@ -238,7 +239,7 @@ def run_pass(args, top, cfg, jobs, fake, out, hold, give_back=True, record_times
         start = time.time()
         cmd = args if args is FULL else ['-m', 'unittest'] + args
         out.flush()
-        rc = subprocess.call([sys.executable] + cmd, cwd=top, env=env)
+        rc = spawn.call([sys.executable] + cmd, cwd=top, env=env)
         if hold is not None:
             say('kit_tests: %s' % hold.end())
         say('kit_tests: %s in %.0fs (%s, one process)' % (

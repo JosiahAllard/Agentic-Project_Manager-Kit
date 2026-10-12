@@ -50,6 +50,7 @@ from kitlib import machinepaths, verdict
 from kitlib.docs import callers as doc_callers
 from kitlib.config import owner as ownermod
 from kitlib.git import checkout, cmd, repo
+from kitlib.proc import spawn
 
 OK, REFUSED, USAGE = 0, 1, 2
 TOOL = 'commit.py'
@@ -320,8 +321,8 @@ def doc_budget_check(root, kit_root=None):
     if not os.path.isfile(tool):
         return 'docs      NOT CHECKED - no tools/doc_budget.py in the kit, so nothing was measured', True
     try:
-        r = subprocess.run([sys.executable, tool, '-C', root], capture_output=True, text=True,
-                           encoding='utf-8', errors='replace', timeout=DOC_BUDGET_TIMEOUT)
+        r = spawn.run([sys.executable, tool, '-C', root], capture_output=True, text=True,
+                      encoding='utf-8', errors='replace', timeout=DOC_BUDGET_TIMEOUT)
     except subprocess.TimeoutExpired:
         return 'docs      FAILED (doc_budget.py did not finish in %d s)' % DOC_BUDGET_TIMEOUT, False
     except OSError as e:
@@ -343,8 +344,8 @@ def doc_index_check(root, kit_root=None):
     if not os.path.isfile(tool):
         return doc_callers.not_checked(), True
     try:
-        r = subprocess.run([sys.executable, tool, '-C', root], capture_output=True, text=True,
-                           encoding='utf-8', errors='replace', timeout=doc_callers.TIMEOUT)
+        r = spawn.run([sys.executable, tool, '-C', root], capture_output=True, text=True,
+                      encoding='utf-8', errors='replace', timeout=doc_callers.TIMEOUT)
     except subprocess.TimeoutExpired:
         return 'doc index FAILED (doc_index.py did not finish in %d s)' % doc_callers.TIMEOUT, False
     except OSError as e:

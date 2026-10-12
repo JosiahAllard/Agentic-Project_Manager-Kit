@@ -466,7 +466,9 @@ def cmd_stop(args):
 
 def engine_running():
     try:
-        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=15).stdout
+        # Its output is captured, so it needs no console of ours: no window from a parent without one.
+        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=15,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
     except Exception:
         return []
     return sorted({line.split(",")[0].strip('"') for line in out.splitlines() if "godot" in line.lower()})
