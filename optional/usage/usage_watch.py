@@ -22,6 +22,9 @@ import os
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _usage as U  # noqa: E402
+
 BANDS = ((60, 'under-60: up to four strongest-model agents'),
          (80, '60-80: at most two strongest-model; landings, reviews, cheap work continue'),
          (90, '80-90: nothing new but clerical docs; running agents to a safe stop; tell the owner'),
@@ -98,11 +101,16 @@ def event(last, r, now):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument('--config-dir', default=os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.claude'))
+    ap.add_argument('--config-dir', help='default: CLAUDE_CONFIG_DIR, else ~/.claude')
     ap.add_argument('--poll', type=int, default=300)
     ap.add_argument('--once', action='store_true')
     a = ap.parse_args(argv)
-    path = os.path.join(a.config_dir, 'usage-status.json')
+    # A given folder is used as written ('' is the current folder); the home is looked up only
+    # when nothing else names one.
+    config_dir = a.config_dir
+    if config_dir is None:
+        config_dir = os.environ.get('CLAUDE_CONFIG_DIR') or U.default_config_dir()
+    path = os.path.join(config_dir, 'usage-status.json')
     parent = os.getppid()
     start = time.time()
 

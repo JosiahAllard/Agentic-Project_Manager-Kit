@@ -97,7 +97,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `preflight.report_hooks` (list of "module:function", default []): module:function report hooks
 - `preflight.traps` (string): where the traps are written down
 - `preflight.udp_ports` (list of 2 int from 0 to 65535): [low, high] ports checked free
-- `redfirst.runners` (list of {glob, kind, pythonpath, dir, project, csproj, args}, default [{"glob": "tests/*test_*.py", "kind": "python"}]): which runner takes a test file, first match wins
+- `redfirst.runners` (list of {glob, kind, pythonpath, dir, project, csproj, args, lock}, default [{"glob": "tests/*test_*.py", "kind": "python"}]): which runner takes a test file, first match wins; none written: this default, then <tools_dir>/*test_*.py as python with the tools folder as pythonpath, unless tools_dir is . or that glob is listed (docs/redfirst.md); a runner's lock is the kinds-table kind the run books around its command (unset: the kind of the heavy-list entry the command matches)
 - `redfirst.hold_wait` (int >= 0, default 60): seconds a held throwaway tree is re-checked before it is left
 - `review_pack.coauthor` (bool, default false): list the branch's commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks
 - `ruling_cites.repo` (string): the ledger repo column cited
@@ -135,7 +135,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 
 ## Machine config keys
 
-The machine's own settings, read by `kitlib.config.user`: `config.json` in the folder `kitlib.config.user.DIR_NAME` names under the home folder, or, while that folder has none, in the retired folder ("Moving the machine config folder"); `python -c "from kitlib.config import user; print(user.config_file())"`, run in the kit, prints the path of the file read. Messages name the file read (`user.display()`), help text `user.DISPLAY`, and this page and the others write `<config-dir>` for that folder. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config.
+The machine's own settings, read by `kitlib.config.user`: `config.json` in the folder `kitlib.config.user.DIR_NAME` names under the home folder, or, while that folder has none, in the retired folder ("Moving the machine config folder"); `python -c "from kitlib.config import user; print(user.config_file())"`, run in the kit, prints the path of the file read. Messages name the file read (`user.display()`), help text `user.DISPLAY`, and this page and the others write `<config-dir>` for that folder. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config. One key does not follow it: `machine_lock` is read from the config under the profile folder Windows itself reports (`kitlib.lock.site.load`, through `kitlib.lock.store.machine_home`), where the machine's lock store lives, so every session that shares the store reads one `machine_lock`, whatever its USERPROFILE. Every other key is read under the environment's home.
 
 - `ledger_path` (absolute path): the rulings ledger file; set here only
 - `ledger_repos` (list of a lower-case repo name): the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)
@@ -159,6 +159,7 @@ The machine's own settings, read by `kitlib.config.user`: `config.json` in the f
 - `launcher` (object, checked by kitlib.launcher): the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")
 - `backlog_lint` (object, checked by kitlib.backloglint): the backlog lint repositories
 - `machine_lock` (object, checked by kitlib.lock.site): the machine lock settings: build daemons at release, lock-window notices
+  Read from the config under the Windows profile folder, not under the environment's home (the paragraph above); under the kit's tests the read is refused (docs/test-tools.md "Home fence").
 - `temp_dir` (absolute path): the folder the kit's own temp files go in (test run folders, gate logs); unset: `AgentTemp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md "Temp folders"); older kit copies reject the key
 - `agent_temp_sweep` (object, checked by optional/agenttemp/agent_temp_sweep.py): the agents' temp folder to sweep (`dir`), the age past which an unused entry goes (`max_age_days`, default 3) and the entries it never removes (`keep`, relative paths such as `claude/<project>/<session>`); `tools/machine_setup.py` adds it when absent (docs/machine-setup.md "Extras")
 - `plugin` (object, checked by kitlib.pluginsource): where the plugin export of pushed kit main lives, and whether pm_watch refreshes it on its own (docs/plugin-source.md); older kit copies reject the key; set it only after every folder is migrated
