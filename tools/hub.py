@@ -29,6 +29,14 @@
   hub.py open [--port N] [--print]
       opens the hub page in the browser, signed in as the owner through a one-time pairing link
       the running server gives for the owner's token. --print prints the link instead.
+  hub.py migrate --from DIR [--from DIR ...] [--store PATH] [--dry-run]
+      copies the documents of each DIR (the mirror folder, or an export of one account's copy)
+      into the store (hub.store, else hub/ in the PM data worktree; --store PATH: that folder)
+      and prints the migration report (kitlib.hubsite.migrate). It only copies in: no source is
+      changed, and a document the store already holds is never replaced, so a second run prints
+      `nothing changed`. --dry-run writes nothing and reports what a run would do. Refused
+      while a running server holds the store. Exit 1 too when a document that has a place in
+      the store was not imported (the CONFLICT and SKIPPED lines).
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.hubsite, prints and exits.
 Exit codes: 0 ok; 1 refused (REFUSED: ...), a server that did not close cleanly, or a Ctrl+C
@@ -44,6 +52,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.hubsite import api, auth, httpd, serve, settings       # noqa: E402
+from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
 
 START = 'python "%s" serve' % os.path.abspath(__file__)
 HEALTH = api.BASE + '/health'
@@ -92,6 +101,13 @@ def parser():
     o.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
     o.add_argument('--print', dest='show', action='store_true',
                    help='print the one-time link instead of opening it')
+    m = sub.add_parser('migrate', help="copy the earlier hub's documents into the store")
+    m.add_argument('--from', dest='sources', action='append', type=_folder, required=True,
+                   metavar='DIR', help='a folder to copy from: the mirror folder or an export '
+                                       '(repeatable); it is only read')
+    m.add_argument('--store', type=_folder, help='the store folder (default: the configured one)')
+    m.add_argument('--dry-run', dest='dry_run', action='store_true',
+                   help='write nothing; report what a run would do')
     return p
 
 
@@ -205,7 +221,22 @@ def _open(a, stop):
     return 0
 
 
-VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open}
+def _migrate(a, stop):
+    root = os.path.abspath(a.store) if a.store is not None else settings.load().store
+    if not root:
+        raise serve.ServeError('no store folder is set: set hub.store or pm_data in the machine '
+                               'config, or give --store PATH')
+    try:
+        result = hub_migrate.migrate(root, a.sources, dry_run=a.dry_run)
+    except hub_migrate.MigrateError as e:
+        raise serve.ServeError(str(e))
+    for line in hub_migrate.report_lines(result):
+        print(serve.scrub(line))
+    return 0 if result.complete else 1
+
+
+VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open,
+         'migrate': _migrate}
 
 
 def main(argv=None, stop=None):

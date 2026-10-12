@@ -11,4 +11,5 @@
   gitsync  the store's commits, and its pull and push against the PM data remote
   httpd    one loopback HTTP listener in front of the api: the gate, the write rules, the waits
   serve    the server: the store, the api, the views and the listeners, started and closed
+  migrate  the earlier hub's documents (the mirror folder, an export) copied into the store
 """
