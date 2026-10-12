@@ -19,14 +19,20 @@ TASK_NAME = 'Claude coordinators after reboot'
 OLD_TASK_NAME = 'Claude conductors after reboot'   # unregistered by install (removed after the switch, W2b)
 
 
+def pythonw_beside(python):
+    """The pythonw.exe in the folder of `python`: the task's program."""
+    return os.path.join(os.path.dirname(python), 'pythonw.exe')
+
+
 def task_script(python, launch_py):
     """The PowerShell that registers the task to run `python launch_py after-reboot` with no
     console window of its own: the task's program is the pythonw.exe beside `python`, running the
     carrier kitlib.proc.spawn.CARRIER (tools/no_window.py, beside `launch_py`), which starts the
     console python.exe with a hidden console (kitlib.proc.spawn.carry). The windows after-reboot
-    opens are its own, as before. `python` may be either of the two; neither is checked to exist."""
+    opens are its own, as before. `python` may be either of the two; neither is checked to exist
+    here (install refuses a pythonw.exe that is not a file)."""
     folder = os.path.dirname(python)
-    pythonw = os.path.join(folder, 'pythonw.exe')
+    pythonw = pythonw_beside(python)
     console = (os.path.join(folder, 'python.exe')
                if os.path.basename(python).lower() == 'pythonw.exe' else python)
     carrier = os.path.join(os.path.dirname(launch_py), spawn.CARRIER)
@@ -53,15 +59,25 @@ def in_worktree(path):
     return any(parts[i] == '.claude' and parts[i + 1] == 'worktrees' for i in range(len(parts) - 1))
 
 
-def install(launch_py, python=None, whatif=False, run=spawn.run):
+def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.isfile):
     """Register the task; the lines it says. whatif: print the script, register nothing. Refused
-    from a kit worktree: the task would point at a launch.py that goes when the worktree does."""
+    from a kit worktree: the task would point at a launch.py that goes when the worktree does.
+    Refused, with nothing registered, when the pythonw.exe the task would run is not a file: the
+    task would register and then never start at sign-in. whatif says so in a third line."""
     if in_worktree(launch_py):
         raise LaunchError('install-autostart from the main kit checkout, not a worktree: %s' % launch_py)
-    text = task_script(python or sys.executable, launch_py)
+    python = python or sys.executable
+    text = task_script(python, launch_py)
     test = 'python "%s" after-reboot --test' % launch_py
+    pythonw = pythonw_beside(python)
+    missing = None if isfile(pythonw) else (
+        'no pythonw.exe beside %s (looked for %s): the task runs it so that no console window '
+        'opens at sign-in; nothing registered' % (python, pythonw))
     if whatif:
-        return ['Would run in PowerShell:', '  ' + text]
+        return ['Would run in PowerShell:', '  ' + text] + (
+            ['install-autostart would refuse: %s' % missing] if missing else [])
+    if missing:
+        raise LaunchError(missing)
     r = run(['powershell', '-NoProfile', '-NonInteractive', '-Command', text], capture_output=True, text=True,
             timeout=120)
     if r.returncode != 0:

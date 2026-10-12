@@ -18,7 +18,8 @@ start in the kit to that.
 `carry` is the carrier: a scheduled task runs `pythonw tools/no_window.py PROGRAM [ARGS...]`, and
 since pythonw has no console, PROGRAM starts with a hidden one, which everything it starts in turn
 inherits. PROGRAM is not put in a job (kitlib.proc.job allows no breakaway, so a job here would
-hold every window `launch.py after-reboot` opens until the carrier ends). Nothing here prints.
+hold every window `launch.py after-reboot` opens until the carrier ends). `exit_code` is how the
+carrier ends with PROGRAM's own code, a crash's included. Nothing here prints.
 """
 import os
 import subprocess
@@ -62,17 +63,27 @@ def console_python(exe=None):
     return path if os.path.isfile(path) else None
 
 
+def exit_code(code):
+    """A child's exit code as subprocess gives it on Windows (0 to 0xFFFFFFFF) as the int that,
+    handed to sys.exit, ends this process with the same 32 bits: unchanged up to 0x7FFFFFFF, and
+    above it (a crash such as 0xC0000005) the negative int with those bits. sys.exit does not take
+    the larger int as it is: the process then ends with another code."""
+    code &= 0xFFFFFFFF
+    return code - 0x100000000 if code > 0x7FFFFFFF else code
+
+
 def carry(argv):
-    """Start argv[0] with argv[1:], wait for it, and give its exit code. A first word `python` or
-    `python.exe` (any case) is the console python beside this interpreter, so a task line needs no
-    second path; any other program is started as named. EXIT_USAGE with nothing started for an
-    empty argv, EXIT_NO_START when the program cannot be started."""
+    """Start argv[0] with argv[1:], wait for it, and give its exit code as exit_code has it, for
+    sys.exit. A first word `python` or `python.exe` (any case) is the console python beside this
+    interpreter, so a task line needs no second path; any other program is started as named.
+    EXIT_USAGE with nothing started for an empty argv, EXIT_NO_START when the program cannot be
+    started."""
     argv = list(argv)
     if not argv:
         return EXIT_USAGE
     if argv[0].lower() in PYTHON_WORDS:
         argv[0] = console_python() or argv[0]
     try:
-        return call(argv)
+        return exit_code(call(argv))
     except OSError:
         return EXIT_NO_START

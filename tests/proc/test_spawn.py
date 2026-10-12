@@ -112,6 +112,16 @@ class CarryTest(unittest.TestCase):
         self.assertEqual(call.call_args[0], (["prog.exe", "a", "b c"],))
         self.assertEqual(call.call_args[1], {"creationflags": win32.CREATE_NO_WINDOW})
 
+    def test_an_exit_code_above_the_signed_range_keeps_its_32_bits(self):
+        """A crashed child's code (0xC0000005) comes back as the int sys.exit ends with those bits."""
+        for code, want in ((0xC0000005, 0xC0000005 - 0x100000000), (0xFFFFFFFF, -1),
+                           (0x80000000, -0x80000000), (0x7FFFFFFF, 0x7FFFFFFF), (0, 0)):
+            with self.subTest(code=hex(code)):
+                got, _ = self.carried(["prog.exe"], return_value=code)
+                self.assertEqual(got, want)
+                self.assertEqual(got & 0xFFFFFFFF, code)
+                self.assertEqual(spawn.exit_code(code), want)
+
     def test_python_is_the_console_python_beside_this_interpreter(self):
         for word in ("python", "PYTHON", "python.exe"):
             with self.subTest(word):

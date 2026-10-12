@@ -124,6 +124,41 @@ class Autostart(unittest.TestCase):
         kit = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.assertTrue(os.path.isfile(os.path.join(kit, 'tools', 'no_window.py')))
 
+    def test_no_pythonw_beside_the_python_is_refused_and_nothing_is_registered(self):
+        """The task's program would be a file that is not there: it would register and never
+        start. /py is not a folder, so the default check itself says no."""
+        def run(*a, **k):
+            raise AssertionError('a refused install ran PowerShell')
+        with self.assertRaisesRegex(autostart.LaunchError, 'no pythonw.exe beside') as cm:
+            autostart.install('/kit/tools/launch.py', python='/py/python.exe', run=run)
+        self.assertIn(os.path.join('/py', 'pythonw.exe'), str(cm.exception))
+        self.assertIn('nothing registered', str(cm.exception))
+
+    def test_the_pythonw_asked_about_is_the_one_registered(self):
+        asked, calls = [], []
+
+        class R(object):
+            returncode, stderr = 0, ''
+
+        def isfile(path):
+            asked.append(path)
+            return True
+
+        def run(*a, **k):
+            calls.append(a[0])
+            return R()
+        autostart.install('/kit/tools/launch.py', python='/py/python.exe', run=run, isfile=isfile)
+        self.assertEqual(asked, [os.path.join('/py', 'pythonw.exe')])
+        self.assertIn("-Execute '%s'" % asked[0], calls[0][-1])
+
+    def test_what_if_says_the_install_would_refuse(self):
+        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True)
+        self.assertEqual(len(out), 3)
+        self.assertIn('install-autostart would refuse: no pythonw.exe beside', out[2])
+        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True,
+                                isfile=lambda p: True)
+        self.assertEqual(len(out), 2)
+
     def test_a_worktree_copy_is_refused(self):
         def run(*a, **k):
             raise AssertionError('a refused install ran PowerShell')

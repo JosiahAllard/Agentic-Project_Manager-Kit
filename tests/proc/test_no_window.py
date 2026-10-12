@@ -248,6 +248,13 @@ class CarrierTest(_Folder):
                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL).returncode
 
+    def carry_stderr(self, *argv):
+        """(the carrier's exit code, what it wrote to a stderr it was given)."""
+        done = subprocess.run([self.pythonw, self.CARRIER] + list(argv), timeout=120,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.PIPE)
+        return done.returncode, done.stderr.decode("utf-8", "replace")
+
     def test_python_runs_with_no_window_and_its_exit_code_comes_back(self):
         out = os.path.join(self.dir, "carried.json")
         self.assertEqual(self.carry("python", self.probe, out, "3"), 3)
@@ -265,7 +272,26 @@ class CarrierTest(_Folder):
         self.assertEqual(self.carry(os.path.join(self.dir, "none.exe")), 127)
 
     def test_no_program_is_a_usage_error(self):
-        self.assertEqual(self.carry(), 2)
+        """The usage line is the carrier's own: a pythonw that failed some other way with 2 (a
+        script it cannot open) writes nothing of the kind."""
+        code, err = self.carry_stderr()
+        self.assertEqual(code, 2)
+        self.assertIn("USAGE: pythonw no_window.py PROGRAM [ARGS...]", err)
+        self.assertEqual(self.carry(), 2)             # and with no stderr at all, as a task has
+
+    def test_an_exit_code_above_the_signed_range_comes_back_whole(self):
+        """A program that ends as a crash does (0xC0000005) is seen as that by whoever started the
+        carrier; the program here ends itself with ExitProcess, the code as it is."""
+        ender = self.write("ender.py", "\n".join([
+            "import ctypes, sys",
+            "ctypes.WinDLL('kernel32').ExitProcess(ctypes.c_uint(int(sys.argv[1])))"]))
+        for code in (0xC0000005, 0xFFFFFFFE, 0x80000000):
+            with self.subTest(code=hex(code)):
+                direct = subprocess.run([python_exe(), ender, str(code)], timeout=120,
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL).returncode
+                self.assertEqual(direct, code)        # the program does end with it
+                self.assertEqual(self.carry("python", ender, str(code)), code)
 
 
 if __name__ == "__main__":

@@ -194,7 +194,8 @@ class Autostart(unittest.TestCase):
         def run(*a, **k):
             calls.append(a[0])
             return R()
-        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', run=run)
+        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', run=run,
+                                isfile=lambda p: True)       # /py is not there: say pythonw is
         self.assertEqual(len(calls), 1)
         self.assertIn("Installed 'Claude coordinators after reboot' and unregistered 'Claude conductors after reboot'",
                       out[0])

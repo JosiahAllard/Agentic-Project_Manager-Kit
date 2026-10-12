@@ -16,16 +16,23 @@ count: nothing shows the flag is in it), the same names handed on without a call
 subprocess.run` default, an alias), `from subprocess import <one of them>`, os.system, os.startfile,
 os.popen, os.spawn*, asyncio's create_subprocess_*, multiprocessing and ProcessPoolExecutor.
 
-What it cannot see: a start written inside a string (the stub text of kitlib/stubs, the scripts a
-test writes to a temporary folder), a name reached with getattr, and code in another language (the
-PowerShell the kit runs). tests/ is not read: a test starts what it tests, on purpose.
+One text that is not a file is read too: the stub kitlib.stubs.stub_text writes into a repository's
+tools folder, under the name STUB. Its start is inside a string, which the reader of files cannot see.
 
-An EXEMPT row is (file, the function the start is in or '<module>', what was found): reason. A row
-nothing matches any more fails the test: the table never outlives the code it excuses.
+What it cannot see: a start written inside any other string (the scripts a test writes to a
+temporary folder), a name reached with getattr, and code in another language (the PowerShell the
+kit runs). tests/ is not read: a test starts what it tests, on purpose.
+
+An EXEMPT row is (file, the function the start is in or '<module>', what was found): (how many
+such starts it excuses, reason). One more start of that kind in that function than the row counts
+fails the test, and so does a row that counts more than there are: the table never outlives the
+code it excuses, and never covers a start nobody gave a reason for.
 """
 import ast
 import os
 import unittest
+
+from kitlib import stubs
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SKIP_DIRS = ('tests', '.git', '.claude', '__pycache__', 'node_modules')
@@ -40,31 +47,38 @@ OWN_GATE_TOOL = ('a template for another repository\'s own gate tool, copied the
 STANDALONE = ('a standalone optional tool that imports nothing of the kit: it starts itself again '
               'under the machine lock tool and hands its own console and output on')
 
+STUB = 'kitlib/stubs/__init__.py TEMPLATE'      # the name the stub's text is read under
+STUB_TOOL = 'gate'                              # any name: the template's start is the same
+
 EXEMPT = {
-    ('kitlib/proc/spawn.py', 'run', 'subprocess.run'): HELPER,
-    ('kitlib/proc/spawn.py', 'call', 'subprocess.call'): HELPER,
-    ('kitlib/proc/spawn.py', 'popen', 'subprocess.Popen'): HELPER,
-    ('kitlib/git/batch.py', '<module>', 'ref subprocess.Popen'):
-        'kept at import only to tell whether a test replaced Popen; the real start is Job.start, '
-        'which passes creationflags',
-    ('kitlib/git/batch.py', 'CatFile._proc', 'ref subprocess.Popen'):
-        'the comparison with the Popen kept at import: it starts nothing',
-    ('kitlib/launcher/window.py', 'open_window', 'ref subprocess.run'):
-        'the default of a test seam; the one call through it passes CREATE_NO_WINDOW, and the '
-        'session window that PowerShell opens is meant to be seen',
-    ('kitlib/pluginsource/claude.py', 'Runner.__init__', 'ref subprocess.run'):
-        'the default of a test seam; Runner.run, the one call through it, passes creationflags',
-    ('kitlib/machinesetup/agenttemp.py', 'task_registered', 'ref subprocess.run'):
-        'the default of a test seam; the one call through it passes CREATE_NO_WINDOW',
-    ('kitlib/redfirst/run.py', 'cleanup_in_child', 'subprocess.Popen'):
-        'its keywords are OWN_CONSOLE, which is creationflags=CREATE_NO_WINDOW on Windows: the '
-        'child gets a console of its own on purpose, so a Ctrl+C here does not reach it',
-    ('optional/comfy/comfy_gen.py', 'machine_lock_rerun', 'subprocess.call'): STANDALONE,
-    ('optional/comfy/render_glb.py', 'machine_lock_rerun', 'subprocess.call'): STANDALONE,
-    ('templates/stacks/dotnet/tools/dotnet_each.py', 'dotnet_each', 'ref subprocess.run'):
-        OWN_GATE_TOOL,
-    ('templates/stacks/python/tools/js_tests.py', 'run_js_tests', 'ref subprocess.run'):
-        OWN_GATE_TOOL,
+    ('kitlib/proc/spawn.py', 'run', 'subprocess.run'): (1, HELPER),
+    ('kitlib/proc/spawn.py', 'call', 'subprocess.call'): (1, HELPER),
+    ('kitlib/proc/spawn.py', 'popen', 'subprocess.Popen'): (1, HELPER),
+    ('kitlib/git/batch.py', '<module>', 'ref subprocess.Popen'): (
+        1, 'kept at import only to tell whether a test replaced Popen; the real start is Job.start, '
+           'which passes creationflags'),
+    ('kitlib/git/batch.py', 'CatFile._proc', 'ref subprocess.Popen'): (
+        1, 'the comparison with the Popen kept at import: it starts nothing'),
+    ('kitlib/launcher/window.py', 'open_window', 'ref subprocess.run'): (
+        1, 'the default of a test seam; the one call through it passes CREATE_NO_WINDOW, and the '
+           'session window that PowerShell opens is meant to be seen'),
+    ('kitlib/pluginsource/claude.py', 'Runner.__init__', 'ref subprocess.run'): (
+        1, 'the default of a test seam; Runner.run, the one call through it, passes creationflags'),
+    ('kitlib/machinesetup/agenttemp.py', 'task_registered', 'ref subprocess.run'): (
+        1, 'the default of a test seam; the one call through it passes CREATE_NO_WINDOW'),
+    ('kitlib/redfirst/run.py', 'cleanup_in_child', 'subprocess.Popen'): (
+        1, 'its keywords are OWN_CONSOLE, which is creationflags=CREATE_NO_WINDOW on Windows: the '
+           'child gets a console of its own on purpose, so a Ctrl+C here does not reach it'),
+    ('optional/comfy/comfy_gen.py', 'machine_lock_rerun', 'subprocess.call'): (1, STANDALONE),
+    ('optional/comfy/render_glb.py', 'machine_lock_rerun', 'subprocess.call'): (1, STANDALONE),
+    ('templates/stacks/dotnet/tools/dotnet_each.py', 'dotnet_each', 'ref subprocess.run'): (
+        1, OWN_GATE_TOOL),
+    ('templates/stacks/python/tools/js_tests.py', 'run_js_tests', 'ref subprocess.run'): (
+        1, OWN_GATE_TOOL),
+    (STUB, 'main', 'subprocess.call'): (
+        1, 'a stub is a console program, run as `python <tools>/<name>.py`: it has a console when '
+           'it runs, its caller\'s or the one Windows gave it, and the kit tool it starts shares '
+           'that one. It imports nothing of the kit, so a stub whose kit is gone can still say so'),
 }
 
 
@@ -191,11 +205,22 @@ def scan_tree(root):
     return found
 
 
+def scan_stub():
+    """The findings in the text of a stub, under the name STUB."""
+    return scan_source(stubs.stub_text(STUB_TOOL, kit=ROOT), STUB)
+
+
 def check(found, exempt):
-    """(the findings no row excuses, the rows that excuse nothing)."""
-    keys = {f[:3] for f in found}
-    return ([f for f in found if f[:3] not in exempt],
-            sorted(k for k in exempt if k not in keys))
+    """(the findings no row excuses, the rows that count more starts than were found). A row
+    excuses as many findings as its count, the first ones in `found`; the rest are unexcused."""
+    left = dict((key, row[0]) for key, row in exempt.items())
+    unlisted = []
+    for f in found:
+        if left.get(f[:3], 0) > 0:
+            left[f[:3]] -= 1
+        else:
+            unlisted.append(f)
+    return unlisted, sorted(k for k, n in left.items() if n)
 
 
 class Scanner(unittest.TestCase):
@@ -266,9 +291,26 @@ class Scanner(unittest.TestCase):
     def test_a_stale_row_is_reported(self):
         found = scan_source('import subprocess\nsubprocess.run(["x"])\n', 'm.py')
         row, gone = ('m.py', '<module>', 'subprocess.run'), ('m.py', 'old', 'subprocess.call')
-        self.assertEqual(check(found, {row: 'why'}), ([], []))
-        self.assertEqual(check(found, {row: 'why', gone: 'why'}), ([], [gone]))
+        self.assertEqual(check(found, {row: (1, 'why')}), ([], []))
+        self.assertEqual(check(found, {row: (1, 'why'), gone: (1, 'why')}), ([], [gone]))
         self.assertEqual(check(found, {}), (found, []))
+
+    def test_a_row_excuses_its_count_of_starts_and_no_more(self):
+        """A second start of the same kind in the same function is not covered by the first's row."""
+        found = scan_source('import subprocess\n'
+                            'def f():\n'
+                            '    subprocess.run(["x"])\n'
+                            '    subprocess.run(["y"])\n', 'm.py')
+        row = ('m.py', 'f', 'subprocess.run')
+        self.assertEqual([f[3] for f in found], [3, 4])
+        self.assertEqual(check(found, {row: (1, 'why')}), (found[1:], []))
+        self.assertEqual(check(found, {row: (2, 'why')}), ([], []))
+        self.assertEqual(check(found, {row: (3, 'why')}), ([], [row]))      # one of them is gone
+
+    def test_the_stub_text_is_read(self):
+        """The start a stub makes is in a string in kitlib/stubs: it is read from the stub's text."""
+        self.assertEqual([f[:3] for f in scan_stub()], [(STUB, 'main', 'subprocess.call')])
+        self.assertIn(stubs.MARK, stubs.stub_text(STUB_TOOL, kit=ROOT))
 
     def test_the_hooks_with_no_extension_are_read(self):
         files = python_files(ROOT)
@@ -284,7 +326,7 @@ class Sites(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.found = scan_tree(ROOT)
+        cls.found = scan_tree(ROOT) + scan_stub()
         cls.unlisted, cls.stale = check(cls.found, EXEMPT)
 
     def test_every_start_names_its_creation_flags(self):
@@ -295,12 +337,15 @@ class Sites(unittest.TestCase):
                     'its reason to EXEMPT in tests/proc/test_spawn_sites.py.']))
 
     def test_no_exemption_outlives_its_site(self):
-        self.assertEqual(self.stale, [], 'EXEMPT rows that match no start any more: remove them')
+        self.assertEqual(self.stale, [], 'EXEMPT rows that count more starts than there are: '
+                                         'lower the count, or remove the row')
 
-    def test_every_exemption_gives_its_reason(self):
-        for key, reason in EXEMPT.items():
+    def test_every_exemption_gives_its_count_and_reason(self):
+        for key, (count, reason) in EXEMPT.items():
             with self.subTest(key=key):
                 self.assertEqual(len(key), 3)
+                self.assertIs(type(count), int)
+                self.assertGreaterEqual(count, 1)
                 self.assertIsInstance(reason, str)
                 self.assertGreaterEqual(len(reason.split()), 6, 'a reason is a sentence')
 
