@@ -15,8 +15,9 @@ tools/land.py).
                  in that time: BUSY ("The queue" below). Landings into one repository take
                  turns; branch gates and other repositories' landings never wait for it
   5  fetch       again under the lock, then the locked checks: main == <remote>/main ==
-                 --expect-main, the branch tip == --expect-tip, a clean main checkout, no merge
-                 in progress, the branch not already in main, (a lane) every changed path in
+                 --expect-main, the branch tip == --expect-tip, a clean main checkout, an empty
+                 stash stack (kitlib.gate.stash: the repository's, whichever checkout pushed), no
+                 merge in progress, the branch not already in main, (a lane) every changed path in
                  the lane's globs, every branch commit that changes an owner-only path the
                  landing would change authored by the owner (kitlib.guard.ownercommits; rules of
                  --expect-main merged with the tip's), and the branch's history free of the backlog store's root
@@ -39,7 +40,8 @@ tools/land.py).
                  step left are kept and named), the lock released: FAILED / REFUSED. Never
                  undone once <remote>/<main> holds the merge (someone pushed it while the gate
                  ran): STUCK, and the report says no reset
-  7b unchanged   green: HEAD on main at the merge, no tracked change, no untracked file; else
+  7b unchanged   green: HEAD on main at the merge, no tracked change, no untracked file, the
+                 stash stack still empty; else
                  undone as on red and nothing pushed (the pushed commit is the gated one).
                  Except (adopt): someone committed on top of the merge in the main checkout and
                  pushed while the gate ran: <remote>/<main> == the tracking ref == main, HEAD on
@@ -105,7 +107,7 @@ from kitlib import gate as G
 from kitlib.backlog import at_landing
 import kitlib.config as kconfig
 from kitlib.config.types import ConfigError
-from kitlib.gate import cleanup, result, reuse, runner
+from kitlib.gate import cleanup, result, reuse, runner, stash
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.guard import ownercommits
@@ -394,6 +396,9 @@ class Lander(object):
         if entries:
             return 'the main checkout is not clean: %s' % ', '.join(
                 '%s %s' % (xy.strip(), p) for xy, p in entries[:10])
+        why = stash.refusal(self.root)      # the repository's one stack, whichever checkout pushed
+        if why:
+            return why
         merging, why = refs.merge_in_progress(self.root)
         if merging is not False:
             return why or 'a merge is in progress in the main checkout'
@@ -619,7 +624,8 @@ class Lander(object):
 
     def unchanged(self):
         """None when the main checkout is exactly the merge the gate passed (HEAD on main, main
-        at the merge, no tracked change, no untracked file), else why not."""
+        at the merge, no tracked change, no untracked file) and the repository's stash stack is
+        still empty (kitlib.gate.stash; the locked checks found it empty), else why not."""
         problems = []
         current, _ = refs.current_branch(self.root)
         head, main = self.ref('HEAD'), self.ref(self.main_ref)
@@ -635,6 +641,9 @@ class Lander(object):
                 problems.append('a step changed tracked files: %s' % _paths(tracked))
             if untracked:
                 problems.append('a step left untracked files: %s' % ', '.join(untracked[:10]))
+        stashed = stash.appeared(self.root)
+        if stashed:
+            problems.append(stashed)
         return '; '.join(problems) or None
 
     def gate(self):

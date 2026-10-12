@@ -7,7 +7,9 @@
       refused (4) when this gate.py is in another checkout of the gated tree's repository; a
       relative --log-dir
       outside the gated checkout is USAGE (2) (kitlib.gate.caller). From another directory:
-      python <worktree>/tools/gate.py -C <worktree> (docs/gate.md "The caller's checkout")
+      python <worktree>/tools/gate.py -C <worktree> (docs/gate.md "The caller's checkout").
+      Refused (4), with --plan and as `land` too, while the repository's stash stack holds an
+      entry, whichever checkout made it (kitlib.gate.stash; docs/gate.md "The stash guard")
   gate.py land BRANCH --expect-main SHA --expect-tip SHA [-C DIR] [--lane L] [--summary TEXT]
                       [--full] [--fresh] [--wait SECONDS] [--log-dir D] [--keep-branch]
       land BRANCH from the main checkout: merge, gate the merged tree, push, verify, then delete

@@ -3,6 +3,7 @@
   steps    the configured steps: built, selected by what changed, judged by their logs
   runner   the steps run in a machine-lock slot; the branch gate and the merged-tree gate
   land     one branch landed: landing lock, expected refs, merge, merged gate, push, verify
+  stash    the stash guard: no gate and no landing while the repository's stash stack has an entry
   measure  a proposed kinds table from the lock's run history (never written in place)
 
 tools/gate.py parses, prints and exits; everything else is here. Nothing here prints: progress
