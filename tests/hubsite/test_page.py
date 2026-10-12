@@ -814,6 +814,53 @@ class DomTest(unittest.TestCase):
         self.assertEqual(got["say"], "Not added: the hub server did not answer. Your text is kept.")
         self.assertEqual(got["kept"], "kept text")
 
+    def test_the_to_pm_repo_menu_lists_the_repos_without_being_clicked(self):
+        got = dom("""
+            await start();
+            return $("#pm-fields select").options.map(o => [o.value, text(o)]);
+        """, snapshot(collections=LISTS, views={"repos": [{"name": "beta"}, {"name": "alpha"}]}), hash="#topm")
+        self.assertEqual(got, [["", "No repo"], ["alpha", "alpha"], ["beta", "beta"]])
+
+    def test_a_queued_note_says_it_is_saved_and_not_yet_sent(self):
+        got = dom("""
+            await start();
+            await type($("#pm-fields textarea"), "a question");
+            await fire($("#pmform"), "submit");
+            return { say: text($("#pm-addstatus")), sent: calls.filter(c => c.path === "/to_pm").map(c => c.body) };
+        """, snapshot(collections=LISTS), hash="#topm")
+        self.assertEqual(got["say"], "Saved as EX-1. It is not sent yet: press Send all.")
+        self.assertEqual(got["sent"], [{"kind": "question", "repo": "", "urgent": False, "text": "a question"}])
+
+    def test_send_all_with_no_pm_listening_says_the_message_is_saved_for_when_one_connects(self):
+        body = """
+            server.route = c => c.path === "/to_pm/send" ? { status: 200, body: { ok: true, sent: ["P-1", "P-2"] } } : undefined;
+            await start();
+            await click($("#pm-sendall"));
+            return text($("#pm-sendstatus"));
+        """
+        self.assertEqual(dom(body, snapshot(collections=LISTS), hash="#topm"),
+                         "Sent 2. No PM is listening now: your message is saved and the PM gets it when one connects.")
+        listening = snapshot(collections=LISTS, pm_seen={"waited": NOW, "pulled": None, "waiting": 1})
+        self.assertEqual(dom(body, listening, hash="#topm"), "Sent 2. A PM is listening.")
+
+    def test_an_empty_to_pm_queue_says_to_add_first(self):
+        hint = "Nothing is queued. Write your message below and press Add, then Send all."
+        got = dom("""
+            await start();
+            const empty = { say: text($("#pm-sendstatus")), off: $("#pm-sendall").disabled };
+            server.snap.collections.to_pm = { "P-1": { status: "queued", kind: "question", text: "first", version: 1 } }; server.snap.revision++;
+            await wake();
+            const queued = { say: text($("#pm-sendstatus")), off: $("#pm-sendall").disabled };
+            server.route = c => c.path === "/to_pm/send" ? { status: 200, body: { ok: true, sent: ["P-1"] } } : undefined;
+            await click($("#pm-sendall"));
+            server.snap.collections.to_pm["P-1"].status = "sent"; server.snap.revision++;
+            await wake();
+            return { empty, queued, after: text($("#pm-sendstatus")) };
+        """, snapshot(collections={"to_pm": {}}), hash="#topm")
+        self.assertEqual(got["empty"], {"say": hint, "off": True})
+        self.assertEqual(got["queued"], {"say": "", "off": False})
+        self.assertTrue(got["after"].startswith("Sent 1."), got["after"])        # the hint never replaces what a send said
+
     def test_cancel_forgets_what_a_refused_answer_said(self):
         lists = {"questions": {"Q-1": {"status": "answered", "title": "which", "version": 2, "asked_at": NOW,
                                        "options": [{"label": "one"}, {"label": "two"}],
@@ -934,6 +981,18 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("WebSocket", self.p)
         self.assertNotIn("EventSource", self.p)
         self.assertNotIn("sendBeacon", self.p)
+
+    def test_the_hidden_attribute_hides_whatever_display_rule_an_element_has(self):
+        """A browser lets any author `display` rule beat its own rule for `hidden`; the stand-in DOM has no CSS and
+        cannot see that. So the page's style must carry the one rule that makes `hidden` win, and nothing above it."""
+        style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
+        self.assertRegex(style, r"\[hidden\]\s*\{\s*display\s*:\s*none\s*!important\s*;?\s*\}")
+        self.assertEqual(re.findall(r"display\s*:[^;}]*!important", style), ["display:none !important"])
+        # Not a check of nothing: elements the page hides do carry an author display rule.
+        self.assertRegex(style, r"(?m)^\.tabs\{display:flex")
+        self.assertRegex(style, r"(?m)^form\.add\{display:grid")
+        self.assertRegex(self.markup, r'<div class="tabs"[^>]*\shidden>')
+        self.assertRegex(self.markup, r'<form class="add"[^>]*\shidden[ >]')
 
     def test_no_artifact_store_call(self):
         for gone in ("window.claude", "onSnapshot", ".collection(", "sendToClaude", "db.", "user.can("):

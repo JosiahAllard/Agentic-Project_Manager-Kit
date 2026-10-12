@@ -7,6 +7,7 @@
 <style>
 /* Layout: one hub column — summary strip, filter tabs, question cards stacked newest-open first.
    Nothing here is loaded from the network: the fonts named below are used only where the machine has them. */
+[hidden]{display:none !important}
 :root{
   --bg:#f3f5f7; --surface:#ffffff; --fg:#17202a; --muted:#5b6876; --line:#d9dfe6;
   --accent:#1f5f8b; --accent-soft:#e3eef6; --rec:#8a5a00; --rec-soft:#fbf0d9;
@@ -372,6 +373,7 @@ button.danger{color:var(--warn)}
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
     $("#repo").hidden = sc === "info" || sc === "backlog" || sc === "topm";
     $("#tabs").hidden = !q; $("#itabs").hidden = sc !== "inbox"; $("#ttabs").hidden = sc !== "todo"; $("#pmtabs").hidden = sc !== "topm"; $("#pmform").hidden = sc !== "topm" || !ready; $("#stabs").hidden = $("#brepo").hidden = sc !== "backlog"; $("#ftabs").hidden = sc !== "info";
+    if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
     $("#storyform").hidden = sc !== "backlog" || state.sfilter !== "new" || !ready;
     q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "parked" ? renderParked() : renderBacklog();
@@ -612,7 +614,7 @@ button.danger{color:var(--warn)}
     const urg = el("input", {type:"checkbox"}); urg.checked = f.urgent; urg.addEventListener("change", () => { f.urgent = urg.checked; });
     const ta = el("textarea", {placeholder:"What you want to ask or tell the PM", "aria-label":"Message to the PM"}); ta.value = init.text || "";
     const node = el("div", {class:"pmf"}, el("div", {class:"row"}, kinds, sel, el("label", {class:"urg"}, urg, " Urgent")), ta);
-    return { node, ta, get: () => ({ kind: f.kind, repo: f.repo, urgent: f.urgent, text: ta.value.trim() }),
+    return { node, ta, fill, get: () => ({ kind: f.kind, repo: f.repo, urgent: f.urgent, text: ta.value.trim() }),
       reset: () => { f.kind = "question"; f.repo = ""; f.urgent = false; sel.value = ""; urg.checked = false; ta.value = ""; drawKinds(); } };
   }
   const pmCompose = pmFields({});
@@ -624,7 +626,7 @@ button.danger{color:var(--warn)}
     b.disabled = true; st.className = "status"; st.textContent = "Adding…";
     try {
       const r = await write("/to_pm", { kind: v.kind, repo: v.repo, urgent: v.urgent, text: v.text });    // the server gives the id
-      pmCompose.reset(); st.textContent = "Queued as " + r.id + ". Nothing is sent until you press Send all."; render();
+      pmCompose.reset(); st.textContent = "Saved as " + r.id + ". It is not sent yet: press Send all."; render();
     } catch (err) { st.className = "status err"; st.textContent = "Not added: " + why(err) + ". Your text is kept."; b.disabled = false; }
   });
   $("#pmtabs").addEventListener("click", e => {
@@ -641,7 +643,7 @@ button.danger{color:var(--warn)}
     b.disabled = true; st.className = "status"; st.textContent = "Sending…";
     try {
       const r = await write("/to_pm/send", {});
-      st.textContent = "Sent " + (Array.isArray(r.sent) ? r.sent.length : 0) + ".";
+      st.textContent = "Sent " + (Array.isArray(r.sent) ? r.sent.length : 0) + (state.seen && Number(state.seen.waiting) > 0 ? ". A PM is listening." : ". No PM is listening now: your message is saved and the PM gets it when one connects.");
     } catch (err) { st.className = "status err"; st.textContent = "Not sent: " + why(err) + ". Your queued items are kept."; }
     render();
   });
@@ -725,12 +727,17 @@ button.danger{color:var(--warn)}
     if (tab === "done") parts.push(el("div", {class:"ans"}, el("b", {text:"PM:"}), el("p", {class:"reply", text: x.reply || "noted"})));
     return el("article", {class: "q " + tab + (x.urgent && tab !== "done" ? " urgent" : ""), id: "pm-" + x.id}, ...parts);
   }
+  const NO_QUEUE = "Nothing is queued. Write your message below and press Add, then Send all.";
   function renderToPm(){
     const c = { queued: 0, sent: 0, done: 0 };
     for (const x of state.topm) if (x.status in c) c[x.status]++;
     for (const k of Object.keys(c)) $("#n-p" + k).textContent = c[k];
     document.querySelectorAll("#pmtabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.pf === state.pfilter)));
     const sb = $("#pm-sendall"); sb.textContent = c.queued ? "Send all (" + c.queued + ")" : "Send all"; sb.disabled = !c.queued || !ready;
+    // Send all is off with nothing queued: the line beside it says what to do first. It never replaces another word there.
+    const ss = $("#pm-sendstatus");
+    if (!c.queued && ready && !ss.textContent) { ss.className = "status"; ss.textContent = NO_QUEUE; }
+    else if ((c.queued || !ready) && ss.textContent === NO_QUEUE) ss.textContent = "";
     const { rows, hidden } = pmRows(state.topm, state.pfilter, Date.now(), state.pmOlder);
     // The card of an edit whose item is gone stays at the top of Queued, where the edit was made.
     const lost = state.pfilter === "queued" ? lostCards(state.pmEdit) : [];
