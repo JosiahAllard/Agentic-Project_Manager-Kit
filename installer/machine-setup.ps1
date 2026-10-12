@@ -3,9 +3,14 @@
 # work is tools\machine_setup.py.
 #
 #   powershell -NoProfile -File installer\machine-setup.ps1 -OldKit <old kit clone>
-#                                [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>] [-Apply]
+#                                [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>]
+#                                [-RegisterSweepTask] [-Apply]
 #   powershell -NoProfile -File installer\machine-setup.ps1 -Fresh [-PmSettings <file>]
-#                                [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>] [-Apply]
+#                                [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>]
+#                                [-RegisterSweepTask] [-Apply]
+#
+# -RegisterSweepTask, with -Apply, registers the agent-temp-sweep scheduled task (the owner's act);
+# without it the plan prints the line that registers it.
 #
 # Dry run by default: prints every link, settings.json diff and extra it would change. -Apply makes
 # them, writing a .bak beside each settings.json and renaming any real folder aside (never deleting
@@ -33,6 +38,7 @@ param(
     [string]$HomeDir = '',
     [string]$Desktop = '',
     [string]$Python = '',
+    [switch]$RegisterSweepTask,
     [switch]$Apply
 )
 
@@ -62,6 +68,7 @@ foreach ($d in ($ConfigDir | ForEach-Object { $_ -split ',' } | Where-Object { $
 if ($AgentTemp) { $argv += @('--agent-temp', $AgentTemp) }
 if ($HomeDir) { $argv += @('--home', $HomeDir) }
 if ($Desktop) { $argv += @('--desktop', $Desktop) }
+if ($RegisterSweepTask) { $argv += '--register-sweep-task' }
 if ($Apply) { $argv += '--apply' }
 
 # Native calls run under Continue: Windows PowerShell 5.1 turns a native stderr line into an error

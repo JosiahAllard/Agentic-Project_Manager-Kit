@@ -50,9 +50,12 @@ class StubCase(unittest.TestCase):
             fh.write(text)
 
     def call(self, args, cwd):
+        # A stub's kit tool may look up the home (landed.py: the kit temp), and under the home fence
+        # (docs/test-tools.md "Home fence") the real one is refused: the fixture's folder is its home.
         done = subprocess.run([sys.executable] + list(args), cwd=cwd, capture_output=True,
                               text=True, encoding='utf-8', errors='replace',
-                              env=gitfixture.fixture_env(), timeout=120)
+                              env=gitfixture.fixture_env({'USERPROFILE': self.tmp, 'HOME': self.tmp}),
+                              timeout=120)
         return done.returncode, (done.stdout or '') + (done.stderr or '')
 
 

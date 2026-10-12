@@ -15,8 +15,8 @@ Harness traps (Plan cannot write, output files are no rescue path): skill `subag
   work); narrow it on main through a quick records landing right after the plan. A session-owned
   item is pulled with its session: `python tools/backlog.py -C <worktree> --session <key> pull <ID>`.
   Price before pull: an unpriced record refuses the pull, so a price set on an unlanded branch
-  must land first, or the brief has the worker set the same agent price in its worktree before
-  its pull.
+  must land first. A worker never sets a price; if its pull is refused as unpriced it stops and
+  reports to you.
 - **Bundle related work**: pull other open records in the same area onto the same branch, keeping
   it reviewable and never mixing a high-risk change with unrelated work.
 - 1 workstream = 1 branch = 1 isolated worktree, per profile. A brief that names a worktree you
@@ -26,6 +26,8 @@ Harness traps (Plan cannot write, output files are no rescue path): skill `subag
   owns it, or by a fresh agent dispatched into that worktree; never by you with `-C` from outside.
   Only for new work: a refused command is never rerouted this way.
 - Non-trivial: plan read-only -> your approval or correction -> build.
+- A change to `.kit.json` or any other owner-only path (`--find kit-json`, key `owner.paths`) is
+  never dispatched to a builder: it goes to the owner, through the PM.
 
 ## The brief
 
@@ -38,6 +40,7 @@ Harness traps (Plan cannot write, output files are no rescue path): skill `subag
   and `doc_index.py --section "<heading>"` before any search; agents use Grep and Read, not shell
   grep, cat or sed. Reviewer and lander briefs name `python tools/review_pack.py <branch>` as
   their first call, where the repo has it.
+- In a large file the brief names the sections or line ranges to read; the agent reads ranges (codemap or Grep first), never the whole file, unless it is rewriting all of it.
 - Every coding brief states its risk level and why (path in the risk map, or the reason it is
   higher); unlisted is not a reason - list routine paths at their real level.
 - Briefs to `pm-kit:records` and `pm-kit:spec-writer` give facts as keyword lines in the entry format
@@ -89,6 +92,7 @@ the cheap/strong split, the coding ladder, model and effort rules, `pm-kit:deep-
 
 - Continue an agent 2-3 rounds per artefact, then reseed from a short written summary. A message
   queued to a busy agent may never be read: if a report shows something was missed, resend in full.
+- Review a hand-back at once and continue the same agent within 5 minutes (its cache lasts 5); later, continue anyway unless its context is above about 150k tokens (opus coder types) or it is a reviewer, then start fresh from a short written summary; never park a large-context agent to resume later for a small fix.
 - A background run dies with its agent: tell its replacement to check logs first.
 - Few long-running agents: each notification costs a turn over your whole context.
 - **When agents die together** (an API error or usage limit stops every running agent at once):

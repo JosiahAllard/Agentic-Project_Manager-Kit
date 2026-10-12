@@ -81,8 +81,8 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `landing.lanes` (map lane -> {branch_prefix, paths, why, merged_args}, default {}): lanes besides full that gate.py land --lane takes
 - `landing.wait_s` (int from 0 to 86400, default 3600): seconds tools/land.py waits for its turn at the landing lock unless --wait says otherwise
 - `landing.batch_max` (int from 1 to 20, default 3): most branches one tools/land.py landing merges and gates together
-- `landing.reuse_max_age_h` (int from 0 to 168, default 24): hours a branch gate-OK record serves a landing's gate reuse; 0: never reused
-- `landing.reuse_never` (list of string, default []): globs of paths whose change makes a landing reuse no step
+- `landing.reuse_max_age_h` (int from 0 to 168, default 24): hours a pass stored in the gate cache serves a branch gate rerun or a landing; 0: no gate reads or stores a step result
+- `landing.reuse_never` (list of string, default []): globs of paths whose change makes a gate (branch or landing) read and store no step result in the gate cache
 - `landing.in_flight` ({wait_s, command}): how tools/new_worktree.py and tools/sync_base.py see a landing in flight before they fetch, and wait for it (unset: off; {}: the kit landing lock; wait_s unset: 100, inferred not measured; docs/new-worktree.md "Waiting for a landing in flight")
 - `ledger.pre_commit_check` (bool, default false): githooks/pre-commit runs tools/ledger.py check --base HEAD before each commit that changes the ledger file or its standing digest (opt-in; docs/ledger.md "Pre-commit check")
 - `machine_paths.allow` (list of {glob, line, hit, why, temporary}, default []): machine-path hits allowed
@@ -160,7 +160,7 @@ The machine's own settings, read by `kitlib.config.user`: `config.json` in the f
 - `backlog_lint` (object, checked by kitlib.backloglint): the backlog lint repositories
 - `machine_lock` (object, checked by kitlib.lock.site): the machine lock settings: build daemons at release, lock-window notices
 - `temp_dir` (absolute path): the folder the kit's own temp files go in (test run folders, gate logs); unset: `AgentTemp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md "Temp folders"); older kit copies reject the key
-- `agent_temp_sweep` (object, checked by optional/agenttemp/agent_temp_sweep.py): the agents' temp folder to sweep and the age past which an unused entry goes
+- `agent_temp_sweep` (object, checked by optional/agenttemp/agent_temp_sweep.py): the agents' temp folder to sweep (`dir`), the age past which an unused entry goes (`max_age_days`, default 3) and the entries it never removes (`keep`, relative paths such as `claude/<project>/<session>`); `tools/machine_setup.py` adds it when absent (docs/machine-setup.md "Extras")
 - `plugin` (object, checked by kitlib.pluginsource): where the plugin export of pushed kit main lives, and whether pm_watch refreshes it on its own (docs/plugin-source.md); older kit copies reject the key; set it only after every folder is migrated
   - `export_dir` (absolute path): the export root; unset: `%LOCALAPPDATA%\pm-kit\plugin`. Nothing needs setting for the default. It must lie outside the kit checkout and `agent_temp_sweep.dir` (`kitlib.pluginsource` `placement_errors`).
   - `auto_refresh` (true or false, default false): pm_watch starts `tools/plugin_refresh.py --apply` itself when kit main moves.

@@ -90,9 +90,12 @@ class Fixture(unittest.TestCase):
         return got.code, '\n'.join(got.lines)
 
     def cli(self, *args, cwd=None):
+        # The child's home is the one setUp gives this process (home_dir): it looks up the kit temp
+        # too, and under the home fence (docs/test-tools.md "Home fence") the real home is refused.
         done = subprocess.run([sys.executable, TOOL] + list(args), cwd=cwd or self.root,
                               capture_output=True, text=True, encoding='utf-8', errors='replace',
-                              env=gitfixture.fixture_env(), timeout=120)
+                              env=gitfixture.fixture_env({'USERPROFILE': self.tmp, 'HOME': self.tmp}),
+                              timeout=120)
         return done.returncode, (done.stdout or '') + (done.stderr or '')
 
 
