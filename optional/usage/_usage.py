@@ -1,5 +1,6 @@
 """Shared helpers for the usage readers in this folder (agent_costs, api_cost, coordinator_profile,
-testing_cost): which transcripts to read, from when, and what a turn weighs. Standard library only.
+testing_cost): which transcripts to read, from when, and what a turn weighs. Standard library only,
+plus the kit's kitlib.config.user for the home folder when the kit is there (home()).
 
 A turn's weight is relative to one uncached input token: cache read 0.1, cache write 1.25, output 5,
 times the model's multiplier (opus 1). Transcript timestamps are UTC, so a `since` value is too; it
@@ -39,48 +40,64 @@ def since_value(since, days, now=None):
 
 
 def _kit_user():
-    """kitlib.config.user of the kit this folder belongs to, or None when there is none (the
-    folder was copied somewhere without the kit). ~/.claude/tools/usage is a link into the kit,
-    so the real path of this file is what finds it."""
-    try:
-        from kitlib.config import user
-        return user
-    except ImportError:
-        pass
-    if not os.path.isdir(os.path.join(KIT_ROOT, "kitlib")):
-        return None
-    if KIT_ROOT not in sys.path:
-        sys.path.append(KIT_ROOT)
-    try:
-        from kitlib.config import user
-        return user
-    except ImportError:
-        return None
+    """kitlib.config.user of the kit this folder belongs to, or None: the folder was copied
+    somewhere without the kit, the kitlib found does not import, or it has no home_dir (a broken
+    or foreign one must not stop these scripts). ~/.claude/tools/usage is a link into the kit, so
+    the real path of this file is what finds it."""
+    for own in (False, True):
+        if own:
+            if not os.path.isdir(os.path.join(KIT_ROOT, "kitlib")):
+                return None
+            if KIT_ROOT not in sys.path:
+                sys.path.append(KIT_ROOT)
+        try:
+            from kitlib.config import user
+        except Exception:
+            continue
+        return user if callable(getattr(user, "home_dir", None)) else None
+    return None
 
 
 def home():
     """The home folder, through kitlib.config.user.home_dir(): the kit's tests fence it
     (docs/test-tools.md "Home fence"), so a test of these scripts cannot read the real home.
-    Without the kit: os.path.expanduser("~")."""
+    Without a usable kit (_kit_user): os.path.expanduser("~")."""
     user = _kit_user()
     return user.home_dir() if user else os.path.expanduser("~")
 
 
 def expand(path):
-    """`path` with a leading `~`, `~/` or `~\\` read as home(); any other path unchanged, and no
+    """`path` with a leading `~`, `~/` or `~\\` read as home(), spelled as os.path.expanduser
+    spells it (the home, then the rest as written); any other path unchanged, `~name` too, and no
     home is looked up for it."""
     if path == "~" or path[:2] in ("~/", "~\\"):
         return home() + path[1:]
     return path
 
 
+def default_config_dir():
+    """~/.claude, spelled as os.path.expanduser("~/.claude") spells it."""
+    return expand("~/.claude")
+
+
+def same_folder_key(path):
+    """What two spellings of one folder share: case, slashes and `.` parts aside."""
+    return os.path.normcase(os.path.normpath(path))
+
+
 def config_dirs(given):
     """The Claude config folders to read: those given, else CLAUDE_CONFIG_DIR (this session's
-    account) plus ~/.claude. A machine with more accounts passes --config-dir once per folder."""
+    account) plus ~/.claude, each folder once whichever way it is spelled (the first in sorted
+    order is kept). A machine with more accounts passes --config-dir once per folder."""
     if given:
         return [expand(d) for d in given]
-    default = os.path.join(home(), ".claude")
-    return sorted({os.environ.get("CLAUDE_CONFIG_DIR") or default, default})
+    default = default_config_dir()
+    seen, out = set(), []
+    for d in sorted({os.environ.get("CLAUDE_CONFIG_DIR") or default, default}):
+        if same_folder_key(d) not in seen:
+            seen.add(same_folder_key(d))
+            out.append(d)
+    return out
 
 
 def transcripts(root, recursive=True):
@@ -111,8 +128,9 @@ def records(path):
 
 def bare_type(name):
     """An agent type without the plugin that bundles it: `<plugin>:worker` is `worker`, so a
-    report groups an agent dispatched by either name together. This folder runs on its own,
-    without the kit's library, so any one `<plugin>:` prefix is dropped."""
+    report groups an agent dispatched by either name together. This folder also runs without
+    the kit's library (home()), so it asks it for no plugin names: any one `<plugin>:` prefix is
+    dropped."""
     if not isinstance(name, str):
         return name
     head, sep, tail = name.partition(":")

@@ -105,9 +105,11 @@ def main(argv=None):
     ap.add_argument('--poll', type=int, default=300)
     ap.add_argument('--once', action='store_true')
     a = ap.parse_args(argv)
-    # The home is looked up only when nothing else names the folder.
-    config_dir = (a.config_dir or os.environ.get('CLAUDE_CONFIG_DIR')
-                  or os.path.join(U.home(), '.claude'))
+    # A given folder is used as written ('' is the current folder); the home is looked up only
+    # when nothing else names one.
+    config_dir = a.config_dir
+    if config_dir is None:
+        config_dir = os.environ.get('CLAUDE_CONFIG_DIR') or U.default_config_dir()
     path = os.path.join(config_dir, 'usage-status.json')
     parent = os.getppid()
     start = time.time()

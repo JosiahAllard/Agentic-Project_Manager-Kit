@@ -126,6 +126,9 @@ class ConfigDir(unittest.TestCase):
             W.main([*args, "--once"])
         return out.getvalue()
 
+    # Guards (green before they were written): a given folder, the env folder and the default
+    # folder's name.
+
     def test_a_given_config_dir_looks_up_no_home(self):
         thome.fence_decoy(self)
         self.assertIn(os.path.join(self.tmp, "usage-status.json"), self.once("--config-dir", self.tmp))
@@ -135,9 +138,19 @@ class ConfigDir(unittest.TestCase):
         os.environ["CLAUDE_CONFIG_DIR"] = self.tmp
         self.assertIn(os.path.join(self.tmp, "usage-status.json"), self.once())
 
+    def test_an_empty_config_dir_is_the_current_folder(self):
+        thome.fence_decoy(self)
+        os.environ["CLAUDE_CONFIG_DIR"] = self.tmp
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        os.chdir(self.tmp)
+        self.assertIn(": usage-status.json (", self.once("--config-dir", ""))
+
     def test_the_default_is_the_homes_claude_folder(self):
+        # Spelled as os.path.expanduser("~/.claude") spells it.
         home = thome.temp_home(self)
-        self.assertIn(os.path.join(home, ".claude", "usage-status.json"), self.once())
+        self.assertIn(os.path.join(home + "/.claude", "usage-status.json"), self.once())
+        self.assertIn(os.path.join(os.path.expanduser("~/.claude"), "usage-status.json"), self.once())
 
     def test_the_default_is_fenced(self):
         thome.fence_decoy(self)

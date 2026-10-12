@@ -75,7 +75,7 @@ class Report(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), mock.patch.object(sys, 'argv', ['repetition_report.py', repo]):
             RR.main()
-        self.assertIn('1 transcripts | read: %s' % os.path.join(home, '.claude'), out.getvalue())
+        self.assertIn('1 transcripts | read: %s/.claude\n' % home, out.getvalue())
 
     def test_no_config_dir_is_fenced(self):
         home = thome.fence_decoy(self)
