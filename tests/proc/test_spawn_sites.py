@@ -10,7 +10,10 @@ kit's code goes one of three ways, and this test reads the source to hold that:
 - a row in EXEMPT below, with the reason that site needs neither.
 
 What is read: every .py and .pyw file, and every file with no extension whose first line names
-python (githooks/pre-push), under the repository root, outside SKIP_DIRS. What is found: a
+python (githooks/pre-push), that git lists for the checkout (python_files: tracked, or new and
+not ignored), outside SKIP_DIRS. A file git ignores, and a worktree or a repository of its own
+inside the checkout's folder (another session's, a whole copy of some other kit), is not the kit's
+source and is not read. What is found: a
 `subprocess.<SPAWNERS>` call with no `creationflags=` keyword (a `**keywords` splat alone does not
 count: nothing shows the flag is in it), the same names handed on without a call (a `run=
 subprocess.run` default, an alias), `from subprocess import <one of them>`, os.system, os.startfile,
@@ -32,11 +35,11 @@ import ast
 import os
 import unittest
 
-from kitlib import stubs
+from kitlib import machinepaths, stubs
 from tests import gitfixture
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SKIP_DIRS = ('tests', '.git', '.claude', '__pycache__', 'node_modules')
+SKIP_DIRS = ('tests', '.claude')        # folders of the kit's own files that are not read
 SPAWNERS = ('run', 'Popen', 'call', 'check_call', 'check_output', 'getoutput', 'getstatusoutput')
 OS_STARTS = ('system', 'startfile', 'popen')
 ASYNC_STARTS = ('create_subprocess_exec', 'create_subprocess_shell')
@@ -99,15 +102,14 @@ def is_python(path):
 
 
 def python_files(root):
-    """[path relative to root, with /] of every file read, sorted."""
-    found = []
-    for folder, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        for name in files:
-            full = os.path.join(folder, name)
-            if is_python(full):
-                found.append(os.path.relpath(full, root).replace(os.sep, '/'))
-    return sorted(found)
+    """[path relative to root, with /] of every file read, sorted.
+
+    The names come from git (kitlib.machinepaths.tree_files: tracked, plus untracked and not
+    ignored), never from walking folders: git lists a worktree or a repository nested in the
+    checkout as one folder name, if at all, and none of the files in it."""
+    return [rel for rel in machinepaths.tree_files(root)
+            if not set(rel.split('/')[:-1]).intersection(SKIP_DIRS)
+            and os.path.isfile(os.path.join(root, rel)) and is_python(os.path.join(root, rel))]
 
 
 class _Scan(ast.NodeVisitor):
