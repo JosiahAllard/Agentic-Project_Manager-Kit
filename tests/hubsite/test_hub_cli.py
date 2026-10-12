@@ -92,7 +92,9 @@ class UsageCase(CliCase):
     def test_no_verb_and_an_unknown_verb_are_usage_errors(self):
         code, out, err = self.run_cli()
         self.assertEqual((code, out), (2, ''))
-        self.assertIn('USAGE: give a verb: serve, status, setup or open', err)
+        self.assertIn('USAGE: give a verb: serve, status, setup, open, migrate, questions, '
+                      'answer, todos, stories, to-pm, inbox, pending, wait or validate\n', err)
+        self.assertEqual(sorted(HUB.VERBS), sorted(HUB.VERB_NAMES))     # every verb it has
         self.assertEqual(self.run_cli('launch')[0], 2)
         self.assertEqual(self.run_cli('serve', '--bind', '0.0.0.0')[0], 2)
         self.assertEqual(self.run_cli('serve', '--host', '0.0.0.0')[0], 2)
@@ -645,6 +647,493 @@ class ClientCase(CliCase):
         code, out, err = self.run_cli('open', '--print', '--port', str(hub.port))
         self.assertEqual((code, out), (1, ''))
         self.assertIn('answered 403', err)
+
+
+class ClosedConsoleCase(CliCase):
+    """`serve` beside a console that was closed while it served: every line of it is lost, and
+    the server ends as it would have."""
+
+    def shut(self, gone, texts):
+        class Shut(io.StringIO):
+            def write(self, text):
+                if any(t in text for t in texts):
+                    raise gone
+                return io.StringIO.write(self, text)
+        return Shut()
+
+    def serve(self, gone, texts, under):
+        stop = threading.Event()
+        stop.set()
+        out, err = self.shut(gone, texts), self.shut(gone, texts)
+        with under, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = HUB.main(['serve', '--store', self.store_dir, '--port', '0'], stop=stop)
+            except (OSError, ValueError) as e:
+                self.fail('the closed console left hub.py as %r' % e)
+        self.assertFalse(self.locked(), 'the store lock outlived the server')
+        return code, out.getvalue(), err.getvalue()
+
+    GONE = (OSError(9, 'Bad file descriptor'), ValueError('I/O operation on closed file'))
+
+    def test_a_close_cut_by_ctrl_c_is_still_exit_1(self):
+        for gone in self.GONE:
+            with self.subTest(gone=type(gone).__name__):
+                code, out, err = self.serve(gone, [HUB.CLOSE_CUT],
+                                            ServeCase.cut_in(self, 'drain'))
+                self.assertEqual((code, err), (1, ''))
+                self.assertNotIn('hub closed', out)
+
+    def test_an_unclean_close_is_still_exit_1(self):
+        real = HUB.serve.build
+
+        def build(settings, sources, log=None):
+            hub = real(settings, sources, log=log)
+            lis = hub.listeners[0]
+            join = lis.join
+            lis.join = lambda timeout=None: join(timeout) and False
+            return hub
+
+        for gone in self.GONE:
+            with self.subTest(gone=type(gone).__name__):
+                code, out, err = self.serve(gone, [HUB.UNCLEAN, 'ERROR: '],
+                                            mock.patch.object(HUB.serve, 'build', build))
+                self.assertEqual((code, err), (1, ''))
+                self.assertNotIn('hub closed', out)
+        self.assertEqual(HUB.UNCLEAN, 'the hub server did not close cleanly: see the lines above')
+
+    def test_a_start_line_that_cannot_be_written_does_not_stop_the_server(self):
+        served = []
+        real = HUB.serve.run
+
+        def run(hub, started, stop):
+            def said(h):
+                started(h)
+                served.append(get_health(h))
+            return real(hub, said, stop)
+
+        def get_health(h):
+            token = auth.read_token(self.tokens, auth.AGENT)
+            return httpfix.get(h.port, HUB.HEALTH, token).status
+
+        for gone in self.GONE:
+            with self.subTest(gone=type(gone).__name__):
+                del served[:]
+                code, out, err = self.serve(gone, ['hub serving ', HUB.CLOSED],
+                                            mock.patch.object(HUB.serve, 'run', run))
+                self.assertEqual((code, out, err), (0, '', ''))
+                self.assertEqual(served, [200], 'the server did not serve after its start line')
+
+
+class VerbCase(CliCase):
+    """The verbs that ask the server, against one this test started on port 0."""
+
+    def setUp(self):
+        CliCase.setUp(self)
+        self.hub = self.server()
+        self.port = str(self.hub.port)
+
+    def ok(self, *argv):
+        """The stdout lines of a verb that must end with exit 0 and say nothing on stderr."""
+        code, out, err = self.run_cli(*(argv + ('--port', self.port)))
+        self.assertEqual((code, err), (0, ''), (argv, out))
+        lines = out.splitlines()
+        if '--json' in argv:
+            return lines
+        self.warned = [line for line in lines if line.startswith('WARN ')]
+        return [line for line in lines if not line.startswith('WARN ')]
+
+    def refused(self, *argv):
+        code, out, err = self.run_cli(*(argv + ('--port', self.port)))
+        self.assertEqual((code, out), (1, ''), (argv, err))
+        return err
+
+    def direct(self, path):
+        r = httpfix.get(self.hub.port, HUB.api.BASE + path,
+                        auth.read_token(self.tokens, auth.AGENT))
+        self.assertEqual(r.status, 200, r.body)
+        return r.json()
+
+    def file(self, name, text):
+        path = os.path.join(self.home, name)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        return path
+
+    def ask(self, title='which way'):
+        return self.ok('questions', 'add', '--title', title, '--repo', 'kit',
+                       '--option', 'left::go left', '--option', 'right :: go right')
+
+
+class PendingCase(VerbCase):
+    def test_pending_prints_the_items_get_pending_answers(self):
+        self.assertEqual(self.ok('pending'), [])
+        self.assertEqual(self.ask(), ['ASKED Q-001'])
+        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '1'), ['ANSWERED Q-001 right'])
+        self.assertEqual(self.ok('to-pm', 'add', '--text', 'look at this', '--repo', 'kit'),
+                         ['QUEUED P-001'])
+        self.assertEqual(self.ok('to-pm', 'send'), ['SENT P-001'])
+        want = self.direct('/pending')
+        self.assertEqual(len(want['items']), 2, want)
+        self.assertEqual(json.loads('\n'.join(self.ok('pending', '--json'))), want)
+        self.assertEqual(self.ok('pending'), [
+            '%s %s [%s] %s' % (i['kind'], i['id'], i['repo'] or '-', i['title'])
+            for i in want['items']])
+        self.assertIn('Q-001 [kit] which way', self.ok('pending')[0])
+
+
+class WriteCase(VerbCase):
+    def test_a_question_is_asked_answered_and_logged(self):
+        context = self.file('context.md', 'the context\nof it\n')
+        self.assertEqual(self.ok(
+            'questions', 'add', '--title', 'which way', '--repo', 'kit', '--context-file', context,
+            '--option', 'left::go left', '--option', 'right::go right', '--recommended', '0',
+            '--refs', 'B-1', 'B-2', '--urgent', '--from', 'coordinator'), ['ASKED Q-001'])
+        doc = self.direct('/questions')['items'][0]
+        self.assertEqual((doc['context'], doc['recommended'], doc['refs'], doc['urgent'],
+                          doc['from']), ('the context\nof it\n', 0, ['B-1', 'B-2'], True,
+                                         'coordinator'))
+        self.assertEqual(doc['options'], [{'label': 'left', 'description': 'go left'},
+                                          {'label': 'right', 'description': 'go right'}])
+        self.assertEqual(self.ok('questions'), ['Q-001 open [kit] which way'])
+        self.assertEqual(self.ok('questions', '--status', 'answered'), [])
+        self.assertEqual(self.ok('questions', '--repo', 'elsewhere'), [])
+        # the first option is place 0: it is a choice, not "no choice"
+        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '0', '--note', 'as planned'),
+                         ['ANSWERED Q-001 left'])
+        self.assertEqual(self.ok('questions', '--status', 'answered'),
+                         ['Q-001 answered [kit] which way'])
+        self.assertEqual(self.ok('questions', 'log', 'Q-001', 'D-7'), ['LOGGED Q-001 D-7'])
+        doc = self.direct('/questions?status=all')['items'][0]
+        self.assertEqual((doc['status'], doc['ruling'], doc['answer']['note']),
+                         ('logged', 'D-7', 'as planned'))
+        self.assertEqual(json.loads(self.ok('questions', '--status', 'all', '--json')[0]),
+                         self.direct('/questions?status=all'))
+
+    def test_other_needs_a_note_and_a_stale_version_is_refused(self):
+        self.ask()
+        self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-001', '--choice', 'other'))
+        self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-001', '--choice', '7'))
+        self.assertIn('REFUSED conflict: ', self.refused('answer', 'Q-001', '--choice', '0',
+                                                         '--if-version', '99'))
+        self.assertEqual(self.ok('answer', 'Q-001', '--choice', 'other', '--note', 'neither'),
+                         ['ANSWERED Q-001 Other'])
+        self.assertIn('REFUSED conflict: ', self.refused('questions', 'log', 'Q-001', 'D-7',
+                                                         '--if-version', '0'))
+        self.assertIn('REFUSED not_found: ', self.refused('questions', 'log', 'Q-009', 'D-7'))
+        self.assertIn('REFUSED not_found: ', self.refused('answer', 'Q-009', '--choice', '0'))
+
+    def test_a_refusal_with_json_prints_the_servers_answer_too(self):
+        code, out, err = self.run_cli('answer', 'Q-009', '--choice', '0', '--json', '--port',
+                                      self.port)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out)['error']['code'], 'not_found')
+        self.assertTrue(err.startswith('REFUSED not_found: '), err)
+
+    def test_todos_are_added_done_reopened_and_acked(self):
+        self.assertEqual(self.ok('todos', 'add', '--title', 'rotate the key', '--detail', 'soon',
+                                 '--command', 'tool one', '--command', 'tool two', '--repo',
+                                 'kit', '--from', 'coordinator'), ['ADDED T-001'])
+        self.assertEqual(self.ok('todos', 'add', '--title', 'my own', '--owner'), ['ADDED T-002'])
+        docs = self.direct('/todos')['items']
+        self.assertEqual([(d['from'], d.get('commands')) for d in docs],
+                         [('coordinator', ['tool one', 'tool two']), ('you', None)])
+        self.assertEqual(self.ok('todos'), ['T-001 open [kit] rotate the key',
+                                            'T-002 open [-] my own'])
+        self.assertEqual(self.ok('todos', 'done', 'T-001'), ['DONE T-001'])
+        self.assertEqual(self.ok('todos', '--status', 'open'), ['T-002 open [-] my own'])
+        self.assertEqual(self.ok('todos', 'ack', 'T-001'), ['ACKED T-001'])
+        self.assertEqual(self.ok('todos', 'done', 'T-001', '--undo'), ['REOPENED T-001'])
+        self.assertEqual(len(self.ok('todos', '--status', 'open')), 2)
+        code, out, err = self.run_cli('todos', 'add', '--title', 't', '--owner', '--from', 'x')
+        self.assertEqual((code, out), (2, ''))
+
+    def test_stories_are_submitted_set_and_withdrawn(self):
+        story = self.file('story.md', 'As the owner I want it.\n')
+        self.assertEqual(self.ok('stories', 'add', '--repo', 'kit', '--title', 'a verb',
+                                 '--story-file', story), ['SUBMITTED S-001'])
+        self.assertEqual(self.ok('stories'), ['S-001 submitted [kit] a verb'])
+        self.assertEqual(self.ok('stories', 'set', 'S-001', '--status', 'review', '--reviewer',
+                                 'coordinator', '--review-note', 'reading'), ['SET S-001 review'])
+        self.assertEqual(self.ok('stories', 'set', 'S-001', '--status', 'added', '--backlog-id',
+                                 'B-12'), ['SET S-001 added'])
+        doc = self.direct('/stories?status=all')['items'][0]
+        self.assertEqual((doc['status'], doc['backlog_id'], doc['story']),
+                         ('added', 'B-12', 'As the owner I want it.\n'))
+        self.ok('stories', 'add', '--repo', 'kit', '--title', 'another', '--story-file', story)
+        self.assertEqual(self.ok('stories', 'withdraw', 'S-002'), ['WITHDRAWN S-002'])
+        self.assertEqual(self.ok('stories', '--status', 'withdrawn'),
+                         ['S-002 withdrawn [kit] another'])
+        self.assertIn('REFUSED conflict: ', self.refused('stories', 'set', 'S-001', '--status',
+                                                         'review', '--if-version', '0'))
+        code, out, err = self.run_cli('stories', 'set', 'S-001', '--status', 'withdrawn')
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('REFUSED: cannot read the story file', self.refused(
+            'stories', 'add', '--repo', 'kit', '--title', 't', '--story-file',
+            os.path.join(self.home, 'absent.md')))
+
+    def test_messages_to_the_pm_are_queued_sent_and_replied_to(self):
+        self.assertEqual(self.ok('to-pm', 'send'), ['SENT nothing'])
+        self.assertEqual(self.ok('to-pm', 'add', '--text', 'first', '--repo', 'kit'),
+                         ['QUEUED P-001'])
+        self.assertEqual(self.ok('to-pm', 'add', '--text', 'second\nline', '--urgent'),
+                         ['QUEUED P-002'])
+        self.assertEqual(self.ok('to-pm'), ['P-001 queued [kit] first', 'P-002 queued [-] second line'])
+        self.assertEqual(self.ok('to-pm', 'send'), ['SENT P-001 P-002'])
+        self.assertEqual(self.ok('to-pm', 'reply', 'P-001', 'done as asked', 'D-7'),
+                         ['REPLIED P-001'])
+        self.assertEqual(self.ok('to-pm', 'reply', 'P-002', 'seen'), ['REPLIED P-002'])
+        docs = self.direct('/to_pm?status=all')['items']
+        self.assertEqual([(d['reply'], d.get('ruling')) for d in docs],
+                         [('done as asked', 'D-7'), ('seen', None)])
+
+    def test_the_inbox_is_posted_to_listed_and_read(self):
+        self.assertEqual(self.ok('inbox'), [])
+        self.assertEqual(self.ok('inbox', 'add', '--text', 'the answer', '--title', 'about it',
+                                 '--repo', 'kit', '--ref', 'P-001', '--asked', 'what'),
+                         ['POSTED M-001'])
+        self.assertEqual(self.ok('inbox'), ['M-001 unread [kit] about it'])
+        self.assertEqual(self.ok('inbox', 'read', 'M-001'), ['READ M-001'])
+        self.assertEqual(self.ok('inbox'), ['M-001 read [kit] about it'])
+        self.assertEqual(self.ok('inbox', 'read', 'M-001', '--undo'), ['UNREAD M-001'])
+        got = json.loads(self.ok('inbox', '--json')[0])
+        self.assertEqual([(m['id'], m['read'], m['text']) for m in got['items']],
+                         [('M-001', False, 'the answer')])
+
+    def test_a_listed_title_is_one_line_with_no_user_or_password_of_a_url(self):
+        self.ok('todos', 'add', '--owner', '--title',
+                'clone https://someone:s3cret@git.example.test/x\n  then build')
+        self.assertEqual(self.ok('todos'),
+                         ['T-001 open [-] clone https://git.example.test/x then build'])
+        self.assertNotIn('s3cret', self.ok('todos', '--json')[0])
+
+    def test_a_write_says_each_warning_of_the_document_it_wrote(self):
+        self.assertEqual(self.ask(), ['ASKED Q-001'])
+        self.assertEqual(len(self.warned), 1, self.warned)
+        self.assertTrue(self.warned[0].startswith('WARN questions/Q-001 repo: '), self.warned)
+        self.assertTrue(self.warned[0].endswith('[repo-alias]'), self.warned)
+
+
+class ForeignCase(CliCase):
+    def test_tokens_that_are_not_the_servers_are_refused_by_the_server(self):
+        other = self.server(tokens=os.path.join(self.home, 'other-tokens'))
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        code, out, err = self.run_cli('pending', '--port', str(other.port))
+        self.assertEqual((code, out), (1, ''))
+        self.assertTrue(err.startswith('REFUSED forbidden: '), err)
+
+
+class WaitVerbCase(VerbCase):
+    def test_a_wait_with_nothing_is_exit_4_and_prints_nothing(self):
+        code, out, err = self.run_cli('wait', '--timeout', '0', '--port', self.port)
+        self.assertEqual((code, out, err), (4, '', ''))
+        code, out, err = self.run_cli('wait', '--timeout', '0', '--pending', '--json', '--port',
+                                      self.port)
+        self.assertEqual((code, err), (4, ''))
+        self.assertIs(json.loads(out)['timed_out'], True)
+
+    def test_a_wait_prints_each_change_and_each_pending_item(self):
+        was = self.hub.store.revision
+        self.ask()
+        now = self.hub.store.revision
+        self.assertEqual(self.ok('wait', '--since', str(was), '--timeout', '5'),
+                         ['HUB %d questions Q-001 %s open' % (
+                             now, self.direct('/wait?since=%d&timeout=0' % was)['changes'][0]['op'])])
+        self.ok('answer', 'Q-001', '--choice', '0')
+        items = self.direct('/pending')['items']
+        self.assertEqual([i['id'] for i in items], ['Q-001'])
+        self.assertEqual(self.ok('wait', '--pending', '--timeout', '5'),
+                         ['HUB %d %s Q-001 which way' % (self.hub.store.revision,
+                                                         items[0]['kind'])])
+
+    def test_a_wait_argument_that_is_no_number_is_a_usage_error(self):
+        for argv in (('wait', '--timeout', 'soon'), ('wait', '--timeout', '-1'),
+                     ('wait', '--since', '-1'), ('wait', '--since', 'x'),
+                     ('wait', '--timeout', 'nan'), ('wait', '--timeout', 'inf')):
+            code, out, err = self.run_cli(*argv)
+            self.assertEqual((code, out), (2, ''), argv)
+            self.assertIn('USAGE: ', err)
+
+
+class ArgumentCase(CliCase):
+    VERBS = (('questions',), ('questions', 'add', '--title', 't'),
+             ('questions', 'log', 'Q-001', 'D-7'), ('answer', 'Q-001', '--choice', '0'),
+             ('todos',), ('todos', 'add', '--title', 't'), ('todos', 'done', 'T-001'),
+             ('todos', 'ack', 'T-001'), ('stories',), ('stories', 'set', 'S-001', '--status', 'review'),
+             ('stories', 'withdraw', 'S-001'), ('to-pm',), ('to-pm', 'add', '--text', 't'),
+             ('to-pm', 'send'), ('to-pm', 'reply', 'P-001', 'text'), ('inbox',),
+             ('inbox', 'add', '--text', 't'), ('inbox', 'read', 'M-001'), ('pending',),
+             ('wait', '--timeout', '0'))
+
+    def test_every_verb_that_asks_is_exit_3_with_the_start_command_when_no_server_runs(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        for argv in (('pending',), ('wait', '--timeout', '0'), ('todos', 'add', '--title', 't')):
+            code, out, err = self.run_cli(*(argv + ('--port', str(port))))
+            self.assertEqual((code, out), (3, ''), argv)
+            self.assertIn('no hub server is listening on port %d' % port, err)
+            self.assertIn(HUB.START, err)
+
+        def down(port, *args, **kw):            # the rest: a refused connect is slow here
+            raise serve.NotRunning(port)
+
+        with mock.patch.object(serve, 'ask', down):
+            for argv in self.VERBS:
+                for more in ((), ('--json',)):
+                    code, out, err = self.run_cli(*(argv + more + ('--port', '8791')))
+                    self.assertEqual((code, out), (3, ''), argv)
+                    self.assertIn('port 8791', err)
+                    self.assertIn(HUB.START, err)
+        # each verb of the tool is in that list, but for those that ask no running server
+        self.assertEqual(sorted({v[0] for v in self.VERBS}),
+                         sorted(set(HUB.VERB_NAMES)
+                                - {'serve', 'status', 'setup', 'open', 'migrate', 'validate'}))
+
+    def test_the_port_is_the_configured_one_unless_given(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        self.config({'hub': {'port': 8793}})
+        asked = []
+
+        def down(port, *args, **kw):
+            asked.append(port)
+            raise serve.NotRunning(port)
+
+        with mock.patch.object(serve, 'ask', down):
+            self.assertEqual(self.run_cli('pending')[0], 3)
+            self.assertEqual(self.run_cli('questions', '--port', '8794')[0], 3)
+            self.assertEqual(self.run_cli('questions', '--port', '8794', 'log', 'Q-001', 'D-7')[0], 3)
+            self.assertEqual(self.run_cli('todos', 'ack', 'T-001', '--port', '8795')[0], 3)
+        self.assertEqual(asked, [8793, 8794, 8794, 8795])
+
+    def test_an_argument_that_is_missing_or_wrong_is_a_usage_error(self):
+        for argv in (('answer', 'Q-001'), ('answer', '--choice', '0'),
+                     ('answer', 'Q-001', '--choice', 'first'), ('answer', 'Q-001', '--choice', '-1'),
+                     ('questions', 'add'), ('questions', 'add', '--title', 't', '--option', 'bare'),
+                     ('questions', 'add', '--title', 't', '--option', '::no label'),
+                     ('questions', 'add', '--title', 't', '--recommended', 'x'),
+                     ('questions', 'log', 'Q-001'), ('questions', 'close', 'Q-001'),
+                     ('questions', '--status', 'nonsense'), ('todos', 'add'), ('todos', 'done'),
+                     ('todos', 'ack'), ('stories', 'add', '--title', 't', '--story-file', 'f'),
+                     ('stories', 'add', '--repo', 'r', '--title', 't'), ('stories', 'set', 'S-001'),
+                     ('to-pm', 'add'), ('to-pm', 'reply', 'P-001'), ('inbox', 'add'),
+                     ('inbox', 'read'), ('pending', 'now'), ('pending', '--port', '0'),
+                     ('answer', 'Q-001', '--choice', '0', '--if-version', 'x'),
+                     ('validate', '--store', ''), ('validate', '--port', '8790')):
+            code, out, err = self.run_cli(*argv)
+            self.assertEqual((code, out), (2, ''), argv)
+            self.assertIn('USAGE: ', err)
+
+    def test_a_verb_with_no_token_file_is_refused_before_it_asks(self):
+        asked = []
+        with mock.patch.object(serve, 'ask', lambda *a, **kw: asked.append(a)):
+            code, out, err = self.run_cli('pending', '--port', '8791')
+            self.assertEqual((code, out), (1, ''))
+            self.assertIn('REFUSED: no agent or owner token in %s: run hub.py setup'
+                          % self.tokens, err)
+            os.makedirs(self.tokens)
+            auth.ensure_tokens(self.tokens)
+            os.remove(os.path.join(self.tokens, auth.TOKEN_FILES[auth.OWNER]))
+            code, out, err = self.run_cli('answer', 'Q-001', '--choice', '0', '--port', '8791')
+            self.assertEqual((code, out), (1, ''))
+            self.assertIn('REFUSED: no owner token', err)
+        self.assertEqual(asked, [])
+
+    def test_the_owner_verbs_carry_the_owners_token_and_the_others_the_agents(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        owner, agent = (auth.read_token(self.tokens, r) for r in (auth.OWNER, auth.AGENT))
+        seen = []
+
+        def ask(port, method, path, token=None, body=None, timeout=None):
+            seen.append((method, path, {owner: 'owner', agent: 'agent'}[token]))
+            return 200, {'ok': True, 'id': 'X-1', 'items': [{'id': 'Q-001', 'version': 3},
+                                                             {'id': 'S-001', 'version': 4}]}
+
+        base = HUB.api.BASE
+        with mock.patch.object(serve, 'ask', ask):
+            for argv, want in (
+                    (('answer', 'Q-001', '--choice', '0'), ('POST', '/questions/Q-001/answer', 'owner')),
+                    (('todos', 'done', 'T-001'), ('POST', '/todos/T-001/done', 'owner')),
+                    (('todos', 'add', '--title', 't', '--owner'), ('POST', '/todos', 'owner')),
+                    (('todos', 'add', '--title', 't'), ('POST', '/todos', 'agent')),
+                    (('todos', 'ack', 'T-001'), ('POST', '/todos/T-001/ack', 'agent')),
+                    (('stories', 'add', '--repo', 'r', '--title', 't', '--story-file', __file__),
+                     ('POST', '/stories', 'owner')),
+                    (('stories', 'withdraw', 'S-001'), ('POST', '/stories/S-001/withdraw', 'owner')),
+                    (('stories', 'set', 'S-001', '--status', 'review'),
+                     ('POST', '/stories/S-001', 'agent')),
+                    (('to-pm', 'add', '--text', 't'), ('POST', '/to_pm', 'owner')),
+                    (('to-pm', 'send'), ('POST', '/to_pm/send', 'owner')),
+                    (('to-pm', 'reply', 'P-001', 'text'), ('POST', '/to_pm/P-001/reply', 'agent')),
+                    (('inbox', 'add', '--text', 't'), ('POST', '/inbox', 'agent')),
+                    (('inbox', 'read', 'M-001'), ('POST', '/inbox/M-001/read', 'owner')),
+                    (('questions', 'add', '--title', 't'), ('POST', '/questions', 'agent')),
+                    (('questions', 'log', 'Q-001', 'D-7'), ('POST', '/questions/Q-001/log', 'agent')),
+                    (('questions',), ('GET', '/questions', 'agent')),
+                    (('inbox',), ('GET', '/snapshot', 'agent')),
+                    (('pending',), ('GET', '/pending', 'agent')),
+                    (('wait', '--timeout', '0'), ('GET', '/wait?timeout=0', 'agent'))):
+                del seen[:]
+                code, out, err = self.run_cli(*(argv + ('--port', '8791')))
+                self.assertEqual((code, err), (0, ''), argv)
+                self.assertEqual(seen[-1], (want[0], base + want[1], want[2]), argv)
+
+    def test_an_id_cannot_leave_its_place_in_the_path(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        seen = []
+
+        def ask(port, method, path, token=None, body=None, timeout=None):
+            seen.append(path)
+            return 200, {'ok': True}
+
+        with mock.patch.object(serve, 'ask', ask):
+            self.assertEqual(self.run_cli('todos', 'ack', '../stories/S-001?x=1#y', '--port',
+                                          '8791')[0], 0)
+        self.assertEqual(seen, [HUB.api.BASE + '/todos/..%2Fstories%2FS-001%3Fx%3D1%23y/ack'])
+
+
+class ValidateCase(CliCase):
+    def test_validate_reads_the_store_beside_a_running_server_and_writes_nothing(self):
+        hub = self.server()
+        self.assertEqual(self.run_cli('todos', 'add', '--owner', '--title', 't', '--port',
+                                      str(hub.port))[0], 0)
+
+        def tree():
+            return sorted((os.path.join(d, n), os.path.getmtime(os.path.join(d, n)))
+                          for d, _, names in os.walk(self.store_dir) for n in names)
+
+        was = tree()
+        self.assertTrue(self.locked(), 'the server does not hold its store')
+        code, out, err = self.run_cli('validate', '--store', self.store_dir)
+        self.assertEqual((code, out, err), (0, 'VALIDATE clean: no finding\n', ''))
+        self.assertEqual(tree(), was)
+        self.config({'hub': {'store': self.store_dir}})     # the configured store, by default
+        self.assertEqual(self.run_cli('validate'), (0, 'VALIDATE clean: no finding\n', ''))
+
+    def test_a_store_with_an_error_finding_is_exit_1_with_each_finding(self):
+        hub = self.server()
+        self.assertEqual(self.run_cli('todos', 'add', '--owner', '--title', 't', '--port',
+                                      str(hub.port))[0], 0)
+        hub.close()
+        path = os.path.join(self.store_dir, 'todos', 'T-001.json')
+        with open(path, encoding='utf-8') as f:
+            doc = json.load(f)
+        doc['status'] = 'someday'
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(doc, f)
+        code, out, err = self.run_cli('validate', '--store', self.store_dir)
+        self.assertEqual((code, err), (1, ''))
+        lines = out.splitlines()
+        self.assertTrue(all(line.startswith('VALIDATE ') for line in lines), out)
+        self.assertTrue(any(line.startswith('VALIDATE ERROR todos/T-001 status: ')
+                            for line in lines), out)
+
+    def test_validate_of_no_store_is_refused(self):
+        code, out, err = self.run_cli('validate')
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('REFUSED: no store folder is set', err)
+        code, out, err = self.run_cli('validate', '--store', os.path.join(self.home, 'absent'))
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('REFUSED: the hub store ', err)
+        self.assertFalse(os.path.exists(os.path.join(self.home, 'absent')))
 
 
 if __name__ == '__main__':
