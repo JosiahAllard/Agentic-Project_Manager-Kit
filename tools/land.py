@@ -30,7 +30,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kitlib import gate as G                                        # noqa: E402
+if __name__ == '__main__':      # from the kit's main checkout: run from pushed main (kitlib.gate.pin)
+    from kitlib.gate import pin                                     # noqa: E402
+    _code, _said = pin.run(__file__, sys.argv[1:])
+    if _said:
+        sys.stderr.write(_said + '\n')
+    if _code is not None:
+        sys.exit(_code)
+
+from kitlib import gate as G                                       # noqa: E402
 from kitlib.gate import cleanup                                    # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
 from kitlib.gate import runner                                     # noqa: E402

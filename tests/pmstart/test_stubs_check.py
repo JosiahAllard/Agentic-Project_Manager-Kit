@@ -5,10 +5,16 @@ import tempfile
 import unittest
 
 from kitlib import pmstart
+from tests.home import temp_home
+from tests.pmstart import keep_off_plugin_export
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 FAKES = dict(pm_data=lambda: None, handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"})
+
+
+def setUpModule():
+    keep_off_plugin_export()    # the checklist's plugin_current check reads nothing of this machine
 
 
 class StubsCheckTest(unittest.TestCase):
@@ -48,6 +54,7 @@ class StubsCheckTest(unittest.TestCase):
         self.assertTrue(got[0].startswith("stubs (a): ") and "missing/stale: backlog" in got[0], got)
 
     def test_in_the_checklist(self):
+        temp_home(self)     # the hub check's current account reads an empty machine config
         txt = pmstart.checklist({}, NOW, procs=[], **FAKES,
                                 stubs={"repos": {"a": self.a}, "check": lambda p: "stubs (a): 1 missing/stale: q"})
         self.assertIn("- stubs (a): 1 missing/stale: q", txt)

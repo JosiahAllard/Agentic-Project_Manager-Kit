@@ -27,6 +27,9 @@ Tests run on the fake git (docs/test-tools.md "Fake git"): the units get KIT_FAK
 is set; --real-git gives them 0, so the unit tier also runs on real git. --both-tiers runs the
 selection twice, KIT_FAKE_GIT 1 then 0, and prints `kit_tests: OK` only when both passed; each
 pass's own lines read `kit_tests [fake git]: ` / `kit_tests [real git]: `.
+The units also get the home fence's marker (docs/test-tools.md "Home fence"): KIT_HOME_FENCE, the
+home folder this process resolves, unless the environment already carries one. The tools a test
+starts inherit it and refuse that home.
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls the library, prints, runs, exits.
 Exit codes: the unittest run's (0 passed or nothing selected, 1 failed); 2 USAGE or a refusal
 (git could not list the change, or --select with a malformed table): no test ran; 130 Ctrl+C.
@@ -41,6 +44,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import config as kconfig                                # noqa: E402
+from kitlib.config import user as kuser                             # noqa: E402
 from kitlib.git import refs as gitrefs                              # noqa: E402
 from kitlib.git import repo as gitrepo                              # noqa: E402
 from kitlib.lock import giveback                                    # noqa: E402
@@ -149,7 +153,7 @@ def main(argv=None, out=None):
         return USAGE
     if a.list_tests:
         modules = selftree.all_test_modules(top)
-        env = dict(os.environ)
+        env = kuser.fence_env(dict(os.environ))
         env.setdefault('KIT_FAKE_GIT', '1')
         entries = selflist.collect(top, modules, environ=env)
         if entries is None:
@@ -166,7 +170,11 @@ def main(argv=None, out=None):
             return USAGE
         # --full is the escape hatch: it needs no table, so a broken one cannot stop it.
         say('kit_tests: WARNING: %s; --full runs every module, none serial' % e)
-        cfg = {'serial': []}
+        cfg = {'serial': [], 'skip_fails': []}
+    stale = selftree.stale_skip_fails(cfg.get('skip_fails', ()), selftree.all_test_modules(top))
+    for m in stale:
+        say('kit_tests: WARNING: skip_fails names %s, which is not a test module; its entry guards '
+            'nothing (fix tests/selection.json)' % m)
     if a.full:
         say('kit_tests: full suite (--full)')
         args = FULL
@@ -217,11 +225,13 @@ def main(argv=None, out=None):
 
 def run_pass(args, top, cfg, jobs, fake, out, hold, give_back=True, record_times=True):
     """One run of `args` (FULL or test modules) with the units' KIT_FAKE_GIT set to `fake`,
-    writing to `out`; its exit status."""
+    writing to `out`; its exit status. The units' environment also carries the home fence's
+    marker (kitlib.config.user.fence_env): a pool worker (kitlib/tooldeps/pool_worker.py) replaces
+    its environment for each unit, so tests/__init__.py's marker would not reach it."""
     def say(line):
         out.write(line + '\n')
         out.flush()
-    env = dict(os.environ)
+    env = kuser.fence_env(dict(os.environ))
     env['KIT_FAKE_GIT'] = fake
     label = 'full' if args is FULL else 'selected'
     if jobs == 1:
@@ -247,7 +257,8 @@ def run_pass(args, top, cfg, jobs, fake, out, hold, give_back=True, record_times
         say('kit_tests: give back: off for this pass (a later tier runs on the same slots)')
     rc, _summary = selfrun.run(modules, top, jobs, serial=cfg['serial'], out=out, label=label,
                                times_path=times, hint=cfg.get('long', ()), environ=env,
-                               give_back=give, hold=hold, record_times=record_times)
+                               give_back=give, hold=hold, record_times=record_times,
+                               skip_fails=cfg.get('skip_fails', ()))
     return rc
 
 

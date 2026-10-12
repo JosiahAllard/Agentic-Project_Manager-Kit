@@ -10,6 +10,7 @@ from kitlib.pmstart import fglock
 from kitlib.git import cmd as gitcmd
 from kitlib.records import landing
 from tests import gitfixture
+from tests.home import temp_home
 from tests.pmstart import keep_off_launcher_repos
 from tests.realgit import real_git
 
@@ -193,6 +194,7 @@ class KitSyncTest(Base):
                      liveness={'read': lambda p: '{}'})
         now = datetime.datetime(2026, 10, 6, 9, 0)
         sha = self.remote_ahead()
+        temp_home(self)     # the hub check's current account reads an empty machine config
         txt = pmstart.checklist({'standing': ['x']}, now, procs=[], pm_data=lambda: self.settings,
                                 **fakes)
         self.assertIn('kit updated to %s' % sha[:9], txt)

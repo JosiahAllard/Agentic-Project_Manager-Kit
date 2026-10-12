@@ -32,7 +32,7 @@ def load_config(path=None):
 
 
 def default_state_file():
-    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    base = os.environ.get("LOCALAPPDATA") or kuser.home_dir()
     return os.path.join(base, "pm_watch", "state.json")
 
 
@@ -335,18 +335,50 @@ def idle_events(names, newest, fired, nolog, now, minutes):
     return ev, cur, miss
 
 
+def plugin_check(kit=None, settings=None, spawn=None, alive=None, folders=None):
+    """The PLUGIN check for Watcher: check(last) -> (lines, last), over kitlib.pluginsource.poll
+    (docs/plugin-source.md "Behind warnings"). `last` is the kit main sha last reported (None when
+    current), kept in the state file so a relaunch does not report the same sha again. With no
+    `settings` the machine config's plugin key is read on every call, so a bad key is a failed
+    check (ERROR on the third), never a dead watcher, and so is an unreadable tracking ref or
+    state.json; with no `kit`, the checkout this code is in; with no `folders`, this machine's
+    account folders."""
+    from kitlib import pluginsource
+
+    def check(last):
+        s = pluginsource.load() if settings is None else settings
+        return pluginsource.poll(kit or pluginsource.kit_root(), s, last, spawn=spawn, alive=alive,
+                                 folders=folders)
+    return check
+
+
+def preload():
+    """Load, at start, every kit module a check imports on its first pass, so a landing that writes
+    this checkout later cannot give the running watcher a mix of old and new modules
+    (kitlib.pluginsource.claude after the first PLUGIN difference, kitlib.launcher.usage at the
+    first usage read). The function-level imports stay where they are; they find these loaded."""
+    import kitlib.launcher.settings
+    import kitlib.launcher.usage
+    import kitlib.machinesetup.extras
+    import kitlib.pluginsource
+    import kitlib.pluginsource.claude
+
+
 class Watcher:
     """One watcher run. start() records baselines; poll(now) runs the checks that are due and
     returns their event lines. The caller saves state after each poll and stops at the first
     non-empty one. Every check gives an ERROR line on its third failure in a row.
 
     branches: [(repo_dir, ref)]; usage_reader() -> {account: {"five", "week"}};
-    sessions: path of sessions.json; newest(name) -> mtime or None; tip(repo, ref) -> short sha.
+    sessions: path of sessions.json; newest(name) -> mtime or None; tip(repo, ref) -> short sha;
+    plugin: check(last) -> (lines, last) (plugin_check), or None for no PLUGIN check. Unlike the
+    others it has no baseline: a plugin export already behind at the first run is reported then.
     """
 
     def __init__(self, state, branches, usage_reader, alerts_dir, sessions, newest,
                  idle_minutes=20, branch_poll=300, usage_poll=600, idle_poll=300, tip=branch_tip,
-                 notice_dir=None):
+                 notice_dir=None, plugin=None):
+        preload()
         self.s = state
         self.branches = branches
         self.usage_reader = usage_reader
@@ -357,8 +389,9 @@ class Watcher:
         self.branch_poll, self.usage_poll, self.idle_poll = branch_poll, usage_poll, idle_poll
         self.tip = tip
         self.notice_dir = notice_dir
-        self.fails = {"branch": 0, "usage": 0, "alerts": 0, "idle": 0, "notices": 0}
-        self.next_b = self.next_u = self.next_i = 0.0
+        self.plugin = plugin
+        self.fails = {"branch": 0, "usage": 0, "alerts": 0, "idle": 0, "notices": 0, "plugin": 0}
+        self.next_b = self.next_u = self.next_i = self.next_p = 0.0
 
     def start(self, now):
         s = self.s
@@ -429,4 +462,12 @@ class Watcher:
                 self.fails["notices"] = 0
             except Exception as e:
                 self._failed("notices", e, events)
+        if self.plugin and now >= self.next_p:      # on the branch cadence: a ref read, a json read
+            self.next_p = now + self.branch_poll
+            try:
+                ev, s["plugin_main"] = self.plugin(s.get("plugin_main"))
+                events += ["PLUGIN %s" % line for line in ev]
+                self.fails["plugin"] = 0
+            except Exception as e:
+                self._failed("plugin", e, events)
         return events

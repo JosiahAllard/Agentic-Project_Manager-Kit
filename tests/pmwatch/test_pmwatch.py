@@ -15,6 +15,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "tools"))
 import pm_watch as cli                                              # noqa: E402
 from kitlib.config import user as kuser                             # noqa: E402
+from tests.home import TempHomeCase                                 # noqa: E402
 
 
 class UsageEvents(unittest.TestCase):
@@ -253,7 +254,9 @@ class WatcherRun(unittest.TestCase):
         self.assertEqual([g for g in got if g], [["ERROR usage check: usage.ps1 printed no account lines"]])
 
 
-class Cli(unittest.TestCase):
+class Cli(TempHomeCase):
+    # TempHomeCase (tests/home.py): parse's defaults and main's load_config read the machine
+    # config (an empty one here), never the real home's.
     def test_missing_sessions_exits_2(self):
         err = io.StringIO()
         with redirect_stderr(err), self.assertRaises(SystemExit) as c:
@@ -334,7 +337,7 @@ class Cli(unittest.TestCase):
                 rc = cli.main(["--sessions", sessions,
                                "--alerts-dir", os.path.join(d, "none"), "--state", state, "--once",
                                "--notice-dir", ""],
-                              sleep=lambda s: self.fail("slept"), launcher_set=True)
+                              sleep=lambda s: self.fail("slept"), launcher_set=True, plugin=False)
             self.assertEqual((rc, out.getvalue()), (0, ""))
             with open(state, encoding="utf-8") as f:
                 self.assertEqual(json.load(f), {"branches": {}, "usage": {"1": {"five": 1, "week": 2}},

@@ -55,7 +55,7 @@ class EveryKind(unittest.TestCase):
         out = start.start(self.h.settings, self.host, repo='alpha', account='1')
         text = self.only_window()
         self.assertEqual(role_of(text), 'coordinator')
-        self.assertIn('--agent coordinator', text)
+        self.assertIn('--agent pm-kit:coordinator', text)
         self.assertIn('alpha-coordinator-a1', out[0])
 
     def test_a_renamed_coordinator_agent_is_still_coordinator(self):
@@ -93,7 +93,7 @@ class EveryKind(unittest.TestCase):
                    brief_text='find it', account='1', brief_dir=os.path.join(self.h.root, 'briefs'))
         text = self.only_window()
         self.assertEqual(role_of(text), 'deep-worker')
-        self.assertIn('--agent deep-worker', text)
+        self.assertIn('--agent pm-kit:deep-worker', text)
 
     def test_consultant_is_consultant(self):
         start.consultant(self.h.settings, self.host, self.h.repos['alpha'], account='2')

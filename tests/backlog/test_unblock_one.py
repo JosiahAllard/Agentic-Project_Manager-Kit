@@ -8,7 +8,7 @@ from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Refusal, Usage
 
 from tests.backlog import test_cli
-from tests.backlog.helpers import StoreCase, parse, rec
+from tests.backlog.helpers import ADD_FLAGS, StoreCase, parse, rec
 
 REASON = 'the blocker landed on main today'
 SEVERAL = dict(state='blocked', blocked_on=['item:BAR', 'live-client'])
@@ -123,8 +123,8 @@ class UnblockCli(unittest.TestCase):
     ok = test_cli.Cli.ok
 
     def test_cli_exit_codes(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
-        self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'tools/y.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
+        self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'tools/y.py', *ADD_FLAGS)
         self.ok('block', 'FOO', '--on', 'item:BAR', '--on', 'live-client')
         rc, out = self.run_tool('unblock', 'FOO')
         self.assertEqual(rc, 2, out)

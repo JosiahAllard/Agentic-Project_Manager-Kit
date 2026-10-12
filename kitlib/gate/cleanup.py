@@ -48,7 +48,7 @@ KEPT_LINE = '  kept     '
 def sweep_command(root, apply=True):
     """The command that runs the sweep for the repository at `root`."""
     return 'python "%s" -C "%s" --sweep-landed%s' % (
-        os.path.join(S.KIT_TOOLS, 'land.py'), root, ' --apply' if apply else '')
+        os.path.join(S.kit_live(), 'tools', 'land.py'), root, ' --apply' if apply else '')
 
 
 def entry(remote=ABSENT, worktree=ABSENT, path=None, local=ABSENT, kept=None):

@@ -48,7 +48,7 @@ Missing any: say what you need, do nothing.
    (`git diff --numstat <merge-base> <branch> -- <path>`), plus or minus 1.
    Anything else: stop and report.
 4. Take whatever lock the profile's **Shared resources** section requires, then
-   run the requested extra gate, if any. Pure pass/fail -> dispatch `test-runner`
+   run the requested extra gate, if any. Pure pass/fail -> dispatch `pm-kit:test-runner`
    rather than reading logs yourself. **Release that lock before step 5:** the
    landing tool takes the landing lock and books the machine lock for its merged
    gate itself, and a lock you still hold deadlocks it or fails looking like a

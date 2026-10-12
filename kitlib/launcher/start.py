@@ -29,6 +29,11 @@ CONSULTANT_AUTOCOMPACT = (100000, 500000)
 CONSULTANT_DEFAULT_AUTOCOMPACT = 350000
 # a sessions.json entry of that agent, bare or with the kit plugin's prefix (kitlib.agentname)
 ROLE_AUTOCOMPACT = {'consultant': CONSULTANT_DEFAULT_AUTOCOMPACT, 'deep-worker': DEEP_AUTOCOMPACT}
+# the kit plugin's agents (claude/agents/*.md stems; tests/launcher/test_start.py pins the set):
+# a bare one of these is started with the plugin's prefix, any other name as given
+KIT_AGENTS = ('asset-smith', 'consultant', 'coordinator', 'deep-worker', 'lander', 'opus-worker', 'records',
+              'researcher', 'reviewer', 'sound-smith', 'spec-writer', 'strong-worker', 'tech-artist',
+              'test-runner', 'worker')
 LONG_MODEL = 'opus[1m]'
 NOTES_DEFAULT = 'docs/ops/consultant-notes.local.md'
 DIGEST = os.path.join('docs', 'conventions-digest.md')
@@ -49,10 +54,13 @@ def stop_cmd(name, successor=None, pid=None):
     return cli(*parts)
 
 
-def predecessor_text(old):
-    return ("You succeed %s, which has checkpointed and starts nothing new. After a work-set wind-down it is "
-            "still landing its own branches: leave those branches and the landing slot to it until it hands them "
-            "over; otherwise don't wait on it. " % old)
+def predecessor_text(old, coordinator=True):
+    """The first-message opening for a successor. Only a coordinator's successor lands: the landing
+    sentence is left out for any other role (a consultant, a deep-worker, a plain session)."""
+    if not coordinator:
+        return "You succeed %s, which has checkpointed and does nothing more; never wait on it. " % old
+    return ("You succeed %s, which has checkpointed and lands nothing more. Land every LAND verdict its state "
+            "note lists at once; never wait on it. " % old)
 
 
 def _check_common(model, effort, autocompact, lo_hi=AUTOCOMPACT):
@@ -73,6 +81,12 @@ def account_folder(settings, account=None, org=None):
         return d, 'org %s' % org, 'o%s' % org
     d = A.launch_dir(settings, account)
     return (None if settings.is_default(d) else d), 'account %s' % account, 'a%s' % account
+
+
+def run_as(agent):
+    """The --agent value for `agent`: a bare kit agent qualified with the plugin's prefix
+    (kitlib.agentname); a prefixed name, a repo's own agent or None unchanged."""
+    return agentname.qualified(agent) if agent in KIT_AGENTS else agent
 
 
 def window_text(settings, host, name, role, folder, command, config_dir):
@@ -102,12 +116,12 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
                   'with the PM (the session named %s), and begin.' % (brief, PM_NAME)) if brief else default_prompt
     elif brief:
         prompt = 'Read your standing brief %s first. ' % brief + prompt
+    role = window.role_for(agent, settings.coordinator_agent)
     if predecessor:
-        prompt = predecessor_text(predecessor) + prompt
+        prompt = predecessor_text(predecessor, role == window.COORDINATOR) + prompt
     repo_label = repo or os.path.basename(os.path.normpath(folder))
     name = name or '%s-%s-%s' % (repo_label.lower(), agentname.bare(agent) or 'session', tag)
-    role = window.role_for(agent, settings.coordinator_agent)
-    command = window.claude_command(name, prompt, agent, model, effort, autocompact)
+    command = window.claude_command(name, prompt, run_as(agent), model, effort, autocompact)
     text = window_text(settings, host, name, role, folder, command, config_dir)
     if whatif:
         return ['Would open a new window running:', '  powershell -NoExit -Command "%s"' % text]
@@ -231,7 +245,7 @@ def deep(settings, host, repo_path, requester, slug, brief=None, brief_text=None
             wrote = True
             out.append('Wrote the brief to %s' % brief_path)
     try:
-        out += start(settings, host, repo_path=repo_path, account=acct, name=name, agent='deep-worker',
+        out += start(settings, host, repo_path=repo_path, account=acct, name=name, agent='pm-kit:deep-worker',
                      model=model, effort=effort, autocompact=autocompact, prompt=prompt, whatif=plan)
     except Exception:
         if wrote:
@@ -300,7 +314,7 @@ def consultant(settings, host, repo_path, repo=None, account='auto', autocompact
               "question, answer and reason. Never edit code, commit, land or dispatch builds. After a compaction, "
               "reread the digest and the notes file." % (name, repo_path, notes, PM_NAME))
     try:
-        out += start(settings, host, repo_path=repo_path, account=acct, name=name, agent='consultant', model=model,
+        out += start(settings, host, repo_path=repo_path, account=acct, name=name, agent='pm-kit:consultant', model=model,
                      effort=effort, autocompact=autocompact, prompt=prompt, whatif=plan)
     except Exception:
         raise _with_lines(out)

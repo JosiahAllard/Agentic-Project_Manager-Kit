@@ -671,7 +671,7 @@ class Entry(unittest.TestCase):
     def run_tool(self, *args):
         return subprocess.run([sys.executable, os.path.join(KIT_ROOT, 'tools', 'land.py')]
                               + list(args), capture_output=True, text=True, timeout=60,
-                              stdin=subprocess.DEVNULL)
+                              stdin=subprocess.DEVNULL, env=dict(os.environ, KIT_PINNED='live'))
 
     def test_usage(self):
         for args in ([], ['kit/x'], ['kit/x', '--expect-main', 'a' * 40],

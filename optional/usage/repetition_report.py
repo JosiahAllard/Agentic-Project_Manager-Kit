@@ -20,6 +20,9 @@ import re
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _usage as U  # noqa: E402
+
 INLINE = re.compile(r"python3? - <<|python3? -c |<<'?(?:PY|EOF)", re.I)
 TOPICS = (('test results / xml', r'test-results|\.trx|junit|testcase'), ('json / fixtures', r'json\.load|\.json'),
           ('patch a file', r"\.replace\(|re\.sub\(|open\([^)]*['\"]w"), ('git data', r'\bgit\b|subprocess'),
@@ -58,8 +61,7 @@ def main():
     key = re.sub(r'[^A-Za-z0-9]', '-', os.path.abspath(a.repo)).lower()
     # Every account config folder whose transcripts should count: pass --config-dir once per folder
     # when this machine runs more than one account, or the report silently covers only one of them.
-    roots = a.config_dir or sorted({os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.claude'),
-                                    os.path.expanduser('~/.claude')})
+    roots = a.config_dir or U.config_dirs(None)
     since = time.time() - a.days * 86400
     shapes, fails, inline, tools = collections.Counter(), collections.Counter(), collections.Counter(), collections.Counter()
     before_edit, files = [], 0

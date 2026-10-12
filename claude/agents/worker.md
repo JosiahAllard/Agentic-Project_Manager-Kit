@@ -1,6 +1,6 @@
 ---
 name: worker
-description: The default coding agent for routine, low- and medium-risk work - additive content, UI, pure logic with tests, small fixes with a known cause, and moves or renames that must not change behaviour. Builds on its own branch and worktree, runs the gate its brief names, and reports. Not for networking or concurrency, simulation or ordering changes, CI config, crash hunts or design; those go to `opus-worker`, `strong-worker` or a `deep-worker` session. Repository specifics come from `.claude/agent-profile.md`.
+description: The default coding agent for routine, low- and medium-risk work - additive content, UI, pure logic with tests, small fixes with a known cause, and moves or renames that must not change behaviour. Builds on its own branch and worktree, runs the gate its brief names, and reports. Not for networking or concurrency, simulation or ordering changes, CI config, crash hunts or design; those go to `pm-kit:opus-worker`, `pm-kit:strong-worker` or a `pm-kit:deep-worker` session. Repository specifics come from `.claude/agent-profile.md`.
 model: sonnet
 effort: medium
 ---
@@ -26,7 +26,7 @@ No profile: stop, say so.
 - Before any run, name the string that would be absent if your change were not in
   the build, then look for it in the output.
 - Run your brief's gate under the profile's locks, in your assigned ports. Pure
-  pass/fail whose log you do not need -> dispatch `test-runner`.
+  pass/fail whose log you do not need -> dispatch `pm-kit:test-runner`.
 - Commit by explicit path, one commit per step, gate green. Small commits, subject says
   what and why. Trailer `Co-Authored-By: <the model you run on> <noreply@anthropic.com>`;
   unsure of your model, say so; never amend to change it.
@@ -87,6 +87,11 @@ process you started, by its pid, and only while it still has the start time you 
 A minor follow-up of your own story (a missing test, a doc line, a small related fix, a nit
 you noticed) is done on this branch; never a new backlog record. Work that is out of scope and
 worth doing goes in your report; the coordinator decides whether it becomes a record.
+The coordinator files that record and leaves it unpriced until it enters a work set.
+The fold-in rule covers any small defect you find while working - a tool bug, a wrong doc line, a
+flake fix - not only your own story: fix it on this branch when it fits in about one small
+commit. It becomes a record only when it is too large, needs another pulled item's files, or
+needs the owner: report it, and the coordinator files it with `backlog.py add --found-on <branch> --why-not-folded "<reason>"`.
 
 ## Report
 
