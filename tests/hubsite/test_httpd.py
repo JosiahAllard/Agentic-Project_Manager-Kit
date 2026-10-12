@@ -590,6 +590,27 @@ class PairCase(httpfix.ListenerCase):
         r = get(lis.port, HEALTH, headers=[('Cookie', '%s=%s' % (auth.cookie_name(1), value))])
         self.assertEqual(r.status, 403)
 
+    def test_a_session_cookie_alone_gets_no_pairing_link(self):
+        lis = self.listener()
+        path = post(lis.port, httpd.PAIR_ROUTE, None, self.owner).json()['path']
+        cookie = ('Cookie', get(lis.port, path).header('Set-Cookie')[0].split(';')[0])
+        # the session is the owner's everywhere else
+        self.assertIn('store', get(lis.port, HEALTH, headers=[cookie]).json())
+        r = post(lis.port, httpd.PAIR_ROUTE, None, headers=[cookie])
+        self.assertEqual((r.status, r.code()), (403, 'forbidden'))
+        self.assertEqual(r.json()['error']['field'], 'role')
+        self.assertNotIn(b'code=', r.body)
+        # nor with a token that is not the owner's beside it
+        for token in (self.agent, 'x' * 43):
+            with self.subTest(token=token):
+                r = post(lis.port, httpd.PAIR_ROUTE, None, token, headers=[cookie])
+                self.assertEqual((r.status, r.code()), (403, 'forbidden'))
+                self.assertNotIn(b'code=', r.body)
+        # the owner's token still pairs, with the cookie beside it or without
+        r = post(lis.port, httpd.PAIR_ROUTE, None, self.owner, headers=[cookie])
+        self.assertEqual(r.status, 200, r.body)
+        self.assertTrue(r.json()['path'].startswith(httpd.PAIR_PATH + '?code='))
+
     def test_a_listener_given_no_pairing_routes_pairs_nobody(self):
         lis = self.listener(routes={})
         r = post(lis.port, httpd.PAIR_ROUTE, None, self.owner)

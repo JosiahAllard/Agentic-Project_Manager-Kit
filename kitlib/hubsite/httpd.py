@@ -98,7 +98,7 @@ METHODS = ('GET', 'HEAD', 'POST')
 JSON = 'application/json'
 INDEX = 'index.html'
 VIA_HEADER = 'X-Hub-Via'
-PAIR_ROUTE = _api.BASE + '/pair'    # POST, owner: a one-time pairing link for the PC's browser
+PAIR_ROUTE = _api.BASE + '/pair'    # POST, the owner's token: a one-time link for the browser
 PAIR_PATH = '/pair'                 # GET ?code=...: redeems it and sets the session cookie
 BUSY = 'busy'
 RETRY_AFTER_S = 1
@@ -206,13 +206,18 @@ def local_gate(creds):
 def pair_routes(creds):
     """The routes that pair the PC's browser, for a Listener's `routes`.
 
-    POST PAIR_ROUTE, the owner only: {"ok", "path", "ttl"}; `path` is PAIR_PATH with a fresh
-    one-time code, good for `ttl` seconds. GET PAIR_PATH?code=...: redeems the code, sets the
-    session cookie (auth.cookie_header on creds.port) and sends the browser to "/"; a code that
-    is unknown, expired or already used is a 403."""
+    POST PAIR_ROUTE, the owner's token only: {"ok", "path", "ttl"}; `path` is PAIR_PATH with a
+    fresh one-time code, good for `ttl` seconds. The Authorization header alone must give the
+    owner role: a session cookie is refused, so a paired browser (or a script in the page's
+    origin) cannot make the code of its own successor and a session ends at auth.SESSION_TTL_S.
+    GET PAIR_PATH?code=...: redeems the code, sets the session cookie (auth.cookie_header on
+    creds.port) and sends the browser to "/"; a code that is unknown, expired or already used
+    is a 403."""
     def new(request):
-        if request.role != auth.OWNER:
-            return refusal(403, 'forbidden', 'only the owner may pair a browser', 'role')
+        # role_for with no cookies: only a Bearer token can answer OWNER here
+        if request.role != auth.OWNER or creds.role_for(request.headers) != auth.OWNER:
+            return refusal(403, 'forbidden', "only the owner's token may pair a browser, never "
+                           'a browser session', 'role')
         code = creds.new_pairing_code()
         return json_response(200, {'ok': True, 'ttl': auth.PAIR_TTL_S,
                                    'path': '%s?code=%s' % (PAIR_PATH, code)})
