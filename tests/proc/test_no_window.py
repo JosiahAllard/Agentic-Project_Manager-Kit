@@ -124,5 +124,149 @@ class ConsoleWindowTest(unittest.TestCase):
         self.assertIn(r["parent_pid"], r["child"]["console_pids"], r)
 
 
+# Run as the child: writes what it sees of its console to argv[1] (no pipe: a child of pythonw has
+# none) and exits with argv[2].
+PROBE = "\n".join([
+    "import ctypes, json, os, sys",
+    "k = ctypes.WinDLL('kernel32')",
+    "k.GetConsoleWindow.restype = ctypes.c_void_p",
+    "a = (ctypes.c_uint * 64)()",
+    "n = k.GetConsoleProcessList(a, 64)",
+    "with open(sys.argv[1], 'w') as f:",
+    "    json.dump({'window': k.GetConsoleWindow() or 0, 'pid': os.getpid(),",
+    "               'console_pids': list(a[:min(n, 64)]), 'exe': sys.executable}, f)",
+    "sys.exit(int(sys.argv[2]))"])
+
+# Run as the parent: argv is <kit root> <out> <mode> <the child's command line...>. Starts the child
+# the way kit code does, with no creation flags and no handles of its own choosing.
+SPAWN_PARENT = "\n".join([
+    "import ctypes, json, os, sys, traceback",
+    "out = sys.argv[2]",
+    "try:",
+    "    sys.path.insert(0, sys.argv[1])",
+    "    mode, argv = sys.argv[3], sys.argv[4:]",
+    "    if mode == 'gitcmd':",
+    "        from kitlib.git import cmd",
+    "        code = cmd.subprocess_run(argv, timeout=60).returncode",
+    "    else:",
+    "        from kitlib.proc import spawn",
+    "        if mode == 'popen':",
+    "            code = spawn.popen(argv).wait(60)",
+    "        elif mode == 'call':",
+    "            code = spawn.call(argv, timeout=60)",
+    "        else:",
+    "            code = spawn.run(argv, timeout=60).returncode",
+    "    attached = ctypes.WinDLL('kernel32').GetConsoleProcessList((ctypes.c_uint * 1)(), 1) != 0",
+    "    r = {'parent_pid': os.getpid(), 'parent_console': attached, 'code': code}",
+    "except BaseException:",
+    "    r = {'error': traceback.format_exc()}",
+    "with open(out, 'w') as f:",
+    "    f.write(json.dumps(r))"])
+
+MODES = ("run", "call", "popen", "gitcmd")
+
+
+def pythonw_exe():
+    p = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    return p if os.path.exists(p) else None
+
+
+class _Folder(unittest.TestCase):
+    """A temporary folder holding the probe."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="kit-nowin-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.probe = self.write("probe.py", PROBE)
+
+    def write(self, name, text):
+        path = os.path.join(self.dir, name)
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def read(self, path):
+        self.assertTrue(os.path.exists(path), "%s was not written" % os.path.basename(path))
+        with open(path) as f:
+            return json.load(f)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class SpawnWindowTest(_Folder):
+    """Real processes: what a console child of kitlib.proc.spawn, and of kitlib.git.cmd's
+    subprocess_run, sees of its console. The child is started with no flags of the caller's."""
+
+    def run_parent(self, exe, mode, creationflags=0):
+        script = self.write("parent-%s.py" % mode, SPAWN_PARENT)
+        out = os.path.join(self.dir, "out-%s.json" % mode)
+        child_out = out + ".child"
+        subprocess.run([exe, script, ROOT, out, mode, python_exe(), self.probe, child_out, "3"],
+                       timeout=120, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, creationflags=creationflags)
+        r = self.read(out)
+        self.assertNotIn("error", r, r.get("error"))
+        self.assertEqual(r["code"], 3, r)                       # the child ran, and to its end
+        r["child"] = self.read(child_out)
+        return r
+
+    def test_pythonw_parent_child_has_no_window(self):
+        pythonw = pythonw_exe()
+        if not pythonw:
+            self.skipTest("no pythonw.exe beside %s" % sys.executable)
+        for mode in MODES:
+            with self.subTest(mode):
+                r = self.run_parent(pythonw, mode)
+                self.assertFalse(r["parent_console"], r)
+                self.assertEqual(r["child"]["window"], 0, r)                  # no console window
+                self.assertIn(r["child"]["pid"], r["child"]["console_pids"], r)   # yet a console
+
+    def test_console_parent_child_shares_its_console(self):
+        """A parent with a console (hidden here, so no window flashes) keeps its child on it:
+        nothing changes for a tool run from a shell."""
+        for mode in MODES:
+            with self.subTest(mode):
+                r = self.run_parent(python_exe(), mode, creationflags=win32.CREATE_NO_WINDOW)
+                self.assertTrue(r["parent_console"], r)
+                self.assertIn(r["parent_pid"], r["child"]["console_pids"], r)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class CarrierTest(_Folder):
+    """tools/no_window.py under pythonw, as a scheduled task runs it: the program it carries has
+    no console window, runs under the console python, and its exit code comes back."""
+
+    CARRIER = os.path.join(ROOT, "tools", "no_window.py")
+
+    def setUp(self):
+        super().setUp()
+        self.pythonw = pythonw_exe()
+        if not self.pythonw:
+            self.skipTest("no pythonw.exe beside %s" % sys.executable)
+
+    def carry(self, *argv):
+        return subprocess.run([self.pythonw, self.CARRIER] + list(argv), timeout=120,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode
+
+    def test_python_runs_with_no_window_and_its_exit_code_comes_back(self):
+        out = os.path.join(self.dir, "carried.json")
+        self.assertEqual(self.carry("python", self.probe, out, "3"), 3)
+        child = self.read(out)
+        self.assertEqual(child["window"], 0, child)                     # no console window
+        self.assertIn(child["pid"], child["console_pids"], child)       # yet a console
+        self.assertEqual(os.path.normcase(child["exe"]), os.path.normcase(python_exe()), child)
+
+    def test_a_program_named_by_path_is_carried_too(self):
+        out = os.path.join(self.dir, "carried.json")
+        self.assertEqual(self.carry(python_exe(), self.probe, out, "0"), 0)
+        self.assertEqual(self.read(out)["window"], 0)
+
+    def test_a_program_that_is_not_there(self):
+        self.assertEqual(self.carry(os.path.join(self.dir, "none.exe")), 127)
+
+    def test_no_program_is_a_usage_error(self):
+        self.assertEqual(self.carry(), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
