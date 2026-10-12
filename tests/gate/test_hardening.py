@@ -483,17 +483,20 @@ class Measure(fixtures.GateRepoCase):
     def test_the_proposal_names_a_whole_number_of_cores_per_kind(self):
         # --measure passes the layout's agent_cap, so every proposed kind is an integer
         # 1..agent_cap; the live table stays as it was.
+        import datetime
         from kitlib.lock.store import iso, utc_now
         live = json.dumps({'kinds': {
             'engine-test': {'cpu': 'medium', 'gpu': 0, 'warn_min': 30},
             'cpu-eval': {'cpu': 'heavy', 'gpu': 0, 'warn_min': 120}}})
         with open(self.live, 'w', encoding='utf-8') as f:
             f.write(live)
-        now = iso(utc_now())
-        for i in range(3):
+        end = utc_now()
+        now, start = iso(end), iso(end - datetime.timedelta(seconds=60))
+        for i in range(3):          # held 60 s with 60 cpu seconds: lines that show work in the job
             self.store.history_append({'id': 'r-%d' % i, 'kind': 'engine-test', 'how': 'done',
-                                       'since': now, 'held_since': now, 'ended': now,
-                                       'peak_cpu_cores': 0.9, 'cores': [0, 1, 2, 3, 4, 5]})
+                                       'since': start, 'held_since': start, 'ended': now,
+                                       'cpu_s': 60, 'peak_cpu_cores': 0.9,
+                                       'cores': [0, 1, 2, 3, 4, 5]})
         out = os.path.join(self.tmp, 'proposal.json')
         self.assertEqual(self.measure(out), G.OK)
         with open(out, encoding='utf-8') as f:
