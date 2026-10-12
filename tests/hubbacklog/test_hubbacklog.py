@@ -1,12 +1,16 @@
 import datetime
 import os
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 from kitlib import hubbacklog
 from kitlib.git import cmd as gitcmd
 from tests.gitfixture import fixture_env
+from tests.realgit import real_git
 
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "claude", "hub"))
 import hub_backlog                                                  # noqa: E402
@@ -175,6 +179,50 @@ class PlanTest(unittest.TestCase):
         w, st, lines = hub_backlog.plan(["r"], {"r": "/r"}, {"backlog/r": {"d": "old", "v": 3}}, NOW, snap=bad)
         self.assertEqual((w, st), ([], {"backlog/r": {"d": "old", "v": 3}}))
         self.assertEqual(lines, ["r: could not read: git log: boom"])
+
+
+# A git that is a launcher whose child holds the pipes (see tests/git/test_launcher.py): a bare
+# subprocess timeout kills only the launcher and then waits on the pipes until the child ends.
+LAUNCHER = (
+    "import subprocess, sys\n"
+    "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],\n"
+    "                     stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)\n"
+    "sys.exit(c.wait())\n")
+
+
+@real_git("the process tree a timed-out call ends (git is stubbed by a python launcher)")
+class GitTimeoutTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.started = []
+        real = subprocess.Popen
+
+        def fake(args, *a, **kw):
+            args = list(args)
+            if args and args[0] == "git":
+                self.started.append(real([sys.executable, "-c", LAUNCHER], *a, **kw))
+                return self.started[-1]
+            return real(args, *a, **kw)
+        patcher = mock.patch.object(subprocess, "Popen", fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        timeout = mock.patch.object(hubbacklog, "TIMEOUT", 3)
+        timeout.start()
+        self.addCleanup(timeout.stop)
+
+    def cut_off(self, call):
+        t0 = time.monotonic()
+        with self.assertRaises(RuntimeError) as ctx:
+            call()
+        self.assertLess(time.monotonic() - t0, 15)      # the child sleeps 30 holding the pipes
+        self.assertIn("timed out", str(ctx.exception))
+
+    def test_git_is_cut_off_when_a_child_holds_the_pipes(self):
+        self.cut_off(lambda: hubbacklog.git(self.tmp.name, "status"))
+
+    def test_main_branch_probe_is_cut_off(self):
+        self.cut_off(lambda: hubbacklog.main_branch(self.tmp.name, {}))
 
 
 if __name__ == "__main__":
