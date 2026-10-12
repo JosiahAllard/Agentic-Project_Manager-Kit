@@ -2,15 +2,18 @@
 
   hub.py serve [--port N] [--store PATH]
       serves the hub on the loopback address until Ctrl+C, which closes it cleanly: the last
-      changes are committed and the store lock is released. Prints one start line; notes
-      (NOTE: ...) and errors (ERROR: ...) go to stderr: the start-up notes, a git sync pass that
-      failed with git's reason, the last pass of the close when it begins (it is given no time
-      limit) and each step of the close that failed or ran out of time. The port is hub.port of
-      the machine config (default 8790); --port 0 takes a free one, named on the start line. The
-      store is hub.store, else hub/ in the PM data worktree. --store PATH serves that folder
-      instead, as a scratch copy: git sync is off for that run, so nothing in it is committed or
-      pushed, here or at the close. An empty PATH is a usage error, never the configured store.
-      A store another server holds is refused.
+      changes are committed and the store lock is released. Prints one start line and, after a
+      clean close, one closing line; notes (NOTE: ...) and errors (ERROR: ...) go to stderr: the
+      start-up notes, a git sync pass that failed with git's reason, the wait for git at the
+      close before it begins (it is given no time limit) and each step of the close that failed
+      or ran out of time. Ctrl+C again ends that wait: an error line then says that a git
+      command may have been left half-way and what to check, and the exit code is 1. No line
+      of these holds the user or password of a URL.
+      The port is hub.port of the machine config (default 8790); --port 0 takes a free one,
+      named on the start line. The store is hub.store, else hub/ in the PM data worktree.
+      --store PATH serves that folder instead, as a scratch copy: git sync is off for that run,
+      so nothing in it is committed or pushed, here or at the close. An empty PATH is a usage
+      error, never the configured store. A store another server holds is refused.
   hub.py status [--port N]
       asks the running server for its health and prints the revision, the store, the git sync
       (with git's reason when its last pass failed: the owner's token gets it) and each
@@ -89,15 +92,17 @@ def parser():
 
 
 LEVELS = {'error': 'ERROR', 'note': 'NOTE'}     # the log levels that are printed, and as what
+CLOSED = 'hub closed: the server ended cleanly and the store lock is released'
 
 
 def _log(level, text):
-    """The server's error and note lines, to stderr; a request line is not printed."""
+    """The server's error and note lines, to stderr; a request line is not printed. Every line
+    goes through serve.scrub: a listener's error line may quote a remote URL as git gave it."""
     word = LEVELS.get(level)
     if word is None:
         return
     try:
-        print('%s: %s' % (word, text), file=sys.stderr, flush=True)
+        print('%s: %s' % (word, serve.scrub(text)), file=sys.stderr, flush=True)
     except (OSError, ValueError):       # a closed console must not stop a handler
         pass
 
@@ -113,12 +118,13 @@ def _serve(a, stop):
 
     def started(h):
         for note in h.notes:
-            print('NOTE: %s' % note, file=sys.stderr, flush=True)
+            _log('note', note)
         print('hub serving %s on %s (Ctrl+C stops it)' % (h.store.root, h.url), flush=True)
 
     if not serve.run(hub, started, stop):
         print('the hub server did not close cleanly: see the lines above', file=sys.stderr)
         return 1
+    print(CLOSED, flush=True)           # the owner sees that the server ended on purpose
     return 0
 
 

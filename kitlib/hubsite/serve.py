@@ -39,9 +39,10 @@ then carry it with no change here. That code gives it health_route too, or its o
 sees why a sync failed.
 
 The log. `log(level, text)` gets the listeners' lines (httpd: 'access', 'error') and the hub's
-own: 'error' for a close step that failed or ran out of time and for a git sync pass that
-failed, 'note' for what is no error (the last pass begins; the sync works again). Every line
-of the hub's own goes through scrub(), so none holds the user or password of a remote URL.
+own: 'error' for a close step that failed, ran out of time or was cut short and for a git sync
+pass that failed, 'note' for what is no error (the wait for git begins at the close; the sync
+works again). Every line of the hub's own goes through scrub(), so none holds the user or
+password of a remote URL; the listeners' lines do not, so what prints them applies scrub().
 
 The git sync's failures. GitSync has no log of its own: it keeps the step its last pass failed
 at and git's reason (`detail`) in status(). Hub.watch() reads that status (it never waits for a
@@ -55,26 +56,39 @@ The clean close, in this order (Hub.close; run() ends with it, also on Ctrl+C):
   1. every listener's door: no new connection, and no write begins (httpd refuses it);
   2. the backlog timer;
   3. the requests in flight, except the long waits: after this no write is in flight;
-  4. the git sync's thread, then one last pass (sync_once) while the store is still open and
-     locked, so what was written since the last pass is committed whole. Only when the server
-     was started; a pass that fails is an error line in the log and is tried again at the next
-     start;
+  4. the git sync, only when the server was started: a 'note' line says that the wait for git
+     begins, the sync's thread is stopped, then one last pass (sync_once) runs while the store
+     is still open and locked, so what was written since the last pass is committed whole. A
+     pass that fails is an error line in the log and is tried again at the next start;
   5. the store: every long wait ends and the store lock is released;
   6. the handler threads.
 Each step is given `timeout` seconds. One that raises, or that has not ended when its time is
 up, is an 'error' line in the log that names the step; the next step still runs, and the store
 is closed whatever happened before it. close() answers True only when every step ended in time
-and none raised. Two things about the last pass:
-  - It is not given `timeout`. A 'note' line says it begins, and it runs to its end, however
-    long git's own limits let it (gitsync.NET_TIMEOUT for a fetch and again for a push); so
-    does the wait for a pass still in flight when the sync's thread did not end in its time.
-    The pass must end before the store closes, and a git command stopped half way may leave an
-    `index.lock` behind, after which every pass ends at `busy` until a person removes it
-    (kitlib.hubsite.gitsync). There is no second Ctrl+C that cuts it short cleanly.
-  - It is skipped when step 3 ran out of time or raised. A request is then still in flight and
-    may write while git adds the store's files (GitSync takes no store lock), so the commit
-    could hold half of that write with no later pass in this process to bring the rest. An
-    'error' line says so; the first pass of the next start commits what is left.
+and none raised. Three things about step 4:
+  - The wait for git has no limit of this module's. The last pass is not given `timeout`: it
+    waits for a pass still in flight, then runs to its end, each as long as git's own limits
+    let it (gitsync.NET_TIMEOUT for a fetch and again for a push, in each pass). A pass must
+    end before the store closes, and a git command stopped half way may leave an `index.lock`
+    behind, after which every pass ends at `busy` until a person removes it
+    (kitlib.hubsite.gitsync). The 'note' line (LAST_PASS) is logged before the wait begins
+    and says all of this.
+  - The last pass is skipped when step 3 ran out of time or raised. A request is then still in
+    flight and may write while git adds the store's files (GitSync takes no store lock), so the
+    commit could hold half of that write with no later pass in this process to bring the rest.
+    An 'error' line says so (LAST_PASS_SKIPPED); the first pass of the next start commits what
+    is left. The sync's thread is still stopped, after a 'note' (IN_FLIGHT). When it has not
+    ended in `timeout`, a pass is in flight: close() says so (a 'note', STILL_WAITING) and
+    waits for it with no limit, so the store is not closed beside a running git. Only when
+    that wait itself fails is the store closed with a pass that may still run, and an 'error'
+    line (LEFT_RUNNING) says what to check.
+  - A second Ctrl+C ends the wait. Every wait of step 4 is made on a thread of its own
+    (GIT_WAIT_THREAD) while close() waits for that thread in turns of POLL_S, so a
+    KeyboardInterrupt reaches a close() that runs on the main thread. For that one, and for
+    one in steps 1 to 3 of a server whose sync was started, an 'error' line (CUT_SHORT) says
+    that a git command may have been left half way and what to check; the sync is told to
+    begin no further pass, steps 5 and 6 still run, and close() answers False. With no sync
+    started, a KeyboardInterrupt leaves close() as it came, after steps 5 and 6.
 A process that is killed closes nothing: the system drops the store lock with it, and the next
 start takes it over.
 
@@ -131,12 +145,29 @@ SYNC_REFUSED = 'git sync was refused at start-up: the server console says why'
 NO_USAGE_SOURCE = 'no launcher usage source configured'     # derived.usage's own phrase
 USAGE_FAILED = 'the usage source could not be read'
 AGENTS_FAILED = 'the agent definitions could not be read'
-LAST_PASS = ('closing: the last git sync pass (it runs to its end: git may take %d s for a fetch '
-             'and again for a push)' % gitsync.NET_TIMEOUT)
+GIT_WAIT_THREAD = 'hub-close-git'       # the thread a wait for git is made on at the close
+_GIT_LIMITS = ('git may take %d s for a fetch and again for a push' % gitsync.NET_TIMEOUT)
+_AGAIN = 'Ctrl+C again ends the wait'
+LAST_PASS = ('closing: the last git sync pass: finishing a sync pass, waiting for git. A pass in '
+             'flight ends first, then the last one runs; each runs to its end, and in each %s. %s.'
+             % (_GIT_LIMITS, _AGAIN))
 LAST_PASS_SKIPPED = ('closing: the last git sync pass is skipped: a request was still in flight '
                      'and could write during it; the next start commits what is left')
-# the user and password part of a URL: everything between `://` and the last `@` of its host part
-_USERINFO = re.compile(r'(?<=://)[^/?#\s\'"<>]*@')
+IN_FLIGHT = ('closing: finishing a sync pass that may be in flight, waiting for git: it has to '
+             'end before the store closes (%s). %s.' % (_GIT_LIMITS, _AGAIN))
+STILL_WAITING = ('closing: still waiting for git: the sync pass in flight has to end before the '
+                 'store closes. %s.' % _AGAIN)
+_CHECK = ('Look for a leftover index.lock in the git directory of the store\'s work tree (`git '
+          'rev-parse --git-dir` in the store folder names it): while it is there every sync '
+          'pass ends at `busy`. Remove it once no git runs there; the next start commits what '
+          'is left.')
+CUT_SHORT = ('closing: interrupted before the git sync had ended: a git command may have been '
+             'left half-way. ' + _CHECK)
+LEFT_RUNNING = ('closing: the store is closed while a git sync pass may still be running: a git '
+                'command may be left half-way. ' + _CHECK)
+# the user and password part of a URL: everything between `://` and the last `@` of its host
+# part. A quote does not end it (a password may hold `'`); a space, `"`, `<` and `>` do.
+_USERINFO = re.compile(r'(?<=://)[^/?#\s"<>]*@')
 
 
 def scrub(text):
@@ -581,12 +612,11 @@ class Hub(object):
         return False
 
     def _last_pass(self):
-        """The last git sync pass of the close, after a note that it begins: it is given no
-        time limit (module docstring). False when it raised; a pass that failed is logged
-        and is no unclean close (the next start tries again)."""
-        self._say(LAST_PASS, 'note')
+        """The last git sync pass of the close: it is given no time limit (module docstring;
+        _close_sync said so in the log before this). False when it raised; a pass that failed
+        is logged and is no unclean close (the next start tries again)."""
         try:
-            last = self.sync.sync_once()
+            last = _apart(self.sync.sync_once)
         except Exception as e:      # noqa: BLE001 - the store is still closed
             self._say('closing: the last git sync pass failed: %s: %s' % (type(e).__name__, e))
             return False
@@ -595,14 +625,52 @@ class Hub(object):
                       % (last.get('failed'), last.get('detail') or '-'))
         return True
 
+    def _close_sync(self, timeout, drained):
+        """Step 4 of the close (module docstring): True when the sync's thread ended in
+        `timeout` and, when the requests had `drained`, the last pass did not raise. Every wait
+        for git here is announced in the log first and made through _apart, so a
+        KeyboardInterrupt leaves it (close() answers that one)."""
+        if drained:
+            self._say(LAST_PASS, 'note')
+        else:
+            self._say(LAST_PASS_SKIPPED)
+            self._say(IN_FLIGHT, 'note')
+        stopped = self._step('the git sync', timeout, _apart, self.sync.stop, timeout)
+        if drained:
+            return self._last_pass() and stopped
+        if stopped:
+            return True
+        # no last pass will wait for the pass in flight: wait for it here, before the store closes
+        self._say(STILL_WAITING, 'note')
+        try:
+            ended = _apart(self.sync.stop, None) is True
+        except Exception:           # noqa: BLE001 - said below; the store is still closed
+            ended = False
+        if not ended:
+            self._say(LEFT_RUNNING)
+        return False
+
+    def _cut_short(self):
+        """A KeyboardInterrupt ended the close before the git sync had: say what may be left
+        half way, and tell the sync to begin no further pass (no wait: a pass in flight is
+        left to itself)."""
+        self._say(CUT_SHORT)
+        try:
+            self.sync.stop(0)
+        except Exception:           # noqa: BLE001 - the store is still closed
+            pass
+
     def close(self, timeout=CLOSE_TIMEOUT_S):
         """The clean close (module docstring). True when every step ended within `timeout`
-        seconds (None: wait) and none raised; a second call answers what the first did."""
+        seconds (None: wait) and none raised; a second call answers what the first did (False
+        after one that a KeyboardInterrupt left)."""
         with self._life:
             if self._closed:
                 return self._clean
             self._closed = True
+            self._clean = False
             clean = []
+            synced = self.sync is not None and self._started
             try:
                 for lis in self.listeners:
                     clean.append(self._step('the listener door', timeout, _shut, lis))
@@ -614,12 +682,13 @@ class Hub(object):
                     done = self._step('the requests in flight', timeout, lis.drain, timeout)
                     drained = drained and done
                     clean.append(done)
-                if self.sync is not None and self._started:
-                    clean.append(self._step('the git sync', timeout, self.sync.stop, timeout))
-                    if drained:
-                        clean.append(self._last_pass())
-                    else:
-                        self._say(LAST_PASS_SKIPPED)
+                if synced:
+                    clean.append(self._close_sync(timeout, drained))
+            except KeyboardInterrupt:
+                if not synced:
+                    raise
+                clean.append(False)
+                self._cut_short()
             finally:
                 try:
                     self.store.close()
@@ -639,6 +708,29 @@ def _shut(listener):
     return True
 
 
+def _apart(fn, *args):
+    """What fn(*args) answered or raised, with the call made on a thread of its own
+    (GIT_WAIT_THREAD, a daemon) while this caller waits for it in turns of POLL_S. A wait with no
+    time limit is not interrupted by Ctrl+C on Windows; this one is: a KeyboardInterrupt in the
+    caller leaves here within one turn, and the call is then left running on its thread."""
+    box = []
+
+    def work():
+        try:
+            box.append((True, fn(*args)))
+        except BaseException as e:     # noqa: BLE001 - raised again in the caller, below
+            box.append((False, e))
+
+    thread = threading.Thread(target=work, name=GIT_WAIT_THREAD, daemon=True)
+    thread.start()
+    while thread.is_alive():
+        thread.join(POLL_S)
+    ok, value = box[0]
+    if ok:
+        return value
+    raise value
+
+
 def run(hub, started=None, stop=None):
     """Start `hub`, call started(hub), serve until the event `stop` is set or Ctrl+C, then close
     it: what Hub.close() answered. The hub is closed however this ends. ServeError when the hub
@@ -646,7 +738,10 @@ def run(hub, started=None, stop=None):
 
     The wait is a timed one in a loop: on Windows a wait with no time limit is not interrupted
     by Ctrl+C. Each turn of it calls hub.watch(), which logs a git sync failure that is new. No
-    signal handler is set, so only Ctrl+C (KeyboardInterrupt) and `stop` are a clean close."""
+    signal handler is set, so only Ctrl+C (KeyboardInterrupt) and `stop` are a clean close. A
+    second Ctrl+C, during the close, is Hub.close's to answer (module docstring, "The clean
+    close"): with a git sync started it ends the wait for git and this answers False; with
+    none it leaves here as a KeyboardInterrupt, the store closed."""
     stop = stop if stop is not None else threading.Event()
     try:
         if not hub.start():

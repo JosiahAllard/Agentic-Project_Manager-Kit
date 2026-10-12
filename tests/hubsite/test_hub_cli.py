@@ -1,13 +1,16 @@
 """tools/hub.py: its arguments and exit codes. The machine config, the token files and the store
 are all under a temp home; a server is on port 0 or is one this test built; no browser is
 opened."""
+import _thread
 import contextlib
 import importlib.util
 import io
 import json
 import os
 import shutil
+import signal
 import socket
+import sys
 import tempfile
 import threading
 import unittest
@@ -118,7 +121,11 @@ class ServeCase(CliCase):
         code, out, err = self.run_cli('serve', '--store', self.store_dir, '--port', '0', stop=stop)
         self.assertEqual((code, err), (0, ''))
         lines = out.splitlines()
-        self.assertEqual(len(lines), 1, out)
+        # the start line, and one closing line: the owner sees that the server ended on purpose
+        self.assertEqual(len(lines), 2, out)
+        self.assertEqual(lines[1], HUB.CLOSED)
+        self.assertEqual(HUB.CLOSED, 'hub closed: the server ended cleanly and the store lock '
+                                     'is released')
         start = 'hub serving %s on http://127.0.0.1:' % os.path.abspath(self.store_dir)
         self.assertTrue(lines[0].startswith(start), lines[0])
         port = int(lines[0][len(start):].split()[0])
@@ -230,6 +237,98 @@ class ServeCase(CliCase):
             'ERROR: closing: the handler threads did not end within %g s' % serve.CLOSE_TIMEOUT_S,
             'the hub server did not close cleanly: see the lines above'])
         self.assertFalse(self.locked())
+        # no closing line: that one is for a close that was clean
+        self.assertEqual(len(out.splitlines()), 1, out)
+        self.assertNotIn('hub closed', out)
+
+    def synced(self, sync):
+        """The machine config of a server whose store is the configured one, so git sync is on;
+        `sync` stands where the real git sync is taken from. -> a patch to serve under."""
+        self.store_dir = os.path.join(self.home, 'live-store')
+        self.config({'hub': {'store': self.store_dir}})
+        return mock.patch.object(HUB.serve.gitsync, 'GitSync', lambda *args, **kw: sync)
+
+    def test_a_clean_close_of_a_synced_server_says_the_wait_for_git_then_that_it_closed(self):
+        seen = []
+
+        class Sync(object):
+            def start(self):
+                return True
+
+            def stop(self, timeout=None):       # what the console held when the wait began
+                seen.append((sys.stdout.getvalue(), sys.stderr.getvalue()))
+                return True
+
+            def sync_once(self):
+                return self.status()
+
+            def status(self):
+                return {'running': True, 'failed': '', 'detail': ''}
+
+        stop = threading.Event()
+        stop.set()
+        with self.synced(Sync()):
+            code, out, err = self.run_cli('serve', '--port', '0', stop=stop)
+        self.assertEqual(code, 0, err)
+        lines = out.splitlines()
+        self.assertEqual(len(lines), 2, out)
+        self.assertTrue(lines[0].startswith('hub serving %s on ' % self.store_dir), lines[0])
+        self.assertEqual(lines[1], HUB.CLOSED)
+        self.assertEqual(err.splitlines(), ['NOTE: ' + serve.LAST_PASS])
+        # the wait for git was on the console before it began, and the closing line after it
+        self.assertEqual(seen, [(lines[0] + '\n', 'NOTE: %s\n' % serve.LAST_PASS)])
+        self.assertIn('finishing a sync pass, waiting for git', err)
+        self.assertFalse(self.locked(), 'the store lock outlived the server')
+
+    def test_a_second_ctrl_c_ends_the_wait_for_git_with_what_to_check_and_exit_1(self):
+        if threading.current_thread() is not threading.main_thread():
+            self.skipTest('a Ctrl+C reaches the main thread only')
+        was = signal.signal(signal.SIGINT, signal.default_int_handler)
+        if was is not None:
+            self.addCleanup(signal.signal, signal.SIGINT, was)
+        release = threading.Event()
+
+        class Sync(object):             # its last pass hangs in git; the owner presses again
+            def start(self):
+                return True
+
+            def stop(self, timeout=None):
+                return True
+
+            def sync_once(self):
+                _thread.interrupt_main()
+                release.wait(httpfix.TIMEOUT)
+                return self.status()
+
+            def status(self):
+                return {'running': True, 'failed': '', 'detail': ''}
+
+        def ended():
+            waits = [t for t in threading.enumerate() if t.name == serve.GIT_WAIT_THREAD]
+            for t in waits:
+                t.join(httpfix.TIMEOUT)
+            self.assertEqual([t for t in waits if t.is_alive()], [],
+                             'a wait for git outlived its test')
+
+        self.addCleanup(ended)
+        self.addCleanup(release.set)
+        stop = threading.Event()
+        stop.set()
+        with self.synced(Sync()), mock.patch.object(serve, 'POLL_S', 0.01):
+            try:
+                code, out, err = self.run_cli('serve', '--port', '0', stop=stop)
+            except KeyboardInterrupt:
+                self.fail('the second Ctrl+C left hub.py as a KeyboardInterrupt')
+        self.assertEqual(code, 1)
+        self.assertEqual(err.splitlines(), [
+            'NOTE: ' + serve.LAST_PASS,
+            'ERROR: ' + serve.CUT_SHORT,
+            'the hub server did not close cleanly: see the lines above'])
+        self.assertIn('a git command may have been left half-way', err)
+        self.assertIn('index.lock', err)
+        self.assertEqual(len(out.splitlines()), 1, out)
+        self.assertNotIn('hub closed', out)
+        self.assertFalse(self.locked(), 'the store lock outlived the server')
 
     def test_the_log_prints_errors_and_notes_and_no_request_line(self):
         err = io.StringIO()
@@ -239,6 +338,36 @@ class ServeCase(CliCase):
             HUB._log('error', 'closing: it failed')
         self.assertEqual(err.getvalue(), 'NOTE: closing: the last pass\n'
                                          'ERROR: closing: it failed\n')
+
+    def test_no_printed_line_holds_the_user_or_password_of_a_url(self):
+        remote = 'https://someone:s3cret@git.example.test/team/data.git'
+        trace = ('GET /api/v1/health: unexpected error\nTraceback (most recent call last):\n'
+                 '  File "x.py", line 1, in route\nRuntimeError: cannot reach \'%s\'' % remote)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            HUB._log('error', trace)            # a listener's line: httpd does not scrub its own
+            HUB._log('note', 'the remote is %s' % remote)
+        text = err.getvalue()
+        self.assertEqual(text, 'ERROR: %s\nNOTE: the remote is %s\n' % (
+            trace.replace('someone:s3cret@', ''), 'https://git.example.test/team/data.git'))
+        for word in ('someone', 's3cret'):
+            self.assertNotIn(word, text)
+
+    def test_a_start_note_is_printed_without_the_user_or_password_of_a_url(self):
+        real = HUB.serve.build
+
+        def build(settings, sources, log=None):
+            hub = real(settings, sources, log=log)
+            hub.notes.append('git sync is off: https://someone:s3cret@git.example.test/x refused')
+            return hub
+
+        stop = threading.Event()
+        stop.set()
+        with mock.patch.object(HUB.serve, 'build', build):
+            code, out, err = self.run_cli('serve', '--store', self.store_dir, '--port', '0',
+                                          stop=stop)
+        self.assertEqual(code, 0)
+        self.assertEqual(err, 'NOTE: git sync is off: https://git.example.test/x refused\n')
 
     def test_the_help_says_what_store_turns_off_and_what_setup_does_not_write(self):
         def helped(*argv):

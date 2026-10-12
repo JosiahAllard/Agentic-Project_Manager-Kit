@@ -4,11 +4,13 @@ loopback address. Two classes take a real part instead of its stand-in: TimerCas
 backlog.Views whose repository has no checkout (no git), RealSyncCase a gitsync.GitSync over a
 temp repository on the fake git. Every hub a test builds is closed before the test ends, and no
 listener thread may outlive its test."""
+import _thread
 import copy
 import datetime
 import json
 import os
 import shutil
+import signal
 import socket
 import tempfile
 import threading
@@ -73,13 +75,18 @@ class FakeSync(object):
     """What serve needs of kitlib.hubsite.gitsync.GitSync. sync_once notes whether the store was
     still locked and whether every door was closed when the last pass ran, and the log lines
     there were when it began. `fail`: 'stop' (stop raises), 'slow' (stop answers that its thread
-    did not end), 'pass' (sync_once raises). `state`: a test's changes to status()."""
+    did not end), 'pass' (sync_once raises). `state`: a test's changes to status(). `timeouts`:
+    what each stop() was given; `stop_noted`: the log lines there were at the first stop();
+    `on`: the name of the thread each stop() and sync_once() ran on."""
 
     def __init__(self, case, fail=None):
         self.case = case
         self.fail = fail
         self.last = None
         self.noted = None
+        self.stop_noted = None
+        self.timeouts = []
+        self.on = []
         self.state = {}
 
     def start(self):
@@ -88,12 +95,17 @@ class FakeSync(object):
 
     def stop(self, timeout=None):
         self.case.calls.append('sync.stop')
+        self.timeouts.append(timeout)
+        self.on.append(threading.current_thread().name)
+        if self.stop_noted is None:
+            self.stop_noted = list(self.case.lines)
         if self.fail == 'stop':
             raise RuntimeError(SECRET)
         return self.fail != 'slow'
 
     def sync_once(self):
         self.case.calls.append('sync.sync_once')
+        self.on.append(threading.current_thread().name)
         self.noted = list(self.case.lines)
         if self.fail == 'pass':
             raise RuntimeError(SECRET)
@@ -108,6 +120,60 @@ class FakeSync(object):
                'diverged': False}
         out.update(self.state)
         return out
+
+
+class Stuck(FakeSync):
+    """A sync whose git hangs at the close: its first call of `at` ('stop' or 'sync_once') sends
+    the main thread a Ctrl+C, as the owner's second one, and does not come back before the event
+    `release` is set."""
+
+    def __init__(self, case, at, release):
+        FakeSync.__init__(self, case)
+        self.at = at
+        self.release = release
+        self.hung = False
+
+    def hang(self, name):
+        if name == self.at and not self.hung:
+            self.hung = True
+            _thread.interrupt_main()
+            self.release.wait(TIMEOUT)
+
+    def stop(self, timeout=None):
+        out = FakeSync.stop(self, timeout)
+        self.hang('stop')
+        return out
+
+    def sync_once(self):
+        self.case.calls.append('sync.sync_once')
+        self.on.append(threading.current_thread().name)
+        self.hang('sync_once')
+        return self.status()
+
+
+class Late(FakeSync):
+    """A sync with a pass in flight at the close: stop() with a time limit answers that its
+    thread did not end. With none it waits for the pass: `waited` is what was true then (the
+    store still locked, the log lines so far), and `ends` what it answers (an exception: raised)."""
+
+    def __init__(self, case, ends=True):
+        FakeSync.__init__(self, case)
+        self.ends = ends
+        self.waited = None
+
+    def stop(self, timeout=None):
+        FakeSync.stop(self, timeout)
+        if timeout is not None:
+            return False
+        self.waited = {'locked': self.case.locked(), 'lines': list(self.case.lines)}
+        if isinstance(self.ends, Exception):
+            raise self.ends
+        return self.ends
+
+
+def git_waits():
+    """The threads alive now on which a close waits for git."""
+    return [t for t in threading.enumerate() if t.name == serve.GIT_WAIT_THREAD]
 
 
 class ServeCase(unittest.TestCase):
@@ -137,6 +203,13 @@ class ServeCase(unittest.TestCase):
                 raise gitsync.Refused('%s is not in a git work tree' % SECRET)
             self.sync = FakeSync(self, fail)
             return self.sync
+        return make
+
+    def given(self, sync):
+        """A sync source that gives the stand-in `sync`."""
+        def make(store_dir, every, remote=None, branch=None, push=True):
+            self.sync = sync
+            return sync
         return make
 
     def build(self, settings=None, **src):
@@ -493,6 +566,27 @@ class ViewsCase(ServeCase):
         self.assertEqual(self.fake.reads, [False])
         self.assertEqual(h['unavailable'], {})
 
+    def test_a_timer_that_is_stopping_reads_nothing_more_for_health(self):
+        waits = []
+
+        class Timed(FakeBacklog):       # with the pause of a timer, as backlog.Views has one
+            def wait(self, stop, seconds):
+                waits.append((stop.is_set(), seconds))
+                return stop.is_set()
+
+        fake = Timed(self.calls)
+        hub = self.build(backlog=lambda refresh_s: fake)
+        stop = threading.Event()
+        # the pause after a round reads the view, so health has what the round read
+        self.assertIs(hub.backlog.wait(stop, 5), False)
+        self.assertEqual(fake.reads, [False])
+        self.assertEqual(hub.views.health()['backlog_at'], ANSWER['at'])
+        # not when the timer is stopping: the close waits for this thread
+        stop.set()
+        self.assertIs(hub.backlog.wait(stop, 5), True)
+        self.assertEqual(fake.reads, [False])
+        self.assertEqual(waits, [(False, 5), (True, 5)])
+
     def test_a_repository_list_that_cannot_be_read_is_unavailable_not_a_500(self):
         phrase = backlog.NO_REPOS + ': KeyError'
         hub = self.views(answer={'at': ANSWER['at'], 'error': phrase, 'repos': []})
@@ -584,6 +678,46 @@ class ReasonCase(ServeCase):
                 (SECRET, SECRET),
                 ('', '')):
             self.assertEqual(serve.scrub(text), want, text)
+
+    def test_scrub_takes_out_a_password_that_holds_a_quote(self):
+        host = 'https://git.example.test/x'
+        for text, want in (
+                ("https://someone:s3'cret@git.example.test/x", host),
+                ("https://some'one@git.example.test/x", host),
+                ("fatal: unable to access 'https://someone:s3'cret@git.example.test/x/': refused",
+                 "fatal: unable to access '%s/': refused" % host),
+                # a quote that ends a URL is no part of a password
+                ("'%s' was refused for a@b" % host, "'%s' was refused for a@b" % host),
+                ("'https://git.example.test' was refused for a@b",
+                 "'https://git.example.test' was refused for a@b"),
+                ('"https://git.example.test"@b', '"https://git.example.test"@b'),
+                ('<https://git.example.test>@b', '<https://git.example.test>@b'),
+                # the scp form of a remote has no password to take out
+                ('git@git.example.test:team/data.git', 'git@git.example.test:team/data.git'),
+                ("'git@git.example.test:team/data.git'", "'git@git.example.test:team/data.git'")):
+            self.assertEqual(serve.scrub(text), want, text)
+
+    def test_health_gives_no_reason_when_the_failing_step_changed_between_its_two_reads(self):
+        hub = self.failing()
+        hub.start()
+        answers = [{'failed': 'push', 'detail': WHY},
+                   {'failed': 'fetch', 'detail': 'the reason of another step'}]
+        asked = []
+
+        def status():       # the Api's health reads it first, the route's reason second
+            asked.append(len(asked))
+            return dict(FakeSync.status(self.sync), **answers[min(len(asked), 2) - 1])
+
+        self.sync.status = status
+        r = get(hub.port, HEALTH, self.owner)
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(asked, [0, 1], 'health did not read the status twice')
+        git = r.json()['git']
+        # the step the answer names is not the one the reason is of: no reason is better than
+        # the wrong one
+        self.assertEqual(git['failed'], 'push')
+        self.assertNotIn('detail', git)
+        self.assertNotIn('another step', r.body.decode('utf-8'))
 
     def test_health_gives_the_reason_to_the_owner_alone_and_without_credentials(self):
         hub = self.failing()
@@ -805,6 +939,205 @@ class StepCase(ServeCase):
                                          + SECRET])
         self.assertFalse(self.locked())
         self.assertEqual(httpfix.http_threads(), [])
+
+
+class WaitCase(ServeCase):
+    """The waits for git at the close: each is said in the log before it begins, a second Ctrl+C
+    ends it with a line that says what to check, and the store is not closed beside a pass in
+    flight without a line that says so."""
+
+    def ctrl_c(self):
+        """Make a Ctrl+C a KeyboardInterrupt in this, the main thread, whatever the runner set
+        for it; and after the test, end every wait for git it left on a thread."""
+        if threading.current_thread() is not threading.main_thread():
+            self.skipTest('a Ctrl+C reaches the main thread only')
+        was = signal.signal(signal.SIGINT, signal.default_int_handler)
+        if was is not None:
+            self.addCleanup(signal.signal, signal.SIGINT, was)
+        release = threading.Event()
+
+        def ended():
+            for t in git_waits():
+                t.join(TIMEOUT)
+            self.assertEqual(git_waits(), [], 'a wait for git outlived its test')
+
+        self.addCleanup(ended)
+        self.addCleanup(release.set)
+        return release
+
+    def cut(self, hub, timeout=TIMEOUT):
+        """What hub.close() answers when a second Ctrl+C arrives during it. A KeyboardInterrupt
+        that leaves the close would end the whole test run: it fails this test instead."""
+        try:
+            with mock.patch.object(serve, 'POLL_S', 0.01):
+                return hub.close(timeout)
+        except KeyboardInterrupt:
+            self.fail('the second Ctrl+C left the close as a KeyboardInterrupt')
+
+    def in_flight(self, sync):
+        """A started hub over `sync` with one request that does not end before the test does."""
+        entered, release = threading.Event(), threading.Event()
+
+        def usage():
+            entered.set()
+            release.wait(TIMEOUT)
+            return []
+
+        hub = self.build(sync=self.given(sync), usage=usage)
+        hub.start()
+        lis = hub.listeners[0]
+        client = threading.Thread(target=lambda: get(hub.port, BASE + '/usage', self.owner),
+                                  name='test-slow-read', daemon=True)
+        client.start()
+        self.addCleanup(client.join, TIMEOUT)
+        self.addCleanup(lis.join, TIMEOUT)
+        self.addCleanup(release.set)
+        self.assertTrue(entered.wait(TIMEOUT), 'the request never arrived')
+        return hub
+
+    def test_the_wait_for_git_is_said_before_it_begins(self):
+        hub = self.build(sync=self.sync_factory())
+        hub.start()
+        self.assertIs(hub.close(TIMEOUT), True)
+        # the line is in the log before the first wait (the stop of the sync's thread), not
+        # only before the last pass
+        self.assertEqual(self.sync.stop_noted, [('note', serve.LAST_PASS)])
+        self.assertIn('finishing a sync pass, waiting for git', serve.LAST_PASS)
+        self.assertIn('Ctrl+C again ends the wait', serve.LAST_PASS)
+        self.assertEqual(self.lines, [('note', serve.LAST_PASS)])
+        # a wait for git is never made on the caller's thread: a Ctrl+C could not end it there
+        self.assertEqual(self.sync.on, [serve.GIT_WAIT_THREAD] * 2)
+        self.assertEqual(self.sync.timeouts, [TIMEOUT])
+        self.assertEqual(git_waits(), [])
+
+    def test_the_text_of_the_last_pass_says_a_pass_in_flight_ends_first(self):
+        text = serve.LAST_PASS
+        self.assertIn('A pass in flight ends first, then the last one runs', text)
+        self.assertIn('in each git may take %d s for a fetch and again for a push'
+                      % gitsync.NET_TIMEOUT, text)
+
+    def test_a_second_ctrl_c_ends_the_wait_for_the_last_pass(self):
+        release = self.ctrl_c()
+        hub = self.build(sync=self.given(Stuck(self, 'sync_once', release)))
+        hub.start()
+        self.assertIs(self.cut(hub), False)
+        self.assertEqual(self.lines, [('note', serve.LAST_PASS), ('error', serve.CUT_SHORT)])
+        # the sync was told to begin no further pass, with no wait; the store was still closed
+        self.assertEqual(self.calls, ['sync.start', 'sync.stop', 'sync.sync_once', 'sync.stop'])
+        self.assertEqual(self.sync.timeouts, [TIMEOUT, 0])
+        self.assertFalse(self.locked(), 'the store was not released')
+        self.assertEqual(httpfix.http_threads(), [])
+        self.assertIs(hub.close(), False)
+
+    def test_a_second_ctrl_c_ends_the_wait_for_the_syncs_thread(self):
+        release = self.ctrl_c()
+        hub = self.build(sync=self.given(Stuck(self, 'stop', release)))
+        hub.start()
+        self.assertIs(self.cut(hub), False)
+        self.assertEqual(self.lines, [('note', serve.LAST_PASS), ('error', serve.CUT_SHORT)])
+        self.assertEqual(self.calls, ['sync.start', 'sync.stop', 'sync.stop'])
+        self.assertEqual(self.sync.timeouts, [TIMEOUT, 0])
+        self.assertFalse(self.locked(), 'the store was not released')
+        self.assertEqual(httpfix.http_threads(), [])
+
+    def test_the_line_of_a_cut_wait_says_what_may_be_left_and_what_to_check(self):
+        for text in (serve.CUT_SHORT, serve.LEFT_RUNNING):
+            self.assertIn('a git command may', text)
+            self.assertIn('half-way', text)
+            self.assertIn('index.lock', text)
+            self.assertIn('the next start commits what is left', text)
+        self.assertTrue(serve.CUT_SHORT.startswith('closing: interrupted'))
+
+    def interrupted(self, **src):
+        """A started hub whose step 3 (the requests in flight) is left by a Ctrl+C."""
+        hub = self.build(**src)
+        hub.start()
+        lis = hub.listeners[0]
+        drain = lis.drain
+
+        def cut(timeout=None):
+            drain(timeout)
+            raise KeyboardInterrupt()
+
+        lis.drain = cut
+        return hub
+
+    def test_a_ctrl_c_in_an_earlier_step_of_a_synced_close_is_answered_the_same_way(self):
+        hub = self.interrupted(sync=self.sync_factory())
+        self.assertIs(self.cut(hub), False)
+        self.assertEqual(self.lines, [('error', serve.CUT_SHORT)])
+        self.assertEqual(self.calls, ['sync.start', 'sync.stop'])
+        self.assertEqual(self.sync.timeouts, [0])
+        self.assertFalse(self.locked(), 'the store was not released')
+        self.assertEqual(httpfix.http_threads(), [])
+
+    def test_a_ctrl_c_in_a_close_with_no_sync_leaves_it_with_the_store_released(self):
+        hub = self.interrupted()
+        with self.assertRaises(KeyboardInterrupt):
+            hub.close(TIMEOUT)
+        self.assertEqual(self.lines, [])
+        self.assertFalse(self.locked(), 'the store was not released')
+        self.assertEqual(httpfix.http_threads(), [])
+        self.assertIs(hub.close(), False)
+
+    def test_a_pass_in_flight_is_waited_for_when_no_last_pass_will(self):
+        hub = self.in_flight(Late(self))
+        self.assertIs(hub.close(0.05), False)
+        self.assertEqual(self.lines, [
+            ('error', 'closing: the requests in flight did not end within 0.05 s'),
+            ('error', serve.LAST_PASS_SKIPPED),
+            ('note', serve.IN_FLIGHT),
+            ('error', 'closing: the git sync did not end within 0.05 s'),
+            ('note', serve.STILL_WAITING),
+            ('error', 'closing: the handler threads did not end within 0.05 s')])
+        # the second wait has no limit, was said first, and ended before the store closed
+        self.assertEqual(self.calls, ['sync.start', 'sync.stop', 'sync.stop'])
+        self.assertEqual(self.sync.timeouts, [0.05, None])
+        self.assertEqual(self.sync.stop_noted[-1], ('note', serve.IN_FLIGHT))
+        self.assertEqual(self.sync.waited, {'locked': True, 'lines': self.lines[:5]})
+        self.assertEqual(self.sync.on, [serve.GIT_WAIT_THREAD] * 2)
+        self.assertFalse(self.locked(), 'the store was not released')
+        for text in (serve.IN_FLIGHT, serve.STILL_WAITING):
+            self.assertIn('waiting for git', text)
+            self.assertIn('Ctrl+C again ends the wait', text)
+
+    def test_a_store_closed_beside_a_pass_that_may_still_run_is_said(self):
+        for ends in (False, RuntimeError(SECRET)):
+            with self.subTest(ends=ends):
+                del self.calls[:], self.lines[:]
+                self.store_dir = tempfile.mkdtemp(prefix='store-', dir=self.root)
+                self.settings = self.settings._replace(store=self.store_dir)
+                hub = self.in_flight(Late(self, ends))
+                self.assertIs(hub.close(0.05), False)
+                self.assertEqual(self.errors(), [
+                    'closing: the requests in flight did not end within 0.05 s',
+                    serve.LAST_PASS_SKIPPED,
+                    'closing: the git sync did not end within 0.05 s',
+                    serve.LEFT_RUNNING,
+                    'closing: the handler threads did not end within 0.05 s'])
+                self.assertEqual(self.sync.timeouts, [0.05, None])
+                self.assertFalse(self.locked(), 'the store was not released')
+
+    def test_a_second_ctrl_c_ends_the_wait_for_a_pass_in_flight(self):
+        release = self.ctrl_c()
+
+        class Held(Late):               # its pass in flight does not end: the wait with no limit
+            def stop(self, timeout=None):
+                Late.stop(self, timeout)
+                if timeout is None:
+                    _thread.interrupt_main()
+                    release.wait(TIMEOUT)
+                return timeout == 0
+
+        hub = self.in_flight(Held(self))
+        self.assertIs(self.cut(hub, 0.05), False)
+        self.assertEqual(self.lines[3:], [
+            ('error', 'closing: the git sync did not end within 0.05 s'),
+            ('note', serve.STILL_WAITING),
+            ('error', serve.CUT_SHORT),
+            ('error', 'closing: the handler threads did not end within 0.05 s')])
+        self.assertEqual(self.sync.timeouts, [0.05, None, 0])
+        self.assertFalse(self.locked(), 'the store was not released')
 
 
 class TimerCase(ServeCase):
