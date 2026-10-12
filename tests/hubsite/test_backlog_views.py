@@ -374,6 +374,32 @@ class AFailureIsNeverAnEmptyStore(Case):
         self.assertEqual(bad["error"], backlog.GIT_EXITED % 1)
         self.assertEqual(v.get()["repos"][0], good)             # and it mends on the next good read
 
+    def test_a_failed_log_of_the_deleted_records_is_a_read_error_not_a_short_list(self):
+        # kitlib.hubbacklog.deleted asks `git log` (no -1) for the records deleted in the window.
+        # When that one call fails the read fails: Completed is never shown without them.
+        repo = self.main_repo(A=record("A", "first"), GONE=record("GONE", "closed by deletion"))
+        self.put(repo, "close GONE", GONE=None)
+
+        def its_log(args):
+            return not lookup(args)
+
+        for rc, err, phrase in ((1, "", backlog.GIT_EXITED % 1), (128, STDERR, backlog.GIT_FAILED)):
+            with self.subTest(rc=rc):
+                with git_says(rc, err, "log", only=its_log):
+                    entry = self.views(("r", repo.root)).get()["repos"][0]
+                self.assertEqual(entry["error"], phrase)
+                self.assertEqual((entry["open"], entry["completed"], entry["stale"]), ([], [], False))
+        # after a good read the last good lists stay, marked stale
+        v = self.views(("r", repo.root))
+        good = v.get()["repos"][0]
+        self.assertEqual((good["error"], [c["id"] for c in good["completed"]]), (None, ["GONE"]))
+        self.put(repo, "add B", B=record("B", "second"))        # a new commit: the store is read again
+        with no_answer("log", only=its_log):
+            bad = v.get()["repos"][0]
+        self.assertEqual((bad["error"], bad["stale"]), (backlog.GIT_EXITED % 1, True))
+        self.assertEqual((bad["open"], bad["completed"]), (good["open"], good["completed"]))
+        self.assertEqual(ids(v.get(), "r", "open"), ["A", "B"])  # and it mends on the next good read
+
     def test_a_failed_read_never_shows_the_lists_of_another_folder(self):
         good, broken = self.main_repo(A=record("A", "first")), self.main_repo(B=record("B", "second"))
         broken.write(".kit.json", '{"backlog": ')
