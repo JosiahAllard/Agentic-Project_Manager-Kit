@@ -119,7 +119,7 @@ def live_runs(store, alive=None, mine=None):
     in mine ({(pid, ctime)}). Writes nothing."""
     alive = alive or process.alive
     mine = mine or set()
-    if not os.path.isdir(store.root):
+    if not os.path.isdir(store.path()):
         return [MISSING], [], []
     live, gone, own = [], [], []
 
