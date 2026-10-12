@@ -45,13 +45,22 @@ ENG_LINE = ("ENG rulings: an engineering question (API shape, class versus recor
             "classifier, credentials, hooks that guard owner files); Money and accounts (purchases, cloud credit, "
             "game accounts, bans); Priority and pre-empts (one owner entry per change); Go-live and live-client "
             "runs, and removals of owner files; anything the owner flagged for review (eng_review).")
-# The start-up pricing pass and backlog audit (claude/agents/coordinator.md, On start); emitted only when
-# coordinator_start.pricing_pass is true, so merging changes no live session.
-PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch: run `python tools/backlog.py list "
-                "--needs-priority`; check each unpriced open record for duplicates, size and fit, then price it "
-                "2-5 under the standing valuation rules (`set <ID> --priority <n> --priority-by agent`). A record "
-                "that needs the owner (priority 1, a pre-emption, an owner-held area, a question only he can "
-                "answer) goes to the PM as one question; never ask him directly.")
+# When a coordinator prices a record (claude/agents/coordinator.md, On start step 6 and Work sets,
+# Follow-ups): the start-up pricing pass leaves follow-up records unpriced.
+# Emitted only when coordinator_start.pricing_pass is true.
+PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, follow-up records excepted: run "
+                "`python tools/backlog.py list --needs-priority`. A follow-up record (filed from a finding on a "
+                "branch, a review or a worker's report; a new one says so in its summary) stays unpriced until "
+                "you or the PM promote it. Check "
+                "every other unpriced open record (an owner story, a record from the PM's brief) for duplicates, "
+                "size and fit, then price it 2-5 under the standing valuation rules (`set <ID> --priority <n> "
+                "--priority-by agent`). Promote a follow-up at any time it enters a work set: price it 2-5; "
+                "price before pull. When `next --all` lists fewer startable records than the set needs, pick the "
+                "follow-ups worth doing now, check each for duplicates, size and fit, and price only those going "
+                "into this set; never a sweep. `next` never offers an unpriced record; its banner counts it "
+                "under `unprioritised+open`, not under `held` (`held` = blocked). "
+                "A record that needs the owner (priority 1, a pre-emption, an owner-held area, a question only "
+                "he can answer) goes to the PM as one question; never ask him directly.")
 
 
 def is_coordinator(env=None):

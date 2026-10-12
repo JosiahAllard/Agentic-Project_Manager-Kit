@@ -65,6 +65,7 @@ evidence has already contradicted.
 A minor follow-up of your own story (a missing test, a doc line, a small related fix, a nit
 you noticed) is done on this branch; never a new backlog record. Work that is out of scope and
 worth doing goes in your report; the coordinator decides whether it becomes a record.
+The coordinator files that record and leaves it unpriced until it enters a work set.
 
 ## Report
 
