@@ -167,6 +167,14 @@ class OlderItemsLineTest(Base):
         self.assertNotIn('Items:', text[text.index('## %s' % rid(2)):])
         self.assertEqual(fmt.validate(text), [])
 
+    def test_a_bad_or_repeated_items_line_is_refused(self):
+        self.add()
+        for line, bad in (('Items: A, A', "['A', 'A']"), ('Items: ok, not ok', "['not ok']")):
+            errs = fmt.validate(self.text() + line + '\n')
+            self.assertEqual(errs, ['%s: Items must be distinct record ids, comma-separated (bad: %s)'
+                                    % (rid(1), bad)], msg=line)
+        self.assertEqual(fmt.validate(self.text() + 'Items: A, B\n'), [])
+
 
 class ValidateTest(Base):
     def test_ids_must_run_in_order_from_one(self):
