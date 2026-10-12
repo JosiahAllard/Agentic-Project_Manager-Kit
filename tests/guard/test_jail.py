@@ -986,10 +986,10 @@ class UnplacedGit(MainGit):
                     self.assertTrue(p.clean, text)
                     d = decide(event(tool, {'command': text, 'description': 'test'}, where, True, 'worker'),
                                self.w.ctx(environ={}))
-                    # in the main checkout the main-checkout rule cannot pin New-Item's computed
-                    # item (env: joined with $n) to the env: drive and refuses first
-                    main_item = where == self.w.main and 'New-Item' in text
-                    self.jailed(d, 'main-checkout' if main_item else 'write-jail')
+                    # the main-checkout rule cannot pin New-Item's item (env: on a line that is not
+                    # plain, joined with $n) to the env: drive and refuses first, from the main
+                    # checkout and from a worktree alike
+                    self.jailed(d, 'main-checkout' if 'New-Item' in text else 'write-jail')
             with self.subTest(text, role='main'):
                 self.allowed(decide(event(tool, {'command': text, 'description': 'test'}, self.w.wt),
                                     self.w.ctx(environ={})))
@@ -1226,15 +1226,24 @@ class UnplacedGit(MainGit):
             "$ExecutionContext.InvokeCommand.NewScriptBlock($s).Invoke(); %s" % g,
             "[scriptblock]::Create($s).Invoke(); %s" % g,
             "[System.Management.Automation.ScriptBlock]::Create($s).Invoke(); %s" % g,
-            # a name an env: item is renamed, copied or moved to may then hold env:
-            "Rename-Item env:FOO TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
-            "Rename-Item env:FOO -NewName TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
-            "Copy-Item env:FOO env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
-            "Move-Item env:FOO -Destination env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
             # = at the start of the value's word
             '$env:GIT_EXEC_PATH ="x"; %s' % g,
             '$env:BASH_ENV ="x"; %s' % g,
             '$env:GIT_DIR +="x"; %s' % g], tool='PowerShell')
+        # a name an env: item is renamed, copied or moved to may then hold env:. The line is not
+        # plain (Set-Item), so the env: item is judged as a path the guard cannot place: the
+        # main-checkout rule refuses a worker first, naming the provider item; the coordinator's
+        # mark meets the write jail
+        for text in ("Rename-Item env:FOO TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
+                     "Rename-Item env:FOO -NewName TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
+                     "Copy-Item env:FOO env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
+                     "Move-Item env:FOO -Destination env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g)):
+            with self.subTest(text):
+                self.assertTrue(cm.read(text, sh.PS, W.fwd(self.w.wt)).clean, text)
+                d = self.jailed(self.git(text, 'worker', tool='PowerShell'), 'main-checkout')
+                self.assertIn('PowerShell provider item (env:', d.reason)
+                for environ in (COORDINATOR, OLD_MARK):
+                    self.jailed(self.marked(text, environ, 'PowerShell'))
         for text in ('$env:FOO ="x"; %s' % g, "Rename-Item env:FOO BAR; Set-Content \"$env:TEMP\\x.txt\" hi; %s" % g):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))

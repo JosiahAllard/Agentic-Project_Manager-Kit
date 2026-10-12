@@ -319,7 +319,7 @@ def prepare_commit(mirror, model=None, environ=None, remote=None, env=None):
     for the Co-Authored-By trailer (model, else kitlib.commit.MODEL_ENV), the mirror inside a git
     work tree that is not a main checkout (kitlib.commit refuses one) and is on its `.kit.json`
     main branch (the data worktree's is the data branch), and refuses a work tree of the kit
-    itself (_kit_checkout_error): the hub holds the owner's private to-dos and answers, and the
+    itself (_kit_code_error, _kit_checkout_error): the hub holds the owner's private to-dos and answers, and the
     kit's main is public. `remote` is where push goes (pm_data.remote); None: the data branch's
     recorded remote in the kit's repository, else the work tree's repo.remote. `env` is the git
     environment for status and push (tests); the commit itself runs in this process's."""
@@ -342,12 +342,13 @@ def prepare_commit(mirror, model=None, environ=None, remote=None, env=None):
         sets = kcommit.settings(cfg)
     except kconfig.ConfigError as e:
         raise Refused("the mirror repository's .kit.json: %s" % e)
+    _kit_code_error(root)       # first, whatever HEAD is: the reason that matters most
     branch, why = refs.current_branch(root)
     if branch is None:
         raise Refused('cannot read the branch of %s: %s' % (root, why))
     if not branch:
         raise Refused('HEAD is detached in %s' % root)
-    data_remote = _kit_checkout_error(root, branch, remote)     # first: the reason that matters most
+    data_remote = _kit_checkout_error(root, branch, remote)
     if branch != sets['main_branch']:
         raise Refused('%s is on %r, not its main branch %s' % (root, branch, sets['main_branch']))
     rel = os.path.relpath(os.path.abspath(mirror), root).replace('\\', '/')
@@ -363,15 +364,19 @@ def prepare_commit(mirror, model=None, environ=None, remote=None, env=None):
     return CommitPlan(root, rel, branch, name, remote or data_remote or cfg.remote, env)
 
 
-def _kit_checkout_error(root, branch, remote):
-    """Refused when the work tree `root` is the kit's own: a checkout holding the kit's code (any
-    clone), or a work tree of the repository this kit runs from that is not on the data branch
-    recorded in its kit-pm-data.json (docs/pm-data-branch.md "Layout"), or one pushing to another
-    remote than the recorded one. Returns the recorded remote for the data branch, else None."""
+def _kit_code_error(root):
+    """Refused when the work tree `root` holds the kit's code (any clone), on any HEAD state."""
     if os.path.isfile(os.path.join(root, 'kitlib', 'hubmirror', '__init__.py')):
         raise Refused('the hub mirror is in %s, a checkout of the kit itself: the hub holds the '
                       "owner's private to-dos and answers and the kit is public; mirror into the "
                       'PM data worktree (pm_data) or a private repository' % root)
+
+
+def _kit_checkout_error(root, branch, remote):
+    """Refused when the work tree `root` is a work tree of the repository this kit runs from that
+    is not on the data branch recorded in its kit-pm-data.json (docs/pm-data-branch.md "Layout"),
+    or one pushing to another remote than the recorded one (a checkout holding the kit's code is
+    _kit_code_error's). Returns the recorded remote for the data branch, else None."""
     same, why = repo.same_repository(root, kcommit.KIT_ROOT)
     if same is None:
         kit_common, _ = repo.common_dir(kcommit.KIT_ROOT)
