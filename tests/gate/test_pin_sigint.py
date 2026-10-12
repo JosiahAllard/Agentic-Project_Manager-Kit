@@ -119,8 +119,25 @@ def _sentinel(signum, frame):
     raise KeyboardInterrupt
 
 
+REAP_S = 60     # what a child the pin lost gets to exit by itself before the cleanup ends it
+
+
+class _PinSubprocess:
+    """What kitlib.gate.pin sees as `subprocess` while a test wraps the tool's start: its Popen is
+    the test's, every other name the real module's. Only the pin's own start of the tool goes
+    through it. The git children the pin's reads start on real git (kitlib.proc.job) use the real
+    module: they are not counted, refused or interrupted, so the tests hold on both tiers."""
+
+    def __init__(self, popen):
+        self.Popen = popen
+
+    def __getattr__(self, name):
+        return getattr(subprocess, name)
+
+
 class Window(unittest.TestCase):
-    """pin.run on a kit fixture, as in test_live_pin's Run, with Popen wrapped."""
+    """pin.run on a kit fixture, as in test_live_pin's Run, with the pin's start of the tool
+    wrapped."""
 
     def setUp(self):
         if threading.current_thread() is not threading.main_thread():
@@ -141,9 +158,26 @@ class Window(unittest.TestCase):
         self.addCleanup(self.reap)
         self.seen = []                  # the SIGINT handler at each step: (step, handler)
 
-    def reap(self):
-        for proc in self.started:       # a child the pin lost (the gap) still exits before cleanup
-            proc.wait(60)
+    def reap(self, grace=REAP_S):
+        """A child the pin lost (the gap) still exits by itself before cleanup. One that does not
+        within `grace` seconds is ended here, through its own handle, so no test leaves a process
+        behind; the cleanup fails all the same, naming it."""
+        left = []
+        for proc in self.started:
+            try:
+                proc.wait(grace)
+            except subprocess.TimeoutExpired:
+                left.append(proc)
+        for proc in left:
+            proc.kill()
+        for proc in left:
+            proc.wait(REAP_S)
+        self.assertEqual([proc.args for proc in left], [],
+                         'still running %s s after the test; ended by the cleanup' % grace)
+
+    def wrap(self, popen):
+        """Patch the pin's own start of the tool, and no other Popen call in the process."""
+        return mock.patch.object(_pin(), 'subprocess', _PinSubprocess(popen))
 
     def popen(self, then=None):
         real = subprocess.Popen
@@ -155,7 +189,7 @@ class Window(unittest.TestCase):
             if then:
                 then()
             return proc
-        return mock.patch.object(_pin().subprocess, 'Popen', side_effect=start)
+        return self.wrap(start)
 
     def read_probe(self):
         with open(self.out, encoding='utf-8') as fh:
@@ -190,7 +224,7 @@ class Window(unittest.TestCase):
         def refuse(*args, **kwargs):
             self.seen.append(('popen', signal.getsignal(signal.SIGINT)))
             raise OSError('no such interpreter')
-        with mock.patch.object(pin.subprocess, 'Popen', side_effect=refuse):
+        with self.wrap(refuse):
             code, said = pin.run(self.tool, [self.out], environ=self.env)
         self.assertIsNone(code)
         self.assertIn('OSError: no such interpreter', said)
@@ -227,6 +261,16 @@ class Window(unittest.TestCase):
         self.assertNotEqual(self.env.get(pin.PINNED_ENV), pin.LIVE)    # nothing runs it again
         self.assertEqual(os.listdir(os.path.join(pins_root(self.places), 'leases')), [])
         self.assertIs(signal.getsignal(signal.SIGINT), _sentinel)
+
+    def test_the_cleanup_ends_a_child_that_outlives_it_and_fails_naming_it(self):
+        """reap, the cleanup of every test here, on a child that does not exit by itself."""
+        proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])
+        self.addCleanup(proc.kill)      # before reap's own turn, should the lines below fail
+        self.started.append(proc)
+        with self.assertRaises(AssertionError) as caught:
+            self.reap(grace=0.5)
+        self.assertIsNotNone(proc.poll())
+        self.assertIn('time.sleep(120)', str(caught.exception))
 
     def test_off_the_main_thread_the_tool_still_runs(self):
         pin = _pin()
