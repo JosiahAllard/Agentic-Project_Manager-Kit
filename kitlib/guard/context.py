@@ -45,6 +45,9 @@ a constructor argument, and the defaults read this machine.
                      config_location() names; a BAD location sets 'broken' too (fail closed).
   config_location()  kitlib.config.user.locate(home), taken once per Ctx, so every read of
                      the machine config in one hook call reads the same file.
+  kit                the kit the guard runs from (kitlib.kitroot.root(): the checkout this module
+                     is in), or a test's folder; the lock tool an alternative names is under it
+                     (rules.lock_tool).
   session_role(ev)   who runs the session (kitlib.sessionmark): 'subagent' when the payload has
                      agent_id, else the launcher's mark (PM_KIT_ROLE), else 'owner': a session
                      nothing marks is the owner's own. Replaceable (role_resolver).
@@ -57,6 +60,7 @@ import os
 import tempfile
 
 from kitlib import config as kconfig
+from kitlib import kitroot
 from kitlib import pmdata
 from kitlib import sessionmark
 from kitlib.config import user as kuser
@@ -122,9 +126,10 @@ def _same_dir(a, b):
 class Ctx(object):
     def __init__(self, environ=None, home=None, store=None, classify=None, load=None,
                  gate_ok=None, git=None, lock_held=None, role_resolver=None, tempdir=None,
-                 pm_data=None, gitread=None):
+                 pm_data=None, gitread=None, kit=None):
         self.environ = dict(os.environ if environ is None else environ)
         self.home = home or kuser.home_dir()
+        self.kit = kit or kitroot.root()
         self.store = store
         self._classify = classify or fsplace.classify
         self._load = load or kconfig.load
