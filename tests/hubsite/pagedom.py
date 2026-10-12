@@ -14,7 +14,8 @@ without waiting for it.
 """
 import json
 import re
-import subprocess
+
+from kitlib.proc import spawn       # node is started with no console window of its own
 
 DOM = r"""
 "use strict";
@@ -207,6 +208,6 @@ def run(node, page_text, body, snap, hash=""):
     src = "%s\nconst MARKUP = %s, SCRIPT = %s, OPTS = %s;\n%s" % (
         DOM, json.dumps(markup), json.dumps(script), json.dumps({"snap": snap, "hash": hash}),
         HARNESS.replace("BODY", body))
-    out = subprocess.run([node, "-"], input=src, capture_output=True, text=True, encoding="utf-8", timeout=60)
+    out = spawn.run([node, "-"], input=src, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr[-4000:]
     return json.loads(out.stdout.strip().splitlines()[-1])

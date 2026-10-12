@@ -11,11 +11,11 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import unittest
 
 from kitlib.hubsite import httpd, serve
 from kitlib.hubsite.api import BASE
+from kitlib.proc import spawn
 from tests.hubsite import httpfix, pagedom
 from tests.hubsite.httpfix import get, post
 
@@ -43,7 +43,7 @@ def js(expr, items):
     """Evaluate expr (which sees `items` and the page's pure functions) under node; return its JSON."""
     src = block() + "\nconst items = %s;\nconsole.log(JSON.stringify(%s));" % (json.dumps(items), expr)
     # The script goes in on stdin: the pure block outgrew the Windows command-line limit.
-    out = subprocess.run([NODE, "-"], input=src, capture_output=True, text=True, encoding="utf-8", timeout=30)
+    out = spawn.run([NODE, "-"], input=src, capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
 

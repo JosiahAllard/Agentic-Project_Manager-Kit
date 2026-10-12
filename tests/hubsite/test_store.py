@@ -12,6 +12,7 @@ from unittest import mock
 
 from kitlib.hubsite import store
 from kitlib.hubsite.store import HubError, Store, StoreBusy
+from kitlib.proc import spawn
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CLOCK = lambda: '2026-01-02T03:04:05+00:00'      # noqa: E731
@@ -419,8 +420,8 @@ class PendingTest(StoreCase):
 
 class LockTest(StoreCase):
     def holder(self, root):
-        p = subprocess.Popen([sys.executable, '-c', HOLDER, root], cwd=KIT, env=child_env(),
-                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        p = spawn.popen([sys.executable, '-c', HOLDER, root], cwd=KIT, env=child_env(),
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.addCleanup(lambda: p.poll() is not None or (p.kill(), p.wait()))  # our own child
         self.assertEqual(p.stdout.readline().strip(), 'READY')
         return p
@@ -503,8 +504,8 @@ class ContentionTest(StoreCase):
 class CrashTest(StoreCase):
     def crash(self, n, op):
         root = self.root
-        p = subprocess.run([sys.executable, '-c', CRASH, root, str(n), op], cwd=KIT,
-                           env=child_env(), timeout=60)
+        p = spawn.run([sys.executable, '-c', CRASH, root, str(n), op], cwd=KIT,
+                      env=child_env(), timeout=60)
         self.assertEqual(p.returncode, 3)
         return p
 
