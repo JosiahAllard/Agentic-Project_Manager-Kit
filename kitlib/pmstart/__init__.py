@@ -197,6 +197,87 @@ def hub(cfg, account=None, isfile=os.path.isfile):
     return lines
 
 
+HUB_SITE_TIMEOUT_S = 1.5    # seconds each ask of the hub server waits (two asks at most)
+HUB_TOOL = os.path.join(KIT_ROOT, "tools", "hub.py")
+
+
+class HubSettingsError(Exception):
+    """The machine config has a `hub` key that cannot be used."""
+
+
+def hub_settings():
+    """The hub Settings when the machine config has a `hub` key, else None. HubSettingsError when
+    the key is there and unusable; any other error: the config could not be read at all."""
+    from kitlib.hubsite import settings as hubsettings
+    if kuser.user_config().get(hubsettings.KEY) is None:
+        return None
+    try:
+        return hubsettings.load()
+    except Exception as e:
+        raise HubSettingsError(str(e))
+
+
+def _hub_client(port):
+    from kitlib.hubsite import client
+    return client.Client(port, timeout=HUB_SITE_TIMEOUT_S)
+
+
+def _wait_running(procs):
+    """Whether a `hub.py wait --pending` process is in `procs` (a list, or a function giving
+    one: asked only when the server is up; a list that cannot be had counts as none)."""
+    try:
+        procs = procs() if callable(procs) else procs
+    except Exception:
+        return False
+    for p in procs or []:
+        cmd = p.get("CommandLine") or ""
+        if (p.get("Name") or "").lower().startswith("python") and "hub.py" in cmd \
+                and " wait" in cmd and "--pending" in cmd:
+            return True
+    return False
+
+
+def hub_site(procs=(), load=hub_settings, make_client=_hub_client):
+    """The hub site's lines, or None when the machine config has no `hub` key (or cannot be read
+    at all): the caller then shows the old hub lines. Asks only the loopback server, with
+    HUB_SITE_TIMEOUT_S per ask; starts nothing. Every failure is one line naming no more than the
+    port and the exception's class, so no token, URL or message of the server reaches the text."""
+    from kitlib.hubsite import serve
+    try:
+        site = load()
+    except HubSettingsError as e:
+        return ["hub: the hub key of the machine config cannot be used (%s)" % type(e).__name__]
+    except (Exception, kuser.HomeFenced):
+        return None
+    if site is None:
+        return None
+    port = site.port
+    try:
+        hub = make_client(port)
+        health = hub.get("/health", timeout=HUB_SITE_TIMEOUT_S)
+    except serve.NotRunning:
+        return ["hub: hub server down (nothing listens on port %d): start it with python \"%s\" serve"
+                % (port, HUB_TOOL)]
+    except Exception as e:
+        return ["hub: server did not answer as the hub does (%s)" % type(e).__name__]
+    if health.get("ok") is False:
+        return ["hub: server did not answer as the hub does (health not ok)"]
+    try:
+        items = hub.get("/pending", timeout=HUB_SITE_TIMEOUT_S).get("items") or []
+    except Exception as e:
+        return ["hub: server up on port %d, pending not asked (%s)" % (port, type(e).__name__)]
+    lines = ["hub: server up on port %d, %d pending" % (port, len(items))]
+    if items:
+        lines.append("hub: process the %d pending item(s): python \"%s\" pending, then handle, ack or log "
+                     "each" % (len(items), HUB_TOOL))
+    if _wait_running(procs):
+        lines.append("hub: wait --pending is running")
+    else:
+        lines.append("hub: start in the background: python \"%s\" wait --pending (it exits with one HUB "
+                     "line per item; handle the items, then start it again)" % HUB_TOOL)
+    return lines
+
+
 def read_heartbeat():
     """The pm_watch heartbeat ({pid, beat, stream, started}) at the state file pm_watch uses, or None
     (kitlib.pmwatch.heartbeat_file, read_heartbeat)."""
@@ -576,7 +657,8 @@ def checklist(cfg, now=None, procs=None, **fakes):
     checks = [
         ("standing", lambda: standing(cfg)),
         ("eng_review", lambda: eng_review(cfg)),
-        ("hub", lambda: hub(cfg, **fakes.get("hub", {}))),
+        ("hub", lambda: hub_site(procs_once, **fakes.get("hub_site", {}))
+                        or hub(cfg, **fakes.get("hub", {}))),
         ("watcher", lambda: watcher(cfg, procs_once(), **fakes.get("watcher", {}))),
         ("handoff", lambda: handoff(cfg, **fakes.get("handoff", {}))),
         ("reminders", lambda: reminders(cfg, today, **fakes.get("reminders", {}))),

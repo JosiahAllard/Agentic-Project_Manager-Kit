@@ -14,7 +14,22 @@ account cannot be identified the line says `--account auto` (pick-account's choi
 neither the PM's ArtifactComments subscription nor the hub's data: republish the page (or publish a
 copy), start the ArtifactComments watch on it (again after a resume or compact), check that its
 `backlog` collection is filled (empty means a new copy: refill the regenerated collections), then
-process the hub. Tests: `tests/pmstart/test_hub_line.py`. `pm_watch.py` counts as running when its
+process the hub. Tests: `tests/pmstart/test_hub_line.py`.
+
+Hub site (`kitlib.pmstart` `hub_site`, tests `tests/pmstart/test_hub_site.py`): when the machine
+config has a `hub` key (`kitlib.hubsite.settings`), these lines replace the hub lines above; with no
+`hub` key they are unchanged. The check only asks the loopback server on `hub.port`, through
+`kitlib.hubsite.client`; it starts no process and never starts the server. Each ask (`GET /health`,
+then `GET /pending`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The lines:
+`hub: server up on port <n>, <k> pending`; when `<k>` is above 0, a line to process the items
+(`hub.py pending`); then either `hub: wait --pending is running` (a `python` process whose command
+line holds `hub.py`, `wait` and `--pending`) or a line telling the PM to start
+`hub.py wait --pending` in the background and start it again after it ends. When nothing listens:
+`hub: hub server down (nothing listens on port <n>): start it with python "<kit>/tools/hub.py" serve`.
+Any other failure (a timeout, a refusal, an answer that is not the hub's, no token file, pending not
+asked) is one line naming the port or the exception class and nothing else, so no token or server
+message reaches the checklist. A `hub` key the settings reject gives one line; a machine config that
+cannot be read at all gives the old hub lines. `pm_watch.py` counts as running when its
 heartbeat (docs/pm-watch.md "Stream mode and heartbeat") is at most 5 minutes old
 (`kitlib.pmstart` `BEAT_STALE`) and names the pid of a running `python` process whose command line
 holds `pm_watch.py` and that started at the time the heartbeat records (within 2 seconds,

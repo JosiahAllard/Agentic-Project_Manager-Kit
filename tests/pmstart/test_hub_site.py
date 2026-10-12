@@ -5,8 +5,10 @@ import datetime
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib import pmstart
+from kitlib.pmstart import fglock
 from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import auth, serve, settings
 from tests.pmstart import keep_off_launcher_repos
@@ -15,11 +17,18 @@ NOW = datetime.datetime(2026, 10, 6, 9, 0)
 FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"})
 SET = settings.settings({"port": 4321})
-TOKEN = "SECRET-TOKEN-VALUE"
+TOKEN = "SECRET-TOKEN-VALUE-" + "x" * auth.MIN_TOKEN
 
 
 def setUpModule():
     keep_off_launcher_repos()
+    # the checklist must not read this machine's pm_data setting, foreground lock or heartbeat
+    for owner, name, value in ((pmstart, "pm_data_settings", lambda: None),
+                               (fglock, "read_live", lambda user32=None: 0),
+                               (pmstart, "read_heartbeat", lambda: None)):
+        p = mock.patch.object(owner, name, value)
+        p.start()
+        unittest.addModuleCleanup(p.stop)
 
 
 class FakeClient(object):
@@ -56,7 +65,7 @@ class HubSiteTest(unittest.TestCase):
     def test_pending_items_are_counted_and_to_be_processed(self):
         out = site(FakeClient(pending=[{"id": "a"}, {"id": "b"}]))
         self.assertEqual(out[0], "hub: server up on port 4321, 2 pending")
-        self.assertIn("hub.py pending", out[1])
+        self.assertIn('hub.py" pending', out[1])
         self.assertIn("wait --pending", out[2])
 
     def test_a_running_wait_replaces_the_start_line(self):
@@ -72,7 +81,7 @@ class HubSiteTest(unittest.TestCase):
         out = site(FakeClient(error=serve.NotRunning(4321)))
         self.assertEqual(len(out), 1)
         self.assertTrue(out[0].startswith("hub: hub server down (nothing listens on port 4321)"), out[0])
-        self.assertIn("hub.py serve", out[0])
+        self.assertTrue(out[0].endswith('hub.py" serve'), out[0])
 
     def test_any_other_failure_is_one_line_naming_the_class_only(self):
         for err in (serve.ServeError("secret detail"), hubclient.Refused(403, {}), OSError("x"),
@@ -153,7 +162,7 @@ class ChecklistTest(unittest.TestCase):
         txt = pmstart.checklist(cfg, NOW, procs=[], hub_site={"load": boom},
                                 hub={"account": lambda: "1", "isfile": lambda p: True}, **FAKES)
         self.assertIn("hub: republish the kit's Action Hub page", txt)
-        self.assertNotIn("could not check", txt)
+        self.assertNotIn("could not check hub", txt)
 
 
 if __name__ == "__main__":
