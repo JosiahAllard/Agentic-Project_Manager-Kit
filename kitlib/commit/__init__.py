@@ -138,8 +138,9 @@ def unapproved_locked(rules, locked, owner_approved):
 
 
 def canonical_approved(rules, owner_approved, paths):
-    """Each --owner-approved value in the spelling a landing check compares literally: the
-    committed path it names, or the blanket entry as configured; anything else as typed."""
+    """Each --owner-approved value in the one spelling a trailer is written in
+    (kitlib.config.owner, Rules.canonical): the committed path it names, or the blanket entry as
+    configured; anything else as typed."""
     return [rules.canonical(value, paths) for value in owner_approved]
 
 

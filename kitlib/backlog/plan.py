@@ -265,15 +265,24 @@ def _bare_branch(ctx, name):
 def _fold_overlap(snap, ctx, rid, branch, scopes):
     """The fold-in guard's git probe: Refusal when a member of `scopes` overlaps a path
     `branch` changed since its merge base with the code main, or the scope of a record `branch`
-    holds pulled; a member that cannot be compared counts as an overlap. Returns the NOTE lines
-    (a branch that does not exist: its diff is not compared, the pulled scopes still are).
-    Failure when git cannot answer or there is no base to measure from."""
+    holds pulled; a member that cannot be compared counts as an overlap. Refusal too when
+    `branch` is neither a local branch nor a branch of any remote as last fetched. Returns the
+    NOTE lines (a branch only a remote has: its diff is not compared, the pulled scopes still
+    are). Failure when git cannot answer or there is no base to measure from."""
     notes, hits = [], []
     tip, why = refs.resolve('refs/heads/%s' % branch, ctx.root, known=True)
     if tip is None:
         raise Failure('cannot read branch %s: %s' % (branch, why))
     if not tip:
-        notes.append('NOTE: branch %s not found; its diff was not compared' % branch)
+        remotes = _remotes_with(ctx, branch)
+        if not remotes:
+            raise Refusal('cannot add %s: `--found-on %s` names a branch that exists neither '
+                          'here nor on a remote (as last fetched): pass an existing branch, or '
+                          '`none` when no branch found it\na branch that has landed and been '
+                          'removed is written as `none`, with the branch named in '
+                          '--why-not-folded' % (rid, branch))
+        notes.append('NOTE: branch %s is not a local branch (only on %s); its diff was not '
+                     'compared' % (branch, ', '.join(remotes)))
     else:
         for path in _branch_changes(ctx, branch, tip):
             hits += _overlaps(scopes, [path], '(changed on %s)' % branch)
@@ -290,6 +299,28 @@ def _fold_overlap(snap, ctx, rid, branch, scopes):
                       'there:\n  %s\nfold it into %s, or file it after %s lands'
                       % (rid, branch, '\n  '.join(hits), branch, branch))
     return notes
+
+
+def _remotes_with(ctx, branch):
+    """The remotes whose `branch` git holds a remote-tracking ref for (as last fetched; no
+    network). Every remote is asked, not `ctx.remote` alone: a store's checkout can name another
+    remote than the one the code is pushed to. Failure when git cannot list the remotes or read
+    a ref: "cannot tell" is never "no such branch"."""
+    out, why = cmd.run_text(['remote'], ctx.root)
+    if out is None:
+        raise Failure('cannot list the remotes to look for branch %s: %s' % (branch, why))
+    found = []
+    for remote in out.splitlines():
+        remote = remote.strip()
+        if not remote:
+            continue
+        ref = 'refs/remotes/%s/%s' % (remote, branch)
+        tip, why = refs.resolve(ref, ctx.root, known=True)
+        if tip is None:
+            raise Failure('cannot read %s: %s' % (ref, why))
+        if tip:
+            found.append(remote)
+    return found
 
 
 def _overlaps(scopes, others, source):

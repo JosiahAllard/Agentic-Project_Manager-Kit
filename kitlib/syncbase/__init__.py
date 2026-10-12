@@ -394,6 +394,8 @@ def sync(path, target, model, model_source='--model', base=None, wait=True, say=
     if found:
         return done(FAILED, 'REGROWTH - the base deleted text and this merge brought it back (no '
                             'conflict was reported):', *found,
-                    'fix: `git checkout %s -- <path>`, re-apply only your own change, commit.'
+                    'fix: `git checkout %s -- <path>`, re-apply only your own change, commit. '
+                    'That checkout discards an uncommitted edit of <path>: this work tree had '
+                    'none when the merge ran; commit any made since before running it.'
                     % full[:7])
     return done(OK, 'no regrowth. Now rerun your gate: python %s/gate.py' % tools)
