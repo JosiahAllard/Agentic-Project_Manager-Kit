@@ -13,11 +13,17 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 CODE = os.path.join(HERE, '..', '..', '..', 'optional', 'usage')
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)            # a run from this folder: tests.home and kitlib
 sys.path.insert(0, CODE)
 sys.path.insert(0, HERE)
+from kitlib.config import user as kuser  # noqa: E402
+from tests import home as thome  # noqa: E402
 import usage_watch as W  # noqa: E402
 
 UTC = dt.timezone.utc
@@ -101,6 +107,42 @@ class ReadAndOnce(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             W.main(["--config-dir", self.tmp.name, "--once"])
         self.assertTrue(out.getvalue().startswith("five_hour 30%"))
+
+
+class ConfigDir(unittest.TestCase):
+    """Which folder main() reads, and that the home is looked up only when nothing names one."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="kit-usage-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+
+    def once(self, *args):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            W.main([*args, "--once"])
+        return out.getvalue()
+
+    def test_a_given_config_dir_looks_up_no_home(self):
+        thome.fence_decoy(self)
+        self.assertIn(os.path.join(self.tmp, "usage-status.json"), self.once("--config-dir", self.tmp))
+
+    def test_claude_config_dir_looks_up_no_home(self):
+        thome.fence_decoy(self)
+        os.environ["CLAUDE_CONFIG_DIR"] = self.tmp
+        self.assertIn(os.path.join(self.tmp, "usage-status.json"), self.once())
+
+    def test_the_default_is_the_homes_claude_folder(self):
+        home = thome.temp_home(self)
+        self.assertIn(os.path.join(home, ".claude", "usage-status.json"), self.once())
+
+    def test_the_default_is_fenced(self):
+        thome.fence_decoy(self)
+        with self.assertRaises(kuser.HomeFenced):
+            self.once()
 
 
 @unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "needs Windows PowerShell")

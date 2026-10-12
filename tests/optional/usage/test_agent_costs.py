@@ -9,11 +9,17 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 CODE = os.path.join(HERE, '..', '..', '..', 'optional', 'usage')
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)            # a run from this folder: tests.home and kitlib
 sys.path.insert(0, CODE)
 sys.path.insert(0, HERE)
+from kitlib.config import user as kuser  # noqa: E402
+from tests import home as thome  # noqa: E402
 import _fixture as F  # noqa: E402
 import _usage as U  # noqa: E402
 import agent_costs as AC  # noqa: E402
@@ -38,9 +44,50 @@ class UsageHelpers(unittest.TestCase):
         self.assertTrue("2026-09-17T23:59:59Z" < "2026-09-18")
         self.assertTrue("2026-09-18T15:59:00Z" < "2026-09-18T16:00")
 
+    def no_config_dir_env(self):
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+
     def test_config_dirs_given_or_default(self):
+        home = thome.temp_home(self)
         self.assertEqual(U.config_dirs(["/a", "/b"]), ["/a", "/b"])
-        self.assertIn(os.path.expanduser("~/.claude"), U.config_dirs(None))
+        self.assertIn(os.path.join(home, ".claude"), U.config_dirs(None))
+
+    def test_config_dirs_default_is_the_env_folder_and_the_home_one(self):
+        home = thome.temp_home(self)
+        self.no_config_dir_env()
+        self.assertEqual(U.config_dirs(None), [os.path.join(home, ".claude")])
+        os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(home, "acct2")
+        self.assertEqual(U.config_dirs(None), sorted([os.path.join(home, ".claude"),
+                                                      os.path.join(home, "acct2")]))
+
+    def test_config_dirs_default_is_fenced(self):
+        thome.fence_decoy(self)
+        with self.assertRaises(kuser.HomeFenced):
+            U.config_dirs(None)
+
+    def test_config_dirs_given_look_up_no_home_unless_they_say_tilde(self):
+        thome.fence_decoy(self)
+        self.assertEqual(U.config_dirs(["/a", "b~"]), ["/a", "b~"])
+        with self.assertRaises(kuser.HomeFenced):
+            U.config_dirs(["~/acct"])
+
+    def test_a_tilde_is_the_home(self):
+        home = thome.temp_home(self)
+        self.assertEqual(U.config_dirs(["~", "~/acct", "~\\acct"]),
+                         [home, home + "/acct", home + "\\acct"])
+
+    def test_transcripts_under_a_tilde_root_are_fenced(self):
+        thome.fence_decoy(self)
+        with self.assertRaises(kuser.HomeFenced):
+            U.transcripts("~/x")
+
+    def test_transcripts_under_a_tilde_root_are_the_homes(self):
+        home = thome.temp_home(self)
+        p = F.write(os.path.join(home, "x", "s1.jsonl"), [])
+        self.assertEqual([os.path.normpath(t) for t in U.transcripts("~/x")], [os.path.normpath(p)])
 
     def test_agent_type_from_meta_or_path(self):
         with tempfile.TemporaryDirectory() as d:

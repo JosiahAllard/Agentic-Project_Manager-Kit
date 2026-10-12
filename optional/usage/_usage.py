@@ -9,6 +9,10 @@ import datetime
 import glob
 import json
 import os
+import sys
+
+# The kit this folder is in: optional/usage/ is two folders below its root.
+KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 WEIGHTS = {"input_tokens": 1.0, "cache_creation_input_tokens": 1.25, "cache_read_input_tokens": 0.1,
            "output_tokens": 5.0}
@@ -34,19 +38,55 @@ def since_value(since, days, now=None):
     return (now - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
 
 
+def _kit_user():
+    """kitlib.config.user of the kit this folder belongs to, or None when there is none (the
+    folder was copied somewhere without the kit). ~/.claude/tools/usage is a link into the kit,
+    so the real path of this file is what finds it."""
+    try:
+        from kitlib.config import user
+        return user
+    except ImportError:
+        pass
+    if not os.path.isdir(os.path.join(KIT_ROOT, "kitlib")):
+        return None
+    if KIT_ROOT not in sys.path:
+        sys.path.append(KIT_ROOT)
+    try:
+        from kitlib.config import user
+        return user
+    except ImportError:
+        return None
+
+
+def home():
+    """The home folder, through kitlib.config.user.home_dir(): the kit's tests fence it
+    (docs/test-tools.md "Home fence"), so a test of these scripts cannot read the real home.
+    Without the kit: os.path.expanduser("~")."""
+    user = _kit_user()
+    return user.home_dir() if user else os.path.expanduser("~")
+
+
+def expand(path):
+    """`path` with a leading `~`, `~/` or `~\\` read as home(); any other path unchanged, and no
+    home is looked up for it."""
+    if path == "~" or path[:2] in ("~/", "~\\"):
+        return home() + path[1:]
+    return path
+
+
 def config_dirs(given):
     """The Claude config folders to read: those given, else CLAUDE_CONFIG_DIR (this session's
     account) plus ~/.claude. A machine with more accounts passes --config-dir once per folder."""
     if given:
-        return [os.path.expanduser(d) for d in given]
-    return sorted({os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
-                   os.path.expanduser("~/.claude")})
+        return [expand(d) for d in given]
+    default = os.path.join(home(), ".claude")
+    return sorted({os.environ.get("CLAUDE_CONFIG_DIR") or default, default})
 
 
 def transcripts(root, recursive=True):
     """Every *.jsonl under `root` (a project's transcript folder or a config folder's projects/)."""
-    pattern = os.path.join(os.path.expanduser(root), "**", "*.jsonl") if recursive \
-        else os.path.join(os.path.expanduser(root), "*.jsonl")
+    root = expand(root)
+    pattern = os.path.join(root, "**", "*.jsonl") if recursive else os.path.join(root, "*.jsonl")
     return glob.glob(pattern, recursive=recursive)
 
 
