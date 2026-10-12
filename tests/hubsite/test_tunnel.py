@@ -878,7 +878,6 @@ class TunnelSourceTest(TunnelCase):
         return self.hub.store.get('todos', r.json()['id'])['via']
 
     def test_a_write_through_the_tunnel_is_recorded_as_tunnel_whatever_the_client_says(self):
-        self.assertEqual(tunnel.VIA, 'tunnel')
         for said in (None, 'web', 'cli', 'api', 'relay:phone', 'tunnel', 'WEB', ''):
             with self.subTest(said=said):
                 headers = [] if said is None else [(httpd.VIA_HEADER, said)]
@@ -896,15 +895,17 @@ class TunnelSourceTest(TunnelCase):
                      headers=[(httpd.VIA_HEADER, 'web')])
         self.assertEqual(r.status, 200, r.body)
         self.assertEqual(self.hub.store.get('todos', tid)['via'], 'tunnel')
+        # how: the tunnel listener names the source itself, the local one still asks the client
+        self.assertEqual(tunnel.VIA, 'tunnel')
+        local, tunnelled = self.hub.listeners
+        self.assertEqual((local.via, local.via_header), ('', True))
+        self.assertEqual((tunnelled.via, tunnelled.via_header), ('tunnel', False))
 
     def test_a_local_write_is_recorded_as_before(self):
         for said, recorded in (('web', 'web'), ('cli', 'cli'), (None, 'api'), ('tunnel', 'tunnel')):
             with self.subTest(said=said):
                 r = post(self.lport, TODOS, {'title': 'at the PC'}, self.owner, via=said)
                 self.assertEqual(self.via(r), recorded)
-        local, tunnelled = self.hub.listeners
-        self.assertEqual((local.via, local.via_header), ('', True))
-        self.assertEqual((tunnelled.via, tunnelled.via_header), ('tunnel', False))
 
 
 class UnreadableRequestTest(TunnelCase):
