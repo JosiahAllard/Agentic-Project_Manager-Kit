@@ -285,6 +285,35 @@ class RetiredKeyTest(TreeCase):
                       self.refused({'backlog': {'retired_docs': [], 'phasez': []}}))
 
 
+class RetiredLedgerRepoTest(TreeCase):
+    """`backlog.ledger_repo` named the repository to a reader that is gone: the key is retired, so
+    a config that still carries it loads, whatever its value."""
+
+    def test_a_config_still_carrying_ledger_repo_loads_without_it(self):
+        for value in ('alpha', '', 3, ['alpha']):
+            with self.subTest(value=value):
+                cfg = self.load({'backlog': {'phases': ['L0'], 'ledger_repo': value}})
+                self.assertEqual(cfg.section('backlog')['phases'], ['L0'])
+                self.assertNotIn('ledger_repo', cfg.section('backlog'))
+
+    def test_ledger_repo_in_a_backlog_section_file_loads_without_it(self):
+        cfg = self.load({'backlog': 'b.json'}, {'b.json': {'ledger_repo': 3}})
+        self.assertNotIn('ledger_repo', cfg.section('backlog'))
+
+    def test_ledger_repo_is_retired_and_not_a_schema_field(self):
+        self.assertIn('ledger_repo', schema.RETIRED['backlog'])
+        self.assertNotIn('ledger_repo', schema.SECTIONS['backlog'])
+        self.assertFalse(any('ledger_repo' in line for line in schema.doc_lines()))
+
+
+class RetiredLedgerRepoUnchangedTest(TreeCase):
+    """What the retirement leaves as it was."""
+
+    def test_a_typo_beside_ledger_repo_still_refuses(self):
+        why = self.refused({'backlog': {'ledger_repo': 'alpha', 'ledger_repoz': 'alpha'}})
+        self.assertIn('unknown key(s) ledger_repoz', why)
+
+
 class RetiredSectionTest(TreeCase):
     """A whole section no tool reads any more (schema.RETIRED_SECTIONS): a config that still
     carries it loads, the section dropped unchecked."""

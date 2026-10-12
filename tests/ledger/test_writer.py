@@ -79,19 +79,6 @@ class AddTest(Base):
         header = self.text().split('\n## ', 1)[1].split('\n', 1)[0]
         self.assertRegex(header, r'^R-\d{4} \| \d{4}-\d{2}-\d{2} \d{2}:\d{2}Z \| alpha \| selected$')
 
-    def test_items_are_the_last_line_and_the_backlog_reads_them(self):
-        self.add(items=['T3', 'EX-UNLOCKS'])
-        self.assertIn('Supersedes: -\nItems: T3, EX-UNLOCKS\n', self.text())
-        found, why = backlog_ledger.read_entries(self.path)
-        self.assertIsNone(why)
-        self.assertEqual(found[rid(1)].items, ('T3', 'EX-UNLOCKS'))
-        self.assertEqual((found[rid(1)].repo, found[rid(1)].kind), ('alpha', 'selected'))
-
-    def test_bad_or_repeated_items_are_refused(self):
-        for items in (['ok', 'not ok'], ['A', 'A']):
-            with self.assertRaises(write.Refused, msg=items):
-                self.add(items=items)
-
     def test_multi_line_values_are_indented_and_read_back(self):
         self.add(q='line one\nline two')
         self.assertIn('Q: line one\n  line two\n', self.text())
@@ -145,6 +132,40 @@ class AddTest(Base):
             f.write(fmt.template_text())
         self.add()
         self.assertNotIn('\r', self.text())
+
+
+class NoItemsWriterTest(Base):
+    """The writer names no backlog record: `add` and `fmt.render` take no items."""
+
+    def test_add_takes_no_items(self):
+        with self.assertRaises(TypeError):
+            self.add(items=['T3'])
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_render_takes_no_items(self):
+        with self.assertRaises(TypeError):
+            fmt.render(rid(1), WHEN, 'alpha', 'selected', 'q', 'a', 'd', 's', '-', ['T3'])
+
+
+class OlderItemsLineTest(Base):
+    """An entry written before, ending with an `Items:` line, is still read and validated."""
+
+    def test_an_older_items_line_validates_is_read_and_is_kept_by_the_next_add(self):
+        os.makedirs(os.path.dirname(self.path))
+        old = ('## %s | %s | alpha | selected\nQ: Which?\nA: This one\nDecides: Use this one.\n'
+               'Source: PM session chat\nSupersedes: -\nItems: T3, EX-UNLOCKS\n' % (rid(1), WHEN))
+        with open(self.path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(fmt.template_text().rstrip('\n') + '\n\n' + old)
+        self.assertEqual(fmt.validate(self.text()), [])
+        found, why = backlog_ledger.read_entries(self.path)
+        self.assertIsNone(why)
+        self.assertEqual(found[rid(1)].items, ('T3', 'EX-UNLOCKS'))
+        self.assertEqual((found[rid(1)].repo, found[rid(1)].kind), ('alpha', 'selected'))
+        self.assertEqual(self.add(decides='Second.').id, rid(2))
+        text = self.text()
+        self.assertIn(old, text)
+        self.assertNotIn('Items:', text[text.index('## %s' % rid(2)):])
+        self.assertEqual(fmt.validate(text), [])
 
 
 class ValidateTest(Base):

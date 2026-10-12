@@ -2,7 +2,8 @@
 
 An entry is a header `## R-nnnn | YYYY-MM-DD HH:MMZ | <repo> | <prov>` then the fields Q, A,
 Decides, Source and Supersedes, one `Key: value` line each (a continuation line starts with two
-spaces), and optionally `Items: A, B` last. A tombstone keeps its header and has one body line,
+spaces). An older entry may end with an `Items: A, B` line: it is still parsed and validated, and
+`render` writes none. A tombstone keeps its header and has one body line,
 `Retired: <class> - <why> (see R-nnnn|-)`. Ids are numbered from 1 in file order, one apart.
 
 Pure functions over text; kitlib.ledger.write reads and writes the file.
@@ -116,11 +117,11 @@ def fmt_value(v):
     return '\n  '.join(v.replace('\r\n', '\n').split('\n'))
 
 
-def render(rid, when, repo, prov, q, a, decides, source, supersedes, items=None):
+def render(rid, when, repo, prov, q, a, decides, source, supersedes):
     return ('## %s | %s | %s | %s\n' % (rid, when, repo, prov)
             + 'Q: %s\nA: %s\nDecides: %s\nSource: %s\nSupersedes: %s\n'
             % tuple(fmt_value(x) for x in (q, a, decides, source, supersedes or '-'))
-            + ('Items: %s\n' % ', '.join(items) if items else '') + '\n')
+            + '\n')
 
 
 def render_tombstone(header_line, cls, why, by):

@@ -113,7 +113,7 @@ RUNNER = Obj({
 
 SECTIONS = {
     'repo': {
-        'name': Field(Str(nonempty=False), '', 'repository name for reports and the ledger'),
+        'name': Field(Str(nonempty=False), '', 'repository name for reports'),
         'main_branch': Field(Str(), 'main', 'the branch landings target'),
         'remote': Field(Str(), 'origin', 'the remote main is pushed to'),
         'worktrees_dir': Field(RelPath(), '.claude/worktrees', 'where agent worktrees live'),
@@ -140,7 +140,6 @@ SECTIONS = {
                        'the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md)'),
         'phases': Field(Strs, [], 'phase names in order'),
         'id_grammar': Field(Enum('upper', 'mixed'), 'upper', 'item id spelling'),
-        'ledger_repo': Field(Str(), None, 'the ledger repo column; default the repo name'),
         'code_main': Field(Str(), None, 'the branch code lands on, which `add --found-on` measures a branch\'s diff from; default repo.main_branch'),
     },
     'board': {
@@ -308,7 +307,7 @@ MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, 
 
 # Keys no tool reads any more, per section. A config that still carries one loads: the key is
 # dropped unchecked (not an unknown-key refusal), so an install written before the removal works.
-RETIRED = {'backlog': ('retired_docs', 'rename_script')}
+RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo')}
 # Whole sections no tool reads any more. A config that still carries one loads: the section is
 # dropped unchecked, whatever it holds. Any other unknown section still refuses.
 RETIRED_SECTIONS = ('ruling_cites',)

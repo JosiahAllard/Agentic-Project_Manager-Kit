@@ -1,6 +1,6 @@
 # The rulings ledger
 
-One append-only file holds the owner's rulings for every repository on the machine. It is the file the machine config's `ledger_path` names (docs/kit-json.md "Machine config keys"); no flag or environment variable names another. Entry point `tools/ledger.py`; logic `kitlib/ledger` (`read` the one reader, `fmt` the format, `write` the writes, `vcs` the git, `orphans` the orphan scan, `standing` the standing digest, `precommit` the opt-in hook); tests `tests/ledger`. Ported from the PM repository's writer.
+One append-only file holds the owner's rulings for every repository on the machine. It is the file the machine config's `ledger_path` names (docs/kit-json.md "Machine config keys"); no flag or environment variable names another. Entry point `tools/ledger.py`; logic `kitlib/ledger` (`read` the one reader, `fmt` the format, `write` the writes, `vcs` the git, `standing` the standing digest, `precommit` the opt-in hook); tests `tests/ledger`. Ported from the PM repository's writer.
 
 ## Format
 
@@ -13,13 +13,12 @@ A: <the owner's answer>
 Decides: <what it decides, one line>
 Source: <where it was given>
 Supersedes: R-nnnn | -
-Items: A, B
 ```
 
 - **Ids** are four or more digits, numbered from 1 in file order, one apart. The time is UTC.
 - **Repo column:** `all`, or a repository's ledger name.
 - **Provenance:** `typed`, `selected`, `relayed-from-terminal` (the owner's own answer) or `delegated`. A delegated entry's Source says `under R-nnnn`, naming an earlier owner entry.
-- **Values:** a value's continuation lines start with two spaces. `Items` (backlog record ids) is optional and comes last.
+- **Values:** a value's continuation lines start with two spaces. An older entry may end with an `Items: A, B` line. It is still read and validated; `add` no longer writes one.
 - **Tombstone:** keeps its header, and its body is one line: `Retired: spent|superseded|duplicate - <why> (see R-nnnn|-)`.
 - **Append-only:** an entry never changes once written, except that a full entry may become its own tombstone.
 
@@ -27,12 +26,12 @@ Items: A, B
 
 ```
 python tools/ledger.py add --repo REPO --prov PROV --q Q --a A --decides D --source S
-                           [--supersedes R-nnnn] [--items A,B] [--when 'YYYY-MM-DD HH:MMZ']
+                           [--supersedes R-nnnn] [--when 'YYYY-MM-DD HH:MMZ']
                            [--commit | --push] [--title T] [--branch-ok] [--model NAME]
 python tools/ledger.py retire R-nnnn --class spent|superseded|duplicate --why WHY [--by R-nnnn] [--ruling R-nnnn]
 python tools/ledger.py show R-nnnn
 python tools/ledger.py grep TEXT
-python tools/ledger.py check [--base REV] [--root DIR]
+python tools/ledger.py check [--base REV]
 python tools/ledger.py list --prov PROV --since YYYY-MM-DD
 python tools/ledger.py standing WORD
 ```
@@ -41,15 +40,13 @@ python tools/ledger.py standing WORD
 - **`retire`** turns an entry into its tombstone in place and prints its id. It is refused while a live entry's Decides or Items still names the entry. `--ruling` names the live entry whose Decides orders this retirement, and that entry's mention does not count.
 - **`show`** prints one entry; `grep` prints the header of every entry holding the text, ignoring case. Either exits 1 when nothing is found.
 - **`check`** validates the ledger and compares it with the ledger at `--base`: every older entry must be unchanged, or have become its own tombstone. The default base is `<repo.remote>/<main branch>` of the ledger's repository (`origin` unless its `.kit.json` sets `repo.remote`). A base that cannot be read prints `append-only NOT CHECKED` and validates only. It also fails on each standing-digest line that cites a retired or missing entry ("Standing digest").
-
-  After the validation it runs the ruling-orphan scan (`kitlib/ledger/orphans.py`, wired by `kitlib.backlog.ledger.orphan_report`) over the repository at `--root` (default: the current directory). A live entry whose repo column is that repository's ledger name (`.kit.json` "backlog".ledger_repo, else "repo".name) or `all`, and whose `Items:` last line names a record that is open in the backlog store now and that no store commit closed or retired, prints `WARN R-nnnn: Items: ...`. A tombstone, a missing Items line and a malformed one name nobody and are not read. A WARN never changes the exit code. The scan prints `ruling orphans   SKIPPED - <why>` and the check goes on when `--root` is in no repository, its `.kit.json` or store cannot be read, the store does not exist, or the ledger holds no entry. The scan line is `ruling orphans   N Items line(s) read, M WARN`.
 - **`list`** is the read-only digest feed (docs/engineering-rulings.md "Kit pieces").
 - **`standing WORD`** prints the standing digest's rule lines for a topic word, under their headings. Exits 1 on no match or no digest.
 - **Exit codes:** 0 ok; 1 no ledger configured, a ledger that cannot be read, a refused write, a failed check, nothing found, or a commit or push that failed after the entry was written; 2 usage.
 
 ## One reader
 
-`kitlib/ledger/read.py` (`parse`, `read_entries`, `Entry`) is the only parser of the ledger's entries. `kitlib.ledger.entries` and `list_rulings` (the digest feed), `kitlib.backlog.ledger` (the backlog's ruling gates, which re-exports `read_entries` and `Entry`), `kitlib/rulingcites` (through `kitlib.backlog.ledger`) and the orphan scan all read through it. It reads a header leniently and says whether it is also in the writer's form (`Entry.strict`); the validator and the append-only check in `kitlib/ledger/fmt.py` work on the text and stay apart, since they judge the format instead of reading entries. A file is read as UTF-8 with a leading BOM dropped.
+`kitlib/ledger/read.py` (`parse`, `read_entries`, `Entry`) is the only parser of the ledger's entries. `kitlib.ledger.entries` and `list_rulings` (the digest feed) and `kitlib/ledger/standing.py` (`check`'s standing-digest check) read through it; `kitlib.backlog.ledger` re-exports `read_entries` and `Entry`, and no backlog write or `check` reads the ledger. It reads a header leniently and says whether it is also in the writer's form (`Entry.strict`); the validator and the append-only check in `kitlib/ledger/fmt.py` work on the text and stay apart, since they judge the format instead of reading entries. A file is read as UTF-8 with a leading BOM dropped.
 
 ## Path checks
 
@@ -61,7 +58,7 @@ Before the ledger, or the standing digest beside it, is read or written, `kitlib
 
 A part that does not exist yet is skipped, so the first `add` can still create the ledger. A refused path is never opened, and the refusal names the fix:
 
-- `kitlib/ledger/read.py` `read_file` returns the refusal as its reason, and the consumers treat it as an unreadable ledger. A backlog write whose ruling must be checked fails (`kitlib.backlog.ledger.check_ruling`), `backlog.py check` reports each ruling as not checked, and `ruling_cites` prints its NOT CHECKED warning.
+- `kitlib/ledger/read.py` `read_file` returns the refusal as its reason, and a consumer treats it as an unreadable ledger.
 - `kitlib/ledger/write.py` raises `Refused`, so every `tools/ledger.py` verb exits 1. The coordinator start's rulings line becomes the refusal.
 
 Cases that lock a ledger out, and the fix for each:
@@ -70,8 +67,6 @@ Cases that lock a ledger out, and the fix for each:
 - A folder copied or restored from elsewhere can keep a foreign owner. Run `takeown /f <path>`, or `icacls <path> /setowner <you>`.
 - Mount points and folders relocated through a junction are reparse points: point `ledger_path` at the real target. OneDrive placeholders are too: move the ledger off OneDrive.
 - A hard-linked ledger: remove the other names (`fsutil hardlink list <path>`), or copy the file to a new one.
-
-Not a path check: a configured `ledger_path` that names no file makes the backlog skip its ruling checks, rather than refuse (`kitlib.backlog.ledger` `Ledger.configured`). A separate record covers it.
 
 Tests: `tests/ledger/test_safepath.py`.
 
@@ -108,7 +103,7 @@ A commit or push that fails after the write leaves the entry written and says wh
 
 ## Citing rulings
 
-A repository cites a ruling as `PM R-nnnn`, the form `tools/ruling_cites.py` reads (docs/repo-checks.md "ruling_cites"). The entry's repo column must be that repository's ledger name or `all`. Cite by id; never copy an entry's words into the repository.
+The ledger is the PM's private record. No repository, tool or text cites its ids; the PM relays a decision in words.
 
 The guard denies a direct edit of the ledger file (docs/guard.md, rule `ledger`); `add` and `retire` are the only writers.
 
@@ -125,7 +120,7 @@ Logic: `kitlib/ledger/standing.py`.
 
 Hook `githooks/pre-commit`; dispatch `kitlib/githooks/precommit.py`; ledger step `kitlib/ledger/precommit.py`; tests `tests/ledger/test_precommit.py` and `tests/githooks/test_precommit.py`.
 
-Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then judges each commit that adds, changes or deletes the ledger file the machine config's `ledger_path` names, or the standing digest beside it: it runs `tools/ledger.py check --base HEAD --root <repo>` and refuses the commit when that fails. Any other commit passes after one `git diff --cached` (the index the commit is built from, so `commit -a` and `commit -- <paths>` count). The check reads the working files of both, so such a commit is refused before it runs when either the ledger or the digest has unstaged changes, whichever of them is staged.
+Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then judges each commit that adds, changes or deletes the ledger file the machine config's `ledger_path` names, or the standing digest beside it: it runs `tools/ledger.py check --base HEAD` and refuses the commit when that fails. Any other commit passes after one `git diff --cached` (the index the commit is built from, so `commit -a` and `commit -- <paths>` count). The check reads the working files of both, so such a commit is refused before it runs when either the ledger or the digest has unstaged changes, whichever of them is staged.
 
 `githooks/pre-commit.py` makes one call, `kitlib.githooks.precommit.main`, which runs the kit's checks (`CHECKS`, today the ledger step only) in order and stops at the first refusal. Nothing there runs a repository's own `hooks/pre-commit`; a later step would be one more entry in `CHECKS` (docs/pm-data-branch.md "Decided by the owner").
 

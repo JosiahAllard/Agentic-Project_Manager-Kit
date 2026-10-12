@@ -245,6 +245,15 @@ class PreCommitTest(unittest.TestCase):
         self.assertIn('commit refused', message)
 
 
+class CommandTest(unittest.TestCase):
+    """The check the hook runs names no repository: `check` has no `--root`."""
+
+    def test_the_command_is_check_against_head_and_nothing_more(self):
+        got = precommit.command(os.path.join('some', 'root'))
+        self.assertEqual(got[1:], [precommit.LEDGER_TOOL, 'check', '--base', 'HEAD'])
+        self.assertNotIn('--root', got)
+
+
 class TargetsTest(unittest.TestCase):
     """Which staged paths are the ledger: no git, no hook."""
 

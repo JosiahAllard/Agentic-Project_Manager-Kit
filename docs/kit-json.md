@@ -12,12 +12,12 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - A `landing.lanes` entry is keyed by the lane name and has four keys (`LANE` in `kitlib/config/schema.py`): `branch_prefix` (list of string; a branch on the lane starts with one), `paths` (list of glob; every path the branch changes matches one), `why` (string; the ruling that made the lane) and `merged_args` (list of string; added to every step command of the lane's merged-tree gate, after the step's own `merged_args`, with the same `{root}`-style substitutions). `tools/land.py` reads `main_branch` and `remote` from `repo`, the lanes, `wait_s` and `batch_max` from `landing`, and the gate steps from `gate` (docs/gate.md, Landing).
 - No old spelling is read: the hook module is the top-level `hook` (not `gate.hook`), and owner settings are `owner` (not `doc_budget` keys).
 - `backlog.code_main` matters where the store's checkout is on a branch that shares no history with the code, as the kit's pmdata store is (its `repo.main_branch` is `pmdata`): there `backlog.py add --found-on <branch>` (`plan_add` in `kitlib/backlog/plan.py`) finds no merge base and stops with an ERROR naming the key, until the PM sets it to the code's main branch. `--found-on none` needs no base.
-- Retired keys are still accepted and ignored, so an older install loads: `backlog` may still carry `retired_docs` and `rename_script` (`RETIRED` in `kitlib/config/schema.py`); nothing reads them. A whole `ruling_cites` section is accepted the same way and dropped unchecked (`RETIRED_SECTIONS` there); any other unknown section still refuses.
+- Retired keys are still accepted and ignored, so an older install loads: `backlog` may still carry `retired_docs`, `rename_script` and `ledger_repo` (`RETIRED` in `kitlib/config/schema.py`); nothing reads them. A whole `ruling_cites` section is accepted the same way and dropped unchecked (`RETIRED_SECTIONS` there); any other unknown section still refuses.
 - A repo lists its own heavy programs in `heavy.programs`; the kit defaults are general tools only (godot, blender, dotnet, gradle). For example `{"program": "run_tests.bat", "kind": "engine-test", "why": "runs the engine test suite"}`, `{"program": "graph_build*", "kind": "worldgraph", "why": "rebuilds the world graph"}` and `{"program": "local_model*", "kind": "local-ai", "unless_args": ["--help"], "why": "loads a model onto the gpu"}`.
 
 ## `.kit.json` keys
 
-- `repo.name` (string, may be empty, default ""): repository name for reports and the ledger
+- `repo.name` (string, may be empty, default ""): repository name for reports
 - `repo.main_branch` (string, default "main"): the branch landings target
 - `repo.remote` (string, default "origin"): the remote main is pushed to
 - `repo.worktrees_dir` (repo path, default ".claude/worktrees"): where agent worktrees live
@@ -37,7 +37,6 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `backlog.store` (ref|branch|main or repo path, default "ref"): the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md)
 - `backlog.phases` (list of string, default []): phase names in order
 - `backlog.id_grammar` (upper|mixed, default "upper"): item id spelling
-- `backlog.ledger_repo` (string): the ledger repo column; default the repo name
 - `backlog.code_main` (string): the branch code lands on, which `add --found-on` measures a branch's diff from; default repo.main_branch
 - `board.state_file` (repo path): the board state file, under the git dir (default <git common dir>/kit/board-state.md)
 - `checkout_guard.rule_pointer` (string): where a refusal points for the rule
