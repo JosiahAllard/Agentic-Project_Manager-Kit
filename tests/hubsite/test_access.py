@@ -20,6 +20,7 @@ import socketserver
 import ssl
 import string
 import threading
+import time
 import types
 import unittest
 import urllib.error
@@ -1333,6 +1334,103 @@ class KeyCacheTest(unittest.TestCase):
             self.assertEqual(self.cache.get(A.kid), K.jwk(A))
             self.assertIsNone(self.cache.get(B.kid))
         self.assertEqual((self.cache.error, len(self.fetch.calls)), ('keys-fetch', 2))
+
+
+class KeyCacheStopTest(unittest.TestCase):
+    """KeyCache.stop and KeyCache.ready: what a closing listener and its health line ask."""
+
+    setUp = KeyCacheTest.setUp
+    at = KeyCacheTest.at
+    fails = KeyCacheTest.fails
+    stalled = KeyCacheTest.stalled
+
+    def refuses(self, reason):
+        with self.assertRaises(access.AccessError) as caught:
+            access.verify(VALID, self.cache, K.TEAM, K.AUD, [K.EMAIL], K.NOW)
+        self.assertEqual(caught.exception.reason, reason)
+
+    def test_ready_says_whether_cached_keys_serve_and_never_fetches(self):
+        self.assertIs(self.cache.ready(), False)
+        self.assertEqual(self.fetch.calls, [])          # asking fetched nothing
+        self.cache.get(A.kid)
+        self.assertIs(self.cache.ready(), True)
+        self.fetch.result = OSError('gone')
+        for seconds, serving in ((access.KEY_TTL_S, True), (access.STALE_LIMIT_S, True),
+                                 (access.STALE_LIMIT_S + 1, False), (-1, False)):
+            with self.subTest(seconds=seconds):
+                self.at(seconds)
+                self.assertIs(self.cache.ready(), serving)
+        self.assertEqual(len(self.fetch.calls), 1)      # due or not, ready never fetched
+
+    def test_ready_is_false_after_a_failed_fetch_and_true_after_a_good_one(self):
+        self.fetch.result = OSError('unreachable')
+        self.fails('keys-unavailable')
+        self.assertEqual((self.cache.ready(), self.cache.error), (False, 'keys-fetch'))
+        self.fetch.result = K.document(A)
+        self.at(access.REFETCH_S)
+        self.assertEqual(self.cache.get(A.kid), K.jwk(A))
+        self.assertEqual((self.cache.ready(), self.cache.error), (True, ''))
+
+    def test_ready_answers_at_once_while_a_fetch_is_out(self):
+        entered, release = self.stalled(A)
+        poke = Asker(self.cache, A.kid)
+        self.assertTrue(entered.wait(30))
+        said = []
+        asking = threading.Thread(target=lambda: said.append(self.cache.ready()), daemon=True)
+        asking.start()
+        asking.join(10)
+        self.assertEqual((said, poke.got, len(self.fetch.calls)), ([False], [], 1))
+        release.set()
+        poke.join(30)
+        self.assertEqual((poke.got, self.cache.ready()), ([K.jwk(A)], True))
+
+    def test_stop_answers_the_callers_waiting_on_a_fetch_and_admits_none(self):
+        self.assertEqual(access.FETCH_DEADLINE_S, 15)   # the wait a stop cuts short
+        entered, release = self.stalled(A)
+        poke = Asker(self.cache, A.kid)                 # makes the attempt, and waits on it
+        self.assertTrue(entered.wait(30))
+        behind = Asker(self.cache, A.kid)               # no fresh keys: waits behind the first
+        behind.join(0.05)
+        self.assertEqual((poke.got, behind.got), ([], []))
+        began = time.monotonic()
+        self.cache.stop()
+        poke.join(10)
+        behind.join(10)
+        self.assertLess(time.monotonic() - began, 10)
+        for asker in (poke, behind):
+            self.assertEqual([type(got) for got in asker.got], [access.AccessError])
+            self.assertEqual(asker.got[0].reason, 'keys-stopped')
+        self.assertFalse(self.cache._fetching.locked())
+        self.refuses('keys-stopped')
+        release.set()                                   # the fetch ends late, with good keys
+        self.cache._worker.join(30)
+        self.assertFalse(self.cache._worker.is_alive())
+        self.assertIs(self.cache.ready(), False)
+        self.fails('keys-stopped')                      # its answer was dropped
+        self.refuses('keys-stopped')
+        self.assertEqual(len(self.fetch.calls), 1)
+
+    def test_after_stop_cached_keys_serve_nobody_and_no_fetch_is_started(self):
+        self.assertEqual(self.cache.get(A.kid), K.jwk(A))
+        self.cache.stop()
+        self.cache.stop()                               # a second stop changes nothing
+        self.assertIs(self.cache.ready(), False)
+        self.fetch.result = K.document(A, B)
+        for seconds in (0, access.REFETCH_S, access.KEY_TTL_S, access.STALE_LIMIT_S + 1):
+            with self.subTest(seconds=seconds):
+                self.at(seconds)
+                self.fails('keys-stopped')
+                self.fails('keys-stopped', B.kid)
+                self.refuses('keys-stopped')
+        self.assertEqual(len(self.fetch.calls), 1)
+        self.assertFalse(self.cache._fetching.locked())
+
+    def test_a_cache_stopped_before_its_first_fetch_never_fetches(self):
+        self.cache.stop()
+        self.fails('keys-stopped')
+        self.refuses('keys-stopped')
+        self.assertEqual((self.fetch.calls, self.cache.ready()), ([], False))
+        self.assertIn('keys-stopped', access.REASONS)
 
 
 class _Redirecting(http.server.BaseHTTPRequestHandler):

@@ -19,7 +19,8 @@ whose `reason` is one of REASONS. Checks, in this order; the first that fails is
                         bad-kid. `jku`, `x5u`, `jwk` and `x5c` are never read: the key comes
                         from `keys` alone
   the key               keys.get(kid): unknown-kid when it gives None; a KeyCache raises
-                        keys-unavailable or keys-stale itself. bad-key unless rsa_key accepts it
+                        keys-unavailable, keys-stale or keys-stopped itself. bad-key unless
+                        rsa_key accepts it
   the signature         bad-signature-length (not the modulus length in bytes),
                         signature-out-of-range (not below the modulus), bad-signature
   the claims            no-exp, bad-exp, expired (now >= exp, no leeway); bad-nbf, not-yet-valid
@@ -61,6 +62,13 @@ itself and its late answer is dropped; while it lives every attempt fails at onc
 one such thread exists. A thread that cannot be started, and one that ends with no answer, are
 failed attempts too. `fetch(team, timeout)` returns the parsed key document; `clock` is a
 monotonic seconds clock, and a clock that runs backwards counts as stale.
+
+KeyCache.stop() ends a cache for good, for a listener that is closing: the caller waiting on a
+fetch is answered at once, and every get from then on raises keys-stopped, so a stop admits
+nobody. It starts no fetch and cannot end the thread of one that is running: that thread ends
+when its fetcher does, and its answer is dropped. KeyCache.ready() says whether get would answer
+from cached keys now (a good fetch no older than STALE_LIMIT_S, not stopped); it starts no fetch
+and waits for none.
 
 fetch_keys(team, timeout) is the one network call: GET ISSUER % team + CERTS_PATH over HTTPS
 with certificate checking, no redirect followed, USER_AGENT and nothing else that names the
@@ -111,7 +119,7 @@ REASONS = (
     'bad-signature-length', 'signature-out-of-range', 'bad-signature',
     'no-exp', 'bad-exp', 'expired', 'bad-nbf', 'not-yet-valid',
     'wrong-issuer', 'wrong-audience', 'no-email', 'email-not-allowed',
-    'keys-unavailable', 'keys-stale', 'keys-fetch', 'keys-malformed',
+    'keys-unavailable', 'keys-stale', 'keys-fetch', 'keys-malformed', 'keys-stopped',
 )
 
 _TEAM = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?')
@@ -434,6 +442,26 @@ class KeyCache:
         self._good_at = None        # clock time the last good fetch began
         self._tried_at = None       # clock time the last attempt ended, good or not
         self._worker = None         # the thread of the last attempt; read under _fetching
+        self._wake = threading.Condition(threading.Lock())  # an attempt's end, and stop()
+        self._stopped = False       # set once by stop(), under _wake; never cleared
+
+    def stop(self):
+        """Ends the cache for good: the caller waiting on a fetch is answered at once, and from
+        now on get raises keys-stopped, whatever is cached and whatever a fetch still running
+        answers later. No fetch is started after it. It waits for nothing and may be called
+        from any thread, any number of times."""
+        with self._wake:
+            self._stopped = True
+            self._wake.notify_all()
+
+    def ready(self):
+        """True when get would answer from cached keys now: a fetch has been good, it began no
+        more than STALE_LIMIT_S ago, and stop() has not been called. It starts no fetch and
+        waits for none."""
+        with self._lock:
+            if self._stopped or self._good_at is None:
+                return False
+            return 0 <= self._clock() - self._good_at <= STALE_LIMIT_S
 
     def get(self, kid):
         """The JWK cached under `kid`, or None when the team publishes no such key. AccessError
@@ -469,6 +497,8 @@ class KeyCache:
         return self._tried_at is None or not 0 <= now - self._tried_at < REFETCH_S
 
     def _answer(self, kid, now):
+        if self._stopped:
+            raise AccessError('keys-stopped', self.error)
         if self._good_at is None:
             raise AccessError('keys-unavailable', self.error)
         if not 0 <= now - self._good_at <= STALE_LIMIT_S:
@@ -493,11 +523,13 @@ class KeyCache:
         fetcher with no answer after FETCH_DEADLINE_S, a thread whose making or start raises any
         Exception, a thread that ended with no answer (its fetcher raised what `run` does not
         catch), and the thread of an earlier attempt still alive, when the fetcher is not
-        called. Nothing a fetcher or the thread does comes out of get as another exception."""
+        called. Nothing a fetcher or the thread does comes out of get as another exception.
+        After stop() no fetcher is called, and a stop() during the wait ends it at once: the
+        attempt has failed and its thread is left to end by itself, its answer dropped."""
         failed = None, 'keys-fetch'
-        if self._worker is not None and self._worker.is_alive():
+        if self._stopped or (self._worker is not None and self._worker.is_alive()):
             return failed
-        box = []
+        box, ended = [], []
 
         def run():
             try:
@@ -506,11 +538,20 @@ class KeyCache:
                 box.append((None, exc.reason))
             except Exception:       # whatever a fetcher raises, the gate stays shut on it
                 box.append(failed)
+            finally:                # whatever it ends on: the waiting caller is told
+                with self._wake:
+                    ended.append(True)
+                    self._wake.notify_all()
 
         try:
             self._worker = threading.Thread(target=run, name='hub-access-keys', daemon=True)
             self._worker.start()
         except Exception:           # no thread to give (RuntimeError), no memory, anything
             return failed
-        self._worker.join(FETCH_DEADLINE_S)
+        with self._wake:
+            self._wake.wait_for(lambda: ended or self._stopped, FETCH_DEADLINE_S)
+            stopped = self._stopped
+        if stopped or not ended:
+            return failed
+        self._worker.join(FETCH_DEADLINE_S)     # it has its answer: only the thread's end is left
         return box[0] if box else failed
