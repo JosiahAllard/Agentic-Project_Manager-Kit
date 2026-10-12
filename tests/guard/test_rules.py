@@ -203,7 +203,7 @@ class RuleTable(unittest.TestCase):
     def fill(self, text):
         w = self.w
         return text.format(main=W.fwd(w.main), wt=W.fwd(w.wt), temp=W.fwd(w.temp), home=W.fwd(w.home),
-                           main_bs=w.main)
+                           kit=W.fwd(w.kit_dir), main_bs=w.main)
 
     def test_rows(self):
         names = [r[0] for r in ROWS]
@@ -583,7 +583,7 @@ class LockMcp(unittest.TestCase):
                 d = decide(self.ev(name), self.w.ctx(environ={context.ROLE_ENV: 'coordinator'}))
                 self.assertEqual(d.kind, 'deny')
                 self.assertIn('This session is coordinator.', d.reason)
-                self.assertIn('Instead: python %s/.claude/tools/machine_lock/machine_lock.py status ' % W.fwd(self.w.home), d.reason)
+                self.assertIn('Instead: python "%s/tools/machine_lock.py" status ' % W.fwd(self.w.kit_dir), d.reason)
                 # a session nothing marks is the owner's own (docs/guard.md "Session mark")
                 self.assertIsNone(decide(self.ev(name), self.w.ctx(environ={})))
 
@@ -769,7 +769,7 @@ class OwnerLockTools(unittest.TestCase):
         return decide(make(text, self.w.wt, sub=sub), self.w.ctx(environ=environ))
 
     def test_blocked(self):
-        status = 'python %s status' % (rules.LOCK_TOOL % W.fwd(self.w.home))
+        status = 'python "%s/tools/machine_lock.py" status' % W.fwd(self.w.kit_dir)
         for shell, text in self.BLOCKED:
             for sub in (True, False):
                 with self.subTest(text, sub=sub):

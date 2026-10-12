@@ -42,6 +42,7 @@ import re
 
 from kitlib import agentname
 from kitlib import config as kconfig
+from kitlib import kitroot
 from kitlib import pmdata
 from kitlib.git import repo
 from kitlib.lockmcp import claude_tool_prefix
@@ -60,10 +61,6 @@ SHELL_TOOLS = {'Bash': sh.BASH, 'PowerShell': sh.PS}
 # CLAUDE_PLUGIN_NAME). INFERRED, not observed: the kit has no installed plugin yet. The machine
 # config's guard_mcp_prefix replaces it.
 MCP_PREFIX = claude_tool_prefix()
-# The live machine_lock.py still requires --lock on `run`; ARCHITECTURE.md retires the flag
-# for the kit's own tool. Alternatives carry it until the kit tool is the one installed.
-LOCK_TOOL = '%s/.claude/tools/machine_lock/machine_lock.py'
-LOCK_RUN_FLAGS = '--lock'
 TAG = '[kit guard: rule=%s role=%s]'
 NULL_TARGETS = {'/dev/null', '$null', 'nul', 'nul:', '&1', '&2'}
 
@@ -92,6 +89,13 @@ def fwd(path):
 
 def quote(path):
     return '"%s"' % fwd(path)
+
+
+def lock_tool(ctx):
+    """The lock CLI an alternative names: tools/machine_lock.py of the kit the guard runs from
+    (ctx.kit, kitlib.kitroot.lock_tool), quoted since a kit path may hold a space. Its `run` takes
+    no --lock flag: it always locks."""
+    return quote(kitroot.lock_tool(ctx.kit))
 
 
 def tag_role(event):
@@ -174,7 +178,7 @@ def lock_mcp(event, ctx, tool, role):
     if who == context.OWNER:
         return None                             # a session nothing marks is the owner's own
     what = '%s changes the machine lock and is the owner\'s alone (ARCHITECTURE.md "Guard rules").' % name
-    status = 'python %s status' % (LOCK_TOOL % fwd(ctx.home))
+    status = 'python %s status' % lock_tool(ctx)
     return refuse('lock-mcp', role, what + ' This session is %s. Ask the owner (through the PM) to make the change; '
                   'the read tools (lock_snapshot, lock_run, lock_hold) stay open. To see the lock state:' % who, status)
 
@@ -227,7 +231,7 @@ OWNER_LOCK_WHY = ('owner-only lock tools are run by the owner, not agents; the l
 
 def owner_lock_refusal(ctx, role, what):
     return refuse('owner-lock', role, '%s, the owner\'s: %s' % (what, OWNER_LOCK_WHY),
-                  'python %s status' % (LOCK_TOOL % fwd(ctx.home)))
+                  'python %s status' % lock_tool(ctx))
 
 
 def _ui_word(w):
@@ -395,7 +399,7 @@ def lock_state(event, ctx, target, role, what):
         return None
     return refuse('lock-state', role, '%s edits the machine lock\'s state, which only the lock tool writes, under its own '
                   'mutex. Ask the owner (through the PM) when the state looks wrong. To see it:' % what,
-                  'python %s status' % (LOCK_TOOL % fwd(ctx.home)))
+                  'python %s status' % lock_tool(ctx))
 
 
 WT_ADD = 'git -C %s worktree add .claude/worktrees/<slug> -b <branch>'
@@ -1615,12 +1619,11 @@ def lock_alternative(ctx, cmd, entry, cwd, run=None):
     name = (cfg.repo.get('name') if cfg is not None else '') or (os.path.basename(top) if top else '<repo>')
     place = ctx.place(where) if where else None
     slug = os.path.basename(place.top) if place is not None and place.kind == repo.LINKED else 'main'
-    tool = LOCK_TOOL % fwd(ctx.home)
     if run is None:
         inv = cm.invocation(cmd)
         run = plain_run(cmd, inv) if inv is not None else bare(cmd)
-    return 'python %s run %s --kind %s --repo %s --slug %s -- %s' % (
-        tool, LOCK_RUN_FLAGS, entry['kind'], name, slug, run)
+    return 'python %s run --kind %s --repo %s --slug %s -- %s' % (
+        lock_tool(ctx), entry['kind'], name, slug, run)
 
 
 def run_from(cmd, cwd):
