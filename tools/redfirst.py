@@ -21,8 +21,8 @@ refusal (`--help` too, since 0 means RED); 3 undecided; 4 the throwaway worktree
 
 A run whose command is heavy (gradle, dotnet; or its runner names a `lock` kind) books the machine
 lock itself around its commands, and takes nothing more inside a run that already holds enough
-(docs/redfirst.md "The machine lock"). When the lock refuses the run nothing is made: exit 2 for
-its usage refusals, else the lock's own exit code - 6, 8, 10, 11 or 12.
+(docs/redfirst.md "The machine lock"). When the lock refuses the run no tree is made and nothing
+runs: exit 2 for its usage refusals, else the lock's own exit code - 6, 8, 10, 11 or 12.
 """
 import argparse
 import os

@@ -15,12 +15,15 @@ command in the booked run's job (locked_run) and releases before the cleanup. Th
 runner's `lock`, else the kind of the heavy-list entry its command matches
 (kitlib.config.heavy_match: build for gradle and dotnet, none for the python runner, which books
 nothing). Inside a run that already holds enough (MACHINE_LOCK_RUN) the booking takes nothing more;
-inside one that holds less the lock refuses it. A refusal makes nothing: exit 2 for the lock's
-usage refusals, the lock's own exit code for the others (LOCK_CODES).
+inside one that holds less the lock refuses it. A refusal makes no tree and runs nothing (the log
+folder, made first, stays): exit 2 for the lock's usage refusals, the lock's own exit code for the
+others (LOCK_CODES). The booked run's record ends, before the cleanup, with the code the verdicts
+give (0 every test red, 1 a test green, 3 undecided), 130 after an interrupt, 1 after an error or
+after the lock's stop ended the command.
 
 Interrupts: a Ctrl-C while the tests run stops them and goes to the cleanup; one while the tree is
 made or filled is held until that is done; one while the run waits in the lock's queue ends the
-wait (the lock removes the run's entry) and nothing is made. The cleanup ignores Ctrl-C and runs
+wait (the lock removes the run's entry) and no tree is made. The cleanup ignores Ctrl-C and runs
 in a child process on its own hidden console (a new session elsewhere), every git of it included:
 a console Ctrl-C reaches every process on the console, and a `git worktree remove` killed partway
 is the run that destroys the entry. A hard kill of this process runs no cleanup; the leftover then
@@ -527,24 +530,25 @@ def book_slot(plan, say, ints, book_kw=None):
             ints.mode = HOLD
     except LockError as e:
         if e.code == EXIT_USAGE:
-            say('refused: the machine lock: %s (kind %s: %s); nothing was made'
-                % (re.sub(r'^usage:\s*', '', e.message or ''), plan.lock, plan.lock_from))
+            say('refused: the machine lock: %s (kind %s: %s); no tree was made and nothing was run'
+                % (re.sub(r'^usage:\s*|\.?\s*Exit 2\.$', '', e.message or ''), plan.lock,
+                   plan.lock_from))
             return None, V.EXIT_USAGE
         if e.code in LOCK_CODES:
             say('NOT RUN: the machine lock refused the run: %s' % e.message)
-            say('REDFIRST NOT RUN - the machine lock refused a %s run (exit %d); nothing was made'
-                % (plan.lock, e.code))
+            say('REDFIRST NOT RUN - the machine lock refused a %s run (exit %d); no tree was made '
+                'and nothing was run' % (plan.lock, e.code))
             return None, e.code
         say('failed    the machine lock: %s' % e.message)
-        say('REDFIRST UNDECIDED - nothing was made')
+        say('REDFIRST UNDECIDED - no tree was made')
         return None, V.EXIT_UNDECIDED
     except KeyboardInterrupt:
-        say('stopped   interrupted while waiting for the machine lock; nothing was made')
+        say('stopped   interrupted while waiting for the machine lock; no tree was made')
         say('REDFIRST UNDECIDED - nothing ran')
         return None, V.EXIT_UNDECIDED
     except Exception as e:  # noqa: BLE001
         say('failed    the machine lock: %s: %s' % (type(e).__name__, e))
-        say('REDFIRST UNDECIDED - nothing was made')
+        say('REDFIRST UNDECIDED - no tree was made')
         return None, V.EXIT_UNDECIDED
     if ints.seen:                            # noted while book held it back: give the slots back
         let_go(slot, say, 130, 'interrupted')
@@ -554,7 +558,7 @@ def book_slot(plan, say, ints, book_kw=None):
 
 
 def stopped(say):
-    say('stopped   interrupted before anything was made')
+    say('stopped   interrupted before the tree was made')
     say('REDFIRST UNDECIDED - nothing ran')
     return V.EXIT_UNDECIDED
 
@@ -673,6 +677,8 @@ def execute(plan, say, run=None, cleanup=None, ints=None, book_kw=None):
             say('failed    %s' % (e if isinstance(e, RuntimeError) else '%s: %s' % (type(e).__name__, e)))
             verdicts.append(V.ERROR)
             end = (None, None) if isinstance(e, Cancelled) else (1, 'error')
+        else:                                # the lock's record gets this run's verdict code
+            end = (V.exit_code(verdicts, True), 'done')
         # In HOLD, and before the cleanup: after an interrupt or an error the release ends what
         # is left of the command's tree, so nothing of it holds the throwaway tree.
         let_go(slot, say, *end)
