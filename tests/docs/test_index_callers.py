@@ -34,6 +34,7 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.repo = repo_with_docs()
         self.addCleanup(self.repo.cleanup)
+        self.addCleanup(index.close_readers)
         self.root = self.repo.root
         env = mock.patch.dict(os.environ, fixture_env(), clear=True)
         env.start()

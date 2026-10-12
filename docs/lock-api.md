@@ -34,7 +34,10 @@
   - `division` (in force), `default_division`, and `wanted_division` / `wanted_key` (the owner's machine.json division on this hardware), and `owner_division` (only the keys machine.json sets, `{}` when none; a dialog prefills from it so saving pins no derived key).
   - `source` (`config` or `default`) and `warning`.
   - `hardware_change` {changed, pending}. When `changed` is true, the wanted layout differs from the one in force, and it is adopted once nothing is live or queued. `pending` is true while it waits for that.
-  - A run record's `layout` is `layout.slot_key`, not `key`: the slot numbering only, in the format of the older kit's installed `machine_lock.py`, which refuses a run while a live record holds a string other than its own.
+  - A run record's `layout` is `layout.slot_key`, not `key`: a label of the slot numbering only, `t<threads> g<cards> cpu <cpu slots> x <threads per slot> gpu <gpu slots> m<hash>`.
+  - What the label is: `g` is the layout's `gpus`, the cards of `hardware.gpus` that `layout.derive` gives a share (the division's `gpu_share`, else each card's `default_share`). `gpu` is `gpu_slots`, which is 1 with no shared card (the placeholder slot). The hash covers the cpu slots only. `tests/lock/test_layout.py` pins the text for one card, two cards and none.
+  - What it is not: this kit never reads or compares it. `run.book` counts slots from layout.json (`layout.in_force`), and a live record with another label never refuses a booking (`tests/lock/test_layout_mismatch.py`). It does not say which cards the gpu slots are; `gpu_cards` does.
+  - The format is that of the older kit's `machine_lock.py`, kept for the records and for any such tool still installed and sharing the store: that tool refuses a run while a live record holds a string other than its own. Nothing in this kit checks that another tool counts cards or gpu slots the same way.
 - **`slots`**: {cpu: [...], gpu: [...]}, one per slot.
   - {slot, holder (run id), background, hold (the hold id covering it now), hold_owner}.
   - cpu slots add `threads` and `pinned`; gpu slots add `card`.
