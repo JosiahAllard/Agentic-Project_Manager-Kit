@@ -56,13 +56,14 @@ SHARED = (
     'backlog', 'board', 'checkout_guard', 'codemap', 'commit', 'daily_full', 'doc_budget',
     'doc_index', 'forbidden', 'gate', 'land', 'landed', 'ledger', 'machine_paths', 'new_worktree',
     'pieces', 'preflight', 'pytests', 'redfirst', 'review_pack', 'ruling_cites', 'stack_skill',
-    'sync_base', 'testlist', 'tool_deps', 'trailers', 'worktree_paths', 'worktree_remove',
+    'sync_base', 'testlist', 'tool_deps', 'trailers', 'verdict', 'worktree_paths',
+    'worktree_remove',
 )
 # The kit tools that get no stub: they act on the machine, the owner's files or the kit itself,
 # not on a repository checkout named by -C or the current directory. Every `tools/*.py` command
 # is in exactly one of SHARED and KIT_ONLY (tests/stubs: a new tool fails until it is classified).
 KIT_ONLY = (
-    'agent_roster', 'backlog_lint', 'branch_overlap', 'hub_mirror', 'kit_tests', 'launch', 'ledger_refs',
+    'agent_roster', 'agent_temp_init', 'backlog_lint', 'branch_overlap', 'hub_mirror', 'kit_tests', 'launch', 'ledger_refs',
     'lock_release_check', 'machine_lock', 'machine_setup', 'pending', 'pm_data', 'pm_watch',
     'plugin_refresh', 'worktree_sweep_task',
 )

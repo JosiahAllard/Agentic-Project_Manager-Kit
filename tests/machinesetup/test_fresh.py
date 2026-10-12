@@ -124,6 +124,9 @@ class FreshBase(unittest.TestCase):
         os.makedirs(self.c1)
         os.makedirs(self.c2)
         os.makedirs(kuser.config_dir(self.home))
+        cache = mock.patch.dict(os.environ, gitfixture.ps_cache_env(self.home))   # real powershell: no cache in the cwd
+        cache.start()
+        self.addCleanup(cache.stop)
         self.machine_config({'plugin': {'export_dir': self.export}})
         self.s1 = os.path.join(self.c1, 'settings.json')
         self.s2 = os.path.join(self.c2, 'settings.json')
@@ -457,9 +460,11 @@ class Fresh(FreshBase):
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertTrue(os.path.isfile(os.path.join(self.desk, extras.SHORTCUT)))
         self.assertTrue(self.host.acl_fixed)
-        self.assertEqual(self.host.env, {extras.LOCK_ENV: 'somewhere-else'})
-        self.assertNotIn('env', [c[0] for c in self.host.calls])
+        self.assertEqual(self.host.env, {extras.LOCK_ENV: 'somewhere-else', 'AGENT_TEMP': self.temp})
+        self.assertEqual([c[1] for c in self.host.calls if c[0] == 'env'], ['AGENT_TEMP'])
         self.assertIn('KIT_MACHINE_LOCK left as is in fresh mode', out)
+        self.assertIn('add agent_temp_sweep = ', out)                     # agent temp init runs fresh too
+        self.assertIn('scheduled task agent-temp-sweep is not registered', out)
 
 
 SLEEPER = '''import os, sys, time
@@ -570,7 +575,10 @@ class FreshTool(FreshBase):
         os.makedirs(desk)
         env = dict(os.environ, PATH=path, USERPROFILE=self.home, HOME=self.home, LOCALAPPDATA=lad)
         env.pop('CLAUDE_CONFIG_DIR', None)
-        args = ['-Fresh', '-PmSettings', self.pm, '-HomeDir', self.home, '-Desktop', desk]
+        # A temp agent folder beside the temp home: the user environment's AGENT_TEMP may hold this
+        # temp home, a folder the sweep (and so the setup) refuses.
+        args = ['-Fresh', '-PmSettings', self.pm, '-HomeDir', self.home, '-Desktop', desk,
+                '-AgentTemp', os.path.join(self.root, 'agent-temp')]
         r = self.ps1(args, env=env)
         self.assertEqual(r.returncode, M.EXIT_OK, r.stdout + r.stderr)
         self.assertIn('DRY RUN', r.stdout)

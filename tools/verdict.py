@@ -1,0 +1,131 @@
+"""verdict.py: the verdict queue, reviewed branches waiting to land (kitlib/gate/verdicts.py).
+
+  verdict.py add --branch B --tip SHA --verdict V --risk R --reviewer TYPE --reviewer-model M
+                 --reviewer-id ID --author A --range BASE..TIP --session S [--record ID ...] [-C DIR]
+      queue B at SHA (the coordinator, after reading the review; never the reviewer). SHA must be
+      B's head now. A re-add replaces B's entry. V: LAND | "LAND WITH FOLLOW-UP"; R: Low |
+      Medium | High. Prints `QUEUED <branch> <tip>`.
+  verdict.py list [-C DIR]
+      one line per entry, oldest first: `<STATE> <branch> <tip> <risk> <verdict> <queued_utc> ...`;
+      `BAD <file>: <why>` for a file in the queue that is not an entry; `NOTHING QUEUED` when empty.
+  verdict.py drop BRANCH [--tip SHA] [-C DIR]
+      remove BRANCH's entry (with --tip, only when it is queued at SHA). Prints `DROPPED <branch>`.
+
+-C: a path in the repository (default: here); every work tree of it shares one queue.
+
+A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate.verdicts, prints and
+exits. Exit codes: 0 done; 1 not done (git gave no answer, a queue file cannot be read or written,
+nothing queued to drop, or list found a file that is not an entry); 2 usage (the arguments, or an
+entry add finds malformed; nothing written); 3 tip mismatch (add: SHA is not the branch's head, or
+there is no such branch; nothing written).
+"""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from kitlib.gate import verdicts                                    # noqa: E402
+from kitlib.git import refs, repo                                  # noqa: E402
+
+DONE, NOT_DONE, USAGE, TIP_MISMATCH = 0, 1, 2, 3
+
+
+class Parser(argparse.ArgumentParser):
+    """argparse whose errors print `USAGE:` and exit 2."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        sys.stderr.write('USAGE: %s\n' % message)
+        sys.exit(USAGE)
+
+
+def parser():
+    p = Parser(prog='verdict.py', description='The verdict queue: reviewed branches waiting to land.')
+    sub = p.add_subparsers(dest='cmd', required=True, parser_class=Parser)
+
+    def common(sp):
+        sp.add_argument('-C', dest='root', default='.', help='a path in the repository (default: here)')
+    ad = sub.add_parser('add', help='queue a reviewed branch')
+    ad.add_argument('--branch', required=True)
+    ad.add_argument('--tip', required=True, metavar='SHA', help='the full hash reviewed')
+    ad.add_argument('--verdict', required=True, choices=verdicts.VERDICTS)
+    ad.add_argument('--risk', required=True, choices=verdicts.RISKS)
+    ad.add_argument('--reviewer', required=True, metavar='TYPE', help="the reviewer's agent type")
+    ad.add_argument('--reviewer-model', required=True, metavar='MODEL')
+    ad.add_argument('--reviewer-id', required=True, metavar='ID', help="the reviewer's agent id")
+    ad.add_argument('--author', required=True, help='commit author and agent type')
+    ad.add_argument('--range', required=True, metavar='BASE..TIP', help='the range reviewed')
+    ad.add_argument('--session', required=True, help='the coordinator session queueing it')
+    ad.add_argument('--record', action='append', default=[], metavar='ID',
+                    help='a backlog record the branch carries (repeatable)')
+    common(ad)
+    ls = sub.add_parser('list', help='the queue, oldest first')
+    common(ls)
+    dr = sub.add_parser('drop', help="remove a branch's entry")
+    dr.add_argument('branch')
+    dr.add_argument('--tip', metavar='SHA', help='only when it is queued at this full hash')
+    common(dr)
+    return p
+
+
+def fail(prefix, msg, code):
+    print('%s: %s' % (prefix, msg), flush=True)
+    return code
+
+
+def line(e):
+    last = (e['last_result'] or '').splitlines()
+    return ' '.join([e['state'].upper(), e['branch'], e['tip'], e['risk'], e['verdict'].replace(' ', '_'),
+                     e['queued_utc'], 'reviewer=%s/%s' % (e['reviewer'], e['reviewer_model']),
+                     'reviewer_id=%s' % e['reviewer_id'], 'records=%s' % (','.join(e['records']) or '-')]
+                    + (['last=%s' % last[0]] if last else []))
+
+
+def run(a, common_dir):
+    if a.cmd == 'add':
+        entry = {'branch': a.branch, 'tip': a.tip, 'verdict': a.verdict, 'risk': a.risk,
+                 'reviewer': a.reviewer, 'reviewer_model': a.reviewer_model,
+                 'reviewer_id': a.reviewer_id, 'author': a.author, 'range': a.range,
+                 'session': a.session, 'records': a.record}
+        _, stored = verdicts.add(common_dir, entry)
+        print('QUEUED %s %s' % (stored['branch'], stored['tip']), flush=True)
+        return DONE
+    if a.cmd == 'list':
+        good, bad = verdicts.scan(common_dir)
+        for e in good:
+            print(line(e))
+        for path, why in bad:
+            print('BAD %s: %s' % (path, why))
+        if not good and not bad:
+            print('NOTHING QUEUED')
+        return NOT_DONE if bad else DONE
+    if a.tip is not None and not refs.is_sha(a.tip):
+        raise verdicts.BadEntry('--tip is a full commit hash, not %r' % a.tip)
+    if not verdicts.drop(common_dir, a.branch, tip=a.tip):
+        return fail('NOT QUEUED', '%s%s' % (a.branch, ' at %s' % a.tip if a.tip else ''), NOT_DONE)
+    print('DROPPED %s' % a.branch, flush=True)
+    return DONE
+
+
+def main(argv=None):
+    p = parser()
+    a = p.parse_args(argv)
+    root = os.path.abspath(a.root)
+    common_dir, why = repo.common_dir(root)
+    if not common_dir:
+        return fail('NOT DONE', 'no git repository at %s: %s' % (root, why), NOT_DONE)
+    try:
+        return run(a, common_dir)
+    except verdicts.BadEntry as e:
+        p.print_usage(sys.stderr)
+        sys.stderr.write('USAGE: %s\n' % e)
+        return USAGE
+    except verdicts.TipMismatch as e:
+        return fail('TIP MISMATCH', str(e), TIP_MISMATCH)
+    except verdicts.VerdictError as e:
+        return fail('NOT DONE', str(e), NOT_DONE)
+
+
+if __name__ == '__main__':
+    sys.exit(main())
