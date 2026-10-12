@@ -831,7 +831,8 @@ class Slot:
         using it), or whose clients cannot be told, is left running and its result says why
         (kitlib.proc.daemons stop). A nested slot leaves them to the run it is nested in, unless
         it is a gate: then it stops those in its own job and records none. Never raises: what it
-        cannot read or stop runs on, unpinned."""
+        cannot read or stop runs on, unpinned, and a store.say that fails is dropped (the record
+        is then not given these results)."""
         try:
             if not site.stops_daemons(self.store, self.gate):
                 return
@@ -840,9 +841,15 @@ class Slot:
                 return
             done = daemons.stop(found, self.job.contains)
         except Exception as e:
-            self.store.say("WARNING: run %s: build daemons not checked: %s" % (self.id, e))
+            try:
+                self.store.say("WARNING: run %s: build daemons not checked: %s" % (self.id, e))
+            except Exception:               # noqa: BLE001 - not said: the release goes on
+                pass
             return
-        self.tell_daemons(done)
+        try:
+            self.tell_daemons(done)
+        except Exception:                   # noqa: BLE001 - not said: the release goes on
+            pass
 
     def tell_daemons(self, done):
         """Says each of daemons.stop's results and lists them in the record's `daemons`: a pid
@@ -886,9 +893,10 @@ class Slot:
         job after the last pass (and END_WAIT_S more) is said, and runs on once release unpins
         the job. Sets self.spared; release then closes the job without killing it. A second
         end_tree (the release's, after a Ctrl+C) adds its results to the record's `daemons`
-        (tell_daemons), so what the first one stopped stays listed. When tell_daemons raises
-        (store.say failed), what is ended and spared is unchanged: only the record loses this
-        judgement's results, and the results after the one whose say failed are not said.
+        (tell_daemons), so what the first one stopped stays listed. A store.say that fails is
+        dropped: what is ended and spared is unchanged. When it fails in tell_daemons, the
+        results after it are not said and the record is not given this judgement's results, so a
+        pid judged again keeps its earlier one there.
 
         Raises nothing but what is not an Exception: a KeyboardInterrupt (a second Ctrl+C) goes
         up with tree_ended and spared cleared, so the release that follows ends the tree again,
@@ -906,8 +914,11 @@ class Slot:
         try:
             found = daemons.find(job.pids())
         except Exception as e:              # noqa: BLE001 - cannot tell: the kill goes ahead
-            self.store.say("WARNING: run %s: build daemons not checked before its tree was "
-                           "ended: %s" % (self.id, e))
+            try:
+                self.store.say("WARNING: run %s: build daemons not checked before its tree was "
+                               "ended: %s" % (self.id, e))
+            except Exception:               # noqa: BLE001 - not said: the kill goes ahead
+                pass
             found = []
         if not found:
             job.terminate(1)
@@ -922,7 +933,7 @@ class Slot:
             self.tell_daemons(done)
         except Exception:                   # noqa: BLE001 - not said: the kill goes on as judged
             pass
-        left ={pid for pid, _label, res in done if res.startswith(("left: ", NOT_JUDGED))}
+        left = {pid for pid, _label, res in done if res.startswith(("left: ", NOT_JUDGED))}
         kept = [(pid, ct) for pid, ct, _label in found if pid in left]
         if not kept:
             job.terminate(1)
@@ -933,13 +944,19 @@ class Slot:
         except Exception as e:              # noqa: BLE001 - the job cannot be read: end it all
             self.spared = False
             job.terminate(1)
-            self.store.say("WARNING: run %s: its job could not be read while its tree was ended "
-                           "(%s); the whole job was ended, the daemons it had left among them"
-                           % (self.id, e))
+            try:
+                self.store.say("WARNING: run %s: its job could not be read while its tree was "
+                               "ended (%s); the whole job was ended, the daemons it had left "
+                               "among them" % (self.id, e))
+            except Exception:               # noqa: BLE001 - not said: the job is ended
+                pass
             return
         for pid in rest:
-            self.store.say("WARNING: run %s: pid %d in its job could not be ended; it runs on, "
-                           "unpinned" % (self.id, pid))
+            try:
+                self.store.say("WARNING: run %s: pid %d in its job could not be ended; it runs "
+                               "on, unpinned" % (self.id, pid))
+            except Exception:               # noqa: BLE001 - not said: the spared stay spared
+                pass
 
     def _end_others(self, kept):
         """end_tree's passes: the pids still in the job outside the trees of `kept` [(pid,

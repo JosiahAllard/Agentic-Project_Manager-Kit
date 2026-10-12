@@ -558,6 +558,67 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
         self.assertIsNone(escaped, "the say's failure left the release")
         self.assertEqual(self.ended()["how"], "error")
 
+    def deafen(self):
+        """From here every store.say raises, after its text is noted."""
+        def deaf(text):
+            self.said.append(text)
+            raise OSError("stderr has closed")
+        self.store.say = deaf
+
+    def test_a_survivor_that_cannot_be_said_does_not_end_the_spared_daemon(self):
+        """Every store.say raises and a job process outlives the passes (terminate_verified
+        answers "denied" for it): the warning about it cannot be said, yet the shared daemon's
+        tree stays spared, the job is not ended whole and nothing leaves the release."""
+        c = self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain")
+        self.assertEqual(s.wait(p), (0, "done"))
+        daemon, _, plain = self.shared_pids()
+        real = process.terminate_verified
+
+        def denied(pid, ct, code=1):        # the leftover cannot be ended
+            return "denied" if pid == plain else real(pid, ct, code)
+        self.deafen()
+        escaped = None
+        with mock.patch.object(process, "terminate_verified", denied):
+            try:
+                s.release(1, "error")
+            except OSError as e:
+                escaped = e
+        self.assertTrue(any("pid %d in its job could not be ended" % plain in x
+                            for x in self.said), self.said)     # the say that fails was reached
+        self.connected(c)
+        cts = self.recorded()
+        self.assertFalse(self.wait_gone(daemon, cts[daemon], timeout=2),
+                         "a survivor that could not be said ended the daemon another job's "
+                         "client uses")
+        for pid in cts:
+            self.assertTrue(process.alive(pid, cts[pid]),
+                            "a survivor that could not be said ended the whole job (pid %d)" % pid)
+        self.assertIsNone(escaped, "the say's failure left the release")
+        self.assertEqual(self.ended()["how"], "error")
+
+    def test_a_done_gate_whose_daemon_results_cannot_be_said_still_closes_its_job(self):
+        """Every store.say raises on the done path: stop_daemons leaves the shared daemon, cannot
+        say so and does not raise, so the release goes on to close the run's job."""
+        c = self.outside_client()
+        s, p = self.book_shared("outside", "worker", "plain")
+        self.assertEqual(s.wait(p), (0, "done"))
+        self.deafen()
+        escaped = None
+        try:
+            s.release(0, "done")
+        except OSError as e:
+            escaped = e
+        self.assertTrue(self.judged(), self.said)       # the say that fails was reached
+        self.assertIsNone(escaped, "the say's failure left the release")
+        self.assertIsNone(s.job.h, "the release did not close the run's job")
+        self.connected(c)
+        cts = self.recorded()
+        for pid in cts:
+            self.assertTrue(process.alive(pid, cts[pid]),
+                            "a done release ended what the run left (pid %d)" % pid)
+        self.assertEqual(self.ended()["how"], "done")
+
     def test_a_client_that_exited_fails_as_the_tests_fault_not_the_kill_paths(self):
         """Control on the harness: an outside client that exits once it says it connected leaves
         the daemon serving no other job, so the kill path rightly ends it. spared() says the
