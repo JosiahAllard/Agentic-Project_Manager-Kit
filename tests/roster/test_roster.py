@@ -3,14 +3,19 @@
 The check runs on the real claude/agents/ folder; --write runs on a temp copy and must leave every byte
 outside the changed lines alone (CRLF files included).
 """
+import importlib
 import io
 import os
+import re
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
-from kitlib import roster
+from kitlib import reviewpack, roster
+from tests.docs.test_cli import repo_with_docs
+from tests.gitfixture import fixture_env
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 AGENTS = os.path.join(KIT_ROOT, 'claude', 'agents')
@@ -139,6 +144,69 @@ class TempCopyTest(unittest.TestCase):
         os.mkdir(flat)
         shutil.copy(self.roster, os.path.join(flat, 'ROSTER.md'))
         self.assertEqual(roster.roster_path(self.dir), os.path.join(flat, 'ROSTER.md'))
+
+
+class ReviewerRuleTest(unittest.TestCase):
+    """The "Reviewer model" rule in the dispatch skill's roster.md is prose a coordinator follows by
+    matching strings: the group labels the review pack prints and the name of the strict-path
+    tuple. Each one it names must still be what the code prints or defines."""
+
+    RULE_FILE = os.path.join(KIT_ROOT, 'claude', 'skills', 'coordinator-dispatch', 'roster.md')
+
+    def rule(self):
+        text = read(self.RULE_FILE).decode('utf-8').replace('\r\n', '\n')
+        m = re.search(r'^- \*\*Reviewer model\*\*.*?(?=^- )', text, re.S | re.M)
+        self.assertIsNotNone(m, 'no "Reviewer model" bullet in roster.md')
+        return re.sub(r'\s+', ' ', m.group(0))       # a wrapped line is still one sentence
+
+    def printed_groups(self):
+        """The group lines a real pack prints under its `files` line, in order: a throwaway repo
+        whose branch changes one file at each risk level and one the risk map does not list."""
+        repo = repo_with_docs()
+        self.addCleanup(repo.cleanup)
+        env = mock.patch.dict(os.environ, fixture_env(), clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        repo.write('docs/ops/risk-map.md', '- High | hi/\n- Medium | med/\n- Low | low/\n')
+        repo.git('add', '-A')
+        repo.git('commit', '-q', '-m', 'risk map')
+        repo.git('checkout', '-q', '-b', 'phase/x')
+        for folder in ('hi', 'med', 'low', 'other'):
+            repo.write('%s/a.py' % folder, 'x = 1\n')
+        repo.git('add', '-A')
+        repo.git('commit', '-q', '-m', 'one file per level')
+        lines = reviewpack.pack(repo.root, 'phase/x', base='main').lines
+        start = next(i for i, l in enumerate(lines) if l.startswith('files '))
+        groups = []
+        for line in lines[start + 1:]:
+            if not line.startswith('  '):
+                break
+            m = re.match(r'  (\S.*) \(\d+\)$', line)
+            if m:
+                groups.append(m.group(1))
+        return groups
+
+    def test_rule_names_only_what_the_code_prints_and_defines(self):
+        rule = self.rule()
+        printed = self.printed_groups()
+        self.assertEqual(len(printed), 4, printed)      # the fixture reached every level
+        # the list of groups the rule tells the coordinator to read: `<label> (N)`
+        listed = re.findall(r'`([^`]+) \(N\)`', rule)
+        self.assertEqual(listed, printed)
+        # the labels its rows turn on: `<label>` group, `<a>` or `<b>` group
+        in_rows = []
+        for run in re.findall(r'((?:`[^`]+`(?:,| or| and)? )+)groups?\b', rule):
+            in_rows.extend(re.findall(r'`([^`]+)`', run))
+        self.assertTrue(in_rows, 'the rule names no group in its rows')
+        self.assertEqual(sorted(set(in_rows) - set(printed)), [])
+        self.assertEqual(sorted(set(printed) - set(in_rows)), [], 'a printed group no row covers')
+        # the strict landing paths: a name in a module, both as the rule spells them
+        m = re.search(r'`(\w+)` in `\$\{CLAUDE_PLUGIN_ROOT\}/(kitlib/[\w/]+)\.py`', rule)
+        self.assertIsNotNone(m, 'the rule names no strict-path tuple')
+        self.assertEqual(m.group(1), 'STRICT_DEFAULTS')
+        module = importlib.import_module(m.group(2).replace('/', '.'))
+        self.assertTrue(getattr(module, m.group(1), None), '%s.%s' % (module.__name__, m.group(1)))
+        self.assertIn('claude/agents/**', getattr(module, m.group(1)))
 
 
 if __name__ == '__main__':

@@ -19,21 +19,26 @@ def frontmatter(text):
         return None
     out = {}
     for line in m.group(1).splitlines():
+        if line[:1] in (" ", "\t"):        # a map's child: never a top-level key, never shadows one
+            continue
         k, sep, v = line.partition(":")
         if sep:
             out[k.strip()] = v.strip()
     return out
 
 
+MAP_KEY = "experimental"    # the one top-level key an agent file may open a map under
+
+
 def strict_frontmatter(text):
     """Parse the frontmatter the way a YAML loader would accept it, for the shape the agent files
-    use: flat `key: value` lines, plus one map, written as a key with no value of its own followed
-    by `key: value` lines indented two spaces (`experimental:` over `cacheTtl: 1h`). Returns
-    (dict, problems); a map's value is a dict. An unquoted scalar holding ': ' (or ' #') is a YAML
-    error, and a quoted one must close its quote at the end of the line. Any other indent (a tab,
-    four spaces, a line under a key that has a value, a map inside a map) is a problem: the files
-    do not use it, so this parser does not model it. So is a key with nothing after its colon and
-    no map under it."""
+    use: flat `key: value` lines, plus one map, the top-level key `experimental` with no value of
+    its own followed by `key: value` lines indented two spaces (`experimental:` over
+    `cacheTtl: 1h`). Returns (dict, problems); a map's value is a dict. An unquoted scalar holding
+    ': ' (or ' #') is a YAML error, and a quoted one must close its quote at the end of the line.
+    Any other indent (a tab, four spaces, a line under a key that has a value, a map inside a map,
+    a map under any key but `experimental`) is a problem: the files do not use it, so this parser
+    does not model it. So is a key with nothing after its colon and no map under it."""
     m = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", text, re.S)
     if not m:
         return None, ["no frontmatter block"]
@@ -52,6 +57,8 @@ def strict_frontmatter(text):
                 continue
             if not isinstance(top[parent], dict):
                 top[parent] = {}
+                if parent != MAP_KEY:
+                    problems.append("%s: a map under a key other than %s" % (parent, MAP_KEY))
             out, label = top[parent], "%s.%s" % (parent, key)
             if not val:
                 problems.append("%s: no value (a map inside a map is not modelled)" % label)
@@ -118,9 +125,20 @@ class AgentFilesTest(unittest.TestCase):
                     ("experimental: {cacheTtl: 1h}",),            # a flow map: not the shape in use
                     ("experimental:",),                           # nothing after the colon, no map
                     ("experimental:", "model: opus"),
+                    ("x:", "  cacheTtl: 1h"),                     # a map under another key
+                    ("experimental:", "  cacheTtl: 1h", "x:", "  y: 1"),   # a second map
+                    ("tools: Read", "x:", "  tools: Skill"),      # a child named like a top-level key
                     ("  cacheTtl: 1h",)):                         # right under `name: x`
             with self.subTest(lines=bad):
                 self.assertTrue(parse(*bad)[1], bad)
+
+    def test_a_map_child_never_shadows_a_top_level_key(self):
+        """test_agent_naming_a_skill_can_load_skills reads `tools` with the loose parser: it must
+        see the top-level list the client sees, not a line indented under another key."""
+        for indent in ("  ", " ", "\t"):
+            with self.subTest(indent=indent):
+                fm = frontmatter("---\nname: x\ntools: Read\nx:\n%stools: Skill\n---\nbody\n" % indent)
+                self.assertEqual(fm, {"name": "x", "tools": "Read", "x": ""})
 
     def test_only_opus_worker_asks_for_the_one_hour_prompt_cache(self):
         """The one-hour cache lifetime is one agent's setting (docs/ROSTER.md, "The one-hour prompt

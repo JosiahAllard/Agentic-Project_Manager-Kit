@@ -47,12 +47,12 @@ Read from skill `coordinator-dispatch`, "Which agent, which model". A repo's own
 - **Reviewer model** (this is the rule's one home). Read the groups printed under the `files` line
   of `python tools/review_pack.py <branch>`: `High (N)`, `unlisted (= High) (N)`, `Medium (N)`,
   `Low (N)`; a group with no file is not printed. The first row that fits:
-  1. A `High` or `unlisted (= High)` group is printed, or a changed path matches a strict landing
-     path (`STRICT_DEFAULTS` in `${CLAUDE_PLUGIN_ROOT}/kitlib/gate/strict_defaults.py`: guard, lock,
+  1. A `High` group is printed, or a changed path matches a strict landing path
+     (`STRICT_DEFAULTS` in `${CLAUDE_PLUGIN_ROOT}/kitlib/gate/strict_defaults.py`: guard, lock,
      gate, proc and hook code, agent definitions) whatever group it is printed in -> `model: opus`.
   2. Only a `Low` group is printed -> no `model`: sonnet as pinned, never raised.
-  3. Otherwise (a `Medium` group, nothing higher) -> no `model`; raise to `opus` only for a risk
-     you name in status.
+  3. Otherwise (a `Medium` or `unlisted (= High)` group, no `High` group) -> no `model`; you may
+     raise to `opus` for a risk you name in status, never must.
 
   No review pack in the repo -> the same rows on the risk level the brief states.
 - Effort is not settable per dispatch: pick the agent for it. High risk -> `pm-kit:opus-worker`, or
