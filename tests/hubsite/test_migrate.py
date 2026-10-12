@@ -450,10 +450,13 @@ class StoreConflictCase(Case):
         self.assertIn(
             "CONFLICT questions/Q-002: the store's copy, which no server has written, and %s "
             "hold different fields; the store's copy is kept and nothing was imported (the later "
-            "by its time stamps: %s). To keep the store's copy: run again without that source. "
-            "To take a source's copy: with the server stopped, move the file questions/Q-002.json "
-            "out of the store folder, then run again with the chosen source alone"
-            % (self.export, self.export), lines)
+            "by its time stamps: %s). To keep the store's copy there is nothing to do; a run with "
+            "that source reports this again. To take a source's copy: with the server stopped, "
+            "move the file questions/Q-002.json out of the store folder (where the store folder "
+            "is the mirror folder, that file is the mirror's own file), then run again with the "
+            "chosen source alone" % (self.export, self.export), lines)
+        self.assertFalse(any('run again without that source' in x for x in lines),
+                         'leaving the source out would leave out its other documents too')
         self.assertIn('NOT COMPLETE: 1 document not imported (CONFLICT and SKIPPED above); the '
                       'sources are unchanged', lines)
         self.assertIn('questions/: imported 1, already in the store 2, store differs and is kept '
@@ -627,6 +630,135 @@ class SourceCase(Case):
         self.assertEqual(sorted(got), ['Q-001', 'Q-002', 'Q-007', 'Q-009', 'Q-017', 'Q-018'])
         self.assertEqual(got['Q-017'], question())
         self.assertEqual(got['Q-018'], dict(question(), collection='a field'))
+
+    def test_an_id_inside_the_wrapped_data_that_names_another_document_is_skipped(self):
+        q = os.path.join(self.export, 'questions')
+        write(os.path.join(q, 'Q-011.json'), {'data': dict(question(), id='Q-010')})
+        write(os.path.join(q, 'Q-012.json'), {'id': 'Q-012', 'data': dict(question(), id='Q-012')})
+        r = self.run_both()
+        self.assertEqual([s.rel for s in r.skipped], ['questions/Q-011'])
+        self.assertIn("its `data.id` is 'Q-010', not 'Q-011' as its path says", r.skipped[0].why)
+        self.assertIsNone(self.stored('questions', 'Q-011'))
+        self.assertEqual(self.stored('questions', 'Q-012'), question())
+
+    def test_an_id_that_is_a_number_names_the_file_of_that_text(self):
+        q = os.path.join(self.export, 'questions')
+        write(os.path.join(q, '21.json'), dict(question(), id=21))
+        write(os.path.join(q, '22.json'), {'id': 22, 'doc_id': 22, 'data': dict(question(), id=22)})
+        write(os.path.join(q, '23.json'), dict(question(), id=24))
+        write(os.path.join(q, '25.json'), dict(question(), id=True))
+        r = self.run_both()
+        self.assertEqual([s.rel for s in r.skipped], ['questions/23', 'questions/25'])
+        self.assertIn("its `id` is 24, not '23' as its path says", r.skipped[0].why)
+        self.assertEqual(self.stored('questions', '21'), question())
+        self.assertEqual(self.stored('questions', '22'), question())
+
+
+class RecommendedCase(Case):
+    """A question's `recommended` that is a whole number written as text is imported as the
+    number: the store refuses every update of a question that holds the text."""
+
+    LINE = ("RECOMMENDED questions/Q-020: its `recommended` is the text '1'; %s as the number 1; "
+            "nothing else in the document is changed")
+
+    def setUp(self):
+        Case.setUp(self)
+        self.text = question(recommended='1', title='as text', options=[
+            {'label': 'a', 'description': 'b'}, {'label': 'c', 'description': 'd'}])
+        self.number = dict(self.text, recommended=1)
+        self.path = os.path.join(self.mirror, 'questions', 'Q-020.json')
+        write(self.path, self.text)
+
+    def test_a_whole_number_written_as_text_is_imported_as_the_number_and_said_so(self):
+        before = tree(self.mirror)
+        r = self.run_both()
+        self.assertEqual(r.turned, [migrate.Turned('questions/Q-020', '1', 1)])
+        self.assertEqual(self.stored('questions', 'Q-020'), self.number)
+        self.assertEqual(tree(self.mirror), before, 'the source keeps its text')
+        self.assertEqual(r.findings, [])
+        lines = migrate.report_lines(r)
+        self.assertEqual([x for x in lines if x.startswith('RECOMMENDED')],
+                         [self.LINE % 'imported'])
+        self.assertFalse(any('the api will refuse' in x for x in lines))
+        with Store.open(self.root) as s:            # the question can now be answered
+            s.update('questions', 'Q-020', {'status': 'answered', 'answer': {'choice': 1}})
+
+    def test_a_dry_run_says_it_would_and_writes_nothing(self):
+        r = self.run_both(dry_run=True)
+        self.assertFalse(os.path.exists(self.root))
+        self.assertEqual(r.turned, [migrate.Turned('questions/Q-020', '1', 1)])
+        self.assertEqual(r.findings, [], 'the findings are of what the store would hold')
+        self.assertEqual([x for x in migrate.report_lines(r) if x.startswith('RECOMMENDED')],
+                         [self.LINE % 'would be imported'])
+
+    def test_text_that_is_not_a_whole_number_stays_and_is_reported(self):
+        kept = {'Q-021': 'one', 'Q-022': '1.0', 'Q-023': '-1', 'Q-024': ' 1', 'Q-025': ''}
+        for doc_id, text in kept.items():
+            write(os.path.join(self.mirror, 'questions', doc_id + '.json'),
+                  dict(self.text, recommended=text))
+        # no other field is read as a number, and no other collection's `recommended` is
+        write(os.path.join(self.mirror, 'questions', 'Q-026.json'), question(title='7'))
+        write(os.path.join(self.mirror, 'todos', 'T-009.json'),
+              dict(MIRROR['todos']['T-001'], recommended='1'))
+        r = self.run_both()
+        self.assertEqual([t.rel for t in r.turned], ['questions/Q-020'])
+        for doc_id, text in kept.items():
+            self.assertEqual(self.stored('questions', doc_id)['recommended'], text, doc_id)
+        self.assertEqual(self.stored('questions', 'Q-026')['title'], '7')
+        self.assertEqual(self.stored('todos', 'T-009')['recommended'], '1')
+        lines = migrate.report_lines(r)
+        self.assertIn('VALIDATE ERROR questions/Q-021 recommended: recommended must be int, not '
+                      'str [schema-field]', lines)
+        self.assertEqual(
+            [x.split(':')[0] for x in lines if 'the api will refuse' in x],
+            ['VALIDATE questions/%s' % i for i in sorted(kept)])
+
+    def test_a_second_run_finds_the_number_and_changes_nothing(self):
+        self.run_both()
+        before = docs_of(self.root)
+        r = self.run_both()
+        self.assertEqual(docs_of(self.root), before)
+        self.assertEqual((r.added, r.conflicts, r.kept, r.turned), ([], [], [], []))
+        self.assertIn('questions/Q-020', r.same)
+        lines = migrate.report_lines(r)
+        self.assertTrue(lines[-1].startswith('nothing changed: '))
+        self.assertFalse(any(x.startswith('RECOMMENDED') for x in lines))
+        # after a server wrote it, still the same document: not KEPT
+        with Store.open(self.root) as s:
+            s.put('questions', 'Q-020', self.number)
+        again = self.run_both()
+        self.assertEqual((again.kept, again.conflicts), ([], []))
+
+    def test_a_wrapped_document_is_turned_inside_its_data(self):
+        os.remove(self.path)
+        write(os.path.join(self.export, 'questions', 'Q-020.json'),
+              {'id': 'Q-020', 'version': 3, 'data': self.text})
+        r = self.run_both()
+        self.assertEqual(r.turned, [migrate.Turned('questions/Q-020', '1', 1)])
+        self.assertEqual(self.stored('questions', 'Q-020'), self.number)
+
+    def test_the_text_and_the_number_in_two_sources_are_one_document(self):
+        write(os.path.join(self.export, 'questions', 'Q-020.json'),
+              {'id': 'Q-020', 'data': self.number})
+        r = self.run_both()
+        self.assertEqual(r.conflicts, [])
+        self.assertEqual(self.stored('questions', 'Q-020'), self.number)
+
+    def test_a_store_that_already_holds_the_text_keeps_it_and_is_reported(self):
+        # a store migrated before, or the mirror folder served in place: never written over
+        r = migrate.migrate(self.mirror, [self.mirror])
+        self.assertEqual((r.added, r.conflicts, r.kept, r.turned), ([], [], [], []))
+        self.assertIn('questions/Q-020', r.same)
+        self.assertTrue(r.complete)
+        with Store.open(self.mirror) as s:
+            self.assertEqual(s.get('questions', 'Q-020'), self.text)
+        lines = migrate.report_lines(r)
+        self.assertIn('VALIDATE ERROR questions/Q-020 recommended: recommended must be int, not '
+                      'str [schema-field]', lines)
+        self.assertIn('VALIDATE questions/Q-020: the api will refuse every update of this '
+                      'document until it is fixed; fix its file by hand with the server stopped '
+                      '(no api route repairs it)', lines)
+        self.assertTrue(lines[-1].startswith('nothing changed: '))
 
 
 class MigrateCliCase(cli.CliCase):

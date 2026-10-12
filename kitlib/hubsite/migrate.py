@@ -22,6 +22,13 @@ What a source document becomes:
     earlier hub held is kept whole even where a new write of it would be refused, and check()
     reports what is wrong with it. An inbox document that is a lock-window notice is a document
     like any other and is copied in.
+  - One field is not copied as it is: a question's `recommended` that is a whole number written
+    as text (digits only) is written as the number, and is in `turned`. The store refuses every
+    update of a question whose `recommended` is text (schema.check), so such a question could
+    not be answered. No other field and no other text is changed. Two copies are compared with
+    this text read as the number on both sides: a store document that holds the number, or the
+    text, is the same document as a source that holds the text. The store's file is never
+    rewritten, so one that already holds the text keeps it and check() reports it.
   - A document the store already holds with the same fields is counted in `same`.
   - A document the store already holds with other fields is never written over. When the store's
     has a `version` (a server wrote it since), the store's is the newer truth: the difference is
@@ -52,6 +59,7 @@ import collections
 import datetime
 import json
 import os
+import re
 
 from kitlib import hubmirror, hubvalidate
 
@@ -70,11 +78,14 @@ Kept = collections.namedtuple('Kept', 'rel sources')
 # None when the stamps do not tell.
 Conflict = collections.namedtuple('Conflict', 'rel sources later store')
 Skipped = collections.namedtuple('Skipped', 'source rel why')
+# a question written with its `recommended`, the text `old`, as the number `new`
+Turned = collections.namedtuple('Turned', 'rel old new')
+_WHOLE = re.compile(r'[0-9]+')
 
 
 class Result(collections.namedtuple(
         'Result', 'store dry_run sources added same kept conflicts skipped left lock_windows '
-                  'findings empty unchecked')):
+                  'findings empty unchecked turned')):
     """One run. `store` and `sources` are absolute folders. `added`, `same`: sorted
     "collection/id" lists (written, or with dry_run what would be; already in the store with the
     same fields). `kept`: [Kept], the document a server wrote was kept. `conflicts`:
@@ -82,7 +93,8 @@ class Result(collections.namedtuple(
     has no collection for. `lock_windows`: the lock-window notices among added, same, kept and
     the store's side of a conflict. `findings`: check() over the store after the run (with
     dry_run, over what it would hold). `empty`: the sources that gave no document of a
-    collection the store has. `unchecked`: why `findings` could not be made ('' when it was)."""
+    collection the store has. `unchecked`: why `findings` could not be made ('' when it was).
+    `turned`: [Turned], the documents of `added` whose `recommended` was text."""
 
     @property
     def changed(self):
@@ -110,6 +122,16 @@ def _own(fields):
     return {k: v for k, v in fields.items() if k != 'id' and k not in schema.STORE_KEYS}
 
 
+def _whole(coll, fields):
+    """(fields, old): a question whose `recommended` is a whole number written as text, digits
+    only, is given back as a copy with the number, and old is that text. Any other document is
+    given back as it is, with old None."""
+    old = fields.get('recommended') if coll == 'questions' else None
+    if not isinstance(old, str) or not _WHOLE.fullmatch(old):
+        return fields, None
+    return dict(fields, recommended=int(old)), old
+
+
 def _doc_files(folder):
     """{id: path} of the *.json files directly in folder."""
     out = {}
@@ -127,17 +149,25 @@ def _read_json(path):
 
 def _misplaced(coll, doc_id, obj):
     """Why the file's own keys name another document than its path coll/doc_id, or ''. A wrapped
-    document's `id`, `doc_id` and `collection` and a bare document's `id` are not stored
-    (hubmirror.fields_of): one that disagrees with the path would be dropped unseen."""
+    document's `id`, `doc_id` and `collection`, the `id` inside its `data`, and a bare document's
+    `id` are not stored (hubmirror.fields_of): one that disagrees with the path would be dropped
+    unseen. A whole number is read as its text: the `id` 7 names the file 7.json."""
     if not isinstance(obj, dict):
         return ''
-    wrapped = isinstance(obj.get('data'), dict)
-    for key, want in (('id', doc_id), ('doc_id', doc_id), ('collection', coll)):
-        if key != 'id' and not wrapped:
+    named = [('id', obj, doc_id)]
+    if isinstance(obj.get('data'), dict):
+        named += [('doc_id', obj, doc_id), ('collection', obj, coll),
+                  ('data.id', obj['data'], doc_id)]
+    for name, holder, want in named:
+        key = name.split('.')[-1]
+        if key not in holder:
             continue
-        if key in obj and obj[key] != want:
+        got = holder[key]
+        if isinstance(got, int) and not isinstance(got, bool):
+            got = str(got)
+        if got != want:
             return ('its `%s` is %r, not %r as its path says: which document it is cannot be '
-                    'told' % (key, obj[key], want))
+                    'told' % (name, holder[key], want))
     return ''
 
 
@@ -315,12 +345,15 @@ def migrate(root, sources, dry_run=False):
                                                      'names ignore case' % (coll, first)))
                     continue
                 versions.setdefault((coll, doc_id), []).append((src, fields))
-        added, same, kept, conflicts = [], [], [], []
+        added, same, kept, conflicts, turned = [], [], [], [], []
         for (coll, doc_id), found in sorted(versions.items()):
             rel = '%s/%s' % (coll, doc_id)
             cur = have[coll].get(doc_id)
+            was = {s: _whole(coll, f)[1] for s, f in found}
+            found = [(s, _whole(coll, f)[0]) for s, f in found]
             if cur is not None:
-                differs = [(s, f) for s, f in found if _own(f) != _own(cur)]
+                mine = _own(_whole(coll, cur)[0])       # compared as a source is: text as number
+                differs = [(s, f) for s, f in found if _own(f) != mine]
                 if not differs:
                     same.append(rel)
                 elif 'version' in cur:          # a server wrote it since: the store's is newer
@@ -348,6 +381,8 @@ def migrate(root, sources, dry_run=False):
                     continue
                 have[coll][doc_id] = fields
                 added.append(rel)
+                if was[src] is not None:
+                    turned.append(Turned(rel, was[src], fields['recommended']))
             if coll == 'inbox' and LOCK_WINDOW in (
                     [f.get('kind') for _, f in found] + [(cur or {}).get('kind')]):
                 notices.add(rel)
@@ -361,7 +396,8 @@ def migrate(root, sources, dry_run=False):
         unchecked = str(e)
     empty = [src for src, docs, _, src_skipped in read if not docs and not src_skipped]
     return Result(root, bool(dry_run), sources, added, same, kept, conflicts,
-                  sorted(skipped), sorted(left), sorted(notices), findings, empty, unchecked)
+                  sorted(skipped), sorted(left), sorted(notices), findings, empty, unchecked,
+                  turned)
 
 
 def validate_lines(findings):
@@ -385,8 +421,9 @@ def _count(n, word='document'):
 
 def report_lines(result):
     """The migration report: the store and sources, a count line per collection, one line per
-    document or folder that is not in the store and why, the validation lines, and a last line
-    that says what the run changed."""
+    document or folder that is not in the store and why, one per question whose `recommended`
+    was written as the number, the validation lines, and a last line that says what the run
+    changed."""
     r = result
     lines = ['hub store: %s%s' % (r.store, ' (dry run: nothing is written)' if r.dry_run else '')]
     lines.extend('source: %s' % s for s in r.sources)
@@ -415,15 +452,20 @@ def report_lines(result):
             lines.append(
                 "CONFLICT %s: the store's copy, which no server has written, and %s hold "
                 "different fields; the store's copy is kept and nothing was imported (%s). To "
-                "keep the store's copy: run again without that source. To take a source's copy: "
-                "with the server stopped, move the file %s.json out of the store folder, then run "
-                "again with the chosen source alone"
+                "keep the store's copy there is nothing to do; a run with that source reports "
+                "this again. To take a source's copy: with the server stopped, move the file "
+                "%s.json out of the store folder (where the store folder is the mirror folder, "
+                "that file is the mirror's own file), then run again with the chosen source alone"
                 % (c.rel, ' and '.join(c.sources), later, c.rel))
         else:
             lines.append(
                 'CONFLICT %s: %s hold different fields; imported from neither (%s). To resolve '
                 'without editing a source: run again with the chosen source alone'
                 % (c.rel, ' and '.join(c.sources), later))
+    for t in r.turned:
+        lines.append('RECOMMENDED %s: its `recommended` is the text %r; %s as the number %d; '
+                     'nothing else in the document is changed'
+                     % (t.rel, t.old, 'would be imported' if r.dry_run else 'imported', t.new))
     for s in r.skipped:
         lines.append('SKIPPED %s in %s: %s' % (s.rel, s.source, s.why))
     for x in r.left:
