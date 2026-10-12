@@ -5,8 +5,9 @@ docs/backlog-store.md). Logic only: no argparse, no printing, no exit.
   scope     scope members, collision (undecidable counts as a collision), area
   record    parse, the schema, record-local validation, render, apply_changes
   store     Snapshot, the ref/branch/main backends, the compare-and-swap write loop
-  ledger    what a record's own ruling fields allow (a live hold, a spent ruling); no ledger file
-            is read by a write or by `check`
+  ledger    what a record's own ruling fields allow (a live hold, a spent ruling), and
+            `orphan_report`, which reads the ledger file `ledger.py check` hands it; a backlog
+            write (plan.py `_check_ruling`) and `check` read no ledger file
   offer     partition, rank, in flight, requires, the `next` offer
   check     every `check` line with its own denominator
   plan      the write verbs as plans: add, set, block, unblock, pull, release, close, retire
