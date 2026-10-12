@@ -3,15 +3,15 @@ and 9).
 
   build(settings, sources, log=None) -> Hub     open the store, make the views, the Api and the
                                                 listeners; nothing is started. ServeError.
-  Hub   .settings .store .api .views .creds .listeners .sync .backlog .notes .port .url
-        .start()                                start the git sync, the backlog timer, the listeners
+  Hub   .settings .store .api .views .creds .listeners .sync .backlog .notes .tunnel .port .url
+        .start()                               start the git sync, the backlog timer, the listeners
         .watch()                                log a git sync failure that is new (below)
         .close(timeout=CLOSE_TIMEOUT_S)         the clean close (below); safe to call twice
   run(hub, started=None, stop=None)             start, serve until `stop` is set or Ctrl+C, close
   Sources(...)                                  where each part comes from
   machine_sources(home=None, sync=True)         this machine's Sources, from its machine config
   SiteViews                                     the Api's `views` object over those sources
-  health_route(api, views)                      a listener's route for GET health (below)
+  health_route(api, views, tunnel='')           a listener's route for GET health (below)
   scrub(text)                                   `text` without the `user:password@` of any URL
   ask(port, method, path, token=None, body=None, timeout=ASK_TIMEOUT_S) -> (status, object)
   status_lines(health, now=None)                what `hub status` prints for a GET health answer
@@ -33,16 +33,25 @@ text is for the owner's console (it may name a folder):
   4. the Api over the store and a SiteViews, then the local listener on settings.port with
      httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
      the port that was really bound, and health_route.
-`Hub.listeners` is a list. It holds the local listener; a second listener (the tunnel's, on
-settings.tunnel_port) is appended there by the code that builds it, and start() and close()
-then carry it with no change here. That code gives it health_route too, or its owner never
-sees why a sync failed.
+  5. the tunnel listener on settings.tunnel_port (kitlib.hubsite.tunnel.start), only when
+     settings.access can serve it. It never stops the server: with no Access settings at all
+     there is no second listener and no line about it; with settings that cannot serve
+     (tunnel.TunnelConfigError) or a port that cannot be bound, a line in `Hub.notes` says why
+     and the local listener serves alone. `Hub.tunnel` is then TUNNEL_OFF with the reason in
+     fixed words, else TUNNEL_ON, and a note says which port needs an Access token.
+`Hub.listeners` is a list: the local listener first, then the tunnel's when there is one.
+start() and close() carry every listener in it, and a start-up that fails after one was bound
+closes its door. Both get the same health_route, so the tunnel's owner too sees why a sync
+failed. The tunnel listener has no pairing routes and no Host rule; the local listener's rules
+are what they were with no tunnel, and it never reads the Access header.
 
-The log. `log(level, text)` gets the listeners' lines (httpd: 'access', 'error') and the hub's
-own: 'error' for a close step that failed, ran out of time or was cut short and for a git sync
-pass that failed, 'note' for what is no error (the wait for git begins at the close; the sync
-works again). Every line of the hub's own goes through scrub(), so none holds the user or
-password of a remote URL; the listeners' lines do not, so what prints them applies scrub().
+The log. `log(level, text)` gets the listeners' lines (httpd: 'access', 'error'), the tunnel
+gate's ('note' or 'error' for a request it refused, at most one a reason a minute:
+kitlib.hubsite.tunnel) and the hub's own: 'error' for a close step that failed, ran out of
+time or was cut short and for a git sync pass that failed, 'note' for what is no error (the
+wait for git begins at the close; the sync works again). Every line of the hub's own goes
+through scrub(), so none holds the user or password of a remote URL; the listeners' and the
+gate's lines do not, so what prints them applies scrub().
 
 The git sync's failures. GitSync has no log of its own: it keeps the step its last pass failed
 at and git's reason (`detail`) in status(). Hub.watch() reads that status (it never waits for a
@@ -128,6 +137,12 @@ GET health and the sync's reason (health_route). The Api's health carries no `de
 anyone. The route adds `git.detail`, the reason of a failing sync with scrub() applied, for the
 owner role only: an agent and a caller with no role get the Api's answer as it is. `detail` may
 name a remote URL or a folder of this machine, which is why it is the owner's alone.
+The route also adds `tunnel` to every 200 answer, so for the owner and the agent alike and on
+both listeners: TUNNEL_ON, or TUNNEL_OFF with why the tunnel listener did not start, in
+kitlib.hubsite.tunnel's fixed phrases or TUNNEL_BIND. It never holds a value of the settings
+(no team name, audience tag or email) and never the system's words for a failed bind: those
+are in the console note. `on` says the listener is bound, not that a tunnel program reaches it
+or that the team's keys can be fetched.
 
 ask() is the one request every local client makes (`hub status`, `hub open`, and
 kitlib.hubsite.client for the other verbs): to the loopback listener through http.client, which
@@ -145,7 +160,7 @@ from kitlib.config import user
 from kitlib.config.types import ConfigError
 
 from . import api as _api
-from . import auth, backlog, derived, gitsync, httpd
+from . import auth, backlog, derived, gitsync, httpd, tunnel
 from .store import HubError, Store, StoreBusy
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
@@ -157,6 +172,12 @@ VIA_CLI = 'cli'
 USER_AGENT = 'hub-client'       # what ask() calls itself: it names no person and no machine
 SYNC_OFF = 'git sync is off on this server'
 SYNC_REFUSED = 'git sync was refused at start-up: the server console says why'
+TUNNEL_ON = 'on'                # GET health's `tunnel`, and `Hub.tunnel`
+TUNNEL_OFF = 'off: %s'
+TUNNEL_BIND = 'the tunnel port could not be bound: the server console says why'
+TUNNEL_OFF_NOTE = 'the tunnel listener is off: %s'
+TUNNEL_ON_NOTE = ('the tunnel listener is on %s: every request there needs a Cloudflare Access '
+                  'token')
 NO_USAGE_SOURCE = 'no launcher usage source configured'     # derived.usage's own phrase
 USAGE_FAILED = 'the usage source could not be read'
 AGENTS_FAILED = 'the agent definitions could not be read'
@@ -241,10 +262,16 @@ class Sources(object):
                    timer's event: module docstring, "Views")
       sync         callable(store_dir, commit_every_s, remote=, branch=, push=) -> a
                    kitlib.hubsite.gitsync.GitSync (or its like: start, stop, sync_once, status)
+      access_keys  callable(team) -> the tunnel gate's key source (get(kid)); None:
+                   kitlib.hubsite.access.KeyCache, which asks Cloudflare for the team's keys
+                   when a token first needs one. Called only when the tunnel listener starts.
+      access_now   callable() -> the Unix time the tunnel gate checks a token's times against;
+                   None: time.time
     """
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
-                 usage=None, agents=None, backlog=None, sync=None):
+                 usage=None, agents=None, backlog=None, sync=None, access_keys=None,
+                 access_now=None):
         self.tokens = tokens
         self.static_dir = static_dir
         self.pm_data = pm_data
@@ -254,6 +281,8 @@ class Sources(object):
         self.agents = agents
         self.backlog = backlog
         self.sync = sync
+        self.access_keys = access_keys
+        self.access_now = access_now
 
 
 def _repo_pairs(cfg):
@@ -487,10 +516,30 @@ def _make_sync(settings, sources, notes):
     return sync, ''
 
 
-def health_route(api, views):
+def _make_tunnel(settings, sources, api, notes, log):
+    """(the tunnel listener or None, what health says of it): module docstring, "Start-up",
+    step 5. The listener is bound and not started, with no route yet. The note of a port that
+    could not be bound carries the system's reason; health carries TUNNEL_BIND instead."""
+    try:
+        # through the module, never a name bound at import: a test replaces tunnel.start
+        lis = tunnel.start(settings, api, static_dir=sources.static_dir, log=log,
+                           keys=sources.access_keys, now=sources.access_now)
+    except tunnel.TunnelConfigError as e:
+        if not e.unset:
+            notes.append(TUNNEL_OFF_NOTE % e)
+        return None, TUNNEL_OFF % e
+    except httpd.BindRefused as e:
+        notes.append(scrub(TUNNEL_OFF_NOTE % e))
+        return None, TUNNEL_OFF % TUNNEL_BIND
+    notes.append(TUNNEL_ON_NOTE % lis.url)
+    return lis, TUNNEL_ON
+
+
+def health_route(api, views, tunnel=''):
     """The route a listener answers GET health with (module docstring, "GET health and the
     sync's reason"): the answer of `api` (an Api), and for the owner role `git.detail` from
-    `views` (a SiteViews) when the sync is failing at the step the answer names."""
+    `views` (a SiteViews) when the sync is failing at the step the answer names. `tunnel`
+    (TUNNEL_ON, or TUNNEL_OFF with a fixed reason) is added to every 200 answer when given."""
     def route(request):
         # raise_unexpected: as the listener's own Api call, so an error is logged there
         status, obj = api.call(request.method, request.path, request.role, request.body,
@@ -500,6 +549,8 @@ def health_route(api, views):
             failed, detail = views.git_failure()
             if detail and git.get('failed') == failed:
                 git['detail'] = detail
+        if status == 200 and tunnel and isinstance(obj, dict):
+            obj['tunnel'] = tunnel
         return httpd.json_response(status, obj)
     return route
 
@@ -561,8 +612,14 @@ def build(settings, sources, log=None):
         creds = auth.Credentials(sources.tokens, port=local.port)
         local.gate = httpd.local_gate(creds)
         local.routes.update(httpd.pair_routes(creds))
-        local.routes[('GET', _api.BASE + '/health')] = health_route(api, views)
-        return Hub(settings, store, api, views, creds, listeners, sync, views_b, notes, log)
+        tunnelled, tunnel_state = _make_tunnel(settings, sources, api, notes, log)
+        if tunnelled is not None:
+            listeners.append(tunnelled)     # at once: a failure below closes its door too
+        health = health_route(api, views, tunnel_state)
+        for lis in listeners:
+            lis.routes[('GET', _api.BASE + '/health')] = health
+        return Hub(settings, store, api, views, creds, listeners, sync, views_b, notes, log,
+                   tunnel=tunnel_state)
     except BaseException:
         for lis in listeners:
             lis.close_door()
@@ -572,10 +629,12 @@ def build(settings, sources, log=None):
 
 class Hub(object):
     """One built server (build): its parts, start() and close(). `notes` are start-up lines for
-    the console; `port` and `url` are the local listener's."""
+    the console; `port` and `url` are the local listener's; `tunnel` is what GET health says of
+    the tunnel listener (TUNNEL_ON, or TUNNEL_OFF with the reason; '' for a Hub made without
+    build)."""
 
     def __init__(self, settings, store, api, views, creds, listeners, sync, backlog_views, notes,
-                 log=None):
+                 log=None, tunnel=''):
         self.settings = settings
         self.store = store
         self.api = api
@@ -585,6 +644,7 @@ class Hub(object):
         self.sync = sync
         self.backlog = backlog_views
         self.notes = notes
+        self.tunnel = tunnel
         self._log = log
         self._life = threading.Lock()       # start() and close()
         self._started = False
@@ -897,8 +957,10 @@ def _git_line(git):
 
 def status_lines(health, now=None):
     """The lines `hub status` prints for a GET health answer: the revision, the store (the
-    owner's answer has it), the git sync, each repository's backlog fetch age, and what is
-    unavailable. `now`: an aware datetime (default the UTC clock)."""
+    owner's answer has it), the git sync, each repository's backlog fetch age, the tunnel
+    listener in one line (`tunnel: on`, or `tunnel: off: ` and why; none when the answer has no
+    such text, as an older server's) and what is unavailable. `now`: an aware datetime (default
+    the UTC clock)."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     lines = ['revision %s' % health.get('revision')]
     if health.get('store'):
@@ -920,6 +982,9 @@ def status_lines(health, now=None):
     for key, what in (('backlog_error', 'backlog'), ('backlog_timer', 'backlog timer')):
         if health.get(key):
             lines.append('%s: %s' % (what, health[key]))
+    said = health.get('tunnel')
+    if isinstance(said, str) and said:
+        lines.append('tunnel: %s' % scrub(said))    # fixed words; scrubbed all the same
     missing = health.get('unavailable')
     if isinstance(missing, dict) and missing:
         lines.append('unavailable: %s' % ', '.join('%s (%s)' % (k, missing[k])
