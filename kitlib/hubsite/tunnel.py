@@ -5,9 +5,14 @@
         TunnelConfigError when settings.access cannot serve; httpd.BindRefused when the port
         cannot be bound.
   check(access_settings)        None when the Access settings can serve, else TunnelConfigError
-  gate(access_settings, keys, now=None, log=None, clock=None) -> the listener's gate
+  gate(access_settings, keys, now=None, log=None, clock=None) -> the listener's Gate
+  Gate      (request) -> auth.OWNER or the one refusal
+            .stop()             shut it for good: every request from now on is refused
+            .keys()             (True, '') when there are keys to check a token with, else
+                                (False, one of access.REASONS or '')
   TunnelConfigError             .unset: nothing of hub.access is set at all
   HEADER                        the one header the Access token is read from
+  VIA                           the source a write through this listener is recorded with
 
 Nothing here runs, installs or configures a tunnel program. The kit listens on the loopback
 address for one; whoever runs it points it at this port.
@@ -26,8 +31,9 @@ the same for a missing token, a forged one and a key source that cannot be reach
 stranger learns nothing from it.
 
 What the log says. `log('note' | 'error', REFUSAL_LINE % reason)` with access's reason
-(`expired`, `bad-signature`, `keys-unavailable`, ...), NO_TOKEN, or GATE_ERROR for anything else
-that went wrong in the gate (then with the exception's type). `(detail)` follows when access
+(`expired`, `bad-signature`, `keys-unavailable`, ...), NO_TOKEN, CLOSING for a request refused
+because the gate was stopped, or GATE_ERROR for anything else that went wrong in the gate (then
+with the exception's type). `(detail)` follows when access
 gives one: its details are fixed words and numbers. The level is 'error' when the fault is this
 server's (its keys, its clock, its settings, the gate itself) and 'note' when it is the token's.
 One line a reason every SAY_EVERY_S seconds: a port open to the internet through a tunnel is
@@ -37,13 +43,22 @@ a value of the settings.
 
 The listener differs from the local one in this and no more: its gate; no Host rule (the tunnel
 hands on the public host name); writes need an `https` Origin that names that Host; no pairing
-routes, as this port hands out no local session. start() installs no route at all:
-kitlib.hubsite.serve gives it its health route.
+routes, as this port hands out no local session; and the source of a write. Every write through
+it is recorded with the source VIA: the listener is made with via_header=False, so the
+X-Hub-Via header a client sends on this port is never read. start() installs no route at all:
+kitlib.hubsite.serve gives it its health route, which answers fixed words only on this port.
 
-The limits. access.KeyCache has no close: the thread of a key fetch in flight (a daemon) may
-outlive the listener by up to access.FETCH_DEADLINE_S, and a request waiting on that fetch is
-answered only when it ends. The gate does not tell whether the keys can be fetched until a
-token arrives: start() makes the key source and asks it nothing.
+Closing. Gate.stop() shuts the gate for good and stops its key source (access.KeyCache.stop), so
+a request held in the gate on a key fetch is refused with the one answer at once and no longer
+counts as in flight; kitlib.hubsite.serve.Hub.close calls it before anything else. A stop admits
+nobody: a token whose check ended after the stop is refused too, and so is every later request.
+
+The limits. A stop cannot end the thread of a key fetch that is running (a daemon, named
+hub-access-keys): it ends when its fetcher does (the docstring of access.fetch_keys says how
+long that can take), and its answer is dropped. So that one thread may outlive the listener and
+Hub.close. The gate does not fetch keys until a token arrives: start() makes
+the key source and asks it nothing, and Gate.keys() says "no keys" until the first request that
+carried a token made a good fetch.
 """
 import threading
 import time
@@ -53,8 +68,10 @@ from . import access, auth, httpd
 HEADER = 'Cf-Access-Jwt-Assertion'
 ORIGIN_SCHEME = 'https'                 # a browser reaches the tunnel's public name over https
 REFUSED = 'this listener needs a valid Cloudflare Access token'
+VIA = 'tunnel'                          # the source every write through this listener is recorded with
 NO_TOKEN = 'no-token'
 GATE_ERROR = 'gate-error'
+CLOSING = 'closing'                     # refused because Gate.stop() was called: the hub is closing
 SAY_EVERY_S = 60                        # one log line a reason in this many seconds
 REFUSAL_LINE = 'the tunnel listener refused a request: %s'
 MORE = '; %d more were refused for this reason since the last line'
@@ -140,35 +157,82 @@ class _Lines(object):
             pass
 
 
-def gate(access_settings, keys, now=None, log=None, clock=None):
-    """The tunnel listener's gate (the module docstring): auth.OWNER for a request whose HEADER
-    holds a valid Access token for `access_settings`, else the one refusal. `keys` has get(kid)
-    (an access.KeyCache); `now()` is the Unix time a token's times are checked against and
-    `clock()` the one the log lines are spaced by (time.time and time.monotonic). Whatever
-    goes wrong in here is the refusal, never a pass and never an exception."""
-    team, aud, emails = access_settings.team, access_settings.aud, access_settings.emails
-    now = now or time.time
-    lines = _Lines(log, clock or time.monotonic)
+class Gate(object):
+    """The tunnel listener's gate (the module docstring), as gate() makes it. Called with a
+    request it answers auth.OWNER when HEADER holds a valid Access token, else the one refusal.
+    Whatever goes wrong in a call is the refusal, never a pass and never an exception."""
 
-    def check_request(request):
+    def __init__(self, access_settings, keys, now=None, log=None, clock=None):
+        self._team, self._aud = access_settings.team, access_settings.aud
+        self._emails = access_settings.emails
+        self._keys = keys
+        self._now = now or time.time
+        self._lines = _Lines(log, clock or time.monotonic)
+        self._stopped = threading.Event()
+
+    def __call__(self, request):
         reason, detail = NO_TOKEN, ''
         try:
-            token = request.header(HEADER)      # absent, empty or sent twice: no token
-            if token:
-                access.verify(token, keys, team, aud, emails, now())
-                return auth.OWNER
+            if not self._stopped.is_set():
+                token = request.header(HEADER)      # absent, empty or sent twice: no token
+                if token:
+                    access.verify(token, self._keys, self._team, self._aud, self._emails,
+                                  self._now())
+                    # a stop() that came while the token was being checked refuses it too
+                    if not self._stopped.is_set():
+                        return auth.OWNER
         except access.AccessError as e:
             reason, detail = e.reason, e.detail
         except Exception as e:
             reason, detail = GATE_ERROR, type(e).__name__
-        lines.say(reason, detail)
+        if self._stopped.is_set():
+            reason, detail = CLOSING, ''
+        self._lines.say(reason, detail)
         return httpd.refusal(403, 'forbidden', REFUSED, 'access')
-    return check_request
+
+    def stop(self):
+        """Shut the gate for good (the listener is closing): True. From now on every request
+        gets the one refusal, a valid token included, and a request held on a key fetch is
+        refused at once when the key source has a stop() (access.KeyCache has). It waits for
+        nothing and never raises."""
+        self._stopped.set()
+        try:
+            stop = getattr(self._keys, 'stop', None)
+            if callable(stop):
+                stop()
+        except Exception:               # the gate is shut whatever its key source does
+            pass
+        return True
+
+    def keys(self):
+        """(True, '') when the key source has keys to check a token with, else (False, why).
+        `why` is one of access.REASONS (the key source's `error`, when it is one) or ''. A key
+        source with no ready() holds its keys already (a dict, in tests). It asks ready() and
+        nothing else: no fetch is started and none is waited for. Never raises."""
+        try:
+            if self._stopped.is_set():
+                return False, ''
+            ready = getattr(self._keys, 'ready', None)
+            if not callable(ready) or ready() is True:
+                return True, ''
+            why = getattr(self._keys, 'error', '')
+            return False, why if isinstance(why, str) and why in access.REASONS else ''
+        except Exception:
+            return False, ''
+
+
+def gate(access_settings, keys, now=None, log=None, clock=None):
+    """The tunnel listener's Gate for `access_settings`. `keys` has get(kid) (an access.KeyCache,
+    which also has the stop() and ready() the Gate's own stop() and keys() use); `now()` is the
+    Unix time a token's times are checked against and `clock()` the one the log lines are spaced
+    by (time.time and time.monotonic)."""
+    return Gate(access_settings, keys, now=now, log=log, clock=clock)
 
 
 def start(settings, api, static_dir=None, log=None, keys=None, now=None):
     """The tunnel listener for `settings`: an httpd.Listener on the loopback address at
-    settings.tunnel_port with gate(), bound and not started, with no route of its own.
+    settings.tunnel_port with gate(), bound and not started, with no route of its own. Its `via`
+    is VIA and it reads no VIA_HEADER, so every write through it is recorded as VIA.
     TunnelConfigError, before any port is bound or key source made, when settings.access cannot
     serve; httpd.BindRefused when the port cannot be bound. `keys(team)` makes the key source
     (None: access.KeyCache, which fetches nothing until a token asks for a key); `now` is the
@@ -178,4 +242,4 @@ def start(settings, api, static_dir=None, log=None, keys=None, now=None):
     return httpd.Listener((httpd.LOOPBACK, settings.tunnel_port), api,
                           gate(settings.access, source, now=now, log=log),
                           static_dir=static_dir, host_rule=None, origin_scheme=ORIGIN_SCHEME,
-                          log=log)
+                          via=VIA, via_header=False, log=log)

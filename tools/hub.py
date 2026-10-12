@@ -22,14 +22,17 @@
       With hub.access set in the machine config the server also listens on hub.tunnel_port
       (default 8791, loopback too) for a tunnel program, which this tool never runs: every
       request there needs a Cloudflare Access token (kitlib.hubsite.tunnel). A start-up note
-      says that it is on, or why it is off (settings that cannot serve, a port that is taken);
-      the hub then serves on its own port alone. A request it refuses is a note or an error
-      line, at most one a reason a minute, with the reason and never the token.
+      says that it is on, or why it is off (settings that cannot serve, a port that is taken,
+      a listener that could not be made); the hub then serves on its own port alone. A request
+      it refuses is a note or an error line, at most one a reason a minute, with the reason and
+      never the token. A write made through it is recorded with the source `tunnel`.
   hub.py status [--port N]
       asks the running server for its health and prints the revision, the store, the git sync
       (with git's reason when its last pass failed: the owner's token gets it), each
-      repository's backlog fetch age and one line for the tunnel listener: `tunnel: on`, or
-      `tunnel: off: ` and why.
+      repository's backlog fetch age and one line for the tunnel listener: `tunnel: on` once
+      the Access keys were fetched (the first request with a token fetches them), `tunnel:
+      bound, keys not fetched` until then (with the reason as one fixed word in brackets when
+      a fetch failed), or `tunnel: off: ` and why.
   hub.py setup
       makes the two token files where they are absent and prints where they are and how to start
       the server. It writes nothing else: never the machine config, so no `hub` key (it says so

@@ -10,6 +10,8 @@ import json
 import os
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 
 from kitlib.hubsite import access, api, auth, httpd, serve, tunnel
@@ -29,6 +31,55 @@ REFUSAL = {'ok': False, 'error': {'code': 'forbidden', 'field': 'access',
                                   'message': 'this listener needs a valid Cloudflare Access '
                                              'token'}}
 OTHER_METHODS = ('OPTIONS', 'PUT', 'DELETE', 'PATCH')
+# what health says of a tunnel listener that is bound, spelled out: `hub status` prints them
+BOUND = 'bound, keys not fetched'
+BOUND_FETCH = 'bound, keys not fetched (keys-fetch)'
+NOT_MADE = 'off: the tunnel listener could not be made: the server console says why'
+# git's words for a failed pass, as a sync gives them: a remote and a folder, both made up
+GIT_BRANCH = 'made-up-branch'
+GIT_WHY = "fatal: unable to access 'https://git.example.invalid/team/data.git/' from X:\\made-up"
+
+
+class _Sync(object):
+    """What serve needs of a git sync; `state` is a test's changes to status()."""
+
+    def __init__(self, state=None):
+        self.state = dict(state or {})
+
+    def start(self):
+        return True
+
+    def stop(self, timeout=None):
+        return True
+
+    def sync_once(self):
+        return self.status()
+
+    def status(self):
+        out = {'running': True, 'branch': GIT_BRANCH, 'remote': 'origin', 'failed': '',
+               'detail': '', 'pending_commit': False, 'pending_push': False, 'diverged': False}
+        out.update(self.state)
+        return out
+
+
+class _Source(object):
+    """A key source that checks tokens from the keys it holds and says of itself what a test
+    tells it to: `ready` (an exception: ready() raises it) and `error`."""
+
+    def __init__(self, keys, ready=False, error=''):
+        self._keys = keys
+        self.said = ready
+        self.error = error
+        self.asked = 0              # how often ready() was called
+
+    def get(self, kid):
+        return self._keys.get(kid)
+
+    def ready(self):
+        self.asked += 1
+        if isinstance(self.said, Exception):
+            raise self.said
+        return self.said
 
 
 class TunnelCase(unittest.TestCase):
@@ -189,8 +240,10 @@ class TunnelTokenTest(TunnelCase):
     def test_a_valid_token_is_served_as_the_owner(self):
         r = self.ask('GET', HEALTH, token=self.good)
         self.assertEqual(r.status, 200)
-        # the store folder is in the owner's answer only
-        self.assertEqual(r.json()['store'], os.path.abspath(self.settings.store))
+        # health answers fixed words on this port (TunnelHealthTest): the store is a word here,
+        # never its folder. That the caller is the owner is in the access line and in the
+        # owner-only write below
+        self.assertEqual(r.json()['store'], 'ok')
         self.assertEqual(r.json()['tunnel'], 'on')
         self.assertIn(('access', '127.0.0.1 GET %s 200 owner' % HEALTH), self.lines)
         r = self.ask('GET', '/', token=self.good)
@@ -399,6 +452,43 @@ class StartTest(TunnelCase):
         self.assertEqual([text for level, text in self.lines if level == 'error'], [])
         self.assertIs(hub.close(), True)
 
+    def test_the_local_port_still_starts_whatever_making_the_tunnel_listener_raises(self):
+        secret = 'a-made-up-secret-word'
+        for error in (RuntimeError(secret), ValueError(secret), OSError(5, secret),
+                      KeyError(secret), TypeError(secret), access.AccessError('keys-fetch', secret)):
+            kind = type(error).__name__
+            with self.subTest(error=kind):
+                del self.lines[:]
+                made = []
+
+                def raiser(team, error=error):
+                    made.append(team)
+                    raise error
+
+                hub = self.build(access_keys=raiser)
+                self.assertEqual(made, [ak.TEAM], 'the key source was not asked for')
+                self.assertEqual(len(hub.listeners), 1)
+                self.assertIsNone(self.tport)
+                # one fixed phrase, in the status and in health, for both roles; the console is
+                # told the class of what was raised and nothing of its text
+                self.assertEqual(hub.tunnel, NOT_MADE)
+                self.assertEqual(hub.notes,
+                                 ['the tunnel listener is off: it could not be made (%s)' % kind])
+                for token in (self.owner, self.agent):
+                    r = get(self.lport, HEALTH, token)
+                    self.assertEqual((r.status, r.json()['tunnel']), (200, NOT_MADE))
+                    self.assertNotIn(secret, r.body.decode('utf-8'))
+                    self.assertIn('tunnel: ' + NOT_MADE, serve.status_lines(r.json()))
+                self.assertNoSecret(secret)
+                # the local listener serves as it does with no tunnel
+                r = get(self.lport, '/')
+                self.assertEqual((r.status, r.body), (200, PAGE))
+                r = post(self.lport, TODOS, {'title': 'the local port serves'}, self.owner)
+                self.assertEqual(r.status, 200, r.body)
+                self.assertEqual([text for level, text in self.lines if level == 'error'], [])
+                self.assertIs(hub.close(), True)
+        self.assertEqual(serve.TUNNEL_OFF % serve.TUNNEL_FAILED, NOT_MADE)
+
     def test_both_listeners_bind_loopback_only(self):
         hub = self.build()
         self.assertEqual(len(hub.listeners), 2)
@@ -512,6 +602,381 @@ class FetchFailureTest(TunnelCase):
             ('error', 'the tunnel listener refused a request: keys-stale (keys-fetch)')])
         self.assertNoSecret(self.good, PUBLIC)
 
+    def said(self, hub, phrase):
+        """Hub.tunnel, the local listener's health for both roles and `hub status` say `phrase`
+        of the tunnel listener."""
+        self.assertEqual(hub.tunnel, phrase)
+        for token in (self.owner, self.agent):
+            r = get(self.lport, HEALTH, token)
+            self.assertEqual((r.status, r.json()['tunnel']), (200, phrase))
+            self.assertIn('tunnel: ' + phrase, serve.status_lines(r.json()))
+            text = r.body.decode('utf-8')
+            for word in (PUBLIC, 'network is down', 'OSError', 'Traceback'):
+                self.assertNotIn(word, text)
+
+    def test_health_says_on_only_once_the_keys_were_fetched_and_fetches_none_itself(self):
+        hub = self.build(access_keys=self.cached)
+        self.said(hub, BOUND)
+        self.assertEqual(self.fetches, [], 'health fetched the keys')
+        # the first token through the tunnel fetches them: on, on both ports
+        r = self.ask('GET', HEALTH, token=self.good)
+        self.assertEqual((r.status, r.json()['tunnel']), (200, 'on'))
+        self.said(hub, 'on')
+        self.assertEqual(len(self.fetches), 1)
+        # keys past the limit serve nobody, so they are no keys to health either. The last
+        # fetch was good: there is no reason to give
+        self.clock[0] = access.STALE_LIMIT_S + 1
+        self.said(hub, BOUND)
+        self.assertEqual(len(self.fetches), 1, 'health fetched the keys')
+
+    def test_health_says_bound_and_a_fixed_word_while_the_key_fetch_fails(self):
+        self.failing = True
+        hub = self.build(access_keys=self.cached)
+        self.refused('GET', HEALTH, token=self.good)
+        self.assertEqual(len(self.fetches), 1)
+        self.said(hub, BOUND_FETCH)
+        # when the next attempt is due health still makes none: a token does
+        self.clock[0] += access.REFETCH_S + 1
+        self.said(hub, BOUND_FETCH)
+        self.assertEqual(len(self.fetches), 1, 'health fetched the keys')
+        self.failing = False
+        r = self.ask('GET', HEALTH, token=self.good)
+        self.assertEqual((r.status, r.json()['tunnel']), (200, 'on'))
+        self.said(hub, 'on')
+        self.assertEqual(len(self.fetches), 2)
+        self.assertNoSecret(self.good, PUBLIC)
+
+    def test_health_says_on_while_cached_keys_serve_through_a_failing_refetch(self):
+        hub = self.build(access_keys=self.cached)
+        self.assertEqual(self.ask('GET', HEALTH, token=self.good).status, 200)
+        self.failing = True
+        self.clock[0] = access.KEY_TTL_S + 1
+        r = self.ask('GET', HEALTH, token=self.good)
+        self.assertEqual((r.status, r.json()['tunnel']), (200, 'on'))
+        self.assertEqual((len(self.fetches), self.cache.error), (2, 'keys-fetch'))
+        self.said(hub, 'on')
+        # past the limit they serve nobody: bound, with the word of the fetch that fails
+        self.clock[0] = access.STALE_LIMIT_S + 1
+        self.said(hub, BOUND_FETCH)
+        self.assertEqual(len(self.fetches), 2, 'health fetched the keys')
+
+    def test_health_does_not_wait_for_a_key_fetch_that_is_out(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def fetch(team, timeout):
+            self.fetches.append((team, timeout))
+            entered.set()
+            release.wait(httpfix.TIMEOUT)
+            return ak.document(ak.KEY_A)
+
+        hub = self.build(access_keys=lambda team: access.KeyCache(team, fetch=fetch))
+        answers = []
+        client = threading.Thread(
+            target=lambda: answers.append(self.ask('GET', HEALTH, token=self.good)))
+        self.addCleanup(client.join, httpfix.TIMEOUT)
+        self.addCleanup(release.set)
+        client.start()
+        self.assertTrue(entered.wait(httpfix.TIMEOUT), 'the token asked for no key')
+        # the fetch is out and the token's request waits on it: health answers all the same
+        self.said(hub, BOUND)
+        self.assertEqual((answers, release.is_set()), ([], False), 'health waited for the fetch')
+        self.assertEqual(len(self.fetches), 1)
+        release.set()
+        client.join(httpfix.TIMEOUT)
+        self.assertEqual([(r.status, r.json()['tunnel']) for r in answers], [(200, 'on')])
+        self.said(hub, 'on')
+        self.assertEqual(len(self.fetches), 1)
+
+
+class KeysSaidTest(TunnelCase):
+    """What health says of the keys, over a key source that says of itself what the test tells
+    it to. It checks tokens all the while, so the tunnel listener's own health can be asked."""
+
+    def setUp(self):
+        TunnelCase.setUp(self)
+        self.source = _Source(self.keys, ready=False, error='keys-fetch')
+        self.build(access_keys=lambda team: self.source)
+        self.good = ak.token(ak.KEY_A)
+
+    def local(self):
+        out = []
+        for token in (self.owner, self.agent):
+            r = get(self.lport, HEALTH, token)
+            self.assertEqual(r.status, 200, r.body)
+            out.append(r.json()['tunnel'])
+        self.assertEqual(out[0], out[1], 'the two roles were told different things')
+        self.assertEqual(out[0], self.hub.tunnel)
+        return out[0]
+
+    def through(self):
+        r = self.ask('GET', HEALTH, token=self.good)
+        self.assertEqual(r.status, 200, r.body)
+        return r.json()['tunnel']
+
+    def test_the_reason_is_the_local_listeners_and_never_the_tunnels(self):
+        self.assertEqual(self.local(), BOUND_FETCH)
+        self.assertEqual(self.through(), BOUND)
+        self.assertEqual(self.ask('GET', HEALTH, token=self.good).json(), {
+            'ok': True, 'version': 'v1', 'store': 'ok', 'git': 'off', 'tunnel': BOUND})
+        self.assertEqual((serve.TUNNEL_BOUND, serve.TUNNEL_BOUND_WHY % 'keys-fetch'),
+                         (BOUND, BOUND_FETCH))
+        self.source.said = True
+        self.assertEqual((self.local(), self.through()), ('on', 'on'))
+
+    def test_only_a_reason_of_access_is_shown(self):
+        for error in ('a made-up reason at %s' % PUBLIC, 'keys-fetch and more', 'Keys-Fetch', '',
+                      None, 7, ['keys-fetch'], RuntimeError('keys-fetch')):
+            with self.subTest(error=repr(error)):
+                self.source.error = error
+                self.assertEqual((self.local(), self.through()), (BOUND, BOUND))
+        for reason in access.REASONS:
+            with self.subTest(reason=reason):
+                self.source.error = reason
+                self.assertEqual(self.local(), '%s (%s)' % (BOUND, reason))
+                self.assertEqual(self.through(), BOUND)
+
+    def test_only_a_key_source_that_says_true_has_keys(self):
+        self.source.error = ''
+        for said in (False, None, 1, 'yes', [True], RuntimeError('a secret word at %s' % PUBLIC)):
+            with self.subTest(said=repr(said)):
+                self.source.said = said
+                self.assertEqual((self.local(), self.through()), (BOUND, BOUND))
+        self.source.said = True
+        self.assertEqual((self.local(), self.through()), ('on', 'on'))
+        self.assertEqual([text for level, text in self.lines if level == 'error'], [])
+        self.assertNoSecret(self.good, PUBLIC)
+
+    def test_health_asks_the_key_source_whether_it_is_ready_and_nothing_else(self):
+        asked = []
+        self.source.get = lambda kid: asked.append(kid)
+        before = self.source.asked
+        self.assertEqual(self.local(), BOUND_FETCH)
+        self.assertEqual(asked, [], 'health asked the key source for a key')
+        self.assertGreater(self.source.asked, before)
+
+
+class TunnelHealthTest(TunnelCase):
+    """GET health on the two listeners of one hub whose git sync says what the test tells it."""
+
+    def setUp(self):
+        TunnelCase.setUp(self)
+        self.sync = _Sync()
+        self.build(sync=lambda *args, **kw: self.sync)
+        self.good = ak.token(ak.KEY_A)
+
+    def test_through_the_tunnel_health_is_fixed_words_and_nothing_else(self):
+        self.sync.state.update(failed='push', detail=GIT_WHY, pending_push=True)
+        r = self.ask('GET', HEALTH, token=self.good)
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.body,
+                         b'{"ok":true,"version":"v1","store":"ok","git":"failed","tunnel":"on"}')
+        # the same request at the local listener names the folder, the branch and git's reason
+        local = get(self.lport, HEALTH, self.owner).json()
+        self.assertEqual(local['store'], os.path.abspath(self.settings.store))
+        self.assertEqual((local['git']['branch'], local['git']['detail']), (GIT_BRANCH, GIT_WHY))
+        # a sync that works, and whatever else a sync says of itself
+        self.sync.state.update(failed='', detail='')
+        self.assertEqual(self.ask('GET', HEALTH, token=self.good).json()['git'], 'ok')
+        for failed in ('commit', 'fetch', GIT_WHY, 7):
+            self.sync.state.update(failed=failed, detail=GIT_WHY)
+            r = self.ask('GET', HEALTH, token=self.good)
+            self.assertEqual(r.json(), {'ok': True, 'version': 'v1', 'store': 'ok',
+                                        'git': 'failed', 'tunnel': 'on'}, failed)
+        self.assertNoSecret(self.good)
+
+    def test_the_local_listeners_health_is_what_it_was(self):
+        self.sync.state.update(failed='push', detail=GIT_WHY)
+        store = os.path.abspath(self.settings.store)
+        status, obj = self.hub.api.call('GET', HEALTH, auth.OWNER)
+        self.assertEqual(status, 200)
+        self.assertEqual(sorted(obj), ['backlog', 'backlog_at', 'backlog_error', 'backlog_timer',
+                                       'git', 'ok', 'revision', 'store', 'unavailable',
+                                       'version'])
+        # byte for byte: the Api's own answer, git's reason for the owner, and `tunnel` last
+        obj['git']['detail'] = GIT_WHY
+        obj['tunnel'] = 'on'
+        r = get(self.lport, HEALTH, self.owner)
+        self.assertEqual(r.body, httpd.json_response(200, obj).body)
+        self.assertEqual((r.json()['store'], r.json()['git']), (store, self.sync.status()))
+        # the agent is told neither the folder nor git's reason
+        status, obj = self.hub.api.call('GET', HEALTH, auth.AGENT)
+        obj['tunnel'] = 'on'
+        r = get(self.lport, HEALTH, self.agent)
+        self.assertEqual(r.body, httpd.json_response(200, obj).body)
+        self.assertNotIn('store', r.json())
+        self.assertNotIn('detail', r.json()['git'])
+        self.assertEqual(r.json()['git']['failed'], 'push')
+
+    def test_with_no_git_sync_the_tunnel_is_told_off_in_one_word(self):
+        self.hub.close()
+        self.build()
+        r = self.ask('GET', HEALTH, token=self.good)
+        self.assertEqual(r.json(), {'ok': True, 'version': 'v1', 'store': 'ok', 'git': 'off',
+                                    'tunnel': 'on'})
+        self.assertEqual(get(self.lport, HEALTH, self.owner).json()['git'],
+                         {'running': False, 'off': serve.SYNC_OFF})
+
+    def test_a_health_that_cannot_be_answered_says_so_in_fixed_words(self):
+        secret = 'cannot read X:\\made-up\\store'
+
+        class Api(object):
+            answer = None
+
+            def call(self, *args, **kw):
+                return self.answer
+
+        stand_in = Api()
+        route = serve.health_route(stand_in, None, 'on', fixed=True)
+        request = httpd.Request('GET', HEALTH, None, '127.0.0.1', 0)
+        request.role = auth.OWNER
+        for answer, status, code in (
+                ((503, api.error_body('store', secret, 'path')), 503, 'store'),
+                ((403, api.error_body('forbidden', secret, 'role')), 403, 'forbidden'),
+                ((500, api.error_body('a made-up code', secret)), 500, 'internal'),
+                ((500, {'ok': False, 'error': secret}), 500, 'internal'),
+                ((500, secret), 500, 'internal'),
+                ((200, [secret]), 500, 'internal'),
+                ((200, None), 500, 'internal')):
+            with self.subTest(answer=answer):
+                stand_in.answer = answer
+                r = route(request)
+                self.assertEqual(r.status, status)
+                self.assertEqual(json.loads(r.body.decode('utf-8')), {
+                    'ok': False, 'error': {'code': code, 'field': '',
+                                           'message': 'health could not be answered'}})
+        # and a 200 says of git what it can tell, never what it was given
+        for git, word in ((None, 'unknown'), ('failed', 'unknown'), ([], 'unknown'),
+                          ({'off': secret}, 'off'), ({'failed': secret}, 'failed'), ({}, 'ok')):
+            stand_in.answer = (200, {'ok': True, 'git': git, 'store': secret, 'version': secret})
+            r = route(request)
+            self.assertEqual(json.loads(r.body.decode('utf-8')), {
+                'ok': True, 'version': 'v1', 'store': 'ok', 'git': word, 'tunnel': 'on'}, git)
+
+    def test_a_health_that_raises_through_the_tunnel_is_the_listeners_fixed_answer(self):
+        secret = 'a secret word at X:\\made-up'
+
+        def broken():
+            raise RuntimeError(secret)
+
+        self.hub.views.health = broken          # a view that fails: the Api answers all the same
+        r = self.ask('GET', HEALTH, token=self.good)
+        self.assertEqual(r.json(), {'ok': True, 'version': 'v1', 'store': 'ok', 'git': 'unknown',
+                                    'tunnel': 'on'})
+        self.assertNotIn('RuntimeError', r.body.decode('utf-8'))
+
+
+class TunnelSourceTest(TunnelCase):
+    """A write through the tunnel listener is recorded with the source `tunnel`."""
+
+    def setUp(self):
+        TunnelCase.setUp(self)
+        self.build()
+        self.good = ak.token(ak.KEY_A)
+
+    def via(self, r):
+        self.assertEqual(r.status, 200, r.body)
+        return self.hub.store.get('todos', r.json()['id'])['via']
+
+    def test_a_write_through_the_tunnel_is_recorded_as_tunnel_whatever_the_client_says(self):
+        self.assertEqual(tunnel.VIA, 'tunnel')
+        for said in (None, 'web', 'cli', 'api', 'relay:phone', 'tunnel', 'WEB', ''):
+            with self.subTest(said=said):
+                headers = [] if said is None else [(httpd.VIA_HEADER, said)]
+                r = self.ask('POST', TODOS, token=self.good, headers=headers,
+                             obj={'title': 'through the tunnel'})
+                self.assertEqual(self.via(r), 'tunnel')
+        # sent twice: still not read
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'twice'},
+                     headers=[(httpd.VIA_HEADER, 'web'), (httpd.VIA_HEADER, 'cli')])
+        self.assertEqual(self.via(r), 'tunnel')
+        # a later change of the document through the tunnel is recorded so too
+        tid = post(self.lport, TODOS, {'title': 'at the PC'}, self.owner, via='web').json()['id']
+        self.assertEqual(self.hub.store.get('todos', tid)['via'], 'web')
+        r = self.ask('POST', '%s/%s/done' % (TODOS, tid), token=self.good,
+                     headers=[(httpd.VIA_HEADER, 'web')])
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(self.hub.store.get('todos', tid)['via'], 'tunnel')
+
+    def test_a_local_write_is_recorded_as_before(self):
+        for said, recorded in (('web', 'web'), ('cli', 'cli'), (None, 'api'), ('tunnel', 'tunnel')):
+            with self.subTest(said=said):
+                r = post(self.lport, TODOS, {'title': 'at the PC'}, self.owner, via=said)
+                self.assertEqual(self.via(r), recorded)
+        local, tunnelled = self.hub.listeners
+        self.assertEqual((local.via, local.via_header), ('', True))
+        self.assertEqual((tunnelled.via, tunnelled.via_header), ('tunnel', False))
+
+
+class UnreadableRequestTest(TunnelCase):
+    """A request the tunnel listener cannot read: the listener's own fixed answer, before any
+    gate, route or file."""
+
+    def setUp(self):
+        TunnelCase.setUp(self)
+        self.build()
+        self.good = ak.token(ak.KEY_A)
+
+    def head(self, path, extra=b'', line=None):
+        """A request for `path` with everything a served one has: the public Host and a valid
+        Access token."""
+        line = line or ('GET %s HTTP/1.1' % path).encode('ascii')
+        return (line + b'\r\n' + ('Host: %s\r\n%s: %s\r\n' % (PUBLIC, tunnel.HEADER, self.good))
+                .encode('ascii') + extra + b'\r\n')
+
+    def test_a_request_that_cannot_be_read_gets_the_fixed_body_and_reaches_nothing(self):
+        # the same requests, readable, are served: what follows is refused for its form alone
+        for path, body in (('/', PAGE), ('/app.js', SCRIPT)):
+            answer = httpfix.raw(self.tport, self.head(path))
+            self.assertTrue(answer.startswith(b'HTTP/1.1 200 '), answer[:40])
+            self.assertTrue(answer.endswith(body))
+        self.assertIn(b'"tunnel":"on"', httpfix.raw(self.tport, self.head(HEALTH)))
+        del self.lines[:]
+        before = self.revision()
+        calls = []
+        tunnelled = self.hub.listeners[1]
+        health = tunnelled.routes[('GET', HEALTH)]
+        tunnelled.routes[('GET', HEALTH)] = lambda request: calls.append('route') or health(request)
+        ask = self.hub.api.call
+        self.hub.api.call = lambda *args, **kw: calls.append('api') or ask(*args, **kw)
+        fixed = {'ok': False, 'error': {'code': 'invalid', 'field': 'request',
+                                        'message': 'the request could not be read'}}
+        long_header = b'X-Pad: ' + b'a' * 70000 + b'\r\n'
+        cases = (
+            ('a request line that is no request', b'GARBAGE\r\n\r\n', 400),
+            ('a request line of one word, with headers', self.head('/', line=b'GET'), 400),
+            ('a version that is none', self.head('/', line=b'GET / HTTP/9.9'), 505),
+            # a request line with no version is HTTP/0.9, whose answer has no status line and
+            # no header: the fixed body is all of it
+            ('a request line with no version', self.head('/', line=b'GET /'), None),
+            ('health with no version', self.head(HEALTH, line=('GET ' + HEALTH).encode()), None),
+            ('a request line too long', self.head('/' + 'a' * 70000), 414),
+            ('one header too long', self.head('/', long_header), 431),
+            ('one header too long, health', self.head(HEALTH, long_header), 431),
+            ('too many headers', self.head('/app.js', b'X-H: 1\r\n' * 200), 431),
+        )
+        for what, data, status in cases:
+            with self.subTest(what=what):
+                answer = httpfix.raw(self.tport, data)
+                if status is None:
+                    body = answer
+                else:
+                    head, _, body = answer.partition(b'\r\n\r\n')
+                    self.assertTrue(head.startswith(b'HTTP/1.1 %d ' % status), head[:60])
+                self.assertEqual(json.loads(body.decode('utf-8')), fixed)
+                for word in (PAGE, SCRIPT, b'Traceback', b'Python', b'BaseHTTP', b'<html',
+                             b'"tunnel"', b'"store"'):
+                    self.assertNotIn(word, answer)
+        self.assertEqual(calls, [], 'an unreadable request reached a route or the Api')
+        self.assertEqual(self.revision(), before)
+        # refused before the gate: no role, no line of the gate's, and no error
+        self.assertEqual(self.refusals(), [])
+        self.assertEqual([text for level, text in self.lines if level == 'error'], [])
+        lines = [text for level, text in self.lines if level == 'access']
+        self.assertEqual(len(lines), len(cases))
+        for text in lines:
+            self.assertRegex(text, r'^127\.0\.0\.1 - - \d{3} -$')
+        self.assertNoSecret(self.good)
+
 
 class _Request(object):
     """What the gate reads of a request: the one header."""
@@ -619,6 +1084,137 @@ class GateTest(unittest.TestCase):
             self.assertRefusal(gate(_Request()))
             self.assertRefusal(gate(_Request('x')))
             self.assertEqual(gate(_Request(self.good)), auth.OWNER)
+
+    def test_a_stopped_gate_refuses_every_request_and_reads_none(self):
+        gate = self.gate()
+        self.assertEqual(gate(_Request(self.good)), auth.OWNER)
+        self.assertIs(gate.stop(), True)
+        for token in (self.good, None, 'x', self.good):
+            request = _Request(token)
+            self.assertRefusal(gate(request))
+            self.assertEqual(request.read, [], 'a stopped gate read the token')
+        self.assertIs(gate.stop(), True)                    # a second stop is the same stop
+        self.assertRefusal(gate(_Request(self.good)))
+        self.assertEqual(tunnel.CLOSING, 'closing')
+        self.assertEqual(self.lines, [('note', 'the tunnel listener refused a request: closing')])
+
+    def test_a_stop_refuses_the_request_held_on_a_key_fetch_at_once_and_admits_none(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def fetch(team, timeout):
+            entered.set()
+            release.wait(httpfix.TIMEOUT)
+            return ak.document(ak.KEY_A)                    # the right keys, after the stop
+
+        gate = self.gate(keys=access.KeyCache(ak.TEAM, fetch=fetch))
+        answers = []
+        held = threading.Thread(target=lambda: answers.append(gate(_Request(self.good))))
+        self.addCleanup(held.join, httpfix.TIMEOUT)
+        self.addCleanup(release.set)
+        held.start()
+        self.assertTrue(entered.wait(httpfix.TIMEOUT), 'the token asked for no key')
+        self.assertEqual(answers, [])
+        started = time.monotonic()
+        self.assertIs(gate.stop(), True)
+        held.join(httpfix.TIMEOUT)
+        waited = time.monotonic() - started
+        self.assertFalse(held.is_alive(), 'the held request outlived the stop')
+        self.assertFalse(release.is_set())                  # the fetch is still out
+        self.assertLess(waited, access.FETCH_DEADLINE_S / 3.0)
+        self.assertEqual(len(answers), 1)
+        self.assertRefusal(answers[0])
+        self.assertEqual(gate.keys(), (False, ''))
+        # the fetch ends with the right keys: they open nothing
+        release.set()
+        for thread in threading.enumerate():
+            if thread.name == 'hub-access-keys':
+                thread.join(httpfix.TIMEOUT)
+                self.assertFalse(thread.is_alive())
+        self.assertRefusal(gate(_Request(self.good)))
+        self.assertEqual(gate.keys(), (False, ''))
+        self.assertEqual(self.lines, [('note', tunnel.REFUSAL_LINE % tunnel.CLOSING)])
+
+    def test_a_token_whose_check_ends_after_the_stop_is_refused(self):
+        case = self
+
+        class Late(object):
+            """Hands out the right key, after the gate was stopped."""
+            asked = 0
+
+            def get(self, kid):
+                self.asked += 1
+                gate.stop()
+                return case.keys.get(kid)
+
+        late = Late()
+        gate = self.gate(keys=late)
+        self.assertRefusal(gate(_Request(self.good)))
+        self.assertEqual(late.asked, 1)
+        self.assertEqual(self.lines, [('note', tunnel.REFUSAL_LINE % tunnel.CLOSING)])
+
+    def test_a_key_source_whose_stop_fails_still_leaves_the_gate_shut(self):
+        case = self
+
+        class Stubborn(object):
+            stopped = 0
+
+            def get(self, kid):
+                return case.keys.get(kid)
+
+            def stop(self):
+                self.stopped += 1
+                raise RuntimeError('a secret word in an error')
+
+        source = Stubborn()
+        gate = self.gate(keys=source)
+        self.assertEqual(gate(_Request(self.good)), auth.OWNER)
+        self.assertIs(gate.stop(), True)
+        self.assertEqual(source.stopped, 1)
+        self.assertRefusal(gate(_Request(self.good)))
+        self.assertEqual(self.lines, [('note', tunnel.REFUSAL_LINE % tunnel.CLOSING)])
+
+    def test_keys_says_whether_there_are_keys_and_fetches_none(self):
+        self.assertEqual(self.gate().keys(), (True, ''))    # a dict holds its keys already
+        fetches, failing, clock = [], [True], [0.0]
+
+        def fetch(team, timeout):
+            fetches.append(team)
+            if failing[0]:
+                raise OSError('the network is down at %s' % PUBLIC)
+            return ak.document(ak.KEY_A)
+
+        cache = access.KeyCache(ak.TEAM, fetch=fetch, clock=lambda: clock[0])
+        gate = self.gate(keys=cache)
+        self.assertEqual(gate.keys(), (False, ''))
+        self.assertEqual(fetches, [], 'keys() fetched the keys')
+        self.assertRefusal(gate(_Request(self.good)))
+        self.assertEqual((gate.keys(), len(fetches)), ((False, 'keys-fetch'), 1))
+        clock[0] += access.REFETCH_S + 1                    # an attempt is due: keys() makes none
+        self.assertEqual((gate.keys(), len(fetches)), ((False, 'keys-fetch'), 1))
+        failing[0] = False
+        self.assertEqual(gate(_Request(self.good)), auth.OWNER)
+        self.assertEqual((gate.keys(), len(fetches)), ((True, ''), 2))
+        clock[0] += access.STALE_LIMIT_S + 1                # keys too old to serve are no keys
+        self.assertEqual((gate.keys(), len(fetches)), ((False, ''), 2))
+        gate.stop()
+        self.assertEqual(gate.keys(), (False, ''))
+
+    def test_keys_never_raises_and_only_true_is_ready(self):
+        self.assertEqual(self.gate(keys=_Broken()).keys(), (True, ''))  # no ready(): keys in hand
+        source = _Source(self.keys)
+        gate = self.gate(keys=source)
+        for said in (False, None, 1, 'yes', RuntimeError('a secret word')):
+            source.said = said
+            for error in ('', 'keys-fetch at %s' % PUBLIC, None, 7):
+                source.error = error
+                self.assertEqual(gate.keys(), (False, ''), (said, error))
+        source.said = False
+        for reason in access.REASONS:
+            source.error = reason
+            self.assertEqual(gate.keys(), (False, reason))
+        source.said = True
+        self.assertEqual(gate.keys(), (True, ''))
+        self.assertEqual(self.lines, [])
 
 
 if __name__ == '__main__':

@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 from kitlib.config.types import ConfigError
-from kitlib.hubsite import auth, backlog, gitsync, httpd, serve, tunnel
+from kitlib.hubsite import access, auth, backlog, gitsync, httpd, serve, tunnel
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.api import BASE
 from kitlib.hubsite.store import Store, StoreBusy
@@ -1873,16 +1873,78 @@ class TunnelCase(ServeCase):
         self.assertFalse(self.locked())
         self.assertEqual(httpfix.http_threads(), [])
 
-    def test_the_tunnels_owner_is_given_the_reason_of_a_failing_sync_without_credentials(self):
+    def test_the_tunnel_is_told_a_failing_sync_in_one_word_and_the_pc_its_reason(self):
+        # was test_the_tunnels_owner_is_given_the_reason_of_a_failing_sync_without_credentials:
+        # health through the tunnel is fixed words now, so git's reason stays at the PC
         hub = self.build(sync=self.sync_factory())
         self.sync.state = {'failed': 'push', 'detail': WHY}
         hub.start()
-        r = self.through(hub.listeners[1].port, HEALTH)
+        local, tunnelled = hub.listeners
+        r = self.through(tunnelled.port, HEALTH)
         self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(r.json(), {'ok': True, 'version': 'v1', 'store': 'ok', 'git': 'failed',
+                                    'tunnel': 'on'})
+        text = r.body.decode('utf-8')
+        for word in CREDENTIALS + ('git.example.test', 'Could not resolve', 'push',
+                                   os.path.basename(self.root)):
+            self.assertNotIn(word, text)
+        # the owner at the local listener is given the reason as before, without credentials
+        r = get(local.port, HEALTH, self.owner)
         git = r.json()['git']
         self.assertEqual((git['failed'], git['detail']), ('push', serve.scrub(WHY)))
+        self.assertEqual(r.json()['store'], os.path.abspath(self.store_dir))
         for word in CREDENTIALS:
             self.assertNotIn(word, r.body.decode('utf-8'))
+
+    def test_a_close_refuses_the_request_held_on_a_key_fetch_and_stays_clean(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def fetch(team, timeout):
+            entered.set()
+            release.wait(TIMEOUT)               # a key source that hangs past every deadline
+            raise OSError('the network is down')
+
+        hub = self.build(sync=self.sync_factory(),
+                         access_keys=lambda team: access.KeyCache(team, fetch=fetch))
+        hub.start()
+        local, tunnelled = hub.listeners
+        self.assertEqual(post(local.port, BASE + '/todos', {'title': 't'}, self.owner).status,
+                         200)
+        written = hub.store.revision
+        got = []
+        client = threading.Thread(target=lambda: got.append(self.through(tunnelled.port, HEALTH)),
+                                  name='test-held', daemon=True)
+        self.addCleanup(client.join, TIMEOUT)
+        self.addCleanup(release.set)
+        client.start()
+        self.assertTrue(entered.wait(TIMEOUT), 'the token asked for no key')
+        self.assertEqual(got, [])
+        # well inside the time a held request would wait for its keys (access.FETCH_DEADLINE_S)
+        self.assertLess(5, access.FETCH_DEADLINE_S)
+        self.assertIs(hub.close(5), True)
+        self.assertFalse(release.is_set())      # the fetch is still out: nobody waited for it
+        # the last pass ran, with both doors closed and the store still this server's
+        self.assertEqual(self.calls, ['sync.start', 'sync.stop', 'sync.sync_once'])
+        self.assertEqual(self.sync.last,
+                         {'locked': True, 'doors': [True, True], 'writes': written})
+        # the held request was answered, with the one refusal
+        client.join(TIMEOUT)
+        self.assertEqual([r.status for r in got], [403])
+        self.assertEqual(got[0].json(), {'ok': False, 'error': {
+            'code': 'forbidden', 'field': 'access', 'message': tunnel.REFUSED}})
+        self.assertIn(('note', tunnel.REFUSAL_LINE % tunnel.CLOSING), self.lines)
+        self.assertEqual(self.errors(), [])
+        self.assertEqual(httpfix.http_threads(), [])
+        self.assertFalse(self.locked())
+        for lis in hub.listeners:
+            self.assertEqual(lis._server.socket.fileno(), -1, 'a listening socket was left open')
+        # the one thread a stop cannot end is the fetch itself: it ends when its fetcher does
+        release.set()
+        for thread in threading.enumerate():
+            if thread.name == 'hub-access-keys':
+                thread.join(TIMEOUT)
+                self.assertFalse(thread.is_alive(), 'the key fetch thread never ended')
+        self.assertEqual(hub.tunnel, serve.TUNNEL_BOUND)    # a closed gate has no keys to say
 
     def test_status_lines_say_the_tunnel_after_the_backlog_and_before_what_is_unavailable(self):
         health = {'revision': 3, 'git': {'running': False, 'off': serve.SYNC_OFF},
@@ -1894,6 +1956,13 @@ class TunnelCase(ServeCase):
             'unavailable: usage (KeyError)'])
         health['tunnel'] = 'off: ' + tunnel.NO_AUD
         self.assertEqual(serve.status_lines(health, NOW)[4], 'tunnel: off: ' + tunnel.NO_AUD)
+        # bound, and the Access keys not fetched: the server's words as they are
+        why = serve.TUNNEL_BOUND_WHY % 'keys-fetch'
+        self.assertEqual((serve.TUNNEL_ON, serve.TUNNEL_BOUND, why),
+                         ('on', 'bound, keys not fetched', 'bound, keys not fetched (keys-fetch)'))
+        for said in (serve.TUNNEL_BOUND, why):
+            health['tunnel'] = said
+            self.assertEqual(serve.status_lines(health, NOW)[4], 'tunnel: ' + said)
         # what is printed never holds the user part of a URL, whatever a server answered
         health['tunnel'] = 'off: https://someone:s3cret@hub.example.invalid'
         self.assertEqual(serve.status_lines(health, NOW)[4],

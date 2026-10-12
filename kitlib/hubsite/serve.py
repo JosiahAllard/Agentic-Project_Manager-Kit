@@ -11,7 +11,8 @@ and 9).
   Sources(...)                                  where each part comes from
   machine_sources(home=None, sync=True)         this machine's Sources, from its machine config
   SiteViews                                     the Api's `views` object over those sources
-  health_route(api, views, tunnel='')           a listener's route for GET health (below)
+  health_route(api, views, tunnel='', fixed=False)
+                                                a listener's route for GET health (below)
   scrub(text)                                   `text` without the `user:password@` of any URL
   ask(port, method, path, token=None, body=None, timeout=ASK_TIMEOUT_S) -> (status, object)
   status_lines(health, now=None)                what `hub status` prints for a GET health answer
@@ -37,13 +38,18 @@ text is for the owner's console (it may name a folder):
      settings.access can serve it. It never stops the server: with no Access settings at all
      there is no second listener and no line about it; with settings that cannot serve
      (tunnel.TunnelConfigError) or a port that cannot be bound, a line in `Hub.notes` says why
-     and the local listener serves alone. `Hub.tunnel` is then TUNNEL_OFF with the reason in
-     fixed words, else TUNNEL_ON, and a note says which port needs an Access token.
+     and the local listener serves alone. So it does when tunnel.start raises anything else
+     (the maker of the key source, say): the note then names the exception's class and none
+     of its text, and the reason is TUNNEL_FAILED. `Hub.tunnel` is then TUNNEL_OFF with the
+     reason in fixed words. With a listener bound, a note says which port needs an Access
+     token and `Hub.tunnel` is what "GET health and the sync's reason" gives below.
 `Hub.listeners` is a list: the local listener first, then the tunnel's when there is one.
 start() and close() carry every listener in it, and a start-up that fails after one was bound
-closes its door. Both get the same health_route, so the tunnel's owner too sees why a sync
-failed. The tunnel listener has no pairing routes and no Host rule; the local listener's rules
-are what they were with no tunnel, and it never reads the Access header.
+closes its door. Each gets a health_route of its own: the local listener's answers as it did
+with no tunnel, the tunnel's (fixed=True) answers fixed words only, so the tunnel's owner is
+told that a sync failed and not why. The tunnel listener has no pairing routes and no Host
+rule; the local listener's rules are what they were with no tunnel, and it never reads the
+Access header.
 
 The log. `log(level, text)` gets the listeners' lines (httpd: 'access', 'error'), the tunnel
 gate's ('note' or 'error' for a request it refused, at most one a reason a minute:
@@ -62,7 +68,11 @@ A sync with push on and no remote to push to is failing from the start (gitsync.
 the first look logs that.
 
 The clean close, in this order (Hub.close; run() ends with it, also on Ctrl+C):
-  1. every listener's door: no new connection, and no write begins (httpd refuses it);
+  1. every listener's gate that has a stop() (the tunnel's: tunnel.Gate.stop), then every
+     listener's door. The gate first: a tunnel request held on a fetch of the Access keys
+     (up to access.FETCH_DEADLINE_S, longer than a step's `timeout`) is refused at once with
+     the tunnel's one answer, so step 3 does not wait for it; a stop admits nobody. Then no
+     new connection, and no write begins (httpd refuses it);
   2. the backlog timer;
   3. the requests in flight, except the long waits: after this no write is in flight;
   4. the git sync, only when the server was started: a 'note' line says that the wait for git
@@ -138,17 +148,35 @@ anyone. The route adds `git.detail`, the reason of a failing sync with scrub() a
 owner role only: an agent and a caller with no role get the Api's answer as it is. `detail` may
 name a remote URL or a folder of this machine, which is why it is the owner's alone.
 The route also adds `tunnel` to every 200 answer, so for the owner and the agent alike and on
-both listeners: TUNNEL_ON, or TUNNEL_OFF with why the tunnel listener did not start, in
-kitlib.hubsite.tunnel's fixed phrases or TUNNEL_BIND. It never holds a value of the settings
-(no team name, audience tag or email) and never the system's words for a failed bind: those
-are in the console note. `on` says the listener is bound, not that a tunnel program reaches it
-or that the team's keys can be fetched.
+both listeners; `hub status` prints it (status_lines) and `Hub.tunnel` is the local listener's:
+  TUNNEL_OFF with why the tunnel listener did not start, in kitlib.hubsite.tunnel's fixed
+      phrases, TUNNEL_BIND or TUNNEL_FAILED;
+  TUNNEL_ON when the listener is bound and its gate has the team's keys to check a token with
+      (tunnel.Gate.keys: a good fetch no older than access.STALE_LIMIT_S);
+  TUNNEL_BOUND when it is bound and has no such keys. On the local listener, and there only,
+      TUNNEL_BOUND_WHY names the reason the last fetch failed, one word of access.REASONS
+      (`keys-fetch`, ...), never an exception's text.
+It never holds a value of the settings (no team name, audience tag or email) and never the
+system's words for a failed bind: those are in the console note. Health asks the gate what it
+holds: it starts no key fetch and waits for none, and the gate fetches keys only when a request
+brings a token. So a server just started says TUNNEL_BOUND until the first request with a token
+made a good fetch, and `on` does not say that a tunnel program reaches the listener.
+
+GET health through the tunnel (health_route with fixed=True, _fixed_health). The tunnel
+listener's answer holds fixed words and no other value: {ok: true, version, store: WORD_OK,
+git: WORD_OK | WORD_FAILED | WORD_OFF | WORD_UNKNOWN, tunnel: TUNNEL_ON | TUNNEL_BOUND}. No
+store folder, no git branch, step or reason, no backlog, no revision. `store` is WORD_OK
+whenever the Api answered at all; `git` is WORD_OFF with no sync, WORD_FAILED when its last
+pass failed, WORD_UNKNOWN when the Api gave no git status. An answer of the Api that is no 200
+leaves as its status and error code with the message HEALTH_REFUSED, never the Api's own
+message.
 
 ask() is the one request every local client makes (`hub status`, `hub open`, and
 kitlib.hubsite.client for the other verbs): to the loopback listener through http.client, which
 uses no proxy, so a token never leaves this machine. It names itself USER_AGENT.
 """
 import datetime
+import functools
 import http.client
 import json
 import os
@@ -160,7 +188,7 @@ from kitlib.config import user
 from kitlib.config.types import ConfigError
 
 from . import api as _api
-from . import auth, backlog, derived, gitsync, httpd, tunnel
+from . import access, auth, backlog, derived, gitsync, httpd, tunnel
 from .store import HubError, Store, StoreBusy
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
@@ -173,9 +201,16 @@ USER_AGENT = 'hub-client'       # what ask() calls itself: it names no person an
 SYNC_OFF = 'git sync is off on this server'
 SYNC_REFUSED = 'git sync was refused at start-up: the server console says why'
 TUNNEL_ON = 'on'                # GET health's `tunnel`, and `Hub.tunnel`
+TUNNEL_BOUND = 'bound, keys not fetched'
+TUNNEL_BOUND_WHY = 'bound, keys not fetched (%s)'   # the local listener's: one of access.REASONS
 TUNNEL_OFF = 'off: %s'
 TUNNEL_BIND = 'the tunnel port could not be bound: the server console says why'
+TUNNEL_FAILED = 'the tunnel listener could not be made: the server console says why'
 TUNNEL_OFF_NOTE = 'the tunnel listener is off: %s'
+TUNNEL_FAILED_NOTE = 'it could not be made (%s)'    # the exception's class name, never its text
+# GET health through the tunnel listener: these words and no other value
+WORD_OK, WORD_FAILED, WORD_OFF, WORD_UNKNOWN = 'ok', 'failed', 'off', 'unknown'
+HEALTH_REFUSED = 'health could not be answered'
 TUNNEL_ON_NOTE = ('the tunnel listener is on %s: every request there needs a Cloudflare Access '
                   'token')
 NO_USAGE_SOURCE = 'no launcher usage source configured'     # derived.usage's own phrase
@@ -265,6 +300,9 @@ class Sources(object):
       access_keys  callable(team) -> the tunnel gate's key source (get(kid)); None:
                    kitlib.hubsite.access.KeyCache, which asks Cloudflare for the team's keys
                    when a token first needs one. Called only when the tunnel listener starts.
+                   What it raises turns the tunnel off (TUNNEL_FAILED). A key source may also
+                   have ready() (are there keys now: health's `tunnel`; one without it counts
+                   as having them), `error` and stop() (called first at the close)
       access_now   callable() -> the Unix time the tunnel gate checks a token's times against;
                    None: time.time
     """
@@ -517,9 +555,12 @@ def _make_sync(settings, sources, notes):
 
 
 def _make_tunnel(settings, sources, api, notes, log):
-    """(the tunnel listener or None, what health says of it): module docstring, "Start-up",
-    step 5. The listener is bound and not started, with no route yet. The note of a port that
-    could not be bound carries the system's reason; health carries TUNNEL_BIND instead."""
+    """(the tunnel listener, None) or (None, what health says of there being none: TUNNEL_OFF
+    with a fixed reason): module docstring, "Start-up", step 5. The listener is bound and not
+    started, with no route yet. The note of a port that could not be bound carries the system's
+    reason; health carries TUNNEL_BIND instead. Whatever else tunnel.start raises is no reason
+    to refuse the local listener: the note names the exception's class and nothing of its text
+    (a key source's maker may put a setting in it), and health carries TUNNEL_FAILED."""
     try:
         # through the module, never a name bound at import: a test replaces tunnel.start
         lis = tunnel.start(settings, api, static_dir=sources.static_dir, log=log,
@@ -531,26 +572,75 @@ def _make_tunnel(settings, sources, api, notes, log):
     except httpd.BindRefused as e:
         notes.append(scrub(TUNNEL_OFF_NOTE % e))
         return None, TUNNEL_OFF % TUNNEL_BIND
+    except Exception as e:          # noqa: BLE001 - the local listener serves alone
+        notes.append(TUNNEL_OFF_NOTE % (TUNNEL_FAILED_NOTE % type(e).__name__))
+        return None, TUNNEL_OFF % TUNNEL_FAILED
     notes.append(TUNNEL_ON_NOTE % lis.url)
-    return lis, TUNNEL_ON
+    return lis, None
 
 
-def health_route(api, views, tunnel=''):
+def _tunnel_state(listener, why=False):
+    """What health says of the bound tunnel `listener`: TUNNEL_ON when its gate has the keys to
+    check a token with (tunnel.Gate.keys: it asks the key source and starts no fetch, waits for
+    none), else TUNNEL_BOUND. With `why`, and a reason that is one of access.REASONS, it is
+    TUNNEL_BOUND_WHY with that word. A gate that cannot say, or that raises, has no keys."""
+    try:
+        fetched, reason = listener.gate.keys()
+    except Exception:               # noqa: BLE001 - health still answers
+        fetched, reason = False, ''
+    if fetched is True:
+        return TUNNEL_ON
+    if why and isinstance(reason, str) and reason in access.REASONS:
+        return TUNNEL_BOUND_WHY % reason
+    return TUNNEL_BOUND
+
+
+def _fixed_health(status, obj, tunnel):
+    """GET health as the tunnel listener answers it, from the Api's (status, obj): fixed words
+    and nothing else (module docstring, "GET health through the tunnel")."""
+    if status != 200 or not isinstance(obj, dict):
+        error = obj.get('error') if isinstance(obj, dict) else None
+        code = error.get('code') if isinstance(error, dict) else None
+        if status == 200:           # a 200 that is no object is no answer at all
+            status, code = 500, 'internal'
+        elif not (isinstance(code, str) and code in _api.STATUS):
+            code = 'internal'
+        return httpd.refusal(status, code, HEALTH_REFUSED)
+    git = obj.get('git')
+    if not isinstance(git, dict):
+        word = WORD_UNKNOWN
+    elif git.get('off'):
+        word = WORD_OFF
+    else:
+        word = WORD_FAILED if git.get('failed') else WORD_OK
+    said = {'ok': True, 'version': _api.API_VERSION, 'store': WORD_OK, 'git': word}
+    if tunnel:
+        said['tunnel'] = tunnel
+    return httpd.json_response(200, said)
+
+
+def health_route(api, views, tunnel='', fixed=False):
     """The route a listener answers GET health with (module docstring, "GET health and the
     sync's reason"): the answer of `api` (an Api), and for the owner role `git.detail` from
-    `views` (a SiteViews) when the sync is failing at the step the answer names. `tunnel`
-    (TUNNEL_ON, or TUNNEL_OFF with a fixed reason) is added to every 200 answer when given."""
+    `views` (a SiteViews) when the sync is failing at the step the answer names. `tunnel` is
+    added to every 200 answer when given: a text (TUNNEL_OFF with a fixed reason), or a callable
+    giving one, asked at each request (_tunnel_state). With `fixed`, the tunnel listener's
+    route, the answer is _fixed_health's instead: the Api is asked all the same, and nothing of
+    its answer but a fixed word leaves."""
     def route(request):
         # raise_unexpected: as the listener's own Api call, so an error is logged there
         status, obj = api.call(request.method, request.path, request.role, request.body,
                                request.query, request.via, raise_unexpected=True)
+        said = tunnel() if callable(tunnel) else tunnel
+        if fixed:
+            return _fixed_health(status, obj, said)
         git = obj.get('git') if status == 200 and request.role == _api.OWNER else None
         if isinstance(git, dict):
             failed, detail = views.git_failure()
             if detail and git.get('failed') == failed:
                 git['detail'] = detail
-        if status == 200 and tunnel and isinstance(obj, dict):
-            obj['tunnel'] = tunnel
+        if status == 200 and said and isinstance(obj, dict):
+            obj['tunnel'] = said
         return httpd.json_response(status, obj)
     return route
 
@@ -612,14 +702,18 @@ def build(settings, sources, log=None):
         creds = auth.Credentials(sources.tokens, port=local.port)
         local.gate = httpd.local_gate(creds)
         local.routes.update(httpd.pair_routes(creds))
-        tunnelled, tunnel_state = _make_tunnel(settings, sources, api, notes, log)
+        tunnelled, said = _make_tunnel(settings, sources, api, notes, log)
+        health = ('GET', _api.BASE + '/health')
         if tunnelled is not None:
             listeners.append(tunnelled)     # at once: a failure below closes its door too
-        health = health_route(api, views, tunnel_state)
-        for lis in listeners:
-            lis.routes[('GET', _api.BASE + '/health')] = health
+            # the local listener's health and Hub.tunnel say why there are no keys; the
+            # tunnel's own health never does
+            said = functools.partial(_tunnel_state, tunnelled, True)
+            tunnelled.routes[health] = health_route(
+                api, views, functools.partial(_tunnel_state, tunnelled), fixed=True)
+        local.routes[health] = health_route(api, views, said)
         return Hub(settings, store, api, views, creds, listeners, sync, views_b, notes, log,
-                   tunnel=tunnel_state)
+                   tunnel=said)
     except BaseException:
         for lis in listeners:
             lis.close_door()
@@ -629,9 +723,10 @@ def build(settings, sources, log=None):
 
 class Hub(object):
     """One built server (build): its parts, start() and close(). `notes` are start-up lines for
-    the console; `port` and `url` are the local listener's; `tunnel` is what GET health says of
-    the tunnel listener (TUNNEL_ON, or TUNNEL_OFF with the reason; '' for a Hub made without
-    build)."""
+    the console; `port` and `url` are the local listener's; `tunnel` is what the local listener's
+    GET health says of the tunnel listener at this moment (TUNNEL_ON, TUNNEL_BOUND or
+    TUNNEL_BOUND_WHY, or TUNNEL_OFF with the reason; '' for a Hub made without build). The
+    `tunnel` given here is that text or a callable giving it."""
 
     def __init__(self, settings, store, api, views, creds, listeners, sync, backlog_views, notes,
                  log=None, tunnel=''):
@@ -644,7 +739,7 @@ class Hub(object):
         self.sync = sync
         self.backlog = backlog_views
         self.notes = notes
-        self.tunnel = tunnel
+        self._tunnel = tunnel
         self._log = log
         self._life = threading.Lock()       # start() and close()
         self._started = False
@@ -659,6 +754,10 @@ class Hub(object):
     @property
     def url(self):
         return self.listeners[0].url
+
+    @property
+    def tunnel(self):
+        return self._tunnel() if callable(self._tunnel) else self._tunnel
 
     def _say(self, text, level='error'):
         """One line of the hub's own to the log, with scrub() applied."""
@@ -797,6 +896,12 @@ class Hub(object):
             clean = []
             synced = self.sync is not None and self._started
             try:
+                for lis in self.listeners:
+                    # first: a request a gate holds (the tunnel's, on a key fetch) is refused
+                    # now, so it is not in flight when the requests are waited for below
+                    stop = getattr(getattr(lis, 'gate', None), 'stop', None)
+                    if callable(stop):
+                        clean.append(self._step('the listener gate', timeout, stop))
                 for lis in self.listeners:
                     clean.append(self._step('the listener door', timeout, _shut, lis))
                 if self.backlog is not None:
@@ -958,9 +1063,10 @@ def _git_line(git):
 def status_lines(health, now=None):
     """The lines `hub status` prints for a GET health answer: the revision, the store (the
     owner's answer has it), the git sync, each repository's backlog fetch age, the tunnel
-    listener in one line (`tunnel: on`, or `tunnel: off: ` and why; none when the answer has no
-    such text, as an older server's) and what is unavailable. `now`: an aware datetime (default
-    the UTC clock)."""
+    listener in one line (`tunnel: on`, `tunnel: bound, keys not fetched` with the reason in
+    brackets when health gave one, or `tunnel: off: ` and why; none when the answer has no such
+    text, as an older server's) and what is unavailable. `now`: an aware datetime (default the
+    UTC clock)."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     lines = ['revision %s' % health.get('revision')]
     if health.get('store'):
