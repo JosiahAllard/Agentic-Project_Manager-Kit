@@ -188,11 +188,12 @@ class Holds(StoreCase):
         self.assertEqual(cm.exception.code, 1)
         self.assertIn("it ended: released", cm.exception.message)
 
-    def drawn(self, taken):
-        """(a patch of the id builder create uses: `taken` first, then an id nothing has, that
-        id). A third draw is an error (StopIteration)."""
-        fresh = taken[:-4] + ("0000" if taken[-4:] != "0000" else "0001")
-        return mock.patch.object(hl, "new_id", side_effect=[taken, fresh]), fresh
+    def drawn(self, *taken):
+        """(a patch of the id builder create uses: each of `taken` in turn, then an id nothing
+        has, that id). A draw after it is an error (StopIteration)."""
+        fresh = next(i for i in (taken[0][:-4] + "%04x" % n for n in range(len(taken) + 1))
+                     if i not in taken)
+        return mock.patch.object(hl, "new_id", side_effect=list(taken) + [fresh]), fresh
 
     def test_an_id_a_live_hold_has_is_drawn_again(self):
         """An id is a second stamp and a 2-byte token, so two holds made in one second can draw
@@ -226,6 +227,26 @@ class Holds(StoreCase):
         self.assertEqual(b["id"], fresh)
         self.assertEqual(self.store.read("ended/%s.json" % fresh)["note"], "second")
         self.assertEqual(ids.call_count, 2)
+
+    def test_an_id_is_drawn_until_one_is_free(self):
+        """One more draw is not enough: the id drawn after a live hold's may be an ended
+        hold's. create draws until neither folder has the id."""
+        gone, _ = self.make(owner="owner", scope="slots", slots={"cpu": [5], "gpu": []},
+                            note="ended")
+        hl.end_hold(self.store, self.L, gone["id"])
+        live, _ = self.agent_hold(session="sess-A")
+        ended = self.store.read("ended/%s.json" % gone["id"])
+        before = self.store.read("holds/%s.json" % live["id"])
+        patch, fresh = self.drawn(live["id"], gone["id"])
+        with patch as ids:
+            b, _ = self.make(owner="owner", scope="slots", slots={"cpu": [4], "gpu": []},
+                             note="third")
+        hl.end_hold(self.store, self.L, b["id"])
+        self.assertEqual(self.store.read("ended/%s.json" % gone["id"]), ended)
+        self.assertEqual(self.store.read("holds/%s.json" % live["id"]), before)
+        self.assertEqual(b["id"], fresh)
+        self.assertEqual(self.store.read("ended/%s.json" % fresh)["note"], "third")
+        self.assertEqual(ids.call_count, 3)
 
     def rec(self, rid, slug="t", kind="engine-test", role="agent"):
         return {"id": rid, "repo": "kit", "slug": slug, "kind": kind, "pid": os.getpid(),
