@@ -296,7 +296,7 @@ button.danger{color:var(--warn)}
   const why = e => (e && e.message) || "the hub server refused the write";
   const NOT_READY = "Waiting for the hub server", NOT_READY_WHY = "Nothing has been read from the hub server yet. The line at the top says why when it cannot be reached.";
 
-  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "questions"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
+  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "questions"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["new", "current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
   // An answer's draft is kept in the browser's storage and in the page itself, so it survives a redraw
   // where the browser gives the page no storage.
   const draftKey = id => "oq.draft." + id, drafts = new Map();
@@ -305,6 +305,14 @@ button.danger{color:var(--warn)}
   const clearDraft = id => { drafts.delete(id); try { localStorage.removeItem(draftKey(id)); } catch(e){} };
   // What a card has to say that must outlast a redraw (its question changed on the server), by id.
   const said = new Map();
+  // Two things a card may know that the lists do not yet, each held by id with the question as the page
+  // held it then (asIs): an answer that was sent and not read back (sent), and a refusal for a changed
+  // question that could not be read again (unread). Each ends once the lists hold the question otherwise.
+  const sent = new Map(), unread = new Map();
+  const asIs = d => JSON.stringify([d.version, d.status, d.answer || null]);
+  const CHANGED = "Not sent: this question changed on the hub server while you were answering. Your draft is kept; check it against the question as it is now, then send again.";
+  const CHANGED_UNREAD = "Not sent: this question changed on the hub server and could not be read again, so this card still shows it as it was. Your draft is kept; send again once the page has read the hub server.";
+  const SENT_UNREAD = "Your answer was sent. The hub server could not be read again, so this card still shows the question as it was before your answer; it shows the answer once the server is read.";
 
   function el(tag, attrs, ...kids){
     const n = document.createElement(tag);
@@ -387,11 +395,11 @@ button.danger{color:var(--warn)}
   }
 
   // The usage chip is one figure, the highest of every account's two windows: it says whose and which. A tie goes to
-  // the weekly window (it lasts longer), then to the first account by name.
+  // the weekly window (it lasts longer) whichever account it is on, then to the first account by name.
   function usagePeak(rows){
     let top = { pct: -1, win: "", account: "" };
     for (const u of rows.slice().sort((a,b) => String(a.account).localeCompare(String(b.account), [], {numeric:true})))
-      for (const [win, v] of [["wk", u.seven_day], ["5h", u.five_hour]]) { const n = pctOf(v); if (n > top.pct) top = { pct: n, win, account: String(u.account) }; }
+      for (const [win, v] of [["wk", u.seven_day], ["5h", u.five_hour]]) { const n = pctOf(v); if (n > top.pct || (n === top.pct && n >= 0 && win === "wk" && top.win !== "wk")) top = { pct: n, win, account: String(u.account) }; }
     return top;
   }
   const usageChip = t => t.pct < 0 ? "–" : t.pct + "% " + t.win + " · " + (/^\d+$/.test(t.account) ? "acct " + t.account : t.account);
@@ -1063,7 +1071,10 @@ button.danger{color:var(--warn)}
   function card(d){
     const opts = Array.isArray(d.options) ? d.options : [];
     const rec = Number.isInteger(d.recommended) ? d.recommended : 0;
-    const editable = d.status === "open" || (d.status === "answered" && state.editing.has(d.id));
+    if (sent.has(d.id) && sent.get(d.id) !== asIs(d)) sent.delete(d.id);
+    // The lists now hold the changed question: the refusal's line is the one about the question as it is now.
+    if (unread.has(d.id) && unread.get(d.id) !== asIs(d)) { unread.delete(d.id); if (said.has(d.id)) said.set(d.id, CHANGED); }
+    const editable = !sent.has(d.id) && (d.status === "open" || (d.status === "answered" && state.editing.has(d.id)));
     const head = el("div", {class:"meta"},
       d.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null,
       el("span", {class:"id", text: d.id}),
@@ -1100,23 +1111,28 @@ button.danger{color:var(--warn)}
       const btn = el("button", {class:"primary", type:"button", text: d.status === "answered" ? "Save new answer" : "Send answer"});
       btn.disabled = draft.choice == null || (draft.choice === "other" && !draft.note.trim());
       btn.addEventListener("click", async () => {
-        btn.disabled = true; said.delete(d.id); status.className = "status"; status.textContent = "Sending…";
+        btn.disabled = true; said.delete(d.id); unread.delete(d.id); status.className = "status"; status.textContent = "Sending…";
         try {
           // The choice is the option's place in the list, or "other" with a note; the server writes the label and the time.
           await hub.post("/questions/" + seg(d.id) + "/answer", { choice: draft.choice, note: (draft.note||"").trim(), ...pin(d) });
-          clearDraft(d.id); state.editing.delete(d.id); await refresh().catch(() => {}); render();
+          // Sent. If the lists cannot be read again the card is still the question from before the answer:
+          // it says the answer was sent and offers no second send (which the server would refuse).
+          clearDraft(d.id); state.editing.delete(d.id); await refresh().catch(() => { sent.set(d.id, asIs(d)); }); render();
         } catch (e) {
           // The question changed meanwhile: the lists are read again, so the card is the question as it is now
-          // (and names its new version on the next send), with the draft still in it.
-          if (e.status === 409) { said.set(d.id, "Not sent: this question changed on the hub server while you were answering. Your draft is kept; check it against the question as it is now, then send again."); await refresh().catch(() => {}); render(); return; }
+          // (and names its new version on the next send), with the draft still in it. If they cannot be read,
+          // the card is still the old question and its line says so, until a later read brings the new one.
+          if (e.status === 409) { said.set(d.id, CHANGED); await refresh().catch(() => { unread.set(d.id, asIs(d)); said.set(d.id, CHANGED_UNREAD); }); render(); return; }
           status.className = "status err";
           status.textContent = "Not sent: " + why(e) + ". Your draft is kept; try again.";
           btn.disabled = false;
         }
       });
       const acts = el("div", {class:"act"}, btn, status);
-      if (d.status === "answered") acts.append(el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.editing.delete(d.id); clearDraft(d.id); said.delete(d.id); render(); }}));
+      if (d.status === "answered") acts.append(el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.editing.delete(d.id); clearDraft(d.id); said.delete(d.id); unread.delete(d.id); render(); }}));
       parts.push(fs, note, acts);
+    } else if (sent.has(d.id)) {
+      parts.push(el("p", {class:"gone", role:"status", text: SENT_UNREAD}));
     } else if (d.answer) {
       const a = d.answer;
       const pick = a.choice === "other" ? "Something else" : (a.label || opts[a.choice]?.label || "—");
@@ -1174,7 +1190,8 @@ button.danger{color:var(--warn)}
   });
   $("#stabs").addEventListener("click", e => {
     const t = e.target.closest(".tab"); if (!t) return;
-    state.sfilter = t.dataset.sf; render();
+    state.sfilter = t.dataset.sf; try { localStorage.setItem("oq.sfilter", state.sfilter); } catch(err){}
+    render();
   });
   function storyTo(){
     const r = state.brepo;

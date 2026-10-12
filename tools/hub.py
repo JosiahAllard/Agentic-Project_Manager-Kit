@@ -47,11 +47,11 @@ The verbs below ask the running server through kitlib.hubsite.client. Each takes
 the lines named here. A verb marked (owner) carries the owner's token, the others the agent's;
 the server alone decides what a role may do.
 
-  hub.py questions [--status S] [--repo R]          `Q-1 open [repo] title` for each
+  hub.py questions [--status S] [--repo R]          `Q-1 v2 open [repo] title` for each
   hub.py questions add --title T [--repo R] [--context-file F] [--option "label::description"
         ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from NAME]
                                                      `ASKED Q-2`, then a line for each warning
-  hub.py questions log Q-1 <ruling id> [--if-version V]      `LOGGED Q-1 <ruling id>`
+  hub.py questions log Q-1 <ruling id> --if-version V        `LOGGED Q-1 <ruling id>`
   hub.py answer Q-1 --choice N|other [--note TEXT] [--if-version V]     (owner)
                                                      `ANSWERED Q-1 <label>`
   hub.py todos [--status S] [--repo R]              `T-1 open [repo] title` for each
@@ -59,10 +59,10 @@ the server alone decides what a role may do.
         [--urgent] [--from NAME | --owner]           `ADDED T-2`; --owner: the owner's own to-do
   hub.py todos done T-1 [--undo] [--if-version V]   (owner) `DONE T-1`, `REOPENED T-1`
   hub.py todos ack T-1                              `ACKED T-1`
-  hub.py stories [--status S] [--repo R]            `S-1 submitted [repo] title` for each
+  hub.py stories [--status S] [--repo R]            `S-1 v2 submitted [repo] title` for each
   hub.py stories add --repo R --title T --story-file F [--urgent]       (owner) `SUBMITTED S-2`
   hub.py stories set S-1 --status review|questions|added|declined [--reviewer NAME]
-        [--review-note TEXT] [--backlog-id ID] [--closed-note TEXT] [--if-version V]
+        [--review-note TEXT] [--backlog-id ID] [--closed-note TEXT] --if-version V
                                                      `SET S-1 <status>`
   hub.py stories withdraw S-1                       (owner) `WITHDRAWN S-1`
   hub.py to-pm [--status S] [--repo R]              `P-1 queued [repo] text` for each
@@ -88,8 +88,10 @@ the server alone decides what a role may do.
       a finding is an error.
 
 `--choice N` and `--recommended N` are the option's place in the question's list, counted from
-0 as the api counts it. A write that pins a version the caller did not name (questions log,
-stories set) takes the version the document has when the verb runs.
+0 as the api counts it. `questions log` and `stories set` need --if-version V: the version of the
+document the caller read and decided on, which the `questions` and `stories` lines show as `v2`
+and --json as `version`. Without it the verb is a usage error and asks nothing; with a version
+the document no longer has, the server refuses the write (`REFUSED conflict`).
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.hubsite, prints and exits.
 Exit codes: 0 ok; 1 refused (`REFUSED: ...`, or `REFUSED <code>: <message>` when the server
@@ -195,9 +197,15 @@ def _asks(p):
     return p
 
 
-def _pins(p):
+def _pins(p, required=False):
     p.add_argument('--if-version', dest='if_version', type=_count, default=None, metavar='V',
-                   help='refuse unless the document has this version')
+                   required=required, help='refuse unless the document has this version')
+
+
+def _repo(p):
+    """--repo of an `add` whose verb lists by --repo too. No default is set, as in _asks: the
+    sub-verb's own would put None over a --repo given before `add`. Read it with getattr."""
+    p.add_argument('--repo', default=argparse.SUPPRESS)
 
 
 def _listed(sub, name, what, statuses=None, repo=True):
@@ -221,13 +229,13 @@ def _client_verbs(sub):
                 S['questions'])
     x = _leaf(q, 'add', 'ask the owner a question')
     x.add_argument('--title', required=True)
-    x.add_argument('--repo')
+    _repo(x)
     x.add_argument('--context-file', dest='context_file', metavar='F',
                    help='a UTF-8 file with the context of the question')
     x.add_argument('--option', dest='options', action='append', type=_option, default=[],
                    metavar='"label::description"', help='an answer to choose (repeatable)')
     x.add_argument('--recommended', type=_count, metavar='N',
-                   help='the place of the recommended option, from 0')
+                   help='the place of the recommended option (counts from 0)')
     x.add_argument('--refs', nargs='+', metavar='ID')
     x.add_argument('--urgent', action='store_true')
     x.add_argument('--story', metavar='S-n')
@@ -235,12 +243,13 @@ def _client_verbs(sub):
     x = _leaf(q, 'log', 'record the ruling an answered question was logged as')
     x.add_argument('id')
     x.add_argument('ruling', metavar='ruling-id')
-    _pins(x)
+    _pins(x, required=True)
 
     x = _asks(sub.add_parser('answer', help='answer a question (the owner)'))
     x.add_argument('id')
     x.add_argument('--choice', required=True, type=_choice, metavar='N|other',
-                   help='the place of the chosen option, from 0, or other (which needs --note)')
+                   help='the place of the chosen option (counts from 0), or other (which needs '
+                        '--note)')
     x.add_argument('--note')
     _pins(x)
 
@@ -250,7 +259,7 @@ def _client_verbs(sub):
     x.add_argument('--detail')
     x.add_argument('--command', dest='commands', action='append', metavar='C',
                    help='a command the to-do names (repeatable)')
-    x.add_argument('--repo')
+    _repo(x)
     x.add_argument('--refs', nargs='+', metavar='ID')
     x.add_argument('--urgent', action='store_true')
     who = x.add_mutually_exclusive_group()
@@ -276,14 +285,14 @@ def _client_verbs(sub):
     x.add_argument('--review-note', dest='review_note')
     x.add_argument('--backlog-id', dest='backlog_id')
     x.add_argument('--closed-note', dest='closed_note')
-    _pins(x)
+    _pins(x, required=True)
     _leaf(s, 'withdraw', 'withdraw a story (the owner)').add_argument('id')
 
     m = _listed(sub, 'to-pm', 'list the messages to the PM; add, send, reply', S['to_pm'])
     x = _leaf(m, 'add', 'queue a message to the PM (the owner)')
     x.add_argument('--text', required=True)
     x.add_argument('--kind')
-    x.add_argument('--repo')
+    _repo(x)
     x.add_argument('--urgent', action='store_true')
     _leaf(m, 'send', 'send every queued message (the owner)')
     x = _leaf(m, 'reply', 'answer a message the owner sent')
@@ -513,16 +522,18 @@ def _hub(a):
     return client.Client(getattr(a, 'port', None) or settings.load().port)
 
 
-def _item(d, state=None):
+def _item(d, state=None, version=False):
     title = d.get('title') or d.get('text') or ''
-    return '%s %s [%s] %s' % (d.get('id'), state or d.get('status') or '-', d.get('repo') or '-',
-                              title)
+    name = '%s v%s' % (d.get('id'), d.get('version')) if version else d.get('id')
+    return '%s %s [%s] %s' % (name, state or d.get('status') or '-', d.get('repo') or '-', title)
 
 
-def _list(a, collection):
+def _list(a, collection, version=False):
+    """The lines of a collection. `version`: each line shows its document's version, for the
+    collections that have a write which needs it named (--if-version)."""
     got = _hub(a).get('/' + collection, query={'status': getattr(a, 'status', None),
                                               'repo': getattr(a, 'repo', None)})
-    return _show(a, got, [_item(d) for d in got.get('items') or []])
+    return _show(a, got, [_item(d, version=version) for d in got.get('items') or []])
 
 
 def _wrote(a, got, line):
@@ -549,12 +560,6 @@ def _body(**fields):
             if not (v is None or v is False or (isinstance(v, list) and not v))}
 
 
-def _pinned(a, hub, collection):
-    if a.if_version is not None:
-        return a.if_version
-    return hub.version(collection, a.id)
-
-
 def _one(collection, a):
     return '/%s/%s' % (collection, client.part(a.id))
 
@@ -564,15 +569,15 @@ def _questions(a, stop):
     if a.sub == 'add':
         context = _text_of(a.context_file, 'context') if a.context_file else None
         got = hub.post('/questions', client.AGENT, _body(
-            title=a.title, repo=a.repo, context=context, options=a.options,
+            title=a.title, repo=getattr(a, 'repo', None), context=context, options=a.options,
             recommended=a.recommended, refs=a.refs, urgent=a.urgent, story=a.story,
             **{'from': a.who}))
         return _wrote(a, got, 'ASKED %s' % got.get('id'))
     if a.sub == 'log':
         got = hub.post(_one('questions', a) + '/log', client.AGENT,
-                       {'ruling': a.ruling, 'if_version': _pinned(a, hub, 'questions')})
+                       {'ruling': a.ruling, 'if_version': a.if_version})
         return _wrote(a, got, 'LOGGED %s %s' % (got.get('id'), a.ruling))
-    return _list(a, 'questions')
+    return _list(a, 'questions', version=True)
 
 
 def _answer(a, stop):
@@ -585,8 +590,8 @@ def _answer(a, stop):
 def _todos(a, stop):
     hub = _hub(a)
     if a.sub == 'add':
-        body = _body(title=a.title, detail=a.detail, commands=a.commands, repo=a.repo,
-                     refs=a.refs, urgent=a.urgent)
+        body = _body(title=a.title, detail=a.detail, commands=a.commands,
+                     repo=getattr(a, 'repo', None), refs=a.refs, urgent=a.urgent)
         if a.who:
             body['from'] = a.who
         got = hub.post('/todos', client.OWNER if a.owner else client.AGENT, body)
@@ -612,19 +617,19 @@ def _stories(a, stop):
         got = hub.post(_one('stories', a), client.AGENT, _body(
             status=a.status, reviewer=a.reviewer, review_note=a.review_note,
             backlog_id=a.backlog_id, closed_note=a.closed_note,
-            if_version=_pinned(a, hub, 'stories')))
+            if_version=a.if_version))
         return _wrote(a, got, 'SET %s %s' % (got.get('id'), a.status))
     if a.sub == 'withdraw':
         got = hub.post(_one('stories', a) + '/withdraw', client.OWNER)
         return _wrote(a, got, 'WITHDRAWN %s' % got.get('id'))
-    return _list(a, 'stories')
+    return _list(a, 'stories', version=True)
 
 
 def _to_pm(a, stop):
     hub = _hub(a)
     if a.sub == 'add':
         got = hub.post('/to_pm', client.OWNER, _body(
-            text=a.text, kind=a.kind, repo=a.repo, urgent=a.urgent))
+            text=a.text, kind=a.kind, repo=getattr(a, 'repo', None), urgent=a.urgent))
         return _wrote(a, got, 'QUEUED %s' % got.get('id'))
     if a.sub == 'send':
         got = hub.post('/to_pm/send', client.OWNER)

@@ -794,15 +794,16 @@ class WriteCase(VerbCase):
                                          'coordinator'))
         self.assertEqual(doc['options'], [{'label': 'left', 'description': 'go left'},
                                           {'label': 'right', 'description': 'go right'}])
-        self.assertEqual(self.ok('questions'), ['Q-001 open [kit] which way'])
+        self.assertEqual(self.ok('questions'), ['Q-001 v1 open [kit] which way'])
         self.assertEqual(self.ok('questions', '--status', 'answered'), [])
         self.assertEqual(self.ok('questions', '--repo', 'elsewhere'), [])
         # the first option is place 0: it is a choice, not "no choice"
         self.assertEqual(self.ok('answer', 'Q-001', '--choice', '0', '--note', 'as planned'),
                          ['ANSWERED Q-001 left'])
         self.assertEqual(self.ok('questions', '--status', 'answered'),
-                         ['Q-001 answered [kit] which way'])
-        self.assertEqual(self.ok('questions', 'log', 'Q-001', 'D-7'), ['LOGGED Q-001 D-7'])
+                         ['Q-001 v2 answered [kit] which way'])
+        self.assertEqual(self.ok('questions', 'log', 'Q-001', 'D-7', '--if-version', '2'),
+                         ['LOGGED Q-001 D-7'])
         doc = self.direct('/questions?status=all')['items'][0]
         self.assertEqual((doc['status'], doc['ruling'], doc['answer']['note']),
                          ('logged', 'D-7', 'as planned'))
@@ -819,8 +820,56 @@ class WriteCase(VerbCase):
                          ['ANSWERED Q-001 Other'])
         self.assertIn('REFUSED conflict: ', self.refused('questions', 'log', 'Q-001', 'D-7',
                                                          '--if-version', '0'))
-        self.assertIn('REFUSED not_found: ', self.refused('questions', 'log', 'Q-009', 'D-7'))
+        self.assertIn('REFUSED not_found: ', self.refused('questions', 'log', 'Q-009', 'D-7',
+                                                          '--if-version', '1'))
         self.assertIn('REFUSED not_found: ', self.refused('answer', 'Q-009', '--choice', '0'))
+
+    def test_a_ruling_for_an_answer_that_changed_since_is_refused_and_nothing_is_logged(self):
+        """The version is the one the caller read: an answer changed after that read is never
+        logged under a ruling written for the earlier one."""
+        self.ask()
+        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '0'), ['ANSWERED Q-001 left'])
+        read = self.direct('/questions?status=answered')['items'][0]['version']
+        self.assertEqual(self.ok('questions', '--status', 'answered'),
+                         ['Q-001 v%d answered [kit] which way' % read])
+        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '1'), ['ANSWERED Q-001 right'])
+        err = self.refused('questions', 'log', 'Q-001', 'D-7', '--if-version', str(read))
+        self.assertTrue(err.startswith('REFUSED conflict: '), err)
+        doc = self.direct('/questions?status=all')['items'][0]
+        self.assertEqual((doc['status'], doc.get('ruling'), doc['answer']['label']),
+                         ('answered', None, 'right'))
+        # the version of the answer as it is now logs it
+        self.assertEqual(self.ok('questions', 'log', 'Q-001', 'D-7', '--if-version',
+                                 str(doc['version'])), ['LOGGED Q-001 D-7'])
+
+    def test_a_story_set_on_a_version_it_no_longer_has_is_refused_and_not_set(self):
+        story = self.file('story.md', 'As the owner I want it.\n')
+        self.ok('stories', 'add', '--repo', 'kit', '--title', 'a verb', '--story-file', story)
+        read = self.direct('/stories')['items'][0]['version']
+        self.assertEqual(self.ok('stories'), ['S-001 v%d submitted [kit] a verb' % read])
+        self.ok('stories', 'set', 'S-001', '--status', 'review', '--if-version', str(read))
+        err = self.refused('stories', 'set', 'S-001', '--status', 'declined', '--if-version',
+                           str(read))
+        self.assertTrue(err.startswith('REFUSED conflict: '), err)
+        self.assertEqual(self.direct('/stories?status=all')['items'][0]['status'], 'review')
+
+    def test_the_questions_and_stories_lines_and_json_show_each_documents_version(self):
+        self.ask()
+        self.ask('and then')
+        self.ok('answer', 'Q-002', '--choice', '0')
+        story = self.file('story.md', 'As the owner I want it.\n')
+        self.ok('stories', 'add', '--repo', 'kit', '--title', 'a verb', '--story-file', story)
+        for verb, path in (('questions', '/questions?status=all'), ('stories', '/stories?status=all')):
+            docs = self.direct(path)['items']
+            self.assertTrue(docs and all(isinstance(d['version'], int) for d in docs), docs)
+            self.assertEqual(self.ok(verb, '--status', 'all'),
+                             ['%s v%d %s [kit] %s' % (d['id'], d['version'], d['status'], d['title'])
+                              for d in docs])
+            got = json.loads(self.ok(verb, '--status', 'all', '--json')[0])
+            self.assertEqual([(d['id'], d['version']) for d in got['items']],
+                             [(d['id'], d['version']) for d in docs])
+        versions = [d['version'] for d in self.direct('/questions?status=all')['items']]
+        self.assertNotEqual(versions[0], versions[1], 'the two lines must not show one figure')
 
     def test_a_refusal_with_json_prints_the_servers_answer_too(self):
         code, out, err = self.run_cli('answer', 'Q-009', '--choice', '0', '--json', '--port',
@@ -851,22 +900,25 @@ class WriteCase(VerbCase):
         story = self.file('story.md', 'As the owner I want it.\n')
         self.assertEqual(self.ok('stories', 'add', '--repo', 'kit', '--title', 'a verb',
                                  '--story-file', story), ['SUBMITTED S-001'])
-        self.assertEqual(self.ok('stories'), ['S-001 submitted [kit] a verb'])
+        self.assertEqual(self.ok('stories'), ['S-001 v1 submitted [kit] a verb'])
         self.assertEqual(self.ok('stories', 'set', 'S-001', '--status', 'review', '--reviewer',
-                                 'coordinator', '--review-note', 'reading'), ['SET S-001 review'])
+                                 'coordinator', '--review-note', 'reading', '--if-version', '1'),
+                         ['SET S-001 review'])
         self.assertEqual(self.ok('stories', 'set', 'S-001', '--status', 'added', '--backlog-id',
-                                 'B-12'), ['SET S-001 added'])
+                                 'B-12', '--if-version', '2'), ['SET S-001 added'])
         doc = self.direct('/stories?status=all')['items'][0]
         self.assertEqual((doc['status'], doc['backlog_id'], doc['story']),
                          ('added', 'B-12', 'As the owner I want it.\n'))
         self.ok('stories', 'add', '--repo', 'kit', '--title', 'another', '--story-file', story)
         self.assertEqual(self.ok('stories', 'withdraw', 'S-002'), ['WITHDRAWN S-002'])
         self.assertEqual(self.ok('stories', '--status', 'withdrawn'),
-                         ['S-002 withdrawn [kit] another'])
+                         ['S-002 v2 withdrawn [kit] another'])
         self.assertIn('REFUSED conflict: ', self.refused('stories', 'set', 'S-001', '--status',
                                                          'review', '--if-version', '0'))
-        code, out, err = self.run_cli('stories', 'set', 'S-001', '--status', 'withdrawn')
+        code, out, err = self.run_cli('stories', 'set', 'S-001', '--status', 'withdrawn',
+                                      '--if-version', '3')
         self.assertEqual((code, out), (2, ''))
+        self.assertIn('--status', err)          # the status is what is wrong, not a missing flag
         self.assertIn('REFUSED: cannot read the story file', self.refused(
             'stories', 'add', '--repo', 'kit', '--title', 't', '--story-file',
             os.path.join(self.home, 'absent.md')))
@@ -956,9 +1008,11 @@ class WaitVerbCase(VerbCase):
 
 class ArgumentCase(CliCase):
     VERBS = (('questions',), ('questions', 'add', '--title', 't'),
-             ('questions', 'log', 'Q-001', 'D-7'), ('answer', 'Q-001', '--choice', '0'),
+             ('questions', 'log', 'Q-001', 'D-7', '--if-version', '1'),
+             ('answer', 'Q-001', '--choice', '0'),
              ('todos',), ('todos', 'add', '--title', 't'), ('todos', 'done', 'T-001'),
-             ('todos', 'ack', 'T-001'), ('stories',), ('stories', 'set', 'S-001', '--status', 'review'),
+             ('todos', 'ack', 'T-001'), ('stories',),
+             ('stories', 'set', 'S-001', '--status', 'review', '--if-version', '1'),
              ('stories', 'withdraw', 'S-001'), ('to-pm',), ('to-pm', 'add', '--text', 't'),
              ('to-pm', 'send'), ('to-pm', 'reply', 'P-001', 'text'), ('inbox',),
              ('inbox', 'add', '--text', 't'), ('inbox', 'read', 'M-001'), ('pending',),
@@ -1000,9 +1054,69 @@ class ArgumentCase(CliCase):
         with mock.patch.object(serve, 'ask', down):
             self.assertEqual(self.run_cli('pending')[0], 3)
             self.assertEqual(self.run_cli('questions', '--port', '8794')[0], 3)
-            self.assertEqual(self.run_cli('questions', '--port', '8794', 'log', 'Q-001', 'D-7')[0], 3)
+            self.assertEqual(self.run_cli('questions', '--port', '8794', 'log', 'Q-001', 'D-7',
+                                          '--if-version', '1')[0], 3)
             self.assertEqual(self.run_cli('todos', 'ack', 'T-001', '--port', '8795')[0], 3)
         self.assertEqual(asked, [8793, 8794, 8794, 8795])
+
+    def sent(self, *argv):
+        """The (method, path, body) of each call a verb made to a server that says yes."""
+        seen = []
+
+        def ask(port, method, path, token=None, body=None, timeout=None):
+            seen.append((method, path[len(HUB.api.BASE):], body))
+            return 200, {'ok': True, 'id': 'X-1'}
+
+        with mock.patch.object(serve, 'ask', ask):
+            got = self.run_cli(*(argv + ('--port', '8791')))
+        return got, seen
+
+    def test_a_repo_given_before_add_is_sent_as_one_given_after_it(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        for verb, path, rest in (('questions', '/questions', ('--title', 't')),
+                                 ('todos', '/todos', ('--title', 't')),
+                                 ('to-pm', '/to_pm', ('--text', 't'))):
+            for argv in ((verb, '--repo', 'kit', 'add') + rest, (verb, 'add', '--repo', 'kit') + rest,
+                         (verb, 'add') + rest + ('--repo', 'kit'),
+                         (verb, '--repo', 'other', 'add', '--repo', 'kit') + rest):
+                with self.subTest(argv=argv):
+                    (code, out, err), seen = self.sent(*argv)
+                    self.assertEqual((code, err), (0, ''), out)
+                    self.assertEqual([(m, p, b.get('repo')) for m, p, b in seen],
+                                     [('POST', path, 'kit')])
+            with self.subTest(verb=verb, repo='none'):
+                (code, out, err), seen = self.sent(verb, 'add', *rest)
+                self.assertEqual((code, err), (0, ''), out)
+                self.assertEqual([(m, p, 'repo' in b) for m, p, b in seen], [('POST', path, False)])
+
+    def test_questions_log_and_stories_set_need_the_version_and_ask_nothing_without_it(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        for argv in (('questions', 'log', 'Q-001', 'D-7'),
+                     ('stories', 'set', 'S-001', '--status', 'review'),
+                     ('questions', 'log', 'Q-001', 'D-7', '--json')):
+            with self.subTest(argv=argv):
+                (code, out, err), seen = self.sent(*argv)
+                self.assertEqual((code, out), (2, ''), err)
+                self.assertIn('USAGE: ', err)
+                self.assertIn('--if-version', err.split('USAGE: ')[1])
+                self.assertEqual(seen, [], 'a verb with no version asked the server')
+        # with it, the one call is the write, with the version that was given: nothing is read first
+        (code, out, err), seen = self.sent('questions', 'log', 'Q-001', 'D-7', '--if-version', '4')
+        self.assertEqual((code, err), (0, ''), out)
+        self.assertEqual(seen, [('POST', '/questions/Q-001/log', {'ruling': 'D-7', 'if_version': 4})])
+        (code, out, err), seen = self.sent('stories', 'set', 'S-001', '--status', 'review',
+                                           '--if-version', '0')
+        self.assertEqual((code, err), (0, ''), out)
+        self.assertEqual(seen, [('POST', '/stories/S-001', {'status': 'review', 'if_version': 0})])
+
+    def test_the_help_says_that_a_place_counts_from_0(self):
+        for argv, flag in ((('questions', 'add', '--help'), '--recommended'),
+                           (('answer', '--help'), '--choice')):
+            code, out, err = self.run_cli(*argv)
+            self.assertEqual((code, err), (0, ''), argv)
+            said = ' '.join(out.split())
+            about = said[said.rindex(flag + ' '):]          # the flag's own line, past the usage
+            self.assertIn('(counts from 0)', about[:about.index(' --', 2)], (argv, about))
 
     def test_an_argument_that_is_missing_or_wrong_is_a_usage_error(self):
         for argv in (('answer', 'Q-001'), ('answer', '--choice', '0'),
@@ -1058,7 +1172,7 @@ class ArgumentCase(CliCase):
                     (('stories', 'add', '--repo', 'r', '--title', 't', '--story-file', __file__),
                      ('POST', '/stories', 'owner')),
                     (('stories', 'withdraw', 'S-001'), ('POST', '/stories/S-001/withdraw', 'owner')),
-                    (('stories', 'set', 'S-001', '--status', 'review'),
+                    (('stories', 'set', 'S-001', '--status', 'review', '--if-version', '4'),
                      ('POST', '/stories/S-001', 'agent')),
                     (('to-pm', 'add', '--text', 't'), ('POST', '/to_pm', 'owner')),
                     (('to-pm', 'send'), ('POST', '/to_pm/send', 'owner')),
@@ -1066,7 +1180,8 @@ class ArgumentCase(CliCase):
                     (('inbox', 'add', '--text', 't'), ('POST', '/inbox', 'agent')),
                     (('inbox', 'read', 'M-001'), ('POST', '/inbox/M-001/read', 'owner')),
                     (('questions', 'add', '--title', 't'), ('POST', '/questions', 'agent')),
-                    (('questions', 'log', 'Q-001', 'D-7'), ('POST', '/questions/Q-001/log', 'agent')),
+                    (('questions', 'log', 'Q-001', 'D-7', '--if-version', '3'),
+                     ('POST', '/questions/Q-001/log', 'agent')),
                     (('questions',), ('GET', '/questions', 'agent')),
                     (('inbox',), ('GET', '/snapshot', 'agent')),
                     (('pending',), ('GET', '/pending', 'agent')),

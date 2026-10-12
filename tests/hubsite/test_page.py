@@ -964,6 +964,155 @@ class DomTest(unittest.TestCase):
         self.assertTrue(got["open"])
         self.assertNotIn("changed on the hub server", got["again"])
 
+    DOWN = {"status": 500, "body": {"ok": False, "error": {"code": "internal", "message": "store unreadable", "field": ""}}}
+
+    def test_an_answer_that_was_sent_and_not_read_back_says_it_was_sent_and_is_not_sent_twice(self):
+        answered = {"Q-1": dict(LISTS["questions"]["Q-1"], status="answered", version=2,
+                                answer={"choice": 0, "label": "one", "note": "", "at": NOW})}
+        for name, lists, before, send in (("open", LISTS, "", "Send answer"),
+                                          ("answered", dict(LISTS, questions=answered),
+                                           'await click($("#tabs [data-f=answered]")); await click(button($("#q-Q-1"), "Change answer"));',
+                                           "Save new answer")):
+            got = dom("""
+                await start();
+                BEFORE
+                const pick = $("#q-Q-1-1"); pick.checked = true; await fire(pick, "change");
+                let down = true;
+                server.route = c => {
+                  if (c.path === "/snapshot" && down) return DOWN;
+                  if (c.path !== "/questions/Q-1/answer") return undefined;
+                  const d = server.snap.collections.questions["Q-1"]; server.snap.revision++;
+                  d.version++; d.status = "answered"; d.answer = { choice: 1, label: "two", note: "" };
+                  return { status: 200, body: { ok: true } };
+                };
+                await click(button($("#q-Q-1"), SEND));
+                const unread = { card: text($("#q-Q-1")), send: !!button($("#q-Q-1"), SEND), change: !!button($("#q-Q-1"), "Change answer"),
+                                 radios: $$("#q-Q-1 input").length };
+                down = false;
+                await wake();
+                await click($("#tabs [data-f=answered]"));
+                return { unread, sent: calls.filter(c => c.path === "/questions/Q-1/answer").length, after: text($("#q-Q-1")) };
+            """.replace("BEFORE", before).replace("DOWN", json.dumps(self.DOWN)).replace("SEND", json.dumps(send)),
+                snapshot(collections=lists))
+            with self.subTest(card=name):
+                self.assertIn("Your answer was sent.", got["unread"]["card"])
+                self.assertIn("could not be read again", got["unread"]["card"])
+                self.assertNotIn("Your answer: ", got["unread"]["card"])           # not the answer from before it either
+                # nothing on the card sends again: the server would refuse a second send of an old version
+                self.assertEqual((got["unread"]["send"], got["unread"]["change"], got["unread"]["radios"]), (False, False, 0))
+                self.assertEqual(got["sent"], 1)
+                self.assertIn("Your answer: two", got["after"])                    # the read that came shows the answer
+                self.assertNotIn("Your answer was sent.", got["after"])
+
+    def test_a_refused_answer_whose_reread_fails_does_not_point_at_the_old_question_as_the_new_one(self):
+        got = dom("""
+            await start();
+            const pick = $("#q-Q-1-1"); pick.checked = true; await fire(pick, "change");
+            let n = 0, down = true;
+            server.route = c => {
+              if (c.path === "/snapshot" && down) return DOWN;
+              if (c.path !== "/questions/Q-1/answer") return undefined;
+              const d = server.snap.collections.questions["Q-1"];
+              if (++n <= 2) { d.version = 2; d.context = "asked again, differently"; server.snap.revision = 4; return CONFLICT; }
+              d.version = 3; d.status = "answered"; d.answer = { choice: 1, label: "two", note: "" }; server.snap.revision = 5;
+              return { status: 200, body: { ok: true } };
+            };
+            const see = () => ({ card: text($("#q-Q-1")), status: text($("#q-Q-1 .status")), picked: $("#q-Q-1-1").checked,
+                                 send: !!button($("#q-Q-1"), "Send answer") });
+            await click(button($("#q-Q-1"), "Send answer"));
+            const unread = see();
+            await click(button($("#q-Q-1"), "Send answer"));
+            const again = see();
+            down = false;
+            await wake();
+            const read = see();
+            await click(button($("#q-Q-1"), "Send answer"));
+            await click($("#tabs [data-f=answered]"));
+            return { unread, again, read, sent: calls.filter(c => c.path === "/questions/Q-1/answer").map(c => [c.body.choice, c.body.if_version]),
+                     after: text($("#q-Q-1")) };
+        """.replace("DOWN", json.dumps(self.DOWN)).replace("CONFLICT", json.dumps(conflict("questions/Q-1 is at version 2, not 1"))),
+            snapshot(collections=LISTS))
+        for seen in (got["unread"], got["again"]):
+            self.assertTrue(seen["status"].startswith("Not sent: "), seen["status"])
+            self.assertIn("could not be read again", seen["status"])
+            self.assertNotIn("as it is now", seen["card"])                         # the card is still the question as it was
+            self.assertIn("as asked", seen["card"])
+            self.assertNotIn("asked again, differently", seen["card"])
+            self.assertIn("Your draft is kept", seen["status"])
+            self.assertEqual((seen["picked"], seen["send"]), (True, True))
+        # once a read comes, the card is the changed question and the line is the one about it
+        self.assertIn("asked again, differently", got["read"]["card"])
+        self.assertIn("check it against the question as it is now", got["read"]["status"])
+        self.assertNotIn("could not be read again", got["read"]["card"])
+        self.assertTrue(got["read"]["picked"])
+        self.assertEqual(got["sent"], [[1, 1], [1, 1], [1, 2]])                    # the version moves only on a read that came
+        self.assertIn("Your answer: two", got["after"])
+
+    def test_the_backlog_tab_is_kept_over_a_reload(self):
+        views = {"repos": [{"name": "alpha"}], "backlog": []}
+        stored = dom("""
+            await start();
+            await click($("#sections [data-s=backlog]"));
+            const first = $$("#stabs .tab").filter(t => t.getAttribute("aria-selected") === "true").map(t => t.dataset.sf);
+            await click($("#stabs [data-sf=parked]"));
+            return { first, section: localStorage.getItem("oq.section"), tab: localStorage.getItem("oq.sfilter") };
+        """, snapshot(views=views))
+        self.assertEqual(stored, {"first": ["new"], "section": "backlog", "tab": "parked"})
+
+        def reload(keys, hash_=""):
+            return dom("""
+                for (const [k, v] of Object.entries(KEYS)) localStorage.setItem(k, v);
+                await start();
+                return { section: $$("#sections .sec").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s),
+                         tab: $$("#stabs .tab").filter(t => t.getAttribute("aria-selected") === "true").map(t => t.dataset.sf),
+                         row: $("#stabs").hidden, form: $("#storyform").hidden, list: text($("#list")) };
+            """.replace("KEYS", json.dumps(keys)), snapshot(views=views), hash=hash_)
+        # the page as the first run left it: the reload is on Backlog > Parked, not on New story
+        got = reload({"oq.section": stored["section"], "oq.sfilter": stored["tab"]})
+        self.assertEqual((got["section"], got["tab"], got["row"], got["form"]), (["backlog"], ["parked"], False, True))
+        self.assertIn("Nothing parked", got["list"])
+        for tab in ("current", "done", "new"):
+            with self.subTest(tab=tab):
+                got = reload({"oq.section": "backlog", "oq.sfilter": tab})
+                self.assertEqual((got["section"], got["tab"]), (["backlog"], [tab]))
+        # a link to Parked beats the stored tab; a stored value that is no tab is not taken
+        self.assertEqual(reload({"oq.section": "backlog", "oq.sfilter": "done"}, "#parked")["tab"], ["parked"])
+        self.assertEqual(reload({"oq.section": "backlog", "oq.sfilter": "nowhere"})["tab"], ["new"])
+
+    def test_a_section_stored_as_parked_by_an_older_page_still_opens_backlog_parked(self):
+        views = {"repos": [{"name": "alpha"}], "backlog": []}
+
+        def reload(keys):
+            return dom("""
+                for (const [k, v] of Object.entries(KEYS)) localStorage.setItem(k, v);
+                await start();
+                return { section: $$("#sections .sec").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s),
+                         tab: $$("#stabs .tab").filter(t => t.getAttribute("aria-selected") === "true").map(t => t.dataset.sf),
+                         list: text($("#list")) };
+            """.replace("KEYS", json.dumps(keys)), snapshot(views=views))
+        got = reload({"oq.section": "parked"})
+        self.assertEqual((got["section"], got["tab"]), (["backlog"], ["parked"]))
+        self.assertIn("Nothing parked", got["list"])
+        # a tab chosen since, on the page as it is now, is the later word
+        self.assertEqual(reload({"oq.section": "parked", "oq.sfilter": "done"})["tab"], ["done"])
+
+    def test_a_usage_tie_goes_to_the_weekly_window_whichever_account_has_it(self):
+        def chip(accounts):
+            return dom("""
+                await start();
+                return text($("#n-u"));
+            """, snapshot(views={"usage": {"available": True, "as_of": NOW, "accounts": accounts}}), hash="#usage")
+        # the first account's 5 h window ties with a later account's week: the week is the one named
+        self.assertEqual(chip({"1": {"five": 99, "week": 10}, "2": {"five": 0, "week": 99}}), "99% wk · acct 2")
+        self.assertEqual(chip({"1": {"five": 50, "week": 10}, "2": {"five": 50, "week": 10}, "3": {"five": 3, "week": 50}}),
+                         "50% wk · acct 3")
+        # two weeks tie: the first account by name; two 5 h windows tie with no week beside them: the first too
+        self.assertEqual(chip({"2": {"five": 99, "week": 80}, "1": {"five": 80, "week": 80}, "3": {"five": 0, "week": 99}}),
+                         "99% wk · acct 3")
+        self.assertEqual(chip({"1": {"five": 0, "week": 70}, "2": {"five": 70, "week": 70}}), "70% wk · acct 1")
+        self.assertEqual(chip({"1": {"five": 70, "week": 1}, "2": {"five": 70, "week": 2}}), "70% 5h · acct 1")
+        self.assertEqual(chip({"1": {"five": 0, "week": 0}, "2": {"five": 0, "week": 0}}), "0% wk · acct 1")
+
     def test_a_stale_repository_whose_fetch_time_moves_does_not_redraw_under_a_typing_owner(self):
         stale = [dict(BACKLOG[0], stale=True, error="the local read failed")]
         got = dom("""
