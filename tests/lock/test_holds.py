@@ -188,6 +188,66 @@ class Holds(StoreCase):
         self.assertEqual(cm.exception.code, 1)
         self.assertIn("it ended: released", cm.exception.message)
 
+    def drawn(self, *taken):
+        """(a patch of the id builder create uses: each of `taken` in turn, then an id nothing
+        has, that id). A draw after it is an error (StopIteration)."""
+        fresh = next(i for i in (taken[0][:-4] + "%04x" % n for n in range(len(taken) + 1))
+                     if i not in taken)
+        return mock.patch.object(hl, "new_id", side_effect=list(taken) + [fresh]), fresh
+
+    def test_an_id_a_live_hold_has_is_drawn_again(self):
+        """An id is a second stamp and a 2-byte token, so two holds made in one second can draw
+        the same one: the second create wrote its record over the first hold's (red there),
+        which lost its slots while its holder still counted on them."""
+        a, _ = self.agent_hold(session="sess-A")
+        before = self.store.read("holds/%s.json" % a["id"])
+        patch, fresh = self.drawn(a["id"])
+        with patch as ids:
+            b, _ = self.agent_hold(session="sess-B")
+        self.assertEqual(self.store.read("holds/%s.json" % a["id"]), before)
+        self.assertEqual({h["id"]: (h["session"], h["_slots"]["cpu"])
+                          for h in hl.records(self.store, self.L)},
+                         {a["id"]: ("sess-A", [0, 1]), fresh: ("sess-B", [2, 3])})
+        self.assertEqual(b["id"], fresh)
+        self.assertEqual(ids.call_count, 2)
+
+    def test_an_id_an_ended_hold_has_is_drawn_again(self):
+        """The same clash with a hold that has ended: the new hold took its id, and its own
+        end then replaced ended/<id>.json (red there), the only record of the first."""
+        a, _ = self.make(owner="owner", scope="half", note="first")
+        hl.end_hold(self.store, self.L, a["id"])
+        before = self.store.read("ended/%s.json" % a["id"])
+        self.assertEqual(before["note"], "first")
+        patch, fresh = self.drawn(a["id"])
+        with patch as ids:
+            b, _ = self.make(owner="owner", scope="slots", slots={"cpu": [3], "gpu": []},
+                             note="second")
+        hl.end_hold(self.store, self.L, b["id"])
+        self.assertEqual(self.store.read("ended/%s.json" % a["id"]), before)
+        self.assertEqual(b["id"], fresh)
+        self.assertEqual(self.store.read("ended/%s.json" % fresh)["note"], "second")
+        self.assertEqual(ids.call_count, 2)
+
+    def test_an_id_is_drawn_until_one_is_free(self):
+        """One more draw is not enough: the id drawn after a live hold's may be an ended
+        hold's. create draws until neither folder has the id."""
+        gone, _ = self.make(owner="owner", scope="slots", slots={"cpu": [5], "gpu": []},
+                            note="ended")
+        hl.end_hold(self.store, self.L, gone["id"])
+        live, _ = self.agent_hold(session="sess-A")
+        ended = self.store.read("ended/%s.json" % gone["id"])
+        before = self.store.read("holds/%s.json" % live["id"])
+        patch, fresh = self.drawn(live["id"], gone["id"])
+        with patch as ids:
+            b, _ = self.make(owner="owner", scope="slots", slots={"cpu": [4], "gpu": []},
+                             note="third")
+        hl.end_hold(self.store, self.L, b["id"])
+        self.assertEqual(self.store.read("ended/%s.json" % gone["id"]), ended)
+        self.assertEqual(self.store.read("holds/%s.json" % live["id"]), before)
+        self.assertEqual(b["id"], fresh)
+        self.assertEqual(self.store.read("ended/%s.json" % fresh)["note"], "third")
+        self.assertEqual(ids.call_count, 3)
+
     def rec(self, rid, slug="t", kind="engine-test", role="agent"):
         return {"id": rid, "repo": "kit", "slug": slug, "kind": kind, "pid": os.getpid(),
                 "ctime": process.own_ctime(), "role": role}

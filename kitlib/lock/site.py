@@ -16,6 +16,10 @@
       (kitlib.lock.notice). Unset: none (the default). "kinds" unset means every kind whose cpu
       size reaches the heavy size (agent_cap) or whose gpu is not shared, and any run inside an owner whole hold.
 
+The machine's store reads the machine config under the store's own home, the profile folder
+Windows reports (kitlib.lock.store.machine_home), not under the environment's home: every session
+that shares the store reads one file, whatever its USERPROFILE. Under the kit's tests that read is
+refused (HomeFenced, docs/test-tools.md "Home fence"), not defaulted.
 A scratch store (tests) reads no machine config: store.site, when a test sets it, is used instead.
 A config that cannot be read, or a bad value, is said once and the defaults are used: a lock run
 never fails on it.
@@ -63,7 +67,8 @@ def load(store):
     if not store.testing:
         try:
             from kitlib.config import user
-            cfg = user.user_config().get(KEY) or {}
+            from kitlib.lock import store as lockstore
+            cfg = user.user_config(home=lockstore.machine_home()).get(KEY) or {}
         except Exception as e:          # a bad machine config never fails a lock run
             store.say("WARNING: machine config not read (%s); machine lock defaults used" % e)
             cfg = {}

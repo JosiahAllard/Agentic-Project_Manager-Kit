@@ -13,6 +13,7 @@ from kitlib.gate import runner
 from kitlib.guard import context, prepush
 from kitlib.records import gate_ok
 from tests import gitfixture
+from tests.home import child_home
 from tests.realgit import real_git
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -48,9 +49,11 @@ class PrePushCase(unittest.TestCase):
                             config_rev=rev if config_rev == 'same' else config_rev)
 
     def push(self, *args):
+        home = child_home()         # the hook is a kit process: it gets a temp home, never the real one
         r = subprocess.run(('git', '-c', 'core.hooksPath=%s' % HOOKS.replace('\\', '/'), 'push') + args,
                            cwd=self.repo.root, capture_output=True, text=True, encoding='utf-8',
-                           errors='replace', env=gitfixture.fixture_env())
+                           errors='replace',
+                           env=gitfixture.fixture_env({'USERPROFILE': home, 'HOME': home}))
         return r.returncode, r.stderr
 
     def remote_main(self):

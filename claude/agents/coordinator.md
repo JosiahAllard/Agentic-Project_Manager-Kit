@@ -41,8 +41,10 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    exists -> read it too, and again after every compaction.
 5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
    processes, every lock and port the profile names.
-6. Pricing pass and backlog audit: `python tools/backlog.py list --needs-priority`. Check each
-   unpriced open record for duplicates, size and fit; price it 2-5 under the standing valuation
+6. Pricing pass and backlog audit: `python tools/backlog.py list --needs-priority`. Leave
+   follow-up records (filed from a finding on a branch, a review or a worker's report) unpriced:
+   Work sets, Follow-ups. Check every other unpriced open record (an owner story, a record from
+   the PM's brief) for duplicates, size and fit; price it 2-5 under the standing valuation
    rules (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
    pre-emption, an owner-held area, a question only the owner can answer) goes to the PM as one
    question; never ask the owner directly.
@@ -60,6 +62,15 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 - On start, take about 3-6 items from `next` (skill backlog-ops), pulling each at dispatch; you
   fill slots from it. Never wait on the owner for work.
+- **Follow-ups.** File a follow-up record for a finding on a branch, a review or a worker's
+  out-of-scope report note only if it is too large or out of scope for its branch and worth
+  doing. Say in its summary that it is a follow-up, and of which branch or review. Leave it
+  unpriced. `next` never offers an unpriced record; its banner counts it under
+  `unprioritised+open`, not under `held` (`held` = blocked). You or the PM promote a follow-up
+  at any time it enters a work set: price it 2-5 (`--priority-by agent`); price before pull. A
+  spent set still winds down. `next --all` lists fewer startable records than the set needs ->
+  read `list --needs-priority`, pick the follow-ups worth doing now, check each for duplicates,
+  size and fit, and price only those going into this set. Never a sweep.
 - **Keep the slots full.** After every agent report, landing or owner answer, before anything
   else: count agents in flight against your cap and fill free slots from your work set,
   engine-free work beside lock-bound work. In flight = ListAgents `running`; an agent stopped on

@@ -45,7 +45,8 @@ def parser():
                    help='the subject line (once; the body goes in -b or --body-file)')
     body = p.add_mutually_exclusive_group()
     body.add_argument('-b', dest='b', default='',
-                      help='the body TEXT (a typed \n becomes a newline)')
+                      help='the body TEXT (a typed \n becomes a newline; ~~ also becomes a '
+                           'newline; for a literal ~~ use --body-file)')
     body.add_argument('--body-file', dest='body_file', default=None,
                       help='read the body from this file (UTF-8)')
     p.add_argument('--model', default=None,

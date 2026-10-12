@@ -15,7 +15,8 @@ lines). Nothing here prints. The checks, in order, are the PM tool's:
   git-IGNORED file outside `build_output` or a keeper inside it; a `{piece, path}` entry is the
   folder the pieces table puts there, and one that cannot be resolved holds nothing), then links
   or junctions inside;
-- only then the `disposable_untracked` files are deleted, `git worktree remove` runs (never
+- only then the `disposable_untracked` files are deleted, the status is read once more
+  (`last_look`, inside `git_remove`: every caller gets it), `git worktree remove` runs (never
   forced, never retried) and the branch goes with `git branch -d` (never -D).
 
 `remove_branch` deletes a LANDED local branch that no worktree has checked out and no backlog record
@@ -550,8 +551,9 @@ def dirty_refusal(ctx, path, what, rerun):
 
 
 def clear_disposable(ctx, path):
-    """Delete the untracked files `disposable_untracked` names, the last step before git. True when
-    none is left; False after saying which could not go, or that ignored files appeared since."""
+    """Delete the untracked files `disposable_untracked` names, the verbs' last step before
+    `git_remove`. True when none is left; False after saying which could not go, or that ignored
+    files appeared since."""
     _, disposable, ignored, why = dirty(ctx, path)
     if disposable is None:
         ctx.say('failed    %s: its status could not be read again (%s); git was NOT run'
@@ -572,9 +574,36 @@ def clear_disposable(ctx, path):
     return True
 
 
+def last_look(ctx, path):
+    """The status read `git_remove` makes just before git. True when `dirty` lists nothing at all;
+    False after saying what appeared since the caller's checks, or that the status cannot be read.
+    git's own refusal names modified and untracked files and never an ignored one, so this read is
+    all that keeps an ignored file written late. It narrows that window and does not close it: an
+    ignored file written after this returns is deleted with the tree."""
+    work, disposable, ignored, why = dirty(ctx, path)
+    if work is None:
+        ctx.say('failed    %s: its status could not be read again (%s); git was NOT run'
+                % (path, why))
+        return False
+    # disposable_untracked counts here: the callers that clear such files have done it already.
+    lines = work + ['?? ' + rel for rel in disposable]
+    if lines:
+        reason = 'uncommitted or untracked files (%d): %s%s' % (
+            len(lines), '; '.join(lines[:5]), ' ...' if len(lines) > 5 else '')
+    elif ignored:
+        reason = ignored_reason(ignored, path)
+    else:
+        return True
+    ctx.say('failed    %s changed after it was checked - %s; git was NOT run' % (path, reason))
+    return False
+
+
 def git_remove(ctx, path, registered_path):
-    """`git worktree remove`, every check made. True when it removed the tree; False after saying
-    what is left (intact, or the entry destroyed) - never retried, never forced."""
+    """`last_look`, then `git worktree remove`. True when it removed the tree; False after saying
+    why git was not run or what is left (intact, or the entry destroyed) - never retried, never
+    forced."""
+    if not last_look(ctx, path):
+        return False
     rc, out, err = git(ctx.main, 'worktree', 'remove', registered_path)
     if rc == 0:
         ctx.say('removed   %s' % path)

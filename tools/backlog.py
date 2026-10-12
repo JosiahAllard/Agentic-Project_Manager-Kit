@@ -15,6 +15,8 @@
           close ID --reason T [--ruling R]                   retire ID --why T [--ruling R]
           set-status ID parked --q Q-nnn                     unpark ID --ruling R
   start   migrate [--dry-run] [--to ref|branch] [--dir D]   (main's records -> a new store)
+  repair  catch-up [--apply PATH...]     (the PM data worktree's uncommitted record paths; a dry
+                                          run lists them, --apply commits the paths it names)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.backlog, prints and exits.
 Exit codes: 0 OK, 1 NOT FOUND / ERROR / a red check / a landable that cannot tell, 2 USAGE /
@@ -32,17 +34,11 @@ from kitlib.backlog import migrate as mmod                          # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
 from kitlib.backlog import record as rmod                           # noqa: E402
-from kitlib.backlog import retarget as retmod                       # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
-from kitlib.backlog.errors import Failure, Refusal, Usage           # noqa: E402
-from kitlib.config import ConfigError, load as load_config          # noqa: E402
-from kitlib.git import repo as gitrepo                              # noqa: E402
-
-# `set --<field>` for every field but hold_ruling, whose `--hold-ruling` is the recite.
-FIELD_FLAGS = [k for k in rmod.FIELDS if k != 'hold_ruling']
-WRITES = ('add', 'set', 'block', 'unblock', 'pull', 'release', 'close', 'retire', 'set-status',
-          'unpark')
+from kitlib.backlog.errors import Failure, IndexStale, Refusal, Usage  # noqa: E402
+from kitlib.backlog.opener import (FIELD_FLAGS, WRITES, open_repo, open_store, planner,  # noqa: E402
+                                   retarget_dry)
 
 
 def say(line=''):
@@ -148,6 +144,9 @@ def build_parser():
     v.add_argument('--dry-run', action='store_true')
     v.add_argument('--to', default=None, choices=('ref', 'branch'))
     v.add_argument('--dir', default=None)
+    v = sub.add_parser('catch-up')
+    v.add_argument('--apply', nargs='+', default=None, metavar='PATH',
+                   help='commit these record paths, each named; without it a dry run')
     return p
 
 
@@ -290,66 +289,82 @@ def do_landable(args, ctx, snap, backend):
 
 # --- writes ---------------------------------------------------------------------------------------
 
-def set_changes(args):
-    return [(key, getattr(args, 'f_' + key)) for key in FIELD_FLAGS
-            if getattr(args, 'f_' + key) is not None]
-
-
-def planner(args, ctx):
-    v = args.verb
-    if v == 'add':
-        return lambda s: pmod.plan_add(s, ctx, args.id, args.summary, args.scope, args.effort,
-                                       args.ref, args.reopen, session=ctx.session,
-                                       found_on=args.found_on, why_not_folded=args.why_not_folded)
-    if v == 'set':
-        body = pmod.read_body_file(args.body_file) if args.body_file else None
-        changes = set_changes(args)
-        return lambda s: pmod.plan_set(s, ctx, args.id, changes, args.unset, args.ruling, body,
-                                       args.hold_ruling)
-    if v == 'block':
-        return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask, args.ruling,
-                                         reason=args.reason)
-    if v == 'retarget':
-        return lambda s: retmod.plan_retarget(s, args.old, args.new)
-    if v == 'unblock':
-        return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling, args.on, args.reason)
-    if v == 'pull':
-        return lambda s: pmod.plan_pull(s, ctx, args.id, args.reason, args.ruling, args.blocker)
-    if v == 'release':
-        return lambda s: pmod.plan_release(s, ctx, args.id, args.reason)
-    if v == 'close':
-        return lambda s: pmod.plan_close(s, ctx, args.id, args.reason, args.ruling)
-    if v == 'set-status':
-        return lambda s: pmod.plan_set_status(s, ctx, args.id, args.status, args.q)
-    if v == 'unpark':
-        return lambda s: pmod.plan_unpark(s, ctx, args.id, args.ruling)
-    return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling)
+def index_stale(exc):
+    """The WARNING line for a write that is committed with the worktree's index left stale
+    (errors.IndexStale): the write stands, so the verb still reports it and exits 0."""
+    say('WARNING: %s' % ' '.join(str(exc).split()))
 
 
 def do_write(args, ctx, store):
-    change, tip = store.write(planner(args, ctx))
+    made = []
+
+    def plan(snap):                              # the change, kept for an IndexStale report
+        made[:] = [planner(args, ctx)(snap)]
+        return made[0]
+    stale = None
+    try:
+        change, tip = store.write(plan)
+    except IndexStale as exc:                    # committed: report it as written
+        stale, change, tip = exc, made[0], exc.commit
     for line in change.lines:
         say(line)
     if not change.writes:
         say('nothing changed; nothing was written')
         return 0
-    say('WROTE %s -> %s' % (store.backend.describe(), (tip or 'the worktree')[:10]))
+    if stale is not None and not tip:
+        say('WROTE %s -> HEAD already held it' % store.backend.describe())
+    else:
+        say('WROTE %s -> %s' % (store.backend.describe(), tip[:10] if tip else 'the worktree'))
     say('  %s' % change.subject)
+    if stale is not None:
+        index_stale(stale)
     return 0
 
 
 def do_retarget_dry(args, store):
-    """`retarget` without `--apply`: the change it would write, planned against a fresh read and
-    checked as a write would be; nothing is published."""
-    snap = store.load()
-    smod.require_readable(snap)
-    change = retmod.plan_retarget(snap, args.old, args.new)
-    if change.writes:
-        smod.check_change(snap, change)
+    """`retarget` without `--apply`: prints the change it would write (kitlib/backlog/opener.py
+    `retarget_dry`); nothing is published."""
+    change = retarget_dry(args, store)
     for line in change.lines:
         say(line)
     say('DRY RUN: nothing was written%s' % ('; `--apply` writes it as one store commit'
                                             if change.writes else ''))
+    return 0
+
+
+def do_catch_up(args, store):
+    """`catch-up`: each uncommitted path in the folder store as `<kind>  <path>`, then the counts;
+    with `--apply PATH...` commit the named record paths (kitlib.backlog.store.catch_up)."""
+    backend = store.backend
+    if args.apply is not None:
+        stale = None
+        try:
+            tip = smod.catch_up(backend, args.apply, store.session)
+        except IndexStale as exc:                # committed: report it as caught up
+            stale, tip = exc, exc.commit
+        say('CAUGHT UP %d record path(s) in %s -> %s'
+            % (len(set(args.apply)), backend.describe(), tip[:10] if tip else 'nothing to commit'))
+        if stale is not None:
+            index_stale(stale)
+        return 0
+    if not isinstance(backend, smod.MainBackend):
+        raise Usage('`catch-up` is for a folder store; %s commits its own writes'
+                    % backend.describe())
+    found = backend.pending()
+    say('UNCOMMITTED in %s (%s)' % (backend.describe(), 'the PM data worktree: its writes commit'
+                              if backend.commit_branch() else 'not the PM data worktree'))
+    for kind, path in found:
+        say('  %-12s %s' % (kind, path))
+    counts = {}
+    for kind, _ in found:
+        counts[kind] = counts.get(kind, 0) + 1
+    say('%d path(s)%s' % (len(found), ''.join(', %d %s' % (counts[k], k) for k in sorted(counts))))
+    records = [p for kind, p in found if kind != 'not a record']
+    if records:
+        say('DRY RUN: nothing was committed; commit the record paths with: catch-up --apply %s'
+            % smod.quoted(records))
+    else:
+        say('DRY RUN: no uncommitted record path')
     return 0
 
 
@@ -390,28 +405,20 @@ def main(argv=None):
             raise Usage('`--owner-said` is gone: owner words are never copied into a record. '
                         'Retiring an owner-held record takes `--ruling R-nnnn`')
         root = os.path.abspath(args.root or os.getcwd())
-        top, why = gitrepo.toplevel(root)
-        if not top:
-            raise Failure(why)
-        try:
-            cfg = load_config(top)
-        except ConfigError as exc:
-            raise Failure(str(exc))
-        section = cfg.section('backlog')
-        rules = rmod.Rules(section['id_grammar'], section['phases'])
         if args.verb == 'migrate':
+            top, cfg, rules = open_repo(root)
             return do_migrate(args, top, cfg, rules)
-        backend = smod.open_backend(top, cfg, fetch=not args.no_fetch)
-        store = smod.Store(backend, rules, session=args.session)
-        ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
-                           branch=args.branch, code_main=section['code_main'] or cfg.main_branch)
+        ctx = open_store(root, fetch=not args.no_fetch, session=args.session, branch=args.branch)
+        store = ctx.store
         if args.verb in WRITES or (args.verb == 'retarget' and args.apply):
             return do_write(args, ctx, store)
         if args.verb == 'retarget':
             return do_retarget_dry(args, store)
+        if args.verb == 'catch-up':
+            return do_catch_up(args, store)
         snap = store.load()
         if args.verb == 'landable':
-            return do_landable(args, ctx, snap, backend)
+            return do_landable(args, ctx, snap, store.backend)
         return {'next': do_next, 'show': do_show, 'list': do_list,
                 'check': do_check, 'stale': do_stale}[args.verb](args, ctx, snap)
     except omod.PartitionError as exc:

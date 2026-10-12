@@ -80,8 +80,8 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
 - `procwatch`: a process watcher. It spares ComfyUI; add patterns with env `PROCWATCH_PROTECT`
   (`;`-separated regexes).
 - `usage`: usage reports and the statusline (`statusline-usage.ps1`, `write-usage-status.ps1`).
-- `agenttemp`: `agent_temp_sweep.py` clears old entries from the agents' shared temp folder,
-  set by `agent_temp_sweep` in the machine config (docs/kit-json.md).
+- `agenttemp`: `agent_temp_sweep.py` clears old entries from the agents' shared temp folder and its
+  session folders, set by `agent_temp_sweep` in the machine config (docs/kit-json.md).
 
 ## Knowledge (`knowledge/asset-generation`)
 

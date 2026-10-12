@@ -238,7 +238,11 @@ def _read_text(path):
         st = os.stat(path)
     except OSError:
         return None
-    key = (os.path.normcase(os.path.abspath(path)), st.st_mtime_ns, st.st_size)
+    # st_ino (the file id on Windows): on NTFS a replace gives the path a new one, so a same-size
+    # rewrite in the same clock tick still misses. That is filesystem-dependent: where the id is
+    # reused or reported as 0 the key degrades to mtime+size, and the eviction in _write is the
+    # guard for the fake's own rewrites (tests/git/test_fake_cache.py).
+    key = (os.path.normcase(os.path.abspath(path)), st.st_mtime_ns, st.st_size, st.st_ino)
     with _CACHE_LOCK:
         got = _CACHE.get(key)
     if got is not None:
@@ -304,10 +308,35 @@ def system_files(env):
     return out
 
 
+def home_of(env):
+    """The home folder of a git run with the environment `env`: its HOME, else its USERPROFILE,
+    else the process's own through kitlib.config.user.home_dir(), which raises HomeFenced under
+    the kit's tests when that is a real home (docs/test-tools.md "Home fence"). A home the
+    environment names is taken as given. The import is here, not at the top: kitlib.config
+    imports kitlib.git."""
+    home = env.get('HOME') or env.get('USERPROFILE')
+    if home:
+        return home
+    from kitlib.config import user
+    return user.home_dir()
+
+
+def expand_user(path, env, key):
+    """The config value `path` of `key` with a leading `~` read as home_of(env): `~`, `~/x` and
+    `~\\x`, joined as os.path.expanduser joins them. Any other path is returned unchanged, and no
+    home is looked up for it. `~name` (another user's home) is Unsupported: the fake knows no
+    users."""
+    if not path.startswith('~'):
+        return path
+    if len(path) > 1 and path[1] not in '/\\':
+        raise Unsupported('%s naming a user\'s home (%s)' % (key, path))
+    return home_of(env) + path[1:]
+
+
 def global_files(env):
     if env.get('GIT_CONFIG_GLOBAL') is not None:
         return [env['GIT_CONFIG_GLOBAL']]
-    home = env.get('HOME') or env.get('USERPROFILE') or os.path.expanduser('~')
+    home = home_of(env)
     xdg = env.get('XDG_CONFIG_HOME')
     first = os.path.join(xdg, 'git', 'config') if xdg else os.path.join(home, '.config', 'git', 'config')
     return [first, os.path.join(home, '.gitconfig')]
@@ -433,6 +462,10 @@ def _write(path, text):
     finally:
         os.close(fd)
     os.replace(lock, path)
+    norm = os.path.normcase(os.path.abspath(path))
+    with _CACHE_LOCK:
+        for k in [k for k in _CACHE if k[0] == norm]:
+            del _CACHE[k]
 
 
 def _section_header(section, sub):

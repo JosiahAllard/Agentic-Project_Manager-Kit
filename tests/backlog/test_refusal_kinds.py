@@ -134,8 +134,10 @@ class GuardSites(unittest.TestCase):
 
     def test_every_raise_in_the_verbs_is_one_of_the_four_kinds(self):
         for rel in ('kitlib/backlog/plan.py', 'kitlib/backlog/ledger.py', 'kitlib/backlog/migrate.py',
-                    'kitlib/backlog/retarget.py'):
-            for kind in raised_kinds(parse(rel)):
+                    'kitlib/backlog/retarget.py', 'kitlib/backlog/opener.py'):
+            kinds = raised_kinds(parse(rel))
+            self.assertTrue(kinds, '%s raises nothing: the sweep would pass unread' % rel)
+            for kind in kinds:
                 if kind in ('PartitionError', 'Conflict', 'UndecidableScope', 'ValueError'):
                     continue
                 self.assertIn(kind, KINDS, rel)
