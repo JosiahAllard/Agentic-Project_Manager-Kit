@@ -278,7 +278,9 @@ def _fold_overlap(snap, ctx, rid, branch, scopes):
         if not remotes:
             raise Refusal('cannot add %s: `--found-on %s` names a branch that exists neither '
                           'here nor on a remote (as last fetched): pass an existing branch, or '
-                          '`none` when no branch found it' % (rid, branch))
+                          '`none` when no branch found it\na branch that has landed and been '
+                          'removed is written as `none`, with the branch named in '
+                          '--why-not-folded' % (rid, branch))
         notes.append('NOTE: branch %s is not a local branch (only on %s); its diff was not '
                      'compared' % (branch, ', '.join(remotes)))
     else:

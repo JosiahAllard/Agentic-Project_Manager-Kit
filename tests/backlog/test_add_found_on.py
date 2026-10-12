@@ -104,11 +104,44 @@ class FoundOn(StoreCase):
         self.add(['tools/z/a.py'])
         self.assertIsNotNone(self.get('NEW'))
 
-    def remote_only(self, branch, *paths):
-        """`branch` pushed to origin with one commit adding `paths`, and no local branch."""
+    def remote_only(self, branch, *paths, remotes=('origin',)):
+        """`branch` pushed to each of `remotes` with one commit adding `paths`, and no local
+        branch."""
         self.branch_with(branch, *paths)
-        self.repo.git('push', '-q', 'origin', branch)
+        for remote in remotes:
+            self.repo.git('push', '-q', remote, branch)
         self.repo.git('branch', '-q', '-D', branch)
+
+    def second_remote(self, name='upstream'):
+        """A second remote name, which the plan context does not name (`ctx.remote` is origin).
+        Its url is the fixture's bare remote: a push to it writes refs/remotes/<name>/ only."""
+        self.assertNotEqual(name, self.ctx.remote)
+        self.repo.git('remote', 'add', name, self.repo.remote)
+        return name
+
+    def test_a_branch_only_a_second_remote_has_is_noted_not_refused(self):
+        other = self.second_remote()
+        self.remote_only('kit/far', 'kitlib/x/b.py', remotes=(other,))
+        self.assertEqual(self.repo.git('rev-parse', '--verify', '--quiet',
+                                       'refs/remotes/origin/kit/far', check=False), '')
+        change = self.add(['docs/y.md'], found_on='kit/far')
+        self.assertIn('NOTE: branch kit/far is not a local branch (only on upstream); its diff '
+                      'was not compared', change.lines)
+        self.assertIsNotNone(self.get('NEW'))
+
+    def test_a_branch_several_remotes_have_names_each_in_the_note(self):
+        other = self.second_remote()
+        self.remote_only('kit/far', 'kitlib/x/b.py', remotes=('origin', other))
+        change = self.add(['docs/y.md'], found_on='kit/far')
+        self.assertIn('NOTE: branch kit/far is not a local branch (only on origin, upstream); its '
+                      'diff was not compared', change.lines)
+
+    def test_a_branch_no_remote_of_several_has_is_refused(self):
+        self.second_remote()
+        with self.assertRaises(Refusal) as cm:
+            self.add(['docs/y.md'], found_on='kit/nowhere')
+        self.assertIn('names a branch that exists neither here nor on a remote', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
 
     def test_a_branch_only_the_remote_has_is_noted_and_its_pulled_scope_still_checked(self):
         gone = 'kit/gone'
@@ -183,6 +216,8 @@ class FoundOn(StoreCase):
         self.assertIn('`--found-on kit/nowhere` names a branch that exists neither here nor on a '
                       'remote', msg)
         self.assertIn('pass an existing branch, or `none`', msg)
+        self.assertEqual(msg.splitlines()[-1], 'a branch that has landed and been removed is '
+                         'written as `none`, with the branch named in --why-not-folded')
         self.assertIsNone(self.get('NEW'))
         self.assertEqual(self.remote_tip(), before)
 
@@ -262,6 +297,19 @@ class FoundOn(StoreCase):
                 self.add(['docs/y.md'], found_on='none', ref='%s%sNOTES.md' % (d, os.sep))
             self.assertIn('--ref', str(cm.exception))
             self.assertIn('machine path', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
+
+class FoundOnNoRemote(StoreCase):
+    """A repository with no remote at all: `git remote` lists nothing."""
+    remote = False
+
+    def test_a_missing_branch_is_refused_and_no_remote_is_not_a_failure(self):
+        self.assertEqual(self.repo.git('remote'), '')
+        with self.assertRaises(Refusal) as cm:
+            self.verb('add', 'NEW', 'a defect found while working', ['docs/y.md'],
+                      found_on='kit/nowhere', why_not_folded=WHY)
+        self.assertIn('names a branch that exists neither here nor on a remote', str(cm.exception))
         self.assertIsNone(self.get('NEW'))
 
 
