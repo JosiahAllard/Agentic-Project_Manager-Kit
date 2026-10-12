@@ -91,9 +91,9 @@ and none raised. Three things about step 4:
     that a git command may have been left half way and what to check; the sync is told to
     begin no further pass, steps 5 and 6 still run, and close() answers False. No pass
     begins after that: the wait that was left is one in the sync's stop(), or a last pass
-    that had begun already, and that one, like a pass in flight, is left to itself. (One
-    case is left: a sync whose stop(None) raises or does not answer True. Its last pass is
-    still called and may wait for a pass in flight; GitSync's stop(None) answers True.)
+    that had begun already, and that one, like a pass in flight, is left to itself. (A sync
+    whose stop(None) raises or does not answer True gets no last pass either: the raise is
+    an 'error' line, then LEFT_RUNNING. GitSync's stop(None) answers True.)
     With no sync started, a KeyboardInterrupt leaves close() as it came, after steps 5 and
     6. So does one that arrives in step 5 or 6 itself, sync or none: step 4 has ended, so
     there is no CUT_SHORT line, and what is left of those two steps is not run (the system
@@ -120,15 +120,18 @@ phrases, and the reasons of the derived views are replaced by fixed phrases here
       view as a client would, mostly from what the round just read; with no timer
       (backlog_refresh_s unset) health knows nothing of the backlog until a client reads it.
       That read is given the timer's stop event (backlog.Views.get(stop=)): once the timer is
-      told to stop it reads no further repository, and health says what it said before.
+      told to stop it reads no further repository, and health says what it said before. A
+      read of after_round() that raises (a backlog source whose `get` takes no `stop`, say) is
+      one 'error' line in the log (ROUND_FAILED), once for each failure that is new.
 
 GET health and the sync's reason (health_route). The Api's health carries no `detail` for
 anyone. The route adds `git.detail`, the reason of a failing sync with scrub() applied, for the
 owner role only: an agent and a caller with no role get the Api's answer as it is. `detail` may
 name a remote URL or a folder of this machine, which is why it is the owner's alone.
 
-ask() is the small client `hub status` and `hub open` need: one request to the loopback
-listener through http.client, which uses no proxy, so a token never leaves this machine.
+ask() is the one request every local client makes (`hub status`, `hub open`, and
+kitlib.hubsite.client for the other verbs): to the loopback listener through http.client, which
+uses no proxy, so a token never leaves this machine. It names itself USER_AGENT.
 """
 import datetime
 import http.client
@@ -151,11 +154,14 @@ POLL_S = 0.5                    # run()'s wait between two looks at `stop` (and 
 ASK_TIMEOUT_S = 10
 MAX_ANSWER = 16 << 20           # bytes of one answer ask() reads
 VIA_CLI = 'cli'
+USER_AGENT = 'hub-client'       # what ask() calls itself: it names no person and no machine
 SYNC_OFF = 'git sync is off on this server'
 SYNC_REFUSED = 'git sync was refused at start-up: the server console says why'
 NO_USAGE_SOURCE = 'no launcher usage source configured'     # derived.usage's own phrase
 USAGE_FAILED = 'the usage source could not be read'
 AGENTS_FAILED = 'the agent definitions could not be read'
+ROUND_FAILED = ('the backlog view could not be read after a round of the backlog timer, so '
+                'health does not follow the timer: %s: %s')
 GIT_WAIT_THREAD = 'hub-close-git'       # the thread a wait for git is made on at the close
 _GIT_LIMITS = ('git may take %d s for a fetch and again for a push' % gitsync.NET_TIMEOUT)
 _AGAIN = 'Ctrl+C again ends the wait'
@@ -309,9 +315,13 @@ class SiteViews(object):
     exists: `backlog_views` for backlog and completed, sources.repos and .agents for theirs.
     notices, usage and health are always there (kitlib.hubsite.derived answers a missing notice
     folder with no notices and a missing usage source with its own phrase). `sync` is the git
-    sync or None, `sync_off` the fixed phrase health gives when there is none."""
+    sync or None, `sync_off` the fixed phrase health gives when there is none. `log(level,
+    text)`: where after_round says that a read of its own failed."""
 
-    def __init__(self, store, sources, backlog_views=None, sync=None, sync_off=SYNC_OFF):
+    def __init__(self, store, sources, backlog_views=None, sync=None, sync_off=SYNC_OFF,
+                 log=None):
+        self._log = log
+        self._round_said = ''       # the failure after_round last logged
         self._store = store
         self._sources = sources
         self._backlog = backlog_views
@@ -408,13 +418,25 @@ class SiteViews(object):
         """Read the backlog view as a client's read does, so health carries what the timer's
         round just read. `stop`: the timer's event; once it is set no further repository is
         read (backlog.Views.get) and health keeps what it had. Never raises: it runs on the
-        timer's thread (build)."""
+        timer's thread (build). A read that raised leaves health saying what it said before,
+        and is one 'error' line in the log (ROUND_FAILED): one for a failure that is new, not
+        one for every round. A repository list that cannot be read is no such failure: health
+        carries it (backlog_error)."""
         if self._backlog is None:
             return
         try:
             self._read(stop=stop)
-        except Exception:           # noqa: BLE001 - health then says what it said before
-            pass
+            said = ''
+        except NoRepoList:
+            said = ''
+        except Exception as e:      # noqa: BLE001 - the timer's thread goes on
+            said = scrub(ROUND_FAILED % (type(e).__name__, e))
+        was, self._round_said = self._round_said, said
+        if said and said != was and self._log is not None:
+            try:
+                self._log('error', said)
+            except Exception:       # noqa: BLE001 - a log that fails must not end the timer
+                pass
 
     def health(self):
         out = {'git': self._git(), 'backlog': None, 'backlog_at': None, 'backlog_error': None,
@@ -525,7 +547,7 @@ def build(settings, sources, log=None):
         if sources.backlog is not None:
             views_b = sources.backlog(settings.backlog_refresh_s)
         sync, sync_off = _make_sync(settings, sources, notes)
-        views = SiteViews(store, sources, views_b, sync, sync_off)
+        views = SiteViews(store, sources, views_b, sync, sync_off, log=log)
         if views_b is not None:
             _follow_rounds(views_b, views)
         api = _api.Api(store, views)
@@ -667,9 +689,12 @@ class Hub(object):
         if drained:
             # A pass is in flight. Wait for it in stop(), which begins no pass, and only then
             # call the last one: a sync_once left waiting behind that pass by a Ctrl+C would
-            # begin its own pass after the store closed. LAST_PASS announced this wait.
-            self._pass_ended()
-            self._last_pass()
+            # begin its own pass after the store closed. LAST_PASS announced this wait. When
+            # the wait itself failed the pass may still run: no last pass is called beside it.
+            if self._pass_ended():
+                self._last_pass()
+            else:
+                self._say(LEFT_RUNNING)
             return False
         # no last pass will wait for the pass in flight: wait for it here, before the store closes
         self._say(STILL_WAITING, 'note')
@@ -679,11 +704,14 @@ class Hub(object):
 
     def _pass_ended(self):
         """Wait, with no time limit, for the sync's thread and so for its pass in flight: True
-        when it ended. No pass begins here. False when the wait raised or answered anything
-        else; the store is still closed."""
+        when it ended. No pass begins here. False when the wait raised (an 'error' line says
+        what) or answered anything else; the caller says what follows, and the store is still
+        closed."""
         try:
             return _apart(self.sync.stop, None) is True
-        except Exception:           # noqa: BLE001 - the caller says what follows from it
+        except Exception as e:      # noqa: BLE001 - the store is still closed
+            self._say('closing: the wait for the git sync pass in flight failed: %s: %s'
+                      % (type(e).__name__, e))
             return False
 
     def _cut_short(self):
@@ -802,7 +830,7 @@ def ask(port, method, path, token=None, body=None, timeout=ASK_TIMEOUT_S):
     answered). `token` is sent as a Bearer token; a POST carries `body` as JSON with the Origin
     and Content-Type the listener requires and names itself VIA_CLI. NotRunning when nothing
     listens there, ServeError when what answers is not the hub."""
-    headers = {'Accept': httpd.JSON}
+    headers = {'Accept': httpd.JSON, 'User-Agent': USER_AGENT}
     if token:
         headers['Authorization'] = 'Bearer %s' % token
     data = None

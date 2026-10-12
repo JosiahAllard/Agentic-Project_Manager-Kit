@@ -502,12 +502,16 @@ class SyncCase(ServeCase):
         hub.start()
         self.assertIs(hub.close(), False)
         # a stop that did not answer in its time is asked again with no limit, so the last pass
-        # is never called beside a pass in flight; that one raised too and is not said twice
-        self.assertEqual(self.calls, ['sync.start', 'sync.stop', 'sync.stop', 'sync.sync_once'])
+        # is never called beside a pass in flight; that one raised too: each raise is a line,
+        # the pass may still run, and no last pass is called beside it
+        self.assertEqual(self.calls, ['sync.start', 'sync.stop', 'sync.stop'])
         self.assertEqual(self.sync.timeouts, [serve.CLOSE_TIMEOUT_S, None])
         self.assertFalse(self.locked())
-        self.assertEqual(len(self.errors()), 1)
+        self.assertEqual(len(self.errors()), 3, self.errors())
         self.assertIn('the git sync failed: RuntimeError', self.errors()[0])
+        self.assertIn('the wait for the git sync pass in flight failed: RuntimeError',
+                      self.errors()[1])
+        self.assertEqual(self.errors()[2], serve.LEFT_RUNNING)
         self.assertIs(hub.close(), False)
         self.assertEqual(httpfix.http_threads(), [])
 
@@ -1014,13 +1018,15 @@ class StepCase(ServeCase):
                     join = lis.join
                     lis.join = lambda t=None: join(t) and False
                 self.assertIs(hub.close(timeout), False)
-                self.assertEqual(self.errors(), [line])
                 # a step that ran out of time stops none after it: the requests had ended, so
                 # the last pass ran, and the store was released. A sync whose thread had not
-                # ended is waited for with no limit before that pass (a second stop).
-                stops = ['sync.stop'] * (2 if step == 'sync' else 1)
+                # ended is waited for with no limit before that pass (a second stop); this one
+                # does not end then either, so no last pass is called beside its pass.
+                late = step == 'sync'
+                self.assertEqual(self.errors(), [line] + [serve.LEFT_RUNNING] * late)
                 self.assertEqual(self.calls, ['sync.start', 'backlog.start', 'backlog.stop']
-                                 + stops + ['sync.sync_once'])
+                                 + ['sync.stop'] * (2 if late else 1)
+                                 + ['sync.sync_once'] * (not late))
                 self.assertFalse(self.locked())
                 self.assertIs(hub.close(timeout), False)
                 self.assertEqual(httpfix.http_threads(), [])
@@ -1207,13 +1213,38 @@ class WaitCase(ServeCase):
                 self.settings = self.settings._replace(store=self.store_dir)
                 hub = self.in_flight(Late(self, ends))
                 self.assertIs(hub.close(0.05), False)
+                # a wait that raised is a line of its own, before the one that says what follows
+                raised = ['closing: the wait for the git sync pass in flight failed: '
+                          'RuntimeError: ' + SECRET] if ends is not False else []
                 self.assertEqual(self.errors(), [
                     'closing: the requests in flight did not end within 0.05 s',
                     serve.LAST_PASS_SKIPPED,
-                    'closing: the git sync did not end within 0.05 s',
+                    'closing: the git sync did not end within 0.05 s'] + raised + [
                     serve.LEFT_RUNNING,
                     'closing: the handler threads did not end within 0.05 s'])
                 self.assertEqual(self.sync.timeouts, [0.05, None])
+                self.assertFalse(self.locked(), 'the store was not released')
+
+    def test_no_last_pass_is_called_beside_a_pass_whose_wait_failed(self):
+        # the requests drained, so a last pass is due; the wait for the pass in flight fails
+        for ends in (False, None, RuntimeError(SECRET)):
+            with self.subTest(ends=ends):
+                del self.calls[:], self.lines[:]
+                self.store_dir = tempfile.mkdtemp(prefix='store-', dir=self.root)
+                self.settings = self.settings._replace(store=self.store_dir)
+                hub = self.build(sync=self.given(Late(self, ends)))
+                hub.start()
+                self.assertIs(hub.close(TIMEOUT), False)
+                raised = [('error', 'closing: the wait for the git sync pass in flight failed: '
+                           'RuntimeError: ' + SECRET)] if isinstance(ends, Exception) else []
+                self.assertEqual(self.lines, [
+                    ('note', serve.LAST_PASS),
+                    ('error', 'closing: the git sync did not end within %g s' % TIMEOUT)]
+                    + raised + [('error', serve.LEFT_RUNNING)])
+                # the pass may still run: no sync_once beside it, and the store is still released
+                self.assertEqual(self.calls, ['sync.start', 'sync.stop', 'sync.stop'])
+                self.assertEqual(self.sync.timeouts, [TIMEOUT, None])
+                self.assertIsNone(self.sync.last)
                 self.assertFalse(self.locked(), 'the store was not released')
 
     def test_a_second_ctrl_c_ends_the_wait_for_a_pass_in_flight(self):
@@ -1370,6 +1401,59 @@ class TimerCase(ServeCase):
         self.assertEqual(self.threads(), ['hub-backlog-refresh'])
         self.assertIs(hub.close(TIMEOUT), True)
         self.assertEqual(self.threads(), [])
+        self.assertEqual(self.errors(), [])     # health carries it: no line for it
+
+    def test_a_round_whose_read_fails_is_one_error_line_not_silence(self):
+        class Old(FakeBacklog):         # a backlog source whose get takes no `stop`
+            def get(self, fresh=False):
+                return FakeBacklog.get(self, fresh)
+
+            def wait(self, stop, seconds):
+                return True
+
+        source = Old(self.calls)
+        hub = self.build(backlog=lambda refresh_s: source)
+        stop = threading.Event()
+        self.assertIs(source.wait(stop, 1), True)      # the pause after a round: serve's wrap
+        self.assertEqual(len(self.errors()), 1, self.lines)
+        line = self.errors()[0]
+        self.assertTrue(line.startswith(serve.ROUND_FAILED % ('TypeError', '')), line)
+        self.assertIn("unexpected keyword argument 'stop'", line)
+        self.assertIn('health does not follow the timer', line)
+        self.assertEqual(hub.views.health()['backlog'], [])    # what it said before: nothing
+        # the same failure in the next round is not said again; one that is new is
+        source.wait(stop, 1)
+        self.assertEqual(self.errors(), [line])
+        source.get = lambda fresh=False, stop=None: {}['repos']
+        source.wait(stop, 1)
+        self.assertEqual(self.errors(), [line, serve.ROUND_FAILED % ('KeyError', "'repos'")])
+        # a read that works again, then the first failure: said again
+        source.get = lambda fresh=False, stop=None: copy.deepcopy(ANSWER)
+        source.wait(stop, 1)
+        self.assertEqual(len(hub.views.health()['backlog']), len(ANSWER['repos']))
+        del source.get
+        source.wait(stop, 1)
+        self.assertEqual(self.errors()[2:], [line])
+
+    def test_a_round_failure_is_logged_without_the_user_or_password_of_a_url(self):
+        class Broken(FakeBacklog):
+            def get(self, fresh=False, stop=None):
+                raise RuntimeError(WHY)
+
+            def wait(self, stop, seconds):
+                return True
+
+        source = Broken(self.calls)
+        self.build(backlog=lambda refresh_s: source)
+        source.wait(threading.Event(), 1)
+        self.assertEqual(len(self.errors()), 1)
+        for word in CREDENTIALS:
+            self.assertNotIn(word, self.errors()[0])
+        self.assertIn('git.example.test', self.errors()[0])
+        # a log that raises does not reach the timer's thread
+        views = serve.SiteViews(None, serve.Sources(tokens=self.tokens), Broken(self.calls),
+                                log=lambda level, text: {}['gone'])
+        self.assertIsNone(views.after_round(threading.Event()))
 
 
 class RealSyncCase(gitcase.Case):
