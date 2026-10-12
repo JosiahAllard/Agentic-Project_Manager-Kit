@@ -13,7 +13,7 @@ from kitlib.backlog import store as stmod
 from kitlib.backlog.errors import Usage
 
 from tests.backlog import test_cli
-from tests.backlog.helpers import StoreCase, priced, rec
+from tests.backlog.helpers import ADD_FLAGS, StoreCase, priced, rec
 
 BROKEN = ('a/x\npin: 1', 'a/x\rb', 'a\tb', 'a/\x7fb')
 
@@ -108,14 +108,15 @@ class ScopeShapeCli(unittest.TestCase):
     def test_add_refuses_a_line_break_in_a_scope(self):
         before = self.tip()
         for p in BROKEN:
-            rc, out = self.run_tool('add', 'FOO', '--summary', 'a thing to do', '--scope', p)
+            rc, out = self.run_tool('add', 'FOO', '--summary', 'a thing to do', '--scope', p,
+                                    *ADD_FLAGS)
             self.assertEqual(rc, 2, (p, out))
             self.assertRegex(out, r'^USAGE: ')
         self.assertEqual(self.tip(), before)
 
     def test_set_refuses_a_line_break_in_a_header_value(self):
         # record.render's guard: `set` does not run the field validators itself.
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'a/x')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'a/x', *ADD_FLAGS)
         before = self.tip()
         for flag, value in (('--scope', 'a/x\npin: 1'), ('--summary', 'a thing\npin: 1'),
                             ('--summary', 'a thing\rto do'), ('--scope', 'a\tb')):
@@ -126,7 +127,7 @@ class ScopeShapeCli(unittest.TestCase):
         self.assertNotIn('pin:', self.ok('show', 'FOO'))
 
     def test_a_plain_set_still_writes(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'a/x')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'a/x', *ADD_FLAGS)
         before = self.tip()
         self.ok('set', 'FOO', '--summary', 'a thing to do, reworded', '--scope', 'a/y')
         self.assertNotEqual(self.tip(), before)

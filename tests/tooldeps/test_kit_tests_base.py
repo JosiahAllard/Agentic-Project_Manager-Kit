@@ -1,15 +1,17 @@
 """tools/kit_tests.py --select's base (docs/test-tools.md "kit_tests", docs/gate.md "Default
 base"): origin/main when it resolves, a line when the local main differs, and an explicit --base
 kept. The change list is mocked; the refs are a throwaway repository's (tests/gitfixture.py).
-Also the git tier (KIT_FAKE_GIT) the units are given, and --jobs 1's pid hold (docs/test-tools.md
-"The pid shield")."""
+Also the git tier (KIT_FAKE_GIT) and the home fence's marker (KIT_HOME_FENCE) the units are given,
+and --jobs 1's pid hold (docs/test-tools.md "The pid shield")."""
 import importlib.util
 import io
 import os
+import tempfile
 import unittest
 from unittest import mock
 
 from tests import gitfixture
+from tests.home import temp_home
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _spec = importlib.util.spec_from_file_location('kit_tests_entry_for_base_tests',
@@ -156,6 +158,82 @@ class GitTierEnvironment(unittest.TestCase):
 
     def test_a_value_already_set_is_kept(self):
         self.assertEqual(self.run_full(outer='0'), {'pooled': '0', 'one': '0', 'own': '0'})
+
+
+class HomeFenceEnvironment(unittest.TestCase):
+    """The units' environment carries the home fence's marker (docs/test-tools.md "Home fence"):
+    KIT_HOME_FENCE, the home kit_tests itself resolves, for the reason KIT_FAKE_GIT is there (a
+    pool worker replaces its environment for each unit); a marker already set is kept, and
+    kit_tests' own process stays unmarked. The home here is a temp folder."""
+    MARK = 'KIT_HOME_FENCE'
+
+    def run_main(self, argv_sets, outer=None):
+        home = temp_home(self)
+        seen, out = {}, io.StringIO()
+
+        def run(modules, root, jobs, **kw):
+            seen['pooled'] = kw['environ'].get(self.MARK)
+            return 0, 'kit_tests: OK'
+
+        def call(cmd, cwd=None, env=None):
+            seen['one'] = env.get(self.MARK)
+            return 0
+
+        def collect(top, modules, environ=None):
+            seen['list'] = environ.get(self.MARK)
+            return []
+        here = os.path.abspath('.')
+        with mock.patch.dict(os.environ, {}), \
+                mock.patch.object(cli.gitrepo, 'toplevel', return_value=(here, None)), \
+                mock.patch.object(cli.gitrepo, 'common_dir', return_value=(None, 'no git')), \
+                mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
+                mock.patch.object(cli.selftree, 'all_test_modules', return_value=['tests.a.test_m']), \
+                mock.patch.object(cli.selfrun, 'run', side_effect=run), \
+                mock.patch.object(cli.selflist, 'collect', side_effect=collect), \
+                mock.patch.object(cli.selflist, 'render', return_value=[]), \
+                mock.patch.object(cli.subprocess, 'call', side_effect=call):
+            os.environ.pop(self.MARK, None)
+            if outer is not None:
+                os.environ[self.MARK] = outer
+            for argv in argv_sets:
+                self.assertEqual(cli.main(argv, out=out), 0)
+            seen['own'] = os.environ.get(self.MARK)
+        return home, seen
+
+    RUNS = (['--full', '--jobs', '2'], ['--full', '--jobs', '1'], ['--list'])
+
+    def test_the_units_get_the_home_kit_tests_resolves(self):
+        home, seen = self.run_main(self.RUNS)
+        self.assertEqual(seen.pop('own'), None)
+        self.assertEqual(sorted(seen), ['list', 'one', 'pooled'])
+        for who, marker in seen.items():
+            self.assertEqual(os.path.normcase(marker or ''), os.path.normcase(home), who)
+
+    def test_an_inherited_marker_is_kept(self):
+        # a guard: green before the marker too (the units' environment is a copy)
+        outer = os.path.join(tempfile.gettempdir(), 'kit-outer-home')      # only a name
+        home, seen = self.run_main(self.RUNS, outer=outer)
+        self.assertEqual(seen, {'pooled': outer, 'one': outer, 'list': outer, 'own': outer})
+
+    def test_both_tiers_mark_each_pass(self):
+        home, seen, out = temp_home(self), [], io.StringIO()
+
+        def run(modules, root, jobs, **kw):
+            seen.append(kw['environ'].get(self.MARK))
+            kw['out'].write('kit_tests: OK in 1s (full)\n')
+            return 0, ''
+        here = os.path.abspath('.')
+        with mock.patch.dict(os.environ, {'KIT_FAKE_GIT': '1'}), \
+                mock.patch.object(cli.gitrepo, 'toplevel', return_value=(here, None)), \
+                mock.patch.object(cli.gitrepo, 'common_dir', return_value=(here, None)), \
+                mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
+                mock.patch.object(cli.selftree, 'all_test_modules', return_value=['tests.a.test_m']), \
+                mock.patch.object(cli.giveback, 'drainer', return_value=lambda n: None), \
+                mock.patch.object(cli.selfrun, 'run', side_effect=run):
+            os.environ.pop(self.MARK, None)
+            rc = cli.main(['--full', '--jobs', '2', '--both-tiers'], out=out)
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertEqual([os.path.normcase(m or '') for m in seen], [os.path.normcase(home)] * 2)
 
 
 class BothTiers(unittest.TestCase):

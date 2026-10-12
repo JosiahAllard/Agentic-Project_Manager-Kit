@@ -20,7 +20,7 @@ unless the owner asks; override a dispatch only upward.
 | agent | model | effort | use for |
 |---|---|---|---|
 | asset-smith | opus | high | 3D assets as Blender Python scripts against a decided art direction, validated against budgets, with a contact sheet for the owner. No rigging or animation. |
-| coordinator | opus | medium | Main session (`claude --agent pm-kit:coordinator`), never a subagent. Splits work, dispatches agents, reviews branches, serialises landings, brings decisions to the owner. Writes no code. |
+| coordinator | opus | medium | Main session (`claude --agent pm-kit:coordinator`), never a subagent. Splits work, dispatches agents, reviews branches, lands every LAND verdict as soon as the lane is free, brings decisions to the owner. Writes no code. |
 | consultant | opus | high | Own long-lived launched session per repository (never an Agent dispatch; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked. |
 | deep-worker | opus | xhigh | Own launched session (never an Agent dispatch; 1M via launcher). Root cause or concurrency work strong-worker failed at or plainly cannot do; never builds or plans. |
 | lander | haiku | medium | Lands one reviewed branch (or a batch) on main on the coordinator's go. Never edits code. |

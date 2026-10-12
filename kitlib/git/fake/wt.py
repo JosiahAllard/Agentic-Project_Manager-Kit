@@ -9,6 +9,7 @@ core.filemode false (Git for Windows) keeps the index's mode; a symlink entry is
 import os
 import stat as _stat
 
+from . import config as _config
 from . import ignore as _ignore
 from .errors import GitExit, Unsupported
 from .index import MODE_EXEC, MODE_FILE, S_IFLNK, Entry
@@ -86,12 +87,11 @@ class Convert:
                 cand.append(os.path.join(repo.worktree, '.gitattributes'))
             af = repo.config.get('core.attributesfile')
             if af:
-                cand.append(os.path.expanduser(af))
+                cand.append(_config.expand_user(af, repo.env, 'core.attributesfile'))
             else:
                 xdg = repo.env.get('XDG_CONFIG_HOME')
-                home = repo.env.get('HOME') or repo.env.get('USERPROFILE') or os.path.expanduser('~')
                 cand.append(os.path.join(xdg, 'git', 'attributes') if xdg
-                            else os.path.join(home, '.config', 'git', 'attributes'))
+                            else os.path.join(_config.home_of(repo.env), '.config', 'git', 'attributes'))
             for p in cand:
                 if os.path.isfile(p):
                     raise Unsupported('git attributes (%s)' % p.replace('\\', '/'))

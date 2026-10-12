@@ -24,6 +24,11 @@ BASE = [
 ]
 BRANCH = 'tools/some-branch'
 TODAY = '2026-10-07'
+# What every `add` must now say about where its finding came from (docs/backlog.md, "The fold-in
+# guard"): a fixture's record is found on no branch.
+ADD_WHY = 'a test fixture, found on no branch'
+ADD_NONE = dict(found_on='none', why_not_folded=ADD_WHY)
+ADD_FLAGS = ('--found-on', 'none', '--why-not-folded', ADD_WHY)
 
 
 def record_text(drop=(), body='', **over):

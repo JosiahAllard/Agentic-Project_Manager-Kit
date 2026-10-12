@@ -51,6 +51,20 @@ repository's own `could not check stubs (<repo>): ...` line. The coordinator's s
 same check for its own repository (docs/install.md "Tools without a stub"). Code: `kitlib/pmstart`
 `stubs`; tests: `tests/pmstart/test_stubs_check.py`.
 
+## Agent temp (`agent_temp`)
+
+After `stubs`, the `agent_temp` check prints one line for each part of the agents' temp folder set-up
+(docs/machine-setup.md "Extras") that is missing: "AGENT_TEMP is not set (machine_setup.py plans
+it)" when neither the process nor the user environment has `AGENT_TEMP`; "agent_temp_sweep is not
+set in the machine config (machine_setup.py plans it)"; and "agent temp sweep task agent-temp-sweep
+is not registered (machine_setup.py --register-sweep-task --apply, the owner's act)" when
+`schtasks /Query` (4 second limit) says the task does not exist. A query that fails any other way
+(access denied, the time limit, no `schtasks`) is "could not check the agent temp sweep task
+agent-temp-sweep: ...", after the other two lines, never "not registered"
+(`kitlib.machinesetup.agenttemp.task_registered`). It changes nothing. A failing environment or
+config reader is one `could not check agent_temp: ...` line. Code: `kitlib/pmstart` `agent_temp_lines`; tests:
+`tests/pmstart/test_agent_temp_check.py`.
+
 ## Config
 
 The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; without it the checklist says it is skipped.
@@ -98,10 +112,12 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 
 Only in settings the PM session loads; the hook does not check which session runs it. It is not
 in the plugin, which every session loads. Exec form, with `<pythonw>` the interpreter that
-`guard.py --settings-entry` prints (docs/guard.md "Go-live"), starts no shell. The PM repo's own
-`.claude/settings.json` is edited by hand: `tools/machine_setup.py` reads the account config
-folders (`~/.claude`, `~/.claude-*`, `default_config_dirs` in `kitlib/machinesetup`), not a
-repository's settings.
+`guard.py --settings-entry` prints (docs/guard.md "Go-live"), starts no shell. Put it in the PM
+repo's `.claude/settings.local.json`, which only that checkout loads. `tools/machine_setup.py`
+otherwise reads the account config folders (`~/.claude`, `~/.claude-*`, `default_config_dirs` in
+`kitlib/machinesetup`), never a repository's settings, so this file is edited by hand, except that
+`machine-setup.ps1 -Fresh -PmSettings <file>` writes the hook to the one file it names and refuses an
+account's `settings.json` (docs/machine-setup.md "Fresh machine (--fresh)").
 
 ```json
 {"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"<pythonw>","args":["<kit>/claude/hooks/pm_session_start.py"]}]}]}}

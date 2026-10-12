@@ -6,6 +6,7 @@ import json
 import os
 
 from tests import gitfixture
+from tests.home import child_home
 from tests.lock.helpers import StoreCase
 
 # A step that prints ok and exits 1 when the file RED is in the tree it runs in.
@@ -16,9 +17,17 @@ GATE = {'steps': [{'name': 'unit', 'always': True, 'cmd': RED_AWARE, 'pass': '^o
 
 def test_env():
     """The fixture's git environment without the Claude Code and machine lock variables: what the
-    gate's steps and git writes get in a test."""
-    return {k: v for k, v in gitfixture.fixture_env().items()
-            if k not in ('CLAUDE_CODE_SESSION_ID', 'CLAUDE_PID') and not k.startswith('MACHINE_LOCK_')}
+    gate's steps and git writes get in a test. KIT_PINNED is `live`: a tools/gate.py or land.py a
+    test starts in the kit's main checkout runs this tree's code, never an export of pushed main
+    under the real LOCALAPPDATA (kitlib.gate.pin). USERPROFILE and HOME are a temp folder
+    (tests.home.child_home): a home lookup in such a process reads no real machine config, and the
+    home fence has nothing to refuse there (kitlib.gate.runner._run_check reports any exception
+    of a check as a failed check, a refusal included)."""
+    home = child_home()
+    env = {k: v for k, v in gitfixture.fixture_env({'USERPROFILE': home, 'HOME': home}).items()
+           if k not in ('CLAUDE_CODE_SESSION_ID', 'CLAUDE_PID') and not k.startswith('MACHINE_LOCK_')}
+    env['KIT_PINNED'] = 'live'
+    return env
 
 
 class GateRepoCase(StoreCase):

@@ -188,6 +188,11 @@ step as the install, or it runs twice (`tools/machine_setup.py` notes it, docs/m
 "Settings"). guard.py stays in each account's settings and is never in the plugin (docs/guard.md
 "Go-live"); the PM repo's `pm_session_start.py` stays in that repo's settings.
 
+On a fresh machine, `machine-setup.ps1 -Fresh -Apply` does the same migrate for each account folder
+whose plugin is not enabled from the export: it makes the export, then runs the migrate steps for
+that folder through the same code (docs/machine-setup.md "Fresh machine (--fresh)"). The CLI also
+rewrites other keys of that `settings.json`, so the step backs the file up first.
+
 ### After the plugin install: remove the per-item junctions
 
 An account set up by `machine_setup.py` has per-item junctions under `~/.claude` that load the same
@@ -224,7 +229,9 @@ lock path, and `machine_setup.py --apply` recreates those links. Record KIT-JUNC
 retires them.
 
 `tools/backlog.py add` needs at least one `--scope <path>` (`none` for a record that touches no
-tracked file); without one it refuses (docs/backlog.md).
+tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or
+`--found-on none` when no branch found it) and `--why-not-folded "<reason>"` (docs/backlog.md
+"The fold-in guard").
 
 The rulings ledger is once per machine: set `ledger_path` (and optionally `ledger_repos`) in
 the machine config (docs/kit-json.md "Machine config keys"). The first `tools/ledger.py add` creates the file from
@@ -237,13 +244,18 @@ python tools/kit_stubs.py write [-C DIR] [--tools a,b,...] [--replace] [--dry-ru
 python tools/kit_stubs.py check [-C DIR] [--tools a,b,...]
 ```
 
-Logic: `kitlib/stubs/__init__.py`; tests: `tests/stubs/test_kit_stubs.py`.
+Logic: `kitlib/stubs/__init__.py`; tests: `tests/stubs/test_kit_stubs.py`,
+`tests/stubs/test_live_root.py`.
 
 A stub is `<checkout>/<tools_dir>/<name>.py`. It runs `<kit>/tools/<name>.py` in a child Python
 with the stub's arguments.
 
 - The kit's location is written into the stub. No environment variable names the kit, the
   repository or its config.
+- That location is the live kit checkout (`kitlib.stubs.kit_root`). When `kit_stubs.py` runs
+  from a pinned export of pushed main (a gate's `kit-stubs` step under a pinned gate.py or
+  land.py, docs/gate.md "Pinned tools"), it is `KIT_LIVE_ROOT` (`kitlib.pluginsource.live_root`), never the
+  export: `write` names the main checkout and `check` holds stubs that name it current.
 - The child runs in the caller's directory when that is inside the stub's checkout, else in the
   stub's checkout. So a kit tool's default `-C .` names the stub's checkout, and a linked
   worktree's stub acts on that worktree.

@@ -24,7 +24,10 @@ works, not that the change is right, in scope, or exercised.
    its gate; you re-review the fix only.
 5. Small findings are fixed on this branch before it lands, never filed as follow-up records; file
    a follow-up only for work too large or out of scope, and worth doing. The same bar holds for
-   every agent's own findings: a minor one folds into its story, not a new record. Verdicts: land;
+   every agent's own findings: a minor one folds into its story, not a new record. This covers
+   incidental defects found on the branch (a tool bug, a wrong doc line, a flake fix), not only
+   the branch's own story; `backlog.py add` refuses a record whose scope overlaps the finding
+   branch. Verdicts: land;
    land with a follow-up recorded in the plan; send back. Design disagreement -> the owner, both
    positions stated fairly.
 6. A defect class seen twice is prevented in this order: **a guard in code** (fail-fast check, test,

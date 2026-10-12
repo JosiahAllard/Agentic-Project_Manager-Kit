@@ -7,13 +7,16 @@ import unittest
 from kitlib import pluginsource as P
 from kitlib import pmstart
 from kitlib.pluginsource import claude
+from tests.home import temp_home
 from tests.pluginsource import FakeProc, Kit
 
 NOW = datetime.datetime(2026, 10, 11, 9, 0)
 FAKES = dict(pm_data=lambda: None, handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"}, stubs={"repos": {}},
              watcher={"beat": lambda: None, "now": 0},
-             foreground_lock={"read": lambda: 0})
+             foreground_lock={"read": lambda: 0},
+             agent_temp={"env": lambda: "X:\\temp", "sweep_key": lambda: {"dir": "X:\\temp"},
+                         "task_exists": lambda name: True})
 
 
 class PluginCurrentTest(unittest.TestCase):
@@ -65,6 +68,7 @@ class PluginCurrentTest(unittest.TestCase):
         self.assertIn("could not check the pm-kit plugin", got[0])
 
     def test_in_the_checklist_and_a_failure_isolated(self):
+        temp_home(self)     # the hub check's current account reads an empty machine config
         txt = pmstart.checklist({}, NOW, procs=[], plugin_current={"settings": self.s, "kit": self.k.kit,
                                                                  "folders": []},
                                 **FAKES)

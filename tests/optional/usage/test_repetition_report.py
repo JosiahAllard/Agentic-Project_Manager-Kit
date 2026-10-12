@@ -12,9 +12,14 @@ import unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 CODE = os.path.join(HERE, '..', '..', '..', 'optional', 'usage')
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)            # a run from this folder: tests.home and kitlib
 sys.path.insert(0, CODE)
 sys.path.insert(0, HERE)
+from kitlib.config import user as kuser  # noqa: E402
+from tests import home as thome  # noqa: E402
 import _fixture as F  # noqa: E402
 import repetition_report as RR  # noqa: E402
 
@@ -53,6 +58,33 @@ class Report(unittest.TestCase):
             text = out.getvalue()
             self.assertIn('2 transcripts | read: %s, %s' % (dirs[0], dirs[1]), text)
             self.assertRegex(text, r'\n\s+1 \|\s+2 \| tools/gate\.py')     # 1 call, 2 hand-rolled
+
+    def no_config_dir_env(self):
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop('CLAUDE_CONFIG_DIR', None)
+
+    def test_no_config_dir_reads_the_homes_claude_folder(self):
+        home = thome.temp_home(self)
+        self.no_config_dir_env()
+        repo = os.path.join(home, 'Repo')
+        key = re.sub(r'[^A-Za-z0-9]', '-', os.path.abspath(repo)).lower()
+        F.write(os.path.join(home, '.claude', 'projects', key, 's.jsonl'),
+                [F.turn('m', '2026-10-04T00:00:00Z', content=[F.shell('t', 'python tools/gate.py')])])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(sys, 'argv', ['repetition_report.py', repo]):
+            RR.main()
+        self.assertIn('1 transcripts | read: %s/.claude\n' % home, out.getvalue())
+
+    def test_no_config_dir_is_fenced(self):
+        home = thome.fence_decoy(self)
+        self.no_config_dir_env()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out), \
+                mock.patch.object(sys, 'argv', ['repetition_report.py', os.path.join(home, 'Repo')]):
+            with self.assertRaises(kuser.HomeFenced):
+                RR.main()
 
 
 if __name__ == '__main__':

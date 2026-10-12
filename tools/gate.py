@@ -12,8 +12,8 @@
                       [--full] [--fresh] [--wait SECONDS] [--log-dir D] [--keep-branch]
       land BRANCH from the main checkout: merge, gate the merged tree, push, verify, then delete
       the landed branch (remote and local) and remove its worktree, never forced, unless
-      --keep-branch (docs/gate.md "Branch cleanup"); --fresh runs every step of the merged
-      gate (no gate reuse, docs/gate.md "Gate reuse")
+      --keep-branch (docs/gate.md "Branch cleanup"); --fresh or --full runs every step of the
+      merged gate: nothing is read from or stored in the gate cache (docs/gate.md "Gate reuse")
   gate.py --measure --out PATH [--days N]
       write a proposed kinds table from the lock's run history (never the live table)
   gate.py wait-result BRANCH --tip SHA [--kind gate|land] [--timeout S] [-C DIR]
@@ -35,8 +35,17 @@ import sys
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, KIT)
 
-from kitlib import gate as G                                        # noqa: E402
-from kitlib.config import policy                                   # noqa: E402
+if __name__ == '__main__':      # from the kit's main checkout: run from pushed main (kitlib.gate.pin)
+    from kitlib.gate import pin                                     # noqa: E402
+    _code, _said = pin.run(__file__, sys.argv[1:])
+    if _said:
+        sys.stderr.write(_said + '\n')
+    if _code is not None:
+        sys.exit(_code)
+
+from kitlib import gate as G                                       # noqa: E402
+from kitlib import pluginsource                                    # noqa: E402
+from kitlib.config import policy                                  # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
 from kitlib.gate import caller, measure, runner                    # noqa: E402
 from kitlib.gate import result as resultmod                       # noqa: E402
@@ -67,7 +76,8 @@ def gate_parser():
                    '<worktree>/tools/gate.py -C <worktree>')
     p.add_argument('--base', help='compare against this rev (default <remote>/<main>)')
     sel = p.add_mutually_exclusive_group()
-    sel.add_argument('--full', action='store_true', help='every step that is not manual')
+    sel.add_argument('--full', action='store_true', help='every step that is not manual; nothing '
+                     'read from or stored in the gate cache')
     sel.add_argument('--only', nargs='+', metavar='STEP', help='exactly these steps (no record)')
     p.add_argument('--plan', action='store_true', help='print what would run; run nothing')
     p.add_argument('--slug', help='the machine-lock slug (default: the branch)')
@@ -88,7 +98,7 @@ def land_parser():
     p.add_argument('--summary', help='the merge title after "Merge <branch>: "')
     p.add_argument('--full', action='store_true', help='gate every non-manual step')
     p.add_argument('--fresh', action='store_true',
-                   help='run every merged-gate step: reuse none from the branch gate')
+                   help='run every merged-gate step: nothing read from or stored in the gate cache')
     p.add_argument('--wait', type=int, default=0, metavar='SECONDS',
                    help='wait this long for another landing to finish (default 0: BUSY at once)')
     p.add_argument('--log-dir', help='where the merged gate\'s logs go')
@@ -235,7 +245,7 @@ def main(argv):
         # No stub, and no -C or a relative one: this gate.py on another checkout of its own
         # repository. An absolute -C names the tree on purpose.
         if here is None and not (a.root and os.path.isabs(a.root)):
-            refused = caller.own_copy_refusal(root, KIT, rel=a.root)
+            refused = caller.own_copy_refusal(root, pluginsource.live_root(KIT), rel=a.root)
             if refused is not None:
                 return emit(refused)
         refused = caller.log_dir_refusal(a.log_dir, root, os.getcwd())

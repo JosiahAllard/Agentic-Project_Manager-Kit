@@ -4,6 +4,7 @@ import unittest
 
 from kitlib import pmstart
 from kitlib.pmstart import fglock
+from tests.home import temp_home
 from tests.pmstart import keep_off_launcher_repos
 
 CFG = {}
@@ -13,7 +14,9 @@ FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]
 
 
 def setUpModule():
-    """The other checklist checks read this machine; keep them off it."""
+    """The other checklist checks read this machine; keep them off it (keep_off_launcher_repos
+    also keeps the plugin export and agent_temp checks off this machine's config and scheduler)."""
+    keep_off_launcher_repos()
     global _orig_settings
     _orig_settings = pmstart.pm_data_settings
     pmstart.pm_data_settings = lambda: None
@@ -58,6 +61,7 @@ class FgLockTest(unittest.TestCase):
             fglock.read_live(FakeUser32(0, ok=0))
 
     def test_in_checklist_last_and_failure_isolated(self):
+        temp_home(self)     # the hub check's current account reads an empty machine config
         txt = pmstart.checklist(dict(CFG, standing=["x"]), NOW, procs=[],
                                 foreground_lock={"read": lambda: 5}, **FAKES)
         lines = txt.splitlines()

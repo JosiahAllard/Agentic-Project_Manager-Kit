@@ -20,3 +20,15 @@ def keep_off_plugin_export():
     p = mock.patch.object(pmstart, "plugin_settings", lambda: None)
     p.start()
     unittest.addModuleCleanup(p.stop)
+    keep_off_agent_temp()
+
+
+def keep_off_agent_temp():
+    """For a module's setUpModule: the checklist's agent_temp check reads neither this machine's
+    environment, its config nor its task scheduler (every reader says "in place": no line)."""
+    from kitlib import pmstart
+    for name, value in (("agent_temp_env", lambda: "X:\\temp"), ("agent_temp_sweep_key", lambda: {"dir": "X:\\temp"}),
+                        ("agent_temp_task_exists", lambda name=None: True)):
+        p = mock.patch.object(pmstart, name, value)
+        p.start()
+        unittest.addModuleCleanup(p.stop)

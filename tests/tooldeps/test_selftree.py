@@ -13,6 +13,7 @@ import unittest.mock
 from kitlib.tooldeps import selftree
 from kitlib.tooldeps.deps import ALL
 from tests.gitfixture import TempRepo, rmtree
+from tests.home import TempHomeCase
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _spec = importlib.util.spec_from_file_location('kit_tests_entry_for_tests',
@@ -259,8 +260,9 @@ class Config(unittest.TestCase):
             selftree.config(root)
 
 
-class GitAndCli(unittest.TestCase):
+class GitAndCli(TempHomeCase):
     def setUp(self):
+        super().setUp()         # TempHomeCase: kit_tests' run folder comes from user.make_temp
         self.repo = TempRepo()
         self.addCleanup(self.repo.cleanup)
         write_tree(self.repo.root)

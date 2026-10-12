@@ -831,17 +831,14 @@ class Lander(object):
         elif released is not None:
             lines.append('WARNING: the landing lock was released, and leaving the landing queue '
                          'stopped (%s); the entry goes once this process ends' % released)
-        try:
-            store = at_landing.ref_store(self.root, self.cfg) is not None
-        except BaseException:       # noqa: BLE001 - cannot tell: name the command anyway
-            store = True
-        for b in self.branches if store else ():
+        for b in self.branches:
             try:
-                how = at_landing.backlog_command(self.root, 'landable', b)
-            except BaseException:   # noqa: BLE001
-                how = 'the backlog tool'
-            lines.append('WARNING: the records %s holds pulled in the backlog store were not '
-                         'closed; see what is left with: %s' % (b, how))
+                hows = at_landing.landable_commands(self.root, self.cfg, b)
+            except BaseException:   # noqa: BLE001 - cannot tell: name the tool anyway
+                hows = ['the backlog tool']
+            for how in hows:
+                lines.append('WARNING: the records %s holds pulled in the backlog store were not '
+                             'closed; see what is left with: %s' % (b, how))
         if not self.cleaned and not self.keep_branch:
             lines.append('WARNING: the branch cleanup did not run; once no landing is running, '
                          'clean up with: %s' % cleanup.sweep_command(self.root))
@@ -965,7 +962,7 @@ class Lander(object):
         on_top = [l for l in (log or '').splitlines() if l.strip()] or chain[:len(chain) - n]
         said = '; '.join(l[:10] + l[40:] for l in on_top[:10]) + (
             '; and %d more' % (len(on_top) - 10) if len(on_top) > 10 else '')
-        gate_cmd = 'python "%s" -C "%s" --full' % (os.path.join(S.KIT_ROOT, 'tools', 'gate.py'),
+        gate_cmd = 'python "%s" -C "%s" --full' % (os.path.join(S.kit_live(), 'tools', 'gate.py'),
                                                    self.root)
         # Fail closed: until unseen() shows the commits on top select no gate step, anything that
         # stops the landing from here (landed_anyway) still says main was not gated whole.
@@ -1055,10 +1052,14 @@ class Lander(object):
             except BaseException as e:
                 what = 'Ctrl+C' if isinstance(e, KeyboardInterrupt) else '%s: %s' % (
                     type(e).__name__, e)
+                try:
+                    hows = at_landing.landable_commands(self.root, self.cfg, b) or [
+                        at_landing.backlog_command(self.root, 'landable', b)]
+                except BaseException:   # noqa: BLE001 - still say what stopped
+                    hows = ['the backlog tool']
                 lines.append('WARNING: %s landed, and closing the records it holds pulled in the '
                              'backlog store stopped (%s); see what is left with: %s' % (
-                                 b, ' '.join(what.split()),
-                                 at_landing.backlog_command(self.root, 'landable', b)))
+                                 b, ' '.join(what.split()), ' and '.join(hows)))
         return lines
 
     def clean_up(self):
@@ -1089,7 +1090,7 @@ class Lander(object):
     def break_command(self):
         return ('python -c "import sys; sys.path.insert(0, r\'%s\'); from kitlib.records.landing '
                 'import LandingLock as L; print(L(r\'%s\', \'%s\', \'%s\', name=\'%s\')'
-                '.break_lock())"' % (S.KIT_ROOT, self.root, self.cfg.main_branch, self.cfg.remote,
+                '.break_lock())"' % (S.kit_live(), self.root, self.cfg.main_branch, self.cfg.remote,
                                      os.path.basename(self.lock.path)))
 
     def stuck(self, why):
@@ -1294,7 +1295,7 @@ class Lander(object):
                               '; '.join(l[:10] + l[40:] for l in on_top[:10]) + (
                                   '; and %d more' % (len(on_top) - 10) if len(on_top) > 10
                                   else ''),
-                              main_b, os.path.join(S.KIT_ROOT, 'tools', 'gate.py'), self.root),
+                              main_b, os.path.join(S.kit_live(), 'tools', 'gate.py'), self.root),
                           []))
         if left['current'] != main_b:
             steps.append(('HEAD is on %s, not %s: switch back to %s first%s' % (

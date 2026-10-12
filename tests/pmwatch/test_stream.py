@@ -14,6 +14,7 @@ from kitlib import pmwatch as W
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "tools"))
 import pm_watch as cli                                              # noqa: E402
+from tests.home import TempHomeCase                                 # noqa: E402
 
 
 class Stop(Exception):
@@ -122,7 +123,8 @@ class HeartbeatTest(unittest.TestCase):
                 self.assertIsNone(W.read_heartbeat(p), bad)
 
 
-class CliTest(unittest.TestCase):
+class CliTest(TempHomeCase):
+    # TempHomeCase (tests/home.py): parse's --notice-dir default reads an empty machine config.
 
     def test_stream_flag_parses(self):
         a = cli.parse(["--sessions", "s.json", "--stream"], {}, launcher_set=True)
