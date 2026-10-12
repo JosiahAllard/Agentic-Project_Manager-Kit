@@ -11,9 +11,9 @@ works, not that the change is right, in scope, or exercised.
 1. Scope check, yourself: `git diff --stat` branch vs merge base against the brief. Files outside
    scope = a finding before you read a line.
 2. Read every hunk yourself only when the diff is small (~150 lines) and low/medium risk; docs and
-   additive content: skim. Larger or high-risk -> `pm-kit:reviewer` (fresh, read-only, never the author,
-   `sonnet` by default, `opus` for a high-risk diff), given the brief, diff range, the author's
-   gate report and log paths. You read findings; the verdict stays yours. Standing checks:
+   additive content: skim. Larger or high-risk -> `pm-kit:reviewer` (fresh, read-only, never the author;
+   its model by the "Reviewer model" rule in skill `coordinator-dispatch`, roster.md, nowhere
+   else), given the brief, diff range, the author's gate report and log paths. You read findings; the verdict stays yours. Standing checks:
    `--find review`.
 3. Look for: does what the brief asked and only that; a test that would fail without the change,
    and did it run; new failure paths handled or merely unreachable; public interface, wire format,
