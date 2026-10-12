@@ -25,7 +25,8 @@ was skipped, no --only was given, the base is the default base, the work tree wa
 tracked change, no untracked file) when the gate started and when it ended, HEAD did not
 move, and the repository's stash stack was empty when the gate started (else REFUSED, before
 --plan; kitlib.gate.stash) and when it ended: the record then names exactly the commit whose tree
-was gated, and its config_rev is that commit. A REUSED step did not run in this gate: a pass of its key is in the gate cache
+was gated, and its config_rev is that commit. A REUSED step did not run in this gate: a pass of
+its key is in the gate cache
 (kitlib.gate.reuse), stored by an earlier gate of the same inputs. A rerun with every step
 reused therefore writes a gate-OK record for a commit on which no step ran; its record says
 `reused` for each step.
