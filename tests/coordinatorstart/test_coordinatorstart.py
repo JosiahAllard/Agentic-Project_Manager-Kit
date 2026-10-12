@@ -52,8 +52,8 @@ class RenderTest(unittest.TestCase):
         self.assertTrue(line.startswith("- Pricing pass and backlog audit before your first dispatch, "
                                         "follow-up records excepted"), line)
         for want in ("python tools/backlog.py list --needs-priority",
-                     "A follow-up record (filed from a finding on a branch, a review or a worker's report) "
-                     "stays unpriced until you or the PM promote it",
+                     "A follow-up record (filed from a finding on a branch, a review or a worker's report; "
+                     "a new one says so in its summary) stays unpriced until you or the PM promote it",
                      "Check every other unpriced open record (an owner story, a record from the PM's brief) "
                      "for duplicates, size and fit",
                      "--priority-by agent",
@@ -68,6 +68,10 @@ class RenderTest(unittest.TestCase):
         for gone in ("No start-up pricing pass", "is held", "stay held", "held is not waiting",
                      "`next` offers fewer items", "duplicates or replaces a priced one", "each unpriced"):
             self.assertNotIn(gone, line)
+        # "held" only where it is true: the banner's group, twice, and "owner-held".
+        self.assertEqual(line.count("held"), 3, line)
+        self.assertEqual(line.count("`held`"), 2, line)
+        self.assertEqual(line.count("owner-held"), 1, line)
 
     def test_pricing_line_is_off_unless_the_config_switches_it_on(self):
         with tempfile.TemporaryDirectory() as d:

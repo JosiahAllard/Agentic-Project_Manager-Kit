@@ -50,7 +50,8 @@ ENG_LINE = ("ENG rulings: an engineering question (API shape, class versus recor
 # Emitted only when coordinator_start.pricing_pass is true.
 PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, follow-up records excepted: run "
                 "`python tools/backlog.py list --needs-priority`. A follow-up record (filed from a finding on a "
-                "branch, a review or a worker's report) stays unpriced until you or the PM promote it. Check "
+                "branch, a review or a worker's report; a new one says so in its summary) stays unpriced until "
+                "you or the PM promote it. Check "
                 "every other unpriced open record (an owner story, a record from the PM's brief) for duplicates, "
                 "size and fit, then price it 2-5 under the standing valuation rules (`set <ID> --priority <n> "
                 "--priority-by agent`). Promote a follow-up at any time it enters a work set: price it 2-5; "
