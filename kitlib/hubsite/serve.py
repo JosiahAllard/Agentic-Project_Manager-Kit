@@ -5,11 +5,14 @@ and 9).
                                                 listeners; nothing is started. ServeError.
   Hub   .settings .store .api .views .creds .listeners .sync .backlog .notes .port .url
         .start()                                start the git sync, the backlog timer, the listeners
+        .watch()                                log a git sync failure that is new (below)
         .close(timeout=CLOSE_TIMEOUT_S)         the clean close (below); safe to call twice
   run(hub, started=None, stop=None)             start, serve until `stop` is set or Ctrl+C, close
   Sources(...)                                  where each part comes from
   machine_sources(home=None, sync=True)         this machine's Sources, from its machine config
   SiteViews                                     the Api's `views` object over those sources
+  health_route(api, views)                      a listener's route for GET health (below)
+  scrub(text)                                   `text` without the `user:password@` of any URL
   ask(port, method, path, token=None, body=None, timeout=ASK_TIMEOUT_S) -> (status, object)
   status_lines(health, now=None)                what `hub status` prints for a GET health answer
   ServeError, NotRunning
@@ -28,11 +31,25 @@ text is for the owner's console (it may name a folder):
      server: the reason goes to `Hub.notes` for the console, the server serves with sync off,
      and GET health says so in a fixed phrase (the reason itself names folders).
   4. the Api over the store and a SiteViews, then the local listener on settings.port with
-     httpd.local_hosts, httpd.local_gate and httpd.pair_routes over an auth.Credentials made for
-     the port that was really bound.
+     httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
+     the port that was really bound, and health_route.
 `Hub.listeners` is a list. It holds the local listener; a second listener (the tunnel's, on
 settings.tunnel_port) is appended there by the code that builds it, and start() and close()
-then carry it with no change here.
+then carry it with no change here. That code gives it health_route too, or its owner never
+sees why a sync failed.
+
+The log. `log(level, text)` gets the listeners' lines (httpd: 'access', 'error') and the hub's
+own: 'error' for a close step that failed or ran out of time and for a git sync pass that
+failed, 'note' for what is no error (the last pass begins; the sync works again). Every line
+of the hub's own goes through scrub(), so none holds the user or password of a remote URL.
+
+The git sync's failures. GitSync has no log of its own: it keeps the step its last pass failed
+at and git's reason (`detail`) in status(). Hub.watch() reads that status (it never waits for a
+pass) and logs an 'error' line with the step and the reason when a failure is new or its reason
+changed, and a 'note' when the sync works again; run() calls it on every turn of its wait
+(POLL_S). A Hub served without run() logs a failing sync only when its owner calls watch().
+A sync with push on and no remote to push to is failing from the start (gitsync.NO_REMOTE), so
+the first look logs that.
 
 The clean close, in this order (Hub.close; run() ends with it, also on Ctrl+C):
   1. every listener's door: no new connection, and no write begins (httpd refuses it);
@@ -44,10 +61,20 @@ The clean close, in this order (Hub.close; run() ends with it, also on Ctrl+C):
      start;
   5. the store: every long wait ends and the store lock is released;
   6. the handler threads.
-Each step is given `timeout` seconds; one that fails or runs out is logged and the next still
-runs, and the store is closed whatever happened before it. close() answers True when every
-step ended in time. The last pass is the exception: it runs to its end, however long git's own
-time limits let it (kitlib.hubsite.gitsync).
+Each step is given `timeout` seconds. One that raises, or that has not ended when its time is
+up, is an 'error' line in the log that names the step; the next step still runs, and the store
+is closed whatever happened before it. close() answers True only when every step ended in time
+and none raised. Two things about the last pass:
+  - It is not given `timeout`. A 'note' line says it begins, and it runs to its end, however
+    long git's own limits let it (gitsync.NET_TIMEOUT for a fetch and again for a push); so
+    does the wait for a pass still in flight when the sync's thread did not end in its time.
+    The pass must end before the store closes, and a git command stopped half way may leave an
+    `index.lock` behind, after which every pass ends at `busy` until a person removes it
+    (kitlib.hubsite.gitsync). There is no second Ctrl+C that cuts it short cleanly.
+  - It is skipped when step 3 ran out of time or raised. A request is then still in flight and
+    may write while git adds the store's files (GitSync takes no store lock), so the commit
+    could hold half of that write with no later pass in this process to bring the rest. An
+    'error' line says so; the first pass of the next start commits what is left.
 A process that is killed closes nothing: the system drops the store lock with it, and the next
 start takes it over.
 
@@ -62,8 +89,18 @@ phrases, and the reasons of the derived views are replaced by fixed phrases here
   notices() repos() usage() agents()      kitlib.hubsite.derived's answers
   health()    {git, backlog, backlog_at, backlog_error, backlog_timer}. `git` is GitSync.status()
       without `detail`, or {"running": false, "off": phrase}. `backlog` is null with no backlog
-      source, else [{repo, fetched_at, error}] as the last backlog view read gave it
-      (`backlog_at`: when; null and an empty list before the first read): health starts no git.
+      source, else [{repo, fetched_at, error}] as the last backlog read gave it (`backlog_at`:
+      when; null and an empty list before the first read): health starts no git. A read is a
+      client's GET of the backlog or completed view, or the end of a round of the backlog
+      timer: build() wraps the `wait` of a backlog.Views (its pause between two rounds) so
+      SiteViews.after_round() runs on the timer's own thread after each round. That reads the
+      view as a client would, mostly from what the round just read; with no timer
+      (backlog_refresh_s unset) health knows nothing of the backlog until a client reads it.
+
+GET health and the sync's reason (health_route). The Api's health carries no `detail` for
+anyone. The route adds `git.detail`, the reason of a failing sync with scrub() applied, for the
+owner role only: an agent and a caller with no role get the Api's answer as it is. `detail` may
+name a remote URL or a folder of this machine, which is why it is the owner's alone.
 
 ask() is the small client `hub status` and `hub open` need: one request to the loopback
 listener through http.client, which uses no proxy, so a token never leaves this machine.
@@ -72,6 +109,7 @@ import datetime
 import http.client
 import json
 import os
+import re
 import threading
 
 from kitlib import hubbacklog, pmdata, pmstart, pmwatch
@@ -93,6 +131,28 @@ SYNC_REFUSED = 'git sync was refused at start-up: the server console says why'
 NO_USAGE_SOURCE = 'no launcher usage source configured'     # derived.usage's own phrase
 USAGE_FAILED = 'the usage source could not be read'
 AGENTS_FAILED = 'the agent definitions could not be read'
+LAST_PASS = ('closing: the last git sync pass (it runs to its end: git may take %d s for a fetch '
+             'and again for a push)' % gitsync.NET_TIMEOUT)
+LAST_PASS_SKIPPED = ('closing: the last git sync pass is skipped: a request was still in flight '
+                     'and could write during it; the next start commits what is left')
+# the user and password part of a URL: everything between `://` and the last `@` of its host part
+_USERINFO = re.compile(r'(?<=://)[^/?#\s\'"<>]*@')
+
+
+def scrub(text):
+    """`text` without the `user:password@` part of any URL in it. git's own words may quote a
+    remote URL, and a remote URL may carry a token: nothing shown or logged here keeps one."""
+    return _USERINFO.sub('', str(text))
+
+
+def _failure(sync):
+    """(the step the last pass of the git sync `sync` failed at, git's reason with scrub()
+    applied); ('', '') when it is not failing. Never waits for a pass."""
+    status = sync.status()
+    failed = status.get('failed') or ''
+    if not failed:
+        return '', ''
+    return str(failed), scrub(status.get('detail') or '')
 
 
 class ServeError(Exception):
@@ -125,7 +185,8 @@ class Sources(object):
       usage        callable() -> the lines kitlib.launcher.usage prints
       agents       the folder of agent definitions
       backlog      callable(refresh_s) -> a kitlib.hubsite.backlog.Views (or its like: get, start,
-                   stop, days, clock, timer_error)
+                   stop, days, clock, timer_error; a callable `wait`, when it has one, is
+                   wrapped by build(): module docstring, "Views")
       sync         callable(store_dir, commit_every_s, remote=, branch=, push=) -> a
                    kitlib.hubsite.gitsync.GitSync (or its like: start, stop, sync_once, status)
     """
@@ -283,6 +344,22 @@ class SiteViews(object):
         out.pop('detail', None)     # git's own words: they may name a remote URL or a path
         return out
 
+    def git_failure(self):
+        """(the step the git sync's last pass failed at, git's reason with scrub() applied), or
+        ('', '') with no sync or one that is not failing. The reason may name a remote or a
+        folder: it is for the owner and the server log, never for an agent."""
+        return ('', '') if self._sync is None else _failure(self._sync)
+
+    def after_round(self):
+        """Read the backlog view as a client's read does, so health carries what the timer's
+        round just read. Never raises: it runs on the timer's thread (build)."""
+        if self._backlog is None:
+            return
+        try:
+            self._read()
+        except Exception:           # noqa: BLE001 - health then says what it said before
+            pass
+
     def health(self):
         out = {'git': self._git(), 'backlog': None, 'backlog_at': None, 'backlog_error': None,
                'backlog_timer': None}
@@ -327,15 +404,49 @@ def _make_sync(settings, sources, notes):
                             remote=pm['remote'] if pm else None,
                             branch=pm['branch'] if pm else None, push=settings.push)
     except (gitsync.Refused, ValueError, OSError) as e:
-        notes.append('git sync is off: %s' % e)
+        notes.append(scrub('git sync is off: %s' % e))
         return None, SYNC_REFUSED
     return sync, ''
+
+
+def health_route(api, views):
+    """The route a listener answers GET health with (module docstring, "GET health and the
+    sync's reason"): the answer of `api` (an Api), and for the owner role `git.detail` from
+    `views` (a SiteViews) when the sync is failing at the step the answer names."""
+    def route(request):
+        # raise_unexpected: as the listener's own Api call, so an error is logged there
+        status, obj = api.call(request.method, request.path, request.role, request.body,
+                               request.query, request.via, raise_unexpected=True)
+        git = obj.get('git') if status == 200 and request.role == _api.OWNER else None
+        if isinstance(git, dict):
+            failed, detail = views.git_failure()
+            if detail and git.get('failed') == failed:
+                git['detail'] = detail
+        return httpd.json_response(status, obj)
+    return route
+
+
+def _follow_rounds(backlog_views, views):
+    """Make each round of the backlog timer reach health: wrap `backlog_views.wait`, the pause
+    the timer takes after a round on its own thread, so views.after_round() runs first. Not
+    when the timer is stopping, and not for a stand-in with no `wait`."""
+    wait = getattr(backlog_views, 'wait', None)
+    if not callable(wait):
+        return
+
+    def pause(stop, seconds):
+        if not stop.is_set():
+            views.after_round()
+        return wait(stop, seconds)
+
+    backlog_views.wait = pause
 
 
 def build(settings, sources, log=None):
     """The Hub for `settings` (kitlib.hubsite.settings.Settings) from `sources` (a Sources):
     module docstring, "Start-up". Nothing is started; close() the Hub to release the store.
-    `log(level, text)` gets the listeners' lines (httpd) and the close's errors. ServeError."""
+    `log(level, text)` gets the listeners' lines (httpd) and the hub's own (module docstring,
+    "The log"). ServeError."""
     if not settings.store:
         raise ServeError('no store folder: set hub.store or pm_data in the machine config, '
                          'or name one')
@@ -358,6 +469,8 @@ def build(settings, sources, log=None):
             views_b = sources.backlog(settings.backlog_refresh_s)
         sync, sync_off = _make_sync(settings, sources, notes)
         views = SiteViews(store, sources, views_b, sync, sync_off)
+        if views_b is not None:
+            _follow_rounds(views_b, views)
         api = _api.Api(store, views)
         try:
             local = httpd.Listener((httpd.LOOPBACK, settings.port), api, None,
@@ -369,6 +482,7 @@ def build(settings, sources, log=None):
         creds = auth.Credentials(sources.tokens, port=local.port)
         local.gate = httpd.local_gate(creds)
         local.routes.update(httpd.pair_routes(creds))
+        local.routes[('GET', _api.BASE + '/health')] = health_route(api, views)
         return Hub(settings, store, api, views, creds, listeners, sync, views_b, notes, log)
     except BaseException:
         for lis in listeners:
@@ -397,6 +511,7 @@ class Hub(object):
         self._started = False
         self._closed = False
         self._clean = None
+        self._seen = ('', '')               # the sync failure watch() last logged
 
     @property
     def port(self):
@@ -406,13 +521,33 @@ class Hub(object):
     def url(self):
         return self.listeners[0].url
 
-    def _say(self, text):
+    def _say(self, text, level='error'):
+        """One line of the hub's own to the log, with scrub() applied."""
         if self._log is None:
             return
         try:
-            self._log('error', text)
+            self._log(level, scrub(text))
         except Exception:           # noqa: BLE001 - a log that fails must not stop the close
             pass
+
+    def watch(self):
+        """Look at the git sync once and log what is new (module docstring, "The git sync's
+        failures"): an 'error' line when its last pass failed at another step or for another
+        reason than the last look saw, a 'note' when it works again. Never waits for a pass
+        and never raises. One caller at a time: run() is it."""
+        if self.sync is None:
+            return
+        try:
+            seen = _failure(self.sync)
+        except Exception:           # noqa: BLE001 - a look that fails is tried again next turn
+            return
+        was, self._seen = self._seen, seen
+        if seen == was:
+            return
+        if seen[0]:
+            self._say('the git sync failed at %s: %s' % (seen[0], seen[1] or '-'))
+        else:
+            self._say('the git sync works again', 'note')
 
     def start(self):
         """Start the git sync, the backlog timer and every listener, the listeners last so the
@@ -430,17 +565,39 @@ class Hub(object):
                 lis.start()
             return True
 
-    def _step(self, what, fn, *args):
-        """fn(*args), or None after logging what it raised."""
+    def _step(self, what, timeout, fn, *args):
+        """One step of the close: True when fn(*args) answered True, which is how a step says
+        it ended in time. A step that raised, or that answered anything else, is logged by
+        its name `what` and answers False."""
         try:
-            return fn(*args)
+            done = fn(*args)
         except Exception as e:      # noqa: BLE001 - the next step of the close still runs
             self._say('closing: %s failed: %s: %s' % (what, type(e).__name__, e))
-            return None
+            return False
+        if done is True:
+            return True
+        self._say('closing: %s did not end within %s'
+                  % (what, 'its time' if timeout is None else '%g s' % timeout))
+        return False
+
+    def _last_pass(self):
+        """The last git sync pass of the close, after a note that it begins: it is given no
+        time limit (module docstring). False when it raised; a pass that failed is logged
+        and is no unclean close (the next start tries again)."""
+        self._say(LAST_PASS, 'note')
+        try:
+            last = self.sync.sync_once()
+        except Exception as e:      # noqa: BLE001 - the store is still closed
+            self._say('closing: the last git sync pass failed: %s: %s' % (type(e).__name__, e))
+            return False
+        if isinstance(last, dict) and last.get('failed'):
+            self._say('the last git sync pass failed at %s: %s; the next start tries again'
+                      % (last.get('failed'), last.get('detail') or '-'))
+        return True
 
     def close(self, timeout=CLOSE_TIMEOUT_S):
         """The clean close (module docstring). True when every step ended within `timeout`
-        seconds (None: wait); a second call answers what the first did."""
+        seconds (None: wait) and none raised; a second call answers what the first did."""
         with self._life:
             if self._closed:
                 return self._clean
@@ -448,17 +605,21 @@ class Hub(object):
             clean = []
             try:
                 for lis in self.listeners:
-                    self._step('the listener door', lis.close_door)
+                    clean.append(self._step('the listener door', timeout, _shut, lis))
                 if self.backlog is not None:
-                    clean.append(self._step('the backlog timer', self.backlog.stop, timeout))
+                    clean.append(self._step('the backlog timer', timeout, self.backlog.stop,
+                                            timeout))
+                drained = True
                 for lis in self.listeners:
-                    clean.append(self._step('the requests in flight', lis.drain, timeout))
+                    done = self._step('the requests in flight', timeout, lis.drain, timeout)
+                    drained = drained and done
+                    clean.append(done)
                 if self.sync is not None and self._started:
-                    clean.append(self._step('the git sync', self.sync.stop, timeout))
-                    last = self._step('the last git sync pass', self.sync.sync_once)
-                    if isinstance(last, dict) and last.get('failed'):
-                        self._say('the last git sync pass failed at %s: %s; the next start '
-                                  'tries again' % (last.get('failed'), last.get('detail') or '-'))
+                    clean.append(self._step('the git sync', timeout, self.sync.stop, timeout))
+                    if drained:
+                        clean.append(self._last_pass())
+                    else:
+                        self._say(LAST_PASS_SKIPPED)
             finally:
                 try:
                     self.store.close()
@@ -467,9 +628,15 @@ class Hub(object):
                     clean.append(False)
                     self._say('closing: the store failed: %s: %s' % (type(e).__name__, e))
                 for lis in self.listeners:
-                    clean.append(self._step('the handler threads', lis.join, timeout))
+                    clean.append(self._step('the handler threads', timeout, lis.join, timeout))
             self._clean = all(x is True for x in clean)
             return self._clean
+
+
+def _shut(listener):
+    """Close a listener's door: True, as a close step that ended (close_door answers nothing)."""
+    listener.close_door()
+    return True
 
 
 def run(hub, started=None, stop=None):
@@ -478,8 +645,8 @@ def run(hub, started=None, stop=None):
     was started or closed already.
 
     The wait is a timed one in a loop: on Windows a wait with no time limit is not interrupted
-    by Ctrl+C. No signal handler is set, so only Ctrl+C (KeyboardInterrupt) and `stop` are a
-    clean close."""
+    by Ctrl+C. Each turn of it calls hub.watch(), which logs a git sync failure that is new. No
+    signal handler is set, so only Ctrl+C (KeyboardInterrupt) and `stop` are a clean close."""
     stop = stop if stop is not None else threading.Event()
     try:
         if not hub.start():
@@ -487,7 +654,7 @@ def run(hub, started=None, stop=None):
         if started is not None:
             started(hub)
         while not stop.wait(POLL_S):
-            pass
+            hub.watch()
     except KeyboardInterrupt:
         pass
     finally:
@@ -561,7 +728,9 @@ def _git_line(git):
     if git.get('diverged'):
         parts.append('diverged from the remote: a person joins them')
     if git.get('failed'):
-        parts.append('the last pass failed at %s' % git['failed'])
+        # `detail` is in the owner's answer only (health_route); scrubbed there, and here again
+        why = scrub(git['detail']) if git.get('detail') else ''
+        parts.append('the last pass failed at %s%s' % (git['failed'], ': %s' % why if why else ''))
     return ', '.join(parts)
 
 

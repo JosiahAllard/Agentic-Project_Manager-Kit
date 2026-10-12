@@ -2,17 +2,23 @@
 
   hub.py serve [--port N] [--store PATH]
       serves the hub on the loopback address until Ctrl+C, which closes it cleanly: the last
-      changes are committed and the store lock is released. Prints one start line; start-up
-      notes (NOTE: ...) and errors go to stderr. The port is hub.port of the machine config
-      (default 8790); --port 0 takes a free one, named on the start line. The store is hub.store,
-      else hub/ in the PM data worktree. --store PATH serves that folder instead, as a scratch
-      copy: nothing in it is committed or pushed. A store another server holds is refused.
+      changes are committed and the store lock is released. Prints one start line; notes
+      (NOTE: ...) and errors (ERROR: ...) go to stderr: the start-up notes, a git sync pass that
+      failed with git's reason, the last pass of the close when it begins (it is given no time
+      limit) and each step of the close that failed or ran out of time. The port is hub.port of
+      the machine config (default 8790); --port 0 takes a free one, named on the start line. The
+      store is hub.store, else hub/ in the PM data worktree. --store PATH serves that folder
+      instead, as a scratch copy: git sync is off for that run, so nothing in it is committed or
+      pushed, here or at the close. An empty PATH is a usage error, never the configured store.
+      A store another server holds is refused.
   hub.py status [--port N]
-      asks the running server for its health and prints the revision, the store, the git sync and
-      each repository's backlog fetch age.
+      asks the running server for its health and prints the revision, the store, the git sync
+      (with git's reason when its last pass failed: the owner's token gets it) and each
+      repository's backlog fetch age.
   hub.py setup
       makes the two token files where they are absent and prints where they are and how to start
-      the server. It never writes the machine config: it says so when no store folder is set.
+      the server. It writes nothing else: never the machine config, so no `hub` key (it says so
+      when no store folder is set).
   hub.py open [--port N] [--print]
       opens the hub page in the browser, signed in as the owner through a one-time pairing link
       the running server gives for the owner's token. --print prints the link instead.
@@ -55,15 +61,26 @@ def _port(low):
     return port
 
 
+def _folder(text):
+    """--store's value. An empty one is refused here: it must never mean "no --store", which
+    serves the configured store with git sync on."""
+    if not text.strip():
+        raise argparse.ArgumentTypeError('--store needs a folder, not an empty value')
+    return text
+
+
 def parser():
     p = Parser(prog='hub.py', description='The hub server of this machine.')
     sub = p.add_subparsers(dest='verb')
     s = sub.add_parser('serve', help='serve the hub until Ctrl+C')
     s.add_argument('--port', type=_port(0), help='the port (default: hub.port; 0: a free one)')
-    s.add_argument('--store', help='serve this folder as a scratch copy, with no git sync')
+    s.add_argument('--store', type=_folder,
+                   help='serve this folder as a scratch copy: git sync is off for the run, so '
+                        'nothing in it is committed or pushed')
     t = sub.add_parser('status', help="the running server's health")
     t.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
-    sub.add_parser('setup', help='make the token files')
+    sub.add_parser('setup', help='make the token files where they are absent; the machine '
+                                 'config is not written')
     o = sub.add_parser('open', help='open the hub page, signed in as the owner')
     o.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
     o.add_argument('--print', dest='show', action='store_true',
@@ -71,12 +88,16 @@ def parser():
     return p
 
 
+LEVELS = {'error': 'ERROR', 'note': 'NOTE'}     # the log levels that are printed, and as what
+
+
 def _log(level, text):
-    """The server's error lines, to stderr; a request line is not printed."""
-    if level != 'error':
+    """The server's error and note lines, to stderr; a request line is not printed."""
+    word = LEVELS.get(level)
+    if word is None:
         return
     try:
-        print('ERROR: %s' % text, file=sys.stderr, flush=True)
+        print('%s: %s' % (word, text), file=sys.stderr, flush=True)
     except (OSError, ValueError):       # a closed console must not stop a handler
         pass
 
@@ -85,9 +106,10 @@ def _serve(a, stop):
     s = settings.load()
     if a.port is not None:
         s = s._replace(port=a.port)
-    if a.store:
+    scratch = a.store is not None       # never the truth of the text: '' is refused by the parser
+    if scratch:
         s = s._replace(store=os.path.abspath(a.store), push=False)
-    hub = serve.build(s, serve.machine_sources(sync=not a.store), log=_log)
+    hub = serve.build(s, serve.machine_sources(sync=not scratch), log=_log)
 
     def started(h):
         for note in h.notes:

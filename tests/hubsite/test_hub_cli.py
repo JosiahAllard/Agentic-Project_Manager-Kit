@@ -161,6 +161,101 @@ class ServeCase(CliCase):
         self.assertIn(bad, err)
         self.assertFalse(self.locked())
 
+    def test_an_empty_store_value_is_a_usage_error_and_never_the_configured_store(self):
+        live = os.path.join(self.home, 'live-store')
+        self.config({'hub': {'store': live, 'push': True}})
+        built = []
+        stop = threading.Event()
+        stop.set()
+        with mock.patch.object(HUB.serve, 'build', lambda *a, **kw: built.append((a, kw))):
+            for argv in (('--store', ''), ('--store', '   '), ('--store', '\t'), ('--store=',)):
+                code, out, err = self.run_cli('serve', '--port', '0', *argv, stop=stop)
+                self.assertEqual((code, out), (2, ''), argv)
+                self.assertIn('USAGE: ', err)
+                self.assertIn('--store', err)
+        self.assertEqual(built, [], 'a server was built for an empty --store')
+        self.assertFalse(os.path.exists(live), 'the configured store was opened')
+
+    def test_a_store_run_has_git_sync_off_whatever_the_machine_config_says(self):
+        live = os.path.join(self.home, 'live-store')
+        self.config({'hub': {'store': live, 'push': True, 'commit_every_s': 1}})
+        real, seen, syncs = HUB.serve.build, [], []
+
+        def build(settings, sources, log=None):
+            hub = real(settings, sources, log=log)
+            seen.append((settings, sources, hub))
+            return hub
+
+        class Sync(object):             # stands where the real git sync is taken from
+            def __init__(self, *args, **kw):
+                syncs.append((args, kw))
+                raise AssertionError('a --store run made a git sync')
+
+        stop = threading.Event()
+        stop.set()
+        with mock.patch.object(HUB.serve, 'build', build), \
+                mock.patch.object(HUB.serve.gitsync, 'GitSync', Sync):
+            code, out, err = self.run_cli('serve', '--store', self.store_dir, '--port', '0',
+                                          stop=stop)
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(len(seen), 1)
+        settings, sources, hub = seen[0]
+        # nothing commits and nothing pushes: there is no sync at all, and push is off
+        self.assertEqual((settings.store, settings.push),
+                         (os.path.abspath(self.store_dir), False))
+        self.assertIsNone(sources.sync)
+        self.assertIsNone(hub.sync)
+        self.assertEqual(syncs, [])
+        self.assertEqual(hub.views.health()['git'], {'running': False, 'off': serve.SYNC_OFF})
+        self.assertFalse(os.path.exists(live), 'the configured store was opened')
+        self.assertFalse(os.path.exists(os.path.join(self.store_dir, '.git')))
+
+    def test_an_unclean_close_is_exit_1_with_the_step_named_on_the_line_above(self):
+        real = HUB.serve.build
+
+        def build(settings, sources, log=None):
+            hub = real(settings, sources, log=log)
+            lis = hub.listeners[0]
+            join = lis.join
+            lis.join = lambda timeout=None: join(timeout) and False     # ended, but says not
+            return hub
+
+        stop = threading.Event()
+        stop.set()
+        with mock.patch.object(HUB.serve, 'build', build):
+            code, out, err = self.run_cli('serve', '--store', self.store_dir, '--port', '0',
+                                          stop=stop)
+        self.assertEqual(code, 1)
+        self.assertEqual(err.splitlines(), [
+            'ERROR: closing: the handler threads did not end within %g s' % serve.CLOSE_TIMEOUT_S,
+            'the hub server did not close cleanly: see the lines above'])
+        self.assertFalse(self.locked())
+
+    def test_the_log_prints_errors_and_notes_and_no_request_line(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            HUB._log('access', 'GET /api/v1/health 200')
+            HUB._log('note', 'closing: the last pass')
+            HUB._log('error', 'closing: it failed')
+        self.assertEqual(err.getvalue(), 'NOTE: closing: the last pass\n'
+                                         'ERROR: closing: it failed\n')
+
+    def test_the_help_says_what_store_turns_off_and_what_setup_does_not_write(self):
+        def helped(*argv):
+            with mock.patch.dict(os.environ, {'NO_COLOR': '1', 'COLUMNS': '200'}):
+                code, out, err = self.run_cli(*argv)
+            self.assertEqual((code, err), (0, ''), argv)
+            return ' '.join(out.split())
+
+        text = helped('serve', '--help')
+        self.assertIn('git sync is off for the run', text)
+        self.assertIn('nothing in it is committed or pushed', text)
+        self.assertIn('the machine config is not written', helped('--help'))
+        doc = ' '.join(HUB.__doc__.split())
+        self.assertIn('git sync is off for that run', doc)
+        self.assertIn('An empty PATH is a usage error', doc)
+        self.assertIn('It writes nothing else: never the machine config', doc)
+
 
 class SetupCase(CliCase):
     def test_setup_makes_the_token_files_and_writes_no_config(self):

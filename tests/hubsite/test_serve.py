@@ -1,7 +1,9 @@
 """kitlib.hubsite.serve: the server wired from its parts. Every hub here serves a temp store on
 port 0 from stand-in sources: no machine config, no real repository, no git, no network past the
-loopback address. Every hub a test builds is closed before the test ends, and no listener thread
-may outlive its test."""
+loopback address. Two classes take a real part instead of its stand-in: TimerCase a
+backlog.Views whose repository has no checkout (no git), RealSyncCase a gitsync.GitSync over a
+temp repository on the fake git. Every hub a test builds is closed before the test ends, and no
+listener thread may outlive its test."""
 import copy
 import datetime
 import json
@@ -19,6 +21,7 @@ from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.api import BASE
 from kitlib.hubsite.store import Store, StoreBusy
 from tests.hubsite import httpfix
+from tests.hubsite import test_gitsync as gitcase       # its Case: a data work tree on the fake git
 from tests.hubsite.httpfix import TIMEOUT, bearer, get, post, send
 
 HEALTH = BASE + '/health'
@@ -35,6 +38,9 @@ ANSWER = {'at': '2026-01-10T12:00:00+00:00', 'error': None, 'repos': [
     {'repo': 'beta', 'days': 30, 'error': 'git timed out', 'stale': True, 'fetched': None,
      'fetch_error': 'git timed out', 'open': [], 'parked': [], 'completed': []}]}
 SECRET = 'X:\\somewhere\\private'
+REMOTE = 'https://someone:s3cret@git.example.test/team/data.git'
+WHY = "fatal: unable to access '%s/': Could not resolve host" % REMOTE     # git quotes the remote
+CREDENTIALS = ('someone', 's3cret')
 
 
 class FakeBacklog(object):
@@ -65,12 +71,16 @@ class FakeBacklog(object):
 
 class FakeSync(object):
     """What serve needs of kitlib.hubsite.gitsync.GitSync. sync_once notes whether the store was
-    still locked and whether every door was closed when the last pass ran."""
+    still locked and whether every door was closed when the last pass ran, and the log lines
+    there were when it began. `fail`: 'stop' (stop raises), 'slow' (stop answers that its thread
+    did not end), 'pass' (sync_once raises). `state`: a test's changes to status()."""
 
     def __init__(self, case, fail=None):
         self.case = case
         self.fail = fail
         self.last = None
+        self.noted = None
+        self.state = {}
 
     def start(self):
         self.case.calls.append('sync.start')
@@ -80,19 +90,24 @@ class FakeSync(object):
         self.case.calls.append('sync.stop')
         if self.fail == 'stop':
             raise RuntimeError(SECRET)
-        return True
+        return self.fail != 'slow'
 
     def sync_once(self):
         self.case.calls.append('sync.sync_once')
+        self.noted = list(self.case.lines)
+        if self.fail == 'pass':
+            raise RuntimeError(SECRET)
         self.last = {'locked': self.case.locked(),
                      'doors': [lis.closing for lis in self.case.hub.listeners],
                      'writes': self.case.hub.store.revision}
         return self.status()
 
     def status(self):
-        return {'running': True, 'branch': 'data', 'remote': 'origin', 'failed': '',
-                'detail': SECRET, 'pending_commit': False, 'pending_push': True,
-                'diverged': False}
+        out = {'running': True, 'branch': 'data', 'remote': 'origin', 'failed': '',
+               'detail': SECRET, 'pending_commit': False, 'pending_push': True,
+               'diverged': False}
+        out.update(self.state)
+        return out
 
 
 class ServeCase(unittest.TestCase):
@@ -536,6 +551,372 @@ class ViewsCase(ServeCase):
         self.assertEqual(r.json()['items'], [{'name': 'alpha', 'aliases': []}])
         self.assertEqual(seen, [[]])
         self.assertEqual(get(hub.port, BASE + '/notices', self.owner).json()['items'], [])
+
+
+class ReasonCase(ServeCase):
+    """Why a git sync pass failed: the owner's and the server log's, never an agent's, and
+    nowhere with the user or password of a remote URL."""
+
+    def failing(self, **state):
+        hub = self.build(sync=self.sync_factory())
+        self.sync.state = dict({'failed': 'push', 'detail': WHY}, **state)
+        return hub
+
+    def clean(self, text):
+        for word in CREDENTIALS:
+            self.assertNotIn(word, text)
+
+    def test_scrub_takes_the_user_and_password_out_of_a_url_and_nothing_else(self):
+        host = 'https://git.example.test/team/data.git'
+        for text, want in (
+                (REMOTE, host),
+                (WHY, "fatal: unable to access '%s/': Could not resolve host" % host),
+                ('https://tok3n@git.example.test/x', 'https://git.example.test/x'),
+                ('https://u:p@ss@git.example.test/x', 'https://git.example.test/x'),
+                ('ssh://git@git.example.test:22/team/data.git',
+                 'ssh://git.example.test:22/team/data.git'),
+                ('to http://a:b@h/x and https://c@i/y', 'to http://h/x and https://i/y'),
+                # what is no user part of a URL stays
+                ('git@git.example.test:team/data.git', 'git@git.example.test:team/data.git'),
+                (host + '/a@b', host + '/a@b'),
+                (host + '?to=a@b', host + '?to=a@b'),
+                ('someone@example.test wrote it', 'someone@example.test wrote it'),
+                (SECRET, SECRET),
+                ('', '')):
+            self.assertEqual(serve.scrub(text), want, text)
+
+    def test_health_gives_the_reason_to_the_owner_alone_and_without_credentials(self):
+        hub = self.failing()
+        hub.start()
+        r = get(hub.port, HEALTH, self.owner)
+        self.assertEqual(r.status, 200, r.body)
+        git = r.json()['git']
+        self.assertEqual((git['failed'], git['detail']), ('push', serve.scrub(WHY)))
+        self.assertIn('git.example.test/team/data.git', git['detail'])
+        self.clean(r.body.decode('utf-8'))
+        # the agent learns that it failed and at which step, never why
+        r = get(hub.port, HEALTH, self.agent)
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(r.json()['git']['failed'], 'push')
+        self.assertNotIn('detail', r.json()['git'])
+        for word in CREDENTIALS + ('example.test', 'resolve'):
+            self.assertNotIn(word, r.body.decode('utf-8'))
+        # a caller with no role learns nothing
+        for token in (None, 'x' * 43):
+            r = get(hub.port, HEALTH, token)
+            self.assertEqual((r.status, r.code()), (403, 'forbidden'), token)
+            for word in CREDENTIALS + ('example.test', 'push'):
+                self.assertNotIn(word, r.body.decode('utf-8'))
+        # the view itself holds no reason: only the listener's route adds it, by role
+        self.assertNotIn('detail', hub.views.health()['git'])
+        self.assertEqual(hub.views.git_failure(), ('push', serve.scrub(WHY)))
+
+    def test_the_owners_session_gets_the_reason_and_a_failure_with_none_has_no_detail(self):
+        hub = self.failing()
+        hub.start()
+        r = get(hub.port, post(hub.port, httpd.PAIR_ROUTE, {}, self.owner).json()['path'])
+        cookie = r.header('Set-Cookie')[0].split(';')[0]
+        git = get(hub.port, HEALTH, headers=[('Cookie', cookie)]).json()['git']
+        self.assertEqual(git['detail'], serve.scrub(WHY))
+        self.sync.state = {'failed': 'fetch', 'detail': ''}
+        git = get(hub.port, HEALTH, self.owner).json()['git']
+        self.assertEqual(git['failed'], 'fetch')
+        self.assertNotIn('detail', git)
+
+    def test_watch_logs_a_failure_once_then_a_new_reason_then_that_it_works_again(self):
+        hub = self.failing()
+        hub.watch()
+        hub.watch()
+        self.assertEqual(self.lines, [('error', 'the git sync failed at push: '
+                                       + serve.scrub(WHY))])
+        self.sync.state = {'failed': 'fetch', 'detail': ''}
+        hub.watch()
+        hub.watch()
+        self.assertEqual(self.lines[1:], [('error', 'the git sync failed at fetch: -')])
+        self.sync.state = {}
+        hub.watch()
+        hub.watch()
+        self.assertEqual(self.lines[2:], [('note', 'the git sync works again')])
+        for level, text in self.lines:
+            self.clean(text)
+
+    def test_watch_says_nothing_of_a_sync_that_works_or_is_off_or_cannot_be_asked(self):
+        hub = self.build(sync=self.sync_factory())
+        hub.watch()
+        self.sync.status = lambda: {}['no status']
+        hub.watch()
+        hub.close()
+        self.build().watch()
+        self.assertEqual(self.lines, [])
+
+    def test_run_logs_a_failing_sync_while_it_serves_and_its_last_pass(self):
+        seen = threading.Event()
+
+        def log(level, text):
+            self.lines.append((level, text))
+            if level == 'error':
+                seen.set()
+
+        self.log = log
+        hub = self.failing()
+        stop, out = threading.Event(), []
+        with mock.patch.object(serve, 'POLL_S', 0.01):
+            runner = threading.Thread(target=lambda: out.append(serve.run(hub, None, stop)),
+                                      name='test-run', daemon=True)
+            runner.start()
+            try:
+                self.assertTrue(seen.wait(TIMEOUT), 'the failing sync was never logged')
+            finally:
+                stop.set()
+                runner.join(TIMEOUT)
+        # a last pass that failed is logged and is no unclean close: the next start tries again
+        self.assertEqual(out, [True])
+        why = serve.scrub(WHY)
+        self.assertEqual(self.errors(), [
+            'the git sync failed at push: ' + why,
+            'the last git sync pass failed at push: %s; the next start tries again' % why])
+        self.assertIn(('note', serve.LAST_PASS), self.lines)
+        for level, text in self.lines:
+            self.clean(text)
+
+    def test_hub_status_prints_the_reason_for_the_owner_only(self):
+        hub = self.failing()
+        hub.start()
+        start = 'git: running, branch data, pending: a push, the last pass failed at push'
+        status, obj = serve.ask(hub.port, 'GET', HEALTH, self.owner)
+        self.assertEqual(serve.status_lines(obj, NOW)[2], '%s: %s' % (start, serve.scrub(WHY)))
+        status, obj = serve.ask(hub.port, 'GET', HEALTH, self.agent)
+        self.assertEqual(serve.status_lines(obj, NOW)[1], start)
+        # the client scrubs what it prints too, whatever answered it
+        lines = serve.status_lines({'revision': 1, 'backlog': None, 'git': {
+            'running': True, 'failed': 'fetch', 'detail': WHY}}, NOW)
+        self.assertEqual(lines[1], 'git: running, nothing pending, the last pass failed at '
+                                   'fetch: ' + serve.scrub(WHY))
+
+    def test_a_refused_syncs_note_holds_no_credentials(self):
+        def make(store_dir, every, remote=None, branch=None, push=True):
+            raise gitsync.Refused('the remote %s cannot be used' % REMOTE)
+
+        hub = self.build(sync=make)
+        self.assertEqual(hub.notes, ['git sync is off: the remote '
+                                     'https://git.example.test/team/data.git cannot be used'])
+
+
+class StepCase(ServeCase):
+    """The steps of the clean close that fail or run out of time: each is a line in the log
+    that names it, the later steps still run, and the close answers False."""
+
+    def test_a_request_still_in_flight_is_named_and_the_last_pass_is_skipped(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def usage():
+            entered.set()
+            release.wait(TIMEOUT)
+            return []
+
+        hub = self.build(sync=self.sync_factory(), usage=usage)
+        hub.start()
+        lis = hub.listeners[0]
+        got = []
+        client = threading.Thread(
+            target=lambda: got.append(get(hub.port, BASE + '/usage', self.owner)),
+            name='test-slow-read', daemon=True)
+        client.start()
+        self.addCleanup(client.join, TIMEOUT)
+        self.addCleanup(release.set)
+        self.assertTrue(entered.wait(TIMEOUT), 'the request never arrived')
+        self.assertIs(hub.close(0.05), False)
+        self.assertEqual(self.errors(), [
+            'closing: the requests in flight did not end within 0.05 s',
+            serve.LAST_PASS_SKIPPED,
+            'closing: the handler threads did not end within 0.05 s'])
+        # the sync's thread was stopped; no pass ran beside a request that may still write
+        self.assertEqual(self.calls, ['sync.start', 'sync.stop'])
+        self.assertNotIn(('note', serve.LAST_PASS), self.lines)
+        self.assertFalse(self.locked(), 'the store was not released')
+        self.assertIs(hub.close(), False)
+        release.set()
+        self.assertTrue(lis.join(TIMEOUT), 'the handler thread never ended')
+        client.join(TIMEOUT)
+        self.assertEqual(len(got), 1, 'the request was never answered')
+
+    def test_each_step_that_does_not_end_in_its_time_is_named(self):
+        class Slow(FakeBacklog):
+            def stop(self, timeout=None):
+                FakeBacklog.stop(self, timeout)
+                return False
+
+        for step, timeout, line in (
+                ('backlog', 7, 'closing: the backlog timer did not end within 7 s'),
+                ('backlog', None, 'closing: the backlog timer did not end within its time'),
+                ('sync', 7, 'closing: the git sync did not end within 7 s'),
+                ('join', 2.5, 'closing: the handler threads did not end within 2.5 s')):
+            with self.subTest(step=step, timeout=timeout):
+                del self.calls[:], self.lines[:]
+                made = Slow if step == 'backlog' else FakeBacklog
+                hub = self.build(sync=self.sync_factory('slow' if step == 'sync' else None),
+                                 backlog=lambda s: made(self.calls))
+                hub.start()
+                lis = hub.listeners[0]
+                if step == 'join':
+                    join = lis.join
+                    lis.join = lambda t=None: join(t) and False
+                self.assertIs(hub.close(timeout), False)
+                self.assertEqual(self.errors(), [line])
+                # a step that ran out of time stops none after it: the requests had ended, so
+                # the last pass ran, and the store was released
+                self.assertEqual(self.calls, ['sync.start', 'backlog.start', 'backlog.stop',
+                                              'sync.stop', 'sync.sync_once'])
+                self.assertFalse(self.locked())
+                self.assertIs(hub.close(timeout), False)
+                self.assertEqual(httpfix.http_threads(), [])
+
+    def test_a_door_that_raises_is_an_unclean_close_and_the_rest_still_runs(self):
+        hub = self.build(sync=self.sync_factory())
+        hub.start()
+        lis = hub.listeners[0]
+        door = lis.close_door
+
+        def broken():
+            door()
+            raise OSError('the door')
+
+        lis.close_door = broken
+        self.assertIs(hub.close(TIMEOUT), False)
+        self.assertEqual(self.errors(), ['closing: the listener door failed: OSError: the door'])
+        self.assertEqual(self.calls, ['sync.start', 'sync.stop', 'sync.sync_once'])
+        self.assertFalse(self.locked())
+        self.assertEqual(httpfix.http_threads(), [])
+
+    def test_the_last_pass_is_announced_before_it_begins_and_names_its_limit(self):
+        hub = self.build(sync=self.sync_factory())
+        hub.start()
+        self.assertIs(hub.close(TIMEOUT), True)
+        self.assertEqual(self.sync.noted, [('note', serve.LAST_PASS)])
+        self.assertTrue(serve.LAST_PASS.startswith('closing: the last git sync pass'))
+        self.assertIn('%d s' % gitsync.NET_TIMEOUT, serve.LAST_PASS)
+        self.assertEqual(self.errors(), [])
+
+    def test_a_last_pass_that_raises_is_an_unclean_close_and_the_store_is_released(self):
+        hub = self.build(sync=self.sync_factory('pass'))
+        hub.start()
+        self.assertIs(hub.close(TIMEOUT), False)
+        self.assertEqual(self.errors(), ['closing: the last git sync pass failed: RuntimeError: '
+                                         + SECRET])
+        self.assertFalse(self.locked())
+        self.assertEqual(httpfix.http_threads(), [])
+
+
+class TimerCase(ServeCase):
+    """The backlog timer over a real kitlib.hubsite.backlog.Views: its repository has no checkout
+    here, so a round starts no git."""
+
+    def timer(self, repos):
+        """A started hub whose backlog timer has ended its first round and is in its pause."""
+        paused = threading.Event()
+
+        def wait(stop, seconds):
+            paused.set()
+            return stop.wait(TIMEOUT)
+
+        def source(refresh_s):
+            self.refresh_s = refresh_s
+            return backlog.Views(repos, refresh_s, clock=lambda: NOW, wait=wait)
+
+        hub = self.build(self.settings._replace(backlog_refresh_s=3600), backlog=source)
+        hub.start()
+        self.assertTrue(paused.wait(TIMEOUT), 'the timer never ended a round')
+        return hub
+
+    def threads(self):
+        return [t.name for t in threading.enumerate() if t.name == 'hub-backlog-refresh']
+
+    def test_a_timer_round_reaches_health_with_no_client_read(self):
+        hub = self.timer([('alpha', None)])
+        self.assertEqual(self.refresh_s, 3600)
+        self.assertIsInstance(hub.backlog, backlog.Views)
+        h = get(hub.port, HEALTH, self.agent).json()
+        self.assertEqual(h['backlog_at'], NOW.isoformat())
+        self.assertEqual(h['backlog'], [{'repo': 'alpha', 'fetched_at': None,
+                                         'error': backlog.NO_CHECKOUT}])
+        self.assertEqual((h['backlog_error'], h['backlog_timer']), (None, None))
+        self.assertEqual(serve.status_lines(h, NOW)[2],
+                         'backlog alpha: never fetched; ' + backlog.NO_CHECKOUT)
+        # the real timer goes through the clean close and leaves no thread
+        self.assertEqual(self.threads(), ['hub-backlog-refresh'])
+        self.assertIs(hub.close(TIMEOUT), True)
+        self.assertEqual(self.threads(), [])
+        self.assertEqual(self.errors(), [])
+
+    def test_a_round_whose_view_cannot_be_read_leaves_the_timer_running(self):
+        def repos():
+            raise KeyError('no list')
+
+        hub = self.timer(repos)
+        h = get(hub.port, HEALTH, self.agent).json()
+        self.assertEqual(h['backlog_error'], backlog.NO_REPOS + ': KeyError')
+        self.assertEqual((h['backlog'], h['backlog_timer']), ([], None))
+        self.assertEqual(self.threads(), ['hub-backlog-refresh'])
+        self.assertIs(hub.close(TIMEOUT), True)
+        self.assertEqual(self.threads(), [])
+
+
+class RealSyncCase(gitcase.Case):
+    """The clean close over a real kitlib.hubsite.gitsync.GitSync on its own thread: a data work
+    tree with a bare remote, on the fake git (docs/test-tools.md, "Fake git")."""
+
+    def test_the_close_commits_and_pushes_what_was_written_since_the_last_pass(self):
+        self.addCleanup(lambda: self.assertEqual(httpfix.http_threads(), [],
+                                                 'a listener thread outlived its test'))
+        passes, first, lines = [], threading.Event(), []
+
+        def make(store_dir, every, remote=None, branch=None, push=True):
+            sync = gitsync.GitSync(store_dir, every, remote=remote, branch=branch, push=push,
+                                   git=self.runner, env=self.env)
+            once = sync.sync_once
+
+            def recorded():                 # the thread's pass at start and the close's last one
+                out = once()
+                passes.append(dict(out))
+                first.set()
+                return out
+
+            sync.sync_once = recorded
+            return sync
+
+        tokens = os.path.join(gitcase.tmpdir(self), 'tokens')
+        cfg = hub_settings.settings(None)._replace(port=0, store=self.hub, push=True,
+                                                   commit_every_s=3600)
+        server = serve.build(cfg, serve.Sources(
+            tokens=tokens, static_dir=os.path.join(gitcase.tmpdir(self), 'web'), sync=make,
+            pm_data={'path': self.wt, 'branch': 'pmdata', 'remote': 'origin'}),
+            log=lambda level, text: lines.append((level, text)))
+        self.addCleanup(server.close)
+        self.assertEqual(server.notes, [])
+        self.assertIsInstance(server.sync, gitsync.GitSync)
+        self.assertIs(server.start(), True)
+        self.assertTrue(first.wait(TIMEOUT), 'the pass at start never ran')
+        r = post(server.port, BASE + '/todos', {'title': 'written before the close'},
+                 auth.read_token(tokens, auth.OWNER))
+        self.assertEqual(r.status, 200, r.body)
+        tip = self.head()
+        self.assertIs(server.close(TIMEOUT), True)
+        # two passes: the thread's at start, and the last one of the close, which committed the
+        # write whole and pushed it before the store was released
+        self.assertEqual(len(passes), 2, passes)
+        last = passes[-1]
+        self.assertEqual((last['ok'], last['failed'], last['pending_commit'],
+                          last['pending_push']), (True, '', False, False))
+        self.assertNotEqual(self.head(), tip)
+        self.assertEqual(self.git('log', '-1', '--format=%B').strip(), gitsync.SUBJECT)
+        self.assertTrue([p for p in self.committed() if p.startswith('hub/todos/')],
+                        self.committed())
+        self.assertEqual(self.remote_tip(), self.head())
+        self.assertIn(self.hub_status(), ('', gitcase.LOCK))
+        self.assertEqual([t.name for t in threading.enumerate() if t.name == 'hub-gitsync'], [])
+        Store.open(self.hub).close()        # the lock is free
+        self.assertEqual([text for level, text in lines if level == 'error'], [])
+        self.assertIn(('note', serve.LAST_PASS), lines)
 
 
 class MachineCase(unittest.TestCase):
