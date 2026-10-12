@@ -18,6 +18,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog
 - `docs/backlog-lint.md` | backlog lint | checking backlog records | kw: backlog-lint, lint
 - `docs/backlog-store.md` | backlog store design | changing the store | kw: backlog-store, store
+- `docs/branch-overlap.md` | branch overlap: unmerged branches touching a file set | checking a sweep's exclusions | kw: branch_overlap, overlap
 - `docs/commit.md` | commit.py and machine_paths.py | committing | kw: commit, machine_paths
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
@@ -35,6 +36,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/lock-release.md` | lock release pre-check | releasing a lock | kw: lock-release
 - `docs/machine-setup.md` | machine setup | a new machine | kw: machine-setup, setup
 - `docs/model-ab.md` | model A/B results | choosing a model | kw: model, ab
+- `docs/agent-review.md` | agent review: usage, refusals, definition findings (undecided) | choosing a model, editing agent definitions | kw: agent-review, agents, model
 - `docs/new-worktree.md` | new_worktree | starting a task | kw: new-worktree, worktree
 - `docs/pending.md` | the pending-steps file | pending steps | kw: pending
 - `docs/pm-data-branch.md` | PM data on a private branch of the kit repo | PM data | kw: pm-data, data-branch
@@ -81,6 +83,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/review_pack.py` | review pack (`docs/review-pack.md`) | kw: review_pack
 - `tools/land.py` | land a reviewed branch (`docs/shipping.md`) | kw: land
 - `tools/landed.py` | has a branch landed (`docs/landed.md`) | kw: landed
+- `tools/branch_overlap.py` | unmerged branches that change files in a set (`docs/branch-overlap.md`) | kw: branch_overlap, overlap
 - `tools/machine_lock.py` | machine lock (`docs/lock-api.md`) | kw: machine_lock, lock
 - `tools/lock_release_check.py` | lock release pre-check (`docs/lock-release.md`) | kw: lock_release_check
 - `tools/worktree_remove.py` | remove a worktree (`docs/worktree-remove.md`) | kw: worktree_remove
@@ -101,6 +104,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/ledger_refs.py` | where each ruling id is cited (`docs/ledger.md`) | kw: ledger_refs
 - `tools/machine_paths.py` | refuse a hard-coded machine path (`docs/commit.md`) | kw: machine_paths
 - `tools/machine_setup.py` | switch Claude config folders to this kit, or set up a fresh machine (`docs/machine-setup.md`) | kw: machine_setup, fresh
+- `tools/agent_temp_init.py` | set up the agents' temp folder alone (`docs/machine-setup.md` "Agent temp init") | kw: agent_temp_init, agent temp
 - `tools/plugin_refresh.py` | export pushed kit main and refresh the plugin in every account folder (`docs/plugin-source.md`) | kw: plugin_refresh, plugin
 - `tools/pieces.py` | the path-to-piece table (`docs/repo-checks.md`) | kw: pieces
 - `tools/pm_data.py` | make or re-link the PM-data branch (`docs/pm-data-branch.md`) | kw: pm_data

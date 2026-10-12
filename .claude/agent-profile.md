@@ -27,7 +27,8 @@ project manager's go, with the reviewer's verdict in its brief. From the main ch
 after `git merge --ff-only <remote>/<main>`:
 `python tools/gate.py land <branch> --expect-main <sha> --expect-tip <sha>`.
 It queues, locks, merges, gates the merge, pushes and verifies (docs/gate.md "Landing"). Success: a
-`LANDED ` line and exit 0; any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`) is
+`LANDED ` line and exit 0, or exit 9 (landed-ungated: commits on top were not gated; run the full
+gate on main and report); any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`) is
 reported as is, with the doc's recovery steps, and not retried. Batches: docs/gate.md.
 
 ## Shared resources that must be serialised
@@ -64,8 +65,9 @@ known tie in this repo allows a rerun.
 
 ## Records
 The configured backlog store (docs/backlog-store.md), written with
-`tools/backlog.py`. A builder sets and closes its own record. No ruling ids, owner names or
-machine paths in tracked kit files (the scrub test enforces it).
+`tools/backlog.py`. A builder sets its own record and names it in a `Closes:` trailer in its
+last commit; it never runs `backlog.py close` (land.py closes it at landing). No ruling ids,
+owner names or machine paths in tracked kit files (the scrub test enforces it).
 
 ## Art
 Not applicable.

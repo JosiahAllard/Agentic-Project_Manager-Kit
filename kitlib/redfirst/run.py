@@ -16,11 +16,15 @@ reaches every process on the console, and a `git worktree remove` killed partway
 destroys the entry. A hard kill of this process runs no cleanup; the leftover then shows in
 `worktree_remove.py --check`.
 
+Runners: `.kit.json` "redfirst".runners as written; unwritten, the schema default plus a glob for
+the tools folder (runners_for). A path no runner takes is refused with the globs tried (select).
+
 Output goes through `say(line)`; nothing here prints or exits.
 """
 import datetime
 import json
 import os
+import posixpath
 import signal
 import subprocess
 import sys
@@ -337,7 +341,8 @@ def prepare(where, tests, also=(), base=None, head='HEAD', log_dir=None):
                       % (base[:10], head[:10], why))
     if not inside:
         raise V.Usage('refused: base %s is not an ancestor of head %s' % (base[:10], head[:10]))
-    sels = [V.parse_selector(t, section['runners']) for t in tests]
+    runners, written = runners_for(cfg)
+    sels = [select(t, runners, written, top, head) for t in tests]
     files = []
     for f in [s.path for s in sels] + [p.replace('\\', '/') for p in also]:
         if f not in files:
@@ -368,6 +373,61 @@ def prepare(where, tests, also=(), base=None, head='HEAD', log_dir=None):
                 landed=landed, log_dir=os.path.abspath(log_dir),
                 worktrees_dir=os.path.normpath(cfg.repo['worktrees_dir']),
                 tools_dir=cfg.tools_dir, hold_wait=section['hold_wait'])
+
+
+# ---- which runner -------------------------------------------------------------------------------
+KEY = '`.kit.json` "redfirst".runners'
+# Appended to the runners for one parse: a valid path that reaches it was taken by no real runner.
+_NOTHING_TOOK_IT = {'glob': '*', 'kind': 'gradle', 'dir': '.', 'project': ':'}
+
+
+def runners_for(cfg):
+    """`(runners, written)`. `written`: `.kit.json` holds "redfirst".runners, used as they are.
+    Unwritten: the schema default, then one python runner for test files of the tools folder
+    ("repo".tools_dir), which is their PYTHONPATH (the layout of kitlib/pytests/runner.py)."""
+    runners = list(cfg.section('redfirst')['runners'])
+    if cfg.raw('redfirst').get('runners') is not None:
+        return runners, True
+    tools = posixpath.normpath(cfg.tools_dir.replace('\\', '/').strip() or '.').strip('/')
+    if tools and tools != '.':
+        derived = {'glob': tools + '/*test_*.py', 'kind': 'python', 'pythonpath': tools}
+        if not any(r['glob'].lower() == derived['glob'].lower() for r in runners):
+            runners.append(derived)
+    return runners, False
+
+
+def no_runner_text(text, runners, written, head, committed):
+    """The refusal for a `--tests` path no runner takes: every glob tried, how many files
+    committed at `head` each matches (`committed`: their paths, or None when unread), and the key
+    to set."""
+    lines = ['refused: --tests %r: no runner takes it; nothing was run' % text]
+    if not runners:
+        lines.append('  %s is an empty list' % KEY)
+    for r in runners:
+        if committed is None:
+            found = ''
+        else:
+            n = sum(1 for f in committed if V.matches(f, r['glob']))
+            found = ': matches %s committed at head %s' % ('%d file(s)' % n if n else 'no file',
+                                                           head[:10])
+        lines.append('  glob %r (%s)%s' % (r['glob'], r['kind'], found))
+    if written:
+        lines.append('  these are the globs %s holds' % KEY)
+    else:
+        lines.append('  %s is not set, so these are the defaults (the tools-folder glob comes '
+                     'from "repo".tools_dir)' % KEY)
+    lines.append('  set %s to an entry whose glob takes the file (docs/redfirst.md)' % KEY)
+    return '\n'.join(lines)
+
+
+def select(text, runners, written, top, head):
+    """The Selector for one `--tests` text, or V.Usage; a path no runner takes gets no_runner_text."""
+    sel = V.parse_selector(text, list(runners) + [_NOTHING_TOOK_IT])
+    if sel.runner is not _NOTHING_TOOK_IT:
+        return sel
+    rc, out, _ = git(top, 'ls-tree', '-r', '--name-only', '-z', head)
+    committed = [f for f in out.split('\0') if f] if rc == 0 else None
+    raise V.Usage(no_runner_text(text, runners, written, head, committed))
 
 
 FINAL = {V.EXIT_RED: 'REDFIRST OK - every named test is red at %s',
