@@ -2,6 +2,8 @@
 
 The backlog's reads and writes: `tools/backlog.py` (entry) over `kitlib/backlog` (library). docs/backlog-store.md is the design; this page is the behaviour. Not live until reviewed.
 
+A program opens the configured store the way the tool does with kitlib/backlog/opener.py `open_store(root, fetch=True, session=None, branch=None)`, which returns the plan Context (its `store.load()` reads), and maps a write verb to its plan with `planner` (a verb that is no write is `USAGE:`, raised before any plan runs); opener.py `retarget_dry` returns the Change a `retarget` without `--apply` would write. `kitlib.backlog.open_store` is the same function: kitlib/backlog/__init__.py `__getattr__` imports it from opener.py on first use, so importing another backlog module does not also load the config and plan code.
+
 ## Stores
 
 `.kit.json` `"backlog".store` picks the backend (kitlib/backlog/store.py `open_backend`):
