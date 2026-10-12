@@ -32,3 +32,12 @@ def keep_off_agent_temp():
         p = mock.patch.object(pmstart, name, value)
         p.start()
         unittest.addModuleCleanup(p.stop)
+
+
+def keep_off_hub_site():
+    """For a module's setUpModule: the checklist's hub check reads no machine config (the hub
+    settings loader says "no hub key": the old hub lines show). Undone with the module."""
+    from kitlib import pmstart
+    p = mock.patch.object(pmstart, "hub_settings", lambda: None)
+    p.start()
+    unittest.addModuleCleanup(p.stop)

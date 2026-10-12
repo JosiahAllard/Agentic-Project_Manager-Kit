@@ -199,17 +199,38 @@ def hub(cfg, account=None, isfile=os.path.isfile):
 
 HUB_SITE_TIMEOUT_S = 1.5    # seconds each ask of the hub server waits (two asks at most)
 HUB_TOOL = os.path.join(KIT_ROOT, "tools", "hub.py")
+HUB_ERROR_MAX = 400         # characters of a rejected `hub` key's message shown in its line
+# What `hub.py setup` prints: the `hub` key is the switch between the two sets of hub lines.
+HUB_SWITCH_NOTE = ("hub key: writing the `hub` key in the machine config switches the PM session start "
+                   "checklist to the new hub site; the old hub lines (the Action Hub artifact) "
+                   "no longer show")
 
 
 class HubSettingsError(Exception):
     """The machine config has a `hub` key that cannot be used."""
 
 
+class NoHubToken(Exception):
+    """Neither token file of the hub (agent or owner) is there to read."""
+
+
 def hub_settings():
     """The hub Settings when the machine config has a `hub` key, else None. HubSettingsError when
-    the key is there and unusable; any other error: the config could not be read at all."""
+    the key is there and unusable, also when it is the machine config's check that refuses (the
+    raw file holds a `hub` key); any other error: the config could not be read at all."""
+    from kitlib.config.types import ConfigError
     from kitlib.hubsite import settings as hubsettings
-    if kuser.user_config().get(hubsettings.KEY) is None:
+    try:
+        cfg = kuser.user_config()
+    except ConfigError as e:
+        try:
+            has_key = machine_config().get(hubsettings.KEY) is not None
+        except ConfigError:
+            has_key = False
+        if has_key:
+            raise HubSettingsError(str(e))
+        raise
+    if cfg.get(hubsettings.KEY) is None:
         return None
     try:
         return hubsettings.load()
@@ -218,8 +239,12 @@ def hub_settings():
 
 
 def _hub_client(port):
-    from kitlib.hubsite import client
-    return client.Client(port, timeout=HUB_SITE_TIMEOUT_S)
+    """The real client, after a look that a token file is there: NoHubToken when neither is."""
+    from kitlib.hubsite import auth, client
+    folder = auth.folder()
+    if not any(auth.read_token(folder, role) for role in auth.ROLES):
+        raise NoHubToken()
+    return client.Client(port, tokens=folder, timeout=HUB_SITE_TIMEOUT_S)
 
 
 def _wait_running(procs):
@@ -237,24 +262,29 @@ def _wait_running(procs):
     return False
 
 
-def hub_site(procs=(), load=hub_settings, make_client=_hub_client):
+def hub_site(procs=(), load=None, make_client=_hub_client):
     """The hub site's lines, or None when the machine config has no `hub` key (or cannot be read
-    at all): the caller then shows the old hub lines. Asks only the loopback server, with
-    HUB_SITE_TIMEOUT_S per ask; starts nothing. Every failure is one line naming no more than the
-    port and the exception's class, so no token, URL or message of the server reaches the text."""
-    from kitlib.hubsite import serve
+    at all; the test home fence is not caught): the caller then shows the old hub lines. Asks only
+    the loopback server, with HUB_SITE_TIMEOUT_S per ask; starts nothing. A failure of the server
+    side is one line naming no more than the port and the exception's class, so no token, URL or
+    message of the server reaches the text. The one message shown is a rejected `hub` key's own
+    (key names and paths; the key holds no token)."""
     try:
-        site = load()
+        site = (load or hub_settings)()      # looked up at the call, so a test can replace it
     except HubSettingsError as e:
-        return ["hub: the hub key of the machine config cannot be used (%s)" % type(e).__name__]
-    except (Exception, kuser.HomeFenced):
+        text = " ".join(str(e).split())[:HUB_ERROR_MAX]
+        return ["hub: the hub key of the machine config cannot be used: %s" % text]
+    except Exception:
         return None
     if site is None:
         return None
+    from kitlib.hubsite import serve      # only a machine with the key pays for the import
     port = site.port
     try:
         hub = make_client(port)
         health = hub.get("/health", timeout=HUB_SITE_TIMEOUT_S)
+    except NoHubToken:
+        return ["hub: no hub token file is there to read: run python \"%s\" setup" % HUB_TOOL]
     except serve.NotRunning:
         return ["hub: hub server down (nothing listens on port %d): start it with python \"%s\" serve"
                 % (port, HUB_TOOL)]
@@ -263,7 +293,8 @@ def hub_site(procs=(), load=hub_settings, make_client=_hub_client):
     if health.get("ok") is False:
         return ["hub: server did not answer as the hub does (health not ok)"]
     try:
-        items = hub.get("/pending", timeout=HUB_SITE_TIMEOUT_S).get("items") or []
+        items = hub.get("/pending", timeout=HUB_SITE_TIMEOUT_S).get("items")
+        items = items if isinstance(items, list) else []
     except Exception as e:
         return ["hub: server up on port %d, pending not asked (%s)" % (port, type(e).__name__)]
     lines = ["hub: server up on port %d, %d pending" % (port, len(items))]

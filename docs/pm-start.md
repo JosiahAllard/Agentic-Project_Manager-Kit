@@ -18,18 +18,35 @@ process the hub. Tests: `tests/pmstart/test_hub_line.py`.
 
 Hub site (`kitlib.pmstart` `hub_site`, tests `tests/pmstart/test_hub_site.py`): when the machine
 config has a `hub` key (`kitlib.hubsite.settings`), these lines replace the hub lines above; with no
-`hub` key they are unchanged. The check only asks the loopback server on `hub.port`, through
-`kitlib.hubsite.client`; it starts no process and never starts the server. Each ask (`GET /health`,
+`hub` key they are unchanged. The `hub` key is the switch: with it set the old hub lines (the Action
+Hub artifact) no longer show, and `hub.py setup` says so on every run. The check only asks the
+loopback server on `hub.port`, through
+`kitlib.hubsite.client`; it starts no process and never starts the server, and it imports
+`kitlib.hubsite.serve` only once the key is known to be set. Each ask (`GET /health`,
 then `GET /pending`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The lines:
-`hub: server up on port <n>, <k> pending`; when `<k>` is above 0, a line to process the items
-(`hub.py pending`); then either `hub: wait --pending is running` (a `python` process whose command
-line holds `hub.py`, `wait` and `--pending`) or a line telling the PM to start
-`hub.py wait --pending` in the background and start it again after it ends. When nothing listens:
-`hub: hub server down (nothing listens on port <n>): start it with python "<kit>/tools/hub.py" serve`.
-Any other failure (a timeout, a refusal, an answer that is not the hub's, no token file, pending not
-asked) is one line naming the port or the exception class and nothing else, so no token or server
-message reaches the checklist. A `hub` key the settings reject gives one line; a machine config that
-cannot be read at all gives the old hub lines. `pm_watch.py` counts as running when its
+`hub: server up on port <n>, <k> pending` (`<k>` is 0 when the answer's `items` is not a list); when
+`<k>` is above 0, a line to process the items (`hub.py pending`); then either
+`hub: wait --pending is running` or a line telling the PM to start
+`hub.py wait --pending` in the background and start it again after it ends. "Running" is matched by
+command text only: any `python` process on the machine whose command line holds `hub.py`, `wait`
+and `--pending` counts, so another session's `wait --pending` makes this line say running. Failures,
+each one line:
+- Nothing listens: `hub: hub server down (nothing listens on port <n>): start it with python
+  "<kit>/tools/hub.py" serve`.
+- No token file (neither the agent's nor the owner's can be read): `hub: no hub token file is there
+  to read: run python "<kit>/tools/hub.py" setup`.
+- `GET /health` answered, but not ok: `hub: server did not answer as the hub does (health not ok)`.
+- Any other failure of `GET /health` (a timeout, a refusal, an answer that is not the hub's): `hub:
+  server did not answer as the hub does (<exception class>)`; the class is all it names.
+- `GET /pending` fails after `GET /health` answered: `hub: server up on port <n>, pending not asked
+  (<exception class>)`.
+- The `hub` key is there and cannot be used (the machine config check refuses it, or the hub
+  settings do): `hub: the hub key of the machine config cannot be used: <the configuration error's
+  own text>`, on one line and cut at `HUB_ERROR_MAX` (400) characters. The text holds key names and
+  paths, and echoes a rejected value; the `hub` key holds no token.
+No token or server message reaches a line. A machine config that cannot be read at all, and one
+whose check fails with no `hub` key in it, give the old hub lines; the test home fence is not caught
+here (`kitlib.config.user` `HomeFenced`). `pm_watch.py` counts as running when its
 heartbeat (docs/pm-watch.md "Stream mode and heartbeat") is at most 5 minutes old
 (`kitlib.pmstart` `BEAT_STALE`) and names the pid of a running `python` process whose command line
 holds `pm_watch.py` and that started at the time the heartbeat records (within 2 seconds,

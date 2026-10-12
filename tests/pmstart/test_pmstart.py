@@ -9,7 +9,7 @@ import unittest
 from kitlib import pmstart
 from kitlib.pmstart import fglock
 from tests.home import temp_home
-from tests.pmstart import keep_off_launcher_repos
+from tests.pmstart import keep_off_hub_site, keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 CFG = {"hub_url": "https://claude.ai/artifact/X", "hub_source": "claude/hub/action-hub.html",
@@ -29,6 +29,7 @@ def setUpModule():
     _orig_beat = pmstart.read_heartbeat
     pmstart.read_heartbeat = lambda: None     # nor this machine's pm_watch heartbeat
     keep_off_launcher_repos()   # nor this machine's launcher.repos (the stubs check)
+    keep_off_hub_site()         # nor its hub key (the hub check; the home fence is not caught)
 
 
 def tearDownModule():

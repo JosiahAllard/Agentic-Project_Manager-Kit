@@ -2,12 +2,16 @@
 config has a `hub` key (docs/pm-start.md "Hub site"). The server is a stand-in client; the
 real client is used once, with an injected ask, to pin the timeout and that no token is shown."""
 import datetime
+import json
 import os
+import shutil
 import tempfile
 import unittest
 from unittest import mock
 
 from kitlib import pmstart
+from kitlib.config import user as kuser
+from kitlib.config.types import ConfigError
 from kitlib.pmstart import fglock
 from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import auth, serve, settings
@@ -102,11 +106,64 @@ class HubSiteTest(unittest.TestCase):
         out = site(Half())
         self.assertEqual(out, ["hub: server up on port 4321, pending not asked (ServeError)"])
 
-    def test_a_broken_hub_key_is_one_line(self):
+    def test_a_broken_hub_key_is_one_line_with_the_configuration_errors_own_text(self):
         def bad():
-            raise pmstart.HubSettingsError("x")
+            raise pmstart.HubSettingsError("hub.port must be a whole number\nbetween 1 and 65535")
         out = site(FakeClient(), load=bad)
-        self.assertEqual(out, ["hub: the hub key of the machine config cannot be used (HubSettingsError)"])
+        self.assertEqual(out, ["hub: the hub key of the machine config cannot be used: "
+                               "hub.port must be a whole number between 1 and 65535"])
+
+    def test_a_very_long_configuration_error_is_cut(self):
+        def bad():
+            raise pmstart.HubSettingsError("k" * 5000)
+        out = site(FakeClient(), load=bad)
+        self.assertEqual(len(out), 1)
+        self.assertLess(len(out[0]), pmstart.HUB_ERROR_MAX + 100)
+
+    def test_the_home_fence_is_not_swallowed_by_the_loader_catch(self):
+        def fenced():
+            raise kuser.HomeFenced("fence")
+        with self.assertRaises(kuser.HomeFenced):
+            site(FakeClient(), load=fenced)
+
+    def test_no_token_file_is_its_own_line_naming_setup(self):
+        def no_token(port):
+            raise pmstart.NoHubToken()
+        out = pmstart.hub_site(procs=[], load=lambda: SET, make_client=no_token)
+        self.assertEqual(out, ['hub: no hub token file is there to read: run python "%s" setup'
+                               % pmstart.HUB_TOOL])
+
+    def test_the_real_client_maker_gives_no_token_when_no_file_is_there(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(auth, "folder", lambda: d):
+            with self.assertRaises(pmstart.NoHubToken):
+                pmstart._hub_client(4321)
+            out = pmstart.hub_site(procs=[], load=lambda: SET, make_client=pmstart._hub_client)
+            self.assertEqual(out, ['hub: no hub token file is there to read: run python "%s" setup'
+                                   % pmstart.HUB_TOOL])
+            with open(os.path.join(d, auth.AGENT_FILE), "w") as f:
+                f.write(TOKEN)
+            self.assertEqual(pmstart._hub_client(4321).port, 4321)
+
+    def test_a_pending_answer_whose_items_are_not_a_list_is_zero_pending(self):
+        for bad in ({"a": 1}, "abc", 7, None):
+            class Odd(FakeClient):
+                def get(self, path, *a, **k):
+                    if path == "/pending":
+                        return {"ok": True, "items": bad}
+                    return FakeClient.get(self, path, *a, **k)
+            out = site(Odd())
+            self.assertEqual(out[0], "hub: server up on port 4321, 0 pending", repr(bad))
+            self.assertEqual(len(out), 2, repr(bad))
+
+    def test_without_the_key_the_server_module_is_not_imported(self):
+        real, wanted = __import__, []
+
+        def spy(name, globals=None, locals=None, fromlist=(), level=0):
+            wanted.append((name, tuple(fromlist or ())))
+            return real(name, globals, locals, fromlist, level)
+        with mock.patch("builtins.__import__", spy):
+            self.assertIsNone(site(FakeClient(), load=lambda: None))
+        self.assertFalse([w for w in wanted if "serve" in w[0] or "serve" in w[1]], wanted)
 
     def test_each_ask_has_a_short_timeout(self):
         c = FakeClient()
@@ -132,6 +189,54 @@ class HubSiteTest(unittest.TestCase):
         self.assertTrue(all(a[4] == pmstart.HUB_SITE_TIMEOUT_S and a[0] == 4321 for a in asked))
         self.assertNotIn(TOKEN, "\n".join(made))
         self.assertNotIn("@", "\n".join(made))
+
+
+class RealSettingsTest(unittest.TestCase):
+    """The real hub_settings over a machine config in a temp home (the real home is fenced)."""
+
+    def setUp(self):
+        d = tempfile.mkdtemp(prefix="kit-pmstart-home-")
+        self.addCleanup(shutil.rmtree, d, True)
+        self.home = d
+        p = mock.patch.dict(os.environ, {"USERPROFILE": d, "HOME": d})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def write(self, body):
+        os.makedirs(os.path.dirname(kuser.config_file(self.home)), exist_ok=True)
+        with open(kuser.config_file(self.home), "w", encoding="utf-8") as f:
+            f.write(json.dumps(body))
+
+    def test_no_hub_key_is_none_and_hub_site_shows_nothing(self):
+        self.write({})
+        self.assertIsNone(pmstart.hub_settings())
+        self.assertIsNone(pmstart.hub_site(procs=[]))
+
+    def test_a_valid_hub_key_gives_the_settings(self):
+        self.write({"hub": {"port": 4322}})
+        self.assertEqual(pmstart.hub_settings().port, 4322)
+
+    def test_a_hub_key_the_config_check_refuses_is_a_hub_settings_error(self):
+        self.write({"hub": ["not", "an", "object"]})
+        with self.assertRaises(pmstart.HubSettingsError) as cm:
+            pmstart.hub_settings()
+        self.assertIn("hub must be an object", str(cm.exception))
+        out = pmstart.hub_site(procs=[])
+        self.assertEqual(len(out), 1)
+        self.assertTrue(out[0].startswith("hub: the hub key of the machine config cannot be used: "), out)
+        self.assertIn("hub must be an object", out[0])
+
+    def test_a_hub_key_the_settings_refuse_is_a_hub_settings_error(self):
+        self.write({"hub": {"port": 4322, "tunnel_port": 4322}})
+        with self.assertRaises(pmstart.HubSettingsError):
+            pmstart.hub_settings()
+
+    def test_a_broken_config_with_no_hub_key_keeps_the_old_lines(self):
+        self.write({"no_such_key": 1})
+        with self.assertRaises(ConfigError) as cm:
+            pmstart.hub_settings()
+        self.assertNotIsInstance(cm.exception, pmstart.HubSettingsError)
+        self.assertIsNone(pmstart.hub_site(procs=[]))
 
 
 class ChecklistTest(unittest.TestCase):
