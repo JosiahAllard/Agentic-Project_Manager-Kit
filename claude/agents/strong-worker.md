@@ -66,6 +66,10 @@ A minor follow-up of your own story (a missing test, a doc line, a small related
 you noticed) is done on this branch; never a new backlog record. Work that is out of scope and
 worth doing goes in your report; the coordinator decides whether it becomes a record.
 The coordinator files that record and leaves it unpriced until it enters a work set.
+The fold-in rule covers any small defect you find while working - a tool bug, a wrong doc line, a
+flake fix - not only your own story: fix it on this branch when it fits in about one small
+commit. It becomes a record only when it is too large, needs another pulled item's files, or
+needs the owner: report it, and the coordinator files it with `backlog.py add --found-on <branch> --why-not-folded "<reason>"`.
 
 ## Report
 

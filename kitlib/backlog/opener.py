@@ -43,10 +43,11 @@ def open_repo(root):
 
 def open_store(root, fetch=True, session=None, branch=None):
     top, cfg, rules = open_repo(root)
+    section = cfg.section('backlog')
     backend = smod.open_backend(top, cfg, fetch=fetch)
     store = smod.Store(backend, rules, session=session)
     ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
-                       branch=branch)
+                       branch=branch, code_main=section['code_main'] or cfg.main_branch)
     return ctx
 
 
@@ -59,7 +60,8 @@ def planner(args, ctx):
     v = args.verb
     if v == 'add':
         return lambda s: pmod.plan_add(s, ctx, args.id, args.summary, args.scope, args.effort,
-                                       args.ref, args.reopen, session=ctx.session)
+                                       args.ref, args.reopen, session=ctx.session,
+                                       found_on=args.found_on, why_not_folded=args.why_not_folded)
     if v == 'set':
         body = pmod.read_body_file(args.body_file) if args.body_file else None
         changes = set_changes(args)

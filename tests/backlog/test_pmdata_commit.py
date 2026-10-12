@@ -18,7 +18,7 @@ from kitlib.backlog import errors
 from kitlib.backlog.errors import Failure, Uncommitted, Usage
 from tools import backlog as backlog_tool
 
-from tests.backlog.helpers import BRANCH, priced
+from tests.backlog.helpers import ADD_FLAGS, ADD_NONE, BRANCH, priced
 from tests.gitfixture import TempRepo
 
 DIR = 'kit/backlog'
@@ -78,7 +78,7 @@ class PmDataStore(unittest.TestCase):
     def test_add_commits_the_new_record(self):
         before = self.head()
         change, tip = self.store.write(
-            lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+            lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE))
         self.assert_committed(before, tip, [('A', DIR + '/FOO.md')])
         self.assertEqual(self.git('log', '-1', '--format=%s', tip), change.subject)
 
@@ -108,7 +108,7 @@ class PmDataStore(unittest.TestCase):
         self.repo.write('notes.txt', 'scratch\n', root=self.wt)
         before = self.head()
         _, tip = self.store.write(
-            lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+            lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE))
         self.assertEqual(self.changed_in(tip), [('A', DIR + '/FOO.md')])
         self.assertEqual(self.git('rev-parse', tip + '^'), before)
         self.assertEqual(sorted(self.status()), [' M %s/BAZ.md' % DIR, '?? notes.txt'])
@@ -136,7 +136,8 @@ class PmDataStore(unittest.TestCase):
             return sha
         with mock.patch.object(self.backend, '_head', side_effect=head_then_move):
             _, tip = self.store.write(
-                lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+                lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                        **ADD_NONE))
         self.assert_committed(moved[0], tip, [('A', DIR + '/FOO.md')])
 
     def test_a_write_that_fails_partway_commits_nothing(self):
@@ -162,7 +163,8 @@ class PmDataStore(unittest.TestCase):
         with mock.patch.object(smod.time, 'sleep'):
             with self.assertRaises(Failure) as cm:
                 self.store.write(
-                    lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+                    lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                            **ADD_NONE))
         self.assertIsInstance(cm.exception, Uncommitted)    # the files are written
         msg = str(cm.exception)
         self.assertIn('%s/FOO.md' % DIR, msg)
@@ -470,7 +472,8 @@ class PmDataStore(unittest.TestCase):
             with mock.patch.object(smod.time, 'sleep'):
                 with self.assertRaises(Failure) as cm:
                     self.store.write(
-                        lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+                        lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                                **ADD_NONE))
         finally:
             os.remove(lock)
         exc = cm.exception
@@ -505,7 +508,7 @@ class PmDataStore(unittest.TestCase):
             with mock.patch.object(smod.time, 'sleep'):
                 with self.assertRaises(errors.IndexStale) as cm:
                     store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary',
-                                                        ['area/foo/**']))
+                                                        ['area/foo/**'], **ADD_NONE))
         finally:
             os.remove(lock)
         repair = cm.exception.repair
@@ -531,7 +534,8 @@ class PmDataStore(unittest.TestCase):
                                           'GIT_DIR': os.path.join(tmp, 'no-repo'),
                                           'GIT_WORK_TREE': tmp}):
             _, tip = self.store.write(
-                lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+                lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                        **ADD_NONE))
             pending = self.backend.pending()
         self.assertFalse(os.path.exists(stray))
         self.assertEqual(pending, [])
@@ -545,7 +549,8 @@ class PmDataStore(unittest.TestCase):
         store = smod.Store(backend, rmod.Rules(), session='kit-test')
         ctx = pmod.Context(store, other, branch=BRANCH)
         before = self.repo.git('rev-parse', 'HEAD', cwd=other)
-        _, tip = store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary', ['area/foo/**']))
+        _, tip = store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                                     **ADD_NONE))
         self.assertIsNone(tip)
         self.assertEqual(self.repo.git('rev-parse', 'HEAD', cwd=other), before)
         self.assertIsNone(backend.commit_branch())
@@ -671,7 +676,7 @@ class PmDataStore(unittest.TestCase):
         try:
             with mock.patch.object(smod.time, 'sleep'):
                 rc, out = self.tool('add', 'FOO', '--summary', 'a summary', '--scope',
-                                    'area/foo/**')
+                                    'area/foo/**', *ADD_FLAGS)
                 added = self.head()
                 rc2, out2 = self.tool('catch-up', '--apply', DIR + '/NEW.md')
         finally:

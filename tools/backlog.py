@@ -5,7 +5,8 @@
   reads   next [--cap N | --all] [--with ID]...     show ID     check     landable BRANCH...
           list [--blocked [--on M]] [--needs-priority] [--status S] [--area A]
           stale [--days N]
-  writes  add ID --summary S --scope P... [--effort s|m|l] [--ref R] [--reopen]
+  writes  add ID --summary S --scope P... --found-on BRANCH|none --why-not-folded T
+              [--effort s|m|l] [--ref R] [--reopen]
           set ID [--<field> V]... [--unset K]... [--ruling R] [--body-file F] [--hold-ruling R]
           block ID --on M... [--reason T] [--owner-ask Q] [--ruling R]
           retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
@@ -87,6 +88,10 @@ def build_parser():
     v.add_argument('--effort', default=None)
     v.add_argument('--ref', default=None)
     v.add_argument('--reopen', action='store_true')
+    v.add_argument('--found-on', dest='found_on', required=True,
+                   help='the branch the finding was made on, or none')
+    v.add_argument('--why-not-folded', dest='why_not_folded', required=True,
+                   help='why the finding is not fixed on that branch')
     v = sub.add_parser('set')
     v.add_argument('id')
     for key in FIELD_FLAGS:

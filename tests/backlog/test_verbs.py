@@ -7,7 +7,7 @@ import unittest
 
 from kitlib.backlog.errors import NotFound, Refusal, Usage
 
-from tests.backlog.helpers import BRANCH, TODAY, StoreCase, priced, rec
+from tests.backlog.helpers import ADD_NONE, BRANCH, TODAY, StoreCase, priced, rec
 
 OWNER_PRICED = dict(priority='2', priority_by='owner', priority_ruling='R-9001')
 OWNER_BLOCKED = dict(state='blocked', blocked_on='owner', owner_ask='which one?')
@@ -20,7 +20,7 @@ class VerbCase(StoreCase):
 class Add(VerbCase):
 
     def test_add_writes_an_unpriced_open_record(self):
-        self.verb('add', 'NEW', 'a new thing to do here', ['link/src/**'], effort='s')
+        self.verb('add', 'NEW', 'a new thing to do here', ['link/src/**'], effort='s', **ADD_NONE)
         r = self.get('NEW')
         self.assertEqual((r.get('priority'), r.get('priority_by'), r.get('state'), r.get('area'),
                           r.get('effort')), ('-', '-', 'open', 'link', 's'))
@@ -29,21 +29,21 @@ class Add(VerbCase):
     def test_add_refuses_a_taken_id_a_bad_id_and_a_bad_scope(self):
         self.seed(rec('FOO'))
         with self.assertRaises(Refusal):
-            self.verb('add', 'FOO', 'again', ['x/**'])
+            self.verb('add', 'FOO', 'again', ['x/**'], **ADD_NONE)
         with self.assertRaises(Usage):
-            self.verb('add', 'lower', 'bad id', ['x/**'])
+            self.verb('add', 'lower', 'bad id', ['x/**'], **ADD_NONE)
         with self.assertRaises(Usage):
-            self.verb('add', 'NEW', 'bad scope', ['*.java'])
+            self.verb('add', 'NEW', 'bad scope', ['*.java'], **ADD_NONE)
         with self.assertRaises(Usage):
-            self.verb('add', 'NEW', '   ', ['x/**'])
+            self.verb('add', 'NEW', '   ', ['x/**'], **ADD_NONE)
 
     def test_re_adding_a_closed_id_needs_reopen(self):
         self.seed(rec('FOO'))
         self.verb('close', 'FOO', 'the work is finished')
         with self.assertRaises(Refusal) as cm:
-            self.verb('add', 'FOO', 'it came back', ['x/**'])
+            self.verb('add', 'FOO', 'it came back', ['x/**'], **ADD_NONE)
         self.assertIn('--reopen', str(cm.exception))
-        self.verb('add', 'FOO', 'it came back', ['x/**'], reopen=True)
+        self.verb('add', 'FOO', 'it came back', ['x/**'], reopen=True, **ADD_NONE)
         self.assertIsNotNone(self.get('FOO'))
 
 
@@ -286,7 +286,7 @@ class MachinePaths(VerbCase):
         for d in self.DRIVES:
             text = 'see %s for the details' % d
             with self.subTest(drive=d):
-                self.refused('add', 'NEW', text, ['link/src/**'])
+                self.refused('add', 'NEW', text, ['link/src/**'], **ADD_NONE)
                 self.refused('set', 'FOO', [('summary', [text])])
                 self.refused('block', 'BAR', ['owner'], owner_ask=text)
                 self.refused('pull', 'FOO', reason=text)

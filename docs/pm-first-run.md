@@ -84,7 +84,8 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    `git -C <repo> config core.hooksPath` prints `<kit>/githooks`.
 
 10. **Start its backlog.** In each repository the first `python tools/backlog.py add` creates the
-    store (docs/backlog.md).
+    store (docs/backlog.md); a first record found on no branch takes
+    `--found-on none --why-not-folded "<reason>"` (docs/backlog.md "The fold-in guard").
     Success: `python tools/backlog.py check` is GREEN (RED while the store is empty).
 
 11. **Add the coordinators.** For each repository, add an entry to the sessions file:
