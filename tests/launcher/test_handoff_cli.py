@@ -7,7 +7,7 @@ import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
-from kitlib.launcher import autostart, handoff, reboot, window
+from kitlib.launcher import autostart, handoff, reboot
 from kitlib.launcher import host as hostmod
 from tests.launcher.fakes import FakeHost, Home, role_of, session
 
@@ -108,8 +108,21 @@ class Autostart(unittest.TestCase):
         script = out[1]
         self.assertIn("-TaskName 'Claude coordinators after reboot'", script)
         self.assertIn('-LogonType Interactive -RunLevel Limited', script)
-        enc = script.split('-EncodedCommand ')[1].split("'")[0]
-        self.assertEqual(window.decode(enc), "& '/py/python.exe' '/kit/tools/launch.py' after-reboot")
+        self.assertIn("-Execute '%s' -Argument '\"%s\" \"/py/python.exe\" \"/kit/tools/launch.py\" after-reboot'"
+                      % (os.path.join('/py', 'pythonw.exe'), os.path.join('/kit/tools', 'no_window.py')), script)
+
+    def test_the_task_opens_no_console_window_of_its_own(self):
+        """The task runs pythonw (no console) on the kit's carrier, which starts the console python
+        on launch.py with no window: no PowerShell window flashes at sign-in."""
+        script = autostart.task_script('/py/pythonw.exe', '/kit/tools/launch.py')
+        self.assertIn("-Execute '%s' -Argument '\"%s\" \"%s\" \"/kit/tools/launch.py\" after-reboot'"
+                      % (os.path.join('/py', 'pythonw.exe'), os.path.join('/kit/tools', 'no_window.py'),
+                         os.path.join('/py', 'python.exe')), script)
+        self.assertNotIn('powershell.exe', script)
+        self.assertNotIn('-WindowStyle', script)
+        self.assertNotIn('-EncodedCommand', script)
+        kit = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.assertTrue(os.path.isfile(os.path.join(kit, 'tools', 'no_window.py')))
 
     def test_a_worktree_copy_is_refused(self):
         def run(*a, **k):
