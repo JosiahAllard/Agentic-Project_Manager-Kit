@@ -36,6 +36,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/lock-release.md` | lock release pre-check | releasing a lock | kw: lock-release
 - `docs/machine-setup.md` | machine setup | a new machine | kw: machine-setup, setup
 - `docs/model-ab.md` | model A/B results | choosing a model | kw: model, ab
+- `docs/agent-review.md` | agent review: usage, refusals, definition findings (undecided) | choosing a model, editing agent definitions | kw: agent-review, agents, model
 - `docs/new-worktree.md` | new_worktree | starting a task | kw: new-worktree, worktree
 - `docs/pending.md` | the pending-steps file | pending steps | kw: pending
 - `docs/pm-data-branch.md` | PM data on a private branch of the kit repo | PM data | kw: pm-data, data-branch
@@ -111,3 +112,4 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/trailers.py` | fail a commit with no agent trailer (`docs/repo-checks.md`) | kw: trailers
 - `tools/worktree_paths.py` | which path a worktree write may go to (`docs/worktree-paths.md`) | kw: worktree_paths
 - `tools/worktree_sweep_task.py` | nightly worktree sweep scheduled task (`docs/worktree-remove.md`) | kw: worktree_sweep_task, sweep
+- `tools/no_window.py` | run a program with no console window, for a scheduled task (`docs/daily-full.md` "The schedule") | kw: no_window, console window, scheduled task

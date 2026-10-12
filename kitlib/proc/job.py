@@ -18,7 +18,8 @@ a console with no window. A parent that has a console, shown or hidden, keeps it
 console as before. The test is "attached to a console" (GetConsoleProcessList), not
 GetConsoleWindow: measured 2026-10-10, a python started with CREATE_NO_WINDOW, and an agent's
 shell, have a console whose GetConsoleWindow() is 0. A caller that wants a visible window passes
-CREATE_NEW_CONSOLE.
+CREATE_NEW_CONSOLE. A start that needs no job gets the same flags through kitlib.proc.spawn (run,
+call, popen); tests/proc/test_spawn_sites.py holds every start in the kit to one of the two.
 """
 import ctypes
 import subprocess

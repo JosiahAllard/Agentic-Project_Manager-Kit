@@ -16,6 +16,10 @@ named Win32 mutexes, plus each run's liveness mutex.
 Store(root) is the machine's store when root is None; any other root is a scratch store with
 mutexes of its own (tests). Timings live in Settings, so a test shortens them by parameter, not
 by environment (the old MACHINE_LOCK_TEST_* seams). Nothing here prints: `say` is the caller's.
+
+Under the kit's tests the machine's store is fenced (fence; docs/test-tools.md "Home fence"): it
+can be built and its root named, but Store.path and Store.mutex_name raise HomeFenced, so nothing
+under it is read, written or locked. A scratch store is not fenced, and a real run never is.
 """
 import contextlib
 import ctypes
@@ -105,6 +109,29 @@ def profile_dir():
 
 def real_root():
     return os.path.join(profile_dir(), ".claude", "machine-lock")
+
+
+FENCED = ("the machine's lock store is refused under the kit's tests (asked for: %s): this "
+          "process was fenced by the tests package or carries KIT_HOME_FENCE; a test uses a "
+          "scratch store, Store(root=<a temp folder>) (docs/test-tools.md \"Home fence\")")
+
+
+def fence(what):
+    """Refuse the machine's lock store to a process under the kit's tests: HomeFenced, naming
+    `what` (what was asked for), when kitlib.config.user.fenced(). A BaseException, so neither the
+    store's `except OSError` nor a caller's `except Exception` turns the refusal into a default or
+    a warning. A real run falls through: one global read and one environment read."""
+    from kitlib.config import user
+    if user.fenced():
+        raise user.HomeFenced(FENCED % what)
+
+
+def machine_home():
+    """The home folder the machine's lock store lives under, for what is read beside it (the
+    machine config's lock settings, kitlib.lock.site): profile_dir(), refused under the kit's
+    tests (fence)."""
+    fence("the store's home folder")
+    return profile_dir()
 
 
 _SA = []
@@ -314,7 +341,8 @@ class RunMutex:
 class Store:
     """One lock store. root None: the machine's (~/.claude/machine-lock, from Windows);
     else a scratch store whose mutexes are named after its path. say(text): where the library's
-    progress lines go (default: nowhere; the CLI prints them)."""
+    progress lines go (default: nowhere; the CLI prints them). Under the kit's tests the machine's
+    store gives no file path and names no mutex: path and mutex_name raise HomeFenced (fence)."""
 
     def __init__(self, root=None, settings=None, say=None, hardware=None, kinds_path=None):
         real = real_root()
@@ -328,10 +356,13 @@ class Store:
         self._game_at = 0.0
 
     def path(self, *parts):
+        if not self.testing:
+            fence("a file path")
         return os.path.join(self.root, *parts)
 
     def mutex_name(self, lock):
         if not self.testing:
+            fence("a mutex name")
             return "Global\\MachineLock." + lock
         h = hashlib.sha1(os.path.normcase(self.root).encode("utf-8")).hexdigest()[:12]
         return "Global\\MachineLock.test-%s.%s" % (h, lock)

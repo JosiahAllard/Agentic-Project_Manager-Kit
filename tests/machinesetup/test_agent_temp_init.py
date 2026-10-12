@@ -302,7 +302,18 @@ class Init(T.Base):
     def test_task_line_quotes_a_kit_path_with_a_quote_and_a_space(self):
         line = at().task_line("C:\\it's a kit")
         self.assertIn("-WorkingDirectory 'C:\\it''s a kit'", line)
-        self.assertIn("-Argument '\"C:\\it''s a kit\\optional\\agenttemp\\agent_temp_sweep.py\" --apply'", line)
+        self.assertIn("-Argument '\"C:\\it''s a kit\\tools\\no_window.py\" python"
+                      " \"C:\\it''s a kit\\optional\\agenttemp\\agent_temp_sweep.py\" --apply'", line)
+
+    def test_task_line_starts_no_console_window(self):
+        """The task runs pythonw (no console of its own) on the kit's carrier, which starts the
+        console python on the sweep with no window."""
+        line = at().task_line('C:\\kit')
+        self.assertTrue(line.startswith('$py = (Get-Command pythonw).Source; '), line)
+        self.assertNotIn('Get-Command python)', line)
+        self.assertIn("-Execute $py -Argument '\"C:\\kit\\tools\\no_window.py\" python"
+                      " \"C:\\kit\\optional\\agenttemp\\agent_temp_sweep.py\" --apply'", line)
+        self.assertTrue(os.path.isfile(os.path.join(T.KIT, 'tools', 'no_window.py')))
 
     def test_acl_step_no_longer_refuses_when_the_folder_is_made_in_the_same_run(self):
         code, out = self.run_new()

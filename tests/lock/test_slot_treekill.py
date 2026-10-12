@@ -1,8 +1,11 @@
 """kitlib.lock.run.slot(): a run that is stopped, raises, is interrupted (Ctrl+C) or is killed
 through its launcher ends its command's whole process tree - child and grandchild, and a subtree
 whose top has already exited - because every process the launcher starts is in the run's job
-(kitlib.proc.job) and the slot ends the job (TerminateJobObject). This is why the gate has no
-`kill_retry` step key (docs/gate.md "Not ported").
+(kitlib.proc.job) and the slot's kill path (Slot.end_tree) ends the job. These trees hold no
+build daemon, so end_tree ends the whole job (TerminateJobObject); a job with a shared daemon in
+it has that daemon's tree spared and the rest ended process by process, which
+tests/lock/test_release_daemons.py covers (docs/gate.md "Build daemons"). This is why the gate has
+no `kill_retry` step key (docs/gate.md "Not ported").
 
 Real processes, nothing mocked: a three-level python tree on a scratch store
 (helpers.StoreCase). Each descendant is checked by a handle the test opens while it is alive and
@@ -15,6 +18,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -44,6 +48,26 @@ time.sleep(60)
 '''
 LEVELS = (0, 1, 2)
 GONE_MS = 10000
+PID_READ_S = 5
+
+
+def read_pid(path, timeout=PID_READ_S):
+    """The pid in the pid file `path`, waited for up to `timeout` seconds; past that it fails,
+    naming the file and the last error. A pid file whose name is there may still refuse to open:
+    one read at once failed with PermissionError (errno 13), seen once. Inferred cause: the
+    handle os.replace renamed the file through is still open for an instant after the name
+    appears, and open() does not share a file with a handle that may delete it."""
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            with open(path, encoding="utf-8") as f:
+                return int(f.read())
+        except (OSError, ValueError) as e:
+            last = e
+        if time.monotonic() >= end:
+            raise AssertionError("pid file %s was not readable as a pid within %g s: %r"
+                                 % (path, timeout, last))
+        time.sleep(0.02)
 
 
 class SlotTreeKill(StoreCase):
@@ -63,8 +87,9 @@ class SlotTreeKill(StoreCase):
             p.kill()
         p.wait(30)
 
-    def pids(self, d, hold=LEVELS, timeout=30):
-        """({level: pid}, {level: handle}) once every level has written its pid file. Each level
+    def pids(self, d, hold=LEVELS, timeout=30, read_s=PID_READ_S):
+        """({level: pid}, {level: handle}) once every level has written its pid file. A file
+        that is there gets `read_s` seconds to open and hold a pid (read_pid). Each level
         in `hold` is opened the moment its pid is read (it sleeps 60 s, so the pid is its own)
         and its handle registered for cleanup at once, before anything is asserted: a later
         failure - this wait timing out, a check in hold() - leaves no held level running."""
@@ -73,8 +98,7 @@ class SlotTreeKill(StoreCase):
             for lv in LEVELS:
                 path = os.path.join(d, "%d.pid" % lv)
                 if lv not in out and os.path.exists(path):
-                    with open(path, encoding="utf-8") as f:
-                        out[lv] = int(f.read())
+                    out[lv] = read_pid(path, read_s)
                     if lv in hold:
                         h = process.open_process(out[lv], process.SYNCHRONIZE
                                                  | process.PROCESS_TERMINATE
@@ -186,6 +210,59 @@ class SlotTreeKill(StoreCase):
         for lv in (1, 2):
             self.assertEqual(win32.K32.WaitForSingleObject(handles[lv], 0), win32.WAIT_TIMEOUT,
                              "level %d ended with its parent alone" % lv)
+
+    def pid_files(self, late):
+        """A folder holding every level's pid file but `late`, whose name is a folder: there,
+        and open() on it fails with PermissionError, as a file not yet shared does."""
+        d = tempfile.mkdtemp(dir=self.tmp)
+        for lv in LEVELS:
+            if lv == late:
+                os.mkdir(os.path.join(d, "%d.pid" % lv))
+            else:
+                with open(os.path.join(d, "%d.pid" % lv), "w", encoding="utf-8") as f:
+                    f.write(str(100 + lv))
+        return d
+
+    def test_pids_waits_out_a_pid_file_that_cannot_be_opened_yet(self):
+        # Red on the read at once: PermissionError from open(), the failure seen.
+        d = self.pid_files(late=2)
+        path = os.path.join(d, "2.pid")
+        with self.assertRaises(PermissionError):
+            open(path, encoding="utf-8")
+
+        def write():
+            os.rmdir(path)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("102")
+        t = threading.Timer(0.3, write)
+        self.addCleanup(t.join)
+        t.start()
+        self.assertEqual(self.pids(d, hold=()), ({0: 100, 1: 101, 2: 102}, {}))
+
+    def test_pids_fails_naming_a_pid_file_that_never_opens(self):
+        d = self.pid_files(late=1)
+        path = os.path.join(d, "1.pid")
+        t0 = time.monotonic()
+        with self.assertRaises(AssertionError) as caught:
+            self.pids(d, hold=(), read_s=0.5)
+        self.assertLess(time.monotonic() - t0, 5)
+        said = str(caught.exception)
+        self.assertIn("pid file %s was not readable as a pid within 0.5 s" % path, said)
+        self.assertIn("PermissionError", said)
+
+    def test_pids_waits_out_a_pid_file_with_no_pid_in_it_yet(self):
+        d = self.pid_files(late=None)
+        path = os.path.join(d, "0.pid")
+        with open(path, "w", encoding="utf-8"):
+            pass
+
+        def write():
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("100")
+        t = threading.Timer(0.3, write)
+        self.addCleanup(t.join)
+        t.start()
+        self.assertEqual(self.pids(d, hold=())[0], {0: 100, 1: 101, 2: 102})
 
 
 if __name__ == "__main__":

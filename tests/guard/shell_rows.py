@@ -7,7 +7,7 @@ from . import world as W
 from .world import bash, ps
 
 BS = chr(92)
-LOCK = 'python {home}/.claude/tools/machine_lock/machine_lock.py run --lock'
+LOCK = 'python "{kit}/tools/machine_lock.py" run'
 
 
 def win(*parts):

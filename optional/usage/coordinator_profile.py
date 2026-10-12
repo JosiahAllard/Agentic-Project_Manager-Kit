@@ -87,7 +87,7 @@ def main(argv=None):
     ap.add_argument("--days", type=int, default=U.DEFAULT_DAYS)
     a = ap.parse_args(argv)
     since = U.since_value(a.since, a.days)
-    print("%s | since %s" % (os.path.expanduser(a.root), since))
+    print("%s | since %s" % (U.expand(a.root), since))
     for p in sorted(U.transcripts(a.root, recursive=False), key=os.path.getmtime):
         s = profile(p, since)
         if s:

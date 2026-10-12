@@ -150,6 +150,8 @@ files or the kit itself:
 - `launch.py`, `machine_setup.py`, `pm_data.py`, `pm_watch.py`, `hub_mirror.py`, `pending.py`,
   `ledger_refs.py`, `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and
   the machine.
+- `no_window.py`: the carrier a scheduled task runs under `pythonw` so that no console window
+  opens (docs/daily-full.md "The schedule").
 
 A stub bakes in the kit it was written from, so one written from a kit worktree runs that
 worktree and is stale on main (`check` says `runs the kit at ...`). At session start the
@@ -229,7 +231,9 @@ lock path, and `machine_setup.py --apply` recreates those links. Record KIT-JUNC
 retires them.
 
 `tools/backlog.py add` needs at least one `--scope <path>` (`none` for a record that touches no
-tracked file); without one it refuses (docs/backlog.md).
+tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or
+`--found-on none` when no branch found it) and `--why-not-folded "<reason>"` (docs/backlog.md
+"The fold-in guard").
 
 The rulings ledger is once per machine: set `ledger_path` (and optionally `ledger_repos`) in
 the machine config (docs/kit-json.md "Machine config keys"). The first `tools/ledger.py add` creates the file from

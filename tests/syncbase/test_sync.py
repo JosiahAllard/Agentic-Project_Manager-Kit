@@ -562,6 +562,16 @@ class Regrowth(SyncCase):
         self.assertIn('docs/long.md: base shrank it', text)
         self.assertIn('fix: `git checkout %s -- <path>`' % target[:7], text)
 
+    def test_the_regrowth_remedy_says_what_its_checkout_discards(self):
+        # The remedy is a command that overwrites the path in the work tree. sync() refuses a
+        # dirty tree before it merges, so the tree it read had no uncommitted edit; the line says
+        # so, and that an edit made after it is lost unless committed first.
+        text = self.out(self.sync(self.stage_regrowth()))
+        [fix] = [line for line in text.splitlines() if line.startswith('fix: `git checkout ')]
+        self.assertIn('discards an uncommitted edit of <path>', fix)
+        self.assertIn('this work tree had none when the merge ran', fix)
+        self.assertIn('commit any made since before running it', fix)
+
     def test_a_clean_merge_says_no_regrowth_and_names_the_gate(self):
         done = self.sync(self.stage_clean())
         self.assertEqual(done.code, syncbase.OK, self.out(done))

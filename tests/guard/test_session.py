@@ -188,7 +188,7 @@ class AgentSessions(unittest.TestCase):
     def test_lock_state_names_the_rule_and_the_status_command(self):
         d = self.edit_state(COORDINATOR)
         self.assertEqual(d.rule, 'lock-state')
-        self.assertIn('Instead: python %s/.claude/tools/machine_lock/machine_lock.py status ' % W.fwd(self.w.home), d.reason)
+        self.assertIn('Instead: python "%s/tools/machine_lock.py" status ' % W.fwd(self.w.kit_dir), d.reason)
 
     def test_lock_state_by_shell_redirect(self):
         target = W.fwd(os.path.join(self.w.home, '.claude', 'machine-lock', 'state.json'))

@@ -5,8 +5,9 @@ they go red there - red-first evidence with no in-place mutant (docs/redfirst.md
               [--log-dir DIR]
 
   --tests   a committed test file of --head, repo-relative, optionally ::<filter>; the runner that
-            takes it is the first `.kit.json` "redfirst".runners entry whose glob matches; may be
-            repeated, the values accumulate
+            takes it is the first `.kit.json` "redfirst".runners entry whose glob matches (none
+            written: tests/*test_*.py, then <tools_dir>/*test_*.py run with the tools folder as
+            PYTHONPATH); may be repeated, the values accumulate
   --also    a further committed file of --head checked out with the tests (a new fixture); never run;
             may be repeated
   --base    the pre-change commit; default the merge-base of --head with <remote>/<main branch>
@@ -17,6 +18,11 @@ they go red there - red-first evidence with no in-place mutant (docs/redfirst.md
 parses, calls kitlib.redfirst, prints and exits. One line per selector: RED, GREEN, NONE (no test
 matched) or ERROR. Exit: 0 every selector RED at the base; 1 at least one GREEN; 2 usage or a
 refusal (`--help` too, since 0 means RED); 3 undecided; 4 the throwaway worktree was left.
+
+A run whose command is heavy (gradle, dotnet; or its runner names a `lock` kind) books the machine
+lock itself around its commands, and takes nothing more inside a run that already holds enough
+(docs/redfirst.md "The machine lock"). When the lock refuses the run no tree is made and nothing
+runs: exit 2 for its usage refusals, else the lock's own exit code - 6, 8, 10, 11 or 12.
 """
 import argparse
 import os
@@ -62,7 +68,8 @@ def parse_args(argv):
     return ap.parse_args(argv)
 
 
-def main(argv=None, run=R.default_run, cleanup=None):
+def main(argv=None, run=None, cleanup=None, book_kw=None):
+    """run, cleanup and book_kw are kitlib.redfirst.run.execute's (tests pass them)."""
     argv = list(sys.argv[1:] if argv is None else argv)
     root, rest, why = split_root(argv)
     if why:
@@ -86,7 +93,7 @@ def main(argv=None, run=R.default_run, cleanup=None):
         say('failed    %s: %s' % (type(e).__name__, e))
         say('REDFIRST UNDECIDED - nothing was made')
         return V.EXIT_UNDECIDED
-    return R.execute(plan, say, run=run, cleanup=cleanup)
+    return R.execute(plan, say, run=run, cleanup=cleanup, book_kw=book_kw)
 
 
 def child():

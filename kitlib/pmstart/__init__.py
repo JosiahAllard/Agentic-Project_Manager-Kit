@@ -13,6 +13,7 @@ import time
 
 from kitlib.config import user as kuser
 from kitlib.pmstart import fglock
+from kitlib.proc import spawn
 
 KEY = "pm_start"
 TIMEOUT = 4
@@ -44,8 +45,8 @@ def _read(path):
 def list_processes(timeout=TIMEOUT):
     """All processes as dicts with Name, CommandLine, ExecutablePath, ProcessId, ParentProcessId, Created (PowerShell Get-CimInstance).
     subprocess.TimeoutExpired after `timeout` seconds (the session start's TIMEOUT by default)."""
-    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS],
-                       capture_output=True, text=True, timeout=timeout)
+    r = spawn.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS],
+                  capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError("powershell exit %d: %s" % (r.returncode, r.stderr.strip()[:200]))
     data = json.loads(r.stdout or "[]")

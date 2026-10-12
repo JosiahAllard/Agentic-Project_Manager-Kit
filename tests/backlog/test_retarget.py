@@ -7,7 +7,7 @@ from kitlib.backlog.errors import Usage
 from kitlib.backlog import store as smod
 
 from tests.backlog import test_cli
-from tests.backlog.helpers import StoreCase, rec
+from tests.backlog.helpers import ADD_FLAGS, StoreCase, rec
 from tests.backlog import test_verbs
 
 OLD, NEW = 'docs/guide', 'docs/design/guide'
@@ -157,7 +157,8 @@ class RetargetCli(unittest.TestCase):
     ok = test_cli.Cli.ok
 
     def test_dry_run_by_default_then_apply(self):
-        self.ok('add', 'FOO', '--summary', 'touches %s/a.md' % OLD, '--scope', OLD + '/a.md')
+        self.ok('add', 'FOO', '--summary', 'touches %s/a.md' % OLD, '--scope', OLD + '/a.md',
+                *ADD_FLAGS)
         tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)
         out = self.ok('retarget', OLD, NEW)
         self.assertIn('DRY RUN: nothing was written', out)
@@ -171,7 +172,7 @@ class RetargetCli(unittest.TestCase):
 
     def test_a_none_new_is_usage_in_a_dry_run_and_an_apply(self):
         self.ok('add', 'FOO', '--summary', 'a thing to move', '--scope', 'tools/x.py',
-                '--ref', 'a/x')
+                '--ref', 'a/x', *ADD_FLAGS)
         tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)
         for extra in ((), ('--apply',)):
             rc, out = self.run_tool('retarget', 'a/x', 'NONE', *extra)

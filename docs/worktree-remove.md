@@ -20,7 +20,7 @@ Exit codes: 0 done, 1 refused or failed (or the sweep deferred), 2 usage or a re
 | Module | Holds |
 |---|---|
 | `kitlib/worktree/holders.py` | Windows holder probes (`blockers`, `cwd_holders`, `describe`), link and keeper walks, `path_glob`, `is_build_output` |
-| `kitlib/worktree/remove.py` | `remove`, `remove_branch`, `abandon`, `abandon_branch`, `check`, merge check, `dirty`, `git_remove`, `delete_branch`, `pulled_by` |
+| `kitlib/worktree/remove.py` | `remove`, `remove_branch`, `abandon`, `abandon_branch`, `check`, merge check, `dirty`, `last_look`, `git_remove`, `delete_branch`, `pulled_by` |
 | `kitlib/worktree/sweep.py` | `sweep`, `sweep_skip`, `last_activity`, `landing_hold`, `machine_lock_entries` |
 | `kitlib/worktree/task.py` | the PowerShell registration line, `parse`, `resolve`, `run` |
 
@@ -31,6 +31,25 @@ A landing's branch cleanup and `land.py --sweep-landed` (kitlib/gate/cleanup.py;
 Each verb returns `Outcome(code, lines)` and prints nothing; the tools print the lines. Settings come from `.kit.json`: `repo.main_branch`, `repo.remote`, `repo.worktrees_dir`, `repo.tools_dir`, `repo.name`, `backlog.store`, `landing.lock_file` and `landing.lanes`, and the `worktree_remove` section (docs/kit-json.md).
 
 A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` is the literal folder `kitlib.pieces` puts at that piece's dir: an ignored entry that is that folder or lies under it is build output (compared case-sensitively, so a folder git prints in another case is refused), and when the pieces table is missing or malformed, the id is unknown, the piece or path is not a string, the path is empty, a glob or climbs out, or the piece's dir has an empty or `.` part, the entry holds nothing and the removal refuses (`kitlib.worktree.remove.piece_dirs`; tests in `tests/worktree/test_piece_build_output.py`).
+
+## The last status read
+
+`kitlib.worktree.remove.git_remove` calls `last_look` first: one more read of `dirty`, just before `git worktree remove`. git's own refusal names modified and untracked files and never an ignored one, which it deletes with the tree, so this read is what keeps an ignored file written after the caller's own checks. Every removal goes through `git_remove`, so every caller gets it: the remove and abandon verbs (after `clear_disposable`), the sweep (after its second `sweep_status`), the landing cleanup (through `_remove`) and redfirst's cleanup (`kitlib/redfirst/run.py` `remove_tree`).
+
+- It refuses on anything `dirty` lists: a modified or untracked file (one `disposable_untracked` names too: the verbs have cleared those by then), an ignored file outside `build_output`, a keeper inside it. The line is `failed    <path> changed after it was checked - <what>; git was NOT run`. A status that cannot be read gives `failed    <path>: its status could not be read again (<why>); git was NOT run`. The tree stays registered and intact, `--abandon` keeps its tag and the branch, and the sweep counts the worktree under `failed` (exit 1).
+- A folder that vanishes between the caller's checks and `git_remove` is refused the same way: no status can be read where it was, so git is not run. Before `last_look`, `git worktree remove` dropped the entry of a missing folder and the branch went with it. Now the registration and the branch stay, and later runs report the entry: `--check` lists it as an `orphan`, the sweep skips it (`its directory is missing`), the landing cleanup (`kitlib/gate/cleanup.py` `clean_branch`) keeps it as `registered, and its folder is gone`, and the remove verb answers `nothing   <path> does not exist`.
+- The window is narrowed, not closed. An ignored file written after `last_look` returns and before git deletes its folder is still deleted, without a word from git.
+- `last_look` does not repeat the link check (`holders.link_reason`): a link or junction made inside build output after the verb's link check is not seen. One outside build output is refused when the status lists it or what it leads to (`??`, or `!!` when ignored).
+
+Tests: `tests/worktree/test_remove_snapshot.py` (`IgnoredAfterTheLastStatusRead`; after `clear_disposable`, a tracked edit and delete in `FileAppearsInTheWindow`, a `disposable_untracked` file in `DisposableInTheWindow`, a junction in `JunctionAppearsInTheWindow`, a vanished folder in `FolderGoneInTheWindow`) and `tests/worktree/test_worktree_sweep.py` (`Sweep.test_an_ignored_file_written_after_the_sweeps_second_status_read_survives`).
+
+## The scheduled task
+
+`kitlib/worktree/task.py` `command` writes the one PowerShell line `tools/worktree_sweep_task.py` prints or, with `--register --owner-confirmed`, runs. The task `<repo name>-worktree-sweep` runs daily at 03:00 as the registering user (`-RunLevel Limited`, `-StartWhenAvailable`), its working directory the main checkout.
+
+- No console window opens. The task's program is the `pythonw.exe` that `Get-Command pythonw` finds when the line runs (`FIND_PYTHONW`), and its arguments are `"<kit>\tools\no_window.py" python "<kit>\tools\worktree_remove.py" -C "<main checkout>" --sweep-merged --apply` (`argument`). `tools/no_window.py` is the carrier (docs/daily-full.md "The schedule"): it starts the `python.exe` beside that `pythonw.exe` with a console that has no window and exits with the sweep's exit code.
+- The line throws, registering nothing, when there is no `pythonw` or it is the Microsoft Store alias, a path under `WindowsApps` (`NOT_THE_STORE_ALIAS`).
+- The line does not replace a task: PowerShell refuses to register a name that exists. A task registered before the carrier runs `python` directly, with a window, until the owner removes it (`Unregister-ScheduledTask -TaskName '<repo name>-worktree-sweep' -Confirm:$false`) and registers it again.
 
 ## Behaves differently from the PM copy
 
@@ -51,6 +70,6 @@ A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` 
 - `tests/worktree/test_worktree_remove.py`
 - `tests/worktree/test_worktree_sweep.py`
 - `tests/worktree/test_worktree_sweep_task.py`
-- `tests/worktree/test_remove_snapshot.py` (what appears inside the window before git; a failing git)
+- `tests/worktree/test_remove_snapshot.py` (what appears inside the window before git, after `clear_disposable` and after `last_look`; a failing git)
 
 Every case uses throwaway `tests/gitfixture.py` repositories. The machine lock and PowerShell are seams. The holder and junction cases run on Windows only.

@@ -28,6 +28,7 @@ import sys
 from kitlib import config
 from kitlib.config import ConfigError
 from kitlib.git import cmd
+from kitlib.proc import spawn
 
 from . import standing
 
@@ -142,7 +143,7 @@ def check(commit, home=None):
         return 1, ('pre-commit: %s has unstaged changes and the ledger check reads the working file: '
                    'stage them (git add) or set them aside, then commit again%s'
                    % (', '.join(dirty), REFUSED))
-    rc = subprocess.call(command(root), cwd=root)
+    rc = spawn.call(command(root), cwd=root)
     if rc:
         return rc, 'pre-commit: tools/ledger.py check failed (exit %d)%s' % (rc, REFUSED)
     return 0, None
