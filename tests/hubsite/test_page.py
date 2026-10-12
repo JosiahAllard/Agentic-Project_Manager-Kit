@@ -721,6 +721,99 @@ class DomTest(unittest.TestCase):
                 self.assertEqual(got["sent"], [[1, "my edit"], [3, "my edit"]])
                 self.assertFalse(got["open"])
 
+    def test_a_conflict_whose_reread_fails_does_not_show_the_old_text_as_the_servers(self):
+        down = {"status": 500, "body": {"ok": False, "error": {"code": "internal", "message": "store unreadable", "field": ""}}}
+        for hash_, card, field, coll, path in (("#topm", "#pm-P-1", "textarea", "to_pm", "/to_pm/P-1/edit"),
+                                               ("#todo", "#todo-T-1", "input[type=text]", "todos", "/todos/T-1/edit")):
+            got = dom("""
+                const CARD = %s, FIELD = CARD + " " + %s, COLL = %s, ID = CARD.slice(-3), PATH = %s;
+                await start();
+                await click(button($(CARD), "Edit"));
+                await type($(FIELD), "my edit");
+                let n = 0, down = true;
+                server.route = c => {
+                  if (c.path === "/snapshot" && down) return %s;
+                  if (c.path !== PATH) return undefined;
+                  const d = server.snap.collections[COLL][ID];
+                  if (++n <= 2) { d.version = 3; d.text = d.title = "theirs"; server.snap.revision = 4; return %s; }
+                  d.version = 4; d.text = d.title = "my edit"; server.snap.revision = 5; return { status: 200, body: { ok: true } };
+                };
+                const see = () => ({ card: text($(CARD)), status: text($(CARD + " .status")), kept: $(FIELD) && $(FIELD).value });
+                await click(button($(CARD), "Save"));
+                const unread = see();
+                down = false;
+                await click(button($(CARD), "Save"));
+                const read = see();
+                await click(button($(CARD), "Save"));
+                return { unread, read, sent: calls.filter(c => c.path === PATH).map(c => c.body.if_version), open: !!$(FIELD) };
+            """ % (json.dumps(card), json.dumps(field), json.dumps(coll), json.dumps(path), json.dumps(down),
+                   json.dumps(conflict("%s is at version 3, not 1" % coll))),
+                snapshot(collections=LISTS), hash=hash_)
+            with self.subTest(card=card):
+                self.assertEqual(got["unread"]["status"], "Not saved: this item changed on the hub server and could not be "
+                                 "read again. Your text is kept; press Save again.")
+                self.assertNotIn("The hub server now holds:", got["unread"]["card"])
+                self.assertEqual(got["unread"]["kept"], "my edit")
+                self.assertIn("The hub server now holds:theirs", got["read"]["card"])
+                self.assertEqual(got["read"]["kept"], "my edit")
+                self.assertEqual(got["sent"], [1, 1, 3])                         # the version moves only on a read that came
+                self.assertFalse(got["open"])
+
+    def test_a_lost_to_do_card_has_a_tick_box_that_says_the_to_do_is_gone(self):
+        got = dom("""
+            await start();
+            await click(button($("#todo-T-1"), "Edit"));
+            await type($("#todo-T-1 input[type=text]"), "half");
+            const box = () => { const b = $("#list article input.chk"); return { id: b.id, label: b.getAttribute("aria-label"), off: b.disabled }; };
+            const before = box();
+            delete server.snap.collections.todos["T-1"]; server.snap.revision++;
+            await wake();
+            const c = $("#lost-todo-T-1");
+            return { before, after: box(), boxes: c.querySelectorAll("input.chk").length, kept: c.querySelector("input[type=text]").value };
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got["before"], {"id": "t-T-1", "label": "Save or cancel the edit before ticking this", "off": True})
+        self.assertEqual(got["after"], {"id": "", "label": "This to-do is gone", "off": True})
+        self.assertEqual(got["boxes"], 1)
+        self.assertEqual(got["kept"], "half")
+
+    def test_an_open_to_do_edit_stays_in_sight_when_its_to_do_leaves_the_tab_or_the_filter(self):
+        lists = {"todos": {"T-1": {"status": "open", "title": "mine", "from": "you", "repo": "alpha", "version": 1, "added_at": NOW},
+                           "T-2": {"status": "open", "title": "other", "from": "pm", "repo": "alpha", "version": 1, "added_at": NOW}}}
+        got = dom("""
+            await start();
+            await click(button($("#todo-T-1"), "Edit"));
+            await type($("#todo-T-1 input[type=text]"), "half written");
+            const see = () => ({ kept: $("#todo-T-1 input[type=text]") ? $("#todo-T-1 input[type=text]").value : null, other: !!$("#todo-T-2"), lost: !!$("#lost-todo-T-1") });
+            // Another repository is chosen in the filter.
+            $("#repo").value = "beta"; await fire($("#repo"), "change");
+            const filtered = see();
+            $("#repo").value = ""; await fire($("#repo"), "change");
+            // The to-do is ticked done meanwhile, in another tab.
+            server.snap.collections.todos["T-1"].status = "done"; server.snap.revision++;
+            await wake();
+            const ticked = see();
+            await click($("#ttabs [data-tf=done]"));
+            const onDone = see();
+            await click(button($("#todo-T-1"), "Cancel"));
+            await click($("#ttabs [data-tf=open]"));
+            return { filtered, ticked, onDone, after: !!$("#todo-T-1") };
+        """, snapshot(collections=lists, views={"repos": [{"name": "alpha"}, {"name": "beta"}]}), hash="#todo")
+        self.assertEqual(got["filtered"], {"kept": "half written", "other": False, "lost": False})
+        self.assertEqual(got["ticked"], {"kept": "half written", "other": True, "lost": False})
+        self.assertEqual(got["onDone"], {"kept": "half written", "other": False, "lost": False})
+        self.assertFalse(got["after"])                                           # the edit over, the to-do is on its own tab only
+
+    def test_a_write_whose_answer_is_cut_off_in_its_body_says_not_added_and_keeps_the_text(self):
+        got = dom("""
+            server.route = c => c.method === "POST" ? { status: 200, body: null, cut: true } : undefined;
+            await start();
+            await type($("#pm-fields textarea"), "kept text");
+            await fire($("#pmform"), "submit");
+            return { say: text($("#pm-addstatus")), kept: $("#pm-fields textarea").value };
+        """, snapshot(collections=LISTS), hash="#topm")
+        self.assertEqual(got["say"], "Not added: the hub server did not answer. Your text is kept.")
+        self.assertEqual(got["kept"], "kept text")
+
     def test_cancel_forgets_what_a_refused_answer_said(self):
         lists = {"questions": {"Q-1": {"status": "answered", "title": "which", "version": 2, "asked_at": NOW,
                                        "options": [{"label": "one"}, {"label": "two"}],

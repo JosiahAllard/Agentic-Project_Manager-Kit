@@ -560,7 +560,8 @@ button.danger{color:var(--warn)}
   // The page's lists from one snapshot. gone is {view: reason} for a view the server could not give at all;
   // partial is {view: [text]} for a repository whose part of a view failed while the rest is shown; stale is
   // {view: [{repo, reason, since}]} for a repository whose items are those of an earlier read, the last one
-  // having failed (reason is the server's own phrase for the failure, since the time of the read shown).
+  // having failed (reason is the server's own phrase for the failure, since the time the hub server last
+  // fetched that repository, which is not the time of the read shown).
   function hubState(snap){
     const s = snap && typeof snap === "object" ? snap : {};
     const obj = v => v && typeof v === "object" && !Array.isArray(v) ? v : {};
@@ -664,6 +665,9 @@ button.danger{color:var(--warn)}
     ed.gone = true; ed.node.id = "lost-" + ed.node.id;   // the item may still have a card of its own (a sent item)
     ed.note.textContent = LOST; ed.note.hidden = false; ed.theirs.replaceChildren(); ed.theirs.hidden = true;
     ed.acts.replaceChildren(el("button", {class:"link", type:"button", text:"Dismiss", onclick: () => { map.delete(id); render(); }}));
+    // A lost to-do's tick box: a new one with no id (a to-do still on the page may carry that id) that says why it is off.
+    const box = ed.node.querySelector("input.chk");
+    if (box) { box.parentNode.insertBefore(el("input", {type:"checkbox", class:"chk", checked: box.checked, disabled: true, "aria-label":"This to-do is gone"}), box); box.remove(); }
   }
   const lostCards = map => [...map.values()].filter(ed => ed.gone).map(ed => ed.node);
   // What to say when a Save was refused. A 409 means the item changed meanwhile: the lists are read again,
@@ -671,9 +675,12 @@ button.danger{color:var(--warn)}
   // `theirs(cur)` gives what the server holds now as nodes, shown under the fields.
   async function refused(err, ed, find, theirs){
     if (err.status !== 409) return "Not saved: " + why(err) + ". Your text is kept.";
-    await refresh().catch(() => {});
+    let unread = false;
+    await refresh().catch(() => { unread = true; });
     const cur = find();
-    if (ed.gone || !cur) return "Not saved: this item is no longer on the hub server. Your text is kept.";   // a lost card says it in its notice
+    if (ed.gone || (!cur && !unread)) return "Not saved: this item is no longer on the hub server. Your text is kept.";   // a lost card says it in its notice
+    // The lists could not be read again, so what the page holds is from before the change: it is neither shown as the server's nor saved on.
+    if (unread) return "Not saved: this item changed on the hub server and could not be read again. Your text is kept; press Save again.";
     ed.version = cur.version;
     ed.theirs.replaceChildren(el("div", {class:"ans"}, el("b", {text: "The hub server now holds:"}), theirs(cur))); ed.theirs.hidden = false;
     return "Not saved: this item changed on the hub server while you were editing. Your text is kept; press Save again to put it in place of what the server holds now.";
@@ -743,7 +750,10 @@ button.danger{color:var(--warn)}
     const open = state.todos.filter(t => t.status !== "done"), done = state.todos.filter(t => t.status === "done");
     $("#n-topen").textContent = open.length; $("#n-tdone").textContent = done.length;
     document.querySelectorAll("#ttabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.tf === state.tfilter)));
-    let rows = (state.tfilter === "done" ? done : open).filter(inR);
+    // A to-do with an open edit stays in the list whatever the tab or the repository filter, so what was
+    // typed in it is never out of sight without a word (it may be ticked done elsewhere meanwhile).
+    const editing = t => { const ed = t.from === "you" ? state.todoEdit.get(t.id) : null; return !!ed && !ed.gone; };
+    let rows = state.todos.filter(t => editing(t) || ((t.status === "done") === (state.tfilter === "done") && inR(t)));
     rows.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || (state.tfilter === "done" ? String(b.done_at||"").localeCompare(String(a.done_at||"")) : String(a.added_at||"").localeCompare(String(b.added_at||""))));
     // The card of an edit whose to-do is gone stays at the top of both tabs: its to-do has no tab any more.
     const lost = lostCards(state.todoEdit);
