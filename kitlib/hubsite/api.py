@@ -49,8 +49,8 @@ of these methods, each one optional. A missing one answers `unavailable` on its 
 so does one that raises, with a short reason (a HubError's code, else the exception's class
 name; never a message or a path). GET snapshot and GET health never fail for a view: the part
 is null and `unavailable` maps its name to that same reason:
-  backlog(repo='', state='', fresh=False)   [{repo, tip, fetched_at, items}]
-  completed(repo='', days=None)             [{repo, tip, fetched_at, items}]
+  backlog(repo='', state='', fresh=False)   [{repo, fetched_at, items}]
+  completed(repo='', days=None)             [{repo, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
   health()                                  a dict merged into GET health (git, backlog, ...)
 

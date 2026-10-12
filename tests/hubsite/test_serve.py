@@ -602,7 +602,7 @@ class ViewsCase(ServeCase):
         repos = r.json()['repos']
         self.assertEqual([e['repo'] for e in repos], ['Alpha', 'beta'])
         self.assertEqual(repos[0], {
-            'repo': 'Alpha', 'tip': None, 'fetched_at': '2026-01-10T11:00:00+00:00',
+            'repo': 'Alpha', 'fetched_at': '2026-01-10T11:00:00+00:00',
             'items': ANSWER['repos'][0]['open'], 'error': None, 'stale': False,
             'fetch_error': None})
         self.assertEqual((repos[1]['error'], repos[1]['stale'], repos[1]['items']),

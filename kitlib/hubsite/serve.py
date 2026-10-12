@@ -106,8 +106,8 @@ the Api answers a missing one `unavailable` by itself. What a view says never ho
 git's words or an exception's text: the backlog views carry kitlib.hubsite.backlog's fixed
 phrases, and the reasons of the derived views are replaced by fixed phrases here.
   backlog(repo, state, fresh), completed(repo, days)
-      [{repo, tip, fetched_at, items, error, stale, fetch_error}]; completed adds `days`.
-      `tip` is always null (backlog.Views does not give the commit it read). `days` narrows the
+      [{repo, fetched_at, items, error, stale, fetch_error}]; completed adds `days`. No entry
+      names the commit it was read at (backlog.Views does not give it). `days` narrows the
       window backlog.Views was built with and cannot widen it.
   notices() repos() usage() agents()      kitlib.hubsite.derived's answers
   health()    {git, backlog, backlog_at, backlog_error, backlog_timer}. `git` is GitSync.status()
@@ -299,7 +299,7 @@ def _named(entries, repo):
 
 
 def _entry(e, items):
-    return {'repo': e.get('repo'), 'tip': None, 'fetched_at': e.get('fetched'), 'items': items,
+    return {'repo': e.get('repo'), 'fetched_at': e.get('fetched'), 'items': items,
             'error': e.get('error'), 'stale': bool(e.get('stale')),
             'fetch_error': e.get('fetch_error')}
 
