@@ -66,8 +66,9 @@ def console_python(exe=None):
 def exit_code(code):
     """A child's exit code as subprocess gives it on Windows (0 to 0xFFFFFFFF) as the int that,
     handed to sys.exit, ends this process with the same 32 bits: unchanged up to 0x7FFFFFFF, and
-    above it (a crash such as 0xC0000005) the negative int with those bits. sys.exit does not take
-    the larger int as it is: the process then ends with another code."""
+    above it (a crash such as 0xC0000005) the negative int with those bits. That int fits a C long
+    on Windows, so no interpreter has to convert one that does not; Python 3.14 ends with the same
+    bits for either form (tests/proc/test_no_window.py CarrierTest measures the negative one)."""
     code &= 0xFFFFFFFF
     return code - 0x100000000 if code > 0x7FFFFFFF else code
 

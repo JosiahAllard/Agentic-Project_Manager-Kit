@@ -281,7 +281,8 @@ class CarrierTest(_Folder):
 
     def test_an_exit_code_above_the_signed_range_comes_back_whole(self):
         """A program that ends as a crash does (0xC0000005) is seen as that by whoever started the
-        carrier; the program here ends itself with ExitProcess, the code as it is."""
+        carrier; the program here ends itself with ExitProcess, the code as it is. A pin: Python
+        3.14 passes the unconverted code through sys.exit too, so this held before exit_code."""
         ender = self.write("ender.py", "\n".join([
             "import ctypes, sys",
             "ctypes.WinDLL('kernel32').ExitProcess(ctypes.c_uint(int(sys.argv[1])))"]))
