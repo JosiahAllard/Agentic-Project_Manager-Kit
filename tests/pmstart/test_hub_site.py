@@ -17,7 +17,7 @@ NOW = datetime.datetime(2026, 10, 6, 9, 0)
 FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"})
 SET = settings.settings({"port": 4321})
-TOKEN = "SECRET-TOKEN-VALUE-" + "x" * auth.MIN_TOKEN
+TOKEN = "secret_token_value_" + "x" * auth.MIN_TOKEN
 
 
 def setUpModule():
