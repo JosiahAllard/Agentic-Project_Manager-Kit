@@ -33,6 +33,7 @@ import os
 import unittest
 
 from kitlib import stubs
+from tests import gitfixture
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SKIP_DIRS = ('tests', '.git', '.claude', '__pycache__', 'node_modules')
@@ -319,6 +320,64 @@ class Scanner(unittest.TestCase):
         self.assertIn('kitlib/proc/job.py', files)
         self.assertNotIn('githooks/pre-commit', files)              # a shell script
         self.assertEqual([f for f in files if f.startswith('tests/')], [])
+
+
+BARE = 'import subprocess\nsubprocess.run(["x"])\n'
+
+
+class NestedTrees(unittest.TestCase):
+    """What is read is the checkout's own files and no other tree that sits inside its folder.
+
+    The main checkout holds other sessions' worktrees, each a whole copy of some older kit, under
+    folders this file cannot list ahead of time. A throwaway repository stands in for it here."""
+
+    def setUp(self):
+        self.repo = gitfixture.TempRepo()
+        self.addCleanup(self.repo.cleanup)
+        r = self.repo
+        r.write('kit/kept.py', BARE)
+        r.write('tests/test_kept.py', BARE)
+        r.write('.gitignore', 'scratch/\n')
+        r.commit('a start', 'kit/kept.py', 'tests/test_kept.py', '.gitignore')
+
+    def nest(self):
+        """A linked worktree and a repository of its own, both inside the checkout's folder and
+        both holding a start with no creation flags."""
+        r = self.repo
+        r.git('worktree', 'add', '-q', r.path('.other', 'worktrees', 'companion'), '-b', 'kit/companion')
+        inner = r.path('vendor', 'inner')
+        os.makedirs(inner)
+        r.git('init', '-q', '-b', 'main', cwd=inner)
+        r.write('tool.py', BARE, root=inner)
+        r.git('add', '--', 'tool.py', cwd=inner)
+        r.git('-c', 'user.name=%s' % gitfixture.NAME, '-c', 'user.email=%s' % gitfixture.EMAIL,
+              'commit', '-q', '-m', 'inner', cwd=inner)
+        self.assertTrue(os.path.isfile(r.path('.other', 'worktrees', 'companion', 'kit', 'kept.py')))
+        self.assertTrue(os.path.isfile(r.path('vendor', 'inner', 'tool.py')))
+
+    def test_a_nested_worktree_and_a_nested_repository_are_not_read(self):
+        self.nest()
+        self.assertEqual(python_files(self.repo.root), ['kit/kept.py'])
+        self.assertEqual([f[:3] for f in scan_tree(self.repo.root)],
+                         [('kit/kept.py', '<module>', 'subprocess.run')])
+
+    def test_a_new_file_not_yet_added_is_read(self):
+        """A start in a file nobody has added yet is found before its first commit."""
+        self.repo.write('kit/new.py', BARE)
+        self.assertEqual(python_files(self.repo.root), ['kit/kept.py', 'kit/new.py'])
+        self.assertEqual([f[:3] for f in scan_tree(self.repo.root)],
+                         [('kit/kept.py', '<module>', 'subprocess.run'),
+                          ('kit/new.py', '<module>', 'subprocess.run')])
+
+    def test_an_ignored_file_is_not_read(self):
+        """What git ignores cannot be committed: it is no part of the kit."""
+        self.repo.write('scratch/try.py', BARE)
+        self.assertEqual(python_files(self.repo.root), ['kit/kept.py'])
+
+    def test_a_tracked_file_gone_from_the_folder_is_not_read(self):
+        os.remove(self.repo.path('kit', 'kept.py'))
+        self.assertEqual(python_files(self.repo.root), [])
+        self.assertEqual(scan_tree(self.repo.root), [])
 
 
 class Sites(unittest.TestCase):
