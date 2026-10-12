@@ -119,6 +119,7 @@ class UsageHelpers(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
 
+    # Guard (green before it was written): the fallback itself.
     def test_without_the_kit_the_home_is_expanduser(self):
         home = thome.temp_home(self)
         with mock.patch.object(kuser, "home_dir", side_effect=AssertionError("the kit was asked")):
@@ -203,6 +204,8 @@ class AgentCosts(unittest.TestCase):
             module.main([root, "2026-09-18"])
         return out.getvalue().split(" | ")[0]
 
+    # Guard (green before it was written): on this Python expanduser leaves `~name` as written
+    # too, so the old print gave the same text.
     def test_the_root_printed_is_the_root_read(self):
         home = thome.temp_home(self)
         for module in (AC, CP):
