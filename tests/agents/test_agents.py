@@ -26,42 +26,63 @@ def frontmatter(text):
 
 
 def strict_frontmatter(text):
-    """Parse the frontmatter the way a YAML loader would accept it, for the flat `key: value` shape
-    the agent files use. Returns (dict, problems). An unquoted scalar holding ': ' (or ' #') is a
-    YAML error, and a quoted one must close its quote at the end of the line."""
+    """Parse the frontmatter the way a YAML loader would accept it, for the shape the agent files
+    use: flat `key: value` lines, plus one map, written as a key with no value of its own followed
+    by `key: value` lines indented two spaces (`experimental:` over `cacheTtl: 1h`). Returns
+    (dict, problems); a map's value is a dict. An unquoted scalar holding ': ' (or ' #') is a YAML
+    error, and a quoted one must close its quote at the end of the line. Any other indent (a tab,
+    four spaces, a line under a key that has a value, a map inside a map) is a problem: the files
+    do not use it, so this parser does not model it. So is a key with nothing after its colon and
+    no map under it."""
     m = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", text, re.S)
     if not m:
         return None, ["no frontmatter block"]
-    out, problems = {}, []
+    top, problems, parent, opened = {}, [], None, []
     for line in m.group(1).splitlines():
         if not line.strip():
             continue
-        km = re.match(r"([A-Za-z][\w-]*):(?: +(.*))?$", line)
+        km = re.match(r"(  )?([A-Za-z][\w-]*):(?: +(.*))?$", line)
         if not km:
-            problems.append("not a flat 'key: value' line: %r" % line[:60])
+            problems.append("not a 'key: value' line, flat or one map level down: %r" % line[:60])
             continue
-        key, val = km.group(1), (km.group(2) or "").strip()
+        key, val = km.group(2), (km.group(3) or "").strip()
+        if km.group(1):                      # a line of the map opened by the key above
+            if parent is None:
+                problems.append("indented line under no empty-valued key: %r" % line[:60])
+                continue
+            if not isinstance(top[parent], dict):
+                top[parent] = {}
+            out, label = top[parent], "%s.%s" % (parent, key)
+            if not val:
+                problems.append("%s: no value (a map inside a map is not modelled)" % label)
+        else:
+            out, label, parent = top, key, (None if val else key)
         if key in out:
-            problems.append("duplicate key %s" % key)
+            problems.append("duplicate key %s" % label)
         if val[:1] in ("'", '"'):
             q = val[0]
             body = val[1:-1]
             if len(val) < 2 or val[-1] != q:
-                problems.append("%s: quote not closed at end of line" % key)
+                problems.append("%s: quote not closed at end of line" % label)
             elif q == "'" and re.search(r"(?<!')'(?!')", body):
-                problems.append("%s: lone ' inside single-quoted scalar" % key)
+                problems.append("%s: lone ' inside single-quoted scalar" % label)
             elif q == '"' and re.search(r'(?<!\\)"', body):
-                problems.append('%s: unescaped " inside double-quoted scalar' % key)
+                problems.append('%s: unescaped " inside double-quoted scalar' % label)
             val = body
-        else:
+        elif val:
             if ": " in val or val.endswith(":"):
-                problems.append("%s: unquoted scalar contains ': '" % key)
+                problems.append("%s: unquoted scalar contains ': '" % label)
             if " #" in val:
-                problems.append("%s: unquoted scalar contains ' #'" % key)
+                problems.append("%s: unquoted scalar contains ' #'" % label)
             if val[:1] in "[]{}&*!|>%@`,":
-                problems.append("%s: unquoted scalar starts with %r" % (key, val[:1]))
+                problems.append("%s: unquoted scalar starts with %r" % (label, val[:1]))
+        elif out is top:
+            opened.append(key)
         out[key] = val
-    return out, problems
+    # a key with nothing after the colon is a problem, as before, unless it opened a map
+    problems.extend("%s: no value and no map under it" % k for k in opened
+                    if not isinstance(top[k], dict))
+    return top, problems
 
 
 class AgentFilesTest(unittest.TestCase):
@@ -79,6 +100,42 @@ class AgentFilesTest(unittest.TestCase):
         self.assertTrue(problems)
         _, problems = strict_frontmatter('---\nname: x\ndescription: "go (a): those go to y."\n---\nbody\n')
         self.assertEqual(problems, [])
+
+    def test_strict_parser_takes_one_map_and_refuses_every_other_indent(self):
+        def parse(*lines):
+            return strict_frontmatter("---\nname: x\n%s\n---\nbody\n" % "\n".join(lines))
+        fm, problems = parse("experimental:", "  cacheTtl: 1h", "  other: \"a: b\"", "model: opus")
+        self.assertEqual(problems, [])
+        self.assertEqual(fm, {"name": "x", "experimental": {"cacheTtl": "1h", "other": "a: b"},
+                              "model": "opus"})
+        for bad in (("model: opus", "  cacheTtl: 1h"),            # under a key that has a value
+                    ("experimental:", "\tcacheTtl: 1h"),          # a tab
+                    ("experimental:", "    cacheTtl: 1h"),        # four spaces
+                    ("experimental:", " cacheTtl: 1h"),           # one space
+                    ("experimental:", "  deeper:", "  x: 1"),     # a map inside a map
+                    ("experimental:", "  cacheTtl: 1h: 2"),       # ': ' in a plain scalar, one level down
+                    ("experimental:", "  cacheTtl: 1h", "  cacheTtl: 5m"),
+                    ("experimental: {cacheTtl: 1h}",),            # a flow map: not the shape in use
+                    ("experimental:",),                           # nothing after the colon, no map
+                    ("experimental:", "model: opus"),
+                    ("  cacheTtl: 1h",)):                         # right under `name: x`
+            with self.subTest(lines=bad):
+                self.assertTrue(parse(*bad)[1], bad)
+
+    def test_only_opus_worker_asks_for_the_one_hour_prompt_cache(self):
+        """The one-hour cache lifetime is one agent's setting (docs/ROSTER.md, "The table"); the
+        client reads `cacheTtl` only inside the `experimental` map of a subagent file."""
+        for p in sorted(AGENTS.glob("*.md")):
+            with self.subTest(agent=p.name):
+                text = p.read_text(encoding="utf-8")
+                fm, _ = strict_frontmatter(text)
+                head = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", text, re.S).group(1)
+                if p.stem == "opus-worker":
+                    self.assertEqual(fm.get("experimental"), {"cacheTtl": "1h"})
+                    self.assertEqual(head.count("cacheTtl"), 1)
+                else:
+                    self.assertNotIn("experimental", fm)
+                    self.assertNotIn("cacheTtl", head)
 
     def test_set_is_complete(self):
         self.assertEqual({p.stem for p in AGENTS.glob("*.md")}, EXPECTED)

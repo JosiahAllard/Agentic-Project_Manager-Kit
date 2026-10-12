@@ -110,6 +110,24 @@ class TempCopyTest(unittest.TestCase):
         want = text.replace('effort: medium' + chr(10), '', 1)
         self.assertEqual(read(path).decode('utf-8'), want)
 
+    def test_write_leaves_a_frontmatter_map_alone(self):
+        # opus-worker.md carries a map (`experimental:` over an indented `cacheTtl: 1h`): the
+        # indented line is no key of its own to check, and a rewrite of effort: must not move it.
+        path = os.path.join(self.dir, 'opus-worker.md')
+        old = read(path)
+        nl = b'\r\n' if b'\r\n' in old else b'\n'
+        block = nl + b'experimental:' + nl + b'  cacheTtl: 1h' + nl + b'---' + nl
+        self.assertIn(b'effort: medium' + block, old)
+        self.assertEqual(roster.read_frontmatter(old).get('experimental'), '')
+        self.assertNotIn('cacheTtl', roster.read_frontmatter(old))
+        self.edit_row('opus-worker', '| opus | medium |', '| opus | high |')
+        self.assertEqual(roster.write(self.dir), ['opus-worker'])
+        self.assertEqual(read(path), old.replace(b'effort: medium', b'effort: high', 1))
+        self.edit_row('opus-worker', '| opus | high |', '| opus | - |')
+        self.assertEqual(roster.write(self.dir), ['opus-worker'])
+        self.assertEqual(read(path), old.replace(nl + b'effort: medium', b'', 1))
+        self.assertEqual(roster.check(self.dir), [])
+
     def test_write_is_a_no_op_when_agreeing(self):
         self.assertEqual(roster.write(self.dir), [])
 
