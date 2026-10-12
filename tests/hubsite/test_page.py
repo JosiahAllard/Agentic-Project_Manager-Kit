@@ -6,6 +6,7 @@ the new pure functions (the snapshot's shape, the Parked groups, the PM line, th
 tested the same way. What node cannot show without a browser is checked on the file's text: one
 transport, no artifact-store call, no HTML sink, no outside resource, and only the decided routes.
 """
+import datetime
 import json
 import os
 import re
@@ -15,7 +16,7 @@ import unittest
 
 from kitlib.hubsite import httpd, serve
 from kitlib.hubsite.api import BASE
-from tests.hubsite import httpfix
+from tests.hubsite import httpfix, pagedom
 from tests.hubsite.httpfix import get, post
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -238,6 +239,294 @@ class StateTest(unittest.TestCase):
         self.assertEqual(js("hubRetryMs(1, undefined)", None), 2000)
 
 
+    def test_a_repository_showing_an_earlier_read_is_named_as_stale(self):
+        got = js("hubState(items)", snapshot(views={"backlog": [
+            {"repo": "alpha", "fetched_at": NOW, "items": [{"id": "B-1", "t": "one", "s": "open"}],
+             "error": None, "stale": True, "fetch_error": "git fetch failed"},
+            {"repo": "beta", "fetched_at": NOW, "items": [], "error": None, "stale": False, "fetch_error": None}]}))
+        self.assertEqual(got["stale"], {"backlog": [{"repo": "alpha", "reason": "git fetch failed", "since": NOW}]})
+        self.assertEqual(got["partial"], {})
+        self.assertEqual([b["id"] for b in got["backlog"]], ["alpha:B-1"])
+
+
+def mark(name):
+    """A server value that would be markup, and would run, if the page ever read it as HTML."""
+    return '<img src=x onerror=alert(1)><script>alert("%s")</script>' % name
+
+
+def dom(body, snap, hash=""):
+    return pagedom.run(NODE, page(), body, snap, hash)
+
+
+def conflict(what):
+    return {"status": 409, "body": {"ok": False, "error": {"code": "conflict", "message": what, "field": ""}}}
+
+
+LISTS = {
+    "to_pm": {"P-1": {"status": "queued", "kind": "question", "text": "first", "version": 1, "created_at": NOW},
+              "P-2": {"status": "queued", "kind": "fyi", "text": "second", "version": 1, "created_at": NOW}},
+    "todos": {"T-1": {"status": "open", "title": "mine", "detail": "d", "from": "you", "version": 1, "added_at": NOW},
+              "T-2": {"status": "open", "title": "theirs", "from": "pm", "version": 1, "added_at": NOW}},
+    "questions": {"Q-1": {"status": "open", "title": "which", "context": "as asked", "version": 1, "asked_at": NOW,
+                          "options": [{"label": "one"}, {"label": "two"}], "recommended": 0}},
+}
+BACKLOG = [{"repo": "alpha", "fetched_at": NOW, "error": None, "stale": False, "fetch_error": None,
+            "items": [{"id": "B-1", "t": "one", "p": 1, "s": "open"}]}]
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class DomTest(unittest.TestCase):
+    """The page's script run against a stand-in DOM (tests/hubsite/pagedom.py): what it draws and sends."""
+
+    def test_server_text_with_markup_is_drawn_as_text(self):
+        day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        names = ("q-title", "q-context", "q-from", "q-label", "q-description", "q-ref", "i-title", "i-text", "i-asked",
+                 "p-text", "t-title", "t-detail", "t-command", "s-title", "s-story", "s-note", "b-title", "b-error",
+                 "c-title", "c-stale", "k-branch", "gone", "account", "repo")
+        m = {n: mark(n) for n in names}
+        snap = snapshot(
+            unavailable={"agents": m["gone"]},
+            collections={
+                "questions": {"Q-1": {"status": "open", "title": m["q-title"], "context": m["q-context"], "from": m["q-from"],
+                                      "options": [{"label": m["q-label"], "description": m["q-description"]}],
+                                      "refs": [m["q-ref"]], "version": 1}},
+                "inbox": {"I-1": {"title": m["i-title"], "text": m["i-text"], "asked": m["i-asked"], "read": False, "at": day}},
+                "to_pm": {"P-1": {"status": "queued", "text": m["p-text"], "version": 1}},
+                "todos": {"T-1": {"status": "open", "title": m["t-title"], "detail": m["t-detail"], "from": "pm",
+                                  "commands": [m["t-command"]]}},
+                "stories": {"S-1": {"status": "review", "title": m["s-title"], "story": m["s-story"], "review_note": m["s-note"]}}},
+            views={
+                "repos": [{"name": m["repo"], "aliases": []}],
+                "backlog": [{"repo": "alpha", "fetched_at": day, "items": [
+                    {"id": "B-1", "t": m["b-title"], "p": 1, "s": "open"},
+                    {"id": "B-2", "t": "parked one", "p": 2, "s": "parked", "parked_at": day, "branch": m["k-branch"]}]},
+                    {"repo": "beta", "items": [], "error": m["b-error"]}],
+                "completed": [{"repo": "alpha", "fetched_at": day, "days": 30, "stale": True, "fetch_error": m["c-stale"],
+                               "items": [{"id": "B-0", "t": m["c-title"], "d": day}]}],
+                "usage": {"available": True, "as_of": day, "accounts": {m["account"]: {"five": 12, "week": 95}}}})
+        got = dom("""
+            await start();
+            let shown = text(body);
+            const see = async sel => { await click($(sel)); shown += "\\n" + text(body); };
+            await see("#qtabs [data-qt=inbox]");
+            for (const s of ["topm", "todo", "parked", "info"]) await see("#sections [data-s=" + s + "]");
+            await see("#ftabs [data-nf=agents]");
+            await see("#sections [data-s=backlog]");
+            for (const f of ["current", "done"]) await see("#stabs [data-sf=" + f + "]");
+            const risky = ["href", "src", "srcdoc", "srcset", "action", "formaction", "style"];
+            const attrs = all().flatMap(e => Object.keys(e.attrs).filter(k => k.startsWith("on") || risky.includes(k)).map(k => e.tag + " " + k));
+            return { shown, tags: [...new Set(created)], sinks, attrs, err: text($("#loaderr")) };
+        """, snap)
+        for name in names:
+            self.assertIn(m[name], got["shown"], name)
+        self.assertEqual(got["sinks"], [])
+        self.assertEqual(got["attrs"], [])
+        self.assertEqual(got["err"], "")
+        made = set(got["tags"])
+        self.assertIn("article", made)
+        self.assertEqual(made & {"img", "script", "a", "iframe", "object", "embed", "link", "style", "base", "meta", "svg", "form"},
+                         set())
+
+    def test_an_unpaired_browser_is_told_to_pair_again_and_stops_reading(self):
+        for status in (401, 403):
+            for where in ("snapshot", "wait"):
+                got = dom("""
+                    const no = { status: %d, body: { ok: false, error: { code: "refused", message: "no session", field: "" } } };
+                    if (%s) server.route = c => c.path === "/snapshot" ? no : undefined;
+                    await start();
+                    if (!%s) await answerWait(no.status, no.body);
+                    const first = { err: text($("#loaderr")), hidden: $("#loaderr").hidden, calls: calls.length, sleeps: sleeps() };
+                    await fireTimers(); await fireTimers();
+                    return { first, calls: calls.length, waiting: waits.length, list: text($("#list")) };
+                """ % (status, json.dumps(where == "snapshot"), json.dumps(where == "snapshot")),
+                    snapshot(collections={"todos": {"T-1": {"status": "open", "title": "kept on the page", "from": "pm"}}}),
+                    hash="#todo")
+                with self.subTest(status=status, where=where):
+                    self.assertIn("no longer paired", got["first"]["err"])
+                    self.assertIn("`hub open` on the PC", got["first"]["err"])
+                    self.assertNotIn("Trying again", got["first"]["err"])
+                    self.assertFalse(got["first"]["hidden"])
+                    self.assertEqual(got["first"]["sleeps"], [])                 # no later try is waiting
+                    self.assertEqual(got["calls"], got["first"]["calls"])        # and none is made
+                    self.assertEqual(got["waiting"], 0)
+                    if where == "wait":
+                        self.assertIn("kept on the page", got["list"])
+                        self.assertIn("may be out of date", got["first"]["err"])
+
+    def test_a_busy_server_is_given_its_wait_and_only_no_answer_reads_cannot_reach(self):
+        got = dom("""
+            let mode = "busy";
+            const busy = { status: 429, body: { ok: false, error: { code: "busy", message: "too many requests", field: "" } }, headers: { "Retry-After": "7" } };
+            server.route = c => c.path !== "/snapshot" ? undefined : mode === "busy" ? busy : mode === "down" ? new Error("connection refused") : undefined;
+            const now = () => ({ err: text($("#loaderr")), hidden: $("#loaderr").hidden, sleeps: sleeps(), calls: calls.length });
+            await start();
+            const a = now();
+            mode = "down"; await fireTimers();
+            const b = now();
+            mode = "ok"; await fireTimers();
+            const ok = now();
+            // A long-poll the server refuses, then a server that answers again: the notice goes without a change to wait for.
+            await answerWait(500, { ok: false, error: { code: "internal", message: "store unreadable", field: "" } });
+            const refused = now();
+            await fireTimers();
+            return { busy: a, down: b, ok, refused, back: now(), list: text($("#list")) };
+        """, snapshot(collections={"todos": {"T-1": {"status": "open", "title": "read at last", "from": "pm"}}}), hash="#todo")
+        self.assertIn("busy", got["busy"]["err"])
+        self.assertIn("7 s", got["busy"]["err"])
+        self.assertNotIn("Cannot reach", got["busy"]["err"])
+        self.assertEqual(got["busy"]["sleeps"], [7000])
+        self.assertEqual(got["busy"]["calls"], 1)
+        self.assertTrue(got["down"]["err"].startswith("Cannot reach the hub server"), got["down"]["err"])
+        self.assertIn("Trying again", got["down"]["err"])
+        self.assertEqual(got["down"]["sleeps"], [4000])                          # the second failure in a row
+        self.assertTrue(got["ok"]["hidden"])
+        self.assertEqual(got["ok"]["err"], "")
+        self.assertIn("read at last", got["list"])
+        self.assertIn("refused the read (store unreadable)", got["refused"]["err"])
+        self.assertIn("may be out of date", got["refused"]["err"])
+        self.assertNotIn("Cannot reach", got["refused"]["err"])
+        self.assertEqual((got["back"]["err"], got["back"]["hidden"]), ("", True))
+
+    def test_an_open_edit_keeps_what_was_typed_through_a_refresh(self):
+        got = dom("""
+            await start();
+            await click(button($("#pm-P-1"), "Edit"));
+            const ta = $("#pm-P-1 textarea");
+            await type(ta, "half written");
+            const pm = () => ({ kept: $("#pm-P-1 textarea") && $("#pm-P-1 textarea").value, p2: text($("#pm-P-2")),
+              focus: document.activeElement === ta && ta.isConnected, caret: ta.selectionStart });
+            // Another item changes while the field does not have the focus.
+            server.snap.collections.to_pm["P-2"].text = "changed by an agent"; server.snap.revision++;
+            await wake();
+            const other = pm();
+            // Only the time of a backlog read moves.
+            server.snap.views.backlog[0].fetched_at = "2026-10-07T12:05:00Z"; server.snap.revision++;
+            await wake();
+            const moved = pm();
+            // Another item changes while the owner is in the field.
+            ta.focus(); ta.setSelectionRange(4, 4);
+            server.snap.collections.to_pm["P-2"].text = "changed again"; server.snap.revision++;
+            await wake();
+            const focused = pm();
+            // The same for a to-do of the owner's own, and the edit is still there on coming back to its section.
+            await click($("#sections [data-s=todo]"));
+            await click(button($("#todo-T-1"), "Edit"));
+            await type($("#todo-T-1 input[type=text]"), "a new title, half");
+            server.snap.collections.todos["T-2"].title = "changed too"; server.snap.revision++;
+            await wake();
+            const todo = { kept: $("#todo-T-1 input[type=text]") && $("#todo-T-1 input[type=text]").value, t2: text($("#todo-T-2")) };
+            await click($("#sections [data-s=topm]"));
+            return { other, moved, focused, todo, back: pm().kept, err: text($("#loaderr")) };
+        """, snapshot(collections=LISTS, views={"backlog": BACKLOG}), hash="#topm")
+        self.assertEqual(got["err"], "")
+        self.assertEqual(got["other"]["kept"], "half written")
+        self.assertIn("changed by an agent", got["other"]["p2"])                 # the list was redrawn around the edit
+        self.assertEqual(got["moved"]["kept"], "half written")
+        self.assertEqual(got["focused"]["kept"], "half written")
+        self.assertIn("changed again", got["focused"]["p2"])
+        self.assertTrue(got["focused"]["focus"])
+        self.assertEqual(got["focused"]["caret"], 4)
+        self.assertEqual(got["todo"]["kept"], "a new title, half")
+        self.assertIn("changed too", got["todo"]["t2"])
+        self.assertEqual(got["back"], "half written")
+
+    def test_after_a_conflict_an_edit_takes_the_new_version(self):
+        for hash_, card, field, coll, path in (("#topm", "#pm-P-1", "textarea", "to_pm", "/to_pm/P-1/edit"),
+                                               ("#todo", "#todo-T-1", "input[type=text]", "todos", "/todos/T-1/edit")):
+            got = dom("""
+                const CARD = %s, FIELD = CARD + " " + %s, COLL = %s, ID = CARD.slice(-3), PATH = %s;
+                await start();
+                await click(button($(CARD), "Edit"));
+                await type($(FIELD), "my edit");
+                let n = 0;
+                server.route = c => {
+                  if (c.path !== PATH) return undefined;
+                  const d = server.snap.collections[COLL][ID]; server.snap.revision++;
+                  if (++n === 1) { d.version = 3; d.text = d.title = "theirs"; return %s; }
+                  d.version = 4; d.text = d.title = "my edit"; return { status: 200, body: { ok: true } };
+                };
+                await click(button($(CARD), "Save"));
+                const refused = { status: text($(CARD + " .status")), kept: $(FIELD) && $(FIELD).value };
+                await click(button($(CARD), "Save"));
+                return { refused, sent: calls.filter(c => c.path === PATH).map(c => c.body.if_version), open: !!$(FIELD), after: text($(CARD)) };
+            """ % (json.dumps(card), json.dumps(field), json.dumps(coll), json.dumps(path),
+                   json.dumps(conflict("%s is at version 3, not 1" % coll))),
+                snapshot(collections=LISTS), hash=hash_)
+            with self.subTest(card=card):
+                self.assertIn("changed on the hub server", got["refused"]["status"])
+                self.assertEqual(got["refused"]["kept"], "my edit")
+                self.assertEqual(got["sent"], [1, 3])
+                self.assertFalse(got["open"])
+                self.assertIn("my edit", got["after"])
+
+    def test_after_a_conflict_an_answer_takes_the_new_version(self):
+        got = dom("""
+            await start();
+            const pick = $("#q-Q-1-1"); pick.checked = true; await fire(pick, "change");
+            let n = 0;
+            server.route = c => {
+              if (c.path !== "/questions/Q-1/answer") return undefined;
+              const d = server.snap.collections.questions["Q-1"]; server.snap.revision++;
+              if (++n === 1) { d.version = 2; d.context = "asked again, differently"; return %s; }
+              d.version = 3; d.status = "answered"; d.answer = { choice: 1, label: "two", note: "" }; return { status: 200, body: { ok: true } };
+            };
+            await click(button($("#q-Q-1"), "Send answer"));
+            const refused = { card: text($("#q-Q-1")), picked: $("#q-Q-1-1").checked };
+            await click(button($("#q-Q-1"), "Send answer"));
+            await click($("#tabs [data-f=answered]"));
+            return { refused, sent: calls.filter(c => c.path === "/questions/Q-1/answer").map(c => [c.body.choice, c.body.if_version]), after: text($("#q-Q-1")) };
+        """ % json.dumps(conflict("questions/Q-1 is at version 2, not 1")), snapshot(collections=LISTS))
+        self.assertIn("changed on the hub server", got["refused"]["card"])
+        self.assertIn("asked again, differently", got["refused"]["card"])
+        self.assertTrue(got["refused"]["picked"])
+        self.assertEqual(got["sent"], [[1, 1], [1, 2]])
+        self.assertIn("Your answer: two", got["after"])
+
+    def test_one_card_that_cannot_be_drawn_does_not_take_the_page_with_it(self):
+        lists = {"questions": {"Q-1": {"status": "open", "title": "broken", "options": [None, {"label": "a"}], "version": 1},
+                               "Q-2": {"status": "open", "title": "whole", "options": [{"label": "b"}], "version": 1}},
+                 "todos": {"T-1": {"status": "open", "title": "a step", "from": "pm"}}}
+        got = dom("""
+            await start();
+            const q = { cards: $$("#list article").map(a => text(a)), err: text($("#loaderr")), hidden: $("#loaderr").hidden, n: text($("#n-qq")) };
+            await click($("#sections [data-s=todo]"));
+            return { q, todo: text($("#list")), sleeps: sleeps() };
+        """, snapshot(collections=lists))
+        self.assertEqual(len(got["q"]["cards"]), 2)
+        bad, good = got["q"]["cards"]
+        self.assertTrue(bad.startswith("Q-1"), bad)
+        self.assertIn("cannot be shown", bad)
+        self.assertIn("whole", good)
+        self.assertIn("b", good)
+        self.assertEqual((got["q"]["err"], got["q"]["hidden"], got["q"]["n"]), ("", True, "2"))
+        self.assertIn("a step", got["todo"])
+        self.assertEqual(got["sleeps"], [])                                      # nothing failed, so nothing is retried
+
+    def test_a_backlog_showing_an_earlier_read_says_so(self):
+        entry = lambda repo, **kw: dict({"repo": repo, "fetched_at": NOW, "error": None, "stale": False,      # noqa: E731
+                                         "fetch_error": None, "days": 30,
+                                         "items": [{"id": "B-1", "t": "item of " + repo, "p": 1, "s": "parked", "d": NOW}]}, **kw)
+        views = {"backlog": [entry("alpha", stale=True, fetch_error="git fetch failed"), entry("beta")],
+                 "completed": [entry("alpha"), entry("beta", stale=True, error="no answer from the remote")]}
+        got = dom("""
+            await start();
+            await click($("#stabs [data-sf=current]"));
+            const current = text($("#list"));
+            await click($("#stabs [data-sf=done]"));
+            const done = $$("#list .gone").map(text);
+            await click($("#sections [data-s=parked]"));
+            return { current, done, parked: $$("#list .gone").map(text) };
+        """, snapshot(views=views), hash="#backlog")
+        self.assertIn("Out of date: the alpha part of the backlog view could not be read again (git fetch failed).", got["current"])
+        self.assertIn("item of alpha", got["current"])                           # the last good items are still shown
+        self.assertNotIn("the beta part of the backlog", got["current"])
+        self.assertEqual(len(got["done"]), 1)
+        self.assertIn("Out of date: the beta part of the completed view could not be read again (no answer from the remote).",
+                      got["done"][0])
+        self.assertEqual(len(got["parked"]), 1)
+        self.assertIn("the alpha part of the backlog view", got["parked"][0])
+
+
 class PageTextTest(unittest.TestCase):
     def setUp(self):
         self.p = page()
@@ -262,6 +551,22 @@ class PageTextTest(unittest.TestCase):
                      "createContextualFragment", "eval(", "new Function", "javascript:"):
             self.assertNotIn(sink, self.p, sink)
         self.assertIn('if (k === "class") n.className = v; else if (k === "text") n.textContent = v;', self.script)
+
+    def test_no_attribute_that_loads_or_navigates_is_ever_set(self):
+        """The page builds no link, image or frame, so no server value can become an address the browser follows."""
+        keys = r"(?:href|src|srcset|srcdoc|action|formaction|poster|background|ping|xlink:href)"
+        self.assertEqual(re.findall(r'[{,\s]"?%s"?\s*:' % keys, self.script), [])           # an el() attribute
+        self.assertEqual(re.findall(r'setAttribute\(\s*"%s"' % keys, self.script), [])
+        self.assertEqual(re.findall(r"\.%s\s*=[^=]" % keys, self.script), [])                # a property set
+        self.assertEqual(re.findall(r"<[^>]*\s%s\s*=" % keys, self.markup), [])
+        self.assertNotIn("location.assign", self.script)
+        self.assertNotIn("location.replace", self.script)
+        self.assertNotIn("window.open", self.script)
+        # Every attribute name comes from the page's own code: el() takes the key its caller wrote, the rest name one.
+        names = re.findall(r"setAttribute\(([^,]*),", self.script)
+        self.assertEqual(sorted(set(names)), ['"aria-selected"', "k"])
+        self.assertEqual(names.count("k"), 1)
+        self.assertIn("else n.setAttribute(k, v === true ? \"\" : v);", self.script)
 
     def test_nothing_outside_the_page_is_loaded(self):
         self.assertIsNone(re.search(r"https?:", self.p))
