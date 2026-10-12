@@ -509,7 +509,8 @@ def book_slot(plan, say, ints, book_kw=None):
     """`(slot, None)`: the machine lock booked for the whole run (kitlib.lock.run.book, kind
     plan.lock, for `<repo>/redfirst-<base10>`), said as a `lock` line. Or `(None, exit code)`:
     nothing is booked and the reason is said - 2 for the lock's usage refusals (an unknown kind;
-    a run nested in one that holds fewer slots than the kind needs), the lock's own code for
+    a run nested in one that holds fewer slots than the kind needs; a kind with a gpu slot of its
+    own under a background run), the lock's own code for
     LOCK_CODES, 3 for anything else and for an interrupt. A `say` that raises on the `lock` line
     of a held slot raises on, with the slot released first (record ended 1, "error").
 
