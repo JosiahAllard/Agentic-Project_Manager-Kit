@@ -16,7 +16,7 @@ import threading
 import unittest
 from unittest import mock
 
-from kitlib.hubsite import auth, httpd, serve
+from kitlib.hubsite import auth, httpd, serve, tunnel
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.store import Store, StoreBusy
 from tests.hubsite import httpfix
@@ -609,6 +609,14 @@ class ClientCase(CliCase):
         self.assertEqual(lines[1], 'revision %d' % hub.store.revision)
         self.assertIn('store %s' % os.path.abspath(self.store_dir), lines)
         self.assertIn('git: ' + serve.SYNC_OFF, lines)
+
+    def test_status_says_in_one_line_why_the_tunnel_listener_is_off(self):
+        hub = self.server()             # no hub.access in the settings: the tunnel is off
+        self.assertEqual(len(hub.listeners), 1)
+        code, out, err = self.run_cli('status', '--port', str(hub.port))
+        self.assertEqual((code, err), (0, ''))
+        said = [line for line in out.splitlines() if line.startswith('tunnel')]
+        self.assertEqual(said, ['tunnel: off: ' + tunnel.UNSET])
 
     def test_status_with_tokens_that_are_not_the_servers_is_refused(self):
         hub = self.server(tokens=os.path.join(self.home, 'other-tokens'))

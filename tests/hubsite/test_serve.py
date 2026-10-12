@@ -18,10 +18,11 @@ import unittest
 from unittest import mock
 
 from kitlib.config.types import ConfigError
-from kitlib.hubsite import auth, backlog, gitsync, httpd, serve
+from kitlib.hubsite import auth, backlog, gitsync, httpd, serve, tunnel
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.api import BASE
 from kitlib.hubsite.store import Store, StoreBusy
+from tests.hubsite import access_keys as ak
 from tests.hubsite import httpfix
 from tests.hubsite import test_gitsync as gitcase       # its Case: a data work tree on the fake git
 from tests.hubsite.httpfix import TIMEOUT, bearer, get, post, send
@@ -1740,6 +1741,169 @@ class ClientCase(ServeCase):
         self.assertEqual(serve.status_lines({'revision': 1, 'git': None, 'backlog': [],
                                              'backlog_at': None}, NOW),
                          ['revision 1', 'git: no answer', 'backlog: not read yet'])
+
+
+class TunnelCase(ServeCase):
+    """The tunnel listener in the server's life: built beside the local one, started with it and
+    closed with it. What that listener lets in is tests.hubsite.test_tunnel's."""
+
+    def setUp(self):
+        ServeCase.setUp(self)
+        self.keyed = []         # the team names a key source was made for
+        self.tunnelled = self.settings._replace(
+            tunnel_port=0, access=hub_settings.Access(ak.TEAM, ak.AUD, (ak.EMAIL,)))
+
+    def keys(self, team):
+        self.keyed.append(team)
+        return {ak.KEY_A.kid: ak.jwk(ak.KEY_A)}
+
+    def build(self, settings=None, **src):
+        src.setdefault('access_keys', self.keys)
+        src.setdefault('access_now', lambda: ak.NOW)
+        return ServeCase.build(self, settings or self.tunnelled, **src)
+
+    def through(self, port, path):
+        """GET `path` on the tunnel port `port` as the tunnel program hands it on: the public
+        Host and a valid Access token."""
+        return send(port, 'GET', path, [(tunnel.HEADER, ak.token(ak.KEY_A))],
+                    host='hub.example.invalid')
+
+    def taken_port(self):
+        """A loopback port another program listens on."""
+        other = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.addCleanup(other.close)
+        other.bind((httpd.LOOPBACK, 0))
+        other.listen(1)
+        return other.getsockname()[1]
+
+    def test_a_server_with_no_access_settings_binds_no_second_port_and_says_nothing(self):
+        # the tunnel port is another program's: a server that tried to bind it would say so
+        hub = self.build(self.settings._replace(tunnel_port=self.taken_port()))
+        self.assertEqual((len(hub.listeners), hub.notes), (1, []))
+        self.assertEqual(hub.tunnel, 'off: ' + tunnel.UNSET)
+        self.assertEqual(self.keyed, [])
+        hub.start()
+        self.assertEqual(httpfix.http_threads(), ['hub-http-%d' % hub.port])
+        r = get(hub.port, HEALTH, self.owner)
+        self.assertEqual((r.status, r.json()['tunnel']), (200, 'off: ' + tunnel.UNSET))
+        self.assertIs(hub.close(), True)
+        self.assertEqual(self.lines, [('access', '127.0.0.1 GET %s 200 owner' % HEALTH)])
+
+    def test_a_taken_tunnel_port_is_a_note_and_the_local_listener_still_serves(self):
+        port = self.taken_port()
+        hub = self.build(self.tunnelled._replace(tunnel_port=port))
+        self.assertEqual(len(hub.listeners), 1)
+        self.assertEqual(len(hub.notes), 1, hub.notes)
+        self.assertTrue(hub.notes[0].startswith(
+            'the tunnel listener is off: cannot listen on 127.0.0.1:%d: ' % port), hub.notes[0])
+        self.assertEqual(hub.tunnel, 'off: ' + serve.TUNNEL_BIND)
+        hub.start()
+        # health says it in fixed words, to the agent as to the owner
+        for token in (self.owner, self.agent):
+            r = get(hub.port, HEALTH, token)
+            self.assertEqual((r.status, r.json()['tunnel']),
+                             (200, 'off: ' + serve.TUNNEL_BIND))
+        self.assertEqual(post(hub.port, BASE + '/todos', {'title': 't'}, self.owner).status, 200)
+        self.assertIs(hub.close(), True)
+        self.assertFalse(self.locked())
+        self.assertEqual(self.errors(), [])
+
+    def test_both_doors_are_closed_before_the_last_pass_and_no_socket_or_thread_is_left(self):
+        hub = self.build(sync=self.sync_factory())
+        self.assertEqual(len(hub.listeners), 2)
+        self.assertEqual(self.keyed, [ak.TEAM])
+        self.assertEqual(httpfix.http_threads(), [])        # built: nothing is started
+        self.assertIs(hub.start(), True)
+        local, tunnelled = hub.listeners
+        self.assertEqual(httpfix.http_threads(),
+                         sorted('hub-http-%d' % lis.port for lis in hub.listeners))
+        self.assertEqual(self.through(tunnelled.port, HEALTH).status, 200)
+        self.assertEqual(post(local.port, BASE + '/todos', {'title': 't'}, self.owner).status,
+                         200)
+        written = hub.store.revision
+        self.assertIs(hub.close(), True)
+        # the last pass ran with both doors closed and the store still this server's, whole
+        self.assertEqual(self.sync.last,
+                         {'locked': True, 'doors': [True, True], 'writes': written})
+        for lis in hub.listeners:
+            self.assertEqual(lis._server.socket.fileno(), -1, 'a listening socket was left open')
+        self.assertEqual(httpfix.http_threads(), [])
+        self.assertFalse(self.locked())
+        self.assertEqual(self.errors(), [])
+        # a second close does nothing more
+        self.assertIs(hub.close(), True)
+        self.assertEqual(self.calls, ['sync.start', 'sync.stop', 'sync.sync_once'])
+
+    def test_a_close_ends_a_long_wait_on_the_tunnel_port_and_leaves_no_thread(self):
+        hub = self.build()
+        hub.start()
+        tunnelled = hub.listeners[1]
+        got = []
+        path = '%s/wait?since=%d&timeout=%d' % (BASE, hub.store.revision, TIMEOUT)
+        client = threading.Thread(
+            target=lambda: got.append(self.through(tunnelled.port, path)),
+            name='test-waiter', daemon=True)
+        client.start()
+        self.addCleanup(client.join, TIMEOUT)
+        self.assertTrue(tunnelled.await_waits(1, TIMEOUT), 'the wait never arrived')
+        self.assertIs(hub.close(TIMEOUT), True)
+        client.join(TIMEOUT)
+        self.assertEqual(len(got), 1, 'the wait was never answered')
+        self.assertIn(got[0].status, (200, 503))
+        self.assertEqual(httpfix.http_threads(), [])
+        self.assertFalse(self.locked())
+        self.assertEqual(self.errors(), [])
+
+    def test_a_start_up_that_fails_after_the_tunnel_port_was_bound_releases_it(self):
+        made = []
+        real = tunnel.start
+
+        def start(*args, **kw):
+            made.append(real(*args, **kw))
+            return made[-1]
+
+        with mock.patch.object(tunnel, 'start', start), \
+                mock.patch.object(serve, 'Hub', side_effect=RuntimeError('no hub')):
+            with self.assertRaises(RuntimeError):
+                serve.build(self.tunnelled,
+                            serve.Sources(tokens=self.tokens, access_keys=self.keys),
+                            log=self.log)
+        self.assertEqual(len(made), 1)
+        self.assertEqual(made[0]._server.socket.fileno(), -1, 'the tunnel port was left bound')
+        self.assertFalse(self.locked())
+        self.assertEqual(httpfix.http_threads(), [])
+
+    def test_the_tunnels_owner_is_given_the_reason_of_a_failing_sync_without_credentials(self):
+        hub = self.build(sync=self.sync_factory())
+        self.sync.state = {'failed': 'push', 'detail': WHY}
+        hub.start()
+        r = self.through(hub.listeners[1].port, HEALTH)
+        self.assertEqual(r.status, 200, r.body)
+        git = r.json()['git']
+        self.assertEqual((git['failed'], git['detail']), ('push', serve.scrub(WHY)))
+        for word in CREDENTIALS:
+            self.assertNotIn(word, r.body.decode('utf-8'))
+
+    def test_status_lines_say_the_tunnel_after_the_backlog_and_before_what_is_unavailable(self):
+        health = {'revision': 3, 'git': {'running': False, 'off': serve.SYNC_OFF},
+                  'backlog': None, 'backlog_error': 'the list could not be read',
+                  'tunnel': 'on', 'unavailable': {'usage': 'KeyError'}}
+        self.assertEqual(serve.status_lines(health, NOW), [
+            'revision 3', 'git: ' + serve.SYNC_OFF, 'backlog: no source on this server',
+            'backlog: the list could not be read', 'tunnel: on',
+            'unavailable: usage (KeyError)'])
+        health['tunnel'] = 'off: ' + tunnel.NO_AUD
+        self.assertEqual(serve.status_lines(health, NOW)[4], 'tunnel: off: ' + tunnel.NO_AUD)
+        # what is printed never holds the user part of a URL, whatever a server answered
+        health['tunnel'] = 'off: https://someone:s3cret@hub.example.invalid'
+        self.assertEqual(serve.status_lines(health, NOW)[4],
+                         'tunnel: off: https://hub.example.invalid')
+        # a server that says nothing of a tunnel (an earlier one), or nothing usable: no line
+        for value in (None, '', 7, ['on'], {'on': True}):
+            health['tunnel'] = value
+            self.assertEqual(len(serve.status_lines(health, NOW)), 5, value)
+        del health['tunnel']
+        self.assertEqual(len(serve.status_lines(health, NOW)), 5)
 
 
 if __name__ == '__main__':
