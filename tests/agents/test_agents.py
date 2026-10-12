@@ -123,8 +123,8 @@ class AgentFilesTest(unittest.TestCase):
                 self.assertTrue(parse(*bad)[1], bad)
 
     def test_only_opus_worker_asks_for_the_one_hour_prompt_cache(self):
-        """The one-hour cache lifetime is one agent's setting (docs/ROSTER.md, "The table"); the
-        client reads `cacheTtl` only inside the `experimental` map of a subagent file."""
+        """The one-hour cache lifetime is one agent's setting (docs/ROSTER.md, "The one-hour prompt
+        cache"); the client reads `cacheTtl` only inside the `experimental` map of a subagent file."""
         for p in sorted(AGENTS.glob("*.md")):
             with self.subTest(agent=p.name):
                 text = p.read_text(encoding="utf-8")
