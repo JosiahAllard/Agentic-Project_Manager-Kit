@@ -5,11 +5,12 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib import hubmirror
 from kitlib.hubsite import migrate
 from kitlib.hubsite.migrate import Busy, Conflict, Kept, Left, MigrateError
-from kitlib.hubsite.store import LOCK_NAME, META_NAME, Store
+from kitlib.hubsite.store import LOCK_NAME, META_NAME, HubError, Store, StoreBusy
 from tests.hubsite import test_hub_cli as cli
 
 AT = '2026-01-02T03:04:05+00:00'
@@ -191,6 +192,14 @@ class ImportCase(Case):
         self.assertEqual(migrate.validate(self.root), r.findings)
         lines = migrate.report_lines(r)
         self.assertIn('VALIDATE 2 error(s), 1 warning(s)', lines)
+        # the one document the store's own check refuses to write again is said so, plainly
+        self.assertEqual([x for x in lines if 'the api will refuse' in x], [
+            'VALIDATE inbox/M-002: the api will refuse every update of this document until it is '
+            'fixed; fix its file by hand with the server stopped (no api route repairs it)'])
+        with Store.open(self.root) as s:
+            with self.assertRaises(HubError):
+                s.update('inbox', 'M-002', {'read': True})
+            s.update('questions', 'Q-003', {'title': 'a finding it already had does not block'})
         self.assertTrue(any(x.startswith('VALIDATE ERROR questions/Q-003 status') for x in lines))
 
     def test_the_next_id_the_store_gives_is_above_every_imported_one(self):
@@ -338,17 +347,29 @@ class NotImportedCase(Case):
         before = tree(self.mirror), tree(self.export)
         r = self.run_both()
         self.assertEqual(r.conflicts,
-                         [Conflict('questions/Q-002', [self.mirror, self.export], self.export)])
+                         [Conflict('questions/Q-002', [self.mirror, self.export], self.export,
+                                   False)])
         self.assertIsNone(self.stored('questions', 'Q-002'))
         self.assertFalse(r.complete)
         self.assertEqual(len(r.added), 14, 'every other document is imported')
         self.assertEqual((tree(self.mirror), tree(self.export)), before)
         lines = migrate.report_lines(r)
         self.assertIn('CONFLICT questions/Q-002: %s and %s hold different fields; imported from '
-                      'neither (the later by its time stamps: %s)'
+                      'neither (the later by its time stamps: %s). To resolve without editing a '
+                      'source: run again with the chosen source alone'
                       % (self.mirror, self.export, self.export), lines)
+        # the line's own advice: the chosen source alone imports its copy
+        alone = migrate.migrate(self.root, [self.export])
+        self.assertEqual((alone.added, alone.conflicts), (['questions/Q-002'], []))
+        self.assertEqual(self.stored('questions', 'Q-002')['status'], 'logged')
+
+    def test_a_conflict_resolved_at_a_source_is_imported_by_the_next_run(self):
+        write(os.path.join(self.export, 'questions', 'Q-002.json'),
+              {'id': 'Q-002', 'data': question(status='logged', asked_at=LATER)})
+        r = self.run_both()
+        self.assertFalse(r.complete)
         self.assertIn('NOT COMPLETE: 1 document not imported (CONFLICT and SKIPPED above); the '
-                      'sources are unchanged', lines)
+                      'sources are unchanged', migrate.report_lines(r))
         # resolved at a source, the next run imports it
         write(os.path.join(self.export, 'questions', 'Q-002.json'), MIRROR['questions']['Q-002'])
         again = self.run_both()
@@ -357,7 +378,8 @@ class NotImportedCase(Case):
     def test_a_conflict_with_no_time_to_tell_names_no_later_source(self):
         write(os.path.join(self.export, 'pages', 'guide.json'), {'title': 'Another guide'})
         r = self.run_both()
-        self.assertEqual(r.conflicts, [Conflict('pages/guide', [self.mirror, self.export], None)])
+        self.assertEqual(r.conflicts,
+                         [Conflict('pages/guide', [self.mirror, self.export], None, False)])
         self.assertTrue(any('the time stamps do not tell which is later' in x
                             for x in migrate.report_lines(r)))
 
@@ -396,8 +418,215 @@ class NotImportedCase(Case):
             migrate._create(path, 'other text\n')
         self.assertEqual(tree(self.root), text, 'the file is as it was and no temp file is left')
         r = self.run_both()
-        self.assertEqual(r.kept, [Kept('questions/Q-001', [self.mirror, self.export])])
+        self.assertEqual(r.kept, [])
+        self.assertEqual(r.conflicts,
+                         [Conflict('questions/Q-001', [self.mirror, self.export], None, True)])
         self.assertEqual(self.stored('questions', 'Q-001')['title'], 'the store was first')
+
+
+class StoreConflictCase(Case):
+    """A store document no server has written (no `version`) that a source differs from: one
+    source against another, so the run is not complete. The default layout is the case that
+    matters: the store folder is the mirror folder."""
+
+    def newer_in_the_export(self):
+        write(os.path.join(self.export, 'questions', 'Q-002.json'),
+              {'id': 'Q-002', 'data': question(status='logged', asked_at=LATER)})
+
+    def test_the_mirror_served_in_place_and_a_newer_copy_in_a_second_source_is_a_conflict(self):
+        self.newer_in_the_export()
+        before = docs_of(self.mirror), tree(self.export)
+        r = migrate.migrate(self.mirror, [self.mirror, self.export])
+        self.assertEqual(r.conflicts,
+                         [Conflict('questions/Q-002', [self.export], self.export, True)])
+        self.assertEqual(r.kept, [])
+        self.assertFalse(r.complete)
+        self.assertEqual(r.added, EXPORT_ONLY, 'the rest of the second source is imported')
+        after = docs_of(self.mirror)
+        for rel in EXPORT_ONLY:
+            del after[rel + '.json']
+        self.assertEqual((after, tree(self.export)), before, 'no document was written over')
+        lines = migrate.report_lines(r)
+        self.assertIn(
+            "CONFLICT questions/Q-002: the store's copy, which no server has written, and %s "
+            "hold different fields; the store's copy is kept and nothing was imported (the later "
+            "by its time stamps: %s). To keep the store's copy: run again without that source. "
+            "To take a source's copy: with the server stopped, move the file questions/Q-002.json "
+            "out of the store folder, then run again with the chosen source alone"
+            % (self.export, self.export), lines)
+        self.assertIn('NOT COMPLETE: 1 document not imported (CONFLICT and SKIPPED above); the '
+                      'sources are unchanged', lines)
+        self.assertIn('questions/: imported 1, already in the store 2, store differs and is kept '
+                      '0, conflict 1', lines)
+        # a second run still says so: the conflict does not go quiet
+        self.assertEqual(migrate.migrate(self.mirror, [self.mirror, self.export]).conflicts,
+                         r.conflicts)
+        # the line's own advice, taken: the file moved out, the chosen source alone
+        os.replace(os.path.join(self.mirror, 'questions', 'Q-002.json'),
+                   os.path.join(self.tmp, 'Q-002.aside.json'))
+        done = migrate.migrate(self.mirror, [self.export])
+        self.assertEqual((done.added, done.conflicts), (['questions/Q-002'], []))
+        self.assertTrue(done.complete)
+
+    def test_the_stores_copy_is_named_when_it_is_the_later_one(self):
+        write(os.path.join(self.export, 'questions', 'Q-001.json'),
+              question(title='an older wording', asked_at='2025-01-02T03:04:05+00:00'))
+        r = migrate.migrate(self.mirror, [self.mirror, self.export])
+        self.assertEqual(r.conflicts,
+                         [Conflict('questions/Q-001', [self.export], self.mirror, True)])
+        self.assertTrue(any("(the later by its time stamps: the store's copy)" in x
+                            for x in migrate.report_lines(r)))
+
+    def test_a_copy_of_an_earlier_run_that_a_source_now_differs_from_is_a_conflict(self):
+        self.run_both()
+        self.newer_in_the_export()
+        r = self.run_both()
+        self.assertEqual(r.conflicts,
+                         [Conflict('questions/Q-002', [self.export], self.export, True)])
+        self.assertFalse(r.complete)
+        self.assertEqual(self.stored('questions', 'Q-002'), MIRROR['questions']['Q-002'])
+
+    def test_a_document_a_server_wrote_is_kept_and_the_run_is_complete(self):
+        self.run_both()
+        with Store.open(self.root) as s:
+            s.update('questions', 'Q-002', {'title': 'the server wrote this'})
+        self.newer_in_the_export()
+        r = self.run_both()
+        self.assertEqual(r.conflicts, [])
+        self.assertEqual(r.kept, [Kept('questions/Q-002', [self.mirror, self.export])])
+        self.assertTrue(r.complete)
+        self.assertEqual(self.stored('questions', 'Q-002')['title'], 'the server wrote this')
+
+    def test_a_lock_window_notice_in_a_conflict_stays_in_the_store_and_is_counted(self):
+        write(os.path.join(self.export, 'inbox', 'L-run1-end.json'),
+              dict(notice('run1', 'end'), text='another wording'))
+        r = migrate.migrate(self.mirror, [self.mirror, self.export])
+        self.assertEqual([c.rel for c in r.conflicts], ['inbox/L-run1-end'])
+        self.assertEqual(r.lock_windows, ['inbox/L-run1-end', 'inbox/L-run1-start'])
+        self.assertEqual(self.stored_in(self.mirror, 'inbox', 'L-run1-end'), notice('run1', 'end'))
+
+    def stored_in(self, root, coll, doc_id):
+        with Store.open(root) as s:
+            return s.get(coll, doc_id)
+
+
+class WriteCase(Case):
+    def test_a_document_that_is_not_utf8_text_is_skipped_and_the_rest_is_imported(self):
+        write(os.path.join(self.mirror, 'questions', 'Q-004.json'),
+              r'{"status": "open", "title": "half \ud800 pair"}')
+        dry = self.run_both(dry_run=True)
+        r = self.run_both()
+        for got in (dry, r):
+            self.assertEqual([(s.source, s.rel) for s in got.skipped],
+                             [(self.mirror, 'questions/Q-004')])
+            self.assertIn('cannot be written to the store: ', got.skipped[0].why)
+            self.assertEqual(len(got.added), 15, 'every other document is imported')
+            self.assertFalse(got.complete)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.root, 'questions'))),
+                         ['Q-001.json', 'Q-002.json', 'Q-007.json', 'Q-009.json'])
+        with self.assertRaises(ValueError):
+            migrate._create(os.path.join(self.root, 'questions', 'Q-005.json'), '\ud800')
+        self.assertEqual(len(os.listdir(os.path.join(self.root, 'questions'))), 4,
+                         'no temp file and no half document is left')
+
+    def test_the_store_lock_is_held_while_documents_are_written(self):
+        real, seen = migrate._create, []
+
+        def create(path, text):
+            with self.assertRaises(StoreBusy):
+                Store.open(self.root)
+            seen.append(path)
+            real(path, text)
+
+        with mock.patch.object(migrate, '_create', create):
+            self.run_both()
+        self.assertEqual(len(seen), 15)
+        Store.open(self.root).close()
+
+    def test_the_lock_is_released_when_the_run_dies_while_writing(self):
+        with mock.patch.object(migrate, '_create', side_effect=RuntimeError('died')):
+            with self.assertRaises(RuntimeError):
+                self.run_both()
+        Store.open(self.root).close()
+        self.assertEqual(len(self.run_both().added), 15)
+
+    def test_every_write_failing_is_not_called_nothing_changed(self):
+        with mock.patch.object(migrate, '_create', side_effect=OSError('the disk is full')):
+            r = self.run_both()
+        self.assertEqual((r.added, len(r.skipped)), ([], 15))
+        lines = migrate.report_lines(r)
+        self.assertEqual(lines[-1],
+                         'nothing was imported: see NOT COMPLETE above; nothing was written')
+        self.assertFalse(any(x.startswith('nothing changed') for x in lines))
+
+    def test_a_store_that_cannot_be_read_back_keeps_the_report(self):
+        real, calls = migrate.store_docs, []
+
+        def store_docs(root):
+            calls.append(root)
+            if len(calls) > 1:
+                raise MigrateError('cannot read the hub store: gone')
+            return real(root)
+
+        with mock.patch.object(migrate, 'store_docs', store_docs):
+            r = self.run_both()
+        self.assertEqual((len(r.added), r.findings), (15, []))
+        self.assertEqual(r.unchecked, 'cannot read the hub store: gone')
+        lines = migrate.report_lines(r)
+        self.assertIn('VALIDATE skipped: cannot read the hub store: gone', lines)
+        self.assertNotIn('VALIDATE clean: no finding', lines)
+        self.assertEqual(lines[-1], 'imported 15 documents; no source was changed')
+        self.assertEqual(self.run_both().unchecked, '')
+
+
+class SourceCase(Case):
+    def test_a_source_with_no_document_for_the_store_is_said_so(self):
+        only = fill(os.path.join(self.tmp, 'only-parked'), {'parked': MIRROR['parked']})
+        r = migrate.migrate(self.root, [only])
+        self.assertEqual(r.empty, [only])
+        self.assertTrue(r.complete)
+        lines = migrate.report_lines(r)
+        self.assertIn('NO DOCUMENT in %s: it holds no document of a collection the store has'
+                      % only, lines)
+        self.assertEqual(lines[-1], 'nothing to import: no source holds a document of a '
+                                    'collection the store has; nothing was written')
+        both = migrate.report_lines(migrate.migrate(self.root, [only, self.mirror]))
+        self.assertIn('NO DOCUMENT in %s: it holds no document of a collection the store has'
+                      % only, both)
+        self.assertEqual(both[-1], 'imported 13 documents; no source was changed')
+        self.assertEqual(self.run_both().empty, [])
+
+    def test_with_no_repos_document_the_tags_are_noted_once_not_warned_each(self):
+        r = migrate.migrate(self.root, [self.mirror])     # Q-007 is tagged `kit`; no repos/
+        self.assertEqual([(f.level, f.rel, f.code) for f in r.findings],
+                         [('note', '', 'repo-alias')])
+        self.assertEqual(migrate.validate(self.root), r.findings)
+        self.assertIn('VALIDATE 0 error(s), 0 warning(s)', migrate.report_lines(r))
+        # with a repos/ document the tags are judged: one the store does not know is a warning
+        write(os.path.join(self.root, 'repos', 'other.json'), {'name': 'other', 'added_at': AT})
+        self.assertEqual([(f.level, f.rel, f.code) for f in migrate.validate(self.root)],
+                         [('warn', 'questions/Q-007', 'repo-alias')])
+
+    def test_a_file_whose_own_keys_name_another_document_is_skipped(self):
+        q = os.path.join(self.export, 'questions')
+        write(os.path.join(q, 'Q-011.json'), {'id': 'Q-010', 'data': question()})
+        write(os.path.join(q, 'Q-012.json'), {'doc_id': 'Q-013', 'data': question()})
+        write(os.path.join(q, 'Q-014.json'), {'collection': 'todos', 'data': question()})
+        write(os.path.join(q, 'Q-015.json'), dict(question(), id='Q-016'))
+        write(os.path.join(q, 'Q-017.json'), {'id': 'Q-017', 'doc_id': 'Q-017',
+                                              'collection': 'questions', 'data': question()})
+        write(os.path.join(q, 'Q-018.json'), dict(question(), id='Q-018', collection='a field'))
+        r = self.run_both()
+        self.assertEqual([s.rel for s in r.skipped], [
+            'questions/Q-011', 'questions/Q-012', 'questions/Q-014', 'questions/Q-015'])
+        self.assertIn("its `id` is 'Q-010', not 'Q-011' as its path says", r.skipped[0].why)
+        self.assertIn("its `collection` is 'todos', not 'questions'", r.skipped[2].why)
+        self.assertFalse(r.complete)
+        with Store.open(self.root) as s:
+            got = s.docs('questions')
+        self.assertEqual(sorted(got), ['Q-001', 'Q-002', 'Q-007', 'Q-009', 'Q-017', 'Q-018'])
+        self.assertEqual(got['Q-017'], question())
+        self.assertEqual(got['Q-018'], dict(question(), collection='a field'))
 
 
 class MigrateCliCase(cli.CliCase):
@@ -458,6 +687,20 @@ class MigrateCliCase(cli.CliCase):
         self.assertEqual((code, out), (1, ''))
         self.assertIn('REFUSED: ', err)
         self.assertIn('is not a folder', err)
+        self.assertIn('USAGE: argument --from: --from needs a folder, not an empty value',
+                      self.run_cli('migrate', '--from', '')[2])
+        self.assertIn('--store needs a folder, not an empty value',
+                      self.run_cli('migrate', '--from', self.mirror, '--store', '')[2])
+
+    def test_the_default_layout_with_a_newer_copy_in_an_export_is_exit_1(self):
+        write(os.path.join(self.export, 'questions', 'Q-002.json'),
+              {'id': 'Q-002', 'data': question(status='logged', asked_at=LATER)})
+        code, out, err = self.run_cli('migrate', '--from', self.mirror, '--from', self.export,
+                                      '--store', self.mirror)
+        self.assertEqual((code, err), (1, ''))
+        self.assertIn("CONFLICT questions/Q-002: the store's copy, which no server has written",
+                      out)
+        self.assertIn('NOT COMPLETE: 1 document not imported', out)
 
     def test_no_store_folder_set_is_refused(self):
         code, out, err = self.run_cli('migrate', '--from', self.mirror)

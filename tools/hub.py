@@ -36,7 +36,10 @@
       changed, and a document the store already holds is never replaced, so a second run prints
       `nothing changed`. --dry-run writes nothing and reports what a run would do. Refused
       while a running server holds the store. Exit 1 too when a document that has a place in
-      the store was not imported (the CONFLICT and SKIPPED lines).
+      the store was not imported (the CONFLICT and SKIPPED lines): a file that is no document,
+      two sources that differ, or a source that differs from a store document no server has
+      written (the store folder is the mirror folder by default). A document a server has
+      written since is kept (KEPT) and does not fail the run.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.hubsite, prints and exits.
 Exit codes: 0 ok; 1 refused (REFUSED: ...), a server that did not close cleanly, or a Ctrl+C
@@ -85,6 +88,13 @@ def _folder(text):
     return text
 
 
+def _source(text):
+    """migrate's --from value: a folder, never an empty value."""
+    if not text.strip():
+        raise argparse.ArgumentTypeError('--from needs a folder, not an empty value')
+    return text
+
+
 def parser():
     p = Parser(prog='hub.py', description='The hub server of this machine.')
     sub = p.add_subparsers(dest='verb')
@@ -102,7 +112,7 @@ def parser():
     o.add_argument('--print', dest='show', action='store_true',
                    help='print the one-time link instead of opening it')
     m = sub.add_parser('migrate', help="copy the earlier hub's documents into the store")
-    m.add_argument('--from', dest='sources', action='append', type=_folder, required=True,
+    m.add_argument('--from', dest='sources', action='append', type=_source, required=True,
                    metavar='DIR', help='a folder to copy from: the mirror folder or an export '
                                        '(repeatable); it is only read')
     m.add_argument('--store', type=_folder, help='the store folder (default: the configured one)')

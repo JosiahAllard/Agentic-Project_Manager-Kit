@@ -23,13 +23,18 @@ What a source document becomes:
     reports what is wrong with it. An inbox document that is a lock-window notice is a document
     like any other and is copied in.
   - A document the store already holds with the same fields is counted in `same`.
-  - A document the store already holds with other fields is not written: the store's is kept and
-    the difference is in `kept`. The store may have been written since the first run.
+  - A document the store already holds with other fields is never written over. When the store's
+    has a `version` (a server wrote it since), the store's is the newer truth: the difference is
+    in `kept` and the run is complete. When it has none (no server ever wrote it: it is a copy
+    from a source, or a mirror file where the mirror folder is the store folder), it is one
+    source against another: it is in `conflicts` (Conflict.store True) and the run is not
+    complete.
   - A document two sources hold with different fields, and the store does not hold, is written
-    from neither: which one is right is not decided here. It is in `conflicts`, with the source
-    whose time stamps are later, when they tell.
-  - A file that cannot be read as a document, an id the store cannot address (schema.check_id) or
-    one that differs only in case from another is in `skipped`.
+    from neither: which one is right is not decided here. It is in `conflicts`. A conflict names
+    the copy whose time stamps are later, when they tell.
+  - A file that cannot be read as a document or written as UTF-8, an id the store cannot address
+    (schema.check_id), one that differs only in case from another, or a file whose own `id`,
+    `doc_id` or `collection` names another place than its path is in `skipped`.
   - A folder the store has no collection for (parked/, and backlog/, completed/, usage/, agents/
     of an export) is in `left`, with its document count. Nothing of it is read into the store.
 
@@ -59,19 +64,25 @@ STAMPS = ('updated_at', 'done_at', 'asked_at')
 
 Left = collections.namedtuple('Left', 'source folder count')
 Kept = collections.namedtuple('Kept', 'rel sources')
-Conflict = collections.namedtuple('Conflict', 'rel sources later')
+# store False: `sources` hold different fields and the store has no such document. store True:
+# the store holds one no server has written, and `sources` are those that differ from it.
+# later: the source whose time stamps are the latest, the store folder for the store's copy, or
+# None when the stamps do not tell.
+Conflict = collections.namedtuple('Conflict', 'rel sources later store')
 Skipped = collections.namedtuple('Skipped', 'source rel why')
 
 
 class Result(collections.namedtuple(
         'Result', 'store dry_run sources added same kept conflicts skipped left lock_windows '
-                  'findings')):
+                  'findings empty unchecked')):
     """One run. `store` and `sources` are absolute folders. `added`, `same`: sorted
     "collection/id" lists (written, or with dry_run what would be; already in the store with the
-    same fields). `kept`: [Kept], the store's differing document was kept. `conflicts`:
+    same fields). `kept`: [Kept], the document a server wrote was kept. `conflicts`:
     [Conflict], written from no source. `skipped`: [Skipped]. `left`: [Left], folders the store
-    has no collection for. `lock_windows`: the lock-window notices among added, same and kept.
-    `findings`: check() over the store after the run (with dry_run, over what it would hold)."""
+    has no collection for. `lock_windows`: the lock-window notices among added, same, kept and
+    the store's side of a conflict. `findings`: check() over the store after the run (with
+    dry_run, over what it would hold). `empty`: the sources that gave no document of a
+    collection the store has. `unchecked`: why `findings` could not be made ('' when it was)."""
 
     @property
     def changed(self):
@@ -114,6 +125,22 @@ def _read_json(path):
         return json.load(f)
 
 
+def _misplaced(coll, doc_id, obj):
+    """Why the file's own keys name another document than its path coll/doc_id, or ''. A wrapped
+    document's `id`, `doc_id` and `collection` and a bare document's `id` are not stored
+    (hubmirror.fields_of): one that disagrees with the path would be dropped unseen."""
+    if not isinstance(obj, dict):
+        return ''
+    wrapped = isinstance(obj.get('data'), dict)
+    for key, want in (('id', doc_id), ('doc_id', doc_id), ('collection', coll)):
+        if key != 'id' and not wrapped:
+            continue
+        if key in obj and obj[key] != want:
+            return ('its `%s` is %r, not %r as its path says: which document it is cannot be '
+                    'told' % (key, obj[key], want))
+    return ''
+
+
 def read_source(src):
     """(docs, left, skipped) of one source folder: docs is {(collection, id): fields} for the
     collections the store holds, left a [Left] for every other folder, skipped a [Skipped] for
@@ -139,9 +166,16 @@ def read_source(src):
                     skipped.append(Skipped(src, rel, why))
                     continue
                 try:
-                    docs[(name, doc_id)] = hubmirror.fields_of(name, _read_json(path))
+                    obj = _read_json(path)
+                    fields = hubmirror.fields_of(name, obj)
                 except (OSError, ValueError, hubmirror.Refused) as e:
                     skipped.append(Skipped(src, rel, 'cannot be read as a document: %s' % e))
+                    continue
+                why = _misplaced(name, doc_id, obj)
+                if why:
+                    skipped.append(Skipped(src, rel, why))
+                    continue
+                docs[(name, doc_id)] = fields
     except OSError as e:
         raise MigrateError('cannot list %s: %s' % (src, e))
     return docs, left, skipped
@@ -169,11 +203,16 @@ def store_docs(root):
 
 def check(docs):
     """The findings for docs ({collection: {id: document}}): schema.check's errors for each
-    document, then kitlib.hubvalidate.validate's, sorted by document, code and field."""
+    document, then kitlib.hubvalidate.validate's, sorted by document, code and field. With no
+    repos/ document there is nothing to judge a `repo` tag against: `repos` is then left out, so
+    validate gives its one note that the tags were not checked, not a warning per tagged
+    document."""
     out = []
     for coll in schema.COLLECTIONS:
         for doc_id, d in sorted(docs.get(coll, {}).items()):
             out.extend(schema.check(coll, d, doc_id))
+    if not docs.get('repos'):
+        docs = {k: v for k, v in docs.items() if k != 'repos'}
     out.extend(hubvalidate.validate(docs))
     return sorted(out, key=lambda f: (f.rel, f.code, f.field, f.message))
 
@@ -220,15 +259,16 @@ def _later(versions):
 def _create(path, text):
     """Write a new file at path, never over one: the text goes to a temp file beside it (one the
     store sweeps at its next open, were this to die here), then os.rename, which fails on
-    Windows when path exists."""
+    Windows when path exists. OSError, or ValueError for a text that is not UTF-8 (a lone
+    surrogate), with the temp file removed."""
     folder, name = os.path.split(path)
     os.makedirs(folder, exist_ok=True)
     tmp = os.path.join(folder, '.%s.%d%s' % (name, os.getpid(), hubstore.TMP_SUFFIX))
-    with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(text)
     try:
+        with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
         os.rename(tmp, path)
-    except OSError:
+    except (OSError, ValueError):
         try:
             os.remove(tmp)
         except OSError:
@@ -280,46 +320,63 @@ def migrate(root, sources, dry_run=False):
             rel = '%s/%s' % (coll, doc_id)
             cur = have[coll].get(doc_id)
             if cur is not None:
-                differs = [s for s, f in found if _own(f) != _own(cur)]
-                if differs:
-                    kept.append(Kept(rel, differs))
-                else:
+                differs = [(s, f) for s, f in found if _own(f) != _own(cur)]
+                if not differs:
                     same.append(rel)
+                elif 'version' in cur:          # a server wrote it since: the store's is newer
+                    kept.append(Kept(rel, [s for s, _ in differs]))
+                else:                           # never written by a server: source against source
+                    conflicts.append(Conflict(rel, [s for s, _ in differs],
+                                              _later([(root, cur)] + differs), True))
             else:
                 distinct = []
                 for s, f in found:
                     if not any(_own(f) == _own(g) for _, g in distinct):
                         distinct.append((s, f))
                 if len(distinct) > 1:
-                    conflicts.append(Conflict(rel, [s for s, _ in distinct], _later(distinct)))
+                    conflicts.append(Conflict(rel, [s for s, _ in distinct], _later(distinct),
+                                              False))
                     continue
                 src, fields = distinct[0]
-                if not dry_run:
-                    try:
-                        _create(os.path.join(root, coll, doc_id + '.json'),
-                                hubstore.normal_text(fields))
-                    except OSError as e:
-                        skipped.append(Skipped(src, rel, 'cannot be written to the store: %s' % e))
-                        continue
+                try:
+                    text = hubstore.normal_text(fields)
+                    text.encode('utf-8')        # a dry run names what a run could not write
+                    if not dry_run:
+                        _create(os.path.join(root, coll, doc_id + '.json'), text)
+                except (OSError, ValueError) as e:
+                    skipped.append(Skipped(src, rel, 'cannot be written to the store: %s' % e))
+                    continue
                 have[coll][doc_id] = fields
                 added.append(rel)
-            if coll == 'inbox' and any(f.get('kind') == LOCK_WINDOW for _, f in found):
+            if coll == 'inbox' and LOCK_WINDOW in (
+                    [f.get('kind') for _, f in found] + [(cur or {}).get('kind')]):
                 notices.add(rel)
     finally:
         if held is not None:
             held.close()
+    findings, unchecked = [], ''
+    try:        # the documents are written by now: a store that cannot be read back is said so
+        findings = check(have if dry_run else store_docs(root))
+    except MigrateError as e:
+        unchecked = str(e)
+    empty = [src for src, docs, _, src_skipped in read if not docs and not src_skipped]
     return Result(root, bool(dry_run), sources, added, same, kept, conflicts,
-                  sorted(skipped), sorted(left), sorted(notices),
-                  check(have if dry_run else store_docs(root)))
+                  sorted(skipped), sorted(left), sorted(notices), findings, empty, unchecked)
 
 
 def validate_lines(findings):
     """The findings as lines, kitlib.hubvalidate.format_line each, then one summary line; one
-    line saying the store is clean when there is none."""
+    line saying the store is clean when there is none. After the findings, one line per document
+    that has a schema.check error: the store refuses a write that leaves such an error in the
+    document (store.Store, "check"), so the api cannot change it until its file is fixed."""
     if not findings:
         return ['VALIDATE clean: no finding']
-    return (['VALIDATE %s' % hubvalidate.format_line(f) for f in findings]
-            + ['VALIDATE %s' % hubvalidate.summary(findings)])
+    lines = ['VALIDATE %s' % hubvalidate.format_line(f) for f in findings]
+    for rel in sorted({f.rel for f in findings if f.code == schema.CODE}):
+        lines.append('VALIDATE %s: the api will refuse every update of this document until it is '
+                     'fixed; fix its file by hand with the server stopped (no api route repairs '
+                     'it)' % rel)
+    return lines + ['VALIDATE %s' % hubvalidate.summary(findings)]
 
 
 def _count(n, word='document'):
@@ -348,16 +405,37 @@ def report_lines(result):
         lines.append('KEPT %s: the store holds other fields than %s; the store is unchanged'
                      % (k.rel, ', '.join(k.sources)))
     for c in r.conflicts:
-        lines.append('CONFLICT %s: %s hold different fields; imported from neither (%s)' % (
-            c.rel, ' and '.join(c.sources),
-            'the later by its time stamps: %s' % c.later if c.later
-            else 'the time stamps do not tell which is later'))
+        if c.later is None:
+            later = 'the time stamps do not tell which is later'
+        elif c.store and c.later == r.store:
+            later = "the later by its time stamps: the store's copy"
+        else:
+            later = 'the later by its time stamps: %s' % c.later
+        if c.store:
+            lines.append(
+                "CONFLICT %s: the store's copy, which no server has written, and %s hold "
+                "different fields; the store's copy is kept and nothing was imported (%s). To "
+                "keep the store's copy: run again without that source. To take a source's copy: "
+                "with the server stopped, move the file %s.json out of the store folder, then run "
+                "again with the chosen source alone"
+                % (c.rel, ' and '.join(c.sources), later, c.rel))
+        else:
+            lines.append(
+                'CONFLICT %s: %s hold different fields; imported from neither (%s). To resolve '
+                'without editing a source: run again with the chosen source alone'
+                % (c.rel, ' and '.join(c.sources), later))
     for s in r.skipped:
         lines.append('SKIPPED %s in %s: %s' % (s.rel, s.source, s.why))
     for x in r.left:
         lines.append('LEFT ALONE %s/ in %s: %s; the store has no %s/ collection' % (
             x.folder, x.source, _count(x.count), x.folder))
-    lines.extend(validate_lines(r.findings))
+    for src in r.empty:
+        lines.append('NO DOCUMENT in %s: it holds no document of a collection the store has'
+                     % src)
+    if r.unchecked:
+        lines.append('VALIDATE skipped: %s' % r.unchecked)
+    else:
+        lines.extend(validate_lines(r.findings))
     if not r.complete:
         lines.append('NOT COMPLETE: %s not imported (CONFLICT and SKIPPED above); the sources '
                      'are unchanged' % _count(len(r.conflicts) + len(r.skipped)))
@@ -365,6 +443,11 @@ def report_lines(result):
         lines.append('dry run: %s would be imported; nothing was written' % _count(len(r.added)))
     elif r.added:
         lines.append('imported %s; no source was changed' % _count(len(r.added)))
+    elif not r.complete:
+        lines.append('nothing was imported: see NOT COMPLETE above; nothing was written')
+    elif not (r.same or r.kept):
+        lines.append('nothing to import: no source holds a document of a collection the store '
+                     'has; nothing was written')
     else:
         lines.append('nothing changed: the store already holds every document that can be '
                      'imported; nothing was written')
