@@ -253,16 +253,63 @@ class SpellingTest(ChildCase):
         self.assertEqual(rc, 0, out)
         self.assertTrue(out[0].startswith('fenced '), out)
 
-    def test_the_short_name_of_the_fenced_home_is_refused(self):
-        decoy = fence_decoy(self)
+    def short(self, folder):
+        """The short (8.3) spelling of `folder`; the test is skipped when its volume gives none."""
         buf = ctypes.create_unicode_buffer(1024)
-        n = ctypes.WinDLL('kernel32').GetShortPathNameW(decoy, buf, len(buf))
+        n = ctypes.WinDLL('kernel32').GetShortPathNameW(folder, buf, len(buf))
         short = buf.value if 0 < n < len(buf) else ''
-        if not short or same(short, decoy):
+        if not short or same(short, folder):
             self.skipTest('the temp folder\'s volume gives no short (8.3) names')
+        return short
+
+    def as_profile(self, folder):
+        """Until the test ends, `folder` is the profile folder Windows reports to this process."""
+        for patch in (mock.patch.object(user, '_PROFILE', None),
+                      mock.patch.object(user, '_windows_profile', return_value=folder)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_the_short_name_of_the_fenced_home_is_refused(self):
+        short = self.short(fence_decoy(self))
         with mock.patch.dict(os.environ, {'USERPROFILE': short, 'HOME': short}):
             with self.assertRaises(user.HomeFenced):
                 user.home_dir()
+
+    # Guards (green before they were written): the spellings above, for the profile folder and
+    # for a child. The profile is a temp folder standing in for it, so no link to the real one
+    # is ever made.
+
+    def test_a_junction_to_the_profile_folder_is_refused_whatever_else_is_fenced(self):
+        fence_decoy(self)                       # the recorded home is another folder
+        profile = self.folder('kit-profile-')
+        link = self.junction(profile)
+        with mock.patch.dict(os.environ, {'USERPROFILE': link, 'HOME': link}):
+            self.assertEqual(user.home_dir(), link)         # a temp folder, until it is the profile
+            self.as_profile(profile)
+            with self.assertRaises(user.HomeFenced):
+                user.home_dir()
+
+    def test_the_short_name_of_the_profile_folder_is_refused_whatever_else_is_fenced(self):
+        fence_decoy(self)
+        profile = self.folder('kit-profile-')
+        short = self.short(profile)
+        with mock.patch.dict(os.environ, {'USERPROFILE': short, 'HOME': short}):
+            self.assertEqual(user.home_dir(), short)        # a temp folder, until it is the profile
+            self.as_profile(profile)
+            with self.assertRaises(user.HomeFenced):
+                user.home_dir()
+
+    def test_a_marked_child_refuses_the_short_name_of_the_recorded_home(self):
+        decoy = self.folder('kit-fenced-home-')
+        rc, out = self.child(RESOLVE, self.short(decoy), marker=decoy)
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out[0].startswith('fenced '), out)
+
+    def test_a_marked_child_refuses_the_home_when_the_marker_is_its_short_name(self):
+        decoy = self.folder('kit-fenced-home-')
+        rc, out = self.child(RESOLVE, decoy, marker=self.short(decoy))
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out[0].startswith('fenced '), out)
 
     def test_the_extended_length_spelling_of_the_fenced_home_is_refused(self):
         long = extended(fence_decoy(self))
