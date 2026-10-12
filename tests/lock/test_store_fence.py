@@ -4,7 +4,8 @@ under it can be read, written or locked; a scratch store is untouched; and a rea
 store it always got.
 
 On the machine's store these tests compute paths and names only: Store(), .root, .testing,
-path(), mutex_name(), real_root() and profile_dir(). None reads, writes or locks it."""
+path(), mutex_name(), real_root(), profile_dir() and machine_home(). None reads, writes or locks
+it; the release check's look at it (kitlib.lock.release.live_runs) is given a stand-in for `os`."""
 import hashlib
 import json
 import os
@@ -14,8 +15,10 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 from kitlib.config import user
+from kitlib.lock import release
 from kitlib.lock import store as lockstore
 from kitlib.lock.store import Settings, Store, iso, real_root
 from kitlib.proc import process
@@ -24,19 +27,22 @@ from tests.home import unmarked_env
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # The marker, spelled here so that a renamed constant fails a test instead of following it.
 MARK = 'KIT_HOME_FENCE'
+# The prefix of the temp folder a child gets as USERPROFILE and HOME.
+CHILD_HOME = 'kit-store-fence-home-'
 
 # A process that imports kitlib and not the tests package, and only computes: the machine's store,
-# one line of JSON with its root, two file paths and a mutex name.
+# one line of JSON with its root, one with file paths and a mutex name, one with the store's home.
 COMPUTE = '''\
     import json, sys
     sys.path.insert(0, sys.argv[1])
-    from kitlib.lock.store import Store
-    s = Store()
+    from kitlib.lock import store as lockstore
+    s = lockstore.Store()
     print('built', json.dumps({'root': s.root, 'testing': s.testing,
                                'tests': 'tests' in sys.modules}))
     print('used', json.dumps({'bare': s.path(), 'queue': s.path('queue.json'),
                               'run': s.path('active', 'r.json'),
                               'mutex': s.mutex_name('queue')}))
+    print('home', json.dumps(lockstore.machine_home()))
     '''
 
 
@@ -49,7 +55,7 @@ class Case(unittest.TestCase):
     def child(self, env):
         """COMPUTE in a child whose USERPROFILE and HOME are a temp folder, over `env`:
         (exit code, {first word: the rest of the line}, all its output)."""
-        home = self.folder('kit-store-fence-home-')
+        home = self.folder(CHILD_HOME)
         script = os.path.join(self.folder('kit-store-fence-child-'), 'child.py')
         with open(script, 'w', encoding='utf-8') as fh:
             fh.write(textwrap.dedent(COMPUTE))
@@ -60,7 +66,7 @@ class Case(unittest.TestCase):
         lines = {}
         for ln in out.splitlines():
             word, _, rest = ln.partition(' ')
-            if word in ('built', 'used'):
+            if word in ('built', 'used', 'home'):
                 lines[word] = rest
         return r.returncode, lines, out
 
@@ -106,8 +112,20 @@ class MachineStoreFenced(Case):
             'root': os.path.abspath(real_root()), 'testing': False, 'tests': False}, out)
         self.assertNotEqual(code, 0, out)
         self.assertNotIn('used', lines, out)
+        self.assertNotIn('home', lines, out)
         self.assertIn('HomeFenced', out)
         self.assertIn('Home fence', out)
+
+    def test_a_release_check_is_refused_before_it_looks_at_the_machines_folder(self):
+        # the stand-in for `os` says "no such folder": a look at the folder that does not go
+        # through Store.path would report the store missing instead of refusing it
+        s = Store()
+        fake = mock.Mock()
+        fake.path.isdir.return_value = False
+        with mock.patch.object(release, 'os', fake):
+            with self.assertRaises(user.HomeFenced):
+                release.live_runs(s)
+        self.assertEqual(fake.mock_calls, [])       # nothing was asked of the file system
 
 
 @unittest.skipUnless(os.name == 'nt', 'the lock is Windows only')
@@ -183,6 +201,9 @@ class RealRun(Case):
             'bare': root, 'queue': os.path.join(root, 'queue.json'),
             'run': os.path.join(root, 'active', 'r.json'),
             'mutex': 'Global\\MachineLock.queue'}, out)
+        # the store's home is the profile folder Windows reports, not the child's USERPROFILE
+        self.assertEqual(json.loads(lines['home']), lockstore.profile_dir(), out)
+        self.assertNotIn(CHILD_HOME, lines['home'])
 
     def test_the_stores_profile_is_the_fences(self):
         self.assertEqual(user.real_profile(), lockstore.profile_dir())
