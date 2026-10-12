@@ -32,6 +32,11 @@ h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:bal
 .tab{font:600 .85rem var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:6px 12px;border-radius:999px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
 .tab[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:var(--surface)}
 .tab .n{font:600 .75rem var(--f-mono);font-variant-numeric:tabular-nums;opacity:.85}
+.sw{gap:0;align-items:baseline}
+.sw .tab{display:inline;border:0;border-radius:0;background:none;padding:2px 0;font-weight:500;color:var(--muted)}
+.sw .tab[aria-selected="true"]{background:none;color:var(--fg);text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:4px}
+.sw .tab .n{margin-left:5px}
+.sw .tab+.tab::before{content:"\00b7";display:inline-block;margin:0 8px;color:var(--muted)}
 .tab:focus-visible,button:focus-visible,textarea:focus-visible,label.opt:focus-within{outline:2px solid var(--accent);outline-offset:2px}
 select{font:500 .85rem var(--f-body);padding:5px 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg)}
 .bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
@@ -164,8 +169,7 @@ button.danger{color:var(--warn)}
     <button class="sec" role="tab" data-s="questions" aria-selected="true" id="sec-questions">Inbox <span class="n" id="n-q">0</span></button>
     <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">To PM <span class="n" id="n-pm">0</span></button>
     <button class="sec" role="tab" data-s="todo" aria-selected="false" id="sec-todo">To do <span class="n" id="n-t">0</span></button>
-    <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span></button>
-    <button class="sec" role="tab" data-s="parked" aria-selected="false" id="sec-parked">Parked <span class="n" id="n-p">0</span></button>
+    <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span><span class="n hot" id="n-sp" hidden></span></button>
     <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Info</button>
   </div>
 
@@ -174,25 +178,26 @@ button.danger{color:var(--warn)}
       <button class="tab" role="tab" data-qt="questions" aria-selected="true" id="qtab-questions">Questions <span class="n" id="n-qq">0</span></button>
       <button class="tab" role="tab" data-qt="inbox" aria-selected="false" id="qtab-answers">Answers <span class="n" id="n-i">0</span></button>
     </div>
-  </div>
-  <div class="bar">
-    <div class="tabs" role="tablist" id="tabs" data-for="questions">
+    <div class="tabs sw" role="tablist" id="tabs" data-for="questions" aria-label="Which questions">
       <button class="tab" role="tab" data-f="open" aria-selected="true" id="tab-open">Open <span class="n" id="n-open">0</span></button>
       <button class="tab" role="tab" data-f="answered" aria-selected="false" id="tab-answered">Submitted <span class="n" id="n-answered">0</span></button>
       <button class="tab" role="tab" data-f="logged" aria-selected="false" id="tab-logged">Logged <span class="n" id="n-logged">0</span></button>
       <button class="tab" role="tab" data-f="other" aria-selected="false" id="tab-other" hidden>Other <span class="n" id="n-other">0</span></button>
     </div>
-    <div class="tabs" role="tablist" id="itabs" data-for="inbox" hidden>
+    <div class="tabs sw" role="tablist" id="itabs" data-for="inbox" aria-label="Which answers" hidden>
       <button class="tab" role="tab" data-if="unread" aria-selected="true" id="itab-unread">Unread <span class="n" id="n-iunread">0</span></button>
       <button class="tab" role="tab" data-if="read" aria-selected="false" id="itab-read">Read <span class="n" id="n-iread">0</span></button>
     </div>
-    <div class="tabs" role="tablist" id="ttabs" data-for="todo" hidden>
+  </div>
+  <div class="bar">
+    <div class="tabs sw" role="tablist" id="ttabs" data-for="todo" hidden>
       <button class="tab" role="tab" data-tf="open" aria-selected="true" id="ttab-open">To do <span class="n" id="n-topen">0</span></button>
       <button class="tab" role="tab" data-tf="done" aria-selected="false" id="ttab-done">Done <span class="n" id="n-tdone">0</span></button>
     </div>
     <div class="tabs" role="tablist" id="stabs" data-for="backlog" hidden>
       <button class="tab" role="tab" data-sf="new" aria-selected="true" id="stab-new">New story <span class="n" id="n-sactive">0</span></button>
       <button class="tab" role="tab" data-sf="current" aria-selected="false" id="stab-current">Current backlog <span class="n" id="n-bcur">0</span></button>
+      <button class="tab" role="tab" data-sf="parked" aria-selected="false" id="stab-parked">Parked <span class="n" id="n-p">0</span></button>
       <button class="tab" role="tab" data-sf="done" aria-selected="false" id="stab-done">Completed</button>
     </div>
     <div class="tabs" role="tablist" id="ftabs" data-for="info" hidden>
@@ -200,7 +205,7 @@ button.danger{color:var(--warn)}
       <button class="tab" role="tab" data-nf="agents" aria-selected="false" id="ftab-agents">Agents <span class="n" id="n-a">0</span></button>
     </div>
     <div class="pmbar" id="pmtabs" hidden>
-      <div class="tabs" role="tablist" data-for="topm">
+      <div class="tabs sw" role="tablist" data-for="topm">
         <button class="tab" role="tab" data-pf="queued" aria-selected="true" id="ptab-queued">Queued <span class="n" id="n-pqueued">0</span></button>
         <button class="tab" role="tab" data-pf="sent" aria-selected="false" id="ptab-sent">Sent <span class="n" id="n-psent">0</span></button>
         <button class="tab" role="tab" data-pf="done" aria-selected="false" id="ptab-done">Done <span class="n" id="n-pdone">0</span></button>
@@ -245,7 +250,7 @@ button.danger{color:var(--warn)}
   try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "agents") state.infotab = it; } catch(e){}
   if (location.hash === "#info") state.section = "info";
   if (location.hash === "#usage" || location.hash === "#agents") { state.section = "info"; state.infotab = location.hash.slice(1); }
-  if (location.hash === "#parked") state.section = "parked";
+  if (location.hash === "#parked") { state.section = "backlog"; state.sfilter = "parked"; }
   // ready: the server has answered once, so the lists are real and the owner's controls are shown.
   let ready = false;
 
@@ -291,7 +296,7 @@ button.danger{color:var(--warn)}
   const why = e => (e && e.message) || "the hub server refused the write";
   const NOT_READY = "Waiting for the hub server", NOT_READY_WHY = "Nothing has been read from the hub server yet. The line at the top says why when it cannot be reached.";
 
-  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm"].includes(location.hash)) state.section = {stories: "backlog", agents: "info", usage: "info", pages: "questions"}[sct] || sct; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
+  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "questions"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
   // An answer's draft is kept in the browser's storage and in the page itself, so it survives a redraw
   // where the browser gives the page no storage.
   const draftKey = id => "oq.draft." + id, drafts = new Map();
@@ -365,20 +370,31 @@ button.danger{color:var(--warn)}
     const os = state.stories.filter(st => ACTIVE.includes(st.status));
     $("#n-s").textContent = os.length; $("#n-s").classList.toggle("hot", os.some(st => st.status === "questions"));
     const ua = state.usage.filter(u => u.account);
-    const peak = Math.max(-1, ...ua.map(u => Math.max(pctOf(u.five_hour), pctOf(u.seven_day))));
-    $("#n-u").textContent = peak < 0 ? "–" : peak + "%"; $("#n-u").classList.toggle("hot", peak >= 90);
+    const top = usagePeak(ua), peak = top.pct;
+    $("#n-u").textContent = usageChip(top); $("#n-u").classList.toggle("hot", peak >= 90);
     $("#n-a").textContent = state.agents.length;
     $("#n-i").textContent = ui.length; $("#n-i").classList.toggle("hot", ui.length > 0);
-    $("#n-p").textContent = state.parked.length;
+    // Parked lives under Backlog: its count is on its tab, and on the Backlog section itself while something is parked.
+    $("#n-p").textContent = state.parked.length; $("#n-p").classList.toggle("hot", state.parked.length > 0);
+    $("#n-sp").textContent = state.parked.length + " parked"; $("#n-sp").hidden = !state.parked.length;
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
     $("#repo").hidden = sc === "info" || sc === "backlog" || sc === "topm";
     $("#tabs").hidden = !q; $("#itabs").hidden = sc !== "inbox"; $("#ttabs").hidden = sc !== "todo"; $("#pmtabs").hidden = sc !== "topm"; $("#pmform").hidden = sc !== "topm" || !ready; $("#stabs").hidden = $("#brepo").hidden = sc !== "backlog"; $("#ftabs").hidden = sc !== "info";
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
     $("#storyform").hidden = sc !== "backlog" || state.sfilter !== "new" || !ready;
-    q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "parked" ? renderParked() : renderBacklog();
+    q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : renderBacklog();
   }
 
+  // The usage chip is one figure, the highest of every account's two windows: it says whose and which. A tie goes to
+  // the weekly window (it lasts longer), then to the first account by name.
+  function usagePeak(rows){
+    let top = { pct: -1, win: "", account: "" };
+    for (const u of rows.slice().sort((a,b) => String(a.account).localeCompare(String(b.account), [], {numeric:true})))
+      for (const [win, v] of [["wk", u.seven_day], ["5h", u.five_hour]]) { const n = pctOf(v); if (n > top.pct) top = { pct: n, win, account: String(u.account) }; }
+    return top;
+  }
+  const usageChip = t => t.pct < 0 ? "–" : t.pct + "% " + t.win + " · " + (/^\d+$/.test(t.account) ? "acct " + t.account : t.account);
   function pctOf(v){ const n = typeof v === "number" ? v : parseFloat(v); return isNaN(n) ? -1 : Math.round(n); }
   function meter(label, v){
     const n = pctOf(v), shown = n < 0 ? (v === "reset" ? "0%" : "?") : n + "%", w = n < 0 ? 0 : Math.min(100, n);
@@ -427,8 +443,7 @@ button.danger{color:var(--warn)}
   const PARKED_FROM = {status: " (the day in the record)", updated: " (the record's last change)", store: " (when the store saw it)"};
   const ageOf = iso => { const t = new Date(iso); if (!iso || isNaN(t)) return null; const m = Math.max(0, Math.round((Date.now() - t) / 60000)); return m < 60 ? m + "m" : m < 1440 ? Math.floor(m / 60) + "h" : Math.floor(m / 1440) + "d"; };
   function renderParked(){
-    fillRepos(state.parked);
-    const groups = parkedGroups(state.parked.filter(inR), Date.now());
+    const groups = parkedGroups(state.parked.filter(inB), Date.now());
     if (!groups.length) { show(["backlog"], state.gone.backlog ? null : el("div", {class:"empty"}, el("strong", {text: ready ? "Nothing parked" : "Parked needs the hub server"}), "When a coordinator parks a backlog item waiting on you, it shows here with its question and how long it has waited.")); return; }
     const out = [];
     for (const g of groups) {
@@ -886,7 +901,7 @@ button.danger{color:var(--warn)}
     const active = state.stories.filter(st => ACTIVE.includes(st.status));
     $("#n-sactive").textContent = active.length; $("#n-bcur").textContent = state.backlog.length;
     document.querySelectorAll("#stabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.sf === state.sfilter)));
-    state.sfilter === "current" ? renderCurrent() : state.sfilter === "done" ? renderCompleted() : renderStories();
+    state.sfilter === "current" ? renderCurrent() : state.sfilter === "parked" ? renderParked() : state.sfilter === "done" ? renderCompleted() : renderStories();
   }
   function renderStories(){
     const mine = state.stories.filter(inB), active = mine.filter(st => ACTIVE.includes(st.status)), closed = mine.filter(st => !ACTIVE.includes(st.status));

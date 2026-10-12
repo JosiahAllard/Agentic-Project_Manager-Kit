@@ -314,10 +314,10 @@ class DomTest(unittest.TestCase):
             let shown = text(body);
             const see = async sel => { await click($(sel)); shown += "\\n" + text(body); };
             await see("#qtabs [data-qt=inbox]");
-            for (const s of ["topm", "todo", "parked", "info"]) await see("#sections [data-s=" + s + "]");
+            for (const s of ["topm", "todo", "info"]) await see("#sections [data-s=" + s + "]");
             await see("#ftabs [data-nf=agents]");
             await see("#sections [data-s=backlog]");
-            for (const f of ["current", "done"]) await see("#stabs [data-sf=" + f + "]");
+            for (const f of ["current", "parked", "done"]) await see("#stabs [data-sf=" + f + "]");
             const risky = ["href", "src", "srcdoc", "srcset", "action", "formaction", "style"];
             const attrs = all().flatMap(e => Object.keys(e.attrs).filter(k => k.startsWith("on") || risky.includes(k)).map(k => e.tag + " " + k));
             return { shown, tags: [...new Set(created)], sinks, attrs, err: text($("#loaderr")) };
@@ -520,7 +520,7 @@ class DomTest(unittest.TestCase):
             const current = text($("#list"));
             await click($("#stabs [data-sf=done]"));
             const done = $$("#list .gone").map(text);
-            await click($("#sections [data-s=parked]"));
+            await click($("#stabs [data-sf=parked]"));
             return { current, done, parked: $$("#list .gone").map(text) };
         """, snapshot(views=views), hash="#backlog")
         self.assertIn("Out of date: the alpha part of the backlog view could not be read again (git fetch failed).", got["current"])
@@ -876,6 +876,71 @@ class DomTest(unittest.TestCase):
         self.assertEqual(got["queued"], {"say": "", "off": False})
         self.assertTrue(got["after"].startswith("Sent 1."), got["after"])        # the hint never replaces what a send said
 
+    def test_the_usage_chip_names_the_account_and_window_of_its_figure(self):
+        def chip(accounts):
+            return dom("""
+                await start();
+                return { chip: text($("#n-u")), hot: $("#n-u").classList.contains("hot") };
+            """, snapshot(views={"usage": {"available": True, "as_of": NOW, "accounts": accounts}}), hash="#usage")
+        # The highest figure of any account and either window, with whose it is and which window.
+        self.assertEqual(chip({"1": {"five": 0, "week": 99}, "2": {"five": 0, "week": 99}, "3": {"five": 39, "week": 90}}),
+                         {"chip": "99% wk · acct 1", "hot": True})
+        self.assertEqual(chip({"1": {"five": 12, "week": 40}, "2": {"five": 97, "week": 41}}),
+                         {"chip": "97% 5h · acct 2", "hot": True})
+        self.assertEqual(chip({"team": {"five": 5, "week": 50}}), {"chip": "50% wk · team", "hot": False})
+        self.assertEqual(chip({}), {"chip": "–", "hot": False})
+
+    def test_parked_is_a_tab_under_backlog_and_its_count_shows_on_the_backlog_section(self):
+        item = lambda i, at: {"id": "B-%d" % i, "t": "parked %d" % i, "p": 1, "s": "parked", "parked_at": at}      # noqa: E731
+        entry = lambda repo, items: {"repo": repo, "fetched_at": NOW, "error": None, "stale": False,               # noqa: E731
+                                     "fetch_error": None, "items": items}
+        views = {"repos": [{"name": "alpha"}, {"name": "beta"}],
+                 "backlog": [entry("alpha", [item(1, NOW), item(2, NOW), {"id": "B-9", "t": "open one", "p": 1, "s": "open"}]),
+                             entry("beta", [item(3, NOW)])]}
+        got = dom("""
+            await start();
+            const on = () => ({ say: text($("#n-sp")), off: $("#n-sp").hidden, hot: $("#n-sp").classList.contains("hot") });
+            const out = { sections: $$("#sections .sec").map(b => b.dataset.s), first: on(), badge: $("#n-sp").parentNode.attrs.id };
+            await click($("#sections [data-s=backlog]"));
+            await click($("#stabs [data-sf=parked]"));
+            out.tab = { chosen: $("#stab-parked").getAttribute("aria-selected"), n: text($("#n-p")),
+                        section: $("#sec-backlog").getAttribute("aria-selected"), form: $("#storyform").hidden, row: $("#stabs").hidden };
+            out.cards = $$("#list .pk").map(c => c.attrs.id);
+            $("#brepo").value = "beta"; await fire($("#brepo"), "change");
+            out.beta = $$("#list .pk").map(c => c.attrs.id);
+            server.snap.views.backlog = []; server.snap.revision++;
+            await wake();
+            out.none = on(); out.empty = text($("#list"));
+            return out;
+        """, snapshot(views=views))
+        self.assertEqual(got["sections"], ["questions", "topm", "todo", "backlog", "info"])
+        self.assertEqual(got["first"], {"say": "3 parked", "off": False, "hot": True})       # seen from any section
+        self.assertEqual(got["badge"], "sec-backlog")
+        self.assertEqual(got["tab"], {"chosen": "true", "n": "3", "section": "true", "form": True, "row": False})
+        self.assertEqual(got["cards"], ["pk-alpha:B-1", "pk-alpha:B-2", "pk-beta:B-3"])
+        self.assertEqual(got["beta"], ["pk-beta:B-3"])                                     # the Backlog row's own picker filters it
+        self.assertTrue(got["none"]["off"])
+        self.assertIn("Nothing parked", got["empty"])
+
+    def test_the_state_switch_sits_in_the_heading_row_and_still_selects(self):
+        got = dom("""
+            await start();
+            const cls = id => $(id).attrs.class, picked = id => $$(id + " .tab").filter(t => t.getAttribute("aria-selected") === "true").map(t => t.dataset.f || t.dataset.if);
+            const out = { row: [$("#qtabs").parentNode.attrs.id, $("#tabs").parentNode.attrs.id, $("#itabs").parentNode.attrs.id],
+                          look: [cls("#qtabs"), cls("#tabs"), cls("#itabs")], open: picked("#tabs") };
+            await click($("#tab-answered"));
+            out.submitted = picked("#tabs"); out.shown = $$("#list .q").length;
+            await click($("#qtab-answers"));
+            out.hides = [$("#tabs").hidden, $("#itabs").hidden]; out.unread = picked("#itabs");
+            await click($("#itab-read"));
+            out.read = picked("#itabs");
+            return out;
+        """, snapshot(collections=LISTS))
+        self.assertEqual(got["row"], ["qbar", "qbar", "qbar"])       # what is shown at the left, its state at the right of the same row
+        self.assertEqual(got["look"], ["tabs", "tabs sw", "tabs sw"])
+        self.assertEqual((got["open"], got["submitted"], got["shown"]), (["open"], ["answered"], 0))
+        self.assertEqual((got["hides"], got["unread"], got["read"]), ([True, False], ["unread"], ["read"]))
+
     def test_cancel_forgets_what_a_refused_answer_said(self):
         lists = {"questions": {"Q-1": {"status": "answered", "title": "which", "version": 2, "asked_at": NOW,
                                        "options": [{"label": "one"}, {"label": "two"}],
@@ -1009,6 +1074,34 @@ class PageTextTest(unittest.TestCase):
         self.assertRegex(self.markup, r'<div class="tabs"[^>]*\shidden>')
         self.assertRegex(self.markup, r'<form class="add"[^>]*\shidden[ >]')
 
+    def test_state_filters_are_a_quiet_text_switch_and_what_filters_stay_pills(self):
+        """No test here runs a browser: this pins the classes and the style rules the look hangs on, not the look."""
+        lists = {}
+        for cls, rest in re.findall(r'<div class="([^"]*)" role="tablist"([^>]*)>', self.markup):
+            name = re.search(r'\bid="(\w+)"', rest) or re.search(r'data-for="(\w+)"', rest)
+            lists[name.group(1)] = cls
+        self.assertEqual(lists.pop("sections"), "sections")                      # the top row is neither kind
+        self.assertEqual(lists, {"qtabs": "tabs", "stabs": "tabs", "ftabs": "tabs",                # WHAT is shown: pills
+                                 "tabs": "tabs sw", "itabs": "tabs sw", "ttabs": "tabs sw", "topm": "tabs sw"})      # its STATE: quiet text
+        # Still real buttons in a tablist, each with aria-selected.
+        for row in re.findall(r'<div class="tabs sw".*?</div>', self.markup, re.S):
+            buttons = re.findall(r"<(\w+)([^>]*)>", row)[1:]
+            tabs = [a for t, a in buttons if t == "button"]
+            self.assertGreaterEqual(len(tabs), 2, row)
+            for a in tabs:
+                self.assertRegex(a, r'class="tab" role="tab"[^>]*aria-selected="(true|false)"')
+        style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
+        rule = lambda sel: re.search(r"(?m)^" + re.escape(sel) + r"\{([^}]*)\}", style).group(1)      # noqa: E731
+        plain = rule(".sw .tab")
+        for part in ("border:0", "background:none", "border-radius:0"):
+            self.assertIn(part, plain)
+        chosen = rule('.sw .tab[aria-selected="true"]')
+        self.assertIn("text-decoration:underline", chosen)
+        self.assertIn("background:none", chosen)                                 # the pill's filled look does not come through
+        self.assertIn('content:"\\00b7"', rule(".sw .tab+.tab::before"))          # a middle dot between the choices
+        self.assertLess(style.index('.tab[aria-selected="true"]{'), style.index(".sw .tab{"))       # the quiet rules come later, so they win
+        self.assertNotIn("\x00", self.p)
+
     def test_no_artifact_store_call(self):
         for gone in ("window.claude", "onSnapshot", ".collection(", "sendToClaude", "db.", "user.can("):
             self.assertNotIn(gone, self.p, gone)
@@ -1069,7 +1162,10 @@ class PageTextTest(unittest.TestCase):
         self.assertIn("Mark urgent", card)
 
     def test_sections(self):
-        self.assertRegex(self.markup, r'data-s="parked"[^>]*>Parked')
+        self.assertRegex(self.markup, r'data-sf="parked"[^>]*>Parked')          # Parked is a tab of the Backlog row,
+        self.assertNotIn('data-s="parked"', self.markup)                         # no longer a section of its own
+        order = [self.markup.index('data-sf="%s"' % f) for f in ("new", "current", "parked", "done")]
+        self.assertEqual(order, sorted(order))
         self.assertRegex(self.markup, r'data-s="topm"[^>]*>To PM')
         self.assertLess(self.markup.index('data-s="questions"'), self.markup.index('data-s="topm"'))
         self.assertLess(self.markup.index('data-s="topm"'), self.markup.index('data-s="todo"'))
