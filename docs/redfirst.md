@@ -16,6 +16,24 @@
   - It runs in a child process on its own console.
   - It puts back the base's copy of each `--also` file, then removes the tree with `kitlib.worktree.remove` (the checks and `git_remove` that `worktree_remove.py` uses), never forced.
   - A tree still held after `"redfirst".hold_wait` seconds is left in place, with the `worktree_remove.py` command that removes it.
-- Exit codes: 0 every selector RED, 1 any GREEN, 2 usage or refusal (`--help` too), 3 undecided, 4 throwaway left.
+- Exit codes: 0 every selector RED, 1 any GREEN, 2 usage or refusal (`--help` too), 3 undecided, 4 throwaway left; 6, 8, 10, 11 or 12 when the machine lock refused the run ("The machine lock" below).
 
-Not ported: the pid shield around the test run (a plain subprocess). Tests: `tests/redfirst`.
+## The machine lock
+
+A run whose command is heavy books the machine lock itself, so the caller does not wrap `redfirst.py` in `machine_lock.py run` (`kitlib/redfirst/run.py`: `lock_kind`, `one_lock`, `book_slot`, `locked_run`; tests: `tests/redfirst/test_lock.py`).
+
+- **Which kind.** A runner's `lock` (docs/kit-json.md, `redfirst.runners`) names the kinds-table kind. Without it the kind is that of the first heavy-list entry the runner's command matches (`kitlib.config.heavy_match` over `heavy_programs`: the kit defaults, then the repo's `heavy.programs`): `build` for `gradlew` and for `dotnet test`, none for the python runner. A run with no kind books nothing and runs as before (`run.py`, `default_run`).
+- **One booking a run.** The run books once, before the throwaway tree is made, as `<repo name>/redfirst-<base10>` (`kitlib.lock.run.book`; the repo name is `"repo".name`, else the main checkout's folder name), runs every command in the booked run's job, and releases before the cleanup. `--tests` values that need two different kinds are refused, exit 2, with the kind of each; run them in separate calls.
+- **No wait limit.** A busy lock queues the run and it waits its turn. Ctrl-C while it waits ends the wait: the lock removes the run's entry, no tree is made, exit 3.
+- **Inside a caller's run** (`MACHINE_LOCK_RUN`, as `kitlib.lock.run.nest_check` accepts it):
+  - The caller's run holds as many slots as the kind needs, or more: redfirst takes nothing more and its command runs on the caller's cores. The `lock` line says `nested: run <id> already holds what it needs`.
+  - The caller's run holds slots of a pool the kind needs, but fewer than it needs: the lock refuses the nested run (`kitlib.lock.run.nest_need`), and redfirst prints `refused: the machine lock: nested run refused: ...; start it outside that run`, makes no tree, runs nothing and exits 2. Run `redfirst.py` outside that run, where it books for itself.
+  - The caller's run holds no slot of a pool the kind needs: redfirst books that pool itself.
+- **Refusals.** When the lock refuses the run, no tree is made and nothing is run; the log folder, made first, stays. A usage refusal (the nested one above, or a `lock` kind the kinds table does not have) is exit 2. The others print `NOT RUN: the machine lock refused the run: <the lock's line>` and `REDFIRST NOT RUN - ...` and exit with the lock's own code (`run.py`, `LOCK_CODES`; `kitlib/lock/store.py`). None of them is 0 or 1, so a refusal never reads as RED or GREEN:
+  - 10: the kinds table, the lock's store, its queue or the run's mutex could not be read, made or written (`kitlib.lock.run.book`, the `require-lock:` lines). It is the one `book` gives for what `book_slot` passes, which is no wait limit and no hold.
+  - 6 (busy), 8 (the wait ran out), 11 (an owner or game hold leaves too few slots past the wait limit) and 12 (a hold the run names cannot be claimed) are passed through should the lock give them; each needs a wait limit, `no_wait` or a named hold (`kitlib.lock.run.acquire`, `book`). With none of those a hold over the slots parks the run until it clears.
+  - Any other failure of the lock is exit 3, a `machine_lock.py stop` of the run while it waits among them: the lock ends that wait with its own code 1, which here would read as GREEN.
+- **The run's record.** The booked run ends, before the cleanup, with the code the verdicts give (0, 1 or 3), 130 after Ctrl-C, 1 after an error. A `machine_lock.py stop` of the run ends its command: that selector prints `failed    the machine lock stopped run <id>; ...` and the exit is 3.
+- **Build daemons.** A Gradle daemon the command starts is treated as any run's (docs/gate.md "Build daemons"): `kitlib/lock/run.py` `Slot.stop_daemons` stops it at the release only when `machine_lock.daemons` says so, which the default `gates` does not for a redfirst run, so it runs on unpinned after the release.
+
+Not ported: the pid shield around the test run. Tests: `tests/redfirst`.
