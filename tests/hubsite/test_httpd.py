@@ -215,6 +215,30 @@ class GateCase(httpfix.ListenerCase):
                 post(lis.port, TODOS, None, self.owner, via=said)
                 self.assertEqual(rec.calls[-1]['via'], said)
 
+    def test_a_listener_told_not_to_read_the_via_header_names_the_source_itself(self):
+        rec = Recorder()
+        lis = self.listener(rec, via='made-up', via_header=False)
+        self.assertIs(lis.via_header, False)
+        for said in ('web', 'cli', 'relay:phone_1.2', 'WEB', '', 'made-up'):
+            with self.subTest(via=said):
+                post(lis.port, TODOS, None, self.owner, headers=[(httpd.VIA_HEADER, said)])
+                self.assertEqual(rec.calls[-1]['via'], 'made-up')
+        post(lis.port, TODOS, None, self.owner,
+             headers=[(httpd.VIA_HEADER, 'web'), (httpd.VIA_HEADER, 'cli')])
+        post(lis.port, TODOS, None, self.owner)
+        get(lis.port, BASE + '/backlog', self.agent, headers=[(httpd.VIA_HEADER, 'web')])
+        self.assertEqual([call['via'] for call in rec.calls[-3:]], ['made-up'] * 3)
+        # only True reads the header: a value that is merely truthy does not turn it on
+        for flag, read in ((True, True), (False, False), (None, False), (0, False), (1, False),
+                           ('yes', False)):
+            with self.subTest(flag=flag):
+                other = self.listener(rec, via='made-up', via_header=flag)
+                self.assertIs(other.via_header, read)
+                post(other.port, TODOS, None, self.owner, via='web')
+                self.assertEqual(rec.calls[-1]['via'], 'web' if read else 'made-up')
+        # and a listener made without it reads the header, as every listener did
+        self.assertIs(self.listener(rec).via_header, True)
+
     def test_the_via_is_recorded_on_the_document(self):
         lis = self.listener()
         tid = post(lis.port, TODOS, {'title': 't'}, self.owner, via='web').json()['id']

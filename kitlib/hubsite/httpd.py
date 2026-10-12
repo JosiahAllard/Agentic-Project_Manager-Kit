@@ -2,7 +2,7 @@
 
   Listener(addr, api, gate, static_dir=None, host_rule=None, routes=None, via='', log=None,
            max_waits=MAX_WAITS, max_body=MAX_BODY, max_connections=MAX_CONNECTIONS,
-           origin_scheme='http')
+           origin_scheme='http', via_header=True)
       .port .url .waiting          the bound port (addr may name port 0), its URL, waits blocked now
       .closing                     close_door() was called
       .start()                     serve on a thread; .stop(timeout) = close_door() then join()
@@ -54,7 +54,9 @@ most LINGER_S seconds and LINGER_BYTES bytes, so the answer reaches the client a
 
 via. A caller names its transport in the VIA_HEADER header (`web`, `cli`, `desktop-mcp`,
 `relay:<source>`): a short lower-case token, else the listener's own `via` is used ('' lets the
-Api record `api`).
+Api record `api`). A listener made with via_header=False never reads that header: every request
+on it carries the listener's own `via`, whatever the client sent. That is the tunnel listener
+(kitlib.hubsite.tunnel), whose writes are all recorded as `tunnel`.
 
 Waits. GET wait blocks in the Api for up to api.WAIT_MAX_S. At most max_waits requests may be in
 it at once on one listener: the next is refused at once with 429 `busy` and a Retry-After, and
@@ -537,6 +539,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         return refusal(404, 'not_found', 'there is nothing at this path', 'path')
 
     def _via(self, listener):
+        if not listener.via_header:
+            return listener.via     # this port names the source itself: the client is not asked
         said = self.headers.get_all(VIA_HEADER) or ()
         if len(said) == 1 and _VIA.match(said[0].strip()):
             return said[0].strip()
@@ -622,7 +626,7 @@ class Listener(object):
 
     def __init__(self, addr, api, gate, static_dir=None, host_rule=None, routes=None, via='',
                  log=None, max_waits=MAX_WAITS, max_body=MAX_BODY,
-                 max_connections=MAX_CONNECTIONS, origin_scheme='http'):
+                 max_connections=MAX_CONNECTIONS, origin_scheme='http', via_header=True):
         if origin_scheme not in ORIGIN_SCHEMES:
             raise ValueError('origin_scheme is one of %s, not %r'
                              % (', '.join(ORIGIN_SCHEMES), origin_scheme))
@@ -641,6 +645,7 @@ class Listener(object):
         self.host_rule = host_rule
         self.routes = dict(routes or {})
         self.via = via if isinstance(via, str) else ''
+        self.via_header = via_header is True        # anything else: the header is never read
         self.max_waits = max_waits
         self.max_body = max_body
         self.max_connections = max_connections
