@@ -47,6 +47,29 @@ class Derive(unittest.TestCase):
             with self.subTest(division=d):
                 self.assertNotEqual(lay.slot_key(lay.derive(hw, d)), base)
 
+    # Pins of today's text: they pass before and after any change that keeps it. slot_key goes
+    # into every run record, where the older kit's tool compares it; layout_key is layout.json's
+    # key, which every kit version recomputes (valid_layout). A change to either text has to be
+    # made on purpose.
+    def test_slot_key_text_for_two_cards_and_for_none(self):
+        # g is the count of shared cards and gpu the count of gpu slots (two per card; one
+        # placeholder slot with no card). The m part is LIVE_TOOL_KEY's with any count of
+        # cards: the hash takes the cpu slots only.
+        two = lay.derive(lay.fake_hardware(threads=24, smt=2, gpus=2, vram_mb=12288))
+        self.assertEqual(lay.slot_key(two), "t24 g2 cpu 12 x 2 gpu 4 m9b5a6751")
+        none = lay.derive(lay.fake_hardware(threads=24, smt=2, gpus=0))
+        self.assertEqual(lay.slot_key(none), "t24 g0 cpu 12 x 2 gpu 1 m9b5a6751")
+
+    def test_layout_key_text_is_pinned(self):
+        # layout.json's key: no g part, and a hash that does take the gpu slots' cards.
+        for gpus, want in ((1, "t24 cpu 12 x 2 gpu 2 m90bcd92d"),
+                           (2, "t24 cpu 12 x 2 gpu 4 m6c673e2a"),
+                           (0, "t24 cpu 12 x 2 gpu 1 m9a7f63d7")):
+            with self.subTest(gpus=gpus):
+                L = lay.derive(lay.fake_hardware(threads=24, smt=2, gpus=gpus, vram_mb=12288))
+                self.assertEqual(L["key"], want)
+                self.assertEqual(lay.layout_key(L), want)
+
     def test_a_small_machine_keeps_one_slot_out_of_half(self):
         L = lay.derive(lay.fake_hardware(threads=4, smt=2, gpus=0))
         self.assertEqual((L["cpu_slots"], L["agent_cap"], L["medium_cores"], L["half"]["cpu"]),
