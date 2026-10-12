@@ -330,6 +330,170 @@ class ServeCase(CliCase):
         self.assertNotIn('hub closed', out)
         self.assertFalse(self.locked(), 'the store lock outlived the server')
 
+    def ctrl_c(self):
+        """Make a Ctrl+C a KeyboardInterrupt in this, the main thread, whatever the runner set
+        for it."""
+        if threading.current_thread() is not threading.main_thread():
+            self.skipTest('a Ctrl+C reaches the main thread only')
+        was = signal.signal(signal.SIGINT, signal.default_int_handler)
+        if was is not None:
+            self.addCleanup(signal.signal, signal.SIGINT, was)
+
+    def test_the_first_ctrl_c_is_a_clean_close_and_exit_0(self):
+        self.ctrl_c()
+        real, looks, stop = HUB.serve.build, [], threading.Event()
+
+        def build(settings, sources, log=None):
+            hub = real(settings, sources, log=log)
+
+            def watch():                # each turn of the serving wait: the owner presses once
+                looks.append(True)
+                if len(looks) == 1:
+                    _thread.interrupt_main()
+                else:
+                    stop.set()          # the Ctrl+C did not end the wait: the test fails below
+
+            hub.watch = watch
+            return hub
+
+        with mock.patch.object(HUB.serve, 'build', build), \
+                mock.patch.object(serve, 'POLL_S', 0.01):
+            try:
+                code, out, err = self.run_cli('serve', '--store', self.store_dir, '--port', '0',
+                                              stop=stop)
+            except KeyboardInterrupt:
+                self.fail('the first Ctrl+C left hub.py as a KeyboardInterrupt')
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(looks, [True], 'the server went on serving after the Ctrl+C')
+        lines = out.splitlines()
+        self.assertEqual(len(lines), 2, out)
+        self.assertEqual(lines[1], HUB.CLOSED)
+        self.assertFalse(self.locked(), 'the store lock outlived the server')
+
+    def cut_in(self, step):
+        """A patch to serve under: the built server's close is left by a Ctrl+C in `step` of its
+        listener ('drain': the requests in flight; 'join': the handler threads, after the store
+        closed)."""
+        real = HUB.serve.build
+
+        def build(settings, sources, log=None):
+            hub = real(settings, sources, log=log)
+            lis = hub.listeners[0]
+            was = getattr(lis, step)
+
+            def cut(timeout=None):
+                was(timeout)
+                raise KeyboardInterrupt()
+
+            setattr(lis, step, cut)
+            return hub
+
+        return mock.patch.object(HUB.serve, 'build', build)
+
+    def test_a_ctrl_c_that_leaves_the_close_itself_says_so_and_is_exit_1(self):
+        stop = threading.Event()
+        stop.set()
+        # no git sync to wait for: the second Ctrl+C ends the close, and the store was released
+        with self.cut_in('drain'):
+            code, out, err = self.run_cli('serve', '--store', self.store_dir, '--port', '0',
+                                          stop=stop)
+        self.assertEqual(code, 1)
+        self.assertEqual(err.splitlines(), [HUB.CLOSE_CUT])
+        self.assertTrue(HUB.CLOSE_CUT.startswith('interrupted during the close: the hub server '
+                                                 'did not close cleanly'))
+        self.assertIn('The store lock is released', HUB.CLOSE_CUT)
+        self.assertNotIn('before the server closed', err)
+        self.assertEqual(len(out.splitlines()), 1, out)
+        self.assertNotIn('hub closed', out)
+        self.assertFalse(self.locked(), 'the store lock outlived the server')
+
+    def test_a_ctrl_c_in_the_last_steps_of_a_synced_close_is_the_same_line(self):
+        class Sync(object):
+            def start(self):
+                return True
+
+            def stop(self, timeout=None):
+                return True
+
+            def sync_once(self):
+                return self.status()
+
+            def status(self):
+                return {'running': True, 'failed': '', 'detail': ''}
+
+        stop = threading.Event()
+        stop.set()
+        with self.synced(Sync()), self.cut_in('join'):
+            code, out, err = self.run_cli('serve', '--port', '0', stop=stop)
+        self.assertEqual(code, 1)
+        # the waits for git had ended: no line says that a git command may be left half-way
+        self.assertEqual(err.splitlines(), ['NOTE: ' + serve.LAST_PASS, HUB.CLOSE_CUT])
+        self.assertNotIn('hub closed', out)
+        self.assertFalse(self.locked(), 'the store lock outlived the server')
+
+    def test_a_ctrl_c_before_a_server_serves_or_in_another_verb_is_exit_1(self):
+        def pressed(*args, **kw):
+            raise KeyboardInterrupt()
+
+        for argv, at in ((('serve', '--store', self.store_dir, '--port', '0'), HUB.serve),
+                         (('status',), HUB.settings), (('setup',), HUB.settings)):
+            name = 'build' if at is HUB.serve else 'load'
+            with self.subTest(argv=argv), mock.patch.object(at, name, pressed):
+                try:
+                    code, out, err = self.run_cli(*argv)
+                except KeyboardInterrupt:
+                    self.fail('the Ctrl+C left hub.py as a KeyboardInterrupt')
+                # no server was closing: the line does not say that one did not close
+                self.assertEqual((code, out, err), (1, '', HUB.INTERRUPTED + '\n'))
+        self.assertEqual(HUB.INTERRUPTED, 'interrupted')
+
+    def test_a_closed_console_at_the_closing_line_is_still_a_clean_close(self):
+        for gone in (OSError(9, 'Bad file descriptor'),
+                     ValueError('I/O operation on closed file')):
+            with self.subTest(gone=type(gone).__name__):
+                class Shut(io.StringIO):        # the console closed while the server served
+                    def write(self, text):
+                        if HUB.CLOSED in text:
+                            raise gone
+                        return io.StringIO.write(self, text)
+
+                stop = threading.Event()
+                stop.set()
+                out, err = Shut(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    code = HUB.main(['serve', '--store', self.store_dir, '--port', '0'],
+                                    stop=stop)
+                self.assertEqual((code, err.getvalue()), (0, ''))
+                self.assertEqual(len(out.getvalue().splitlines()), 1, out.getvalue())
+                self.assertFalse(self.locked(), 'the store lock outlived the server')
+
+    def test_a_refusal_and_a_config_error_are_printed_without_the_user_or_password_of_a_url(self):
+        remote = 'https://someone:s3cret@git.example.test/team/data.git'
+        bare = 'https://git.example.test/team/data.git'
+
+        def raising(exc):
+            def raise_it(*args, **kw):
+                raise exc
+            return raise_it
+
+        for at, name, exc, code, line in (
+                (HUB.serve, 'build', serve.ServeError('the remote %s cannot be used' % remote),
+                 1, 'REFUSED: the remote %s cannot be used' % bare),
+                (HUB.serve, 'build', auth.TokenFileError("a token file beside '%s'" % remote),
+                 1, "REFUSED: a token file beside '%s'" % bare),
+                (HUB.settings, 'load', HUB.ConfigError('hub.remote: %s is no name' % remote),
+                 2, 'machine config: hub.remote: %s is no name' % bare)):
+            with self.subTest(line=line), mock.patch.object(at, name, raising(exc)):
+                got, out, err = self.run_cli('serve', '--store', self.store_dir, '--port', '0')
+                self.assertEqual((got, out, err), (code, '', line + '\n'))
+        # the answer of a server that is not as expected: its message is another process's text
+        answer = (500, {'error': {'code': 'internal', 'message': "cannot reach '%s'" % remote}})
+        with mock.patch.object(HUB.serve, 'ask', lambda *args, **kw: answer):
+            got, out, err = self.run_cli('status', '--port', '8790')
+        self.assertEqual((got, out, err), (
+            1, '', "REFUSED: the server on port 8790 answered 500 internal: cannot reach '%s'\n"
+            % bare))
+
     def test_the_log_prints_errors_and_notes_and_no_request_line(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):

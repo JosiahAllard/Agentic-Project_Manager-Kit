@@ -892,6 +892,27 @@ class Fetching(unittest.TestCase):
         self.v.get()
         self.assertEqual(self.opener.calls, [("/one", True), ("/two", True)])   # the round's open serves
 
+    def test_a_read_given_a_stop_reads_no_further_repo_once_it_is_set(self):
+        stop = threading.Event()
+        whole = self.v.get(stop=stop)                           # not set: the read is whole
+        self.assertEqual([r["repo"] for r in whole["repos"]], ["one", "two", "absent"])
+        del self.opener.calls[:]
+        self.opener.on_read = stop.set                          # set while the first repo is read
+        self.assertIsNone(self.v.get(stop=stop))
+        self.assertEqual(self.opener.calls, [("/one", False)])  # the second repo was never read
+        # the read that was cut is no answer anywhere: the last whole one still serves a repo
+        # list that fails, and a caller that gives no stop reads every repo
+        self.assertEqual(self.v._last, whole)
+        self.opener.on_read = None
+        del self.opener.calls[:]
+        self.assertEqual(self.v.get()["repos"], whole["repos"])
+        self.assertEqual(self.opener.calls, [("/one", False), ("/two", False)])
+        # a repo read recently enough to reuse is no read: a stop that is set leaves that whole
+        self.v.reuse_s = 5
+        del self.opener.calls[:]
+        self.assertEqual(self.v.get(stop=stop)["repos"], whole["repos"])
+        self.assertEqual(self.opener.calls, [])
+
     def test_a_repo_list_that_raises_gives_the_last_good_answer_with_an_error(self):
         known, broken = [("one", "/one")], []
 

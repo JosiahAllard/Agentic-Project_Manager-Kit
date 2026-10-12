@@ -7,8 +7,12 @@
       start-up notes, a git sync pass that failed with git's reason, the wait for git at the
       close before it begins (it is given no time limit) and each step of the close that failed
       or ran out of time. Ctrl+C again ends that wait: an error line then says that a git
-      command may have been left half-way and what to check, and the exit code is 1. No line
-      of these holds the user or password of a URL.
+      command may have been left half-way and what to check, and the exit code is 1. Where
+      the close has no git to wait for (--store, a sync refused at start-up, or its last two
+      steps: the store and the handler threads), Ctrl+C again ends the close itself: one line
+      says that the close was interrupted and that the store lock is released, and the exit
+      code is 1. No line of these holds the user or password of a URL, and neither does a
+      `REFUSED:` or a `machine config:` line of any verb.
       The port is hub.port of the machine config (default 8790); --port 0 takes a free one,
       named on the start line. The store is hub.store, else hub/ in the PM data worktree.
       --store PATH serves that folder instead, as a scratch copy: git sync is off for that run,
@@ -27,9 +31,9 @@
       the running server gives for the owner's token. --print prints the link instead.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.hubsite, prints and exits.
-Exit codes: 0 ok; 1 refused (REFUSED: ...), or a server that did not close cleanly; 2 usage error
-or a machine config that cannot be read; 3 the server is not running (the start command is
-printed).
+Exit codes: 0 ok; 1 refused (REFUSED: ...), a server that did not close cleanly, or a Ctrl+C
+other than the one that closes a running server; 2 usage error or a machine config that cannot
+be read; 3 the server is not running (the start command is printed).
 """
 import argparse
 import os
@@ -93,6 +97,12 @@ def parser():
 
 LEVELS = {'error': 'ERROR', 'note': 'NOTE'}     # the log levels that are printed, and as what
 CLOSED = 'hub closed: the server ended cleanly and the store lock is released'
+# Ctrl+C left the close itself (kitlib.hubsite.serve, "The clean close": a second one with no
+# git sync to wait for, or one in the close's last two steps). The lock: step 5 released it, or
+# the system does when the process ends.
+CLOSE_CUT = ('interrupted during the close: the hub server did not close cleanly. The store '
+             'lock is released, at the latest when this process ends')
+INTERRUPTED = 'interrupted'             # Ctrl+C anywhere else (a verb, or serve before it served)
 
 
 def _log(level, text):
@@ -121,17 +131,25 @@ def _serve(a, stop):
             _log('note', note)
         print('hub serving %s on %s (Ctrl+C stops it)' % (h.store.root, h.url), flush=True)
 
-    if not serve.run(hub, started, stop):
+    try:
+        clean = serve.run(hub, started, stop)
+    except KeyboardInterrupt:           # run() lets one through only from the close
+        print(CLOSE_CUT, file=sys.stderr)
+        return 1
+    if not clean:
         print('the hub server did not close cleanly: see the lines above', file=sys.stderr)
         return 1
-    print(CLOSED, flush=True)           # the owner sees that the server ended on purpose
+    try:
+        print(CLOSED, flush=True)       # the owner sees that the server ended on purpose
+    except (OSError, ValueError):       # a closed console: the server still ended cleanly
+        pass
     return 0
 
 
 def _refused(port, status, obj):
     err = obj.get('error') if isinstance(obj.get('error'), dict) else {}
-    print('REFUSED: the server on port %d answered %d %s: %s' % (
-        port, status, err.get('code') or '', err.get('message') or 'not the expected answer'),
+    print(serve.scrub('REFUSED: the server on port %d answered %d %s: %s' % (
+        port, status, err.get('code') or '', err.get('message') or 'not the expected answer')),
         file=sys.stderr)
     return 1
 
@@ -191,7 +209,9 @@ VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open}
 
 
 def main(argv=None, stop=None):
-    """`stop`: a threading.Event that ends `serve` when set (default: Ctrl+C only)."""
+    """`stop`: a threading.Event that ends `serve` when set (default: Ctrl+C only). The
+    `machine config:` and `REFUSED:` lines go through serve.scrub, as the server's log lines
+    do: a reason may quote a remote URL."""
     p = parser()
     a = p.parse_args(argv)
     if not a.verb:
@@ -199,16 +219,16 @@ def main(argv=None, stop=None):
     try:
         return VERBS[a.verb](a, stop)
     except ConfigError as e:
-        print('machine config: %s' % e, file=sys.stderr)
+        print(serve.scrub('machine config: %s' % e), file=sys.stderr)
         return 2
     except serve.NotRunning as e:
         print('%s; start it with: %s' % (e, START), file=sys.stderr)
         return 3
     except (serve.ServeError, auth.TokenFileError) as e:
-        print('REFUSED: %s' % e, file=sys.stderr)
+        print(serve.scrub('REFUSED: %s' % e), file=sys.stderr)
         return 1
-    except KeyboardInterrupt:
-        print('interrupted before the server closed', file=sys.stderr)
+    except KeyboardInterrupt:           # not in a server's close: _serve answers that one
+        print(INTERRUPTED, file=sys.stderr)
         return 1
 
 

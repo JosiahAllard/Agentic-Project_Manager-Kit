@@ -72,7 +72,9 @@ and none raised. Three things about step 4:
     end before the store closes, and a git command stopped half way may leave an `index.lock`
     behind, after which every pass ends at `busy` until a person removes it
     (kitlib.hubsite.gitsync). The 'note' line (LAST_PASS) is logged before the wait begins
-    and says all of this.
+    and says all of this. When the sync's thread has not ended in `timeout`, the wait for
+    its pass in flight is made in the sync's stop(None), which begins no pass, and the last
+    pass is called after it: no call of sync_once is left queued behind a pass in flight.
   - The last pass is skipped when step 3 ran out of time or raised. A request is then still in
     flight and may write while git adds the store's files (GitSync takes no store lock), so the
     commit could hold half of that write with no later pass in this process to bring the rest.
@@ -87,8 +89,15 @@ and none raised. Three things about step 4:
     KeyboardInterrupt reaches a close() that runs on the main thread. For that one, and for
     one in steps 1 to 3 of a server whose sync was started, an 'error' line (CUT_SHORT) says
     that a git command may have been left half way and what to check; the sync is told to
-    begin no further pass, steps 5 and 6 still run, and close() answers False. With no sync
-    started, a KeyboardInterrupt leaves close() as it came, after steps 5 and 6.
+    begin no further pass, steps 5 and 6 still run, and close() answers False. No pass
+    begins after that: the wait that was left is one in the sync's stop(), or a last pass
+    that had begun already, and that one, like a pass in flight, is left to itself. (One
+    case is left: a sync whose stop(None) raises or does not answer True. Its last pass is
+    still called and may wait for a pass in flight; GitSync's stop(None) answers True.)
+    With no sync started, a KeyboardInterrupt leaves close() as it came, after steps 5 and
+    6. So does one that arrives in step 5 or 6 itself, sync or none: step 4 has ended, so
+    there is no CUT_SHORT line, and what is left of those two steps is not run (the system
+    drops the store lock with the process when step 5 was the one cut).
 A process that is killed closes nothing: the system drops the store lock with it, and the next
 start takes it over.
 
@@ -110,6 +119,8 @@ phrases, and the reasons of the derived views are replaced by fixed phrases here
       SiteViews.after_round() runs on the timer's own thread after each round. That reads the
       view as a client would, mostly from what the round just read; with no timer
       (backlog_refresh_s unset) health knows nothing of the backlog until a client reads it.
+      That read is given the timer's stop event (backlog.Views.get(stop=)): once the timer is
+      told to stop it reads no further repository, and health says what it said before.
 
 GET health and the sync's reason (health_route). The Api's health carries no `detail` for
 anyone. The route adds `git.detail`, the reason of a failing sync with scrub() applied, for the
@@ -166,7 +177,10 @@ CUT_SHORT = ('closing: interrupted before the git sync had ended: a git command 
 LEFT_RUNNING = ('closing: the store is closed while a git sync pass may still be running: a git '
                 'command may be left half-way. ' + _CHECK)
 # the user and password part of a URL: everything between `://` and the last `@` of its host
-# part. A quote does not end it (a password may hold `'`); a space, `"`, `<` and `>` do.
+# part. A quote does not end it (a password may hold `'`); a space, `"`, `<` and `>` do. So in
+# `'https://h','x@y'` (a URL with no user part, then other text with an `@` and no space or
+# `/` before it) what stands between is lost: too much is taken out, never a password left
+# in. No rule here tells that text from a password that holds `','`.
 _USERINFO = re.compile(r'(?<=://)[^/?#\s"<>]*@')
 
 
@@ -217,7 +231,8 @@ class Sources(object):
       agents       the folder of agent definitions
       backlog      callable(refresh_s) -> a kitlib.hubsite.backlog.Views (or its like: get, start,
                    stop, days, clock, timer_error; a callable `wait`, when it has one, is
-                   wrapped by build(): module docstring, "Views")
+                   wrapped by build(), and its get() is then also called with `stop=`, the
+                   timer's event: module docstring, "Views")
       sync         callable(store_dir, commit_every_s, remote=, branch=, push=) -> a
                    kitlib.hubsite.gitsync.GitSync (or its like: start, stop, sync_once, status)
     """
@@ -313,8 +328,16 @@ class SiteViews(object):
         if sources.agents:
             self.agents = self._agents
 
-    def _read(self, fresh=False):
-        got = self._backlog.get(fresh=bool(fresh))
+    def _read(self, fresh=False, stop=None):
+        """The backlog source's entries, kept for health. With `stop` (an Event; the timer's
+        own read gives its) the source may answer None, a read it cut short: None then, and
+        health keeps what it had."""
+        if stop is None:
+            got = self._backlog.get(fresh=bool(fresh))
+        else:
+            got = self._backlog.get(fresh=bool(fresh), stop=stop)
+            if got is None:
+                return None
         entries = got.get('repos') or []
         # one assignment: health reads it from another thread and takes no lock
         self._last = {'at': got.get('at'), 'error': got.get('error'),
@@ -381,13 +404,15 @@ class SiteViews(object):
         folder: it is for the owner and the server log, never for an agent."""
         return ('', '') if self._sync is None else _failure(self._sync)
 
-    def after_round(self):
+    def after_round(self, stop=None):
         """Read the backlog view as a client's read does, so health carries what the timer's
-        round just read. Never raises: it runs on the timer's thread (build)."""
+        round just read. `stop`: the timer's event; once it is set no further repository is
+        read (backlog.Views.get) and health keeps what it had. Never raises: it runs on the
+        timer's thread (build)."""
         if self._backlog is None:
             return
         try:
-            self._read()
+            self._read(stop=stop)
         except Exception:           # noqa: BLE001 - health then says what it said before
             pass
 
@@ -459,15 +484,16 @@ def health_route(api, views):
 
 def _follow_rounds(backlog_views, views):
     """Make each round of the backlog timer reach health: wrap `backlog_views.wait`, the pause
-    the timer takes after a round on its own thread, so views.after_round() runs first. Not
-    when the timer is stopping, and not for a stand-in with no `wait`."""
+    the timer takes after a round on its own thread, so views.after_round(stop) runs first. Not
+    when the timer is stopping (and a timer told to stop during that read ends it after the
+    repository it is on), and not for a stand-in with no `wait`."""
     wait = getattr(backlog_views, 'wait', None)
     if not callable(wait):
         return
 
     def pause(stop, seconds):
         if not stop.is_set():
-            views.after_round()
+            views.after_round(stop)
         return wait(stop, seconds)
 
     backlog_views.wait = pause
@@ -636,24 +662,35 @@ class Hub(object):
             self._say(LAST_PASS_SKIPPED)
             self._say(IN_FLIGHT, 'note')
         stopped = self._step('the git sync', timeout, _apart, self.sync.stop, timeout)
-        if drained:
-            return self._last_pass() and stopped
         if stopped:
-            return True
+            return self._last_pass() if drained else True
+        if drained:
+            # A pass is in flight. Wait for it in stop(), which begins no pass, and only then
+            # call the last one: a sync_once left waiting behind that pass by a Ctrl+C would
+            # begin its own pass after the store closed. LAST_PASS announced this wait.
+            self._pass_ended()
+            self._last_pass()
+            return False
         # no last pass will wait for the pass in flight: wait for it here, before the store closes
         self._say(STILL_WAITING, 'note')
-        try:
-            ended = _apart(self.sync.stop, None) is True
-        except Exception:           # noqa: BLE001 - said below; the store is still closed
-            ended = False
-        if not ended:
+        if not self._pass_ended():
             self._say(LEFT_RUNNING)
         return False
 
+    def _pass_ended(self):
+        """Wait, with no time limit, for the sync's thread and so for its pass in flight: True
+        when it ended. No pass begins here. False when the wait raised or answered anything
+        else; the store is still closed."""
+        try:
+            return _apart(self.sync.stop, None) is True
+        except Exception:           # noqa: BLE001 - the caller says what follows from it
+            return False
+
     def _cut_short(self):
         """A KeyboardInterrupt ended the close before the git sync had: say what may be left
-        half way, and tell the sync to begin no further pass (no wait: a pass in flight is
-        left to itself)."""
+        half way, and tell the sync to begin no further pass (no wait: a pass in flight, or a
+        last pass that had begun, is left to itself). No wait _close_sync makes is one that
+        begins a pass later: module docstring, "The clean close"."""
         self._say(CUT_SHORT)
         try:
             self.sync.stop(0)
@@ -741,7 +778,8 @@ def run(hub, started=None, stop=None):
     signal handler is set, so only Ctrl+C (KeyboardInterrupt) and `stop` are a clean close. A
     second Ctrl+C, during the close, is Hub.close's to answer (module docstring, "The clean
     close"): with a git sync started it ends the wait for git and this answers False; with
-    none it leaves here as a KeyboardInterrupt, the store closed."""
+    none, or when it arrives in the last two steps of the close, it leaves here as a
+    KeyboardInterrupt (the store is closed, unless closing it was the step cut)."""
     stop = stop if stop is not None else threading.Event()
     try:
         if not hub.start():

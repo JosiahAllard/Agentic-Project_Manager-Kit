@@ -356,7 +356,9 @@ class Views(object):
 
     `get()` never fetches. A repository is read by one caller at a time (`_read`): a hung
     repository costs the caller that started its read git's time limit, and the callers that
-    arrive meanwhile wait for that one read instead of starting their own. `refresh()` runs a
+    arrive meanwhile wait for that one read instead of starting their own. `get(stop=event)`
+    starts no further repository's read once `event` is set, and then answers None (the read a
+    stopping timer's thread makes: kitlib.hubsite.serve). `refresh()` runs a
     round: each repository in turn is fetched and read again (the local copy when its fetch
     failed); `get(fresh=True)` is the same. Only one round runs at a time: a call that waited
     through a round started after it arrived takes that round's result instead of fetching again.
@@ -425,8 +427,13 @@ class Views(object):
             self._reads[name] = self._reads.get(name, 0) + 1
             return entry
 
-    def get(self, fresh=False):
-        """The view now: {"at", "repos": [...], "error"}. The caller owns what it gets."""
+    def get(self, fresh=False, stop=None):
+        """The view now: {"at", "repos": [...], "error"}. The caller owns what it gets.
+
+        `stop`: an Event, or None. Once it is set, a plain read (not a fresh one) starts no
+        further repository's read: it answers None, and what `get()` answered last stays as it
+        was. A repository whose last read is recent enough to reuse is no read, so a view that
+        needs none is still answered."""
         if fresh:
             return self.refresh()
         now = self.clock()
@@ -441,6 +448,8 @@ class Views(object):
             held = self._held.get(name)
             if held and held[0] == root and self._recent(held[1]):
                 entry = held[2]
+            elif stop is not None and stop.is_set():
+                return None                 # the caller is stopping: no further repository is read
             else:
                 entry = self._read(name, root, now)
             entry = copy.deepcopy(entry)
