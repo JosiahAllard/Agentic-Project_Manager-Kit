@@ -510,7 +510,8 @@ def book_slot(plan, say, ints, book_kw=None):
     plan.lock, for `<repo>/redfirst-<base10>`), said as a `lock` line. Or `(None, exit code)`:
     nothing is booked and the reason is said - 2 for the lock's usage refusals (an unknown kind;
     a run nested in one that holds fewer slots than the kind needs), the lock's own code for
-    LOCK_CODES, 3 for anything else and for an interrupt.
+    LOCK_CODES, 3 for anything else and for an interrupt. A `say` that raises on the `lock` line
+    of a held slot raises on, with the slot released first (record ended 1, "error").
 
     book_kw: further arguments of book (a test's store, env and cores). The store's lines come
     out through `say` as `lock` lines. No wait limit is passed: the run waits its turn in the
@@ -553,7 +554,11 @@ def book_slot(plan, say, ints, book_kw=None):
     if ints.seen:                            # noted while book held it back: give the slots back
         let_go(slot, say, 130, 'interrupted')
         return None, stopped(say)
-    say('lock      %s' % slot.held_text())
+    try:
+        say('lock      %s' % slot.held_text())
+    except BaseException:                    # only this frame knows the slot: release, then raise
+        let_go(slot, lambda line: None, 1, 'error')
+        raise
     return slot, None
 
 

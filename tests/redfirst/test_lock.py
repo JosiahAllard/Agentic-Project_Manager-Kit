@@ -275,6 +275,27 @@ class Booking(LockCase):
                       'own lock', out)
         self.assertIn('lock      engine-test holds cpu slot', out)
 
+    def test_a_held_slot_whose_lock_line_cannot_be_said_is_given_back(self):
+        # book_slot holds the slot before execute has it: were the line's failure to leave it
+        # there, the run would stay booked until a prune found its holder dead.
+        self.commit({'tests/test_lockrun.py': SHOW_RUN})
+        failed = []
+
+        def say(line):
+            if line.startswith('lock      engine-test holds'):
+                failed.append(line)
+                raise OSError('the output is gone')
+            print(line, flush=True)
+        with mock.patch.object(tool, 'say', say):
+            rc, out = self.run_locked('--tests', 'tests/test_lockrun.py')
+        self.assertEqual(len(failed), 1, out)
+        self.assertEqual(rc, V.EXIT_UNDECIDED, out)
+        self.assertIn('failed    unexpected OSError: the output is gone', out)
+        self.assertEqual([(r['how'], r['code'], r['slug'], len(r['cores'])) for r in self.ended()],
+                         [('error', 1, self.slug, 1)])              # it held its slot, and let it go
+        self.assertEqual((self.records('active'), self.entries()), ([], []))
+        self.nothing_made(out)
+
 
 class NoBooking(LockCase):
     def test_a_python_runner_with_no_lock_books_nothing(self):
