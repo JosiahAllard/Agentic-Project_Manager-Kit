@@ -190,12 +190,12 @@ class TheViewFollowsTheStore(Case):
         self.assertEqual(paths, [None, "docs/backlog/P1.md", "docs/backlog/P2.md"])    # None: once
 
     def hung(self, *paths):
-        """(patch, asked): under the patch `git log` of each of `paths` (None: the store commit's
-        own) times out; `asked` lists the path of every `git log` run."""
+        """(patch, asked): under the patch the last-change lookup (`lookup`) of each of `paths`
+        (None: the store commit's own) times out; `asked` lists the path of every lookup run."""
         real, asked = gitcmd.call, []
 
         def call(args, cwd, *a, **kw):
-            if args[0] == "log":
+            if lookup(args):
                 path = args[-1] if "--" in args else None
                 asked.append(path)
                 if path in paths:
@@ -236,7 +236,7 @@ class TheViewFollowsTheStore(Case):
 
     def test_a_git_that_cannot_tell_any_change_leaves_the_time_none_not_an_error(self):
         repo = self.main_repo(P=record("P", "waits", state="parked", q="Q-012"))
-        with no_answer("log"):
+        with no_answer("log", only=lookup):
             entry = self.views(("r", repo.root)).get()["repos"][0]
         self.assertEqual((entry["error"], entry["stale"]), (None, False))
         self.assertEqual(entry["parked"], [{"id": "P", "t": "waits", "p": None, "s": "parked", "q": "Q-012",
@@ -294,22 +294,30 @@ class TheViewFollowsTheStore(Case):
                          ["completed", "days", "error", "open", "parked", "repo", "stale"])
 
 
-def git_says(rc, err, *subcommands):
+def lookup(args):
+    """True for the arguments of a last-change lookup: the `git log -1` that
+    kitlib.hubsite.backlog.last_change runs. The store's own `git log` (kitlib.hubbacklog.deleted,
+    the deleted records) goes through kitlib.git.cmd.call too and is not one."""
+    return bool(args) and args[0] == "log" and "-1" in args
+
+
+def git_says(rc, err, *subcommands, only=None):
     """A stand-in for kitlib.git.cmd.call under which git answers `subcommands` with exit `rc`
-    (None: it never ran), no output and `err`."""
+    (None: it never ran), no output and `err`. `only`: a test of the arguments (`lookup`) that
+    narrows it to the calls it is true for."""
     real = gitcmd.call
 
     def call(args, cwd, *a, **kw):
-        if args and args[0] in subcommands:
+        if args and args[0] in subcommands and (only is None or only(args)):
             return gitcmd.Result(rc, b"", err)
         return real(args, cwd, *a, **kw)
     return mock.patch.object(gitcmd, "call", call)
 
 
-def no_answer(*subcommands):
-    """Git gives no answer to `subcommands`: exit 1 and no output, as a git ended from outside
-    leaves."""
-    return git_says(1, "", *subcommands)
+def no_answer(*subcommands, only=None):
+    """Git gives no answer to `subcommands` (`only`: as git_says): exit 1 and no output, as a git
+    ended from outside leaves."""
+    return git_says(1, "", *subcommands, only=only)
 
 
 # What a real git prints, with what must never reach a view: a profile folder and a host.
