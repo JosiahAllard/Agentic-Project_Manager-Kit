@@ -69,9 +69,9 @@ class LocateTest(_Home):
         self.assertEqual(user.config_dir(self.home), self.old_dir)
 
     def test_a_new_folder_without_its_config_file_still_reads_the_old_file(self):
-        # another writer (hub state, say) made the new folder first: the ledger stays known
+        # another writer (a state file, say) made the new folder first: the ledger stays known
         os.makedirs(self.new_dir)
-        self.put(os.path.join(self.new_dir, 'hub_backlog_state.json'), {})
+        self.put(os.path.join(self.new_dir, 'some_state.json'), {})
         self.put(self.old, {'ledger_path': self.ledger})
         self.assertEqual(user.locate(self.home).state, user.OLD)
         self.assertEqual(user.ledger_path(self.home), self.ledger)
@@ -255,17 +255,14 @@ class BadLocationCliTest(_Home):
 
     def test_each_says_machine_config_and_exits_2(self):
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        for d in (os.path.join(root, 'tools'), os.path.join(root, 'claude', 'hub')):
-            if d not in sys.path:
-                sys.path.append(d)
-        import hub_notices
-        import hub_repos
+        d = os.path.join(root, 'tools')
+        if d not in sys.path:
+            sys.path.append(d)
         import pm_watch
         self.put(self.new_dir, 'not a folder')
         self.put(self.old, {'pm_start': {'sessions_file': 's.json'},
                             'machine_lock': {'notice': {'dir': self.home}}})
-        for name, main in (('pm_watch', pm_watch.main), ('hub_repos', hub_repos.main),
-                           ('hub_notices', hub_notices.main)):
+        for name, main in (('pm_watch', pm_watch.main),):
             with self.subTest(name):
                 code, err = self.run_main(main, [])
                 self.assertEqual(code, 2, err)

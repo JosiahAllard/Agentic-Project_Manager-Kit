@@ -1,10 +1,11 @@
-"""hub_mirror.py: the Action Hub's mirror in git, so the hub works from any Claude account
-(docs/action-hub.md "One copy per account").
+"""hub_mirror.py: the retired artifact hub's mirror in git, which `hub migrate` reads
+(docs/action-hub.md "Data from the old hub").
 
-  hub_mirror.py save --from DIR [--commit [--push]] [--model NAME]
+  hub_mirror.py save --from DIR [--prune] [--commit [--push]] [--model NAME]
       DIR holds <collection>/<doc_id>.json as ArtifactData's out_dir writes them. Each mirrored
-      collection present in DIR replaces its mirror copy (added, changed, deleted); a collection
-      absent from DIR is left alone. --commit commits this save's changed mirror paths through
+      collection present in DIR is brought into its mirror copy (added, changed); a mirror document
+      DIR lacks is kept, and deleted only with --prune; a collection absent from DIR is left alone.
+      Refused when the mirror folder is a live hub site store. --commit commits this save's changed mirror paths through
       kitlib.commit (tools/commit.py's checks) on the mirror's branch: a linked work tree on its
       main branch (the data branch), never a main checkout or a work tree of the kit itself;
       --push then pushes that branch to pm_data.remote with an explicit refspec. Prints one line
@@ -45,6 +46,8 @@ def parser():
     sub = p.add_subparsers(dest='verb')
     s = sub.add_parser('save', help='ArtifactData out_dir files -> the mirror')
     s.add_argument('--from', dest='src', required=True, help='the out_dir folder ArtifactData wrote')
+    s.add_argument('--prune', action='store_true',
+                   help='also delete mirror documents the source lacks (default: keep them)')
     s.add_argument('--commit', action='store_true', help='commit the changed mirror paths')
     s.add_argument('--push', action='store_true', help='also push the branch (needs --commit)')
     s.add_argument('--model', help='the model for the Co-Authored-By trailer')
@@ -95,7 +98,7 @@ def main(argv=None):
                 print('mirror %s is empty: nothing to send' % mirror)
             for path, n in written:
                 print('%d set(s) -> %s' % (n, path))
-            print('then refill the regenerated collections: %s' % hubmirror.regenerate_text())
+            print('not mirrored: %s' % hubmirror.regenerate_text())
             return 0
         plan = None
         if a.commit:
@@ -103,7 +106,7 @@ def main(argv=None):
         found, notes = hubmirror.read_source(a.src)
         for n in notes:
             print(n)
-        changes = hubmirror.save(found, mirror)
+        changes = hubmirror.save(found, mirror, prune=a.prune)
         for c in changes:
             print('%s %s' % (c.op, c.rel))
         print('%d change(s) in %s (collections read: %s)' % (

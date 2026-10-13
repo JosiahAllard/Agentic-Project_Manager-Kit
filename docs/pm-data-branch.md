@@ -13,7 +13,7 @@ One git repository holds the public kit and one user's private PM data (rulings 
 | Private remote | any other remote name; default `private`; only `pmdata` is ever pushed there |
 | Record of the split | `<git common dir>/kit-pm-data.json`: `{"branch": "pmdata", "remote": "private", "root": "<sha of the data branch's root commit>"}` |
 | Machine config | The machine config, key `pm_data`: `{"path": "<abs>", "branch": "pmdata", "remote": "private"}` (`Owned('kitlib.pmdata')`) |
-| Hub mirror | `hub/<collection>/<doc_id>.json` in the data worktree: one folder per hub collection, one JSON file per document; written by `tools/hub_mirror.py save` (docs/action-hub.md) |
+| Hub store | `hub/<collection>/<doc_id>.json` in the data worktree: one folder per hub collection, one JSON file per document; written by the hub server (`tools/hub.py serve`), once the old hub's mirror (`tools/hub_mirror.py save`; docs/action-hub.md "Data from the old hub") |
 
 The root commit is recorded when the branch is made, so the guard still knows it if the branch is renamed or deleted. The branch is called `pmdata`, not `pm`, so `pm/<slug>` work branches keep working (git refuses `refs/heads/pm/x` while `refs/heads/pm` exists; `pmdata/<slug>` would collide the same way, so no work branch uses that prefix). A test asserts `init` refuses the name `pm`.
 

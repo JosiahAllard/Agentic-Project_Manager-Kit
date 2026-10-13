@@ -63,7 +63,7 @@ SHARED = (
 # not on a repository checkout named by -C or the current directory. Every `tools/*.py` command
 # is in exactly one of SHARED and KIT_ONLY (tests/stubs: a new tool fails until it is classified).
 KIT_ONLY = (
-    'agent_roster', 'agent_temp_init', 'backlog_lint', 'branch_overlap', 'hub_mirror', 'kit_tests', 'launch', 'ledger_refs',
+    'agent_roster', 'agent_temp_init', 'backlog_lint', 'branch_overlap', 'hub', 'hub_mirror', 'kit_tests', 'launch', 'ledger_refs',
     'lock_release_check', 'machine_lock', 'machine_setup', 'no_window', 'pending', 'pm_data', 'pm_watch',
     'plugin_refresh', 'worktree_sweep_task',
 )

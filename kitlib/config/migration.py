@@ -15,7 +15,7 @@ OLD_DIR_NAME = '.claude-pm-kit'
 
 def state_paths(name, home=None):
     """(read, write) for the kit file `name` that lives beside the machine config (a tool's state,
-    such as hub_backlog_state.json; never config.json, which kitlib.config.user.locate decides).
+    never config.json, which kitlib.config.user.locate decides).
     `write` is always the new folder's file. `read` is the new folder's file while anything is
     there by that name, else the retired folder's while it has the file (the fallback), else the
     new one: so the first run after the move reads the state the last run wrote."""

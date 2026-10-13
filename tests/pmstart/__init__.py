@@ -32,3 +32,17 @@ def keep_off_agent_temp():
         p = mock.patch.object(pmstart, name, value)
         p.start()
         unittest.addModuleCleanup(p.stop)
+
+
+# The one line the checklist's hub check gives under keep_off_hub_site.
+HUB_KEPT_OFF = "hub: (the hub check, kept off this machine by the tests)"
+
+
+def keep_off_hub_site():
+    """For a module's setUpModule: the checklist's hub check reads no machine config, no token
+    and no server; it gives the one line HUB_KEPT_OFF (tests/pmstart/test_hub_site.py tests the
+    check itself). Undone with the module."""
+    from kitlib import pmstart
+    p = mock.patch.object(pmstart, "hub_site", lambda procs=(), **kw: [HUB_KEPT_OFF])
+    p.start()
+    unittest.addModuleCleanup(p.stop)
