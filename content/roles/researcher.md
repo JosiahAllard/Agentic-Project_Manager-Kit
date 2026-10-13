@@ -68,8 +68,8 @@ building it; its strongest objection; and what would have to be true for it to
 work, phrased as something a playtest could settle. Then: what you cut; prior art
 with sources; the open forks with your proposed defaults. No preamble.
 
-## Repo tools
+## Kit tools
 
-You have no shell, so the repo's python tools are not yours to run. Find docs by {{tool:search}} over
+You have no shell, so the kit's python tools are not yours to run. Find docs by {{tool:search}} over
 `docs/INDEX.md` for your topic and {{tool:read}} only the section an entry points to; never read the index
 whole. Long notes go in your scratch folder, never in the repo.

@@ -1,11 +1,13 @@
 """Every kit command a skill or role shows exists, with the flags it shows (docs/multi-host-plan.md
 section 5, form C; docs/content.md).
 
-For each `python tools/<name>.py ...` in content/skills/**.md, content/roles/*.md and
-content/default-profile.md (also written
-`python <kit>/tools/...` or `python <worktree>/tools/...`), the
-kit has tools/<name>.py, and every `-x` / `--flag` the command shows is an option string that
-tool's parser defines. The tools are never run: their source is parsed (ast) for the option
+For each kit tool command in content/skills/**.md, content/roles/*.md and
+content/default-profile.md: it is written `python <kit>/tools/<name>.py`, never a bare
+`python tools/<name>.py` or another folder's copy (a repository holds no stubs: decision 21 in
+docs/multi-host-plan.md section 7); the kit has tools/<name>.py; the command shows `-C` when that
+tool's parser defines it, so it names the checkout it acts on and runs the same from any
+directory; and every `-x` / `--flag` the command shows is an option string that tool's parser
+defines. The tools are never run: their source is parsed (ast) for the option
 strings given to `add_argument`, including flags a loop builds as `'--' + name` over a literal or
 an imported list; a tool that parses its arguments by hand (no `add_argument`) is read for every
 string constant shaped like a flag. A command is read from its code span or fenced block, or in
@@ -21,8 +23,8 @@ import unittest
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOLS = os.path.join(KIT_ROOT, 'tools')
 
-CMD = re.compile(r'python3?\s+(?:(?:<kit>|\$\{CLAUDE_PLUGIN_ROOT\}|<worktree>)/)?'
-                 r'tools/(\w+)\.py\b(.*)')
+CMD = re.compile(r'python3?\s+"?([^\s`"]*?)tools/(\w+)\.py\b"?(.*)')
+KIT_PREFIX = '<kit>/'
 FLAG = re.compile(r'(?<![\w<>/.-])(--?[A-Za-z][\w-]*)')
 FLAG_SHAPE = re.compile(r'^--?[A-Za-z][\w-]*$')
 QUOTED = re.compile(r'"[^"]*"|\'[^\']*\'')
@@ -58,13 +60,19 @@ def segments(text):
 
 def commands(text):
     """[(tool name, the argument text shown)] for every kit tool command in `text`."""
+    return [(name, args) for _, name, args in located(text)]
+
+
+def located(text):
+    """[(the folder written before `tools/`, tool name, the argument text shown)] for every kit
+    tool command in `text`: `<kit>/` for the kit's own tool, '' for a bare `tools/<name>.py`."""
     found = []
     for seg, code in segments(text):
         for m in CMD.finditer(seg):
-            args = m.group(2)
+            args = m.group(3)
             if not code:
                 args = PROSE_END.split(args, 1)[0]
-            found.append((m.group(1), args))
+            found.append((m.group(1), m.group(2), args))
     return found
 
 
@@ -144,6 +152,12 @@ class OptionStringsTest(unittest.TestCase):
         self.assertEqual(got, [('land', ['--expect-main', '--wait']), ('machine_lock', ['--kind']),
                                ('ledger', ['--q'])])
 
+    def test_the_folder_written_before_tools_is_read(self):
+        text = ('`python tools/gate.py -C <w>` and `python <kit>/tools/gate.py -C <w>`, '
+                '`python "<kit>/tools/preflight.py" -C <w>`, `python <worktree>/tools/gate.py`')
+        self.assertEqual([(where, name) for where, name, _ in located(text)],
+                         [('', 'gate'), ('<kit>/', 'gate'), ('<kit>/', 'preflight'), ('<worktree>/', 'gate')])
+
 
 class SkillCommandsTest(unittest.TestCase):
     def test_every_command_shown_exists_with_its_flags(self):
@@ -152,16 +166,22 @@ class SkillCommandsTest(unittest.TestCase):
             with open(path, encoding='utf-8') as f:
                 text = f.read()
             rel = os.path.relpath(path, KIT_ROOT).replace(os.sep, '/')
-            for name, args in commands(text):
+            for where, name, args in located(text):
                 seen += 1
                 tool = os.path.join(TOOLS, name + '.py')
                 with self.subTest(file=rel, tool=name, args=args.strip()):
+                    self.assertEqual(where, KIT_PREFIX, '%s runs %stools/%s.py: a repository holds no copy of '
+                                     'the kit\'s tools, so write python <kit>/tools/%s.py' % (rel, where, name, name))
                     self.assertTrue(os.path.isfile(tool), '%s names tools/%s.py, which the kit lacks' % (rel, name))
                     if name not in cache:
                         with open(tool, encoding='utf-8') as f:
                             cache[name] = option_strings(f.read())
-                    unknown = [fl for fl in shown_flags(args) if fl not in cache[name]]
+                    flags = shown_flags(args)
+                    unknown = [fl for fl in flags if fl not in cache[name]]
                     self.assertEqual(unknown, [], '%s shows flags tools/%s.py does not accept' % (rel, name))
+                    if '-C' in cache[name]:
+                        self.assertIn('-C', flags, '%s runs tools/%s.py without -C: name the checkout it acts on '
+                                      '(-C <worktree>)' % (rel, name))
         self.assertGreater(seen, 30, 'the scan found almost no commands: is it reading the files?')
 
 

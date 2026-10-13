@@ -15,7 +15,7 @@ docs included, means STOP and report, even if the brief gives conflict rules (st
 Read `.claude/agent-profile.md` sections **Branches and worktrees**, **Build and
 test** (including **Known flakes**), **Landing**, **Shared resources**. Read the
 project instruction-file sections the profile's **Landing** section names, once.
-A section names a topic: `python tools/doc_index.py --find <topic>`, then the one section it
+A section names a topic: `python <kit>/tools/doc_index.py -C <main checkout> --find <topic>`, then the one section it
 names. Nothing else.
 No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
 CLAUDE.md (or equivalent) where they exist. Never work out a landing procedure
@@ -57,11 +57,11 @@ Missing any: say what you need, do nothing.
    timeout or a test failure, not like a lock mistake.
 5. Run the landing tool from the main checkout, with output to a log file in your
    scratch folder:
-   `python tools/land.py <branch> --expect-main <sha> --expect-tip <tip> [--lane <lane>] [--summary <text>]`
+   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-main <sha> --expect-tip <tip> [--lane <lane>] [--summary <text>]`
    (the repo's stub; `<kit>/tools/land.py` where the repo has none).
    It waits for its turn in the repo's landing queue (`"landing".wait_s`, or
    `--wait <s>`), merges with `--no-ff`, gates the merged tree, pushes, verifies
-   with `ls-remote`, and undoes the merge on red; `python tools/land.py --queue`
+   with `ls-remote`, and undoes the merge on red; `python <kit>/tools/land.py -C <main checkout> --queue`
    shows who holds and who waits. Never pass anything to jump the queue, and never
    break a landing lock: BUSY or STUCK -> stop and report its lines. Do not
    truncate native output through a pipe - in PowerShell, `Select-Object -First`
@@ -83,7 +83,7 @@ Missing any: say what you need, do nothing.
 
 ## Flakes
 
-Only flakes listed by `python tools/doc_index.py --find flakes` get a rerun, at most one per
+Only flakes listed by `python <kit>/tools/doc_index.py -C <main checkout> --find flakes` get a rerun, at most one per
 landing. The same flake twice: stop and report. Anything not on that list is a
 real failure: stop, leave main as the command left it, report the failing lines.
 
@@ -117,7 +117,7 @@ Only when the profile's **Landing** section says batches are allowed and the bri
 lists them: up to the repo's `"landing".batch_max` branches, each with its own
 reviewer, reviewed range and LAND verdict. One call, in the brief's order, one
 `--expect-tip` per branch in the same order:
-`python tools/land.py <a> <b> --expect-main <sha> --expect-tip <tip-a> --expect-tip <tip-b>`.
+`python <kit>/tools/land.py -C <main checkout> <a> <b> --expect-main <sha> --expect-tip <tip-a> --expect-tip <tip-b>`.
 The tool merges each with its own merge commit, gates the result once, and pushes
 once; a conflict or a red gate undoes the whole batch and lands nothing. Verify
 each branch tip is an ancestor of the remote main. Not landed: report; the
@@ -131,10 +131,10 @@ One short block: branch; old and new main hash; fast-forward or merge commit; te
 counts; extra gate result; pushed yes/no with the two hashes; worktree removed
 yes/no; any line you had to judge. No narrative.
 
-## Repo tools
+## Kit tools
 
-If the repo has them: start with `python tools/preflight.py`. First call on a branch: `python tools/review_pack.py <branch>`.
-Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
-`docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
+Start with `python <kit>/tools/preflight.py -C <main checkout>`. First call on a branch: `python <kit>/tools/review_pack.py -C <main checkout> <branch>`.
+Find what you need with `python <kit>/tools/doc_index.py -C <main checkout> --find <topic>` (`--tools` for tools); never read
+`docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
 Use the Grep and Read tools, not shell grep, cat or sed. No tool fits: write your own script in your
 scratch folder, never in the repo.

@@ -15,7 +15,7 @@ with you; only a root cause or concurrency problem you have failed at, or plainl
 solve, goes up to a deep-worker session: stop and report.
 
 The project's own instructions ({{instructions_file}} or equivalent) bind you. A profile section that names
-a topic: `python tools/doc_index.py --find <topic>`, then the one section it names. Your brief is
+a topic: `python <kit>/tools/doc_index.py -C <worktree> --find <topic>`, then the one section it names. Your brief is
 self-contained: something it needs is missing -> say so in your report rather than
 guessing.
 
@@ -82,10 +82,10 @@ confirmed and how, what remains inferred, what you changed (branch and commits),
 the gate you ran with the line that proves each result, and anything you noticed
 outside your scope. No narrative of your process.
 
-## Repo tools
+## Kit tools
 
-If the repo has them: start with `python tools/preflight.py`.
-Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
-`docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
+Start with `python <kit>/tools/preflight.py -C <worktree>`.
+Find what you need with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools` for tools); never read
+`docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
 Use the {{tool:search}} and {{tool:read}} tools, not shell grep, cat or sed. No tool fits: write your own script in your
 scratch folder, never in the repo.

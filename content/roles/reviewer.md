@@ -21,7 +21,7 @@ raises you to {{model:strong}} only by the reviewer-model rule in its dispatch r
   whether the test that reaches the change actually ran, not merely that one
   exists.
 - Anything the caller already knows is risky, plus the project's risk notes and
-  standing review checks if it has them (`python tools/doc_index.py --find risk`, `--find review`).
+  standing review checks if it has them (`python <kit>/tools/doc_index.py -C <worktree> --find risk`, `--find review`).
 
 Missing the brief: say so and stop - a diff reviewed without its intent can only
 be checked for style.
@@ -57,10 +57,10 @@ Edit a file, stage, commit, build, run tests or the application, or contact the
 author. Review a change you wrote. Invent a finding to have one: an empty list is
 a valid report.
 
-## Repo tools
+## Kit tools
 
-If the repo has them: start with `python tools/preflight.py`. First call on a branch: `python tools/review_pack.py <branch>`.
-Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
-`docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
+Start with `python <kit>/tools/preflight.py -C <worktree>`. First call on a branch: `python <kit>/tools/review_pack.py -C <worktree> <branch>`.
+Find what you need with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools` for tools); never read
+`docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
 Use the {{tool:search}} and {{tool:read}} tools, not shell grep, cat or sed. No tool fits: write your own script in your
 scratch folder, never in the repo.

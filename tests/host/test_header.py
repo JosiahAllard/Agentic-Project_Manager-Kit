@@ -23,6 +23,12 @@ class HeaderText(unittest.TestCase):
             self.assertIn(placeholder, text)
         self.assertIn('placeholder', text)
 
+    def test_it_says_the_tools_run_from_the_kit_with_C_never_from_a_repo_copy(self):
+        text = header.text('C:/k')
+        self.assertIn('`python <kit>/tools/preflight.py -C <worktree>`', text)
+        self.assertIn('never from a copy in the repository', text)
+        self.assertNotIn('`python tools/', text)
+
     def test_it_names_no_host(self):
         self.assertNotRegex(header.text('/k'), r'(?i)claude|codex|plugin_root')
 

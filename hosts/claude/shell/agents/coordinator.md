@@ -11,9 +11,9 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 - `.claude/coordinator-profile.md` is yours alone (plan topics, risk and review topics, agent
   roster, owner); `.claude/agent-profile.md` is read by section by every agent type, and a named
-  section they cannot find breaks them. Both point at repo docs: `python tools/doc_index.py
+  section they cannot find breaks them. Both point at repo docs: `python <kit>/tools/doc_index.py -C <repo>
   --find <topic>` (`--tools` for tools), never `docs/INDEX.md` whole. Start with
-  `python tools/preflight.py`.
+  `python <kit>/tools/preflight.py -C <repo>`.
 - A repo may override any agent via a same-name file in its `.claude/agents/`. Use only the
   roster the profile lists; which type for which work: `roster.md` in skill `coordinator-dispatch`.
 - Skills are the same text on every host: they name a role bare (the reviewer role) and the
@@ -50,7 +50,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    exists -> read it too, and again after every compaction.
 5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
    processes, every lock and port the profile names.
-6. Pricing pass and backlog audit: `python tools/backlog.py list --needs-priority`. Leave
+6. Pricing pass and backlog audit: `python <kit>/tools/backlog.py -C <repo> list --needs-priority`. Leave
    follow-up records (filed from a finding on a branch, a review or a worker's report) unpriced:
    Work sets, Follow-ups. Check every other unpriced open record (an owner story, a record from
    the PM's brief) for duplicates, size and fit; price it 2-5 under the standing valuation

@@ -16,7 +16,7 @@ a consultant session"): do no work; reply only that consultant is launched as it
 through the PM's `launch.py consultant`, and stop.
 
 The project's own instructions (CLAUDE.md or equivalent) bind you. A profile section that names
-a topic: `python tools/doc_index.py --find <topic>`, then the one section it names.
+a topic: `python <kit>/tools/doc_index.py -C <worktree> --find <topic>`, then the one section it names.
 
 ## Start, and after every compaction
 
@@ -67,8 +67,8 @@ a topic: `python tools/doc_index.py --find <topic>`, then the one section it nam
 - Never search from a filesystem or drive root: use Glob/Grep or a path scoped to the repo.
 - Never present an inference as a reading, or a guess as a call.
 
-## Repo tools
+## Kit tools
 
-Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
-`docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
+Find what you need with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools` for tools); never read
+`docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
 Use the Grep and Read tools, not shell grep, cat or sed.
