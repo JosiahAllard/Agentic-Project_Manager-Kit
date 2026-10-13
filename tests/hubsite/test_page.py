@@ -1,9 +1,10 @@
 """The hub server's web page, kitlib/hubsite/web/index.html.
 
 The page is one HTML file. Its pure functions sit between the `pm-pure:begin` and `pm-pure:end`
-markers, as in claude/hub/action-hub.html, so the same node-run tests apply (tests/hubtopm) and
-the new pure functions (the snapshot's shape, the Parked groups, the PM line, the retry delay) are
-tested the same way. What node cannot show without a browser is checked on the file's text: one
+markers; these tests cut that block out and run it under node: the To PM rows, the freshness,
+the snapshot's shape, the Parked groups, the PM line, the retry delay. The repo-tag mapping
+(canonRepo) is cut out and run the same way. What node cannot show without a browser is checked
+on the file's text: one
 transport, no artifact-store call, no HTML sink, no outside resource, and only the decided routes.
 """
 import datetime
@@ -39,13 +40,25 @@ def block():
     return m.group(1)
 
 
-def js(expr, items):
-    """Evaluate expr (which sees `items` and the page's pure functions) under node; return its JSON."""
-    src = block() + "\nconst items = %s;\nconsole.log(JSON.stringify(%s));" % (json.dumps(items), expr)
+def node_json(src):
+    """Run the script `src` under node; return the JSON it prints."""
     # The script goes in on stdin: the pure block outgrew the Windows command-line limit.
     out = spawn.run([NODE, "-"], input=src, capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
+
+
+def js(expr, items):
+    """Evaluate expr (which sees `items` and the page's pure functions) under node; return its JSON."""
+    return node_json(block() + "\nconst items = %s;\nconsole.log(JSON.stringify(%s));" % (json.dumps(items), expr))
+
+
+def canon(repos, tags):
+    """canonRepo, cut out of the page, over a stub `state` holding `repos`, for each tag."""
+    m = re.search(r"  function canonRepo\(r\)\{.*?return hit \? named\(hit\) : \"\"; \}", page(), re.S)
+    assert m, "canonRepo missing from kitlib/hubsite/web/index.html"
+    return node_json("const state = {repos: %s};\n%s\nconsole.log(JSON.stringify(%s.map(canonRepo)));"
+                     % (json.dumps(repos), m.group(0), json.dumps(tags)))
 
 
 def item(i, status, **kw):
@@ -101,7 +114,7 @@ class ServedTest(httpfix.ListenerCase):
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
 class LogicTest(unittest.TestCase):
-    """The tests of tests/hubtopm, on the ported page's pure block."""
+    """The To PM rows and the freshness, on the page's pure block."""
 
     def test_next_id(self):
         self.assertEqual(js("pmNextId(items)", []), "P-001")
@@ -151,6 +164,42 @@ class LogicTest(unittest.TestCase):
         self.assertIn("P-002 [FYI, pm]: line one line two", lines[2])
         self.assertIn("P-003 [Question] (urgent)", lines[3])
         self.assertEqual(js("pmAlertLines(items)", [item(1, "queued")]), [])
+
+    def test_freshness(self):
+        now = "Date.parse('2026-10-11T12:00:00Z')"
+        self.assertEqual(js("pmFresh(items, %s)" % now, []), {"kind": "never"})
+        self.assertEqual(js("pmFresh(items, %s)" % now, [{"posted_at": None}]), {"kind": "never"})
+        self.assertEqual(js("pmFresh(items, %s)" % now, [{"posted_at": "2026-10-10T12:00:00Z"}]), {"kind": "fresh"})
+        old = [{"posted_at": "2026-10-01T00:00:00Z"}, {"posted_at": "2026-10-05T00:00:00Z"}]
+        self.assertEqual(js("pmFresh(items, %s)" % now, old), {"kind": "stale", "since": "2026-10-05T00:00:00Z"})
+        edge = [{"posted_at": "2026-10-08T12:00:00Z"}]                        # exactly 3 days: still fresh
+        self.assertEqual(js("pmFresh(items, %s)" % now, edge), {"kind": "fresh"})
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class CanonRepoTest(unittest.TestCase):
+    """An item's `repo` tag maps to the repo whose repos/ doc has that name, or lists it in
+    `aliases`; the page holds no alias of its own."""
+
+    def test_no_aliases_maps_only_real_names(self):
+        repos = [{"id": "alpha", "name": "Alpha"}, {"id": "beta"}]
+        self.assertEqual(canon(repos, ["alpha", "BETA", "a", "machine", "", None]),
+                         ["Alpha", "beta", "", "", "", ""])
+
+    def test_aliases_from_the_repo_doc(self):
+        repos = [{"id": "alpha", "name": "Alpha", "aliases": ["a", "Old-Alpha"]},
+                 {"id": "beta", "name": "beta", "aliases": "not-a-list"}]
+        self.assertEqual(canon(repos, ["A", "old-alpha", "not-a-list", "beta"]),
+                         ["Alpha", "Alpha", "", "beta"])
+
+    def test_a_real_name_wins_over_an_alias(self):
+        repos = [{"name": "alpha", "aliases": ["beta"]}, {"name": "beta"}]
+        self.assertEqual(canon(repos, ["beta"]), ["beta"])
+
+    def test_the_page_names_no_alias(self):
+        self.assertNotRegex(page(), r"\{\s*pm\s*:")
+        # A repository's own name or alias in the page is the scrub's to catch (tests/scrub/
+        # test_generic.py, the install names), so this test names none.
 
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")

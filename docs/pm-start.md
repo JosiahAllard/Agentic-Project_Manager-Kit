@@ -10,19 +10,13 @@ with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/look
 this PM session runs on (`kitlib.pmstart` `current_account`), not the entry's stored one, so the PM
 launches every coordinator, the kit's included, from whatever account it started on; when that
 account cannot be identified the line says `--account auto` (pick-account's choice). Tests:
-`tests/pmstart/test_pmstart.py` `LivenessTest`. The hub lines are steps, since the hook sees
-neither the PM's ArtifactComments subscription nor the hub's data: republish the page (or publish a
-copy), start the ArtifactComments watch on it (again after a resume or compact), check that its
-`backlog` collection is filled (empty means a new copy: refill the regenerated collections), then
-process the hub. Tests: `tests/pmstart/test_hub_line.py`.
+`tests/pmstart/test_pmstart.py` `LivenessTest`.
 
-Hub site (`kitlib.pmstart` `hub_site`, tests `tests/pmstart/test_hub_site.py`): when the machine
-config has a `hub` key (`kitlib.hubsite.settings`), these lines replace the hub lines above; with no
-`hub` key they are unchanged. The `hub` key is the switch: with it set the old hub lines (the Action
-Hub artifact) no longer show, and `hub.py setup` says so on every run. The check only asks the
-loopback server on `hub.port`, through
+Hub (`kitlib.pmstart` `hub_site`, tests `tests/pmstart/test_hub_site.py`; docs/action-hub.md): the
+lines read the machine config's `hub` key (`kitlib.hubsite.settings`), or every default (port 8790)
+when there is no `hub` key. The check only asks the loopback server on `hub.port`, through
 `kitlib.hubsite.client`; it starts no process and never starts the server, and it imports
-`kitlib.hubsite.serve` only once the key is known to be set. Each ask (`GET /health`,
+`kitlib.hubsite.serve` only once the settings are read. Each ask (`GET /health`,
 then `GET /pending`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The lines:
 `hub: server up on port <n>, <k> pending` (`<k>` is 0 when the answer's `items` is not a list); when
 `<k>` is above 0, a line to process the items (`hub.py pending`); then either
@@ -44,9 +38,10 @@ each one line:
   settings do): `hub: the hub key of the machine config cannot be used: <the configuration error's
   own text>`, on one line and cut at `HUB_ERROR_MAX` (400) characters. The text holds key names and
   paths, and echoes a rejected value; the `hub` key holds no token.
-No token or server message reaches a line. A machine config that cannot be read at all, and one
-whose check fails with no `hub` key in it, give the old hub lines; the test home fence is not caught
-here (`kitlib.config.user` `HomeFenced`). `pm_watch.py` counts as running when its
+- A machine config that cannot be read at all, or whose check fails with no `hub` key in it: `hub:
+  the machine config could not be read (<exception class>)`.
+No token or server message reaches a line. The test home fence is not caught here
+(`kitlib.config.user` `HomeFenced`). `pm_watch.py` counts as running when its
 heartbeat (docs/pm-watch.md "Stream mode and heartbeat") is at most 5 minutes old
 (`kitlib.pmstart` `BEAT_STALE`) and names the pid of a running `python` process whose command line
 holds `pm_watch.py` and that started at the time the heartbeat records (within 2 seconds,
@@ -104,8 +99,6 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 
 ```json
 {"pm_start": {
-  "hub_urls": {"1": "https://claude.ai/artifact/<id>"},
-  "hub_source": "claude/hub/action-hub.html",
   "pm_watch_cmd": "python -u <kit>/tools/pm_watch.py --stream",
   "memory_dir": "<home>/.claude/projects/<project>/memory",
   "handoff_glob": "pm-handoff-*.md",
@@ -115,16 +108,8 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 }}
 ```
 
-- `hub_urls`: account label -> that account's hub copy (docs/action-hub.md "One copy per
-  account"; `tools/hub_mirror.py set-url` writes it). This account's URL gives the republish
-  line; none gives the steps to publish a copy, record it and restore it from the mirror.
-  `hub_url` (one URL) is read only while `hub_urls` has no entry; when both are set the checklist
-  says `hub_url` is ignored. `hub_source`: the page to publish, absolute or relative to the kit
-  (default `claude/hub/action-hub.html`); the hub lines name it as an absolute path, and a file
-  that does not exist, or a value that is not a string, replaces the publish step with a line
-  saying so; the watch and process lines still print. `hub_mirror`: the absolute
-  mirror folder for an install without `pm_data`. Code: `kitlib/pmstart` `hub`, `hub_source`;
-  tests: `tests/pmstart/test_hub_accounts.py`, `tests/pmstart/test_hub_line.py`.
+- `hub_mirror`: the absolute folder of the old hub's mirror for an install without `pm_data`
+  (docs/action-hub.md "Data from the old hub"). The checklist does not read it.
 - `reminders_file`: `[{"due": "YYYY-MM-DD", "text": "..."}]`.
 - `sessions_file`: `{"<key>": {"name": "<remote-control name>", "repo": "<repo>"}}`; an entry
   with `autostart: false` is not checked.
@@ -137,8 +122,8 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
   a consultant or a coordinator) to the hub. Empty or absent prints nothing; a value that is not
   a list of non-empty strings prints "could not check eng_review".
 - Optional too: `standing` (strings, each printed as "standing rule:"), `repos` (more repo names
-  for the hub's menus) and `repo_paths` ({repo: folder} for `claude/hub/hub_backlog.py`; default
-  the PM repository's sibling folder).
+  for the hub's menus) and `repo_paths` ({repo: folder} for the hub's backlog view,
+  `kitlib.hubbacklog` `repo_root`; default the PM repository's sibling folder).
 
 ## Hook (settings.json)
 

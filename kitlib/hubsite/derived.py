@@ -18,8 +18,8 @@ from kitlib import pmstart, pmwatch, roster
 def notices(notice_dir):
     """Every notice file in notice_dir (kitlib.lock.notice writes <run id>-start|end.json), as its
     doc dict with its "id", oldest first by "at". A file being written, one that is not a doc with an
-    id, a missing folder or no folder (None) is skipped. The posted/ subfolder of the older
-    hub_notices.py is not read."""
+    id, a missing folder or no folder (None) is skipped. A subfolder (the posted/ one an older
+    kit left) is not read."""
     if not notice_dir:
         return []
     return [doc for _name, doc in pmwatch.pending_notices(notice_dir)]

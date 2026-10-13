@@ -28,7 +28,7 @@ The commit message names the verb, id, session and any ruling, so `git log refs/
 
 ## Reads
 
-`next`, `show`, `list`, `check`, the guards and hub_backlog read the store ref after a fetch. Checks that need code (scope paths exist) read main's tree directly; nothing is copied between the two.
+`next`, `show`, `list`, `check`, the guards and the hub's backlog view (`kitlib.hubbacklog`, `kitlib.hubsite.backlog`) read the store ref after a fetch. Checks that need code (scope paths exist) read main's tree directly; nothing is copied between the two.
 
 ## Lifecycle changes
 
@@ -55,7 +55,7 @@ The commit message names the verb, id, session and any ruling, so `git log refs/
 
 ## Readers to repoint
 
-hub_backlog snapshot, kit pmstart/coordinatorstart, `landable`. A repo's own tools that read `docs/backlog` (landing scope, gate scope, doc index, checkout guard) lose those rules when the repo switches (its own tools retire then anyway).
+the hub's backlog snapshot (`kitlib.hubbacklog`), kit pmstart/coordinatorstart, `landable`. A repo's own tools that read `docs/backlog` (landing scope, gate scope, doc index, checkout guard) lose those rules when the repo switches (its own tools retire then anyway).
 
 ## Migration (per repo, at go-live)
 
@@ -70,7 +70,7 @@ hub_backlog snapshot, kit pmstart/coordinatorstart, `landable`. A repo's own too
 
 1. kitlib/backlog rewrite with the store layer and three backends. The write path is compare-and-swap concurrency: strong-worker.
 2. Landing close and the ancestry refusal in kitlib/gate land. Built on kit/store-landing.
-3. hub_backlog reads the store.
+3. The hub's backlog view (`kitlib.hubbacklog`) reads the store.
 4. migrate verb, tested on a scratch clone of each repo. Built on kit/store-landing.
 5. Joint review, then per-repo switch-over.
 

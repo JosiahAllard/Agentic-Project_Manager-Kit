@@ -29,8 +29,9 @@ test and land code at the same time. The kit lays the rails they run on:
   checkout.
 - **Backlog and owner decisions.** Each repository keeps its task list (the backlog) in git, on a
   hidden ref beside main. The PM keeps the owner's decisions in its own private record.
-- **Action Hub.** One private web page where you, the owner, answer the PM's questions, tick off
-  hand steps and write new stories. Nobody waits on it: you answer when it suits you.
+- **Action Hub.** One private web page, served on your own PC, where you, the owner, answer the
+  PM's questions, tick off hand steps and write new stories. Nobody waits on it: you answer when
+  it suits you.
 
 ## What sets it apart
 
@@ -60,7 +61,7 @@ is still to switch on.
 |---|---|
 | `tools/` | The command-line tools: lock, gate and landing, worktrees, commit, backlog, ledger, preflight and more |
 | `kitlib/` | The library the tools call; all the logic lives here |
-| `claude/` | The Claude Code parts: agents, skills, hooks, the Action Hub page |
+| `claude/` | The Claude Code parts: agents, skills, hooks |
 | `githooks/` | The git hooks: pre-push, and a pre-commit ledger check that does nothing unless a repository opts in |
 | `installer/` | `new-repo.ps1`, which sets a repository up to use the kit |
 | `templates/` | A starter CLAUDE.md and per-language gate settings |

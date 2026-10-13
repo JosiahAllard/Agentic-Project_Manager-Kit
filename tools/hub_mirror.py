@@ -1,5 +1,5 @@
-"""hub_mirror.py: the Action Hub's mirror in git, so the hub works from any Claude account
-(docs/action-hub.md "One copy per account").
+"""hub_mirror.py: the retired artifact hub's mirror in git, which `hub migrate` reads
+(docs/action-hub.md "Data from the old hub").
 
   hub_mirror.py save --from DIR [--prune] [--commit [--push]] [--model NAME]
       DIR holds <collection>/<doc_id>.json as ArtifactData's out_dir writes them. Each mirrored
@@ -98,7 +98,7 @@ def main(argv=None):
                 print('mirror %s is empty: nothing to send' % mirror)
             for path, n in written:
                 print('%d set(s) -> %s' % (n, path))
-            print('then refill the regenerated collections: %s' % hubmirror.regenerate_text())
+            print('not mirrored: %s' % hubmirror.regenerate_text())
             return 0
         plan = None
         if a.commit:

@@ -36,8 +36,7 @@
   hub.py setup
       makes the two token files where they are absent and prints where they are and how to start
       the server. It writes nothing else: never the machine config, so no `hub` key (it says so
-      when no store folder is set). It also says, every run, that writing the `hub` key switches
-      the PM session start checklist to the hub site and the old hub lines no longer show.
+      when no store folder is set).
   hub.py open [--port N] [--print]
       opens the hub page in the browser, signed in as the owner through a one-time pairing link
       the running server gives for the owner's token. --print prints the link instead.
@@ -123,7 +122,6 @@ from kitlib import hubvalidate                                     # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.hubsite import api, auth, client, httpd, serve, settings   # noqa: E402
 from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
-from kitlib import pmstart                                         # noqa: E402
 
 START = 'python "%s" serve' % os.path.abspath(__file__)
 HEALTH = api.BASE + '/health'
@@ -455,7 +453,6 @@ def _setup(a, stop):
     else:
         print('NOTE: no store folder is set: set hub.store or pm_data in the machine config '
               '(this tool does not write it), or start with --store PATH')
-    print(pmstart.HUB_SWITCH_NOTE)
     print('start the server with: %s' % START)
     return 0
 

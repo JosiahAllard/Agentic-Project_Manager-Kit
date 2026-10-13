@@ -570,15 +570,13 @@ class SetupCase(CliCase):
         self.assertEqual(self.run_cli('setup')[0], 0)
         self.assertEqual(auth.read_token(self.tokens, auth.OWNER), owner)
 
-    def test_setup_says_the_hub_key_switches_the_pm_start_checklist_every_run(self):
-        from kitlib import pmstart
+    def test_setup_speaks_of_no_old_hub(self):
+        # the PM start checklist shows the hub site with or without the `hub` key: no switch to name
         for _ in range(2):          # the first run makes the files, the second changes nothing
             code, out, err = self.run_cli('setup')
             self.assertEqual((code, err), (0, ''))
-            self.assertEqual(out.splitlines().count(pmstart.HUB_SWITCH_NOTE), 1, out)
-        self.assertIn('`hub` key', pmstart.HUB_SWITCH_NOTE)
-        self.assertIn('old hub lines', pmstart.HUB_SWITCH_NOTE)
-        self.assertIn('no longer show', pmstart.HUB_SWITCH_NOTE)
+            for old in ('old hub', 'Action Hub', 'artifact', 'switches'):
+                self.assertNotIn(old, out)
 
     def test_setup_names_the_configured_store(self):
         self.config({'hub': {'store': self.store_dir}})

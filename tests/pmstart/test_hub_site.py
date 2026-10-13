@@ -1,6 +1,7 @@
-"""pmstart.hub_site: the hub site's lines of the start checklist, shown only when the machine
-config has a `hub` key (docs/pm-start.md "Hub site"). The server is a stand-in client; the
-real client is used once, with an injected ask, to pin the timeout and that no token is shown."""
+"""pmstart.hub_site: the hub site's lines of the start checklist, on the machine config's `hub`
+key or, with no key, on the default settings (docs/pm-start.md "Hub site"). The server is a
+stand-in client; the real client is used once, with an injected ask, to pin the timeout and that
+no token is shown."""
 import datetime
 import json
 import os
@@ -54,9 +55,14 @@ def site(client, load=lambda: SET, procs=()):
 
 class HubSiteTest(unittest.TestCase):
 
-    def test_no_hub_key_gives_none_and_asks_nothing(self):
+    def test_a_config_that_cannot_be_read_is_one_line_naming_the_class_and_asks_nothing(self):
         c = FakeClient()
-        self.assertIsNone(site(c, load=lambda: None))
+        for err in (OSError("made-up\\folder"), ConfigError("no_such_key, not 'x@mail.invalid'")):
+            def bad():
+                raise err
+            out = site(c, load=bad)
+            self.assertEqual(out, ["hub: the machine config could not be read (%s)"
+                                   % type(err).__name__])
         self.assertEqual(c.calls, [])
 
     def test_up_with_nothing_pending_says_port_and_count_and_the_wait_line(self):
@@ -201,16 +207,6 @@ class HubSiteTest(unittest.TestCase):
             self.assertEqual(out[0], "hub: server up on port 4321, 0 pending", repr(bad))
             self.assertEqual(len(out), 2, repr(bad))
 
-    def test_without_the_key_the_server_module_is_not_imported(self):
-        real, wanted = __import__, []
-
-        def spy(name, globals=None, locals=None, fromlist=(), level=0):
-            wanted.append((name, tuple(fromlist or ())))
-            return real(name, globals, locals, fromlist, level)
-        with mock.patch("builtins.__import__", spy):
-            self.assertIsNone(site(FakeClient(), load=lambda: None))
-        self.assertFalse([w for w in wanted if "serve" in w[0] or "serve" in w[1]], wanted)
-
     def test_each_ask_has_a_short_timeout(self):
         c = FakeClient()
         site(c)
@@ -253,10 +249,17 @@ class RealSettingsTest(unittest.TestCase):
         with open(kuser.config_file(self.home), "w", encoding="utf-8") as f:
             f.write(json.dumps(body))
 
-    def test_no_hub_key_is_none_and_hub_site_shows_nothing(self):
+    def test_no_hub_key_gives_the_default_settings_and_the_site_lines(self):
         self.write({})
-        self.assertIsNone(pmstart.hub_settings())
-        self.assertIsNone(pmstart.hub_site(procs=[]))
+        self.assertEqual(pmstart.hub_settings().port, settings.PORT)
+        self.assertEqual(settings.PORT, 8790)
+        out = pmstart.hub_site(procs=[], make_client=lambda port: FakeClient(error=serve.NotRunning(port)))
+        self.assertEqual(len(out), 1)
+        self.assertTrue(out[0].startswith("hub: hub server down (nothing listens on port 8790)"), out)
+
+    def test_no_machine_config_at_all_gives_the_default_settings(self):
+        self.assertFalse(os.path.exists(kuser.config_file(self.home)))
+        self.assertEqual(pmstart.hub_settings().port, settings.PORT)
 
     def test_a_valid_hub_key_gives_the_settings(self):
         self.write({"hub": {"port": 4322}})
@@ -277,43 +280,41 @@ class RealSettingsTest(unittest.TestCase):
         with self.assertRaises(pmstart.HubSettingsError):
             pmstart.hub_settings()
 
-    def test_a_broken_config_with_no_hub_key_keeps_the_old_lines(self):
+    def test_a_broken_config_with_no_hub_key_is_one_line_naming_the_class(self):
         self.write({"no_such_key": 1})
         with self.assertRaises(ConfigError) as cm:
             pmstart.hub_settings()
         self.assertNotIsInstance(cm.exception, pmstart.HubSettingsError)
-        self.assertIsNone(pmstart.hub_site(procs=[]))
+        self.assertEqual(pmstart.hub_site(procs=[]),
+                         ["hub: the machine config could not be read (ConfigError)"])
+
+    def test_without_a_hub_key_the_checklist_shows_the_site_lines_on_port_8790(self):
+        self.write({})
+        txt = pmstart.checklist({}, NOW, procs=[], hub_site={
+            "make_client": lambda port: FakeClient(error=serve.NotRunning(port))}, **FAKES)
+        self.assertIn("- hub: hub server down (nothing listens on port 8790)", txt)
+        self.assertNotIn("could not check hub", txt)
+        for old in ("republish", "Action Hub", "Artifact", "claude.ai"):
+            self.assertNotIn(old, txt)
 
 
 class ChecklistTest(unittest.TestCase):
 
-    def test_with_a_hub_key_the_site_lines_replace_the_old_hub_line(self):
+    def test_with_a_hub_key_the_checklist_shows_the_site_lines_on_its_port(self):
         txt = pmstart.checklist({}, NOW, procs=[], hub_site={"load": lambda: SET,
                                 "make_client": lambda port: FakeClient(error=serve.NotRunning(port))},
                                 **FAKES)
         self.assertIn("- hub: hub server down (nothing listens on port 4321)", txt)
-        self.assertNotIn("no Action Hub copy is recorded", txt)
+        self.assertNotIn("Action Hub", txt)
         self.assertNotIn("ArtifactComments watch", txt)
 
-    def test_without_a_hub_key_the_old_hub_line_is_unchanged_byte_for_byte(self):
-        cfg = {"hub_url": "https://claude.ai/artifact/X"}
-        old = pmstart.hub(cfg, account=lambda: "1", isfile=lambda p: True)
-        txt = pmstart.checklist(cfg, NOW, procs=[], hub_site={"load": lambda: None},
-                                hub={"account": lambda: "1", "isfile": lambda p: True}, **FAKES)
-        self.assertIn("\n".join("- " + l for l in old), txt)
-        self.assertEqual(old[0], "hub: republish the kit's Action Hub page %s to %s with the Artifact tool, "
-                                 "restating the capabilities in docs/action-hub.md (For the PM), to arm the alert"
-                         % (os.path.join(pmstart.KIT_ROOT, "claude", "hub", "action-hub.html"),
-                            "https://claude.ai/artifact/X"))
-
-    def test_a_loader_that_cannot_read_the_config_keeps_the_old_line(self):
+    def test_a_loader_that_cannot_read_the_config_is_one_hub_line_not_a_failed_check(self):
         def boom():
             raise OSError("no config")
-        cfg = {"hub_url": "https://claude.ai/artifact/X"}
-        txt = pmstart.checklist(cfg, NOW, procs=[], hub_site={"load": boom},
-                                hub={"account": lambda: "1", "isfile": lambda p: True}, **FAKES)
-        self.assertIn("hub: republish the kit's Action Hub page", txt)
+        txt = pmstart.checklist({}, NOW, procs=[], hub_site={"load": boom}, **FAKES)
+        self.assertIn("- hub: the machine config could not be read (OSError)", txt)
         self.assertNotIn("could not check hub", txt)
+        self.assertNotIn("no config", txt)
 
 
 if __name__ == "__main__":

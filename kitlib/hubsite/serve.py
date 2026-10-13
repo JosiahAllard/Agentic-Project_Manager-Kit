@@ -333,7 +333,7 @@ class Sources(object):
 
 def _repo_pairs(cfg):
     """A callable giving backlog.Views its (name, root) pairs from the pm_start config `cfg`,
-    as claude/hub/hub_backlog.py finds them. The PM repository's root is asked of git once."""
+    each root as kitlib.hubbacklog.repo_root finds it. The PM repository's root is asked of git once."""
     found = []
 
     def pairs():

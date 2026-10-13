@@ -1,10 +1,10 @@
-"""kitlib.hubmirror: the Action Hub's data of record, kept in git (docs/action-hub.md "One copy
-per account").
+"""kitlib.hubmirror: the retired artifact hub's data, kept in git (docs/action-hub.md "Data from
+the old hub").
 
-A published artifact belongs to one Claude account, so each account the PM runs on has its own
-copy of the hub page (pm_start.hub_urls). What the owner and the PM write on the hub is mirrored as
-files, one per document, so a new copy on another account is filled from the mirror and nothing is
-lost by switching accounts:
+The old hub was a claude.ai artifact page, one copy per Claude account (pm_start.hub_urls). What
+the owner and the PM wrote on it was mirrored as files, one per document; `hub migrate`
+(kitlib.hubsite.migrate) reads the mirror, or an ArtifactData out_dir export, into the hub site's
+store:
 
     <mirror>/<collection>/<doc_id>.json    the document's fields, sorted keys, 2-space indent
 
@@ -39,13 +39,14 @@ from kitlib.hubsite import store as hubstore
 MIRROR_FOLDER = 'hub'
 # The collections the owner, the page or the PM write and no tool regenerates: mirrored.
 MIRRORED = ('questions', 'inbox', 'to_pm', 'todos', 'parked', 'stories', 'pages', 'page_html')
-# The collections a tool or a repost fills: never mirrored; refilled on a new copy by these.
+# The collections that are read from elsewhere: never mirrored. The hub site (kitlib.hubsite)
+# reads each live from its source, so none needs refilling there.
 REGENERATED = (
-    ('backlog', 'claude/hub/hub_backlog.py --force'),
-    ('completed', 'claude/hub/hub_backlog.py --force'),
-    ('repos', 'claude/hub/hub_repos.py --have <names> --out <file>, then any aliases again'),
-    ('usage', 'launch.py usage, posted as at session start'),
-    ('agents', 'repost each agent definition'),
+    ('backlog', 'read from each repository\'s backlog store (kitlib.hubsite.backlog)'),
+    ('completed', 'read from each repository\'s backlog store (kitlib.hubsite.backlog)'),
+    ('repos', 'read from the pm_start config (kitlib.hubsite.derived.repos); aliases set again'),
+    ('usage', 'read from launch.py usage (kitlib.hubsite.derived.usage)'),
+    ('agents', 'read from the agent definitions (kitlib.hubsite.derived.agents)'),
 )
 # A wrapped out_dir document: a `data` object plus only these keys (fields_of).
 WRAPPER_KEYS = frozenset(('data', 'id', 'version', 'doc_id', 'collection'))
@@ -64,7 +65,7 @@ class Refused(Exception):
 
 
 def regenerate_text():
-    """The regenerated collections and what refills each, as one phrase."""
+    """The collections that are not mirrored and where each is read from, as one phrase."""
     return '; '.join('%s/: %s' % (c, how) for c, how in REGENERATED)
 
 
