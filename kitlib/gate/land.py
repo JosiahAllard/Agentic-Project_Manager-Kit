@@ -18,7 +18,7 @@ tools/land.py).
   4  lock        fetch <remote>, then the landing lock file (kitlib.records.landing), with what is
                  left of --wait; not had: BUSY. Held at phase stuck: BUSY at once; held by a
                  process that is surely gone: broken and taken unless something is unpushed
-  5  follow      fetch again under the lock. The base is <remote>/<main> as fetched: a local main
+  5  follow      fetch again under the lock; HEAD still on main, or REFUSED. The base is <remote>/<main> as fetched: a local main
                  only behind it (nothing unpushed) is fast-forwarded first (`git merge --ff-only`,
                  HEAD on main, a clean checkout); a local main with commits the remote lacks, or
                  one the fast-forward cannot move: REFUSED, as before. When the base is not the
