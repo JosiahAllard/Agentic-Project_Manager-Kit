@@ -161,3 +161,49 @@ a hook in settings.json. Whether a plugin's hooks.json may register SubagentStar
 check on the owner's machine: start a subagent with the plugin enabled and ask it for the kit
 folder. If it cannot, only the main session gets the header, and a brief must name the kit folder
 for a subagent.
+
+## Agent view
+
+`python <kit>/tools/agent_view.py <role> [--host <name>] [-C <repo>] [--brief]` shows everything
+one role is given and held to on one host (docs/multi-host-plan.md section 7, decision 18). The
+host is `--host`, else `PM_KIT_HOST`, else the hosts.json default; `-C` is the repository the role
+works in (default: here); `--brief` prints paths only and runs no start check. Exit 0 shown; 2 a
+usage error, a role no role file defines (the line names every role) or an unknown host. An old
+name (`kitlib.content.ALIASES`) shows its new role.
+
+It is built from the code that renders and enforces, so it cannot drift from it. The host's side
+comes only through the host contract (docs/new-host.md), which the conformance suite pins to what
+the host writes: the ContentRenderer's `role_path`, `settings`, `tokens` and `tools`, and the
+adapter's optional `start_text`. File text is indented under its label.
+
+Sections 1-7, what the agent is given, in the order it gets it:
+1. **Role file**: `renderer.role_path(role)`, the file the host loads, with its text as `render`
+   writes it, and a note when the committed copy differs.
+2. **Repository instructions**: the `instructions_file` token in the repository, and each file it
+   imports with a `@<path>` line.
+3. **User instructions**: that file name in the host's per-user folder (the `user_folder` token,
+   or the folder `config_dir_env` names). The kit never reads it.
+4. **Kit header**: `kitlib.host.header.text`, at SubagentStart for a dispatched role and at
+   SessionStart for a `run: session` one.
+5. **At start**: what the adapter's `start_text` adds past the header for a session marked with the
+   role (`PM_KIT_ROLE`) in the repository; for the PM and the coordinator that runs their start
+   checks. A host without `start_text` is shown as not known, never guessed.
+6. **Skills**: `content/skills`, where the host has skills, and a note when the role's tool list
+   leaves out the host's skill tool.
+7. **Repo profile**: the `profile_path` token (and `coordinator_profile_path` when the role's body
+   names it) if the repository has it, else none.
+
+Sections 8-11, what it is held to:
+8. **Model, tools and mode**: the role file's tier, effort and sandbox; what the host's file sets
+   (`renderer.settings`: its model, effort, sandbox or tool list as that file writes them); each
+   capability as the host's tool (`renderer.tools()`); `mode`, `writes`, group and run.
+9. **Guard rules**: the `kitlib/guard/rolepolicy.py` `RULES` rows for its mode (`rules_for`), with
+   its `LOCK_VERBS`; tests/guard/test_rolepolicy.py pins each row to the guard's answers.
+10. **.kit.json switches**: what the guard reads from the main checkout's `.kit.json`
+    (`guard.role_policy`, the role's `roles` entry, the mode `rolepolicy.mode` gives it,
+    `edit_main_checkout`, `guard.data_roots`).
+11. **Backlog rights**: every `kitlib/backlog/roles.py` `ACTIONS` row, grouped by the answer
+    (`role_of`, `allows`, and the fact a grant needs).
+
+Code: `kitlib/agentview`; tests `tests/agentview`. `content/README.md` maps each thing shown to
+the file that changes it.

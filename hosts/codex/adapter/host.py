@@ -14,7 +14,9 @@ ADAPTER is the one instance; hosts/codex/shell/hooks/run.py hands it to kitlib.h
                        lowers one it is still handed (kitlib.host.degrade), never writing an ask.
   context(event_name, text)    (stdout, 0): {"hookSpecificOutput": {"hookEventName",
                        "additionalContext"}} for the CONTEXT_EVENTS; nothing for no text
-  sessions()           AppServerSessions: kitlib.host.SessionHost over the local app-server
+  start_text(event_name, kit, payload, environ)   hosts.codex.adapter.start.text: what its start
+                       hooks add to the context, the header first
+  sessions()          AppServerSessions: kitlib.host.SessionHost over the local app-server
                        (hosts.codex.adapter.sessions), each read through a fresh proxy
   command_host()       None: Codex's CommandHost (runtime.SandboxCommandHost) runs a command as one
                        bound native thread, so it is built for that thread by the runtime broker,
@@ -81,6 +83,11 @@ class CodexAdapter(object):
             return '', 0
         return json.dumps({'hookSpecificOutput': {'hookEventName': event_name,
                                                   'additionalContext': text}}) + '\n', 0
+
+    @staticmethod
+    def start_text(event_name, kit, payload=None, environ=None):
+        from hosts.codex.adapter import start
+        return start.text(event_name, kit, payload, environ)
 
     def sessions(self):
         from hosts.codex.adapter import sessions

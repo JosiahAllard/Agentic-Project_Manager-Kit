@@ -16,6 +16,8 @@ ADAPTER is the one instance; hosts/claude/shell/hooks/guard.py hands it to kitli
                        "additionalContext"}} and a newline; nothing for no text. Only the
                        CONTEXT_EVENTS take it.
   settings_entry(script, executable)   the PreToolUse entry for settings.json (MATCHER, exec form)
+  start_text(event_name, kit, payload, environ)   hosts.claude.adapter.start.text: what its start
+                       hooks add to the context, the header first
   sessions()           hosts.claude.adapter.claude_host, Claude's session files (kitlib.pmwatch's seam)
   command_host(), launcher(), plugin_installer()   None: not behind the contract yet
   content()            hosts.claude.adapter.content (the content renderer)
@@ -80,6 +82,11 @@ class ClaudeAdapter(object):
     def settings_entry(script, executable=None):
         from kitlib.host import hookmain
         return hookmain.settings_entry('PreToolUse', MATCHER, script, executable)
+
+    @staticmethod
+    def start_text(event_name, kit, payload=None, environ=None):
+        from hosts.claude.adapter import start
+        return start.text(event_name, kit, payload, environ)
 
     def sessions(self):
         from hosts.claude.adapter import claude_host
