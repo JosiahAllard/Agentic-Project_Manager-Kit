@@ -36,7 +36,7 @@ short-lived window can count against a run.
 The title heuristic (looks_launched) and its limits:
 - A title counts as launched when, after an "Administrator: " prefix, it is a full path to a
   .exe, .com, .bat or .cmd file, or a bare `name.exe` (or .com, .bat, .cmd), quoted or not, with or
-  without arguments after it; cmd's "C:\\...\\cmd.exe - command" titles are of that kind.
+  without arguments after it; cmd's "<windir>\\system32\\cmd.exe - command" titles are of that kind.
 - A program that sets its own title before the event is read (PowerShell, many TUIs) is not seen
   by its title: a new tab of one is missed unless the title change still matches, and a new
   Terminal window of one is still counted (by its show event) but its title is whatever it set.
@@ -177,8 +177,8 @@ def base(path):
 
 _EXT = r"\.(?:exe|com|bat|cmd)"
 _LAUNCHED = re.compile(
-    r'^(?:"(?P<q>(?:[A-Za-z]:\\|\\\\)[^"]*?' + _EXT + r')"'      # "C:\...\x.exe"
-    r'|(?P<p>(?:[A-Za-z]:\\|\\\\)[^"<>|*?]*?' + _EXT + r')'      # C:\...\x.exe
+    r'^(?:"(?P<q>(?:[A-Za-z]:\\|\\\\)[^"]*?' + _EXT + r')"'      # "<drive>\...\x.exe"
+    r'|(?P<p>(?:[A-Za-z]:\\|\\\\)[^"<>|*?]*?' + _EXT + r')'      # <drive>\...\x.exe
     r'|"?(?P<b>[\w.()+-]+' + _EXT + r')"?)'                       # x.exe
     r'(?:\s.*)?$', re.I | re.S)
 _ADMIN = "Administrator: "

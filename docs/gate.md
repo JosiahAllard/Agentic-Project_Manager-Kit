@@ -116,7 +116,7 @@ Every gate run's lock run watches for console windows while its steps run: `kitl
 
 ```
 windows opened: 1 - WARNING: a console window opened (the verdict does not count it)
-  12:20:05 window pid 56324 python.exe via windowsterminal.exe CASCADIA_HOSTING_WINDOW_CLASS title "C:\...\python.exe" [this run]
+  12:20:05 window pid 56324 python.exe via windowsterminal.exe CASCADIA_HOSTING_WINDOW_CLASS title "<python folder>\python.exe" [this run]
 ```
 
 - N counts the windows the run opened (`[this run]`: the program was in the run's job, `Slot.window_owner`) and those it cannot place (`[run unknown]`: the program had exited, or could not be opened, when the window was read). A window whose program is outside the job is listed under `also seen, another run's: M` and not counted. A console host window shown and gone before it could be read is listed under `also seen: K console host window(s) ...` and not counted.
