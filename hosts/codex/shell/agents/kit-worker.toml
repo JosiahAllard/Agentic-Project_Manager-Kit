@@ -1,5 +1,5 @@
+# Generated from content/roles/worker.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 # Review template: do not install until live acceptance (hosts/codex/README.md).
-# Rendered from content/roles/worker.md by tools/render_content.py; never edit it by hand.
 # Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".
 name = "kit-worker"
 description = "The default coding agent for routine, low- and medium-risk work - additive content, UI, pure logic with tests, small fixes with a known cause, and moves or renames that must not change behaviour. Builds on its own branch and worktree, runs the gate its brief names, and reports. Not for networking or concurrency, simulation or ordering changes, CI config, crash hunts or design; those go to `kit-senior-worker`, `kit-strong-worker` or a `kit-deep-worker` session. Repository specifics come from `.codex/agent-profile.md`."

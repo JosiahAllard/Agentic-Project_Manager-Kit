@@ -1,5 +1,5 @@
+# Generated from content/roles/records.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 # Review template: do not install until live acceptance (hosts/codex/README.md).
-# Rendered from content/roles/records.md by tools/render_content.py; never edit it by hand.
 # Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".
 name = "kit-records"
 description = "Writes settled facts into a repository's docs - owner decisions, landing notes, plan ticks, findings the caller has already established. Docs only - it never touches code, tests, tools, CI or configuration, and never lands anything. Must be given the exact text or facts to record, the exact file and section they belong in, and a branch slug. Repository specifics come from `.codex/agent-profile.md`."

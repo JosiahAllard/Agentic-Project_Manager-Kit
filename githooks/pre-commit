@@ -1,19 +1,31 @@
 #!/bin/sh
-# The kit's git pre-commit hook (docs/ledger.md "Pre-commit check"). Inert unless the repository's
-# .kit.json sets ledger.pre_commit_check. This front end uses shell builtins only, so a repository
-# that has not opted in starts no other process per commit: no .kit.json, or one whose text never
-# names pre_commit_check, exits 0 here. Otherwise githooks/pre-commit.py runs the kit's pre-commit
-# checks (kitlib.githooks.precommit). A check added there that must run without that key also needs
-# its own condition here. Git runs the hook at the work-tree root.
-[ -f .kit.json ] || exit 0
-named=
-while IFS= read -r line || [ -n "$line" ]; do
-    case $line in
-        *pre_commit_check*) named=1; break ;;
-    esac
-done < .kit.json
-[ -n "$named" ] || exit 0
+# The kit's git pre-commit hook (docs/ledger.md "Pre-commit check"; docs/content.md "Render on
+# commit"). githooks/pre-commit.py runs the kit's pre-commit checks (kitlib.githooks.precommit)
+# when one of two things holds, and no other process starts per commit:
+# - the repository's .kit.json names pre_commit_check (the ledger check), read with shell builtins;
+# - the work tree has the kit's layout (content/roles/ and tools/render_content.py) and the commit
+#   stages a render source (content/, kit.json, hosts.json): one git read, in a kit checkout only.
+# A check added there that must run without either also needs its own condition here. Git runs the
+# hook at the work-tree root.
+ledger=
+if [ -f .kit.json ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        case $line in
+            *pre_commit_check*) ledger=1; break ;;
+        esac
+    done < .kit.json
+fi
+render=
+if [ -d content/roles ] && [ -f tools/render_content.py ] \
+        && [ -n "$(git diff --cached --name-only -- content kit.json hosts.json)" ]; then
+    render=1
+fi
+[ -n "$ledger$render" ] || exit 0
 if ! command -v python >/dev/null 2>&1; then
+    if [ -n "$render" ]; then
+        echo "pre-commit: a render source is staged and no python is on PATH to render it: run python tools/render_content.py --write, stage what it wrote, then commit again; commit refused" >&2
+        exit 1
+    fi
     echo "pre-commit: ledger check skipped: no python on PATH" >&2
     exit 0
 fi

@@ -1,4 +1,5 @@
 ---
+# Generated from content/roles/lander.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: lander
 description: Lands one finished branch on the main branch at a time, on the coordinator's explicit go - check main is where the coordinator expects, run the repository's landing command, verify the push, report. Spawned fresh for each landing (a batch counts as one), never continued across landings. Must be told the branch, the main hash the coordinator expects, the review verdict, and whether an extra gate is wanted first. It never edits code and never decides what is ready to land. Repository specifics come from `.claude/agent-profile.md`.
 tools: PowerShell, Bash, Read, Grep, Glob, Agent

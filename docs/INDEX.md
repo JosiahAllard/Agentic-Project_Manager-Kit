@@ -65,9 +65,8 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `content/README.md` | where to change what a role is given or held to, and how to see it (`tools/agent_view.py`) | changing a role, a rule, a skill or a model | kw: content, where, change, agent_view
 - `content/roles/*.md` | one role per file, the source of every host's agent file (`docs/content.md`) | editing an agent | kw: roles, agents, agent-definition
 - `content/default-profile.md` | the agent profile roles read in a repository with none of its own (`docs/agent-profile.md`) | a repo has no profile | kw: profile, default-profile
-- `content/skills/*/*.md` | one skill per folder, the source of every host's skills (`docs/content.md`) | editing a skill | kw: skills, skill
+- `content/skills/*/*.md` | one skill per folder, the source of every host's skills, and the folder Claude's plugin loads them from (`docs/content.md`) | editing a skill, reading what Claude loads | kw: skills, skill
 - `hosts/claude/shell/agents/*.md` | Claude's agent files, rendered from content/roles (never edit by hand) | reading what Claude loads | kw: agents, rendered
-- `hosts/claude/shell/skills/*/*.md` | Claude's skills, copied from content/skills (never edit by hand) | reading what Claude loads | kw: skills, rendered
 - `hosts/codex/README.md` | the Codex host: what is ported, what runs, what is not verified | working on the Codex plugin | kw: codex, host, plugin, runtime, canary
 - `hosts/codex/shell/skills/*/*.md` | Codex's skills, copied from content/skills (never edit by hand) | reading what Codex loads | kw: skills, rendered, codex
 - `templates/stacks/godot/.claude/skills/godot-render-check/SKILL.md` | Godot render check and e2e tiers | Godot repos | kw: godot, render, e2e

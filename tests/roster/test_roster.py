@@ -186,7 +186,7 @@ class ReviewerRuleTest(unittest.TestCase):
     matching strings: the group labels the review pack prints and the name of the strict-path
     tuple. Each one it names must still be what the code prints or defines."""
 
-    RULE_FILE = os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'skills', 'coordinator-dispatch', 'roster.md')
+    RULE_FILE = os.path.join(KIT_ROOT, 'content', 'skills', 'coordinator-dispatch', 'roster.md')
 
     def rule(self):
         text = read(self.RULE_FILE).decode('utf-8').replace('\r\n', '\n')

@@ -3,7 +3,8 @@
 `load(root)` reads every role (`content/roles/*.md`, kitlib.host.content.parse_role) and every
 skill folder (`content/skills/<name>/`, its files as bytes). `render(root, renderers)` asks each
 host's ContentRenderer for its files. `drift` compares them with the committed files: a file that
-differs, one that is missing, and one in a folder a renderer owns that it no longer writes (stale).
+differs, one that is missing, and one in a folder a renderer owns that it no longer writes, or in a
+folder it has retired (`retired()`, optional), is stale.
 `write` makes the committed files what the renderers say, and removes the stale ones.
 
 `load_kit(root)` reads `kit.json`, the kit's one name and version (ARCHITECTURE.md "Packaging"). A
@@ -218,9 +219,11 @@ def _roster_doc(root, content, tiers):
 
 
 def _owned_files(root, renderers):
+    """Every file in a folder a renderer owns, or in one it retired (`retired()`, when it has it:
+    a folder it no longer writes, so whatever is left there is stale)."""
     out = set()
     for r in renderers:
-        for rel in r.owned():
+        for rel in tuple(r.owned()) + tuple(r.retired() if hasattr(r, 'retired') else ()):
             folder = _join(root, rel)
             if os.path.isdir(folder):
                 out.update('%s/%s' % (rel, f) for f in _files_under(folder))
@@ -255,7 +258,8 @@ def drift(root, renderers, content=None, tiers=None):
 
 
 def write(root, renderers, content=None, tiers=None):
-    """Write every differing or missing rendered file and remove every stale one; the paths
+    """Write every differing or missing rendered file and remove every stale one, then each folder
+    above a removed file that is left empty (a retired folder goes, as git removes it); the paths
     touched, sorted."""
     changed, stale = diff(root, renderers, content, tiers)
     for p, data in changed.items():
@@ -265,4 +269,12 @@ def write(root, renderers, content=None, tiers=None):
             f.write(data)
     for p in stale:
         os.remove(_join(root, p))
+    for p in stale:
+        parts = p.split('/')[:-1]
+        while parts:
+            try:
+                os.rmdir(_join(root, '/'.join(parts)))     # only an empty folder
+            except OSError:
+                break
+            parts.pop()
     return sorted(set(changed) | set(stale))

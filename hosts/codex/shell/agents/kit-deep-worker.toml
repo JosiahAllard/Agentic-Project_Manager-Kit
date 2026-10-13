@@ -1,5 +1,5 @@
+# Generated from content/roles/deep-worker.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 # Review template: do not install until live acceptance (hosts/codex/README.md).
-# Rendered from content/roles/deep-worker.md by tools/render_content.py; never edit it by hand.
 # Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".
 name = "kit-deep-worker"
 description = "NEVER dispatch with the spawn_agent (not available to a Codex agent: ask the PM) tool. deep-worker is its own launched session - its own window, the account's model with a 500k auto-compact window, effort xhigh - started by the PM's launcher (`launch.py deep`) with a brief and a named requester it reports back to. Only for the most difficult issues - root-causing a crash or a race, concurrency and networking changes where a subtle mistake is expensive - once strong-worker has been defeated or plainly will be. Coordinators request one; the PM launches it: send_message (not available to a Codex agent: ask the PM) the PM a brief file path, your session name as requester and a slug."

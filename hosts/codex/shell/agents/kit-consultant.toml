@@ -1,5 +1,5 @@
+# Generated from content/roles/consultant.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 # Review template: do not install until live acceptance (hosts/codex/README.md).
-# Rendered from content/roles/consultant.md by tools/render_content.py; never edit it by hand.
 # Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".
 name = "kit-consultant"
 description = "NEVER dispatch with the spawn_agent (not available to a Codex agent: ask the PM) tool. consultant is its own long-lived launched session, one per repository - its own window, the account's model with a ~350k auto-compact window - started by the PM's launcher (`launch.py consultant`) and named consultant-<repo>. It answers engineering questions from that repo's coordinators and workers (conventions, design trade-offs, which approach, where code lives, whether a change is safe) and owns those calls; the PM logs each one as delegated. It never edits code, lands or dispatches builds, and it stays idle until asked. Ask it by send_message (not available to a Codex agent: ask the PM) to consultant-<repo> (the session list (not available to a Codex agent: ask the PM) finds it)."

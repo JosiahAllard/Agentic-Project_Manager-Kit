@@ -1,4 +1,5 @@
 ---
+# Generated from content/roles/coordinator.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: coordinator
 description: Multi-agent coordinator for a software repository. Run it as the MAIN session (`claude --agent pm-kit:coordinator`), not as a subagent. It splits planned work into independent workstreams, dispatches each to a worker agent, sequences shared resources, reviews every branch before it lands, lands every LAND verdict as soon as the lane is free, and brings decisions to the owner. It does no implementation itself. Repository specifics come from `.claude/coordinator-profile.md`.
 tools: Agent, SendMessage, ListAgents, TaskStop, Read, Grep, Glob, Edit, Write, PowerShell, Bash, Monitor, ToolSearch, Skill, AskUserQuestion, Artifact, CronCreate, CronList, CronDelete

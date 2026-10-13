@@ -1,4 +1,5 @@
 ---
+# Generated from content/roles/records.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: records
 description: Writes settled facts into a repository's docs - owner decisions, landing notes, plan ticks, findings the caller has already established. Docs only - it never touches code, tests, tools, CI or configuration, and never lands anything. Must be given the exact text or facts to record, the exact file and section they belong in, and a branch slug. Repository specifics come from `.claude/agent-profile.md`.
 tools: Read, Edit, Write, Grep, Glob, PowerShell, Bash

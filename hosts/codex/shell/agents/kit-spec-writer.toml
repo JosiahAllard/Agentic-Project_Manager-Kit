@@ -1,5 +1,5 @@
+# Generated from content/roles/spec-writer.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 # Review template: do not install until live acceptance (hosts/codex/README.md).
-# Rendered from content/roles/spec-writer.md by tools/render_content.py; never edit it by hand.
 # Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".
 name = "kit-spec-writer"
 description = "Extends a named design or spec document (a design doc, a plan section) from answers the owner has already given, reading the code the spec depends on so it stays buildable. Docs only, no machine time beyond the docs gate. Must be given the document, the owner's answers verbatim, the code areas the spec touches, and a branch slug. Repository specifics come from `.codex/agent-profile.md`."

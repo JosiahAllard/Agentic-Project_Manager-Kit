@@ -1,7 +1,8 @@
 """Codex's ContentRenderer (kitlib.host.content; docs/content.md "Codex").
 
 Each role becomes `hosts/codex/shell/agents/kit-<name>.toml`, a Codex agent definition: a header
-comment, then `name` (kit-<name>, hosts.json agent_name_format), `description`, `model` (the role's
+comment opening with the generated-file line (kitlib.host.content.banner), then `name` (kit-<name>,
+hosts.json agent_name_format), `description`, `model` (the role's
 `model.codex` override, else hosts.json's model for its tier; no line for ACCOUNT_DEFAULT, so the account's
 configured model runs, as the Codex branch's roles.json had it), `model_reasoning_effort` (the
 role's effort, else TIER_EFFORT of its tier), `sandbox_mode` (read-only for a read or lander
@@ -9,7 +10,10 @@ role, else the role's `sandbox`: sandbox_mode) and
 `developer_instructions`, the role body with its tokens filled from TOKENS, as a TOML multi-line
 string. Codex agent files carry no tool list, so `capabilities` and `cache` are not rendered; the
 sandbox is what limits a role. Lines end as the role file's do. Each skill folder is copied byte for
-byte to `hosts/codex/shell/skills/<name>/`.
+byte to `hosts/codex/shell/skills/<name>/`: the default host's plugin points at `content/skills/`
+itself, and Codex follows once a live install shows it loads skills from outside its plugin
+folder (decision 29 in docs/multi-host-plan.md section 7; README.md "Not verified"). A skill file
+is a copy, so it carries no generated-file line.
 
 manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a final newline:
 - `hosts/codex/shell/plugin.json`: kit.json's name and version, the hooks file under
@@ -27,6 +31,8 @@ copied out of the kit (a plugin cache) cannot reach the kit's boot/ or hosts.jso
 check that verifies the kit it binds through PM_KIT_ROOT, as the Codex branch's plugin carried
 release_binding.py, the hook entry, and the hook data that entry reads before the kit boots (never
 from the kit it is about to verify). render_content --check fails when a copy drifts.
+The JSON files and the byte-for-byte copies carry no generated-file line: JSON holds no comment, and
+a copy must stay the bytes of its source.
 """
 import json
 import os
@@ -34,7 +40,7 @@ import os
 from kitlib import agentname
 from kitlib.host import hookmain, registry
 from kitlib.lockmcp import SERVER_NAME
-from kitlib.host.content import ContentError, substitute
+from kitlib.host.content import ContentError, banner, role_source, substitute
 
 HOST = 'codex'
 SHELL_REL = 'hosts/codex/shell'
@@ -229,8 +235,8 @@ class CodexContent:
         fill = lambda text: substitute(text, values, agent_name, names, src, models=prose_models(),  # noqa: E731
                                        tools=TOOLS)
         nl = role.newline
-        lines = ['# Review template: do not install until live acceptance (hosts/codex/README.md).',
-                 '# Rendered from content/roles/%s.md by tools/render_content.py; never edit it by hand.' % role.name,
+        lines = ['# ' + banner(role_source(role.name)),
+                 '# Review template: do not install until live acceptance (hosts/codex/README.md).',
                  '# Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".',
                  'name = %s' % toml_string(agent_name(role.name)),
                  'description = %s' % toml_string(fill(role.description))]

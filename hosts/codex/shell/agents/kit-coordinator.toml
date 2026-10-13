@@ -1,5 +1,5 @@
+# Generated from content/roles/coordinator.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 # Review template: do not install until live acceptance (hosts/codex/README.md).
-# Rendered from content/roles/coordinator.md by tools/render_content.py; never edit it by hand.
 # Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".
 name = "kit-coordinator"
 description = "Multi-agent coordinator for a software repository. Run it as the MAIN session (`python <kit>/hosts/codex/shell/scripts/launch.py --role kit-coordinator`), not as a subagent. It splits planned work into independent workstreams, dispatches each to a worker agent, sequences shared resources, reviews every branch before it lands, lands every LAND verdict as soon as the lane is free, and brings decisions to the owner. It does no implementation itself. Repository specifics come from `.codex/coordinator-profile.md`."

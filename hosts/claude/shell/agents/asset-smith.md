@@ -1,4 +1,5 @@
 ---
+# Generated from content/roles/asset-smith.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: asset-smith
 description: Builds 3D assets as Blender Python scripts - the script is the asset, the exported glTF is a build output - then validates the exported file against budgets and publishes a contact sheet of renders as a link the owner can click. For parametric hard-surface props (props, housings, frames, panels, blocky weapons), and cleans up meshes from the owner's local image-to-3D generators into game assets; never for rigged or animated characters, or anything needing an artist's eye the generators cannot supply. Must be given what to build, its real-world size, the art direction it matches, and where the asset lives. Repository specifics come from `.claude/agent-profile.md`.
 tools: Read, Edit, Write, Grep, Glob, Bash, PowerShell, EnterWorktree, Artifact, Agent

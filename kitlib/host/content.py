@@ -33,6 +33,10 @@ tables. A role file keeps its own line endings, and the body is copied byte for 
 tokens.
 
 A skill is a folder, `content/skills/<name>/`, whose files every host ships unchanged.
+
+`banner(source)` is the line every rendered file a comment can go in opens with (decision 19 in
+docs/multi-host-plan.md section 7): the repo-relative file it is generated from, and the command
+that renders it. Each renderer puts it in its file type's comment form; JSON takes none.
 """
 import dataclasses
 import re
@@ -288,6 +292,21 @@ def parse_role(data, source='role'):
                 cache=fields.get('cache'), mode=mode, models=tuple(sorted(models.items())),
                 writes=writes, group=group or MODE_GROUP.get(mode), run=fields.get('run'), summary=summary,
                 body=text[m.end():], newline=newline)
+
+
+RENDER_COMMAND = 'python tools/render_content.py --write'
+ROLE_SOURCE = 'content/roles/%s.md'
+
+
+def banner(source):
+    """The generated-file line for a file rendered from the repo-relative `source`, without the
+    comment marker its file type adds."""
+    return 'Generated from %s: edit that, then run %s. Never edit this file by hand.' % (source, RENDER_COMMAND)
+
+
+def role_source(name):
+    """The repo-relative role file role `name` is rendered from."""
+    return ROLE_SOURCE % name
 
 
 def tokens_in(text):

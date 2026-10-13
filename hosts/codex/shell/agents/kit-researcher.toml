@@ -1,5 +1,5 @@
+# Generated from content/roles/researcher.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 # Review template: do not install until live acceptance (hosts/codex/README.md).
-# Rendered from content/roles/researcher.md by tools/render_content.py; never edit it by hand.
 # Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".
 name = "kit-researcher"
 description = "Read-only idea and research agent - new game modes, features and mechanics, prior art in other games, and how a concept would fit this codebase. It proposes; it never builds, edits the repository or lands. Its output is a set of concrete concepts with evidence, seams they would use and rough costs, for the owner to choose from; a `kit-spec-writer` turns the chosen one into a buildable spec. Must be given the question, the constraints that are already settled, and the code and docs worth reading."

@@ -72,6 +72,22 @@ class Agents(unittest.TestCase):
                     self.assertNotIn(value.encode(), data, (path, value))
 
 
+class Banner(unittest.TestCase):
+    def test_every_committed_agent_file_opens_with_the_generated_line(self):
+        """Its first line names the role file and the render command (decision 19 in
+        docs/multi-host-plan.md section 7; docs/content.md "Generated files")."""
+        folder = os.path.join(ROOT, *cc.AGENTS_REL.split('/'))
+        names = kcontent.load(ROOT).role_names()
+        self.assertEqual(sorted(n for n in os.listdir(folder) if n.endswith('.toml')),
+                         sorted('kit-%s.toml' % n for n in names))
+        for n in names:
+            with self.subTest(role=n):
+                with open(os.path.join(folder, 'kit-%s.toml' % n), encoding='utf-8') as f:
+                    first = f.readline().rstrip('\r\n')
+                self.assertEqual(first, '# ' + hc.banner(hc.role_source(n)))
+                self.assertIn('python tools/render_content.py --write', first)
+
+
 class Tokens(unittest.TestCase):
     def test_every_token_has_a_codex_value(self):
         self.assertEqual(sorted(cc.tokens()), sorted(t for t in hc.TOKENS if t not in hc.ARG_TOKENS))

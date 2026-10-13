@@ -38,13 +38,15 @@ def strict_frontmatter(text):
     ': ' (or ' #') is a YAML error, and a quoted one must close its quote at the end of the line.
     Any other indent (a tab, four spaces, a line under a key that has a value, a map inside a map,
     a map under any key but `experimental`) is a problem: the files do not use it, so this parser
-    does not model it. So is a key with nothing after its colon and no map under it."""
+    does not model it. So is a key with nothing after its colon and no map under it. A whole-line
+    comment at the left margin (`# ...`, the generated-file line the renderer writes) is YAML a
+    loader skips, and so is skipped here."""
     m = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", text, re.S)
     if not m:
         return None, ["no frontmatter block"]
     top, problems, parent, opened = {}, [], None, []
     for line in m.group(1).splitlines():
-        if not line.strip():
+        if not line.strip() or line.startswith("#"):
             continue
         km = re.match(r"(  )?([A-Za-z][\w-]*):(?: +(.*))?$", line)
         if not km:
@@ -178,13 +180,15 @@ class AgentFilesTest(unittest.TestCase):
         manifest = json.loads((AGENTS.parents[3] / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(sorted(manifest["agents"]),
                          sorted("./hosts/claude/shell/agents/%s" % p.name for p in AGENTS.glob("*.md")))
-        self.assertEqual(manifest["skills"], ["./hosts/claude/shell/skills/"])
-        self.assertTrue((AGENTS.parents[3] / "hosts" / "claude" / "shell" / "skills").is_dir())
+        # the skills are content/skills itself: no rendered copy (decision 29, docs/content.md)
+        self.assertEqual(manifest["skills"], ["./content/skills/"])
+        self.assertTrue((AGENTS.parents[3] / "content" / "skills").is_dir())
+        self.assertFalse((AGENTS.parents[3] / "hosts" / "claude" / "shell" / "skills").exists())
 
     def test_agent_naming_a_skill_can_load_skills(self):
         # An explicit `tools:` list without Skill stops the agent invoking any skill (also on the
         # main thread under `claude --agent`), so a body that says to use one is unreachable.
-        skills = [d.name for d in (AGENTS.parent / "skills").iterdir() if d.is_dir()]
+        skills = [d.name for d in (AGENTS.parents[3] / "content" / "skills").iterdir() if d.is_dir()]
         for p in AGENTS.glob("*.md"):
             text = p.read_text(encoding="utf-8")
             tools = frontmatter(text).get("tools")

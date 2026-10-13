@@ -2,7 +2,8 @@
 
   commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME] [--host NAME]
             [--owner-authored] [--owner-approved VALUE ...] [--lander-main-checkout] PATH ...
-      commit exactly PATH ... in the work tree DIR is in (default: here)
+      commit exactly PATH ... in the work tree DIR is in (default: here); in a kit checkout, a
+      PATH under content/ (or kit.json, hosts.json) renders first and commits the rendered files too
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.commit, prints and exits.
 Exit codes (kitlib.commit): 0 committed, 1 refused or git failed, 2 USAGE (also the main-checkout
