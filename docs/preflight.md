@@ -16,7 +16,7 @@ One rule runs through all three: a reading that failed is printed as `?`, `UNKNO
 - **leftovers**: registered worktrees whose own commits are in `<remote>/<main_branch>` as it stands (`kitlib/preflight/leftovers.py`, `merged_worktrees` in docs/worktree-remove.md), as `leftovers WARN N under <worktrees_dir>` with the `worktree_remove.py <slug>` that removes each; `leftovers none` when there are none. The worktree preflight runs in, fresh worktrees and exempt folders are not listed. A failed read is `leftovers WARN ... not checked: <why>`. Ported from the PM preflight's merged-worktree WARN (its stump and orphan lines are not ported: `worktree_remove.py --check` lists those).
 - **NOTE**: in the main checkout only. It names `<tools_dir>/new_worktree.py` and `<worktrees_dir>/<slug>/`.
 - **docs**: `<kit>/tools/doc_budget.py -C <checkout>`, judged by `kitlib.verdict.line`.
-- **doc index**: `<kit>/tools/doc_index.py -C <checkout>` (`kitlib.docs.callers`), judged on `DOC INDEX OK` / `DOC INDEX FAILED`; no line when `.kit.json` "doc_index".enabled is false.
+- **doc index**: `<kit>/tools/doc_index.py -C <checkout>` (`kitlib.docs.callers`), judged on `DOC INDEX OK` / `DOC INDEX FAILED`; no line when `.kit.json` "doc_index".enabled is false. With no index file the line passes and quotes the tool's one-line note that the listing check was skipped (the doc index is opt-in; docs/doc-tools.md "doc_index").
 - **stray lines**: from `kitlib.git.stray.check`.
 - **report hooks**.
 - **engines and ports**: only when configured.

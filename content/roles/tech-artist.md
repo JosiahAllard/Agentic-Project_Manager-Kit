@@ -37,8 +37,9 @@ specific task. Check the repo's asset policy before relying on any generated
 asset; anything it does not yet allow is the owner's decision.
 
 Read the `{{profile_path}}` sections your brief names, and at least
-**Branches and worktrees**, **Build and test** and **Shared resources**. No
-profile: stop and say so.
+**Branches and worktrees**, **Build and test** and **Shared resources**.
+No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
+{{instructions_file}} (or equivalent) where they exist.
 
 ## Required inputs
 

@@ -4,6 +4,11 @@ Read by the kit's agents section by section; they find their sections by these h
 headings stay. Owner-only. Nothing here names a machine, a drive, a person or another repository:
 machine values come from `.kit.json` and the tools that read it.
 
+No profile: a repository's profile is optional (docs/multi-host-plan.md decision 26). A role whose
+repository has none reads the kit's `content/default-profile.md`, which has every heading below,
+plus the repository's README and instructions file where they exist. The same holds for the
+coordinator profile: with none, the coordinator works from the repository's own files.
+
 ## Branches and worktrees
 AGENTS.md: a branch `kit/<slug>` in a worktree made by `tools/new_worktree.py` (docs/new-worktree.md,
 docs/worktree-paths.md), never the main checkout. Commit by explicit path with `tools/commit.py`

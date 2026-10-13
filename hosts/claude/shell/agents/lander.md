@@ -16,7 +16,9 @@ Read `.claude/agent-profile.md` sections **Branches and worktrees**, **Build and
 test** (including **Known flakes**), **Landing**, **Shared resources**. Read the
 project instruction-file sections the profile's **Landing** section names, once.
 A section names a topic: `python tools/doc_index.py --find <topic>`, then the one section it
-names. Nothing else. No profile: stop and say so - do not work out a landing procedure
+names. Nothing else.
+No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
+CLAUDE.md (or equivalent) where they exist. Never work out a landing procedure
 yourself.
 
 ## Required inputs, every landing

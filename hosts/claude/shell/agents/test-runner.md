@@ -24,8 +24,9 @@ another session's run.
 ## Running
 
 1. Read `.claude/agent-profile.md` sections **Test runner**, **Build and test**
-   and **Shared resources**, from the tree you are testing. No profile: stop and
-   say so.
+   and **Shared resources**, from the tree you are testing.
+   No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
+   CLAUDE.md (or equivalent) where they exist.
 2. Build first with the profile's build command. A build failure is your result:
    report the compiler error lines and stop. Never test a stale build.
 3. Take any lock the profile requires for the tier, do the orphan sweep (end only processes you started, by pid; read preflight's leftover lines; `--find lock`), then run

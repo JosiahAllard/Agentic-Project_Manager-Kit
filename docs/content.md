@@ -7,6 +7,9 @@ a test fails when they differ from what the renderer writes now (tests/content/t
 
 - `content/roles/<name>.md`: one role. Front matter, then a neutral body.
 - `content/skills/<name>/`: one skill folder, shipped byte for byte on every host.
+- `content/default-profile.md`: the agent profile every role reads when a repository has none
+  (docs/agent-profile.md). Not rendered: it holds no tokens and names no host
+  (tests/content/test_default_profile.py).
 - `python tools/render_content.py` (`--check`, the default) lists each rendered file that differs,
   is missing, or is stale (in a folder a host renderer owns, but no longer rendered). Exit 1 if any.
 - `python tools/render_content.py --write` writes them and removes the stale ones. `--host <name>`

@@ -55,8 +55,9 @@ down the longer the machine stays up: docs/windows-token-leak.md.
      landing refuses "main checkout is not clean") plus the stack's `gitignore` and
      `gitattributes` lists. A file already there is never overwritten: only the lines it lacks
      are appended, and the dry run lists them.
-   - `docs/INDEX.md` is written only when absent. The doc index check (run by preflight, commit
-     and review_pack) needs the file, and every tracked `.md` named on an entry line of it. The starter names only itself: when it is
+   - `docs/INDEX.md` is written only when absent. The doc index is opt-in: with no index file the
+     check (run by preflight, commit and review_pack) is skipped and says so; with one, every
+     tracked `.md` must be named on an entry line of it. The starter names only itself: when it is
      written, the dry run and `-Apply` list the target's tracked `.md` files it does not name
      (under "add these to docs/INDEX.md"; advice only, never a refusal), for you to add.
    - `-Stack dotnet|godot|java|python` copies `templates/stacks/<stack>/tools/gate.json` to
@@ -125,7 +126,9 @@ down the longer the machine stays up: docs/windows-token-leak.md.
   `.claude/skills/godot-render-check/SKILL.md`, with the kit path written in) are installed.
 - `templates/common/AGENTS.md` (with `templates/common/CLAUDE.md`, the one line `@AGENTS.md`) and the two profile templates (`agent-profile.TEMPLATE.md`,
   `coordinator-profile.TEMPLATE.md`): the repository's rules file and profiles are drafted from
-  them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates").
+  them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates"). Both profiles
+  are optional: with no agent profile, every role reads the kit's `content/default-profile.md`
+  plus the repository's README and instructions file (docs/agent-profile.md).
 - `.claude/settings.json`: the kit ships none (docs/go-live.md "Joint-review questions").
 - `backlog/.gitkeep` is not needed (the backlog store is the ref `refs/backlog/main`), and
   `.github/workflows/instructions.yml` is not shipped: the stack workflows do not mention it.

@@ -16,7 +16,8 @@ do not guess.
 Read the `{{profile_path}}` sections your brief names, plus **Branches and
 worktrees**, **Build and test**, **Shared resources**. A section names a topic: look it up
 with `python tools/doc_index.py --find <topic>`, then read the one section it names.
-No profile: stop, say so.
+No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
+{{instructions_file}} (or equivalent) where they exist.
 
 ## How to work
 

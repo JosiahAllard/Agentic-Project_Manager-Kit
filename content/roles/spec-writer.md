@@ -17,7 +17,9 @@ upward for an unusually hard design; do not ask for it.
 
 Read `{{profile_path}}` sections **Branches and worktrees**, **Build and test** (the docs gate), **Records**;
 each names a topic, so `python tools/doc_index.py --find <topic>` and read the one section it
-names. Nothing else. No profile: stop, say so.
+names. Nothing else.
+No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
+{{instructions_file}} (or equivalent) where they exist.
 
 ## Required inputs
 

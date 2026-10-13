@@ -86,6 +86,16 @@ class Preflight(Case):
         out = self.run_preflight()
         self.assertNotIn('doc index', out)
 
+    def test_no_index_is_skipped_not_failed_and_the_line_says_so(self):
+        # The doc index is opt-in (decision 26): a repository without one passes, saying why.
+        self.repo.git('rm', '-q', 'docs/INDEX.md')
+        self.repo.git('commit', '-q', '-m', 'no index')
+        self.commit_unlisted()
+        line = self.line(self.run_preflight())
+        self.assertNotIn('FAILED', line)
+        self.assertIn('no docs/INDEX.md in this repository, so the listing check is skipped', line)
+        self.assertIn('DOC INDEX OK', line)
+
 
 class Commit(Case):
 
@@ -206,12 +216,14 @@ class ConfigRef(Case):
 
     def test_the_index_path_is_the_ref_s(self):
         base = self.repo.git('rev-parse', 'HEAD').strip()
-        self.config(doc_index={'index': 'docs/MAP.md'})       # no such file: a miss if it counted
+        self.config(doc_index={'index': 'docs/MAP.md'})       # no such file: skipped if it counted
         code, out = self.check(config_ref=base)
         self.assertEqual(code, 0, out)
+        self.assertNotIn('docs/MAP.md', out)
         code, out = self.check()
-        self.assertEqual(code, 1, out)
-        self.assertIn('docs/MAP.md', out)
+        self.assertEqual(code, 0, out)
+        self.assertIn('doc_index: no docs/MAP.md in this repository, so the listing check is skipped',
+                      out)
 
     def failing_git(self, rc, words=('show',)):
         """kitlib.config's git seam answering every git call starting with `words` with exit `rc`

@@ -28,7 +28,9 @@ asset; anything it does not yet allow is the owner's decision.
 
 Read the `.claude/agent-profile.md` sections your brief names, and at least
 **Branches and worktrees**, **Build and test**, **Shared resources** and **Art**.
-No profile, or no **Art** section: stop and say so.
+No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
+CLAUDE.md (or equivalent) where they exist. No art direction in the **Art** section
+(the default profile has none): stop and say so.
 
 ## What this agent is for
 

@@ -372,11 +372,48 @@ class ListingCheck(RepoCase):
         if kit is not None:
             self.write('.kit.json', json.dumps(kit))
 
-    def test_a_missing_index_fails(self):
+    def test_a_missing_index_skips_the_listing_and_says_so_once(self):
+        # The doc index is opt-in (decision 26): no index at the head is no listing check.
         self.docs(kit={})
         code, out = self.capture()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.count('doc_index: no docs/INDEX.md in this repository, so the listing '
+                                   'check is skipped (the doc index is opt-in'), 1, out)
+        self.assertIn('DOC INDEX OK (HEAD as committed, 1 .md files)', out)
+        self.assertNotIn('the index is missing', out)
+
+    def test_a_missing_configured_index_is_named_in_the_skip(self):
+        self.docs(kit={'doc_index': {'index': 'handbook/MAP.md'}})
+        code, out = self.capture()
+        self.assertEqual(code, 0, out)
+        self.assertIn('doc_index: no handbook/MAP.md in this repository', out)
+
+    def test_enabled_false_says_nothing_about_a_missing_index(self):
+        self.docs(kit={'doc_index': {'enabled': False}})
+        code, out = self.capture()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('opt-in', out)
+
+    def test_an_index_the_base_has_still_fails_when_the_branch_deletes_it(self):
+        # A branch cannot switch the check off by deleting the index: --config-ref is the base.
+        self.docs(self.SELF + '- `docs/a.md` | a doc | always | kw: a\n', kit={})
+        self.commit('kit json')
+        base = self.r.git('rev-parse', 'HEAD').strip()
+        self.r.git('rm', '-q', 'docs/INDEX.md')
+        self.commit('drop the index')
+        code, out = self.capture(config_ref=base)
         self.assertEqual(code, 1, out)
         self.assertIn('  docs/INDEX.md: the index is missing (no such file at the ref checked)', out)
+        self.assertNotIn('opt-in', out)
+        code, out = self.capture()                       # no base to compare: the skip
+        self.assertEqual(code, 0, out)
+
+    def test_has_index_counts_a_failed_ref_probe_as_present(self):
+        self.docs(kit={})
+        self.assertFalse(index.has_index(self.repo, 'docs/INDEX.md', ['docs/a.md']))
+        self.assertTrue(index.has_index(self.repo, 'docs/INDEX.md', ['docs/INDEX.md']))
+        self.assertTrue(index.has_index(self.repo, 'docs/INDEX.md', [], config_ref='no-such-ref'))
+        self.assertFalse(index.has_index(self.repo, 'docs/INDEX.md', [], config_ref='HEAD'))
 
     def test_an_entry_line_lists_a_doc(self):
         self.docs(self.SELF + '- `docs/a.md` | a doc | always | kw: a\n', kit={})
@@ -626,8 +663,15 @@ class IndexLookupText(RepoCase):
         self.assertEqual(code, 0, out)
         self.kit_json({'find_match': 'text'})
         code, out = self.capture(find='TOTP')
+        self.assertEqual(code, 1, out)
+        self.assertIn('doc_index: this repository has no doc index (no docs/INDEX.md)', out)
+
+    def test_an_unreadable_index_still_refuses(self):
+        # Only an absent index is "no doc index"; any other read error stays a refusal.
+        with mock.patch.object(index, 'read_index', side_effect=PermissionError('denied')):
+            code, out = self.capture(find='TOTP')
         self.assertEqual(code, 2, out)
-        self.assertIn('doc_index: cannot read docs/INDEX.md:', out)
+        self.assertIn('doc_index: cannot read docs/INDEX.md: denied', out)
 
     def test_a_missing_tools_section_exits_1(self):
         self.write('docs/INDEX.md', '# Doc index\n')

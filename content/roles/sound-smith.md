@@ -22,7 +22,9 @@ owner. Say what you measured, show the picture, say what the owner should listen
 
 Read the `{{profile_path}}` sections your brief names, and at least
 **Branches and worktrees**, **Build and test**, **Shared resources**, **Audio**.
-No profile, or no **Audio** section: stop and say so.
+No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
+{{instructions_file}} (or equivalent) where they exist. No audio direction in the **Audio**
+section (the default profile has none): stop and say so.
 
 ## Required inputs
 

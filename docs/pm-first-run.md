@@ -94,7 +94,8 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
     `stem` and `agent`, docs/launcher.md "State files"; it sets `PM_KIT_ROLE` to `coordinator`), or by hand in the repository with `PM_KIT_ROLE` set to `coordinator`:
     `claude --agent pm-kit:coordinator --remote-control "<name>"`. The name must match the entry
     exactly, case included: the checklist finds a coordinator only by that flag. On its first
-    start it drafts the repository's profiles for the owner to approve.
+    start it reads the repository's profiles; with none, agents use the kit's default profile
+    (docs/agent-profile.md) and it drafts one only when the owner asks.
     `--account current` starts it on the account you are on. Add the kit's own coordinator the same way
     (sessions.json key `kit`, repo `kit`, a launcher.repos name for the kit checkout; see docs/launcher.sessions.example.json):
     the PM runs from the pmdata folder and its write-jail keeps it and its subagents out of kit worktrees,

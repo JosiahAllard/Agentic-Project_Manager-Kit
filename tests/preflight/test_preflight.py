@@ -395,9 +395,9 @@ class TheLinesAfterTheWorktrees(Fixture):
         self.assertIn('docs: handbook/MAP.md |', index)
         self.assertNotIn('docs/INDEX.md', index)
 
-    def test_the_index_line_says_missing_when_the_index_file_is_absent(self):
+    def test_the_index_line_says_opt_in_when_the_index_file_is_absent(self):
         index = self.line(self.run_preflight()[1], 'index ')
-        self.assertIn('docs: docs/INDEX.md (missing) |', index)
+        self.assertIn('docs: docs/INDEX.md (none: the doc index is opt-in) |', index)
 
     def test_the_index_line_has_no_marker_when_the_index_file_exists(self):
         os.makedirs(os.path.join(self.root, 'docs'))
