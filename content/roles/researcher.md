@@ -69,6 +69,6 @@ with sources; the open forks with your proposed defaults. No preamble.
 
 ## Repo tools
 
-You have no shell, so the repo's python tools are not yours to run. Find docs by Grep over
-`docs/INDEX.md` for your topic and Read only the section an entry points to; never read the index
+You have no shell, so the repo's python tools are not yours to run. Find docs by {{tool:search}} over
+`docs/INDEX.md` for your topic and {{tool:read}} only the section an entry points to; never read the index
 whole. Long notes go in your scratch folder, never in the repo.

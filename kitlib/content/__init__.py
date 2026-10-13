@@ -13,7 +13,7 @@ version) is asked for those files too, and they are checked and written like the
 The renderers are passed in: this package names no host and imports none (the host is chosen at
 the edge, tools/render_content.py). Pure file work: no printing, no exit.
 
-`role_modes(kit)` is {role: mode} from the role files under the kit root `kit`, for the guard's
+`names_of(name)` is a role's name with its old or new one (ALIASES). `role_modes(kit)` is {role: mode} from the role files under the kit root `kit`, for the guard's
 role policy (docs/guard.md "Role policy"); `role_mode(name, kit)` one role's, an old name
 (ALIASES) read as its new one; `role_writes(name, kit)` the paths its `writes` names. Read once
 per kit root and cached. It never raises: no
@@ -35,6 +35,17 @@ ALIASES = {'opus-worker': 'senior-worker'}
 _MODES = {}
 _KIT_NAME = re.compile(r'[a-z][a-z0-9-]*\Z')
 _VERSION = re.compile(r'\d+\.\d+\.\d+\Z')
+
+
+def names_of(name):
+    """(name, then every other name the same role goes by in ALIASES): its new name for an old
+    one, its old names for a new one."""
+    out = [name]
+    for old, new in ALIASES.items():
+        other = new if old == name else old if new == name else None
+        if other and other not in out:
+            out.append(other)
+    return tuple(out)
 
 
 def load_kit(root):
@@ -153,8 +164,10 @@ def load(root):
 
 
 def render(root, renderers, content=None):
-    """{repo-relative posix path: bytes} of every file the renderers write; two renderers writing
-    one path is a ContentError."""
+    """{repo-relative posix path: bytes} of every file the renderers write: render(content), the
+    manifests(kit, content) of a renderer with them, and the vendored(root) copies of kit files a
+    renderer's plugin ships (read from `root`, so a copy that drifts from its source is drift); two
+    renderers writing one path is a ContentError."""
     content = load(root) if content is None else content
     out = {}
     kit = None
@@ -163,6 +176,8 @@ def render(root, renderers, content=None):
         if hasattr(r, 'manifests'):
             kit = load_kit(root) if kit is None else kit
             files.update(r.manifests(kit, content))
+        if hasattr(r, 'vendored'):                  # kit files the host's plugin ships a copy of
+            files.update(r.vendored(root))
         for path, data in files.items():
             if path in out:
                 raise ContentError('%s: written by two hosts' % path)

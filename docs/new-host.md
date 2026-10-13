@@ -9,7 +9,8 @@ The worked example is the fake host in `tests/host/fakehost/`. It exists only in
 passes the same suite as Claude (`tests/host/test_conformance_fake.py`). It has no ask, no subagent
 identity in its hooks, no MCP and no skills, so it shows each way the kit degrades. Copy its files
 and rename them. Claude is the full example: `hosts/claude/` and
-`tests/host/test_conformance_claude.py`.
+`tests/host/test_conformance_claude.py`. Codex (`hosts/codex/`, `tests/host/test_conformance_codex.py`)
+shows a real host without ask or subagent identity, with a several-target edit tool and a `screen`.
 
 ## 1. The `hosts.json` entry
 
@@ -50,6 +51,7 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 | `attribution` | The commit trailer: `name`, `email`, `model_env` (or `null`), and `model_pattern` (`null` allows any model name) |
 | `agent_name_format` | How it names a bundled agent: `{plugin}` once at most, then `{name}` last |
 | `session_process` | The process image of a session it launches |
+| `env_prefixes` | The environment variable prefixes its sessions own (`CLAUDE_`). A child launched on another host never inherits them (`kitlib.sessionmark.child_environment`). |
 
 ## 2. The adapter: `hosts/<name>/adapter/`
 
@@ -60,7 +62,12 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   (with `command` and `shell`, plus `workdir` or `background` if the host has them), `mcp` (the
   full tool name) or `other`. Start events become `session_start` or `subagent_start`. A
   subagent's identity goes in `agent`, and its bare role in `agent_role`. A payload of the wrong
-  shape raises, and the hook then denies it.
+  shape raises, and the hook then denies it. A call that acts on several targets (Codex's
+  `apply_patch` adds, deletes and renames files in one call) returns a tuple of Actions, one per
+  target: `hookmain` judges each and the first deny decides. An empty tuple is denied.
+- `screen(action, environ)` (optional): the host's own policy over one Action, a `Decision` or
+  `None`. It runs before the guard; its deny stands alone. Use it only for what is true of this
+  host and no other (Codex: a shell command that runs `apply_patch`, a tool outside its allowlist).
 - `agent(payload)` (optional): the subagent id alone. A deny for a payload that `parse` refused
   still gets the right role tag.
 - `render(event_name, decision) -> (stdout, exit code)`. Use the host's own deny form. An allow
@@ -73,8 +80,13 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   where it writes every file), `render(content)` for every role (and every skill if the host has
   skills), and `manifests(kit, content)` for the plugin files carrying `kit.json`'s version and the
   hook registration (command lines from `hookmain.manifest_command`). Role bodies fill tokens from
-  the host's own table (docs/content.md "Tokens").
+  the host's own table (docs/content.md "Tokens"): every one-value token in `kitlib.host.content.TOKENS`,
+  `{{model:<tier>}}` from `tier_models()` and `{{tool:<capability>}}` from its capability map, passed
+  to `kitlib.host.content.substitute` (`models=`, `tools=`).
 - `command_host()`, `launcher()` and `plugin_installer()`: `None` until the host has them.
+- The renderer's optional `vendored(root)`: `{path: bytes}` of kit files the host's plugin ships a
+  copy of, read from the kit checkout `root` and drift-checked with the rest. A plugin root that is
+  not the whole kit ships `boot/kitboot.py` this way (Codex).
 
 ## 3. The shell: `hosts/<name>/shell/`
 
@@ -91,7 +103,8 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
 Recorded payloads go in `tests/host/<name>/payloads.json`, in the shape the conformance module
 describes:
 - `events`: each hook event mapped to `tool`, `session_start` or `subagent_start`
-- `cases`: a payload and the whole `Action` it parses into
+- `cases`: a payload and the whole `Action` it parses into (`actions`, a list, for a call with
+  several targets)
 - `malformed`: payloads that `parse` must refuse
 - `render`: exact outputs for a few decisions
 
@@ -109,6 +122,7 @@ tool call and a main-session call.
 The suite checks:
 - the registry entry, and the adapter `tools/_host.py` imports
 - parse for every case, and subagent identity only where it is declared
+- a several-target call denied when any one target is
 - render of allow, deny and ask, and the ask lowered through `hookmain.run`
 - fail-closed denies
 - the kit header at each start event

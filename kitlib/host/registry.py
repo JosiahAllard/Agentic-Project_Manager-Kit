@@ -52,6 +52,7 @@ TIERS = ('light', 'standard', 'strong', 'deep')
 
 _NAME = re.compile(r'[a-z][a-z0-9-]*\Z')
 _ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+_ENV_PREFIX = re.compile(r'[A-Z][A-Z0-9_]*_\Z')
 _EMAIL = re.compile(r'[^\s<>@]+@[^\s<>@]+\Z')
 _MODULE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z')
 _KEYS = {'adapter', 'shell', 'platforms', 'capabilities', 'profile', 'tiers'}
@@ -160,11 +161,19 @@ def _name_format(where, value):
     return value
 
 
+def _env_prefixes(where, value):
+    """Upper-case variable-name prefixes, each ending in `_` (CLAUDE_)."""
+    prefixes = _texts(where, value)
+    if not all(_ENV_PREFIX.match(p) for p in prefixes):
+        raise RegistryError('hosts.json: %s must be upper-case prefixes ending in _' % where)
+    return prefixes
+
+
 def _profile(name, raw):
     w = '%s.profile' % name
     p = _object(w, raw, ('owner_paths', 'worktrees_directory', 'state_directory', 'process_names',
                          'mcp_tool_format', 'session_env', 'skills_directory', 'attribution',
-                         'agent_name_format', 'session_process'))
+                         'agent_name_format', 'session_process', 'env_prefixes'))
     session_env = _text(w + '.session_env', p['session_env'])
     if not _ENV_NAME.match(session_env):
         raise RegistryError('hosts.json: %s.session_env must be an environment variable name' % w)
@@ -178,7 +187,8 @@ def _profile(name, raw):
         _relpath(w + '.skills_directory', p['skills_directory']),
         _attribution(w + '.attribution', p['attribution']),
         _name_format(w + '.agent_name_format', p['agent_name_format']),
-        _text(w + '.session_process', p['session_process']))
+        _text(w + '.session_process', p['session_process']),
+        _env_prefixes(w + '.env_prefixes', p['env_prefixes']))
 
 
 def _entry(name, raw):

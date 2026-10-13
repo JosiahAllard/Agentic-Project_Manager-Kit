@@ -16,6 +16,7 @@ from unittest import mock
 
 from hosts.claude.adapter import content as claude_content
 from kitlib import content, reviewpack, roster
+from kitlib.host import registry
 from tests.docs.test_cli import repo_with_docs
 from tests.gitfixture import fixture_env
 
@@ -23,7 +24,7 @@ KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 sys.path.insert(0, os.path.join(KIT_ROOT, 'tools'))
 import agent_roster as cli  # noqa: E402
 
-MAPS = {'claude': claude_content.TIER_MODEL}
+MAPS = {h: dict(registry.host(h).tiers) for h in ('claude', 'codex')}     # hosts.json, the one tier map
 
 
 def read(path):
@@ -59,7 +60,7 @@ class TempCopyTest(unittest.TestCase):
         top = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, top, True)
         self.top = top
-        for rel in ('content', 'docs', '.claude-plugin', os.path.join('hosts', 'claude', 'shell', 'agents'),
+        for rel in ('content', 'docs', 'boot', '.claude-plugin', os.path.join('hosts', 'claude', 'shell', 'agents'),
                     os.path.join('hosts', 'claude', 'shell', 'skills')):
             shutil.copytree(os.path.join(KIT_ROOT, rel), os.path.join(top, rel))
         for rel in ('kit.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json')):
@@ -90,11 +91,11 @@ class TempCopyTest(unittest.TestCase):
                       roster.check(self.top, MAPS))
 
     def test_tier_table_against_the_host_map(self):
-        self.assertEqual(roster.check(self.top, {'claude': dict(MAPS['claude'], deep='sonnet')}),
+        self.assertEqual(roster.check(self.top, dict(MAPS, claude=dict(MAPS['claude'], deep='sonnet'))),
                          ['claude: tier deep runs opus in ROSTER.md, sonnet in the host renderer'])
         self.assertEqual(roster.check(self.top, dict(MAPS, other={'light': 'x'})),
                          ['other: no column in the ROSTER.md tier table'])
-        self.assertEqual(roster.check(self.top, {}),
+        self.assertEqual(roster.check(self.top, {k: v for k, v in MAPS.items() if k != 'claude'}),
                          ['claude: a column in the ROSTER.md tier table, but no such host renderer'])
 
     def test_missing_on_either_side(self):

@@ -34,7 +34,7 @@ class Types(unittest.TestCase):
                          ['owner_paths', 'worktrees_directory', 'state_directory',
                           'process_names', 'mcp_tool_format', 'session_env',
                           'skills_directory', 'attribution', 'agent_name_format',
-                          'session_process'])
+                          'session_process', 'env_prefixes'])
 
 
 class Degrade(unittest.TestCase):

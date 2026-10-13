@@ -53,26 +53,56 @@ each flag shown.
 ## Tokens
 
 A body or description names a value that differs by host only as a token. An unknown token, or a
-`{{` that is not one, refuses the render.
+`{{` that is not one, refuses the render. A value `hosts.json` already holds is read from the host's
+profile there, never written a second time in the renderer (Claude: `PROFILE_TOKENS`).
 
-| token | Claude |
-|---|---|
-| `{{agent:<role>}}` | `pm-kit:<role>` |
-| `{{profile_path}}` | `.claude/agent-profile.md` |
-| `{{coordinator_profile_path}}` | `.claude/coordinator-profile.md` |
-| `{{instructions_file}}` | `CLAUDE.md` |
-| `{{worktrees_dir}}` | `.claude/worktrees` |
+| token | meaning | Claude | Codex |
+|---|---|---|---|
+| `{{agent:<role>}}` | the name the host dispatches a role by | `pm-kit:<role>` | `kit-<role>` |
+| `{{model:<tier>}}` | the host's model for a tier | hosts.json `tiers`: `{{model:strong}}` is `opus` | `the account's model` while hosts.json maps the tier to `account-default` |
+| `{{tool:<capability>}}` | the host's tool for a capability (the front matter's names) | the renderer's `TOOLS`: `{{tool:message}}` is `SendMessage`, `{{tool:dispatch}}` `Agent` | the renderer's `TOOLS` (inferred names): `send_message`, `spawn_agent`, `apply_patch`; a capability with no Codex tool says so |
+| `{{profile_path}}` | a repository's agent profile | `.claude/agent-profile.md` | `.codex/agent-profile.md` |
+| `{{coordinator_profile_path}}` | a repository's coordinator profile | `.claude/coordinator-profile.md` | `.codex/coordinator-profile.md` |
+| `{{instructions_file}}` | the repository instructions file the host reads | `CLAUDE.md` | `AGENTS.md` |
+| `{{worktrees_dir}}` | the repository folder agent worktrees go in | `.claude/worktrees` (hosts.json profile `worktrees_directory`) | `.codex/worktrees` |
+| `{{owner_folder}}` | the host's own folder in a repository, owner-only, with its final `/` | `.claude/` (the folder among hosts.json profile `owner_paths`) | `.codex/` |
+| `{{user_folder}}` | the host's per-user folder, home-relative | `~/.claude` (`~/` and hosts.json profile `state_directory`) | `~/.codex` |
+| `{{config_dir_env}}` | the environment variable that moves that per-user folder | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` |
+| `{{long_context_model}}` | a noun phrase for the model a launched long-context session (deep-worker, consultant) runs on | `the 1M-context opus model` (the `deep` tier's model from hosts.json) | `the account's model` |
+| `{{coauthor_email}}` | the address in the host's Co-Authored-By trailer | `noreply@anthropic.com` (hosts.json profile `attribution.email`) | `noreply@openai.com` |
+| `{{launch_agent}}` | the command that starts the host's main session as a named agent; `{{agent:<role>}}` follows it | `claude --agent` | `python <kit>/hosts/codex/shell/scripts/launch.py --role` (a plan only) |
+
+A neutral sentence is preferred to a token where it reads as well (`<kit>/optional/comfy/comfy_gen.py`,
+not a per-user link to it). tests/content `test_role_bodies_name_no_claude_value_a_token_covers`
+fails a role that writes a Claude value bare, and tests/host/test_leaks a host name in `content/`.
 
 ## Claude
 
 `hosts/claude/adapter/content.py` writes `hosts/claude/shell/agents/<name>.md` with `name`, `description` (quoted only
-when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model`,
+when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model` (hosts.json `tiers`, the
+one tier map),
 `effort` when set, and for `cache: long` the `experimental` map with `cacheTtl: 1h`. It copies each
 skill folder to `hosts/claude/shell/skills/<name>/`. It owns both folders.
 
 An agent body gets no `${CLAUDE_PLUGIN_ROOT}` substitution, so a role names the kit's folder
 `<kit>`, as a skill does, and the kit header says what it is (tests/content
 `test_no_agent_file_names_the_plugin_root_variable`).
+
+## Codex
+
+`hosts/codex/adapter/content.py` writes `hosts/codex/shell/agents/kit-<name>.toml`: a header comment,
+`name` (`kit-<name>`), `description`, `model` (none while the tier maps to `account-default`: the
+account's model runs; docs/ROSTER.md), `model_reasoning_effort` (the role's `effort`, else its tier's),
+`sandbox_mode` (the role's `sandbox`) and `developer_instructions`, the body with Codex's token values
+as a TOML multi-line string. A Codex agent file has no tool list, so `capabilities` and `cache` are not
+rendered. It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders. Its
+manifests are `hosts/codex/shell/plugin.json` (the name and version, the hooks file),
+`hosts/codex/shell/mcp.json` (the read-only lock server) and `hosts/codex/shell/hooks/hooks.json`
+(every declared hook event running `hooks/run.py <event>`, as one command string). Its
+`vendored(root)` ships a byte copy of `boot/kitboot.py` as `hosts/codex/shell/boot/kitboot.py`: the
+Codex plugin root is `hosts/codex/shell`, so a copied plugin carries the check that verifies the kit
+it binds; `--check` fails when the copy drifts. Claude needs none: its plugin root is the whole kit,
+`boot/` included. Status: hosts/codex/README.md.
 
 ## Manifests
 

@@ -38,15 +38,11 @@ Regexes = Either(Regex(), ListOf(Regex()))
 # own rules file and folder point at them), so they are locked as their old homes are. Each host's
 # own paths are its hosts.json profile owner_paths, and its agent worktrees under them are not
 # locked (worktrees_directory).
-# Codex's folder, which no hosts.json entry declares until step 9 of docs/multi-host-plan.md
-# registers that host (its profile then names it, and these two go): kept locked meanwhile.
-UNREGISTERED_OWNER_PATHS = ['.codex/']
-UNREGISTERED_OWNER_PATHS_EXCEPT = ['.codex/worktrees/']
-OWNER_PATHS = (['AGENTS.md'] + list(registry.union('owner_paths')) + UNREGISTERED_OWNER_PATHS
-               + ['docs/agent-profile.md', '.github/workflows/', '.kit.json', 'tools/gate.json',
-                  'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py'])
-OWNER_PATHS_EXCEPT = ([w + '/' for w in registry.union('worktrees_directory')]
-                      + UNREGISTERED_OWNER_PATHS_EXCEPT)
+OWNER_PATHS = list(dict.fromkeys(
+    ['AGENTS.md'] + list(registry.union('owner_paths'))
+    + ['docs/agent-profile.md', '.github/workflows/', '.kit.json', 'tools/gate.json',
+       'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']))
+OWNER_PATHS_EXCEPT = [w + '/' for w in registry.union('worktrees_directory')]
 
 # The heavy-program entry shape: kit defaults (policy.HEAVY_DEFAULTS) and `.kit.json` "heavy".programs.
 HEAVY_ENTRY = Obj({

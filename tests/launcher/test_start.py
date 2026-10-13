@@ -9,7 +9,7 @@ import unittest
 
 from kitlib.launcher import start, window
 from kitlib.launcher import settings as S
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 from tests.launcher.fakes import EXE, NOW, FakeHost, Home, role_of, session
 
 DAY = datetime.timedelta(days=1)
@@ -438,7 +438,7 @@ class Start(Base):
             self.assertIn('--autocompact %d ' % window_, out)
 
     def test_a_plugin_prefixed_agent_is_named_bare_and_keeps_its_roles_window(self):
-        p = CLAUDE_PLUGIN_NAME + ':'
+        p = PLUGIN_NAME + ':'
         out = self.go(agent=p + 'deep-worker')
         self.assertIn('--agent %sdeep-worker ' % p, out)
         self.assertIn("-n 'alpha-deep-worker-a1'", out)

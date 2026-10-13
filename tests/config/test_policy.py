@@ -113,6 +113,19 @@ class RolesTest(TreeCase):
         self.assertTrue(policy.permissions(ev({}))['edit_main_checkout'])
         self.assertFalse(policy.permissions(ev({'agent_id': 'a1'}))['edit_main_checkout'])
 
+    def test_a_roles_key_under_a_renamed_roles_old_or_new_name(self):
+        """kitlib.content.ALIASES: a .kit.json roles key `opus-worker` holds the agent now called
+        senior-worker, and a key `senior-worker` an agent still sent as opus-worker."""
+        for key, kind in (('opus-worker', 'senior-worker'), ('senior-worker', 'opus-worker'),
+                          ('senior-worker', 'senior-worker'), ('opus-worker', 'opus-worker')):
+            with self.subTest(key=key, kind=kind):
+                table = {key: {}, 'subagent': {}}
+                self.assertEqual(policy.role_name(Action('edit', agent='a', agent_role=kind), table), key)
+        both = {'opus-worker': {}, 'senior-worker': {}}
+        self.assertEqual(policy.role_name(Action('edit', agent='a', agent_role='opus-worker'), both), 'opus-worker')
+        self.assertEqual(policy.role_name(Action('edit', agent='a', agent_role='worker'), {'opus-worker': {}}),
+                         'subagent')
+
     def test_an_agent_cannot_claim_the_main_role(self):
         self.assertEqual(policy.role_name(ev({'agent_id': 'a1', 'agent_type': 'main'})), 'subagent')
 
@@ -131,7 +144,7 @@ class RolesTest(TreeCase):
     def test_the_plugin_prefixed_agent_type_names_the_same_role(self):
         # docs/guard.md "Agent names": the kit plugin bundles its agents as <plugin>:<name>
         # (kitlib.agentname.PREFIX; tests/agentname pins it to this value)
-        p = lockmcp.CLAUDE_PLUGIN_NAME + ':'
+        p = lockmcp.PLUGIN_NAME + ':'
         table = policy.roles(self.load({'roles': {'lander': {'edit_main_checkout': True, 'why': 'merges'}}}))
         self.assertEqual(policy.role_name(ev({'agent_id': 'a', 'agent_type': p + 'lander'}), table), 'lander')
         self.assertTrue(policy.permissions(ev({'agent_id': 'a', 'agent_type': p + 'lander'}), table)['edit_main_checkout'])

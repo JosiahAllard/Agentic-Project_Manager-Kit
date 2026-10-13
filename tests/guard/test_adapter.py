@@ -40,7 +40,9 @@ class Parse(unittest.TestCase):
         self.assertEqual(ADAPTER.parse('PreToolUse', event('mcp__x__lock_free', {}, 'C:/r')).kind, 'mcp')
         for tool in ('Read', 'Grep', 'Agent', ''):
             self.assertEqual(ADAPTER.parse('PreToolUse', event(tool, {}, 'C:/r')).kind, 'other', tool)
-        self.assertEqual(ADAPTER.parse('PreToolUse', None), Action('other'))
+        for payload in (None, [], 0, '', False, 'x'):          # not an object: the hook denies it
+            with self.subTest(payload=payload):
+                self.assertRaises(ValueError, ADAPTER.parse, 'PreToolUse', payload)
         self.assertEqual(ADAPTER.parse('SessionStart', {'cwd': 'C:/r'}), Action('session_start', cwd='C:/r'))
         self.assertEqual(ADAPTER.parse('SubagentStart', {'agent_id': 'a'}).kind, 'subagent_start')
 
@@ -66,7 +68,8 @@ class Parse(unittest.TestCase):
 
     def test_agent_reads_the_identity_alone(self):
         self.assertEqual(events.agent({'agent_id': 'a1'}), 'a1')
-        self.assertIsNone(events.agent(None))
+        self.assertIsNone(events.agent({}))
+        self.assertRaises(ValueError, events.agent, None)     # hookmain then tags the deny main
 
 
 class Render(unittest.TestCase):

@@ -1,0 +1,12 @@
+{
+ "comment": "Codex app-server read responses in the shapes the Codex branch's tests/codex/test_session_host.py recorded: thread/list in two pages, thread/loaded/list, account/rateLimits/read, model/list. Read by tests/host/test_conformance_codex.py through hosts.codex.adapter.sessions.SessionHost.",
+ "thread/list": [
+  {"data": [{"id": "t-1", "sessionId": "s-1", "name": "coordinator", "cwd": "C:/r", "status": {"type": "loaded"}, "preview": "private text"},
+            {"id": "t-2", "sessionId": "s-1", "cwd": "C:/r/.codex/worktrees/w", "agentRole": "kit-worker", "parentThreadId": "t-1"}],
+   "nextCursor": "next"},
+  {"data": [{"id": "t-3", "sessionId": "s-3", "cwd": "C:/other", "status": {"type": "notLoaded"}}], "nextCursor": null}
+ ],
+ "thread/loaded/list": ["t-1"],
+ "account/rateLimits/read": {"primary": {"usedPercent": 12}},
+ "model/list": ["gpt-6.1-sol"]
+}

@@ -193,10 +193,6 @@ def local_ok(*times):
 
 
 # ------------------------------------------------------------------ who is asking
-# Agent process images no hosts.json entry declares yet: Codex's, until step 9 of
-# docs/multi-host-plan.md registers that host (its profile's process_names then carries it, and
-# this goes). Kept so a Codex session stays an agent to the lock meanwhile.
-UNREGISTERED_AGENT_HOSTS = frozenset({"codex.exe"})
 # An actor's agent host [pid, ctime] is under HOST_KEY. Actors made before the key was neutral
 # carry it under LEGACY_HOST_KEY, which is read too (actor_host) and never written.
 HOST_KEY = "host"
@@ -206,11 +202,11 @@ LEGACY_HOST_KEY = "claude"
 def agent_hosts(registry_path=None):
     """The lower-case image names of the processes that host agents: every registered host's
     profile process_names (hosts.json; Claude Code runs as claude.exe, or node.exe when installed
-    from npm, and so does its desktop app's terminal panel) and UNREGISTERED_AGENT_HOSTS. A
-    hosts.json that cannot be read raises RegistryError, which each caller here treats as an agent
-    (fail closed)."""
+    from npm, and so does its desktop app's terminal panel; Codex as codex.exe). A hosts.json
+    that cannot be read raises RegistryError, which each caller here treats as an agent (fail
+    closed)."""
     names = registry.union("process_names", registry_path)
-    return frozenset(n.lower() for n in names) | UNREGISTERED_AGENT_HOSTS
+    return frozenset(n.lower() for n in names)
 
 
 def session_of(env, registry_path=None):

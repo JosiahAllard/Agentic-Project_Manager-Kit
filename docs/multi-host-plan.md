@@ -31,6 +31,7 @@ except its last 4 commits.
 | 13 | Folder layout | Uniform `hosts/<name>/` | `claude/` moves to `hosts/claude/` in step 7, and Codex lands as `hosts/codex/` in step 9. |
 | 14 | Form of the shared skill text | C: checklist + pointer | One line per step with its command, the "never" list, then the tool doc. A test checks that each `tools/*.py` command and flag a skill names exists (§5). |
 | 15 | Linux and macOS | A separate refactor after this plan | The host work keeps Windows behaviour identical. Rules in §6 stop it adding Windows debt. The OS work is §6. |
+| 16 | Owner paths in every repo | A deliberate tightening, a superset of before | `kitlib/config/schema.py` `OWNER_PATHS` (the default of `.kit.json` `owner.paths`) now also protects `AGENTS.md`, `docs/agent-profile.md` and `.codex/` (its worktrees folder excepted) in every repository, beside every host's `owner_paths`. Each path protected before still is; a repository that names its own `owner.paths` keeps its list. |
 
 ## 1. Where things stand
 
@@ -370,8 +371,8 @@ behaviour unchanged.
 | 6 | Remove the Claude leaks from kitlib, one PR per cluster: lock actor key → `host`, session env, worktree defaults, MCP prefix, commit model env, hub paths, launcher, pluginsource. | 2 |
 | 7 | Move `claude/` → `hosts/claude/{adapter,shell}`. `kit.json` and the one release value. `boot/kitboot.py`. **Done**, with the rendered manifests and the kit header hook (docs/content.md "Manifests", "Kit header"; docs/kitboot.md; docs/machine-setup.md "Moved hook paths"). | 5, 6 |
 | 8 | Conformance suite, required in the gate. `docs/new-host.md`. **Done**: `tests/host/conformance.py`, run for Claude and for a test-only fake host (`tests/host/fakehost`); the bridge-port check is `tests/host/bridge_conformance.py` (step 10). | 3, 7 |
-| 9 | **Rebase `codex/companion-plugin`** onto main as `hosts/codex/`: `actions.py` → adapter events, `guard_adapter` reduced to what only Codex has, roles rendered from `content/`, `PM_KIT_CODEX_ROLE` removed. It must pass the conformance suite. The bridge owns the Codex bridge client at `optional/bridge/hosts/codex/client.py` (step 10). Codex's diagnostics either drop it or probe for it lazily and optionally by importing that module, and they never keep a copy. | 8 |
-| 10 | **Rebase `codex/robust-bridge-plan`** as `optional/bridge/`: promote the helpers, declare the port, move the host halves, delete the probe code, collapse the docs. **Ported; merges after step 9** (branch `claude/rebase-bridge`, rebased onto step 9 before it lands): optional/bridge/README.md (layout, port, install, what was deleted) and STATUS.md. Until step 9 registers `codex` in hosts.json, only Claude is served. | 9 |
+| 9 | **Rebase `codex/companion-plugin`** onto main as `hosts/codex/`: `actions.py` → adapter events, `guard_adapter` reduced to what only Codex has, roles rendered from `content/`, `PM_KIT_CODEX_ROLE` removed. It must pass the conformance suite. **Ported** on its own branch (`claude/rebase-codex-host`): `hosts.json` registers Codex, `hosts/codex/` passes the suite on payloads in the branch's recorded shapes, `parse` may return several Actions (one `apply_patch`, several files) and an adapter may `screen`, the child-environment scrub is core (`kitlib.sessionmark.child_environment`, hosts.json `env_prefixes`), Codex's renderer fills every content token (docs/content.md "Tokens"). Nothing is installed; live parity is unverified (hosts/codex/README.md "Not verified"). The bridge owns the Codex bridge client at `optional/bridge/hosts/codex/client.py` (step 10). Codex's diagnostics either drop it or probe for it lazily and optionally by importing that module, and they never keep a copy. | 8 |
+| 10 | **Rebase `codex/robust-bridge-plan`** as `optional/bridge/`: promote the helpers, declare the port, move the host halves, delete the probe code, collapse the docs. **Ported, and merged after step 9** (branch `claude/rebase-bridge`, merged with step 9's result): optional/bridge/README.md (layout, port, install, what was deleted) and STATUS.md. Claude and Codex are both served. | 9 |
 
 Steps 3–4 and 5–6 can run in parallel. Tell the Codex agent about steps 9–10 now, so it can
 stop building on paths that are about to move.
@@ -379,7 +380,11 @@ stop building on paths that are about to move.
 ## 4. What does not change
 - Standard library only and Windows only. No argparse or printing in kitlib.
 - Tool paths and exit codes. A merged flag keeps the old one as an alias for one release.
-- Guard semantics for Claude: every existing guard test passes through the adapter.
+- Guard semantics for Claude: every existing guard test passes through the adapter. Two
+  changes are deliberate: the role policy (docs/guard.md "Role policy"), which runs only where a
+  repository's `.kit.json` sets `guard.role_policy` (opt in; off, every call is judged as before),
+  and the owner paths' tightening of decision 16 (`AGENTS.md`, `docs/agent-profile.md` and `.codex/`
+  added to the default `owner.paths`, a superset of before).
 - The bridge's security posture: fail closed, no resend of unknown messages, routes chosen by
   the owner.
 
@@ -484,3 +489,44 @@ Separately and early: Windows CI (GitHub Actions) for the gate, so every step ha
    tree, or must it give the same guarantees on every OS?
 3. Can GitHub Actions run Windows, Ubuntu and macOS runners for this repo?
 4. Does the bridge stay Windows-only at first?
+
+## 7. Agenda for the next planning session (owner asked: no changes until planned)
+
+### 7.1 Agent instructions: what each agent loads, and changing roles
+- Today an agent's instructions come from six places: its role file (`content/roles/`, rendered
+  to `hosts/<name>/shell/agents/`), the repo's `AGENTS.md`, the user's own instructions file, the
+  kit header and start-checklist hooks, skills (`content/skills/`), and the repo profile read on
+  demand. Enforced rules live elsewhere again: `kitlib/guard/` code, the role file's `mode:`,
+  `writes:` and `capabilities:`, and the repo's `.kit.json`. Nothing shows a human the whole set
+  for one role.
+- Adding or removing a role touches up to six places: the role file, a re-render, `docs/ROSTER.md`,
+  `KIT_AGENTS` in `kitlib/launcher/start.py`, the separate groupings in `kitlib/backlog/roles.py`
+  (which duplicate `mode:` and already disagree with it: test-runner), and prose mentions.
+- Rendered files carry no "generated, edit the source" marker.
+- Options to weigh: a `tools/agent_view.py <role> [--host]` that prints everything a role gets;
+  a generated-file banner; role lists derived from `content/roles/` (one file + render to add or
+  remove a role); `content/README.md` ("where do I change X"); a check for role names in prose.
+- Related: one shared, parameterised hook entry for every host instead of near-identical
+  per-host entries (the guard's fast path would need each host's guarded tool list as data).
+
+### 7.2 Zero repo setup
+Goal: the kit works in any repository with nothing written into it. Today a repo needs
+`.kit.json`, ~30 tool stubs (each with the kit's absolute path written in), `.gitignore` worktree
+lines, `docs/INDEX.md`, `tools/gate.json`, `AGENTS.md`/`CLAUDE.md` and profiles, and a local
+`core.hooksPath`. Options to weigh:
+1. No stubs: skills and roles call `python <kit>/tools/<x>.py -C <worktree>`, using the kit header.
+2. `.kit.json` purely optional overrides: main branch from `origin/HEAD`, repo name from the folder
+   or remote, owner email from the machine config.
+3. Worktrees outside the checkout, or the worktree folder added to `.git/info/exclude` (local).
+4. Gate auto-detected from the stack when no steps are configured; `gate.json` only overrides.
+5. Doc index opt-in.
+6. Git hooks: the kit sets the local `core.hooksPath` on first use, or the push block relies on
+   the guard and gate record alone.
+7. Roles fall back to kit defaults when a repo has no profile.
+8. Machine setup shrinks to: plugin install, agent temp folder, guard (until the plugin carries it).
+Trade-offs: worktree location vs tools that assume `.claude/worktrees`; owner rules that depend
+on the machine config; an auto-detected gate running the wrong checks until overridden.
+
+### 7.3 Retiring the `claude/hooks/` stubs
+Three forwarding stubs keep machines whose settings still name `claude/hooks/` working. They go
+once every machine has re-run `tools/machine_setup.py --apply` (or one release after the move).

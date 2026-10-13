@@ -47,4 +47,4 @@ guard.py denies agents these seven tools, matched on the tool name's suffix. How
 `lock_hold_create`, `lock_hold_edit`, `lock_hold_end`, `lock_set_game_mode`, `lock_set_games`, `lock_set_division`, `lock_end_run`
 
 - The list in code is `kitlib.lockmcp.server.OWNER_ONLY`, and `tests/lockmcp/test_server.py` pins it.
-- Inferred, not yet seen: once the plugin is installed, Claude Code names these with the Claude plugin's MCP prefix, `kitlib.lockmcp.tool_prefix()` + `<tool>` (the host's hosts.json `mcp_tool_format`; `claude_tool_prefix()` is its old name, still read by the guard). Check the name against a real PreToolUse payload before the guard matches on it.
+- Inferred, not yet seen: once the plugin is installed, Claude Code names these with the Claude plugin's MCP prefix, `kitlib.lockmcp.tool_prefix()` + `<tool>` (the host's hosts.json `mcp_tool_format`, which the guard reads too). Check the name against a real PreToolUse payload before the guard matches on it.

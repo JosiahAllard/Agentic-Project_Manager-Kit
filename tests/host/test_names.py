@@ -30,8 +30,8 @@ class Names(unittest.TestCase):
 
     def test_the_kit_registry_gives_todays_names(self):
         self.assertEqual(lockmcp.tool_prefix(), 'mcp__plugin_pm-kit_machine-lock__')
-        self.assertEqual(lockmcp.claude_tool_prefix(), lockmcp.tool_prefix())
-        self.assertEqual(lockmcp.CLAUDE_PLUGIN_NAME, lockmcp.PLUGIN_NAME)
+        self.assertFalse(hasattr(lockmcp, 'claude_tool_prefix'), 'the old alias is gone: tool_prefix')
+        self.assertFalse(hasattr(lockmcp, 'CLAUDE_PLUGIN_NAME'), 'the old alias is gone: PLUGIN_NAME')
         self.assertEqual(agentname.PREFIX, 'pm-kit:')
         self.assertEqual(agentname.prefix(), agentname.PREFIX)
 
@@ -42,13 +42,13 @@ class Names(unittest.TestCase):
 
     def test_session_processes_are_every_hosts(self):
         from kitlib import pmstart
-        self.assertEqual(pmstart.session_images(), frozenset({'claude.exe'}))
+        self.assertEqual(pmstart.session_images(), frozenset({'claude.exe', 'codex.exe'}))
         with open(self.path, encoding='utf-8') as f:
             data = json.load(f)
         data['other']['profile']['session_process'] = 'other.exe'
         with open(self.path, 'w', encoding='utf-8') as f:
             json.dump(data, f)
-        self.assertEqual(pmstart.session_images(self.path), frozenset({'claude.exe', 'other.exe'}))
+        self.assertEqual(pmstart.session_images(self.path), frozenset({'claude.exe', 'codex.exe', 'other.exe'}))
         procs = [{'Name': 'other.exe', 'CommandLine': 'other.exe --remote-control x'}]
         self.assertEqual(pmstart.live_session_names(procs), set())   # not registered in the kit's
 
