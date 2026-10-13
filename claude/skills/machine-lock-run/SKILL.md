@@ -5,34 +5,26 @@ description: Use before any heavy work on the shared machine - builds beyond the
 
 # Machine lock
 
-One machine is shared by every repo, the local generators and training. Heavy work runs inside the lock; light work (ordinary gates, unit tiers) never locks. Sizes are whole physical cores plus gpu training slots, from the machine's layout (`status` prints it). An agent run takes at most the agent cap of cores; only a run inside an owner whole hold takes more. One queue, first come first served, no repo has priority: `status` shows each waiting run's position and expected start. A run starts ahead of its turn only when it expects to end before the runs ahead of it start, so pass `--expect <duration>` when you know it; a caller that dies leaves the queue at once. The tool is `${CLAUDE_PLUGIN_ROOT}/tools/machine_lock.py` in the kit (`${CLAUDE_PLUGIN_ROOT}/docs/lock-api.md`); the kinds table is `${CLAUDE_PLUGIN_ROOT}/kitlib/lock/kinds.json`.
+One machine is shared by every repo, every host's sessions, the local generators and training. Heavy work runs inside the lock; light work (ordinary gates, unit tiers) never locks. One queue, first come first served; sizes are whole cores plus gpu slots from the machine's layout; an agent run takes at most the agent cap of cores.
 
-## Steps
+1. Look first: `python <kit>/tools/machine_lock.py status` (each waiting run's position and expected start).
+2. A tool that takes the lock itself needs no wrapper and runs straight through inside a locked run: `python tools/gate.py`, `<kit>/optional/comfy/comfy_gen.py`, the repo's own e2e or daily runners. The profile names others: `python tools/doc_index.py --find lock`.
+3. Anything else heavy: `python <kit>/tools/machine_lock.py run --repo <repo> --slug <slug> --kind <kind> [--cores N] [--expect D] [--max-wait 5m | --no-wait] -- <command>`, with the kind and ports your brief assigns. It waits with no limit by default.
+4. The kind sets the size (`<kit>/kitlib/lock/kinds.json`): engine-test, engine-run, build medium; graph-build, daily-full, cpu-eval heavy; local-ai, render medium plus the gpu; measure heavy plus the gpu. `--cores N` changes the count, up to the agent cap. Pass `--expect <duration>` when you know it: a run that ends before the runs ahead start may go first.
+5. Read your threads from `MACHINE_LOCK_CPUS` (also `MACHINE_LOCK_CPUMASK`), never assume them. Docker: pass `--cpuset-cpus "$MACHINE_LOCK_CPUS"` to `docker run`, or `docker update <container>` before `docker exec`; run container work under an in-container `timeout -k 30 <limit>` and add `--on-release "<command that kills it>"`.
+6. `--hold <id>` only with a hold id the owner or PM gave you (exit 12 if it cannot take the run); `--gpu-share training` only for model training on local-ai or render; `--detach` prints `<run id> pid <n>`, then follow it with `status <run id>`.
+7. Training: `python <kit>/tools/machine_lock.py background --repo <repo> --slug <slug> -- <launcher>`; the trainer polls `should_pause()` in `<kit>/kitlib/lock/bg_client.py` and checkpoints and exits 75 when a due run needs its slots.
+8. Output goes to a log file; read the log when the run ends.
+9. A run past its kind's `warn_min` gets a WARNING, never a kill: check it is still progressing.
+10. End a run you started: `python <kit>/tools/machine_lock.py stop <run id>`.
 
-1. Look first: `python ${CLAUDE_PLUGIN_ROOT}/tools/machine_lock.py status`.
-2. A tool that takes the lock itself (`tools/gate.py`, `${CLAUDE_PLUGIN_ROOT}/optional/comfy/comfy_gen.py`, the repo's own e2e or daily runners) needs no wrapper; inside a run that holds the lock it runs straight through. Check the repo's profile (`python tools/doc_index.py --find lock`) for wrappers it names.
-3. Direct form: `python ${CLAUDE_PLUGIN_ROOT}/tools/machine_lock.py run --repo <repo> --slug <slug> --kind <kind> [--cores N] [--expect D] [--max-wait 5m | --no-wait] -- <command>`. It waits with no limit by default; `--max-wait` (s, m, h or d) sets one.
-   - The kind sets the default size (read `${CLAUDE_PLUGIN_ROOT}/kitlib/lock/kinds.json`): engine-test, engine-run and build take the medium size; graph-build, daily-full and cpu-eval the heavy size; local-ai and render the medium size plus the whole gpu; measure the heavy size plus the whole gpu. `--cores N` changes the count, up to the agent cap. Read the threads you got from `MACHINE_LOCK_CPUS`, never assume them.
-   - `--hold <id>`: only when the owner or the PM gives you a hold's id. The run waits for it and may take every core; exit 12 if it cannot.
-   - `--gpu-share training`: model training only, on local-ai or render; takes one gpu training slot instead of the card.
-   - Every command gets `MACHINE_LOCK_CPUS` (a Docker cpuset list such as `0-3`) and `MACHINE_LOCK_CPUMASK`. A Docker caller passes `--cpuset-cpus "$MACHINE_LOCK_CPUS"` to `docker run`, or to `docker update <container>` before a `docker exec` (exec has no such flag).
-   - Work in a container outlives a killed `docker exec` client. Run it under an in-container `timeout -k 30 <limit>` no longer than your hold, and add `--on-release "<command that kills it>"` (it runs before the slots free).
-   - A Gradle or Kotlin daemon a gate run leaves behind is stopped when the gate ends, but only when every client it serves is in that gate's job; one another build is using is left running, with the reason said. MSBuild nodes and the compiler server are always left. Any other run leaves them all running for the next build. Only `gate.py`'s own booking is a gate run. The machine config's `machine_lock` `"daemons"` changes this: `"stop"` after every run, `"leave"` after none (`${CLAUDE_PLUGIN_ROOT}/kitlib/lock/site.py`).
-   - A bare `bash` command runs Git Bash, never the WSL one; with no Git Bash found it is refused before the run books, so pass a full path (`${CLAUDE_PLUGIN_ROOT}/kitlib/proc/bash.py`).
-   - A run past its kind's `warn_min` gets a WARNING, never a kill. Check it is still making progress.
-   - Nested inside another locked run, a run needing more of a pool than the outer run holds is refused, exit 2: run it outside.
-   - `--detach` runs it outside your shell and prints `<run id> pid <n>`; follow with `status <run id>`.
-4. Training: `python ${CLAUDE_PLUGIN_ROOT}/tools/machine_lock.py background --repo <repo> --slug <slug> -- <launcher>`; the child waits for its slots and pauses (checkpoints and exits 75, freeing them) whenever a run due to start needs them. The trainer must use `${CLAUDE_PLUGIN_ROOT}/kitlib/lock/bg_client.py` (`should_pause()`), checking often and checkpointing promptly; `${CLAUDE_PLUGIN_ROOT}/docs/lock-api.md` has the details.
-5. Send output to a log file and read the log. Never truncate a locked run's output (`head`, `Select-Object -First`): it kills the wrapper.
-6. End a run you started: `stop <run id>`. Nothing else: `stop` refuses another session's run, and `--force` is not for agents.
-
-## Refusals
-
-- Exit 6 busy (`--no-wait`), exit 8 its `--max-wait` ran out. Waiting is normal; never start the work another way.
-- Exit 11: a reservation leaves the run too few cores or gpu slots before its wait ends. Wait, or ask your coordinator; never release it. Pass `--expect <duration>` when you know the run is shorter than its kind's guide, so a scheduled reservation does not block it.
-- Exit 12: the named hold cannot take the run. Exit 10: the lock could not be taken; exit 1 `could not start the command`. Report both.
-- Exclusive window: when the owner or PM declares one for another session, pause every gate, build, heavy test and landing until it is closed.
+Refusals: exit 6 busy (`--no-wait`), 8 `--max-wait` ran out: waiting is normal. Exit 11: a reservation leaves too few slots: wait or ask your coordinator, and pass `--expect` when the run is shorter than its kind's guide. Exit 2 nested: a run needing more than the outer locked run holds; run it outside. Exit 10 (lock not taken), 1 (`could not start the command`), 12: report. A bare `bash` is Git Bash, never WSL; none found is refused before booking: pass a full path. Build daemons a gate leaves are stopped only when that gate alone used them (machine config `machine_lock` `"daemons"`). Exclusive window declared for another session: pause every gate, build, heavy test and landing until it closes.
 
 ## Never
 
-Touch another run's lock, records or processes; report its run id and `status` text to your coordinator. Use `hold` or `division` or `game` unless told to. Time a measurement under load without labelling it "shared machine".
+- Run heavy work unlocked because the queue is busy, or take an environment variable claiming a lock as proof of one.
+- Truncate a locked run's live output (`head`, `Select-Object -First`): it kills the wrapper.
+- Touch another run's lock, records or processes, or use `stop --force`, `hold`, `division` or `game`: report the run id and `status` text to your coordinator.
+- Time a measurement under load without labelling it "shared machine".
+
+Details: `<kit>/docs/lock-api.md`; read-only lock tools over MCP: `<kit>/docs/lock-mcp.md`.
