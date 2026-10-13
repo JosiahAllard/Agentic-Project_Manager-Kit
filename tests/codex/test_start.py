@@ -1,5 +1,4 @@
-"""hosts.codex.adapter.start: what a Codex start hook adds to the context (ported from the Codex
-branch's session_adapter tests in tests/codex/test_entries.py)."""
+"""hosts.codex.adapter.start: what a Codex start hook adds to the context."""
 import io
 import json
 import unittest

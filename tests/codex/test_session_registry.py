@@ -1,6 +1,6 @@
-"""hosts.codex.adapter.session_registry (ported from the Codex branch's tests/codex/test_session_registry.py; its DeliveryTests went with session_delivery.py, the owner-grant
-transport scaffolding the bridge (plan step 10) replaces, and its StartupTests with the runtime
-registry hook-up of session_adapter.startup, which no hook entry could reach)."""
+"""hosts.codex.adapter.session_registry (no delivery tests: session_delivery.py, the owner-grant transport scaffolding the bridge
+(plan step 10) replaces, is gone; no startup tests: no hook entry reaches the runtime registry
+hook-up of session_adapter.startup)."""
 from dataclasses import replace
 from pathlib import Path
 import unittest

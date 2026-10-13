@@ -313,9 +313,7 @@ class RuntimeLifetime(unittest.TestCase):
 class BoundGuard(unittest.TestCase):
     """evaluate_bound: the broker's guard holds the BOUND role (never the inherited PM_KIT_ROLE) as
     an agent of that role, root or child, with the role policy on for it whatever .kit.json says:
-    the World's .kit.json here leaves guard.role_policy unset (ported from the source's
-    test_bound_guard_*, test_reader_lander_and_test_roles_cannot_patch_files and
-    test_test_and_lander_shell_writes_are_denied)."""
+    the World's .kit.json here leaves guard.role_policy unset."""
 
     def setUp(self):
         from tests.guard.world import World

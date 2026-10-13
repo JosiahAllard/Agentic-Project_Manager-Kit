@@ -12,7 +12,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -58,7 +58,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -81,7 +81,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -105,7 +105,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -129,7 +129,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -153,7 +153,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -176,7 +176,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -203,7 +203,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -222,7 +222,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -243,7 +243,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -265,7 +265,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -290,7 +290,7 @@
    "event": "SessionStart",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "SessionStart",
@@ -306,7 +306,7 @@
    "event": "PostCompact",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PostCompact",
@@ -322,7 +322,7 @@
    "event": "SubagentStart",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "SubagentStart"
@@ -342,7 +342,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse"
@@ -352,7 +352,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "relative",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -368,7 +368,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -383,7 +383,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -398,7 +398,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -411,7 +411,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -429,7 +429,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -444,7 +444,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
@@ -460,7 +460,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PostToolUse",
@@ -475,7 +475,7 @@
    "event": "Stop",
    "payload": {
     "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "Stop"

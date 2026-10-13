@@ -1,8 +1,6 @@
 """Tests for kitlib.proc.pipe: private pipes, their client and server identity checks and file ACLs.
 
-Ported from the bridge's probe tests (tests/bridgeprobe/test_claude.py WindowsPipeTests,
-test_identity.py and test_restricted.py on codex/robust-bridge-plan), with the probe harness
-replaced by plain subprocesses and raw JSON lines. Each helper process is the test's own."""
+Plain subprocesses and raw JSON lines stand in for a bridge harness. Each helper process is the test's own."""
 import ctypes
 import json
 import os

@@ -1,5 +1,5 @@
 """hosts.codex.adapter.dispatch: one kit tool as literal argv for a Codex role, with the broker's
-prechecks (ported from the Codex branch's tests/codex/test_kit_adapter.py). The host is the run's
+prechecks. The host is the run's
 PM_KIT_HOST, never an inserted --provider; the model must be explicit."""
 from pathlib import Path
 import os

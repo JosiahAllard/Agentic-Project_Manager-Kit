@@ -1,8 +1,7 @@
 """optional/bridge/hosts/claude/records.py: Claude's registry records, bounded and strict.
 
-Ported from the source branch's tests/bridgeprobe/test_claude.py
-(test_registry_duplicate_nonfinite_and_size_limits), which covered read_record in
-claude/bridge_phase0.py before it moved."""
+Covers duplicate keys, non-finite numbers and size limits in a registry record
+(read_record)."""
 from pathlib import Path
 import tempfile
 import unittest

@@ -1,5 +1,4 @@
-"""hosts.codex.adapter.launcher: launch plans for a kit role as its own Codex session (ported from
-the Codex branch's tests/codex/test_launcher.py; the role, its sandbox and instructions come from
+"""hosts.codex.adapter.launcher: launch plans for a kit role as its own Codex session (the role, its sandbox and instructions come from
 content/roles through the Codex renderer)."""
 import os
 from pathlib import Path

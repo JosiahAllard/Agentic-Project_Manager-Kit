@@ -1,6 +1,5 @@
 """kitlib.guard.rolepolicy over neutral Actions, so every host gets the same answers (docs/guard.md
-"Role policy"). Ported from the Codex branch's tests/codex/test_guard.py and test_kit_adapter.py
-(lock verbs), with the Codex-only parts left out: apply_patch, the native-hook identity and
+"Role policy"). The Codex-only parts are not here: apply_patch, the native-hook identity and
 the role binding are its adapter's.
 
 The World's main checkout turns the policy on (guard.role_policy) and names a mode for some roles;

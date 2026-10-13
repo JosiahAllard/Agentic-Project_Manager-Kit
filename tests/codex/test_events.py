@@ -1,5 +1,4 @@
-"""hosts.codex.adapter.events: Codex's hook payloads parsed into kitlib.host.Action (ported from the
-Codex branch's tests/codex/test_actions.py)."""
+"""hosts.codex.adapter.events: Codex's hook payloads parsed into kitlib.host.Action."""
 import os
 import unittest
 
