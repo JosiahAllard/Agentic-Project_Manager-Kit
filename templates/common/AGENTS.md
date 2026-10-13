@@ -67,7 +67,8 @@ on `main` and is never worked in; only the lander writes to it.
 Standing owner-approved work: the `pm-kit:lander` merges reviewed branches into `main` and pushes
 without asking each time. Only the lander, only with the coordinator's review verdict, one at a
 time, by ONE bare call from the main checkout:
-`python <kit>/tools/gate.py land <branch> --expect-main <sha> --expect-tip <sha> -C <repo>` (skill land-branch).
+`python <kit>/tools/gate.py land <branch> --expect-tip <sha> -C <repo>` (skill land-branch). It merges
+onto the main it finds at its turn, so no `--expect-main` is needed.
 No `cd` prefix, `Tee-Object`, pipe or chaining: the bare form is what the allow rule matches.
 Success, whatever the exit code: the call's `LANDED` line, `git rev-parse main origin/main` match
 **and** the branch tip is an ancestor of `origin/main` (`git merge-base --is-ancestor <tip> origin/main`).
