@@ -33,6 +33,18 @@ renderer).
 
 A role file keeps its own line endings; the host file gets the same ones.
 
+## Skills
+
+A skill is not rendered, so it has no tokens and says nothing only one host understands
+(docs/multi-host-plan.md section 5, form C): a numbered checklist, one line per step with its
+command, a "Never" list, then "Details:" pointers. It names a role bare (the reviewer role), the
+kit's folder as `<kit>` (`<kit>/docs/gate.md`), and an edit as "your file-edit tool"; commits go
+through `python tools/commit.py`, which takes the host from `PM_KIT_HOST`. The coordinator, PM and
+worker role files say what a bare role name and `<kit>` are on their host. Tests:
+tests/skills `test_skills_are_host_neutral`; tests/content/test_skill_commands.py checks that every
+`python tools/<name>.py` command a skill or role shows exists and that the tool's parser defines
+each flag shown.
+
 ## Tokens
 
 A body or description names a value that differs by host only as a token. An unknown token, or a

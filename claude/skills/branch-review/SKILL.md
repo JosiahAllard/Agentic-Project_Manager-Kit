@@ -5,37 +5,23 @@ description: Use as a coordinator before giving any branch its landing verdict. 
 
 # Coordinator: branch review
 
-No branch reaches the lander without your verdict. Green proves the project still
-works, not that the change is right, in scope, or exercised.
+No branch reaches the lander without your verdict. Green proves the project still works, not that the change is right, in scope, or exercised.
 
-1. Scope check, yourself: `git diff --stat` branch vs merge base against the brief. Files outside
-   scope = a finding before you read a line.
-2. Read every hunk yourself only when the diff is small (~150 lines) and low/medium risk; docs and
-   additive content: skim. Larger or high-risk -> `pm-kit:reviewer` (fresh, read-only, never the author;
-   its model by the "Reviewer model" rule in skill `coordinator-dispatch`, roster.md, nowhere
-   else), given the brief, diff range, the author's gate report and log paths. You read findings; the verdict stays yours. Standing checks:
-   `--find review`.
-3. Look for: does what the brief asked and only that; a test that would fail without the change,
-   and did it run; new failure paths handled or merely unreachable; public interface, wire format,
-   schema or stored data changed; a check weakened for green (a gate made green by deleting or
-   loosening a test goes back); inferences marked as inferences. A failure is real unless it is
-   on the known-flakes list (`--find flakes`, kept current).
-4. Findings -> the author, by continuing that agent: numbered, file + symbol. It fixes and re-runs
-   its gate; you re-review the fix only.
-5. Small findings are fixed on this branch before it lands, never filed as follow-up records; file
-   a follow-up only for work too large or out of scope, and worth doing. The same bar holds for
-   every agent's own findings: a minor one folds into its story, not a new record. This covers
-   incidental defects found on the branch (a tool bug, a wrong doc line, a flake fix), not only
-   the branch's own story; `backlog.py add` refuses a record whose scope overlaps the finding
-   branch. Verdicts: land;
-   land with a follow-up recorded in the plan; send back. Design disagreement -> the owner, both
-   positions stated fairly.
-6. A defect class seen twice is prevented in this order: **a guard in code** (fail-fast check, test,
-   or a script that does the step); **else the reference doc owning the area**, the incident going
-   to the findings or decisions log, never an instruction file; **only then an instruction line** -
-   one line, a rule not a story, only if every agent must act on it. CLAUDE.md and `.claude/` are
-   owner-only: propose, never write. One home per rule: never restate in a profile what CLAUDE.md or
-   the reference doc says.
-7. A CI change that only adds strictness (pass-string grep, test step, assertion) for an approved
-   plan item = ordinary work: review it like any High-risk file and land it. Removing, loosening,
-   skipping or making optional an existing check still needs the owner's typed go (coordinator.md, The owner).
+1. Gather the brief, the exact diff range, the author's gate report and log paths; `python tools/review_pack.py <branch>` where the repo has it.
+2. Scope check, yourself: `git diff --stat <merge-base>..<branch>` against the brief. A file outside scope is a finding before you read a line.
+3. Small (about 150 lines) and low or medium risk: read every hunk yourself (docs and additive content: skim). Larger or high risk: dispatch a fresh, read-only reviewer role, never the author, its tier by the "Reviewer model" rule in skill coordinator-dispatch, roster.md; give it the brief, range, gate report and logs. The verdict stays yours. Standing checks: `python tools/doc_index.py --find review`.
+4. Look for: what the brief asked and only that; a test that fails without the change, and that it ran; new failure paths handled, not merely unreachable; a changed public interface, wire format, schema or stored data; a check weakened for green (a gate made green by deleting or loosening a test goes back); inferences marked as inferences; a commit trailer that misnames the host or model.
+5. A failure is real unless it is on the known-flakes list (`python tools/doc_index.py --find flakes`).
+6. Findings go to the author by continuing that agent: numbered, file and symbol, with severity; it fixes and re-runs its gate; you re-review the fix only.
+7. Small findings are fixed on this branch, never filed as follow-ups, including incidental defects found there (a tool bug, a wrong doc line, a flake fix); `backlog.py add` refuses a record whose scope overlaps the branch. File a follow-up only for work too large or out of scope, and worth doing.
+8. Verdict: LAND; LAND WITH FOLLOW-UP (recorded in the plan); SEND BACK. Give the lander the branch, full main and tip hashes and the reviewed range. A design disagreement goes to the owner, both positions stated fairly.
+9. A defect class seen twice is prevented in this order: a guard in code (fail-fast check, test, or a script that does the step); else the reference doc owning the area, the incident in the findings or decisions log; only then one instruction line, a rule not a story, if every agent must act on it.
+10. A CI change that only adds strictness (pass-string grep, test step, assertion) for an approved plan item is ordinary work: review it as High risk and land it.
+
+## Never
+
+- Decide from green alone, or review your own implementation.
+- Write the repo's instruction files or tracked host config: owner-only; propose. Restate in a profile what the instructions or a reference doc already say.
+- Land a check removed, loosened, skipped or made optional without the owner's typed go.
+
+Details: `<kit>/docs/review-pack.md`; the coordinator role file, "The owner".
