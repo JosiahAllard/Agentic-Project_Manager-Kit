@@ -148,16 +148,16 @@ class CarrierFailureLine(unittest.TestCase):
 
     def lines(self):
         with open(self.log, encoding="utf-8") as f:
-            return f.read().splitlines()
+            return [json.loads(x) for x in f.read().splitlines()]
 
-    def test_one_line_with_the_program_file_name_only(self):
-        now = datetime.datetime(2026, 10, 13, 9, 30, 5)
+    def test_one_json_line_with_the_program_file_name_only(self):
+        now = datetime.datetime(2026, 10, 13, 9, 30, 5).timetuple()
         self.assertEqual(dt.note_carrier_failure(r'"C:\Py\python.exe"', "exit 127\n(x)",
                                                  path=self.log, now=now, pid=42), self.log)
-        self.assertEqual(self.lines(),
-                         ["2026-10-13T09:30:05 pid 42 no_window.py could not start python.exe: exit 127 (x)"])
+        self.assertEqual(self.lines(), [{"time": "2026-10-13T09:30:05Z", "how": "carrier-fail",
+                                         "pid": 42, "exe": "python.exe", "why": "exit 127 (x)"}])
         dt.note_carrier_failure("C:/a/b.exe", "again", path=self.log)
-        self.assertEqual(len(self.lines()), 2)          # appended, never replaced
+        self.assertEqual([x["exe"] for x in self.lines()], ["python.exe", "b.exe"])  # appended
 
     def test_a_line_that_cannot_be_written_is_not_an_error(self):
         open(os.path.join(os.path.dirname(os.path.dirname(self.log)), "file"), "w").close()
@@ -169,10 +169,20 @@ class CarrierFailureLine(unittest.TestCase):
         self.assertEqual(dt.incident_log(environ={dt.INCIDENT_LOG_ENV: self.log}), self.log)
         with mock.patch.object(user, "work_temp", lambda near: os.path.join("W:\\", "t")):
             self.assertEqual(dt.incident_log(environ={}), os.path.join("W:\\", "t", dt.INCIDENT_LOG))
-        with mock.patch.object(user, "work_temp", mock.Mock(side_effect=RuntimeError("no drive"))):
-            self.assertEqual(dt.incident_log(environ={}),
-                             os.path.join(tempfile.gettempdir(), dt.INCIDENT_LOG))
         self.assertEqual(dt.INCIDENT_LOG, "kit-console-incidents.log")
+
+    def test_no_work_temp_folder_skips_the_line_and_never_raises(self):
+        """kitlib/proc/console.py skips its line too: no second folder under the same name. A
+        fenced test process's HomeFenced is a BaseException and is caught as well."""
+        from kitlib.config import user
+        for err in (RuntimeError("no drive"), user.HomeFenced("fenced")):
+            with self.subTest(err=type(err).__name__), \
+                    mock.patch.dict(os.environ, {dt.INCIDENT_LOG_ENV: ""}), \
+                    mock.patch.object(user, "work_temp", mock.Mock(side_effect=err)):
+                self.assertIsNone(dt.incident_log(environ={}))
+                self.assertIsNone(dt.note_carrier_failure("python", "why"))
+        with mock.patch.object(dt.os, "makedirs", mock.Mock(side_effect=user.HomeFenced("x"))):
+            self.assertIsNone(dt.note_carrier_failure("python", "why", path=self.log))
 
     def test_the_carrier_logs_an_exception_and_lets_it_out(self):
         """tools/no_window.py's exit path when spawn raises (not an OSError, which carry turns
@@ -188,14 +198,29 @@ class CarrierFailureLine(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tool.main(["python", "-B", "secret.py"])
         line, = self.lines()
-        self.assertIn("no_window.py could not start python: ValueError: bad handle", line)
-        self.assertNotIn("secret", line)
+        self.assertEqual((line["how"], line["exe"], line["why"]), ("carrier-fail", "python", "ValueError"))
+        self.assertNotIn("secret", json.dumps(line))
+        self.assertNotIn("bad handle", json.dumps(line))   # the type only: a message can echo argv
         with mock.patch.object(spawn, "carry", lambda argv: 127):
             self.assertEqual(tool.main(["python"]), 127)
         self.assertEqual(len(self.lines()), 2)
         with mock.patch.object(spawn, "carry", lambda argv: 0):
             self.assertEqual(tool.main(["python"]), 0)
         self.assertEqual(len(self.lines()), 2)
+
+    def test_a_failing_log_changes_neither_the_exit_code_nor_the_exception(self):
+        spec = importlib.util.spec_from_file_location(
+            "no_window_tool", os.path.join(REPO, "tools", "no_window.py"))
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+        broken = mock.Mock(side_effect=RuntimeError("log broke"))
+        with mock.patch.object(dt, "note_carrier_failure", broken):
+            with mock.patch.object(spawn, "carry", lambda argv: 127):
+                self.assertEqual(tool.main(["python"]), 127)
+            with mock.patch.object(spawn, "carry", mock.Mock(side_effect=ValueError("x"))):
+                with self.assertRaises(ValueError):
+                    tool.main(["python"])
+        self.assertEqual(broken.call_count, 2)
 
 
 if __name__ == "__main__":

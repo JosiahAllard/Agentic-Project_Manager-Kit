@@ -34,6 +34,7 @@ DECLARATION = re.compile(rb'^\s*<\?xml[^>]*?\?>')
 DECLARED = re.compile(rb'encoding\s*=\s*["\']([A-Za-z0-9._-]+)["\']')
 WORD = re.compile(r'"([^"]*)"|(\S+)')
 ABSOLUTE = re.compile(r'^(?:[A-Za-z]:\\|\\\\)')
+OPTION = re.compile(r'^--?[A-Za-z][\w-]*[:=]')     # `-opt:` / `--opt=` before a path
 
 
 def kit_names():
@@ -82,10 +83,26 @@ def is_kit(task, roots):
         return True
     for a in task['actions']:
         text = '"%s" %s' % ((a.get('exe') or '').strip().strip('"'), a.get('args') or '')
-        for m in WORD.finditer(text):
-            if _inside(m.group(1) if m.group(1) is not None else m.group(2), roots):
+        for word in words(text):
+            if _inside(word, roots):
                 return True
     return False
+
+
+def words(text):
+    """Each word of a task line that may be a path: a double-quoted run whole (a path with a
+    space) and each of its own words, then each word with a leading `&` (PowerShell's call
+    operator), quotes and an option's `-opt:` / `--opt=` prefix taken off, so
+    `-Command "& '<kit>\\tools\\x.ps1'"` and `--flag=<kit>\\x` give the path."""
+    out = []
+    for m in WORD.finditer(text):
+        whole = m.group(1) if m.group(1) is not None else m.group(2)
+        for w in [whole] + whole.split():
+            w = w.lstrip('&').strip('"\';')
+            w = OPTION.sub('', w, count=1).strip('"\'')
+            if w:
+                out.append(w)
+    return out
 
 
 def judge(tasks, roots=None):

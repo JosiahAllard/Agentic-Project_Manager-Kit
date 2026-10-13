@@ -111,7 +111,8 @@ the carrier tools\no_window.py as its first argument (docs/daily-full.md "The sc
 a task opens a window on the desktop each time it runs (docs/daily-full.md "The schedule"). A kit
 task is one with a name the kit registers (the launcher's sign-in task, `agent-temp-sweep`, a name
 ending `-worktree-sweep` or `-daily-full`) or an action with a word (its program, or an argument,
-quoted or not) that is an absolute path inside a kit folder (`is_kit`, `kit_roots`): this kit; the
+quoted or not, with a leading `&`, quotes and an option's `-opt:` / `--opt=` taken off, `words`)
+that is an absolute path inside a kit folder (`is_kit`, `kit_roots`): this kit; the
 live checkout an export runs for (`KIT_LIVE_ROOT`); and, when this kit is a plugin export, the
 folder that holds every export. A file named like a kit tool in another folder, another
 repository's `<repo>\tools\gate.py`, is not the kit's. A task that names the kit's checkout while

@@ -19,11 +19,9 @@ started (the run's wrapper, whose pid the run record holds). Nothing here prints
 it has no stderr, so without the line a detached run (or a scheduled task) that never started
 would leave nothing behind.
 """
-import datetime
 import json
 import os
 import subprocess
-import tempfile
 import time
 
 from kitlib.proc import process, spawn
@@ -116,32 +114,44 @@ def wrapper_pid(carrier, wait_s=WRAPPER_WAIT_S, poll_s=WRAPPER_POLL_S, snapshot=
 
 def incident_log(environ=None):
     """The file `note_carrier_failure` appends to: INCIDENT_LOG_ENV when set, else INCIDENT_LOG in
-    the kit's work temp folder (the system temp folder when that cannot be worked out)."""
+    the kit's work temp folder. None when that folder cannot be worked out (a fenced test process:
+    HomeFenced, a BaseException; a bad machine config; no LOCALAPPDATA): the line is skipped, as
+    kitlib/proc/console.py skips its own, rather than kept in a second folder under the same name."""
     env = os.environ if environ is None else environ
     if env.get(INCIDENT_LOG_ENV):
         return env[INCIDENT_LOG_ENV]
     try:
         from kitlib.config import user
-        folder = user.work_temp(KIT)
-    except Exception:       # a broken machine config or no LOCALAPPDATA: still leave the line
-        folder = tempfile.gettempdir()
-    return os.path.join(folder, INCIDENT_LOG)
+        try:
+            return os.path.join(user.work_temp(KIT), INCIDENT_LOG)
+        except user.HomeFenced:
+            return None
+    except Exception:
+        return None
 
 
 def note_carrier_failure(program, why, path=None, now=None, pid=None):
-    """Append one line to `path` (default `incident_log()`): the time, the carrier's pid, the
-    file name of `program` (never its arguments) and `why`. Returns the path written, or None
-    when it could not be written; never raises: it runs on the carrier's way out."""
+    """Append one JSON line to `path` (default `incident_log()`), in the shape of
+    kitlib/proc/console.py's lines in the same log: {"time" (UTC), "how": "carrier-fail", "pid"
+    (the carrier's), "exe" (the file name of `program`, never its arguments), "why"}. Returns the
+    path written, or None when there is no log or it could not be written; never raises, a
+    HomeFenced included: it runs on the carrier's way out."""
     try:
-        path = path or incident_log()
-        name = str(program).strip().strip('"').replace('/', '\\').split('\\')[-1]
-        line = '%s pid %d %s could not start %s: %s\n' % (
-            (now or datetime.datetime.now()).isoformat(timespec='seconds'),
-            os.getpid() if pid is None else pid, spawn.CARRIER, name or '?',
-            ' '.join(str(why).split()))
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, 'a', encoding='utf-8') as f:
-            f.write(line)
-        return path
+        from kitlib.config import user
+        try:
+            path = path or incident_log()
+            if not path:
+                return None
+            name = str(program).strip().strip('"').replace('/', '\\').split('\\')[-1]
+            line = json.dumps({
+                'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', now or time.gmtime()),
+                'how': 'carrier-fail', 'pid': os.getpid() if pid is None else pid,
+                'exe': name or '?', 'why': ' '.join(str(why).split())}) + '\n'
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            with open(path, 'a', encoding='utf-8') as f:
+                f.write(line)
+            return path
+        except user.HomeFenced:
+            return None
     except Exception:
         return None

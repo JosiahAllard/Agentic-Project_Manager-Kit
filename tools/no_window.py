@@ -15,8 +15,9 @@ unless whoever started it gave it one; a scheduled task gives none). Exit codes:
 2 no PROGRAM named; 127 PROGRAM could not be started.
 
 So that a failure is not silent with no stderr, an exit of 127 and an exception out of the carry
-each append one line (PROGRAM's file name, never its arguments) to the kit's console incident
-log (kitlib.lock.detach.note_carrier_failure). A PROGRAM that itself exits 127 is logged too:
+each append one JSON line (PROGRAM's file name, never its arguments; for an exception, its type
+only) to the kit's console incident log (kitlib.lock.detach.note_carrier_failure); a line that
+cannot be written is skipped and changes nothing else. A PROGRAM that itself exits 127 is logged too:
 the exit code alone cannot tell the two apart.
 """
 import os
@@ -31,15 +32,19 @@ USAGE = 'USAGE: pythonw no_window.py PROGRAM [ARGS...]'
 
 
 def note(argv, why):
-    from kitlib.lock import detach        # only on the way out: a carried run starts no sooner
-    detach.note_carrier_failure(argv[0], why)
+    """The incident line; a failure to write it never replaces the exit code or the exception."""
+    try:
+        from kitlib.lock import detach    # only on the way out: a carried run starts no sooner
+        detach.note_carrier_failure(argv[0], why)
+    except Exception:
+        pass
 
 
 def main(argv):
     try:
         code = spawn.carry(argv)
     except Exception as e:
-        note(argv, '%s: %s' % (type(e).__name__, e))
+        note(argv, type(e).__name__)      # the type only: a message can echo the arguments
         raise
     if argv and code == spawn.EXIT_NO_START:
         note(argv, 'exit %d (it could not be started, or it exited %d itself)' % (code, code))

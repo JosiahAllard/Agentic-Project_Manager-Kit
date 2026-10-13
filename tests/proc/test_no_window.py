@@ -275,7 +275,9 @@ class CarrierTest(_Folder):
         with open(self.log, encoding="utf-8") as f:
             lines = f.read().splitlines()
         self.assertEqual(len(lines), 1, lines)            # under pythonw: not silent
-        self.assertIn("no_window.py could not start none.exe: exit 127", lines[0])
+        line = json.loads(lines[0])
+        self.assertEqual((line["how"], line["exe"]), ("carrier-fail", "none.exe"))
+        self.assertTrue(line["why"].startswith("exit 127"), line)
         self.assertNotIn("secret-arg", lines[0])
         self.assertNotIn(self.dir, lines[0])
 

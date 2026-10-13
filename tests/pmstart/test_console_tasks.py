@@ -10,9 +10,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 from kitlib import pluginsource, pmstart
 from kitlib.pmstart import consoletasks as ct
+from kitlib.proc import spawn
 from tests.home import temp_home
 from tests.pmstart import keep_off_launcher_repos
 
@@ -73,6 +75,12 @@ class Judge(unittest.TestCase):
         rows = ((r'"z:/KIT/tools/whatever.py"', True),             # case and slashes do not matter
                 (r"Z:\kit\tools\daily_full.py -C x", True),          # unquoted
                 (r'-X "Z:\kit"', True),                              # the folder itself
+                (r"""-Command "& 'Z:\kit\tools\x.ps1'" """, True),   # PowerShell's call operator
+                (r"-NoProfile -Command & 'Z:\kit\tools\x.ps1' -y", True),
+                (r"--flag=Z:\kit\x", True),                          # an option's value
+                (r'-File:"Z:\kit\tools\x.ps1"', True),
+                (r"""-Command "& 'C:\proj\tools\gate.ps1'" """, False),
+                (r"--flag=C:\proj\tools\gate.py", False),
                 (r'"C:\copy\tools\worktree_remove.py" -C x', False),  # a kit tool's name in a copy
                 (r"C:\proj\tools\gate.py --full", False),            # another repository's gate
                 (r'"Z:\kit2\tools\gate.py"', False),                 # a folder that only starts like it
@@ -230,10 +238,21 @@ class Read(unittest.TestCase):
 class RealRead(unittest.TestCase):
     def test_this_machines_task_list_parses(self):
         """One read-only `schtasks /Query /XML ONE`; skips when schtasks cannot answer in time."""
+        seen = []
+
+        def run(*a, **kw):
+            seen.append(spawn.run(*a, **kw))
+            return seen[-1]
         try:
-            tasks = REAL_READ(timeout=30)
+            tasks = REAL_READ(run=run, timeout=30)
         except (OSError, RuntimeError) as e:
             self.skipTest("schtasks could not answer: %s" % e)
+        except ET.ParseError as e:
+            # no task at all, or an informational message: nothing of the XML to check
+            raw = seen[-1].stdout or b""
+            if b"<Task" in raw or b"<\0T\0a\0s\0k\0" in raw:
+                raise
+            self.skipTest("schtasks gave no task XML: %s" % e)
         self.assertIsInstance(tasks, list)
         for t in tasks:
             self.assertTrue(t["path"])
