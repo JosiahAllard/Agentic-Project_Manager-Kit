@@ -1,5 +1,6 @@
 """kitlib.gate.result: the result records every branch gate and landing writes (running, then
-final), and wait-result, the read-only wait a second session arms on them (docs/gate.md "Result
+final), and wait-result, the wait a second session arms on them (its one write: a running
+record whose process died, finished error) (docs/gate.md "Result
 record")."""
 import json
 import os
