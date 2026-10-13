@@ -13,8 +13,8 @@ dry run prints and the function --apply runs, plus the refusals that stop both. 
   (kitlib.machinesetup.plugin; every other host is a note naming its README); the owner's email is
   stored in the machine config (kitlib.machinesetup.owner); the agents' temp folder is made with
   its AGENT_TEMP variable, sweep config key and permissions (kitlib.machinesetup.agenttemp,
-  extras). Opt-in: the PM SessionStart hook (`pm_settings`), the sweep task
-  (`register_sweep_task`), the machine schedule shortcut (`shortcut`).
+  extras), and the sweep task (opt-out: `sweep_task` false). Opt-in: the PM SessionStart hook
+  (`pm_settings`), the machine schedule shortcut (`shortcut`).
 - The switch from an older kit clone (`old_kit`): the links (kitlib.machinesetup.links), each
   config folder's settings.json (its old kit hooks removed or re-pointed, the guard's entry
   added), the owner's email, and the extras: the shortcut, the agents' temp folder and
@@ -31,7 +31,7 @@ from kitlib.config import user
 from kitlib.config.migration import OLD_DIR_NAME
 
 from . import agenttemp, extras, links, owner, plugin, settings
-from .common import Change, Plan, kit_file
+from .common import Change, Plan, Report, kit_file
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
 
@@ -44,7 +44,7 @@ class Context(object):
     `shortcut` None: the machine schedule shortcut in the old kit switch only."""
 
     def __init__(self, home, kit, old_kit=None, config_dirs=None, agent_temp=None, desktop=None,
-                 host=None, today=None, fresh=False, pm_settings=None, register_sweep_task=False,
+                 host=None, today=None, fresh=False, pm_settings=None, sweep_task=True,
                  owner_email=None, shortcut=None):
         if fresh and old_kit:
             raise ValueError('give old_kit or fresh, not both')
@@ -63,7 +63,7 @@ class Context(object):
             config_dirs = account_dirs(self.home) if fresh else default_config_dirs(self.home)
         self.config_dirs = dedupe(os.path.abspath(d) for d in config_dirs)
         self.agent_temp = agent_temp
-        self.register_sweep_task = bool(register_sweep_task)
+        self.sweep_task = bool(sweep_task)
         self.desktop = desktop
         self.host = host or extras.Host()
         self.today = today or datetime.date.today().strftime('%Y%m%d')
@@ -178,7 +178,7 @@ def _carry_out(name, plan, apply, emit, lines):
     done = []
     for c in plan.changes:
         try:
-            c.do()
+            said = c.do()
         except BaseException as e:                                   # any failure gets the report
             emit('%s: STOPPED at: %s' % (name, c.text),
                  '  error: %s: %s' % (type(e).__name__, e))
@@ -189,6 +189,8 @@ def _carry_out(name, plan, apply, emit, lines):
                 raise
             return EXIT_REFUSED, lines
         done.append(c.text)
+        if isinstance(said, Report):                                 # a change's own report lines
+            emit(*['  ' + l for l in said])
         emit('done: %s' % c.text)
     emit('%s: made %d change(s); a second run reports nothing to do' % (name, len(done)))
     return EXIT_OK, lines
@@ -205,11 +207,11 @@ class AgentTempContext(object):
     """What the agent temp init alone (tools/agent_temp_init.py) reads: the subset of Context that
     kitlib.machinesetup.agenttemp and the folder's ACL step use."""
 
-    def __init__(self, home, kit, agent_temp=None, host=None, register_sweep_task=False):
+    def __init__(self, home, kit, agent_temp=None, host=None, sweep_task=True):
         self.home = os.path.abspath(home)
         self.kit = os.path.abspath(kit)
         self.agent_temp = agent_temp
-        self.register_sweep_task = bool(register_sweep_task)
+        self.sweep_task = bool(sweep_task)
         self.host = host or extras.Host()
 
 

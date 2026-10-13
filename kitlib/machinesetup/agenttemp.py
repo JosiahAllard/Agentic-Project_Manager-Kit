@@ -2,8 +2,10 @@
 environment variable AGENT_TEMP naming it, the machine config's `agent_temp_sweep` key the sweep
 (optional/agenttemp/agent_temp_sweep.py) reads, and the scheduled task that runs the sweep. Each is
 read first and planned only when it differs. An existing config key or another AGENT_TEMP value is
-noted, never overwritten. The task is registered only with `register_sweep_task`; without it a note
-carries the PowerShell line that registers it. Nothing here prints or exits.
+noted, never overwritten. The task is registered by default: the change first runs the sweep once
+without --apply (sweep_dry_run) and prints what it would remove, then registers. With
+`sweep_task` false (--no-sweep-task) a note carries the PowerShell line that registers it instead.
+A task already registered is left as is. Nothing here prints or exits.
 """
 import json
 import os
@@ -14,7 +16,7 @@ from kitlib.config import user as kuser
 from kitlib.worktree.task import CARRIER, FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted
 
 from . import machineconfig
-from .common import is_link, norm
+from .common import Report, is_link, norm
 
 ENV = 'AGENT_TEMP'
 KEY = 'agent_temp_sweep'
@@ -258,6 +260,33 @@ def write_sweep_key(home, snap, folder):
     machineconfig.set_key(home, snap, KEY, {'dir': folder, 'max_age_days': MAX_AGE_DAYS})
 
 
+def sweep_dry_run_argv(kit, python):
+    """The command line of one dry run of the sweep: `python <kit>/SWEEP`, no --apply."""
+    return [python, os.path.join(os.path.normpath(kit), SWEEP)]
+
+
+DRY_RUN_TIMEOUT = 120
+
+
+def sweep_dry_run(kit, python, timeout=DRY_RUN_TIMEOUT, run=None):
+    """Run the sweep once without --apply (it removes nothing) and return its report lines, so the
+    owner sees what the task's first run would remove before it is registered. RuntimeError when it
+    refuses (exit 2: no config key, a bad config, an unsafe or unlistable folder), exits any way but
+    0 or 3 (3: the process list could not be read, so it would keep every claude/ folder), or takes
+    over `timeout` seconds. run: the tests' subprocess.run."""
+    run = run or subprocess.run
+    try:
+        r = run(sweep_dry_run_argv(kit, python), capture_output=True, text=True, timeout=timeout,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('the sweep dry run took over %s s' % timeout)
+    said = [l for l in ((r.stdout or '') + (r.stderr or '')).splitlines() if l.strip()]
+    if r.returncode not in (0, 3):
+        raise RuntimeError('the sweep dry run exit %d, so the task is not registered: %s'
+                           % (r.returncode, ' | '.join(said)[:400] or 'no output'))
+    return said
+
+
 def _task(plan, ctx):
     host = ctx.host
     line = task_line(ctx.kit)
@@ -267,11 +296,23 @@ def _task(plan, ctx):
         plan.note('extras', 'could not tell whether the scheduled task %s is registered (%s)' % (TASK, e))
         return
     if there:
+        if not getattr(ctx, 'sweep_task', True):
+            plan.note('extras', 'scheduled task %s is registered; --no-sweep-task leaves it (undo: '
+                                'Unregister-ScheduledTask -TaskName %s -Confirm:$false)' % (TASK, TASK))
         return
-    if not ctx.register_sweep_task:
-        plan.note('extras', 'scheduled task %s is not registered; the owner registers it with '
-                            '--register-sweep-task --apply, which runs: %s' % (TASK, line))
+    if not getattr(ctx, 'sweep_task', True):
+        plan.note('extras', 'scheduled task %s is not registered (--no-sweep-task); a run without '
+                            '--no-sweep-task registers it, or run: %s' % (TASK, line))
         return
+
+    def dry_run():
+        said = host.sweep_dry_run(ctx.kit)
+        return Report('sweep dry run (nothing removed): ' + l for l in said)
+
+    plan.add('extras', 'run the sweep once without --apply: %s'
+             % ' '.join(sweep_dry_run_argv(ctx.kit, 'python')[1:]), dry_run,
+             detail=['prints what the task\'s first run would remove, before the task is registered; '
+                     'stops the run, registering nothing, when the sweep refuses'])
     plan.add('extras', 'register the scheduled task %s (daily %s, as you, not elevated): %s'
              % (TASK, AT, line), lambda: host.task_register(line),
              undo='Unregister-ScheduledTask -TaskName %s -Confirm:$false' % TASK)

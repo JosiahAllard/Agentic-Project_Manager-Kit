@@ -144,7 +144,13 @@ class HubSiteTest(unittest.TestCase):
                  % (team, aud), "%s; %s" % (team, aud)),
                 # a value that does not end as a written string does: cut, with what follows
                 ("%s, not 'someone@mail.invalid; %s" % (team, aud), team),
-                ("%s, not \"someone@mail.invalid" % team, team)):
+                ("%s, not \"someone@mail.invalid" % team, team),
+                # a value that is not a string, as kitlib.pmdata echoes it: a number goes alone,
+                # a list is cut with what follows
+                ("pm_data: remote must be a branch or remote name, not 7; %s, not 'tag one'" % aud,
+                 "pm_data: remote must be a branch or remote name; %s" % aud),
+                ("pm_data: path must be an absolute path, not ['made-up@mail.invalid']; %s" % aud,
+                 "pm_data: path must be an absolute path")):
             with self.subTest(said=said):
                 def bad():
                     raise pmstart.HubSettingsError(said)
@@ -279,6 +285,30 @@ class RealSettingsTest(unittest.TestCase):
         self.write({"hub": {"port": 4322, "tunnel_port": 4322}})
         with self.assertRaises(pmstart.HubSettingsError):
             pmstart.hub_settings()
+
+    def test_a_pm_data_value_that_is_not_a_string_is_named_and_never_shown(self):
+        from kitlib import pmdata
+        down = dict(make_client=lambda port: FakeClient(error=serve.NotRunning(port)))
+        for pm, rule in (({"path": ["SECRETPATH"]}, "path must be an absolute path"),
+                         ({"path": "C:\\pm", "branch": ["SECRETBR"]},
+                          "branch must be a branch or remote name"),
+                         ({"path": "C:\\pm", "remote": 7654321}, "remote must be a branch or remote name")):
+            for hub in (None, {"port": 4322}):
+                with self.subTest(pm=pm, hub=hub):
+                    body = {"pm_data": pm}
+                    if hub:
+                        body["hub"] = hub
+                    self.write(body)
+                    txt = pmstart.checklist({}, NOW, procs=[], pm_data=pmdata.machine_settings,
+                                            hub_site=down, **FAKES)
+                    kit = [l for l in txt.splitlines() if "kit_sync" in l]
+                    self.assertEqual(len(kit), 1, txt)
+                    self.assertIn("could not check kit_sync: PmDataError: ", kit[0])
+                    self.assertIn(rule, kit[0])
+                    if hub:
+                        self.assertIn("hub: the hub key of the machine config cannot be used: ", txt)
+                    for word in ("SECRET", "7654321", ", not "):
+                        self.assertNotIn(word, txt)
 
     def test_a_broken_config_with_no_hub_key_is_one_line_naming_the_class(self):
         self.write({"no_such_key": 1})
