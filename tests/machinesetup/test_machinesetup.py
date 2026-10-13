@@ -725,9 +725,10 @@ class Parts(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')
 class Tool(Base):
-    def test_old_kit_is_required(self):
-        r = subprocess.run([sys.executable, TOOL], capture_output=True, text=True)
-        self.assertEqual(r.returncode, M.EXIT_USAGE)
+    def test_a_missing_old_kit_is_usage(self):
+        """--old-kit names a folder that is not there: usage, before any home is looked up. With
+        no --old-kit the tool runs the default mode, not a usage error (plan step 20;
+        tests/machinesetup/test_fresh.py test_the_default_mode_needs_no_switch)."""
         r = subprocess.run([sys.executable, TOOL, '--old-kit', os.path.join(self.root, 'none')],
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, M.EXIT_USAGE)
@@ -768,10 +769,9 @@ class Tool(Base):
         self.assertIn('REFUSED - no config folder at %s' % m1, r.stdout)
         self.assertIn('REFUSED - no config folder at %s' % m2, r.stdout)
 
-    def test_the_wrapper_without_old_kit_or_python_is_usage(self):
-        r = self.ps1([])
-        self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
-        self.assertIn('-OldKit', r.stdout)
+    def test_the_wrapper_without_python_is_usage(self):
+        """No python on PATH and no -Python: usage. (No -OldKit is the default mode since plan
+        step 20, not usage: test_fresh.py test_the_default_mode_needs_no_switch.)"""
         sysdir = os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32')
         env = dict(os.environ, PATH=sysdir + ';' + os.path.join(sysdir, 'WindowsPowerShell', 'v1.0'))
         r = self.ps1(['-OldKit', self.old], env=env, python=False)
