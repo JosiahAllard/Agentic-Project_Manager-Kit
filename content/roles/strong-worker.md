@@ -5,6 +5,7 @@ tier: strong
 effort: high
 sandbox: workspace-write
 mode: write
+summary: "High-risk changes: networking, concurrency, simulation or ordering, landing or lock tools, migrations, CI config, known-area crash fixes."
 capabilities: all
 ---
 

@@ -17,6 +17,14 @@ A role file, `content/roles/<name>.md`, is front matter between two `---` lines,
   writes: [docs/notes.local.md]      optional: repo-relative paths or globs (posix, no `..`) the
                                      role may write though its mode makes the checkout read-only
                                      (docs/guard.md "Role policy"). Never rendered either
+  group: docs                        optional: the role's group (GROUPS) where its mode alone does
+                                     not give it (MODE_GROUP); only with a mode the group allows
+                                     (GROUP_MODES). Read by the backlog policy, never rendered
+  run: session                       optional: the role runs only as its own launched session,
+                                     never as a dispatched subagent (RUNS). Never rendered
+  summary: ...                       optional: one line, the role's "use for" cell in the rendered
+                                     docs/ROSTER.md (its description when absent). Never rendered
+                                     into a host's file
   model.<host>: <model>              optional: that host runs this role on <model>, not the tier's
 
 The body is neutral prose. Values that differ by host are tokens, `{{name}}`, `{{agent:<role>}}`,
@@ -40,6 +48,14 @@ SANDBOXES = ('read-only', 'workspace-write')
 CACHES = ('long',)
 # The role-policy modes (kitlib.guard.rolepolicy, which takes them from here).
 MODES = ('controller', 'write', 'read', 'test', 'lander')
+# A role's group (kitlib.backlog.roles reads them): its mode's (MODE_GROUP), or the `group:` it
+# names, which must be one its mode allows (GROUP_MODES). A role with no mode has no group.
+GROUPS = ('lead', 'builder', 'docs', 'read-only', 'lander')
+MODE_GROUP = {'controller': 'lead', 'write': 'builder', 'read': 'read-only', 'test': 'read-only',
+              'lander': 'lander'}
+GROUP_MODES = {'lead': ('controller',), 'builder': ('write',), 'docs': ('write',),
+               'read-only': ('read', 'test'), 'lander': ('lander',)}
+RUNS = ('session',)
 ALL = 'all'
 # The neutral capabilities. A host maps each to its own tool (or tools), keeping this order.
 CAPABILITIES = (
@@ -66,7 +82,7 @@ TOKENS = ARG_TOKENS + ('profile_path', 'coordinator_profile_path', 'instructions
                        'owner_folder', 'user_folder', 'config_dir_env', 'long_context_model', 'coauthor_email',
                        'launch_agent')
 REQUIRED = ('name', 'description', 'tier', 'sandbox', 'capabilities')
-OPTIONAL = ('effort', 'cache', 'mode', 'writes')
+OPTIONAL = ('effort', 'cache', 'mode', 'writes', 'group', 'run', 'summary')
 MODEL_KEY = 'model.'
 
 _FM = re.compile(r'\A---(\r?\n)(.*?)\r?\n---\r?\n', re.S)
@@ -91,6 +107,9 @@ class Role:
     mode: str = None             # the role-policy mode (MODES); a host's file never carries it
     models: tuple = ()           # ((host, model), ...): per-host overrides of the tier's model
     writes: tuple = ()           # repo-relative posix paths or globs the role policy lets it write
+    group: str = None            # GROUPS: the `group:` it names, else its mode's (MODE_GROUP)
+    run: str = None              # RUNS: 'session' for a role only ever started as its own session
+    summary: str = None          # its "use for" line in docs/ROSTER.md; never in a host's file
     body: str = ''
     newline: str = '\n'          # the role file's line ending; a host's file keeps it
 
@@ -224,7 +243,7 @@ def parse_role(data, source='role'):
     if not _NAME.match(name):
         raise ContentError('%s: name %r' % (source, name))
     for key, allowed in (('tier', TIERS), ('sandbox', SANDBOXES), ('effort', EFFORTS), ('cache', CACHES),
-                         ('mode', MODES)):
+                         ('mode', MODES), ('group', GROUPS), ('run', RUNS)):
         if key in fields and fields[key] not in allowed:
             raise ContentError('%s: %s %r is not one of %s' % (source, key, fields[key], ', '.join(allowed)))
     caps = _list(fields['capabilities'], '%s: capabilities' % source)
@@ -237,10 +256,17 @@ def parse_role(data, source='role'):
     description = unquote(fields['description'], '%s: description' % source)
     if not description:
         raise ContentError('%s: empty description' % source)
+    mode, group = fields.get('mode'), fields.get('group')
+    if group is not None and mode not in GROUP_MODES[group]:
+        raise ContentError('%s: group %s needs mode %s' % (source, group, ' or '.join(GROUP_MODES[group])))
+    summary = unquote(fields['summary'], '%s: summary' % source) if 'summary' in fields else None
+    if summary is not None and not summary:
+        raise ContentError('%s: empty summary' % source)
     return Role(name=name, description=description, tier=fields['tier'], sandbox=fields['sandbox'],
                 capabilities=caps or (), all_tools=caps is None, effort=fields.get('effort'),
-                cache=fields.get('cache'), mode=fields.get('mode'), models=tuple(sorted(models.items())),
-                writes=writes, body=text[m.end():], newline=newline)
+                cache=fields.get('cache'), mode=mode, models=tuple(sorted(models.items())),
+                writes=writes, group=group or MODE_GROUP.get(mode), run=fields.get('run'), summary=summary,
+                body=text[m.end():], newline=newline)
 
 
 def tokens_in(text):

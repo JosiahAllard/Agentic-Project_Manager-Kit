@@ -37,7 +37,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
   cause or concurrency work strong-worker failed at or plainly cannot do). senior-worker not
   installed -> the worker raised to strong. Never the host's general-purpose agent for code. An
   escalation = reassign upward with its findings, not a failure.
-- Tier and effort per role are pinned in each role's front matter (set from `<kit>/docs/ROSTER.md`).
+- Tier and effort per role are pinned in each role's front matter (`<kit>/docs/ROSTER.md` is rendered from it).
   A kit role is dispatched with no model of its own choosing. Override only upward for risk, and
   say so in status; never the lander (light as pinned, whatever is being landed), and the reviewer
   only by the reviewer rule below. Never a model above the strong tier's for any dispatch, reviews

@@ -108,7 +108,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/tool_deps.py` | tests a changed file selects (`docs/test-tools.md`) | kw: tool_deps
 - `tools/pytests.py` | test runner (`docs/test-tools.md`) | kw: pytests
 - `tools/forbidden.py` | forbidden-text check (`docs/repo-checks.md`) | kw: forbidden
-- `tools/agent_roster.py` | docs/ROSTER.md against content/roles tier and effort and the hosts' tier maps (`docs/ROSTER.md`) | kw: agent_roster, roster
+- `tools/agent_roster.py` | checks or writes docs/ROSTER.md's tables alone, rendered from content/roles and the hosts' tier maps (`docs/ROSTER.md`) | kw: agent_roster, roster
 - `tools/render_content.py` | render content/ into each host's agents and skills; --check for drift (`docs/content.md`) | kw: render_content, content, render
 - `tools/board.py` | the coordinator's whole board in one call (`docs/preflight.md`) | kw: board
 - `tools/checkout_guard.py` | is a path in the main checkout; strays in it (`docs/preflight.md`) | kw: checkout_guard, stray

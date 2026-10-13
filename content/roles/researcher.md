@@ -5,6 +5,7 @@ tier: standard
 effort: high
 sandbox: read-only
 mode: read
+summary: Read-only ideas and prior art; proposes concepts for the owner to choose from, builds nothing.
 capabilities: [read, search, find, web-search, web-fetch, write]
 ---
 

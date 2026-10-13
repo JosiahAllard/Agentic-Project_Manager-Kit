@@ -5,6 +5,8 @@ tier: standard
 effort: low
 sandbox: workspace-write
 mode: write
+group: docs
+summary: "Writes settled facts into docs only: decisions, landing notes, plan ticks."
 capabilities: [read, edit, write, search, find, powershell, bash]
 ---
 

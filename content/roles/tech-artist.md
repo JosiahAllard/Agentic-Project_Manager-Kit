@@ -5,6 +5,7 @@ tier: strong
 effort: high
 sandbox: workspace-write
 mode: write
+summary: "Art that is code: shaders, materials, palettes, UI themes, procedural meshes and textures, lighting; checked by rendering."
 capabilities: [read, edit, write, search, find, bash, powershell, worktree, artifact, dispatch]
 ---
 

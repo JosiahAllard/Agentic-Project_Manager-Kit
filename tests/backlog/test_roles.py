@@ -1,6 +1,10 @@
 """kitlib.backlog.roles against the approved design table and the owner's answers."""
+import os
+import shutil
+import tempfile
 import unittest
 
+from kitlib import content
 from kitlib.backlog import record
 from kitlib.backlog import roles as R
 from kitlib.config import schema
@@ -42,9 +46,44 @@ VERBS = {'next', 'show', 'list', 'check', 'stale', 'landable', 'add', 'set', 'bl
 class RolesTest(unittest.TestCase):
     def test_every_role_in_the_design_is_a_role(self):
         self.assertEqual(sorted(R.ROLES), sorted(ROLES))
-        self.assertEqual((R.BUILDERS, R.READ_ONLY, R.DOCS),
-                         (BUILDERS, READ_ONLY, ('records', 'spec-writer')))
+        self.assertEqual((sorted(R.BUILDERS), sorted(R.READ_ONLY), sorted(R.DOCS), R.LANDERS),
+                         (sorted(BUILDERS + ('deep-worker',)), sorted(READ_ONLY), ['records', 'spec-writer'],
+                          ('lander',)))
+        self.assertEqual(sorted(R.LEADS), sorted(CPO))
+        self.assertEqual(sorted(R.SESSION_ONLY), ['consultant', 'coordinator', 'deep-worker', 'owner', 'pm'])
         self.assertIn('kitlib/backlog/roles.py', schema.OWNER_PATHS)
+
+    def test_the_groups_are_read_from_the_role_files(self):
+        """decision 17: every role file's role is in the group its mode (or `group:`) gives, and in
+        no other; no name but the owner's is in a group without a role file (an old name is)."""
+        roster = {r.name: r for r in content.roster(R.KIT)}
+        groups = {'lead': R.LEADS, 'builder': R.BUILDERS, 'docs': R.DOCS, 'read-only': R.READ_ONLY,
+                  'lander': R.LANDERS}
+        for name, entry in roster.items():
+            with self.subTest(role=name):
+                self.assertEqual([g for g, names in groups.items() if name in names], [entry.group])
+                self.assertEqual(name in R.SESSION_ONLY, entry.run == 'session')
+        known = set(roster) | set(content.ALIASES) | {R.OWNER}
+        self.assertLessEqual(set(R.ROLES), known)
+        self.assertIn(R.PM, roster)
+        # test-runner's mode is `test`: read-only for the backlog, as the role policy holds its checkout
+        self.assertEqual(roster['test-runner'].mode, 'test')
+        self.assertIn('test-runner', R.READ_ONLY)
+
+    def test_a_role_file_adds_a_role_to_its_group(self):
+        """One file and nothing else: a new write role is a builder, a docs one a docs role."""
+        top = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, top, True)
+        roles = os.path.join(top, 'content', 'roles')
+        os.makedirs(roles)
+        head = '---\nname: %s\ndescription: d\ntier: light\nsandbox: read-only\ncapabilities: [read]\n'
+        for name, extra in (('maker', 'mode: write\n'), ('scribe', 'mode: write\ngroup: docs\n'),
+                            ('boss', 'mode: controller\nrun: session\n'), ('plain', '')):
+            with open(os.path.join(roles, name + '.md'), 'w') as f:
+                f.write(head % name + extra + '---\nbody\n')
+        got = {r.name: (r.group, r.run) for r in content.roster(top)}
+        self.assertEqual(got, {'boss': ('lead', 'session'), 'maker': ('builder', None),
+                               'plain': (None, None), 'scribe': ('docs', None)})
 
     def test_every_design_row_and_backlog_verb_is_present(self):
         self.assertEqual(set(R.ACTIONS), set(DESIGN))
