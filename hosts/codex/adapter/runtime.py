@@ -11,9 +11,9 @@ This adapter does not expose process/spawn, shellCommand, stdin writes or permis
                         PM_KIT_HOST codex; refused without an enabled Windows sandbox backend
   evaluate_bound(event, binding)   the guard on a command the broker runs for a binding: the
                         payload parsed as a hook's (events.parse), held by Codex's screen and
-                        kitlib.guard with the BOUND role, and as a subagent when the binding is a
-                        native child (its identity is native metadata the broker verified, not a
-                        hook payload's); None for an allow, else Codex's deny JSON
+                        kitlib.guard as an agent of the BOUND role (its identity is native metadata
+                        the broker verified, not a hook payload's), the role policy on for it
+                        whatever .kit.json says (PolicyOn); None for an allow, else Codex's deny JSON
   KitOperationExecutor, BoundKitHost, KitToolBroker   run one kit tool for a fresh-checked binding
   RuntimeAppServer      an owned app-server connection
 """
@@ -68,10 +68,52 @@ def _deny(reason):
                                    'permissionDecisionReason': reason}}
 
 
+class PolicyOn(object):
+    """A guard Ctx whose every .kit.json turns the role policy on (guard.role_policy true), and a
+    checkout with none reads as one that does: the broker holds its bound role to the role policy
+    whatever the repository chose for its hooks. The rest is the base Ctx's."""
+
+    def __init__(self, base):
+        self._base = base
+
+    def __getattr__(self, name):
+        return getattr(self._base, name)
+
+    def _view(self, value, path):
+        if value is None:
+            from kitlib.config import Config
+            value = Config(self._base.place(path).top or path, 'the Codex broker\'s default view', {}, {}, found=False)
+        return _PolicyConfig(value)
+
+    def config(self, path):
+        return self._view(self._base.config(path), path)
+
+    def config_at(self, top):
+        return self._view(self._base.config_at(top), top)
+
+
+class _PolicyConfig(object):
+    def __init__(self, config):
+        self._config = config
+
+    def __getattr__(self, name):
+        return getattr(self._config, name)
+
+    def section(self, name):
+        value = self._config.section(name)
+        if name == 'guard':
+            value = copy.deepcopy(value)
+            value['role_policy'] = True
+        return value
+
+
 def evaluate_bound(event, binding, ctx=None, profile=None, environ=None):
-    """In-process broker guard. Only the freshly resolved native binding supplies the role."""
+    """In-process broker guard. Only the freshly resolved native binding supplies the role: every
+    Action is judged as an agent of the bound role (agent the binding's thread, root or child), with
+    the role policy on for it (PolicyOn)."""
     try:
         from kitlib import guard
+        from kitlib.guard import context
         from kitlib.host import registry
         from . import events, policy
         if binding.role not in catalog():
@@ -81,14 +123,14 @@ def evaluate_bound(event, binding, ctx=None, profile=None, environ=None):
         if os.path.normcase(os.path.realpath(event['cwd'])) != os.path.normcase(os.path.realpath(binding.cwd)):
             raise ValueError('runtime guard checkout differs from the resolved binding')
         parsed = events.parse('PreToolUse', event)
-        child = binding.parent is not None
         env = dict(os.environ if environ is None else environ, **{ROLE_ENV: binding.role})
+        base = ctx or context.Ctx(environ=env, profile=lambda: registry.host(HOST).profile)
+        held = PolicyOn(base)
         for action in parsed if isinstance(parsed, tuple) else (parsed,):
-            action = replace(action, role=binding.role, agent=binding.thread if child else None,
-                             agent_role=binding.role if child else None)
+            action = replace(action, role=binding.role, agent=binding.thread, agent_role=binding.role)
             d = policy.screen(action, env)
             if d is None or d.verdict == 'allow':
-                d = guard.decide(action, ctx, environ=env, profile=lambda: registry.host(HOST).profile)
+                d = guard.decide(action, held)
             if d.verdict != 'allow':        # Codex has no ask: an ask is refused with its reason
                 return _deny(d.reason)
         return None

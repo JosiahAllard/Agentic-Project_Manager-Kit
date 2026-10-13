@@ -311,34 +311,59 @@ class RuntimeLifetime(unittest.TestCase):
 
 
 class BoundGuard(unittest.TestCase):
-    """evaluate_bound: the broker's guard holds the BOUND role (not the inherited PM_KIT_ROLE), and a
-    native child binding as a subagent; the shared role policy decides (tests/guard/test_rolepolicy.py)."""
+    """evaluate_bound: the broker's guard holds the BOUND role (never the inherited PM_KIT_ROLE) as
+    an agent of that role, root or child, with the role policy on for it whatever .kit.json says:
+    the World's .kit.json here leaves guard.role_policy unset (ported from the source's
+    test_bound_guard_*, test_reader_lander_and_test_roles_cannot_patch_files and
+    test_test_and_lander_shell_writes_are_denied)."""
 
     def setUp(self):
         from tests.guard.world import World
         from tests.guard.test_rolepolicy import kit
-        self.w = World(kit=kit({}))
+        self.w = World(kit=kit({}, on=None))
         self.addCleanup(self.w.cleanup)
 
-    def judge(self, role, path, child=False, cwd=None):
+    def run_bound(self, role, event, child=False, cwd=None):
         from hosts.codex.adapter.runtime import evaluate_bound
         from kitlib import kitroot
         binding = SimpleNamespace(role=role, cwd=cwd or self.w.wt, parent='parent' if child else None, thread='t')
-        event = {'hook_event_name': 'PreToolUse', 'cwd': binding.cwd, 'tool_name': 'apply_patch',
-                 'tool_input': {'command': '*** Begin Patch\n*** Add File: %s\n+x\n*** End Patch' % path}}
+        event = dict(event, hook_event_name='PreToolUse', cwd=binding.cwd)
         with mock.patch.dict(os.environ, {'PM_KIT_ROLE': 'worker'}):
             out = evaluate_bound(event, binding, ctx=self.w.ctx(kit=kitroot.root()))
         return out and out['hookSpecificOutput']['permissionDecisionReason']
 
-    def test_the_bound_role_decides_not_the_inherited_mark(self):
+    def judge(self, role, path, child=False, cwd=None):
+        return self.run_bound(role, {'tool_name': 'apply_patch', 'tool_input': {
+            'command': '*** Begin Patch\n*** Add File: %s\n+x\n*** End Patch' % path}}, child, cwd)
+
+    def shell(self, role, command, cwd=None, **data):
+        return self.run_bound(role, {'tool_name': 'PowerShell', 'tool_input': dict(data, command=command)}, cwd=cwd)
+
+    def test_bound_guard_ignores_the_inherited_role(self):
         self.assertIsNone(self.judge('worker', 'a.py'))
         self.assertIn('rule=role-edit', self.judge('reviewer', 'a.py'))
 
-    def test_a_native_child_is_held_as_a_subagent(self):
-        target = os.path.join(self.w.main, 'a.py')
-        self.assertIn('rule=main-checkout', self.judge('worker', target, child=True))
+    def test_reader_lander_and_test_roles_cannot_patch_files(self):
+        for role in ('reviewer', 'lander', 'test-runner'):
+            with self.subTest(role=role):
+                self.assertIn('rule=role-edit', self.judge(role, 'worker.py'))
 
-    def test_a_spoofed_checkout_is_refused(self):
+    def test_test_and_lander_shell_writes_are_denied(self):
+        self.assertIsNotNone(self.shell('test-runner', 'Set-Content -LiteralPath a.txt -Value changed'))
+        self.assertIsNotNone(self.shell('lander', 'Set-Content -LiteralPath a.txt -Value changed', cwd=self.w.main))
+        self.assertIsNone(self.shell('worker', 'Set-Content -LiteralPath a.txt -Value changed'))
+
+    def test_bound_guard_holds_root_and_child_off_main(self):
+        target = os.path.join(self.w.main, 'a.py')
+        for child in (False, True):
+            with self.subTest(child=child):
+                self.assertIn('rule=main-checkout', self.judge('worker', target, child=child))
+
+    def test_bound_guard_role_policy_checks_run_with_the_policy_off(self):
+        self.assertIn('rule=role-shell', self.shell('worker', 'powershell.exe'))
+        self.assertIn('rule=role-workdir', self.shell('worker', 'Get-Location', workdir=self.w.plain))
+
+    def test_bound_guard_refuses_a_spoofed_checkout(self):
         from hosts.codex.adapter.runtime import evaluate_bound
         binding = SimpleNamespace(role='worker', cwd=self.w.wt, parent=None, thread='t')
         out = evaluate_bound({'hook_event_name': 'PreToolUse', 'cwd': self.w.main, 'tool_name': 'Read',
