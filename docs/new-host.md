@@ -60,7 +60,12 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   (with `command` and `shell`, plus `workdir` or `background` if the host has them), `mcp` (the
   full tool name) or `other`. Start events become `session_start` or `subagent_start`. A
   subagent's identity goes in `agent`, and its bare role in `agent_role`. A payload of the wrong
-  shape raises, and the hook then denies it.
+  shape raises, and the hook then denies it. A call that acts on several targets (Codex's
+  `apply_patch` adds, deletes and renames files in one call) returns a tuple of Actions, one per
+  target: `hookmain` judges each and the first deny decides. An empty tuple is denied.
+- `screen(action, environ)` (optional): the host's own policy over one Action, a `Decision` or
+  `None`. It runs before the guard; its deny stands alone. Use it only for what is true of this
+  host and no other (Codex: a shell command that runs `apply_patch`, a tool outside its allowlist).
 - `agent(payload)` (optional): the subagent id alone. A deny for a payload that `parse` refused
   still gets the right role tag.
 - `render(event_name, decision) -> (stdout, exit code)`. Use the host's own deny form. An allow
@@ -91,7 +96,8 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
 Recorded payloads go in `tests/host/<name>/payloads.json`, in the shape the conformance module
 describes:
 - `events`: each hook event mapped to `tool`, `session_start` or `subagent_start`
-- `cases`: a payload and the whole `Action` it parses into
+- `cases`: a payload and the whole `Action` it parses into (`actions`, a list, for a call with
+  several targets)
 - `malformed`: payloads that `parse` must refuse
 - `render`: exact outputs for a few decisions
 
@@ -109,6 +115,7 @@ tool call and a main-session call.
 The suite checks:
 - the registry entry, and the adapter `tools/_host.py` imports
 - parse for every case, and subagent identity only where it is declared
+- a several-target call denied when any one target is
 - render of allow, deny and ask, and the ask lowered through `hookmain.run`
 - fail-closed denies
 - the kit header at each start event

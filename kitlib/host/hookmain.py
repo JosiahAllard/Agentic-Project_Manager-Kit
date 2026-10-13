@@ -27,11 +27,16 @@ every host's hook needs besides its own parse and render lives here once:
         a settings.json hooks entry in exec form (no shell). Claude's --settings-entry prints it,
         and kitlib.machinesetup installs what that prints.
 
-The adapter is kitlib.host.HostAdapter; run() also reads two optional attributes:
-`capabilities` (HostCapabilities: a verdict the host cannot show is lowered by kitlib.host.degrade)
-and `agent(payload)` (the subagent a payload names, read even when parse refuses it, so a
-guard-error deny still carries the right role tag). Only the standard library and kitlib.host are
-imported at the top: the guard is imported inside run(), so its failure to import is a deny too.
+The adapter is kitlib.host.HostAdapter. Its parse may return one Action or a tuple of them, for a
+host whose one tool call acts on several targets (one patch that adds, deletes and renames files):
+each is judged, and the first deny decides, else the first ask, else allow. An empty tuple is
+refused (fail closed). run() also reads three optional attributes:
+`capabilities` (HostCapabilities: a verdict the host cannot show is lowered by kitlib.host.degrade),
+`agent(payload)` (the subagent a payload names, read even when parse refuses it, so a guard-error
+deny still carries the right role tag) and `screen(action, environ)` (the host's own policy, a
+Decision or None, judged before kitlib.guard.decide for each Action; a deny or an ask from it
+stands without the guard). Only the standard library and kitlib.host are imported at the top: the
+guard is imported inside run(), so its failure to import is a deny too.
 """
 import json
 import os
@@ -55,6 +60,8 @@ def failure(e, role, entry):
 
 
 def _role(adapter, payload, action):
+    if isinstance(action, tuple):
+        action = action[0] if action else None
     agent = action.agent if action is not None else None
     if action is None and hasattr(adapter, 'agent'):
         try:
@@ -84,6 +91,24 @@ def _decide(guard, action, environ, profile, deadline):
     return box['d']
 
 
+def _judge(adapter, guard, actions, environ, deadline):
+    """The Decision on every Action of one call: the host's screen, then the guard, for each; the
+    first deny decides, else the first ask, else allow. None when the guard was still deciding at
+    the deadline."""
+    screen = getattr(adapter, 'screen', None)
+    found = []
+    for action in actions:
+        d = screen(action, environ) if screen is not None else None
+        if d is None or d.verdict == 'allow':
+            d = _decide(guard, action, environ, lambda: adapter.profile, deadline)
+            if d is None:
+                return None
+        if d.verdict == 'deny':
+            return d
+        found.append(d)
+    return next((d for d in found if d.verdict == 'ask'), found[0])
+
+
 def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=None):
     environ = os.environ if environ is None else environ
     entry = (entry or sys.argv[0] or 'hook').replace(os.sep, '/')
@@ -91,8 +116,11 @@ def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=N
     try:
         payload = json.loads(stdin.read() or '{}')
         action = adapter.parse(event_name, payload)
+        actions = action if isinstance(action, tuple) else (action,)
+        if not actions:
+            raise ValueError('the payload parsed into no action')
         from kitlib import guard
-        decision = _decide(guard, action, environ, lambda: adapter.profile, deadline)
+        decision = _judge(adapter, guard, actions, environ, deadline)
         if decision is None:                    # still deciding at the deadline
             role = _role(adapter, payload, action)
             decision = Decision('deny', TIMEOUT, 'The kit guard did not decide within %s s, so it cannot clear '

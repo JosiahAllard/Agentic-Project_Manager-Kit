@@ -119,6 +119,62 @@ class Run(unittest.TestCase):
                 hookmain.run(FakeAdapter(), 'PreToolUse', io.StringIO('{}'), Closed(), environ={}, entry='h')
 
 
+class Several(unittest.TestCase):
+    """A call parsed into several Actions (one patch over several files): each is judged."""
+
+    class Multi(FakeAdapter):
+        def __init__(self, paths, screen=None, **kw):
+            super().__init__(**kw)
+            self.paths, self._screen = paths, screen
+
+        def parse(self, event_name, payload):
+            return tuple(Action('edit', path=p) for p in self.paths)
+
+        def screen(self, action, environ):
+            return self._screen(action) if self._screen else None
+
+    def by_path(self, verdicts):
+        seen = []
+
+        def decide(action, ctx=None, environ=None, profile=None):
+            seen.append(action.path)
+            v = verdicts.get(action.path, 'allow')
+            return Decision(v, 'r-' + action.path, 'about ' + action.path)
+        return decide, seen
+
+    def test_every_action_is_judged_and_all_allowed_allows(self):
+        decide, seen = self.by_path({})
+        self.assertEqual(run(self.Multi(('a', 'b', 'c')), {}, decide), (0, ''))
+        self.assertEqual(seen, ['a', 'b', 'c'])
+
+    def test_any_deny_denies_and_stops(self):
+        decide, seen = self.by_path({'b': 'deny', 'c': 'deny'})
+        a = self.Multi(('a', 'b', 'c'))
+        self.assertEqual(run(a, {}, decide), (3, 'deny r-b\n'))
+        self.assertEqual(seen, ['a', 'b'])
+
+    def test_a_deny_outranks_an_earlier_ask(self):
+        decide, _ = self.by_path({'a': 'ask', 'b': 'deny'})
+        self.assertEqual(run(self.Multi(('a', 'b')), {}, decide), (3, 'deny r-b\n'))
+        decide, _ = self.by_path({'b': 'ask'})
+        self.assertEqual(run(self.Multi(('a', 'b')), {}, decide), (0, 'ask r-b\n'))
+        self.assertEqual(run(self.Multi(('a', 'b'), supports_ask=False), {}, decide), (3, 'deny r-b\n'))
+
+    def test_no_action_is_refused(self):
+        a = self.Multi(())
+        self.assertEqual(run(a, {}, lambda *x, **k: Decision('allow')), (3, 'deny guard-error\n'))
+        self.assertIn('no action', a.last.reason)
+
+    def test_the_hosts_screen_judges_before_the_guard(self):
+        decide, seen = self.by_path({})
+        a = self.Multi(('a', 'b'), screen=lambda act: Decision('deny', 'host-rule', 'no') if act.path == 'b' else None)
+        self.assertEqual(run(a, {}, decide), (3, 'deny host-rule\n'))
+        self.assertEqual(seen, ['a'], 'a screened deny never reaches the guard')
+        allow = self.Multi(('a',), screen=lambda act: Decision('allow'))
+        self.assertEqual(run(allow, {}, decide), (0, ''))
+        self.assertEqual(seen, ['a', 'a'], 'a screen allow still meets the guard')
+
+
 class CommandLine(unittest.TestCase):
     def test_the_one_hook_command_line_is_exec_form(self):
         line = hookmain.command_line(os.path.join('k', 'hook.py'))

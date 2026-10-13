@@ -159,7 +159,11 @@ class HostAdapter(Protocol):
     passes the conformance suite (tests/host/conformance.py; docs/new-host.md).
 
     capabilities                 its HostCapabilities (hosts.json), which hookmain degrades by
-    parse(event_name, payload)   the host's hook payload as an Action
+    parse(event_name, payload)   the host's hook payload as an Action, or a non-empty tuple of
+                                 Actions when one call acts on several targets (hookmain judges
+                                 each; any deny decides)
+    screen(action, environ)      optional: the host's own policy over one Action, a Decision or
+                                 None, judged before kitlib.guard (a deny or ask stands alone)
     render(event_name, decision) (stdout text, exit code) the host's hook reads back
     context(event_name, text)    (stdout text, exit code) of a session or subagent start hook that
                                  adds `text` to the agent's context (the kit header); ('', 0) for
@@ -174,7 +178,7 @@ class HostAdapter(Protocol):
     profile: HostProfile
     capabilities: HostCapabilities
 
-    def parse(self, event_name, payload) -> Action: ...
+    def parse(self, event_name, payload): ...
     def render(self, event_name, decision) -> tuple: ...
     def context(self, event_name, text) -> tuple: ...
     def sessions(self) -> SessionHost: ...
