@@ -4,6 +4,7 @@ description: Read-only idea and research agent - new game modes, features and me
 tier: standard
 effort: high
 sandbox: read-only
+mode: read
 capabilities: [read, search, find, web-search, web-fetch, write]
 ---
 

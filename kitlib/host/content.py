@@ -11,6 +11,9 @@ A role file, `content/roles/<name>.md`, is front matter between two `---` lines,
   sandbox: workspace-write           read-only | workspace-write
   capabilities: [read, edit, bash]   the tools the role gets, in order, or `all` for no list
   cache: long                        optional: the role asks for the host's long prompt cache
+  mode: write                        optional: the role policy it is held to (MODES; docs/guard.md
+                                     "Role policy"), where a repository turns that policy on.
+                                     Read by the guard, never rendered into a host's file
   model.<host>: <model>              optional: that host runs this role on <model>, not the tier's
 
 The body is neutral prose. Values that differ by host are tokens, `{{name}}` or
@@ -31,6 +34,8 @@ TIERS = ('light', 'standard', 'strong', 'deep')
 EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
 SANDBOXES = ('read-only', 'workspace-write')
 CACHES = ('long',)
+# The role-policy modes (kitlib.guard.rolepolicy, which takes them from here).
+MODES = ('controller', 'write', 'read', 'test', 'lander')
 ALL = 'all'
 # The neutral capabilities. A host maps each to its own tool (or tools), keeping this order.
 CAPABILITIES = (
@@ -42,7 +47,7 @@ CAPABILITIES = (
 TOKENS = ('agent', 'profile_path', 'coordinator_profile_path', 'instructions_file', 'kit_root',
           'worktrees_dir')
 REQUIRED = ('name', 'description', 'tier', 'sandbox', 'capabilities')
-OPTIONAL = ('effort', 'cache')
+OPTIONAL = ('effort', 'cache', 'mode')
 MODEL_KEY = 'model.'
 
 _FM = re.compile(r'\A---(\r?\n)(.*?)\r?\n---\r?\n', re.S)
@@ -64,6 +69,7 @@ class Role:
     all_tools: bool              # `capabilities: all`: the host gives every tool, no list
     effort: str = None
     cache: str = None
+    mode: str = None             # the role-policy mode (MODES); a host's file never carries it
     models: tuple = ()           # ((host, model), ...): per-host overrides of the tier's model
     body: str = ''
     newline: str = '\n'          # the role file's line ending; a host's file keeps it
@@ -182,7 +188,8 @@ def parse_role(data, source='role'):
     name = fields['name']
     if not _NAME.match(name):
         raise ContentError('%s: name %r' % (source, name))
-    for key, allowed in (('tier', TIERS), ('sandbox', SANDBOXES), ('effort', EFFORTS), ('cache', CACHES)):
+    for key, allowed in (('tier', TIERS), ('sandbox', SANDBOXES), ('effort', EFFORTS), ('cache', CACHES),
+                         ('mode', MODES)):
         if key in fields and fields[key] not in allowed:
             raise ContentError('%s: %s %r is not one of %s' % (source, key, fields[key], ', '.join(allowed)))
     caps = _list(fields['capabilities'], '%s: capabilities' % source)
@@ -196,7 +203,7 @@ def parse_role(data, source='role'):
         raise ContentError('%s: empty description' % source)
     return Role(name=name, description=description, tier=fields['tier'], sandbox=fields['sandbox'],
                 capabilities=caps or (), all_tools=caps is None, effort=fields.get('effort'),
-                cache=fields.get('cache'), models=tuple(sorted(models.items())),
+                cache=fields.get('cache'), mode=fields.get('mode'), models=tuple(sorted(models.items())),
                 body=text[m.end():], newline=newline)
 
 

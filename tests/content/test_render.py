@@ -66,6 +66,21 @@ class RealContentTest(unittest.TestCase):
             for rel, data in s.files:
                 self.assertEqual(read(os.path.join(KIT_ROOT, 'claude', 'skills', s.name, *rel.split('/'))), data)
 
+    def test_every_role_names_its_policy_mode(self):
+        """The owner's table (docs/guard.md "Role policy"): leads control, builders write, the
+        read-only roles read, the test-runner tests, the lander lands. role_modes reads the same."""
+        want = {'pm': 'controller', 'coordinator': 'controller',
+                'worker': 'write', 'senior-worker': 'write', 'strong-worker': 'write', 'deep-worker': 'write',
+                'asset-smith': 'write', 'sound-smith': 'write', 'tech-artist': 'write', 'spec-writer': 'write',
+                'records': 'write', 'reviewer': 'read', 'researcher': 'read', 'consultant': 'read',
+                'test-runner': 'test', 'lander': 'lander'}
+        self.assertEqual({r.name: r.mode for r in content.load(KIT_ROOT).roles}, want)
+        self.assertEqual(content.role_modes(KIT_ROOT), want)
+        self.assertEqual(content.role_mode('opus-worker', KIT_ROOT), 'write')
+        for r in content.load(KIT_ROOT).roles:
+            with self.subTest(r.name):
+                self.assertNotIn(b'\nmode:', read(os.path.join(KIT_ROOT, 'claude', 'agents', r.name + '.md')))
+
     def test_role_bodies_name_no_claude_value_a_token_covers(self):
         """The values in claude.adapter.content.TOKENS reach the agent files only through tokens."""
         for r in content.load(KIT_ROOT).roles:
@@ -108,6 +123,15 @@ class ParseTest(unittest.TestCase):
                 with self.assertRaises(hc.ContentError):
                     hc.parse_role(ROLE.replace(old, new, 1))
 
+    def test_a_mode(self):
+        self.assertIsNone(hc.parse_role(ROLE).mode)
+        for m in hc.MODES:
+            with self.subTest(m):
+                self.assertEqual(hc.parse_role(ROLE.replace(b'effort: low\n', b'effort: low\nmode: %s\n' % m.encode())).mode, m)
+        for bad in (b'mode: admin\n', b'mode: write\nmode: read\n', b'mode: \n'):
+            with self.subTest(bad=bad), self.assertRaises(hc.ContentError):
+                hc.parse_role(ROLE.replace(b'effort: low\n', b'effort: low\n' + bad))
+
     def test_quote_round_trip(self):
         for v in ('plain words', 'a: b', 'x #y', '"quoted"', 'back\\slash: x', '`tick` start'):
             with self.subTest(v=v):
@@ -142,6 +166,12 @@ class ClaudeRendererTest(unittest.TestCase):
                          b'Read .claude/agent-profile.md and CLAUDE.md; docs at ${CLAUDE_PLUGIN_ROOT}/docs.\n')
         self.assertEqual(got['claude/agents/beta.md'],
                          b'---\nname: beta\ndescription: "Two: parts"\nmodel: opus\n---\nbody\n')
+
+    def test_a_mode_is_never_rendered(self):
+        plain = claude_content.renderer().render(self.content(ROLE, BETA))
+        moded = claude_content.renderer().render(self.content(
+            ROLE.replace(b'effort: low\n', b'effort: low\nmode: write\n'), BETA.replace(b'tier: deep\n', b'tier: deep\nmode: read\n')))
+        self.assertEqual(moded, plain)
 
     def test_long_cache_and_crlf(self):
         role = BETA.replace(b'capabilities: all\n', b'capabilities: all\ncache: long\n').replace(b'\n', b'\r\n')

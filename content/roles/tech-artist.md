@@ -4,6 +4,7 @@ description: Art that is code - shaders, materials, palettes and UI themes, proc
 tier: strong
 effort: high
 sandbox: workspace-write
+mode: write
 capabilities: [read, edit, write, search, find, bash, powershell, worktree, artifact, dispatch]
 ---
 

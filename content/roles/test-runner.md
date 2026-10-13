@@ -3,6 +3,7 @@ name: test-runner
 description: Runs a repository's test tiers in a given worktree and reports only PASS/FAIL plus failing lines. Use this instead of running the build and tests yourself whenever you just need a green/red answer - it keeps verbose output out of your context. Must be told explicitly which worktree to test in, which tier(s) to run, and (for anything networked) which ports to use; it has no memory of any workstream and will ask rather than guess if this is missing. Repository specifics come from `{{profile_path}}`.
 tier: light
 sandbox: workspace-write
+mode: test
 capabilities: [bash, powershell, worktree, search, read, find]
 ---
 

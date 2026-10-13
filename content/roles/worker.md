@@ -4,6 +4,7 @@ description: The default coding agent for routine, low- and medium-risk work - a
 tier: standard
 effort: medium
 sandbox: workspace-write
+mode: write
 capabilities: all
 ---
 

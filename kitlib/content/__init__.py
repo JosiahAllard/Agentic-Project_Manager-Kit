@@ -8,14 +8,23 @@ differs, one that is missing, and one in a folder a renderer owns that it no lon
 
 The renderers are passed in: this package names no host and imports none (the host is chosen at
 the edge, tools/render_content.py). Pure file work: no printing, no exit.
+
+`role_modes(kit)` is {role: mode} from the role files under the kit root `kit`, for the guard's
+role policy (docs/guard.md "Role policy"); `role_mode(name, kit)` one role's, an old name
+(ALIASES) read as its new one. Read once per kit root and cached. It never raises: no
+`content/roles` folder gives {}, and a role file that cannot be read or parsed is left out, so
+the policy is off for that role rather than the guard failing.
 """
 import os
 
-from kitlib.host.content import Content, ContentError, Skill, parse_role
+from kitlib.host.content import MODES, Content, ContentError, Skill, parse_role
 
 ROLES_REL = 'content/roles'
 SKILLS_REL = 'content/skills'
 SKIP_DIRS = ('__pycache__',)
+# a role's old name -> its name now, for one release (docs/ROSTER.md; the launcher's AGENT_ALIASES)
+ALIASES = {'opus-worker': 'senior-worker'}
+_MODES = {}
 
 
 def _join(root, rel):
@@ -64,6 +73,40 @@ def load_skills(root):
             raise ContentError('%s/%s: no SKILL.md' % (SKILLS_REL, n))
         skills.append(Skill(name=n, files=tuple(files)))
     return tuple(skills)
+
+
+def role_modes(kit):
+    """{role name: mode} of every role file under `<kit>/content/roles` that names a mode (cached
+    per `kit`); {} when the folder is missing. A file that does not parse is left out."""
+    key = os.path.normcase(os.path.abspath(kit))
+    if key in _MODES:
+        return dict(_MODES[key])
+    folder = _join(kit, ROLES_REL)
+    out = {}
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        names = []
+    for n in names:
+        if not n.endswith('.md'):
+            continue
+        try:
+            with open(os.path.join(folder, n), 'rb') as f:
+                role = parse_role(f.read(), '%s/%s' % (ROLES_REL, n))
+        except (OSError, ContentError):
+            continue
+        if role.name == n[:-3] and role.mode in MODES:
+            out[role.name] = role.mode
+    _MODES[key] = out
+    return dict(out)
+
+
+def role_mode(name, kit):
+    """The mode role `name` (or the role an old name in ALIASES became) has in its role file under
+    `kit`, or None."""
+    if not isinstance(name, str):
+        return None
+    return role_modes(kit).get(ALIASES.get(name, name))
 
 
 def load(root):

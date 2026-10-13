@@ -4,6 +4,7 @@ description: NEVER dispatch with the Agent tool. consultant is its own long-live
 tier: deep
 effort: high
 sandbox: read-only
+mode: read
 capabilities: all
 ---
 

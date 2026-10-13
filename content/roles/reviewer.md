@@ -4,6 +4,7 @@ description: Read-only code reviewer for one branch. Given the brief the author 
 tier: standard
 effort: high
 sandbox: read-only
+mode: read
 capabilities: [read, search, find, bash]
 ---
 

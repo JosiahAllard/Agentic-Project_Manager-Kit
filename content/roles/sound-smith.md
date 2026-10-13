@@ -4,6 +4,7 @@ description: Builds and upgrades game sound effects from procedural synthesis, a
 tier: standard
 effort: medium
 sandbox: workspace-write
+mode: write
 capabilities: [read, edit, write, search, find, bash, powershell, worktree, artifact, dispatch]
 ---
 

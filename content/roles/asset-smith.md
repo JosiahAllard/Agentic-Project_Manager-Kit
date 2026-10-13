@@ -4,6 +4,7 @@ description: Builds 3D assets as Blender Python scripts - the script is the asse
 tier: strong
 effort: high
 sandbox: workspace-write
+mode: write
 capabilities: [read, edit, write, search, find, bash, powershell, worktree, artifact, dispatch]
 ---
 
