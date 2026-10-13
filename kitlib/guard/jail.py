@@ -184,10 +184,11 @@ def judge(target, rs):
 
 
 def destination(rs):
-    """Where the alternative aims: the session's own checkout, else the temp folder."""
+    """Where the alternative aims: the session's own checkout, else the temp folder; never one a
+    read-only or add-only root holds (a role whose checkout is read-only is pointed at temp)."""
     for kind in (CHECKOUT, TEMP):
         for r in rs:
-            if r.kind == kind:
+            if r.kind == kind and judge(r.path, rs)[0] is None:
                 return r
     return None
 
