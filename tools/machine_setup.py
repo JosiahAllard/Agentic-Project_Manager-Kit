@@ -18,8 +18,8 @@ It writes nothing into any repository: a repository works with the kit with noth
   machine-wide options: --config-dir DIR (repeatable; default: the plugin's account folders, ~/.claude,
                              every ~/.claude-* folder but the machine config's own and each folder
                              of the launcher's accounts and orgs; with --old-kit, the first two)
-           --owner-email EMAIL (default: the machine config's, else `git config user.email`, shown
-                             in the dry run to confirm; with neither, --apply in a console asks)
+           --owner-email EMAIL (default: the machine config's; with none, --apply in a console asks,
+                             offering `git config user.email`, which is never stored unconfirmed)
            --pm-settings FILE (default mode only: the settings file the PM session loads, for its
                              SessionStart hook)
            --agent-temp DIR (default: the machine config's agent_temp_sweep.dir, then the user
@@ -120,7 +120,7 @@ def main(argv=None):
                                pm_settings=a.pm_settings, register_sweep_task=a.register_sweep_task,
                                owner_email=a.owner_email, shortcut=True if a.shortcut else None)
     if a.apply and not ctx.owner_email and interactive() and mowner.needs_prompt(ctx):
-        ctx.owner_email = ask_owner_email()
+        ctx.owner_email = ask_owner_email(mowner.suggestion(ctx))
     code, _ = machinesetup.run(ctx, apply=a.apply, out=out)
     return code
 
@@ -132,12 +132,22 @@ def interactive():
         return False
 
 
-def ask_owner_email():
-    """The owner's email typed at the console, or None when the answer is empty or not an email
-    (the run then notes that none is stored)."""
+def ask_owner_email(offered=None):
+    """The owner's email typed at the console, or `offered` (git config user.email) when the owner
+    answers y to it; None when the answer is empty, no, or not an email (the run then notes that
+    none is stored)."""
     try:
-        typed = input('The email your own commits are authored with (owner-only changes are proven by '
-                      'it; empty to skip): ').strip()
+        if offered:
+            typed = input('Is %s the email your own commits are authored with? Owner-only changes are '
+                          'proven by it. y to store it, another address to store that, empty to skip: '
+                          % offered).strip()
+            if typed.lower() in ('y', 'yes'):
+                return offered
+            if typed.lower() in ('n', 'no'):
+                return None
+        else:
+            typed = input('The email your own commits are authored with (owner-only changes are proven by '
+                          'it; empty to skip): ').strip()
     except EOFError:
         return None
     if typed and mowner.valid(typed):

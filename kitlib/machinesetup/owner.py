@@ -7,10 +7,11 @@ Where the email comes from, in order:
   - `owner_email` (--owner-email): set when the machine config holds another value or none; the
     plan names the value it replaces;
   - the machine config's own value: kept, nothing to do;
-  - `git config user.email`, read in the kit checkout (Host.git_email): planned, and the dry run
-    asks the owner to confirm it is the address their own commits are authored with, or to name
-    another with --owner-email. It is never taken from a repository's own setting alone: the kit
-    checkout's config reads the user's global one;
+  - `git config user.email`, read in the kit checkout (Host.git_email): only suggested, never
+    stored on its own. The note names it and asks the owner to confirm it with --owner-email, and
+    tools/machine_setup.py offers it as the answer to its console question on --apply (needs_prompt,
+    suggestion), so it is stored only when the owner gives it: a git identity can be any address,
+    an agent's among them;
   - none: a note. tools/machine_setup.py asks for it on --apply when it runs in a console
     (needs_prompt).
 The write goes through kitlib.machinesetup.machineconfig (the file's other keys and layout kept).
@@ -53,10 +54,17 @@ def found(ctx):
 
 
 def needs_prompt(ctx):
-    """True when the run has no email to store: none given, none stored, none in git config, and
-    the machine config can be read. tools/machine_setup.py then asks for one."""
+    """True when the run has no email to store: none given, none stored, and the machine config
+    can be read. tools/machine_setup.py then asks for one (offering suggestion())."""
     have, err = stored(ctx.home)
-    return not err and not have and not getattr(ctx, 'owner_email', None) and not found(ctx)
+    return not err and not have and not getattr(ctx, 'owner_email', None)
+
+
+def suggestion(ctx):
+    """`git config user.email` when it is an email address, else None: what the console question
+    offers. It is stored only when the owner confirms it."""
+    value = found(ctx)
+    return value if value and not valid(value) else None
 
 
 def survey(plan, ctx):
@@ -76,18 +84,21 @@ def survey(plan, ctx):
     elif have:
         return
     else:
-        given = found(ctx)
-        if not given or valid(given):
-            plan.note(SECTION, 'no owner email: none in the machine config and %s; pass --owner-email '
-                               '<the email your own commits are authored with> (--apply in a console asks '
-                               'for it). Until it is set, every owner-only path refuses every edit (docs/'
-                               'kit-json.md "With no file")'
-                      % ('git config user.email is not an email address (%r)' % given if given
-                         else 'git config user.email is unset'))
+        git = found(ctx)
+        if git and not valid(git):
+            plan.note(SECTION, 'no owner email stored: git config user.email is %s. If that is the email '
+                               'your own commits are authored with, confirm it: pass --owner-email %s (or '
+                               'answer the question --apply asks in a console). It is not stored unconfirmed: '
+                               'owner-only changes are proven by it. Until one is set, every owner-only path '
+                               'refuses every edit (docs/kit-json.md "With no file")' % (git, git))
             return
-        source = 'git config user.email'
-        plan.note(SECTION, 'confirm %s is the email your own commits are authored with: owner-only '
-                           'changes are proven by it. Another address: pass --owner-email' % given)
+        plan.note(SECTION, 'no owner email: none in the machine config and %s; pass --owner-email '
+                           '<the email your own commits are authored with> (--apply in a console asks '
+                           'for it). Until it is set, every owner-only path refuses every edit (docs/'
+                           'kit-json.md "With no file")'
+                  % ('git config user.email is not an email address (%r)' % git if git
+                     else 'git config user.email is unset'))
+        return
     snap, why = machineconfig.snapshot(ctx)
     if snap is None:
         plan.refuse('cannot write %s to the machine config: %s' % (KEY, why))

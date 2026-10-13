@@ -69,15 +69,19 @@ class Survey(OwnerCase):
         self.assertEqual(kuser.owner_email(self.home), OWNER)
         self.assertEqual(self.plan(self.ctx(given=OWNER.upper())).changes, [])   # stored: nothing to do
 
-    def test_git_config_is_planned_with_a_note_to_confirm_it(self):
+    def test_git_config_is_only_suggested_never_stored_unconfirmed(self):
+        """A git identity can be any address, an agent's among them: --apply does not store it on
+        its own. The note names it and how to confirm it; the console question offers it."""
         ctx = self.ctx(found=OWNER)
         plan = self.plan(ctx)
-        self.assertEqual(len(plan.changes), 1)
-        self.assertIn('from git config user.email', plan.changes[0].text)
-        self.assertTrue(any('confirm %s is the email your own commits' % OWNER in n for n in plan.notes['owner']))
+        self.assertEqual((plan.changes, plan.refusals), ([], []))
+        self.assertTrue(any('git config user.email is %s' % OWNER in n and '--owner-email %s' % OWNER in n
+                            and 'not stored unconfirmed' in n for n in plan.notes['owner']), plan.lines())
         self.assertEqual(ctx.host.asked, [self.kit])
-        self.apply(plan)
-        self.assertEqual(kuser.owner_email(self.home), OWNER)
+        self.assertTrue(owner.needs_prompt(ctx))
+        self.assertEqual(owner.suggestion(ctx), OWNER)
+        self.assertIsNone(owner.suggestion(self.ctx(found='not-an-email')))
+        self.assertFalse(os.path.exists(kuser.config_file(self.home)))
 
     def test_a_stored_one_is_kept_and_git_config_not_asked(self):
         self.config({'owner_email': OWNER})
@@ -159,6 +163,25 @@ class Hosts(unittest.TestCase):
         self.assertEqual(plan.notes['plugin'], [
             'codex: not installed. Machine setup installs no plugin for this host yet: its files are '
             'review templates, not installed (hosts/codex/README.md)'])
+
+
+class Prompt(unittest.TestCase):
+    """tools/machine_setup.py's console question: git config user.email is offered, and stored only
+    on a yes or when typed."""
+
+    def ask(self, answer, offered=OWNER):
+        from tools import machine_setup
+        with mock.patch('builtins.input', lambda prompt: answer), mock.patch('builtins.print'):
+            return machine_setup.ask_owner_email(offered)
+
+    def test_the_offered_email_needs_a_yes(self):
+        self.assertEqual(self.ask('y'), OWNER)
+        self.assertEqual(self.ask('YES'), OWNER)
+        self.assertIsNone(self.ask(''))
+        self.assertIsNone(self.ask('n'))
+        self.assertEqual(self.ask('other@example.invalid'), 'other@example.invalid')
+        self.assertIsNone(self.ask('y', offered=None))               # no offer: y is no address
+        self.assertIsNone(self.ask('not-an-email'))
 
 
 class Modes(unittest.TestCase):
