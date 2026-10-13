@@ -49,12 +49,14 @@ There is no standing landing approval here: each landing needs the owner's go fo
 relayed by the coordinator or project manager with the reviewer's verdict. Missing either: do not
 land; say what is missing. From the main checkout, on the main branch:
 `python <kit>/tools/gate.py land <branch> --expect-tip <sha> -C <repo>` (with `--submit` it queues the
-landing and prints the `gate.py wait-result` command to wait with).
-It queues, locks, merges, gates the merged tree, pushes and verifies (`<kit>/docs/gate.md`
-"Landing"). Success: a `LANDED ` line and exit 0, or exit 9 (landed, but commits on top were not
-gated: run the full gate on main and report). Any other verdict line (`NOT LANDED:`, `STUCK:`,
-`REFUSED:`, `BUSY:`) is reported as it is, with the doc's recovery steps, and not retried. No
-batches.
+landing and prints the `gate.py wait-result ... -C <repo>` command to wait with; its `RESULT` line
+carries the same verdict line).
+It queues, locks, merges onto the main it finds, gates the merged tree, pushes and verifies
+(`<kit>/docs/gate.md` "Landing"). Success: a `LANDED ` line and exit 0, or exit 9 (landed, but
+commits on top were not gated: run the full gate on main and report). A conflict is
+`CONFLICT <branch> with main <sha>: the author merges main`: nothing changed, the branch goes back
+to its author. Any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`, `NOT RUN:`)
+is reported as it is, with the doc's recovery steps, and not retried. No batches.
 
 ## Shared resources that must be serialised
 The machine lock (skill machine-lock-run): the gate takes it itself; other heavy work runs inside

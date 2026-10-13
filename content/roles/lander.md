@@ -61,15 +61,18 @@ Missing any: say what you need, do nothing.
    A detached process lands it: it waits as one entry in the machine-lock queue (landings go
    ahead of ordinary runs), merges the main it finds with `--no-ff`, gates the merged tree,
    pushes, verifies with `ls-remote`, and undoes the merge on red. The call prints one
-   `SUBMITTED ... wait: ...` line and exits 0. Start the `gate.py wait-result ... --kind land`
-   command it prints, as it prints it, with `run_in_background`, and wait for the task
+   `SUBMITTED ... wait: ...` line and exits 0. Start the
+   `gate.py wait-result ... --kind land -C <main checkout>` command it prints, as it prints it, with `run_in_background`, and wait for the task
    notification, never a polling loop (the classifier denies it); no Monitor either
    (<kit>/docs/gate.md "Waiting on a gate: who arms what"). `python <kit>/tools/land.py -C <main checkout> --queue`
    shows who holds and who waits. Never pass anything to jump the queue, and never
    break a landing lock: STUCK -> stop and report its lines. Do not truncate native output
    through a pipe - in PowerShell, `Select-Object -First` fakes a non-zero exit code.
-6. Verify, whatever verdict the wait returned (OK, CONFLICT, FAILED, REFUSED, STUCK, or
-   LANDED_UNGATED: landed, but main was not gated whole; report its `WARNING:` line verbatim).
+6. The wait prints `RESULT <verdict> land <branch> at <tip>: <line> (<log>)`: `pass`
+   (`LANDED ...`); `landed-ungated` (`LANDED ...`, but main was not gated whole; report the
+   log's `WARNING:` line verbatim); `fail` with `CONFLICT <branch> with main <sha>: the author
+   merges main` or with `NOT LANDED: ...`; `refused`, `busy`, `not-run`, `usage`; `stuck`;
+   `error`. Verify, whatever the verdict.
    At minimum: main and its remote match, and the branch tip is an ancestor of the remote main.
    Keep verification read-only and on its own: `git ls-remote origin <main>` plus
    one `git merge-base --is-ancestor`, never chained with anything that changes a
