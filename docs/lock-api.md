@@ -123,6 +123,10 @@ A held run can hand back cpu slots its command no longer needs, while the comman
 - The installed `machine_lock.py` reads a shrunk record and entry as any other. The request file is not a `.json`, so neither tool reads it as a run record; `Store.live_runs(prune=True)` removes an orphaned one.
 - The history line keeps `given_back`.
 
+## Console windows
+
+A run booked by `book()` (`machine_lock.py run`, a gate, a `slot()`) watches for console windows from its first command's start to its release (`kitlib/lock/run.py` `Slot.start`; `Slot.watch_stop`, which the release calls before it ends the job; `kitlib/proc/winwatch.py`). A window is the run's when its program is in the run's job (`Slot.window_owner`, `Job.contains`). The ended record gets `windows` (a list of `at cls how title pid exe host_pid host_exe ours`) when any window was seen, and `windows_error` when the monitor could not run; the history line carries neither (`kitlib/lock/store.py` `Store.HISTORY_KEYS`). `machine_lock.py run` (`run_command`) says the report after the release (`Slot.window_lines`; the lines are in `docs/gate.md` "Console windows"); a gate says it itself; any other run says nothing. A window warns and never changes a run's exit code. `WATCH_WINDOWS = False` in `kitlib/lock/run.py` turns the monitor off.
+
 ## Exclusive resources
 
 `kitlib/lock/resource.py` keeps a second queue in the same store, `resources.json`, for things one caller holds at a time and that take no slot: a repository's landing (docs/gate.md "The landing queue"). It is not in the snapshot and has no write call here; its callers use the module directly.
