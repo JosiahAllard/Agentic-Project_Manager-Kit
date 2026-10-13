@@ -14,13 +14,23 @@ for that python and ends with its exit code. Nothing here relies on ShowWindow.
 
 `command` builds the argv, `create` asks WMI, `wrapper_pid` finds the python the carrier
 started (the run's wrapper, whose pid the run record holds). Nothing here prints.
+
+`note_carrier_failure` is the carrier's one line when it cannot start its program: under pythonw
+it has no stderr, so without the line a detached run (or a scheduled task) that never started
+would leave nothing behind.
 """
+import datetime
 import json
 import os
 import subprocess
+import tempfile
 import time
 
 from kitlib.proc import process, spawn
+
+INCIDENT_LOG = 'kit-console-incidents.log'  # in the kit's work temp folder (kitlib.config.user.work_temp)
+INCIDENT_LOG_ENV = 'KIT_CONSOLE_INCIDENT_LOG'   # a path that replaces it: the tests' own file
+KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Reads {"cmd", "cwd", "env"} as JSON on stdin; prints "<ReturnValue> <ProcessId>".
 CREATE_PS = ("$d = [Console]::In.ReadToEnd() | ConvertFrom-Json; "
@@ -102,3 +112,36 @@ def wrapper_pid(carrier, wait_s=WRAPPER_WAIT_S, poll_s=WRAPPER_POLL_S, snapshot=
         if clock() >= limit or ctime(carrier) != start:
             return None
         sleep(poll_s)
+
+
+def incident_log(environ=None):
+    """The file `note_carrier_failure` appends to: INCIDENT_LOG_ENV when set, else INCIDENT_LOG in
+    the kit's work temp folder (the system temp folder when that cannot be worked out)."""
+    env = os.environ if environ is None else environ
+    if env.get(INCIDENT_LOG_ENV):
+        return env[INCIDENT_LOG_ENV]
+    try:
+        from kitlib.config import user
+        folder = user.work_temp(KIT)
+    except Exception:       # a broken machine config or no LOCALAPPDATA: still leave the line
+        folder = tempfile.gettempdir()
+    return os.path.join(folder, INCIDENT_LOG)
+
+
+def note_carrier_failure(program, why, path=None, now=None, pid=None):
+    """Append one line to `path` (default `incident_log()`): the time, the carrier's pid, the
+    file name of `program` (never its arguments) and `why`. Returns the path written, or None
+    when it could not be written; never raises: it runs on the carrier's way out."""
+    try:
+        path = path or incident_log()
+        name = str(program).strip().strip('"').replace('/', '\\').split('\\')[-1]
+        line = '%s pid %d %s could not start %s: %s\n' % (
+            (now or datetime.datetime.now()).isoformat(timespec='seconds'),
+            os.getpid() if pid is None else pid, spawn.CARRIER, name or '?',
+            ' '.join(str(why).split()))
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(line)
+        return path
+    except Exception:
+        return None

@@ -110,9 +110,17 @@ console program: a console window opens each time it runs. Its program should be
 the carrier tools\no_window.py as its first argument (docs/daily-full.md "The schedule": ...)". Such
 a task opens a window on the desktop each time it runs (docs/daily-full.md "The schedule"). A kit
 task is one with a name the kit registers (the launcher's sign-in task, `agent-temp-sweep`, a name
-ending `-worktree-sweep` or `-daily-full`) or an action that names the kit's folder or
-`tools\<file>` for a file in the kit's tools folder (`is_kit`). A `pythonw.exe` program is never
-flagged, with or without the carrier. It changes nothing; a failed read (access denied, the time
+ending `-worktree-sweep` or `-daily-full`) or an action with a word (its program, or an argument,
+quoted or not) that is an absolute path inside a kit folder (`is_kit`, `kit_roots`): this kit; the
+live checkout an export runs for (`KIT_LIVE_ROOT`); and, when this kit is a plugin export, the
+folder that holds every export. A file named like a kit tool in another folder, another
+repository's `C:\proj\tools\gate.py`, is not the kit's. A task that names the kit's checkout while
+the session start runs from the plugin export is matched by its name only. A `pythonw.exe` program
+is never flagged, with or without the carrier. `schtasks` writes bytes: UTF-16 output (a byte order
+mark, or NULs) goes to the XML parser as bytes, which reads the declaration itself; single-byte
+output is read in the OEM code page, its declaration dropped unless it names a single-byte encoding,
+since `schtasks /Query /XML` declares `encoding="UTF-16"` over single-byte text on a pipe and
+`/XML ONE` declares none (`xml_input`). It changes nothing; a failed read (access denied, the time
 limit, no `schtasks`) is one `could not check console_tasks: ...` line. Code:
 `kitlib/pmstart/consoletasks.py`; tests: `tests/pmstart/test_console_tasks.py`.
 

@@ -6,13 +6,17 @@ process with no console, so Windows gives it a new console and shows its window 
 tools/no_window.py as its first argument (kitlib.proc.spawn.CARRIER), which opens none; a task
 registered by hand, or before the carrier, may not.
 
-A kit task is one whose name is a name the kit registers (`kit_names`) or whose action names the
-kit's folder or one of its tools (`tools\\<file>` for a file in the kit's tools folder). Its
-program is judged by file name only: a console program in `CONSOLE` is flagged; pythonw.exe and
-anything else is not. `read_tasks` reads every task's actions from `schtasks /Query /XML ONE`;
-`judge` is pure and is what the tests drive.
+A kit task is one whose name is a name the kit registers (`kit_names`) or one with an action that
+names a path inside a kit folder (`kit_roots`: this kit, the live checkout an export runs for, and
+the folder of every export of the plugin when this kit is one). A file named like a kit tool in
+another folder (another repository's tools\\gate.py) is not the kit's. Its program is judged by
+file name only: a console program in `CONSOLE` is flagged; pythonw.exe and anything else is not.
+`read_tasks` reads every task's actions from `schtasks /Query /XML ONE` (`xml_input` says how its
+bytes are read); `judge` is pure and is what the tests drive.
 """
+import codecs
 import os
+import re
 import subprocess
 import xml.etree.ElementTree as ET
 
@@ -25,6 +29,11 @@ NS = '{http://schemas.microsoft.com/windows/2004/02/mit/task}'
 CONSOLE = frozenset(('python.exe', 'py.exe', 'powershell.exe', 'pwsh.exe', 'cmd.exe', 'bash.exe'))
 NAME_SUFFIXES = ('-worktree-sweep', '-daily-full')    # kitlib.worktree.task.task_name; docs/daily-full.md
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BOMS = (codecs.BOM_UTF8, codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
+DECLARATION = re.compile(rb'^\s*<\?xml[^>]*?\?>')
+DECLARED = re.compile(rb'encoding\s*=\s*["\']([A-Za-z0-9._-]+)["\']')
+WORD = re.compile(r'"([^"]*)"|(\S+)')
+ABSOLUTE = re.compile(r'^(?:[A-Za-z]:\\|\\\\)')
 
 
 def kit_names():
@@ -33,12 +42,20 @@ def kit_names():
     return {autostart.TASK_NAME, autostart.OLD_TASK_NAME, agenttemp.TASK}
 
 
-def kit_tools(kit=KIT):
-    """The file names in the kit's tools folder, lower case; empty when it cannot be listed."""
-    try:
-        return {n.lower() for n in os.listdir(os.path.join(kit, 'tools')) if n.endswith('.py')}
-    except OSError:
-        return set()
+def _norm(path):
+    return os.path.normcase(os.path.normpath(path.replace('/', '\\'))).rstrip('\\')
+
+
+def kit_roots(kit=KIT, environ=None):
+    """The folders a kit task's action may name, normalised: `kit`; the live kit checkout when
+    `kit` is an export run for one (kitlib.pluginsource.live_root: KIT_LIVE_ROOT); and, when `kit`
+    is a plugin export (it holds pluginsource.MARKER), the folder that holds it, so a task line
+    naming an export of another version is the kit's too."""
+    from kitlib import pluginsource
+    roots = {_norm(kit), _norm(pluginsource.live_root(kit, environ))}
+    if os.path.isfile(os.path.join(kit, pluginsource.MARKER)):
+        roots.add(_norm(os.path.dirname(os.path.abspath(kit))))
+    return roots
 
 
 def program(exe):
@@ -48,28 +65,36 @@ def program(exe):
     return name if os.path.splitext(name)[1] else name + '.exe'
 
 
-def is_kit(task, kit=KIT, tools=None):
-    """Whether `task` ({"path", "actions": [{"exe", "args"}]}) is one of the kit's."""
+def _inside(word, roots):
+    path = word.replace('/', '\\')
+    if not ABSOLUTE.match(path):
+        return False                    # a relative word or an option: no folder it is inside
+    p = _norm(path)
+    return any(p == r or p.startswith(r + '\\') for r in roots)
+
+
+def is_kit(task, roots):
+    """Whether `task` ({"path", "actions": [{"exe", "args"}]}) is one of the kit's: by its name, or
+    by a word of an action (its program, or an argument, quoted or not) that is an absolute path
+    inside one of `roots` (normalised, as `kit_roots` gives them)."""
     name = task['path'].rsplit('\\', 1)[-1]
     if name in kit_names() or name.lower().endswith(NAME_SUFFIXES):
         return True
-    root = os.path.normcase(os.path.normpath(kit)).rstrip('\\') + '\\'
-    tools = kit_tools(kit) if tools is None else tools
     for a in task['actions']:
-        text = ('%s %s' % (a.get('exe') or '', a.get('args') or '')).replace('/', '\\').lower()
-        if root in os.path.normcase(text).replace('"', ''):
-            return True
-        if any('\\tools\\' + t in text for t in tools):
-            return True
+        text = '"%s" %s' % ((a.get('exe') or '').strip().strip('"'), a.get('args') or '')
+        for m in WORD.finditer(text):
+            if _inside(m.group(1) if m.group(1) is not None else m.group(2), roots):
+                return True
     return False
 
 
-def judge(tasks, kit=KIT, tools=None):
-    """One warning line per action of a kit task in `tasks` whose program is a console program."""
-    tools = kit_tools(kit) if tools is None else tools
+def judge(tasks, roots=None):
+    """One warning line per action of a kit task in `tasks` whose program is a console program.
+    `roots`: the kit folders (`kit_roots()` by default)."""
+    roots = kit_roots() if roots is None else {_norm(r) for r in roots}
     lines = []
     for task in sorted(tasks, key=lambda t: t['path'].lower()):
-        if not is_kit(task, kit, tools):
+        if not is_kit(task, roots):
             continue
         for a in task['actions']:
             prog = program(a.get('exe'))
@@ -82,11 +107,35 @@ def judge(tasks, kit=KIT, tools=None):
     return lines
 
 
-def parse(xml_text):
+def xml_input(raw):
+    """What `parse` reads for schtasks' output bytes `raw`. Bytes that start with a byte order mark
+    are given to the XML parser as they are, so it reads the declaration and the encoding itself;
+    UTF-16 with no mark (a NUL among the first bytes) gets its mark first. Single-byte output is
+    text in the console code page whatever its declaration says: `schtasks /Query /XML` declares
+    encoding="UTF-16" and writes one byte per character to a pipe (measured on Windows 11), and
+    `/XML ONE` writes no declaration. So such bytes go to the parser as bytes only when they
+    declare a single-byte encoding; otherwise they are decoded as the OEM code page (the console
+    code page of a process with no console of its own) with the declaration dropped."""
+    if raw.startswith(BOMS):
+        return raw
+    if b'\0' in raw[:64]:
+        return (codecs.BOM_UTF16_BE if raw[:1] == b'\0' else codecs.BOM_UTF16_LE) + raw
+    m = DECLARATION.match(raw)
+    if m:
+        enc = DECLARED.search(m.group(0))
+        name = enc.group(1).decode('ascii').lower().replace('-', '').replace('_', '') if enc else ''
+        if name and not name.startswith(('utf16', 'ucs2', 'utf32')):
+            return raw
+        raw = raw[:m.start()] + raw[m.end():]
+    return raw.decode('oem', errors='replace')
+
+
+def parse(data):
     """[{"path", "actions": [{"exe", "args"}]}] for every task in `schtasks /Query /XML ONE`'s
-    output: the path from the comment before each <Task> (its URI when there is none), the Exec
-    actions only. Raises ET.ParseError on text that is not that XML."""
-    root = ET.fromstring(xml_text, ET.XMLParser(target=ET.TreeBuilder(insert_comments=True)))
+    output (`data`: text, or bytes as `xml_input` gives them): the path from the comment before
+    each <Task> (its URI when there is none), the Exec actions only. Raises ET.ParseError on data
+    that is not that XML."""
+    root = ET.fromstring(data, ET.XMLParser(target=ET.TreeBuilder(insert_comments=True)))
     tasks, path = [], None
     for el in root:
         if el.tag is ET.Comment:
@@ -104,19 +153,18 @@ def parse(xml_text):
 
 
 def read_tasks(run=None, timeout=TIMEOUT_S):
-    """Every registered task's Exec actions (`parse`), from `schtasks /Query /XML ONE`. Raises
-    RuntimeError when schtasks fails or times out, OSError when it cannot be run, ET.ParseError on
-    output that is not the XML. run: the tests' stand-in for spawn.run."""
+    """Every registered task's Exec actions (`parse` of `xml_input`), from `schtasks /Query /XML
+    ONE`. Raises RuntimeError when schtasks fails or times out, OSError when it cannot be run,
+    ET.ParseError on output that is not the XML. run: the tests' stand-in for spawn.run."""
     try:
         r = (run or spawn.run)(['schtasks', '/Query', '/XML', 'ONE'], capture_output=True,
                                timeout=timeout)
     except subprocess.TimeoutExpired:
         raise RuntimeError('schtasks /Query /XML timed out after %s s' % timeout)
-    out = (r.stdout or b'').decode('oem', errors='replace')
     if r.returncode != 0:
-        said = (out + (r.stderr or b'').decode('oem', errors='replace')).strip()
+        said = ((r.stdout or b'') + (r.stderr or b'')).decode('oem', errors='replace').strip()
         raise RuntimeError('schtasks /Query /XML exit %d: %s' % (r.returncode, said[:200] or 'no output'))
-    return parse(out)
+    return parse(xml_input(r.stdout or b''))
 
 
 def check(cfg, read=None):

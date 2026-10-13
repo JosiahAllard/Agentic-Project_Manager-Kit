@@ -1,13 +1,17 @@
 """kitlib.pmstart.consoletasks: the session-start warning for a kit scheduled task whose program is a
 console program (python.exe, powershell.exe, ...) rather than pythonw.exe with the carrier
 tools/no_window.py (docs/pm-start.md, docs/daily-full.md "The schedule"). Fake task definitions
-and fake schtasks output: nothing reads this machine's task scheduler."""
+and fake schtasks output; one read-only `schtasks /Query /XML ONE` (RealRead) is the only read of
+this machine's task scheduler, and it skips when schtasks cannot answer."""
+import codecs
 import datetime
 import os
 import subprocess
+import sys
+import tempfile
 import unittest
 
-from kitlib import pmstart
+from kitlib import pluginsource, pmstart
 from kitlib.pmstart import consoletasks as ct
 from tests.home import temp_home
 from tests.pmstart import keep_off_launcher_repos
@@ -15,7 +19,6 @@ from tests.pmstart import keep_off_launcher_repos
 REAL_READ = ct.read_tasks      # before setUpModule patches it off this machine
 NOW = datetime.datetime(2026, 10, 13, 9, 0)
 KIT = r"Z:\kit"
-TOOLS = {"daily_full.py", "worktree_remove.py", "launch.py", "no_window.py"}
 PYW = r"C:\Py\pythonw.exe"
 CARRIED = '"Z:\\kit\\tools\\no_window.py" python "Z:\\kit\\tools\\daily_full.py" -C "Z:\\repo"'
 FAKES = dict(pm_data=lambda: None, handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
@@ -32,7 +35,7 @@ def task(path, exe, args=""):
 
 
 def judge(tasks):
-    return ct.judge(tasks, kit=KIT, tools=TOOLS)
+    return ct.judge(tasks, roots={KIT})
 
 
 class Judge(unittest.TestCase):
@@ -66,10 +69,20 @@ class Judge(unittest.TestCase):
         self.assertEqual(judge([task(r"\SomeoneElsesTask", "powershell.exe", r"-File C:\x\brain.ps1"),
                                 task(r"\Microsoft\Windows\X", r"C:\Py\python.exe", r"C:\other\run.py")]), [])
 
-    def test_a_task_naming_the_kit_folder_or_a_kit_tool_is_the_kits(self):
-        lines = judge([task(r"\anything", r"C:\Py\python.exe", r'"z:/KIT/tools/whatever.py"'),
-                       task(r"\other", r"C:\Py\python.exe", r'"C:\copy\tools\worktree_remove.py" -C x')])
-        self.assertEqual(len(lines), 2, lines)
+    def test_a_task_naming_a_path_in_the_kit_folder_is_the_kits_and_a_tool_name_elsewhere_is_not(self):
+        rows = ((r'"z:/KIT/tools/whatever.py"', True),             # case and slashes do not matter
+                (r"Z:\kit\tools\daily_full.py -C x", True),          # unquoted
+                (r'-X "Z:\kit"', True),                              # the folder itself
+                (r'"C:\copy\tools\worktree_remove.py" -C x', False),  # a kit tool's name in a copy
+                (r"C:\proj\tools\gate.py --full", False),            # another repository's gate
+                (r'"Z:\kit2\tools\gate.py"', False),                 # a folder that only starts like it
+                (r"tools\gate.py", False))                           # relative: no folder to be in
+        for args, mine in rows:
+            with self.subTest(args=args):
+                self.assertEqual(len(judge([task(r"\anything", r"C:\Py\python.exe", args)])), int(mine))
+
+    def test_a_program_inside_the_kit_folder_is_the_kits(self):
+        self.assertEqual(len(judge([task(r"\x", r"Z:\kit\.venv\Scripts\python.exe", "-V")])), 1)
 
     def test_every_console_action_of_a_task_is_one_line(self):
         t = {"path": r"\kit-daily-full", "actions": [{"exe": "python.exe", "args": "a"},
@@ -83,11 +96,35 @@ class Judge(unittest.TestCase):
         from kitlib.worktree import task as wtask
         for name in (autostart.TASK_NAME, autostart.OLD_TASK_NAME, agenttemp.TASK, wtask.task_name("r")):
             with self.subTest(name=name):
-                self.assertTrue(ct.is_kit(task("\\" + name, "python.exe"), kit=KIT, tools=set()))
+                self.assertTrue(ct.is_kit(task("\\" + name, "python.exe"), roots=set()))
 
-    def test_the_default_kit_is_this_checkout_and_its_tools(self):
+    def test_the_default_kit_is_this_checkout(self):
         self.assertTrue(os.path.isfile(os.path.join(ct.KIT, "tools", "no_window.py")))
-        self.assertIn("no_window.py", ct.kit_tools())
+        self.assertIn(os.path.normcase(os.path.normpath(ct.KIT)), ct.kit_roots(environ={}))
+
+
+class KitRoots(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.top = d.name
+        self.export = os.path.join(self.top, "0.4.0-main.7")
+        self.live = os.path.join(self.top, "live")
+        os.makedirs(self.export)
+        os.makedirs(self.live)
+
+    def norm(self, p):
+        return os.path.normcase(os.path.normpath(p))
+
+    def test_a_checkout_is_its_own_only_root(self):
+        self.assertEqual(ct.kit_roots(self.live, environ={}), {self.norm(self.live)})
+
+    def test_an_export_adds_the_folder_of_every_export_and_its_live_checkout(self):
+        open(os.path.join(self.export, pluginsource.MARKER), "w").close()
+        roots = ct.kit_roots(self.export, environ={pluginsource.LIVE_ROOT_ENV: self.live})
+        self.assertEqual(roots, {self.norm(self.export), self.norm(self.top), self.norm(self.live)})
+        other = os.path.join(self.top, "0.4.0-main.9", "tools", "daily_full.py")
+        self.assertEqual(len(ct.judge([task(r"\x", "python.exe", '"%s"' % other)], roots=roots)), 1)
 
 
 XML = """
@@ -121,6 +158,10 @@ XML = """
 """
 
 
+DECLARED = '<?xml version="1.0" encoding="UTF-16"?>'   # what schtasks /Query /XML writes first
+KIT_NON_ASCII = "Z:\\K\u00eft"
+
+
 class FakeRun:
     def __init__(self, stdout=XML.encode("ascii"), code=0, stderr=b"", raises=None):
         self.stdout, self.code, self.stderr, self.raises = stdout, code, stderr, raises
@@ -147,6 +188,34 @@ class Read(unittest.TestCase):
         self.assertEqual(args, ["schtasks", "/Query", "/XML", "ONE"])
         self.assertEqual(kw["timeout"], ct.TIMEOUT_S)
 
+    def test_utf16_output_with_its_declaration_goes_to_the_parser_as_bytes(self):
+        text = DECLARED + XML.replace("Z:\\kit", KIT_NON_ASCII)
+        for raw in (codecs.BOM_UTF16_LE + text.encode("utf-16-le"), text.encode("utf-16-le"),
+                    text.encode("utf-16"), codecs.BOM_UTF16_BE + text.encode("utf-16-be")):
+            with self.subTest(raw=raw[:4]):
+                self.assertIsInstance(ct.xml_input(raw), bytes)
+                tasks = REAL_READ(run=FakeRun(stdout=raw))
+                self.assertIn(KIT_NON_ASCII + "\\tools\\daily_full.py", tasks[0]["actions"][0]["args"])
+
+    def test_single_byte_output_declaring_utf16_is_read_in_the_console_code_page(self):
+        # schtasks /Query /XML writes encoding="UTF-16" and one byte per character to a pipe
+        text = DECLARED + XML.replace("Z:\\kit", KIT_NON_ASCII)
+        try:
+            raw = text.encode("oem")
+        except UnicodeEncodeError:
+            self.skipTest("the OEM code page has no %r" % KIT_NON_ASCII)
+        tasks = REAL_READ(run=FakeRun(stdout=raw))
+        self.assertEqual(tasks[0]["actions"][0]["args"],
+                         '"%s\\tools\\daily_full.py" -C "Z:\\repo"' % KIT_NON_ASCII)
+        lines = ct.judge(tasks, roots={KIT_NON_ASCII})
+        self.assertEqual(len(lines), 1)
+
+    def test_single_byte_output_declaring_a_single_byte_encoding_keeps_it(self):
+        raw = (b'<?xml version="1.0" encoding="windows-1252"?>'
+               + XML.replace("Z:\\kit", KIT_NON_ASCII).encode("cp1252"))
+        self.assertIsInstance(ct.xml_input(raw), bytes)
+        self.assertIn(KIT_NON_ASCII, REAL_READ(run=FakeRun(stdout=raw))[0]["actions"][0]["args"])
+
     def test_read_failures_raise(self):
         for run, err in ((FakeRun(code=1, stdout=b"ERROR: Access is denied."), RuntimeError),
                          (FakeRun(raises=subprocess.TimeoutExpired("schtasks", 4)), RuntimeError),
@@ -155,6 +224,21 @@ class Read(unittest.TestCase):
             with self.subTest(err=err, code=run.code, raises=run.raises):
                 with self.assertRaises(err):
                     REAL_READ(run=run)
+
+
+@unittest.skipUnless(sys.platform == "win32", "schtasks is Windows'")
+class RealRead(unittest.TestCase):
+    def test_this_machines_task_list_parses(self):
+        """One read-only `schtasks /Query /XML ONE`; skips when schtasks cannot answer in time."""
+        try:
+            tasks = REAL_READ(timeout=30)
+        except (OSError, RuntimeError) as e:
+            self.skipTest("schtasks could not answer: %s" % e)
+        self.assertIsInstance(tasks, list)
+        for t in tasks:
+            self.assertTrue(t["path"])
+            for a in t["actions"]:
+                self.assertEqual(set(a), {"exe", "args"})
 
 
 class InTheChecklist(unittest.TestCase):

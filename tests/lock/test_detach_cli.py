@@ -1,7 +1,7 @@
 """machine_lock.py run --detach through the tool: what main() asks WMI to start (the WMI call
 faked), and one real detach on a scratch store (DetachEndToEnd) that looks for a console window of
-the run's wrapper while it runs. Neither imports kitlib.lock.detach, so each runs against a tool
-without it. Unit tests of that module: tests/lock/test_detach.py."""
+the run's wrapper while it runs. Only the printed-pid test patches kitlib.lock.detach; the rest
+run against a tool without it. Unit tests of that module: tests/lock/test_detach.py."""
 import contextlib
 import ctypes
 import io
@@ -53,9 +53,38 @@ class DetachCli(StoreCase):
         args = list(argv) + ["--test-root", self.root, "--test-hardware", hw,
                              "--test-kinds", self.kinds_path, "--"] + list(cmd)
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.dict(os.environ, clean_env(), clear=True),                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with mock.patch.dict(os.environ, clean_env(), clear=True), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = self.tool.main(args)
         return code, out.getvalue(), err.getvalue()
+
+    def detach(self, run):
+        with mock.patch("kitlib.proc.spawn.run", run):
+            return self.call("run", "--kind", "engine-test", "--repo", "kit", "--slug", "t",
+                             "--cores", "1", "--no-wait", "--detach", cmd=[sys.executable, "-V"])
+
+    def test_no_pythonw_beside_python_is_exit_1_and_nothing_started(self):
+        folder = os.path.join(self.tmp, "py")
+        os.makedirs(folder)
+        python = os.path.join(folder, "python.exe")
+        open(python, "wb").close()
+        run = FakeRun()
+        with mock.patch.object(sys, "executable", python):
+            code, out, err = self.detach(run)
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertIn("could not start the command: --detach: pythonw.exe is not a file: %s"
+                      % os.path.join(folder, "pythonw.exe"), err)
+        self.assertEqual(run.calls, [])                 # WMI was never asked
+
+    def test_the_printed_pid_is_the_wrappers_or_else_the_carriers(self):
+        for wrapper, printed in ((None, "4242"), (5151, "5151")):
+            with self.subTest(wrapper=wrapper), \
+                    mock.patch("kitlib.lock.detach.wrapper_pid", return_value=wrapper) as seen:
+                code, out, err = self.detach(FakeRun(stdout="0 4242\n"))
+                self.assertEqual(code, 0, err)
+                self.assertEqual(out.split()[1:], ["pid", printed])
+                seen.assert_called_once_with(4242)
 
     def test_detach_asks_wmi_for_pythonw_and_the_carrier(self):
         run = FakeRun(stdout="0 %d" % GONE_PID)
