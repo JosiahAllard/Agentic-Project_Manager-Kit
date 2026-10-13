@@ -32,10 +32,11 @@ class JailWorld(W.World):
         base_kit = {'repo': {'name': 'demo', 'push_block': True}}
         W.World.__init__(self, kit=base_kit)
         self.sib = os.path.join(self.main, '.claude', 'worktrees', 'sib')
+        self.foreign = os.path.join(self.main, '.claude', 'worktrees', 'foreign')   # another repository's
         self.add = os.path.join(self.base, 'data', 'add')
         self.ro = os.path.join(self.base, 'data', 'ro')
         self.open = os.path.join(self.base, 'data', 'open')
-        for d in (self.sib, self.add, self.ro, self.open):
+        for d in (self.sib, self.foreign, self.add, self.ro, self.open):
             os.makedirs(d)
         roots = data_roots if data_roots is not None else [
             {'path': self.add, 'mode': 'add-only'},
@@ -52,6 +53,9 @@ class JailWorld(W.World):
         if p.startswith(os.path.normcase(self.sib)):
             return repo.Place(repo.LINKED, self.sib, '', os.path.join(self.main, '.git', 'worktrees', 'sib'),
                               os.path.join(self.main, '.git'))
+        if p.startswith(os.path.normcase(self.foreign)):
+            other = os.path.join(self.base, 'other', '.git')
+            return repo.Place(repo.LINKED, self.foreign, '', os.path.join(other, 'worktrees', 'foreign'), other)
         return W.World.classify(self, path)
 
 
@@ -115,7 +119,7 @@ class Roots(Base):
         self.allowed(self.write(os.path.join(self.w.open, 'old.bin')))
 
     def test_sibling_worktree(self):
-        self.jailed(self.write(os.path.join(self.w.sib, 'a.py')))
+        self.allowed(self.write(os.path.join(self.w.sib, 'a.py')))
 
     def test_main_checkout_for_a_session_that_may_edit_one(self):
         # a coordinator may edit a main checkout, but from its worktree the main checkout is outside
@@ -180,6 +184,52 @@ class Cwd(Base):
 
     def test_the_home_folder_is_never_a_root(self):
         self.jailed(self.write(os.path.join(self.w.home, 'x.txt'), cwd=self.w.home))
+
+
+class Siblings(Base):
+    """A session in a linked worktree reaches the other linked worktrees of its repository under
+    the main checkout, as a session in the main checkout does (jail.sibling); nothing more."""
+
+    def test_a_subagent_and_a_coordinator_write_a_sibling(self):
+        self.allowed(self.write(os.path.join(self.w.sib, 'src', 'a.py')))
+        self.allowed(self.write(os.path.join(self.w.sib, 'a.py'), env=COORDINATOR, sub=False))
+        self.allowed(self.write(os.path.join(self.w.wt, 'a.py'), cwd=self.w.sib))
+
+    def test_git_in_a_sibling(self):
+        for text in ('git -C "%s" commit -m x' % W.fwd(self.w.sib), 'git -C "%s" add a.py' % W.fwd(self.w.sib),
+                     'cd "%s" && git commit -m x' % W.fwd(self.w.sib)):
+            with self.subTest(text):
+                self.allowed(self.run_bash(text))
+
+    def test_the_main_checkout_stays_outside(self):
+        self.jailed(self.write(os.path.join(self.w.main, 'README.md'), env=COORDINATOR, sub=False))
+        self.jailed(self.write(os.path.join(self.w.main, '.claude', 'worktrees', 'x.txt'), env=COORDINATOR, sub=False))
+        self.jailed(self.run_bash('git -C "%s" commit -m x' % W.fwd(self.w.main), env=COORDINATOR, sub=False))
+
+    def test_another_repositorys_worktree_stays_outside(self):
+        self.jailed(self.write(os.path.join(self.w.foreign, 'a.py')))
+        self.jailed(self.run_bash('git -C "%s" commit -m x' % W.fwd(self.w.foreign)))
+
+    def test_a_worktree_outside_the_main_checkout_stays_outside(self):
+        # base/pmdata is a linked worktree of the same repository, but not under the main checkout
+        self.jailed(self.write(os.path.join(self.w.data, 'a.md')))
+
+    def test_a_link_out_of_a_sibling_stays_outside(self):
+        try:
+            import _winapi
+            _winapi.CreateJunction(self.w.main, os.path.join(self.w.sib, 'to-main'))
+            _winapi.CreateJunction(self.w.plain, os.path.join(self.w.sib, 'to-plain'))
+        except (ImportError, AttributeError, OSError) as e:
+            self.skipTest('no junction: %s' % e)
+        self.jailed(self.write(os.path.join(self.w.sib, 'to-main', 'README.md'), env=COORDINATOR, sub=False))
+        self.jailed(self.write(os.path.join(self.w.sib, 'to-plain', 'x.txt')))
+
+    def test_a_session_outside_git_gets_no_sibling(self):
+        self.jailed(self.write(os.path.join(self.w.sib, 'a.py'), cwd=self.w.plain))
+
+    def test_the_message_still_names_the_own_worktree(self):
+        d = self.jailed(self.write(os.path.join(self.w.plain, 'x.txt')))
+        self.assertIn('Instead: Write(file_path="%s/x.txt")' % W.fwd(self.w.wt), d.reason)
 
 
 class Sessions(Base):
@@ -516,9 +566,9 @@ class ShellForms(Base):
                 self.jailed(self.run_ps(text))
 
     def test_git_dash_c(self):
-        for text in ('git -C "%s" commit -m x' % W.fwd(self.w.plain), 'git -C "%s" reset --keep HEAD~1' % W.fwd(self.w.sib),
-                     'git -C "%s" checkout -b x' % W.fwd(self.w.sib), 'git -C "%s" add a.py' % W.fwd(self.w.sib),
-                     'cd "%s" && git commit -m x' % W.fwd(self.w.sib)):
+        for text in ('git -C "%s" commit -m x' % W.fwd(self.w.plain), 'git -C "%s" reset --keep HEAD~1' % W.fwd(self.w.plain),
+                     'git -C "%s" checkout -b x' % W.fwd(self.w.plain), 'git -C "%s" add a.py' % W.fwd(self.w.plain),
+                     'cd "%s" && git commit -m x' % W.fwd(self.w.plain)):
             with self.subTest(text):
                 self.jailed(self.run_bash(text))
 
@@ -777,8 +827,8 @@ class LanderMainCheckout(MainGit):
         self.jailed(self.git('echo x > "%s/out.txt"' % self.main))
 
     def test_a_lander_fetches_only_in_a_main_checkout(self):
-        self.jailed(self.git('git -C "%s" fetch origin main' % W.fwd(self.w.sib)))
-        self.jailed(self.git('git -C "%s" merge --ff-only origin/main' % W.fwd(self.w.sib)))
+        self.jailed(self.git('git -C "%s" fetch origin main' % W.fwd(self.w.foreign)))
+        self.jailed(self.git('git -C "%s" merge --ff-only origin/main' % W.fwd(self.w.foreign)))
 
     def test_no_other_role_may_fetch_or_merge_main(self):
         fetch, merge = 'git -C "%s" fetch origin main' % self.main, 'git -C "%s" merge --ff-only origin/main' % self.main
