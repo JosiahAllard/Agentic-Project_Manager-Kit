@@ -39,8 +39,8 @@ class Agents(unittest.TestCase):
             'model_reasoning_effort': 'xhigh', 'sandbox_mode': 'read-only',
             'developer_instructions': 'Read docs/agent-profile.md and AGENTS.md in .codex/worktrees; "quote" \\ back.\n'
                                       'Trailer <noreply@openai.com>. Run as `python <kit>/hosts/codex/shell/scripts/'
-                                      'launch.py --role kit-beta` on the account\'s model; ask by send_message, edit '
-                                      'with apply_patch, in .codex/ and ~/.codex.\n'})
+                                      'launch.py --role kit-beta` on strong-tier; ask by send_message (not available '
+                                      'to a Codex agent: ask the PM), edit with apply_patch, in .codex/ and ~/.codex.\n'})
         beta = files['hosts/codex/shell/agents/kit-beta.toml']
         self.assertIn(b'\r\n', beta, 'the role file\'s line endings')
         beta = tomllib.loads(beta.decode('utf-8'))
@@ -81,7 +81,7 @@ class Tokens(unittest.TestCase):
     def test_the_tiers_are_hosts_json(self):
         self.assertEqual(cc.renderer().tier_models(), dict(registry.host('codex').tiers))
         self.assertEqual(sorted(cc.TIER_EFFORT), sorted(hc.TIERS))
-        self.assertEqual(cc.prose_models()['deep'], "the account's model")
+        self.assertEqual(cc.prose_models()['deep'], 'deep-tier')
 
     def test_strings_escape(self):
         if tomllib is None:

@@ -39,6 +39,15 @@ def lock_read_tools():
     return frozenset(name for name, spec in server.TOOLS.items() if not spec[2])
 
 
+def lock_read_call(tool):
+    """True for one of the lock MCP server's read tools under the server's own name
+    (kitlib.lockmcp.tool_prefix for Codex: mcp__machine-lock__<tool>), never another server's
+    tool of the same name."""
+    from kitlib import lockmcp
+    prefix = lockmcp.tool_prefix('codex')
+    return isinstance(tool, str) and tool.startswith(prefix) and tool[len(prefix):] in lock_read_tools()
+
+
 def patch_in_shell(action):
     """The apply_patch program a shell Action runs, or None."""
     from kitlib.guard import commands, rules
@@ -65,7 +74,7 @@ def screen(action, environ):
         return _deny('host-tool', '%s is not a tool the kit has reviewed for a Codex agent session: no guard '
                      'rule can see what it does.' % (action.tool or 'This tool'),
                      'return the operation to the PM, who can do it or add the tool to the kit\'s review')
-    if action.kind == 'mcp' and action.tool.rsplit('__', 1)[-1] not in lock_read_tools():
+    if action.kind == 'mcp' and not lock_read_call(action.tool):
         return _deny('host-tool', '%s is not an MCP tool a Codex agent session may call: the kit reviews only the '
                      'machine lock\'s read tools here.' % action.tool,
                      'read the lock with its read tools, or return the operation to the PM')

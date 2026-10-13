@@ -118,7 +118,7 @@ class HostProfile:
     attribution: Attribution
     agent_name_format: str
     session_process: str
-    env_prefixes: tuple = ()
+    env_prefixes: tuple
 
 
 @dataclass(frozen=True)

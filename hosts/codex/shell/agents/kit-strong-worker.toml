@@ -1,7 +1,8 @@
+# Review template: do not install until live acceptance (hosts/codex/README.md).
 # Rendered from content/roles/strong-worker.md by tools/render_content.py; never edit it by hand.
 # Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".
 name = "kit-strong-worker"
-description = "A worker for high-risk changes - networking, concurrency, simulation or ordering, migrations, CI config, known-area crash fixes, changes nobody can observe directly - that need more care than a routine worker but not the deepest reasoning. Runs on the account's model at high effort (worker is the account's model/medium, deep-worker the account's model/xhigh). Dispatch it when a task is above a worker's risk class, builds and plans (designs) included; escalate to deep-worker (its own launched session, never dispatched with the spawn_agent tool; see skill coordinator-dispatch) when it has defeated this one or plainly will. Never for landings, record-keeping, moves or routine changes."
+description = "A worker for high-risk changes - networking, concurrency, simulation or ordering, migrations, CI config, known-area crash fixes, changes nobody can observe directly - that need more care than a routine worker but not the deepest reasoning. Runs on strong-tier at high effort (worker is standard-tier/medium, deep-worker deep-tier/xhigh). Dispatch it when a task is above a worker's risk class, builds and plans (designs) included; escalate to deep-worker (its own launched session, never dispatched with the spawn_agent (not available to a Codex agent: ask the PM) tool; see skill coordinator-dispatch) when it has defeated this one or plainly will. Never for landings, record-keeping, moves or routine changes."
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """

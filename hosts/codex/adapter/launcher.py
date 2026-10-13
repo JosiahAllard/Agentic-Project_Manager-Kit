@@ -24,11 +24,14 @@ import re
 import sys
 
 from kitlib import sessionmark
+from kitlib.lockmcp import SERVER_NAME
 
 from hosts.codex.adapter import content as codex_content
 from hosts.codex.adapter.sessions import native_codex
 
 HOST = 'codex'
+# The lock MCP server's name, as the plugin's mcp.json registers it.
+LOCK_SERVER = SERVER_NAME
 NAME = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}\Z')
 EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 MAX_BRIEF = 50000
@@ -134,9 +137,9 @@ def plan(role, cwd, name, brief, model=None, effort=None, kit=None, classify=Non
                  'shell_environment_policy.set.PM_KIT_ROOT': str(kit),
                  'shell_environment_policy.set.%s' % sessionmark.ENV: role,
                  'shell_environment_policy.set.PM_KIT_HOST': HOST,
-                 'mcp_servers.pm_kit_lock.command': sys.executable,
-                 'mcp_servers.pm_kit_lock.args': [os.path.join(shell, 'mcp', 'lock_server.py')],
-                 'mcp_servers.pm_kit_lock.env_vars': ['PM_KIT_ROOT']}
+                 'mcp_servers.%s.command' % LOCK_SERVER: sys.executable,
+                 'mcp_servers.%s.args' % LOCK_SERVER: [os.path.join(shell, 'mcp', 'lock_server.py')],
+                 'mcp_servers.%s.env_vars' % LOCK_SERVER: ['PM_KIT_ROOT']}
     for key, value in overrides.items():
         argv += ['--config', key + '=' + toml_value(value)]
     argv += ['--', '-']

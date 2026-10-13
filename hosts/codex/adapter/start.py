@@ -20,9 +20,10 @@ from hosts.codex.adapter.events import absolute
 
 STATE_ENV = 'PM_KIT_CODEX_STATE'
 START_ROLES = ('pm', 'coordinator')
-CHILD_NOTE = ('Codex note: this agent runs under its parent session\'s PM_KIT_ROLE mark; Codex hooks cannot '
-              'tell a child from its parent, so the kit guard holds it to the parent\'s role policy. The '
-              'agent name is guidance from the brief, not authority.')
+CHILD_NOTE = ('Codex note: this agent runs under its parent session\'s PM_KIT_ROLE mark, and Codex hooks cannot '
+              'tell a child from its parent: the kit guard holds every call of a marked session, this one '
+              'included, as an agent of that mark\'s role (off the main checkout, inside its own checkout\'s '
+              'write roots). The agent name is guidance from the brief, not authority.')
 
 
 def _lock_lines():

@@ -73,7 +73,7 @@ class Launcher(unittest.TestCase):
             if arg == "--config":
                 key, value = result.argv[i + 1].split("=", 1)
                 parsed[key] = tomllib.loads("v=" + value)["v"]
-        self.assertTrue(Path(parsed["mcp_servers.pm_kit_lock.args"][0]).is_file())
+        self.assertTrue(Path(parsed["mcp_servers.machine-lock.args"][0]).is_file())
         self.assertNotIn("${PLUGIN_ROOT}", str(parsed))
         self.assertTrue(parsed["features.hooks"])
         self.assertFalse(parsed["features.unified_exec"])

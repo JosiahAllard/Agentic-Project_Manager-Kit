@@ -1,3 +1,4 @@
+# Review template: do not install until live acceptance (hosts/codex/README.md).
 # Rendered from content/roles/spec-writer.md by tools/render_content.py; never edit it by hand.
 # Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".
 name = "kit-spec-writer"

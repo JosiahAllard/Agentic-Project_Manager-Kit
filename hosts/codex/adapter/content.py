@@ -29,6 +29,7 @@ import os
 
 from kitlib import agentname
 from kitlib.host import hookmain, registry
+from kitlib.lockmcp import SERVER_NAME
 from kitlib.host.content import ContentError, substitute
 
 HOST = 'codex'
@@ -55,7 +56,7 @@ HOOKS = (
     ('PreToolUse', '*', 'Checking the PM kit guard'),
 )
 HOOK_TIMEOUT = 10
-MCP_SERVERS = {'machine-lock': {'type': 'stdio', 'command': 'python',
+MCP_SERVERS = {SERVER_NAME: {'type': 'stdio', 'command': 'python',
                                 'args': [PLUGIN_ROOT + '/mcp/lock_server.py'],
                                 'env_vars': ['PM_KIT_ROOT', 'PM_KIT_RELEASE_ID']}}
 # hosts.json's Codex tiers are all ACCOUNT_DEFAULT: every role runs on the account's configured
@@ -81,22 +82,25 @@ def agent_name(role):
 
 # Codex's names for the kit's capabilities, as role prose names them ({{tool:<capability>}}). A
 # Codex agent file carries no tool list, so these are prose only. INFERRED from the Codex branch's
-# hook allowlist and native tool names, not from a captured session (README.md "Not verified");
-# a capability Codex has no tool for says so.
+# hook allowlist and native tool names, not from a captured session (README.md "Not verified").
+# A capability Codex has no tool for, or whose tool hosts.codex.adapter.policy refuses a marked
+# session (agent spawning and messaging), says so and points to the PM.
+NOT_AVAILABLE = ' (not available to a Codex agent: ask the PM)'
 TOOLS = {
     'read': 'read_file', 'search': 'Grep', 'find': 'Glob', 'edit': 'apply_patch', 'write': 'apply_patch',
     'bash': 'the shell tool', 'powershell': 'the shell tool',
     'worktree': 'python <kit>/tools/new_worktree.py', 'artifact': 'no Codex artifact tool',
-    'dispatch': 'spawn_agent', 'message': 'send_message', 'list-agents': 'the PM\'s session list',
-    'stop-task': 'no Codex task-stop tool', 'monitor': 'a background shell poll',
-    'tool-search': 'no Codex tool search', 'skill': 'the skill', 'ask-owner': 'request_user_input',
-    'cron-create': 'no Codex scheduler (ask the PM)', 'cron-list': 'no Codex scheduler (ask the PM)',
-    'cron-delete': 'no Codex scheduler (ask the PM)', 'web-search': 'WebSearch', 'web-fetch': 'WebFetch',
+    'dispatch': 'spawn_agent%s' % NOT_AVAILABLE, 'message': 'send_message%s' % NOT_AVAILABLE,
+    'list-agents': 'the session list%s' % NOT_AVAILABLE, 'stop-task': 'task stop%s' % NOT_AVAILABLE,
+    'monitor': 'a background shell poll', 'tool-search': 'tool search%s' % NOT_AVAILABLE,
+    'skill': 'the skill', 'ask-owner': 'request_user_input',
+    'cron-create': 'a schedule%s' % NOT_AVAILABLE, 'cron-list': 'the schedules%s' % NOT_AVAILABLE,
+    'cron-delete': 'a schedule%s' % NOT_AVAILABLE, 'web-search': 'WebSearch', 'web-fetch': 'WebFetch',
 }
 # The tokens whose Codex value no hosts.json field holds.
 TOKENS = {
     'profile_path': 'docs/agent-profile.md',
-    'coordinator_profile_path': 'docs/coordinator-profile.md',
+    'coordinator_profile_path': '.codex/coordinator-profile.md',
     'instructions_file': 'AGENTS.md',
     'config_dir_env': 'CODEX_HOME',
     # Plans only on Codex: the launcher runs nothing yet (launcher.py; README.md).
@@ -117,6 +121,13 @@ def model_phrase(model):
     return "the account's model" if model == ACCOUNT_DEFAULT else model
 
 
+def tier_phrase(tier, model):
+    """How role prose names a tier's model ({{model:<tier>}}): the model when hosts.json names one,
+    else `<tier>-tier`, since every role then runs the account's model and a tier differs by
+    reasoning effort ("a standard-tier worker", "pinned to standard-tier")."""
+    return model if model != ACCOUNT_DEFAULT else '%s-tier' % tier
+
+
 def tokens(registry_path=None):
     """Every one-value token's Codex value (docs/content.md "Tokens"): TOKENS, and PROFILE_TOKENS
     from hosts.json's Codex entry."""
@@ -128,7 +139,7 @@ def tokens(registry_path=None):
 
 def prose_models():
     """{tier: how prose names its model} for {{model:<tier>}}."""
-    return {t: model_phrase(m) for t, m in registry.host(HOST).tiers}
+    return {t: tier_phrase(t, m) for t, m in registry.host(HOST).tiers}
 
 
 def toml_string(value):
@@ -193,7 +204,8 @@ class CodexContent:
         if sandbox_mode(role) not in ('read-only', 'workspace-write'):
             raise ContentError('%s: no Codex sandbox_mode for %s' % (src, role.sandbox))
         nl = role.newline
-        lines = ['# Rendered from content/roles/%s.md by tools/render_content.py; never edit it by hand.' % role.name,
+        lines = ['# Review template: do not install until live acceptance (hosts/codex/README.md).',
+                 '# Rendered from content/roles/%s.md by tools/render_content.py; never edit it by hand.' % role.name,
                  '# Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".',
                  'name = %s' % toml_string(agent_name(role.name)),
                  'description = %s' % toml_string(fill(role.description))]

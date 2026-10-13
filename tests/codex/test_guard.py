@@ -195,6 +195,7 @@ class Tools(Base):
     def test_mcp_is_the_locks_read_tools_in_a_marked_session(self):
         self.allowed(self.event('mcp__machine-lock__lock_snapshot', {}))
         self.denied(self.event('mcp__other__do_things', {}), 'host-tool')
+        self.denied(self.event('mcp__github__lock_snapshot', {}), 'host-tool')   # another server's same name
         self.allowed(self.event('mcp__other__do_things', {}), role=None)
 
     def test_a_lock_owner_tool_is_refused_to_a_marked_session(self):

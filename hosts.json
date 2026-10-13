@@ -60,7 +60,7 @@
       },
       "agent_name_format": "kit-{name}",
       "session_process": "codex.exe",
-      "env_prefixes": ["CODEX_"]
+      "env_prefixes": ["CODEX_", "OPENAI_"]
     },
     "tiers": {"light": "account-default", "standard": "account-default", "strong": "account-default",
               "deep": "account-default"}
