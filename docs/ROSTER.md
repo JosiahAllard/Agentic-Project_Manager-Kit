@@ -92,4 +92,4 @@ The live files held no ruling id, no repo name and no owner path, so the scrub c
 
 Left as is, on purpose:
 - Role words "PM" and "project manager" and the launcher commands `launch.py deep` (coordinator, deep-worker) and `launch.py consultant` (consultant; `launcher\start-*.ps1` paths before the launcher moved into the kit, docs/launcher.md): the kit's own roles and launcher, not owner-specific.
-- `~/.claude/...` paths (templates, comfy tools, knowledge folder): home-relative, no user name.
+- The host's per-user folder (`{{user_folder}}`, `~/.claude` on Claude): home-relative, no user name. The comfy tools and the knowledge folder are named in the kit since (`<kit>/optional/comfy`, `<kit>/knowledge/asset-generation`; machine setup links the old `~/.claude` paths to them).

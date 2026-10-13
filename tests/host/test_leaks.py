@@ -137,18 +137,7 @@ TOP_ALLOWED = {
     'claude': 'the hook paths settings written before step 7 still run (claude/hooks/*.py stubs, '
               'docs/machine-setup.md "Moved hook paths"); delete one release after the move',
 }
-CONTENT_ALLOWED = {        # Claude folders and the launch line in role prose: the content wave (step 9)
-    'content/roles/asset-smith.md':   3,    # ~/.claude tools and knowledge paths
-    'content/roles/coordinator.md':   9,    # `claude --agent`, .claude/ owner paths, ~/.claude
-    'content/roles/deep-worker.md':   1,    # the attribution trailer's example address
-    'content/roles/pm.md':            1,    # `claude --agent`
-    'content/roles/records.md':       2,    # ~/.claude, .claude/
-    'content/roles/senior-worker.md': 1,    # the attribution trailer's example address
-    'content/roles/sound-smith.md':   2,    # ~/.claude tools and knowledge paths
-    'content/roles/spec-writer.md':   2,    # ~/.claude, .claude/
-    'content/roles/strong-worker.md': 1,    # the attribution trailer's example address
-    'content/roles/tech-artist.md':   3,    # ~/.claude tools and knowledge paths
-}
+CONTENT_ALLOWED = {}        # every host value in role prose is a token now (docs/content.md "Tokens")
 
 
 def content_counts():

@@ -5,7 +5,8 @@ role's capabilities as Claude tool names, in order; no line for `capabilities: a
 (the role's `model.claude` override, else hosts.json's `tiers` model for its tier: tier_models), `effort`
 when the role has one, and for `cache: long` the `experimental` map with `cacheTtl: 1h`; then the
 body with its tokens filled from tokens(): TOKENS, and PROFILE_TOKENS read from hosts.json's Claude
-profile, so a value hosts.json holds is written once. Lines end as the role file's do. Each skill folder is copied byte for byte to
+entry, so a value hosts.json holds is written once; `{{model:<tier>}}` from tier_models() and
+`{{tool:<capability>}}` from TOOLS, the map the `tools` line uses. Lines end as the role file's do. Each skill folder is copied byte for byte to
 `hosts/claude/shell/skills/<name>/`.
 
 manifests(kit, content) writes the files that carry the kit's one version (kit.json; ARCHITECTURE.md
@@ -57,17 +58,26 @@ TOKENS = {
     'profile_path': '.claude/agent-profile.md',
     'coordinator_profile_path': '.claude/coordinator-profile.md',
     'instructions_file': 'CLAUDE.md',
+    'config_dir_env': 'CLAUDE_CONFIG_DIR',
+    'launch_agent': 'claude --agent',
 }
-# The tokens filled from a field of hosts.json's Claude profile: token -> HostProfile field.
-PROFILE_TOKENS = {'worktrees_dir': 'worktrees_directory'}
+# The tokens read from hosts.json's Claude entry (a registry.Host): token -> its value from it.
+PROFILE_TOKENS = {
+    'worktrees_dir': lambda host: host.profile.worktrees_directory,
+    'owner_folder': lambda host: next(p for p in host.profile.owner_paths if p.endswith('/')),
+    'user_folder': lambda host: '~/' + host.profile.state_directory,
+    'coauthor_email': lambda host: host.profile.attribution.email,
+    'long_context_model': lambda host: 'the 1M-context %s model' % dict(host.tiers)['deep'],
+}
 CACHE_TTL = {'long': '1h'}
 
 
 def tokens(registry_path=None):
-    """Every token's Claude value: TOKENS, and PROFILE_TOKENS from hosts.json's Claude profile."""
-    profile = registry.host(HOST, registry_path).profile
+    """Every one-value token's Claude value: TOKENS, and PROFILE_TOKENS from hosts.json's Claude
+    entry."""
+    host = registry.host(HOST, registry_path)
     out = dict(TOKENS)
-    out.update((name, getattr(profile, field)) for name, field in PROFILE_TOKENS.items())
+    out.update((name, value(host)) for name, value in PROFILE_TOKENS.items())
     return out
 
 
@@ -92,7 +102,8 @@ class ClaudeContent:
         src = '%s/%s.md' % (AGENTS_REL, role.name)
         values = tokens() if values is None else values
         tiers = self.tier_models() if tiers is None else tiers
-        fill = lambda text: substitute(text, values, agent_name, names, src)    # noqa: E731
+        fill = lambda text: substitute(text, values, agent_name, names, src, models=tiers,    # noqa: E731
+                                       tools=TOOLS)
         lines = ['---', 'name: %s' % role.name, 'description: %s' % quote(fill(role.description))]
         if not role.all_tools:
             missing = [c for c in role.capabilities if c not in TOOLS]

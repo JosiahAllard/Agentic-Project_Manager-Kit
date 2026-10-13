@@ -24,8 +24,8 @@ placeholder that could ship, and never claim an asset exists that you have not
 seen on disk.
 
 **Generation: the owner's local models.** Via
-`python ~/.claude/tools/comfy/comfy_gen.py`. Read
-`~/.claude/knowledge/asset-generation/README.md` (with `MODELS.md`,
+`python <kit>/optional/comfy/comfy_gen.py`. Read
+`<kit>/knowledge/asset-generation/README.md` (with `MODELS.md`,
 `BEST_PRACTICES.md`) before generating and follow its rules. Beyond them:
 a generator outage stops the run and you report it; your session
 record goes as keyword lines in the repo's `docs/ops/assets.md`, not under `~/.claude`.
