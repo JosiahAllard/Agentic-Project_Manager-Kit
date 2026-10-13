@@ -67,6 +67,8 @@ def parser():
     ad.add_argument('--branch-ok', action='store_true', help='allow --commit off the main branch')
     ad.add_argument('--model', help='the model named in the Co-Authored-By trailer (default: $%s)'
                     % vcs.MODEL_ENV)
+    ad.add_argument('--provider', choices=('claude', 'codex'), default='claude',
+                    help='agent provider (default: claude); Codex requires --model')
     rt = sub.add_parser('retire', help='turn an entry into its tombstone')
     rt.add_argument('id')
     rt.add_argument('--class', dest='cls', required=True, choices=fmt.RETIRE_CLASSES)
@@ -119,7 +121,7 @@ def run(a, p, path, repos):
     if a.cmd == 'add':
         plan = None
         if a.commit or a.push:
-            plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model)
+            plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, provider=a.provider)
         items = [i.strip() for i in (a.items or '').split(',') if i.strip()] or None
         got = write.add(path, a.repo, a.prov, a.q, a.a, a.decides, a.source, a.supersedes, items,
                         a.when, repos)

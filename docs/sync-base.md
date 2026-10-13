@@ -2,6 +2,11 @@
 
 `tools/sync_base.py [-C DIR] <hash> --model "<model name>" [--base BRANCH] [--no-wait]` merges exactly the base commit the coordinator named into the branch checked out at `-C` (default `.`). Logic: `kitlib/syncbase`; the module docstring holds the full rules. Ported from the PM repo's `kit/tools/sync_base.py` at 2d390a8.
 
+Optional `--provider claude|codex` selects shared attribution, default Claude. Codex requires
+the actual explicit model id and uses `Codex <model-id> <noreply@openai.com>` on clean and
+prepared conflict messages. It never reads CLAUDE_AGENT_MODEL. Validation precedes mutations;
+exact pushed-base, dirty-tree, conflict and regrowth checks retain their rules.
+
 - Never a rebase; the merge commit, or git's prepared MERGE_MSG on a conflict, ends with `Co-Authored-By: Claude <model> <noreply@anthropic.com>`. `--model` falls back to `CLAUDE_AGENT_MODEL`.
 - Fetches `<remote> <base>` first (`.kit.json` "repo".remote and .main_branch), then refuses a hash that is not on the fetched `refs/remotes/<remote>/<base>` (refusal-log P27). The refusal names the hash from `git ls-remote <remote> <base>`, never local main.
 - With `.kit.json` "landing".`in_flight` set (default off), before the fetch it waits for a landing in flight as `tools/new_worktree.py` does ([new-worktree.md](new-worktree.md), "Waiting for a landing in flight"); `--no-wait` says so and goes on. It still merges exactly `<hash>`; when the fetched `<remote>/<base>` is past it, one line says so: `note      origin/main is at <tip>, past <hash>: ask the coordinator whether to sync to it`.

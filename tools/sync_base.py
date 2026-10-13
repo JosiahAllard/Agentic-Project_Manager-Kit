@@ -40,6 +40,8 @@ def build_parser():
                    help='the worktree to merge into (default: here)')
     p.add_argument('hash', help='the base commit to merge, exactly as the coordinator named it')
     p.add_argument('--model', help='the model you are running on (else %s)' % syncbase.MODEL_ENV)
+    p.add_argument('--provider', choices=('claude', 'codex'), default='claude',
+                   help='agent provider (default: claude); Codex requires --model')
     p.add_argument('--base', help='the base branch (default: .kit.json "repo".main_branch)')
     p.add_argument('--no-wait', dest='wait', action='store_false',
                    help='do not wait for a landing in flight (.kit.json "landing".in_flight); '
@@ -54,7 +56,10 @@ def main(argv=None):
         p.error('-C needs a directory')
     if a.base is not None and (not a.base.strip() or a.base.startswith('-')):
         p.error('--base needs a branch name')
-    model, source = syncbase.resolve_model(a.model)
+    try:
+        model, source = syncbase.resolve_model(a.model, provider=a.provider)
+    except ValueError as error:
+        p.error(str(error))
     if model is None:
         p.error('--model is required: name the model you are running on, --model "<model name>" '
                 '(or set %s for this session only); it goes in the merge commit\'s '
@@ -62,7 +67,7 @@ def main(argv=None):
                 % syncbase.MODEL_ENV)
     try:
         out = syncbase.sync(a.root, a.hash, model, source, a.base, wait=a.wait,
-                            say=lambda line: print(line, flush=True))
+                            say=lambda line: print(line, flush=True), provider=a.provider)
     except KeyboardInterrupt:
         return 130
     for line in out.lines:

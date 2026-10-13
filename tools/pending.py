@@ -51,6 +51,8 @@ def parser():
         sp.add_argument('--branch-ok', action='store_true', help='allow --commit off the main branch')
         sp.add_argument('--model', help='the model named in the Co-Authored-By trailer (default: $%s)'
                         % vcs.MODEL_ENV)
+        sp.add_argument('--provider', choices=('claude', 'codex'), default='claude',
+                        help='agent provider (default: claude); Codex requires --model')
     sub.add_parser('list', help='the open items')
     ad = sub.add_parser('add', help='append one item')
     ad.add_argument('--text', required=True)
@@ -79,7 +81,7 @@ def run(a, path):
         return 0
     plan = None
     if a.commit or a.push:
-        plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, noun=NOUN)
+        plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, noun=NOUN, provider=a.provider)
     raw = pending.read_raw(path)
     if a.cmd == 'add':
         new, n = pending.add(raw, a.text)

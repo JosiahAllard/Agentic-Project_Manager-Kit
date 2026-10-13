@@ -51,6 +51,8 @@ def parser():
                       help='read the body from this file (UTF-8)')
     p.add_argument('--model', default=None,
                    help='the model you run on (default: CLAUDE_AGENT_MODEL)')
+    p.add_argument('--provider', choices=('claude', 'codex'), default='claude',
+                   help='agent provider (default: claude); Codex requires --model')
     p.add_argument('--owner-authored', action='store_true',
                    help="the owner's own commit: Owner-Authored: yes, no Co-Authored-By")
     p.add_argument('--owner-approved', action='append', default=[],
@@ -70,7 +72,7 @@ def main(argv=None):
     out = C.commit(C.request(root, a.subject, a.paths, b=a.b, body_file=a.body_file,
                              model=a.model, owner_authored=a.owner_authored,
                              owner_approved=a.owner_approved,
-                             lander_main_checkout=a.lander_main_checkout))
+                             lander_main_checkout=a.lander_main_checkout, provider=a.provider))
     for line in out.lines:
         print(line, flush=True)
     return out.code

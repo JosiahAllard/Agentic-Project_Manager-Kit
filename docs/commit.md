@@ -6,6 +6,11 @@ Two tools, both ported from the PM kit (PM 9813c73). `tools/commit.py` is the en
 
 `commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME] [--owner-authored] [--owner-approved VALUE ...] [--lander-main-checkout] PATH ...`
 
+Optional `--provider claude|codex` selects shared agent attribution, default Claude. Codex needs
+the actual explicit model id and emits `Codex <model-id> <noreply@openai.com>`; it never uses
+CLAUDE_AGENT_MODEL. Explicit paths, owner identity/approval, staged-file and document checks
+retain their rules. The shared trailer classifier recognizes both supported provider forms.
+
 It stages exactly the PATHs named and commits them in the work tree that DIR is in (default: here). `-C` is resolved by `kitlib.git.repo.toplevel`.
 - A path is relative to that work tree's root, or absolute inside it.
 - `./` and `..` are folded before the owner-only check.
