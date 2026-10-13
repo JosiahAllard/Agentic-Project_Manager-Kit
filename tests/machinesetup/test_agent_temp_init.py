@@ -31,6 +31,55 @@ class DefaultFolder(unittest.TestCase):
         self.assertIsNone(at().default_agent_temp('\\\\server\\share\\kit'))
 
 
+class SweepDryRun(unittest.TestCase):
+    """agenttemp.sweep_dry_run with a fake `run`: nothing is started."""
+    KIT = 'C:\\k'
+
+    def fake(self, code=0, out='', err='', raises=None):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append((argv, kw))
+            if raises:
+                raise raises
+            return subprocess.CompletedProcess(argv, code, out, err)
+        return run, calls
+
+    def test_argv_has_no_apply_and_is_python_then_the_sweep(self):
+        run, calls = self.fake(out='a\n')
+        at().sweep_dry_run(self.KIT, 'py.exe', run=run)
+        argv = calls[0][0]
+        self.assertEqual(argv, ['py.exe', os.path.join(os.path.normpath(self.KIT), at().SWEEP)])
+        self.assertNotIn('--apply', argv)
+        self.assertEqual(argv, at().sweep_dry_run_argv(self.KIT, 'py.exe'))
+
+    def test_creationflags_and_timeout_are_passed(self):
+        run, calls = self.fake()
+        at().sweep_dry_run(self.KIT, 'py.exe', timeout=7, run=run)
+        kw = calls[0][1]
+        self.assertEqual(kw['creationflags'], getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        self.assertEqual(kw['timeout'], 7)
+
+    def test_exit_0_and_3_return_the_non_blank_lines_of_stdout_and_stderr(self):
+        for code in (0, 3):
+            run, _ = self.fake(code=code, out='one\n\n  \ntwo\n', err='three\n')
+            self.assertEqual(at().sweep_dry_run(self.KIT, 'py.exe', run=run), ['one', 'two', 'three'], code)
+
+    def test_exit_1_and_2_raise(self):
+        for code in (1, 2):
+            run, _ = self.fake(code=code, out='bad config\n')
+            with self.assertRaises(RuntimeError) as cm:
+                at().sweep_dry_run(self.KIT, 'py.exe', run=run)
+            self.assertIn('exit %d' % code, str(cm.exception))
+            self.assertIn('bad config', str(cm.exception))
+
+    def test_a_timeout_raises(self):
+        run, _ = self.fake(raises=subprocess.TimeoutExpired('x', 5))
+        with self.assertRaises(RuntimeError) as cm:
+            at().sweep_dry_run(self.KIT, 'py.exe', timeout=5, run=run)
+        self.assertIn('took over 5 s', str(cm.exception))
+
+
 class TaskRegistered(unittest.TestCase):
     """agenttemp.task_registered against a fake subprocess.run: schtasks is never run."""
 
@@ -99,7 +148,8 @@ class Init(T.Base):
         self.assertIn('user environment AGENT_TEMP = %s' % self.new, out)
         self.assertIn('add agent_temp_sweep = {"dir": %s, "max_age_days": 3}' % json.dumps(self.new), out)
         self.assertIn('register the scheduled task agent-temp-sweep', out)
-        self.assertIn('first runs the sweep once without --apply', out)
+        self.assertIn('run the sweep once without --apply: ', out)
+        self.assertIn('before the task is registered', out)
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(self.host.calls, [])                          # no dry run of the sweep either
         self.assertFalse(os.path.exists(self.new))
@@ -264,8 +314,15 @@ class Init(T.Base):
         code, out = self.run_new(apply=True)
         self.assertEqual(code, M.EXIT_REFUSED, out)
         self.assertEqual(self.tasks(), [])
-        self.assertIn('machine-setup: STOPPED at: register the scheduled task agent-temp-sweep', out)
+        self.assertIn('machine-setup: STOPPED at: run the sweep once without --apply', out)
         self.assertIn('the sweep dry run exit 2', out)
+
+    def test_the_dry_run_report_is_printed_even_when_registering_fails(self):
+        with mock.patch.object(self.host, 'task_register', side_effect=RuntimeError('no pythonw')):
+            code, out = self.run_new(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('  sweep dry run (nothing removed): claude/p/old-session  4.0 days  would', out)
+        self.assertIn('machine-setup: STOPPED at: register the scheduled task agent-temp-sweep', out)
 
     def test_the_tool_registers_by_default_and_no_sweep_task_opts_out(self):
         sys.path.insert(0, os.path.dirname(T.TOOL))

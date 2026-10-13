@@ -305,14 +305,14 @@ def _task(plan, ctx):
                             '--no-sweep-task registers it, or run: %s' % (TASK, line))
         return
 
-    def register():
+    def dry_run():
         said = host.sweep_dry_run(ctx.kit)
-        host.task_register(line)
         return Report('sweep dry run (nothing removed): ' + l for l in said)
 
+    plan.add('extras', 'run the sweep once without --apply: %s'
+             % ' '.join(sweep_dry_run_argv(ctx.kit, 'python')[1:]), dry_run,
+             detail=['prints what the task\'s first run would remove, before the task is registered; '
+                     'stops the run, registering nothing, when the sweep refuses'])
     plan.add('extras', 'register the scheduled task %s (daily %s, as you, not elevated): %s'
-             % (TASK, AT, line), register,
-             undo='Unregister-ScheduledTask -TaskName %s -Confirm:$false' % TASK,
-             detail=['first runs the sweep once without --apply and prints what it would remove '
-                     '(%s); stops, registering nothing, when the sweep refuses'
-                     % ' '.join(sweep_dry_run_argv(ctx.kit, 'python')[1:])])
+             % (TASK, AT, line), lambda: host.task_register(line),
+             undo='Unregister-ScheduledTask -TaskName %s -Confirm:$false' % TASK)
