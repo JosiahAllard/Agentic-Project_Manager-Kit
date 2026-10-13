@@ -51,7 +51,8 @@ CAPABILITIES = (
 # name: `{{agent:test-runner}}` the name the host dispatches it by, `{{launch:pm}}` how the role is
 # started as a host's main session.
 TOKENS = ('agent', 'launch', 'profile_path', 'coordinator_profile_path', 'instructions_file', 'worktrees_dir',
-          'host_folder', 'config_folders', 'user_folder', 'kit_home', 'coauthor', 'compact_window')
+          'host_folder', 'config_folders', 'user_folder', 'kit_home', 'coauthor', 'compact_window',
+          'resume_note')
 ROLE_TOKENS = ('agent', 'launch')
 REQUIRED = ('name', 'description', 'tier', 'sandbox', 'capabilities')
 OPTIONAL = ('effort', 'cache', 'mode', 'writes')

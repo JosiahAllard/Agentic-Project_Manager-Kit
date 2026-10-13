@@ -21,6 +21,11 @@ class ClaudeConformance(conformance.HostConformance, unittest.TestCase):
         'tools/pm_watch.py': 6,
         'tools/launch.py': 1,
         'tools/plugin_refresh.py': 3,
+        # The kit's per-user folder is the default host's (~/.claude, registry.state_path) on every
+        # host: Codex's rendered roles name its installed tools and knowledge there ({{kit_home}}).
+        'hosts/codex/shell/agents/kit-asset-smith.toml': 3,
+        'hosts/codex/shell/agents/kit-sound-smith.toml': 2,
+        'hosts/codex/shell/agents/kit-tech-artist.toml': 3,
     })
     # Over the 20-line entry limit: the guard's no-boot fast path and --settings-entry, and the
     # coordinator hook's role check before the kit loads. Shrink, then drop the line.

@@ -12,8 +12,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 
 def kit_hosts():
+    """The kit's hosts.json with its first (default) host alone: the base the cases below vary."""
     with open(os.path.join(ROOT, 'hosts.json'), encoding='utf-8') as f:
-        return json.load(f)
+        first, entry = next(iter(json.load(f).items()))
+    return {first: entry}
 
 
 def second(data, name='other', **changes):
@@ -179,7 +181,7 @@ class Profiles(Case):
         self.assertEqual(registry.union('session_env', path), ('CLAUDE_CODE_SESSION_ID', 'OTHER_SESSION'))
 
     def test_the_kit_registry_names_claudes_session_variable(self):
-        self.assertEqual(registry.union('session_env'), ('CLAUDE_CODE_SESSION_ID',))
+        self.assertEqual(registry.union('session_env'), ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID'))
 
     def test_the_default_profile_and_the_host_folders(self):
         data = second(kit_hosts())
@@ -187,7 +189,7 @@ class Profiles(Case):
         path = self.put(data)
         self.assertEqual(registry.default_profile(path), registry.host('claude', path).profile)
         self.assertEqual(registry.host_folders(path), ('.claude', '.other'))
-        self.assertEqual(registry.host_folders(), ('.claude',))
+        self.assertEqual(registry.host_folders(), ('.claude', '.codex'))
         self.assertEqual(registry.default_profile().worktrees_directory, '.claude/worktrees')
 
     def test_the_kit_state_folder_is_the_default_hosts(self):

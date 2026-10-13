@@ -1,0 +1,78 @@
+# Agent roster
+
+Read from skill `coordinator-dispatch`, "Which role, which tier". A repo's own
+coordinator profile lists the roles it actually has; use only those. Roles are named bare; a tier
+(light, standard, strong, deep) is turned into a model by the host: the tier table per host is in
+`<kit>/docs/ROSTER.md`. "Raise to strong" below means: dispatch with the strong tier's model.
+
+## Roles and what each is for
+
+- worker: routine coding, low and medium risk; plan-only and sync or prep work (merging main into a branch, rebasing, conflict-free syncs, preparation).
+- senior-worker: High-risk build and fix work on standard paths (API changes, live fixes, ordinary tool features).
+- strong-worker: concurrency, networking, simulation or ordering, landing or lock tools, migrations, CI config, known-area crash fixes.
+- deep-worker: its own launched session for the hardest issues; never a subagent dispatch.
+- reviewer: read-only review of one branch against its brief. Never the author.
+- lander: lands one reviewed branch (or a batch) on the coordinator's go. Never edits code.
+- records: settled facts into docs only (decisions, landing notes, plan ticks).
+- spec-writer: extends a named spec from the owner's answers. Docs only.
+- researcher: read-only ideas and prior art; proposes concepts for the owner to pick.
+- test-runner: runs test tiers in a given worktree; reports PASS/FAIL plus failing lines.
+- tech-artist, asset-smith, sound-smith: creative work (see "Creative dispatches" in the skill).
+- consultant: a long-lived launched session per repository that answers engineering questions.
+
+## Choosing
+
+- Cheap tier: landings, records, doc ticks, moves, routine coding. Strong: concurrency,
+  networking, migration, security, crash and measurement work, design, specs that read code, any
+  change nobody here can observe. Never the lightest where a failure must be judged.
+- Plan-only and sync/prep work (merge main into a branch, rebase, conflict-free sync,
+  preparation) goes to the worker (standard tier), whatever the branch's risk.
+- The worker = default coding, low/medium risk (`--find risk`): additive content, UI, pure logic
+  with tests, known-cause fixes, behaviour-preserving moves and renames (brief names **Moves and
+  renames**; its equivalence check is not optional). Coding ladder by need:
+  worker (standard/medium: Low, Medium) -> senior-worker (strong/medium: High-risk build and fix
+  work - API changes, live fixes, ordinary tool features; never plan-only or sync/prep) ->
+  strong-worker (strong/high: concurrency, networking, landing/lock tools, build-cache
+  correctness, codegen design; builds and plans) -> deep-worker (deep/xhigh, own session: root
+  cause or concurrency work strong-worker failed at or plainly cannot do). senior-worker not
+  installed -> the worker raised to strong. Never the host's general-purpose agent for code. An
+  escalation = reassign upward with its findings, not a failure.
+- Tier and effort per role are pinned in each role's front matter (set from `<kit>/docs/ROSTER.md`).
+  A kit role is dispatched with no model of its own choosing. Override only upward for risk, and
+  say so in status; never the lander (light as pinned, whatever is being landed), and the reviewer
+  only by the reviewer rule below. Never a model above the strong tier's for any dispatch, reviews
+  included, unless the owner asks on that task: the deep-worker session is the step up.
+- The host's built-in agents (a general-purpose agent, an explorer, a planner), where it has
+  them, pin nothing -> dispatch each on the standard tier, never strong. Work that needs the
+  strong tier is coding or design work: it goes to a role on the ladder above. A built-in
+  explorer's or planner's answer that reads thin is asked once more raised to strong; say so in
+  status.
+- **Reviewer model** (this is the rule's one home). Read the groups printed under the `files` line
+  of `python tools/review_pack.py <branch>`: `High (N)`, `unlisted (= High) (N)`, `Medium (N)`,
+  `Low (N)`; a group with no file is not printed. The first row that fits:
+  1. A `High` group is printed, or a changed path matches a strict landing path
+     (`STRICT_DEFAULTS` in `<kit>/kitlib/gate/strict_defaults.py`: guard, lock,
+     gate, proc and hook code, agent definitions, role and skill content) whatever group it is
+     printed in -> raise to strong.
+  2. Only a `Low` group is printed -> no override: standard as pinned, never raised.
+  3. Otherwise (a `Medium` or `unlisted (= High)` group, no `High` group) -> no override; you may
+     raise to strong for a risk you name in status, never must.
+
+  No review pack in the repo -> the same rows on the risk level the brief states.
+- Effort is not settable per dispatch: pick the role for it. High risk -> senior-worker, or
+  strong-worker for the kinds the ladder names. Only when strong-worker has been defeated, or
+  plainly will be, on a race or crash root-cause or subtle concurrency (never a build or a
+  plan): request a deep-worker session; say in status when and why.
+- The deep-worker is never a subagent dispatch: it is its own session - own window, deep tier,
+  long auto-compact window - for the most difficult issues only. You request it; the PM launches
+  it. Write a self-contained brief file, then message the PM: the brief path, your session name
+  as requester, and a slug. The PM runs `python <kit>/tools/launch.py deep --plan` first. The
+  session reports to you by message; review its branch like any other, then tell the PM to stop
+  it (`python <kit>/tools/launch.py stop --name deep-<slug>`).
+- The repo has a running consultant session (`consultant-<repo>` in the host's session list):
+  message engineering questions there before the PM; owner matters still go to the PM, which logs
+  the consultant's calls as delegated.
+- The researcher = ideas, modes, mechanics, prior art; read-only. Output = concepts for the owner
+  to pick; the chosen one -> the spec-writer before any builder sees it.
+- Pass/fail checks whose log nobody needs -> the cheapest role the profile lists; none
+  listed -> the worker.

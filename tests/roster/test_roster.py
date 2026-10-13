@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 from hosts.claude.adapter import content as claude_content
+from hosts.codex.adapter import content as codex_content
 from kitlib import content, reviewpack, roster
 from tests.docs.test_cli import repo_with_docs
 from tests.gitfixture import fixture_env
@@ -23,7 +24,7 @@ KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 sys.path.insert(0, os.path.join(KIT_ROOT, 'tools'))
 import agent_roster as cli  # noqa: E402
 
-MAPS = {'claude': claude_content.TIER_MODEL}
+MAPS = {'claude': claude_content.TIER_MODEL, 'codex': codex_content.TIER_MODEL}
 
 
 def read(path):
@@ -90,11 +91,11 @@ class TempCopyTest(unittest.TestCase):
                       roster.check(self.top, MAPS))
 
     def test_tier_table_against_the_host_map(self):
-        self.assertEqual(roster.check(self.top, {'claude': dict(MAPS['claude'], deep='sonnet')}),
+        self.assertEqual(roster.check(self.top, dict(MAPS, claude=dict(MAPS['claude'], deep='sonnet'))),
                          ['claude: tier deep runs opus in ROSTER.md, sonnet in the host renderer'])
         self.assertEqual(roster.check(self.top, dict(MAPS, other={'light': 'x'})),
                          ['other: no column in the ROSTER.md tier table'])
-        self.assertEqual(roster.check(self.top, {}),
+        self.assertEqual(roster.check(self.top, {k: v for k, v in MAPS.items() if k != 'claude'}),
                          ['claude: a column in the ROSTER.md tier table, but no such host renderer'])
 
     def test_missing_on_either_side(self):

@@ -31,5 +31,38 @@
       "env_prefixes": ["CLAUDE_", "ANTHROPIC_"]
     },
     "tiers": {"light": "haiku", "standard": "sonnet", "strong": "opus", "deep": "opus"}
+  },
+  "codex": {
+    "adapter": "hosts.codex.adapter",
+    "shell": "hosts/codex/shell",
+    "platforms": ["windows"],
+    "capabilities": {
+      "hook_events": ["PreToolUse", "SessionStart", "PostCompact", "SubagentStart"],
+      "supports_ask": false,
+      "subagent_identity_in_hooks": false,
+      "mcp": true,
+      "skills": true,
+      "agent_format": "toml"
+    },
+    "profile": {
+      "owner_paths": ["AGENTS.md", ".codex/"],
+      "worktrees_directory": ".codex/worktrees",
+      "state_directory": ".codex",
+      "process_names": ["codex.exe"],
+      "mcp_tool_format": "mcp__{server}__{tool}",
+      "session_env": "CODEX_THREAD_ID",
+      "skills_directory": ".codex/skills",
+      "attribution": {
+        "name": "Codex",
+        "email": "noreply@openai.com",
+        "model_env": null,
+        "model_pattern": "[A-Za-z0-9][A-Za-z0-9._:/-]*"
+      },
+      "agent_name_format": "kit-{name}",
+      "session_process": "codex.exe",
+      "env_prefixes": ["CODEX_"]
+    },
+    "tiers": {"light": "account-default", "standard": "account-default", "strong": "account-default",
+              "deep": "account-default"}
   }
 }

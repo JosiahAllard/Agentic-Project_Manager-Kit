@@ -64,6 +64,7 @@ TOKENS = {
     'coauthor': '<the model you run on> <noreply@anthropic.com>',
     'compact_window': '`autoCompactWindow` tokens `.claude/settings.local.json`',
     'launch': lambda role: '`claude --agent %s`' % agent_name(role),
+    'resume_note': "; the launcher's after-reboot resume passes it",
 }
 CACHE_TTL = {'long': '1h'}
 

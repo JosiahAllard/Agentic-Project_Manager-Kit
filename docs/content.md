@@ -55,20 +55,21 @@ each flag shown.
 A body or description names a value that differs by host only as a token. An unknown token, or a
 `{{` that is not one, refuses the render.
 
-| token | Claude |
-|---|---|
-| `{{agent:<role>}}` | `pm-kit:<role>` |
-| `{{launch:<role>}}` | `` `claude --agent pm-kit:<role>` `` |
-| `{{profile_path}}` | `.claude/agent-profile.md` |
-| `{{coordinator_profile_path}}` | `.claude/coordinator-profile.md` |
-| `{{instructions_file}}` | `CLAUDE.md` |
-| `{{worktrees_dir}}` | `.claude/worktrees` |
-| `{{host_folder}}` | `.claude` (the repository's host folder, owner-only) |
-| `{{config_folders}}` | a Claude config folder (`~/.claude`, `$env:CLAUDE_CONFIG_DIR`) |
-| `{{user_folder}}` | `~/.claude` (the host's per-user folder) |
-| `{{kit_home}}` | `~/.claude` (the kit's per-user folder: its installed tools and knowledge, on every host) |
-| `{{coauthor}}` | `<the model you run on> <noreply@anthropic.com>` (the commit trailer after `Co-Authored-By: `) |
-| `{{compact_window}}` | `` `autoCompactWindow` tokens `.claude/settings.local.json` `` |
+| token | Claude | Codex |
+|---|---|---|
+| `{{agent:<role>}}` | `pm-kit:<role>` | `kit-<role>` |
+| `{{launch:<role>}}` | `` `claude --agent pm-kit:<role>` `` | started by the owner with the `kit-<role>` agent's instructions (no Codex launch yet) |
+| `{{profile_path}}` | `.claude/agent-profile.md` | `docs/agent-profile.md` |
+| `{{coordinator_profile_path}}` | `.claude/coordinator-profile.md` | `docs/coordinator-profile.md` |
+| `{{instructions_file}}` | `CLAUDE.md` | `AGENTS.md` |
+| `{{worktrees_dir}}` | `.claude/worktrees` | `.codex/worktrees` |
+| `{{host_folder}}` | `.claude` | `.codex` (the repository's host folder, owner-only) |
+| `{{config_folders}}` | a Claude config folder (`~/.claude`, `$env:CLAUDE_CONFIG_DIR`) | a Codex config folder (`~/.codex`, `$env:CODEX_HOME`) |
+| `{{user_folder}}` | `~/.claude` | `~/.codex` (the host's per-user folder) |
+| `{{kit_home}}` | `~/.claude` | `~/.claude` (the kit's per-user folder, the default host's state folder on every host: its installed tools and knowledge) |
+| `{{coauthor}}` | `<the model you run on> <noreply@anthropic.com>` | `Codex <your exact model id> <noreply@openai.com>` (the trailer after `Co-Authored-By: `) |
+| `{{compact_window}}` | `` `autoCompactWindow` tokens `.claude/settings.local.json` `` | `` `model_auto_compact_token_limit` tokens `~/.codex/config.toml` `` |
+| `{{resume_note}}` | `; the launcher's after-reboot resume passes it` | empty (after the PM's launch line) |
 
 `{{agent:<role>}}` and `{{launch:<role>}}` take a role name; the rest take none.
 
@@ -82,6 +83,19 @@ skill folder to `hosts/claude/shell/skills/<name>/`. It owns both folders.
 An agent body gets no `${CLAUDE_PLUGIN_ROOT}` substitution, so a role names the kit's folder
 `<kit>`, as a skill does, and the kit header says what it is (tests/content
 `test_no_agent_file_names_the_plugin_root_variable`).
+
+## Codex
+
+`hosts/codex/adapter/content.py` writes `hosts/codex/shell/agents/kit-<name>.toml`: a header comment,
+`name` (`kit-<name>`), `description`, `model` (none while the tier maps to `account-default`: the
+account's model runs; docs/ROSTER.md), `model_reasoning_effort` (the role's `effort`, else its tier's),
+`sandbox_mode` (the role's `sandbox`) and `developer_instructions`, the body with Codex's token values
+as a TOML multi-line string. A Codex agent file has no tool list, so `capabilities` and `cache` are not
+rendered. It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders. Its
+manifests are `hosts/codex/shell/plugin.json` (the name and version, the hooks file),
+`hosts/codex/shell/mcp.json` (the read-only lock server) and `hosts/codex/shell/hooks/hooks.json`
+(every declared hook event running `hooks/run.py <event>`, as one command string). Status:
+hosts/codex/README.md.
 
 ## Manifests
 

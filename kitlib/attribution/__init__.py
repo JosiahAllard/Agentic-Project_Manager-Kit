@@ -5,7 +5,7 @@ A provider is a host name, and its attribution is that host's hosts.json profile
 the model must be an explicit id. Provider None is the registry's default host, the old default.
 Provider identity is never inferred from a model name.
 
-  providers(path)                  {name: Attribution}: every registered host's, then UNREGISTERED
+  providers(path)                  {name: Attribution}: every registered host's
   model_environment(provider)      the model fallback variable, or None
   requires_model_id(provider)      whether --model must be an explicit id (no fallback)
   coauthor(model, provider, families)   the Co-Authored-By line; ValueError when it cannot be one
@@ -14,21 +14,12 @@ Provider identity is never inferred from a model name.
 """
 import re
 
-from kitlib.host import Attribution, registry
-
-# Codex's attribution, which no hosts.json entry declares until step 9 of docs/multi-host-plan.md
-# registers that host (its profile's attribution then carries it, and this goes). Kept so a Codex
-# trailer stays writable and recognised meanwhile.
-UNREGISTERED = {'codex': Attribution('Codex', 'noreply@openai.com', None,
-                                     r'[A-Za-z0-9][A-Za-z0-9._:/-]*')}
+from kitlib.host import registry
 
 
 def providers(path=None):
-    """{name: Attribution}: each registered host's, in file order, then UNREGISTERED's others."""
-    out = {name: h.profile.attribution for name, h in registry.load(path).items()}
-    for name, a in UNREGISTERED.items():
-        out.setdefault(name, a)
-    return out
+    """{name: Attribution}: each registered host's, in file order."""
+    return {name: h.profile.attribution for name, h in registry.load(path).items()}
 
 
 def _of(provider, path=None):
