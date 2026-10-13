@@ -5,6 +5,8 @@ tier: deep
 effort: xhigh
 sandbox: workspace-write
 mode: write
+run: session
+summary: Own launched session (never dispatched; 1M via launcher). Root cause or concurrency work strong-worker failed at or plainly cannot do; never builds or plans.
 capabilities: all
 ---
 

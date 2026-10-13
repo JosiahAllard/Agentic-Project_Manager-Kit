@@ -12,60 +12,66 @@ qualifies every bare kit agent name, so it always starts the kit's version, and 
 launched row (coordinator, consultant, deep-worker) cannot be started by the launcher under that name
 (docs/launcher.md "The window").
 
-This table is the one place to set which role runs at which tier and effort, and when to use it.
-Every role exists on every host (content/roles/<role>.md; docs/content.md). Edit a row, then
-`python tools/agent_roster.py --write` pins tier and effort into that role file's front matter and
-renders every host's agent files from it; `--check` (the default) lists any disagreement, here or in
-the tier table below. `-` = no effort key. Never `fable` unless the owner asks; override a dispatch
-only upward, and never the lander's. The per-dispatch rules have one home,
-content/skills/coordinator-dispatch/roster.md, "Choosing", written in tiers for every host: which
-reviews are raised to the strong tier (from the review pack's printed risk groups and the strict
-landing paths), and the host's built-in agent types (on Claude `general-purpose`, `Explore`,
-`Plan`), which this table cannot pin, on the standard tier (Claude: `model: sonnet`).
+The role list lives only in `content/roles/` (docs/multi-host-plan.md section 7, decision 17): a
+role is added or removed with one file and a render. The tables between the `rendered` markers
+below are written by `python tools/render_content.py --write` from the role files and each host's
+tier map; never edit them by hand. To change a role's tier, effort or "use for" line, edit its
+`tier:`, `effort:` or `summary:` front matter (docs/content.md "Role front matter") and render; the
+render also rewrites that role's agent file on every host. `python tools/render_content.py` (and
+`python tools/agent_roster.py`, which checks this file alone) lists any disagreement. `-` = no
+effort key. Never `fable` unless the owner asks; override a dispatch only upward, and never the
+lander's. The per-dispatch rules have one home, content/skills/coordinator-dispatch/roster.md,
+"Choosing", written in tiers for every host: which reviews are raised to the strong tier (from the
+review pack's printed risk groups and the strict landing paths), and the host's built-in agent
+types (on Claude `general-purpose`, `Explore`, `Plan`), which this table cannot pin, on the
+standard tier (Claude: `model: sonnet`).
 
+<!-- rendered: roles -->
 | role | tier | effort | use for |
 |---|---|---|---|
 | asset-smith | strong | high | 3D assets as Blender Python scripts against a decided art direction, validated against budgets, with a contact sheet for the owner. No rigging or animation. |
-| coordinator | strong | medium | Main session (`claude --agent pm-kit:coordinator`), never a subagent. Splits work, dispatches agents, reviews branches, lands every LAND verdict as soon as the lane is free, brings decisions to the owner. Writes no code. |
-| consultant | deep | high | Own long-lived launched session per repository (never an Agent dispatch; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked. |
-| deep-worker | deep | xhigh | Own launched session (never an Agent dispatch; 1M via launcher). Root cause or concurrency work strong-worker failed at or plainly cannot do; never builds or plans. |
-| lander | light | medium | Lands one reviewed branch (or a batch) on main on the coordinator's go. Never edits code. Dispatched with no `model`: never overridden. |
-| pm | strong | high | The project manager: the owner's one main session (`claude --agent pm-kit:pm`; after-reboot resumes it so), never a subagent. Keeps every repository's coordinator running and briefed, records owner decisions in the ledger, schedules the machine, runs the Action Hub. Builds and lands nothing itself. |
+| consultant | deep | high | Own long-lived launched session per repository (never dispatched; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked. |
+| coordinator | strong | medium | Main session, never a subagent. Splits work, dispatches agents, reviews branches, lands every LAND verdict as soon as the lane is free, brings decisions to the owner. Writes no code. |
+| deep-worker | deep | xhigh | Own launched session (never dispatched; 1M via launcher). Root cause or concurrency work strong-worker failed at or plainly cannot do; never builds or plans. |
+| lander | light | medium | Lands one reviewed branch (or a batch) on main on the coordinator's go. Never edits code. Dispatched with no model override, and never overridden. |
+| pm | strong | high | The project manager: the owner's one main session (the after-reboot resume starts it so), never a subagent. Keeps every repository's coordinator running and briefed, records owner decisions in the ledger, schedules the machine, runs the Action Hub. Builds and lands nothing itself. |
 | records | standard | low | Writes settled facts into docs only: decisions, landing notes, plan ticks. |
 | researcher | standard | high | Read-only ideas and prior art; proposes concepts for the owner to choose from, builds nothing. |
-| reviewer | standard | high | Read-only review of one branch against its brief; reports defects, scope creep and untested changes. Raised to opus per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file. |
-| senior-worker | strong | medium | High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (`pm-kit:worker`). The one row with a one-hour prompt cache: see "The one-hour prompt cache" below. |
-| sound-smith | standard | medium | Sound effects from synthesis, free libraries, text-to-speech and local music generation; measures clips, the owner judges. Mechanical work at this row; design dispatches override to opus/high (upward only). |
+| reviewer | standard | high | Read-only review of one branch against its brief; reports defects, scope creep and untested changes. Raised to the strong tier per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file. |
+| senior-worker | strong | medium | High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (worker). The one role with a one-hour prompt cache (see "The one-hour prompt cache" below). |
+| sound-smith | standard | medium | Sound effects from synthesis, free libraries, text-to-speech and local music generation; measures clips, the owner judges. Mechanical work at this tier; design dispatches override to the strong tier at high effort (upward only). |
 | spec-writer | standard | high | Extends a named design or spec document from the owner's answers. Docs only. |
 | strong-worker | strong | high | High-risk changes: networking, concurrency, simulation or ordering, landing or lock tools, migrations, CI config, known-area crash fixes. |
 | tech-artist | strong | high | Art that is code: shaders, materials, palettes, UI themes, procedural meshes and textures, lighting; checked by rendering. |
 | test-runner | light | - | Runs test tiers in a given worktree and reports only PASS/FAIL plus failing lines. |
 | worker | standard | medium | Default coder for routine low and medium risk work: additive content, UI, pure logic with tests, small fixes with a known cause, behaviour-neutral moves and renames; plan-only and sync or prep work (merging main into a branch, rebasing, conflict-free syncs, preparation). |
+<!-- end rendered -->
 
 ## Tier to model, per host
 
 Each host maps a tier to a model in `hosts.json` `tiers`, which its renderer's `tier_models()` returns;
-`agent_roster.py --check` holds this table to it. A role file may name a different model for one
+the table below is rendered from it. A role file may name a different model for one
 host (`model.<host>:`, docs/content.md); none does.
 
+<!-- rendered: tiers -->
 | tier | claude | codex |
 |---|---|---|
 | light | haiku | account-default |
 | standard | sonnet | account-default |
 | strong | opus | account-default |
 | deep | opus | account-default |
+<!-- end rendered -->
 
 `account-default` writes no `model` line: the role runs on the model the Codex account is set to, as
 the Codex branch's roles had it. On Codex a tier differs by reasoning effort: a role's `effort`, else
 light `low`, standard `medium`, strong `high`, deep `xhigh` (hosts/codex/adapter/content.py
-`TIER_EFFORT`). The owner names Codex models per tier here and in hosts.json when they are chosen.
+`TIER_EFFORT`). The owner names Codex models per tier in hosts.json when they are chosen, and the table follows on the next render.
 
 Model choices rest on measured A/B runs: docs/model-ab.md.
 
 ## The one-hour prompt cache
 
-content/roles/senior-worker.md says `cache: long`, outside this table and untouched by
-`agent_roster.py --write` (tests/roster/test_roster.py, `test_write_leaves_other_keys_alone`); Claude's
+content/roles/senior-worker.md says `cache: long`, which this table does not show; Claude's
 renderer writes it into hosts/claude/shell/agents/senior-worker.md as a second frontmatter setting (docs/content.md):
 
 ```yaml

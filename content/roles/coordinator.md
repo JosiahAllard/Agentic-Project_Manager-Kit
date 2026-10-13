@@ -5,6 +5,8 @@ tier: strong
 effort: medium
 sandbox: workspace-write
 mode: controller
+run: session
+summary: Main session, never a subagent. Splits work, dispatches agents, reviews branches, lands every LAND verdict as soon as the lane is free, brings decisions to the owner. Writes no code.
 capabilities: [dispatch, message, list-agents, stop-task, read, search, find, edit, write, powershell, bash, monitor, tool-search, skill, ask-owner, artifact, cron-create, cron-list, cron-delete]
 ---
 

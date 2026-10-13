@@ -5,6 +5,8 @@ tier: standard
 effort: high
 sandbox: workspace-write
 mode: write
+group: docs
+summary: Extends a named design or spec document from the owner's answers. Docs only.
 capabilities: [read, edit, write, search, find, powershell, bash]
 ---
 

@@ -1,9 +1,10 @@
-"""render_content.py: write each host's agents, skills and plugin manifests from content/ and kit.json
-(docs/content.md).
+"""render_content.py: write each host's agents, skills and plugin manifests from content/ and kit.json,
+and docs/ROSTER.md's tables from content/roles and every host's tier map (docs/content.md).
 
   render_content.py [--check]   list every rendered file that differs, is missing or is stale; exit 1 if any
   render_content.py --write     write the differing and missing files, remove the stale ones
-  --host NAME                   only that host (repeatable; default: every host in hosts.json)
+  --host NAME                   only that host's files (repeatable; default: every host in hosts.json);
+                                docs/ROSTER.md is always checked or written, with every host's tiers
 
 A thin entry point (ARCHITECTURE.md, Layers): it picks the host renderers, calls kitlib.content,
 prints and exits. Exit codes: 0 agree / written, 1 drift, 2 USAGE or a content file of the wrong
@@ -52,19 +53,25 @@ def renderers(hosts=None):
     return [_host.adapter_module(h).ADAPTER.content().renderer() for h in sorted(hosts or RENDERERS)]
 
 
+def tier_maps():
+    """{host: {tier: model}} of every host in RENDERERS: docs/ROSTER.md's tier table."""
+    return {r.host: r.tier_models() for r in renderers()}
+
+
 def main(argv=None, out=None):
     out = sys.stdout if out is None else out
     a = build_parser().parse_args(argv)
     root = os.path.abspath(a.root)
     try:
         rs = renderers(a.host)
+        tiers = tier_maps()
         if a.write:
-            paths = content.write(root, rs)
+            paths = content.write(root, rs, tiers=tiers)
             for p in paths:
                 out.write('wrote %s\n' % p)
             out.write('%d file(s) changed\n' % len(paths))
             return 0
-        lines = content.drift(root, rs)
+        lines = content.drift(root, rs, tiers=tiers)
     except (ContentError, OSError) as e:
         out.write('render_content: %s\n' % e)
         return USAGE

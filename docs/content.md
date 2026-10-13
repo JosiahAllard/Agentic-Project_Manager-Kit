@@ -14,7 +14,8 @@ a test fails when they differ from what the renderer writes now (tests/content/t
   the file and the problem).
 
 The renderer also writes each host's plugin manifests from `kit.json` (the kit's one name and
-version, ARCHITECTURE.md "Packaging"; see "Manifests" below). Never edit
+version, ARCHITECTURE.md "Packaging"; see "Manifests" below), and the two tables in
+`docs/ROSTER.md` (see "The roster" below). Never edit
 `hosts/claude/shell/agents/`, `hosts/claude/shell/skills/`, `.claude-plugin/*.json` or
 `hosts/claude/shell/hooks/hooks.json` by hand: edit `content/` or `kit.json`, then `--write`, and
 commit both. Code: `kitlib/content` (load, render, drift, write), `kitlib/host/content.py` (the
@@ -35,8 +36,26 @@ renderer).
 | `model.<host>` | optional: that host runs the role on this model instead of the tier's. None is in use. |
 | `mode` | optional: the role policy mode, `controller`, `write`, `read`, `test` or `lander` (`kitlib.host.content.MODES`). Every kit role names one. The guard reads it (`kitlib.content.role_modes`) where a repository sets `guard.role_policy` (docs/guard.md "Role policy"); no host's file carries it, so a change to it renders nothing |
 | `writes` | optional: `[path, ...]`, repo-relative posix paths or globs (no `..`, no drive, no `\`) a `read`, `test` or `lander` role may still edit in its checkout (docs/guard.md "Role policy"). The consultant names its notes file. Not rendered either |
+| `group` | optional: the role's group in the backlog policy (`kitlib/backlog/roles.py`) where its `mode` alone does not give it. Without it the group is the mode's: `controller` lead, `write` builder, `read` and `test` read-only, `lander` lander. The one value in use is `docs` (records, spec-writer: `write` roles that add records but never pull them), and it needs mode `write` (`kitlib.host.content.GROUP_MODES`). Not rendered |
+| `run` | optional: `session`, a role started only as its own launched session, never dispatched as a subagent (pm, coordinator, deep-worker, consultant). The backlog policy holds such a role only from a launcher session mark (`SESSION_ONLY`); pm, which the policy names for its owner-level rows, is held so whatever its file says. Role files are not owner paths, so a `mode`, `group` or `run` change moves a role between backlog groups once it lands. Not rendered |
+| `summary` | optional: one line, the role's "use for" cell in docs/ROSTER.md (its description when absent). Not in any host's file |
 
 A role file keeps its own line endings; the host file gets the same ones.
+
+## The roster
+
+The role list lives only in `content/roles/` (docs/multi-host-plan.md section 7, decision 17).
+`kitlib.content.roster(kit)` reads it: name, mode, tier, group and run per role file, through the
+same cached read as the guard's `role_modes`. The launcher's `KIT_AGENTS` and the backlog
+policy's groups are read from it, never written by hand. `docs/ROSTER.md` is prose with two
+rendered regions, each between `<!-- rendered: roles -->` (or `tiers`) and
+`<!-- end rendered -->`: the role table (name, `tier`, `effort`, `summary`) and the tier table
+(each host's hosts.json `tiers`). `render_content.py` writes and checks them with every host's
+files, whatever `--host` says (`kitlib/roster`); the prose around them is the owner's.
+`tools/agent_roster.py` checks or writes that file alone. So a role is added or removed with one
+file and a render. tests/content/test_role_names.py fails on a `{{agent:<name>}}`, a host's
+dispatch name (`pm-kit:<name>`; Codex's `kit-<name>`, quoted, in hosts/codex/) or a role tuple in
+code that names no role file.
 
 ## Skills
 

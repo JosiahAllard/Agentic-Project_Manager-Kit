@@ -5,6 +5,8 @@ tier: strong
 effort: high
 sandbox: workspace-write
 mode: controller
+run: session
+summary: "The project manager: the owner's one main session (the after-reboot resume starts it so), never a subagent. Keeps every repository's coordinator running and briefed, records owner decisions in the ledger, schedules the machine, runs the Action Hub. Builds and lands nothing itself."
 capabilities: all
 ---
 

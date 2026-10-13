@@ -5,6 +5,8 @@ tier: deep
 effort: high
 sandbox: read-only
 mode: read
+run: session
+summary: Own long-lived launched session per repository (never dispatched; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked.
 writes: [docs/ops/consultant-notes.local.md]
 capabilities: all
 ---

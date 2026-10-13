@@ -195,6 +195,28 @@ class ParseTest(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(hc.ContentError):
                 hc.parse_role(ROLE.replace(b'effort: low\n', b'effort: low\n' + bad))
 
+    def test_a_group_run_and_summary(self):
+        """group: the mode's (MODE_GROUP) unless named, and only one the mode allows; run: session;
+        summary: one line. None of them reaches a host's file."""
+        def parse(extra):
+            return hc.parse_role(ROLE.replace(b'effort: low\n', b'effort: low\n' + extra))
+        r = hc.parse_role(ROLE)
+        self.assertEqual((r.group, r.run, r.summary), (None, None, None))
+        for mode, group in hc.MODE_GROUP.items():
+            with self.subTest(mode):
+                self.assertEqual(parse(b'mode: %s\n' % mode.encode()).group, group)
+        r = parse(b'mode: write\ngroup: docs\nrun: session\nsummary: "Docs: only."\n')
+        self.assertEqual((r.group, r.run, r.summary), ('docs', 'session', 'Docs: only.'))
+        for bad in (b'group: docs\n', b'mode: read\ngroup: docs\n', b'mode: write\ngroup: boss\n',
+                    b'run: always\n', b'summary: ""\n', b'mode: write\ngroup: docs\ngroup: docs\n'):
+            with self.subTest(bad=bad), self.assertRaises(hc.ContentError):
+                parse(bad)
+        role = parse(b'mode: write\ngroup: docs\nrun: session\nsummary: Never in a host file.\n')
+        agent = claude_content.renderer().render(hc.Content(roles=(role, hc.parse_role(BETA)), skills=()))
+        text = b''.join(agent.values())
+        for word in (b'group:', b'run:', b'summary:', b'Never in a host file'):
+            self.assertNotIn(word, text)
+
     def test_writes(self):
         self.assertEqual(hc.parse_role(ROLE).writes, ())
         r = hc.parse_role(ROLE.replace(b'effort: low\n', b'effort: low\nwrites: [docs/a.md, notes/*.txt]\n'))
@@ -295,7 +317,8 @@ class TempTreeTest(unittest.TestCase):
         for rel in ('content', '.claude-plugin', 'boot', os.path.join('hosts', 'claude', 'shell', 'agents'),
                     os.path.join('hosts', 'claude', 'shell', 'skills')):      # boot/: a host's plugin ships a copy
             shutil.copytree(os.path.join(KIT_ROOT, rel), os.path.join(self.root, rel))
-        for rel in ('kit.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json')):
+        for rel in ('kit.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json'),
+                    os.path.join('docs', 'ROSTER.md')):
             write(self.path(rel), read(os.path.join(KIT_ROOT, rel)))
         self.rs = [claude_content.renderer()]
 

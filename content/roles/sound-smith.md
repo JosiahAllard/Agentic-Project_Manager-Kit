@@ -5,6 +5,7 @@ tier: standard
 effort: medium
 sandbox: workspace-write
 mode: write
+summary: Sound effects from synthesis, free libraries, text-to-speech and local music generation; measures clips, the owner judges. Mechanical work at this tier; design dispatches override to the strong tier at high effort (upward only).
 capabilities: [read, edit, write, search, find, bash, powershell, worktree, artifact, dispatch]
 ---
 

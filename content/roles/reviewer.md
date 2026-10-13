@@ -5,6 +5,7 @@ tier: standard
 effort: high
 sandbox: read-only
 mode: read
+summary: Read-only review of one branch against its brief; reports defects, scope creep and untested changes. Raised to the strong tier per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file.
 capabilities: [read, search, find, bash]
 ---
 

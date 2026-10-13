@@ -5,6 +5,7 @@ tier: light
 effort: medium
 sandbox: workspace-write
 mode: lander
+summary: Lands one reviewed branch (or a batch) on main on the coordinator's go. Never edits code. Dispatched with no model override, and never overridden.
 capabilities: [powershell, bash, read, search, find, dispatch]
 ---
 

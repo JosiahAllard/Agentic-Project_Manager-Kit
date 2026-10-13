@@ -5,6 +5,7 @@ tier: strong
 effort: high
 sandbox: workspace-write
 mode: write
+summary: 3D assets as Blender Python scripts against a decided art direction, validated against budgets, with a contact sheet for the owner. No rigging or animation.
 capabilities: [read, edit, write, search, find, bash, powershell, worktree, artifact, dispatch]
 ---
 

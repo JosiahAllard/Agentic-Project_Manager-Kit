@@ -4,6 +4,7 @@ description: Runs a repository's test tiers in a given worktree and reports only
 tier: light
 sandbox: workspace-write
 mode: test
+summary: Runs test tiers in a given worktree and reports only PASS/FAIL plus failing lines.
 capabilities: [bash, powershell, worktree, search, read, find]
 ---
 
