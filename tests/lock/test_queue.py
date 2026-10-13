@@ -316,9 +316,10 @@ class ResourceExclusion(unittest.TestCase):
             self.assertLessEqual(a1, b0)
 
     def test_a_landing_waiting_only_for_its_resource_does_not_hold_back_unrelated_runs(self):
-        # 16 cores. X1 lands repo X on 4 of them, 30 min left; X2, repo X's next landing, waits
-        # for X1 alone (its cores are free now). A landing of repo Y and a 60-min ordinary run
-        # start now on idle cores; X3, repo X's third, still waits for X2.
+        # Sixteen cpu slots (fake hardware). X1 lands repo X on a quarter of them, 30 min left;
+        # X2, repo X's next landing, waits for X1 alone (its cores are free now). A landing of
+        # repo Y and a 60-min ordinary run start now on idle cores; X3, repo X's third, still
+        # waits for X2.
         L = lay.derive(lay.fake_hardware(threads=32, smt=2, gpus=0))
         self.assertEqual(L["cpu_slots"], 16)
         other = "landing:z:\\other\\.git"
@@ -363,8 +364,8 @@ class ResourceExclusion(unittest.TestCase):
         self.assertEqual(got["r-run"]["start"], NOW + 1800)
 
     def test_a_landing_whose_cores_are_busy_too_still_holds_back_a_long_run(self):
-        # X2 needs 13 cores, and only 12 are free while X1 runs: it waits for X1's cores as
-        # well as its resource, so it stays a barrier. The 3-core run behind it would fit beside
+        # X2 needs one core more than X1 leaves free: it waits for X1's cores as well as its
+        # resource, so it stays a barrier. The 3-core run behind it would fit beside
         # it, yet it may not start ahead of it and still run when X2 starts.
         L = lay.derive(lay.fake_hardware(threads=32, smt=2, gpus=0))
         x1 = holder("r-x1", [0, 1, 2, 3], NOW - 600, 2400)
