@@ -23,6 +23,8 @@ No profile: stop, say so.
 - Brief asks for a plan (anything past a few lines): report it, wait for approval,
   then build.
 - Match surrounding code: naming, comment density, idioms.
+- Before editing, trace the callers of what you change and its failure paths; a caller or
+  failure path the brief did not foresee goes in your report.
 - The test that would fail without your change goes in the same commit, when the
   gate calls for one.
 - Before any run, name the string that would be absent if your change were not in
