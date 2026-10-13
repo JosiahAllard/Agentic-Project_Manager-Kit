@@ -372,10 +372,11 @@ def _rx():
             named=re.compile(r'((?:--?|/)?([A-Za-z_][\w.-]*))([=:])(.*)', re.S),
             # a user flag (curl's -u, a cluster ending in it as in -sSu, --proxy-user, /u)
             user_flag=re.compile(r'-[a-z]*u|(?:--?|/)(?:[\w.-]*[-_.])?user|/u', re.I),
-            glued_user=re.compile(r'-[A-Za-z]*?[uU]([^:]*:.*)', re.S),        # -uuser:password
+            glued_user=re.compile(r'-[A-Za-z]*?[uU]([^:]+:.*)', re.S),        # -uuser:password
             glued_pw=re.compile(r'(-p|/r?p:)(.+)', re.I | re.S),        # -ppassword, /p:password
             # a word's last name and the = or : after it (`$env:TOKEN =`, `"password":`)
-            trail=re.compile(r'(?<![\w.-])([\w.-]+)[\'"\]]*\s*([=:]?)\s*\Z'),
+            # (no two white-space runs side by side: that is quadratic on a long run)
+            trail=re.compile(r'(?<![\w.-])([\w.-]+)[\'"\]]*(?:\s*([=:])\s*|\s*)\Z'),
             # name=value, name = value; "name": value, 'name': value, ['name']=value; {name: value
             pair=re.compile(r'(?<![\w.-])([\w.-]+)\s*=\s*'
                             r'|(["\'])([^"\'\\]*)\2\]?\s*[:=]\s*'
@@ -389,15 +390,19 @@ def _rx():
             # `eyJ` is tried once and not again from each of its letters
             token=re.compile(r'(?:sk-|gh[pousr]_|github_pat_|xox[abprs]-|glpat-|AKIA|ASIA)'
                              r'[A-Za-z0-9_\-]{8,}|(?<![\w-])eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]*'),
-            user=re.compile(r'(?![A-Za-z]:[\\/])(?!.*://)([^:/]+):.+', re.S))
+            drive=re.compile(r'[A-Za-z]:[\\/]'))
     return _RX
 
 
 def _user_value(v):
-    """`user:password` (or `DOMAIN\\user:password`) as `user:***`; anything else (a drive
-    path: a letter, a colon and a slash; a URL, whose user info _word masks) as it is."""
-    m = _rx().user.fullmatch(v)
-    return m.group(1) + ':' + MASK if m else v
+    """A user flag's value with all after its first `:` masked, whatever comes before it
+    (`user:***`, `DOMAIN\\user:***`, `:***`, `https:***`); a value ending at that `:` (an API
+    key as the user, `sk_test_x:`) is masked whole. A drive path (a letter, a colon and a slash:
+    `python -u SCRIPT`) and a value with no `:` are kept."""
+    i = v.find(':')
+    if i < 0 or _rx().drive.match(v):
+        return v
+    return v[:i + 1] + MASK if v[i + 1:] else MASK + ':'
 
 
 def _pairs(w):
@@ -467,11 +472,13 @@ def _mask(words):
     - the one after a secret flag (`--token VALUE`, `/key VALUE`), after `Bearer`/`Basic`, after
       a word ending in a secret name and `=` or `:` (`"password":`), and after a lone `=` or
       `:` that follows a secret name (`$env:TOKEN = VALUE`), unless it is a secret flag itself;
-    - the password of a user flag's `user:password` (`-u`, `-sSu`, `-uuser:password`,
-      `--proxy-user`, `/u`); a flag after it is not its value, and `/user:NAME PASSWORD`
-      (net use) hides the next word;
-    - once a user flag (or sshpass) is seen, the value of `-p`, `-P`, `/p` and a glued `-pVALUE`
-      (mysql, schtasks: the password goes with the user); and always after `/RP`."""
+    - all after the first `:` of a user flag's value, as _user_value (`-u`, `-sSu`,
+      `-uuser:password`, `--proxy-user`, `/u`); a flag after it is not its value, and
+      `/user:NAME PASSWORD` (net use) hides the next word;
+    - once a word starting `-u` or `--user` (or sshpass) is seen, the value of `-p`, `-P`, `/p`,
+      `/p:` and a glued `-PVALUE` (mysql, schtasks: the password goes with the user); always
+      the value of `/RP` and `/rp:`; and always a glued `-pVALUE` (mysql's password), the next
+      word too when the word is also a secret flag (`-password VALUE`) or a user flag."""
     rx = _rx()
     out, hide, prev, user_seen = [], None, None, False
     for w in words:
@@ -495,8 +502,14 @@ def _mask(words):
             hide = None
             continue
         hide = None
-        if low.replace('\\', '/').rsplit('/', 1)[-1] in ('sshpass', 'sshpass.exe'):
+        if (low.startswith(('-u', '--user'))
+                or low.replace('\\', '/').rsplit('/', 1)[-1] in ('sshpass', 'sshpass.exe')):
             user_seen = True
+        g = rx.glued_pw.fullmatch(w)
+        if g and (g.group(1) == '-p' or user_seen or g.group(1).lower() == '/rp:'):
+            out.append(g.group(1) + MASK)
+            hide = 'all' if secret_flag else 'user' if rx.user_flag.fullmatch(w) else None
+            continue
         if (secret_flag or low in ('bearer', 'basic', '/rp')
                 or (user_seen and low in ('-p', '/p'))
                 or (w.strip() in ('=', ':') and last and _secret(last))):
@@ -518,10 +531,6 @@ def _mask(words):
             if m.group(1).startswith('/'):
                 hide = 'word'                   # net use X /user:NAME PASSWORD
             user_seen = True
-            continue
-        g = rx.glued_pw.fullmatch(w)
-        if g and (user_seen or g.group(1).lower() == '/rp:'):
-            out.append(g.group(1) + MASK)
             continue
         out.append(_word(w))
         t = rx.trail.search(w)

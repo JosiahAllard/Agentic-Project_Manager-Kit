@@ -500,8 +500,12 @@ class RedactTest(unittest.TestCase):
              ["--pass", "***", "--passphrase", "***", "--pw", "***", "-p", "kept"]),
             (["-u", "alice:abc", "--user", "alice:abc", "--user=alice:abc", "-U", "bob:abc"],
              ["-u", "alice:***", "--user", "alice:***", "--user=alice:***", "-U", "bob:***"]),
-            (["-u", "C:\\kept\\x.py", "-u", "kept", "--user", "git+https://h/kept:1"],
-             ["-u", "C:\\kept\\x.py", "-u", "kept", "--user", "git+https://h/kept:1"]),
+            # a user flag's value: all after its first : (a drive path aside), or whole if it
+            # ends at that :
+            (["-u", "C:\\kept\\x.py", "-u", "kept", "--user", "git+https://h/x:1"],
+             ["-u", "C:\\kept\\x.py", "-u", "kept", "--user", "git+https:***"]),
+            (["-u", ":PAT", "-u", "sk_test_abc:", "-u", "a/b:pw", "-u", "user:pa://x"],
+             ["-u", ":***", "-u", "***:", "-u", "a/b:***", "-u", "user:***"]),
             (["https://h/x?a=1&access_token=abc&b=2", "--data=a=1&password=abc", "--data=pw=abc"],
              ["https://h/x?a=1&access_token=***&b=2", "--data=a=1&password=***", "--data=pw=***"]),
             (['{"user":"kept","password":"abc","n":1}', '{"apiKey": 12345, "a": "pw=abc"}'],
@@ -517,12 +521,12 @@ class RedactTest(unittest.TestCase):
              ["https://***@host/", "https://***@h/x", "https://***@h/x", "https://***@h/x",
               "https://***@scope/pkg"]),
             (["https://h?q=@kept", "https://h/x?r=git://tok@h2/y", "-u", "https://u:pa/ss@h"],
-             ["https://h?q=@kept", "https://***@h2/y", "-u", "https://***@h"]),
+             ["https://h?q=@kept", "https://***@h2/y", "-u", "https:***"]),
             # the value of -u/--user gets every other mask too, and a flag is not its value
             (["-u", "https://user:" + "ghp_" + "a" * 36 + "@github.com/o/r.git", "main"],
-             ["-u", "https://***@github.com/o/r.git", "main"]),
+             ["-u", "https:***", "main"]),
             (["-u", "ghp_" + "a" * 36, "-u", "GITHUB_TOKEN=abc", "--user=https://u:p@h/"],
-             ["-u", "***", "-u", "GITHUB_TOKEN=***", "--user=https://***@h/"]),
+             ["-u", "***", "-u", "GITHUB_TOKEN=***", "--user=https:***"]),
             (["-u", "--token", "abc", "--token", "--password", "abc", "-u", "-v", "kept"],
              ["-u", "--token", "***", "--token", "--password", "***", "-u", "-v", "kept"]),
             # user flags: a cluster ending in u, glued, long forms, /u, DOMAIN\user, any case
@@ -532,13 +536,18 @@ class RedactTest(unittest.TestCase):
               "/u", "d:***", "-u", "DOMAIN\\e:***", "-U", "f:***", "--USER", "g:***"]),
             (["\\\\h\\s", "/user:DOMAIN\\e", "abc", "/persistent:no"],      # net use
              ["\\\\h\\s", "/user:DOMAIN\\e", "***", "/persistent:no"]),
-            # -p/-P/ /p go with a user flag seen before them (or sshpass); /RP always
+            # -p/-P/ /p go with a word starting -u or --user seen before them (or sshpass);
+            # /RP and a glued -pVALUE always
             (["-u", "root", "-h", "db", "-p", "abc", "-P", "abc", "-pabc", "/p:abc"],
              ["-u", "root", "-h", "db", "-p", "***", "-P", "***", "-p***", "/p:***"]),
             (["sshpass", "-p", "abc", "ssh", "h"], ["sshpass", "-p", "***", "ssh", "h"]),
             (["/create", "/u", "e", "/p", "abc", "/RP", "abc", "/rp:abc"],
              ["/create", "/u", "e", "/p", "***", "/RP", "***", "/rp:***"]),
-            (["-p", "kept", "-P", "8080", "-pkept"], ["-p", "kept", "-P", "8080", "-pkept"]),
+            (["-uroot", "-P", "abc", "-Pabc"], ["-uroot", "-P", "***", "-P***"]),
+            (["--user=root", "-p", "abc"], ["--user=root", "-p", "***"]),
+            (["-h", "h", "-pabc", "-psecret", "x", "-P3306"],
+             ["-h", "h", "-p***", "-p***", "***", "-P3306"]),
+            (["-p", "kept", "-P", "8080", "-P8080"], ["-p", "kept", "-P", "8080", "-P8080"]),
             # a quoted value is masked to its closing quote (or the end), keeping its quotes
             (["f(password='hunter2')", "$env:TOKEN='abc'", "{'token': 'abc'}", 'f(pw="a b")'],
              ["f(password='***')", "$env:TOKEN='***'", "{'token': '***'}", 'f(pw="***")']),
@@ -569,9 +578,12 @@ class RedactTest(unittest.TestCase):
              ["--passcode", "***", "--pass-phrase", "***", "--pass-file", "***", "--smtp-pw",
               "***", "--passwd", "***", "-PassThruPassword", "***"]),
             (["-PassThru", "kept", "/passive", "kept", "--bypass-list", "kept", "--stopwatch",
-              "kept", "-PassThru:$true", "--passthrough", "kept"],
+              "kept", "--passthrough", "kept"],
              ["-PassThru", "kept", "/passive", "kept", "--bypass-list", "kept", "--stopwatch",
-              "kept", "-PassThru:$true", "--passthrough", "kept"]),
+              "kept", "--passthrough", "kept"]),
+            # -PassThru ends in u, so it counts as a user flag: a glued -P after it is masked
+            (["-PassThru:$true", "kept"], ["-PassThru:$true", "kept"]),
+            (["-PassThru", "x", "-PassThru:$true"], ["-PassThru", "x", "-P***"]),
         ]
         for words, want in cases:
             with self.subTest(words[0]), mock.patch.object(console, "KEEP_WORDS", 99):
@@ -605,7 +617,8 @@ class RedactTest(unittest.TestCase):
         import time
         words = ["eyJ" * 30000, 'x="' * 30000, "{a:" * 30000, "'a':" * 22000,
                  "-" + "u" * 90000 + ":", "https://" + ":@" * 45000, "://" * 30000,
-                 "aB" * 45000 + "=x", "a!" * 45000, "$env:TOKEN = " * 7000]
+                 "aB" * 45000 + "=x", "a!" * 45000, "$env:TOKEN = " * 7000,
+                 "a" + " " * 90000 + "b", "a" + "	" * 90000 + "b"]
         for w in words:
             with self.subTest(w[:12]):
                 start = time.perf_counter()
