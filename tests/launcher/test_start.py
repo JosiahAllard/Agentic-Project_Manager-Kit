@@ -488,6 +488,8 @@ class Start(Base):
         folder = os.path.join(here, '..', '..', 'claude', 'agents')
         stems = sorted(f[:-3] for f in os.listdir(folder) if f.endswith('.md'))
         self.assertEqual(sorted(start.KIT_AGENTS), stems)
+        roles = os.path.join(here, '..', '..', 'content', 'roles')        # the source they render from
+        self.assertEqual(sorted(start.KIT_AGENTS), sorted(f[:-3] for f in os.listdir(roles) if f.endswith('.md')))
 
     def rec(self, **kw):
         e = {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord', 'state': 's.md', 'account': 1,

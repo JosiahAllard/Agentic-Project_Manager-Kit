@@ -5,6 +5,7 @@ must be exactly what the renderer writes. The rest run on temp copies and small 
 """
 import contextlib
 import io
+import json
 import os
 import shutil
 import sys
@@ -54,6 +55,11 @@ class RealContentTest(unittest.TestCase):
                          sorted(c.role_names()))
         skills = os.path.join(KIT_ROOT, 'claude', 'skills')
         self.assertEqual(sorted(os.listdir(skills)), sorted(s.name for s in c.skills))
+
+    def test_the_plugin_manifest_lists_every_role(self):
+        with open(os.path.join(KIT_ROOT, '.claude-plugin', 'plugin.json'), encoding='utf-8') as f:
+            agents = json.load(f)['agents']
+        self.assertEqual(sorted(agents), sorted('./claude/agents/%s.md' % n for n in content.load(KIT_ROOT).role_names()))
 
     def test_skills_are_copied_byte_for_byte(self):
         for s in content.load(KIT_ROOT).skills:
