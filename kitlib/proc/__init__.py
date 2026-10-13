@@ -5,6 +5,8 @@
     cpu       processor topology over every processor group
     job       job objects: pinned, measured, killed as a tree
     shield    a pid shield for a suspended child, and the pid hold
+    pipe      named pipes, pipe and file ACLs, process SIDs and images (the bridge's base)
+    errors    ProcError, which pipe raises
 
 Windows only.
 """
