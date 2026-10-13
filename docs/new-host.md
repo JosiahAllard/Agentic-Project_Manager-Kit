@@ -82,7 +82,15 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   hook registration (command lines from `hookmain.manifest_command`). Role bodies fill tokens from
   the host's own table (docs/content.md "Tokens"): every one-value token in `kitlib.host.content.TOKENS`,
   `{{model:<tier>}}` from `tier_models()` and `{{tool:<capability>}}` from its capability map, passed
-  to `kitlib.host.content.substitute` (`models=`, `tools=`).
+  to `kitlib.host.content.substitute` (`models=`, `tools=`). For `tools/agent_view.py` it also says
+  what it gives one role: `tokens()` (that table, `{}` if its files fill none), `tools()` (the
+  capability map, or `None`), `role_path(name)` (the file `render` writes the role to) and
+  `settings(role)` (`[(key, value)]`, what that file sets for the role to run with, each value as
+  the file writes it: `model` when it names one, `tools` when it limits the role to a tool list).
+  The conformance suite checks each against `render`.
+- `start_text(event_name, kit, payload, environ)` (optional): the whole text the host's start hooks
+  add at that event (the kit header first, then any start checks for the session's `PM_KIT_ROLE`
+  mark). `tools/agent_view.py` shows it; without it the view says the start text is not known.
 - `command_host()`, `launcher()` and `plugin_installer()`: `None` until the host has them.
 - The renderer's optional `vendored(root)`: `{path: bytes}` of kit files the host's plugin ships a
   copy of, read from the kit checkout `root` and drift-checked with the rest. A plugin root that is
@@ -127,6 +135,8 @@ The suite checks:
 - fail-closed denies
 - the kit header at each start event
 - sessions, rendered-file drift, and every role rendered
+- `tokens`, `tools`, `role_path` and `settings` against what `render` writes, and `start_text`
+  (when the adapter has it) beginning with the kit header
 - `kit.json`'s version in the manifests
 - boot before kitlib in every shell script, and an existing entry for every declared event
 - the 20-line limit, and the host's name kept out of kitlib, tools, boot, content and other hosts

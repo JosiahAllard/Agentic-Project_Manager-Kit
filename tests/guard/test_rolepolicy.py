@@ -7,6 +7,7 @@ The World's main checkout turns the policy on (guard.role_policy) and names a mo
 a role with none is judged by the shared rules alone, exactly as before. The World's kit folder
 (Ctx.kit) holds no role files unless a test writes some (RoleFiles)."""
 import os
+import re
 import unittest
 
 from kitlib import content as kcontent
@@ -564,6 +565,48 @@ class KitRoleFiles(unittest.TestCase):
         roles = os.listdir(os.path.join(kitroot.root(), 'content', 'roles'))
         self.assertEqual(sorted(modes), sorted(n[:-3] for n in roles if n.endswith('.md')))
         self.assertEqual(set(modes.values()) - set(rolepolicy.MODES), set())
+
+
+class Rules(Base):
+    """rolepolicy.RULES, the plain words tools/agent_view.py shows, against the answers the guard
+    gives each mode: a row holds a mode exactly when the guard refuses that mode by it."""
+    HOLDERS = {'senior-worker': 'write', 'reviewer': 'read', 'test-runner': 'test', 'lander': 'lander',
+               'pm': 'controller'}
+
+    @staticmethod
+    def row(modes):
+        """The text of the write-jail row over `modes`."""
+        return next(t for r, ms, t in rolepolicy.RULES if r == 'write-jail' and ms is modes)
+
+    def test_every_role_rule_the_guard_refuses_by_is_a_row(self):
+        import inspect
+        said = set(re.findall(r"_deny\('(role-[a-z]+)'", inspect.getsource(rolepolicy)))
+        self.assertEqual(said, {r for r, _, _ in rolepolicy.RULES if r.startswith('role-')})
+        self.assertEqual(set(self.HOLDERS.values()), set(rolepolicy.MODES))
+
+    def test_each_row_holds_the_modes_the_guard_holds(self):
+        for role, m in self.HOLDERS.items():
+            texts = [t for _, t in rolepolicy.rules_for(m)]
+            held = {r for r, _ in rolepolicy.rules_for(m)}
+            with self.subTest(role=role, mode=m):
+                edit = self.edit(os.path.join(self.w.wt, 'worker.py'), role)
+                if 'role-edit' in held:
+                    self.denied(edit, 'role-edit')
+                else:
+                    self.allowed(edit)
+                self.denied(self.shell('Get-Location', role, workdir=self.w.plain), 'role-workdir')
+                self.denied(self.shell('python -i', role), 'role-shell')
+                self.denied(self.shell(LOCK + ' status --force', role), 'role-lock')
+                write = self.shell('Set-Content -LiteralPath a.txt -Value changed', role)
+                if self.row(rolepolicy.READ_ONLY_CHECKOUT) in texts:
+                    self.denied(write, 'write-jail')
+                else:
+                    self.allowed(write)
+                ctx = self.w.ctx()
+                roots = [r['path'] for r in rolepolicy.context(edit, ctx).config(self.w.wt)
+                         .section('guard').get('data_roots') or []]
+                self.assertEqual(os.path.join(self.w.wt, 'CLAUDE.md') in roots,
+                                 self.row(rolepolicy.OWNER_PATHS_READ_ONLY) in texts)
 
 
 if __name__ == '__main__':

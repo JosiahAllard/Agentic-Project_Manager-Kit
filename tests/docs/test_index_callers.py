@@ -19,6 +19,7 @@ from kitlib.docs import callers as doc_callers, index
 from kitlib.preflight import report
 from tests.docs.test_cli import call, doc_index_cli, repo_with_docs
 from tests.gitfixture import fixture_env
+from tests.home import no_machine_owner
 from tests.preflight.test_preflight import free_reader
 from tools import preflight
 
@@ -130,6 +131,11 @@ class Commit(Case):
 
 
 class ReviewPack(Case):
+
+    def setUp(self):
+        super().setUp()
+        # no owner email in .kit.json: the owner rules read the machine config's, here none
+        no_machine_owner(self)
 
     def pack(self):
         self.repo.git('checkout', '-q', '-b', 'phase/x')

@@ -193,34 +193,50 @@ class CodexContent:
     def owned(self):
         return (AGENTS_REL, SKILLS_REL)
 
+    @staticmethod
+    def tokens():
+        return tokens()
+
+    @staticmethod
+    def tools():
+        return dict(TOOLS)
+
+    @staticmethod
+    def role_path(name):
+        return '%s/kit-%s.toml' % (AGENTS_REL, name)
+
+    def settings(self, role):
+        """[(key, value)] of what `role`'s agent file runs it with, in the file's order: `model`
+        (none for ACCOUNT_DEFAULT: the account's model runs), `model_reasoning_effort` and
+        `sandbox_mode`. No tool list: a Codex agent file has none."""
+        model = role.model_for(HOST, self.tier_models())
+        if sandbox_mode(role) not in ('read-only', 'workspace-write'):
+            raise ContentError('%s: no Codex sandbox_mode for %s' % (self.role_path(role.name), role.sandbox))
+        out = [('model', model)] if model != ACCOUNT_DEFAULT else []
+        return out + [('model_reasoning_effort', role.effort or TIER_EFFORT[role.tier]),
+                      ('sandbox_mode', sandbox_mode(role))]
+
     def agent_file(self, role, names):
         """The bytes of `role`'s agent file; `names` are every role's name (for role tokens)."""
-        src = '%s/kit-%s.toml' % (AGENTS_REL, role.name)
+        src = self.role_path(role.name)
         values = tokens()
         fill = lambda text: substitute(text, values, agent_name, names, src, models=prose_models(),  # noqa: E731
                                        tools=TOOLS)
-        model = role.model_for(HOST, self.tier_models())
-        effort = role.effort or TIER_EFFORT[role.tier]
-        if sandbox_mode(role) not in ('read-only', 'workspace-write'):
-            raise ContentError('%s: no Codex sandbox_mode for %s' % (src, role.sandbox))
         nl = role.newline
         lines = ['# Review template: do not install until live acceptance (hosts/codex/README.md).',
                  '# Rendered from content/roles/%s.md by tools/render_content.py; never edit it by hand.' % role.name,
                  '# Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".',
                  'name = %s' % toml_string(agent_name(role.name)),
                  'description = %s' % toml_string(fill(role.description))]
-        if model != ACCOUNT_DEFAULT:
-            lines.append('model = %s' % toml_string(model))
-        lines += ['model_reasoning_effort = %s' % toml_string(effort),
-                  'sandbox_mode = %s' % toml_string(sandbox_mode(role)),
-                  'developer_instructions = %s' % toml_block(substitute_body(role, names), nl)]
+        lines += ['%s = %s' % (key, toml_string(value)) for key, value in self.settings(role)]
+        lines.append('developer_instructions = %s' % toml_block(substitute_body(role, names), nl))
         return (nl.join(lines) + nl).encode('utf-8')
 
     def render(self, content):
         names = content.role_names()
         out = {}
         for role in content.roles:
-            out['%s/kit-%s.toml' % (AGENTS_REL, role.name)] = self.agent_file(role, names)
+            out[self.role_path(role.name)] = self.agent_file(role, names)
         for skill in content.skills:
             for rel, data in skill.files:
                 out['%s/%s/%s' % (SKILLS_REL, skill.name, rel)] = data

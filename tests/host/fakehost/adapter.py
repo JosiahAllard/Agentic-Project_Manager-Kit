@@ -13,7 +13,7 @@ capabilities), so render refuses an ask outright.
 import json
 import os
 
-from kitlib.host import Action, hookmain, registry
+from kitlib.host import Action, header, hookmain, registry
 
 NAME = 'fakehost'
 SHELL_REL = 'tests/host/fakehost/shell'
@@ -69,10 +69,22 @@ class FakeContent(object):
         return (AGENTS_REL,)
 
     def render(self, content):
-        tiers = self.tier_models()
-        return {'%s/%s.json' % (AGENTS_REL, r.name): _dump({'name': r.name, 'model': r.model_for(NAME, tiers),
-                                                           'sandbox': r.sandbox})
-                for r in content.roles}
+        return {self.role_path(r.name): _dump(dict([('name', r.name)] + self.settings(r))) for r in content.roles}
+
+    @staticmethod
+    def tokens():
+        return {}                               # its files carry no role body, so no token
+
+    @staticmethod
+    def tools():
+        return None
+
+    @staticmethod
+    def role_path(name):
+        return '%s/%s.json' % (AGENTS_REL, name)
+
+    def settings(self, role):
+        return [('model', role.model_for(NAME, self.tier_models())), ('sandbox', role.sandbox)]
 
     def manifests(self, kit, content, registry_path=None):
         entry = registry.host(NAME, registry_path)
@@ -133,6 +145,10 @@ class FakeAdapter(object):
         if event_name not in CONTEXT_EVENTS:
             raise ValueError('%s carries no context' % event_name)
         return (json.dumps({'context': text}) + '\n', 0) if text else ('', 0)
+
+    @staticmethod
+    def start_text(event_name, kit, payload=None, environ=None):
+        return header.text(kit)
 
     def sessions(self):
         return FakeSessions()

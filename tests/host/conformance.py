@@ -45,7 +45,7 @@ from unittest import mock
 
 from kitlib import content as kcontent
 from kitlib.host import Action, Decision, HostCapabilities, HostProfile, header, hookmain, registry
-from kitlib.host.content import ContentError
+from kitlib.host.content import ARG_TOKENS, CAPABILITIES, TOKENS, ContentError
 from tests.host.test_leaks import occurrences
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -359,6 +359,43 @@ class HostConformance(object):
                     self.assertNotEqual(r.render(less), files, 'dropping %s changes nothing' % role.name)
                 except ContentError:
                     pass                        # another role names it ({{agent:<role>}}): it is used
+
+    def test_the_renderer_says_what_it_gives_each_role(self):
+        """tokens, tools, role_path and settings (kitlib.host.content.ContentRenderer), which
+        tools/agent_view.py shows, agree with what render writes."""
+        r, c = self.renderer(), kcontent.load(self.KIT_ROOT)
+        for attr in ('tokens', 'tools', 'role_path', 'settings'):
+            self.assertTrue(callable(getattr(r, attr, None)), 'the renderer has %s()' % attr)
+        values = r.tokens()
+        self.assertEqual(set(values) - (set(TOKENS) - set(ARG_TOKENS)), set(), 'tokens() holds a non-token')
+        self.assertTrue(all(isinstance(v, str) and v for v in values.values()))
+        tools = r.tools()
+        if tools is not None:
+            self.assertEqual(set(tools) - set(CAPABILITIES), set(), 'tools() maps a non-capability')
+            named = {cap for role in c.roles for cap in role.capabilities}
+            self.assertEqual(named - set(tools), set(), 'a role names a capability tools() does not map')
+        files = r.render(c)
+        for role in c.roles:
+            with self.subTest(role=role.name):
+                path = r.role_path(role.name)
+                self.assertIn(path, files, 'role_path is not a file render writes')
+                text = files[path].decode('utf-8')
+                pairs = r.settings(role)
+                keys = [k for k, _ in pairs]
+                self.assertEqual(len(keys), len(set(keys)), 'a setting twice')
+                for key, value in pairs:
+                    self.assertIsInstance(value, str, key)
+                    self.assertIn(value, text, '%s = %s is not in %s' % (key, value, path))
+
+    def test_start_text_begins_with_the_header(self):
+        start_text = getattr(self.adapter, 'start_text', None)
+        if start_text is None:
+            return                              # optional: tools/agent_view.py then says it is unknown
+        text = header.text(self.KIT_ROOT)
+        for event in self.events_of('session_start') + self.events_of('subagent_start'):
+            with self.subTest(event=event):
+                got = start_text(event, self.KIT_ROOT, {'cwd': self.KIT_ROOT}, {})
+                self.assertTrue(got.startswith(text), 'an unmarked session gets the header first')
 
     def test_skills_ship_byte_for_byte_when_declared(self):
         if not self.entry.capabilities.skills:

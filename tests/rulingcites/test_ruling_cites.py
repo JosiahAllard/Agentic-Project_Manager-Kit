@@ -319,6 +319,15 @@ class TheDefaultLedgerNameIsTheRepoName(Fixture):
         self.assertEqual(code, 1, out)
         self.assertIn('not for some-folder or all', out)
 
+    def test_the_name_read_from_the_remote_is_not_the_ledger_name(self):
+        # "repo".name unset reads the remote's URL (docs/kit-json.md "With no file"); the ledger
+        # column takes a written name only, as kitlib.backlog.ledger.ledger_name does
+        gitcmd.subprocess_run(('git', '-C', self.root, 'remote', 'add', 'origin', 'https://example.com/x/beta.git'),
+                              check=True, capture_output=True, env=fixture_env())
+        self.assertEqual(RC.settings(self.root)[0], ('some-folder', 'all'))
+        self.set_config(repo={'name': 'Gamma'})
+        self.assertEqual(RC.settings(self.root)[0], ('gamma', 'all'))
+
 
 class TheSkipGlobs(Fixture):
 

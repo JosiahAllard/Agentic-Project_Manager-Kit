@@ -20,7 +20,7 @@ import sys
 import tempfile
 
 from .migration import MOVE_STEPS, OLD_DIR_NAME
-from .types import ConfigError, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, is_note, parse_json
+from .types import ConfigError, Email, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, is_note, parse_json
 
 # The machine config's folder in the home folder. The one place the kit names it: code derives
 # the folder from config_dir() and messages from DISPLAY or display(), so a new name changes this
@@ -127,6 +127,7 @@ LEDGER_REFS = Obj({
 
 # One line per key. A key another module owns is registered as Owned(<that module>), which checks it.
 SCHEMA = {
+    'owner_email': Field(Email(), None, 'the author email of the owner\'s own commits, for every repository whose .kit.json sets no "owner".email; unset there too: no commit is provable as the owner\'s, so every owner-only change is refused (docs/kit-json.md "With no file"); older kit copies reject the key'),
     'ledger_path': Field(AbsPath(), None, 'the rulings ledger file; set here only'),
     'ledger_repos': Field(ListOf(Str(pattern=r'[a-z0-9][a-z0-9-]*', what='a lower-case repo name')), None, 'the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)'),
     'pending_path': Field(AbsPath(), None, "the owner's pending-steps file tools/pending.py edits (docs/pending.md)"),
@@ -506,6 +507,13 @@ def failing_keys(data):
         if errs:
             out.append(k)
     return sorted(out)
+
+
+def owner_email(home=None, location=None):
+    """The machine's owner email (lower case), or None when the machine config sets none. A
+    machine config that cannot be read raises ConfigError; the caller fails closed on it."""
+    value = user_config(home, location)['owner_email']
+    return value.strip().lower() if isinstance(value, str) and value.strip() else None
 
 
 def ledger_path(home=None):

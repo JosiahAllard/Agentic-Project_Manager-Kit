@@ -480,7 +480,7 @@ class PmDataPlace(unittest.TestCase):
 
     def test_every_ref_push_from_pm_data_is_judged_by_the_kit(self):
         self.configure()
-        cases = (('git push --mirror origin', 'no gate-OK record'),
+        cases = (('git push --mirror origin', 'rewrites main'),         # --mirror forces every ref
                  ('git push --all origin', 'no gate-OK record'),
                  ('git push --delete origin main', 'main is never deleted'),
                  ('git push origin :main', 'main is never deleted'),
