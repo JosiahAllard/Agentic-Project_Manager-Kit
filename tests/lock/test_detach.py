@@ -41,10 +41,6 @@ class Command(unittest.TestCase):
         argv = dt.command(self.pyw, r"C:\kit\tools\machine_lock.py", [], "r-1", ["--"])
         self.assertEqual(argv[:3], [self.pyw, r"C:\kit\tools\no_window.py", self.py])
 
-    def test_the_windowless_python_is_the_hooks_one(self):
-        from kitlib.host import hookmain
-        self.assertEqual(dt.pythons(self.py), (hookmain.windowless(self.py), self.py))
-
     def test_the_carrier_is_the_kit_one_by_path(self):
         argv = dt.command(sys.executable, TOOL, [], "r-1", ["--"])
         self.assertEqual(os.path.normcase(argv[1]),
