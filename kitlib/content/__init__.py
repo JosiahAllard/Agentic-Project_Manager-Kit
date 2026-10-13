@@ -11,7 +11,8 @@ the edge, tools/render_content.py). Pure file work: no printing, no exit.
 
 `role_modes(kit)` is {role: mode} from the role files under the kit root `kit`, for the guard's
 role policy (docs/guard.md "Role policy"); `role_mode(name, kit)` one role's, an old name
-(ALIASES) read as its new one. Read once per kit root and cached. It never raises: no
+(ALIASES) read as its new one; `role_writes(name, kit)` the paths its `writes` names. Read once
+per kit root and cached. It never raises: no
 `content/roles` folder gives {}, and a role file that cannot be read or parsed is left out, so
 the policy is off for that role rather than the guard failing.
 """
@@ -78,9 +79,14 @@ def load_skills(root):
 def role_modes(kit):
     """{role name: mode} of every role file under `<kit>/content/roles` that names a mode (cached
     per `kit`); {} when the folder is missing. A file that does not parse is left out."""
+    return {name: m for name, (m, _) in _policy(kit).items() if m in MODES}
+
+
+def _policy(kit):
+    """{role name: (mode or None, writes)} of every role file under `kit` that parses (cached)."""
     key = os.path.normcase(os.path.abspath(kit))
     if key in _MODES:
-        return dict(_MODES[key])
+        return _MODES[key]
     folder = _join(kit, ROLES_REL)
     out = {}
     try:
@@ -95,10 +101,10 @@ def role_modes(kit):
                 role = parse_role(f.read(), '%s/%s' % (ROLES_REL, n))
         except (OSError, ContentError):
             continue
-        if role.name == n[:-3] and role.mode in MODES:
-            out[role.name] = role.mode
+        if role.name == n[:-3]:
+            out[role.name] = (role.mode, role.writes)
     _MODES[key] = out
-    return dict(out)
+    return out
 
 
 def role_mode(name, kit):
@@ -107,6 +113,14 @@ def role_mode(name, kit):
     if not isinstance(name, str):
         return None
     return role_modes(kit).get(ALIASES.get(name, name))
+
+
+def role_writes(name, kit):
+    """The `writes` paths of role `name` (an old name read as its new one) under `kit`: () when
+    it names none or has no readable file."""
+    if not isinstance(name, str):
+        return ()
+    return _policy(kit).get(ALIASES.get(name, name), (None, ()))[1]
 
 
 def load(root):

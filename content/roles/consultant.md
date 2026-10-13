@@ -5,6 +5,7 @@ tier: deep
 effort: high
 sandbox: read-only
 mode: read
+writes: [docs/ops/consultant-notes.local.md]
 capabilities: all
 ---
 
