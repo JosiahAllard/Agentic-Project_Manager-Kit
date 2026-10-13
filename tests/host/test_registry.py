@@ -112,6 +112,8 @@ class Validation(Case):
                 lambda e: e['profile'].pop('session_env'),
                 lambda e: e['profile'].update(session_env='NOT A NAME'),
                 lambda e: e['profile'].update(session_env=''),
+                lambda e: e['profile'].pop('skills_directory'),
+                lambda e: e['profile'].update(skills_directory='../skills'),
                 lambda e: e['tiers'].pop('deep'),
                 lambda e: e['tiers'].update(light='')):
             bad = copy.deepcopy(data)
@@ -145,6 +147,17 @@ class Profiles(Case):
         self.assertEqual(registry.host_folders(path), ('.claude', '.other'))
         self.assertEqual(registry.host_folders(), ('.claude',))
         self.assertEqual(registry.default_profile().worktrees_directory, '.claude/worktrees')
+
+    def test_the_kit_state_folder_is_the_default_hosts(self):
+        data = second(kit_hosts())
+        data['other']['profile']['state_directory'] = '.other'
+        path = self.put(data)
+        home = os.path.join(self.dir, 'home')
+        self.assertEqual(registry.state_path(home, 'machine-lock', path=path),
+                         os.path.join(home, '.claude', 'machine-lock'))
+        self.assertEqual(registry.state_path(home, 'tools', 'x.py'),
+                         os.path.join(home, '.claude', 'tools', 'x.py'))
+        self.assertEqual(registry.default_profile().skills_directory, '.claude/skills')
 
 
 class Selection(Case):

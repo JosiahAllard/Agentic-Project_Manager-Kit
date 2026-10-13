@@ -10,6 +10,7 @@
   profiles(path)              every host's HostProfile, in file order
   union(field, path)          a profile field's distinct values over every host, in file order
   host_folders(path)          the repo folder each host keeps its own files in (".claude")
+  state_path(home, *parts)    a path in the kit's per-user state folder (~/.claude)
 
 kitlib never imports a host's adapter. The registry hands out the adapter's module NAME, and the
 entry point that wants the adapter imports it (tools/_host.py); hosts.json is data, so reading it
@@ -118,7 +119,7 @@ def _capabilities(name, raw):
 def _profile(name, raw):
     w = '%s.profile' % name
     p = _object(w, raw, ('owner_paths', 'worktrees_directory', 'state_directory', 'process_names',
-                         'mcp_tool_format', 'session_env'))
+                         'mcp_tool_format', 'session_env', 'skills_directory'))
     session_env = _text(w + '.session_env', p['session_env'])
     if not _ENV_NAME.match(session_env):
         raise RegistryError('hosts.json: %s.session_env must be an environment variable name' % w)
@@ -128,7 +129,8 @@ def _profile(name, raw):
         _text(w + '.state_directory', p['state_directory']),
         _texts(w + '.process_names', p['process_names']),
         _text(w + '.mcp_tool_format', p['mcp_tool_format']),
-        session_env)
+        session_env,
+        _relpath(w + '.skills_directory', p['skills_directory']))
 
 
 def _entry(name, raw):
@@ -233,3 +235,10 @@ def host_folders(path=None):
     what a scan of a repository's own sources leaves out."""
     return tuple(dict.fromkeys(p.rstrip('/').split('/')[0]
                                for p in union('owner_paths', path) if p.endswith('/')))
+
+
+def state_path(home, *parts, path=None):
+    """`parts` under the kit's per-user state folder in `home`: the default host's profile
+    state_directory, so it is one folder per machine whatever PM_KIT_HOST says, and the folder the
+    kit has always used (~/.claude: the machine lock's store, the installed lock tool)."""
+    return os.path.join(home, default_profile(path).state_directory, *parts)

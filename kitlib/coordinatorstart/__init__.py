@@ -22,6 +22,7 @@ import sys
 from kitlib import pmstart, sessionmark, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
+from kitlib.host import registry
 from kitlib.ledger import safepath
 
 KEY = "coordinator_start"
@@ -238,7 +239,7 @@ def machine(entry, run=_run, read=_read, now=None, home=None, root=None, lock_fi
     """Owner reservations and bookings in force or starting within 4 h, free gpu and cpu slots, landing lock."""
     home = home or kuser.home_dir()
     now = now or datetime.datetime.now().astimezone()
-    s = json.loads(run([sys.executable, os.path.join(home, ".claude", "tools", "machine_lock", "machine_lock.py"),
+    s = json.loads(run([sys.executable, registry.state_path(home, "tools", "machine_lock", "machine_lock.py"),
                         "status", "--json"]))
     soon = now + datetime.timedelta(hours=SOON_HOURS)
     res = s.get("reservations") or {}

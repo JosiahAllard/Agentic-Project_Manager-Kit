@@ -60,13 +60,15 @@ class HostProfile:
     worktrees go in, `state_directory` its per-user folder name, `process_names` its agent process
     images (the lock's agent-host test), `mcp_tool_format` how it names an MCP tool, with
     {plugin}, {server} and {tool} fields, `session_env` the environment variable its session id
-    is in (the lock shows it, never trusts it)."""
+    is in (the lock shows it, never trusts it), `skills_directory` the repo path it reads a
+    repository's own skills from."""
     owner_paths: tuple
     worktrees_directory: str
     state_directory: str
     process_names: tuple
     mcp_tool_format: str
     session_env: str
+    skills_directory: str
 
 
 @dataclass(frozen=True)

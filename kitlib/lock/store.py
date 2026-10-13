@@ -109,7 +109,9 @@ def profile_dir():
 
 
 def real_root():
-    return os.path.join(profile_dir(), ".claude", "machine-lock")
+    """The machine's store: machine-lock in the kit's per-user state folder (registry.state_path;
+    ~/.claude/machine-lock, where it has always been)."""
+    return registry.state_path(profile_dir(), "machine-lock")
 
 
 FENCED = ("the machine's lock store is refused under the kit's tests (asked for: %s): this "

@@ -25,6 +25,7 @@ import sys
 import time
 
 from kitlib.config import ConfigError, user
+from kitlib.host import registry
 from kitlib.proc import spawn
 from kitlib.records import landing
 
@@ -78,9 +79,9 @@ def landing_hold(ctx):
 
 
 def machine_lock_path(home=None):
-    """The user's installed machine lock tool (`~/.claude/tools/machine_lock/machine_lock.py`)."""
-    return os.path.join(home or user.home_dir(), '.claude', 'tools', 'machine_lock',
-                        'machine_lock.py')
+    """The user's installed machine lock tool (`~/.claude/tools/machine_lock/machine_lock.py`: in
+    the kit's per-user state folder, kitlib.host.registry.state_path)."""
+    return registry.state_path(home or user.home_dir(), 'tools', 'machine_lock', 'machine_lock.py')
 
 
 def machine_lock_entries(run=spawn.run, home=None):

@@ -18,7 +18,8 @@
       "state_directory": ".claude",
       "process_names": ["claude.exe", "node.exe"],
       "mcp_tool_format": "mcp__plugin_{plugin}_{server}__{tool}",
-      "session_env": "CLAUDE_CODE_SESSION_ID"
+      "session_env": "CLAUDE_CODE_SESSION_ID",
+      "skills_directory": ".claude/skills"
     },
     "tiers": {"light": "haiku", "standard": "sonnet", "strong": "opus", "deep": "opus"}
   }
