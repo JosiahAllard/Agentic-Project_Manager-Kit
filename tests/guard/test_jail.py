@@ -227,6 +227,37 @@ class Siblings(Base):
     def test_a_session_outside_git_gets_no_sibling(self):
         self.jailed(self.write(os.path.join(self.w.sib, 'a.py'), cwd=self.w.plain))
 
+    def test_git_worktree_add_and_clone_into_a_sibling(self):
+        for text in ('git worktree add "%s" -b x' % W.fwd(os.path.join(self.w.sib, 'nested')),
+                     'git clone https://example.invalid/r.git "%s"' % W.fwd(os.path.join(self.w.sib, 'r'))):
+            with self.subTest(text):
+                self.allowed(self.run_bash(text))
+        self.jailed(self.run_bash('git worktree add "%s" -b x' % W.fwd(os.path.join(self.w.foreign, 'nested'))))
+
+    def test_a_data_root_mode_inside_a_sibling_still_holds(self):
+        ro, add = os.path.join(self.w.sib, 'ro'), os.path.join(self.w.sib, 'add')
+        self.w.kit({'repo': {'name': 'demo', 'push_block': True},
+                    'guard': {'data_roots': [{'path': ro, 'mode': 'read-only'}, {'path': add, 'mode': 'add-only'}]}})
+        touch(os.path.join(add, 'old.md'))
+        self.jailed(self.write(os.path.join(ro, 'x.md')))
+        self.jailed(self.run_bash('git -C "%s" commit -m x' % W.fwd(ro)))
+        self.jailed(self.write(os.path.join(add, 'old.md')))
+        self.allowed(self.write(os.path.join(add, 'new.md')))
+        self.allowed(self.write(os.path.join(self.w.sib, 'a.py')))
+
+    def test_no_sibling_while_the_pm_data_worktree_cannot_be_told(self):
+        # a marked main session is not stopped by the pm-data rule, so sibling itself refuses
+        self.w.user_config({'pm_data': {'path': 'relative/pmdata'}})
+        self.jailed(self.write(os.path.join(self.w.sib, 'a.py'), env=COORDINATOR, sub=False))
+        self.allowed(self.write(os.path.join(self.w.wt, 'a.py'), env=COORDINATOR, sub=False))
+
+    def test_a_sibling_holding_a_machine_config_folder_stays_outside(self):
+        # the home folder is the sibling, so the machine config folder lies inside it
+        ev = event('Write', {'file_path': os.path.join(self.w.sib, 'a.py'), 'content': 'x'}, self.w.wt, True)
+        self.jailed(decide(ev, self.w.ctx(environ={}, home=self.w.sib)))
+        ev = event('Write', {'file_path': os.path.join(self.w.wt, 'a.py'), 'content': 'x'}, self.w.wt, True)
+        self.allowed(decide(ev, self.w.ctx(environ={}, home=self.w.sib)))
+
     def test_the_message_still_names_the_own_worktree(self):
         d = self.jailed(self.write(os.path.join(self.w.plain, 'x.txt')))
         self.assertIn('Instead: Write(file_path="%s/x.txt")' % W.fwd(self.w.wt), d.reason)

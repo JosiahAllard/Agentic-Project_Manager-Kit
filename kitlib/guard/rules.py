@@ -582,8 +582,9 @@ JAIL_ASK = 'Ask the coordinator (a coordinator asks the PM) when the work needs 
 
 
 def write_jail(event, ctx, target, cwd, role, what, rewrite=None, run=None):
-    """An agent session's write outside its roots (kitlib.guard.jail): its checkout, temp and
-    the .kit.json data roots, judged by the resolved path."""
+    """An agent session's write outside its roots (kitlib.guard.jail): its checkout, its
+    repository's other worktrees (jail.sibling), temp and the .kit.json data roots, judged by the
+    resolved path."""
     if not target or not agent_session(event, ctx):
         return None
     rs = jail_roots(event, ctx, cwd)
@@ -2099,7 +2100,8 @@ def git_jail_unknown(ctx, cmd, gc, cwd, role):
 def git_jail(event, ctx, cmd, inv, cwd, role):
     """An agent session's git that writes a checkout (or makes a folder) outside its roots
     (kitlib.guard.jail): git -C <elsewhere> commit, a cd chain into another checkout, worktree
-    add or clone to a folder outside them."""
+    add or clone to a folder outside them. Its repository's other worktrees (jail.sibling) are
+    not elsewhere."""
     gc = cm.git_call(inv)
     if gc is None or not agent_session(event, ctx):
         return None
