@@ -1,0 +1,24 @@
+{
+  "claude": {
+    "default": true,
+    "adapter": "claude.adapter",
+    "shell": "claude",
+    "platforms": ["windows"],
+    "capabilities": {
+      "hook_events": ["PreToolUse", "SessionStart", "SubagentStart"],
+      "supports_ask": true,
+      "subagent_identity_in_hooks": true,
+      "mcp": true,
+      "skills": true,
+      "agent_format": "markdown"
+    },
+    "profile": {
+      "owner_paths": ["CLAUDE.md", ".claude/"],
+      "worktrees_directory": ".claude/worktrees",
+      "state_directory": ".claude",
+      "process_names": ["claude.exe", "node.exe"],
+      "mcp_tool_format": "mcp__plugin_{plugin}_{server}__{tool}"
+    },
+    "tiers": {"light": "haiku", "standard": "sonnet", "strong": "opus", "deep": "opus"}
+  }
+}

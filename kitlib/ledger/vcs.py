@@ -57,9 +57,11 @@ def short_title(text, limit=TITLE_LIMIT):
     return re.sub(r'\s+', ' ', text).strip()[:limit].rstrip()
 
 
-def prepare(path, branch_ok=False, model=None, env=None, noun='the ledger'):
+def prepare(path, branch_ok=False, model=None, env=None, noun='the ledger', provider='claude'):
     """A Plan for committing the file at `path` alone, or Usage/Refused. Call before writing."""
-    name = model if model is not None else (os.environ if env is None else env).get(MODEL_ENV, '')
+    name, _source, error = kcommit.resolve_model(False, model, env, provider)
+    if error:
+        raise Usage(error)
     if not (name or '').strip():
         raise Usage('--commit needs the model for the Co-Authored-By trailer: --model, else %s' % MODEL_ENV)
     root, rel = locate(path, noun)
@@ -77,7 +79,7 @@ def prepare(path, branch_ok=False, model=None, env=None, noun='the ledger'):
         raise Refused('git status failed: %s' % why)
     if out.strip():
         raise Refused('%s has uncommitted changes; refusing so another edit is not swept in' % rel)
-    return Plan(root, rel, kcommit.coauthor(name, sets['coauthor_families']), env)
+    return Plan(root, rel, kcommit.coauthor(name, sets['coauthor_families'], provider), env)
 
 
 def finish(plan, rid, title, decides, push=False):

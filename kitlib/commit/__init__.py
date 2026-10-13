@@ -46,7 +46,7 @@ import subprocess
 import sys
 
 from kitlib import config as kconfig
-from kitlib import machinepaths, verdict
+from kitlib import attribution, machinepaths, verdict
 from kitlib.docs import callers as doc_callers
 from kitlib.config import owner as ownermod
 from kitlib.git import checkout, cmd, repo
@@ -65,14 +65,14 @@ norm = ownermod.norm
 # environment CLAUDE_AGENT_MODEL is read from (None: os.environ).
 Request = collections.namedtuple(
     'Request', 'root subject b body_file model owner_authored owner_approved '
-               'lander_main_checkout paths cwd env')
+               'lander_main_checkout paths cwd env provider', defaults=('claude',))
 Outcome = collections.namedtuple('Outcome', 'code lines')
 
 
 def request(root, subject, paths, b='', body_file=None, model=None, owner_authored=False,
-            owner_approved=(), lander_main_checkout=False, cwd=None, env=None):
+            owner_approved=(), lander_main_checkout=False, cwd=None, env=None, provider='claude'):
     return Request(root, subject, b, body_file, model, owner_authored, list(owner_approved),
-                   lander_main_checkout, list(paths), cwd or os.getcwd(), env)
+                   lander_main_checkout, list(paths), cwd or os.getcwd(), env, provider)
 
 
 class _Stop(Exception):
@@ -95,18 +95,11 @@ def settings(cfg):
             'rule_pointer': cfg.section('checkout_guard')['rule_pointer']}
 
 
-def coauthor(model, families=()):
+def coauthor(model, families=(), provider='claude'):
     """The co-author trailer for `model`: `Claude <model>`, never a bare model name - unless the
     name is one of `families` or starts with one followed by a space, '.' or '-' (`Codex GPT-5`,
     `Codex-mini`, `Codex.2`; never `Codexer`): that name is kept as given."""
-    name = ' '.join((model or '').split())
-    if not name:
-        raise ValueError('--model is empty')
-    if any(name == f or (name.startswith(f) and name[len(f)] in ' .-') for f in families):
-        return 'Co-Authored-By: %s <noreply@anthropic.com>' % name
-    if name != 'Claude' and not name.startswith('Claude '):
-        name = 'Claude ' + name
-    return 'Co-Authored-By: %s <noreply@anthropic.com>' % name
+    return attribution.coauthor(model, provider, families)
 
 
 def repo_path(path, root):
@@ -145,11 +138,17 @@ def canonical_approved(rules, owner_approved, paths):
     return [rules.canonical(value, paths) for value in owner_approved]
 
 
-def resolve_model(owner_authored, flag, env=None):
+def resolve_model(owner_authored, flag, env=None, provider='claude'):
     """`(model, where it came from, usage message or None)`. --model is required on every
     ordinary commit: the flag, else MODEL_ENV (blank is unset). --owner-authored takes none:
     --model there is contradictory, and MODEL_ENV is ignored."""
     env = os.environ if env is None else env
+    try:
+        model_env = attribution.model_environment(provider)
+        if not owner_authored and provider == 'codex':
+            attribution.coauthor(flag, provider)
+    except ValueError as error:
+        return None, None, str(error)
     if owner_authored:
         if flag:
             return None, None, ('--owner-authored and --model contradict each other - one commit '
@@ -157,7 +156,7 @@ def resolve_model(owner_authored, flag, env=None):
         return None, None, None
     if flag and flag.strip():
         return flag, '--model', None
-    fallback = (env.get(MODEL_ENV) or '').strip()
+    fallback = (env.get(model_env) or '').strip() if model_env else ''
     if fallback:
         return fallback, MODEL_ENV, None
     return None, None, ('--model is required: name the model you are running on, '
@@ -182,11 +181,11 @@ def model_requirement_error(rules, owner_authored, owner_approved, paths):
     return None
 
 
-def build_trailers(rules, owner_approved, owner_authored, model, families=()):
+def build_trailers(rules, owner_approved, owner_authored, model, families=(), provider='claude'):
     """`<owner trailer>: <value>` lines (the configured "owner".trailer), then Co-Authored-By on
     an agent's commit, or `Owner-Authored: yes` on the owner's own."""
     trailers = ['%s: %s' % (rules.trailer, o) for o in owner_approved]
-    trailers.append(OWNER_AUTHORED_TRAILER if owner_authored else coauthor(model, families))
+    trailers.append(OWNER_AUTHORED_TRAILER if owner_authored else coauthor(model, families, provider))
     return trailers
 
 
@@ -492,7 +491,7 @@ def _commit(req, lines):
     except kconfig.ConfigError as e:
         raise _Stop(USAGE, 'REFUSED: the kit configuration is refused: %s. Nothing was committed.'
                     % e)
-    model, source, err = resolve_model(req.owner_authored, req.model, req.env)
+    model, source, err = resolve_model(req.owner_authored, req.model, req.env, req.provider)
     if err:
         raise _usage(err)
     if source == MODEL_ENV:
@@ -543,7 +542,7 @@ def _commit(req, lines):
         err = owner_identity_error(rules, author_email(root))
         if err:
             raise _Stop(REFUSED, err)
-    trailers = build_trailers(rules, approved, req.owner_authored, model, opts['coauthor_families'])
+    trailers = build_trailers(rules, approved, req.owner_authored, model, opts['coauthor_families'], req.provider)
 
     # A listed path is always added again. The one skip: a listed path staged as a deletion and
     # absent from the work tree (`git add` would fail "pathspec did not match"); its deletion is

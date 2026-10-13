@@ -31,9 +31,9 @@ Argv = ListOf(Str(), nonempty=True)
 Regexes = Either(Regex(), ListOf(Regex()))
 
 # Paths only the owner changes (PM kit _owner_only.DEFAULT): an entry ending `/` locks a directory.
-OWNER_PATHS = ['CLAUDE.md', '.claude/', '.github/workflows/', '.kit.json', 'tools/gate.json',
+OWNER_PATHS = ['CLAUDE.md', 'AGENTS.md', '.claude/', '.codex/', '.github/workflows/', '.kit.json', 'tools/gate.json',
                'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']
-OWNER_PATHS_EXCEPT = ['.claude/worktrees/']
+OWNER_PATHS_EXCEPT = ['.claude/worktrees/', '.codex/worktrees/']
 
 # The heavy-program entry shape: kit defaults (policy.HEAVY_DEFAULTS) and `.kit.json` "heavy".programs.
 HEAVY_ENTRY = Obj({
@@ -117,6 +117,9 @@ SECTIONS = {
         'main_branch': Field(Str(), 'main', 'the branch landings target'),
         'remote': Field(Str(), 'origin', 'the remote main is pushed to'),
         'worktrees_dir': Field(RelPath(), '.claude/worktrees', 'where agent worktrees live'),
+        'worktrees_by_host': Field(MapOf(RelPath(), what='host'), {},
+                                   'per-host worktree folders, keyed by hosts.json host name '
+                                   '(docs/new-worktree.md "Hosts")'),
         'tools_dir': Field(RelPath(), 'tools', 'where repo tools, stubs and the hook module live'),
         'push_block': Field(Bool(), False, 'pre-push refuses a push to main without a gate-OK record'),
     },

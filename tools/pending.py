@@ -7,7 +7,7 @@
                                        mark item N `DONE MM-DD (note). Was: ...`; prints `done N`.
   pending.py edit N --text T [COMMIT]  replace item N and its continuation lines; prints `edited N`.
 
-  COMMIT: [--commit | --push] [--branch-ok] [--model NAME]
+  COMMIT: [--commit | --push] [--branch-ok] [--model NAME] [--host NAME]
       --commit commits the file alone as `pending: <added|done|edited> N`; --push also pushes the
       current branch to the repository's `repo.remote` (origin by default). Both refuse, before
       writing, when the file has uncommitted changes or the branch is not its repository's main
@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from kitlib import pending                                         # noqa: E402
 from kitlib.config import user                                     # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
+from kitlib.host import registry                                    # noqa: E402
 from kitlib.ledger import vcs                                      # noqa: E402
 from kitlib.ledger.errors import Refused, Usage                    # noqa: E402
 
@@ -51,6 +52,9 @@ def parser():
         sp.add_argument('--branch-ok', action='store_true', help='allow --commit off the main branch')
         sp.add_argument('--model', help='the model named in the Co-Authored-By trailer (default: $%s)'
                         % vcs.MODEL_ENV)
+        sp.add_argument('--host', '--provider', dest='host', default=None,
+                        help='the agent host, for the Co-Authored-By trailer (default: $PM_KIT_HOST, '
+                             'else the hosts.json default); --provider is its old name, kept for one release')
     sub.add_parser('list', help='the open items')
     ad = sub.add_parser('add', help='append one item')
     ad.add_argument('--text', required=True)
@@ -72,6 +76,14 @@ def fail(msg, code=1):
     return code
 
 
+def host_of(a):
+    """--host, else PM_KIT_HOST, else the hosts.json default; a bad name is a usage error."""
+    try:
+        return registry.choose(a.host)
+    except registry.RegistryError as e:
+        raise Usage('--host: %s' % e) from None
+
+
 def run(a, path):
     if a.cmd == 'list':
         for line in pending.open_items(pending.read_raw(path)):
@@ -79,7 +91,8 @@ def run(a, path):
         return 0
     plan = None
     if a.commit or a.push:
-        plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, noun=NOUN)
+        plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, noun=NOUN,
+                           provider=host_of(a))
     raw = pending.read_raw(path)
     if a.cmd == 'add':
         new, n = pending.add(raw, a.text)

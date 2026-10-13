@@ -1,5 +1,7 @@
 # The rulings ledger
 
+The commit/push options take `--host NAME`: the agent host for the Co-Authored-By trailer, a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude); `--provider` is its old name, accepted for one release. The trailer comes from `kitlib.attribution` (docs/commit.md); a Codex trailer needs the actual explicit --model id. The host and model are checked before anything is written; the provenance, branch, path and owner checks keep their rules.
+
 One append-only file holds the owner's rulings for every repository on the machine. It is the file the machine config's `ledger_path` names (docs/kit-json.md "Machine config keys"); no flag or environment variable names another. Entry point `tools/ledger.py`; logic `kitlib/ledger` (`read` the one reader, `fmt` the format, `write` the writes, `vcs` the git, `orphans` the orphan scan, `standing` the standing digest, `precommit` the opt-in hook); tests `tests/ledger`. Ported from the PM repository's writer.
 
 ## Format

@@ -48,6 +48,8 @@ import collections
 import os
 import time
 
+from kitlib import attribution
+
 from kitlib.config import ConfigError, load as load_config
 from kitlib.git import checkout as gitcheckout
 from kitlib.git import cmd as gitcmd
@@ -65,23 +67,23 @@ MERGE_TIMEOUT = 600       # seconds: a merge of a large tree is slower than a re
 Outcome = collections.namedtuple('Outcome', 'code lines')
 
 
-def resolve_model(flag, env=None):
+def resolve_model(flag, env=None, provider='claude'):
     """`(model, where it came from)`, or `(None, None)` when neither the flag nor MODEL_ENV (a
     per-session fallback; blank counts as unset) names one."""
     env = os.environ if env is None else env
+    model_env = attribution.model_environment(provider)
+    if provider == 'codex':
+        attribution.coauthor(flag, provider)
     if flag and flag.strip():
         return flag, '--model'
-    fallback = (env.get(MODEL_ENV) or '').strip()
+    fallback = (env.get(model_env) or '').strip() if model_env else ''
     return (fallback, MODEL_ENV) if fallback else (None, None)
 
 
-def trailer(model):
+def trailer(model, provider='claude'):
     """The attribution line every commit message ends with: always `Claude <model>`, never a
     bare model name (commit.py's `coauthor()`)."""
-    name = ' '.join(model.split())
-    if name != 'Claude' and not name.startswith('Claude '):
-        name = 'Claude ' + name
-    return 'Co-Authored-By: %s <noreply@anthropic.com>' % name
+    return attribution.coauthor(model, provider)
 
 
 def _git(root, *args, timeout=gitcmd.GIT_TIMEOUT, stdin=None, env=None):
@@ -115,7 +117,7 @@ def last_paragraph(text):
     return '\n'.join(reversed(out))
 
 
-def arm_merge_msg(root, model):
+def arm_merge_msg(root, model, provider='claude'):
     """Put the trailer into the message git prepared, so the RESOLUTION commit carries it.
 
     The clean path makes the merge commit itself and can add the trailer as it goes. The conflict
@@ -139,7 +141,7 @@ def arm_merge_msg(root, model):
     # (gitrefs.KILLED_SHAPE). A merge that cannot be seen is not armed, and the advice says so.
     if not gitrefs.merge_in_progress(root)[0]:
         return False           # no merge in progress, or none git could show: nothing to arm
-    line = trailer(model)
+    line = trailer(model, provider)
     path = merge_msg_path(root)
     if not path or not os.path.isfile(path):
         return False
@@ -156,7 +158,7 @@ def arm_merge_msg(root, model):
     return True
 
 
-def conflict_advice(base, target, model=None, armed=False):
+def conflict_advice(base, target, model=None, armed=False, provider='claude'):
     """What to print when the merge stops on conflicts. A message only - it decides nothing.
 
     It deliberately does NOT say "keep both sides' lines". A row present on your branch and absent
@@ -182,10 +184,10 @@ def conflict_advice(base, target, model=None, armed=False):
         armed = ('trailer: already in the prepared message, so finish with\n'
                  '  tools/commit.py (it adds the trailer; "commit".merge_fold lets the merge\'s staged\n'
                  '  files through). Writing your own message instead? End it with `%s`.'
-                 % trailer(model))
+                 % trailer(model, provider))
     else:
         armed = ('trailer: could NOT be written into the prepared message. End your resolution\n'
-                 '  commit message with `%s` by hand.' % trailer(model))
+                 '  commit message with `%s` by hand.' % trailer(model, provider))
     return (
         'yours to resolve: files you changed. Anything else: `git merge --abort` and tell the '
         'coordinator.\n'
@@ -242,7 +244,7 @@ def _size(cat, rev, path):
 
 
 def sync(path, target, model, model_source='--model', base=None, wait=True, say=None,
-         sleep=time.sleep, clock=time.monotonic):
+         sleep=time.sleep, clock=time.monotonic, provider='claude'):
     """The whole command for the checkout `path` is in. Returns an Outcome; never prints. `wait`
     False is --no-wait; `say(line)` gets the lines said while waiting for a landing in flight
     (None: they go in the Outcome's lines); `sleep` and `clock` are time's, for tests."""
@@ -251,6 +253,11 @@ def sync(path, target, model, model_source='--model', base=None, wait=True, say=
     def done(code, *more):
         lines.extend(more)
         return Outcome(code, lines)
+
+    try:
+        attribution_line = trailer(model, provider)
+    except ValueError as error:
+        return done(USAGE, 'USAGE: %s' % error)
 
     top, why = gitrepo.toplevel(path)
     if top is None:
@@ -341,7 +348,7 @@ def sync(path, target, model, model_source='--model', base=None, wait=True, say=
                         % (err or out or 'git merge exited %s' % rc))
         lines.append('CONFLICTS (%d), merge left in progress:' % len(conflicted))
         lines.extend('  ' + f for f in conflicted)
-        return done(FAILED, conflict_advice(base, full, model, arm_merge_msg(top, model)))
+        return done(FAILED, conflict_advice(base, full, model, arm_merge_msg(top, model, provider), provider))
     # GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - this asked `rev-parse --verify --quiet MERGE_HEAD`, whose
     # "no MERGE_HEAD" is exit 1 with no output, a killed git's shape (gitrefs.KILLED_SHAPE): a kill
     # read as a fast-forward, so the merge was left uncommitted and reported merged.
@@ -364,7 +371,7 @@ def sync(path, target, model, model_source='--model', base=None, wait=True, say=
                                 '`git status` shows it. Tell the coordinator.' % full[:7])
         with open(path, 'r', encoding='utf-8', errors='replace') as f:
             merge_msg = f.read().rstrip('\n')
-        msg = merge_msg + '\n\n' + trailer(model) + '\n'
+        msg = merge_msg + '\n\n' + attribution_line + '\n'
         rc, out, err = _git(top, 'commit', '-q', '-F', '-',
                             stdin=msg.encode('utf-8'))
         if rc != 0:

@@ -4,6 +4,15 @@ Held for the joint review: no repository runs it yet.
 
 `tools/new_worktree.py` makes a workstream's worktree in one call. Logic: `kitlib/worktree/new.py`; tests: `tests/worktree/test_new_worktree.py`. Ported from the PM kit's `tools/new_worktree.py`.
 
+## Hosts
+
+`--host NAME` picks the agent host whose worktree folder is used: a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude). A name `hosts.json` lacks is refused (exit 2) before any fetch. The folder (`kitlib/worktree/hostdirs.py`; tests `tests/worktree/test_host.py`):
+1. `.kit.json` `repo.worktrees_by_host.<host>` when set;
+2. else `repo.worktrees_dir` for the default host, so a repository that sets nothing keeps `.claude/worktrees`;
+3. else the host's `hosts.json` `profile.worktrees_directory`.
+
+A folder other than `repo.worktrees_dir` must stay inside the main checkout and be reached through no junction or link, or the call is refused. Creation keeps every branch, base, landing-lock and fetch check. `worktree_remove.py` and the sweep find a worktree under any host's folder and keep their registration, holder, dirty-file, landing and link checks; a bare slug still means `repo.worktrees_dir`, so name another host's worktree by the absolute path printed.
+
 ```
 python tools/new_worktree.py [-C DIR] <area>/<slug>                 a NEW branch off the main branch
 python tools/new_worktree.py [-C DIR] --existing <area>/<slug>      an EXISTING branch, resumed

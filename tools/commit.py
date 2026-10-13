@@ -1,6 +1,6 @@
 """commit.py: stage explicit paths and commit them with the right trailers (docs/commit.md).
 
-  commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME]
+  commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME] [--host NAME]
             [--owner-authored] [--owner-approved VALUE ...] [--lander-main-checkout] PATH ...
       commit exactly PATH ... in the work tree DIR is in (default: here)
 
@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import commit as C                                      # noqa: E402
 from kitlib.git import repo                                         # noqa: E402
+from kitlib.host import registry                                    # noqa: E402
 
 
 class Parser(argparse.ArgumentParser):
@@ -51,6 +52,9 @@ def parser():
                       help='read the body from this file (UTF-8)')
     p.add_argument('--model', default=None,
                    help='the model you run on (default: CLAUDE_AGENT_MODEL)')
+    p.add_argument('--host', '--provider', dest='host', default=None,
+                   help='the agent host, for the Co-Authored-By trailer (default: $PM_KIT_HOST, '
+                        'else the hosts.json default); --provider is its old name, kept for one release')
     p.add_argument('--owner-authored', action='store_true',
                    help="the owner's own commit: Owner-Authored: yes, no Co-Authored-By")
     p.add_argument('--owner-approved', action='append', default=[],
@@ -62,7 +66,12 @@ def parser():
 
 
 def main(argv=None):
-    a = parser().parse_args(argv)
+    p = parser()
+    a = p.parse_args(argv)
+    try:
+        host = registry.choose(a.host)
+    except registry.RegistryError as e:
+        p.error('--host: %s' % e)
     root, why = repo.toplevel(os.path.abspath(a.root))
     if root is None:
         print('USAGE: -C %s is not in a git work tree: %s' % (a.root, why), flush=True)
@@ -70,7 +79,7 @@ def main(argv=None):
     out = C.commit(C.request(root, a.subject, a.paths, b=a.b, body_file=a.body_file,
                              model=a.model, owner_authored=a.owner_authored,
                              owner_approved=a.owner_approved,
-                             lander_main_checkout=a.lander_main_checkout))
+                             lander_main_checkout=a.lander_main_checkout, provider=host))
     for line in out.lines:
         print(line, flush=True)
     return out.code
