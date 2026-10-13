@@ -113,6 +113,15 @@ class FakeHost(object):
         self.calls.append(('task', line))
         self.tasks = set(self.tasks) | {'agent-temp-sweep'}          # the only task machine setup registers
 
+    sweep_report = ('claude/p/old-session  4.0 days  would',)        # the sweep dry run's lines
+    sweep_error = None                                               # raised by sweep_dry_run when set
+
+    def sweep_dry_run(self, kit):
+        self.calls.append(('sweep-dry-run', kit))
+        if self.sweep_error:
+            raise self.sweep_error
+        return list(self.sweep_report)
+
     git_email_value = None                                           # `git config user.email`
 
     def git_email(self, kit):
@@ -823,6 +832,18 @@ class Tool(Base):
         fence_decoy(self)
         with self.assertRaises(kuser.HomeFenced):
             self.run_main_capturing_home(['--old-kit', self.old])
+
+
+class ChangeReports(unittest.TestCase):
+    def test_only_a_report_is_printed_before_done(self):
+        plan = common.Plan()
+        plan.add('extras', 'fix the acl', lambda: ['processed file: x\n'])          # icacls outputs
+        plan.add('extras', 'register', lambda: common.Report(['would remove a']))
+        lines = []
+        code, _ = M._carry_out('t', plan, True, lambda *ls: lines.extend(ls), [])
+        self.assertEqual(code, M.EXIT_OK)
+        self.assertNotIn('processed file', '\n'.join(lines))
+        self.assertLess(lines.index('  would remove a'), lines.index('done: register'))
 
 
 if __name__ == '__main__':

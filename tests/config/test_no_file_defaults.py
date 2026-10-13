@@ -1,6 +1,7 @@
 """kitlib.config with no `.kit.json` (docs/kit-json.md "With no file"): the main branch and the
 repository name read from the git files (kitlib.git.defaults), the owner email from the machine
-config, and a broken file still refusing. The git files are written by hand: nothing starts git."""
+config, and a broken file still refusing. The git files are written by hand: nothing starts git,
+except in RepoNameLikeGit, which asks real git for the url the name comes from."""
 import json
 import os
 import shutil
@@ -11,6 +12,8 @@ from kitlib import config
 from kitlib.backlog import ledger
 from kitlib.config import user
 from kitlib.git import defaults
+from tests import gitfixture
+from tests.realgit import real_git
 
 
 def write(path, text):
@@ -147,6 +150,33 @@ class RepoName(Case):
         r.config('[remote "upstream"]\n\turl = https://example.com/x/Other.git\n')
         self.assertEqual(r.load().repo['name'], 'Gadget')
 
+    def linked(self, r, wt_config):
+        """A linked worktree of `r` whose git dir holds `wt_config` as its config.worktree."""
+        wt_git = os.path.join(r.git, 'worktrees', 'wt')
+        write(os.path.join(wt_git, 'HEAD'), 'ref: refs/heads/kit/wt\n')
+        write(os.path.join(wt_git, 'commondir'), '../..\n')
+        write(os.path.join(wt_git, 'config.worktree'), wt_config)
+        wt = os.path.join(r.root, '.claude', 'worktrees', 'wt')
+        write(os.path.join(wt, '.git'), 'gitdir: %s\n' % wt_git)
+        return wt
+
+    def test_extensions_worktree_config_reads_the_work_tree_s_own_url(self):
+        # git reads <gitdir>/config.worktree after the common config while the extension is on;
+        # `git remote get-url` gives the first url, so the common config's wins when it has one
+        r = self.repo()
+        wt = self.linked(r, '[remote "origin"]\n\turl = https://example.com/x/Widget.git\n')
+        for common, want in (('[extensions]\n\tworktreeConfig = true\n', 'Widget'),
+                             ('[EXTENSIONS]\n\tWorktreeConfig\n', 'Widget'),
+                             ('', 'work'),
+                             ('[extensions]\n\tworktreeConfig = false\n', 'work'),
+                             ('[extensions]\n\tworktreeConfig = true\n'
+                              '[remote "origin"]\n\turl = https://example.com/x/Common.git\n', 'Common')):
+            with self.subTest(common):
+                r.config(common)
+                self.assertEqual(config.load(wt, home=r.home).repo['name'], want)
+        r.config('[extensions]\n\tworktreeConfig = true\n')
+        self.assertEqual(r.load().repo['name'], 'work')     # the main checkout's own file is .git/config.worktree
+
     def test_a_written_name_wins(self):
         r = self.repo()
         r.config('[remote "origin"]\n\turl = https://example.com/x/Widget.git\n')
@@ -161,6 +191,51 @@ class RepoName(Case):
         self.assertEqual(ledger.ledger_name(cfg), '')
         r.kit({'repo': {'name': 'Mine'}})
         self.assertEqual(ledger.ledger_name(r.load()), 'mine')
+
+
+@real_git("checks the repository name against git's own `git remote get-url`")
+class RepoNameLikeGit(unittest.TestCase):
+    """repo_name's url, from the main checkout and from a linked worktree, is the url `git remote
+    get-url origin` gives there; where git has no url, the main checkout's folder name. The
+    configs are written to real repositories made by git, and git itself is asked."""
+
+    CASES = [
+        # (name, appended to the common config, the linked worktree's config.worktree)
+        ('extension on, url only in config.worktree', '[extensions]\n\tworktreeConfig = true\n',
+         '[remote "origin"]\n\turl = https://example.com/x/Widget.git\n'),
+        ('upper-case extension with no value', '[EXTENSIONS]\n\tWorktreeConfig\n',
+         '[remote "origin"]\n\turl = https://example.com/x/Widget.git\n'),
+        ('extension off: config.worktree not read', '',
+         '[remote "origin"]\n\turl = https://example.com/x/Widget.git\n'),
+        ('worktreeConfig = false', '[extensions]\n\tworktreeConfig = false\n',
+         '[remote "origin"]\n\turl = https://example.com/x/Widget.git\n'),
+        ('a url in both: the common one is first', '[extensions]\n\tworktreeConfig = true\n'
+         '[remote "origin"]\n\turl = https://example.com/x/Common.git\n',
+         '[remote "origin"]\n\turl = https://example.com/x/Widget.git\n'),
+    ]
+
+    def test_the_name_comes_from_the_url_git_gives(self):
+        seen = set()
+        for name, common, linked_wt in self.CASES:
+            with self.subTest(name):
+                r = gitfixture.TempRepo()
+                self.addCleanup(r.cleanup)
+                wt = os.path.join(r.base, 'wt')
+                r.git('worktree', 'add', '-q', wt)
+                git_dir = os.path.join(r.root, '.git')
+                with open(os.path.join(git_dir, 'config'), 'a', encoding='utf-8', newline='\n') as f:
+                    f.write(common)
+                with open(os.path.join(git_dir, 'worktrees', 'wt', 'config.worktree'), 'w', encoding='utf-8',
+                          newline='\n') as f:
+                    f.write(linked_wt)
+                for where in (r.root, wt):
+                    url = r.git('remote', 'get-url', 'origin', cwd=where, check=False)
+                    want = defaults.name_from_url(url) if url else os.path.basename(r.root)
+                    seen.add(want)
+                    self.assertEqual(defaults.repo_name(where), want, where)
+                    self.assertEqual(config.load(where, home=r.base).repo['name'], want, where)
+        # git's answers cover all three sources: config.worktree, the common config, the folder
+        self.assertEqual(seen, {'Widget', 'Common', 'repo'})
 
 
 class OwnerEmail(Case):

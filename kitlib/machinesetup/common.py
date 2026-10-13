@@ -15,6 +15,11 @@ def kit_file(kit, rel):
     return os.path.join(kit, *rel.split('/'))
 
 
+class Report(list):
+    """The lines a change's `do` returns for the run to print before its `done:` line. Only a
+    Report is printed: any other return value (a list of icacls outputs, say) is ignored."""
+
+
 class Change(object):
     """One change: `text` is what a dry run prints, `do` makes it, `undo` (text) restores it by hand."""
 

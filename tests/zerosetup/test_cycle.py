@@ -263,8 +263,17 @@ class _Slot(object):
     def release(self, code, why):
         pass
 
+    def stop_daemons(self):
+        pass
+
     def end_tree(self):
         pass
+
+    def watch_stop(self):
+        return None             # no window monitor: nothing was watched
+
+    def window_lines(self, fails=False):
+        return []
 
     def __enter__(self):
         return self

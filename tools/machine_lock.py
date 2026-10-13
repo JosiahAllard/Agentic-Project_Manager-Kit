@@ -21,20 +21,20 @@ import datetime
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib.lock import api                                        # noqa: E402
+from kitlib.lock import detach as dt                               # noqa: E402
 from kitlib.lock import holds as hl                                # noqa: E402
 from kitlib.lock import status as st                               # noqa: E402
 from kitlib.lock.background import run_background                  # noqa: E402
 from kitlib.lock.run import ORIGIN_ENV, run_command                # noqa: E402
 from kitlib.lock.store import (EXIT_REQUIRE, EXIT_USAGE, LockError, Store,  # noqa: E402
                                caller, iso, new_id, utc_now)
-from kitlib.proc import bash, process, spawn                       # noqa: E402
+from kitlib.proc import bash, process                              # noqa: E402
 # Not used here: loaded at start because kitlib.proc.daemons imports it inside functions that run
 # at the end of a run, and a first load then could read a checkout a landing has rewritten.
 from kitlib.proc import tcp                                        # noqa: E402, F401
@@ -43,12 +43,6 @@ PREFIX = "[machine-lock]"
 TOOL = os.path.abspath(__file__)
 API_EXIT = {"invalid": EXIT_USAGE, "forbidden": EXIT_USAGE, "not_found": 1, "conflict": 11,
             "busy": 6, "store": EXIT_REQUIRE}
-DETACH_PS = ("$d = [Console]::In.ReadToEnd() | ConvertFrom-Json; "
-             "$si = New-CimInstance -ClassName Win32_ProcessStartup -Property "
-             "@{ShowWindow=[UInt16]0; EnvironmentVariables=[string[]]$d.env} -ClientOnly; "
-             "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
-             "@{CommandLine=$d.cmd; CurrentDirectory=$d.cwd; ProcessStartupInformation=$si}; "
-             "\"$($r.ReturnValue) $($r.ProcessId)\"")
 
 
 def say(text):
@@ -263,29 +257,25 @@ def api_result(r, ok_text=None):
 # ------------------------------------------------------------------ detach
 def detach(argv):
     """The same run started again through Win32_Process.Create, outside this process tree, so it
-    outlives the shell that started it. Prints '<run id> pid <wrapper pid>'."""
+    outlives the shell that started it, under the windowless carrier (kitlib.lock.detach). Prints
+    '<run id> pid <wrapper pid>' (the carrier's pid when its python was not seen in time)."""
     rid = new_id("r")
     i = argv.index("--")
-    cmdline = subprocess.list2cmdline([sys.executable, "-B", TOOL] + argv[:i]
-                                      + ["--detached-id", rid] + argv[i:])
+    child = dt.command(sys.executable, TOOL, argv[:i], rid, argv[i:])
+    why = dt.missing(child)
+    if why:
+        say("could not start the command: --detach: %s" % why)
+        return 1
     env = dict(os.environ)
     try:
         env[ORIGIN_ENV] = ";".join("%d:%d" % pc for pc in sorted(process.own_ancestors()))
     except Exception:
         env.pop(ORIGIN_ENV, None)
-    data = {"cmd": cmdline, "cwd": os.getcwd(), "env": ["%s=%s" % kv for kv in env.items()]}
-    try:
-        r = spawn.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", DETACH_PS],
-                      input=json.dumps(data), capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError) as e:
-        say("could not start the command: --detach failed: %s" % e)
+    pid, why = dt.create(child, os.getcwd(), env)
+    if pid is None:
+        say("could not start the command: --detach %s" % why)
         return 1
-    parts = (r.stdout or "").split()
-    if r.returncode or len(parts) != 2 or parts[0] != "0" or not parts[1].isdigit():
-        say("could not start the command: --detach got %r (exit %s): %s"
-            % ((r.stdout or "").strip(), r.returncode, (r.stderr or "").strip()[-300:]))
-        return 1
-    print("%s pid %s" % (rid, parts[1]), flush=True)
+    print("%s pid %s" % (rid, dt.wrapper_pid(pid) or pid), flush=True)
     return 0
 
 

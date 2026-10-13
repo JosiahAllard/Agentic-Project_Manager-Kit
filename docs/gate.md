@@ -110,6 +110,23 @@ Known limits:
 
 Tests: tests/lock/test_release_daemons.py (`ReleaseLeavesASharedDaemon`: the errored and cancelled gates, `Launcher.kill`, a second Ctrl+C mid-kill in wait and in release, a second kill keeping the first's record, a worker started between the reads, a reused pid, a listed pid gone by the last pass, a daemon whose creation time cannot be read, a process table that cannot be read, a judgement that raised, a result that cannot be said, a `say` that raises for every text with a survivor of the passes and on a done release, the two kill-path controls, and a control on the harness: an outside client that exited fails as the test's setup).
 
+## Console windows
+
+Every gate run's lock run watches for console windows while its steps run: `kitlib/lock/run.py` `Slot.start` starts a `kitlib/proc/winwatch.py` `Monitor` before the first step, and `kitlib/gate/runner.py` `window_results` stops it (`Slot.watch_stop`) after the last step and says the report, before the verdict:
+
+```
+windows opened: 1 - WARNING: a console window opened (the verdict does not count it)
+  12:20:05 window pid 56324 python.exe via windowsterminal.exe CASCADIA_HOSTING_WINDOW_CLASS title "<python folder>\python.exe" [this run]
+```
+
+- N counts the windows the run opened (`[this run]`: the program was in the run's job, `Slot.window_owner`) and those it cannot place (`[run unknown]`: the program had exited, or could not be opened, when the window was read). A window whose program is outside the job is listed under `also seen, another run's: M` and not counted. A console host window shown and gone before it could be read is listed under `also seen: K console host window(s) ...` and not counted.
+- A window warns: the verdict, the exit code and the gate-OK record do not change. `WINDOWS_FAIL = True` in `kitlib/gate/runner.py` is the one change that makes a counted window fail the gate: `window_results` then adds a FAIL result named `windows` (`GATE FAILED: windows (windows: N console window(s) opened)`), the report line reads `- FAILED: a console window opened`, and the lock run records code 1. `windows` is a reserved step name (`kitlib/gate/steps.py` `RESERVED`), so no configured step shares that result's name.
+- Every gate run is watched, not only `--full`: a branch gate, a landing's merged-tree gate and the daily full run. The branch and merged-tree gates also return the windows as the outcome fact `windows` (each `Window.as_dict()`; None when no step ran).
+- A monitor that cannot run, or that raises as it starts (`Slot.watch_start`), says `windows opened: unknown (the window monitor did not run: <why>)`, and the gate goes on.
+- What it sees and misses (Windows Terminal hosting, the title heuristic for new tabs, other programs' windows, session 0, the events still queued when it stops): the `kitlib/proc/winwatch.py` module docstring. The tests show no window the user can see (docs/test-tools.md "Window tests").
+
+Tests: tests/gate/test_windows.py, tests/lock/test_run_windows.py, tests/proc/test_winwatch.py.
+
 ## Gate-OK record
 
 The branch gate writes `<git common dir>/kit-gate-ok/<sha>.json` (kitlib/records/gate_ok.py) only when all of these hold:
