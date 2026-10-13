@@ -237,7 +237,7 @@ def snapshot(store=None, history_days=7, since=None, until=None):
                                      "since", "held_since", "expect_s", "expect_from", "hold",
                                      "parent", "need", "has", "shares", "pinned", "pin", "pin_note",
                                      "threads", "child", "blocked_by", "detached", "session",
-                                     "releasing", "log", "moved")}
+                                     "releasing", "log", "moved", "resource", "priority")}
         row.update(cores=qm.entry_holds(L, e, "cpu") if e else r.get("cores") or [],
                    gpus=qm.entry_holds(L, e, "gpu") if e else r.get("gpus") or [],
                    tree=tree, usage=_usage(r),
@@ -295,7 +295,7 @@ def snapshot(store=None, history_days=7, since=None, until=None):
             "expect_s": e.get("expect_s"), "est_start": _epoch_iso(info.get("start")),
             "backfill": bool(info.get("backfill")), "parked": bool(e.get("parked")),
             "blocked_by": e.get("blocked_by"), "hold": e.get("hold"), "moved": e.get("moved"),
-            "why": why})
+            "resource": qm.entry_resource(e), "priority": qm.entry_priority(e), "why": why})
     try:
         kinds, kerr = kinds_mod.load(store.kinds_path, agent_cap=L["agent_cap"]), None
     except kinds_mod.KindsError as e:
