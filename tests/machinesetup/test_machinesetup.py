@@ -834,5 +834,18 @@ class Tool(Base):
             self.run_main_capturing_home(['--old-kit', self.old])
 
 
+class ChangeReports(unittest.TestCase):
+    def test_only_a_report_is_printed_before_done(self):
+        plan = common.Plan()
+        plan.add('extras', 'fix the acl', lambda: ['processed file: x\n'])          # icacls outputs
+        plan.add('extras', 'register', lambda: common.Report(['would remove a']))
+        lines = []
+        code, _ = M._carry_out('t', plan, True, lambda *ls: lines.extend(ls), [])
+        self.assertEqual(code, M.EXIT_OK)
+        self.assertNotIn('processed file', '\n'.join(lines))
+        self.assertLess(lines.index('  would remove a'), lines.index('done: register'))
+
+
 if __name__ == '__main__':
     unittest.main()
+

@@ -31,7 +31,7 @@ from kitlib.config import user
 from kitlib.config.migration import OLD_DIR_NAME
 
 from . import agenttemp, extras, links, owner, plugin, settings
-from .common import Change, Plan, kit_file
+from .common import Change, Plan, Report, kit_file
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
 
@@ -189,7 +189,7 @@ def _carry_out(name, plan, apply, emit, lines):
                 raise
             return EXIT_REFUSED, lines
         done.append(c.text)
-        if isinstance(said, list):                                   # a change's own report lines
+        if isinstance(said, Report):                                 # a change's own report lines
             emit(*['  ' + l for l in said])
         emit('done: %s' % c.text)
     emit('%s: made %d change(s); a second run reports nothing to do' % (name, len(done)))

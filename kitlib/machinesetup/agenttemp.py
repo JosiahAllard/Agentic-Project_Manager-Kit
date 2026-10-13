@@ -16,7 +16,7 @@ from kitlib.config import user as kuser
 from kitlib.worktree.task import CARRIER, FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted
 
 from . import machineconfig
-from .common import is_link, norm
+from .common import Report, is_link, norm
 
 ENV = 'AGENT_TEMP'
 KEY = 'agent_temp_sweep'
@@ -308,7 +308,7 @@ def _task(plan, ctx):
     def register():
         said = host.sweep_dry_run(ctx.kit)
         host.task_register(line)
-        return ['sweep dry run (nothing removed): ' + l for l in said]
+        return Report('sweep dry run (nothing removed): ' + l for l in said)
 
     plan.add('extras', 'register the scheduled task %s (daily %s, as you, not elevated): %s'
              % (TASK, AT, line), register,
