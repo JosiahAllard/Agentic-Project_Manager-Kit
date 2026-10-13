@@ -113,19 +113,14 @@ a relocated copy. Both need re-running against this layout before they count for
 
 This port was checked on Linux only, with a ctypes shim and no Win32, so nothing was run on
 Windows:
-- `tests/bridge`: 426 tests, of which 158 pass on Linux.
-  - 266 of the 268 that fail on Linux open real pipes, tokens or processes, and they are exactly
-    the tests that failed the same way on the source branch.
-  - The other two are new and Windows-only: the CLI test and the frontend-subprocess test for the
-    Codex registration gap.
-  - On Windows, the native-channel tests that need a captured Codex app pipe skip until Codex is
-    registered, because the frontend subprocess reads the kit's real `hosts.json`. Meanwhile
-    `test_codex_channel_follows_registration` asserts that the frontend ignores the variable. It
-    flips to asserting the capture once Codex is registered.
+- `tests/bridge`: 425 tests, of which 159 pass on Linux. The 266 that fail all open real pipes,
+  tokens or processes, and they are exactly the tests that failed the same way on the source
+  branch. Checked after merging step 9 (8b6365a): there are no other new failing ids.
 - `tests/proc/test_pipe.py`: 10 tests; the 9 Windows-only ones skip on Linux.
 - `tests/ident`: 7 tests, all passing on Linux.
-- The bridge part of the Claude conformance suite: 4 tests; 3 pass on Linux and the
-  fake-pipe delivery test skips there.
+- The bridge part of the conformance suite runs for Claude and for Codex: 4 tests each. 3 pass
+  on Linux, and the fake-pipe delivery test skips there. Codex records no fake recipient pipe yet,
+  so that test also skips for Codex on Windows.
 
 Before relying on the port, run the bridge's own packages on Windows:
 `python tools/gate.py --full`, or at least `tests/bridge`, `tests/proc` and `tests/host`.
