@@ -7,6 +7,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -251,6 +252,17 @@ class CommandLine(unittest.TestCase):
             self.assertEqual(os.path.basename(line['command']).lower(), 'pythonw.exe')
         # an interpreter with no pythonw beside it is used itself
         self.assertEqual(hookmain.windowless(sys.executable + '-none'), sys.executable + '-none')
+
+    @unittest.skipUnless(os.name == 'nt', 'pythonw.exe is a Windows interpreter')
+    def test_an_existing_interpreter_of_any_python_name_gets_the_pythonw_beside_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name in ('python3.exe', 'python3.14.exe', 'pythonw.exe'):
+                open(os.path.join(d, name), 'w').close()
+            want = os.path.join(d, 'pythonw.exe')
+            self.assertEqual(hookmain.windowless(os.path.join(d, 'python3.exe')), want)
+            self.assertEqual(hookmain.windowless(os.path.join(d, 'python3.14.exe')), want)
+            gone = os.path.join(d, 'python9.exe')      # no such file: used as given
+            self.assertEqual(hookmain.windowless(gone), gone)
 
     def test_the_settings_entry_wraps_it(self):
         entry = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py')
