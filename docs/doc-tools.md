@@ -58,25 +58,25 @@ With `capped` set, only the listed docs may carry a cap, each needs an integer o
 python tools/doc_index.py [-C DIR] [--find WORD... | --section HEADING [--doc PATH] | --tools | --stale | --role ROLE] [--head REF] [--days N] [--config-ref REF]
 ```
 
-`--config-ref REF` reads `.kit.json` as commit REF holds it instead of the working tree's: the whole `doc_index` section, `doc_budget.shard_indexes`, and whether a `.kit.json` exists at all (`kitlib.docs.index.run`, `config_ref`).
+`--config-ref REF` reads `.kit.json` as commit REF holds it instead of the working tree's: the whole `doc_index` section and `doc_budget.shard_indexes` (`kitlib.docs.index.run`, `config_ref`); a ref with no `.kit.json` is all defaults.
 
 `kitlib.docs.index.run` behaves as follows:
 
-- **No mode.** It checks the index at `--head`: every tracked `.md` but a `doc_budget.retired_paths` one is named on an entry line of the index (`listing_misses`; a glob entry covers what it matches, a path in prose or a table header names nothing), shard indexes (`doc_budget.shard_indexes`), index blocks, and a `kw:` field on every entry. The index is hand-written, so a branch that adds a `.md` adds its entry line in the same commit. A repo with no `.kit.json`, or with `doc_index.enabled` false, skips the listing check and needs no index file.
+- **No mode.** It checks the index at `--head`: every tracked `.md` but a `doc_budget.retired_paths` one is named on an entry line of the index (`listing_misses`; a glob entry covers what it matches, a path in prose or a table header names nothing), shard indexes (`doc_budget.shard_indexes`), index blocks, and a `kw:` field on every entry. The index is hand-written, so a branch that adds a `.md` adds its entry line in the same commit. The doc index is opt-in (docs/multi-host-plan.md decision 26), and the index file is the opt-in, with or without a `.kit.json`; `doc_index.enabled` false is the explicit opt-out, skipping the listing check silently. With no index file at `--head` the listing check is skipped, and the run says so in one line before its verdict (`doc_index: no docs/INDEX.md in this repository, so the listing check is skipped ...`); with `--config-ref`, an index the ref has still counts, so a branch that deletes its base's index fails ("the index is missing") rather than skipping. The other checks run as before.
 - **`--find`.** Prints the index entries for a topic. The match mode is set by `doc_index.find_match`.
 - **`--section`.** Prints one section of any tracked `.md`, found by its heading.
 - **`--tools`.** Prints the index's `## Tools` section.
 - **`--stale`.** A report of state docs (`doc_budget.state_docs`) not touched for `--days`, or `stale_days`, default 14. It never fails.
 - **`--role`.** Prints every section a role reads (`doc_index.roles`, or `roles_doc` + `roles_marker`), capped at `role_lines`.
 
-The index file is `doc_index.index` (default `docs/INDEX.md`). `--find` and `--tools` read it from the working tree and fail (exit 2, "cannot read") when it is absent, even with `doc_index.enabled` false; `--section` does not read it. Preflight's `index` line marks a configured index file that is absent with `(missing)` (`kitlib/preflight/report.py`); the kit's own is `docs/INDEX.md`, pinned by `tests/docs/test_kit_index.py`.
+The index file is `doc_index.index` (default `docs/INDEX.md`). `--find` and `--tools` read it from the working tree; when it is absent they print `doc_index: this repository has no doc index (no <index>)` and where to search instead (`git grep` over docs/ and the README), exit 1, even with `doc_index.enabled` false; any other read error is exit 2, "cannot read". `--role` names the same absence on each topic it cannot resolve. `--section` does not read it. Preflight's `index` line marks a configured index file that is absent with `(none: the doc index is opt-in)` (`kitlib/preflight/report.py`); the kit's own is `docs/INDEX.md`, pinned by `tests/docs/test_kit_index.py`.
 
 The no-mode check is run by preflight (`kitlib/preflight/report.py`), commit (`kitlib.commit.doc_index_check`, after a commit holding a `.md` or an owner-only file) and review_pack (`kitlib.reviewpack.index_line`, with `--head <branch> --config-ref <base>`) as `[sys.executable, <kit>/tools/doc_index.py, -C, <repo>]`, beside doc_budget and judged the same way (`kitlib.docs.callers.line`: exit 0, a `DOC INDEX OK` line, no `DOC INDEX FAILED`). It prints as a `doc index` line; a failure is a failing line in preflight, the follow-up-commit notice in commit, and a failed pack in review_pack. `doc_index.enabled` false runs nothing and prints nothing (review_pack reads it, and every other doc index setting, from the base's `.kit.json`, so a branch can neither switch its own check off nor rename the index it is checked against; preflight and commit read the working tree's, being advisory); a kit with no `tools/doc_index.py` prints NOT CHECKED. `tests/docs/test_index_callers.py` pins each caller.
 
 Exit codes:
 
 - 0: pass.
-- 1: a miss, meaning an index check failed, no entry was found, or a role topic did not resolve.
+- 1: a miss, meaning an index check failed, no entry was found, a role topic did not resolve, or (`--find`, `--tools`) the repository has no index.
 - 2: usage, configuration, an unread index or listing, or an unknown role.
 
 ## codemap

@@ -7,6 +7,9 @@ a test fails when they differ from what the renderer writes now (tests/content/t
 
 - `content/roles/<name>.md`: one role. Front matter, then a neutral body.
 - `content/skills/<name>/`: one skill folder, shipped byte for byte on every host.
+- `content/default-profile.md`: the agent profile every role reads when a repository has none
+  (docs/agent-profile.md). Not rendered: it holds no tokens and names no host
+  (tests/content/test_default_profile.py).
 - `python tools/render_content.py` (`--check`, the default) lists each rendered file that differs,
   is missing, or is stale (in a folder a host renderer owns, but no longer rendered). Exit 1 if any.
 - `python tools/render_content.py --write` writes them and removes the stale ones. `--host <name>`
@@ -191,7 +194,8 @@ Sections 1-7, what the agent is given, in the order it gets it:
 6. **Skills**: `content/skills`, where the host has skills, and a note when the role's tool list
    leaves out the host's skill tool.
 7. **Repo profile**: the `profile_path` token (and `coordinator_profile_path` when the role's body
-   names it) if the repository has it, else none.
+   names it) if the repository has it, else none; for `profile_path`, none names the kit's
+   `content/default-profile.md`, the profile in use then (docs/agent-profile.md).
 
 Sections 8-11, what it is held to:
 8. **Model, tools and mode**: the role file's tier, effort and sandbox; what the host's file sets

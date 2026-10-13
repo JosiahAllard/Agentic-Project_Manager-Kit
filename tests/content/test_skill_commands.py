@@ -1,7 +1,8 @@
 """Every kit command a skill or role shows exists, with the flags it shows (docs/multi-host-plan.md
 section 5, form C; docs/content.md).
 
-For each `python tools/<name>.py ...` in content/skills/**.md and content/roles/*.md (also written
+For each `python tools/<name>.py ...` in content/skills/**.md, content/roles/*.md and
+content/default-profile.md (also written
 `python <kit>/tools/...` or `python <worktree>/tools/...`), the
 kit has tools/<name>.py, and every `-x` / `--flag` the command shows is an option string that
 tool's parser defines. The tools are never run: their source is parsed (ast) for the option
@@ -34,6 +35,7 @@ def content_files(root=KIT_ROOT):
         top = os.path.join(root, base, sub)
         for d, _, files in os.walk(top):
             out.extend(os.path.join(d, f) for f in files if f.endswith('.md'))
+    out.append(os.path.join(root, 'content', 'default-profile.md'))    # the roles' fallback profile
     return sorted(out)
 
 

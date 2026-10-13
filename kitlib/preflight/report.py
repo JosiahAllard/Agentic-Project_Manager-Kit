@@ -101,7 +101,7 @@ def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read
     out.append(configline.line(home))
     out.append('traps     %s' % s['traps'])
     index = cfg.section('doc_index')['index']
-    gone = '' if os.path.isfile(os.path.join(top, index)) else ' (missing)'
+    gone = '' if os.path.isfile(os.path.join(top, index)) else ' (none: the doc index is opt-in)'
     out.append('index     docs: %s%s | a doc section: python %s/doc_index.py '
                '--section "<title>"' % (index, gone, tools))
     out.extend(nextblock.lines(top, tools, branch, base, cfg.main_branch, behind, dirty or [],

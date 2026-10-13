@@ -16,7 +16,9 @@ item, do not reconcile it yourself.
 
 Read `{{profile_path}}` sections **Branches and worktrees**, **Build and test** (docs gate), **Records**
 (paths you must never edit); each names a topic, so `python tools/doc_index.py --find <topic>`
-and read the one section it names. Nothing else. No profile: stop, say so.
+and read the one section it names. Nothing else.
+No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
+{{instructions_file}} (or equivalent) where they exist.
 
 ## Required inputs
 

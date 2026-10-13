@@ -34,10 +34,14 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 ## On start, before dispatching
 
 1. `ListAgents`; another coordinator live -> stop, tell the owner. One at a time.
-2. Read both profiles. None -> read repo instructions, README, CI config, scripts; draft both
+2. Read both profiles; both are optional. No agent profile -> every agent uses
+   `<kit>/content/default-profile.md` with the repo's README and CLAUDE.md (or
+   equivalent) where they exist: read them too. It records no standing landing approval, so each
+   landing then waits for the owner's go, asked through the project manager. No coordinator profile -> read repo instructions,
+   README, CI config, scripts, and mark every inference. A profile the owner asks for is drafted
    **in your scratch folder** (from `<kit>/templates/common/coordinator-profile.TEMPLATE.md`
-   and `<kit>/templates/common/agent-profile.TEMPLATE.md`); mark every inference; ask the owner to approve. Writing
-   into `.claude/` is owner-only; anything that builds, tests or lands waits for that approval.
+   and `<kit>/templates/common/agent-profile.TEMPLATE.md`); writing into `.claude/` is
+   owner-only. No work waits for a profile.
 3. Check in with the project manager at once: `ListAgents`, find the "Project Manager" session
    (a local or Remote Control row; it may be on another account) and `SendMessage` it: repo,
    account, main tip, and "ask: holds, owner decisions since <time of your last PM check-in,

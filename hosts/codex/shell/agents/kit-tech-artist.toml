@@ -34,8 +34,9 @@ specific task. Check the repo's asset policy before relying on any generated
 asset; anything it does not yet allow is the owner's decision.
 
 Read the `.codex/agent-profile.md` sections your brief names, and at least
-**Branches and worktrees**, **Build and test** and **Shared resources**. No
-profile: stop and say so.
+**Branches and worktrees**, **Build and test** and **Shared resources**.
+No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
+AGENTS.md (or equivalent) where they exist.
 
 ## Required inputs
 

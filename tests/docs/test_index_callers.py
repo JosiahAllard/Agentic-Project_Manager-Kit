@@ -87,6 +87,16 @@ class Preflight(Case):
         out = self.run_preflight()
         self.assertNotIn('doc index', out)
 
+    def test_no_index_is_skipped_not_failed_and_the_line_says_so(self):
+        # The doc index is opt-in (decision 26): a repository without one passes, saying why.
+        self.repo.git('rm', '-q', 'docs/INDEX.md')
+        self.repo.git('commit', '-q', '-m', 'no index')
+        self.commit_unlisted()
+        line = self.line(self.run_preflight())
+        self.assertNotIn('FAILED', line)
+        self.assertIn('no docs/INDEX.md in this repository, so the listing check is skipped', line)
+        self.assertIn('DOC INDEX OK', line)
+
 
 class Commit(Case):
 
@@ -199,25 +209,30 @@ class ConfigRef(Case):
         self.assertIn('DOC INDEX FAILED', out)
         self.assertIn(UNLISTED, out)
 
-    def test_a_ref_with_no_kit_json_skips_the_listing(self):
+    def test_a_ref_with_no_kit_json_still_checks_an_index_the_head_has(self):
+        # The index file alone opts in (decision 26): no .kit.json at the ref is all defaults,
+        # "doc_index".enabled true, so the head's index is checked.
         first = self.repo.git('rev-list', '--max-parents=0', 'HEAD').strip()
         self.assertNotEqual(self.repo.git('ls-tree', '--name-only', first, '.kit.json').strip(),
                             '.kit.json')
         self.commit_unlisted()
-        code, out = self.check()
-        self.assertEqual(code, 1, out)                       # the working tree has a .kit.json
-        code, out = self.check(config_ref=first)
-        self.assertEqual(code, 0, out)
-        self.assertIn('DOC INDEX OK', out)
+        for ref in (None, first):
+            with self.subTest(config_ref=ref):
+                code, out = self.check(config_ref=ref)
+                self.assertEqual(code, 1, out)
+                self.assertIn('DOC INDEX FAILED', out)
+                self.assertIn(UNLISTED, out)
 
     def test_the_index_path_is_the_ref_s(self):
         base = self.repo.git('rev-parse', 'HEAD').strip()
-        self.config(doc_index={'index': 'docs/MAP.md'})       # no such file: a miss if it counted
+        self.config(doc_index={'index': 'docs/MAP.md'})       # no such file: skipped if it counted
         code, out = self.check(config_ref=base)
         self.assertEqual(code, 0, out)
+        self.assertNotIn('docs/MAP.md', out)
         code, out = self.check()
-        self.assertEqual(code, 1, out)
-        self.assertIn('docs/MAP.md', out)
+        self.assertEqual(code, 0, out)
+        self.assertIn('doc_index: no docs/MAP.md in this repository, so the listing check is skipped',
+                      out)
 
     def failing_git(self, rc, words=('show',)):
         """kitlib.config's git seam answering every git call starting with `words` with exit `rc`

@@ -17,6 +17,7 @@ which rewrites every host's agent and skill files and docs/ROSTER.md's tables; c
 | The rules a mode is held to | `kitlib/guard/rolepolicy.py` (`RULES`, `LOCK_VERBS`) | nothing to render |
 | Its backlog rights | the role file's `mode`, `group` and `run` give its group; what each group may do is `kitlib/backlog/roles.py` (owner-only) | render (the roster the groups are read from) |
 | A skill | `content/skills/<name>/` | render |
+| The profile a role reads when its repository has none | `content/default-profile.md` (docs/agent-profile.md); a repository's own is the file its host's `profile_path` token names | nothing to render |
 | A host's wording | the role's tokens (`{{name}}`, docs/content.md "Tokens"), filled from the host's table in `hosts/<name>/adapter/content.py` or its `hosts.json` profile | render |
 | What a session gets at start | the kit header is `kitlib/host/header.py`; the PM and coordinator start checks are `kitlib/pmstart`, `kitlib/coordinatorstart` and `kitlib/hoststart`, run by each host's start hooks | nothing to render |
 | Add or remove a role | add or delete one `content/roles/<name>.md` | render; the roster, launcher and backlog groups follow |

@@ -32,7 +32,7 @@ Protections on with no file:
 - The owner-only paths (`owner.paths` default) and the owner identity rule: with the owner email from the machine config, an agent's change to an owner-only path is refused unless the owner approved it, and a session giving a commit the owner's email is refused.
 - The rules whose defaults are already the strict side: the kit-json rule (an agent session never writes a `.kit.json`), the write jail (no data roots: an agent writes its own checkout and temp only), the main-checkout rule (no subagent edits a main checkout), the lock rules and the kit's own heavy-program list.
 
-Off with no file, each switched on by its key: `repo.push_block` (a push to main needs a gate-OK record; it needs a gate), `guard.role_policy` (holding roles to their mode; the kit's own repo turns it on, and the Codex broker holds its role to it whatever the file says), `roles.lander.edit_main_checkout` (a lander fast-forwarding the main checkout), `ledger.pre_commit_check`, `daily_full.enabled` and `landing.in_flight`. The doc index listing check runs only in a repository with a `.kit.json` (docs/INDEX.md opt-in is plan step 19).
+Off with no file, each switched on by its key: `repo.push_block` (a push to main needs a gate-OK record; it needs a gate), `guard.role_policy` (holding roles to their mode; the kit's own repo turns it on, and the Codex broker holds its role to it whatever the file says), `roles.lander.edit_main_checkout` (a lander fast-forwarding the main checkout), `ledger.pre_commit_check`, `daily_full.enabled` and `landing.in_flight`. The doc index listing check runs only in a repository with an index file (`docs/INDEX.md`, or the one `doc_index.index` names), with or without a `.kit.json`; `doc_index.enabled` false turns it off (docs/doc-tools.md "doc_index").
 
 ## `.kit.json` keys
 
@@ -78,7 +78,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `doc_budget.shard_indexes` (map folder -> repo path, default {}): shard folder -> its index doc
 - `doc_budget.state_docs` (list of repo path, default []): docs checked for staleness
 - `doc_budget.stale_days` (int >= 1): days before a state doc is stale
-- `doc_index.enabled` (bool, default true): false: doc_index does not require every .md on an index entry line, nor the index file (a repo with no .kit.json skips it too)
+- `doc_index.enabled` (bool, default true): false: doc_index does not require every .md on an index entry line, even with an index file; with no index file the check is skipped anyway (the index file is the opt-in)
 - `doc_index.index` (repo path, default "docs/INDEX.md"): the doc index both doc tools read
 - `doc_index.find_match` (keywords|text, default "keywords"): how --find matches
 - `doc_index.roles` (map role -> list of string): role -> lookup topics

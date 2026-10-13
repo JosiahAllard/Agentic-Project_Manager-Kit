@@ -64,6 +64,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/worktree-remove.md` | worktree remove | removing a worktree | kw: worktree-remove, sweep
 - `content/README.md` | where to change what a role is given or held to, and how to see it (`tools/agent_view.py`) | changing a role, a rule, a skill or a model | kw: content, where, change, agent_view
 - `content/roles/*.md` | one role per file, the source of every host's agent file (`docs/content.md`) | editing an agent | kw: roles, agents, agent-definition
+- `content/default-profile.md` | the agent profile roles read in a repository with none of its own (`docs/agent-profile.md`) | a repo has no profile | kw: profile, default-profile
 - `content/skills/*/*.md` | one skill per folder, the source of every host's skills (`docs/content.md`) | editing a skill | kw: skills, skill
 - `hosts/claude/shell/agents/*.md` | Claude's agent files, rendered from content/roles (never edit by hand) | reading what Claude loads | kw: agents, rendered
 - `hosts/claude/shell/skills/*/*.md` | Claude's skills, copied from content/skills (never edit by hand) | reading what Claude loads | kw: skills, rendered
