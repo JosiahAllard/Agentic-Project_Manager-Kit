@@ -31,6 +31,7 @@ except its last 4 commits.
 | 13 | Folder layout | Uniform `hosts/<name>/` | `claude/` moves to `hosts/claude/` in step 7, and Codex lands as `hosts/codex/` in step 9. |
 | 14 | Form of the shared skill text | C: checklist + pointer | One line per step with its command, the "never" list, then the tool doc. A test checks that each `tools/*.py` command and flag a skill names exists (§5). |
 | 15 | Linux and macOS | A separate refactor after this plan | The host work keeps Windows behaviour identical. Rules in §6 stop it adding Windows debt. The OS work is §6. |
+| 16 | Owner paths in every repo | A deliberate tightening, a superset of before | `kitlib/config/schema.py` `OWNER_PATHS` (the default of `.kit.json` `owner.paths`) now also protects `AGENTS.md`, `docs/agent-profile.md` and `.codex/` (its worktrees folder excepted) in every repository, beside every host's `owner_paths`. Each path protected before still is; a repository that names its own `owner.paths` keeps its list. |
 
 ## 1. Where things stand
 
@@ -370,7 +371,7 @@ behaviour unchanged.
 | 6 | Remove the Claude leaks from kitlib, one PR per cluster: lock actor key → `host`, session env, worktree defaults, MCP prefix, commit model env, hub paths, launcher, pluginsource. | 2 |
 | 7 | Move `claude/` → `hosts/claude/{adapter,shell}`. `kit.json` and the one release value. `boot/kitboot.py`. **Done**, with the rendered manifests and the kit header hook (docs/content.md "Manifests", "Kit header"; docs/kitboot.md; docs/machine-setup.md "Moved hook paths"). | 5, 6 |
 | 8 | Conformance suite, required in the gate. `docs/new-host.md`. **Done**: `tests/host/conformance.py`, run for Claude and for a test-only fake host (`tests/host/fakehost`); the bridge-port check waits for step 10. | 3, 7 |
-| 9 | **Rebase `codex/companion-plugin`** onto main as `hosts/codex/`: `actions.py` → adapter events, `guard_adapter` reduced to what only Codex has, roles rendered from `content/`, `PM_KIT_CODEX_ROLE` removed. It must pass the conformance suite. **Ported** on its own branch (`claude/rebase-codex-host`): `hosts.json` registers Codex, `hosts/codex/` passes the suite on payloads in the branch's recorded shapes, `parse` may return several Actions (one `apply_patch`, several files) and an adapter may `screen`, the child-environment scrub is core (`kitlib.sessionmark.child_environment`, hosts.json `env_prefixes`), role prose names no host (new tokens, docs/content.md). Nothing is installed; live parity is unverified (hosts/codex/README.md "Not verified"). | 8 |
+| 9 | **Rebase `codex/companion-plugin`** onto main as `hosts/codex/`: `actions.py` → adapter events, `guard_adapter` reduced to what only Codex has, roles rendered from `content/`, `PM_KIT_CODEX_ROLE` removed. It must pass the conformance suite. **Ported** on its own branch (`claude/rebase-codex-host`): `hosts.json` registers Codex, `hosts/codex/` passes the suite on payloads in the branch's recorded shapes, `parse` may return several Actions (one `apply_patch`, several files) and an adapter may `screen`, the child-environment scrub is core (`kitlib.sessionmark.child_environment`, hosts.json `env_prefixes`), Codex's renderer fills every content token (docs/content.md "Tokens"). Nothing is installed; live parity is unverified (hosts/codex/README.md "Not verified"). | 8 |
 | 10 | **Rebase `codex/robust-bridge-plan`** as `optional/bridge/`: promote the helpers, declare the port, move the host halves, delete the probe code, collapse the docs. | 9 |
 
 Steps 3–4 and 5–6 can run in parallel. Tell the Codex agent about steps 9–10 now, so it can
@@ -379,7 +380,11 @@ stop building on paths that are about to move.
 ## 4. What does not change
 - Standard library only and Windows only. No argparse or printing in kitlib.
 - Tool paths and exit codes. A merged flag keeps the old one as an alias for one release.
-- Guard semantics for Claude: every existing guard test passes through the adapter.
+- Guard semantics for Claude: every existing guard test passes through the adapter. Two
+  changes are deliberate: the role policy (docs/guard.md "Role policy"), which runs only where a
+  repository's `.kit.json` sets `guard.role_policy` (opt in; off, every call is judged as before),
+  and the owner paths' tightening of decision 16 (`AGENTS.md`, `docs/agent-profile.md` and `.codex/`
+  added to the default `owner.paths`, a superset of before).
 - The bridge's security posture: fail closed, no resend of unknown messages, routes chosen by
   the owner.
 

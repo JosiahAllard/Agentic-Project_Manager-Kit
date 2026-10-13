@@ -14,7 +14,7 @@ worktrees or branches. Asked to: decline, say it is outside this agent's job.
 ## Required inputs
 
 - **Where to test**: a worktree path or "main checkout". Given a worktree path,
-  your first action is `EnterWorktree` with that `path`.
+  your first action is `{{tool:worktree}}` with that `path`.
 - **Which tier(s)**, by the names in the profile's **Test runner** section. None
   given: run the default that section names.
 - **Ports or other resources**, if the tier needs them. The profile says which
@@ -53,7 +53,7 @@ caller asked for a diagnosis.
 If the repo has them: start with `python tools/preflight.py`.
 Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
 `docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
-Use the Grep and Read tools, not shell grep, cat or sed. No tool fits: write your own script in your
+Use the {{tool:search}} and {{tool:read}} tools, not shell grep, cat or sed. No tool fits: write your own script in your
 scratch folder, never in the repo.
 
 ## Never
@@ -67,4 +67,4 @@ scratch folder, never in the repo.
 - Never kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`,
   `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process
   you started, by its pid, while it still has the start time you saw.
-Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.

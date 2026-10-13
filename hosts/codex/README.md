@@ -26,7 +26,9 @@ The plugin root is `shell/`. Copied out of the kit (a plugin cache), its entries
 
 - **Hook payloads.** The shapes come from the Codex hooks documentation and the branch's tests. No
   payload from an installed client was captured; the MCP tool-name format (`mcp__<server>__<tool>`)
-  and the session variable (`CODEX_THREAD_ID`) are inferred.
+  and the session variable (`CODEX_THREAD_ID`) are inferred, as are the tool names the rendered
+  roles show (`adapter/content.py` `TOOLS`). In a marked session the hook screen refuses
+  `spawn_agent` and `send_message`, which the coordinator and PM roles name.
 - **Which agent runs.** Codex's hooks carry no child identity: a child's payload names its parent's
   session and the child inherits the parent's `PM_KIT_ROLE`. The kit therefore judges every Codex
   call as the main session with its mark (the role-only policy). The branch held every marked call

@@ -2,7 +2,7 @@
 
 Each role becomes `hosts/codex/shell/agents/kit-<name>.toml`, a Codex agent definition: a header
 comment, then `name` (kit-<name>, hosts.json agent_name_format), `description`, `model` (the role's
-`model.codex` override, else TIER_MODEL of its tier; no line for ACCOUNT_DEFAULT, so the account's
+`model.codex` override, else hosts.json's model for its tier; no line for ACCOUNT_DEFAULT, so the account's
 configured model runs, as the Codex branch's roles.json had it), `model_reasoning_effort` (the
 role's effort, else TIER_EFFORT of its tier), `sandbox_mode` (the role's `sandbox`) and
 `developer_instructions`, the role body with its tokens filled from TOKENS, as a TOML multi-line
@@ -52,12 +52,10 @@ HOOK_TIMEOUT = 10
 MCP_SERVERS = {'machine-lock': {'type': 'stdio', 'command': 'python',
                                 'args': [PLUGIN_ROOT + '/mcp/lock_server.py'],
                                 'env_vars': ['PM_KIT_ROOT', 'PM_KIT_RELEASE_ID']}}
-# No tier pins a model: every role runs on the account's configured Codex model and differs by
-# reasoning effort, as the Codex branch's roles.json had it. The owner names models per tier here
-# and in hosts.json (docs/ROSTER.md) when Codex models are chosen.
+# hosts.json's Codex tiers are all ACCOUNT_DEFAULT: every role runs on the account's configured
+# Codex model and differs by reasoning effort, as the Codex branch's roles.json had it. The owner
+# names models per tier in hosts.json (docs/ROSTER.md) when Codex models are chosen.
 ACCOUNT_DEFAULT = 'account-default'
-TIER_MODEL = {'light': ACCOUNT_DEFAULT, 'standard': ACCOUNT_DEFAULT, 'strong': ACCOUNT_DEFAULT,
-              'deep': ACCOUNT_DEFAULT}
 TIER_EFFORT = {'light': 'low', 'standard': 'medium', 'strong': 'high', 'deep': 'xhigh'}
 
 
@@ -66,29 +64,56 @@ def agent_name(role):
     return agentname.prefix(HOST) + role
 
 
-def _state(host):
-    return '~/' + registry.host(host).profile.state_directory
+# Codex's names for the kit's capabilities, as role prose names them ({{tool:<capability>}}). A
+# Codex agent file carries no tool list, so these are prose only. INFERRED from the Codex branch's
+# hook allowlist and native tool names, not from a captured session (README.md "Not verified");
+# a capability Codex has no tool for says so.
+TOOLS = {
+    'read': 'read_file', 'search': 'Grep', 'find': 'Glob', 'edit': 'apply_patch', 'write': 'apply_patch',
+    'bash': 'the shell tool', 'powershell': 'the shell tool',
+    'worktree': 'python <kit>/tools/new_worktree.py', 'artifact': 'no Codex artifact tool',
+    'dispatch': 'spawn_agent', 'message': 'send_message', 'list-agents': 'the PM\'s session list',
+    'stop-task': 'no Codex task-stop tool', 'monitor': 'a background shell poll',
+    'tool-search': 'no Codex tool search', 'skill': 'the skill', 'ask-owner': 'request_user_input',
+    'cron-create': 'no Codex scheduler (ask the PM)', 'cron-list': 'no Codex scheduler (ask the PM)',
+    'cron-delete': 'no Codex scheduler (ask the PM)', 'web-search': 'WebSearch', 'web-fetch': 'WebFetch',
+}
+# The tokens whose Codex value no hosts.json field holds.
+TOKENS = {
+    'profile_path': 'docs/agent-profile.md',
+    'coordinator_profile_path': 'docs/coordinator-profile.md',
+    'instructions_file': 'AGENTS.md',
+    'config_dir_env': 'CODEX_HOME',
+    # Plans only on Codex: the launcher runs nothing yet (launcher.py; README.md).
+    'launch_agent': 'python <kit>/hosts/codex/shell/scripts/launch.py --role',
+}
+# The tokens read from hosts.json's Codex entry (a registry.Host), as every renderer reads them.
+PROFILE_TOKENS = {
+    'worktrees_dir': lambda host: host.profile.worktrees_directory,
+    'owner_folder': lambda host: next(p for p in host.profile.owner_paths if p.endswith('/')),
+    'user_folder': lambda host: '~/' + host.profile.state_directory,
+    'coauthor_email': lambda host: host.profile.attribution.email,
+    'long_context_model': lambda host: model_phrase(dict(host.tiers)['deep']),
+}
 
 
-def tokens():
-    """Codex's token values (docs/content.md "Tokens"). kit_home is the kit's per-user folder,
-    the default host's state folder on every host (kitlib.host.registry.state_path)."""
-    a = registry.host(HOST).profile.attribution
-    return {
-        'profile_path': 'docs/agent-profile.md',
-        'coordinator_profile_path': 'docs/coordinator-profile.md',
-        'instructions_file': 'AGENTS.md',
-        'worktrees_dir': registry.host(HOST).profile.worktrees_directory,
-        'host_folder': '.codex',
-        'config_folders': 'a Codex config folder (`~/.codex`, `$env:CODEX_HOME`)',
-        'user_folder': _state(HOST),
-        'kit_home': '~/' + registry.default_profile().state_directory,
-        'coauthor': '%s <your exact model id> <%s>' % (a.name, a.email),
-        'compact_window': '`model_auto_compact_token_limit` tokens `~/.codex/config.toml`',
-        'launch': lambda role: 'started by the owner with the `%s` agent\'s instructions; the kit '
-                               'launches no Codex main session yet' % agent_name(role),
-        'resume_note': '',
-    }
+def model_phrase(model):
+    """How role prose names a Codex model: ACCOUNT_DEFAULT is the account's configured model."""
+    return "the account's model" if model == ACCOUNT_DEFAULT else model
+
+
+def tokens(registry_path=None):
+    """Every one-value token's Codex value (docs/content.md "Tokens"): TOKENS, and PROFILE_TOKENS
+    from hosts.json's Codex entry."""
+    host = registry.host(HOST, registry_path)
+    out = dict(TOKENS)
+    out.update((name, value(host)) for name, value in PROFILE_TOKENS.items())
+    return out
+
+
+def prose_models():
+    """{tier: how prose names its model} for {{model:<tier>}}."""
+    return {t: model_phrase(m) for t, m in registry.host(HOST).tiers}
 
 
 def toml_string(value):
@@ -128,7 +153,7 @@ def substitute_body(role, names):
     """The developer instructions of `role` on Codex: its body with the tokens filled, the newline
     that ends the front matter dropped. `names` are every role's name (for role tokens)."""
     src = '%s/kit-%s.toml' % (AGENTS_REL, role.name)
-    body = substitute(role.body, tokens(), agent_name, names, src)
+    body = substitute(role.body, tokens(), agent_name, names, src, models=prose_models(), tools=TOOLS)
     return body[len(role.newline):] if body.startswith(role.newline) else body
 
 
@@ -136,7 +161,8 @@ class CodexContent:
     host = HOST
 
     def tier_models(self):
-        return dict(TIER_MODEL)
+        """hosts.json's Codex `tiers`: the one tier -> model map."""
+        return dict(registry.host(HOST).tiers)
 
     def owned(self):
         return (AGENTS_REL, SKILLS_REL)
@@ -145,8 +171,9 @@ class CodexContent:
         """The bytes of `role`'s agent file; `names` are every role's name (for role tokens)."""
         src = '%s/kit-%s.toml' % (AGENTS_REL, role.name)
         values = tokens()
-        fill = lambda text: substitute(text, values, agent_name, names, src)    # noqa: E731
-        model = role.model_for(HOST, TIER_MODEL)
+        fill = lambda text: substitute(text, values, agent_name, names, src, models=prose_models(),  # noqa: E731
+                                       tools=TOOLS)
+        model = role.model_for(HOST, self.tier_models())
         effort = role.effort or TIER_EFFORT[role.tier]
         if role.sandbox not in ('read-only', 'workspace-write'):
             raise ContentError('%s: no Codex sandbox_mode for %s' % (src, role.sandbox))

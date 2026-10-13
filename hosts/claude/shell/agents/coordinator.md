@@ -108,7 +108,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   items and holds (work set item | state; in flight branch | agent | state; landing queue;
   waiting on owner; locks/ports held); last PM check-in (time); next step. Open items only: landed history goes in the
   repo's records (landing notes), never the note. No narrative. A successor reads it as stale.
-- Write it, and anything under a Claude config folder (`~/.claude`, `$env:CLAUDE_CONFIG_DIR`),
+- Write it, and anything under your host's config folder (`~/.claude`, `$env:CLAUDE_CONFIG_DIR`),
   with Edit/Write, never a shell command: a shell write there blocks on an approval prompt and
   leaves you idle.
 - **No implementation.** Code, tests, docs, config, CI -> an agent. Carve-out: a trivial

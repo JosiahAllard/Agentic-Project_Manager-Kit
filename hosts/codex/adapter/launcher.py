@@ -53,6 +53,8 @@ def role_definition(role, kit=None):
     """(Role, its developer instructions on Codex) from content/roles under the kit."""
     from kitlib import content
     found = content.load(kit or kit_root())
+    if role not in found.role_names() and role.startswith(codex_content.agent_name('')):
+        role = role[len(codex_content.agent_name('')):]       # the agent name role prose shows (kit-<role>)
     if role not in found.role_names():
         raise ValueError('unknown kit role: %s' % role)
     r = found.role(role)
@@ -112,7 +114,7 @@ def plan(role, cwd, name, brief, model=None, effort=None, kit=None, classify=Non
     if not body.strip() or len(body) > MAX_BRIEF:
         raise ValueError('a brief is non-empty and at most %d characters' % MAX_BRIEF)
     argv = [native_codex(codex_exe), '--no-daemon', 'exec', '--json', '--cd', str(cwd), '--sandbox', r.sandbox]
-    chosen = model or r.model_for(HOST, codex_content.TIER_MODEL)
+    chosen = model or r.model_for(HOST, codex_content.renderer().tier_models())
     if chosen != codex_content.ACCOUNT_DEFAULT:
         if not isinstance(chosen, str) or not chosen.strip() or any(c in chosen for c in '\r\n\x00'):
             raise ValueError('invalid model')

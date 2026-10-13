@@ -53,30 +53,34 @@ each flag shown.
 ## Tokens
 
 A body or description names a value that differs by host only as a token. An unknown token, or a
-`{{` that is not one, refuses the render.
+`{{` that is not one, refuses the render. A value `hosts.json` already holds is read from the host's
+profile there, never written a second time in the renderer (Claude: `PROFILE_TOKENS`).
 
-| token | Claude | Codex |
-|---|---|---|
-| `{{agent:<role>}}` | `pm-kit:<role>` | `kit-<role>` |
-| `{{launch:<role>}}` | `` `claude --agent pm-kit:<role>` `` | started by the owner with the `kit-<role>` agent's instructions (no Codex launch yet) |
-| `{{profile_path}}` | `.claude/agent-profile.md` | `docs/agent-profile.md` |
-| `{{coordinator_profile_path}}` | `.claude/coordinator-profile.md` | `docs/coordinator-profile.md` |
-| `{{instructions_file}}` | `CLAUDE.md` | `AGENTS.md` |
-| `{{worktrees_dir}}` | `.claude/worktrees` | `.codex/worktrees` |
-| `{{host_folder}}` | `.claude` | `.codex` (the repository's host folder, owner-only) |
-| `{{config_folders}}` | a Claude config folder (`~/.claude`, `$env:CLAUDE_CONFIG_DIR`) | a Codex config folder (`~/.codex`, `$env:CODEX_HOME`) |
-| `{{user_folder}}` | `~/.claude` | `~/.codex` (the host's per-user folder) |
-| `{{kit_home}}` | `~/.claude` | `~/.claude` (the kit's per-user folder, the default host's state folder on every host: its installed tools and knowledge) |
-| `{{coauthor}}` | `<the model you run on> <noreply@anthropic.com>` | `Codex <your exact model id> <noreply@openai.com>` (the trailer after `Co-Authored-By: `) |
-| `{{compact_window}}` | `` `autoCompactWindow` tokens `.claude/settings.local.json` `` | `` `model_auto_compact_token_limit` tokens `~/.codex/config.toml` `` |
-| `{{resume_note}}` | `; the launcher's after-reboot resume passes it` | empty (after the PM's launch line) |
+| token | meaning | Claude | Codex |
+|---|---|---|---|
+| `{{agent:<role>}}` | the name the host dispatches a role by | `pm-kit:<role>` | `kit-<role>` |
+| `{{model:<tier>}}` | the host's model for a tier | hosts.json `tiers`: `{{model:strong}}` is `opus` | `the account's model` while hosts.json maps the tier to `account-default` |
+| `{{tool:<capability>}}` | the host's tool for a capability (the front matter's names) | the renderer's `TOOLS`: `{{tool:message}}` is `SendMessage`, `{{tool:dispatch}}` `Agent` | the renderer's `TOOLS` (inferred names): `send_message`, `spawn_agent`, `apply_patch`; a capability with no Codex tool says so |
+| `{{profile_path}}` | a repository's agent profile | `.claude/agent-profile.md` | `docs/agent-profile.md` |
+| `{{coordinator_profile_path}}` | a repository's coordinator profile | `.claude/coordinator-profile.md` | `docs/coordinator-profile.md` |
+| `{{instructions_file}}` | the repository instructions file the host reads | `CLAUDE.md` | `AGENTS.md` |
+| `{{worktrees_dir}}` | the repository folder agent worktrees go in | `.claude/worktrees` (hosts.json profile `worktrees_directory`) | `.codex/worktrees` |
+| `{{owner_folder}}` | the host's own folder in a repository, owner-only, with its final `/` | `.claude/` (the folder among hosts.json profile `owner_paths`) | `.codex/` |
+| `{{user_folder}}` | the host's per-user folder, home-relative | `~/.claude` (`~/` and hosts.json profile `state_directory`) | `~/.codex` |
+| `{{config_dir_env}}` | the environment variable that moves that per-user folder | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` |
+| `{{long_context_model}}` | a noun phrase for the model a launched long-context session (deep-worker, consultant) runs on | `the 1M-context opus model` (the `deep` tier's model from hosts.json) | `the account's model` |
+| `{{coauthor_email}}` | the address in the host's Co-Authored-By trailer | `noreply@anthropic.com` (hosts.json profile `attribution.email`) | `noreply@openai.com` |
+| `{{launch_agent}}` | the command that starts the host's main session as a named agent; `{{agent:<role>}}` follows it | `claude --agent` | `python <kit>/hosts/codex/shell/scripts/launch.py --role` (a plan only) |
 
-`{{agent:<role>}}` and `{{launch:<role>}}` take a role name; the rest take none.
+A neutral sentence is preferred to a token where it reads as well (`<kit>/optional/comfy/comfy_gen.py`,
+not a per-user link to it). tests/content `test_role_bodies_name_no_claude_value_a_token_covers`
+fails a role that writes a Claude value bare, and tests/host/test_leaks a host name in `content/`.
 
 ## Claude
 
 `hosts/claude/adapter/content.py` writes `hosts/claude/shell/agents/<name>.md` with `name`, `description` (quoted only
-when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model`,
+when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model` (hosts.json `tiers`, the
+one tier map),
 `effort` when set, and for `cache: long` the `experimental` map with `cacheTtl: 1h`. It copies each
 skill folder to `hosts/claude/shell/skills/<name>/`. It owns both folders.
 

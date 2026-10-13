@@ -10,7 +10,7 @@ from kitlib import sessionmark
 from kitlib.guard import context, rules
 from kitlib.host import Action
 from kitlib.lock import api
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 from kitlib.lockmcp import server as lockmcp
 
 from . import world as W
@@ -22,7 +22,7 @@ COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 PM = {context.ROLE_ENV: 'pm'}
 PLAIN = {context.ROLE_ENV: 'plain'}          # a launcher mark no agent-session rule holds by default
 OWNER_EMAIL = 'owner@example.com'
-P = CLAUDE_PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
+P = PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
 
 
 class Mark(unittest.TestCase):

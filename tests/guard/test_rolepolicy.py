@@ -249,6 +249,37 @@ class ShellGap(Base):
             with self.subTest(text):
                 self.denied(self.shell(text, shell='bash'), 'role-shell')
 
+    def test_only_the_interpreters_own_options_count(self):
+        """A word after the script, the -c command or the -m module is the program's, not the
+        interpreter's: `-i`, `-s` and `-` there are arguments."""
+        for text, shell in (('python -m pytest -s tests/', 'bash'), ('python -m pip install -i URL foo', 'bash'),
+                            ('python tools/foo.py -i input.txt', 'bash'), ('python tools/x.py --input -', 'bash'),
+                            ('cat x | python script.py -i', 'bash'), ('python -s script.py', 'bash'),
+                            ('bash script.sh -i', 'bash'), ('bash -c "echo hi" -', 'bash'),
+                            ('pwsh -NoProfile -File x.ps1 -n 5', 'powershell'),
+                            ('pwsh -EncodedCommand ZQBjAGgAbwA=', 'powershell'), ('pwsh -ec ZQBj', 'powershell'),
+                            ('powershell -e ZQBj', 'powershell'), ('pwsh -nop x.ps1 -i', 'powershell'),
+                            ('python -c "print(1)" -i', 'bash'), ('python -X utf8 -W ignore x.py -i', 'bash'),
+                            ('python -Wignore -Bc "print(1)"', 'bash'), ('py -3 x.py -', 'bash'),
+                            ('python -m pytest -s', 'powershell'), ('bash -- script.sh -i', 'bash'),
+                            ('bash -o pipefail script.sh', 'bash'), ('bash -lc "ls"', 'bash'),
+                            ('cmd /q /c dir /k', 'powershell'), ('python -V', 'bash'), ('python --help', 'bash'),
+                            ('bash --version', 'bash')):
+            with self.subTest(text):
+                self.assertIsNone(rolepolicy.check(self.shell(text, shell=shell), self.w.ctx()), text)
+
+    def test_interactive_options_of_the_interpreter_itself_are_still_refused(self):
+        for text, shell in (('python', 'bash'), ('python -i', 'bash'), ('python -i script.py', 'bash'),
+                            ('python -s', 'bash'), ('python -u', 'bash'), ('python -v', 'bash'),
+                            ('python -X utf8', 'bash'), ('bash -i', 'bash'), ('bash -i script.sh', 'bash'),
+                            ('bash -s foo', 'bash'), ('bash --', 'bash'), ('echo x | bash -i', 'bash'),
+                            ('pwsh -NoExit -File x.ps1', 'powershell'), ('pwsh -noe -c 1', 'powershell'),
+                            ('pwsh -NoProfile', 'powershell'), ('pwsh -Interactive', 'powershell'),
+                            ('pwsh -c -', 'powershell'), ('cmd /k dir', 'powershell'), ('cmd /q', 'powershell'),
+                            ('bash -c bash', 'bash'), ('bash -c "python -i"', 'bash')):
+            with self.subTest(text):
+                self.denied(self.shell(text, shell=shell), 'role-shell')
+
     def test_the_instead_names_a_finite_form(self):
         d = self.denied(self.shell('python -i'), 'role-shell')
         self.assertIn('Instead: python -c "<command>"', d.reason)
@@ -270,13 +301,13 @@ class LockVerbs(Base):
     def test_the_agent_rights_pass_for_write_controller_and_test(self):
         """docs/guard.md "Lock CLI owner writes" "Still open"."""
         for role in ('senior-worker', 'pm', 'test-runner'):
-            for args in ('book --kind build', '--repo x unbook b1', 'hold agent --for 1h', 'hold list',
-                         'hold end h-1', 'hold edit h-1 --for 2h', 'division', 'game', 'game show'):
+            for args in ('hold agent --for 1h', 'hold list', 'hold end h-1', 'hold edit h-1 --for 2h',
+                         'division', 'game', 'game show', '--repo x status'):
                 with self.subTest(role=role, args=args):
                     self.assertIsNone(rolepolicy.check(self.shell('%s %s' % (LOCK, args), role), self.w.ctx()))
 
     def test_a_writer_runs_locked_jobs(self):
-        for args in ('status', 'stats', 'run --repo x --kind engine-test -- python -m unittest --force',
+        for args in ('status', 'status --days 3', 'run --repo x --kind engine-test -- python -m unittest --force',
                      'background --repo x --kind build -- x', 'stop r-1'):
             with self.subTest(args):
                 self.assertIsNone(rolepolicy.check(self.shell('%s %s' % (LOCK, args)), self.w.ctx()))
@@ -285,14 +316,87 @@ class LockVerbs(Base):
     def test_a_read_role_only_reads_the_lock_and_a_lander_also_runs(self):
         self.assertIsNone(rolepolicy.check(self.shell(LOCK + ' status', 'reviewer'), self.w.ctx()))
         d = self.denied(self.shell(LOCK + ' run --kind build -- x', 'reviewer'), 'role-lock')
-        self.assertIn('(status, stats; never --force)', d.reason)
-        for args in ('status', 'stats', 'run --kind build -- python tools/gate.py'):
+        self.assertIn('(status; never --force)', d.reason)
+        for args in ('status', 'status --days 3', 'run --kind build -- python tools/gate.py'):
             with self.subTest(args):
                 self.assertIsNone(rolepolicy.check(self.shell('%s %s' % (LOCK, args), 'lander'), self.w.ctx()))
-        for args in ('background --kind build -- x', 'hold agent', 'book', 'run --forc -- x'):
+        for args in ('background --kind build -- x', 'hold agent', 'stop r-1', 'run --forc -- x'):
             with self.subTest(args):
                 d = self.denied(self.shell('%s %s' % (LOCK, args), 'lander'), 'role-lock')
-                self.assertIn('(status, stats, run; never --force)', d.reason)
+                self.assertIn('(status, run; never --force)', d.reason)
+
+    def test_a_force_before_any_verb_is_named_without_a_leading_space(self):
+        from kitlib.guard import commands as cm, shell as sh
+        parsed = cm.read(LOCK + ' --force status', sh.BASH, self.w.wt)
+        self.assertEqual(rolepolicy.lock_verb(parsed, 'read')[0], '(no verb) --force')
+        d = self.denied(self.shell(LOCK + ' --force status', 'reviewer'), 'role-lock')
+        self.assertIn('machine_lock.py (no verb) --force is not', d.reason)
+
+    def test_only_the_verbs_the_lock_cli_has_are_named(self):
+        """tools/machine_lock.py's own parser: a verb it does not have (stats, book, unbook) is
+        nobody's right."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('machine_lock_cli', os.path.join(
+            kitroot.root(), 'tools', 'machine_lock.py'))
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        sub = next(a for a in cli.parser()._actions if a.dest == 'cmd')
+        for m, table in rolepolicy.LOCK_VERBS.items():
+            with self.subTest(m):
+                self.assertLessEqual(set(table), set(sub.choices), m)
+        for args in ('stats', 'book --kind build', 'unbook b1'):
+            with self.subTest(args):
+                self.denied(self.shell('%s %s' % (LOCK, args), 'senior-worker'), 'role-lock')
+
+
+class LockMcp(Base):
+    """The lock MCP's tools are held to the same verbs as the CLI (rolepolicy.MCP_VERBS)."""
+
+    def mcp(self, name, role='reviewer', prefix=None):
+        from kitlib.guard import rules
+        tool = (prefix if prefix is not None else rules.mcp_prefix(self.w.ctx())) + name
+        return Action('mcp', tool=tool, cwd=self.w.wt, agent='a1' if role else None, agent_role=role)
+
+    def test_every_lock_tool_has_a_verb(self):
+        from kitlib.lockmcp import server
+        self.assertEqual(set(rolepolicy.MCP_VERBS), set(server.TOOLS))
+
+    def test_the_read_tools_are_status_for_every_mode(self):
+        for name in ('lock_snapshot', 'lock_wait_change', 'lock_stats', 'lock_run', 'lock_hold'):
+            for role in ('reviewer', 'lander', 'test-runner', 'senior-worker', 'pm'):
+                with self.subTest(name=name, role=role):
+                    a = self.mcp(name, role)
+                    self.assertEqual(rolepolicy.mode(a, self.w.ctx())[1], MODES[role])
+                    self.assertIsNone(rolepolicy.check(a, self.w.ctx()))
+                    self.allowed(a)
+
+    def test_a_write_tool_is_held_to_the_modes_verbs(self):
+        for name, role, refused in (('lock_end_run', 'reviewer', True), ('lock_end_run', 'lander', True),
+                                    ('lock_end_run', 'senior-worker', False), ('lock_hold_end', 'test-runner', False),
+                                    ('lock_hold_end', 'reviewer', True), ('lock_hold_edit', 'pm', False),
+                                    ('lock_hold_create', 'pm', True), ('lock_set_game_mode', 'senior-worker', True),
+                                    ('lock_set_games', 'pm', True), ('lock_set_division', 'test-runner', True)):
+            with self.subTest(name=name, role=role):
+                d = rolepolicy.check(self.mcp(name, role), self.w.ctx())
+                if refused:
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'))
+                    self.assertIn(name, d.reason)
+                else:
+                    self.assertIsNone(d)
+
+    def test_another_server_name_and_an_unknown_lock_tool(self):
+        d = rolepolicy.check(self.mcp('lock_end_run', 'reviewer', prefix='mcp__other__'), self.w.ctx())
+        self.assertEqual(d.rule, 'role-lock')
+        d = rolepolicy.check(self.mcp('lock_new_thing', 'pm'), self.w.ctx())
+        self.assertEqual(d.rule, 'role-lock')
+
+    def test_other_mcp_tools_and_the_owner_read_nothing(self):
+        def load(*a, **k):
+            raise AssertionError('the policy read a .kit.json for a call it does not judge')
+        for a in (self.mcp('search', prefix='mcp__github__'),
+                  Action('mcp', tool='mcp__github__search', cwd=self.w.wt)):
+            with self.subTest(a):
+                self.assertEqual(rolepolicy.mode(a, self.w.ctx(load=load)), (None, None))
 
 
 class Switch(unittest.TestCase):
@@ -332,6 +436,17 @@ class RoleFiles(Base):
         self.denied(self.edit(os.path.join(self.w.wt, 'a.py'), 'test-runner'), 'role-edit')
         self.denied(self.shell('python3 -i', 'worker'), 'role-shell')
         self.allowed(self.edit(os.path.join(self.w.wt, 'a.py'), 'worker'))
+
+    def test_a_roles_key_under_the_old_name_holds_the_renamed_role(self):
+        """.kit.json `roles.opus-worker.mode` holds the senior-worker agent (kitlib.content.ALIASES),
+        over its role file's mode."""
+        w = W.World(kit=kit({'opus-worker': 'write'}))
+        self.addCleanup(w.cleanup)
+        write_roles(w.kit_dir, {'senior-worker': 'read'})
+        for kind in ('senior-worker', 'opus-worker'):
+            with self.subTest(kind):
+                a = Action('edit', tool='Write', path=os.path.join(w.wt, 'a.py'), cwd=w.wt, agent='a1', agent_role=kind)
+                self.assertEqual(rolepolicy.mode(a, w.ctx())[1], 'write')
 
     def test_the_roles_table_wins_over_the_role_file(self):
         a = self.edit(os.path.join(self.w.wt, 'a.py'), 'reviewer')

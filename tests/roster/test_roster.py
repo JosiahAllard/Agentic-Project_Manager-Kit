@@ -15,8 +15,8 @@ import unittest
 from unittest import mock
 
 from hosts.claude.adapter import content as claude_content
-from hosts.codex.adapter import content as codex_content
 from kitlib import content, reviewpack, roster
+from kitlib.host import registry
 from tests.docs.test_cli import repo_with_docs
 from tests.gitfixture import fixture_env
 
@@ -24,7 +24,7 @@ KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 sys.path.insert(0, os.path.join(KIT_ROOT, 'tools'))
 import agent_roster as cli  # noqa: E402
 
-MAPS = {'claude': claude_content.TIER_MODEL, 'codex': codex_content.TIER_MODEL}
+MAPS = {h: dict(registry.host(h).tiers) for h in ('claude', 'codex')}     # hosts.json, the one tier map
 
 
 def read(path):

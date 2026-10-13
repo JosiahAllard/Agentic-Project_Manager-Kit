@@ -282,6 +282,21 @@ class HostConformance(object):
             self.assertIn('rule=%s' % hookmain.ERROR, reason)
         self.assertIn('RuntimeError: guard broke', runs[0][1])
 
+    def test_a_payload_that_is_not_an_object_is_denied(self):
+        """null, [], 0, "", false or a string as the whole payload: parse raises and the hook denies
+        (rule guard-error), never an Action read from an empty payload."""
+        deny_code = self.hook(*[self.tool_payload()[k] for k in ('event', 'payload')],
+                              decide=lambda *a, **k: Decision('deny', 'r', 'no'))[2]
+        for event in self.events_of('tool'):
+            for value in (None, [], 0, '', False, 'x'):
+                with self.subTest(event=event, payload=value):
+                    with self.assertRaises(Exception):
+                        self.adapter.parse(event, value)
+                    verdict, reason, code = self.hook(event, None, lambda *a, **k: Decision('allow'),
+                                                      stdin=json.dumps(value))
+                    self.assertEqual((verdict, code), ('deny', deny_code))
+                    self.assertIn('rule=%s' % hookmain.ERROR, reason)
+
     # -- kit header -----------------------------------------------------------------------------
     def test_the_kit_header_reaches_every_start_event(self):
         text = header.text(self.KIT_ROOT)

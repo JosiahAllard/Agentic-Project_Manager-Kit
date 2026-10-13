@@ -8,11 +8,11 @@ import unittest
 
 from kitlib import coordinatorstart
 from kitlib.config import user as kuser
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 
 HOOK = os.path.join(os.path.dirname(__file__), "..", "..", "hosts", "claude", "shell", "hooks", "coordinator_session_start.py")
 COND = {"PM_KIT_ROLE": "coordinator"}
-P = CLAUDE_PLUGIN_NAME + ":"          # the kit plugin's agent prefix (kitlib.agentname.PREFIX)
+P = PLUGIN_NAME + ":"          # the kit plugin's agent prefix (kitlib.agentname.PREFIX)
 
 
 def write(path, text):

@@ -19,7 +19,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 ROLE = (b'---\nname: alpha\ndescription: "Builds: things. Ask {{agent:beta}} first."\ntier: deep\n'
         b'sandbox: read-only\ncapabilities: [read]\nmode: read\n---\n'
         b'Read {{profile_path}} and {{instructions_file}} in {{worktrees_dir}}; "quote" \\ back.\n'
-        b'Trailer {{coauthor}}. Run as ({{launch:beta}}{{resume_note}}).\n')
+        b'Trailer <{{coauthor_email}}>. Run as `{{launch_agent}} {{agent:beta}}` on {{model:strong}}; '
+        b'ask by {{tool:message}}, edit with {{tool:edit}}, in {{owner_folder}} and {{user_folder}}.\n')
 BETA = (b'---\nname: beta\ndescription: b\ntier: light\neffort: high\nsandbox: workspace-write\n'
         b'capabilities: all\nmodel.codex: gpt-x\n---\r\nbody\r\n')
 
@@ -37,9 +38,9 @@ class Agents(unittest.TestCase):
             'name': 'kit-alpha', 'description': 'Builds: things. Ask kit-beta first.',
             'model_reasoning_effort': 'xhigh', 'sandbox_mode': 'read-only',
             'developer_instructions': 'Read docs/agent-profile.md and AGENTS.md in .codex/worktrees; "quote" \\ back.\n'
-                                      'Trailer Codex <your exact model id> <noreply@openai.com>. Run as (started by '
-                                      'the owner with the `kit-beta` agent\'s instructions; the kit launches no '
-                                      'Codex main session yet).\n'})
+                                      'Trailer <noreply@openai.com>. Run as `python <kit>/hosts/codex/shell/scripts/'
+                                      'launch.py --role kit-beta` on the account\'s model; ask by send_message, edit '
+                                      'with apply_patch, in .codex/ and ~/.codex.\n'})
         beta = files['hosts/codex/shell/agents/kit-beta.toml']
         self.assertIn(b'\r\n', beta, 'the role file\'s line endings')
         beta = tomllib.loads(beta.decode('utf-8'))
@@ -63,22 +64,23 @@ class Agents(unittest.TestCase):
         from hosts.claude.adapter import content as claude
         c = kcontent.load(ROOT)
         files = cc.renderer().render(c)
-        values = [v for k, v in claude.TOKENS.items() if isinstance(v, str) and k != 'kit_home'] + ['pm-kit:', 'CLAUDE.md']
-        shared = cc.tokens()['kit_home'].encode()         # the kit's own folder, the same on both hosts
+        values = [v for v in claude.tokens().values()] + ['pm-kit:', 'CLAUDE.md']
         for path, data in files.items():
             if path.endswith('.toml'):
-                data = data.replace(shared, b'')
                 for value in values:
                     self.assertNotIn(value.encode(), data, (path, value))
 
 
 class Tokens(unittest.TestCase):
     def test_every_token_has_a_codex_value(self):
-        self.assertEqual(sorted(cc.tokens()), sorted(t for t in hc.TOKENS if t != 'agent'))
+        self.assertEqual(sorted(cc.tokens()), sorted(t for t in hc.TOKENS if t not in hc.ARG_TOKENS))
+        self.assertEqual(sorted(cc.TOOLS), sorted(hc.CAPABILITIES))
+        self.assertEqual(sorted(cc.prose_models()), sorted(hc.TIERS))
 
     def test_the_tiers_are_hosts_json(self):
         self.assertEqual(cc.renderer().tier_models(), dict(registry.host('codex').tiers))
         self.assertEqual(sorted(cc.TIER_EFFORT), sorted(hc.TIERS))
+        self.assertEqual(cc.prose_models()['deep'], "the account's model")
 
     def test_strings_escape(self):
         if tomllib is None:

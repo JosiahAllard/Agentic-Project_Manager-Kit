@@ -80,7 +80,9 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   where it writes every file), `render(content)` for every role (and every skill if the host has
   skills), and `manifests(kit, content)` for the plugin files carrying `kit.json`'s version and the
   hook registration (command lines from `hookmain.manifest_command`). Role bodies fill tokens from
-  the host's own table (docs/content.md "Tokens").
+  the host's own table (docs/content.md "Tokens"): every one-value token in `kitlib.host.content.TOKENS`,
+  `{{model:<tier>}}` from `tier_models()` and `{{tool:<capability>}}` from its capability map, passed
+  to `kitlib.host.content.substitute` (`models=`, `tools=`).
 - `command_host()`, `launcher()` and `plugin_installer()`: `None` until the host has them.
 
 ## 3. The shell: `hosts/<name>/shell/`

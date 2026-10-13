@@ -1,6 +1,6 @@
 ---
 name: strong-worker
-description: A worker for high-risk changes - networking, concurrency, simulation or ordering, migrations, CI config, known-area crash fixes, changes nobody can observe directly - that need more care than a routine worker but not the deepest reasoning. Opus at high effort (worker is sonnet/medium, deep-worker opus/xhigh). Dispatch it when a task is above a worker's risk class, builds and plans (designs) included; escalate to deep-worker (its own launched session, never an Agent dispatch; see skill coordinator-dispatch) when it has defeated this one or plainly will. Never for landings, record-keeping, moves or routine changes.
+description: A worker for high-risk changes - networking, concurrency, simulation or ordering, migrations, CI config, known-area crash fixes, changes nobody can observe directly - that need more care than a routine worker but not the deepest reasoning. Runs on opus at high effort (worker is sonnet/medium, deep-worker opus/xhigh). Dispatch it when a task is above a worker's risk class, builds and plans (designs) included; escalate to deep-worker (its own launched session, never dispatched with the Agent tool; see skill coordinator-dispatch) when it has defeated this one or plainly will. Never for landings, record-keeping, moves or routine changes.
 model: opus
 effort: high
 ---

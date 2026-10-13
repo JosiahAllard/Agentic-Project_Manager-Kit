@@ -4,10 +4,10 @@ in it.
 
 Off unless the repository opts in: the main checkout's .kit.json `guard.role_policy` is true. With it
 off no role is held, whatever mode a role file or the roles table names, so every call is judged
-exactly as before. With it on, a role is held to its mode: `roles.<role>.mode` in that .kit.json,
-else the `mode` of its role file, `<kit>/content/roles/<role>.md` under the kit root the guard runs
-from (Ctx.kit; kitlib.content.role_mode, which reads an old name such as opus-worker as its new
-one). A role with neither, or whose role files are missing or unreadable, is judged as before.
+exactly as before. With it on, a role is held to its mode: `roles.<role>.mode` in that .kit.json
+(a key under the role's old or new name too, kitlib.content.names_of), else the `mode` of its
+role file, `<kit>/content/roles/<role>.md` under the kit root the guard runs from (Ctx.kit;
+kitlib.content.role_mode, which reads an old name such as opus-worker as its new one). A role with neither, or whose role files are missing or unreadable, is judged as before.
 The role is the subagent's (config.policy.role_name: Action.agent_role when the roles table or a
 role file names it), else the main session's launcher mark when one of them names it, else `main`.
 The owner's own session (nothing marks it) is never held, and its calls read no config here.
@@ -31,12 +31,14 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   folder) is the write jail's, as for any session
     role-workdir  a shell call whose own working directory (Action.workdir, a host whose shell
                   call names one) is outside the checkout the session runs in
-    role-shell    an interactive interpreter (shell_gap): a shell, cmd, PowerShell or python run with
-                  no script, command or informational option, or told to stay open
-                  (-i, -, -s, -NoExit and any prefix of it, /k). Standard input fed by a pipe, a
-                  heredoc, a here-string or `<` is the script: bare, `-` and `-s` then pass
+    role-shell    an interactive interpreter (shell_gap): a shell, cmd, PowerShell or python whose
+                  own options (those before the script, the command or `-`) name no script,
+                  command or informational option, or tell it to stay open (-i, -Interactive,
+                  -NoExit and any prefix of it, /k). Standard input fed by a pipe, a heredoc, a
+                  here-string or `<` is the script: bare, `-` and bash's `-s` then pass
     role-lock     the lock CLI (machine_lock.py) run with a verb outside the mode's LOCK_VERBS, or
-                  with --force in any abbreviation
+                  with --force in any abbreviation; a lock MCP tool (lock_mcp_tool) whose verb
+                  (MCP_VERBS) is outside them, or that the lock server does not have
   context(action, ctx)  the Ctx the shared rules then use: for a read, test or lander role, a view
                   whose .kit.json guard.data_roots also hold, read-only, every host's owner paths
                   (hosts.json profile owner_paths) in the session's checkout, and for a read or test
@@ -69,20 +71,34 @@ NO_EDIT = ('read', 'test', 'lander')
 READ_ONLY_CHECKOUT = ('read', 'test')
 OWNER_PATHS_READ_ONLY = NO_EDIT
 # The lock verbs a mode runs: verb -> None (any argument) or the sub-verbs it may take ('' none).
-# AGENT_LOCK is docs/guard.md "Lock CLI owner writes" "Still open": an agent's rights.
-AGENT_LOCK = {'status': None, 'stats': None, 'run': None, 'background': None, 'stop': None,
-              'book': None, 'unbook': None, 'hold': ('agent', 'list', 'end', 'edit'),
-              'division': ('',), 'game': ('', 'show')}
+# Only verbs tools/machine_lock.py has (its parser: run, background, status, stop, top, hold,
+# division, game); AGENT_LOCK is docs/guard.md "Lock CLI owner writes" "Still open" among them: an
+# agent's rights. `status` also gives the run history (--days).
+AGENT_LOCK = {'status': None, 'run': None, 'background': None, 'stop': None,
+              'hold': ('agent', 'list', 'end', 'edit'), 'division': ('',), 'game': ('', 'show')}
 LOCK_VERBS = {'controller': AGENT_LOCK, 'write': AGENT_LOCK, 'test': AGENT_LOCK,
-              'lander': {'status': None, 'stats': None, 'run': None},
-              'read': {'status': None, 'stats': None}}
-INTERACTIVE = ('-', '-i', '-s', '-interactive', '-noexit', '/k')
+              'lander': {'status': None, 'run': None},
+              'read': {'status': None}}
+# The lock MCP's tools (kitlib.lockmcp.server.TOOLS) as the lock CLI's verbs they match, held to
+# LOCK_VERBS the same way. A tool under the lock's prefix that is not here is refused.
+MCP_VERBS = {'lock_snapshot': ('status',), 'lock_wait_change': ('status',), 'lock_stats': ('status',),
+             'lock_run': ('status',), 'lock_hold': ('status',), 'lock_hold_create': ('hold', 'create'),
+             'lock_hold_edit': ('hold', 'edit'), 'lock_hold_end': ('hold', 'end'),
+             'lock_set_game_mode': ('game', 'on'), 'lock_set_games': ('game', 'set'),
+             'lock_set_division': ('division', 'set'), 'lock_end_run': ('stop',)}
 REAL_NOT_FORCE = ('--for',)   # a lock CLI option of its own (hold edit, window_args), not --force cut short
-FED = ('-', '-s')               # with standard input fed, the script comes from it
 STDIN_OPS = ('<', '<<', '<<<')
-FINITE = {'ps': ('-command', '-c', '-file', '-f', '-version', '-help', '-?'),
-          'cmd': ('/c', '/?'),
-          'other': ('-c', '-m', '-lc', '-cl', '--command', '-v', '--version', '-h', '--help')}
+# What an interpreter's own options say (shell_gap): it runs a script or command and ends, it reads
+# its script from standard input, it stays on the terminal, or (PowerShell) it stays open.
+FINITE, STDIN, INTERACTIVE, NOEXIT = 'finite', 'stdin', 'interactive', 'noexit'
+PY_INFO, PY_INFO_LONG = 'Vh?', ('--version', '--help')         # python -V, --help-env, ...
+PY_VALUE, PY_VALUE_LONG = 'WX', ('--check-hash-based-pycs',)   # options that take the next word
+SH_INFO_LONG = ('--version', '--help')
+SH_VALUE, SH_VALUE_LONG = 'oO', ('--rcfile', '--init-file')
+PS_INFO = ('version', 'v', 'help', 'h', '?')
+PS_VALUE_NAMES = ('executionpolicy', 'windowstyle', 'outputformat', 'inputformat', 'configurationname',
+                  'workingdirectory', 'psconsolefile', 'settingsfile', 'custompipename', 'encodedarguments')
+PS_VALUE_SHORT = ('ex', 'ep', 'w', 'of', 'o', 'if', 'wd')
 _deny = rules.refuse
 fwd = rules.fwd
 
@@ -103,10 +119,12 @@ def enabled(cfg):
 
 def mode(action, ctx):
     """(role, mode) of the Action, mode None when the policy is off for it: an action no rule
-    here judges, the owner's own session, a session outside any checkout's .kit.json, a .kit.json
+    here judges (only edits, shell calls and the lock's MCP tools are), the owner's own session, a session outside any checkout's .kit.json, a .kit.json
     that does not turn the policy on, or a role with no mode in the roles table or its role file."""
-    if action is None or action.kind not in ('edit', 'shell'):
+    if action is None or action.kind not in ('edit', 'shell', 'mcp'):
         return None, None
+    if action.kind == 'mcp' and lock_mcp_tool(action, ctx) is None:
+        return None, None                       # an MCP call that is not the lock's: not judged here
     if not getattr(action, 'agent', None) and ctx.session_role(action) == OWNER:
         return None, None                       # the owner's own session: no role, nothing read
     cwd = action.cwd or os.getcwd()
@@ -116,7 +134,8 @@ def mode(action, ctx):
     table = kconfig.roles(cfg)
     files = kcontent.role_modes(ctx.kit)
     role = role_of(action, ctx, set(table) | set(files) | set(kcontent.ALIASES))
-    m = table.get(role, {}).get('mode') or kcontent.role_mode(role, ctx.kit)
+    named = (table.get(n, {}).get('mode') for n in kcontent.names_of(role))   # an old or new roles key
+    m = next((x for x in named if x), None) or kcontent.role_mode(role, ctx.kit)
     return role, (m if m in MODES else None)
 
 
@@ -132,6 +151,15 @@ def check(action, ctx):
     if m is None:
         return None
     tag = rules.tag_role(action)
+    if action.kind == 'mcp':
+        name = lock_mcp_tool(action, ctx)
+        said = MCP_VERBS.get(name)
+        if said is not None and verb_allowed(list(said), LOCK_VERBS[m]):
+            return None
+        return _deny('role-lock', tag, 'The lock MCP tool %s (%s) is not one the %s role (mode %s) calls: its lock '
+                     'verbs are %s. To see the lock state:'
+                     % (name, 'machine_lock.py ' + ' '.join(said) if said else 'not a tool of the lock server',
+                        role, m, verbs_text(LOCK_VERBS[m])), 'python %s status' % rules.lock_tool(ctx))
     cwd = action.cwd or os.getcwd()
     top = checkout(ctx, cwd)
     if action.kind == 'edit':
@@ -205,8 +233,10 @@ def _interpreter(name):
         return 'ps'
     if name == 'cmd':
         return 'cmd'
-    if name in cm.BASH_SHELLS or cm.PYTHON_RE.fullmatch(name):
-        return 'other'
+    if name in cm.BASH_SHELLS:
+        return 'sh'
+    if cm.PYTHON_RE.fullmatch(name):
+        return 'py'
     return None
 
 
@@ -216,10 +246,117 @@ def stdin_fed(cmd):
     return bool(cmd.piped_in) or any(r.op in STDIN_OPS and not r.dup for r in cmd.redirects)
 
 
+def _ps_key(word, names, short=(), least=3):
+    """True when the PowerShell parameter `word` (lower case, `-` or `/` and any `:value` gone) is
+    one of `short` or a prefix of one of `names` at least `least` letters long."""
+    return word in short or (len(word) >= least and any(n.startswith(word) for n in names))
+
+
+def _python_opts(args):
+    """What python's own options say, read up to the operand that ends them (the script, `-`, or
+    the text after -c or -m): FINITE, STDIN, (INTERACTIVE, word) or None (no operand)."""
+    k = 0
+    while k < len(args):
+        a = args[k]
+        if a == '-':
+            return STDIN
+        if a == '--':
+            return FINITE if k + 1 < len(args) else None
+        if not a.startswith('-'):
+            return FINITE                       # the script; every later word is its own
+        if a.startswith('--'):
+            name = a.split('=', 1)[0]
+            if name in PY_INFO_LONG or name.startswith('--help'):
+                return FINITE
+            k += 2 if name in PY_VALUE_LONG and '=' not in a else 1
+            continue
+        for j, ch in enumerate(a[1:], 1):       # a cluster: -Bc "...", -Wignore, -OO
+            if ch in 'cm':
+                return FINITE                   # the rest of the word or the next is the command
+            if ch == 'i':
+                return INTERACTIVE, a
+            if ch in PY_INFO:
+                return FINITE
+            if ch in PY_VALUE:
+                k += 0 if j + 1 < len(a) else 1  # -Wignore holds its value; -W ignore takes the next
+                break
+        k += 1
+    return None
+
+
+def _bash_opts(args):
+    """bash's (or sh's) own options, read as _python_opts: the script or -c ends them, -s reads
+    the script from standard input, -i stays on the terminal."""
+    k = 0
+    while k < len(args):
+        a = args[k]
+        if a in ('-', '--'):
+            return FINITE if k + 1 < len(args) else STDIN
+        if not a.startswith(('-', '+')):
+            return FINITE
+        if a.startswith('--'):
+            if a in SH_INFO_LONG:
+                return FINITE
+            k += 2 if a in SH_VALUE_LONG else 1
+            continue
+        flags = a[1:]
+        if a[0] == '-' and 'i' in flags:
+            return INTERACTIVE, a
+        if a[0] == '-' and 'c' in flags:
+            return FINITE
+        if a[0] == '-' and 's' in flags:
+            return STDIN
+        k += 2 if any(f in SH_VALUE for f in flags) else 1
+    return None
+
+
+def _ps_opts(args):
+    """PowerShell's own parameters (lower case), read as _python_opts: -Command, -File and
+    -EncodedCommand end them (`-` after -Command or -File: standard input), a word that is no
+    parameter is the file; -NoExit (any prefix of it) and -Interactive stay open."""
+    k = 0
+    while k < len(args):
+        a = args[k]
+        if a == '-':
+            return STDIN
+        if a[:1] not in '-/':
+            return FINITE                       # the file pwsh runs; later words are the script's
+        key = a.lstrip('-/').split(':', 1)[0]
+        if key and 'noexit'.startswith(key):
+            return NOEXIT, a
+        if _ps_key(key, ('interactive',), ('i',)):
+            return INTERACTIVE, a
+        if _ps_key(key, ('encodedcommand',), ('e', 'ec')):
+            return FINITE
+        if _ps_key(key, ('command',), ('c',)) or _ps_key(key, ('file',), ('f',), 2):
+            return STDIN if k + 1 < len(args) and args[k + 1] == '-' else FINITE
+        if key in PS_INFO:
+            return FINITE
+        k += 2 if _ps_key(key, PS_VALUE_NAMES, PS_VALUE_SHORT) else 1
+    return None
+
+
+def _cmd_opts(args):
+    """cmd's own switches (lower case): /c (or /r) runs a command and ends them, /k stays open."""
+    for a in args:
+        if a.startswith(('/c', '/r')):
+            return FINITE
+        if a.startswith('/k'):
+            return INTERACTIVE, a
+        if a == '/?':
+            return FINITE
+    return None
+
+
+OPTS = {'py': _python_opts, 'sh': _bash_opts, 'ps': _ps_opts, 'cmd': _cmd_opts}
+
+
 def shell_gap(parsed):
     """(program, why, instead) for the first interpreter `parsed` starts that would wait for input,
-    else None. A nested shell's own commands are in `parsed` too (commands.read), so `bash -c bash`
-    is caught at the inner bash."""
+    else None. Only the interpreter's own options count: they end at the script, the command
+    (-c, -m, -Command, -File, -EncodedCommand, /c) or `-`, and every word after that belongs to
+    the program run (`python -m pytest -s`, `python x.py -i`). A nested shell's own commands are
+    in `parsed` too (commands.read), so `bash -c bash` is caught at the inner bash."""
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         if inv is None:
@@ -227,27 +364,22 @@ def shell_gap(parsed):
         kind = _interpreter(inv.name)
         if kind is None:
             continue
-        args = [a.lower() for a in inv.argv]
+        args = inv.argv if kind in ('py', 'sh') else [a.lower() for a in inv.argv]
         instead = {'ps': '%s -NoProfile -Command "<command>"', 'cmd': '%s /c <command>'}.get(
             kind, '%s -c "<command>"') % inv.name
-        fed = stdin_fed(cmd)
-        rest = [a for a in args if not (fed and a in FED)]
-        if fed and (not args or len(rest) < len(args)) and not any(a in INTERACTIVE for a in rest):
-            continue                            # its script is the pipe, heredoc or file on stdin
-        if not args or any(a in INTERACTIVE for a in args):
+        said = OPTS[kind](args)
+        if said == FINITE:
+            continue
+        if isinstance(said, tuple):
+            how, word = said
+            if how == NOEXIT:
+                return inv.name, 'keeps PowerShell open (%s is NoExit)' % word, instead
             return inv.name, 'starts an interactive interpreter', instead
-        if kind == 'ps':
-            for a in args:
-                key = a.lstrip('-/').split(':', 1)[0]
-                if a[:1] in '-/' and key and 'noexit'.startswith(key):
-                    return inv.name, 'keeps PowerShell open (%s is NoExit)' % a, instead
-            finite = any(a in FINITE['ps'] for a in args)
-        elif kind == 'cmd':
-            finite = any(a in FINITE['cmd'] for a in args)
-        else:
-            finite = any(a in FINITE['other'] for a in args) or any(not a.startswith('-') for a in args)
-        if not finite:
-            return inv.name, 'names no script, command or informational option', instead
+        if stdin_fed(cmd):
+            continue                            # its script is the pipe, heredoc or file on stdin
+        if not args or said == STDIN:
+            return inv.name, 'starts an interactive interpreter', instead
+        return inv.name, 'names no script, command or informational option', instead
     return None
 
 
@@ -280,17 +412,38 @@ def lock_verb(parsed, m):
             if t.startswith('-'):
                 key = t.split('=', 1)[0]
                 if len(key) > 2 and key.startswith('--') and key not in REAL_NOT_FORCE and '--force'.startswith(key):
-                    return '%s %s' % (' '.join(said[:1]), t), allowed
+                    return '%s %s' % (said[0] if said else '(no verb)', t), allowed
                 k += 2 if t in rules.LOCK_VALUE_OPTS else 1
                 continue
             said.append(t)
             k += 1
-        if not said or said[0] not in table:
-            return (said[0] if said else '(no verb)'), allowed
-        subs, sub = table[said[0]], (said[1] if len(said) > 1 else '')
-        if subs is not None and sub not in subs:
-            return ' '.join(said[:2]), allowed
+        if not verb_allowed(said, table):
+            return (said[0] if said and said[0] not in table else ' '.join(said[:2]) or '(no verb)'), allowed
     return None
+
+
+def verb_allowed(said, table):
+    """True when the lock words `said` ([verb, sub-verb, ...]) are a verb of the LOCK_VERBS entry
+    `table`, with a sub-verb it allows."""
+    if not said or said[0] not in table:
+        return False
+    subs, sub = table[said[0]], (said[1] if len(said) > 1 else '')
+    return subs is None or sub in subs
+
+
+def lock_mcp_tool(action, ctx):
+    """The lock MCP tool an MCP Action calls, or None: any tool under the lock's prefix
+    (rules.mcp_prefix: the machine config's, else the host profile's mcp_tool_format), or a tool
+    of the lock server (MCP_VERBS) under another server name (rules.host_mcp_separator)."""
+    tool = action.tool or ''
+    if action.kind != 'mcp' or not tool:
+        return None
+    prefix = rules.mcp_prefix(ctx)
+    if prefix and tool.startswith(prefix) and len(tool) > len(prefix):
+        return tool[len(prefix):]
+    sep = rules.host_mcp_separator(ctx.host_profile())
+    tail = tool.rsplit(sep, 1)[-1] if sep else tool
+    return tail if tail in MCP_VERBS else None
 
 
 def verbs_text(table):
@@ -336,7 +489,7 @@ def screen(action, ctx):
 
 def context(action, ctx):
     role, m = mode(action, ctx)
-    if m is None:
+    if m is None or action.kind == 'mcp':
         return ctx
     if m not in OWNER_PATHS_READ_ONLY:
         return ctx                              # write, controller: the owner-approval rules alone

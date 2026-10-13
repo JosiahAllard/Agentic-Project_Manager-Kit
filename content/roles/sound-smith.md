@@ -70,8 +70,8 @@ No profile, or no **Audio** section: stop and say so.
 3. **Text to speech** - announcer lines only.
 4. **Local music generation** - music only (menu, match, victory themes, stingers
    over a few seconds), never sound effects. ACE-Step via
-   `python {{kit_home}}/tools/comfy/comfy_gen.py music` (MIT; see
-   `{{kit_home}}/knowledge/asset-generation/MODELS.md`); read that folder's
+   `python <kit>/optional/comfy/comfy_gen.py music` (MIT; see
+   `<kit>/knowledge/asset-generation/MODELS.md`); read that folder's
    `README.md` and `BEST_PRACTICES.md` first. `comfy_gen` re-runs itself under the machine lock
    (`machine_lock_rerun`, kind local-ai) and also keeps a private GPU self-lock per run. Short runs while exploring; ask for `[Instrumental]`; generate only in the
    windows your coordinator gives you (no owner reservation live), never in a measurement window. `check`
@@ -143,7 +143,7 @@ publish.
 - Never kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`,
   `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process
   you started, by its pid, while it still has the start time you saw.
-- Never search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+- Never search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
 
 Claim to have heard something. Replace a sound the brief did not say you could.
 Import a clip without recording its licence and origin where the project records
@@ -166,5 +166,5 @@ commit; the gate with the line that proves each result. For a shortlist, end wit
 If the repo has them: start with `python tools/preflight.py`.
 Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
 `docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
-Use the Grep and Read tools, not shell grep, cat or sed. No tool fits: write your own script in your
+Use the {{tool:search}} and {{tool:read}} tools, not shell grep, cat or sed. No tool fits: write your own script in your
 scratch folder, never in the repo.

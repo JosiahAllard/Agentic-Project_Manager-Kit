@@ -44,9 +44,9 @@ landing paths), and the host's built-in agent types (on Claude `general-purpose`
 
 ## Tier to model, per host
 
-Each host's renderer maps a tier to a model (Claude: `hosts/claude/adapter/content.py` `TIER_MODEL`;
-Codex: `hosts/codex/adapter/content.py` `TIER_MODEL`); `agent_roster.py --check` holds this table to
-it. A role file may name a different model for one host (`model.<host>:`, docs/content.md); none does.
+Each host maps a tier to a model in `hosts.json` `tiers`, which its renderer's `tier_models()` returns;
+`agent_roster.py --check` holds this table to it. A role file may name a different model for one
+host (`model.<host>:`, docs/content.md); none does.
 
 | tier | claude | codex |
 |---|---|---|
@@ -57,8 +57,8 @@ it. A role file may name a different model for one host (`model.<host>:`, docs/c
 
 `account-default` writes no `model` line: the role runs on the model the Codex account is set to, as
 the Codex branch's roles had it. On Codex a tier differs by reasoning effort: a role's `effort`, else
-light `low`, standard `medium`, strong `high`, deep `xhigh` (`TIER_EFFORT`). The owner names Codex
-models per tier here, in hosts.json and in that `TIER_MODEL` when they are chosen.
+light `low`, standard `medium`, strong `high`, deep `xhigh` (hosts/codex/adapter/content.py
+`TIER_EFFORT`). The owner names Codex models per tier here and in hosts.json when they are chosen.
 
 Model choices rest on measured A/B runs: docs/model-ab.md.
 
@@ -97,4 +97,4 @@ The live files held no ruling id, no repo name and no owner path, so the scrub c
 
 Left as is, on purpose:
 - Role words "PM" and "project manager" and the launcher commands `launch.py deep` (coordinator, deep-worker) and `launch.py consultant` (consultant; `launcher\start-*.ps1` paths before the launcher moved into the kit, docs/launcher.md): the kit's own roles and launcher, not owner-specific.
-- `~/.claude/...` paths (templates, comfy tools, knowledge folder): home-relative, no user name.
+- The host's per-user folder (`{{user_folder}}`, `~/.claude` on Claude): home-relative, no user name. The comfy tools and the knowledge folder are named in the kit since (`<kit>/optional/comfy`, `<kit>/knowledge/asset-generation`; machine setup links the old `~/.claude` paths to them).

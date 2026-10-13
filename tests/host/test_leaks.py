@@ -23,7 +23,7 @@ ALLOWED = {
     'kitlib/config/migration.py':          1,    # OLD_DIR_NAME, a retired folder's name on disk
     'kitlib/config/schema.py':             1,    # a key's help text
     'kitlib/config/user.py':               1,    # a key's help text
-    'kitlib/guard/rules.py':               4,    # the guard refactor
+    'kitlib/guard/rules.py':               3,    # the guard refactor
     'kitlib/hubmirror/__init__.py':        3,    # the hub entries' paths in Claude's shell (hosts/claude/shell/hub)
     'kitlib/kitrelease/bootstrap.py':      3,    # release inventory, runs before kitlib
     'kitlib/launcher/accounts.py':         4,    # launcher wave
@@ -36,7 +36,6 @@ ALLOWED = {
     'kitlib/launcher/usage.py':            9,
     'kitlib/launcher/window.py':           9,
     'kitlib/lock/store.py':                1,    # legacy actor key read
-    'kitlib/lockmcp/__init__.py':          2,    # aliases kitlib/guard still imports
     'kitlib/machinesetup/__init__.py':     12,   # machinesetup wave
     'kitlib/machinesetup/common.py':       2,    # Claude's shell path and its pre-move folder (step 7)
     'kitlib/machinesetup/extras.py':       7,
@@ -137,7 +136,7 @@ TOP_ALLOWED = {
     'claude': 'the hook paths settings written before step 7 still run (claude/hooks/*.py stubs, '
               'docs/machine-setup.md "Moved hook paths"); delete one release after the move',
 }
-CONTENT_ALLOWED = {}       # every host value in role prose is a token (docs/content.md "Tokens")
+CONTENT_ALLOWED = {}        # every host value in role prose is a token now (docs/content.md "Tokens")
 
 
 def content_counts():
