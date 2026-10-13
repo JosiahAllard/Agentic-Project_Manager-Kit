@@ -53,6 +53,7 @@ import re
 import subprocess
 import sys
 
+from kitlib import kitroot
 from kitlib.config import ConfigError, load as load_config, load_at
 from kitlib.config import owner as ownermod
 from kitlib.git import cmd as gitcmd
@@ -572,5 +573,5 @@ def _pack(lines, path, branch, base, diff):
     index, index_failed = index_line(top, base, branch, base_cfg)
     if index:
         lines.append(index)
-    lines.append('next     python tools/review_pack.py %s --diff <path>' % branch)
+    lines.append('next     %s %s --diff <path>' % (kitroot.command('review_pack', top), branch))
     return Outcome(FAILED if (bad or docs_failed or index_failed or co_failing) else OK, lines)

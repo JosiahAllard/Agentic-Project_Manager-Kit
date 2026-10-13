@@ -189,9 +189,13 @@ def unclassified(kit=None):
 
 
 def problem_line(root, kit=None):
-    """None when the checkout `root` has every wanted stub current, else one line for a session
-    start: how many are missing or stale, which, the write command, and the kit a stale one runs.
-    A configuration that cannot be read gives a "could not check" line."""
+    """None when the checkout `root` has every wanted stub current, or uses no stubs, else one line
+    for a session start: how many are missing or stale, which, the write command, and the kit a
+    stale one runs. A configuration that cannot be read gives a "could not check" line.
+
+    Stubs are opt-in (decision 21 in docs/multi-host-plan.md section 7: skills and roles run
+    `<kit>/tools/<x>.py -C <checkout>`): a repository uses them when its `.kit.json` sets
+    "stubs".tools or it holds at least one stub. One that does neither gets no line."""
     label = os.path.basename(os.path.normpath(root))
     kit = kit or kit_root()
     try:
@@ -201,17 +205,19 @@ def problem_line(root, kit=None):
         return 'could not check stubs (%s): %s' % (label, e)
     tdir = os.path.normpath(os.path.join(root, cfg.tools_dir))
     bad, others = [], []
+    opted = cfg.section('stubs').get('tools') is not None
     for name in names:
         path = os.path.join(tdir, name + '.py')
         exists = os.path.exists(path)
         have = _read(path) if exists else None
+        opted = opted or bool(have and MARK in have)
         found = _check_one(path, exists, have, stub_text(name, cfg.tools_dir, kit), kit)
         if found and not found[0].startswith('not a stub'):    # the repository's own tool is no problem
             bad.append(name)
             other = _plain(found[1])
             if other and other not in others:
                 others.append(other)
-    if not bad:
+    if not bad or not opted:
         return None
     return 'stubs (%s): %d missing/stale: %s; run python %s -C %s%s' % (
         label, len(bad), ', '.join(bad),

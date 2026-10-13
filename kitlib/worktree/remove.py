@@ -38,6 +38,7 @@ import json
 import os
 import re
 
+from kitlib import kitroot
 from kitlib import pieces
 from kitlib.backlog import store as backlog_store
 from kitlib.backlog.errors import Failure as BacklogFailure
@@ -167,7 +168,6 @@ def host_folders(cfg):
 def settings(main, cfg):
     """This repository's values (the schema has already checked their shapes)."""
     wr = cfg.section(TOOL)
-    tools = cfg.tools_dir.replace('\\', '/').rstrip('/')
     build = list(wr.get('build_output') or [])
     dirs, dirs_error = piece_dirs(cfg, [b for b in build if isinstance(b, dict)])
     return {
@@ -175,7 +175,7 @@ def settings(main, cfg):
         'upstream': '%s/%s' % (cfg.remote, cfg.main_branch),
         'worktrees_dir': os.path.normpath(cfg.repo['worktrees_dir']),
         'worktrees_dirs': list(host_folders(cfg)),
-        'tool': 'python %s/worktree_remove.py' % tools,
+        'tool': kitroot.command('worktree_remove', main),     # the kit's own tool (no repository copy)
         'name': cfg.repo.get('name') or os.path.basename(os.path.normpath(main)),
         'exempt': dict(wr.get('exempt') or {}),
         'disposable_untracked': list(wr.get('disposable_untracked') or []),

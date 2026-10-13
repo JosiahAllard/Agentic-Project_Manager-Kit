@@ -44,6 +44,7 @@ import subprocess
 import sys
 import time
 
+from kitlib import kitroot
 from kitlib.config import heavy_match, heavy_programs
 from kitlib.config import load as load_config
 from kitlib.config.types import ConfigError
@@ -278,9 +279,12 @@ def cleanup_child(stdin, say):
     return 0 if ok else V.EXIT_LEFTOVER
 
 
-def leftover_line(tw, landed, tools_dir):
+def leftover_line(tw, landed, main):
+    """The line for a throwaway worktree `tw` left registered, naming the kit's own
+    worktree_remove.py with -C the main checkout `main` (a repository holds no copy of the kit's
+    tools, decision 21 in docs/multi-host-plan.md section 7)."""
     name = os.path.basename(tw)
-    verb = 'python %s/worktree_remove.py %s' % (tools_dir.replace('\\', '/').rstrip('/'), name)
+    verb = '%s %s' % (kitroot.command('worktree_remove', main), name)
     return ('leftover  %s stays registered; once nothing holds it: %s'
             % (tw, verb if landed else verb + ' --abandon "red-first throwaway"'))
 
@@ -701,14 +705,14 @@ def execute(plan, say, run=None, cleanup=None, ints=None, book_kw=None):
             say('note      %d interrupt(s) arrived during the cleanup; it ran to its end'
                 % ints.during_cleanup)
         if not cleaned:
-            say(leftover_line(tw, plan.landed, plan.tools_dir))
+            say(leftover_line(tw, plan.landed, plan.main))
         rc = V.exit_code(verdicts, cleaned)
         say(FINAL[rc] % plan.base[:10] if '%s' in FINAL[rc] else FINAL[rc])
         return rc
     except (Exception, KeyboardInterrupt) as e:  # noqa: BLE001  (never Python's 1 = GREEN)
         say('failed    unexpected %s: %s' % (type(e).__name__, e))
         if tw and not cleaned:
-            say(leftover_line(tw, plan.landed, plan.tools_dir))
+            say(leftover_line(tw, plan.landed, plan.main))
             say('REDFIRST LEFTOVER - an unexpected error; the throwaway tree may still stand')
             return V.EXIT_LEFTOVER
         say('REDFIRST UNDECIDED - an unexpected error')

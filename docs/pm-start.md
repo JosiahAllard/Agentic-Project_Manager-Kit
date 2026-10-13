@@ -43,7 +43,9 @@ Right after `kit_sync`, the `plugin_current` check prints one line when the pm-k
 ## Stubs (`stubs`)
 
 For each repository in the machine config's `launcher.repos`, the `stubs` check runs
-`kitlib.stubs.problem_line` and prints one line for a repository whose stubs are missing or stale:
+`kitlib.stubs.problem_line` and prints one line for a repository that uses stubs (its `.kit.json`
+sets `"stubs".tools`, or it holds at least one) whose stubs are missing or stale; stubs are opt-in
+(docs/install.md), so a repository with none prints nothing:
 `stubs (<repo>): N missing/stale: <names>; run python <kit>/tools/kit_stubs.py write -C <folder>`,
 with `(stale ones run the kit at <path>)` added when a stub runs another kit. A repository whose
 stubs are current prints nothing; a folder that is not there, or a check that fails, is that

@@ -80,13 +80,13 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    republish line.
 
 9. **Install each repository** (docs/install.md).
-   Success: `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0 and
-   `git -C <repo> config core.hooksPath` prints `<kit>/githooks`.
+   Success: `git -C <repo> config core.hooksPath` prints `<kit>/githooks` (and, for a
+   repository installed with `-Stubs`, `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0).
 
-10. **Start its backlog.** In each repository the first `python tools/backlog.py add` creates the
+10. **Start its backlog.** In each repository the first `python <kit>/tools/backlog.py -C <repo> add` creates the
     store (docs/backlog.md); a first record found on no branch takes
     `--found-on none --why-not-folded "<reason>"` (docs/backlog.md "The fold-in guard").
-    Success: `python tools/backlog.py check` is GREEN (RED while the store is empty).
+    Success: `python <kit>/tools/backlog.py -C <repo> check` is GREEN (RED while the store is empty).
 
 11. **Add the coordinators.** For each repository, add an entry to the sessions file:
     `"<key>": {"name": "<name>", "repo": "<repo name>"}` (docs/pm-start.md). Start the coordinator

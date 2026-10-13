@@ -297,6 +297,8 @@ Nothing is forced. A tip main does not contain, a worktree with work in it, a wo
 
 ## The caller's checkout
 
+Skills and roles run the gate as `python <kit>/tools/gate.py -C <worktree>`, an absolute `-C` that names the tree, so neither rule below stops them; stubs are opt-in (decision 21 in docs/multi-host-plan.md section 7, docs/install.md). In the kit's own repository that command runs the kit checkout's gate code on the worktree's tree; `python <worktree>/tools/gate.py -C <worktree>` (AGENTS.md) runs the worktree's own.
+
 A stub run from outside its checkout runs the kit tool in the stub's checkout (docs/install.md "Stubs"), so a shell in one checkout that runs another checkout's gate stub would gate that other checkout. The stub then passes `[stub checkout, caller directory]` on in `KIT_STUB_CALLER`; `tools/gate.py` removes it, so no step inherits it, and for a branch gate (`--plan` included) applies kitlib/gate/caller.py `refusal`:
 
 - The caller's directory is in a different checkout from the gated one (their git dirs differ): `REFUSED: the caller is in the checkout ...`, exit 4, nothing run, no record.

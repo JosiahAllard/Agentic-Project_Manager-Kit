@@ -13,7 +13,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 | Content | `content/roles/`, `content/skills/`, `content/instructions/`: every role, skill and instruction written once, rendered into each host's shell by `tools/render_content.py`; `content/default-profile.md`, the host-neutral agent profile a role reads when its repository has none (never rendered) | Every role exists on every host. Skill text is identical on every host. Rendered files are committed and a test fails on drift. |
 | Optional | `optional/bridge/` (agent-to-agent messaging: core, service, MCP frontend, and each host's half under `optional/bridge/hosts/<name>/`) and the other `optional/` packages | Installed on demand. The core never imports them. |
 | Guards | each host's guard hook (`boot/hook.py <host> <tool event>`; every tool a rule can refuse, its `hosts.json` `hook.guarded_tools`), judged once by `kitlib.guard` over a neutral `Action`, and the kit git `pre-push` hook plus the opt-in `pre-commit` ledger check (inert unless `.kit.json` names pre_commit_check) | Read-only checks of real state. They deny with the exact command to use instead. |
-| Repo layer | `.kit.json` (data, optional: with none, the defaults of docs/kit-json.md "With no file") plus at most one repo hook module the kit calls | Repos hold stubs only, never copies. |
+| Repo layer | `.kit.json` (data, optional: with none, the defaults of docs/kit-json.md "With no file") plus at most one repo hook module the kit calls | Repos hold no copies of the kit and, by default, no stubs: skills and roles run `<kit>/tools/<x>.py -C <checkout>` (docs/multi-host-plan.md decision 21); stubs are opt-in (docs/install.md). |
 
 ## Contracts
 
@@ -32,7 +32,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 - Tests target the library directly; the entry-point tests cover only arguments and exit codes.
 - Tests run on an in-process fake git (kitlib/git/fake), except the classes marked `real_git` (docs/test-tools.md "Fake git").
 - Once a repo uses `gate.py land`, the repo's own gate, landing, lock-wrapper, heavy-run and git-guard scripts are deleted (ported first).
-- The installer is `new-repo.ps1` plus `kit_stubs.py` in the kit release, with nothing extra.
+- The installer is `new-repo.ps1` (plus `kit_stubs.py` for a repository that opts into stubs with `-Stubs`) in the kit release, with nothing extra.
 
 ## Build order
 

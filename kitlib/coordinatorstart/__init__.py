@@ -4,7 +4,7 @@ Pure functions that return data; the hook (boot/hook.py claude SessionStart coor
 comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
 filing and pricing-pass lines (each switched on in the config), then the live checks (rulings, cap,
-machine state, other coordinators, and stubs: a line only when the repo's stubs are not current),
+machine state, other coordinators, and stubs: a line only when a repo that uses stubs has them not current),
 run as in kitlib.pmstart: each is a pure function over fakeable inputs (process list, file reads,
 a subprocess runner, now), and a failed one is one "could not check X: reason" line.
 
@@ -50,7 +50,7 @@ ENG_LINE = ("ENG rulings: an engineering question (API shape, class versus recor
 # Follow-ups): the start-up pricing pass leaves follow-up records unpriced.
 # Emitted only when coordinator_start.pricing_pass is true.
 PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, follow-up records excepted: run "
-                "`python tools/backlog.py list --needs-priority`. A follow-up record (filed from a finding on a "
+                "`python <kit>/tools/backlog.py -C <repo> list --needs-priority`. A follow-up record (filed from a finding on a "
                 "branch, a review or a worker's report; a new one says so in its summary) stays unpriced until "
                 "you or the PM promote it. Check "
                 "every other unpriced open record (an owner story, a record from the PM's brief) for duplicates, "
@@ -264,7 +264,8 @@ def machine(entry, run=_run, read=_read, now=None, home=None, root=None, lock_fi
 
 
 def stubs_line(entry, root=None, check=stubs.problem_line):
-    """[the stubs line] for the coordinator's repo (repos_root/<repo>), [] when its stubs are current.
+    """[the stubs line] for the coordinator's repo (repos_root/<repo>), [] when its stubs are current
+    or it uses none (stubs are opt-in: kitlib.stubs.problem_line).
     KeyError without repos_root; a missing folder is a could-not-check line, not an error."""
     if not root:
         raise KeyError("repos_root not configured")

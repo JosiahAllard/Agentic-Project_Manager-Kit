@@ -38,8 +38,9 @@ test and land code at the same time. The kit lays the rails they run on:
   command outright; they do not rely on an agent remembering its instructions.
 - **Main only ever receives a tested merge.** The landing tool tests the merged result, not the
   branch on its own, and undoes the merge when that test fails.
-- **One kit, no copies.** A repository never holds a copy of the kit. It gets small stub files
-  that run the kit's tools, so a fix made in the kit reaches every repository at once.
+- **One kit, no copies.** A repository never holds a copy of the kit, or even stubs of its tools:
+  agents run the kit's tools from the kit's folder, naming the checkout with `-C`, so a fix made
+  in the kit reaches every repository at once.
 - **Nothing extra to install.** Python 3 standard library, git and Claude Code are the whole
   dependency list.
 
@@ -82,22 +83,22 @@ is still to switch on.
 
 ## Day to day
 
-Kit tools run from the kit checkout; in a repository they run through the stubs, as
-`python tools/<name>.py`.
+Kit tools run from the kit checkout, in any repository: `python <kit>/tools/<name>.py -C <checkout>`
+(docs/install.md).
 
 1. **Start the PM.** Open Claude Code in the PM's own folder. A session-start hook prints a
    checklist of what needs doing (docs/pm-start.md).
 2. **Start a coordinator** in each repository you want worked on, with the environment variable
    `PM_KIT_ROLE` set to `coordinator`: `claude --agent pm-kit:coordinator --remote-control "<name>"`, or let
-   `tools/launch.py start` do it (docs/launcher.md).
+   `<kit>/tools/launch.py start` do it (docs/launcher.md).
    Use exactly the name its entry in the PM's sessions file has (docs/pm-start.md), or the PM's
    checklist reports it as not running. On its first start it drafts the repository's profiles
    for you to approve.
 3. **Let it run.** The coordinator gives each task to an agent in its own worktree. A reviewer
-   checks the branch, and a lander lands it with `tools/land.py`, run in the repository.
+   checks the branch, and a lander lands it with `<kit>/tools/land.py -C <repo>`.
 4. **Answer the hub.** Questions, hand steps and the backlog arrive on the Action Hub
    (docs/action-hub.md). The PM reads your answers and passes them on.
-5. **Watch the machine.** `python tools/machine_lock.py status` shows what is running and
+5. **Watch the machine.** `python <kit>/tools/machine_lock.py status` shows what is running and
    queued. `reserve_ui.pyw` holds the machine for you, for example while gaming.
 
 ## Slow process launches on Windows

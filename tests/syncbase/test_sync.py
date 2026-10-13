@@ -575,7 +575,7 @@ class Regrowth(SyncCase):
     def test_a_clean_merge_says_no_regrowth_and_names_the_gate(self):
         done = self.sync(self.stage_clean())
         self.assertEqual(done.code, syncbase.OK, self.out(done))
-        self.assertIn('no regrowth. Now rerun your gate: python tools/gate.py', self.out(done))
+        self.assertRegex(self.out(done), r'no regrowth\. Now rerun your gate: python "[^"]*/tools/gate\.py" -C "[^"]+"')
 
     def test_a_dead_size_reader_is_not_reported_clean(self):
         target = self.stage_clean()

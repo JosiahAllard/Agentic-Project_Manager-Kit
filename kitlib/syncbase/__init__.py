@@ -49,6 +49,7 @@ import os
 import time
 
 from kitlib import attribution
+from kitlib import kitroot
 
 from kitlib.config import ConfigError, load as load_config
 from kitlib.git import checkout as gitcheckout
@@ -267,7 +268,6 @@ def sync(path, target, model, model_source='--model', base=None, wait=True, say=
         rule_pointer = cfg.section('checkout_guard').get('rule_pointer')
     except ConfigError as e:
         return done(USAGE, '%s: refused: kit configuration: %s' % (TOOL, e))
-    tools = cfg.tools_dir.replace('\\', '/').rstrip('/')
     base = base if base is not None else cfg.main_branch
     remote = cfg.remote
     upstream = '%s/%s' % (remote, base)
@@ -324,8 +324,8 @@ def sync(path, target, model, model_source='--model', base=None, wait=True, say=
         return done(FAILED, 'refused: could not read the work tree status (%s).' % why)
     if dirty:
         return done(FAILED, 'refused: uncommitted changes. Commit work in progress first '
-                            '(python %s/commit.py ...); a record backlog.py staged rides in that '
-                            'commit too:' % tools,
+                            '(%s ...); a record backlog.py staged rides in that '
+                            'commit too:' % kitroot.command('commit', top),
                     *['  %s %s' % (xy, p) for xy, p in dirty])
 
     contained, why = gitrefs.is_ancestor(full, 'HEAD', top)
@@ -405,4 +405,4 @@ def sync(path, target, model, model_source='--model', base=None, wait=True, say=
                     'That checkout discards an uncommitted edit of <path>: this work tree had '
                     'none when the merge ran; commit any made since before running it.'
                     % full[:7])
-    return done(OK, 'no regrowth. Now rerun your gate: python %s/gate.py' % tools)
+    return done(OK, 'no regrowth. Now rerun your gate: %s' % kitroot.command('gate', top))

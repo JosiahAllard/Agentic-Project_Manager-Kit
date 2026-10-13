@@ -52,7 +52,7 @@ class RenderTest(unittest.TestCase):
         line = out.splitlines()[1]
         self.assertTrue(line.startswith("- Pricing pass and backlog audit before your first dispatch, "
                                         "follow-up records excepted"), line)
-        for want in ("python tools/backlog.py list --needs-priority",
+        for want in ("python <kit>/tools/backlog.py -C <repo> list --needs-priority",
                      "A follow-up record (filed from a finding on a branch, a review or a worker's report; "
                      "a new one says so in its summary) stays unpriced until you or the PM promote it",
                      "Check every other unpriced open record (an owner story, a record from the PM's brief) "
