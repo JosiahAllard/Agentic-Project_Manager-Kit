@@ -139,7 +139,7 @@ def plan(role, cwd, name, brief, permission_profile, *, model=None, effort=None,
         raise ValueError('controller cannot resolve the Git common directory')
     common, git_dir = _git_roots(place, assignment.cwd)
     definition = catalog()[role]
-    writing = definition['sandbox'] == 'workspace-write'
+    writing = definition['mode'] not in {'read', 'lander'}
     if not writing and store_write_roots:
         raise ValueError('read-only and lander plans cannot add writable stores')
     # Owner instructions and runtime configuration stay read-only even beneath

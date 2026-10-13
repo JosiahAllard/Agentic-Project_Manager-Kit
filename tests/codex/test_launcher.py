@@ -108,6 +108,13 @@ class Launcher(unittest.TestCase):
         self.assertEqual(set(result), {"PATH", "PM_KIT_ROOT", "PM_KIT_ROLE", "PM_KIT_HOST"})
         self.assertEqual(result["PM_KIT_ROLE"], "worker")
 
+    def test_the_lander_is_read_only_on_codex(self):
+        result = self.build("lander", self.world.main)
+        self.assertEqual(result.argv[result.argv.index("--sandbox") + 1], "read-only")
+        path = os.path.join(kitroot.root(), *content.AGENTS_REL.split("/"), "kit-lander.toml")
+        with open(path, "rb") as f:
+            self.assertEqual(tomllib.load(f)["sandbox_mode"], "read-only")
+
     def test_every_roles_sandbox_and_instructions_agree_with_its_agent_file(self):
         for name, role in catalog().items():
             cwd = self.world.main if role["mode"] == "lander" else self.world.wt

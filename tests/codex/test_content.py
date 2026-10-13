@@ -54,7 +54,8 @@ class Agents(unittest.TestCase):
             with self.subTest(role=role.name):
                 got = tomllib.loads(files['hosts/codex/shell/agents/kit-%s.toml' % role.name].decode('utf-8'))
                 self.assertEqual(got['name'], 'kit-' + role.name)
-                self.assertEqual(got['sandbox_mode'], role.sandbox)
+                self.assertEqual(got['sandbox_mode'], cc.sandbox_mode(role))
+                self.assertEqual(got['sandbox_mode'] == 'read-only', role.mode in ('read', 'lander') or role.sandbox == 'read-only')
                 self.assertEqual(got['developer_instructions'],
                                  cc.substitute_body(role, c.role_names()).replace('\r\n', '\n'))
                 self.assertNotIn('model', got, 'every tier is the account default')

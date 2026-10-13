@@ -55,8 +55,8 @@ def _content():
 
 def catalog():
     from hosts.codex.adapter import content
-    return {r.name: {'mode': r.mode, 'effort': r.effort or content.TIER_EFFORT[r.tier], 'sandbox': r.sandbox}
-            for r in _content().roles}
+    return {r.name: {'mode': r.mode, 'effort': r.effort or content.TIER_EFFORT[r.tier],
+                     'sandbox': content.sandbox_mode(r)} for r in _content().roles}
 
 
 def instructions(role):

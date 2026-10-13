@@ -4,7 +4,8 @@ Each role becomes `hosts/codex/shell/agents/kit-<name>.toml`, a Codex agent defi
 comment, then `name` (kit-<name>, hosts.json agent_name_format), `description`, `model` (the role's
 `model.codex` override, else hosts.json's model for its tier; no line for ACCOUNT_DEFAULT, so the account's
 configured model runs, as the Codex branch's roles.json had it), `model_reasoning_effort` (the
-role's effort, else TIER_EFFORT of its tier), `sandbox_mode` (the role's `sandbox`) and
+role's effort, else TIER_EFFORT of its tier), `sandbox_mode` (read-only for a read or lander
+role, else the role's `sandbox`: sandbox_mode) and
 `developer_instructions`, the role body with its tokens filled from TOKENS, as a TOML multi-line
 string. Codex agent files carry no tool list, so `capabilities` and `cache` are not rendered; the
 sandbox is what limits a role. Lines end as the role file's do. Each skill folder is copied byte for
@@ -62,6 +63,15 @@ MCP_SERVERS = {'machine-lock': {'type': 'stdio', 'command': 'python',
 # names models per tier in hosts.json (docs/ROSTER.md) when Codex models are chosen.
 ACCOUNT_DEFAULT = 'account-default'
 TIER_EFFORT = {'light': 'low', 'standard': 'medium', 'strong': 'high', 'deep': 'xhigh'}
+# The role-policy modes that never get a writable Codex sandbox, whatever the role file's `sandbox`
+# says for another host: a reader, and the lander (its landing execution is refused on Codex until
+# reviewed), as the Codex branch's roles had them.
+READ_ONLY_MODES = ('read', 'lander')
+
+
+def sandbox_mode(role):
+    """`role`'s Codex sandbox: read-only for READ_ONLY_MODES, else its role file's `sandbox`."""
+    return 'read-only' if role.mode in READ_ONLY_MODES else role.sandbox
 
 
 def agent_name(role):
@@ -180,7 +190,7 @@ class CodexContent:
                                        tools=TOOLS)
         model = role.model_for(HOST, self.tier_models())
         effort = role.effort or TIER_EFFORT[role.tier]
-        if role.sandbox not in ('read-only', 'workspace-write'):
+        if sandbox_mode(role) not in ('read-only', 'workspace-write'):
             raise ContentError('%s: no Codex sandbox_mode for %s' % (src, role.sandbox))
         nl = role.newline
         lines = ['# Rendered from content/roles/%s.md by tools/render_content.py; never edit it by hand.' % role.name,
@@ -190,7 +200,7 @@ class CodexContent:
         if model != ACCOUNT_DEFAULT:
             lines.append('model = %s' % toml_string(model))
         lines += ['model_reasoning_effort = %s' % toml_string(effort),
-                  'sandbox_mode = %s' % toml_string(role.sandbox),
+                  'sandbox_mode = %s' % toml_string(sandbox_mode(role)),
                   'developer_instructions = %s' % toml_block(substitute_body(role, names), nl)]
         return (nl.join(lines) + nl).encode('utf-8')
 

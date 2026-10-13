@@ -90,14 +90,15 @@ class Controller(unittest.TestCase):
                 plan('worker', self.world.wt, 'native-test', self.brief, 'pmkit_reviewed',
                      classify=classify, codex_exe=self.exe)
 
-    def test_a_main_lander_takes_its_role_files_sandbox(self):
-        """content/roles/lander.md says workspace-write (a landing merges and pushes); the Codex
-        branch's roles.json had it read-only. Landing execution stays refused either way."""
+    def test_main_lander_keeps_git_admin_read_only(self):
+        """A read or lander role gets no write grant on Codex, whatever its role file's sandbox
+        (content/roles/lander.md says workspace-write for the default host), as the source had it."""
         planned = plan('lander', self.world.main, 'landing-review', self.brief, 'pmkit_reviewed',
                        classify=self.world.classify, codex_exe=self.exe)
         entries = tomllib.loads(planned.permission.toml())['permissions']['pmkit_reviewed']['filesystem']
-        self.assertEqual(entries[str(Path(self.world.main) / '.git').replace('\\', '/')], 'write')
-        self.assertEqual(planned.permission.extends, ':workspace')
+        self.assertEqual(entries[str(Path(self.world.main) / '.git').replace('\\', '/')], 'read')
+        self.assertEqual(planned.permission.write_roots, ())
+        self.assertEqual(planned.permission.extends, ':read-only')
         with self.assertRaises(ValueError):
             execute(planned)
 

@@ -192,7 +192,7 @@ class RoleBindings:
             permission = selected['id']
         if role is not None:
             mode = catalog()[role]['mode']
-            if catalog()[role]['sandbox'] == 'read-only' and policy['type'] != 'readOnly':
+            if mode in {'read', 'lander'} and policy['type'] != 'readOnly':
                 raise ValueError('read-only kit role has writable native permissions')
             if mode in {'write', 'test'}:
                 from kitlib.git import repo
