@@ -1024,7 +1024,7 @@ class Lander(object):
         if not paths:
             return [], [], None
         try:
-            gate = detect.effective(self.cfg, self.root).gate
+            gate = detect.effective(self.cfg, self.root, base=self.expect_main).gate
             built = S.build(gate, self.root, self.expect_main, self.cfg.tools_dir, merged=True)
             chosen, _ = S.select(gate, built, paths, read=S.working_tree_reader(self.root))
         except Exception as e:      # noqa: BLE001 - landed already; what cannot be told is unseen

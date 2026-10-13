@@ -71,8 +71,8 @@ def gate_config(cfg):
     """The value a gate-OK record's `gate_config` hashes: `.kit.json` "gate" over its defaults.
     guard.py and the pre-push hook verify a record with this same value. An auto-detected gate
     (kitlib.gate.detect) hashes this too, not its detected steps: they are a function of the
-    commit's tree (which the record names) and the kit (its `kit`), so the hash still names
-    what decides the steps."""
+    commit's tree (which the record names), its base's tree (`base`) and the kit (its `kit`), so
+    the hash still names what decides the steps."""
     return cfg.section('gate')
 
 
@@ -574,21 +574,21 @@ def _branch_gate(root, base=None, full=False, only=None, plan=False, slug=None, 
         cfg = kconfig.load(top)
     except ConfigError as e:
         return G.Outcome(G.REFUSED, ['REFUSED: %s' % e])
-    eff = detect.effective(cfg, top)
-    if eff.source == detect.AUTO:
-        say(detect.label(eff))
-    out = _gate_checkout(top, cfg, eff, base=base, full=full, only=only, plan=plan, slug=slug,
+    seen = [detect.effective(cfg, top)]
+    out = _gate_checkout(top, cfg, seen, base=base, full=full, only=only, plan=plan, slug=slug,
                          log_dir=log_dir, say=say, book_kw=book_kw)
-    out.facts['source'] = eff.source
-    out.lines.append(detect.label(eff))
+    out.facts['source'] = seen[0].source
+    out.lines.append(detect.label(seen[0]))
     return out
 
 
-def _gate_checkout(top, cfg, eff, base=None, full=False, only=None, plan=False, slug=None,
+def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False, slug=None,
                    log_dir=None, say=None, book_kw=None):
-    """_branch_gate() once the config is read: `eff` is the gate it runs (detect.effective)."""
+    """_branch_gate() once the config is read. seen[0]: the gate it runs (detect.effective),
+    first from the checkout alone; an auto-detected one is detected again once the merge base is
+    known, with the steps the merge base owes, and set back in seen[0]."""
+    eff = seen[0]
     gate = eff.gate
-    empty = detect.nothing_detected(eff)
     if gate.get('worktree_guard') and repo.classify(top).kind == repo.MAIN:
         return G.Outcome(G.REFUSED, ['REFUSED: %s is a main checkout, and "gate".worktree_guard '
                                      'gates only linked worktrees' % top])
@@ -617,6 +617,14 @@ def _gate_checkout(top, cfg, eff, base=None, full=False, only=None, plan=False, 
     changed, why = changed_since(top, mb)
     if changed is None:
         return G.Outcome(G.REFUSED, ['REFUSED: git cannot list the changed paths: %s' % why])
+    if eff.source == detect.AUTO:
+        try:
+            seen[0] = eff = detect.effective(cfg, top, base=mb)
+        except detect.DetectError as e:
+            return G.Outcome(G.REFUSED, ['REFUSED: the auto-detected gate: %s' % e])
+        gate = eff.gate
+        say(detect.label(eff))
+    empty = detect.nothing_detected(eff)
     try:
         all_steps = S.build(gate, top, mb, cfg.tools_dir, full=full)
         chosen, picked = S.select(gate, all_steps, changed, full=full, only=only,
@@ -704,8 +712,12 @@ def _gate_checkout(top, cfg, eff, base=None, full=False, only=None, plan=False, 
 def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None, book_kw=None,
                 lane_args=None, reuse=None):
     """_merged_gate() with its source (kitlib.gate.detect) in facts['source'] and as the last
-    line. The gate is detected from the merged tree when `cfg` has no "gate" section."""
-    eff = detect.effective(cfg, root)
+    line. With no "gate" section in `cfg` the gate is detected from the merged tree, plus the
+    steps `base` owes (detect.effective)."""
+    try:
+        eff = detect.effective(cfg, root, base=base)
+    except detect.DetectError as e:
+        return G.Outcome(G.REFUSED, ['REFUSED: the auto-detected gate: %s' % e])
     if eff.source == detect.AUTO:
         (say or _quiet)(detect.label(eff))
     out = _merged_gate(root, cfg, eff, base, full=full, slug=slug, log_dir=log_dir, say=say,

@@ -10,6 +10,7 @@ from unittest import mock
 from kitlib.config.load import Config
 from kitlib.gate import detect, runner
 from kitlib.gate import steps as S
+from tests import gitfixture
 
 PY_TEST = 'import unittest\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n'
 
@@ -158,10 +159,10 @@ class RustGoDotnet(Tree):
     def test_rust_is_cargo_test_plus_fmt_when_rustfmt_is_configured(self):
         got = self.steps('rust', {'Cargo.toml': '[package]\nname = "x"\n'})
         self.assertEqual(list(got), ['rust-test'])
-        self.assertEqual(got['rust-test']['cmd'], ['cargo', 'test'])
+        self.assertEqual(got['rust-test']['cmd'], ['cargo', 'test', '--workspace'])
         self.assertTrue(got['rust-test']['requires_strict'])
         got = self.steps('rust', {'rustfmt.toml': 'edition = "2021"\n'})
-        self.assertEqual(got['rust-fmt']['cmd'], ['cargo', 'fmt', '--check'])
+        self.assertEqual(got['rust-fmt']['cmd'], ['cargo', 'fmt', '--all', '--check'])
 
     def test_go_is_test_and_vet(self):
         got = self.steps('go', {'go.mod': 'module x\n'})
@@ -190,6 +191,15 @@ class RustGoDotnet(Tree):
 
     def test_dotnet_with_no_solution_and_no_test_project_is_not_detected(self):
         self.assertEqual(self.found({'src/App/App.csproj': '<Project/>'}), {})
+
+    def test_dotnet_paths_that_would_read_as_an_option_or_placeholder_are_not_arguments(self):
+        got = self.steps('dotnet', {'-p:Foo=1.sln': '', '{root}.sln': '', 'App.sln': ''})
+        self.assertEqual([s['cmd'][2] for s in got.values()], ['App.sln'])
+
+    def test_dotnet_test_projects_of_one_name_get_distinct_steps(self):
+        got = self.steps('dotnet', {'a/Tests.csproj': '<Project/>', 'b/Tests.csproj': '<Project/>'})
+        self.assertEqual(list(got), ['dotnet-test-Tests', 'dotnet-test-Tests-2'])
+        self.assertEqual([s['cmd'][2] for s in got.values()], ['a/Tests.csproj', 'b/Tests.csproj'])
 
 
 class Several(Tree):
@@ -224,6 +234,14 @@ class Files(Tree):
         self.assertEqual(git.call_args[0][0][:2], ['ls-files', '-z'])
         self.assertEqual(read('tests/test_a.py'), PY_TEST)
         self.assertIsNone(read('Cargo.toml'))         # listed but not on disk
+
+    def test_untracked_files_under_build_folders_are_not_listed_tracked_ones_are(self):
+        answers = {'--cached': 'bin/test_tool.py\0tests/test_a.py\0',
+                   '--others': '.venv/lib/test_x.py\0node_modules/p/package.json\0new_test.py\0'}
+        with mock.patch.object(detect.cmd, 'run_text',
+                               side_effect=lambda args, *a, **k: (answers[args[2]], None)):
+            paths, _ = detect.checkout_files(self.root)
+        self.assertEqual(paths, ['bin/test_tool.py', 'new_test.py', 'tests/test_a.py'])
 
     def test_with_no_git_answer_the_folder_is_walked(self):
         self.write({'go.mod': 'module x\n'})
@@ -288,6 +306,78 @@ class Effective(Tree):
         self.assertNotIn('{python}', py.requires[0][0])        # the probe is substituted too
         self.assertTrue(py.requires_strict)
         self.assertFalse(chosen[2].requires_strict)
+
+
+class Owed(Tree):
+    """owed(): the steps the base detects and the tree under test does not are kept."""
+
+    def detected(self, files):
+        sub = tempfile.mkdtemp(dir=self.root)
+        for rel, text in files.items():
+            path = os.path.join(sub, *rel.split('/'))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(text)
+        return detect.detect(detect.walk_files(sub), detect.reader(sub))
+
+    def test_deleted_tests_and_scripts_are_kept_from_the_base(self):
+        base = self.detected({'tests/test_a.py': PY_TEST, 'ruff.toml': '',
+                              'package.json': '{"scripts": {"test": "jest", "lint": "eslint"}}'})
+        mine = self.detected({'package.json': '{"scripts": {"test": "exit 0"}}'})
+        found, kept = detect.owed(mine, base)
+        steps = {s['name']: s for _, ss in found for s in ss}
+        self.assertEqual(kept, ['python-tests', 'python-ruff', 'node-lint'])
+        self.assertEqual(list(steps), ['python-tests', 'python-ruff', 'node-test', 'node-lint'])
+        self.assertNotIn('warn', steps['python-tests'])      # a kept test step fails as before
+        self.assertTrue(steps['python-ruff']['warn'])          # a kept linter only warns
+        self.assertTrue(steps['node-lint']['warn'])
+
+    def test_the_tree_under_test_keeps_its_own_argv(self):
+        base = self.detected({'tests/test_a.py': PY_TEST})
+        mine = self.detected({'test/test_a.py': PY_TEST})
+        found, kept = detect.owed(mine, base)
+        self.assertEqual(kept, [])
+        self.assertEqual(found[0][1][0]['cmd'][-2:], ['-s', 'test'])
+
+    def test_a_renamed_solution_is_not_a_dropped_check(self):
+        found, kept = detect.owed(self.detected({'New.sln': ''}), self.detected({'Old.sln': ''}))
+        self.assertEqual((kept, [s['cmd'][2] for s in found[0][1]]), ([], ['New.sln']))
+        found, kept = detect.owed(self.detected({}), self.detected({'Old.sln': ''}))
+        self.assertEqual(kept, ['dotnet-test'])
+
+    def test_the_label_names_what_was_kept(self):
+        eff = detect.Effective({'steps': [{}]}, detect.AUTO, ['python'], ('python-tests',))
+        self.assertIn('kept from the base', detect.label(eff))
+        self.assertIn('python-tests', detect.label(eff))
+
+
+class BaseCommit(unittest.TestCase):
+    """effective(base=...) over a real repository: the base commit's tree is read from git."""
+
+    def setUp(self):
+        self.repo = gitfixture.TempRepo()
+        self.addCleanup(self.repo.cleanup)
+        self.repo.write('tests/test_a.py', PY_TEST)
+        self.repo.write('package.json', '{"scripts": {"test": "jest"}}')
+        self.base = self.repo.commit('tests', 'tests/test_a.py', 'package.json')
+
+    def test_a_branch_that_deletes_the_tests_still_owes_them(self):
+        self.repo.git('rm', '-q', 'tests/test_a.py', 'package.json')
+        self.repo.git('commit', '-q', '-m', 'no tests')
+        self.assertEqual(detect.effective(config(), self.repo.root).stacks, [])
+        eff = detect.effective(config(), self.repo.root, base=self.base)
+        self.assertEqual(eff.stacks, ['python', 'node'])
+        self.assertEqual(eff.kept, ('python-tests', 'node-test'))
+        self.assertFalse(detect.nothing_detected(eff))
+        self.assertIn('kept from the base', detect.label(eff))
+
+    def test_a_base_git_cannot_read_refuses(self):
+        with self.assertRaises(detect.DetectError):
+            detect.effective(config(), self.repo.root, base='0' * 40)
+
+    def test_a_configured_gate_never_reads_the_base(self):
+        eff = detect.effective(config({}, written=True), self.repo.root, base='0' * 40)
+        self.assertEqual(eff.source, 'gate.json')
 
 
 if __name__ == '__main__':

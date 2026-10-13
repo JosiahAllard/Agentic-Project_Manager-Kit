@@ -2,11 +2,15 @@
 scratch repository with no "gate" section gates and lands on its detected steps, labelled
 `source: auto` in the report, the gate-OK record and the result record; a configured gate is
 labelled `gate.json` and gets no detected step."""
+import os
 import unittest
+from unittest import mock
 
+import kitlib.config as kconfig
 from kitlib import gate as G
 from kitlib.gate import land, result, runner
 from kitlib.records import gate_ok
+from tests import gitfixture
 from tests.gate import fixtures
 
 PASSING = 'import unittest\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n'
@@ -84,6 +88,65 @@ class AutoLanding(AutoCase):
                          ('auto', ['python-tests']))
         final, _ = result.read(self.repo.root, 'kit/feature', 'land')
         self.assertEqual((final['verdict'], final['source']), ('pass', 'auto'))
+
+
+class NoLock(unittest.TestCase):
+    """The branch gate and the merged-tree gate up to the slot, on any platform: runner.gated
+    (which books the Windows-only machine lock) is replaced by one that runs nothing and passes
+    every step it is given, so what is chosen, labelled and recorded is checked here."""
+
+    def setUp(self):
+        def prepare(repo):
+            repo.write('.kit.json', '{}\n')
+            repo.write('.gitignore', '.claude/\n')
+            repo.write('tests/test_a.py', PASSING)
+            main = repo.commit('kit config and a test', '.kit.json', '.gitignore',
+                               'tests/test_a.py')
+            return main
+        self.repo = gitfixture.TempRepo(prepare=prepare,
+                                        prepare_key=('gate.test_auto_gate.NoLock',))
+        self.addCleanup(self.repo.cleanup)
+        self.main = self.repo.prepared
+        self.ran = []
+
+        def gated(cfg, root, base, changed, chosen, *a, **kw):
+            self.ran.append([s.name for s in chosen])
+            return [{'name': s.name, 'status': 'PASS', 'reasons': [], 'seconds': 0.0, 'log': None}
+                    for s in chosen], None
+        patch = mock.patch.object(runner, 'gated', gated)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.logs = os.path.join(self.repo.base, 'logs')
+
+    def test_a_branch_that_deletes_the_tests_still_runs_them(self):
+        wt = self.repo.worktree('drop')
+        self.repo.git('rm', '-q', 'tests/test_a.py', cwd=wt)
+        self.repo.git('commit', '-q', '-m', 'no tests', cwd=wt)
+        out = runner._branch_gate(wt, log_dir=self.logs)
+        self.assertEqual(self.ran, [['python-tests']], out.lines)
+        self.assertNotEqual(out.verdict, runner.NO_CHECKS)
+        self.assertIn('kept from the base', out.lines[-1])
+        rec, why = runner.verify_record(wt, out.head)
+        self.assertIsNone(why, out.lines)
+        self.assertEqual((rec['source'], [s['name'] for s in rec['steps']]),
+                         ('auto', ['python-tests']))
+
+    def test_nothing_detected_on_either_side_passes_labelled(self):
+        wt = self.repo.worktree('docs')
+        self.repo.git('rm', '-q', 'tests/test_a.py', cwd=wt)
+        self.repo.git('commit', '-q', '-m', 'no tests', cwd=wt)
+        out = runner._branch_gate(wt, base='HEAD', log_dir=self.logs)  # base: the branch itself
+        self.assertEqual((out.code, out.verdict, self.ran), (G.OK, runner.NO_CHECKS, []))
+        self.assertIn('NO checks', out.lines[-1])
+
+    def test_the_merged_gate_owes_the_steps_of_main(self):
+        self.repo.git('rm', '-q', 'tests/test_a.py')
+        self.repo.git('commit', '-q', '-m', 'merged: no tests')
+        cfg = kconfig.load(self.repo.root)
+        out = runner.merged_gate(self.repo.root, cfg, self.main, log_dir=self.logs)
+        self.assertEqual(self.ran, [['python-tests']], out.lines)
+        self.assertEqual(out.source, 'auto')
+        self.assertIn('kept from the base', out.lines[-1])
 
 
 class ConfiguredGate(fixtures.GateRepoCase):

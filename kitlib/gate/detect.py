@@ -7,6 +7,11 @@ docs/multi-host-plan.md decision 24).
 defaults with `steps` set to the detected ones (source `auto`). Every gate built on it (the
 branch gate, the merged-tree gate of a landing, the daily full run) runs the same steps.
 
+The branch gate and a landing also detect over their base commit (the merge base; the landing's
+--expect-main) and keep every step the base has that the tree under test lacks (`owed`): a branch
+that deletes its test files, its `test` script or its manifest still runs those tests, which then
+fail. A kept lint step only warns. Dropping a check on purpose takes a "gate" section.
+
 Detection is pure: each detector reads only the checkout's files (`paths`: repo-relative posix
 paths; `read(rel)`: a file's text or None). Nothing is installed, fetched or run, and no tool is
 looked up on PATH: a step names what it needs in `requires`, and the gate checks that when it
@@ -26,12 +31,13 @@ runs. A detected step is `always` (it runs whatever changed). A test step is `re
           for each of the scripts test, lint, typecheck it has (npm init's placeholder test
           script is not a test). <pm> by lockfile: pnpm-lock.yaml pnpm, yarn.lock yarn,
           bun.lockb / bun.lock bun, else npm.
-  rust    Cargo.toml at the root -> rust-test `cargo test`; rust-fmt `cargo fmt --check` when
-          rustfmt.toml or .rustfmt.toml is there.
+  rust    Cargo.toml at the root -> rust-test `cargo test --workspace`; rust-fmt
+          `cargo fmt --all --check` when rustfmt.toml or .rustfmt.toml is there.
   go      go.mod at the root -> go-test `go test ./...`, go-vet `go vet ./...`.
   dotnet  a *.sln / *.slnx at the root -> dotnet-test `dotnet test <sln>` (one step per
           solution); with none, each test project (*.csproj, *.fsproj, *.vbproj named *test* or
-          referencing Microsoft.NET.Test.Sdk) -> `dotnet test <project>`. With
+          referencing Microsoft.NET.Test.Sdk) -> `dotnet test <project>`; a path starting
+          with '-' or holding '{' is never an argument. With
           -nodeReuse:false -p:UseSharedCompilation=false, as the .NET stack template.
 Several stacks in one checkout: every one's steps, in the order above.
 """
@@ -40,7 +46,7 @@ import json
 import os
 import re
 
-from kitlib.git import cmd
+from kitlib.git import batch, cmd
 
 AUTO = 'auto'
 CONFIG = 'gate.json'        # the configured "gate" section, inline in .kit.json or in its file
@@ -51,8 +57,15 @@ PRUNE = frozenset(['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'targ
 MAX_READ = 50               # test files read for an `import pytest`
 NO_REUSE = ['-nodeReuse:false', '-p:UseSharedCompilation=false']
 NPM_PLACEHOLDER = re.compile(r'no test specified')
+LINT = frozenset(['python-ruff', 'python-flake8', 'node-lint', 'node-typecheck', 'rust-fmt',
+                  'go-vet'])     # the detected steps that check, not test
 
-Effective = collections.namedtuple('Effective', 'gate source stacks')
+Effective = collections.namedtuple('Effective', 'gate source stacks kept')
+Effective.__new__.__defaults__ = ((),)
+
+
+class DetectError(Exception):
+    """The base commit's files could not be read, so the gate cannot tell which steps it owes."""
 
 
 def configured(cfg):
@@ -60,17 +73,50 @@ def configured(cfg):
     return cfg.has('gate')
 
 
-def effective(cfg, root, files=None):
-    """The gate a run uses: Effective(gate, source, stacks). `gate` is the "gate" section over
-    its defaults; with source `auto` its `steps` are the detected ones (maybe none). `files`:
-    `(paths, read)` to detect from instead of the checkout at `root` (tests)."""
+def effective(cfg, root, files=None, base=None):
+    """The gate a run uses: Effective(gate, source, stacks, kept). `gate` is the "gate" section
+    over its defaults; with source `auto` its `steps` are the detected ones (maybe none).
+    `files`: `(paths, read)` to detect from instead of the checkout at `root` (tests).
+
+    `base` (a commit: the branch gate's merge base, a landing's --expect-main): the steps
+    detected in that commit's tree are owed too. A step the base has and the checkout does not
+    (its test files, script or manifest deleted or renamed) is kept, with the base's argv, and
+    named in `kept`, so a branch cannot drop a check by deleting what detects it. Raises
+    DetectError when git cannot list or read the base."""
     gate = cfg.section('gate')
     if configured(cfg):
-        return Effective(gate, CONFIG, [])
+        return Effective(gate, CONFIG, [], ())
     paths, read = files if files is not None else checkout_files(root)
     found = detect(paths, read)
+    kept = []
+    if base:
+        found, kept = owed(found, commit_detect(root, base))
     gate['steps'] = [s for _, steps in found for s in steps]
-    return Effective(gate, AUTO, [name for name, _ in found])
+    return Effective(gate, AUTO, [name for name, _ in found], tuple(kept))
+
+
+def owed(found, at_base):
+    """`(found, plus each step of at_base of a family found lacks, in STACKS order; the names
+    added)`. A step's family is its name, except that every `dotnet-test...` step is one family
+    (a solution or test project renamed or added is not a check dropped). An added step that is
+    a check, not a test (LINT), is `warn`, so its failure is a WARN named
+    in the verdict, not a FAIL; an added test step fails as it would have."""
+    mine, theirs = dict(found), dict(at_base)
+    out, kept = [], []
+    for name in STACKS:
+        steps = list(mine.get(name, []))
+        families = set(_family(s['name']) for s in steps)
+        for s in theirs.get(name, []):
+            if _family(s['name']) not in families:
+                steps.append(dict(s, warn=True) if s['name'] in LINT else s)
+                kept.append(s['name'])
+        if steps:
+            out.append((name, steps))
+    return out, kept
+
+
+def _family(name):
+    return 'dotnet-test' if name.startswith('dotnet-test') else name
 
 
 def nothing_detected(eff):
@@ -84,23 +130,49 @@ def label(eff):
     if not eff.stacks:
         return ('source: auto (auto-detected gate: no stack found, so it ran NO checks; write a '
                 '"gate" section in .kit.json or tools/gate.json to give it steps)')
-    return ('source: auto (auto-detected gate: %s; a "gate" section in .kit.json or '
-            'tools/gate.json replaces it)' % ', '.join(eff.stacks))
+    kept = ('; kept from the base, which detects them and this tree does not: %s'
+            % ', '.join(eff.kept)) if eff.kept else ''
+    return ('source: auto (auto-detected gate: %s%s; a "gate" section in .kit.json or '
+            'tools/gate.json replaces it)' % (', '.join(eff.stacks), kept))
 
 
 # ---------------------------------------------------------------- the checkout's files
 
 def checkout_files(root):
-    """`(paths, read)` of the checkout at `root`: the files git tracks plus the untracked ones it
-    does not ignore; where git cannot list them, a walk that skips PRUNE folders and any folder
-    holding a `.git` of its own (a nested repository or worktree)."""
-    out, _ = cmd.run_text(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], root,
-                          strip=False)
-    if out is not None:
-        paths = sorted(set(p for p in out.split('\0') if p))
-    else:
-        paths = walk_files(root)
-    return paths, reader(root)
+    """`(paths, read)` of the checkout at `root`: the files git tracks, plus the untracked ones it
+    does not ignore that are under no PRUNE folder (an unignored virtualenv or node_modules is not
+    the project's, and can be large); where git cannot list them, a walk that skips PRUNE folders
+    and any folder holding a `.git` of its own (a nested repository or worktree)."""
+    tracked, _ = cmd.run_text(['ls-files', '-z', '--cached'], root, strip=False)
+    others, _ = cmd.run_text(['ls-files', '-z', '--others', '--exclude-standard'], root,
+                             strip=False)
+    if tracked is None or others is None:
+        return walk_files(root), reader(root)
+    paths = set(p for p in tracked.split('\0') if p)
+    paths.update(p for p in others.split('\0') if p and not _pruned(p))
+    return sorted(paths), reader(root)
+
+
+def _pruned(rel):
+    return any(part in PRUNE for part in rel.split('/')[:-1])
+
+
+def commit_detect(root, rev):
+    """detect() over the tree of commit `rev` (one git ls-tree, one cat-file process). Raises
+    DetectError."""
+    out, why = cmd.run_text(['ls-tree', '-r', '-z', '--name-only', '--full-tree', rev], root,
+                            strip=False)
+    if out is None:
+        raise DetectError('git cannot list the files of %s: %s' % (rev[:10], why))
+    paths = sorted(p for p in out.split('\0') if p)
+    with batch.CatFile(root) as cat:
+        def read(rel):
+            data = cat.read(rev, rel)
+            return None if data is None else cmd.text(data)
+        found = detect(paths, read)
+        if cat.dead:
+            raise DetectError('git cannot read the files of %s: %s' % (rev[:10], cat.dead_reason))
+    return found
 
 
 def walk_files(root):
@@ -247,9 +319,11 @@ def rust(paths, read):
     top = _top(paths)
     if 'cargo.toml' not in top:
         return []
-    steps = [_step('rust-test', ['cargo', 'test'], ['cargo'], True)]
+    # --workspace / --all: a root package with workspace members tests and checks them all, not
+    # the root package alone (a virtual manifest does that anyway).
+    steps = [_step('rust-test', ['cargo', 'test', '--workspace'], ['cargo'], True)]
     if 'rustfmt.toml' in top or '.rustfmt.toml' in top:
-        steps.append(_step('rust-fmt', ['cargo', 'fmt', '--check'], ['cargo'], False))
+        steps.append(_step('rust-fmt', ['cargo', 'fmt', '--all', '--check'], ['cargo'], False))
     return steps
 
 
@@ -273,9 +347,20 @@ def dotnet(paths, read):
         targets = sorted(p for p in paths if p.lower().endswith(('.csproj', '.fsproj', '.vbproj'))
                          and ('test' in _base(p).lower()
                               or _has(read, p, r'Microsoft\.NET\.Test\.Sdk')))
+    # A path is an argument: one starting with '-' would be read as an option, and one holding
+    # a '{' could be rewritten by the gate's {placeholder} substitution. Neither is tested.
+    targets = [t for t in targets if not t.startswith('-') and '{' not in t]
     several = len(targets) > 1
-    return [_step(_step_name('dotnet-test', os.path.splitext(_base(t))[0], several),
-                  ['dotnet', 'test', t] + NO_REUSE, ['dotnet'], True) for t in targets]
+    steps, names = [], set()
+    for t in targets:
+        name = _step_name('dotnet-test', os.path.splitext(_base(t))[0], several)
+        n = 2
+        while name in names:            # two test projects of one name in different folders
+            name = '%s-%d' % (_step_name('dotnet-test', os.path.splitext(_base(t))[0], True), n)
+            n += 1
+        names.add(name)
+        steps.append(_step(name, ['dotnet', 'test', t] + NO_REUSE, ['dotnet'], True))
+    return steps
 
 
 DETECTORS = {'python': python, 'node': node, 'rust': rust, 'go': go, 'dotnet': dotnet}
