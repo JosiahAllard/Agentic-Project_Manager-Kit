@@ -315,6 +315,91 @@ class WorktreeConfigPlaces(unittest.TestCase):
         ])
 
 
+def rewrite(path, crlf=False, bom=False):
+    """Rewrite config file `path` with CRLF line ends and/or a UTF-8 byte order mark."""
+    with open(path, 'rb') as f:
+        data = f.read()
+    if crlf:
+        data = data.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+    if bom:
+        data = b'\xef\xbb\xbf' + data
+    with open(path, 'wb') as f:
+        f.write(data)
+
+
+BARE = '[core]\n\tbare = true\n'
+WORK_TREE = (repo.MAIN, FS)         # git answers a work tree, and so does the filesystem
+REFUSED = (None, GIT)               # git refuses (bad config line, or bare): handed to git
+
+
+@real_git("checks the filesystem's places against git's own rev-parse")
+class ConfigLineForms(unittest.TestCase):
+    """How a config line is written: git's parser (config.c get_next_char, get_value,
+    parse_value) decides what core.bare and extensions.worktreeConfig are, or refuses the file.
+    Each form is checked against git; the reader answers what git answers, or hands it to git.
+    A row ending in `true` is preceded by BARE, so a reader that misread the last core.bare
+    would answer MAIN where git refuses."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo = gitfixture.TempRepo()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.repo.cleanup()
+
+    # (name, appended to the common config, main config.worktree (extension on when given),
+    #  rewrite the common config / config.worktree as (crlf, bom), expected (kind, via))
+    CASES = [
+        ('CR CR LF after a key: only the CR before LF ends the line',
+         '[extensions]\n\tworktreeConfig\r\r\n', None, None, None, REFUSED),
+        ('CR CR LF after a plain core key', '[core]\n\tlongpaths\r\r\n', None, None, None, REFUSED),
+        ('CR CR LF after a value: the extra CR is white space', '[core]\n\tlongpaths = true\r\r\n',
+         None, None, None, WORK_TREE),
+        ('a CR inside the line before =', '[core]\n\tlongpaths\r= true\n', None, None, None, REFUSED),
+        ('quoted "false" over true', BARE + '\tbare = "false"\n', None, None, None, WORK_TREE),
+        ('quoted "true"', '[core]\n\tbare = "true"\n', None, None, None, REFUSED),
+        ('; comment after false', BARE + '\tbare = false ; c\n', None, None, None, WORK_TREE),
+        ('# comment right after false', BARE + '\tbare = false# c\n', None, None, None, WORK_TREE),
+        ('# comment after true', '[core]\n\tbare = true # c\n', None, None, None, REFUSED),
+        ('valid escapes in another value', BARE + '\tx = a\\tb\\"c\\\\\n\tbare = false\n',
+         None, None, None, WORK_TREE),
+        ('an unknown escape', '[core]\n\tx = a\\qb\n', None, None, None, REFUSED),
+        ('an escape inside the bare value', BARE + '\tbare = f\\alse\n', None, None, None, REFUSED),
+        ('a CRLF file, last bare false', BARE + '\tbare = false\n', None, (True, False), None, WORK_TREE),
+        ('a byte order mark, last bare false', BARE + '\tbare = false\n', None, (False, True), None,
+         WORK_TREE),
+        ('[core "x"] bare is core.x.bare', '[core "x"]\n\tbare = true\n', None, None, None, WORK_TREE),
+        ('[core.x] bare is core.x.bare', '[core.x]\n\tbare = true\n', None, None, None, WORK_TREE),
+        ('a [core.bare] section', '[core.bare]\n\tx = true\n', None, None, None, WORK_TREE),
+        ('[core] bare = true on the header line with a comment', '[core] bare = true # c\n',
+         None, None, None, REFUSED),
+        ('[core] bare = false on the header line with a comment, over true',
+         BARE + '[core] bare = false ; c\n', None, None, None, WORK_TREE),
+        ('odd white space around false, over true', BARE + ' \t bare\t=\t false \t\n',
+         None, None, None, WORK_TREE),
+        ('a space inside [ core ]', '[ core ]\n\tx = 1\n', None, None, None, REFUSED),
+        ('a vertical tab before a key (not git white space)', BARE + '\x0bbare = false\n',
+         None, None, None, REFUSED),
+        ('a comment after a key with no =', '[core]\n\tlongpaths # c\n', None, None, None, REFUSED),
+        ('config.worktree with CRLF and a byte order mark: bare false over true', BARE,
+         '[core]\n\tbare = false\n', None, (True, True), WORK_TREE),
+        ('config.worktree: CR CR LF after a key', BARE, '[core]\n\tbare = false\n\tlongpaths\r\r\n',
+         None, None, REFUSED),
+    ]
+
+    def test_each_line_form_answers_what_git_answers(self):
+        rows = []
+        for n, (name, common, main_wt, common_rw, wt_rw, (kind, via)) in enumerate(self.CASES):
+            main, _ = pair(self.repo, 'form%02d' % n, ext=main_wt is not None, common=common, main_wt=main_wt)
+            if common_rw:
+                rewrite(os.path.join(main, '.git', 'config'), *common_rw)
+            if wt_rw:
+                rewrite(os.path.join(main, '.git', 'config.worktree'), *wt_rw)
+            rows.append((name, main, kind, via))
+        answers_like_git(self, rows)
+
+
 class NoGitLaunched(unittest.TestCase):
     """The observable: a guarded call in a checkout starts no git child (KIT-HOOK-SPAWNS)."""
 
