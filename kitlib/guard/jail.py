@@ -6,6 +6,10 @@ An agent session writes only inside its roots:
                    worktree alone; a main checkout: the whole checkout). Outside git, the folder
                    it runs in, unless that is a drive root or the home folder. None when it is
                    on, over or inside either machine config folder (config_dirs).
+  its worktrees    every linked worktree of the same repository under its main checkout
+                   (sibling), so a session in one worktree reaches the others as a session in the
+                   main checkout does. The main checkout itself stays outside. Not a listed
+                   Root: write_jail and git_jail ask sibling() about an OUTSIDE verdict only.
   temp             the system temp folder (Ctx.tempdir, and TMP when it differs), and the agents'
                    temp folder AGENT_TEMP names when it is set. The session scratch folder
                    Claude Code makes lives under the system one.
@@ -84,6 +88,27 @@ def own_root(ctx, cwd, is_root):
     else:
         own = os.path.normpath(cwd)
     return None if touches_config(ctx, own) else own
+
+
+def sibling(ctx, target, cwd):
+    """True when `target` lies in a linked worktree of the repository `cwd` belongs to, under that
+    repository's main checkout: what a session in the main checkout already reaches through its own
+    root, given to a session in a linked worktree too. Never the main checkout itself, the PM data
+    worktree (Ctx.place answers it as MAIN; none at all while the guard cannot tell which it is,
+    Ctx.pm_data_error), another repository's worktree, a target a link carries out of its
+    worktree, or a worktree on, over or inside a machine config folder."""
+    if not target or not cwd or ctx.pm_data_error(target):
+        return False
+    here, there = ctx.place(cwd), ctx.place(target)
+    if here.kind not in (repo.MAIN, repo.LINKED) or not here.common:
+        return False
+    if there.kind != repo.LINKED or not there.top or not there.common or real(there.common) != real(here.common):
+        return False
+    main = ctx.main_top(cwd)
+    t, top = real(target), real(there.top)
+    if not main or not inside(t, top) or not inside(top, real(main)):
+        return False
+    return not touches_config(ctx, there.top)
 
 
 def touches_config(ctx, path):

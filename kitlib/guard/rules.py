@@ -15,8 +15,9 @@ Rules, in the order they are checked:
   lock-state       an agent session's edit of a file in the machine lock's state folder
   kit-json         an agent session's edit of a .kit.json in a checkout
   main-checkout    an edit in a main checkout by a role whose edit_main_checkout is false
-  write-jail       an agent session's write outside its own checkout, the temp folder and the
-                   .kit.json data roots (kitlib.guard.jail); git that writes a checkout outside them
+  write-jail       an agent session's write outside its own checkout, its repository's other
+                   worktrees, the temp folder and the .kit.json data roots (kitlib.guard.jail);
+                   git that writes a checkout outside them
   wrapped-gate     gate.py or `machine_lock.py run` piped into another command (P16)
   root-search      a recursive search from a drive or filesystem root
   heavy            a heavy program run with no lock held (MACHINE_LOCK_RUN verified by nest_check)
@@ -581,13 +582,14 @@ JAIL_ASK = 'Ask the coordinator (a coordinator asks the PM) when the work needs 
 
 
 def write_jail(event, ctx, target, cwd, role, what, rewrite=None, run=None):
-    """An agent session's write outside its roots (kitlib.guard.jail): its checkout, temp and
-    the .kit.json data roots, judged by the resolved path."""
+    """An agent session's write outside its roots (kitlib.guard.jail): its checkout, its
+    repository's other worktrees (jail.sibling), temp and the .kit.json data roots, judged by the
+    resolved path."""
     if not target or not agent_session(event, ctx):
         return None
     rs = jail_roots(event, ctx, cwd)
     verdict, root = jail.judge(target, rs)
-    if verdict is None:
+    if verdict is None or (verdict == jail.OUTSIDE and jail.sibling(ctx, target, cwd)):
         return None
     return jail_refusal(role, rs, verdict, root, what, target, rewrite, run)
 
@@ -2098,7 +2100,8 @@ def git_jail_unknown(ctx, cmd, gc, cwd, role):
 def git_jail(event, ctx, cmd, inv, cwd, role):
     """An agent session's git that writes a checkout (or makes a folder) outside its roots
     (kitlib.guard.jail): git -C <elsewhere> commit, a cd chain into another checkout, worktree
-    add or clone to a folder outside them."""
+    add or clone to a folder outside them. Its repository's other worktrees (jail.sibling) are
+    not elsewhere."""
     gc = cm.git_call(inv)
     if gc is None or not agent_session(event, ctx):
         return None
@@ -2115,7 +2118,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
             continue
         rs = rs or jail_roots(event, ctx, cwd)
         verdict, root = jail.judge(target, rs)
-        if verdict is not None:
+        if verdict is not None and not (verdict == jail.OUTSIDE and jail.sibling(ctx, target, cwd)):
             what = '`%s` makes %s' % (bare(cmd), w.text)
             return jail_refusal(role, rs, verdict, root, what, target,
                                 rewrite=lambda path, w=w: retarget(cmd, w, path))
@@ -2129,7 +2132,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
         return d
     rs = rs or jail_roots(event, ctx, cwd)
     verdict, root = jail.judge(gc.dir, rs)
-    if verdict is None:
+    if verdict is None or (verdict == jail.OUTSIDE and jail.sibling(ctx, gc.dir, cwd)):
         return None
     if why is not None:
         return lander_refusal(ctx, cmd, gc, 'write-jail', role, why)
