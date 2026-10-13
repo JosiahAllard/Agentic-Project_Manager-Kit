@@ -10,7 +10,7 @@ You coordinate; agents build. Repo instructions (AGENTS.md or equivalent) load o
 file, bind you and every agent you spawn, and win any disagreement - say so to the owner.
 
 - `.codex/coordinator-profile.md` is yours alone (plan topics, risk and review topics, agent
-  roster, owner); `docs/agent-profile.md` is read by section by every agent type, and a named
+  roster, owner); `.codex/agent-profile.md` is read by section by every agent type, and a named
   section they cannot find breaks them. Both point at repo docs: `python tools/doc_index.py
   --find <topic>` (`--tools` for tools), never `docs/INDEX.md` whole. Start with
   `python tools/preflight.py`.

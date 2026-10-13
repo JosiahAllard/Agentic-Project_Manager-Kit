@@ -99,7 +99,7 @@ TOOLS = {
 }
 # The tokens whose Codex value no hosts.json field holds.
 TOKENS = {
-    'profile_path': 'docs/agent-profile.md',
+    'profile_path': '.codex/agent-profile.md',
     'coordinator_profile_path': '.codex/coordinator-profile.md',
     'instructions_file': 'AGENTS.md',
     'config_dir_env': 'CODEX_HOME',

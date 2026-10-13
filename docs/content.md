@@ -61,8 +61,8 @@ profile there, never written a second time in the renderer (Claude: `PROFILE_TOK
 | `{{agent:<role>}}` | the name the host dispatches a role by | `pm-kit:<role>` | `kit-<role>` |
 | `{{model:<tier>}}` | the host's model for a tier | hosts.json `tiers`: `{{model:strong}}` is `opus` | `the account's model` while hosts.json maps the tier to `account-default` |
 | `{{tool:<capability>}}` | the host's tool for a capability (the front matter's names) | the renderer's `TOOLS`: `{{tool:message}}` is `SendMessage`, `{{tool:dispatch}}` `Agent` | the renderer's `TOOLS` (inferred names): `send_message`, `spawn_agent`, `apply_patch`; a capability with no Codex tool says so |
-| `{{profile_path}}` | a repository's agent profile | `.claude/agent-profile.md` | `docs/agent-profile.md` |
-| `{{coordinator_profile_path}}` | a repository's coordinator profile | `.claude/coordinator-profile.md` | `docs/coordinator-profile.md` |
+| `{{profile_path}}` | a repository's agent profile | `.claude/agent-profile.md` | `.codex/agent-profile.md` |
+| `{{coordinator_profile_path}}` | a repository's coordinator profile | `.claude/coordinator-profile.md` | `.codex/coordinator-profile.md` |
 | `{{instructions_file}}` | the repository instructions file the host reads | `CLAUDE.md` | `AGENTS.md` |
 | `{{worktrees_dir}}` | the repository folder agent worktrees go in | `.claude/worktrees` (hosts.json profile `worktrees_directory`) | `.codex/worktrees` |
 | `{{owner_folder}}` | the host's own folder in a repository, owner-only, with its final `/` | `.claude/` (the folder among hosts.json profile `owner_paths`) | `.codex/` |

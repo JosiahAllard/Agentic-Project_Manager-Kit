@@ -37,7 +37,7 @@ class Agents(unittest.TestCase):
         self.assertEqual(alpha, {
             'name': 'kit-alpha', 'description': 'Builds: things. Ask kit-beta first.',
             'model_reasoning_effort': 'xhigh', 'sandbox_mode': 'read-only',
-            'developer_instructions': 'Read docs/agent-profile.md and AGENTS.md in .codex/worktrees; "quote" \\ back.\n'
+            'developer_instructions': 'Read .codex/agent-profile.md and AGENTS.md in .codex/worktrees; "quote" \\ back.\n'
                                       'Trailer <noreply@openai.com>. Run as `python <kit>/hosts/codex/shell/scripts/'
                                       'launch.py --role kit-beta` on strong-tier; ask by send_message (not available '
                                       'to a Codex agent: ask the PM), edit with apply_patch, in .codex/ and ~/.codex.\n'})
@@ -82,6 +82,15 @@ class Tokens(unittest.TestCase):
         self.assertEqual(cc.renderer().tier_models(), dict(registry.host('codex').tiers))
         self.assertEqual(sorted(cc.TIER_EFFORT), sorted(hc.TIERS))
         self.assertEqual(cc.prose_models()['deep'], 'deep-tier')
+
+    def test_the_profiles_live_in_codexs_owner_only_folder(self):
+        """Both profiles sit in the folder hosts.json's Codex owner_paths lock, as Claude's sit in
+        .claude/, so no repository's own owner.paths can open them to an agent."""
+        values = cc.tokens()
+        folder = values['owner_folder']
+        self.assertIn(folder, registry.host('codex').profile.owner_paths)
+        self.assertEqual(values['profile_path'], folder + 'agent-profile.md')
+        self.assertEqual(values['coordinator_profile_path'], folder + 'coordinator-profile.md')
 
     def test_strings_escape(self):
         if tomllib is None:
