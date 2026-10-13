@@ -510,6 +510,7 @@ The §7 agenda was settled in a planning session with the owner. Nothing below i
 | 26 | Doc index and repo profile | Both opt-in. The index check runs only if `docs/INDEX.md` exists. With no repo profile, roles use the kit's default profile and read the repo's README or AGENTS.md if there is one. |
 | 27 | Machine setup | Shrinks to installing the plugin on each host, making the agent temp folder, and storing the owner's email. It writes nothing into repos by default. A `--repo` mode keeps the old committed setup for those who want it. |
 | 28 | `claude/hooks/` stubs | Removed in the same change that adds `boot/hook.py`. The owner re-runs machine setup once on each machine. |
+| 29 | What is generated, and when | Skills are no longer copied: each host's manifest points at `content/skills/` (Codex after a live check that it loads skills from outside its plugin folder; until then its copy stays). Roles and manifests stay generated, since each host needs its own header and file format and a role body works best as the system prompt (pointer files were weighed and rejected). Rendering happens at commit time: `tools/commit.py` renders when a path it commits is under `content/` or is `kit.json` or `hosts.json`, and adds the rendered files it changed to the same commit. The opt-in pre-commit git hook does the same for plain `git commit`. The gate's drift check stays as the backstop. |
 
 ### 7.1 Steps
 
@@ -520,9 +521,11 @@ Each step is one branch, reviewed and merged before the next, in the same way as
     - `KIT_AGENTS` and the backlog groupings read it, which fixes the test-runner disagreement.
     - `docs/ROSTER.md` is rendered.
     - A test fails on a role name in prose or code that no role file defines.
-12. **Banner and guard.**
-    - The renderer writes the banner, in a comment form that suits each file type.
-    - The drift test checks it.
+12. **Generated files: fewer, marked, rendered on commit.**
+    - The Claude manifest points at `content/skills/`, and `hosts/claude/shell/skills/` is deleted.
+    - Codex follows once a live install confirms the path.
+    - The renderer writes the banner, in a comment form that suits each file type, and the drift test checks it.
+    - `tools/commit.py` and the opt-in pre-commit hook render and stage changed output when `content/`, `kit.json` or `hosts.json` is committed.
     - The guard refuses edits under `hosts/*/shell/agents/**` and `hosts/*/shell/skills/**`, naming the source file.
 13. **Visibility.**
     - `tools/agent_view.py` lists the role file, AGENTS.md, the user instructions file, the kit header text, the start checklist, skills, the profile in use, mode, writes, capabilities and the active `.kit.json` switches.
