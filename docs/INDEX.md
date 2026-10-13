@@ -36,6 +36,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/lock-release.md` | lock release pre-check | releasing a lock | kw: lock-release
 - `docs/machine-setup.md` | machine setup | a new machine | kw: machine-setup, setup
 - `docs/model-ab.md` | model A/B results | choosing a model | kw: model, ab
+- `docs/multi-host-plan.md` | multi-host architecture plan (proposal) | changing host adapters, plugins or the bridge | kw: multi-host, codex, host, plugin, bridge
 - `docs/agent-review.md` | agent review: usage, refusals, definition findings (undecided) | choosing a model, editing agent definitions | kw: agent-review, agents, model
 - `docs/new-worktree.md` | new_worktree | starting a task | kw: new-worktree, worktree
 - `docs/pending.md` | the pending-steps file | pending steps | kw: pending
