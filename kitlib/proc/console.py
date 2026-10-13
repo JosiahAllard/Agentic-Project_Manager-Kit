@@ -74,12 +74,11 @@ LOG_MAX = 1 << 20
 KEEP_WORDS = 6                          # a logged command line: the program and this many words
 WORD_MAX = 120                          # each word cut to its start and end past this length
 MASK = '***'
-# a flag or NAME=VALUE name holding one of these hides its value
-SECRET_WORDS = ('token', 'secret', 'passw', 'passphrase', 'pwd', 'key', 'auth', 'credential',
-                'cookie', 'bearer')
-# ... and so does one whose last part (split at -, _, . and case: `DB_PASS`, `dbPw`) is one of
-# these, which as a substring would hide `-PassThru`, `/passive` and `--stopwatch` values
-SECRET_LAST = ('pass', 'pw')
+# a flag or NAME=VALUE name holding one of these hides its value (pass: password, passcode,
+# passphrase; pw: pwd) ...
+SECRET_WORDS = ('token', 'secret', 'pass', 'pw', 'key', 'auth', 'credential', 'cookie', 'bearer')
+# ... once these words, which hold `pass` or `pw` and name no secret, are taken out of it
+NOT_SECRET = ('passthru', 'passthrough', 'passive', 'bypass', 'stopwatch', 'compass')
 
 # ensure_windowless_console's answers
 PRESENT = 'present'                     # the process had a console already
@@ -348,64 +347,75 @@ def split_command_line(line):
 
 
 def _secret(name):
-    """True when a flag or pair name holds a secret word (SECRET_WORDS anywhere in it), or ends
-    in a part from SECRET_LAST (`--pass`, `DB_PW`, `dbPass`; not `-PassThru` or `/passive`)."""
-    low = name.lower()
-    if any(s in low for s in SECRET_WORDS):
-        return True
-    parts = _rx().parts.findall(name)
-    return bool(parts) and parts[-1].lower() in SECRET_LAST
+    """True when a flag or pair name, lowered and without its digits, holds a secret word once
+    the NOT_SECRET words are taken out of it (`DBPASS`, `adminpw`, `--passcode`; not
+    `-PassThru` or `/passive`). When in doubt it says secret: a masked word costs nothing."""
+    low = ''.join(c for c in name.lower() if not c.isdigit())
+    for word in NOT_SECRET:
+        low = low.replace(word, ' ')
+    return any(s in low for s in SECRET_WORDS)
 
 
-USER_FLAGS = ('-u', '--user')            # curl's: a `user:password` value hides the password
 _RX = None
 
 
 def _rx():
-    """The masks' patterns, compiled on first use (importing kitlib loads no `re`)."""
+    """The masks' patterns, compiled on first use (importing kitlib loads no `re`). Each one
+    is linear in its word: a long or hostile word must not stall the start it is logged for."""
     global _RX
     if _RX is None:
         import re
         import types
         quoted = r'"(?:[^"\\]|\\.)*(?:"|.*)|\'(?:[^\'\\]|\\.)*(?:\'|.*)'   # unclosed: to the end
         _RX = types.SimpleNamespace(
-            parts=re.compile(r'[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+'),
             flag=re.compile(r'(?:--?|/)([A-Za-z][\w.-]*)'),
             named=re.compile(r'((?:--?|/)?([A-Za-z_][\w.-]*))([=:])(.*)', re.S),
-            pair=re.compile(r'(?<![\w.-])([\w.-]+)=|(["\'])([^"\'\\]*)\2\s*:\s*'),
+            # a user flag (curl's -u, a cluster ending in it as in -sSu, --proxy-user, /u)
+            user_flag=re.compile(r'-[a-z]*u|(?:--?|/)(?:[\w.-]*[-_.])?user|/u', re.I),
+            glued_user=re.compile(r'-[A-Za-z]*?[uU]([^:]*:.*)', re.S),        # -uuser:password
+            glued_pw=re.compile(r'(-p|/r?p:)(.+)', re.I | re.S),        # -ppassword, /p:password
+            # a word's last name and the = or : after it (`$env:TOKEN =`, `"password":`)
+            trail=re.compile(r'(?<![\w.-])([\w.-]+)[\'"\]]*\s*([=:]?)\s*\Z'),
+            # name=value, name = value; "name": value, 'name': value, ['name']=value; {name: value
+            pair=re.compile(r'(?<![\w.-])([\w.-]+)\s*=\s*'
+                            r'|(["\'])([^"\'\\]*)\2\]?\s*[:=]\s*'
+                            r'|(?<=[{,])\s*([A-Za-z_][\w.-]*)\s*:\s*'),
             eq_value=re.compile(quoted + r'|[^&;\s"\']*', re.S),
             json_value=re.compile(quoted + r'|[^,}\]\s]*', re.S),
-            # the user info of a URL: its authority (up to the first / ? #) to its last @
-            url_user=re.compile(r'(://)[^/?#\s]*@'),
+            authority_end=re.compile(r'[/?#]'),
+            space=re.compile(r'(\s+)'),
+            bearer=re.compile(r'\b(bearer|basic)(\s+)\S+', re.I),
+            # the JWT form starts only where a run of word characters starts, so a run of
+            # `eyJ` is tried once and not again from each of its letters
             token=re.compile(r'(?:sk-|gh[pousr]_|github_pat_|xox[abprs]-|glpat-|AKIA|ASIA)'
-                             r'[A-Za-z0-9_\-]{8,}|eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]*'),
-            user=re.compile(r'(?![A-Za-z]:[\\/])(?!.*://)([^:\\/]+):.+', re.S))
+                             r'[A-Za-z0-9_\-]{8,}|(?<![\w-])eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]*'),
+            user=re.compile(r'(?![A-Za-z]:[\\/])(?!.*://)([^:/]+):.+', re.S))
     return _RX
 
 
 def _user_value(v):
-    """`user:password` as `user:***`; anything else (a drive path: a letter, a colon and a
-    slash; a URL, whose user info _word masks) as it is."""
+    """`user:password` (or `DOMAIN\\user:password`) as `user:***`; anything else (a drive
+    path: a letter, a colon and a slash; a URL, whose user info _word masks) as it is."""
     m = _rx().user.fullmatch(v)
     return m.group(1) + ':' + MASK if m else v
 
 
 def _pairs(w):
-    """`w` with the value of each `name=value` (a URL query, a form body, a keyword argument)
-    and `"name": value` or `'name': value` (JSON and its like) whose name is secret masked,
-    wherever in the word they stand. A quoted value is masked to its closing quote (or the end),
-    and keeps its quotes."""
+    """`w` with the value of each secret `name=value` (a URL query, a form body, a keyword
+    argument, `name = value`), `"name": value`, `'name': value`, `['name']=value` and
+    `{name: value` masked, wherever in the word they stand. A quoted value is masked to its
+    closing quote (or the end), and keeps its quotes."""
     rx = _rx()
     out, pos = [], 0
     while True:
         m = rx.pair.search(w, pos)
         if not m:
             break
-        is_json = m.group(1) is None
+        name = m.group(1) or m.group(3) or m.group(4) or ''
         out.append(w[pos:m.end()])
         pos = m.end()
-        if _secret(m.group(3) if is_json else m.group(1)):
-            v = (rx.json_value if is_json else rx.eq_value).match(w, pos).group()
+        v = _secret(name) and (rx.eq_value if m.group(1) else rx.json_value).match(w, pos).group()
+        if v:                               # an empty one is in the next word (_mask)
             q = v[:1] if v[:1] in ('"', "'") else ''
             out.append(q + MASK + q)
             pos += len(v)
@@ -413,28 +423,70 @@ def _pairs(w):
     return ''.join(out)
 
 
+def _url_user(w):
+    """`w` with each URL's user info masked. When a `:` follows `scheme://` before the last
+    `@` (of the stretch with no white space), all up to that `@` goes: a password may hold
+    `/`, `#` or `@`, so `https://host:8080/@scope` is masked too. Else, the user info is the
+    authority (to the first / ? or #) up to its last `@`."""
+    rx = _rx()
+    out = []
+    for s in rx.space.split(w):
+        pos, i = 0, s.find('://')
+        while i >= 0:
+            start = i + 3
+            at = s.rfind('@', start)
+            if at < 0:
+                break
+            if s.find(':', start, at) >= 0:
+                cut = at
+            else:
+                end = rx.authority_end.search(s, start)
+                cut = s.rfind('@', start, end.start() if end else len(s))
+            if cut >= 0:
+                out.append(s[pos:start] + MASK)
+                pos = cut
+            i = s.find('://', max(cut, start))
+        out.append(s[pos:])
+    return ''.join(out)
+
+
 def _word(w):
     """One word's own secrets masked: all of `--token=VALUE`, `/password:VALUE` and
-    `GITHUB_TOKEN=VALUE`; secret pairs inside it (_pairs); a URL's user info; and anything
-    shaped like a well-known API token."""
+    `GITHUB_TOKEN=VALUE`; secret pairs inside it (_pairs); a URL's user info (_url_user); the
+    word after `Bearer` or `Basic`; and anything shaped like a well-known API token."""
     rx = _rx()
     m = rx.named.fullmatch(w)
     if m and _secret(m.group(2)):
         return m.group(1) + m.group(3) + MASK
-    return rx.token.sub(MASK, rx.url_user.sub(r'\1' + MASK + '@', _pairs(w)))
+    w = rx.token.sub(MASK, _url_user(_pairs(w)))
+    return rx.bearer.sub(r'\1\2' + MASK, w)
 
 
 def _mask(words):
-    """`words` with secrets masked: each word's own (_word); the whole word after a secret flag
-    (`--token VALUE`, `/key VALUE`) or after `Bearer`/`Basic`, unless that word is a secret
-    flag itself; and the password of `-u`/`--user user:password` (a flag after `-u` is not
-    taken as its value)."""
+    """`words` with secrets masked: each word's own (_word), and these whole words:
+    - the one after a secret flag (`--token VALUE`, `/key VALUE`), after `Bearer`/`Basic`, after
+      a word ending in a secret name and `=` or `:` (`"password":`), and after a lone `=` or
+      `:` that follows a secret name (`$env:TOKEN = VALUE`), unless it is a secret flag itself;
+    - the password of a user flag's `user:password` (`-u`, `-sSu`, `-uuser:password`,
+      `--proxy-user`, `/u`); a flag after it is not its value, and `/user:NAME PASSWORD`
+      (net use) hides the next word;
+    - once a user flag (or sshpass) is seen, the value of `-p`, `-P`, `/p` and a glued `-pVALUE`
+      (mysql, schtasks: the password goes with the user); and always after `/RP`."""
     rx = _rx()
-    out, hide = [], None
+    out, hide, prev, user_seen = [], None, None, False
     for w in words:
+        last, prev = prev, None
+        low = w.lower()
         f = rx.flag.fullmatch(w)
         secret_flag = bool(f) and _secret(f.group(1))
         if hide == 'all' and not secret_flag:
+            if low in ('bearer', 'basic'):
+                out.append(w)                   # Authorization: Bearer VALUE
+                continue
+            out.append(MASK)
+            hide = None
+            continue
+        if hide == 'word' and not w.startswith(('/', '-')):
             out.append(MASK)
             hide = None
             continue
@@ -443,19 +495,40 @@ def _mask(words):
             hide = None
             continue
         hide = None
-        if secret_flag or w.lower() in ('bearer', 'basic'):
+        if low.replace('\\', '/').rsplit('/', 1)[-1] in ('sshpass', 'sshpass.exe'):
+            user_seen = True
+        if (secret_flag or low in ('bearer', 'basic', '/rp')
+                or (user_seen and low in ('-p', '/p'))
+                or (w.strip() in ('=', ':') and last and _secret(last))):
             out.append(w)
             hide = 'all'
             continue
-        if w.lower() in USER_FLAGS:
+        if rx.user_flag.fullmatch(w):
             out.append(w)
-            hide = 'user'
+            hide, user_seen = 'user', True
+            continue
+        g = rx.glued_user.fullmatch(w) if ':' in w and w[1:2] != '-' else None
+        if g:
+            out.append(w[:g.start(1)] + _user_value(_word(g.group(1))))
+            user_seen = True
             continue
         m = rx.named.fullmatch(w)
-        if m and m.group(1).lower() in USER_FLAGS and m.group(3) == '=':
-            out.append(m.group(1) + '=' + _user_value(_word(m.group(4))))
+        if m and rx.user_flag.fullmatch(m.group(1)):
+            out.append(m.group(1) + m.group(3) + _user_value(_word(m.group(4))))
+            if m.group(1).startswith('/'):
+                hide = 'word'                   # net use X /user:NAME PASSWORD
+            user_seen = True
+            continue
+        g = rx.glued_pw.fullmatch(w)
+        if g and (user_seen or g.group(1).lower() == '/rp:'):
+            out.append(g.group(1) + MASK)
             continue
         out.append(_word(w))
+        t = rx.trail.search(w)
+        if t:
+            prev = t.group(1)
+            if t.group(2) and _secret(prev):
+                hide = 'all'
     return out
 
 

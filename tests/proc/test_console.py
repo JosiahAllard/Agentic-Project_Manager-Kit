@@ -510,9 +510,14 @@ class RedactTest(unittest.TestCase):
              ['{"token":"***"', '{"token":"***"}', '{"token":"***"']),
             (["git://tok@h/r", "https://u:p%2Fw@h/x", "ftp://h/kept@x"],
              ["git://***@h/r", "https://***@h/x", "ftp://h/kept@x"]),
-            # URL user info is the authority up to its last @, before the first / ? or #
-            (["https://host:8080/@scope/pkg", "https://u:p@ss@h/x", "https://h?q=@kept"],
-             ["https://host:8080/@scope/pkg", "https://***@h/x", "https://h?q=@kept"]),
+            # URL user info: with a : after scheme://, all up to the last @ (a password may hold
+            # / # or @; a port before /@ is masked too); else the authority up to its last @
+            (["https://user:pa#ss@host/", "https://u:pa/ss@h/x", "https://u:p/w@h/x",
+              "https://u:p@ss@h/x", "https://host:8080/@scope/pkg"],
+             ["https://***@host/", "https://***@h/x", "https://***@h/x", "https://***@h/x",
+              "https://***@scope/pkg"]),
+            (["https://h?q=@kept", "https://h/x?r=git://tok@h2/y", "-u", "https://u:pa/ss@h"],
+             ["https://h?q=@kept", "https://***@h2/y", "-u", "https://***@h"]),
             # the value of -u/--user gets every other mask too, and a flag is not its value
             (["-u", "https://user:" + "ghp_" + "a" * 36 + "@github.com/o/r.git", "main"],
              ["-u", "https://***@github.com/o/r.git", "main"]),
@@ -520,20 +525,53 @@ class RedactTest(unittest.TestCase):
              ["-u", "***", "-u", "GITHUB_TOKEN=***", "--user=https://***@h/"]),
             (["-u", "--token", "abc", "--token", "--password", "abc", "-u", "-v", "kept"],
              ["-u", "--token", "***", "--token", "--password", "***", "-u", "-v", "kept"]),
+            # user flags: a cluster ending in u, glued, long forms, /u, DOMAIN\user, any case
+            (["-sSu", "a:abc", "-uuser:abc", "--proxy-user", "b:abc", "--proxy-user=c:abc",
+              "/u", "d:abc", "-u", "DOMAIN\\e:abc", "-U", "f:abc", "--USER", "g:abc"],
+             ["-sSu", "a:***", "-uuser:***", "--proxy-user", "b:***", "--proxy-user=c:***",
+              "/u", "d:***", "-u", "DOMAIN\\e:***", "-U", "f:***", "--USER", "g:***"]),
+            (["\\\\h\\s", "/user:DOMAIN\\e", "abc", "/persistent:no"],      # net use
+             ["\\\\h\\s", "/user:DOMAIN\\e", "***", "/persistent:no"]),
+            # -p/-P/ /p go with a user flag seen before them (or sshpass); /RP always
+            (["-u", "root", "-h", "db", "-p", "abc", "-P", "abc", "-pabc", "/p:abc"],
+             ["-u", "root", "-h", "db", "-p", "***", "-P", "***", "-p***", "/p:***"]),
+            (["sshpass", "-p", "abc", "ssh", "h"], ["sshpass", "-p", "***", "ssh", "h"]),
+            (["/create", "/u", "e", "/p", "abc", "/RP", "abc", "/rp:abc"],
+             ["/create", "/u", "e", "/p", "***", "/RP", "***", "/rp:***"]),
+            (["-p", "kept", "-P", "8080", "-pkept"], ["-p", "kept", "-P", "8080", "-pkept"]),
             # a quoted value is masked to its closing quote (or the end), keeping its quotes
             (["f(password='hunter2')", "$env:TOKEN='abc'", "{'token': 'abc'}", 'f(pw="a b")'],
              ["f(password='***')", "$env:TOKEN='***'", "{'token': '***'}", 'f(pw="***")']),
             (["x=1;secret='a\\'b';y=kept", "f(password='abc def", '["token": "a,b", 2]'],
              ["x=1;secret='***';y=kept", "f(password='***'", '["token": "***", 2]']),
-            # pass and pw are secret as a name's last part, not inside a longer word
+            # name = value with spaces, in one word or across words; bracketed and bare keys
+            (["password = 'hunter2'", "$env:GITHUB_TOKEN = 'abc'", "os.environ['TOKEN']='abc'",
+              "{password:abc}", "{a:1, secret : abc}", "mode = kept"],
+             ["password = '***'", "$env:GITHUB_TOKEN = '***'", "os.environ['TOKEN']='***'",
+              "{password:***}", "{a:1, secret : ***}", "mode = kept"]),
+            (["$env:GITHUB_TOKEN", "=", "'abc'", "password", "=", "abc", "mode", "=", "kept",
+              '{"password":', '"abc"}'],
+             ["$env:GITHUB_TOKEN", "=", "***", "password", "=", "***", "mode", "=", "kept",
+              '{"password":', "***"]),
+            # Bearer and Basic hide the next word under any header name
+            (["-H", "X-Custom: Bearer abc", "X-Api: basic Zm9vOmJhcg==", "-H",
+              "Authorization:", "Bearer", "abc"],
+             ["-H", "X-Custom: Bearer ***", "X-Api: basic ***", "-H",
+              "Authorization:***", "Bearer", "***"]),
+            # pass and pw are secret anywhere in a name, digits aside, but for a few words
+            (["DBPASS=a", "PGPASS=a", "ROOTPASS=a", "userpass=a", "adminpw=a", "SMTPPW=a",
+              "PASSCODE=a", "PASS_PHRASE=a", "PASS1=a", "DB_PASS_2=a", "dbPass=a"],
+             ["DBPASS=***", "PGPASS=***", "ROOTPASS=***", "userpass=***", "adminpw=***",
+              "SMTPPW=***", "PASSCODE=***", "PASS_PHRASE=***", "PASS1=***", "DB_PASS_2=***",
+              "dbPass=***"]),
+            (["--passcode", "a", "--pass-phrase", "a", "--pass-file", "a", "--smtp-pw", "a",
+              "--passwd", "a", "-PassThruPassword", "a"],
+             ["--passcode", "***", "--pass-phrase", "***", "--pass-file", "***", "--smtp-pw",
+              "***", "--passwd", "***", "-PassThruPassword", "***"]),
             (["-PassThru", "kept", "/passive", "kept", "--bypass-list", "kept", "--stopwatch",
-              "kept", "-PassThru:$true", "--pass-file", "kept"],
+              "kept", "-PassThru:$true", "--passthrough", "kept"],
              ["-PassThru", "kept", "/passive", "kept", "--bypass-list", "kept", "--stopwatch",
-              "kept", "-PassThru:$true", "--pass-file", "kept"]),
-            (["DB_PASS=abc", "dbPass=abc", "--smtp-pw", "abc", "MYPASSWORD=abc", "--passwd",
-              "abc"],
-             ["DB_PASS=***", "dbPass=***", "--smtp-pw", "***", "MYPASSWORD=***", "--passwd",
-              "***"]),
+              "kept", "-PassThru:$true", "--passthrough", "kept"]),
         ]
         for words, want in cases:
             with self.subTest(words[0]), mock.patch.object(console, "KEEP_WORDS", 99):
@@ -560,6 +598,19 @@ class RedactTest(unittest.TestCase):
         with mock.patch.object(console, "_mask", side_effect=ValueError("boom")):
             self.assertEqual(console.redact_command("prog --x"), console.MASK)
             self.assertEqual(console.redact_command(["prog"]), [console.MASK])
+
+    def test_long_hostile_words_are_masked_in_linear_time(self):
+        # each about 90k characters; a pattern that restarts inside a run (the JWT form on
+        # `eyJ` repeated took 8 s here) is quadratic, the masks all take well under 1 s
+        import time
+        words = ["eyJ" * 30000, 'x="' * 30000, "{a:" * 30000, "'a':" * 22000,
+                 "-" + "u" * 90000 + ":", "https://" + ":@" * 45000, "://" * 30000,
+                 "aB" * 45000 + "=x", "a!" * 45000, "$env:TOKEN = " * 7000]
+        for w in words:
+            with self.subTest(w[:12]):
+                start = time.perf_counter()
+                console._mask(["-u", w, "--token", w, w])
+                self.assertLess(time.perf_counter() - start, 3.0)
 
     def test_it_keeps_the_program_and_the_first_words_each_cut(self):
         path = "C:\\" + "d" * 200 + "\\probe.py"
