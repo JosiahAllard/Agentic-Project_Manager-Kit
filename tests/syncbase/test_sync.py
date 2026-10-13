@@ -127,6 +127,13 @@ class SyncCase(unittest.TestCase):
     def out(self, outcome):
         return '\n'.join(outcome.lines)
 
+    def kit_hint(self, name):
+        """The command a hint prints for kit tool `name`: this kit's own tools/<name>.py with
+        -C the linked checkout, both quoted in forward slashes (no repository holds a copy of
+        the kit's tools: decision 21 and step 15 in docs/multi-host-plan.md)."""
+        return 'python "%s/tools/%s.py" -C "%s"' % (KIT.replace('\\', '/'), name,
+                                                     self.git('rev-parse', '--show-toplevel'))
+
     def cli(self, *argv, cwd=None, env_model=None, env=None):
         """The entry point out of process; CLAUDE_AGENT_MODEL only when `env_model` sets it."""
         child = env or fixture_env()
@@ -438,7 +445,7 @@ class Refusals(SyncCase):
         text = self.out(done)
         self.assertEqual(done.code, syncbase.FAILED, text)
         self.assertIn('uncommitted changes', text)
-        self.assertIn('python tools/commit.py', text)
+        self.assertIn('Commit work in progress first (%s ...);' % self.kit_hint('commit'), text)
         self.assertIn(' M docs/rows.md', text)
         self.assertFalse(self.merged(target))
 
@@ -575,7 +582,7 @@ class Regrowth(SyncCase):
     def test_a_clean_merge_says_no_regrowth_and_names_the_gate(self):
         done = self.sync(self.stage_clean())
         self.assertEqual(done.code, syncbase.OK, self.out(done))
-        self.assertRegex(self.out(done), r'no regrowth\. Now rerun your gate: python "[^"]*/tools/gate\.py" -C "[^"]+"')
+        self.assertIn('no regrowth. Now rerun your gate: %s' % self.kit_hint('gate'), self.out(done))
 
     def test_a_dead_size_reader_is_not_reported_clean(self):
         target = self.stage_clean()
@@ -663,19 +670,26 @@ class ConfiguredRemote(SyncCase):
 
 
 class ConfiguredToolsDir(SyncCase):
-    """`.kit.json` "repo".tools_dir spells the commands this prints."""
+    """`.kit.json` "repo".tools_dir does not spell the commands this prints: they name the kit's
+    own tool with -C the checkout, since no repository holds a copy of the kit's tools
+    (docs/multi-host-plan.md section 7 decision 21, "Tool stubs in repos"; step 15 "No stubs")."""
 
     CONFIG = {'repo': {'main_branch': 'master', 'tools_dir': 'devtools'}}
 
-    def test_the_gate_hint_names_the_tools_dir(self):
+    def test_the_gate_hint_names_the_kit_tool_not_the_tools_dir(self):
         done = self.sync(self.stage_clean())
-        self.assertEqual(done.code, syncbase.OK, self.out(done))
-        self.assertIn('python devtools/gate.py', self.out(done))
+        text = self.out(done)
+        self.assertEqual(done.code, syncbase.OK, text)
+        self.assertTrue(text.endswith('no regrowth. Now rerun your gate: %s' % self.kit_hint('gate')),
+                        text)
+        self.assertNotIn('devtools', text)
 
-    def test_the_dirty_tree_refusal_names_the_tools_dir(self):
+    def test_the_dirty_tree_refusal_names_the_kit_tool_not_the_tools_dir(self):
         target = self.stage_clean()
         self.write('docs/rows.md', 'dirty\n')
-        self.assertIn('python devtools/commit.py', self.out(self.sync(target)))
+        text = self.out(self.sync(target))
+        self.assertIn('Commit work in progress first (%s ...);' % self.kit_hint('commit'), text)
+        self.assertNotIn('devtools', text)
 
 
 class FakeTime(object):

@@ -28,6 +28,10 @@ KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 TOOL = os.path.join(KIT, 'tools', 'new_worktree.py')
 REFUSAL = new.REFUSAL
 LOCK_NAME = 'test-landing.lock'
+# the red-first command a `route` line names: the kit's own tool, quoted in forward slashes
+# (docs/multi-host-plan.md section 7 decision 21; step 15 "No stubs")
+REDFIRST = '`python "%s/tools/redfirst.py" -C <your worktree> --tests <test file>`' % (
+    KIT.replace('\\', '/'))
 MASTER_CONFIG = {'repo': {'main_branch': 'master'}, 'landing': {'lock_file': 'git:' + LOCK_NAME}}
 
 
@@ -1037,18 +1041,19 @@ class InFlightCommand(InFlightCase):
 
 class ALocalOnlyBaseNamesTheRoute(LandingCase):
     """`--base dev` with no pushed origin/dev is refused with the lock held or free; the refusal
-    ends with one `route` line naming tools/redfirst.py and saying a wait changes nothing."""
+    ends with one `route` line naming the kit's own tools/redfirst.py (REDFIRST) and saying a wait
+    changes nothing."""
 
     def routes(self, out):
         lines = self.printed(out, 'route')
         self.assertEqual(len(lines), 1, out)
         return lines[0]
 
-    def assert_route(self, out, tools='tools'):
+    def assert_route(self, out):
         line = self.routes(out)
         self.assertIn('dev has no pushed origin/dev', line)
         self.assertIn('with or without a landing', line)
-        self.assertIn('python %s/redfirst.py -C' % tools, line)
+        self.assertIn(REDFIRST, line)
         self.assertFalse(os.path.exists(self.slug_path('fresh')), out)
         self.assertFalse(new.branch_exists(self.repo, 'fix/fresh'), out)
         return line
@@ -1073,13 +1078,15 @@ class ALocalOnlyBaseNamesTheRoute(LandingCase):
         self.hold()
         self.assertEqual(self.routes(self.tool('fix/fresh', '--base', 'dev')[1]), free)
 
-    def test_the_route_spells_the_configured_tools_dir(self):
+    def test_the_route_names_the_kit_tool_not_the_configured_tools_dir(self):
+        # no repository holds a copy of the kit's tools, so "repo".tools_dir does not spell the
+        # route (docs/multi-host-plan.md section 7 decision 21; step 15 "No stubs")
         self.configure({'repo': {'main_branch': 'master', 'tools_dir': 'devtools'},
                         'landing': {'lock_file': 'git:' + LOCK_NAME}})
         self.make_dev()
         self.hold()
         out = self.tool('fix/fresh', '--base', 'dev')[1]
-        self.assert_route(out, tools='devtools')
+        self.assertNotIn('devtools', self.assert_route(out))
 
 
 class ALocalOnlyBaseUnderAnInFlightCommand(InFlightCase):
@@ -1092,7 +1099,7 @@ class ALocalOnlyBaseUnderAnInFlightCommand(InFlightCase):
         self.assertEqual(got.code, 1, out)
         self.assertIn('refused   a landing is in flight, but origin/dev did not resolve', out)
         self.assertEqual(len(self.printed(out, 'route')), 1, out)
-        self.assertIn('python tools/redfirst.py -C', out)
+        self.assertIn(REDFIRST, out)
 
 
 class NoRouteLineWhereItDoesNotApply(LandingCase):
