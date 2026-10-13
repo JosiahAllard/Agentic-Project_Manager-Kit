@@ -1,0 +1,302 @@
+"""No console window from any start in a kit process: a process-wide hook on CreateProcess.
+
+Why: Windows opens a console window for a console program only when its parent has NO console and
+the start makes no console choice of its own. A child of a process that has a console, shown or
+hidden, shares it and opens none. kitlib.proc.spawn and kitlib.proc.job cover the kit's own starts
+one call at a time (no_window_flags); a bare subprocess call, multiprocessing and the tests do not
+go through them. With Windows Terminal as the default terminal SW_HIDE does not help: the window
+shows anyway.
+
+The hook: install() wraps _winapi.CreateProcess, which subprocess.Popen and multiprocessing's
+spawn both call at call time. On the first start whose creationflags make no console choice
+(CREATE_NEW_CONSOLE, DETACHED_PROCESS or CREATE_NO_WINDOW), the wrapper calls
+ensure_windowless_console() once: a process with no console (pythonw, a scheduled task, a hook run
+by a windowed program) gets a console with no window, and every child after that shares it, so
+none opens a window. A process that has a console is left as it is. After that first start the
+wrapper costs one module-global check per start. When no console can be had, every start that
+makes no console choice gets CREATE_NO_WINDOW instead (what no_window_flags does).
+
+kitlib/__init__.py calls install() on `import kitlib`, so every kit process has it. Nothing here
+loads ctypes until the first such start.
+
+ensure_windowless_console(): AllocConsoleWithOptions with ALLOC_CONSOLE_MODE_NO_WINDOW where
+kernel32 exports it (measured 2026-10-13 on Windows 11 10.0.26300 under pythonw: hr 0, a new
+console, no Windows Terminal or OpenConsole process, the std handles unchanged, a bare child's
+GetConsoleWindow() 0). Else the fallback: a holder program started with CREATE_NO_WINDOW, so it
+has a console with no window; AttachConsole(holder), then the holder ends and the console stays
+with this process (measured the same day: attached after about 16 ms of ERROR_INVALID_HANDLE while
+the holder started, std handles unchanged, a bare child's GetConsoleWindow() 0). FORCE_FALLBACK
+makes ensure take the fallback where the export exists (the tests).
+
+Incident log: each time ensure gives a process a console it appends one JSON line (time, how, pid,
+exe, this process's argv, the child's command line, the parent's pid and exe) to LOG_NAME in
+the kit temp folder (kitlib.config.user.work_temp of the kit checkout; docs/test-tools.md "Temp
+folders"). LOG_PATH overrides that (the tests). Over LOG_MAX bytes the log is moved to
+`<log>.1` first. The log can fail in any way (a fenced test process, a bad machine config, a full
+disk): the start goes on.
+
+Ctrl+C: a process that gains a console here also gets that console's control events, and so does
+every child that shares it. A console Ctrl+C has no window to be typed into; only
+GenerateConsoleCtrlEvent from a process on the same console sends one (docs/daily-full.md "The
+schedule").
+
+Windows only: off Windows install() does nothing.
+"""
+import _thread
+import os
+import sys
+
+if os.name == 'nt':
+    import _winapi
+else:                                   # pragma: no cover - Windows only
+    _winapi = None
+
+CREATE_NEW_CONSOLE = 0x00000010
+DETACHED_PROCESS = 0x00000008
+CREATE_NO_WINDOW = 0x08000000
+CONSOLE_CHOICE = CREATE_NEW_CONSOLE | DETACHED_PROCESS | CREATE_NO_WINDOW
+
+ALLOC_CONSOLE_MODE_NO_WINDOW = 2        # ALLOC_CONSOLE_MODE
+ALLOC_CONSOLE_RESULT_NEW = 1            # ALLOC_CONSOLE_RESULT: 0 none, 1 new, 2 existing
+ALLOC_CONSOLE_RESULT_EXISTING = 2
+ERROR_INVALID_HANDLE = 6                # AttachConsole: the holder has no console yet
+HOLDER_WAIT_S = 5.0                     # how long the fallback waits for the holder's console
+
+MARK = '__kit_windowless__'             # set on the wrapper: install() is done in this process
+LOG_NAME = 'kit-console-incidents.log'
+LOG_MAX = 1 << 20
+
+# ensure_windowless_console's answers
+PRESENT = 'present'                     # the process had a console already
+ALLOCATED = 'alloc'                     # AllocConsoleWithOptions gave it one with no window
+ATTACHED = 'attach'                     # the fallback: attached to a holder's windowless console
+NONE = 'none'                           # no console could be had
+
+FORCE_FALLBACK = False                  # tests: ensure takes the holder path regardless
+LOG_PATH = None                         # tests: the incident log file; None: the kit temp folder
+
+_UNKNOWN, _DONE, _NO_WINDOW = 0, 1, 2
+_mode = _UNKNOWN                        # the wrapper's state; _DONE after the first resolve
+_lock = _thread.RLock()
+_original = None                        # the CreateProcess the wrapper delegates to
+_kernel32 = None
+
+
+def _k32():
+    """A private kernel32 binding, made on first use (ctypes loads here, never on import)."""
+    global _kernel32
+    if _kernel32 is None:
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL('kernel32', use_last_error=True)
+        k.GetConsoleProcessList.argtypes = (ctypes.POINTER(wintypes.DWORD), wintypes.DWORD)
+        k.GetConsoleProcessList.restype = wintypes.DWORD
+        k.AttachConsole.argtypes = (wintypes.DWORD,)
+        k.AttachConsole.restype = wintypes.BOOL
+        k.GetConsoleWindow.argtypes = ()
+        k.GetConsoleWindow.restype = ctypes.c_void_p
+        _kernel32 = k
+    return _kernel32
+
+
+def has_console():
+    """True when this process is attached to a console, with a window or without one.
+    GetConsoleProcessList, not GetConsoleWindow: a console made with CREATE_NO_WINDOW, or by
+    ensure_windowless_console, has a GetConsoleWindow() of 0 (kitlib/proc/job.py, measured
+    2026-10-10)."""
+    from ctypes import wintypes
+    one = (wintypes.DWORD * 1)()
+    return _k32().GetConsoleProcessList(one, 1) != 0
+
+
+def _alloc_no_window():
+    """AllocConsoleWithOptions(ALLOC_CONSOLE_MODE_NO_WINDOW): ALLOCATED (a new console),
+    PRESENT (one was there), NONE (refused), or None when kernel32 does not export it."""
+    import ctypes
+    from ctypes import wintypes
+    k = _k32()
+    try:
+        fn = k.AllocConsoleWithOptions
+    except AttributeError:
+        return None
+
+    class OPTIONS(ctypes.Structure):
+        _fields_ = [('mode', ctypes.c_int), ('useShowWindow', wintypes.BOOL),
+                    ('showWindow', wintypes.WORD)]
+    fn.argtypes = (ctypes.POINTER(OPTIONS), ctypes.POINTER(ctypes.c_int))
+    fn.restype = ctypes.c_long
+    result = ctypes.c_int(-1)
+    hr = fn(ctypes.byref(OPTIONS(ALLOC_CONSOLE_MODE_NO_WINDOW, 0, 0)), ctypes.byref(result))
+    if hr < 0:
+        return NONE
+    if result.value == ALLOC_CONSOLE_RESULT_NEW:
+        return ALLOCATED
+    if result.value == ALLOC_CONSOLE_RESULT_EXISTING:
+        return PRESENT
+    return NONE
+
+
+def _holder_argv():
+    """A console program that waits for its stdin to close: cmd.exe (ComSpec), else the console
+    python beside this interpreter; None when there is neither."""
+    comspec = os.environ.get('ComSpec')
+    if comspec and os.path.isfile(comspec):
+        return [comspec, '/d', '/q', '/c', 'set /p _=']
+    py = os.path.join(os.path.dirname(sys.executable), 'python.exe')
+    if os.path.isfile(py):
+        return [py, '-I', '-S', '-c', 'import sys; sys.stdin.read()']
+    return None
+
+
+def _attach_holder(wait_s=HOLDER_WAIT_S):
+    """The fallback: ATTACHED when this process is now on a holder's windowless console, else
+    NONE. The holder is this process's own child; it ends when its stdin closes."""
+    import ctypes
+    import subprocess
+    import time
+    argv = _holder_argv()
+    if argv is None:
+        return NONE
+    holder = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
+    k = _k32()
+    attached = False
+    try:
+        end = time.monotonic() + wait_s
+        while True:
+            if k.AttachConsole(holder.pid):
+                attached = True
+                break
+            if (ctypes.get_last_error() != ERROR_INVALID_HANDLE or holder.poll() is not None
+                    or time.monotonic() > end):
+                break
+            time.sleep(0.005)
+    finally:
+        try:
+            holder.stdin.close()
+            holder.wait(wait_s)
+        except Exception:               # noqa: BLE001 - our own child: end it by its handle
+            holder.kill()
+            holder.wait()
+    return ATTACHED if attached else NONE
+
+
+def ensure_windowless_console(fallback=None, child=None):
+    """Give this process a console with no window unless it has one. PRESENT (it had one: nothing
+    done), ALLOCATED (AllocConsoleWithOptions), ATTACHED (the holder fallback) or NONE (no console
+    could be had). `fallback` True takes the holder path even where AllocConsoleWithOptions is
+    exported (None: FORCE_FALLBACK). `child` (the command line about to start) goes in the
+    incident log. Idempotent: a second call answers PRESENT. Windows only."""
+    with _lock:
+        if has_console():
+            return PRESENT
+        how = None
+        if not (FORCE_FALLBACK if fallback is None else fallback):
+            how = _alloc_no_window()
+        if how is None or how == NONE:
+            how = _attach_holder()
+        if how in (ALLOCATED, ATTACHED):
+            _log_incident(how, child)
+        return how
+
+
+def _create_process(app, cmd, proc_attrs, thread_attrs, inherit, flags, env, cwd, startup):
+    """_winapi.CreateProcess, with this process given a windowless console before its first
+    child that makes no console choice (install)."""
+    if _mode != _DONE and not flags & CONSOLE_CHOICE:
+        flags = flags | CREATE_NO_WINDOW if _mode == _NO_WINDOW else _resolve(flags, app, cmd)
+    return _original(app, cmd, proc_attrs, thread_attrs, inherit, flags, env, cwd, startup)
+
+
+setattr(_create_process, MARK, True)
+
+
+def _resolve(flags, app, cmd):
+    """The first start with no console choice: ensure once, then `flags` (this process has a
+    console now, which the child shares) or `flags` | CREATE_NO_WINDOW (it has none)."""
+    global _mode
+    with _lock:
+        if _mode == _UNKNOWN:
+            try:
+                how = ensure_windowless_console(child=cmd if cmd is not None else app)
+            except Exception:           # noqa: BLE001 - never stop the start
+                how = NONE
+            _mode = _NO_WINDOW if how == NONE else _DONE
+    return flags | CREATE_NO_WINDOW if _mode == _NO_WINDOW else flags
+
+
+def installed():
+    """True when _winapi.CreateProcess is a kit wrapper (this module's, or another kit copy's)."""
+    return _winapi is not None and bool(getattr(_winapi.CreateProcess, MARK, False))
+
+
+def install():
+    """Wrap _winapi.CreateProcess once per process (idempotent: a wrapper already there, from
+    this module or another kit copy's, is kept). Off Windows nothing."""
+    global _original
+    if _winapi is None:
+        return False
+    with _lock:
+        if installed():
+            return False
+        _original = _winapi.CreateProcess
+        _winapi.CreateProcess = _create_process
+    return True
+
+
+def log_path():
+    """The incident log file: LOG_PATH, else LOG_NAME in the kit temp folder of this kit
+    checkout (kitlib.config.user.work_temp). Raises when that cannot be worked out (a fenced test
+    process: HomeFenced; a bad machine config: ConfigError)."""
+    if LOG_PATH:
+        return LOG_PATH
+    from ..config import user
+    kit = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(user.work_temp(kit), LOG_NAME)
+
+
+def _parent():
+    """(parent pid, parent exe name) from one Toolhelp snapshot, or (None, None)."""
+    from . import process
+    rows = process.snapshot()
+    me = os.getpid()
+    ppid = next((pp for pid, pp, _n in rows if pid == me), None)
+    exe = next((n for pid, _pp, n in rows if pid == ppid), None)
+    return ppid, exe
+
+
+def _incident(how, child):
+    """The incident line's fields."""
+    import time
+    try:
+        ppid, pexe = _parent()
+    except Exception:                   # noqa: BLE001 - the line goes without them
+        ppid, pexe = None, None
+    if isinstance(child, (bytes, bytearray)):
+        child = os.fsdecode(child)
+    return {'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'how': how,
+            'pid': os.getpid(), 'exe': sys.executable,
+            'argv': list(getattr(sys, 'orig_argv', sys.argv)), 'child': child,
+            'parent_pid': ppid, 'parent_exe': pexe}
+
+
+def _log_incident(how, child):
+    """Append one line to the incident log; any failure is swallowed (the start goes on)."""
+    try:
+        import json
+        from ..config import user
+        try:
+            path = log_path()
+        except user.HomeFenced:
+            return
+        line = json.dumps(_incident(how, child)) + '\n'
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            if os.path.getsize(path) > LOG_MAX:
+                os.replace(path, path + '.1')
+        except OSError:
+            pass
+        with open(path, 'a', encoding='utf-8') as fh:
+            fh.write(line)
+    except Exception:                   # noqa: BLE001 - a log that fails never stops the start
+        pass
