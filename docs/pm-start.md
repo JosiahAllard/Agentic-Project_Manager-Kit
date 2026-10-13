@@ -36,8 +36,9 @@ each one line:
   (<exception class>)`.
 - The `hub` key is there and cannot be used (the machine config check refuses it, or the hub
   settings do): `hub: the hub key of the machine config cannot be used: <the configuration error's
-  own text>`, on one line and cut at `HUB_ERROR_MAX` (400) characters. The text holds key names and
-  paths, and echoes a rejected value; the `hub` key holds no token.
+  own text>`, on one line and cut at `HUB_ERROR_MAX` (400) characters. The text names the key and
+  the rule it broke, never the rejected value (`_without_values` strips the `, not '<value>'`
+  part); the `hub` key holds no token.
 - A machine config that cannot be read at all, or whose check fails with no `hub` key in it: `hub:
   the machine config could not be read (<exception class>)`.
 No token or server message reaches a line. The test home fence is not caught here
