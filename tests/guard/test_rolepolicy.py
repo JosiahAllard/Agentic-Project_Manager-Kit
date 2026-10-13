@@ -325,6 +325,13 @@ class LockVerbs(Base):
                 d = self.denied(self.shell('%s %s' % (LOCK, args), 'lander'), 'role-lock')
                 self.assertIn('(status, run; never --force)', d.reason)
 
+    def test_a_force_before_any_verb_is_named_without_a_leading_space(self):
+        from kitlib.guard import commands as cm, shell as sh
+        parsed = cm.read(LOCK + ' --force status', sh.BASH, self.w.wt)
+        self.assertEqual(rolepolicy.lock_verb(parsed, 'read')[0], '(no verb) --force')
+        d = self.denied(self.shell(LOCK + ' --force status', 'reviewer'), 'role-lock')
+        self.assertIn('machine_lock.py (no verb) --force is not', d.reason)
+
     def test_only_the_verbs_the_lock_cli_has_are_named(self):
         """tools/machine_lock.py's own parser: a verb it does not have (stats, book, unbook) is
         nobody's right."""
@@ -429,6 +436,17 @@ class RoleFiles(Base):
         self.denied(self.edit(os.path.join(self.w.wt, 'a.py'), 'test-runner'), 'role-edit')
         self.denied(self.shell('python3 -i', 'worker'), 'role-shell')
         self.allowed(self.edit(os.path.join(self.w.wt, 'a.py'), 'worker'))
+
+    def test_a_roles_key_under_the_old_name_holds_the_renamed_role(self):
+        """.kit.json `roles.opus-worker.mode` holds the senior-worker agent (kitlib.content.ALIASES),
+        over its role file's mode."""
+        w = W.World(kit=kit({'opus-worker': 'write'}))
+        self.addCleanup(w.cleanup)
+        write_roles(w.kit_dir, {'senior-worker': 'read'})
+        for kind in ('senior-worker', 'opus-worker'):
+            with self.subTest(kind):
+                a = Action('edit', tool='Write', path=os.path.join(w.wt, 'a.py'), cwd=w.wt, agent='a1', agent_role=kind)
+                self.assertEqual(rolepolicy.mode(a, w.ctx())[1], 'write')
 
     def test_the_roles_table_wins_over_the_role_file(self):
         a = self.edit(os.path.join(self.w.wt, 'a.py'), 'reviewer')

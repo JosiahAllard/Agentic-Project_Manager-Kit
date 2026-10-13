@@ -4,10 +4,10 @@ in it.
 
 Off unless the repository opts in: the main checkout's .kit.json `guard.role_policy` is true. With it
 off no role is held, whatever mode a role file or the roles table names, so every call is judged
-exactly as before. With it on, a role is held to its mode: `roles.<role>.mode` in that .kit.json,
-else the `mode` of its role file, `<kit>/content/roles/<role>.md` under the kit root the guard runs
-from (Ctx.kit; kitlib.content.role_mode, which reads an old name such as opus-worker as its new
-one). A role with neither, or whose role files are missing or unreadable, is judged as before.
+exactly as before. With it on, a role is held to its mode: `roles.<role>.mode` in that .kit.json
+(a key under the role's old or new name too, kitlib.content.names_of), else the `mode` of its
+role file, `<kit>/content/roles/<role>.md` under the kit root the guard runs from (Ctx.kit;
+kitlib.content.role_mode, which reads an old name such as opus-worker as its new one). A role with neither, or whose role files are missing or unreadable, is judged as before.
 The role is the subagent's (config.policy.role_name: Action.agent_role when the roles table or a
 role file names it), else the main session's launcher mark when one of them names it, else `main`.
 The owner's own session (nothing marks it) is never held, and its calls read no config here.
@@ -134,7 +134,8 @@ def mode(action, ctx):
     table = kconfig.roles(cfg)
     files = kcontent.role_modes(ctx.kit)
     role = role_of(action, ctx, set(table) | set(files) | set(kcontent.ALIASES))
-    m = table.get(role, {}).get('mode') or kcontent.role_mode(role, ctx.kit)
+    named = (table.get(n, {}).get('mode') for n in kcontent.names_of(role))   # an old or new roles key
+    m = next((x for x in named if x), None) or kcontent.role_mode(role, ctx.kit)
     return role, (m if m in MODES else None)
 
 
@@ -411,7 +412,7 @@ def lock_verb(parsed, m):
             if t.startswith('-'):
                 key = t.split('=', 1)[0]
                 if len(key) > 2 and key.startswith('--') and key not in REAL_NOT_FORCE and '--force'.startswith(key):
-                    return '%s %s' % (' '.join(said[:1]), t), allowed
+                    return '%s %s' % (said[0] if said else '(no verb)', t), allowed
                 k += 2 if t in rules.LOCK_VALUE_OPTS else 1
                 continue
             said.append(t)

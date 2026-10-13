@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from kitlib.host import registry
-from tests.host.test_registry import kit_hosts
+from tests.host.test_registry import kit_hosts, second
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -80,6 +80,24 @@ class HostFlag(unittest.TestCase):
         self.assertEqual(stop.exception.code, 2)
         self.assertIn('unknown host', err.getvalue())
 
+
+    def test_sync_base_names_the_chosen_hosts_model_variable(self):
+        """A missing --model names the --host's own fallback variable, not the default host's."""
+        folder = tempfile.mkdtemp(prefix='hosts-')
+        self.addCleanup(shutil.rmtree, folder, True)
+        path = os.path.join(folder, 'hosts.json')
+        data = second(kit_hosts())
+        data['other']['profile']['attribution']['model_env'] = 'OTHER_AGENT_MODEL'
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as stop, \
+                mock.patch.object(registry, 'PATH', path), \
+                mock.patch.dict(os.environ, {registry.ENV: '', 'OTHER_AGENT_MODEL': ''}):
+            tool('sync_base').main(['abc', '--host', 'other'])
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn('OTHER_AGENT_MODEL', err.getvalue())
+        self.assertNotIn('CLAUDE_AGENT_MODEL', err.getvalue())
 
 if __name__ == '__main__':
     unittest.main()

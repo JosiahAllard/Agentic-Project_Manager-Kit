@@ -92,6 +92,19 @@ class MovedHooks(unittest.TestCase):
             settings.repoint_moved(data, self.ctx())
         self.assertIn('gone.py', str(caught.exception))
 
+    def test_the_moved_name_keeps_its_case(self):
+        """norm folds case on Windows; the re-pointed path keeps the name as written (on a
+        case-sensitive disk only that spelling exists)."""
+        for where in (self.new, self.old):
+            T.touch(where('Sub/Hook.py'))
+        fold = lambda path: os.path.normpath(os.path.abspath(path)).lower()    # noqa: E731
+        data = {'hooks': {'SessionStart': [{'hooks': [
+            {'type': 'command', 'command': T.PYW, 'args': [self.old('Sub/Hook.py')]}]}]}}
+        with mock.patch.object(settings, 'norm', fold), mock.patch.object(common, 'norm', fold):
+            did = settings.repoint_moved(data, self.ctx())
+        self.assertEqual(len(did), 1, did)
+        self.assertEqual(data['hooks']['SessionStart'][0]['hooks'][0]['args'], [T.fwd(self.new('Sub/Hook.py'))])
+
     def test_switch_mode_repoints_the_guard_and_adds_no_second_entry(self):
         path = os.path.join(self.acct, 'settings.json')
         self.settings_with(path, self.guard_hook(self.old('guard.py')))
