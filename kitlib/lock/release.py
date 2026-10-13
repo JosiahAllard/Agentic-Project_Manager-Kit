@@ -44,7 +44,7 @@ LOCK_PATHS = ("tools/machine_lock.py", "kitlib/__init__.py", "kitlib/lock/", "ki
               # is the plugin name in kitlib/lockmcp/__init__.py
               "kitlib/agentname.py", "kitlib/lockmcp/__init__.py",
               # the agent process images and session variable come from the host registry
-              "kitlib/host/", "kitlib/kitroot.py", "hosts.json")
+              "kitlib/host/", "hosts.json")
 
 MISSING = "store folder (missing)"
 

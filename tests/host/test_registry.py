@@ -60,6 +60,30 @@ class KitRegistry(unittest.TestCase):
                 self.assertTrue(os.path.isdir(os.path.join(ROOT, h.shell)), h.shell)
 
 
+class KitPath(Case):
+    """hosts.json is found beside the real kitlib when the spelled one has none: a machine's
+    installed lock tool runs kitlib through a junction (~/.claude/tools/kitlib)."""
+
+    def test_a_linked_kitlib_finds_the_kits_hosts_json(self):
+        tools = os.path.join(self.dir, 'tools')
+        os.makedirs(tools)
+        link = os.path.join(tools, 'kitlib')
+        try:
+            os.symlink(os.path.join(ROOT, 'kitlib'), link, target_is_directory=True)
+        except (OSError, NotImplementedError) as e:
+            self.skipTest('no directory link here: %s' % e)
+        here = os.path.join(link, 'host', 'registry.py')
+        self.assertEqual(os.path.normcase(registry.kit_path(here)),
+                         os.path.normcase(os.path.join(os.path.realpath(ROOT), 'hosts.json')))
+        self.put(kit_hosts())                             # one beside the link wins
+        os.replace(self.path, os.path.join(tools, 'hosts.json'))
+        self.assertEqual(registry.kit_path(here), os.path.join(tools, 'hosts.json'))
+
+    def test_none_anywhere_is_the_spelled_path(self):
+        here = os.path.join(self.dir, 'kitlib', 'host', 'registry.py')
+        self.assertEqual(registry.kit_path(here), os.path.join(self.dir, 'hosts.json'))
+
+
 class Validation(Case):
     def refused(self, data=None, raw=None):
         with self.assertRaises(registry.RegistryError):
