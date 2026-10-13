@@ -26,8 +26,8 @@ def tracked_fixture():
              'kitlib/__init__.py': b'',
              'tools/kit_release.py': (ROOT / 'tools/kit_release.py').read_bytes(),
              'tools/operation.py': b'pass\n',
-             'mcp/bridge_frontend.py': b'pass\n',
-             'tools/bridge_service.py': b'pass\n',
+             'optional/bridge/mcp_frontend.py': b'pass\n',
+             'optional/bridge/tools/bridge_service.py': b'pass\n',
              'hosts/claude/shell/skills/shared/SKILL.md': b'Claude entry\n',
              'codex/skills/shared/SKILL.md': b'Codex entry\n',
              'templates/example/.claude/skills/check/SKILL.md': b'template entry\n',
@@ -228,8 +228,8 @@ class Release(unittest.TestCase):
         self.assertEqual(binding['python_args'], ['-I', '-B'])
         self.assertEqual(binding['env'], {'PM_KIT_ROOT': str(self.root),
                                          'PM_KIT_RELEASE_ID': result['identity']})
-        self.assertEqual(binding['front'], str(self.root / 'mcp/bridge_frontend.py'))
-        self.assertEqual(binding['service'], str(self.root / 'tools/bridge_service.py'))
+        self.assertEqual(binding['front'], str(self.root / 'optional/bridge/mcp_frontend.py'))
+        self.assertEqual(binding['service'], str(self.root / 'optional/bridge/tools/bridge_service.py'))
         self.assertFalse(binding['ready'])
         with self.assertRaises(ValueError):
             R.launch_bindings(self.root, result['identity'], 'python')
