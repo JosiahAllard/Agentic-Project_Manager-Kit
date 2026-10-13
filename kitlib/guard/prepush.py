@@ -31,7 +31,9 @@ branch's committed .kit.json: the first of refs/remotes/<remote>/HEAD, <remote>/
 edit cannot switch the check off; no such ref means the defaults. A .kit.json that does not load
 refuses the push (fail closed). A base that sets no main branch (no .kit.json at all among them)
 reads it from the repository (kitlib.git.defaults: <remote>/HEAD, then main or master), so the
-delete and fast-forward rules guard the real main branch (docs/kit-json.md "With no file").
+delete and fast-forward rules guard the real main branch (docs/kit-json.md "With no file"), and
+`main` as well (Config.guarded_mains): <remote>/HEAD is local, so repointing it never takes the
+protection off `main`.
 """
 import hashlib
 import os
@@ -46,6 +48,7 @@ from kitlib.git import repo as gitrepo
 from kitlib.guard import ownercommits
 
 ZERO = '0' * 40
+FIXED_MAIN = kschema.SECTIONS['repo']['main_branch'].default
 
 
 # ---------------------------------------------------------------- PM data branch (leak stage)
@@ -321,12 +324,14 @@ def _base_rev(root, remote_sha, remote):
     return None
 
 
-def _default_main(root, remote):
-    """The main branch of a repository with no base commit: read from its git files with the
-    remote git named (an URL names none: the default remote's)."""
+def _default_mains(root, remote):
+    """The branches held as main in a repository with no base commit: the main branch read from
+    its git files with the remote git named (an URL names none: the default remote's), and
+    `main` (kconfig.Config.guarded_mains)."""
     name = remote if remote and not refs.bad_rev(remote) and '://' not in remote and ':' not in remote \
         else kschema.SECTIONS['repo']['remote'].default
-    return gitdefaults.main_branch(root, name)
+    main = gitdefaults.main_branch(root, name)
+    return [main] if main == FIXED_MAIN else [main, FIXED_MAIN]
 
 
 def _cfg(root, remote_sha, remote):
@@ -404,8 +409,9 @@ def check(root, lines, gate_ok=None, remote='origin', url=None):
             cfg = _cfg(root, remote_sha, remote)
         except kconfig.ConfigError as e:
             return False, ('pre-push: refused, .kit.json does not load (%s). Fix it, then push again.' % e)
-        main = _default_main(root, remote) if cfg is None else cfg.main_branch
-        if remote_ref != 'refs/heads/' + main:
+        mains = _default_mains(root, remote) if cfg is None else cfg.guarded_mains()
+        main = remote_ref[len('refs/heads/'):]
+        if main not in mains:
             continue
         if not local_sha.strip('0'):
             return False, 'pre-push: refused, this push deletes %s.' % main

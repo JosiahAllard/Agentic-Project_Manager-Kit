@@ -46,12 +46,15 @@ class NoKitJson(unittest.TestCase):
 
     def test_a_plain_push_is_allowed(self):
         for cmd in ('git push origin main', 'git push origin kit/wt', 'git push --force origin kit/wt',
-                    'git push --no-verify origin main', 'git push origin $BRANCH'):
+                    'git push --no-verify origin main', 'git push $REMOTE main'):
             with self.subTest(cmd):
                 self.assertIsNone(self.decide(cmd), cmd)
 
     def test_a_refspec_that_may_force_and_is_not_literal_is_refused(self):
-        for cmd in ('git push --force origin $BRANCH', 'git push origin "+$BRANCH"'):
+        # a computed refspec may be `+<src>:main` or `:main`; a computed remote with --no-verify
+        # skips the pre-push hook that would judge it
+        for cmd in ('git push --force origin $BRANCH', 'git push origin "+$BRANCH"', 'git push origin $BRANCH',
+                    'git push origin "HEAD:$B"', 'git push --no-verify $REMOTE main'):
             with self.subTest(cmd):
                 d = self.decide(cmd)
                 self.assertEqual(d and d.rule, 'git-push-main', d and d.reason)
@@ -62,7 +65,21 @@ class NoKitJson(unittest.TestCase):
         d = self.decide('git push --force origin trunk')
         self.assertEqual(d and d.rule, 'git-push-main', d and d.reason)
         self.assertIn('to origin/trunk', d.reason)
-        self.assertIsNone(self.decide('git push --force origin main'))
+        self.assertIsNone(self.decide('git push --force origin kit/wt'))
+
+    def test_a_repointed_origin_head_never_frees_main(self):
+        # <remote>/HEAD is local (`git remote set-head origin x`): main stays guarded with it
+        self.head('kit/wt')
+        for cmd in ('git push --force origin HEAD:main', 'git push origin :main', 'git push --force origin kit/wt'):
+            with self.subTest(cmd):
+                d = self.decide(cmd, sub=True)
+                self.assertEqual(d and d.rule, 'git-push-main', d and d.reason)
+
+    def test_a_head_naming_an_option_is_not_read(self):
+        self.head('-f')
+        d = self.decide('git push --force origin main')
+        self.assertEqual(d and d.rule, 'git-push-main', d and d.reason)
+        self.assertIn('to origin/main', d.reason)
 
     def test_a_file_without_push_block_still_refuses_a_forced_push(self):
         with open(os.path.join(self.w.main, '.kit.json'), 'w', encoding='utf-8') as f:

@@ -2779,12 +2779,15 @@ def git_push(event, ctx, gc, role):
     if not gated and isinstance(cfg, DataBranch):
         return None
     main = cfg.main_branch
+    mains = _guarded_mains(cfg)
     short, longs, pos = _opts('push', gc.rest)
     delete = 'd' in short or 'delete' in longs
     force = 'f' in short or bool({'force', 'force-with-lease', 'force-if-includes', 'mirror'} & longs)
     no_verify = 'no-verify' in longs
     dyn = [w for w in pos if w.dyn]
-    if dyn and (gated or delete or force or any(w.text.lstrip('"\'').startswith('+') for w in dyn)):
+    # A computed refspec may be `+<src>:main` or `:main`, so with no push_block too it is refused;
+    # a computed remote alone is, only with a flag that forces, deletes or skips the hook.
+    if dyn and (gated or delete or force or no_verify or any(w.dyn for w in pos[1:])):
         remote = pos[0].text if pos and not pos[0].dyn else cfg.remote
         return refuse('git-push-main', role, '`git push %s` has a refspec that is not literal, so the guard cannot '
                       'tell whether it %s %s. Name the refs literally:'
@@ -2796,7 +2799,7 @@ def git_push(event, ctx, gc, role):
     branch, _why = ctx.git.current_branch(gc.dir)
     targets = []
     if every:
-        targets.append(('refs/heads/' + main, main, False))
+        targets.extend(('refs/heads/' + m, m, False) for m in mains)
     if not specs and not every:
         if branch:
             targets.append((branch, branch, False))
@@ -2810,8 +2813,9 @@ def git_push(event, ctx, gc, role):
             src, dst = '', dst or src
         targets.append((src, _branch_of(dst or ''), plus))
     for src, dst, plus in targets:
-        if dst != main:
+        if dst not in mains:
             continue
+        main = dst
         what = '`git push %s` to %s/%s' % (' '.join(w.text for w in gc.rest), remote, main)
         if not src:
             return refuse('git-push-main', role, '%s deletes %s; main is never deleted. To see where it is:' %
@@ -2839,6 +2843,14 @@ def git_push(event, ctx, gc, role):
 
 
 LAND_HOW = 'Land it with the gate, which records the pass and pushes:'
+
+
+def _guarded_mains(cfg):
+    """The branches git_push holds as main (Config.guarded_mains); the PM data worktree's, and a
+    test's stand-in config without the method, just main_branch."""
+    if isinstance(cfg, DataBranch) or not hasattr(cfg, 'guarded_mains'):
+        return [cfg.main_branch]
+    return cfg.guarded_mains()
 
 
 def landing_command(ctx, gc, cfg, remote, branch):

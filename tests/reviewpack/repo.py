@@ -15,7 +15,7 @@ from unittest import mock
 
 from kitlib import reviewpack
 from tests.gitfixture import EMAIL, TempRepo, fixture_env
-from tests.home import temp_home
+from tests.home import no_machine_owner
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(KIT, 'tools'))
@@ -44,8 +44,8 @@ class PackCase(unittest.TestCase):
         env = mock.patch.dict(os.environ, fixture_env(), clear=True)
         env.start()
         self.addCleanup(env.stop)
-        # no owner email in .kit.json: the owner rules read the machine config, so a temp home
-        temp_home(self)
+        # no owner email in .kit.json: the owner rules read the machine config's, here none
+        no_machine_owner(self)
         self.r = TempRepo('main', prepare=self._prepare_base,
                           prepare_key=('reviewpack.PackCase', json.dumps(self.CONFIG, sort_keys=True)))
         self.addCleanup(self.r.cleanup)

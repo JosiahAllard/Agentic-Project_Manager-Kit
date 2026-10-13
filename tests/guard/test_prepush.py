@@ -416,7 +416,11 @@ class CheckTest(PrePushCase):
         ok, msg = self.check('(delete) %s refs/heads/trunk %s' % ('0' * 40, sha))
         self.assertFalse(ok)
         self.assertIn('this push deletes trunk', msg)
-        self.assertEqual(self.check('(delete) %s refs/heads/main %s' % ('0' * 40, sha)), (True, None))
+        # origin/HEAD is local, so a session that repoints it never frees main (Config.guarded_mains)
+        ok, msg = self.check('(delete) %s refs/heads/main %s' % ('0' * 40, sha))
+        self.assertFalse(ok)
+        self.assertIn('this push deletes main', msg)
+        self.assertEqual(self.check('(delete) %s refs/heads/other %s' % ('0' * 40, sha)), (True, None))
 
     def test_tags_and_other_lines_pass(self):
         lines = ['refs/tags/v1 %s refs/tags/v1 %s' % ('1' * 40, '0' * 40), 'garbage']

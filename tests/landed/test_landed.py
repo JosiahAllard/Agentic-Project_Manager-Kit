@@ -425,6 +425,18 @@ class TheDefaultLogDirIsTheGates(Fixture):
         self.assertEqual(self.look('feat/y')[0], landed.FAILED)
         self.assertEqual(self.look('feat/y', root=wt)[0], landed.FAILED)
 
+    def test_logs_under_the_folder_name_are_still_read(self):
+        """Before the name was read from the remote's URL, a gate with no "repo".name logged under
+        its checkout's folder name: those logs are read too."""
+        self.git('switch', '-q', self.MAIN)
+        wt = os.path.realpath(self.fx.worktree('wt', branch='feat/y'))
+        self.commit('y.txt', 'y work', cwd=wt)
+        self.log('feat-y/1/gate.log', 'GATE FAILED: x\n', base=os.path.join(self.temp, 'wt-gate'))
+        self.assertEqual(self.look('feat/y')[0], landed.FAILED)
+        self.log('topic/1/gate.log', 'GATE FAILED: x\n',
+                 base=os.path.join(self.temp, '%s-gate' % os.path.basename(self.root)))
+        self.assertEqual(self.look()[0], landed.FAILED)
+
 
 class TheLandingLock(Fixture):
 

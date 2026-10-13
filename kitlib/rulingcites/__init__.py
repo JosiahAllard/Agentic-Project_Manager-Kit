@@ -35,11 +35,12 @@ Outcome = collections.namedtuple('Outcome', 'code lines')
 
 def settings(root, cfg=None):
     """`(ledger repo names, skip globs)` from `.kit.json` "ruling_cites" (the schema has checked
-    its types): the name is "ruling_cites".repo, else "repo".name, else the folder, lower-cased;
+    its types): the name is "ruling_cites".repo, else a written "repo".name (never the one read
+    from the remote: kitlib.backlog.ledger.ledger_name), else the folder, lower-cased;
     skip unset is `<tools_dir>/test_*.py` and `<tools_dir>/fixtures/*`."""
     cfg = cfg if cfg is not None else load_config(root)
     sec = cfg.section(SECTION)
-    name = sec.get('repo') or cfg.repo.get('name') or os.path.basename(os.path.normpath(root))
+    name = sec.get('repo') or cfg.written('repo', 'name') or os.path.basename(os.path.normpath(root))
     skip = sec.get('skip')
     if skip is None:
         tools = cfg.tools_dir.replace('\\', '/').strip('/')

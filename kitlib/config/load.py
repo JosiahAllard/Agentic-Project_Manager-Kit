@@ -32,6 +32,7 @@ from . import user as kuser
 from .types import ConfigError, check, is_note, parse_json
 
 CONFIG_NAME = '.kit.json'
+FIXED_MAIN = schema.SECTIONS['repo']['main_branch'].default   # guarded_mains
 KIT_SECTIONS = ('repo', 'owner', 'hook', 'heavy', 'roles')
 PLACEHOLDER = re.compile(r'\{([A-Za-z_]\w*)\}')
 PLACEHOLDERS = ('python', 'root', 'base', 'here', 'tools')    # gate.py's substitution mapping
@@ -124,13 +125,15 @@ class Config(object):
     False only when the reader answered that no `.kit.json` exists (a read that failed raised
     ConfigError instead), so it is the same read the sections came from. `home` is the home
     folder whose machine config gives the owner email when `owner.email` is unset (None: the
-    user's)."""
+    user's); `machine`, when given, is a callable returning that machine config already read
+    (the guard's Ctx.user, so a hook reads it once), used instead of reading it again."""
 
-    def __init__(self, root, where, raw, files, found=True, home=None):
+    def __init__(self, root, where, raw, files, found=True, home=None, machine=None):
         self.root = root
         self.where = where
         self.found = found
         self.home = home
+        self._machine = machine
         self._raw = raw          # name -> dict as written (absent sections are {})
         self._files = files      # name -> repo-relative file it came from, or None (inline/absent)
         self._derived = {}       # repo.main_branch, repo.name, the machine owner email, each read once
@@ -167,6 +170,12 @@ class Config(object):
         """The machine config's owner_email, or None; None too when the machine config cannot
         be read (the owner rules then prove nothing: fail closed)."""
         def read():
+            if self._machine is not None:
+                m = self._machine() or {}
+                if m.get('error'):              # Ctx.user's tolerant read of a broken config
+                    return None
+                value = m.get('owner_email')
+                return value.strip().lower() if isinstance(value, str) and value.strip() else None
             try:
                 return kuser.owner_email(self.home)
             except ConfigError:
@@ -189,6 +198,16 @@ class Config(object):
     @property
     def main_branch(self):
         return self.repo['main_branch']
+
+    def guarded_mains(self):
+        """The branches the push rules (guard, pre-push) hold as main: main_branch, and, while
+        `.kit.json` writes no main_branch, `main` too, the fixed default before it was read from
+        the repository: `<remote>/HEAD` is local and any session can repoint it, so reading it
+        never takes the protection off `main`."""
+        main = self.main_branch
+        if self.written('repo', 'main_branch') is None and main != FIXED_MAIN:
+            return [main, FIXED_MAIN]
+        return [main]
 
     @property
     def remote(self):
@@ -223,7 +242,7 @@ class Config(object):
         return {'module': h['module'], 'options': copy.deepcopy(h.get('options') or {})}
 
 
-def _build(root, where, reader, home=None):
+def _build(root, where, reader, home=None, machine=None):
     text = reader(None)
     top = {} if text is None else _parse(text, where)
     errs = []
@@ -275,19 +294,20 @@ def _build(root, where, reader, home=None):
                         % ', '.join(checks))
     if errs:
         raise ConfigError('%s: %s' % (where, '; '.join(errs)))
-    return Config(root, where, raw, files, found=text is not None, home=home)
+    return Config(root, where, raw, files, found=text is not None, home=home, machine=machine)
 
 
 def config_path(root):
     return os.path.join(root, CONFIG_NAME)
 
 
-def load(root, home=None):
+def load(root, home=None, machine=None):
     """The working tree's checked Config (a repository with no `.kit.json` is all defaults).
-    `home`: the home folder whose machine config gives an unset owner email (None: the user's)."""
+    `home`: the home folder whose machine config gives an unset owner email (None: the user's);
+    `machine`: that machine config already read (Config)."""
     path = config_path(root)
     return _build(root, path, lambda rel: _read_file(path if rel is None else os.path.join(root, rel)),
-                  home)
+                  home, machine)
 
 
 def load_at(root, rev, home=None):

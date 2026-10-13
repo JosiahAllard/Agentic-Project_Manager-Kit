@@ -17,6 +17,10 @@ Read from the git files, never by starting git, so a guard hook pays no process 
                              the common `.git`), else `root`'s own.
 
 Anything that cannot be read is "not there": the answer falls to the next rule, never an error.
+So is a `<remote>/HEAD` naming a branch that starts with `-` or `/` or holds `..`.
+
+`<remote>/HEAD` is local: any session can repoint it (`git remote set-head`). The push rules
+therefore guard `main` as well while `.kit.json` names no main branch (Config.guarded_mains).
 """
 import os
 import re
@@ -72,12 +76,10 @@ def _packed(common):
     return out
 
 
-def _has_ref(common, name, packed):
-    return os.path.isfile(os.path.join(common, *name.split('/'))) or (packed is not None and name in packed)
-
-
-def _remote_ok(remote):
-    return bool(remote) and bool(_NAME_RE.match(remote)) and '..' not in remote
+def _name_ok(name):
+    """A remote or branch name safe to join to a path and to pass to git: no leading `-` or `/`,
+    no `..`, none of the characters git refuses in a ref."""
+    return bool(name) and bool(_NAME_RE.match(name)) and '..' not in name and name[0] not in '-/'
 
 
 def _symref_head(common, remote, root):
@@ -93,7 +95,7 @@ def _symref_head(common, remote, root):
     if not target.startswith(prefix) or '\n' in target:
         return None
     branch = target[len(prefix):]
-    return branch if branch and branch != 'HEAD' else None
+    return branch if _name_ok(branch) and branch != 'HEAD' else None
 
 
 def main_branch_source(root, remote='origin'):
@@ -102,16 +104,20 @@ def main_branch_source(root, remote='origin'):
     common = common_dir(root)
     if common is None:
         return FALLBACK_MAIN, 'fallback'
-    if _remote_ok(remote):
+    if _name_ok(remote):
         head = _symref_head(common, remote, root)
         if head:
             return head, '%s/HEAD' % remote
-    packed = _packed(common)
+    packed = []                                  # packed-refs, read only when a loose ref is missing
     for name in (FALLBACK_MAIN, 'master'):
         candidates = ['refs/heads/' + name]
-        if _remote_ok(remote):
+        if _name_ok(remote):
             candidates.append('refs/remotes/%s/%s' % (remote, name))
-        if any(_has_ref(common, c, packed) for c in candidates):
+        if any(os.path.isfile(os.path.join(common, *c.split('/'))) for c in candidates):
+            return name, 'exists'
+        if not packed:
+            packed.append(_packed(common))
+        if packed[0] is not None and any(c in packed[0] for c in candidates):
             return name, 'exists'
     return FALLBACK_MAIN, 'fallback'
 
@@ -161,7 +167,7 @@ def name_from_url(url):
 def repo_name(root, remote='origin'):
     """The repository's name (module docstring)."""
     common = common_dir(root)
-    if common is not None and _remote_ok(remote):
+    if common is not None and _name_ok(remote):
         name = name_from_url(remote_url(common, remote))
         if name:
             return name

@@ -145,7 +145,7 @@ class Ctx(object):
         self.kit = kit or kitroot.root()
         self.store = store
         self._classify = classify or fsplace.classify
-        self._load = load or (lambda top: kconfig.load(top, home=self.home))
+        self._load = load or (lambda top: kconfig.load(top, home=self.home, machine=self.user))
         self._gate_ok = gate_ok
         self.git = git or refs
         self.gitread = gitread or fsgitread

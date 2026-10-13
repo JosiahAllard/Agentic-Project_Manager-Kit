@@ -107,6 +107,25 @@ class MainBranch(Case):
         r.kit({'repo': {'main_branch': 'main'}})
         self.assertEqual(r.load().main_branch, 'main')
 
+    def test_main_stays_guarded_while_the_file_names_none(self):
+        # <remote>/HEAD is local: any session can repoint it, so the push rules keep main too
+        r = self.repo()
+        r.ref('refs/remotes/origin/HEAD', 'ref: refs/remotes/origin/trunk\n')
+        self.assertEqual(r.load().guarded_mains(), ['trunk', 'main'])
+        r.kit({'repo': {'main_branch': 'trunk'}})
+        self.assertEqual(r.load().guarded_mains(), ['trunk'])
+        r.kit({})
+        r.ref('refs/remotes/origin/HEAD', 'ref: refs/remotes/origin/main\n')
+        self.assertEqual(r.load().guarded_mains(), ['main'])
+
+    def test_a_head_that_is_no_branch_name_is_not_read(self):
+        for target in ('-f', '/abs', 'a..b', 'HEAD', 'x y'):
+            with self.subTest(target):
+                r = self.repo()
+                r.ref('refs/remotes/origin/HEAD', 'ref: refs/remotes/origin/%s\n' % target)
+                r.ref('refs/heads/master')
+                self.assertEqual(r.load().main_branch, 'master')
+
     def test_no_repository_is_main(self):
         base = tempfile.mkdtemp(prefix='kit-nofile-')
         self.addCleanup(shutil.rmtree, base, True)
@@ -171,6 +190,16 @@ class OwnerEmail(Case):
         rules = r.load().owner_rules()
         self.assertIsNotNone(rules.identity_problem())
         self.assertFalse(rules.is_owner('owner@example.com'))
+
+    def test_a_machine_config_read_already_is_used(self):
+        # the guard hands Ctx.user over, so a hook reads the machine config once; its tolerant
+        # read of a broken config (an `error` key) proves nothing
+        r = self.repo()
+        cfg = config.load(r.root, home=r.home, machine=lambda: {'owner_email': 'Owner@Example.com'})
+        self.assertEqual(cfg.owner_rules().owner_email, 'owner@example.com')
+        cfg = config.load(r.root, home=r.home, machine=lambda: {'owner_email': 'owner@example.com',
+                                                                 'error': 'bad key'})
+        self.assertIsNotNone(cfg.owner_rules().identity_problem())
 
     def test_the_machine_config_is_read_only_when_an_identity_is_judged(self):
         r = self.repo()
