@@ -2,9 +2,10 @@
 
 Each role becomes `hosts/claude/shell/agents/<name>.md`: front matter `name`, `description`, `tools` (the
 role's capabilities as Claude tool names, in order; no line for `capabilities: all`), `model`
-(the role's `model.claude` override, else TIER_MODEL of its tier), `effort` when the role has one,
-and for `cache: long` the `experimental` map with `cacheTtl: 1h`; then the body with its tokens
-filled from TOKENS. Lines end as the role file's do. Each skill folder is copied byte for byte to
+(the role's `model.claude` override, else hosts.json's `tiers` model for its tier: tier_models), `effort`
+when the role has one, and for `cache: long` the `experimental` map with `cacheTtl: 1h`; then the
+body with its tokens filled from tokens(): TOKENS, and PROFILE_TOKENS read from hosts.json's Claude
+profile, so a value hosts.json holds is written once. Lines end as the role file's do. Each skill folder is copied byte for byte to
 `hosts/claude/shell/skills/<name>/`.
 
 manifests(kit, content) writes the files that carry the kit's one version (kit.json; ARCHITECTURE.md
@@ -43,7 +44,6 @@ HOOKS = (
     ('SubagentStart', None, 'kit_header.py', ('SubagentStart',)),
 )
 MCP_SERVERS = {'machine-lock': {'command': 'python', 'args': [PLUGIN_ROOT + '/mcp/lock_server.py']}}
-TIER_MODEL = {'light': 'haiku', 'standard': 'sonnet', 'strong': 'opus', 'deep': 'opus'}
 TOOLS = {
     'read': 'Read', 'edit': 'Edit', 'write': 'Write', 'search': 'Grep', 'find': 'Glob',
     'bash': 'Bash', 'powershell': 'PowerShell', 'worktree': 'EnterWorktree', 'artifact': 'Artifact',
@@ -52,13 +52,23 @@ TOOLS = {
     'cron-create': 'CronCreate', 'cron-list': 'CronList', 'cron-delete': 'CronDelete',
     'web-search': 'WebSearch', 'web-fetch': 'WebFetch',
 }
+# The tokens whose Claude value no hosts.json field holds.
 TOKENS = {
     'profile_path': '.claude/agent-profile.md',
     'coordinator_profile_path': '.claude/coordinator-profile.md',
     'instructions_file': 'CLAUDE.md',
-    'worktrees_dir': '.claude/worktrees',
 }
+# The tokens filled from a field of hosts.json's Claude profile: token -> HostProfile field.
+PROFILE_TOKENS = {'worktrees_dir': 'worktrees_directory'}
 CACHE_TTL = {'long': '1h'}
+
+
+def tokens(registry_path=None):
+    """Every token's Claude value: TOKENS, and PROFILE_TOKENS from hosts.json's Claude profile."""
+    profile = registry.host(HOST, registry_path).profile
+    out = dict(TOKENS)
+    out.update((name, getattr(profile, field)) for name, field in PROFILE_TOKENS.items())
+    return out
 
 
 def agent_name(role):
@@ -70,22 +80,26 @@ class ClaudeContent:
     host = HOST
 
     def tier_models(self):
-        return dict(TIER_MODEL)
+        """hosts.json's Claude `tiers`: the one tier -> model map."""
+        return dict(registry.host(HOST).tiers)
 
     def owned(self):
         return (AGENTS_REL, SKILLS_REL)
 
-    def agent_file(self, role, names):
-        """The bytes of `role`'s agent file; `names` are every role's name (for agent tokens)."""
+    def agent_file(self, role, names, values=None, tiers=None):
+        """The bytes of `role`'s agent file; `names` are every role's name (for agent tokens),
+        `values` the tokens' values and `tiers` the tier -> model map (default: hosts.json's)."""
         src = '%s/%s.md' % (AGENTS_REL, role.name)
-        fill = lambda text: substitute(text, TOKENS, agent_name, names, src)    # noqa: E731
+        values = tokens() if values is None else values
+        tiers = self.tier_models() if tiers is None else tiers
+        fill = lambda text: substitute(text, values, agent_name, names, src)    # noqa: E731
         lines = ['---', 'name: %s' % role.name, 'description: %s' % quote(fill(role.description))]
         if not role.all_tools:
             missing = [c for c in role.capabilities if c not in TOOLS]
             if missing:
                 raise ContentError('%s: no Claude tool for %s' % (src, ', '.join(missing)))
             lines.append('tools: %s' % ', '.join(TOOLS[c] for c in role.capabilities))
-        lines.append('model: %s' % role.model_for(HOST, TIER_MODEL))
+        lines.append('model: %s' % role.model_for(HOST, tiers))
         if role.effort:
             lines.append('effort: %s' % role.effort)
         if role.cache:
@@ -96,9 +110,10 @@ class ClaudeContent:
 
     def render(self, content):
         names = content.role_names()
+        values, tiers = tokens(), self.tier_models()
         out = {}
         for role in content.roles:
-            out['%s/%s.md' % (AGENTS_REL, role.name)] = self.agent_file(role, names)
+            out['%s/%s.md' % (AGENTS_REL, role.name)] = self.agent_file(role, names, values, tiers)
         for skill in content.skills:
             for rel, data in skill.files:
                 out['%s/%s/%s' % (SKILLS_REL, skill.name, rel)] = data

@@ -15,6 +15,7 @@ import unittest
 from hosts.claude.adapter import content as claude_content
 from kitlib import content
 from kitlib.host import content as hc
+from kitlib.host import registry
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(KIT_ROOT, 'tools'))
@@ -134,11 +135,11 @@ class ManifestTest(unittest.TestCase):
                 self.assertNotIn(b'\nwrites:', agent)
 
     def test_role_bodies_name_no_claude_value_a_token_covers(self):
-        """The values in hosts.claude.adapter.content.TOKENS reach the agent files only through tokens;
+        """The values in hosts.claude.adapter.content.tokens() reach the agent files only through tokens;
         `<kit>`, the neutral name of the kit's folder (kit_root's Claude value too), is written bare."""
         for r in content.load(KIT_ROOT).roles:
             text = r.description + r.body
-            for value in [v for v in claude_content.TOKENS.values() if v != '<kit>'] + ['pm-kit:']:
+            for value in [v for v in claude_content.tokens().values() if v != '<kit>'] + ['pm-kit:']:
                 with self.subTest(role=r.name, value=value):
                     self.assertNotIn(value, text)
 
@@ -242,9 +243,22 @@ class ClaudeRendererTest(unittest.TestCase):
                               b'experimental:\r\n  cacheTtl: 1h\r\n---\r\nbody\r\n')
 
     def test_every_tier_and_capability_has_a_claude_value(self):
-        self.assertEqual(sorted(claude_content.TIER_MODEL), sorted(hc.TIERS))
+        self.assertEqual(sorted(claude_content.renderer().tier_models()), sorted(hc.TIERS))
+        self.assertEqual(claude_content.renderer().tier_models(), dict(registry.host('claude').tiers))
         self.assertEqual(sorted(claude_content.TOOLS), sorted(hc.CAPABILITIES))
-        self.assertEqual(sorted(claude_content.TOKENS), sorted(t for t in hc.TOKENS if t != 'agent'))
+        self.assertEqual(sorted(claude_content.tokens()), sorted(t for t in hc.TOKENS if t != 'agent'))
+        self.assertEqual(set(claude_content.TOKENS) & set(claude_content.PROFILE_TOKENS), set())
+
+    def test_a_token_hosts_json_holds_is_read_from_it(self):
+        """No Claude token value repeats a hosts.json profile field: PROFILE_TOKENS reads those."""
+        profile = registry.host('claude').profile
+        fields = {f: getattr(profile, f) for f in profile.__dataclass_fields__}
+        values = claude_content.tokens()
+        for name, field in claude_content.PROFILE_TOKENS.items():
+            self.assertEqual(values[name], fields[field])
+        for name, value in claude_content.TOKENS.items():
+            with self.subTest(name):
+                self.assertNotIn(value, [v for v in fields.values() if isinstance(v, str)])
 
 
 class TempTreeTest(unittest.TestCase):

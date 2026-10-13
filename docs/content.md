@@ -53,7 +53,8 @@ each flag shown.
 ## Tokens
 
 A body or description names a value that differs by host only as a token. An unknown token, or a
-`{{` that is not one, refuses the render.
+`{{` that is not one, refuses the render. A value `hosts.json` already holds is read from the host's
+profile there, never written a second time in the renderer (Claude: `PROFILE_TOKENS`).
 
 | token | Claude |
 |---|---|
@@ -61,12 +62,13 @@ A body or description names a value that differs by host only as a token. An unk
 | `{{profile_path}}` | `.claude/agent-profile.md` |
 | `{{coordinator_profile_path}}` | `.claude/coordinator-profile.md` |
 | `{{instructions_file}}` | `CLAUDE.md` |
-| `{{worktrees_dir}}` | `.claude/worktrees` |
+| `{{worktrees_dir}}` | `.claude/worktrees` (hosts.json profile `worktrees_directory`) |
 
 ## Claude
 
 `hosts/claude/adapter/content.py` writes `hosts/claude/shell/agents/<name>.md` with `name`, `description` (quoted only
-when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model`,
+when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model` (hosts.json `tiers`, the
+one tier map),
 `effort` when set, and for `cache: long` the `experimental` map with `cacheTtl: 1h`. It copies each
 skill folder to `hosts/claude/shell/skills/<name>/`. It owns both folders.
 

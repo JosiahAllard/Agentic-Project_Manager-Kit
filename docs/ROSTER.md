@@ -44,7 +44,7 @@ landing paths), and the host's built-in agent types (on Claude `general-purpose`
 
 ## Tier to model, per host
 
-Each host's renderer maps a tier to a model (Claude: `hosts/claude/adapter/content.py` `TIER_MODEL`);
+Each host maps a tier to a model in `hosts.json` `tiers`, which its renderer's `tier_models()` returns;
 `agent_roster.py --check` holds this table to it. A role file may name a different model for one
 host (`model.<host>:`, docs/content.md); none does.
 
