@@ -13,7 +13,8 @@ ordinary waiting runs (plan).
 Planning (plan) gives each waiting entry, in queue order, the earliest time what it needs is free
 for its whole expected time, around what holders and runs planned ahead of it take. A run may
 start ahead of its turn only when it ends before every run ahead of it is planned to start
-(backfill). How long a holder still holds is holder_end.
+(backfill), but for a run ahead whose start its resource alone put off: that one keeps out only
+the runs naming its resource. How long a holder still holds is holder_end.
 """
 import contextlib
 import datetime
@@ -273,7 +274,9 @@ def plan(L, q, now=None):
     resource holds it or is planned to over that time (its parent's hold of it is its own). It
     picks its own hold's slots first, then those no background run holds (they yield), then the
     lowest. It may not start before a run planned ahead of it and still be running when that one
-    starts (backfill), unless it is own_turn. A parked entry (holds not its own leave it too
+    starts (backfill), unless it is own_turn, or that one's start was put off by its resource
+    alone (its slots were free at an earlier time; it is not parked): such a start bars only the
+    entries naming that resource, and the rest plan around its slots. A parked entry (holds not its own leave it too
     little now) is planned from clear_at, around avoid_after, so no run behind it passes it."""
     now = time.time() if now is None else now
     sizes = {p: lay.size(L, p) for p in POOLS}
@@ -318,12 +321,12 @@ def plan(L, q, now=None):
         avoid = {p: entry_slots(e, key, p) for p in POOLS}
         prefer = {p: entry_slots(e, "prefer", p) for p in POOLS}
         times = {t0} | {iv[1] for iv in ivs if iv[1] > t0} | {s for s in starts if s > t0}
+        held_by_rsc = False         # an earlier time had its slots free and only its resource not
         for t in sorted(times):
             if not own and any(t < s < t + exp for s in starts):
                 continue
-            if rsc and any(r == rsc and o != parent and s0 < t + exp and s1 > t
-                           for s0, s1, _sl, r, o in ivs):
-                continue
+            rsc_busy = rsc and any(r == rsc and o != parent and s0 < t + exp and s1 > t
+                                   for s0, s1, _sl, r, o in ivs)
             busy = {p: set() for p in POOLS}
             for s0, s1, r, _rsc, _o in ivs:
                 if s0 < t + exp and s1 > t:
@@ -337,12 +340,19 @@ def plan(L, q, now=None):
                 pick[p] = sorted(sorted(free, key=lambda i: (i not in prefer[p], i in soft[p], i))
                                  [:entry_need(e, p)])
             else:
+                if rsc_busy:
+                    held_by_rsc = True
+                    continue
                 info.update(start=t, cores=pick["cpu"], gpus=pick["gpu"], now=t <= now,
                             backfill=not own and any(t < s for s in starts))
                 ivs.append((t, t + exp, {p: set(pick[p]) for p in POOLS}, rsc, e["id"]))
                 break
+        # A start its resource put off (its slots were free earlier) is no backfill barrier: its
+        # slots are planned (ivs), so a run behind it that fits around them starts now; one
+        # naming its resource is still kept out by ivs. A parked entry stays a barrier.
         if info["start"] is not None:
-            starts.append(info["start"])
+            if not held_by_rsc or e.get("parked"):
+                starts.append(info["start"])
         elif e.get("parked"):
             starts.append(t0)
     return out, soft

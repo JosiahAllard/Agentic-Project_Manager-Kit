@@ -315,6 +315,65 @@ class ResourceExclusion(unittest.TestCase):
         for (a0, a1), (b0, _b1) in zip(spans, spans[1:]):
             self.assertLessEqual(a1, b0)
 
+    def test_a_landing_waiting_only_for_its_resource_does_not_hold_back_unrelated_runs(self):
+        # 16 cores. X1 lands repo X on 4 of them, 30 min left; X2, repo X's next landing, waits
+        # for X1 alone (its cores are free now). A landing of repo Y and a 60-min ordinary run
+        # start now on idle cores; X3, repo X's third, still waits for X2.
+        L = lay.derive(lay.fake_hardware(threads=32, smt=2, gpus=0))
+        self.assertEqual(L["cpu_slots"], 16)
+        other = "landing:z:\\other\\.git"
+
+        def plan(extra):
+            x1 = holder("r-x1", [0, 1, 2, 3], NOW - 600, 2400)
+            x1.update(resource=LAND, priority="land")
+            es = [x1, land("r-x2", 4, 1200, 2)] + extra
+            return qm.plan(L, {"ticket": 9, "entries": es}, now=NOW)[0]
+        alone = plan([])["r-x2"]["start"]
+        self.assertEqual(alone, NOW + 1800)
+        got = plan([waiter("r-y", 4, 2700, 3, priority="land", resource=other),
+                    waiter("r-run", 4, 3600, 4), land("r-x3", 4, 600, 5)])
+        self.assertEqual(got["r-x2"]["start"], alone)               # no later than it would have
+        self.assertTrue(got["r-y"]["now"], got["r-y"])
+        self.assertTrue(got["r-run"]["now"], got["r-run"])
+        self.assertFalse(got["r-y"]["backfill"] or got["r-run"]["backfill"])
+        self.assertEqual(got["r-x3"]["start"], NOW + 1800 + 1200)   # after X2, never beside it
+        x2 = set(got["r-x2"]["cores"])
+        self.assertFalse(x2 & (set(got["r-y"]["cores"]) | set(got["r-run"]["cores"])))
+
+    def test_a_resource_delayed_landing_still_gets_its_cores_from_a_run_behind_it(self):
+        # Every core but X1's is wanted by the run behind X2 for longer than X1 has left: the
+        # run may not take X2's cores, so it waits for X2 to end, and X2 starts as X1 ends.
+        L = lay.derive(lay.fake_hardware(threads=32, smt=2, gpus=0))
+        x1 = holder("r-x1", [0, 1, 2, 3], NOW - 600, 2400)
+        x1["resource"] = LAND
+        got = qm.plan(L, {"ticket": 9, "entries": [x1, land("r-x2", 4, 1200, 2),
+                                                   waiter("r-big", 16, 3600, 3)]}, now=NOW)[0]
+        self.assertEqual(got["r-x2"]["start"], NOW + 1800)
+        self.assertEqual(got["r-big"]["start"], NOW + 3000)
+
+    def test_a_parked_landing_waiting_for_its_resource_stays_a_barrier(self):
+        # A parked entry is never passed by a run behind it, whatever put its start off.
+        L = lay.derive(lay.fake_hardware(threads=32, smt=2, gpus=0))
+        x1 = holder("r-x1", [0, 1, 2, 3], NOW - 600, 2400)
+        x1["resource"] = LAND
+        x2 = land("r-x2", 4, 1200, 2, parked=True, clear_at=NOW, avoid_after={})
+        got = qm.plan(L, {"ticket": 9, "entries": [x1, x2, waiter("r-run", 4, 3600, 3)]},
+                      now=NOW)[0]
+        self.assertEqual(got["r-x2"]["start"], NOW + 1800)
+        self.assertEqual(got["r-run"]["start"], NOW + 1800)
+
+    def test_a_landing_whose_cores_are_busy_too_still_holds_back_a_long_run(self):
+        # X2 needs 13 cores, and only 12 are free while X1 runs: it waits for X1's cores as
+        # well as its resource, so it stays a barrier. The 3-core run behind it would fit beside
+        # it, yet it may not start ahead of it and still run when X2 starts.
+        L = lay.derive(lay.fake_hardware(threads=32, smt=2, gpus=0))
+        x1 = holder("r-x1", [0, 1, 2, 3], NOW - 600, 2400)
+        x1["resource"] = LAND
+        got = qm.plan(L, {"ticket": 9, "entries": [x1, land("r-x2", 13, 1200, 2),
+                                                   waiter("r-run", 3, 3600, 3)]}, now=NOW)[0]
+        self.assertEqual(got["r-x2"]["start"], NOW + 1800)
+        self.assertEqual(got["r-run"]["start"], NOW + 1800)
+
     def test_a_background_run_naming_it_holds_it_but_its_slots_still_yield(self):
         bg = {"id": "r-bg", "ticket": 1, "state": "bg", "need": {"cpu": 1, "gpu": 0},
               "cores": [0], "gpus": [], "held_at": NOW, "expect_s": 600, "resource": LAND}
