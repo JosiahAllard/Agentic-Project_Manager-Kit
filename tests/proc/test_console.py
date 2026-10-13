@@ -4,7 +4,10 @@ console window (docs/daily-full.md "The schedule").
 
 The real-process tests run a pythonw.exe parent (no console, as the guard hook and a scheduled task
 have) that imports kitlib and then starts console pythons the bare ways: subprocess.run, Popen,
-check_output and a multiprocessing child. Every process here is the test's own."""
+check_output and a multiprocessing child; from THREADS threads at once; when the parent was started
+with no std handles; and with a child sending a console Ctrl+C or Ctrl+Break, which only ever
+reaches the parent's own new console (the sender checks who is on it first). Every process here
+is the test's own."""
 import json
 import os
 import shutil
@@ -24,26 +27,79 @@ CREATE_NO_WINDOW = 0x08000000
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_CONSOLE = 0x00000010
 BARE = ("run", "popen", "check_output", "multiprocessing")
+STD_NAMES = ("in", "out", "err")
+FILE_TYPE_CHAR, FILE_TYPE_PIPE = 2, 3
+STATUS_CONTROL_C_EXIT = 0xC000013A
 
-# Run as a child: writes what it sees of its console to argv[1] (a child of pythonw may have no
-# pipe), and prints "said" when argv[2] is "say".
+# The std handles a process has, as {name: [handle, GetFileType]}: 0 none, -1 invalid (no type),
+# file type 1 disk, 2 character (a console), 3 pipe.
+STD = "\n".join([
+    "def std_handles():",
+    "    import ctypes",
+    "    k = ctypes.WinDLL('kernel32')",
+    "    k.GetStdHandle.restype = ctypes.c_void_p",
+    "    k.GetFileType.argtypes = (ctypes.c_void_p,)",
+    "    got = {}",
+    "    for name, n in (('in', -10), ('out', -11), ('err', -12)):",
+    "        h = k.GetStdHandle(n) or 0",
+    "        bad = h in (0, 2 ** 64 - 1, 2 ** 32 - 1)",
+    "        got[name] = [-1 if h == 2 ** 64 - 1 else h, None if bad else k.GetFileType(h)]",
+    "    return got"])
+
+# Run as a child: writes what it sees of its console and std handles to argv[1] (a child of
+# pythonw may have no pipe), and prints "said" when argv[2] is "say".
 PROBE = "\n".join([
     "import ctypes, json, os, sys",
+    STD,
     "k = ctypes.WinDLL('kernel32')",
     "k.GetConsoleWindow.restype = ctypes.c_void_p",
     "a = (ctypes.c_uint * 64)()",
     "n = k.GetConsoleProcessList(a, 64)",
     "with open(sys.argv[1], 'w') as f:",
     "    json.dump({'window': k.GetConsoleWindow() or 0, 'pid': os.getpid(),",
-    "               'console_pids': list(a[:min(n, 64)])}, f)",
+    "               'console_pids': list(a[:min(n, 64)]), 'std': std_handles()}, f)",
     "if sys.argv[2:] == ['say']:",
     "    print('said', flush=True)"])
 
+# Run as a child on the parent's console: says it is ready (argv[1] + ".ready"), sleeps, and
+# writes to argv[1] whether a Ctrl+C ended the sleep.
+WAITER = "\n".join([
+    "import ctypes, sys, time",
+    "ctypes.WinDLL('kernel32').SetConsoleCtrlHandler(None, False)",
+    "open(sys.argv[1] + '.ready', 'w').close()",
+    "try:",
+    "    time.sleep(30)",
+    "    end = 'timeout'",
+    "except KeyboardInterrupt:",
+    "    end = 'interrupted'",
+    "with open(sys.argv[1], 'w') as f:",
+    "    f.write(end)"])
+
+# Run as a child on the parent's console: sends the console control event argv[2] (0 Ctrl+C,
+# 1 Ctrl+Break) to the whole console, but only when every process on it is itself or a pid in
+# argv[3:] (never a console the test shares).
+SENDER = "\n".join([
+    "import ctypes, json, os, sys",
+    "k = ctypes.WinDLL('kernel32')",
+    "keep = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)(lambda e: 1)   # it survives the event",
+    "k.SetConsoleCtrlHandler(keep, 1)",
+    "a = (ctypes.c_uint * 64)()",
+    "n = k.GetConsoleProcessList(a, 64)",
+    "pids = sorted(a[:min(n, 64)])",
+    "ok = 0 < n <= 64 and set(pids) <= {os.getpid()} | {int(p) for p in sys.argv[3:]}",
+    "sent = bool(k.GenerateConsoleCtrlEvent(int(sys.argv[2]), 0)) if ok else False",
+    "with open(sys.argv[1], 'w') as f:",
+    "    json.dump({'console_pids': pids, 'sent': sent, 'refused': not ok}, f)"])
+THREADS = 8
+
 # Run as the parent under pythonw: argv is <kit root> <folder> <mode> <console python>. It imports
 # kitlib, then starts the probe with no creation flags of its own (modes "alloc" and "fallback"),
-# or with console choices first (mode "choice"), and writes what it saw to <folder>/parent.json.
-PARENT = r'''
-import json, multiprocessing, os, subprocess, sys, traceback
+# or with console choices first (mode "choice"), or from THREADS threads at once ("threads" and
+# "threads-fallback"), or with no std handles of its own ("std" and "std-fallback"), or has a
+# child send a Ctrl+C or a Ctrl+Break to the console it shares ("ctrlc", "ctrlbreak"), and writes
+# what it saw to <folder>/parent.json.
+PARENT = STD + "\nTHREADS = %d\n" % THREADS + r'''
+import json, multiprocessing, os, subprocess, sys, threading, time, traceback
 
 DN = subprocess.DEVNULL
 
@@ -74,9 +130,50 @@ def main(root, folder, mode, py):
     import kitlib
     from kitlib.proc import console
     console.LOG_PATH = os.path.join(folder, 'incidents.log')
-    console.FORCE_FALLBACK = mode == 'fallback'
+    console.FORCE_FALLBACK = mode.endswith('fallback')
     r['installed'] = console.installed()
-    if mode == 'choice':
+    if mode.startswith('threads'):
+        r['n'], r['thread_errors'] = THREADS, []
+        barrier = threading.Barrier(THREADS)
+
+        def start(i):
+            try:
+                barrier.wait(60)
+                subprocess.run([py, probe, out('t%d' % i)], timeout=60)
+            except BaseException:
+                r['thread_errors'].append(traceback.format_exc())
+        threads = [threading.Thread(target=start, args=(i,)) for i in range(THREADS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(120)
+    elif mode.startswith('std'):
+        r['std_before'] = std_handles()
+        subprocess.run([py, probe, out('run')], timeout=60)
+        r['std_after'] = std_handles()
+        subprocess.Popen([py, probe, out('popen')]).wait(60)
+        r['said'] = subprocess.check_output([py, probe, out('check_output'), 'say'],
+                                            timeout=60).decode().strip()
+    elif mode in ('ctrlc', 'ctrlbreak'):
+        import ctypes
+        subprocess.run([py, probe, out('run')], timeout=60)     # this process gets its console
+        ctypes.WinDLL('kernel32').SetConsoleCtrlHandler(None, False)    # no inherited ignore
+        waiter = subprocess.Popen([py, os.path.join(folder, 'waiter.py'), out('waiter')])
+        end = time.monotonic() + 60
+        while not os.path.exists(out('waiter') + '.ready') and time.monotonic() < end:
+            time.sleep(0.02)
+        r['parent_interrupted'] = False
+        sender = subprocess.Popen([py, os.path.join(folder, 'sender.py'), out('sender'),
+                                   '0' if mode == 'ctrlc' else '1', str(os.getpid()),
+                                   str(waiter.pid)])
+        try:
+            while waiter.poll() is None and time.monotonic() < end:
+                time.sleep(0.02)
+            time.sleep(0.5)
+        except KeyboardInterrupt:
+            r['parent_interrupted'] = True
+        r['sender_code'], r['waiter_code'] = sender.wait(60), waiter.wait(60)
+    elif mode == 'choice':
         subprocess.run([py, probe, out('detached')], stdin=DN, stdout=DN, stderr=DN,
                        creationflags=subprocess.DETACHED_PROCESS, timeout=60)
         subprocess.run([py, probe, out('own')], creationflags=subprocess.CREATE_NO_WINDOW,
@@ -125,6 +222,17 @@ def pythonw_exe():
 def alloc_exported():
     import ctypes
     return hasattr(ctypes.WinDLL("kernel32"), "AllocConsoleWithOptions")
+
+
+def alloc_how():
+    """What ensure answers by default here: ALLOCATED where kernel32 exports
+    AllocConsoleWithOptions, else the fallback's ATTACHED."""
+    return console.ALLOCATED if alloc_exported() else console.ATTACHED
+
+
+def file_types(std):
+    """{name: GetFileType} of an STD report."""
+    return {name: v[1] for name, v in std.items()}
 
 
 @unittest.skipUnless(os.name == "nt", "Windows only")
@@ -238,6 +346,7 @@ class EnsureTest(unittest.TestCase):
         self.calls = []
         for name, value in (("_alloc_no_window", lambda: self.call("alloc", self.alloc)),
                             ("_attach_holder", lambda: self.call("attach", console.ATTACHED)),
+                            ("_take_ctrl", lambda: self.calls.append("take")),
                             ("_log_incident", lambda how, child: self.calls.append(("log", how)))):
             p = mock.patch.object(console, name, value)
             p.start()
@@ -258,20 +367,24 @@ class EnsureTest(unittest.TestCase):
 
     def test_alloc_first(self):
         self.assertEqual(self.ensure(False), console.ALLOCATED)
-        self.assertEqual(self.calls, ["alloc", ("log", console.ALLOCATED)])
+        self.assertEqual(self.calls, ["alloc", "take", ("log", console.ALLOCATED)])
 
     def test_no_export_or_a_refusal_takes_the_holder(self):
         for alloc in (None, console.NONE):
             with self.subTest(alloc):
                 self.alloc, self.calls[:] = alloc, []
                 self.assertEqual(self.ensure(False), console.ATTACHED)
-                self.assertEqual(self.calls, ["alloc", "attach", ("log", console.ATTACHED)])
+                self.assertEqual(self.calls, ["alloc", "attach", "take", ("log", console.ATTACHED)])
 
     def test_forced_fallback(self):
         self.assertEqual(self.ensure(False, fallback=True), console.ATTACHED)
         with mock.patch.object(console, "FORCE_FALLBACK", True):
             self.assertEqual(self.ensure(False), console.ATTACHED)
-        self.assertEqual(self.calls, ["attach", ("log", console.ATTACHED)] * 2)
+        self.assertEqual(self.calls, ["attach", "take", ("log", console.ATTACHED)] * 2)
+
+    def test_the_ctrl_handler_takes_ctrl_c_and_break_only(self):
+        self.assertEqual([console.ctrl_taken(e) for e in range(7)],
+                         [True, True, False, False, False, False, False])
 
     def test_has_console_is_true_here_or_false(self):
         self.assertIsInstance(console.has_console(), bool)
@@ -396,7 +509,8 @@ class PythonwParentTest(unittest.TestCase):
             self.skipTest("no pythonw.exe beside %s" % sys.executable)
         self.dir = tempfile.mkdtemp(prefix="kit-console-")
         self.addCleanup(shutil.rmtree, self.dir, True)
-        for name, text in (("probe.py", PROBE), ("parent.py", PARENT)):
+        for name, text in (("probe.py", PROBE), ("parent.py", PARENT), ("waiter.py", WAITER),
+                           ("sender.py", SENDER)):
             with open(os.path.join(self.dir, name), "w") as f:
                 f.write(text)
 
@@ -406,16 +520,30 @@ class PythonwParentTest(unittest.TestCase):
         with open(path) as f:
             return json.load(f)
 
-    def run_parent(self, mode):
+    def run_parent(self, mode, std="file"):
+        """Run the pythonw parent. `std` "file": its stdout is a file the test reads, its stdin
+        and stderr NUL. "unset": started with no std handles named (no STARTF_USESTDHANDLES) and
+        none inherited, as a GUI program or a scheduled task starts one. "null": std handles
+        named, all NULL."""
+        argv = [self.pythonw, os.path.join(self.dir, "parent.py"), ROOT, self.dir, mode,
+                python_exe()]
         stdout = os.path.join(self.dir, "stdout.txt")
-        with open(stdout, "wb") as fh:
-            subprocess.run([self.pythonw, os.path.join(self.dir, "parent.py"), ROOT, self.dir,
-                            mode, python_exe()], timeout=180, stdin=subprocess.DEVNULL,
-                           stdout=fh, stderr=subprocess.DEVNULL)
+        if std == "file":
+            with open(stdout, "wb") as fh:
+                subprocess.run(argv, timeout=180, stdin=subprocess.DEVNULL, stdout=fh,
+                               stderr=subprocess.DEVNULL)
+        else:
+            si = subprocess.STARTUPINFO()
+            if std == "null":
+                si.dwFlags = subprocess.STARTF_USESTDHANDLES
+                si.hStdInput = si.hStdOutput = si.hStdError = 0
+            subprocess.run(argv, timeout=180, close_fds=True, startupinfo=si)
         r = self.read("parent.json")
         self.assertNotIn("error", r, r.get("error"))
-        with open(stdout, "rb") as fh:
-            r["stdout"] = fh.read().decode("utf-8", "replace")
+        r["stdout"] = ""
+        if os.path.exists(stdout):
+            with open(stdout, "rb") as fh:
+                r["stdout"] = fh.read().decode("utf-8", "replace")
         log = os.path.join(self.dir, "incidents.log")
         r["log"] = []
         if os.path.exists(log):
@@ -445,10 +573,79 @@ class PythonwParentTest(unittest.TestCase):
         return r
 
     def test_bare_starts_open_no_window(self):
-        self.check_bare("alloc", console.ALLOCATED if alloc_exported() else console.ATTACHED)
+        self.check_bare("alloc", alloc_how())
 
     def test_bare_starts_open_no_window_by_the_fallback(self):
         self.check_bare("fallback", console.ATTACHED)
+
+    def check_threads(self, mode, how):
+        r = self.run_parent(mode)
+        self.assertEqual(r["thread_errors"], [])
+        self.assertFalse(r["before"], r)
+        pids = set()
+        for i in range(r["n"]):
+            with self.subTest(i):
+                self.assert_shares_a_windowless_console(r, "t%d" % i)
+                pids.add(self.read("t%d.json" % i)["pid"])
+        self.assertEqual(len(pids), THREADS)
+        self.assertEqual([(g["how"], g["pid"]) for g in r["log"]], [(how, r["parent_pid"])])
+
+    def test_bare_starts_from_threads_at_once_make_one_console(self):
+        """THREADS threads leave a barrier together and each starts a child bare: one ensure
+        (one log line), and every child is on the one console, the parent's."""
+        self.check_threads("threads", alloc_how())
+
+    def test_bare_starts_from_threads_at_once_make_one_console_by_the_fallback(self):
+        self.check_threads("threads-fallback", console.ATTACHED)
+
+    def check_no_std(self, mode, std, how):
+        """A parent started with no std handles (a GUI program or a scheduled task starting
+        pythonw): all three NULL. The console ensure gives it fills them with console handles,
+        so its bare children get console handles (check_output's stdout is its pipe), and none
+        has a window."""
+        r = self.run_parent(mode, std)
+        self.assertEqual(r["std_before"], {n: [0, None] for n in STD_NAMES})
+        self.assertEqual(file_types(r["std_after"]), dict.fromkeys(STD_NAMES, FILE_TYPE_CHAR))
+        for name in ("run", "popen", "check_output"):
+            with self.subTest(name):
+                self.assert_shares_a_windowless_console(r, name)
+        for name in ("run", "popen"):
+            self.assertEqual(file_types(self.read(name + ".json")["std"]),
+                             dict.fromkeys(STD_NAMES, FILE_TYPE_CHAR), name)
+        self.assertEqual(file_types(self.read("check_output.json")["std"]),
+                         {"in": FILE_TYPE_CHAR, "out": FILE_TYPE_PIPE, "err": FILE_TYPE_CHAR})
+        self.assertEqual(r["said"], "said")
+        self.assertEqual([(g["how"], g["pid"]) for g in r["log"]], [(how, r["parent_pid"])])
+
+    def test_a_parent_with_no_std_handles_named(self):
+        self.check_no_std("std", "unset", alloc_how())
+
+    def test_a_parent_with_null_std_handles(self):
+        self.check_no_std("std", "null", alloc_how())
+
+    def test_a_parent_with_no_std_handles_named_by_the_fallback(self):
+        self.check_no_std("std-fallback", "unset", console.ATTACHED)
+
+    def check_ctrl(self, mode):
+        """A child on the console the parent got sends it a console control event; the sender
+        sends only when the console holds just itself, the parent and the waiter. The parent is
+        not ended by it (its report is written: run_parent) and is not interrupted."""
+        r = self.run_parent(mode)
+        sent = self.read("sender.json")
+        self.assertEqual((sent["refused"], sent["sent"]), (False, True), sent)
+        self.assertIn(r["parent_pid"], sent["console_pids"], sent)
+        self.assertFalse(r["parent_interrupted"], r)
+        return r
+
+    def test_a_console_ctrl_c_leaves_the_parent_and_reaches_its_children(self):
+        r = self.check_ctrl("ctrlc")
+        with open(os.path.join(self.dir, "waiter.json")) as f:
+            self.assertEqual(f.read(), "interrupted")       # KeyboardInterrupt, as before
+        self.assertEqual(r["waiter_code"], 0)
+
+    def test_a_console_ctrl_break_leaves_the_parent_and_ends_its_children(self):
+        r = self.check_ctrl("ctrlbreak")
+        self.assertEqual(r["waiter_code"], STATUS_CONTROL_C_EXIT)
 
     def test_console_choices_are_kept(self):
         """DETACHED_PROCESS and CREATE_NO_WINDOW starts are the caller's: they ensure nothing

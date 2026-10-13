@@ -37,10 +37,13 @@ disk): the start goes on. A command line can carry a token or a prompt, so both 
 (redact_command): the program and the first KEEP_WORDS words after it, each cut to WORD_MAX
 characters, with secrets masked.
 
-Ctrl+C: a process that gains a console here also gets that console's control events, and so does
-every child that shares it. A console Ctrl+C has no window to be typed into; only
-GenerateConsoleCtrlEvent from a process on the same console sends one (docs/daily-full.md "The
-schedule").
+Ctrl+C: a console Ctrl+C has no window to be typed into here; only GenerateConsoleCtrlEvent from a
+process on the same console sends one (no kit code calls it). A pythonw process that gains a
+console would be ended by one at once (exit 0xC000013A, measured 2026-10-13: Python's SIGINT
+handler, SIG_IGN included, never runs under pythonw), where before it had no console and got none.
+So ensure gives it a console control handler that takes Ctrl+C and Ctrl+Break for this process
+(_take_ctrl). A handler is not inherited: a child on the console gets them as before
+(docs/daily-full.md "The schedule").
 
 Windows only: off Windows install() does nothing.
 """
@@ -62,6 +65,7 @@ ALLOC_CONSOLE_MODE_NO_WINDOW = 2        # ALLOC_CONSOLE_MODE
 ALLOC_CONSOLE_RESULT_NEW = 1            # ALLOC_CONSOLE_RESULT: 0 none, 1 new, 2 existing
 ALLOC_CONSOLE_RESULT_EXISTING = 2
 ERROR_INVALID_HANDLE = 6                # AttachConsole: the holder has no console yet
+CTRL_C_EVENT, CTRL_BREAK_EVENT = 0, 1   # the console control events _take_ctrl takes
 HOLDER_WAIT_S = 5.0                     # how long the fallback waits for the holder's console
 
 MARK = '__kit_windowless__'             # set on the wrapper: install() is done in this process
@@ -88,6 +92,7 @@ _mode = _UNKNOWN                        # the wrapper's state; _DONE after the f
 _lock = _thread.RLock()
 _original = None                        # the CreateProcess the wrapper delegates to
 _kernel32 = None
+_ctrl_handler = None                    # _take_ctrl's handler, kept so it is never freed
 
 
 def _k32():
@@ -204,8 +209,34 @@ def ensure_windowless_console(fallback=None, child=None):
         if how is None or how == NONE:
             how = _attach_holder()
         if how in (ALLOCATED, ATTACHED):
+            try:
+                _take_ctrl()
+            except Exception:           # noqa: BLE001 - the console stays; the start goes on
+                pass
             _log_incident(how, child)
         return how
+
+
+def ctrl_taken(event):
+    """_take_ctrl's handler: True (handled) for Ctrl+C and Ctrl+Break, False for any other event
+    (it goes on to the next handler)."""
+    return event in (CTRL_C_EVENT, CTRL_BREAK_EVENT)
+
+
+def _take_ctrl():
+    """Register a console control handler (ctrl_taken) that answers Ctrl+C and Ctrl+Break as
+    handled, so this process, which had no console, is not ended by one sent to the console it now
+    has. Per process: a child does not inherit it. True when registered."""
+    global _ctrl_handler
+    import ctypes
+    from ctypes import wintypes
+    proto = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+    if _ctrl_handler is None:
+        _ctrl_handler = proto(ctrl_taken)
+    k = _k32()
+    k.SetConsoleCtrlHandler.argtypes = (proto, wintypes.BOOL)
+    k.SetConsoleCtrlHandler.restype = wintypes.BOOL
+    return bool(k.SetConsoleCtrlHandler(_ctrl_handler, True))
 
 
 def _create_process(app, cmd, proc_attrs, thread_attrs, inherit, flags, env, cwd, startup):
