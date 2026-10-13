@@ -9,6 +9,10 @@ Nothing in kitlib.pmwatch reads these paths or formats.
 import json
 import os
 
+# The kit modules of Claude's own that the watcher's checks import late (kitlib.pmwatch.preload):
+# the PLUGIN check's account folder refresh, after the first difference.
+PRELOAD = ("kitlib.pluginsource.claude",)
+
 
 def default_alerts_dir():
     return os.path.join(os.path.expanduser("~"), ".claude", "machine-lock", "alerts")

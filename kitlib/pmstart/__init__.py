@@ -12,6 +12,7 @@ import subprocess
 import time
 
 from kitlib.config import user as kuser
+from kitlib.host import registry
 from kitlib.pmstart import fglock
 from kitlib.proc import spawn
 
@@ -301,17 +302,24 @@ STORE_DIR = chr(92) + "WindowsApps" + chr(92)
 _RC = re.compile(r"""(?:^|\s)--remote-control(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S+))""")
 
 
+def session_images(path=None):
+    """The process images a host's launched session runs as (each hosts.json profile's
+    session_process; claude.exe on Claude), matched exactly against a process's Name."""
+    return frozenset(registry.union('session_process', path))
+
+
 def rc_name(cmd):
-    """The --remote-control value of a claude.exe command line, or None (kitlib.launcher.lookup uses it too)."""
+    """The --remote-control value of a session's command line, or None (kitlib.launcher.lookup uses it too)."""
     m = _RC.search(cmd or "")
     return next((g for g in m.groups() if g), None) if m else None
 
 
 def live_session_names(procs):
-    """Remote Control names of launched claude.exe sessions; the Store app (under WindowsApps) is not one."""
+    """Remote Control names of launched sessions (session_images); the Store app (under WindowsApps) is not one."""
     names = set()
+    images = session_images()
     for p in procs:
-        if (p.get("Name") == "claude.exe" and p.get("CommandLine")
+        if (p.get("Name") in images and p.get("CommandLine")
                 and STORE_DIR not in (p.get("ExecutablePath") or "")):
             n = rc_name(p["CommandLine"])
             if n:

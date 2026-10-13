@@ -114,15 +114,17 @@ def _parse_time(text):
 
 
 def own_name(procs, env, pid):
-    """This session's Remote Control name: PM_KIT_SESSION_NAME, else the nearest claude.exe ancestor of pid; None if unknown."""
+    """This session's Remote Control name: PM_KIT_SESSION_NAME, else the nearest session process
+    (pmstart.session_images) above pid; None if unknown."""
     if env.get(NAME_VAR):
         return env[NAME_VAR]
     by_pid = {p.get("ProcessId"): p for p in procs}
+    images = pmstart.session_images()
     seen = set()
     while pid in by_pid and pid not in seen:
         seen.add(pid)
         p = by_pid[pid]
-        if p.get("Name") == "claude.exe":
+        if p.get("Name") in images:
             n = pmstart.rc_name(p.get("CommandLine"))
             if n:
                 return n
@@ -278,8 +280,9 @@ def others(entry, procs, env, pid):
     stem = _need(entry, "stem")
     me = own_name(procs, env, pid)
     cand = []
+    images = pmstart.session_images()
     for p in procs:
-        if (p.get("Name") == "claude.exe" and p.get("CommandLine")
+        if (p.get("Name") in images and p.get("CommandLine")
                 and pmstart.STORE_DIR not in (p.get("ExecutablePath") or "")):
             n = pmstart.rc_name(p["CommandLine"])
             if n and n.startswith(stem):

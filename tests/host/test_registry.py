@@ -126,6 +126,8 @@ class Validation(Case):
                 lambda e: e['profile'].update(agent_name_format='{name}:{plugin}'),
                 lambda e: e['profile'].update(agent_name_format='{other}:{name}'),
                 lambda e: e['profile'].update(agent_name_format='{name}{name}'),
+                lambda e: e['profile'].pop('session_process'),
+                lambda e: e['profile'].update(session_process=''),
                 lambda e: e['tiers'].pop('deep'),
                 lambda e: e['tiers'].update(light='')):
             bad = copy.deepcopy(data)

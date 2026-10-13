@@ -149,7 +149,7 @@ def _profile(name, raw):
     w = '%s.profile' % name
     p = _object(w, raw, ('owner_paths', 'worktrees_directory', 'state_directory', 'process_names',
                          'mcp_tool_format', 'session_env', 'skills_directory', 'attribution',
-                         'agent_name_format'))
+                         'agent_name_format', 'session_process'))
     session_env = _text(w + '.session_env', p['session_env'])
     if not _ENV_NAME.match(session_env):
         raise RegistryError('hosts.json: %s.session_env must be an environment variable name' % w)
@@ -162,7 +162,8 @@ def _profile(name, raw):
         session_env,
         _relpath(w + '.skills_directory', p['skills_directory']),
         _attribution(w + '.attribution', p['attribution']),
-        _name_format(w + '.agent_name_format', p['agent_name_format']))
+        _name_format(w + '.agent_name_format', p['agent_name_format']),
+        _text(w + '.session_process', p['session_process']))
 
 
 def _entry(name, raw):

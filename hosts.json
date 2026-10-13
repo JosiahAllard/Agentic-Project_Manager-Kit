@@ -26,7 +26,8 @@
         "model_env": "CLAUDE_AGENT_MODEL",
         "model_pattern": null
       },
-      "agent_name_format": "{plugin}:{name}"
+      "agent_name_format": "{plugin}:{name}",
+      "session_process": "claude.exe"
     },
     "tiers": {"light": "haiku", "standard": "sonnet", "strong": "opus", "deep": "opus"}
   }

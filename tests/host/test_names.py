@@ -40,6 +40,18 @@ class Names(unittest.TestCase):
         self.assertEqual(lockmcp.tool_prefix('claude', 'p', 's', path=self.path), 'mcp__plugin_p_s__')
         self.assertEqual(agentname.prefix('other', path=self.path), 'pm-kit/')
 
+    def test_session_processes_are_every_hosts(self):
+        from kitlib import pmstart
+        self.assertEqual(pmstart.session_images(), frozenset({'claude.exe'}))
+        with open(self.path, encoding='utf-8') as f:
+            data = json.load(f)
+        data['other']['profile']['session_process'] = 'other.exe'
+        with open(self.path, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        self.assertEqual(pmstart.session_images(self.path), frozenset({'claude.exe', 'other.exe'}))
+        procs = [{'Name': 'other.exe', 'CommandLine': 'other.exe --remote-control x'}]
+        self.assertEqual(pmstart.live_session_names(procs), set())   # not registered in the kit's
+
 
 if __name__ == '__main__':
     unittest.main()

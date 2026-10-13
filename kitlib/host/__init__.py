@@ -77,7 +77,8 @@ class HostProfile:
     is in (the lock shows it, never trusts it), `skills_directory` the repo path it reads a
     repository's own skills from, `attribution` its commits' Co-Authored-By (Attribution),
     `agent_name_format` how it names an agent a plugin bundles, with {plugin} and {name} fields
-    ({name} last)."""
+    ({name} last), `session_process` the process image a session it launches runs as (whose
+    --remote-control value names the session)."""
     owner_paths: tuple
     worktrees_directory: str
     state_directory: str
@@ -87,6 +88,7 @@ class HostProfile:
     skills_directory: str
     attribution: Attribution
     agent_name_format: str
+    session_process: str
 
 
 @dataclass(frozen=True)
