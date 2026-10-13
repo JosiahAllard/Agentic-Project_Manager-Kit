@@ -61,6 +61,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/windows-token-leak.md` | Windows token leak: slow process launches | slow launches | kw: windows, token-leak
 - `docs/worktree-paths.md` | worktree paths | where worktrees live | kw: worktree-paths
 - `docs/worktree-remove.md` | worktree remove | removing a worktree | kw: worktree-remove, sweep
+- `content/README.md` | where to change what a role is given or held to, and how to see it (`tools/agent_view.py`) | changing a role, a rule, a skill or a model | kw: content, where, change, agent_view
 - `content/roles/*.md` | one role per file, the source of every host's agent file (`docs/content.md`) | editing an agent | kw: roles, agents, agent-definition
 - `content/skills/*/*.md` | one skill per folder, the source of every host's skills (`docs/content.md`) | editing a skill | kw: skills, skill
 - `hosts/claude/shell/agents/*.md` | Claude's agent files, rendered from content/roles (never edit by hand) | reading what Claude loads | kw: agents, rendered
@@ -110,6 +111,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/forbidden.py` | forbidden-text check (`docs/repo-checks.md`) | kw: forbidden
 - `tools/agent_roster.py` | checks or writes docs/ROSTER.md's tables alone, rendered from content/roles and the hosts' tier maps (`docs/ROSTER.md`) | kw: agent_roster, roster
 - `tools/render_content.py` | render content/ into each host's agents and skills; --check for drift (`docs/content.md`) | kw: render_content, content, render
+- `tools/agent_view.py` | everything one role is given and held to on one host (`docs/content.md` "Agent view") | kw: agent_view, role, view, instructions, mode, capabilities
 - `tools/board.py` | the coordinator's whole board in one call (`docs/preflight.md`) | kw: board
 - `tools/checkout_guard.py` | is a path in the main checkout; strays in it (`docs/preflight.md`) | kw: checkout_guard, stray
 - `tools/kit_stubs.py` | write or check a repo's stubs for the kit tools (`docs/install.md`) | kw: kit_stubs, stubs

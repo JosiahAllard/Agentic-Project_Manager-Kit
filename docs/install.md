@@ -145,8 +145,9 @@ files or the kit itself:
   A repository's own commands use it only through a gate (booked by `gate.py`) or a wrapped heavy
   run.
 - `kit_tests.py` (the kit's own suites), `lock_release_check.py` (its `-C` is the kit's release
-  checkout), `backlog_lint.py`, `agent_roster.py`: run by the kit's maintainers or the PM
-  (docs/test-tools.md, docs/lock-release.md, docs/backlog-lint.md, docs/ROSTER.md).
+  checkout), `backlog_lint.py`, `agent_roster.py`, `agent_view.py` (its `-C` names the repository
+  it describes, but what it shows is the kit's roles): run by the kit's maintainers or the PM
+  (docs/test-tools.md, docs/lock-release.md, docs/backlog-lint.md, docs/ROSTER.md, docs/content.md).
 - `launch.py`, `machine_setup.py`, `pm_data.py`, `pm_watch.py`, `hub_mirror.py`, `pending.py`,
   `ledger_refs.py`, `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and
   the machine.
