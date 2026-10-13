@@ -107,18 +107,20 @@ HUB_TOOL = os.path.join(KIT_ROOT, "tools", "hub.py")
 HUB_ERROR_MAX = 400         # characters of a rejected `hub` key's message shown in its line
 
 
-# How kitlib.config ends a rule when it refuses a value: `, not ` and the value as Python writes
-# a string (repr: quoted, a quote or backslash inside it escaped).
-_ECHOED = re.compile(r""", not (?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")""", re.S)
-_ECHO_LEFT = re.compile(r""", not ['"]""")
+# How kitlib.config and kitlib.pmdata end a rule when they refuse a value: `, not ` and the value
+# as Python writes it (repr): a string quoted, a quote or backslash inside it escaped; a number,
+# true/false or null as one word, ended by the `; ` that joins problems or by the text's end.
+_ECHOED = re.compile(r""", not (?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|[-+\w.]+(?=;|\Z))""", re.S)
+_ECHO_LEFT = re.compile(r""", not """)
 
 
 def _without_values(text):
     """The configuration error `text` with every rejected value taken out: each `, not <value>`
     goes, so a problem still names its key and its rule (`hub.access.team must be an Access team
     name (one DNS label)`) and holds nothing the owner wrote as a value: no email, audience tag
-    or path. A `, not ` whose value does not end as a written string does is cut with all that
-    follows it. Key names stay, an unknown one the config named too."""
+    or path. A `, not ` whose value is neither a whole written string nor one word (a list, an
+    object, a string cut short) is cut with all that follows it. Key names stay, an unknown one
+    the config named too."""
     text = _ECHOED.sub("", text)
     left = _ECHO_LEFT.search(text)
     return text[:left.start()] if left else text
@@ -615,6 +617,18 @@ def agent_temp_lines(env=None, sweep_key=None, task_exists=None):
     return lines
 
 
+def _failure_text(e):
+    """The reason in a "could not check" line: the exception's own text, with any rejected value
+    taken out (_without_values) when it is a machine config refusal (kitlib.config or
+    kitlib.pmdata), so a malformed pm_data value is named by key and rule and never shown."""
+    from kitlib import pmdata
+    from kitlib.config.types import ConfigError
+    text = str(e)
+    if isinstance(e, (ConfigError, pmdata.PmDataError)):
+        text = _without_values(text)
+    return text
+
+
 def checklist(cfg, now=None, procs=None, **fakes):
     """The full session-start text. A failed check is one "could not check X: reason" line."""
     today = (now or datetime.datetime.now()).date()
@@ -645,5 +659,5 @@ def checklist(cfg, now=None, procs=None, **fakes):
         try:
             lines.extend(fn())
         except Exception as e:
-            lines.append("could not check %s: %s: %s" % (name, type(e).__name__, e))
+            lines.append("could not check %s: %s: %s" % (name, type(e).__name__, _failure_text(e)))
     return "PM session start checklist:\n" + "\n".join("- " + l for l in lines)
