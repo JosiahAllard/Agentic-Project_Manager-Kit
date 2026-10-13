@@ -17,6 +17,11 @@ every host's hook needs besides its own parse and render lives here once:
         {"command", "args"} that starts `script` with no console window: the one place a hook
         command line is rendered (plan section 6, rule 4). Today: pythonw.exe beside `executable`
         (default this interpreter) when there is one, else `executable` itself.
+  manifest_command(script, platforms, *args)
+        {"command", "args"} for a hook manifest another machine runs (a plugin's hooks.json): the
+        windowless interpreter by name for the host's hosts.json `platforms` (INTERPRETERS), found
+        on that machine's PATH, then `script` and `args` as given. The same on every machine that
+        renders it, so a committed manifest has no drift.
   settings_entry(event_name, matcher, script, executable, timeout)
         {event_name: [{"matcher", "hooks": [{"type": "command", "command", "args"[, "timeout"]}]}]}:
         a settings.json hooks entry in exec form (no shell). Claude's --settings-entry prints it,
@@ -115,6 +120,17 @@ def windowless(executable=None):
 
 def command_line(script, executable=None):
     return {'command': windowless(executable).replace(os.sep, '/'), 'args': [script.replace(os.sep, '/')]}
+
+
+# The windowless Python interpreter, by name, per hosts.json platform (plan section 6, rule 4).
+INTERPRETERS = {'windows': 'pythonw'}
+
+
+def manifest_command(script, platforms, *args):
+    names = sorted(set(INTERPRETERS.get(p, '') for p in platforms))
+    if len(names) != 1 or not names[0]:
+        raise ValueError('no one windowless interpreter for the platforms %s' % ', '.join(platforms))
+    return {'command': names[0], 'args': [script.replace(os.sep, '/')] + list(args)}
 
 
 def settings_entry(event_name, matcher, script, executable=None, timeout=None):

@@ -176,16 +176,22 @@ place or copies it into its plugin cache is not settled: the plugins reference
 an install from the checkout was observed copied into the cache (docs/plugin-source.md "Open
 questions"). Either way `${CLAUDE_PLUGIN_ROOT}` holds pushed kit main, not the checkout the stubs
 run: the skills and agents write every kit-only path (the tools above, `kitlib/`, `optional/`, the
-kit's docs) as `${CLAUDE_PLUGIN_ROOT}/<path>` (tests/skills checks it), and only stub tools
-repo-relative. Source: https://code.claude.com/docs/en/plugin-marketplaces. That `${CLAUDE_PLUGIN_ROOT}` is substituted in
-agent and skill text is unverified: confirm it in one real loaded session before the first install.
+kit's docs) as `<kit>/<path>` (tests/skills checks it), and only stub tools repo-relative; the kit
+header hook tells each session and subagent the folder `<kit>` stands for (docs/content.md "Kit
+header"). Agent and skill text gets no `${CLAUDE_PLUGIN_ROOT}` substitution, so neither uses it.
+Source: https://code.claude.com/docs/en/plugin-marketplaces.
 `claude plugin validate` passes with warnings only (no author field; CLAUDE.md is not loaded) and
 reports no reserved name.
 
-The plugin carries one hook: the coordinator SessionStart hook, `hosts/claude/shell/hooks/hooks.json` (named by
-`"hooks"` in `.claude-plugin/plugin.json`), run in exec form as `pythonw` with
-`${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/coordinator_session_start.py` as its argument. Each account's
-settings already run that script, so the owner removes the settings SessionStart entry in the same
+The plugin root is the whole kit (export), and `.claude-plugin/plugin.json` stays at its root: the
+hooks and the MCP server run kitlib and tools beside them. plugin.json, marketplace.json and the hooks
+file `hosts/claude/shell/hooks/hooks.json` (named by `"hooks"` in plugin.json) are rendered from
+`kit.json` and content/ (docs/content.md "Manifests"). The plugin carries two hooks, each run in exec
+form as `pythonw` with a script under `${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/`: the kit
+header (`kit_header.py`, on SessionStart and SubagentStart; whether a plugin may register
+SubagentStart is still to be checked live, docs/content.md "Kit header") and the coordinator
+SessionStart hook (`coordinator_session_start.py`). Each account's settings already run the
+coordinator script, so the owner removes the settings SessionStart entry in the same
 step as the install, or it runs twice (`tools/machine_setup.py` notes it, docs/machine-setup.md
 "Settings"). guard.py stays in each account's settings and is never in the plugin (docs/guard.md
 "Go-live"); the PM repo's `pm_session_start.py` stays in that repo's settings.

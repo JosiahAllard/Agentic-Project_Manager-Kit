@@ -66,11 +66,59 @@ class RealContentTest(unittest.TestCase):
             for rel, data in s.files:
                 self.assertEqual(read(os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'skills', s.name, *rel.split('/'))), data)
 
+    def test_no_agent_file_names_the_plugin_root_variable(self):
+        """An agent body gets no ${CLAUDE_PLUGIN_ROOT} substitution: the kit's folder is `<kit>`."""
+        agents = os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'agents')
+        for n in os.listdir(agents):
+            with self.subTest(agent=n):
+                self.assertNotIn(b'CLAUDE_PLUGIN_ROOT', read(os.path.join(agents, n)))
+
+
+class ManifestTest(unittest.TestCase):
+    """The plugin manifest, the marketplace and hooks.json: rendered from kit.json (the one version)."""
+
+    def load(self, *parts):
+        with open(os.path.join(KIT_ROOT, *parts), encoding='utf-8') as f:
+            return json.load(f)
+
+    def test_every_manifest_carries_kit_json_version(self):
+        kit = content.load_kit(KIT_ROOT)
+        self.assertEqual(self.load('kit.json'), kit)
+        plugin = self.load('.claude-plugin', 'plugin.json')
+        self.assertEqual((plugin['name'], plugin['version']), (kit['name'], kit['version']))
+        market = self.load('.claude-plugin', 'marketplace.json')
+        self.assertEqual(market['metadata']['version'], kit['version'])
+        self.assertEqual([p['source'] for p in market['plugins']], ['./'])
+
+    def test_the_hook_commands_come_from_the_one_helper(self):
+        from kitlib.host import hookmain, registry
+        want = hookmain.manifest_command('x', registry.host('claude').platforms)['command']
+        hooks = self.load('hosts', 'claude', 'shell', 'hooks', 'hooks.json')['hooks']
+        self.assertEqual(sorted(hooks), ['SessionStart', 'SubagentStart'])
+        for event, groups in hooks.items():
+            for h in (h for g in groups for h in g['hooks']):
+                self.assertEqual(h['command'], want)
+                self.assertTrue(h['args'][0].startswith('${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/'))
+
+    def test_load_kit_refusals(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        for raw in (None, b'{', b'[]', b'{"name": "pm-kit"}', b'{"name": "PM", "version": "1.0.0"}',
+                    b'{"name": "pm-kit", "version": "1.0"}', b'{"name": "pm-kit", "version": "1.0.0", "x": 1}'):
+            path = os.path.join(root, 'kit.json')
+            if os.path.exists(path):
+                os.remove(path)
+            if raw is not None:
+                write(path, raw)
+            with self.subTest(raw=raw), self.assertRaises(hc.ContentError):
+                content.load_kit(root)
+
     def test_role_bodies_name_no_claude_value_a_token_covers(self):
-        """The values in hosts.claude.adapter.content.TOKENS reach the agent files only through tokens."""
+        """The values in hosts.claude.adapter.content.TOKENS reach the agent files only through tokens;
+        `<kit>`, the neutral name of the kit's folder (kit_root's Claude value too), is written bare."""
         for r in content.load(KIT_ROOT).roles:
             text = r.description + r.body
-            for value in list(claude_content.TOKENS.values()) + ['pm-kit:']:
+            for value in [v for v in claude_content.TOKENS.values() if v != '<kit>'] + ['pm-kit:']:
                 with self.subTest(role=r.name, value=value):
                     self.assertNotIn(value, text)
 
@@ -139,7 +187,7 @@ class ClaudeRendererTest(unittest.TestCase):
         self.assertEqual(got['hosts/claude/shell/agents/alpha.md'],
                          b'---\nname: alpha\ndescription: Builds things. Ask pm-kit:beta first.\n'
                          b'tools: Read, Grep, Bash\nmodel: sonnet\neffort: low\n---\n\n'
-                         b'Read .claude/agent-profile.md and CLAUDE.md; docs at ${CLAUDE_PLUGIN_ROOT}/docs.\n')
+                         b'Read .claude/agent-profile.md and CLAUDE.md; docs at <kit>/docs.\n')
         self.assertEqual(got['hosts/claude/shell/agents/beta.md'],
                          b'---\nname: beta\ndescription: "Two: parts"\nmodel: opus\n---\nbody\n')
 
@@ -161,8 +209,11 @@ class TempTreeTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.root, True)
-        for rel in ('content', os.path.join('hosts', 'claude', 'shell', 'agents'), os.path.join('hosts', 'claude', 'shell', 'skills')):
+        for rel in ('content', '.claude-plugin', os.path.join('hosts', 'claude', 'shell', 'agents'),
+                    os.path.join('hosts', 'claude', 'shell', 'skills')):
             shutil.copytree(os.path.join(KIT_ROOT, rel), os.path.join(self.root, rel))
+        for rel in ('kit.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json')):
+            write(self.path(rel), read(os.path.join(KIT_ROOT, rel)))
         self.rs = [claude_content.renderer()]
 
     def path(self, *parts):
@@ -191,6 +242,19 @@ class TempTreeTest(unittest.TestCase):
         self.assertEqual(content.drift(self.root, self.rs), ['differs: hosts/claude/shell/agents/worker.md'])
         content.write(self.root, self.rs)
         self.assertIn(b'\neffort: high\r\n', read(self.path('hosts', 'claude', 'shell', 'agents', 'worker.md')))
+
+    def test_a_kit_version_change_reaches_every_manifest(self):
+        write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
+        self.assertEqual(content.drift(self.root, self.rs),
+                         ['differs: .claude-plugin/marketplace.json', 'differs: .claude-plugin/plugin.json'])
+        content.write(self.root, self.rs)
+        self.assertEqual(json.loads(read(self.path('.claude-plugin', 'plugin.json')))['version'], '9.8.7')
+
+    def test_a_bad_kit_json_is_usage(self):
+        write(self.path('kit.json'), b'{"version": "1"}\n')
+        out = io.StringIO()
+        self.assertEqual(cli.main(['-C', self.root], out), 2)
+        self.assertIn('kit.json', out.getvalue())
 
     def test_a_bad_role_is_usage(self):
         role = self.path('content', 'roles', 'worker.md')

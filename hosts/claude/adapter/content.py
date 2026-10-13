@@ -6,13 +6,43 @@ role's capabilities as Claude tool names, in order; no line for `capabilities: a
 and for `cache: long` the `experimental` map with `cacheTtl: 1h`; then the body with its tokens
 filled from TOKENS. Lines end as the role file's do. Each skill folder is copied byte for byte to
 `hosts/claude/shell/skills/<name>/`.
+
+manifests(kit, content) writes the files that carry the kit's one version (kit.json; ARCHITECTURE.md
+"Packaging"), each JSON with indent 2 and a final newline:
+- `.claude-plugin/plugin.json`: kit.json's name and version, every agent file, the skills folder,
+  HOOKS_REL and the machine-lock MCP server. It stays at the kit root: the plugin root is the whole
+  kit, since its hooks and MCP server run kitlib and tools beside them (${CLAUDE_PLUGIN_ROOT}).
+- `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin
+  (`"source": "./"`), its version as `metadata.version`.
+- HOOKS_REL: the plugin's hooks (HOOKS), each command line from kitlib.host.hookmain.manifest_command
+  for the platforms hosts.json gives Claude, the script under ${CLAUDE_PLUGIN_ROOT}.
 """
+import json
+
 from kitlib import agentname
+from kitlib.host import hookmain, registry
 from kitlib.host.content import ContentError, quote, substitute
 
 HOST = 'claude'
-AGENTS_REL = 'hosts/claude/shell/agents'
-SKILLS_REL = 'hosts/claude/shell/skills'
+SHELL_REL = 'hosts/claude/shell'
+AGENTS_REL = SHELL_REL + '/agents'
+SKILLS_REL = SHELL_REL + '/skills'
+HOOKS_REL = SHELL_REL + '/hooks/hooks.json'
+MANIFEST_REL = '.claude-plugin/plugin.json'
+MARKETPLACE_REL = '.claude-plugin/marketplace.json'
+PLUGIN_ROOT = '${CLAUDE_PLUGIN_ROOT}'
+DESCRIPTION = ('The PM kit as a Claude Code plugin (ARCHITECTURE.md, Packaging): the agents and skills '
+               'rendered into hosts/claude/shell/, its hooks and the machine lock MCP server; templates, '
+               'optional tools and knowledge ship beside them (docs/shipping.md). Rendered from kit.json '
+               'and content/ by tools/render_content.py; never edit it by hand.')
+# The plugin's hooks: (event, matcher or None, script in hooks/, its arguments). The kit header runs at
+# every session and subagent start; the coordinator rules at a session's start, resume or compact.
+HOOKS = (
+    ('SessionStart', 'startup|resume|clear|compact', 'kit_header.py', ('SessionStart',)),
+    ('SessionStart', 'startup|resume|compact', 'coordinator_session_start.py', ()),
+    ('SubagentStart', None, 'kit_header.py', ('SubagentStart',)),
+)
+MCP_SERVERS = {'machine-lock': {'command': 'python', 'args': [PLUGIN_ROOT + '/mcp/lock_server.py']}}
 TIER_MODEL = {'light': 'haiku', 'standard': 'sonnet', 'strong': 'opus', 'deep': 'opus'}
 TOOLS = {
     'read': 'Read', 'edit': 'Edit', 'write': 'Write', 'search': 'Grep', 'find': 'Glob',
@@ -26,7 +56,7 @@ TOKENS = {
     'profile_path': '.claude/agent-profile.md',
     'coordinator_profile_path': '.claude/coordinator-profile.md',
     'instructions_file': 'CLAUDE.md',
-    'kit_root': '${CLAUDE_PLUGIN_ROOT}',
+    'kit_root': '<kit>',            # an agent body gets no ${CLAUDE_PLUGIN_ROOT}; the kit header says <kit>
     'worktrees_dir': '.claude/worktrees',
 }
 CACHE_TTL = {'long': '1h'}
@@ -74,6 +104,38 @@ class ClaudeContent:
             for rel, data in skill.files:
                 out['%s/%s/%s' % (SKILLS_REL, skill.name, rel)] = data
         return out
+
+    def hooks(self, registry_path=None):
+        platforms = registry.host(HOST, registry_path).platforms
+        events = {}
+        for event, matcher, script, args in HOOKS:
+            hook = {'type': 'command'}
+            hook.update(hookmain.manifest_command('%s/%s/hooks/%s' % (PLUGIN_ROOT, SHELL_REL, script),
+                                                  platforms, *args))
+            group = {'matcher': matcher} if matcher else {}
+            group['hooks'] = [hook]
+            events.setdefault(event, []).append(group)
+        return {'hooks': events}
+
+    def manifests(self, kit, content, registry_path=None):
+        """{path: bytes} of the plugin manifest, the marketplace and the hooks file, for `kit`
+        ({"name", "version"}, kitlib.content.load_kit) and `content`."""
+        plugin = {
+            'name': kit['name'], 'version': kit['version'], 'description': DESCRIPTION,
+            'agents': ['./%s/%s.md' % (AGENTS_REL, n) for n in sorted(content.role_names())],
+            'skills': ['./%s/' % SKILLS_REL], 'hooks': './' + HOOKS_REL, 'mcpServers': MCP_SERVERS,
+        }
+        market = {
+            'name': kit['name'],
+            'description': "The PM kit's plugin, loaded in place from a kit checkout (docs/install.md, "
+                           'Plugin install).',
+            'owner': {'name': 'PM kit'}, 'metadata': {'version': kit['version']},
+            'plugins': [{'name': kit['name'], 'source': './',
+                         'description': 'The PM kit: agents, skills and the machine lock MCP server.'}],
+        }
+        dump = lambda data: (json.dumps(data, indent=2) + '\n').encode('utf-8')     # noqa: E731
+        return {MANIFEST_REL: dump(plugin), MARKETPLACE_REL: dump(market),
+                HOOKS_REL: dump(self.hooks(registry_path))}
 
 
 def renderer():

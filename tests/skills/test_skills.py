@@ -17,9 +17,8 @@ EXTRA_FILES = {"coordinator-dispatch": ["roster.md"]}
 REPO_LOCAL = {"worktree-start"}
 REPO_LOCAL_SUFFIX = "-train-eval"     # the training-and-evaluation workflow skill
 
-
-# kit-only paths: in an agent file, written for the plugin's root (substituted at load); in a skill,
-# which every host ships byte for byte (docs/content.md), as `<kit>/...`, the kit's folder; and
+# kit-only paths, in an agent file and in a skill (which every host ships byte for byte, docs/content.md),
+# as `<kit>/...`, the kit's folder the kit header names; PLUGIN_RX catches the plugin-root variable; and
 # repo-relative kit paths
 PLUGIN_RX = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([\w./-]*[\w-])")
 KIT_RX = re.compile(r"<kit>/([\w./-]*[\w-])")
@@ -46,8 +45,8 @@ def _repo_relative_kit_docs(text, kit_docs):
 
 
 def _kit_form(p):
-    """How `p` writes the kit's root: `<kit>` in a skill, the plugin-root variable in an agent file."""
-    return "<kit>" if SKILLS in p.parents else "${CLAUDE_PLUGIN_ROOT}"
+    """How `p` writes the kit's root: `<kit>`, in a skill and in an agent file alike (the kit header says it)."""
+    return "<kit>"
 
 
 def _shipped_text_files():
@@ -80,7 +79,7 @@ class SkillFilesTest(unittest.TestCase):
         self.assertEqual(violations(GODOT_SKILL), [])
 
     def test_kit_tools_named_exist(self):
-        """Kit-only paths are written `<kit>/<path>` in a skill, `${CLAUDE_PLUGIN_ROOT}/<path>` in an agent
+        """Kit-only paths are written `<kit>/<path>` in a skill and in an agent
         file, and exist in the kit; a repo-relative `tools/<name>.py` is one a repo has through a stub
         (kitlib.stubs.SHARED) or supplies itself."""
         for p in _shipped_text_files():

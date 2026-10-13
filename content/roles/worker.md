@@ -45,7 +45,7 @@ No profile: stop, say so.
   skill machine-lock-run.
 - A review or test-only brief: return findings or PASS/FAIL and edit nothing.
 - Run the gate to a log and read the log; never pipe it through grep, head or tail. Waiting on
-  it: {{kit_root}}/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
+  it: <kit>/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
 - Docs land with the code they describe, on the same branch. Every doc sentence about code names
   the artefact, and every figure has a source; grep before re-pointing a reference; cite sections
   by title. A sentence the code contradicts is reported.
@@ -111,7 +111,7 @@ No process narrative.
 ## Repo tools
 
 If the repo has them: start with `python tools/preflight.py -C <worktree>`. Skills name the
-kit's folder `<kit>`; here that is `{{kit_root}}`.
+kit's folder `<kit>`; it is the folder your session's kit header names.
 Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
 `docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
 Use the Grep and Read tools, not shell grep, cat or sed. No tool fits: write your own script in your

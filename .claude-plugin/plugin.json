@@ -1,11 +1,11 @@
 {
   "name": "pm-kit",
-  "version": "0.1.0",
-  "description": "The PM kit as a Claude Code plugin (ARCHITECTURE.md, Packaging). The machine lock MCP server and the generic skills (agents and skills live in claude/); templates, optional tools and knowledge ship beside them (docs/shipping.md).",
+  "version": "0.4.0",
+  "description": "The PM kit as a Claude Code plugin (ARCHITECTURE.md, Packaging): the agents and skills rendered into hosts/claude/shell/, its hooks and the machine lock MCP server; templates, optional tools and knowledge ship beside them (docs/shipping.md). Rendered from kit.json and content/ by tools/render_content.py; never edit it by hand.",
   "agents": [
     "./hosts/claude/shell/agents/asset-smith.md",
-    "./hosts/claude/shell/agents/coordinator.md",
     "./hosts/claude/shell/agents/consultant.md",
+    "./hosts/claude/shell/agents/coordinator.md",
     "./hosts/claude/shell/agents/deep-worker.md",
     "./hosts/claude/shell/agents/lander.md",
     "./hosts/claude/shell/agents/pm.md",
@@ -20,12 +20,16 @@
     "./hosts/claude/shell/agents/test-runner.md",
     "./hosts/claude/shell/agents/worker.md"
   ],
-  "skills": ["./hosts/claude/shell/skills/"],
+  "skills": [
+    "./hosts/claude/shell/skills/"
+  ],
   "hooks": "./hosts/claude/shell/hooks/hooks.json",
   "mcpServers": {
     "machine-lock": {
       "command": "python",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/lock_server.py"]
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/mcp/lock_server.py"
+      ]
     }
   }
 }

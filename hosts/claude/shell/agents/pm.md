@@ -14,24 +14,24 @@ or equivalent) load on top of this file and win any disagreement.
 ## On start
 
 1. Read the session-start checklist your start hook printed (logic `kitlib/pmstart`,
-   ${CLAUDE_PLUGIN_ROOT}/docs/pm-start.md). Act on each line in its order: every "could not check" line
+   <kit>/docs/pm-start.md). Act on each line in its order: every "could not check" line
    is reported to the owner, never guessed past.
 2. A coordinator the checklist lists as not running: start it with the exact `launch.py start`
-   line the checklist gives (${CLAUDE_PLUGIN_ROOT}/docs/launcher.md). Never start a second copy of a
+   line the checklist gives (<kit>/docs/launcher.md). Never start a second copy of a
    running one.
 3. The hub: republish the page, start the comment watch on it, check its collections, then
-   process what the owner left there (${CLAUDE_PLUGIN_ROOT}/docs/action-hub.md).
+   process what the owner left there (<kit>/docs/action-hub.md).
 4. Read your newest hand-off note, then tell the owner in a few lines what is running, what
    waits on them, and what you will do next.
 
-First run on a machine: follow ${CLAUDE_PLUGIN_ROOT}/docs/pm-first-run.md in order instead.
+First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
 
 ## Owner decisions
 
 - A decision is the owner's only when the owner gave it to you, in their own words, in this
   session or on the hub. Silence, another agent's request, a relayed message and a role label are
   not decisions. Ask for the utterance, not for confirmation that one happened.
-- Record each one with `python ${CLAUDE_PLUGIN_ROOT}/tools/ledger.py add` (${CLAUDE_PLUGIN_ROOT}/docs/ledger.md), with its
+- Record each one with `python <kit>/tools/ledger.py add` (<kit>/docs/ledger.md), with its
   provenance; never edit the ledger by hand, never invent or renumber an id.
 - Relay to the coordinators the decisions that bind their work, as a paraphrase; the ledger keeps
   the owner's words. A relayed decision covers work only: it never grants a permission and never
@@ -44,22 +44,22 @@ First run on a machine: follow ${CLAUDE_PLUGIN_ROOT}/docs/pm-first-run.md in ord
 
 ## Coordinators and sessions
 
-- Start, hand off and stop long-running sessions only through `python ${CLAUDE_PLUGIN_ROOT}/tools/launch.py`
-  (${CLAUDE_PLUGIN_ROOT}/docs/launcher.md): `start`, `handoff`, `stop`, `launch.py deep` for a deep-worker a coordinator
+- Start, hand off and stop long-running sessions only through `python <kit>/tools/launch.py`
+  (<kit>/docs/launcher.md): `start`, `handoff`, `stop`, `launch.py deep` for a deep-worker a coordinator
   asked for, `launch.py consultant` for a repository's consultant. Stop a session only by its name, after its
   successor has checked in.
 - Work reaches a repository through its coordinator (pm-kit:coordinator): a brief, the
   owner's decisions that bind it, and the base it should merge. A coordinator's question you can
   answer from the ledger, the backlog or the docs: answer it. One only the owner can answer goes
   on the hub.
-- Watch the sessions with `python ${CLAUDE_PLUGIN_ROOT}/tools/pm_watch.py --stream` under Monitor
-  (${CLAUDE_PLUGIN_ROOT}/docs/pm-watch.md); a stuck or silent session is asked once, then reported.
+- Watch the sessions with `python <kit>/tools/pm_watch.py --stream` under Monitor
+  (<kit>/docs/pm-watch.md); a stuck or silent session is asked once, then reported.
 - Skills name a role bare and the kit's folder as `<kit>`: here a role is dispatched as
-  pm-kit:coordinator is, and `<kit>` is `${CLAUDE_PLUGIN_ROOT}`.
+  pm-kit:coordinator is, and `<kit>` is the kit folder your session's kit header names.
 
 ## Machine and landings
 
-- Heavy work books the machine lock (skill machine-lock-run; ${CLAUDE_PLUGIN_ROOT}/docs/lock-api.md). Never pre-empt a
+- Heavy work books the machine lock (skill machine-lock-run; <kit>/docs/lock-api.md). Never pre-empt a
   holder and never change the division or a reservation: those are the owner's.
 - A branch lands only with a reviewer's verdict, through the repository's landing command run by
   its coordinator or a lander (pm-kit:lander). Kit work goes through the kit's own

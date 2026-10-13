@@ -30,7 +30,7 @@ another session's run.
 2. Build first with the profile's build command. A build failure is your result:
    report the compiler error lines and stop. Never test a stale build.
 3. Take any lock the profile requires for the tier, do the orphan sweep (end only processes you started, by pid; read preflight's leftover lines; `--find lock`), then run
-   only the requested tier(s) with the profile's commands. Waiting on a run: {{kit_root}}/docs/gate.md
+   only the requested tier(s) with the profile's commands. Waiting on a run: <kit>/docs/gate.md
    "Waiting on a gate: who arms what" (your own run: no Monitor).
 
 ## Keeping your context small

@@ -13,7 +13,10 @@ a test fails when they differ from what the renderer writes now (tests/content/t
   limits either to one host. Exit 2: usage, or a content file of the wrong shape (the line names
   the file and the problem).
 
-Never edit `hosts/claude/shell/agents/` or `hosts/claude/shell/skills/` by hand: edit `content/`, then `--write`, and
+The renderer also writes each host's plugin manifests from `kit.json` (the kit's one name and
+version, ARCHITECTURE.md "Packaging"; see "Manifests" below). Never edit
+`hosts/claude/shell/agents/`, `hosts/claude/shell/skills/`, `.claude-plugin/*.json` or
+`hosts/claude/shell/hooks/hooks.json` by hand: edit `content/` or `kit.json`, then `--write`, and
 commit both. Code: `kitlib/content` (load, render, drift, write), `kitlib/host/content.py` (the
 role model, tokens, and the `ContentRenderer` protocol), `hosts/claude/adapter/content.py` (Claude's
 renderer).
@@ -56,7 +59,7 @@ A body or description names a value that differs by host only as a token. An unk
 | `{{profile_path}}` | `.claude/agent-profile.md` |
 | `{{coordinator_profile_path}}` | `.claude/coordinator-profile.md` |
 | `{{instructions_file}}` | `CLAUDE.md` |
-| `{{kit_root}}` | `${CLAUDE_PLUGIN_ROOT}` |
+| `{{kit_root}}` | `<kit>` (no role uses it: write `<kit>`, which the kit header explains) |
 | `{{worktrees_dir}}` | `.claude/worktrees` |
 
 ## Claude
@@ -65,3 +68,46 @@ A body or description names a value that differs by host only as a token. An unk
 when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model`,
 `effort` when set, and for `cache: long` the `experimental` map with `cacheTtl: 1h`. It copies each
 skill folder to `hosts/claude/shell/skills/<name>/`. It owns both folders.
+
+An agent body gets no `${CLAUDE_PLUGIN_ROOT}` substitution, so a role names the kit's folder
+`<kit>`, as a skill does, and the kit header says what it is (tests/content
+`test_no_agent_file_names_the_plugin_root_variable`).
+
+## Manifests
+
+A renderer with `manifests(kit, content)` also writes its host's plugin files, `kit` being
+`kitlib.content.load_kit` of `kit.json` (`{"name", "version"}`: a lowercase name and an `N.N.N`
+version, nothing else). Claude's are each JSON with indent 2 and a final newline:
+
+- `.claude-plugin/plugin.json`: the name and version, every agent file, the skills folder, the
+  hooks file and the machine-lock MCP server (`python ${CLAUDE_PLUGIN_ROOT}/mcp/lock_server.py`).
+  It stays at the kit root because the plugin root is the whole kit: the hooks and the MCP server
+  run kitlib and tools beside them, and an installed plugin reaches only files under its root.
+  The export (docs/plugin-source.md) stamps its version as `<version>-main.<count>`.
+- `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin
+  (`"source": "./"`), the version as `metadata.version`.
+- `hosts/claude/shell/hooks/hooks.json`: the plugin's hooks (`HOOKS` in the renderer). Each command
+  line comes from `kitlib.host.hookmain.manifest_command`, the interpreter by name for the platforms
+  hosts.json gives the host (`pythonw` on Windows), so no manifest spells it by hand.
+
+A version bump is one edit to `kit.json`, then `--write`. tests/content `ManifestTest`.
+
+## Kit header
+
+`hosts/claude/shell/hooks/kit_header.py <event>` runs on SessionStart (startup, resume, clear,
+compact) and on SubagentStart (every subagent). It boots the kit (docs/kitboot.md) and adds
+`kitlib.host.header.text(<kit folder>)` to the agent's context (`additionalContext`, rendered by the
+Claude adapter's `context`). The text names the kit's absolute folder, says that `<kit>` in skills
+and role files means that folder (with a worked command), that a tool path without `<kit>/` is the
+repository's own stub, and that `<worktree>`, `<repo>`, `<slug>` and the like are placeholders. A
+kit that does not load is said in plain text instead.
+
+The coordinator's SessionStart hook stays a separate entry: hooks.json runs both, and Claude Code
+joins their context. Keeping it apart keeps its path, which settings re-pointed by machine setup
+still name (docs/machine-setup.md "Settings"), and its role check.
+
+Open: the Claude Code docs show SubagentStart's `additionalContext` reaching the subagent only for
+a hook in settings.json. Whether a plugin's hooks.json may register SubagentStart needs a live
+check on the owner's machine: start a subagent with the plugin enabled and ask it for the kit
+folder. If it cannot, only the main session gets the header, and a brief must name the kit folder
+for a subagent.
