@@ -6,6 +6,8 @@
   default(path)               the one host marked "default": what an unset PM_KIT_HOST means
   selected(environ, path)     PM_KIT_HOST's host (blank or unset: the default), checked
   choose(flag, environ, path) a --host value when one was given, else selected()
+  profiles(path)              every host's HostProfile, in file order
+  union(field, path)          a profile field's distinct values over every host, in file order
 
 kitlib never imports a host's adapter. The registry hands out the adapter's module NAME, and the
 entry point that wants the adapter imports it (tools/_host.py); hosts.json is data, so reading it
@@ -31,6 +33,7 @@ ENV = 'PM_KIT_HOST'
 TIERS = ('light', 'standard', 'strong', 'deep')
 
 _NAME = re.compile(r'[a-z][a-z0-9-]*\Z')
+_ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
 _MODULE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z')
 _KEYS = {'adapter', 'shell', 'platforms', 'capabilities', 'profile', 'tiers'}
 # The operating systems a host can declare it runs on (multi-host plan section 6). Windows is
@@ -113,13 +116,17 @@ def _capabilities(name, raw):
 def _profile(name, raw):
     w = '%s.profile' % name
     p = _object(w, raw, ('owner_paths', 'worktrees_directory', 'state_directory', 'process_names',
-                         'mcp_tool_format'))
+                         'mcp_tool_format', 'session_env'))
+    session_env = _text(w + '.session_env', p['session_env'])
+    if not _ENV_NAME.match(session_env):
+        raise RegistryError('hosts.json: %s.session_env must be an environment variable name' % w)
     return HostProfile(
         _texts(w + '.owner_paths', p['owner_paths']),
         _relpath(w + '.worktrees_directory', p['worktrees_directory']),
         _text(w + '.state_directory', p['state_directory']),
         _texts(w + '.process_names', p['process_names']),
-        _text(w + '.mcp_tool_format', p['mcp_tool_format']))
+        _text(w + '.mcp_tool_format', p['mcp_tool_format']),
+        session_env)
 
 
 def _entry(name, raw):
@@ -194,3 +201,19 @@ def choose(flag, environ=None, path=None):
     if flag is not None:
         return host(flag, path).name
     return selected(environ, path)
+
+
+def profiles(path=None):
+    """Every registered host's HostProfile, in file order: for core code that must know each host
+    at once (the lock's agent-host test, the owner paths), not only the selected one."""
+    return tuple(h.profile for h in load(path).values())
+
+
+def union(field, path=None):
+    """The distinct values of the HostProfile `field` over every host, in file order; the items of
+    a tuple field each count. RegistryError as load(); AttributeError for a field it lacks."""
+    out = []
+    for profile in profiles(path):
+        value = getattr(profile, field)
+        out.extend(value if isinstance(value, tuple) else (value,))
+    return tuple(dict.fromkeys(out))

@@ -109,6 +109,9 @@ class Validation(Case):
                 lambda e: e['profile'].update(role_environment='PM_KIT_ROLE'),
                 lambda e: e['profile'].update(worktrees_directory='/abs'),
                 lambda e: e['profile'].update(process_names='claude.exe'),
+                lambda e: e['profile'].pop('session_env'),
+                lambda e: e['profile'].update(session_env='NOT A NAME'),
+                lambda e: e['profile'].update(session_env=''),
                 lambda e: e['tiers'].pop('deep'),
                 lambda e: e['tiers'].update(light='')):
             bad = copy.deepcopy(data)
@@ -119,6 +122,20 @@ class Validation(Case):
     def test_host_names_are_lowercase_words(self):
         self.refused(second(kit_hosts(), 'Other'))
         self.refused(second(kit_hosts(), 'a b'))
+
+
+class Profiles(Case):
+    def test_profiles_and_union_cover_every_host_in_file_order(self):
+        data = second(kit_hosts())
+        data['other']['profile']['process_names'] = ['other.exe', 'node.exe']
+        data['other']['profile']['session_env'] = 'OTHER_SESSION'
+        path = self.put(data)
+        self.assertEqual(len(registry.profiles(path)), 2)
+        self.assertEqual(registry.union('process_names', path), ('claude.exe', 'node.exe', 'other.exe'))
+        self.assertEqual(registry.union('session_env', path), ('CLAUDE_CODE_SESSION_ID', 'OTHER_SESSION'))
+
+    def test_the_kit_registry_names_claudes_session_variable(self):
+        self.assertEqual(registry.union('session_env'), ('CLAUDE_CODE_SESSION_ID',))
 
 
 class Selection(Case):

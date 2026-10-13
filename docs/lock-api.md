@@ -97,10 +97,10 @@ Error codes:
 ## Who may (the one hook)
 
 - `authorize(actor, action, target)` decides every write. It returns None, or the reason for refusing.
-- Who is asking is `api.who(actor, store)`. On the machine's store it is `store.caller()`, read from the calling process's tree: the role is agent when any ancestor is an agent host (`store.AGENT_HOSTS`: claude.exe, which is both Claude Code and the Claude desktop app, node.exe and codex.exe), or when the tree cannot be read. Environment variables, a role, `force` or a session id in `actor` change nothing.
+- Who is asking is `api.who(actor, store)`. On the machine's store it is `store.caller()`, read from the calling process's tree: the role is agent when any ancestor is an agent host (`store.agent_hosts()`: every hosts.json profile's `process_names`, today claude.exe, which is both Claude Code and the Claude desktop app, and node.exe, plus codex.exe until Codex is registered), or when the tree or hosts.json cannot be read. The session id shown is the first set one of the profiles' `session_env` variables. Environment variables, a role, `force` or a session id in `actor` change nothing.
 - So the owner's commands run from a terminal outside the Claude desktop app. A command run from the app's terminal panel has the app above it and is an agent's.
 - The owner may do everything. "Owner" means `is_owner(actor)`, which calls the owner check.
-- The default check is `default_owner_check`: `role == "owner"` with no agent host (`claude`).
+- The default check is `default_owner_check`: `role == "owner"` with no agent host (`host`; an actor made before that key was renamed carries it as `claude`, which is still read, `store.actor_host`).
 - `set_owner_check(fn)` replaces it, and `set_owner_check(None)` restores the default. This is the only place ownership is decided.
 - An agent owns a record when its nearest agent host (its Claude Code process, from `store.caller`) is among the record's ancestors (`store.owns`). A session id, which `snapshot()` shows, grants nothing.
 - Ending another session's run is the owner's; the CLI's `stop --force` gives an agent nothing. A run whose wrapper has died is reaped by the lock itself.

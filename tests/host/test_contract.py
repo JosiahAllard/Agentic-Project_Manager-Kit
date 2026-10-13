@@ -32,7 +32,7 @@ class Types(unittest.TestCase):
     def test_profile_holds_only_consumed_fields(self):
         self.assertEqual([f.name for f in dataclasses.fields(host.HostProfile)],
                          ['owner_paths', 'worktrees_directory', 'state_directory',
-                          'process_names', 'mcp_tool_format'])
+                          'process_names', 'mcp_tool_format', 'session_env'])
 
 
 class Degrade(unittest.TestCase):
