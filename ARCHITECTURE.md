@@ -76,7 +76,7 @@ The kit ships as one release with a thin plugin per host, which the owner instal
 
 ## Hosts
 - kitlib stays host-neutral and never imports a host. The host is chosen at the edge: a host's entry points build its adapter and pass it in; shared CLIs read `PM_KIT_HOST` (default `claude`) and resolve the adapter through `hosts.json`. One `--host` flag replaces `--provider`.
-- A `HostAdapter` parses its hook payloads into `Action`, renders `Decision` back, and supplies `SessionHost`, `ContentRenderer` and, where the host has them, `CommandHost`, a launcher and a plugin installer. `HostProfile` holds only consumed fields: owner paths, worktree root, state dir, agent process images, MCP tool-name format.
+- A `HostAdapter` parses its hook payloads into `Action`, renders `Decision` back, and supplies `SessionHost`, `ContentRenderer` and, where the host has them, `CommandHost`, a launcher and a plugin installer. `HostProfile` (the `profile` section of `hosts.json`) holds only consumed fields: owner paths, worktree root, state dir, skills dir, agent process images, the session process and session env var, MCP tool-name and agent-name formats, and commit attribution (name, email, model env var, model form).
 - Capabilities a host lacks (no `ask`, no subagent identity in hooks) are declared in `hosts.json`; the core degrades them one way for every host (`ask` becomes deny with the reason).
 - One shared conformance suite (`tests/host/conformance.py`) defines a supported host; each host's tests subclass it with recorded payloads.
 - The roster: every role exists on every host, with a tier per role and a tier → model map per host (docs/ROSTER.md). Roles are referred to by bare name in content; each host's instructions say how a name maps to its dispatch name.
