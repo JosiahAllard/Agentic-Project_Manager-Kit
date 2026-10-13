@@ -55,10 +55,22 @@ class Memo(object):
 
 @real_git("checks the filesystem's places against git's own rev-parse")
 class SameDecisions(unittest.TestCase):
+    # Appended to the common config, the main checkout's config.worktree and the linked
+    # worktree's (None: not written). Subclasses lay out other configs.
+    COMMON = MAIN_WT = LINKED_WT = None
+
     def setUp(self):
         self.w = RealWorld()
         self.addCleanup(lambda: shutil.rmtree(self.w.base, True) if os.path.isdir(self.w.base) else None)
         self.w.git.ancestors.add((W.SHA_WT, 'main'))
+        common = os.path.join(self.w.main, '.git')
+        for path, text in ((os.path.join(common, 'config'), self.COMMON),
+                           (os.path.join(common, 'config.worktree'), self.MAIN_WT),
+                           (os.path.join(common, 'worktrees', os.path.basename(self.w.wt), 'config.worktree'),
+                            self.LINKED_WT)):
+            if text:
+                with open(path, 'a', encoding='utf-8', newline='\n') as f:
+                    f.write(text)
 
     def test_every_row_decides_the_same(self):
         by_git = Memo(repo.classify)
@@ -79,6 +91,25 @@ class SameDecisions(unittest.TestCase):
         self.assertGreater(by_git.calls, 0)
         for rule in ('root-search', 'main-checkout', 'heavy', 'git-checkout'):
             self.assertIn(rule, rules_seen)
+
+
+@real_git("checks the filesystem's places against git's own rev-parse")
+class SameDecisionsUnderWorktreeConfig(SameDecisions):
+    """The state the Claude desktop app leaves a repository in when it makes a worktree:
+    extensions.worktreeConfig on in the common config, and a config.worktree in the linked
+    worktree's git dir setting core.longpaths and core.hooksPath."""
+    COMMON = '[extensions]\n\tworktreeConfig = true\n'
+    LINKED_WT = '[core]\n\tlongpaths = true\n\thooksPath = C:/somewhere/githooks\n'
+
+
+@real_git("checks the filesystem's places against git's own rev-parse")
+class SameDecisionsWhenConfigWorktreeWins(SameDecisions):
+    """The common config says core.bare = true and each work tree's config.worktree says false:
+    git reads config.worktree last, so both are work trees (a reader that ignored config.worktree
+    would hand every place to git, one that ignored the common config would never see bare)."""
+    COMMON = '[extensions]\n\tworktreeConfig = true\n[core]\n\tbare = true\n'
+    MAIN_WT = '[core]\n\tbare = false\n'
+    LINKED_WT = '[core]\n\tbare = false\n\tlongpaths = true\n'
 
 
 if __name__ == '__main__':
