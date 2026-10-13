@@ -31,8 +31,10 @@ Argv = ListOf(Str(), nonempty=True)
 Regexes = Either(Regex(), ListOf(Regex()))
 
 # Paths only the owner changes (PM kit _owner_only.DEFAULT): an entry ending `/` locks a directory.
-OWNER_PATHS = ['CLAUDE.md', '.claude/', '.github/workflows/', '.kit.json', 'tools/gate.json',
-               'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']
+# AGENTS.md is the canonical rules file and docs/agent-profile.md the neutral profile (CLAUDE.md and
+# .claude/agent-profile.md point at them), so they are locked as their old homes are.
+OWNER_PATHS = ['AGENTS.md', 'CLAUDE.md', '.claude/', 'docs/agent-profile.md', '.github/workflows/', '.kit.json',
+               'tools/gate.json', 'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']
 OWNER_PATHS_EXCEPT = ['.claude/worktrees/']
 
 # The heavy-program entry shape: kit defaults (policy.HEAVY_DEFAULTS) and `.kit.json` "heavy".programs.
