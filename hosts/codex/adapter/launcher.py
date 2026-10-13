@@ -56,7 +56,7 @@ def role_definition(role, kit=None):
     if role not in found.role_names():
         raise ValueError('unknown kit role: %s' % role)
     r = found.role(role)
-    body = codex_content.substitute_body(r, found.role_names())
+    body = codex_content.substitute_body(r, found.role_names()).replace("\r\n", "\n")
     return r, body
 
 

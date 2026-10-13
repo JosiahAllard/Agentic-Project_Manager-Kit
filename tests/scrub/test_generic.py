@@ -37,6 +37,8 @@ _ROOT_SEARCH = 'Get-ChildItem C:\\ -Recurse'
 DRIVE_ALLOWED = (
     ('hosts/claude/shell/agents/*.md', _ROOT_SEARCH, 'the root-search rule names the searches it forbids'),
     ('content/roles/*.md', _ROOT_SEARCH, 'the roles the agent files above are rendered from'),
+    ('hosts/codex/shell/agents/*.toml', _ROOT_SEARCH.replace('\\', '\\\\'),
+     'the same roles rendered for Codex, the backslash escaped as TOML writes it'),
     ('docs/backlog-lint.example.json', '"root": "D:/src/alpha"', 'an invented example root'),
     ('docs/guard.md', '| `root-search` |', 'the root-search rule names the searches it denies'),
     ('docs/guard.md', '| `heredoc-winpath` |', 'the rule describes the escapes it passes'),
