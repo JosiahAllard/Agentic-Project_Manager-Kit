@@ -7,7 +7,6 @@ import sys
 import tempfile
 import unittest
 
-from tests.bridge.registered import use_codex_registered
 import xml.etree.ElementTree as ET
 
 import optional.bridge.win.startup as startup
@@ -17,10 +16,6 @@ from kitlib.proc.job import Job
 
 
 class StartupTests(unittest.TestCase):
-    def setUp(self):
-        # The configurations name Codex, served only once hosts.json registers it.
-        use_codex_registered(self)
-
     def test_task_uses_current_interactive_user_and_hidden_explicit_python_launcher(self):
         with tempfile.TemporaryDirectory(prefix='bridge-startup-') as folder:
             root=Path(folder)

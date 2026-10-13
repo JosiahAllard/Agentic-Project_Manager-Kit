@@ -12,7 +12,6 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from optional.bridge import registry
 from optional.bridge.core.messages import DeliveryError
 from kitlib.proc.errors import ProcError
 from kitlib.proc.pipe import PrivateListener,peek
@@ -102,12 +101,7 @@ class NativeChannelTests(unittest.TestCase):
         self.assertEqual(self.native_frames,[])
         self.assertEqual(self.native_errors,[])
 
-    def start(self,endpoint,served_only=True):
-        if served_only and endpoint is not None and 'codex' not in registry.names():
-            # These tests need the captured channel. The frontend subprocess reads the kit's own
-            # hosts.json and nominates Codex's app channel only once Codex is registered there
-            # (plan step 9); test_codex_channel_follows_registration covers the meantime.
-            self.skipTest('Codex is not registered in hosts.json yet, so its channel is not read')
+    def start(self,endpoint):
         env=dict(os.environ)
         env.pop('CODEX_APP_TOOLS_PIPE_PATH',None)
         if endpoint is not None:env['CODEX_APP_TOOLS_PIPE_PATH']=endpoint
@@ -153,18 +147,6 @@ class NativeChannelTests(unittest.TestCase):
         self.assertEqual(len(self.observed),1)
         self.assertEqual(len(self.service.frontends),1)
         self.assertEqual(next(iter(self.service.frontends.values()))[0],native)
-
-    def test_codex_channel_follows_registration(self):
-        # The real frontend subprocess with CODEX_APP_TOOLS_PIPE_PATH set: ignored while hosts.json
-        # does not register Codex, captured once it does. Flips by itself with plan step 9.
-        self.start(self.native_name,served_only=False)
-        native=self.initialize()
-        if 'codex' in registry.names():
-            self.assertIs(type(native.channel),NativeChannel)
-            self.assertGreaterEqual(self.native_accepts,2)
-        else:
-            self.assertIsNone(native.channel)
-            self.assertEqual(self.native_accepts,0)
 
     def test_missing_environment_keeps_legacy_frontend_channel_none(self):
         self.start(None)

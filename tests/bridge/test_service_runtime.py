@@ -8,7 +8,6 @@ import tempfile
 import threading
 import unittest
 
-from tests.bridge.registered import use_codex_registered
 from unittest import mock
 
 from optional.bridge.core.messages import DeliveryError
@@ -22,8 +21,6 @@ from tests.bridge.test_pairing import chat
 
 class BootstrapTests(unittest.TestCase):
     def setUp(self):
-        # Their configurations name Codex, served only once hosts.json registers it.
-        use_codex_registered(self)
         self.temp=tempfile.TemporaryDirectory(prefix='bridge-bootstrap-')
         self.root=Path(self.temp.name)
         self.kit=Path(__file__).resolve().parents[2]

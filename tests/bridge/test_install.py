@@ -12,7 +12,6 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tests.bridge.registered import use_codex_registered
 from optional.bridge.hosts.claude.runtime import hook_descriptor
 from optional.bridge.core.mcp import TOOLS
 from optional.bridge.core.messages import DeliveryError
@@ -25,8 +24,6 @@ from kitlib.proc.pipe import INVALID,create_file
 class InstallTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='bridge-prepare-')
-        # Codex is served in process through a test hosts.json (tests/bridge/registered.py).
-        use_codex_registered(self)
         self.root=Path(self.temp.name).resolve()
         self.kit=Path(__file__).resolve().parents[2]
         self.profile=self.root/'profiles'
@@ -55,9 +52,6 @@ class InstallTests(unittest.TestCase):
     def prepare(self): return install.prepare(self.doc,self.output)
 
     def test_cli_arguments_exit_codes_and_inactive_preparation(self):
-        # A subprocess reads the kit's own hosts.json, which may not register Codex yet (plan
-        # step 9), so the CLI case uses Claude alone; test_codex_cli_* covers the gap.
-        for table in ('native_hosts','profiles'): del self.doc[table]['codex']
         config=self.root/'input.json';config.write_text(json.dumps(self.doc))
         argv=[sys.executable,'-I',str(self.kit/'optional/bridge/tools/bridge_prepare.py'),
             '--config',str(config),'--output',str(self.output)]
@@ -71,17 +65,6 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(again.returncode,1)
         self.assertEqual((self.output/'runtime.json').read_bytes(),before)
         self.assertFalse(self.state.exists())
-
-    def test_codex_cli_preparation_waits_for_codex_in_hosts_json(self):
-        from kitlib.host import registry
-        config=self.root/'input.json';config.write_text(json.dumps(self.doc))
-        argv=[sys.executable,'-I',str(self.kit/'optional/bridge/tools/bridge_prepare.py'),
-            '--config',str(config),'--output',str(self.output)]
-        with open(registry.kit_path(),encoding='utf-8') as f: real=json.load(f)
-        done=subprocess.run(argv,capture_output=True,text=True,timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW)
-        # The kit's hosts.json decides: refused until step 9 registers Codex, then prepared.
-        self.assertEqual(done.returncode,0 if 'codex' in real else 1,done.stderr)
 
     def read(self,name): return json.loads((self.output/name).read_bytes())
 

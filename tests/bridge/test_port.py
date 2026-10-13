@@ -10,7 +10,7 @@ import unittest
 from optional.bridge import port, registry
 from optional.bridge.core.contracts import AdapterDescription, Capability
 from optional.bridge.core.messages import BeforeWriteError, DeliveryError
-from tests.bridge.registered import codex_entry, codex_registered
+from tests.bridge.registered import codex_unregistered
 from tests.host.test_leaks import occurrences
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -78,7 +78,9 @@ class Layout(unittest.TestCase):
         self.assertEqual(found, [], 'the service loops over the installed halves (registry.py)')
 
     def test_no_host_shell_mentions_the_bridge(self):
-        shells = [ROOT / '.claude-plugin'] + [ROOT / 'hosts' / name for name in registry.host_registry.names()]
+        # The shells (hosts.json "shell") and Claude's root manifest: what a host loads. Adapter code
+        # may use the word for other things (Codex's workflow names a 'bridge' dimension).
+        shells = [ROOT / '.claude-plugin'] + [ROOT / h.shell for h in registry.host_registry.load().values()]
         found = []
         for shell in shells:
             for path in shell.rglob('*'):
@@ -117,28 +119,21 @@ class Registry(unittest.TestCase):
         with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
             registry.half('no-such-host')
 
-    def test_codex_is_refused_until_hosts_json_registers_it(self):
-        """The known gap until plan step 9: the Codex half exists, but hosts.json is the source of
-        truth, so the service and the installer refuse a Codex profile until Codex is registered
-        there. This test flips by itself once step 9's entry lands."""
-        self.assertTrue(registry.has_half('codex'))
-        if 'codex' in registry.host_registry.names():
-            self.assertIn('codex', registry.names())
-            self.assertEqual(registry.half('codex').name, 'codex')
-        else:
-            self.assertEqual(registry.names(), tuple(n for n in registry.host_registry.names()
-                                                     if registry.has_half(n)))
+    def test_codex_is_served_with_its_channel_variable(self):
+        """hosts.json registers Codex (plan step 9), so its half is served for real."""
+        self.assertIn('codex', registry.host_registry.names())
+        self.assertIn('codex', registry.names())
+        self.assertEqual(registry.half('codex').name, 'codex')
+        self.assertIn('codex', registry.installed())
+        self.assertIn('CODEX_APP_TOOLS_PIPE_PATH', registry.channel_env())
+
+    def test_without_its_hosts_json_entry_codex_is_refused(self):
+        with codex_unregistered():
             self.assertNotIn('codex', registry.names())
             with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
                 registry.half('codex')
+            self.assertNotIn('codex', registry.installed())
             self.assertNotIn('CODEX_APP_TOOLS_PIPE_PATH', registry.channel_env())
-
-    def test_once_registered_codex_is_served_with_its_channel_variable(self):
-        with codex_registered():
-            self.assertIn('codex', registry.names())
-            self.assertEqual(registry.half('codex').name, 'codex')
-            self.assertIn('codex', registry.installed())
-            self.assertIn('CODEX_APP_TOOLS_PIPE_PATH', registry.channel_env())
 
     def test_a_host_name_maps_to_a_module_name(self):
         self.assertEqual(registry.module_name('my-host'), 'my_host')
@@ -153,8 +148,7 @@ class Registry(unittest.TestCase):
                 port.check_host(bad, name)
 
     def test_channel_env_names_are_distinct_variable_names(self):
-        with codex_registered():
-            names = registry.channel_env()
+        names = registry.channel_env()
         self.assertEqual(len(names), len(set(names)))
         self.assertTrue(all(registry.ENV_NAME.fullmatch(n) for n in names))
 
@@ -176,10 +170,7 @@ class StrayHalves(unittest.TestCase):
     def kit(self, folder, registered):
         kit = Path(folder)
         data = json.loads(Path(registry.host_registry.PATH).read_text(encoding='utf-8'))
-        base = next(iter(data.values()))
-        for name in registered:
-            if name not in data:
-                data[name] = codex_entry(base)
+        self.assertTrue(set(registered) <= set(data))       # hosts the kit's hosts.json registers
         (kit / 'hosts.json').write_text(json.dumps(data), encoding='utf-8')
         return kit, str(kit / 'hosts.json')
 
@@ -323,16 +314,14 @@ class Assembly(unittest.TestCase):
         with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
             factories(self.config(['a', 'missing']), {'a': port.BridgeHost('a', len)})
 
-    def test_a_codex_profile_is_refused_until_codex_is_registered_then_served(self):
+    def test_a_codex_profile_is_served_and_refused_without_its_registration(self):
         from optional.bridge.win.runtime import factories
         config = self.config(['codex'])
-        if 'codex' not in registry.host_registry.names():
-            with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
-                factories(config)
-        with codex_registered():
-            providers, deliveries = factories(config)
+        providers, deliveries = factories(config)
         self.assertEqual(set(providers), {'codex'})
         self.assertEqual(set(deliveries), {'codex'})
+        with codex_unregistered(), self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
+            factories(config)
 
     def test_a_hook_frame_goes_to_the_one_provider_with_a_sink(self):
         from optional.bridge.win.runtime import Runtime
@@ -436,14 +425,31 @@ class UnregisteredProfiles(unittest.TestCase):
         with mock.patch.object(registry, 'profile_path', side_effect=recorded):
             with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
                 runtime._profiles({'unregistered-host': {}}, paths.KIT)
-            if 'codex' not in registry.host_registry.names():
-                with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
-                    runtime._profiles({'codex': {'profile_root': str(ROOT)}}, paths.KIT)
+            with codex_unregistered(), self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
+                runtime._profiles({'codex': {'profile_root': str(ROOT)}}, paths.KIT)
         self.assertEqual(read, [])
 
-    def test_install_prepare_refuses_codex_with_the_provider_code_until_registered(self):
-        if 'codex' in registry.host_registry.names():
-            self.skipTest('Codex is registered: install preparation serves it (test_install)')
+    def test_install_renders_codexs_server_entry_from_the_real_registry(self):
+        import sys
+        import tempfile
+        from unittest import mock
+        from optional.bridge import paths
+        from optional.bridge.win import install, runtime
+        with tempfile.TemporaryDirectory() as folder:
+            doc = {'protocol': 1, 'kit_root': str(paths.KIT), 'python': str(Path(sys.executable).resolve()),
+                   'state_root': str(Path(folder) / 'state'), 'host_id': 'served-fixture',
+                   'native_hosts': {'codex': sys.executable}, 'profiles': {'codex': {'profile_root': folder}}}
+            images = {'codex': (Path(sys.executable).resolve(),)}
+            # The image check and the startup task are Win32 (links, SystemRoot, the user's SID);
+            # the configuration check and the MCP entry are not.
+            with mock.patch('optional.bridge.win.runtime.native_hosts', return_value=images):
+                config = runtime.parse_config(doc)
+            with mock.patch.object(install, 'render_startup', return_value={}):
+                payloads, _ = install._render(config, Path(folder) / 'prepared')
+        servers = json.loads(dict((name, data) for name, _, data in payloads)['mcp.json'])['servers']
+        self.assertEqual(servers['codex']['name'], 'agent-bridge')
+
+    def test_install_prepare_refuses_codex_with_the_provider_code_when_unregistered(self):
         import sys
         import tempfile
         from optional.bridge import paths
@@ -457,7 +463,7 @@ class UnregisteredProfiles(unittest.TestCase):
             # The image check is Win32 evidence (it refuses a link such as a POSIX python3);
             # the refusal under test comes after it, from the host registry.
             with mock.patch('optional.bridge.win.runtime.native_hosts', return_value=images), \
-                    self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
+                    codex_unregistered(), self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
                 install.prepare(doc, Path(folder) / 'prepared')
             self.assertFalse((Path(folder) / 'prepared').exists())
 

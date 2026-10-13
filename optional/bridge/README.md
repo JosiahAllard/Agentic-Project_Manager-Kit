@@ -7,13 +7,12 @@ the recipient host's native channel, and never resends a message whose outcome i
 works today, per host and direction, is in `optional/bridge/STATUS.md`. Read it before relying on
 any of this: no message has yet been delivered end to end between live chats.
 
-**Only Claude is served until Codex is registered in `hosts.json`.** The bridge serves a host only
-when `hosts.json` registers it (`registry.py`), and on this branch only `claude` is registered.
-Until plan step 9 adds the `codex` entry, the service and `bridge_prepare.py` refuse a Codex profile
-with `native-provider-unavailable`. The refusal happens while the configuration is checked, before
-the Codex half's `bridge-profile.json` is read. The MCP frontend reads no Codex channel variable. The Codex
-half and its tests are complete, and the tests run it against a test `hosts.json`
-(`tests/bridge/registered.py`).
+**Claude and Codex are both served.** The bridge serves a host only when `hosts.json` registers
+it (`registry.py`), and `hosts.json` registers both (plan step 9). A profile for a host that is not
+registered is refused with `native-provider-unavailable`. The refusal happens while the
+configuration is checked, before that half's `bridge-profile.json` is read. Being served does not
+make a direction work: STATUS.md has the per-direction limits. Claude to Codex is not deliverable,
+and the Codex terminal adapter is dead.
 
 This is the bridge from `codex/robust-bridge-plan`, ported as plan step 10
 (docs/multi-host-plan.md section 2.4). Its design history, the Phase 0 evidence and the
@@ -215,10 +214,9 @@ Four helpers were load-bearing and moved instead:
 | `claude/bridge_phase0.read_record` | `hosts/claude/records.py` |
 
 `codex/pmkit_codex/bridge_client.py` is now `hosts/codex/client.py`, and the bridge owns it. It is
-the Codex plugin's client of this frontend. Codex's diagnostics (`pmkit_codex/diagnostics.py` on
-the companion branch, plan step 9) must either drop it or probe for it lazily and optionally, by
-importing `optional.bridge.hosts.codex.client` when it is present. The diagnostics must never keep
-a duplicate copy. The legacy `session_delivery.py` helper was not ported, since nothing in
+the Codex plugin's client of this frontend. The Codex host (`hosts/codex/`, plan step 9) keeps no copy of
+it. If its diagnostics ever probe the bridge, they import `optional.bridge.hosts.codex.client`
+lazily and optionally. The legacy `session_delivery.py` helper was not ported, since nothing in
 the bridge uses it.
 
 ## Tests
