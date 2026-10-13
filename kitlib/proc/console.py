@@ -353,8 +353,8 @@ USER_FLAGS = ('-u', '--user')            # curl's: a `user:password` value hides
 
 
 def _user_value(v):
-    """`user:password` as `user:***`; anything else (a drive path `C:\\x`, a URL: pip's
-    `--user` takes no value) as it is."""
+    """`user:password` as `user:***`; anything else (a drive path: a letter, a colon and a
+    slash; a URL: pip's `--user` takes no value) as it is."""
     import re
     m = re.fullmatch(r'(?![A-Za-z]:[\\/])(?!.*://)([^:\\/]+):.+', v, re.S)
     return m.group(1) + ':' + MASK if m else v
