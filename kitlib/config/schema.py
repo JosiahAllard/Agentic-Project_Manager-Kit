@@ -64,8 +64,9 @@ IN_FLIGHT = Obj({
 
 ROLE = Obj({
     'edit_main_checkout': Field(Bool(), None, 'may edit files in a main checkout; unset: the base role (main: true, any other: false)'),
+    'mode': Field(Enum('controller', 'write', 'read', 'test', 'lander'), None, 'the role policy this role is held to (docs/guard.md "Role policy"); unset: none'),
     'why': Field(Str(), None, 'the ruling that grants it'),
-}, what='{edit_main_checkout, why}')
+}, what='{edit_main_checkout, mode, why}')
 
 STEP = Obj({
     'name': Field(Str(pattern=NAME_RE, what='a step name'), None, 'the step name, unique'),

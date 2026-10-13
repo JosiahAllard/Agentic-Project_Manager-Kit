@@ -11,10 +11,11 @@ import unittest
 from kitlib import lockmcp as lockmcp_names, pmdata
 from kitlib.config import user as kuser
 from kitlib.git import repo
-from kitlib.guard import context, decide, rules
+from kitlib.guard import context, rules
 from kitlib.lockmcp import server as lockmcp
 
 from . import world as W
+from .claudehost import MCP_PREFIX, decide
 from .extra_rows import ROWS as EXTRA_ROWS
 from .review_rows import ROWS as REVIEW_ROWS
 from .shell_rows import LOCK, ROWS as SHELL_ROWS
@@ -216,7 +217,7 @@ class RuleTable(unittest.TestCase):
                     self.assertIsNone(d, d and d.reason)
                     continue
                 self.assertIsNotNone(d, 'allowed')
-                self.assertEqual((d.kind, d.rule), (kind, rule), d.reason)
+                self.assertEqual((d.verdict, d.rule), (kind, rule), d.reason)
                 role = 'subagent' if ev.get('agent_id') else 'main'
                 self.assertTrue(d.reason.endswith(rules.tag(rule, role)), d.reason)
                 self.assertIn(' Instead: ', d.reason)
@@ -570,7 +571,7 @@ class LockMcp(unittest.TestCase):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
 
-    def ev(self, name, sub=False, prefix=rules.MCP_PREFIX):
+    def ev(self, name, sub=False, prefix=MCP_PREFIX):
         return event(prefix + name, {'id': 'h-1'}, self.w.wt, sub=sub)
 
     def test_owner_only_tools(self):
@@ -578,10 +579,10 @@ class LockMcp(unittest.TestCase):
         for name in lockmcp.OWNER_ONLY:
             with self.subTest(name):
                 d = decide(self.ev(name, sub=True), self.w.ctx())
-                self.assertEqual((d.kind, d.rule), ('deny', 'lock-mcp'))
+                self.assertEqual((d.verdict, d.rule), ('deny', 'lock-mcp'))
                 self.assertIn('This session is subagent.', d.reason)
                 d = decide(self.ev(name), self.w.ctx(environ={context.ROLE_ENV: 'coordinator'}))
-                self.assertEqual(d.kind, 'deny')
+                self.assertEqual(d.verdict, 'deny')
                 self.assertIn('This session is coordinator.', d.reason)
                 self.assertIn('Instead: python "%s/tools/machine_lock.py" status ' % W.fwd(self.w.kit_dir), d.reason)
                 # a session nothing marks is the owner's own (docs/guard.md "Session mark")
@@ -597,13 +598,13 @@ class LockMcp(unittest.TestCase):
     def test_the_prefix_comes_from_the_machine_config(self):
         self.w.user_config({'guard_mcp_prefix': 'mcp__lockx__'})
         self.assertEqual(rules.mcp_prefix(self.w.ctx()), 'mcp__lockx__')
-        self.assertEqual(rules.mcp_prefix(W.World().ctx()), rules.MCP_PREFIX)
-        self.assertEqual(rules.MCP_PREFIX, lockmcp_names.claude_tool_prefix())
+        self.assertEqual(rules.mcp_prefix(W.World().ctx()), MCP_PREFIX)
+        self.assertEqual(MCP_PREFIX, lockmcp_names.claude_tool_prefix())
 
     def test_the_role_resolver_is_pluggable(self):
         ctx = self.w.ctx(role_resolver=lambda ev, env: 'owner-verified-by-test')
         d = decide(self.ev('lock_set_games'), ctx)
-        self.assertEqual(d.kind, 'deny')
+        self.assertEqual(d.verdict, 'deny')
         self.assertIn('owner-verified-by-test', d.reason)
 
 
@@ -775,7 +776,7 @@ class OwnerLockTools(unittest.TestCase):
                 with self.subTest(text, sub=sub):
                     d = self.run_one(shell, text, sub)
                     self.assertIsNotNone(d, 'allowed')
-                    self.assertEqual((d.kind, d.rule), ('deny', 'owner-lock'), d.reason)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'owner-lock'), d.reason)
                     self.assertIn(OWNER_ONLY, d.reason)
                     self.assertNotRegex(d.reason, r'\b[RQ]-\d+')
                     self.assertTrue(d.reason.endswith(' Instead: %s %s' % (
@@ -812,7 +813,7 @@ class OwnerLockTools(unittest.TestCase):
             with self.subTest(sub=sub):
                 d = self.run_one('bash', text, sub)
                 self.assertIsNotNone(d, 'allowed')
-                self.assertEqual((d.kind, d.rule), ('deny', 'owner-lock'), d.reason)
+                self.assertEqual((d.verdict, d.rule), ('deny', 'owner-lock'), d.reason)
                 self.assertIn('could not read this command', d.reason)
                 self.assertIn(OWNER_ONLY, d.reason)
 
@@ -855,7 +856,7 @@ class PmDataNoVerify(unittest.TestCase):
 
     def assert_denied(self, d, instead=None):
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual((d.kind, d.rule), ('deny', 'git-push-pmdata'), d.reason)
+        self.assertEqual((d.verdict, d.rule), ('deny', 'git-push-pmdata'), d.reason)
         if instead is not None:
             self.assertIn(' Instead: %s [kit guard:' % instead, d.reason)
 

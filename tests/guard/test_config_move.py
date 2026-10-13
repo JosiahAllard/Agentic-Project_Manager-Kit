@@ -7,7 +7,7 @@ import os
 import unittest
 
 from kitlib.config import migration, user as kuser
-from kitlib.guard import decide
+from .claudehost import decide
 
 from . import world as W
 from .world import event

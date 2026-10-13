@@ -13,20 +13,39 @@ import for that): kitlib never imports a host, the host is chosen at the edge.
   degrade(decision, caps)   the one way a verdict the host cannot show is lowered
   HostAdapter, SessionHost, CommandHost   what an adapter supplies
   registry                  hosts.json read as data: names, selection, adapter module names
+  hookmain                  the one hook runner: parse, kitlib.guard.decide, degrade, render, fail
+                            closed; and the one place a hook command line is written
 """
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
-KINDS = ('edit', 'shell', 'mcp', 'session_start', 'subagent_start')
+# `other`: a tool call no guard rule judges (a read, a search); the adapter still parses it, so a
+# hook never has to guess a payload's kind before it knows the host.
+KINDS = ('edit', 'shell', 'mcp', 'session_start', 'subagent_start', 'other')
+SHELLS = ('bash', 'powershell')
 VERDICTS = ('allow', 'deny', 'ask')
 
 
 @dataclass(frozen=True)
 class Action:
     """One event a hook judges, with every host's field names gone. `tool` is the host's own tool
-    name, kept for messages only; `path` an edit's target, `command` a shell's text, `cwd` where
-    it runs. `role` is PM_KIT_ROLE's value (None: unmarked). `agent` is an opaque subagent identity,
-    None for the main session and for a host whose hooks carry none (HostCapabilities)."""
+    name (an MCP tool's full name, matched against HostProfile.mcp_tool_format), kept for messages;
+    `path` an edit's target, `command` a shell's text, `cwd` where the session runs (None: the
+    hook's own folder). `role` is PM_KIT_ROLE's value when the host hands it over (None: the guard
+    reads its own environment). `agent` is an opaque subagent identity, None for the main session
+    and for a host whose hooks carry none (HostCapabilities).
+
+    What the guard needs that only a host can say, each optional so a host that lacks it degrades:
+      agent_role   the subagent's role name in the kit's naming (the host's own prefixing gone),
+                   None when the host does not say; read only when `agent` is set
+      shell        a shell call's dialect, one of SHELLS
+      background   the shell call runs in the background, so it does not hold the session
+      workdir      a shell call's own working directory, for a host whose shell call names one
+                   (the shell then runs there; the role policy holds it inside the checkout);
+                   None: `cwd`
+      retarget     the same edit aimed elsewhere, as the host's call text with `{path}` for the
+                   path (an Instead line); '' when the host has no such form
+    """
     kind: str
     tool: str = ''
     path: Optional[str] = None
@@ -34,10 +53,17 @@ class Action:
     cwd: Optional[str] = None
     role: Optional[str] = None
     agent: Optional[str] = None
+    agent_role: Optional[str] = None
+    shell: Optional[str] = None
+    background: bool = False
+    retarget: str = ''
+    workdir: Optional[str] = None
 
     def __post_init__(self):
         if self.kind not in KINDS:
             raise ValueError('unknown action kind: %r' % (self.kind,))
+        if self.shell is not None and self.shell not in SHELLS:
+            raise ValueError('unknown shell: %r' % (self.shell,))
 
 
 @dataclass(frozen=True)

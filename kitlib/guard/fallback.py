@@ -186,7 +186,7 @@ def check(event, ctx, text, cwd, role, parsed):
 
     def answer(d, rule):
         if d is not None:
-            return rules.Decision(d.kind, d.rule, '%s %s' % (why, d.reason))
+            return rules.reworded(d, '%s %s' % (why, d.reason))
         return rules.refuse('unreadable', role, '%s Its text matches the %s rule.%s' % (why, rule, PLAIN),
                             plain(parsed, text))
 
@@ -244,7 +244,7 @@ def check(event, ctx, text, cwd, role, parsed):
             # `& (...)`: judged by rules.call_subexpr_pmdata (PM data, then agent sessions), never unreadable
             d = rules.call_subexpr_pmdata(event, ctx, c, inv, cwd, role)
             if d:
-                return rules.Decision(d.kind, d.rule, '%s %s' % (why, d.reason))
+                return rules.reworded(d, '%s %s' % (why, d.reason))
             continue
         if main_like(ctx, c.cwd):
             return rules.refuse('unreadable', role, '%s It runs %s in a main checkout or a place git cannot '

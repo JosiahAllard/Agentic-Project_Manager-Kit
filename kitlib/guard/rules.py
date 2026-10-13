@@ -1,7 +1,11 @@
 """The guard's rules (ARCHITECTURE.md "Guard rules"; docs/guard.md "Rules").
 
-decide(event, ctx) -> Decision or None (allow). Every rule is a read-only check of real state
-and every deny names the exact command to use instead. A deny reason ends with the tag
+decide(action, ctx) -> kitlib.host.Decision ('allow' when no rule refuses). `action` is the neutral
+kitlib.host.Action a host adapter parsed its hook payload into (claude/adapter/events.py for
+Claude Code); no rule here reads a host's payload. Every rule is a read-only check of real state and
+every deny names the exact command to use instead (also in Decision.instead). Each rule below
+takes the Action as its first argument, named `event` from before the split; a rule answers None
+for an allow, and decide() turns that into Decision('allow'). A deny reason ends with the tag
 `[kit guard: rule=<rule> role=<role>]`; claude.guard_selftest reads those tags back out of
 subagent transcripts.
 
@@ -45,34 +49,20 @@ from kitlib import config as kconfig
 from kitlib import kitroot
 from kitlib import pmdata
 from kitlib.git import repo
-from kitlib.lockmcp import claude_tool_prefix
+from kitlib import lockmcp as lockmcp_names
+from kitlib.host import Decision
 
 from . import commands as cm
 from . import context
 from . import jail
+from . import paths
 from . import shell as sh
 
-DENY, ASK = 'deny', 'ask'
-FILE_TOOLS = {'Edit': 'file_path', 'Write': 'file_path', 'MultiEdit': 'file_path',
-              'NotebookEdit': 'notebook_path'}
-SHELL_TOOLS = {'Bash': sh.BASH, 'PowerShell': sh.PS}
-
-# The Claude plugin's MCP prefix for the lock MCP's tools (kitlib.lockmcp.claude_tool_prefix, from
-# CLAUDE_PLUGIN_NAME). INFERRED, not observed: the kit has no installed plugin yet. The machine
-# config's guard_mcp_prefix replaces it.
-MCP_PREFIX = claude_tool_prefix()
+DENY, ASK, ALLOW = 'deny', 'ask', 'allow'
+# kitlib.host.Action.shell -> the parser's dialect
+SHELLS = {'bash': sh.BASH, 'powershell': sh.PS}
 TAG = '[kit guard: rule=%s role=%s]'
 NULL_TARGETS = {'/dev/null', '$null', 'nul', 'nul:', '&1', '&2'}
-
-
-class Decision(object):
-    __slots__ = ('kind', 'rule', 'reason')
-
-    def __init__(self, kind, rule, reason):
-        self.kind, self.rule, self.reason = kind, rule, reason
-
-    def __repr__(self):
-        return 'Decision(%s, %s)' % (self.kind, self.rule)
 
 
 def tag(rule, role):
@@ -80,7 +70,13 @@ def tag(rule, role):
 
 
 def refuse(rule, role, what, instead, kind=DENY):
-    return Decision(kind, rule, '%s Instead: %s %s' % (what.rstrip(), instead.strip(), tag(rule, role)))
+    return Decision(kind, rule, '%s Instead: %s %s' % (what.rstrip(), instead.strip(), tag(rule, role)),
+                    instead.strip())
+
+
+def reworded(d, reason):
+    """`d` with its reason replaced (a rule that adds what led to it)."""
+    return Decision(d.verdict, d.rule, reason, d.instead)
 
 
 def fwd(path):
@@ -98,34 +94,57 @@ def lock_tool(ctx):
     return quote(kitroot.lock_tool(ctx.kit))
 
 
+def subagent(event):
+    """True when the Action names a subagent (Action.agent): a host's hook told it apart."""
+    return bool(getattr(event, 'agent', None))
+
+
 def tag_role(event):
-    """'main' when the event has no agent_id, else 'subagent' (the tag the self-test reads)."""
-    return 'subagent' if (event or {}).get('agent_id') else 'main'
+    """'main' for the main session, else 'subagent' (the tag the self-test reads)."""
+    return 'subagent' if subagent(event) else 'main'
 
 
 # ---------------------------------------------------------------- entry
 
-def decide(event, ctx=None):
-    ctx = ctx or context.Ctx()
-    tool = (event or {}).get('tool_name') or ''
-    ti = (event or {}).get('tool_input') or {}
-    cwd = (event or {}).get('cwd') or os.getcwd()
+def decide(event, ctx=None, environ=None, profile=None):
+    """The Decision on the kitlib.host.Action `event`: 'allow', or the first rule's deny or ask.
+    With no `ctx`, a context.Ctx of `environ` (default os.environ) and the host `profile` (a
+    HostProfile or a callable returning one) is built here, so its reads fail inside decide.
+    The shared rules judge first, so a call they refuse is refused as it always was; a call they
+    allow then meets the role policy (kitlib.guard.rolepolicy), which is off for a role whose
+    .kit.json entry names no mode, and, when it adds write-jail roots, the shared rules again."""
+    from . import rolepolicy
+    ctx = ctx or context.Ctx(environ=environ, profile=profile)
+    d = judge(event, ctx)
+    if d:
+        return d
+    d, held = rolepolicy.screen(event, ctx)
+    if d is None and held is not ctx:
+        d = judge(event, held)
+    return d or Decision(ALLOW)
+
+
+def judge(event, ctx):
+    """decide() with None for an allow: the shared rules, before any role policy."""
+    tool = event.tool or ''
+    cwd = (event.workdir if event.kind == 'shell' else None) or event.cwd or os.getcwd()
     role = tag_role(event)
     d = lock_mcp(event, ctx, tool, role)
     if d:
         return d
-    if tool in FILE_TOOLS:
-        target = ti.get(FILE_TOOLS[tool])
+    if event.kind == 'edit':
+        target = event.path
         if not isinstance(target, str) or not target:
             return None
         target = sh.resolve_path(target, cwd) or target
+        form = event.retarget
         return edit_target(event, ctx, target, cwd, role, '%s of %s' % (tool, target),
-                           rewrite=lambda path: '%s(%s="%s")' % (tool, FILE_TOOLS[tool], fwd(path)))
-    if tool in SHELL_TOOLS:
-        text = ti.get('command')
-        if not isinstance(text, str) or not text.strip():
+                           rewrite=(lambda path: form.replace('{path}', fwd(path))) if form else None)
+    if event.kind == 'shell':
+        text = event.command
+        if not isinstance(text, str) or not text.strip() or event.shell not in SHELLS:
             return None
-        return shell_command(event, ctx, text, SHELL_TOOLS[tool], cwd, role)
+        return shell_command(event, ctx, text, SHELLS[event.shell], cwd, role)
     return None
 
 
@@ -149,20 +168,39 @@ def shell_command(event, ctx, text, shell, cwd, role):
 
 # ---------------------------------------------------------------- lock MCP
 
+def host_mcp_prefix(profile):
+    """The lock MCP's tool-name prefix on the host `profile` (kitlib.host.HostProfile) describes:
+    its mcp_tool_format with the kit's plugin and the lock server's name filled in and the tool
+    left off. INFERRED for Claude Code, not observed: the kit has no installed plugin yet."""
+    return profile.mcp_tool_format.format(plugin=lockmcp_names.CLAUDE_PLUGIN_NAME,
+                                          server=lockmcp_names.SERVER_NAME, tool='')
+
+
+def host_mcp_separator(profile):
+    """What the host's MCP tool names put between the server and the tool (`__` in
+    mcp__<server>__<tool>): the text between {server} and {tool} in mcp_tool_format."""
+    fmt = profile.mcp_tool_format
+    i, j = fmt.find('{server}'), fmt.find('{tool}')
+    return fmt[i + len('{server}'):j] if 0 <= i < j else ''
+
+
 def mcp_prefix(ctx):
-    return ctx.user().get('guard_mcp_prefix') or MCP_PREFIX
+    """The machine config's guard_mcp_prefix, else the session's host's (host_mcp_prefix)."""
+    return ctx.user().get('guard_mcp_prefix') or host_mcp_prefix(ctx.host_profile())
 
 
-def mcp_owner_tool(ctx, tool):
+def mcp_owner_tool(ctx, tool, kind='mcp'):
     """The owner-only lock MCP tool `tool` names, or None: under the configured prefix, under any
-    other server name (`mcp__<server>__<tool>`), or listed in full in guard_mcp_tools."""
-    if not tool.startswith('mcp__'):
+    other server name (the tail after the host's separator, `mcp__<server>__<tool>`), or listed in
+    full in guard_mcp_tools. Only an MCP call (Action kind 'mcp') names one."""
+    if kind != 'mcp' or not tool:
         return None
-    from kitlib.lockmcp import server as lockmcp   # here, not at the top: only mcp__ calls pay its import
+    from kitlib.lockmcp import server as lockmcp   # here, not at the top: only MCP calls pay its import
     prefix = mcp_prefix(ctx)
     if tool.startswith(prefix) and tool[len(prefix):] in lockmcp.OWNER_ONLY:
         return tool[len(prefix):]
-    tail = tool.rsplit('__', 1)[-1]
+    sep = host_mcp_separator(ctx.host_profile())
+    tail = tool.rsplit(sep, 1)[-1] if sep else tool
     if tail in lockmcp.OWNER_ONLY:
         return tail                             # the same tool under another server name
     if tool in (ctx.user().get('guard_mcp_tools') or ()):
@@ -171,7 +209,7 @@ def mcp_owner_tool(ctx, tool):
 
 
 def lock_mcp(event, ctx, tool, role):
-    name = mcp_owner_tool(ctx, tool)
+    name = mcp_owner_tool(ctx, tool, event.kind)
     if not name:
         return None
     who = ctx.session_role(event)
@@ -184,9 +222,9 @@ def lock_mcp(event, ctx, tool, role):
 
 
 def is_owner_session(event, ctx):
-    """True for the owner's own main session: no agent_id and no launcher mark (docs/guard.md
+    """True for the owner's own main session: no subagent and no launcher mark (docs/guard.md
     "Session mark")."""
-    return not (event or {}).get('agent_id') and ctx.session_role(event) == context.OWNER
+    return not subagent(event) and ctx.session_role(event) == context.OWNER
 
 
 def agent_session(event, ctx):
@@ -195,7 +233,7 @@ def agent_session(event, ctx):
     ignored; a guard_agent_marks value replaces the default list. The rules only agents are held to (kill by name, lock state,
     kit-json, the write jail) use it. The mark is compared without the kit plugin's prefix
     (kitlib.agentname.bare_mark), so a role_resolver that does not strip it fails closed too."""
-    if (event or {}).get('agent_id'):
+    if subagent(event):
         return True
     marks = ctx.user().get('guard_agent_marks') or AGENT_MARKS
     who = agentname.bare_mark(str(ctx.session_role(event) or ''))
@@ -362,7 +400,7 @@ def owner_lock(event, ctx, cmd, inv, cwd, role):
 # ---------------------------------------------------------------- edits: ledger and main checkout
 
 def same_file(a, b):
-    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    return paths.norm(a, absolute=True) == paths.norm(b, absolute=True)
 
 
 def ledger_rule(ctx, target, role, what):
@@ -500,7 +538,7 @@ def own_worktree(ctx, cwd, main_top=None):
         return None
     if main_top is not None:
         mine = ctx.main_top(cwd)
-        if not mine or os.path.normcase(mine) != os.path.normcase(main_top):
+        if not mine or paths.norm(mine) != paths.norm(main_top):
             return None
     return here_.top
 
@@ -567,7 +605,7 @@ def kit_json(event, ctx, target, role, what):
 def session_mark(event, ctx):
     """The launcher mark of a main session without the kit plugin's prefix (guard_mark_roots looks
     it up), or None for a subagent and the owner's unmarked session."""
-    if (event or {}).get('agent_id'):
+    if subagent(event):
         return None
     who = agentname.bare_mark(ctx.session_role(event))
     return None if who in (context.OWNER, context.SUBAGENT) else who
@@ -1370,7 +1408,7 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
         if w.dyn:
             target, why = None, 'a target that is not literal: %s' % w.text
         elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
-            target, why = os.path.normpath(os.path.join(jail.bash_tmp(ctx), w.text[5:])), None
+            target, why = paths.norm(os.path.join(jail.bash_tmp(ctx), w.text[5:]), fold=False), None
         elif cmd.shell == sh.PS and PS_PROVIDER_ITEM_RE.match(w.text) and sh.ps_unplaceable(w.text):
             ps_drive = True                     # ps_provider_item did not skip it: the line may remap the drive
             target, why = None, ('a PowerShell provider item (%s) on a line that is not only plain cmdlet calls, '
@@ -1465,7 +1503,7 @@ def wrapped_gate(event, ctx, cmd, inv, cwd, role):
 
 
 def same_dir(a, b):
-    return bool(a and b) and os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+    return bool(a and b) and paths.norm(a) == paths.norm(b)
 
 
 # ---------------------------------------------------------------- root searches
@@ -2002,9 +2040,8 @@ def lander_alone(event, cmd, gc):
     Set-Location or pushd into the checkout git runs in, joined by && or ;. The line is read again
     from the event; an unclean parse, a pipe, a group, a nested shell or any third command is not
     alone."""
-    ti = (event or {}).get('tool_input') or {}
-    shell = SHELL_TOOLS.get((event or {}).get('tool_name'))
-    text, cwd = ti.get('command'), (event or {}).get('cwd')
+    shell = SHELLS.get(event.shell) if event is not None and event.kind == 'shell' else None
+    text, cwd = (event.command, event.workdir or event.cwd) if event is not None else (None, None)
     if shell is None or not isinstance(text, str) or cmd.depth or cmd.nested_in is not None:
         return False
     parsed = cm.read(text, shell, cwd)
@@ -2030,8 +2067,7 @@ def lander_check(event, ctx, cmd, inv, gc):
     roles.lander.edit_main_checkout: the one main-checkout write the jail leaves a lander that runs
     from a worktree. (False, <the first test that failed>) when one fails. (False, None) for any
     other session, verb or place: the other rules judge it as before."""
-    ev = event or {}
-    if not ev.get('agent_id') or agentname.bare(ev.get('agent_type')) != LANDER:
+    if not subagent(event) or event.agent_role != LANDER:
         return False, None
     if gc.unknown or gc.sub not in LANDER_VERBS or not gc.dir or ctx.place(gc.dir).kind != repo.MAIN:
         return False, None
@@ -2582,7 +2618,7 @@ def _alias_judged(event, ctx, gc, role, where, chain):
         d = None
     if d is None or len(chain) > 1:
         return d
-    return Decision(d.kind, d.rule, '`git %s` runs the git alias %s. %s' % (gc.sub, chain[0], d.reason))
+    return reworded(d, '`git %s` runs the git alias %s. %s' % (gc.sub, chain[0], d.reason))
 
 
 # ---------------------------------------------------------------- remotes repointed
@@ -3017,10 +3053,9 @@ def _backgrounded(cmd):
 
 def busy_wait(event, ctx, parsed, cwd, role):
     """A foreground while/until (bash) or while/do (PowerShell) loop that sleeps, with no counter,
-    clock or `timeout` bounding it. A call with run_in_background, or a loop sent to the background
-    with &, is left alone: neither holds the call."""
-    ti = (event or {}).get('tool_input') or {}
-    if ti.get('run_in_background') is True:
+    clock or `timeout` bounding it. A call the host runs in the background (Action.background),
+    or a loop sent to the background with &, is left alone: neither holds the call."""
+    if event is not None and event.background:
         return None
     for cmds in _segments(parsed):
         shell = cmds[0].shell
@@ -3308,8 +3343,8 @@ def _without(cmd, first, last):
 def _under_temp(ctx, d):
     if not d:
         return False
-    top = os.path.normcase(os.path.abspath(ctx.tempdir)).rstrip('\\/')
-    here_ = os.path.normcase(os.path.abspath(d))
+    top = paths.norm(ctx.tempdir, absolute=True).rstrip('\\/')
+    here_ = paths.norm(d, absolute=True)
     return here_ == top or here_.startswith(top + os.sep)
 
 

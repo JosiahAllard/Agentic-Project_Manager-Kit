@@ -11,9 +11,10 @@ import unittest
 from unittest import mock
 
 from kitlib import agentname
-from kitlib.guard import context, decide
+from kitlib.guard import context
 
 from . import world as W
+from .claudehost import decide
 from .world import bash, event, ps
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,7 +31,7 @@ def tests_in(suite):
 
 
 def twin(d):
-    return None if d is None else (d.kind, d.rule, d.reason)
+    return None if d is None else (d.verdict, d.rule, d.reason)
 
 
 class Knob(object):
