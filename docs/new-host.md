@@ -1,8 +1,10 @@
 # Adding a host
 
 A host is an AI platform the kit runs on, such as Claude Code. Adding one means adding a folder
-and one `hosts.json` entry. No file in `kitlib/`, `content/` or another host's folder changes
-(docs/multi-host-plan.md section 2.7; ARCHITECTURE.md "Hosts"). A host is supported when its test
+and one `hosts.json` entry. A host adds no hook script: its hooks run the kit's one entry,
+`boot/hook.py <host> <event>` (plan decision 20). No file in `kitlib/`, `content/`, `boot/` or
+another host's folder changes (docs/multi-host-plan.md section 2.7; ARCHITECTURE.md "Hosts"). A
+host is supported when its test
 class passes the conformance suite, `tests/host/conformance.py`.
 
 The worked example is the fake host in `tests/host/fakehost/`. It exists only in the tests, and it
@@ -21,7 +23,7 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 | Field | What it is |
 |---|---|
 | `adapter` | The adapter's dotted module name, `hosts.<name>.adapter`. kitlib never imports it. `tools/_host.py` does. |
-| `shell` | `hosts/<name>/shell`, the folder with the host's manifests and hook entries |
+| `shell` | `hosts/<name>/shell`, the folder with the host's manifests and rendered files |
 | `platforms` | The operating systems it runs on. Use `["windows"]` until the OS work (plan section 6). This field picks the hook interpreter (`kitlib.host.hookmain.manifest_command`). |
 | `default` | Leave it out. Exactly one host is the default, and it is `claude`. |
 | `tiers` | `light`, `standard`, `strong` and `deep`, each mapped to the host's model id (docs/ROSTER.md) |
@@ -36,6 +38,15 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 | `mcp` | Whether the host runs MCP servers, which includes the lock server |
 | `skills` | Whether it reads `SKILL.md` folders. If `true`, every skill ships byte for byte. |
 | `agent_format` | The file format of its agent definitions, for example `markdown` or `toml` |
+
+`hook` is what `boot/hook.py` reads before the kit boots, with json alone (`kitlib.host.registry.HookSpec`):
+
+| Field | What it is |
+|---|---|
+| `tool_event` | The one `hook_events` entry whose calls the guard judges. Every other hook event is a start event: the adapter adds context for it. |
+| `tool_field` | The dotted key of the tool's name in that event's payload: `tool_name`, or `call.name` for the fake host |
+| `guarded_tools` | Every tool a guard rule or the host's own `screen` can refuse, by name; an entry ending in `*` is a prefix (`mcp__*`). A call to any other tool is allowed before the kit boots, so it never pays for a boot or a release check. The conformance suite fails when a recorded payload that parses into an edit, shell or MCP call names a tool left out. |
+| `fast_path` | `all`: an unguarded call skips the kit in every session. `unmarked`: only in a session no launcher marked (`PM_KIT_ROLE` unset), for a host whose `screen` must see every call of a marked session (Codex holds a marked session to an allowlist). |
 
 `profile` holds the host data the core reads. Each field has a consumer (`kitlib.host.HostProfile`):
 
@@ -74,6 +85,13 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   says nothing. A host without ask never receives an ask.
 - `context(event_name, text) -> (stdout, exit code)`. A start event adds `text` (the kit header,
   `kitlib.host.header`) to the agent's context. No text writes nothing.
+- `CONTEXT_EVENTS`: the start events, every hook event but `hook.tool_event`.
+- `start_text(event_name, kit, payload, environ, part)` (optional): a start event's text when it is
+  more than the kit header (Codex adds a lead's start checks). `part` names one of several hooks
+  registered on one event (Claude's coordinator rules and PM checklist are SessionStart parts); a
+  part the adapter does not have raises. Without it, a start event gets the kit header and takes no part.
+- `DEADLINE` (optional): seconds the guard has for one tool call, the boot included, for a host
+  that gives up on a slow hook (Codex: 7, under its manifest's 10 s timeout). None: no deadline.
 - `sessions()`: a `SessionHost` with `sessions(cwd)`, `loaded()`, `usage()` and `models()`, read-only.
 - `content()`: an object whose `renderer()` is a `kitlib.host.content.ContentRenderer`. It has
   `host`, `tier_models()` (the same map as `hosts.json` `tiers`), `owned()` (folders in the shell
@@ -86,15 +104,20 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
 - `command_host()`, `launcher()` and `plugin_installer()`: `None` until the host has them.
 - The renderer's optional `vendored(root)`: `{path: bytes}` of kit files the host's plugin ships a
   copy of, read from the kit checkout `root` and drift-checked with the rest. A plugin root that is
-  not the whole kit ships `boot/kitboot.py` this way (Codex).
+  not the whole kit cannot reach the kit's `boot/` from a plugin cache, so it ships `boot/kitboot.py`
+  and `boot/hook.py` this way, and a `hosts.json` holding its own entry beside them (Codex). The
+  copy finds the kit through `PM_KIT_ROOT`, or the checkout it sits in.
 
 ## 3. The shell: `hosts/<name>/shell/`
 
-- One hook entry per event, 20 lines or fewer. It puts `boot/` on `sys.path`, calls
-  `kitboot.boot()` before any kitlib or adapter import (docs/kitboot.md), then calls
-  `kitlib.host.hookmain.run(ADAPTER, event, stdin, stdout)`. A start event writes
-  `ADAPTER.context(event, header.text(kit))` instead. `hookmain` fails closed: any error becomes
-  the host's deny. The fake host's single entry is `tests/host/fakehost/shell/hooks/run.py`.
+- No hook script. The manifest the renderer writes registers each hook event as
+  `<interpreter> <root>/boot/hook.py <host> <event>` (`hookmain.manifest_command`), `<root>` the
+  plugin root's variable. The entry reads the host's `hosts.json` `hook` data, skips an unguarded
+  call before the kit boots, boots the kit (docs/kitboot.md), imports the adapter `hosts.json` names
+  and calls `kitlib.host.hookmain.dispatch`: the guard through `hookmain.run` for the tool event,
+  which fails closed (any error becomes the host's deny), and `ADAPTER.context` for a start event.
+  When the kit will not boot, a tool call exits 2 (a block on every host so far) and a start event
+  says so in plain text. The fake host's `plugin.json` runs it this way.
 - The rendered files. Run `python tools/render_content.py --write` and commit what it writes.
   `--check` fails on drift. Never edit them by hand.
 
@@ -116,7 +139,7 @@ tool call and a main-session call.
 `unittest.TestCase`. It sets `HOST` and `FIXTURES`, and implements:
 - `read_output(stdout, code)`: returns `(verdict, reason)`
 - `read_context(stdout)`: returns the context text
-- `hook_scripts(manifests)`: returns every `(event, entry path)` the host registers
+- `hook_scripts(manifests)`: returns every `(event, script path, [arguments])` the host registers
 - `session_host()`: returns a `SessionHost` over recorded session files, with the ids it should list
 
 The suite checks:
@@ -128,10 +151,13 @@ The suite checks:
 - the kit header at each start event
 - sessions, rendered-file drift, and every role rendered
 - `kit.json`'s version in the manifests
-- boot before kitlib in every shell script, and an existing entry for every declared event
-- the 20-line limit, and the host's name kept out of kitlib, tools, boot, content and other hosts
+- boot before kitlib in every shell script; every declared event registered, each hook running
+  `boot/hook.py` (or the plugin's byte copy) told its host and event; no hook script in the shell
+- the `hook` data against the fixtures and the adapter, and `boot/hook.py` run in-process: a
+  guarded call judged, an unguarded one skipped before the kit boots, the kit header at each start
+- the host's name kept out of kitlib, tools, boot, content and other hosts
 
-Two lists cover what is left to fix: `LEAK_ALLOWED` and `ENTRY_OVER`. Both can only shrink.
+One list covers what is left to fix: `LEAK_ALLOWED`. It can only shrink.
 `tests/host/test_conformance_gate.py` checks that a change under `hosts/`, `kitlib/host/`,
 `content/`, `kit.json` or `hosts.json` runs the suite (tests/selection.json).
 

@@ -187,14 +187,15 @@ The plugin root is the whole kit (export), and `.claude-plugin/plugin.json` stay
 hooks and the MCP server run kitlib and tools beside them. plugin.json, marketplace.json and the hooks
 file `hosts/claude/shell/hooks/hooks.json` (named by `"hooks"` in plugin.json) are rendered from
 `kit.json` and content/ (docs/content.md "Manifests"). The plugin carries two hooks, each run in exec
-form as `pythonw` with a script under `${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/`: the kit
-header (`kit_header.py`, on SessionStart and SubagentStart; whether a plugin may register
-SubagentStart is still to be checked live, docs/content.md "Kit header") and the coordinator
-SessionStart hook (`coordinator_session_start.py`). Each account's settings already run the
-coordinator script, so the owner removes the settings SessionStart entry in the same
+form as `pythonw` with the kit's one hook entry, `${CLAUDE_PLUGIN_ROOT}/boot/hook.py claude <event>`:
+the kit header (on SessionStart and SubagentStart; whether a plugin may register SubagentStart is
+still to be checked live, docs/content.md "Kit header") and the coordinator SessionStart hook
+(`boot/hook.py claude SessionStart coordinator`). Each account's settings already run the
+coordinator hook, so the owner removes the settings SessionStart entry in the same
 step as the install, or it runs twice (`tools/machine_setup.py` notes it, docs/machine-setup.md
-"Settings"). guard.py stays in each account's settings and is never in the plugin (docs/guard.md
-"Go-live"); the PM repo's `pm_session_start.py` stays in that repo's settings.
+"Settings"). The guard (`boot/hook.py claude PreToolUse`) stays in each account's settings and is
+never in the plugin (docs/guard.md "Go-live"); the PM checklist (`boot/hook.py claude SessionStart
+pm`) stays in the PM repo's settings.
 
 On a fresh machine, `machine-setup.ps1 -Fresh -Apply` does the same migrate for each account folder
 whose plugin is not enabled from the export: it makes the export, then runs the migrate steps for

@@ -8,7 +8,8 @@
             "type": "command",
             "command": "pythonw",
             "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/kit_header.py",
+              "${CLAUDE_PLUGIN_ROOT}/boot/hook.py",
+              "claude",
               "SessionStart"
             ]
           }
@@ -21,7 +22,10 @@
             "type": "command",
             "command": "pythonw",
             "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/coordinator_session_start.py"
+              "${CLAUDE_PLUGIN_ROOT}/boot/hook.py",
+              "claude",
+              "SessionStart",
+              "coordinator"
             ]
           }
         ]
@@ -34,7 +38,8 @@
             "type": "command",
             "command": "pythonw",
             "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/kit_header.py",
+              "${CLAUDE_PLUGIN_ROOT}/boot/hook.py",
+              "claude",
               "SubagentStart"
             ]
           }

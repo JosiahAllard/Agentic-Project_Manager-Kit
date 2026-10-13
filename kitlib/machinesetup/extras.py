@@ -16,7 +16,7 @@ except ImportError:                                                  # not Windo
     winreg = None
 
 from . import agenttemp
-from .common import SHELL, kit_file, norm, under
+from .common import kit_file, norm, under
 
 SHORTCUT = 'Machine schedule.lnk'
 LOCK_ENV = 'KIT_MACHINE_LOCK'
@@ -30,8 +30,8 @@ def _ps_quote(s):
 
 
 class Host(object):
-    """The real machine: PowerShell for shortcuts and the user environment, icacls, guard.py, the
-    `claude` runner."""
+    """The real machine: PowerShell for shortcuts and the user environment, icacls, the guard's
+    settings entry (boot/hook.py), the `claude` runner."""
 
     def _ps(self, script):
         r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
@@ -88,13 +88,16 @@ class Host(object):
         self._ps(line)
 
     def guard_entry(self, kit):
-        r = subprocess.run([sys.executable, kit_file(kit, SHELL + '/hooks/guard.py'),
+        """The guard's settings entry, as the kit's hook entry prints it for the default host:
+        `boot/hook.py <host> --settings-entry`, run by this interpreter."""
+        from kitlib.host import registry
+        r = subprocess.run([sys.executable, kit_file(kit, 'boot/hook.py'), registry.default(),
                             '--settings-entry'], capture_output=True, text=True, creationflags=_NOWIN)
         if r.returncode != 0:
-            raise RuntimeError('guard.py --settings-entry exit %d: %s' % (r.returncode, r.stderr.strip()))
+            raise RuntimeError('boot/hook.py --settings-entry exit %d: %s' % (r.returncode, r.stderr.strip()))
         entry = json.loads(r.stdout)
         if not isinstance(entry, dict) or not all(isinstance(v, list) for v in entry.values()):
-            raise ValueError('guard.py --settings-entry printed no {event: [groups]} object')
+            raise ValueError('boot/hook.py --settings-entry printed no {event: [groups]} object')
         return entry
 
     def plugin_runner(self, home, claude=None, timeout=None, environ=None):

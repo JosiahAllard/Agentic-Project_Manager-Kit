@@ -1,6 +1,6 @@
 """kitlib.coordinatorstart: the coordinator session-start context: standing rules, then live checks.
 
-Pure functions that return data; the hook (hosts/claude/shell/hooks/coordinator_session_start.py) prints it. The text
+Pure functions that return data; the hook (boot/hook.py claude SessionStart coordinator) prints it. The text
 comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
 filing and pricing-pass lines (each switched on in the config), then the live checks (rulings, cap,

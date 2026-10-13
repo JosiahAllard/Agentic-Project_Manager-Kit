@@ -46,17 +46,17 @@ A path it cannot resolve to an absolute one (a relative path, a script name, ano
 A path that resolves into the old kit, into `<kit>/hooks` or to `<kit>/tools/guard.py` (the pre-move paths, go-live.md "Switches") gets one of three outcomes:
 - **Removed.** `no_root_search.py` and `main_checkout_redirect_guard.py`: the hook goes. A group or event that removal empties goes too; one that was already empty stays.
 - **Re-pointed.** The file is rewritten to the kit's copy with forward slashes, quotes kept:
-  - `pm_session_start.py` and `coordinator_session_start.py` go to `hosts/claude/shell/hooks/`.
+  - `pm_session_start.py` and `coordinator_session_start.py` become the kit's hook entry: `boot/hook.py claude SessionStart pm` and `boot/hook.py claude SessionStart coordinator` (the words follow the path in a command line, or are added to `args` after it).
   - `statusline-usage.ps1` and `write-usage-status.ps1` go to `optional/usage/`.
 - **Refused.** Any other old-kit path, named.
 
 A path through `<config>/tools/<link>` stays as written: the links step points it at the kit. It is refused when the kit has no file there.
 
-When no PreToolUse hook names `<kit>/hosts/claude/shell/hooks/guard.py`, the entry `guard.py --settings-entry` prints is appended (docs/guard.md).
+When no PreToolUse hook names `<kit>/boot/hook.py`, the entry `boot/hook.py claude --settings-entry` prints is appended (docs/guard.md). The host, `claude`, is hosts.json's default host, whose account settings these are.
 
-A SessionStart hook in shell form whose command is exactly a Python interpreter (`python`, `python.exe`, `pythonw`, `pythonw.exe`, by base name) and one `.py` file under `<kit>/hosts/claude/shell/hooks/` is written in exec form: `command` becomes the interpreter of the guard entry `guard.py --settings-entry` prints, and `args` holds the script with forward slashes. Exec form starts no shell. Any other command, a hook that already has `args`, and every other event are left as they are.
+A SessionStart hook in shell form whose command is a Python interpreter (`python`, `python.exe`, `pythonw`, `pythonw.exe`, by base name), then `<kit>/boot/hook.py` and its words, is written in exec form: `command` becomes the interpreter of the guard entry `boot/hook.py claude --settings-entry` prints, and `args` holds the script with forward slashes, then its words. Exec form starts no shell. Any other command, a hook that already has `args`, and every other event are left as they are.
 
-When the kit's `.claude-plugin/plugin.json` names a `hooks` file, a settings hook that runs one of that file's scripts for the same event is noted (`${CLAUDE_PLUGIN_ROOT}` read as the kit): once the plugin is enabled the hook runs twice, so the settings entry is removed in the same step as the plugin install (docs/install.md "Plugin install"). The note changes nothing.
+When the kit's `.claude-plugin/plugin.json` names a `hooks` file, a settings hook that runs the same script with the same words as one of that file's hooks, for the same event, is noted (`${CLAUDE_PLUGIN_ROOT}` read as the kit): once the plugin is enabled the hook runs twice, so the settings entry is removed in the same step as the plugin install (docs/install.md "Plugin install"). The note changes nothing.
 
 `statusLine` stays in shell form. Claude Code gives it no `args` field: "The `command` field runs in a shell", and "On Windows, Claude Code runs status line commands through Git Bash when Git Bash is installed, or through PowerShell when Git Bash is absent" (https://code.claude.com/docs/en/statusline).
 
@@ -70,22 +70,28 @@ A `settings.json` that is a symbolic link or has more than one hard link is refu
 
 ### Moved hook paths
 
-The hooks lived in `<kit>/claude/hooks/` until the hosts/ move (docs/multi-host-plan.md step 7); they
-are now in `<kit>/hosts/claude/shell/hooks/`, and the skills in `<kit>/hosts/claude/shell/skills/`.
-Settings and links written before the move still name the old folder, so:
+The hooks lived in `<kit>/claude/hooks/` until the hosts/ move (docs/multi-host-plan.md step 7), then
+in `<kit>/hosts/claude/shell/hooks/` as one script each. Since step 14 every hook runs the kit's one
+entry, `<kit>/boot/hook.py <host> <event> [<part>]`, and those scripts are gone; the skills are in
+`<kit>/hosts/claude/shell/skills/`. Settings and links written before still name the old paths, so:
 
-- **Settings.** Before any other step, every hook path (any event, `command` and `args`) into
-  `<kit>/claude/hooks/` is re-pointed to the same file in `<kit>/hosts/claude/shell/hooks/`
-  (`settings.repoint_moved`). This runs in every mode, fresh too, and in the `--pm-settings` file,
-  so the guard entry is re-pointed instead of a second one being added, and the PM hook is
-  re-pointed instead of refused. A moved name the kit lacks is refused.
+- **Settings.** Before any other step, every hook path (any event, `command` and `args`) to a retired
+  script in `<kit>/claude/hooks/` or `<kit>/hosts/claude/shell/hooks/` is re-pointed to the entry
+  with the host and the script's words (`settings.repoint_moved`, `settings.RETIRED`): `guard.py`
+  becomes `boot/hook.py claude PreToolUse`, `pm_session_start.py` `boot/hook.py claude SessionStart
+  pm`, `coordinator_session_start.py` `boot/hook.py claude SessionStart coordinator`. In a command
+  line the words follow the path; in `args` they are added after it. This runs in every mode, fresh
+  too, and in the `--pm-settings` file, so the guard entry is re-pointed instead of a second one
+  being added, and the PM hook is re-pointed instead of refused. Any other script name in those
+  folders, or a kit with no `boot/hook.py`, is refused.
 - **Skill links.** A link in a real `skills` folder that points into `<kit>/claude/skills/` (dangling
   after the move) is re-pointed to the same skill in `<kit>/hosts/claude/shell/skills/`
   (`links.MOVED_SKILLS_DIR`; switch mode only, as the links step is).
-- **Until then.** `<kit>/claude/hooks/` keeps three stubs, `guard.py`, `pm_session_start.py` and
-  `coordinator_session_start.py`, each running the same-named entry in the new folder, so an
-  account whose settings were not re-pointed yet keeps its guard (a missing guard script would
-  block every tool call) and its session hooks. Delete `claude/` one release after the move.
+- **No stubs.** Plan decision 28 removed the `<kit>/claude/hooks/` stubs with step 14. An account
+  whose settings still name a retired script runs no guard script at all, and Claude Code then
+  blocks every guarded tool call, so the owner re-runs machine setup once on each machine (dry run,
+  then `--apply`, in its mode: `--old-kit DIR` or `--fresh --pm-settings FILE`; go-live.md
+  "Switches").
 
 ## Extras
 
@@ -114,8 +120,8 @@ Settings and links written before the move still name the old folder, so:
 `--fresh` (`-Fresh`) is for a machine with no older kit clone. It cannot be given with `--old-kit`. It only appends: no entry is removed, re-pointed or rewritten into exec form. The dry run prints the sections links, settings, plugin, extras (`Plan.FRESH_SECTIONS`, `kitlib/machinesetup/common.py`). `--apply` makes the changes in the order the survey adds them (`survey`, `kitlib/machinesetup/__init__.py`): the settings writes, the PM hook, the plugin, the extras.
 
 - **Links.** None are switched; the plan notes `fresh: no older kit clone, no links switched`.
-- **Settings.** In each config folder's `settings.json`, the guard entry `guard.py --settings-entry` prints is appended when no PreToolUse hook names `<kit>/hosts/claude/shell/hooks/guard.py`. A missing `settings.json` is created, with indent 2, LF and a final newline; the dry run shows it as a diff from nothing, and `--apply` refuses to replace a file that appeared since the survey. An existing file keeps its layout and gets the `.bak` described in "Settings".
-- **PM SessionStart hook.** It is written only to the file `--pm-settings` (`-PmSettings`) names: the settings the PM session loads, for example `<PM repo>/.claude/settings.local.json` (docs/pm-start.md "Hook (settings.json)"). The hook runs `hosts/claude/shell/hooks/pm_session_start.py` in exec form with the guard entry's interpreter and the matcher `startup|resume|compact`. Without `--pm-settings` it is a note, not a change. It refuses a file that is an account's `settings.json`, a missing folder, and a file whose SessionStart hook already runs a `pm_session_start.py` other than this kit's. It also refuses when a `pm_session_start.py` hook, under any event, is already in the other file of the pair `settings.json` and `settings.local.json` next to it, or in any config folder's `settings.json`: the PM checklist would run twice (`_pm_hook_elsewhere`, `kitlib/machinesetup/settings.py`).
+- **Settings.** In each config folder's `settings.json`, the guard entry `boot/hook.py claude --settings-entry` prints is appended when no PreToolUse hook names `<kit>/boot/hook.py`. A missing `settings.json` is created, with indent 2, LF and a final newline; the dry run shows it as a diff from nothing, and `--apply` refuses to replace a file that appeared since the survey. An existing file keeps its layout and gets the `.bak` described in "Settings".
+- **PM SessionStart hook.** It is written only to the file `--pm-settings` (`-PmSettings`) names: the settings the PM session loads, for example `<PM repo>/.claude/settings.local.json` (docs/pm-start.md "Hook (settings.json)"). The hook runs `boot/hook.py claude SessionStart pm` in exec form with the guard entry's interpreter and the matcher `startup|resume|compact`. Without `--pm-settings` it is a note, not a change. It refuses a file that is an account's `settings.json`, a missing folder, and a file whose SessionStart hook already runs a `pm_session_start.py` other than this kit's. It also refuses when a `pm_session_start.py` hook, under any event, is already in the other file of the pair `settings.json` and `settings.local.json` next to it, or in any config folder's `settings.json`: the PM checklist would run twice (`_pm_hook_elsewhere`, `kitlib/machinesetup/settings.py`).
 - **Plugin.** The plugin is installed from the export of the kit's pushed main, never from the checkout (docs/plugin-source.md), the way `tools/plugin_refresh.py --migrate --apply` does it (`kitlib/machinesetup/plugin.py`). A config folder needs it when its `settings.json` has no `enabledPlugins["pm-kit@pm-kit"]`, or has `true` but the export's `state.json` does not record the folder as migrated (an install from the checkout, which `plugin_refresh.py --apply` refuses); the second case is noted. One change makes the export (`ensure_export`, `kitlib/pluginsource/__init__.py`; it runs no `claude` and refuses when the kit checkout has not fetched its remote's main). Then one change per folder runs `refresh` with migrate for that folder: `claude plugin marketplace remove pm-kit` (its failure tolerated), `marketplace add <export root>` and `install pm-kit@pm-kit -s user` through `Runner` (`kitlib/pluginsource/claude.py`), which removes `CLAUDE_CONFIG_DIR` for `~/.claude` and sets it to any other folder. `machine_setup.py --apply` gives `Runner` `run_tree` (`kitlib/machinesetup/extras.py`), which starts `claude` in a job object so a timeout ends its children too. The CLI also rewrites other keys of `settings.json`, so the change first copies it to `settings.json.machine-setup-<yyyymmdd>-plugin.bak`, and afterwards checks the entry is `true`; if a step fails or the entry is not `true`, the run stops there, and the undo text gives the folder's `--migrate --folder` command to run it again. An entry that is `false` or any other value is noted and left. With no `claude` on PATH each folder is a note giving that command. A `--config-dir` folder outside `account_folders` is never installed: `plugin_refresh.py` and `pm_start` would never update it, so it is a note giving the same three `claude` commands and the two update commands to run there by hand, and the export change is still made for it (`_split`, `_outside_note`, `kitlib/machinesetup/plugin.py`). It runs after the settings writes, so the `.bak` holds the guard entry. The export folder comes from the machine config's `plugin` key, by default under `%LOCALAPPDATA%` (docs/plugin-source.md).
 - **Extras.** The shortcut, the agent temp init, the sweep task and the agent temp permissions run as in "Extras". `KIT_MACHINE_LOCK` is not set: the plugin's lock tool is used, and the plan notes it.
 

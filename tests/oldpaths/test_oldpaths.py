@@ -1,5 +1,5 @@
 """The old hub path stays live until the hub link points at hosts/claude/shell/hub; delete this package then.
-The old hook stubs (hooks/*.py) are gone: settings and the plugin run hosts/claude/shell/hooks/ directly."""
+The old hook stubs (hooks/*.py) are gone: settings and the plugin run boot/hook.py directly."""
 import os
 import unittest
 

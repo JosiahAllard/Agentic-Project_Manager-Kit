@@ -1,6 +1,7 @@
 """Codex's kitlib.host.HostAdapter (ARCHITECTURE.md "Hosts"; plan 2.1 and 2.2).
 
-ADAPTER is the one instance; hosts/codex/shell/hooks/run.py hands it to kitlib.host.hookmain.run.
+ADAPTER is the one instance; boot/hook.py (`hook.py codex <event>`, the plugin's copy of it)
+hands it to kitlib.host.hookmain.dispatch.
 
   name                 'codex', its key in hosts.json
   profile, capabilities  hosts.json's "codex" entry, read on first use
@@ -14,6 +15,10 @@ ADAPTER is the one instance; hosts/codex/shell/hooks/run.py hands it to kitlib.h
                        lowers one it is still handed (kitlib.host.degrade), never writing an ask.
   context(event_name, text)    (stdout, 0): {"hookSpecificOutput": {"hookEventName",
                        "additionalContext"}} for the CONTEXT_EVENTS; nothing for no text
+  start_text(event_name, kit, payload, environ, part)   a start event's text: the kit header and a
+                       lead's start checks (hosts.codex.adapter.start); Codex has no named part
+  DEADLINE             seconds the guard has for a whole PreToolUse call, the boot included (a pinned
+                       verify hashes every file): under the hooks.json timeout (content.HOOK_TIMEOUT)
   sessions()           AppServerSessions: kitlib.host.SessionHost over the local app-server
                        (hosts.codex.adapter.sessions), each read through a fresh proxy
   command_host()       None: Codex's CommandHost (runtime.SandboxCommandHost) runs a command as one
@@ -30,11 +35,13 @@ from kitlib.host import degrade
 from hosts.codex.adapter import events, policy
 
 CONTEXT_EVENTS = ('SessionStart', 'PostCompact', 'SubagentStart')
+DEADLINE = 7
 
 
 class CodexAdapter(object):
     name = 'codex'
     CONTEXT_EVENTS = CONTEXT_EVENTS
+    DEADLINE = DEADLINE
 
     def __init__(self, registry_path=None):
         self._path, self._host = registry_path, None
@@ -81,6 +88,13 @@ class CodexAdapter(object):
             return '', 0
         return json.dumps({'hookSpecificOutput': {'hookEventName': event_name,
                                                   'additionalContext': text}}) + '\n', 0
+
+    @staticmethod
+    def start_text(event_name, kit, payload, environ=None, part=None):
+        if part is not None:
+            raise ValueError('Codex has no start check %r' % (part,))
+        from hosts.codex.adapter import start
+        return start.text(event_name, kit, payload, environ)
 
     def sessions(self):
         from hosts.codex.adapter import sessions

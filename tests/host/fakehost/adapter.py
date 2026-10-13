@@ -8,7 +8,9 @@ Its hook payloads, made up but shaped like a real host's:
   session_begin  {"cwd"}
 Its answer: nothing for an allow; for a deny {"block": true, "message": <reason>} and exit 2. It
 has no ask: kitlib.host.hookmain lowers one to a deny before render sees it (hosts.json
-capabilities), so render refuses an ask outright.
+capabilities), so render refuses an ask outright. It has no hook script: its plugin.json runs the
+kit's one entry, boot/hook.py, with its name and the event (its hosts.json "hook" entry names the
+guarded tools; the plugin root is the kit, as Claude's is).
 """
 import json
 import os
@@ -19,7 +21,7 @@ NAME = 'fakehost'
 SHELL_REL = 'tests/host/fakehost/shell'
 AGENTS_REL = SHELL_REL + '/agents'
 MANIFEST_REL = SHELL_REL + '/plugin.json'
-ENTRY_REL = SHELL_REL + '/hooks/run.py'
+ENTRY = 'boot/hook.py'
 PLUGIN_ROOT = '${FAKEHOST_PLUGIN_ROOT}'
 SESSIONS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sessions')
 CONTEXT_EVENTS = ('session_begin',)
@@ -76,7 +78,7 @@ class FakeContent(object):
 
     def manifests(self, kit, content, registry_path=None):
         entry = registry.host(NAME, registry_path)
-        hooks = {e: hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY_REL), entry.platforms, e)
+        hooks = {e: hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), entry.platforms, NAME, e)
                  for e in entry.capabilities.hook_events}
         return {MANIFEST_REL: _dump({'name': kit['name'], 'version': kit['version'], 'hooks': hooks,
                                      'agents': sorted(content.role_names())})}

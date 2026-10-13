@@ -259,6 +259,64 @@ class CommandLine(unittest.TestCase):
         timed = hookmain.settings_entry('PreToolUse', '*', 'h.py', executable='py', timeout=10)
         self.assertEqual(timed['PreToolUse'][0]['hooks'][0]['timeout'], 10)
         self.assertEqual(list(entry['PreToolUse'][0]['hooks'][0]), ['type', 'command', 'args'])
+        named = hookmain.settings_entry('PreToolUse', 'Bash', 'k/boot/hook.py', executable='py',
+                                        args=('h', 'PreToolUse'))
+        self.assertEqual(named['PreToolUse'][0]['hooks'][0]['args'], ['k/boot/hook.py', 'h', 'PreToolUse'])
+
+
+class Dispatch(unittest.TestCase):
+    """dispatch: boot/hook.py's work once the kit has booted."""
+
+    class Starts(FakeAdapter):
+        CONTEXT_EVENTS = ('Begin',)
+        DEADLINE = 5
+
+        def context(self, event_name, text):
+            return ('[%s] %s\n' % (event_name, text) if text else ''), 0
+
+    def test_a_start_event_writes_the_kit_header_through_context(self):
+        from kitlib.host import header
+        out = io.StringIO()
+        self.assertEqual(hookmain.dispatch(self.Starts(), 'Begin', 'C:/k', '{not json', out), 0)
+        self.assertEqual(out.getvalue(), '[Begin] %s\n' % header.text('C:/k'))
+        with self.assertRaises(ValueError):
+            hookmain.dispatch(self.Starts(), 'Begin', 'C:/k', '{}', io.StringIO(), part='pm')
+
+    def test_start_text_gets_the_payload_and_the_part(self):
+        a, seen = self.Starts(), []
+        a.start_text = lambda *args: seen.append(args) or 'checks'
+        out = io.StringIO()
+        hookmain.dispatch(a, 'Begin', 'C:/k', '{"cwd": "C:/r"}', out, part='pm', environ={'X': '1'})
+        self.assertEqual(seen, [('Begin', 'C:/k', {'cwd': 'C:/r'}, {'X': '1'}, 'pm')])
+        self.assertEqual(out.getvalue(), '[Begin] checks\n')
+        hookmain.dispatch(a, 'Begin', 'C:/k', '[]', io.StringIO())
+        self.assertEqual(seen[-1][2], {}, 'a payload that is not an object reads as none')
+
+    def test_the_tool_event_runs_the_guard_with_the_adapters_deadline_and_the_command_line(self):
+        a, got = self.Starts(), {}
+
+        def fake_run(adapter, event, stdin, stdout, environ, entry, deadline, started, args):
+            got.update(event=event, text=stdin.read(), entry=entry, deadline=deadline, started=started, args=args)
+            return 7
+        with mock.patch.object(hookmain, 'run', fake_run):
+            code = hookmain.dispatch(a, 'PreToolUse', 'C:/k', '{"kind": "shell"}', io.StringIO(),
+                                     'C:/k/boot/hook.py', ['h', 'PreToolUse'], started=1.5)
+        self.assertEqual(code, 7)
+        self.assertEqual(got, {'event': 'PreToolUse', 'text': '{"kind": "shell"}', 'entry': 'C:/k/boot/hook.py',
+                               'deadline': 5, 'started': 1.5, 'args': ['h', 'PreToolUse']})
+        with self.assertRaises(ValueError):
+            hookmain.dispatch(a, 'PreToolUse', 'C:/k', '{}', io.StringIO(), part='pm')
+
+    def test_the_reproduce_line_names_the_entrys_arguments(self):
+        def boom(*a, **k):
+            raise RuntimeError('x')
+        out = io.StringIO()
+        with mock.patch('kitlib.guard.decide', boom):
+            hookmain.run(FakeAdapter(), 'PreToolUse', io.StringIO('{}'), out, environ={},
+                         entry='C:/k/boot/hook.py', args=('h', 'PreToolUse'))
+        self.assertEqual(out.getvalue(), 'deny guard-error\n')
+        d = hookmain.failure(RuntimeError('x'), 'main', 'C:/k/boot/hook.py', ('h', 'PreToolUse'))
+        self.assertEqual(d.instead, 'python "C:/k/boot/hook.py" h PreToolUse < event.json')
 
 
 if __name__ == '__main__':

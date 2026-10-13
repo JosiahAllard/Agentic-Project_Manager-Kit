@@ -126,7 +126,7 @@ class Manifests(unittest.TestCase):
         hooks = json.loads(files[cc.HOOKS_REL])['hooks']
         self.assertEqual(sorted(hooks), sorted(registry.host('codex').capabilities.hook_events))
         for event, groups in hooks.items():
-            self.assertEqual(groups[0]['hooks'][0]['command'], 'pythonw "${PLUGIN_ROOT}/hooks/run.py" ' + event)
+            self.assertEqual(groups[0]['hooks'][0]['command'], 'pythonw "${PLUGIN_ROOT}/boot/hook.py" codex ' + event)
 
     def test_the_hook_events_must_match_hosts_json(self):
         r = cc.renderer()
@@ -136,29 +136,41 @@ class Manifests(unittest.TestCase):
 
 
 class Vendored(unittest.TestCase):
-    def test_the_plugin_ships_the_kits_boot_check_byte_for_byte(self):
+    def test_the_plugin_ships_the_kits_boot_folder_byte_for_byte_and_its_hosts_entry(self):
         files = cc.renderer().vendored(ROOT)
-        with open(os.path.join(ROOT, 'boot', 'kitboot.py'), 'rb') as f:
-            self.assertEqual(files, {'hosts/codex/shell/boot/kitboot.py': f.read()})
-        self.assertIn('hosts/codex/shell/boot/kitboot.py', kcontent.render(ROOT, [cc.renderer()]))
+        want = {}
+        for name in ('kitboot.py', 'hook.py'):
+            with open(os.path.join(ROOT, 'boot', name), 'rb') as f:
+                want['hosts/codex/shell/boot/' + name] = f.read()
+        with open(os.path.join(ROOT, 'hosts.json'), encoding='utf-8') as f:
+            entry = json.load(f)['codex']
+        self.assertEqual(json.loads(files.pop(cc.HOSTS_REL)), {'codex': entry})
+        self.assertEqual(files, want)
+        rendered = kcontent.render(ROOT, [cc.renderer()])
+        for path in list(want) + [cc.HOSTS_REL]:
+            self.assertIn(path, rendered)
 
-    def test_the_entrys_fast_path_is_only_the_policys_read_and_bookkeeping_tools(self):
+    def load_hook(self):
+        """The plugin's copy of boot/hook.py, as a module."""
         import importlib.util
-        from hosts.codex.adapter import policy
         spec = importlib.util.spec_from_file_location(
-            'codex_run', os.path.join(ROOT, 'hosts', 'codex', 'shell', 'hooks', 'run.py'))
-        run = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(run)
-        self.assertTrue(run.FAST <= policy.ALLOWED_TOOLS - {'write_stdin'})
-        self.assertLess(run.DEADLINE, cc.HOOK_TIMEOUT, 'inside the timeout hooks.json gives Codex')
+            'codex_hook', os.path.join(ROOT, 'hosts', 'codex', 'shell', 'boot', 'hook.py'))
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        return hook
 
-    def load_run(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            'codex_run', os.path.join(ROOT, 'hosts', 'codex', 'shell', 'hooks', 'run.py'))
-        run = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(run)
-        return run
+    def test_the_guarded_tools_are_every_tool_the_policy_or_a_rule_judges(self):
+        """The fast path skips a tool hosts.json's codex hook.guarded_tools leaves out, in the owner's
+        unmarked session only (fast_path unmarked: a marked session's every call meets the policy's
+        allowlist). What it skips is what the guard would allow: the read and bookkeeping tools."""
+        from hosts.codex.adapter import events, policy
+        spec = registry.host('codex').hook
+        self.assertEqual(spec.fast_path, 'unmarked')
+        judged = set(events.FILE_TOOLS) | set(events.SHELL_TOOLS) | {events.PATCH, events.STDIN}
+        self.assertEqual(set(spec.guarded_tools), judged | {events.MCP + '*'})
+        self.assertEqual([t for t in policy.READ_TOOLS | policy.BOOKKEEPING_TOOLS if spec.guarded(t)], [])
+        from hosts.codex.adapter.host import ADAPTER
+        self.assertLess(ADAPTER.DEADLINE, cc.HOOK_TIMEOUT, 'inside the timeout hooks.json gives Codex')
 
     def test_the_entrys_budget_counts_the_boot(self):
         """DEADLINE is the whole call's: the time the boot took (a pinned verify hashes every file)
@@ -166,7 +178,7 @@ class Vendored(unittest.TestCase):
         import io
         import sys
         import types
-        run = self.load_run()
+        hook = self.load_hook()
         clock = [100.0]
         boot = types.ModuleType('kitboot')
 
@@ -176,25 +188,26 @@ class Vendored(unittest.TestCase):
         boot.boot = slow_boot
         seen = {}
 
-        def fake_run(event, kit, text, stdout, entry, deadline, started):
-            seen.update(deadline=deadline, started=started)
+        def fake_run(adapter, event, stdin, stdout, environ, entry, deadline, started, args):
+            seen.update(deadline=deadline, started=started, args=args)
             return 0
         with unittest.mock.patch.dict(sys.modules, {'kitboot': boot}), \
                 unittest.mock.patch('time.monotonic', lambda: clock[0]), \
-                unittest.mock.patch('hosts.codex.adapter.entry.run', fake_run):
-            rc = run.main(['PreToolUse'], io.StringIO('{"tool_name": "Write"}'), io.StringIO(), {})
+                unittest.mock.patch('kitlib.host.hookmain.run', fake_run):
+            rc = hook.main(['codex', 'PreToolUse'], io.StringIO('{"tool_name": "Write"}'), io.StringIO(), {})
         self.assertEqual(rc, 0)
-        self.assertEqual((seen['deadline'], seen['started']), (run.DEADLINE, 100.0))
+        from hosts.codex.adapter.host import ADAPTER
+        self.assertEqual(seen, {'deadline': ADAPTER.DEADLINE, 'started': 100.0, 'args': ['codex', 'PreToolUse']})
 
     def test_the_entrys_fast_path_reads_the_mark_as_sessionmark_does(self):
-        """run.py reads the mark before the kit boots, so it cannot import kitlib.sessionmark: its
-        MARK and test are held to sessionmark.ENV and sessionmark.mark's None."""
+        """boot/hook.py reads the mark before the kit boots, so it cannot import kitlib.sessionmark:
+        its MARK and test are held to sessionmark.ENV and sessionmark.mark's None."""
         import io
         import sys
         import types
         from kitlib import sessionmark
-        run = self.load_run()
-        self.assertEqual(run.MARK, sessionmark.ENV)
+        hook = self.load_hook()
+        self.assertEqual(hook.MARK, sessionmark.ENV)
         boot = types.ModuleType('kitboot')
 
         def no_boot(here=None):
@@ -202,8 +215,8 @@ class Vendored(unittest.TestCase):
         boot.boot = no_boot
         for value in ('', '   ', 'worker', ' reviewer ', 'owner', 'pm-kit:worker', 'pm-kit:'):
             with self.subTest(value=value), unittest.mock.patch.dict(sys.modules, {'kitboot': boot}):
-                rc = run.main(['PreToolUse'], io.StringIO('{"tool_name": "Read"}'), io.StringIO(),
-                              {sessionmark.ENV: value})
+                rc = hook.run(['codex', 'PreToolUse'], io.StringIO('{"tool_name": "Read"}'), io.StringIO(),
+                              io.StringIO(), {sessionmark.ENV: value})
                 self.assertEqual(rc, 0 if sessionmark.mark({sessionmark.ENV: value}) is None else 2)
 
 

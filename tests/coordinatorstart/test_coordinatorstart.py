@@ -10,7 +10,8 @@ from kitlib import coordinatorstart
 from kitlib.config import user as kuser
 from kitlib.lockmcp import PLUGIN_NAME
 
-HOOK = os.path.join(os.path.dirname(__file__), "..", "..", "hosts", "claude", "shell", "hooks", "coordinator_session_start.py")
+# the coordinator rules hook as the plugin's hooks.json runs it (boot/hook.py, its coordinator part)
+HOOK = [os.path.join(os.path.dirname(__file__), "..", "..", "boot", "hook.py"), "claude", "SessionStart", "coordinator"]
 COND = {"PM_KIT_ROLE": "coordinator"}
 P = PLUGIN_NAME + ":"          # the kit plugin's agent prefix (kitlib.agentname.PREFIX)
 
@@ -417,7 +418,7 @@ class HookTest(unittest.TestCase):
             env.update(USERPROFILE=d, HOME=d)
             if role:
                 env["PM_KIT_ROLE"] = role
-            return subprocess.run([sys.executable, HOOK], capture_output=True, text=True, env=env, timeout=30,
+            return subprocess.run([sys.executable] + HOOK, capture_output=True, text=True, env=env, timeout=30,
                                   input=json.dumps({"cwd": "D:/src/elsewhere"}))
 
     def test_role_unset_silent_exit_0(self):

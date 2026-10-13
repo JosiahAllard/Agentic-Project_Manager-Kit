@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "pythonw \"${PLUGIN_ROOT}/hooks/run.py\" SessionStart",
+            "command": "pythonw \"${PLUGIN_ROOT}/boot/hook.py\" codex SessionStart",
             "timeout": 10,
             "statusMessage": "Loading the PM kit header"
           }
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "pythonw \"${PLUGIN_ROOT}/hooks/run.py\" PostCompact",
+            "command": "pythonw \"${PLUGIN_ROOT}/boot/hook.py\" codex PostCompact",
             "timeout": 10
           }
         ]
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "pythonw \"${PLUGIN_ROOT}/hooks/run.py\" SubagentStart",
+            "command": "pythonw \"${PLUGIN_ROOT}/boot/hook.py\" codex SubagentStart",
             "timeout": 10
           }
         ]
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "pythonw \"${PLUGIN_ROOT}/hooks/run.py\" PreToolUse",
+            "command": "pythonw \"${PLUGIN_ROOT}/boot/hook.py\" codex PreToolUse",
             "timeout": 10,
             "statusMessage": "Checking the PM kit guard"
           }

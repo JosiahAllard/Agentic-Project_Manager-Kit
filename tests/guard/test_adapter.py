@@ -90,9 +90,9 @@ class Render(unittest.TestCase):
         self.assertEqual(rules.host_mcp_separator(ADAPTER.profile), '__')
 
     def test_the_settings_entry_matches_the_guarded_tools(self):
-        entry = ADAPTER.settings_entry('C:/k/hosts/claude/shell/hooks/guard.py', executable='py')
+        entry = ADAPTER.settings_entry('C:/k/boot/hook.py', executable='py')
         self.assertEqual(entry, {'PreToolUse': [{'matcher': MATCHER, 'hooks': [
-            {'type': 'command', 'command': 'py', 'args': ['C:/k/hosts/claude/shell/hooks/guard.py']}]}]})
+            {'type': 'command', 'command': 'py', 'args': ['C:/k/boot/hook.py', 'claude', 'PreToolUse']}]}]})
         for tool in list(events.FILE_TOOLS) + list(events.SHELL_TOOLS) + ['mcp__a__b']:
             self.assertTrue(re.fullmatch(MATCHER, tool), tool)
 

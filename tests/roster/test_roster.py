@@ -63,7 +63,7 @@ class TempCopyTest(unittest.TestCase):
         for rel in ('content', 'docs', 'boot', '.claude-plugin', os.path.join('hosts', 'claude', 'shell', 'agents'),
                     os.path.join('hosts', 'claude', 'shell', 'skills')):
             shutil.copytree(os.path.join(KIT_ROOT, rel), os.path.join(top, rel))
-        for rel in ('kit.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json')):
+        for rel in ('kit.json', 'hosts.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json')):
             os.makedirs(os.path.dirname(os.path.join(top, rel)), exist_ok=True)
             shutil.copyfile(os.path.join(KIT_ROOT, rel), os.path.join(top, rel))
         self.dir = os.path.join(top, 'content', 'roles')

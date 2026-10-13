@@ -98,11 +98,13 @@ as a TOML multi-line string. A Codex agent file has no tool list, so `capabiliti
 rendered. It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders. Its
 manifests are `hosts/codex/shell/plugin.json` (the name and version, the hooks file),
 `hosts/codex/shell/mcp.json` (the read-only lock server) and `hosts/codex/shell/hooks/hooks.json`
-(every declared hook event running `hooks/run.py <event>`, as one command string). Its
-`vendored(root)` ships a byte copy of `boot/kitboot.py` as `hosts/codex/shell/boot/kitboot.py`: the
-Codex plugin root is `hosts/codex/shell`, so a copied plugin carries the check that verifies the kit
-it binds; `--check` fails when the copy drifts. Claude needs none: its plugin root is the whole kit,
-`boot/` included. Status: hosts/codex/README.md.
+(every declared hook event running `boot/hook.py codex <event>`, the plugin's copy, as one
+command string). Its `vendored(root)` ships byte copies of `boot/kitboot.py` and `boot/hook.py` in
+`hosts/codex/shell/boot/`, and `hosts/codex/shell/hosts.json`, hosts.json's Codex entry alone: the
+Codex plugin root is `hosts/codex/shell`, so a copied plugin carries the hook entry, the hook data it
+reads before the kit boots and the check that verifies the kit it binds; `--check` fails when a copy
+drifts. Claude needs none: its plugin root is the whole kit, `boot/` included. Status:
+hosts/codex/README.md.
 
 ## Manifests
 
@@ -117,7 +119,8 @@ version, nothing else). Claude's are each JSON with indent 2 and a final newline
   The export (docs/plugin-source.md) stamps its version as `<version>-main.<count>`.
 - `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin
   (`"source": "./"`), the version as `metadata.version`.
-- `hosts/claude/shell/hooks/hooks.json`: the plugin's hooks (`HOOKS` in the renderer). Each command
+- `hosts/claude/shell/hooks/hooks.json`: the plugin's hooks (`HOOKS` in the renderer), each running
+  the kit's one hook entry, `${CLAUDE_PLUGIN_ROOT}/boot/hook.py claude <event> [<part>]`. Each command
   line comes from `kitlib.host.hookmain.manifest_command`, the interpreter by name for the platforms
   hosts.json gives the host (`pythonw` on Windows), so no manifest spells it by hand.
 
@@ -125,8 +128,9 @@ A version bump is one edit to `kit.json`, then `--write`. tests/content `Manifes
 
 ## Kit header
 
-`hosts/claude/shell/hooks/kit_header.py <event>` runs on SessionStart (startup, resume, clear,
-compact) and on SubagentStart (every subagent). It boots the kit (docs/kitboot.md) and adds
+`boot/hook.py <host> <event>` adds it at every start event a host declares; on Claude it runs on
+SessionStart (startup, resume, clear, compact) and on SubagentStart (every subagent). It boots the
+kit (docs/kitboot.md) and adds
 `kitlib.host.header.text(<kit folder>)` to the agent's context (`additionalContext`, rendered by the
 Claude adapter's `context`). The text names the kit's absolute folder, says that `<kit>` in skills
 and role files means that folder (with a worked command), that a tool path without `<kit>/` is the

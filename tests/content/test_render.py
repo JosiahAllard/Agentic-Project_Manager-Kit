@@ -100,7 +100,7 @@ class ManifestTest(unittest.TestCase):
         for event, groups in hooks.items():
             for h in (h for g in groups for h in g['hooks']):
                 self.assertEqual(h['command'], want)
-                self.assertTrue(h['args'][0].startswith('${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/'))
+                self.assertEqual(h['args'][:3], ['${CLAUDE_PLUGIN_ROOT}/boot/hook.py', 'claude', event])
 
     def test_load_kit_refusals(self):
         root = tempfile.mkdtemp()
@@ -295,7 +295,8 @@ class TempTreeTest(unittest.TestCase):
         for rel in ('content', '.claude-plugin', 'boot', os.path.join('hosts', 'claude', 'shell', 'agents'),
                     os.path.join('hosts', 'claude', 'shell', 'skills')):      # boot/: a host's plugin ships a copy
             shutil.copytree(os.path.join(KIT_ROOT, rel), os.path.join(self.root, rel))
-        for rel in ('kit.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json')):
+        # hosts.json: a plugin ships its host's entry
+        for rel in ('kit.json', 'hosts.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json')):
             write(self.path(rel), read(os.path.join(KIT_ROOT, rel)))
         self.rs = [claude_content.renderer()]
 

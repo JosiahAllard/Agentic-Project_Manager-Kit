@@ -25,17 +25,22 @@ What a subclass supplies:
                               "code"}]: the host's exact output for a decision
   read_output(stdout, code) -> (verdict, reason)   a hook's answer read back ('allow', None for none)
   read_context(stdout) -> text                     a start hook's added context read back
-  hook_scripts(manifests) -> [(event, kit path)]   every hook entry the host registers: from its
-                  rendered manifests ({path: bytes}), plus any its install writes elsewhere
+  hook_scripts(manifests) -> [(event, kit path, [args])]   every hook the host registers: from its
+                  rendered manifests ({path: bytes}), plus any its install writes elsewhere; the
+                  script each runs and the arguments after it
   session_host() -> (SessionHost, expect) or None  a SessionHost over recorded session files, and
                   {"ids": [...], "cwd": [cwd, [ids]], "loaded": [...]} (None: the host has none
                   behind the contract yet; the session test skips, saying so)
   LEAK_ALLOWED    {kit path: count} of the host's name left where section 2.7 forbids it (shrink only)
-  ENTRY_OVER      {kit path: code lines} of hook entries still over ENTRY_LINES (shrink only)
+
+Every hook a host registers runs the kit's one entry, boot/hook.py <host> <event> [<part>] (plan
+decision 20), or, for a plugin whose root is not the kit, its byte copy at <shell>/boot/hook.py: a
+host adds no hook script. The entry is run here in-process over the host's recorded payloads.
 
 Every check reads hosts.json and the adapter's own answers; none names a host.
 """
 import ast
+import dataclasses
 import importlib.util
 import io
 import json
@@ -53,7 +58,8 @@ START_KINDS = ('session_start', 'subagent_start')
 TOOL_KINDS = ('edit', 'shell', 'other')        # plus 'mcp' when the host declares mcp
 ADAPTER_API = ('parse', 'render', 'sessions', 'command_host', 'content', 'launcher', 'plugin_installer')
 SESSION_API = ('sessions', 'loaded', 'usage', 'models')
-ENTRY_LINES = 20                               # ARCHITECTURE.md "Hosts": hook entries are 20 lines or fewer
+ENTRY = 'boot/hook.py'                         # the one hook entry of every host
+UNGUARDED = 'kit-conformance-unguarded-tool'   # a tool name no host guards
 # Where a host's name may not appear (section 2.7): code read with ast, prose and data whole.
 CODE_FOLDERS = ('kitlib', 'tools', 'mcp', 'boot', 'githooks')
 TEXT_FOLDERS = ('content',)
@@ -69,12 +75,22 @@ def load_tool(name):
     return module
 
 
-def code_lines(path):
-    """The code lines of an entry: after its docstring, blank lines and comments left out."""
-    with open(path, encoding='utf-8') as f:
-        text = f.read()
-    body = text.split('"""', 2)[2] if text.lstrip().startswith('"""') else text
-    return [l for l in body.splitlines() if l.strip() and not l.strip().startswith('#')]
+def load_entry():
+    """boot/hook.py as a fresh module."""
+    spec = importlib.util.spec_from_file_location('conformance_hook', os.path.join(ROOT, *ENTRY.split('/')))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def with_tool(payload, field, tool):
+    """A copy of `payload` with the dotted key `field` set to `tool`."""
+    payload = json.loads(json.dumps(payload))
+    keys, at = field.split('.'), payload
+    for key in keys[:-1]:
+        at = at.setdefault(key, {})
+    at[keys[-1]] = tool
+    return payload
 
 
 def boot_order(source):
@@ -101,7 +117,6 @@ class HostConformance(object):
     FIXTURES = None
     KIT_ROOT = ROOT
     LEAK_ALLOWED = {}
-    ENTRY_OVER = {}
 
     # -- what the subclass supplies -------------------------------------------------------------
     def read_output(self, stdout, code):
@@ -403,26 +418,92 @@ class HostConformance(object):
         r, kit, c = self.renderer(), kcontent.load_kit(self.KIT_ROOT), kcontent.load(self.KIT_ROOT)
         return self.hook_scripts(r.manifests(kit, c))
 
-    def test_every_registered_hook_has_its_entry(self):
+    def test_every_registered_hook_runs_the_one_entry(self):
         caps = self.entry.capabilities
         hooks = self.registered()
-        self.assertEqual(sorted({e for e, _ in hooks}), sorted(caps.hook_events),
-                         'every declared hook event has an entry, and no other event does')
-        shell = self.entry.shell + '/'
-        for event, rel in hooks:
-            with self.subTest(event=event, entry=rel):
-                self.assertTrue(rel.startswith(shell), '%s is not in the shell' % rel)
-                self.assertTrue(os.path.isfile(os.path.join(self.KIT_ROOT, *rel.split('/'))), rel)
+        self.assertEqual(sorted({e for e, _, _ in hooks}), sorted(caps.hook_events),
+                         'every declared hook event has a hook, and no other event does')
+        with open(os.path.join(self.KIT_ROOT, *ENTRY.split('/')), 'rb') as f:
+            entry = f.read()
+        for event, rel, args in hooks:
+            with self.subTest(event=event, entry=rel, args=args):
+                self.assertIn(rel, (ENTRY, '%s/%s' % (self.entry.shell, ENTRY)),
+                              'a hook runs boot/hook.py, the kit\'s or the plugin\'s copy of it')
+                with open(os.path.join(self.KIT_ROOT, *rel.split('/')), 'rb') as f:
+                    self.assertEqual(f.read(), entry, '%s is not a byte copy of %s' % (rel, ENTRY))
+                self.assertEqual(args[:2], [self.HOST, event], 'the entry is told its host and its event')
+                self.assertLessEqual(len(args), 3)
 
-    def test_hook_entries_are_short(self):
-        over = []
-        for rel in sorted({rel for _, rel in self.registered()}):
-            n = len(code_lines(os.path.join(self.KIT_ROOT, *rel.split('/'))))
-            if n > max(ENTRY_LINES, self.ENTRY_OVER.get(rel, 0)):
-                over.append('%s: %d code lines' % (rel, n))
-        self.assertEqual(over, [])
-        for rel, n in self.ENTRY_OVER.items():
-            self.assertGreater(n, ENTRY_LINES, '%s is short now: drop it from ENTRY_OVER' % rel)
+    def test_the_shell_holds_no_hook_script(self):
+        """A host adds no hook script (docs/new-host.md): nothing under its shell's hooks/ runs."""
+        hooks = os.path.join(self.KIT_ROOT, *self.entry.shell.split('/'), 'hooks')
+        scripts = [n for n in (os.listdir(hooks) if os.path.isdir(hooks) else ()) if n.endswith(('.py', '.pyw'))]
+        self.assertEqual(scripts, [])
+
+    # -- the one hook entry, boot/hook.py --------------------------------------------------------
+    def tool_cases(self):
+        return [c for c in self.cases() if c['event'] == self.entry.hook.tool_event]
+
+    def test_the_hook_data_matches_the_fixtures_and_the_adapter(self):
+        hook = self.entry.hook
+        self.assertEqual(self.fixtures['events'][hook.tool_event], 'tool', 'hook.tool_event judges tool calls')
+        starts = [e for e in self.entry.capabilities.hook_events if e != hook.tool_event]
+        self.assertEqual(sorted(getattr(self.adapter, 'CONTEXT_EVENTS', ())), sorted(starts),
+                         'every other hook event is a start event the adapter adds context for')
+        entry = load_entry()
+        for c in self.tool_cases():
+            with self.subTest(case=c['name']):
+                actions = self.parsed(self.adapter.parse(c['event'], c['payload']))
+                tool = entry.tool_of(c['payload'], hook.tool_field)
+                self.assertEqual({a.tool for a in actions}, {tool}, 'hook.tool_field names the tool')
+                if any(a.kind != 'other' for a in actions):
+                    self.assertTrue(hook.guarded(tool), '%s is judged: list it in hook.guarded_tools' % tool)
+                    self.assertFalse(entry.skips(dataclasses.asdict(hook), c['payload'], {}))
+        self.assertFalse(hook.guarded(UNGUARDED))
+
+    def run_hook(self, event, payload, decide, environ=None, part=None, boot=True):
+        """(code, stdout) of boot/hook.py <host> <event> [<part>] run in-process on `payload`, with
+        decide standing in for kitlib.guard.decide; `boot` False: a boot fails the test."""
+        entry, out = load_entry(), io.StringIO()
+        if not boot:
+            entry.kit_here = mock.Mock(side_effect=AssertionError('the kit was booted'))
+        argv = [self.HOST, event] + ([part] if part else [])
+        with mock.patch.dict(os.environ), mock.patch('kitlib.guard.decide', decide):
+            for name in ('PM_KIT_ROOT', 'PM_KIT_RELEASE_ID'):
+                os.environ.pop(name, None)
+            code = entry.main(argv, io.StringIO(json.dumps(payload)), out, environ=environ or {},
+                              hosts=self.REGISTRY or registry.PATH)
+        return code, out.getvalue()
+
+    def test_the_one_entry_judges_a_guarded_call(self):
+        c = self.tool_payload()
+        code, out = self.run_hook(c['event'], c['payload'], lambda *a, **k: Decision('deny', 'r', 'no'))
+        self.assertEqual(self.read_output(out, code), ('deny', 'no'))
+        code, out = self.run_hook(c['event'], c['payload'], lambda *a, **k: Decision('allow'))
+        self.assertEqual(self.read_output(out, code), ('allow', None))
+
+    def test_the_one_entry_skips_an_unguarded_call_before_the_kit_boots(self):
+        hook = self.entry.hook
+        payload = with_tool(self.tool_payload()['payload'], hook.tool_field, UNGUARDED)
+
+        def boom(*a, **k):
+            raise RuntimeError('guard broke')
+        self.assertEqual(self.run_hook(hook.tool_event, payload, boom, boot=False), (0, ''),
+                         'skipped: no kit, no guard')
+        marked = self.run_hook(hook.tool_event, payload, boom, environ={'PM_KIT_ROLE': 'worker'})
+        if hook.fast_path == 'all':
+            self.assertEqual(marked, (0, ''))
+        else:
+            self.assertEqual(self.read_output(marked[1], marked[0])[0], 'deny',
+                             'fast_path unmarked: a marked session\'s call reaches the host and the guard')
+
+    def test_the_one_entry_adds_the_kit_header_at_every_start_event(self):
+        text = header.text(self.KIT_ROOT)
+        for event in self.events_of('session_start') + self.events_of('subagent_start'):
+            with self.subTest(event=event):
+                code, out = self.run_hook(event, self.cases(event)[0]['payload'], None)
+                self.assertEqual(code, 0)
+                self.assertIn(text, self.read_context(out))
 
     # -- the host's name stays in its slot (section 2.7) ----------------------------------------
     def leaks(self):

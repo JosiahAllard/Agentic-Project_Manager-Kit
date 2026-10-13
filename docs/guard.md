@@ -1,26 +1,26 @@
 # Shell guard and git hooks
 
-`hosts/claude/shell/hooks/guard.py` is the kit's one PreToolUse hook (ARCHITECTURE.md "Layers": Guards). `githooks/pre-push` is the kit's guard git hook. Both are thin entries over `kitlib/guard/` ("Hosts" below says how a hook reaches it). `githooks/` also holds `pre-commit`, the ledger check, inert unless a repository opts in (docs/ledger.md "Pre-commit check").
+`boot/hook.py <host> PreToolUse`, the kit's one hook entry (`boot/hook.py claude PreToolUse` on Claude), is the kit's one PreToolUse hook (ARCHITECTURE.md "Layers": Guards). `githooks/pre-push` is the kit's guard git hook. Both are thin entries over `kitlib/guard/` ("Hosts" below says how a hook reaches it). `githooks/` also holds `pre-commit`, the ledger check, inert unless a repository opts in (docs/ledger.md "Pre-commit check").
 
-**Live and enforcing:** `hosts/claude/shell/hooks/guard.py` is registered as the PreToolUse hook in the user settings ("Go-live", step 1), and subagent calls are refused by it (observed: rules `main-checkout` and `write-jail`). `githooks/pre-push` is live only in a repository whose `core.hooksPath` names `githooks/` ("Go-live", step 2).
+**Live and enforcing:** the guard is registered as the PreToolUse hook in the user settings (since plan step 14 as `boot/hook.py claude PreToolUse`; before it as `hosts/claude/shell/hooks/guard.py`, which `tools/machine_setup.py` re-points) ("Go-live", step 1), and subagent calls are refused by it (observed: rules `main-checkout` and `write-jail`). `githooks/pre-push` is live only in a repository whose `core.hooksPath` names `githooks/` ("Go-live", step 2).
 
 ## Output
 
-- **Allow:** guard.py prints nothing and exits 0.
+- **Allow:** the hook prints nothing and exits 0.
 - **Deny or ask:** it prints `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny"|"ask", "permissionDecisionReason": ...}}` and exits 0.
 - **Reason format:** `<what and why> Instead: <the exact command to use> [kit guard: rule=<rule> role=<main|subagent>]`. The role is what the event said (on Claude, `agent_id` present or not; `Action.agent`). The self-test reads it. The command after `Instead:` is also the Decision's `instead`.
   - After `Instead:` comes one command, ready to run, with no prose after it. Any explanation goes in the sentence before it, which ends with `:` (tests/guard/test_rules.py `test_rows` checks this for every row).
-- **Unguarded tools:** a tool no rule can refuse (any tool but Edit, Write, MultiEdit, NotebookEdit, Bash, PowerShell and `mcp__*`) is allowed before kitlib is imported (`hosts/claude/shell/hooks/guard.py` `unguarded`; tests/guard/test_entry.py `Unguarded`).
+- **Unguarded tools:** a tool no rule can refuse (any tool but Edit, Write, MultiEdit, NotebookEdit, Bash, PowerShell and `mcp__*`: `hosts.json` `claude.hook.guarded_tools`) is allowed before kitlib is imported, read by `boot/hook.py` with json alone (`skips`; tests/guard/test_entry.py `Unguarded`, which also holds the list equal to the adapter's tool tables and `MATCHER`).
 - **Guard error:** if the guard fails on a guarded tool, it denies with rule `guard-error` (fail closed; `kitlib.host.hookmain.run`).
-  - This includes a `kitlib.guard` that will not import and a payload the adapter cannot parse: hookmain imports the guard inside its `try` and has the adapter render the deny. Its `Instead:` reruns guard.py on the event.
-  - If the adapter or hookmain themselves will not import, or the answer cannot be written, guard.py exits 2, which Claude Code also reads as a block.
+  - This includes a `kitlib.guard` that will not import and a payload the adapter cannot parse: hookmain imports the guard inside its `try` and has the adapter render the deny. Its `Instead:` reruns the hook on the event (`python "<kit>/boot/hook.py" claude PreToolUse < event.json`).
+  - If the adapter or hookmain themselves will not import, or the answer cannot be written, the hook exits 2, which Claude Code also reads as a block.
   - Test: tests/guard/test_entry.py breaks each import.
 
 ## Hosts
 
 The guard judges a neutral `kitlib.host.Action` and answers a `kitlib.host.Decision` (ARCHITECTURE.md "Host contract"); no module under `kitlib/guard/` reads a host's payload or writes its output.
 
-- **The hook:** `hosts/claude/shell/hooks/guard.py` (the entry) hands Claude's adapter, `hosts.claude.adapter.host.ADAPTER`, to `kitlib.host.hookmain.run`: the event JSON is parsed by `hosts/claude/adapter/events.py` `parse`, judged by `kitlib.guard.decide(action)`, lowered by `kitlib.host.degrade` when the host cannot show an ask, and rendered by the adapter's `render` (nothing for an allow, the JSON in "Output" for a deny or an ask). The fail-closed deny, an optional deadline (rule `guard-timeout`; Claude passes none) and the settings entry (`hookmain.command_line`, the one place a hook command line is written) are hookmain's, the same for every host.
+- **The hook:** `boot/hook.py claude PreToolUse` (the one entry of every host) hands Claude's adapter, `hosts.claude.adapter.host.ADAPTER` (the module `hosts.json` names), to `kitlib.host.hookmain.dispatch`, which runs `kitlib.host.hookmain.run`: the event JSON is parsed by `hosts/claude/adapter/events.py` `parse`, judged by `kitlib.guard.decide(action)`, lowered by `kitlib.host.degrade` when the host cannot show an ask, and rendered by the adapter's `render` (nothing for an allow, the JSON in "Output" for a deny or an ask). The fail-closed deny, an optional deadline (rule `guard-timeout`; Claude passes none) and the settings entry (`hookmain.command_line`, the one place a hook command line is written) are hookmain's, the same for every host.
 - **What Claude's adapter reads:** `tool_name` sorts the call: a file tool (Edit, Write, MultiEdit: `file_path`; NotebookEdit: `notebook_path`) is an `edit`, Bash and PowerShell a `shell` (`command`, its dialect, `run_in_background`), `mcp__*` an `mcp` call, anything else `other`. `cwd` as sent. `agent_id` is `Action.agent`; `agent_type`, for a subagent only, is `Action.agent_role` with one kit plugin prefix dropped ("Agent names"). `PM_KIT_ROLE` is read from the hook's environment, as before.
 - **Host facts the rules need** arrive as Action fields or from `hosts.json`, never as host names in kitlib: the role a subagent runs as (`agent_role`), the shell dialect, whether the call is backgrounded, the host's form of the same edit at another path (`retarget`, for an `Instead:` line), and the lock MCP's tool names (the host profile's `mcp_tool_format`; "Lock MCP").
 - **Paths:** every path the guard folds to compare, key or make canonical goes through `kitlib/guard/paths.py` `norm` (today's Windows rules, unchanged), so the later OS work changes one function. A command line's text (drive letters, quoting) is the shell parser's, not a path rule.
@@ -358,11 +358,11 @@ The guard denies these with the command to use before the auto-mode classifier s
 
 ## Go-live (after the joint review)
 
-1. Settings: the one PreToolUse entry that `python <kit>/hosts/claude/shell/hooks/guard.py --settings-entry` prints, in exec form:
-   - `command` is the `pythonw.exe` beside the python that ran it and `args` is `[<kit>/hosts/claude/shell/hooks/guard.py]`. There is no shell and no console: one process per call, against four for a shell-form `python` command (bash, its conhost, a second bash, python; measured 2026-10-10 for KIT-HOOK-SPAWNS).
+1. Settings: the one PreToolUse entry that `python <kit>/boot/hook.py claude --settings-entry` prints, in exec form:
+   - `command` is the `pythonw.exe` beside the python that ran it and `args` is `[<kit>/boot/hook.py, "claude", "PreToolUse"]`. There is no shell and no console: one process per call, against four for a shell-form `python` command (bash, its conhost, a second bash, python; measured 2026-10-10 for KIT-HOOK-SPAWNS).
    - Do not write a bare `pythonw`: on a Windows install with the Store alias enabled, PATH finds the WindowsApps alias, one process more.
    - The matcher is `Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|mcp__.*`: the tools a rule can refuse. Read, Grep, Glob and the rest start no process.
-   - guard.py stays in each account's settings and never goes into the plugin. The plugin's only hook is the coordinator SessionStart hook (`hosts/claude/shell/hooks/hooks.json`, docs/install.md "Plugin install"); it writes a bare `pythonw`, since a plugin file cannot name the machine's interpreter, so it may cost the alias process above once per session start.
+   - The guard stays in each account's settings and never goes into the plugin. The plugin's only hook is the coordinator SessionStart hook (`hosts/claude/shell/hooks/hooks.json`, docs/install.md "Plugin install"); it writes a bare `pythonw`, since a plugin file cannot name the machine's interpreter, so it may cost the alias process above once per session start.
 2. Every repo: `git config core.hooksPath <kit>/githooks` (the fast-forward rule is for every repo; the gate-OK check needs `push_block`). This also installs `pre-commit`, inert unless the repo's `.kit.json` sets `ledger.pre_commit_check` (docs/ledger.md "Pre-commit check").
 3. Every repo whose landers edit a main checkout, or fetch and fast-forward one from a worktree ("Write jail"): `.kit.json` `roles.lander.edit_main_checkout: true`.
 4. The launcher sets `PM_KIT_ROLE` for every session it starts (`tools/launch.py` does: `pm`, `coordinator`, `deep-worker`, `consultant`, `plain`), with or before step 1: until then every main session counts as the owner's own ("Session mark").

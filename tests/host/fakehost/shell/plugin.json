@@ -20,14 +20,16 @@
   "hooks": {
     "before_tool": {
       "args": [
-        "${FAKEHOST_PLUGIN_ROOT}/tests/host/fakehost/shell/hooks/run.py",
+        "${FAKEHOST_PLUGIN_ROOT}/boot/hook.py",
+        "fakehost",
         "before_tool"
       ],
       "command": "pythonw"
     },
     "session_begin": {
       "args": [
-        "${FAKEHOST_PLUGIN_ROOT}/tests/host/fakehost/shell/hooks/run.py",
+        "${FAKEHOST_PLUGIN_ROOT}/boot/hook.py",
+        "fakehost",
         "session_begin"
       ],
       "command": "pythonw"

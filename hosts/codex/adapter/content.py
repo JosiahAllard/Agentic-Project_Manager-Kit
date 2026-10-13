@@ -16,13 +16,17 @@ manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a
   extensions.com.openai (the portable plugin format the Codex branch used).
 - `hosts/codex/shell/mcp.json`: the machine-lock MCP server, read-only on Codex
   (hosts/codex/shell/mcp/lock_server.py, hosts.codex.adapter.lock).
-- `hosts/codex/shell/hooks/hooks.json`: every hosts.json hook event, each running the one entry
-  hooks/run.py with the event's name. Codex reads a hook's command as one string, so it is
+- `hosts/codex/shell/hooks/hooks.json`: every hosts.json hook event, each running the kit's one
+  hook entry, boot/hook.py, as the plugin's copy ${PLUGIN_ROOT}/boot/hook.py with `codex` and the
+  event's name. Codex reads a hook's command as one string, so it is
   kitlib.host.hookmain.manifest_command's command line joined, the script quoted.
-vendored(root) copies the kit's boot check, boot/kitboot.py, to `hosts/codex/shell/boot/kitboot.py`
-byte for byte: the plugin root is hosts/codex/shell (${PLUGIN_ROOT}), and a plugin copied out of the
-kit must carry the check that verifies the kit it binds through PM_KIT_ROOT, as the Codex branch's
-plugin carried release_binding.py. render_content --check fails when the copy drifts.
+vendored(root) copies the kit's boot folder, boot/kitboot.py and boot/hook.py, to
+`hosts/codex/shell/boot/` byte for byte, and writes `hosts/codex/shell/hosts.json` holding hosts.json's
+Codex entry alone (HOSTS_REL): the plugin root is hosts/codex/shell (${PLUGIN_ROOT}), and a plugin
+copied out of the kit (a plugin cache) cannot reach the kit's boot/ or hosts.json. It must carry the
+check that verifies the kit it binds through PM_KIT_ROOT, as the Codex branch's plugin carried
+release_binding.py, the hook entry, and the hook data that entry reads before the kit boots (never
+from the kit it is about to verify). render_content --check fails when a copy drifts.
 """
 import json
 import os
@@ -40,8 +44,10 @@ MANIFEST_REL = SHELL_REL + '/plugin.json'
 MCP_REL = SHELL_REL + '/mcp.json'
 HOOKS_REL = SHELL_REL + '/hooks/hooks.json'
 # Kit files the plugin ships a copy of: {copy: source}, both repo-relative.
-VENDORED = {SHELL_REL + '/boot/kitboot.py': 'boot/kitboot.py'}
-ENTRY = 'hooks/run.py'
+VENDORED = {SHELL_REL + '/boot/kitboot.py': 'boot/kitboot.py', SHELL_REL + '/boot/hook.py': 'boot/hook.py'}
+# The plugin's hosts.json: the kit's, Codex's entry alone, read by its copy of boot/hook.py.
+HOSTS_REL = SHELL_REL + '/hosts.json'
+ENTRY = 'boot/hook.py'
 PLUGIN_ROOT = '${PLUGIN_ROOT}'
 PLUGIN_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json'
 MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json'
@@ -240,7 +246,7 @@ class CodexContent:
             raise ContentError('%s: HOOKS must cover exactly the hook events hosts.json declares' % HOOKS_REL)
         events = {}
         for event, matcher, status in HOOKS:
-            command = hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), entry.platforms, event)
+            command = hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), entry.platforms, HOST, event)
             hook = {'type': 'command', 'command': self.command_text(command), 'timeout': HOOK_TIMEOUT}
             if status:
                 hook['statusMessage'] = status
@@ -248,11 +254,15 @@ class CodexContent:
         return {'hooks': events}
 
     def vendored(self, root):
-        """{copy: bytes} of VENDORED, read from the kit checkout `root`."""
+        """{copy: bytes} of VENDORED, read from the kit checkout `root`, and HOSTS_REL: its
+        hosts.json's Codex entry alone, JSON with indent 2 and a final newline."""
         out = {}
         for copy, source in VENDORED.items():
             with open(os.path.join(root, *source.split('/')), 'rb') as f:
                 out[copy] = f.read()
+        with open(os.path.join(root, 'hosts.json'), encoding='utf-8') as f:
+            entry = json.load(f)[HOST]
+        out[HOSTS_REL] = (json.dumps({HOST: entry}, indent=2) + '\n').encode('utf-8')
         return out
 
     def manifests(self, kit, content, registry_path=None):
