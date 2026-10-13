@@ -1,28 +1,42 @@
-"""machine_setup.py: switch this machine's Claude config folders from an older kit clone to this
-kit checkout, or set up a fresh machine that has none, as one reviewed command (docs/machine-setup.md).
+"""machine_setup.py: set up this machine for the kit, as one reviewed command (docs/machine-setup.md).
+It writes nothing into any repository: a repository works with the kit with nothing committed in it.
 
-  machine_setup.py --old-kit DIR                     DRY RUN: print every change and the settings diffs
-  machine_setup.py --old-kit DIR --apply             make them (a .bak beside each settings.json)
-  machine_setup.py --fresh [--pm-settings FILE]      DRY RUN of a fresh machine (no older kit clone):
-                                                     the guard's entry, the PM hook in FILE, the kit
-                                                     plugin per account. Either mode re-points
-                                                     settings hooks that run a retired kit hook
-                                                     script to boot/hook.py
-  machine_setup.py --fresh ... --apply               make them
-  options: --config-dir DIR (repeatable; default: ~/.claude and every ~/.claude-* folder but the
-                             machine config's own; with --fresh, the plugin's account folders:
-                             those plus each folder of the launcher's accounts and orgs)
-           --kit DIR (default: the checkout this file is in)   --home DIR (default: the user's home)
+  machine_setup.py [--owner-email EMAIL]               DRY RUN of the machine setup: the guard's
+                                                       entry in each account's settings.json, the
+                                                       kit plugin per account, the owner's email in
+                                                       the machine config, the agents' temp folder
+  machine_setup.py ... --apply                         make them
+  machine_setup.py --old-kit DIR [--apply]             switch the Claude config folders from an
+                                                       older kit clone instead (links, settings,
+                                                       the owner's email, the extras)
+  machine_setup.py --repo PATH --owner-email EMAIL --agent-email EMAIL [--apply]
+                                                       the committed repo setup instead: writes
+                                                       .kit.json, the ignore lines, a starter
+                                                       docs/INDEX.md (and with --stubs, --stack
+                                                       their files) into the repository PATH
+                                                       (docs/install.md "Committed setup (--repo)")
+  machine-wide options: --config-dir DIR (repeatable; default: the plugin's account folders, ~/.claude,
+                             every ~/.claude-* folder but the machine config's own and each folder
+                             of the launcher's accounts and orgs; with --old-kit, the first two)
+           --owner-email EMAIL (default: the machine config's, else `git config user.email`, shown
+                             in the dry run to confirm; with neither, --apply in a console asks)
+           --pm-settings FILE (default mode only: the settings file the PM session loads, for its
+                             SessionStart hook)
            --agent-temp DIR (default: the machine config's agent_temp_sweep.dir, then the user
                              environment's AGENT_TEMP, then AgentTemp at the root of the kit's drive)
-           --desktop DIR (default: the user's Desktop)
-           --register-sweep-task  with --apply, register the agent-temp-sweep scheduled task (the
-                             owner's act; without it the plan prints the line that registers it)
-  Exactly one of --old-kit and --fresh; --pm-settings goes with --fresh only.
+           --register-sweep-task  with --apply, register the agent-temp-sweep scheduled task
+           --shortcut        the machine schedule shortcut on the desktop (always with --old-kit)
+           --desktop DIR (default: the user's Desktop)   --home DIR (default: the user's home)
+           --kit DIR (default: the checkout this file is in)
+  repo options (--repo): --agent-email EMAIL (required) --main-branch NAME (default main)
+           --repo-name NAME --stack NAME --stubs --pm-data DIR [--private-remote URL]
+  --fresh is the default mode's old name, still accepted. Every mode re-points settings hooks that
+  run a retired kit hook script to boot/hook.py.
 
-A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.machinesetup.run, prints and
-exits. Exit codes: 0 done, or nothing to do; 1 refused or stopped part way (it prints what was done
-and how to restore); 2 usage.
+A thin entry point (ARCHITECTURE.md, Layers): it parses, asks for the owner's email when it must,
+calls kitlib.machinesetup, prints and exits. Exit codes: 0 done, or nothing to do; 1 refused or
+stopped part way (it prints what was done and how to restore); 2 usage; with --repo --pm-data
+--apply, pm_data.py's own non-zero code.
 """
 import argparse
 import os
@@ -32,42 +46,104 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import machinesetup                                     # noqa: E402
 from kitlib.config import user as kuser                             # noqa: E402
+from kitlib.machinesetup import owner as mowner                     # noqa: E402
+from kitlib.machinesetup import repo as mrepo                       # noqa: E402
+
+KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ONLY = ('agent_email', 'main_branch', 'repo_name', 'stack', 'stubs', 'pm_data', 'private_remote')
+MACHINE_ONLY = ('config_dir', 'pm_settings', 'agent_temp', 'register_sweep_task', 'shortcut',
+                'desktop', 'home')
 
 
-def main(argv=None):
+def parser():
     p = argparse.ArgumentParser(prog='machine_setup.py', description=__doc__.split('\n')[0],
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    mode = p.add_mutually_exclusive_group(required=True)
+    mode = p.add_mutually_exclusive_group()
     mode.add_argument('--old-kit', help='the older kit clone the machine links point into')
-    mode.add_argument('--fresh', action='store_true', help='a machine with no older kit clone')
+    mode.add_argument('--fresh', action='store_true', help='the default mode (its old name)')
+    mode.add_argument('--repo', help='the committed repo setup of this repository instead')
+    p.add_argument('--owner-email', default=None, help="the owner's email (the machine config; with "
+                   '--repo, .kit.json "owner".email)')
     p.add_argument('--pm-settings', default=None,
-                   help='with --fresh: the settings file the PM session loads, for its SessionStart hook')
-    p.add_argument('--kit', default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                   help='default mode: the settings file the PM session loads, for its SessionStart hook')
+    p.add_argument('--kit', default=KIT)
     p.add_argument('--config-dir', action='append', default=None)
     p.add_argument('--home', default=None)
     p.add_argument('--agent-temp', default=None)
     p.add_argument('--desktop', default=None)
     p.add_argument('--register-sweep-task', action='store_true',
                    help="register the agents' temp sweep task (the owner's act)")
+    p.add_argument('--shortcut', action='store_true', help='the machine schedule shortcut on the desktop')
+    p.add_argument('--agent-email', default=None, help='--repo: the agents\' commit email')
+    p.add_argument('--main-branch', default=None, help='--repo: the main branch (default main)')
+    p.add_argument('--repo-name', default=None, help="--repo: the repository's short name")
+    p.add_argument('--stack', default=None, help='--repo: a stack template (templates/stacks/<name>)')
+    p.add_argument('--stubs', action='store_true', help='--repo: write the kit tool stubs')
+    p.add_argument('--pm-data', default=None, help="--repo: make the kit's PM data branch here after")
+    p.add_argument('--private-remote', default=None, help='--repo, with --pm-data: its private remote')
     p.add_argument('--apply', action='store_true')
+    return p
+
+
+def usage(text):
+    sys.stderr.write('machine_setup.py: %s\n' % text)
+    return machinesetup.EXIT_USAGE
+
+
+def main(argv=None):
     try:
-        a = p.parse_args(argv)
+        a = parser().parse_args(argv)
     except SystemExit as e:
         return machinesetup.EXIT_USAGE if e.code else 0
-    if a.pm_settings and not a.fresh:
-        sys.stderr.write('machine_setup.py: --pm-settings goes with --fresh only\n')
-        return machinesetup.EXIT_USAGE
-    if a.old_kit is not None and not os.path.isdir(a.old_kit):
-        sys.stderr.write('machine_setup.py: no old kit folder at %s\n' % a.old_kit)
-        return machinesetup.EXIT_USAGE
-    home = a.home if a.home is not None else kuser.home_dir()       # the home fence applies to the default
     safe_stdout()
+    out = lambda line: print(line, flush=True)              # noqa: E731
+    if a.repo is not None:
+        given = [n for n in MACHINE_ONLY if getattr(a, n) not in (None, False)]
+        if given:
+            return usage('--%s goes with the machine setup, not --repo' % given[0].replace('_', '-'))
+        ctx = mrepo.RepoContext(a.repo, a.owner_email, a.agent_email, a.kit,
+                                main_branch=a.main_branch or 'main', repo_name=a.repo_name or '',
+                                stack=a.stack or '', pm_data=a.pm_data or '',
+                                private_remote=a.private_remote or '', stubs=a.stubs)
+        code, _ = machinesetup.run_repo(ctx, apply=a.apply, out=out)
+        return code
+    given = [n for n in REPO_ONLY if getattr(a, n) not in (None, False)]
+    if given:
+        return usage('--%s goes with --repo only' % given[0].replace('_', '-'))
+    if a.pm_settings and a.old_kit is not None:
+        return usage('--pm-settings goes with the default mode only, not --old-kit')
+    if a.old_kit is not None and not os.path.isdir(a.old_kit):
+        return usage('no old kit folder at %s' % a.old_kit)
+    home = a.home if a.home is not None else kuser.home_dir()       # the home fence applies to the default
     ctx = machinesetup.Context(home, a.kit, a.old_kit, config_dirs=a.config_dir,
                                agent_temp=a.agent_temp, desktop=a.desktop,
-                               fresh=a.fresh, pm_settings=a.pm_settings,
-                               register_sweep_task=a.register_sweep_task)
-    code, _ = machinesetup.run(ctx, apply=a.apply, out=lambda line: print(line, flush=True))
+                               pm_settings=a.pm_settings, register_sweep_task=a.register_sweep_task,
+                               owner_email=a.owner_email, shortcut=True if a.shortcut else None)
+    if a.apply and not ctx.owner_email and interactive() and mowner.needs_prompt(ctx):
+        ctx.owner_email = ask_owner_email()
+    code, _ = machinesetup.run(ctx, apply=a.apply, out=out)
     return code
+
+
+def interactive():
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def ask_owner_email():
+    """The owner's email typed at the console, or None when the answer is empty or not an email
+    (the run then notes that none is stored)."""
+    try:
+        typed = input('The email your own commits are authored with (owner-only changes are proven by '
+                      'it; empty to skip): ').strip()
+    except EOFError:
+        return None
+    if typed and mowner.valid(typed):
+        print('machine_setup.py: %r is not an email address; none stored' % typed, flush=True)
+        return None
+    return typed or None
 
 
 def safe_stdout():

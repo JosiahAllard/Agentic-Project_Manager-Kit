@@ -1,4 +1,5 @@
-"""Machine extras (docs/machine-setup.md "Extras"): the machine schedule shortcut, the agents' temp
+"""Machine extras (docs/machine-setup.md "Extras"): the machine schedule shortcut (in the default mode
+only with `shortcut`), the agents' temp
 folder with its AGENT_TEMP variable, sweep config key and sweep task (kitlib.machinesetup.agenttemp),
 that folder's permissions, and the comfy entry point's lock tool (not in fresh mode: the plugin's
 lock tool is used). Each is read first and planned only when it differs; Host is the Windows side (also the
@@ -100,6 +101,15 @@ class Host(object):
             raise ValueError('boot/hook.py --settings-entry printed no {event: [groups]} object')
         return entry
 
+    def git_email(self, kit):
+        """`git config user.email` in the kit checkout (the user's global value unless the kit
+        checkout sets its own), or None when it is unset or git cannot run."""
+        from kitlib.git import cmd
+        r = cmd.call(['config', 'user.email'], kit)
+        if r.rc != 0:
+            return None
+        return cmd.text(r.out or b'').strip() or None
+
     def plugin_runner(self, home, claude=None, timeout=None, environ=None):
         """The `claude` runner of the plugin step: kitlib.pluginsource.claude.Runner (the claude on
         PATH unless `claude` names one; CLAUDE_CONFIG_DIR set to the folder, removed for ~/.claude,
@@ -144,7 +154,11 @@ def pythonw():
 
 
 def survey(plan, ctx):
-    _shortcut(plan, ctx)
+    if getattr(ctx, 'shortcut', True):
+        _shortcut(plan, ctx)
+    else:
+        plan.note('extras', 'machine schedule shortcut: not made in the default mode (--shortcut '
+                            'makes it)')
     folder, made = agenttemp.survey(plan, ctx)        # before the ACL: it may make the folder
     if folder:
         _acl(plan, ctx, folder, made)
