@@ -48,7 +48,7 @@ The kit ships as one release with a thin plugin per host, which the owner instal
 - **Hooks:** each host's shell registers its hooks in a rendered manifest; on Claude the kit header (SessionStart and SubagentStart: the kit's folder, what `<kit>` and the placeholders mean) and the coordinator SessionStart hook ship in the plugin, and guard.py stays in each account's settings.
 - **Bundled per host:** the rendered agents, skills and instructions, the lock MCP server and the host's hooks.
 - **Skills:** landing, red-first, ledger, backlog, machine-lock, refusal, handoff and action-hub. Profiles and instruction files become pointers to these skills.
-- **Instructions:** `AGENTS.md` is canonical; `CLAUDE.md` imports it. The repo profile is the neutral `docs/agent-profile.md`.
+- **Instructions:** `AGENTS.md` is canonical; `CLAUDE.md` imports it. The repo profile is the neutral `docs/agent-profile.md`; each host's own-folder stub (`.claude/agent-profile.md`, `.codex/agent-profile.md`, the path its rendered roles name) points to it.
 - **Code:** tools and kitlib stay Python. Skills explain them, and enforcement stays in the hooks and the gate.
 
 ## Scheduler UI

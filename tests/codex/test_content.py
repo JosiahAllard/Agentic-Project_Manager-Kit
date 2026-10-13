@@ -92,6 +92,18 @@ class Tokens(unittest.TestCase):
         self.assertEqual(values['profile_path'], folder + 'agent-profile.md')
         self.assertEqual(values['coordinator_profile_path'], folder + 'coordinator-profile.md')
 
+    def test_the_kits_own_codex_profile_points_to_the_real_one(self):
+        """This repository's profile is docs/agent-profile.md; each host's own-folder stub (Claude's
+        .claude/agent-profile.md, Codex's profile_path) points to it, heading for heading."""
+        def headings(rel):
+            with open(os.path.join(ROOT, rel), encoding='utf-8') as f:
+                return [line.strip() for line in f if line.startswith('#') and not line.startswith('# ')]
+        stub = cc.tokens()['profile_path']
+        self.assertEqual(headings(stub), headings('docs/agent-profile.md'))
+        self.assertEqual(headings(stub), headings('.claude/agent-profile.md'))
+        with open(os.path.join(ROOT, stub), encoding='utf-8') as f:
+            self.assertIn('`docs/agent-profile.md`', f.read())
+
     def test_strings_escape(self):
         if tomllib is None:
             self.skipTest('tomllib needs Python 3.11')

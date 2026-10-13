@@ -47,9 +47,11 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
 - A call with a TTY, input fed to a command, and text sent to a running process (`write_stdin`).
   The guard sees the command that starts a process, never what is typed into it later. A marked
   session refuses all three.
-- A cmd.exe call is judged as PowerShell's `cmd /c <text>`, so the shared git rules (reset --hard,
-  a force push or a push to main, commit -a, clean, checkout -- .) apply to it. What cmd.exe reads
-  differently from that is not judged further. A marked session refuses cmd.exe.
+- A cmd.exe call's text is judged in the guard's cmd.exe dialect (handed over as one PowerShell
+  literal, `cmd /c '<text>'`, so no PowerShell comment or quote hides part of it), and the shared
+  git rules (reset --hard, a force push or a push to main, commit -a, clean, checkout -- .) apply
+  to it. A command built from a variable (`call %G% ...`) or words joined by a caret are not
+  modelled, as with `cmd /c` on the default host. A marked session refuses cmd.exe.
 - A call that names no shell is judged as PowerShell.
 
 ## Not verified
@@ -76,6 +78,9 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
   runs nothing. The rendered roles name spawn_agent and send_message as not available to a Codex
   agent. On Codex the owner starts each agent session by hand.
 - Hook payloads carry no child identity (above), so a child is held as its parent's role.
+- A main checkout with no `.kit.json` lets a force push to main through, as the shared guard does
+  on every host today (baseline behaviour, not this host's). The runtime broker refuses every call
+  while a `.kit.json` exists but does not load (`host-runtime-error`).
 
 ## Not ported, with no replacement
 
