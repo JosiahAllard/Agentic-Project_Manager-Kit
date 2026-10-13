@@ -9,7 +9,8 @@ The worked example is the fake host in `tests/host/fakehost/`. It exists only in
 passes the same suite as Claude (`tests/host/test_conformance_fake.py`). It has no ask, no subagent
 identity in its hooks, no MCP and no skills, so it shows each way the kit degrades. Copy its files
 and rename them. Claude is the full example: `hosts/claude/` and
-`tests/host/test_conformance_claude.py`.
+`tests/host/test_conformance_claude.py`. Codex (`hosts/codex/`, `tests/host/test_conformance_codex.py`)
+shows a real host without ask or subagent identity, with a several-target edit tool and a `screen`.
 
 ## 1. The `hosts.json` entry
 
