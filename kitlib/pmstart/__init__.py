@@ -610,8 +610,8 @@ def agent_temp_lines(env=None, sweep_key=None, task_exists=None):
                      % (AGENT_TEMP_TASK, type(e).__name__, e))
         return lines
     if not there:
-        lines.append("agent temp sweep task %s is not registered (machine_setup.py --register-sweep-task "
-                     "--apply, the owner's act)" % AGENT_TEMP_TASK)
+        lines.append("agent temp sweep task %s is not registered (machine_setup.py --apply registers it, "
+                     "the owner's act)" % AGENT_TEMP_TASK)
     return lines
 
 

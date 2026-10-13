@@ -113,6 +113,15 @@ class FakeHost(object):
         self.calls.append(('task', line))
         self.tasks = set(self.tasks) | {'agent-temp-sweep'}          # the only task machine setup registers
 
+    sweep_report = ('claude/p/old-session  4.0 days  would',)        # the sweep dry run's lines
+    sweep_error = None                                               # raised by sweep_dry_run when set
+
+    def sweep_dry_run(self, kit):
+        self.calls.append(('sweep-dry-run', kit))
+        if self.sweep_error:
+            raise self.sweep_error
+        return list(self.sweep_report)
+
     git_email_value = None                                           # `git config user.email`
 
     def git_email(self, kit):

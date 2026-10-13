@@ -98,9 +98,10 @@ class Init(T.Base):
         self.assertIn('make the agent temp folder %s' % self.new, out)
         self.assertIn('user environment AGENT_TEMP = %s' % self.new, out)
         self.assertIn('add agent_temp_sweep = {"dir": %s, "max_age_days": 3}' % json.dumps(self.new), out)
-        self.assertIn('scheduled task agent-temp-sweep is not registered', out)
-        self.assertIn('--register-sweep-task', out)
+        self.assertIn('register the scheduled task agent-temp-sweep', out)
+        self.assertIn('first runs the sweep once without --apply', out)
         self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.host.calls, [])                          # no dry run of the sweep either
         self.assertFalse(os.path.exists(self.new))
 
     def test_apply_creates_folder_sets_env_and_writes_config_key_without_other_keys_lost(self):
@@ -209,24 +210,64 @@ class Init(T.Base):
         self.assertIn('git checkout', out)
         self.assertFalse(os.path.exists(os.path.join(repo, 'src', 'temp')))
 
-    def test_task_registered_only_with_the_flag(self):
+    def tasks(self):
+        return [c for c in self.host.calls if c[0] == 'task']
+
+    def test_task_registered_by_default_after_a_dry_run_of_the_sweep(self):
         code, out = self.run_new(apply=True)
         self.assertEqual(code, M.EXIT_OK, out)
-        self.assertFalse([c for c in self.host.calls if c[0] == 'task'])
-        self.assertIn('-RunLevel Limited', out)
-        code, out = self.run_new(apply=True, register_sweep_task=True)
-        self.assertEqual(code, M.EXIT_OK, out)
-        calls = [c for c in self.host.calls if c[0] == 'task']
+        calls = self.tasks()
         self.assertEqual(len(calls), 1, out)
         line = calls[0][1]
         for want in ('-RunLevel Limited', '--apply', '-StartWhenAvailable', '-Daily -At 04:00',
                      os.path.join(self.kit, 'optional', 'agenttemp', 'agent_temp_sweep.py')):
             self.assertIn(want, line)
-        code, out = self.run_new(apply=True, register_sweep_task=True)
-        self.assertIn('machine-setup: nothing to do', out)
-        self.assertEqual(len([c for c in self.host.calls if c[0] == 'task']), 1)
+        kinds = [c[0] for c in self.host.calls]
+        self.assertLess(kinds.index('sweep-dry-run'), kinds.index('task'))   # the dry run first
+        self.assertIn(('sweep-dry-run', self.kit), self.host.calls)
+        dry = '  sweep dry run (nothing removed): claude/p/old-session  4.0 days  would'
+        self.assertIn(dry, out)
+        self.assertLess(out.index(dry), out.index('done: register the scheduled task'))
 
-    def test_the_tool_passes_register_sweep_task(self):
+    def test_no_sweep_task_leaves_it_unregistered_and_notes_the_line(self):
+        code, out = self.run_new(apply=True, sweep_task=False)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(self.tasks(), [])
+        self.assertNotIn(('sweep-dry-run', self.kit), self.host.calls)
+        self.assertIn('scheduled task agent-temp-sweep is not registered (--no-sweep-task)', out)
+        self.assertIn('-RunLevel Limited', out)
+
+    def test_no_sweep_task_leaves_a_registered_task_and_says_how_to_undo_it(self):
+        self.host.tasks = {'agent-temp-sweep'}
+        code, out = self.run_new(apply=True, sweep_task=False)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(self.tasks(), [])
+        self.assertIn('scheduled task agent-temp-sweep is registered; --no-sweep-task leaves it', out)
+        self.assertIn('Unregister-ScheduledTask -TaskName agent-temp-sweep', out)
+
+    def test_a_registered_task_is_left_and_a_second_run_does_nothing(self):
+        code, out = self.run_new(apply=True)
+        self.assertEqual(len(self.tasks()), 1, out)
+        calls = len(self.host.calls)
+        code, out = self.run_new(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertIn('machine-setup: nothing to do', out)
+        self.assertEqual(len(self.host.calls), calls)                     # no dry run, no register
+        self.host.tasks = {'agent-temp-sweep'}                            # one registered by hand
+        self.host.calls = []
+        code, out = self.run_new(apply=True, agent_temp=None)
+        self.assertIn('machine-setup: nothing to do', out)
+        self.assertEqual(self.host.calls, [])
+
+    def test_a_sweep_dry_run_that_refuses_registers_nothing(self):
+        self.host.sweep_error = RuntimeError('the sweep dry run exit 2, so the task is not registered')
+        code, out = self.run_new(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertEqual(self.tasks(), [])
+        self.assertIn('machine-setup: STOPPED at: register the scheduled task agent-temp-sweep', out)
+        self.assertIn('the sweep dry run exit 2', out)
+
+    def test_the_tool_registers_by_default_and_no_sweep_task_opts_out(self):
         sys.path.insert(0, os.path.dirname(T.TOOL))
         self.addCleanup(sys.path.remove, os.path.dirname(T.TOOL))
         import machine_setup
@@ -234,11 +275,17 @@ class Init(T.Base):
                 '--desktop', self.desk, '--apply']
         with mock.patch.object(extras, 'Host', lambda: self.host):
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(machine_setup.main(argv), 0)
-            self.assertFalse([c for c in self.host.calls if c[0] == 'task'])
+                self.assertEqual(machine_setup.main(argv + ['--no-sweep-task']), 0)
+            self.assertEqual(self.tasks(), [])
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(machine_setup.main(argv + ['--no-sweep-task', '--register-sweep-task']),
+                                 M.EXIT_USAGE)
             with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(machine_setup.main(argv), 0)
+            self.assertEqual(len(self.tasks()), 1)
+            with contextlib.redirect_stdout(io.StringIO()):                # the old opt-in, still accepted
                 self.assertEqual(machine_setup.main(argv + ['--register-sweep-task']), 0)
-        self.assertEqual(len([c for c in self.host.calls if c[0] == 'task']), 1)
+        self.assertEqual(len(self.tasks()), 1)
 
     def init_tool(self, *argv):
         """tools/agent_temp_init.py main() against FakeHost: (exit code, stdout, stderr)."""
@@ -264,16 +311,17 @@ class Init(T.Base):
         self.assertNotIn('Machine schedule', out)
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(self.host.calls, [])
-        code, out, _ = self.init_tool('--agent-temp', self.new, '--apply')
+        code, out, _ = self.init_tool('--agent-temp', self.new, '--apply', '--no-sweep-task')
         self.assertEqual(code, 0, out)
         self.assertIn('agent-temp-init: made', out)
         self.assertTrue(os.path.isdir(self.new))
         self.assertEqual(self.host.env['AGENT_TEMP'], self.new)
         self.assertEqual(kuser.user_config(self.home)['agent_temp_sweep']['dir'], self.new)
         self.assertEqual(sorted({c[0] for c in self.host.calls}), ['env', 'icacls'])
-        code, out, _ = self.init_tool('--agent-temp', self.new, '--apply', '--register-sweep-task')
+        code, out, _ = self.init_tool('--agent-temp', self.new, '--apply')
         self.assertEqual(code, 0, out)
-        self.assertEqual(len([c for c in self.host.calls if c[0] == 'task']), 1)
+        self.assertEqual(len(self.tasks()), 1)
+        self.assertIn('sweep dry run (nothing removed): ', out)
         code, out, _ = self.init_tool('--apply')          # the config key names it now
         self.assertEqual(code, 0, out)
         self.assertIn('agent-temp-init: nothing to do', out)
@@ -290,11 +338,14 @@ class Init(T.Base):
         self.assertIn('unrecognized arguments', err)
         code, out, _ = self.init_tool('--help')
         self.assertEqual(code, 0)
-        self.assertIn('--register-sweep-task', out)
+        self.assertIn('--no-sweep-task', out)
+        code, _, err = self.init_tool('--no-sweep-task', '--register-sweep-task')
+        self.assertEqual(code, 2, err)
+        self.assertIn('not both', err)
 
     def test_task_query_failure_is_a_note(self):
         self.host.task_error = RuntimeError('schtasks broke')
-        code, out = self.run_new(register_sweep_task=True)
+        code, out = self.run_new()
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertIn('could not tell whether the scheduled task agent-temp-sweep is registered '
                       '(schtasks broke)', out)

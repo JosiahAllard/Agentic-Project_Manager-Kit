@@ -88,6 +88,11 @@ class Host(object):
         """Run the PowerShell line that registers a scheduled task (agenttemp.task_line)."""
         self._ps(line)
 
+    def sweep_dry_run(self, kit):
+        """The sweep's report lines from one run without --apply (agenttemp.sweep_dry_run), under
+        this interpreter."""
+        return agenttemp.sweep_dry_run(kit, sys.executable)
+
     def guard_entry(self, kit):
         """The guard's settings entry, as the kit's hook entry prints it for the default host:
         `boot/hook.py <host> --settings-entry`, run by this interpreter."""

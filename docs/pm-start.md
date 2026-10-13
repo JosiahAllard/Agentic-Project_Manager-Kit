@@ -91,7 +91,7 @@ After `stubs`, the `agent_temp` check prints one line for each part of the agent
 (docs/machine-setup.md "Extras") that is missing: "AGENT_TEMP is not set (machine_setup.py plans
 it)" when neither the process nor the user environment has `AGENT_TEMP`; "agent_temp_sweep is not
 set in the machine config (machine_setup.py plans it)"; and "agent temp sweep task agent-temp-sweep
-is not registered (machine_setup.py --register-sweep-task --apply, the owner's act)" when
+is not registered (machine_setup.py --apply registers it, the owner's act)" when
 `schtasks /Query` (4 second limit) says the task does not exist. A query that fails any other way
 (access denied, the time limit, no `schtasks`) is "could not check the agent temp sweep task
 agent-temp-sweep: ...", after the other two lines, never "not registered"

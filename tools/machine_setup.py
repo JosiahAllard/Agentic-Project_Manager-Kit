@@ -24,7 +24,10 @@ It writes nothing into any repository: a repository works with the kit with noth
                              SessionStart hook)
            --agent-temp DIR (default: the machine config's agent_temp_sweep.dir, then the user
                              environment's AGENT_TEMP, then AgentTemp at the root of the kit's drive)
-           --register-sweep-task  with --apply, register the agent-temp-sweep scheduled task
+           --no-sweep-task   do not register the agent-temp-sweep scheduled task (by default
+                             --apply registers it, after one dry run of the sweep printing what it
+                             would remove; a task already registered is left as is)
+           --register-sweep-task  the default now; still accepted
            --shortcut        the machine schedule shortcut on the desktop (always with --old-kit)
            --desktop DIR (default: the user's Desktop)   --home DIR (default: the user's home)
            --kit DIR (default: the checkout this file is in)
@@ -51,7 +54,8 @@ from kitlib.machinesetup import repo as mrepo                       # noqa: E402
 
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ONLY = ('agent_email', 'main_branch', 'repo_name', 'stack', 'stubs', 'pm_data', 'private_remote')
-MACHINE_ONLY = ('config_dir', 'pm_settings', 'agent_temp', 'register_sweep_task', 'shortcut',
+MACHINE_ONLY = ('config_dir', 'pm_settings', 'agent_temp', 'register_sweep_task', 'no_sweep_task',
+                'shortcut',
                 'desktop', 'home')
 
 
@@ -71,8 +75,10 @@ def parser():
     p.add_argument('--home', default=None)
     p.add_argument('--agent-temp', default=None)
     p.add_argument('--desktop', default=None)
+    p.add_argument('--no-sweep-task', action='store_true',
+                   help="do not register the agents' temp sweep task (registered by default)")
     p.add_argument('--register-sweep-task', action='store_true',
-                   help="register the agents' temp sweep task (the owner's act)")
+                   help='the default; still accepted')
     p.add_argument('--shortcut', action='store_true', help='the machine schedule shortcut on the desktop')
     p.add_argument('--agent-email', default=None, help='--repo: the agents\' commit email')
     p.add_argument('--main-branch', default=None, help='--repo: the main branch (default main)')
@@ -110,6 +116,8 @@ def main(argv=None):
     given = [n for n in REPO_ONLY if getattr(a, n) not in (None, False)]
     if given:
         return usage('--%s goes with --repo only' % given[0].replace('_', '-'))
+    if a.no_sweep_task and a.register_sweep_task:
+        return usage('give --no-sweep-task or --register-sweep-task, not both')
     if a.pm_settings and a.old_kit is not None:
         return usage('--pm-settings goes with the default mode only, not --old-kit')
     if a.old_kit is not None and not os.path.isdir(a.old_kit):
@@ -117,7 +125,7 @@ def main(argv=None):
     home = a.home if a.home is not None else kuser.home_dir()       # the home fence applies to the default
     ctx = machinesetup.Context(home, a.kit, a.old_kit, config_dirs=a.config_dir,
                                agent_temp=a.agent_temp, desktop=a.desktop,
-                               pm_settings=a.pm_settings, register_sweep_task=a.register_sweep_task,
+                               pm_settings=a.pm_settings, sweep_task=not a.no_sweep_task,
                                owner_email=a.owner_email, shortcut=True if a.shortcut else None)
     if a.apply and not ctx.owner_email and interactive() and mowner.needs_prompt(ctx):
         ctx.owner_email = ask_owner_email(mowner.suggestion(ctx))
