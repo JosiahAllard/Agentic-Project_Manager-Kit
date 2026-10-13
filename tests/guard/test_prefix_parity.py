@@ -123,7 +123,7 @@ class Twins(unittest.TestCase):
                      ('PowerShell', {'command': 'Stop-Process -Name godot -Force'}, self.w.wt))
 
     def test_a_subagent_by_either_name(self):
-        for kind in ('lander', 'worker', 'records', 'main', 'opus-worker'):
+        for kind in ('lander', 'worker', 'records', 'main', 'senior-worker'):
             for tool, data, cwd in self.rows:
                 with self.subTest(kind, tool=tool, data=data):
                     bare = decide(event(tool, data, cwd, True, kind), self.w.ctx(environ={}))

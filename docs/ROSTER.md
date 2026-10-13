@@ -28,10 +28,10 @@ built-in agent types (`general-purpose`, `Explore`, `Plan`), which this table ca
 | consultant | opus | high | Own long-lived launched session per repository (never an Agent dispatch; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked. |
 | deep-worker | opus | xhigh | Own launched session (never an Agent dispatch; 1M via launcher). Root cause or concurrency work strong-worker failed at or plainly cannot do; never builds or plans. |
 | lander | haiku | medium | Lands one reviewed branch (or a batch) on main on the coordinator's go. Never edits code. Dispatched with no `model`: never overridden. |
-| opus-worker | opus | medium | High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (`pm-kit:worker`). The one row with a one-hour prompt cache: see "The one-hour prompt cache" below. |
 | records | sonnet | low | Writes settled facts into docs only: decisions, landing notes, plan ticks. |
 | researcher | sonnet | high | Read-only ideas and prior art; proposes concepts for the owner to choose from, builds nothing. |
 | reviewer | sonnet | high | Read-only review of one branch against its brief; reports defects, scope creep and untested changes. Raised to opus per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file. |
+| senior-worker | opus | medium | High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (`pm-kit:worker`). The one row with a one-hour prompt cache: see "The one-hour prompt cache" below. |
 | sound-smith | sonnet | medium | Sound effects from synthesis, free libraries, text-to-speech and local music generation; measures clips, the owner judges. Mechanical work at this row; design dispatches override to opus/high (upward only). |
 | spec-writer | sonnet | high | Extends a named design or spec document from the owner's answers. Docs only. |
 | strong-worker | opus | high | High-risk changes: networking, concurrency, simulation or ordering, landing or lock tools, migrations, CI config, known-area crash fixes. |
@@ -43,7 +43,7 @@ Model choices rest on measured A/B runs: docs/model-ab.md.
 
 ## The one-hour prompt cache
 
-claude/agents/opus-worker.md carries a second frontmatter setting, outside this table and untouched
+claude/agents/senior-worker.md (content/roles/senior-worker.md, `cache: long`) carries a second frontmatter setting, outside this table and untouched
 by `agent_roster.py --write` (tests/roster/test_roster.py, `test_write_leaves_a_frontmatter_map_alone`):
 
 ```yaml
@@ -59,9 +59,9 @@ experimental:
   credits; read only from subagent files. That a plugin's agent file is read like a project's is
   inferred, not stated there.
 - Only this row has it (tests/agents/test_agents.py,
-  `test_only_opus_worker_asks_for_the_one_hour_prompt_cache`). Why this row: the untested pricing
+  `test_only_senior_worker_asks_for_the_one_hour_prompt_cache`). Why this row: the untested pricing
   computation in docs/agent-review.md, "Context and cache findings".
-- Check it took: in one opus-worker run's usage block, the cache-creation split counts tokens
+- Check it took: in one senior-worker run's usage block, the cache-creation split counts tokens
   in the one-hour field and none in the five-minute field. Not yet observed for this file.
 
 ## Changes versus the live files

@@ -92,7 +92,7 @@ the cheap/strong split, the coding ladder, model and effort rules, `pm-kit:deep-
 
 - Continue an agent 2-3 rounds per artefact, then reseed from a short written summary. A message
   queued to a busy agent may never be read: if a report shows something was missed, resend in full.
-- Review a hand-back at once and continue the same agent within 5 minutes (its cache lasts 5; `pm-kit:opus-worker` asks for 60 in its frontmatter and has the hour where the client grants it); later, continue anyway unless its context is above about 150k tokens (opus coder types) or it is a reviewer, then start fresh from a short written summary; never park a large-context agent to resume later for a small fix.
+- Review a hand-back at once and continue the same agent within 5 minutes (its cache lasts 5; `pm-kit:senior-worker` asks for 60 in its frontmatter and has the hour where the client grants it); later, continue anyway unless its context is above about 150k tokens (opus coder types) or it is a reviewer, then start fresh from a short written summary; never park a large-context agent to resume later for a small fix.
 - A background run dies with its agent: tell its replacement to check logs first.
 - Few long-running agents: each notification costs a turn over your whole context.
 - **When agents die together** (an API error or usage limit stops every running agent at once):

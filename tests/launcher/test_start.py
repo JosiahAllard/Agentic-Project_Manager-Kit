@@ -469,6 +469,14 @@ class Start(Base):
             with self.subTest(agent):
                 self.assertIn('--agent %s ' % agent, self.go(agent=agent))
 
+    def test_an_old_kit_agent_name_starts_as_its_new_one(self):
+        """opus-worker became senior-worker; the old name is an alias for one release."""
+        self.assertEqual(start.run_as('opus-worker'), 'pm-kit:senior-worker')
+        self.assertIn('--agent pm-kit:senior-worker ', self.go(agent='opus-worker'))
+        for old, new in start.AGENT_ALIASES.items():
+            self.assertIn(new, start.KIT_AGENTS)
+            self.assertNotIn(old, start.KIT_AGENTS)
+
     def test_kit_agents_are_the_plugins_agent_files(self):
         here = os.path.dirname(os.path.abspath(__file__))
         folder = os.path.join(here, '..', '..', 'claude', 'agents')

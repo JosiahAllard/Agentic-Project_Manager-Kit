@@ -1052,7 +1052,7 @@ class RolesFromConfig(unittest.TestCase):
         for cmd in ('git merge --no-ff kit/wt', 'git commit -m "x"', 'git revert abc123'):
             self.assertIsNone(git(cmd, p + 'lander'), cmd)
         self.assertEqual(git('git restore a.py', p + 'lander').rule, 'git-restore')
-        for kind in (p + 'worker', p + 'opus-worker', 'other:lander', p + p + 'lander', p.upper() + 'lander', p,
+        for kind in (p + 'worker', p + 'senior-worker', 'other:lander', p + p + 'lander', p.upper() + 'lander', p,
                      p + 'main', p.rstrip(':') + 'lander', 'x' + p + 'lander', p[1:] + 'lander'):
             with self.subTest(kind):
                 self.assertEqual(write(kind).rule, 'main-checkout')

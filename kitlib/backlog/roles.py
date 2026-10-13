@@ -14,7 +14,8 @@ gives None: a built-in agent, a plain session) may take only the risks in UNLIST
 import collections
 
 OWNER, PM, COORDINATOR, DEEP_WORKER, LANDER = 'owner', 'pm', 'coordinator', 'deep-worker', 'lander'
-BUILDERS = ('worker', 'opus-worker', 'strong-worker', 'tech-artist', 'asset-smith', 'sound-smith')
+# opus-worker: senior-worker's old name, kept for one release (docs/ROSTER.md)
+BUILDERS = ('worker', 'senior-worker', 'opus-worker', 'strong-worker', 'tech-artist', 'asset-smith', 'sound-smith')
 DOCS = ('records', 'spec-writer')
 READ_ONLY = ('reviewer', 'test-runner', 'researcher', 'consultant')
 ROLES = (OWNER, PM, COORDINATOR, DEEP_WORKER) + BUILDERS + (LANDER,) + DOCS + READ_ONLY
