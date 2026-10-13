@@ -6,6 +6,11 @@
   default(path)               the one host marked "default": what an unset PM_KIT_HOST means
   selected(environ, path)     PM_KIT_HOST's host (blank or unset: the default), checked
   choose(flag, environ, path) a --host value when one was given, else selected()
+  default_profile(path)       the default host's HostProfile
+  profiles(path)              every host's HostProfile, in file order
+  union(field, path)          a profile field's distinct values over every host, in file order
+  host_folders(path)          the repo folder each host keeps its own files in (".claude")
+  state_path(home, *parts)    a path in the kit's per-user state folder (~/.claude)
 
 kitlib never imports a host's adapter. The registry hands out the adapter's module NAME, and the
 entry point that wants the adapter imports it (tools/_host.py); hosts.json is data, so reading it
@@ -23,14 +28,31 @@ import json
 import os
 import re
 
-from kitlib import kitroot
-from kitlib.host import HostCapabilities, HostProfile
+from kitlib.host import Attribution, HostCapabilities, HostProfile
 
-PATH = os.path.join(kitroot.root(), 'hosts.json')
+
+def kit_path(here=None):
+    """The kit's hosts.json: beside the kitlib this module is in as it is spelled (kitroot.root()),
+    else, when that has none, beside the folder it really is. A machine's installed lock tool runs
+    kitlib through a junction (~/.claude/tools/kitlib -> <kit>/kitlib, docs/machine-setup.md
+    "Links"), and the kit's hosts.json is beside the real kitlib, not beside the junction.
+    `here` stands in for this file (tests)."""
+    here = os.path.abspath(here or __file__)
+    spelled = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(here))), 'hosts.json')
+    if os.path.isfile(spelled):
+        return spelled
+    real = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(here)))),
+                        'hosts.json')
+    return real if os.path.isfile(real) else spelled
+
+
+PATH = kit_path()
 ENV = 'PM_KIT_HOST'
 TIERS = ('light', 'standard', 'strong', 'deep')
 
 _NAME = re.compile(r'[a-z][a-z0-9-]*\Z')
+_ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+_EMAIL = re.compile(r'[^\s<>@]+@[^\s<>@]+\Z')
 _MODULE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z')
 _KEYS = {'adapter', 'shell', 'platforms', 'capabilities', 'profile', 'tiers'}
 # The operating systems a host can declare it runs on (multi-host plan section 6). Windows is
@@ -110,16 +132,53 @@ def _capabilities(name, raw):
         _text(w + '.agent_format', c['agent_format']))
 
 
+def _attribution(w, raw):
+    a = _object(w, raw, ('name', 'email', 'model_env', 'model_pattern'))
+    name, email = _text(w + '.name', a['name']), _text(w + '.email', a['email'])
+    if name != ' '.join(name.split()) or not _EMAIL.match(email):
+        raise RegistryError('hosts.json: %s needs a single-spaced name and a plain email' % w)
+    model_env, pattern = a['model_env'], a['model_pattern']
+    if model_env is not None and not (isinstance(model_env, str) and _ENV_NAME.match(model_env)):
+        raise RegistryError('hosts.json: %s.model_env must be an environment variable name or null' % w)
+    if pattern is not None:
+        _text(w + '.model_pattern', pattern)
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            raise RegistryError('hosts.json: %s.model_pattern is not a regex: %s' % (w, e)) from None
+    return Attribution(name, email, model_env, pattern)
+
+
+def _name_format(where, value):
+    """An agent name format: {plugin} at most once, then {name} once and last, nothing else."""
+    _text(where, value)
+    head, sep, tail = value.partition('{name}')
+    if not sep or tail or '{name}' in head or head.replace('{plugin}', '', 1).count('{') \
+            or head.replace('{plugin}', '', 1).count('}'):
+        raise RegistryError('hosts.json: %s must end in {name} and have no field but {plugin}'
+                            % where)
+    return value
+
+
 def _profile(name, raw):
     w = '%s.profile' % name
     p = _object(w, raw, ('owner_paths', 'worktrees_directory', 'state_directory', 'process_names',
-                         'mcp_tool_format'))
+                         'mcp_tool_format', 'session_env', 'skills_directory', 'attribution',
+                         'agent_name_format', 'session_process'))
+    session_env = _text(w + '.session_env', p['session_env'])
+    if not _ENV_NAME.match(session_env):
+        raise RegistryError('hosts.json: %s.session_env must be an environment variable name' % w)
     return HostProfile(
         _texts(w + '.owner_paths', p['owner_paths']),
         _relpath(w + '.worktrees_directory', p['worktrees_directory']),
         _text(w + '.state_directory', p['state_directory']),
         _texts(w + '.process_names', p['process_names']),
-        _text(w + '.mcp_tool_format', p['mcp_tool_format']))
+        _text(w + '.mcp_tool_format', p['mcp_tool_format']),
+        session_env,
+        _relpath(w + '.skills_directory', p['skills_directory']),
+        _attribution(w + '.attribution', p['attribution']),
+        _name_format(w + '.agent_name_format', p['agent_name_format']),
+        _text(w + '.session_process', p['session_process']))
 
 
 def _entry(name, raw):
@@ -194,3 +253,40 @@ def choose(flag, environ=None, path=None):
     if flag is not None:
         return host(flag, path).name
     return selected(environ, path)
+
+
+def profiles(path=None):
+    """Every registered host's HostProfile, in file order: for core code that must know each host
+    at once (the lock's agent-host test, the owner paths), not only the selected one."""
+    return tuple(h.profile for h in load(path).values())
+
+
+def union(field, path=None):
+    """The distinct values of the HostProfile `field` over every host, in file order; the items of
+    a tuple field each count. RegistryError as load(); AttributeError for a field it lacks."""
+    out = []
+    for profile in profiles(path):
+        value = getattr(profile, field)
+        out.extend(value if isinstance(value, tuple) else (value,))
+    return tuple(dict.fromkeys(out))
+
+
+def default_profile(path=None):
+    """The default host's HostProfile: what a kit default that predates hosts stands for (the
+    repo's worktrees_dir, the machine's kit state folder)."""
+    return host(default(path), path).profile
+
+
+def host_folders(path=None):
+    """The top repo folder each host keeps its own files in (its settings, skills and agent
+    worktrees), from the folder entries of its owner_paths ("x/"), each once, in file order:
+    what a scan of a repository's own sources leaves out."""
+    return tuple(dict.fromkeys(p.rstrip('/').split('/')[0]
+                               for p in union('owner_paths', path) if p.endswith('/')))
+
+
+def state_path(home, *parts, path=None):
+    """`parts` under the kit's per-user state folder in `home`: the default host's profile
+    state_directory, so it is one folder per machine whatever PM_KIT_HOST says, and the folder the
+    kit has always used (~/.claude: the machine lock's store, the installed lock tool)."""
+    return os.path.join(home, default_profile(path).state_directory, *parts)

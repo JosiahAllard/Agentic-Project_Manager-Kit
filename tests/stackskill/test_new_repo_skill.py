@@ -28,6 +28,7 @@ class NewRepoSkill(unittest.TestCase):
         for name in ('installer', 'tools', 'kitlib', 'templates'):
             shutil.copytree(os.path.join(stubs.KIT_ROOT, name), os.path.join(self.kit, name),
                             ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copy2(os.path.join(stubs.KIT_ROOT, 'hosts.json'), self.kit)    # the host registry kitlib reads
 
     def ps(self, *args):
         argv = ['powershell', '-NoProfile', '-NonInteractive', '-File',

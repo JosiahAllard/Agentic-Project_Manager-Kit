@@ -22,6 +22,7 @@ import sys
 from kitlib import pmstart, sessionmark, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
+from kitlib.host import registry
 from kitlib.ledger import safepath
 
 KEY = "coordinator_start"
@@ -113,15 +114,17 @@ def _parse_time(text):
 
 
 def own_name(procs, env, pid):
-    """This session's Remote Control name: PM_KIT_SESSION_NAME, else the nearest claude.exe ancestor of pid; None if unknown."""
+    """This session's Remote Control name: PM_KIT_SESSION_NAME, else the nearest session process
+    (pmstart.session_images) above pid; None if unknown."""
     if env.get(NAME_VAR):
         return env[NAME_VAR]
     by_pid = {p.get("ProcessId"): p for p in procs}
+    images = pmstart.session_images()
     seen = set()
     while pid in by_pid and pid not in seen:
         seen.add(pid)
         p = by_pid[pid]
-        if p.get("Name") == "claude.exe":
+        if p.get("Name") in images:
             n = pmstart.rc_name(p.get("CommandLine"))
             if n:
                 return n
@@ -238,7 +241,7 @@ def machine(entry, run=_run, read=_read, now=None, home=None, root=None, lock_fi
     """Owner reservations and bookings in force or starting within 4 h, free gpu and cpu slots, landing lock."""
     home = home or kuser.home_dir()
     now = now or datetime.datetime.now().astimezone()
-    s = json.loads(run([sys.executable, os.path.join(home, ".claude", "tools", "machine_lock", "machine_lock.py"),
+    s = json.loads(run([sys.executable, registry.state_path(home, "tools", "machine_lock", "machine_lock.py"),
                         "status", "--json"]))
     soon = now + datetime.timedelta(hours=SOON_HOURS)
     res = s.get("reservations") or {}
@@ -277,8 +280,9 @@ def others(entry, procs, env, pid):
     stem = _need(entry, "stem")
     me = own_name(procs, env, pid)
     cand = []
+    images = pmstart.session_images()
     for p in procs:
-        if (p.get("Name") == "claude.exe" and p.get("CommandLine")
+        if (p.get("Name") in images and p.get("CommandLine")
                 and pmstart.STORE_DIR not in (p.get("ExecutablePath") or "")):
             n = pmstart.rc_name(p["CommandLine"])
             if n and n.startswith(stem):

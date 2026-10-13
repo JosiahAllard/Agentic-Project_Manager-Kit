@@ -54,7 +54,7 @@ from kitlib.proc import spawn
 
 OK, REFUSED, USAGE = 0, 1, 2
 TOOL = 'commit.py'
-MODEL_ENV = 'CLAUDE_AGENT_MODEL'
+MODEL_ENV = attribution.model_environment()       # the default host's (hosts.json)
 OWNER_AUTHORED_TRAILER = 'Owner-Authored: yes'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DOC_BUDGET_TIMEOUT = 600     # seconds
@@ -62,15 +62,16 @@ DOC_BUDGET_TIMEOUT = 600     # seconds
 norm = ownermod.norm
 
 # root: the work tree's top level; cwd: the caller's directory (a relative --body-file); env: the
-# environment CLAUDE_AGENT_MODEL is read from (None: os.environ).
+# environment the host's model variable is read from (None: os.environ); provider: the host name
+# (None: the hosts.json default).
 Request = collections.namedtuple(
     'Request', 'root subject b body_file model owner_authored owner_approved '
-               'lander_main_checkout paths cwd env provider', defaults=('claude',))
+               'lander_main_checkout paths cwd env provider', defaults=(None,))
 Outcome = collections.namedtuple('Outcome', 'code lines')
 
 
 def request(root, subject, paths, b='', body_file=None, model=None, owner_authored=False,
-            owner_approved=(), lander_main_checkout=False, cwd=None, env=None, provider='claude'):
+            owner_approved=(), lander_main_checkout=False, cwd=None, env=None, provider=None):
     return Request(root, subject, b, body_file, model, owner_authored, list(owner_approved),
                    lander_main_checkout, list(paths), cwd or os.getcwd(), env, provider)
 
@@ -95,7 +96,7 @@ def settings(cfg):
             'rule_pointer': cfg.section('checkout_guard')['rule_pointer']}
 
 
-def coauthor(model, families=(), provider='claude'):
+def coauthor(model, families=(), provider=None):
     """The co-author trailer for `model`: `Claude <model>`, never a bare model name - unless the
     name is one of `families` or starts with one followed by a space, '.' or '-' (`Codex GPT-5`,
     `Codex-mini`, `Codex.2`; never `Codexer`): that name is kept as given."""
@@ -138,14 +139,14 @@ def canonical_approved(rules, owner_approved, paths):
     return [rules.canonical(value, paths) for value in owner_approved]
 
 
-def resolve_model(owner_authored, flag, env=None, provider='claude'):
+def resolve_model(owner_authored, flag, env=None, provider=None):
     """`(model, where it came from, usage message or None)`. --model is required on every
     ordinary commit: the flag, else MODEL_ENV (blank is unset). --owner-authored takes none:
     --model there is contradictory, and MODEL_ENV is ignored."""
     env = os.environ if env is None else env
     try:
         model_env = attribution.model_environment(provider)
-        if not owner_authored and provider == 'codex':
+        if not owner_authored and attribution.requires_model_id(provider):
             attribution.coauthor(flag, provider)
     except ValueError as error:
         return None, None, str(error)
@@ -158,10 +159,10 @@ def resolve_model(owner_authored, flag, env=None, provider='claude'):
         return flag, '--model', None
     fallback = (env.get(model_env) or '').strip() if model_env else ''
     if fallback:
-        return fallback, MODEL_ENV, None
+        return fallback, model_env, None
     return None, None, ('--model is required: name the model you are running on, '
                         '--model "<model name>" (or set %s for this session only). If you do '
-                        'not know it, say so and stop.' % MODEL_ENV)
+                        'not know it, say so and stop.' % (model_env or MODEL_ENV))
 
 
 def model_requirement_error(rules, owner_authored, owner_approved, paths):
@@ -181,7 +182,7 @@ def model_requirement_error(rules, owner_authored, owner_approved, paths):
     return None
 
 
-def build_trailers(rules, owner_approved, owner_authored, model, families=(), provider='claude'):
+def build_trailers(rules, owner_approved, owner_authored, model, families=(), provider=None):
     """`<owner trailer>: <value>` lines (the configured "owner".trailer), then Co-Authored-By on
     an agent's commit, or `Owner-Authored: yes` on the owner's own."""
     trailers = ['%s: %s' % (rules.trailer, o) for o in owner_approved]
@@ -494,8 +495,8 @@ def _commit(req, lines):
     model, source, err = resolve_model(req.owner_authored, req.model, req.env, req.provider)
     if err:
         raise _usage(err)
-    if source == MODEL_ENV:
-        lines.append('model     %s (from %s)' % (model, MODEL_ENV))
+    if source not in (None, '--model'):
+        lines.append('model     %s (from %s)' % (model, source))
 
     body, err = message_body(req.b, req.body_file, root, req.cwd)
     if err:

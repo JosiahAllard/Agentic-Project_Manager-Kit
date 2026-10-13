@@ -94,7 +94,8 @@ def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None):
                   claude_host.newest_finder(), idle_minutes=a.idle_minutes,
                   branch_poll=a.branch_poll, usage_poll=a.usage_poll, idle_poll=a.idle_poll,
                   notice_dir=a.notice_dir,
-                  plugin=W.plugin_check() if plugin is None else (plugin or None))
+                  plugin=W.plugin_check() if plugin is None else (plugin or None),
+                  preload_modules=claude_host.PRELOAD)
     beat, started = W.heartbeat_file(a.state), W.own_start_time()
     return W.run(w, time.time, sleep, lambda s: W.save_state(a.state, s),
                  lambda text: print(text, flush=True),

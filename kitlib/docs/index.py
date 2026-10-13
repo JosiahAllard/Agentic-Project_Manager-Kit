@@ -61,6 +61,7 @@ import time
 from kitlib.config import ConfigError, load, load_at
 from kitlib.docs import budget
 from kitlib.git import batch, cmd
+from kitlib.host import registry
 
 INDEX = 'docs/INDEX.md'          # the schema default of "doc_index".index
 # Every entry form (see the module docstring).
@@ -405,7 +406,8 @@ def print_section(root, title, files, out, doc=None, limit=220, ref='HEAD', inde
         out('no heading contains "%s": searched only %s. Try %s, or --section with fewer words.'
             % (title, searched, index))
         return False
-    hits.sort(key=lambda h: (h[0].startswith('.claude/'), len(h[3][h[1]]) - len(title)))
+    hosts = tuple(f + '/' for f in registry.host_folders())     # a host's own copies sort last
+    hits.sort(key=lambda h: (h[0].startswith(hosts), len(h[3][h[1]]) - len(title)))
     if len(hits) > 1:
         out('%d headings match; showing the first. Narrow with --doc <file>:' % len(hits))
         for f, i, end, lines in hits[:12]:

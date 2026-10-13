@@ -57,7 +57,7 @@ def short_title(text, limit=TITLE_LIMIT):
     return re.sub(r'\s+', ' ', text).strip()[:limit].rstrip()
 
 
-def prepare(path, branch_ok=False, model=None, env=None, noun='the ledger', provider='claude'):
+def prepare(path, branch_ok=False, model=None, env=None, noun='the ledger', provider=None):
     """A Plan for committing the file at `path` alone, or Usage/Refused. Call before writing."""
     name, _source, error = kcommit.resolve_model(False, model, env, provider)
     if error:

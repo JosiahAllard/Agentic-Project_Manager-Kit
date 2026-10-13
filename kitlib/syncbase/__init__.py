@@ -59,7 +59,7 @@ from kitlib.git.batch import CatFile
 from kitlib.records import inflight, landing
 
 TOOL = 'sync_base'
-MODEL_ENV = 'CLAUDE_AGENT_MODEL'
+MODEL_ENV = attribution.model_environment()       # the default host's (hosts.json)
 OK, FAILED, USAGE = 0, 1, 2
 FETCH_TIMEOUT = 120       # seconds: a fetch is network
 MERGE_TIMEOUT = 600       # seconds: a merge of a large tree is slower than a ref read
@@ -67,20 +67,20 @@ MERGE_TIMEOUT = 600       # seconds: a merge of a large tree is slower than a re
 Outcome = collections.namedtuple('Outcome', 'code lines')
 
 
-def resolve_model(flag, env=None, provider='claude'):
+def resolve_model(flag, env=None, provider=None):
     """`(model, where it came from)`, or `(None, None)` when neither the flag nor MODEL_ENV (a
     per-session fallback; blank counts as unset) names one."""
     env = os.environ if env is None else env
     model_env = attribution.model_environment(provider)
-    if provider == 'codex':
+    if attribution.requires_model_id(provider):
         attribution.coauthor(flag, provider)
     if flag and flag.strip():
         return flag, '--model'
     fallback = (env.get(model_env) or '').strip() if model_env else ''
-    return (fallback, MODEL_ENV) if fallback else (None, None)
+    return (fallback, model_env) if fallback else (None, None)
 
 
-def trailer(model, provider='claude'):
+def trailer(model, provider=None):
     """The attribution line every commit message ends with: always `Claude <model>`, never a
     bare model name (commit.py's `coauthor()`)."""
     return attribution.coauthor(model, provider)
@@ -117,7 +117,7 @@ def last_paragraph(text):
     return '\n'.join(reversed(out))
 
 
-def arm_merge_msg(root, model, provider='claude'):
+def arm_merge_msg(root, model, provider=None):
     """Put the trailer into the message git prepared, so the RESOLUTION commit carries it.
 
     The clean path makes the merge commit itself and can add the trailer as it goes. The conflict
@@ -158,7 +158,7 @@ def arm_merge_msg(root, model, provider='claude'):
     return True
 
 
-def conflict_advice(base, target, model=None, armed=False, provider='claude'):
+def conflict_advice(base, target, model=None, armed=False, provider=None):
     """What to print when the merge stops on conflicts. A message only - it decides nothing.
 
     It deliberately does NOT say "keep both sides' lines". A row present on your branch and absent
@@ -244,7 +244,7 @@ def _size(cat, rev, path):
 
 
 def sync(path, target, model, model_source='--model', base=None, wait=True, say=None,
-         sleep=time.sleep, clock=time.monotonic, provider='claude'):
+         sleep=time.sleep, clock=time.monotonic, provider=None):
     """The whole command for the checkout `path` is in. Returns an Outcome; never prints. `wait`
     False is --no-wait; `say(line)` gets the lines said while waiting for a landing in flight
     (None: they go in the Outcome's lines); `sleep` and `clock` are time's, for tests."""
@@ -275,8 +275,8 @@ def sync(path, target, model, model_source='--model', base=None, wait=True, say=
     if refusal:
         return done(USAGE, refusal)
     lines.append('worktree  %s' % top)
-    if model_source == MODEL_ENV:
-        lines.append('model     %s (from %s)' % (model, MODEL_ENV))
+    if model_source not in (None, '--model'):
+        lines.append('model     %s (from %s)' % (model, model_source))
     # The fetch comes first, so a hash pushed since the last fetch is found. Only a PUSHED base
     # commit, judged against that fresh fetch (P27). A hash on the local base
     # branch alone may be an unpushed lander merge that is later undone; merged in

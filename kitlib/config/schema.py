@@ -6,6 +6,8 @@ that holds the object. Defaults of None mean "absent": the tool that reads the k
 Kit-level sections (repo, owner, hook, heavy, roles) are read by kitlib itself; the rest are the
 per-tool sections the PM kit's tools read (kit/tools/_kit.py SECTIONS), checked here for shape only.
 """
+from kitlib.host import registry
+
 from .types import (Any, Bool, Either, Email, Enum, Field, Int, ListOf, MapOf, Obj, Regex, RelPath,
                     Str, T)
 
@@ -31,11 +33,19 @@ Argv = ListOf(Str(), nonempty=True)
 Regexes = Either(Regex(), ListOf(Regex()))
 
 # Paths only the owner changes (PM kit _owner_only.DEFAULT): an entry ending `/` locks a directory.
-# AGENTS.md is the canonical rules file and docs/agent-profile.md the neutral profile (CLAUDE.md and
-# .claude/agent-profile.md point at them), so they are locked as their old homes are.
-OWNER_PATHS = ['AGENTS.md', 'CLAUDE.md', '.claude/', '.codex/', 'docs/agent-profile.md', '.github/workflows/', '.kit.json',
-               'tools/gate.json', 'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']
-OWNER_PATHS_EXCEPT = ['.claude/worktrees/', '.codex/worktrees/']
+# AGENTS.md is the canonical rules file and docs/agent-profile.md the neutral profile (each host's
+# own rules file and folder point at them), so they are locked as their old homes are. Each host's
+# own paths are its hosts.json profile owner_paths, and its agent worktrees under them are not
+# locked (worktrees_directory).
+# Codex's folder, which no hosts.json entry declares until step 9 of docs/multi-host-plan.md
+# registers that host (its profile then names it, and these two go): kept locked meanwhile.
+UNREGISTERED_OWNER_PATHS = ['.codex/']
+UNREGISTERED_OWNER_PATHS_EXCEPT = ['.codex/worktrees/']
+OWNER_PATHS = (['AGENTS.md'] + list(registry.union('owner_paths')) + UNREGISTERED_OWNER_PATHS
+               + ['docs/agent-profile.md', '.github/workflows/', '.kit.json', 'tools/gate.json',
+                  'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py'])
+OWNER_PATHS_EXCEPT = ([w + '/' for w in registry.union('worktrees_directory')]
+                      + UNREGISTERED_OWNER_PATHS_EXCEPT)
 
 # The heavy-program entry shape: kit defaults (policy.HEAVY_DEFAULTS) and `.kit.json` "heavy".programs.
 HEAVY_ENTRY = Obj({
@@ -118,7 +128,8 @@ SECTIONS = {
         'name': Field(Str(nonempty=False), '', 'repository name for reports and the ledger'),
         'main_branch': Field(Str(), 'main', 'the branch landings target'),
         'remote': Field(Str(), 'origin', 'the remote main is pushed to'),
-        'worktrees_dir': Field(RelPath(), '.claude/worktrees', 'where agent worktrees live'),
+        'worktrees_dir': Field(RelPath(), registry.default_profile().worktrees_directory,
+                               'where agent worktrees live'),
         'worktrees_by_host': Field(MapOf(RelPath(), what='host'), {},
                                    'per-host worktree folders, keyed by hosts.json host name '
                                    '(docs/new-worktree.md "Hosts")'),

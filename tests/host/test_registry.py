@@ -60,6 +60,30 @@ class KitRegistry(unittest.TestCase):
                 self.assertTrue(os.path.isdir(os.path.join(ROOT, h.shell)), h.shell)
 
 
+class KitPath(Case):
+    """hosts.json is found beside the real kitlib when the spelled one has none: a machine's
+    installed lock tool runs kitlib through a junction (~/.claude/tools/kitlib)."""
+
+    def test_a_linked_kitlib_finds_the_kits_hosts_json(self):
+        tools = os.path.join(self.dir, 'tools')
+        os.makedirs(tools)
+        link = os.path.join(tools, 'kitlib')
+        try:
+            os.symlink(os.path.join(ROOT, 'kitlib'), link, target_is_directory=True)
+        except (OSError, NotImplementedError) as e:
+            self.skipTest('no directory link here: %s' % e)
+        here = os.path.join(link, 'host', 'registry.py')
+        self.assertEqual(os.path.normcase(registry.kit_path(here)),
+                         os.path.normcase(os.path.join(os.path.realpath(ROOT), 'hosts.json')))
+        self.put(kit_hosts())                             # one beside the link wins
+        os.replace(self.path, os.path.join(tools, 'hosts.json'))
+        self.assertEqual(registry.kit_path(here), os.path.join(tools, 'hosts.json'))
+
+    def test_none_anywhere_is_the_spelled_path(self):
+        here = os.path.join(self.dir, 'kitlib', 'host', 'registry.py')
+        self.assertEqual(registry.kit_path(here), os.path.join(self.dir, 'hosts.json'))
+
+
 class Validation(Case):
     def refused(self, data=None, raw=None):
         with self.assertRaises(registry.RegistryError):
@@ -109,6 +133,25 @@ class Validation(Case):
                 lambda e: e['profile'].update(role_environment='PM_KIT_ROLE'),
                 lambda e: e['profile'].update(worktrees_directory='/abs'),
                 lambda e: e['profile'].update(process_names='claude.exe'),
+                lambda e: e['profile'].pop('session_env'),
+                lambda e: e['profile'].update(session_env='NOT A NAME'),
+                lambda e: e['profile'].update(session_env=''),
+                lambda e: e['profile'].pop('skills_directory'),
+                lambda e: e['profile'].update(skills_directory='../skills'),
+                lambda e: e['profile'].pop('attribution'),
+                lambda e: e['profile']['attribution'].pop('model_pattern'),
+                lambda e: e['profile']['attribution'].update(email='a b@c'),
+                lambda e: e['profile']['attribution'].update(name='Two  spaces'),
+                lambda e: e['profile']['attribution'].update(model_env='NOT A NAME'),
+                lambda e: e['profile']['attribution'].update(model_pattern='('),
+                lambda e: e['profile']['attribution'].update(model_pattern=''),
+                lambda e: e['profile'].pop('agent_name_format'),
+                lambda e: e['profile'].update(agent_name_format='{plugin}:'),
+                lambda e: e['profile'].update(agent_name_format='{name}:{plugin}'),
+                lambda e: e['profile'].update(agent_name_format='{other}:{name}'),
+                lambda e: e['profile'].update(agent_name_format='{name}{name}'),
+                lambda e: e['profile'].pop('session_process'),
+                lambda e: e['profile'].update(session_process=''),
                 lambda e: e['tiers'].pop('deep'),
                 lambda e: e['tiers'].update(light='')):
             bad = copy.deepcopy(data)
@@ -119,6 +162,40 @@ class Validation(Case):
     def test_host_names_are_lowercase_words(self):
         self.refused(second(kit_hosts(), 'Other'))
         self.refused(second(kit_hosts(), 'a b'))
+
+
+class Profiles(Case):
+    def test_profiles_and_union_cover_every_host_in_file_order(self):
+        data = second(kit_hosts())
+        data['other']['profile']['process_names'] = ['other.exe', 'node.exe']
+        data['other']['profile']['session_env'] = 'OTHER_SESSION'
+        path = self.put(data)
+        self.assertEqual(len(registry.profiles(path)), 2)
+        self.assertEqual(registry.union('process_names', path), ('claude.exe', 'node.exe', 'other.exe'))
+        self.assertEqual(registry.union('session_env', path), ('CLAUDE_CODE_SESSION_ID', 'OTHER_SESSION'))
+
+    def test_the_kit_registry_names_claudes_session_variable(self):
+        self.assertEqual(registry.union('session_env'), ('CLAUDE_CODE_SESSION_ID',))
+
+    def test_the_default_profile_and_the_host_folders(self):
+        data = second(kit_hosts())
+        data['other']['profile']['owner_paths'] = ['OTHER.md', '.other/', '.other/x/', '.claude/']
+        path = self.put(data)
+        self.assertEqual(registry.default_profile(path), registry.host('claude', path).profile)
+        self.assertEqual(registry.host_folders(path), ('.claude', '.other'))
+        self.assertEqual(registry.host_folders(), ('.claude',))
+        self.assertEqual(registry.default_profile().worktrees_directory, '.claude/worktrees')
+
+    def test_the_kit_state_folder_is_the_default_hosts(self):
+        data = second(kit_hosts())
+        data['other']['profile']['state_directory'] = '.other'
+        path = self.put(data)
+        home = os.path.join(self.dir, 'home')
+        self.assertEqual(registry.state_path(home, 'machine-lock', path=path),
+                         os.path.join(home, '.claude', 'machine-lock'))
+        self.assertEqual(registry.state_path(home, 'tools', 'x.py'),
+                         os.path.join(home, '.claude', 'tools', 'x.py'))
+        self.assertEqual(registry.default_profile().skills_directory, '.claude/skills')
 
 
 class Selection(Case):

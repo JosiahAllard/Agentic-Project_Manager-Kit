@@ -40,12 +40,12 @@ def owner_check(environ=None):
     (the lock MCP server): the default check (a caller with no agent host above it), or a caller
     under a known agent host in a session nothing marks. The environment is read once, now. A
     caller whose process tree could not be read (no host known) is not the owner."""
-    from kitlib.lock import api
+    from kitlib.lock import api, store
     marked = mark(dict(os.environ if environ is None else environ))
 
     def check(actor):
         if api.default_owner_check(actor):
             return True
-        return marked is None and isinstance(actor, dict) and bool(actor.get('claude'))
+        return marked is None and bool(store.actor_host(actor))
     check.marked = marked
     return check
