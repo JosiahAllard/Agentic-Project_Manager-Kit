@@ -33,10 +33,14 @@
       the Access keys were fetched (the first request with a token fetches them), `tunnel:
       bound, keys not fetched` until then (with the reason as one fixed word in brackets when
       a fetch failed), or `tunnel: off: ` and why.
-  hub.py setup
+  hub.py setup [--autostart [--whatif]]
       makes the two token files where they are absent and prints where they are and how to start
       the server. It writes nothing else: never the machine config, so no `hub` key (it says so
-      when no store folder is set).
+      when no store folder is set). --autostart (opt-in) also registers the scheduled task
+      kitlib.hubsite.autostart.TASK_NAME, which runs this hub.py's `serve` at sign-in with no
+      console window; refused, before any file is written, from a kit worktree or with no
+      pythonw.exe beside python. --whatif prints the task's PowerShell and any refusal and
+      changes nothing, not even a token file.
   hub.py open [--port N] [--print]
       opens the hub page in the browser, signed in as the owner through a one-time pairing link
       the running server gives for the owner's token. --print prints the link instead.
@@ -121,6 +125,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from kitlib import hubvalidate                                     # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.hubsite import api, auth, client, httpd, serve, settings   # noqa: E402
+from kitlib.hubsite import autostart as hub_autostart              # noqa: E402
 from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
 
 START = 'python "%s" serve' % os.path.abspath(__file__)
@@ -346,8 +351,12 @@ def parser():
                         'nothing in it is committed or pushed')
     t = sub.add_parser('status', help="the running server's health")
     t.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
-    sub.add_parser('setup', help='make the token files where they are absent; the machine '
-                                 'config is not written')
+    u = sub.add_parser('setup', help='make the token files where they are absent; the machine '
+                                     'config is not written')
+    u.add_argument('--autostart', action='store_true',
+                   help='also register the scheduled task that starts the server at sign-in')
+    u.add_argument('--whatif', action='store_true',
+                   help='with --autostart: print the task, change nothing (no token file either)')
     o = sub.add_parser('open', help='open the hub page, signed in as the owner')
     o.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
     o.add_argument('--print', dest='show', action='store_true',
@@ -440,6 +449,13 @@ def _status(a, stop):
 
 
 def _setup(a, stop):
+    if a.whatif:
+        for line in hub_autostart.install(os.path.abspath(__file__), whatif=True):
+            print(line)
+        return 0
+    why = hub_autostart.refusals(os.path.abspath(__file__)) if a.autostart else []
+    if why:     # before any token file is written
+        raise hub_autostart.AutostartError('; '.join(why) + '; nothing registered or written')
     s = settings.load()
     folder = auth.folder()
     try:
@@ -454,6 +470,9 @@ def _setup(a, stop):
         print('NOTE: no store folder is set: set hub.store or pm_data in the machine config '
               '(this tool does not write it), or start with --store PATH')
     print('start the server with: %s' % START)
+    if a.autostart:
+        for line in hub_autostart.install(os.path.abspath(__file__)):
+            print(line)
     return 0
 
 
@@ -707,6 +726,8 @@ def main(argv=None, stop=None):
     a = p.parse_args(argv)
     if not a.verb:
         p.error(NO_VERB)
+    if a.verb == 'setup' and a.whatif and not a.autostart:
+        p.error('--whatif needs --autostart')
     try:
         return VERBS[a.verb](a, stop)
     except ConfigError as e:
