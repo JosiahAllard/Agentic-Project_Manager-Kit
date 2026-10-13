@@ -33,12 +33,17 @@ exe, this process's argv, the child's command line, the parent's pid and exe) to
 the kit temp folder (kitlib.config.user.work_temp of the kit checkout; docs/test-tools.md "Temp
 folders"). LOG_PATH overrides that (the tests). Over LOG_MAX bytes the log is moved to
 `<log>.1` first. The log can fail in any way (a fenced test process, a bad machine config, a full
-disk): the start goes on.
+disk): the start goes on. A command line can carry a token or a prompt, so both go in redacted
+(redact_command): the program and the first KEEP_WORDS words after it, each cut to WORD_MAX
+characters, with secrets masked.
 
-Ctrl+C: a process that gains a console here also gets that console's control events, and so does
-every child that shares it. A console Ctrl+C has no window to be typed into; only
-GenerateConsoleCtrlEvent from a process on the same console sends one (docs/daily-full.md "The
-schedule").
+Ctrl+C: a console Ctrl+C has no window to be typed into here; only GenerateConsoleCtrlEvent from a
+process on the same console sends one (no kit code calls it). A pythonw process that gains a
+console would be ended by one at once (exit 0xC000013A, measured 2026-10-13: Python's SIGINT
+handler, SIG_IGN included, never runs under pythonw), where before it had no console and got none.
+So ensure gives it a console control handler that takes Ctrl+C and Ctrl+Break for this process
+(_take_ctrl). A handler is not inherited: a child on the console gets them as before
+(docs/daily-full.md "The schedule").
 
 Windows only: off Windows install() does nothing.
 """
@@ -60,11 +65,18 @@ ALLOC_CONSOLE_MODE_NO_WINDOW = 2        # ALLOC_CONSOLE_MODE
 ALLOC_CONSOLE_RESULT_NEW = 1            # ALLOC_CONSOLE_RESULT: 0 none, 1 new, 2 existing
 ALLOC_CONSOLE_RESULT_EXISTING = 2
 ERROR_INVALID_HANDLE = 6                # AttachConsole: the holder has no console yet
+CTRL_C_EVENT, CTRL_BREAK_EVENT = 0, 1   # the console control events _take_ctrl takes
 HOLDER_WAIT_S = 5.0                     # how long the fallback waits for the holder's console
 
 MARK = '__kit_windowless__'             # set on the wrapper: install() is done in this process
 LOG_NAME = 'kit-console-incidents.log'
 LOG_MAX = 1 << 20
+KEEP_WORDS = 6                          # a logged command line: the program and this many words
+WORD_MAX = 120                          # each word cut to its start and end past this length
+MASK = '***'
+# a flag or NAME=VALUE name holding one of these hides its value
+SECRET_WORDS = ('token', 'secret', 'passw', 'pwd', 'key', 'auth', 'credential', 'cookie',
+                'bearer')
 
 # ensure_windowless_console's answers
 PRESENT = 'present'                     # the process had a console already
@@ -80,6 +92,7 @@ _mode = _UNKNOWN                        # the wrapper's state; _DONE after the f
 _lock = _thread.RLock()
 _original = None                        # the CreateProcess the wrapper delegates to
 _kernel32 = None
+_ctrl_handler = None                    # _take_ctrl's handler, kept so it is never freed
 
 
 def _k32():
@@ -196,8 +209,34 @@ def ensure_windowless_console(fallback=None, child=None):
         if how is None or how == NONE:
             how = _attach_holder()
         if how in (ALLOCATED, ATTACHED):
+            try:
+                _take_ctrl()
+            except Exception:           # noqa: BLE001 - the console stays; the start goes on
+                pass
             _log_incident(how, child)
         return how
+
+
+def ctrl_taken(event):
+    """_take_ctrl's handler: True (handled) for Ctrl+C and Ctrl+Break, False for any other event
+    (it goes on to the next handler)."""
+    return event in (CTRL_C_EVENT, CTRL_BREAK_EVENT)
+
+
+def _take_ctrl():
+    """Register a console control handler (ctrl_taken) that answers Ctrl+C and Ctrl+Break as
+    handled, so this process, which had no console, is not ended by one sent to the console it now
+    has. Per process: a child does not inherit it. True when registered."""
+    global _ctrl_handler
+    import ctypes
+    from ctypes import wintypes
+    proto = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+    if _ctrl_handler is None:
+        _ctrl_handler = proto(ctrl_taken)
+    k = _k32()
+    k.SetConsoleCtrlHandler.argtypes = (proto, wintypes.BOOL)
+    k.SetConsoleCtrlHandler.restype = wintypes.BOOL
+    return bool(k.SetConsoleCtrlHandler(_ctrl_handler, True))
 
 
 def _create_process(app, cmd, proc_attrs, thread_attrs, inherit, flags, env, cwd, startup):
@@ -265,19 +304,117 @@ def _parent():
     return ppid, exe
 
 
+def split_command_line(line):
+    """A Windows command line as its words, by the C runtime's rules (the ones
+    subprocess.list2cmdline writes for): blanks part words outside quotes, 2n backslashes before
+    a quote are n and the quote counts, 2n+1 are n and a literal quote, "" inside quotes is a
+    literal quote; other backslashes are themselves."""
+    words, cur, quoted, have, i, n = [], [], False, False, 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == '\\':
+            j = i
+            while j < n and line[j] == '\\':
+                j += 1
+            if j < n and line[j] == '"':
+                cur.append('\\' * ((j - i) // 2))
+                if (j - i) % 2:
+                    cur.append('"')
+                    j += 1
+            else:
+                cur.append('\\' * (j - i))
+            i, have = j, True
+        elif c == '"':
+            if quoted and line[i + 1:i + 2] == '"':
+                cur.append('"')
+                i += 1
+            else:
+                quoted = not quoted
+            i, have = i + 1, True
+        elif c in ' \t' and not quoted:
+            if have:
+                words.append(''.join(cur))
+                cur, have = [], False
+            i += 1
+        else:
+            cur.append(c)
+            i, have = i + 1, True
+    if have:
+        words.append(''.join(cur))
+    return words
+
+
+def _secret(name):
+    name = name.lower()
+    return any(s in name for s in SECRET_WORDS)
+
+
+def _mask(words):
+    """`words` with secrets masked: the value after a secret flag (`--token VALUE`, `/key VALUE`)
+    or after `Bearer`/`Basic`; the value of `--token=VALUE`, `/password:VALUE` and
+    `GITHUB_TOKEN=VALUE`; the password of `scheme://user:pass@`; and words shaped like
+    well-known API tokens."""
+    import re
+    flag = re.compile(r'(?:--?|/)([A-Za-z][\w.-]*)')
+    named = re.compile(r'((?:--?|/)?([A-Za-z_][\w.-]*))([=:])(.*)', re.S)
+    url_user = re.compile(r'(://)[^/\s@]+@')
+    token = re.compile(r'(?:sk-|gh[pousr]_|github_pat_|xox[abprs]-|glpat-|AKIA|ASIA)'
+                       r'[A-Za-z0-9_\-]{8,}|eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]*')
+    out, hide = [], False
+    for w in words:
+        if hide:
+            out.append(MASK)
+            hide = False
+            continue
+        m = flag.fullmatch(w)
+        if (m and _secret(m.group(1))) or w.lower() in ('bearer', 'basic'):
+            out.append(w)
+            hide = True
+            continue
+        m = named.fullmatch(w)
+        if m and _secret(m.group(2)):
+            out.append(m.group(1) + m.group(3) + MASK)
+            continue
+        out.append(token.sub(MASK, url_user.sub(r'\1' + MASK + '@', w)))
+    return out
+
+
+def _shorten(words):
+    """The program and the first KEEP_WORDS words after it, each longer one cut to its start and
+    end (a path keeps its file name), and `...(+N)` for the N words left out."""
+    head, tail = WORD_MAX * 2 // 3, WORD_MAX // 3 - 3
+    kept = [w if len(w) <= WORD_MAX else w[:head] + '...' + w[-tail:]
+            for w in words[:1 + KEEP_WORDS]]
+    if len(words) > len(kept):
+        kept.append('...(+%d)' % (len(words) - len(kept)))
+    return kept
+
+
+def redact_command(cmd):
+    """A command line as the incident log keeps it: secrets masked (_mask), then shortened
+    (_shorten). A string (or bytes) command line gives a string, a list of words a list; None
+    gives None."""
+    if cmd is None:
+        return None
+    if isinstance(cmd, (bytes, bytearray)):
+        cmd = os.fsdecode(cmd)
+    if isinstance(cmd, str):
+        import subprocess
+        return subprocess.list2cmdline(_shorten(_mask(split_command_line(cmd))))
+    return _shorten(_mask([os.fsdecode(w) if isinstance(w, bytes) else str(w) for w in cmd]))
+
+
 def _incident(how, child):
-    """The incident line's fields."""
+    """The incident line's fields; both command lines redacted (redact_command)."""
     import time
     try:
         ppid, pexe = _parent()
     except Exception:                   # noqa: BLE001 - the line goes without them
         ppid, pexe = None, None
-    if isinstance(child, (bytes, bytearray)):
-        child = os.fsdecode(child)
     return {'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'how': how,
             'pid': os.getpid(), 'exe': sys.executable,
-            'argv': list(getattr(sys, 'orig_argv', sys.argv)), 'child': child,
-            'parent_pid': ppid, 'parent_exe': pexe}
+            'argv': redact_command(list(getattr(sys, 'orig_argv', sys.argv))),
+            'child': redact_command(child), 'parent_pid': ppid, 'parent_exe': pexe}
 
 
 def _log_incident(how, child):
