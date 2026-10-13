@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -15,6 +16,7 @@ import unittest
 from hosts.claude.adapter import content as claude_content
 from kitlib import content
 from kitlib.host import content as hc
+from kitlib.host import registry
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(KIT_ROOT, 'tools'))
@@ -134,13 +136,21 @@ class ManifestTest(unittest.TestCase):
                 self.assertNotIn(b'\nwrites:', agent)
 
     def test_role_bodies_name_no_claude_value_a_token_covers(self):
-        """The values in hosts.claude.adapter.content.TOKENS reach the agent files only through tokens;
+        """The values in hosts.claude.adapter.content.tokens() reach the agent files only through tokens;
         `<kit>`, the neutral name of the kit's folder (kit_root's Claude value too), is written bare."""
         for r in content.load(KIT_ROOT).roles:
             text = r.description + r.body
-            for value in [v for v in claude_content.TOKENS.values() if v != '<kit>'] + ['pm-kit:']:
+            for value in [v for v in claude_content.tokens().values() if v != '<kit>'] + ['pm-kit:']:
                 with self.subTest(role=r.name, value=value):
                     self.assertNotIn(value, text)
+            # the tools a role names for messaging and dispatch, and the tiers' models: {{tool:...}},
+            # {{model:...}}
+            for value in ('SendMessage', 'ListAgents', 'Agent tool', 'EnterWorktree', 'Glob/Grep'):
+                with self.subTest(role=r.name, value=value):
+                    self.assertNotIn(value, text)
+            for model in set(claude_content.renderer().tier_models().values()):
+                with self.subTest(role=r.name, model=model):
+                    self.assertIsNone(re.search(r'(?i)\b%s\b' % re.escape(model), text))
 
 
 class ParseTest(unittest.TestCase):
@@ -215,6 +225,17 @@ class SubstituteTest(unittest.TestCase):
                 with self.assertRaises(hc.ContentError):
                     self.sub(text)
 
+    def test_a_tiers_model_and_a_capabilitys_tool(self):
+        fill = lambda text: hc.substitute(text, {}, str, (), models={'strong': 'big'},    # noqa: E731
+                                          tools={'message': 'Tell'})
+        self.assertEqual(fill('{{model:strong}} via {{tool:message}}'), 'big via Tell')
+        for text in ('{{model:huge}}', '{{model:light}}', '{{model}}', '{{tool:teleport}}', '{{tool:read}}',
+                     '{{tool}}'):
+            with self.subTest(text=text), self.assertRaises(hc.ContentError):
+                fill(text)
+        with self.assertRaises(hc.ContentError):
+            self.sub('{{model:strong}}')                # a host that passes no tier map
+
 
 class ClaudeRendererTest(unittest.TestCase):
     def content(self, *roles):
@@ -242,9 +263,27 @@ class ClaudeRendererTest(unittest.TestCase):
                               b'experimental:\r\n  cacheTtl: 1h\r\n---\r\nbody\r\n')
 
     def test_every_tier_and_capability_has_a_claude_value(self):
-        self.assertEqual(sorted(claude_content.TIER_MODEL), sorted(hc.TIERS))
+        self.assertEqual(sorted(claude_content.renderer().tier_models()), sorted(hc.TIERS))
+        self.assertEqual(claude_content.renderer().tier_models(), dict(registry.host('claude').tiers))
         self.assertEqual(sorted(claude_content.TOOLS), sorted(hc.CAPABILITIES))
-        self.assertEqual(sorted(claude_content.TOKENS), sorted(t for t in hc.TOKENS if t != 'agent'))
+        self.assertEqual(sorted(claude_content.tokens()), sorted(t for t in hc.TOKENS if t not in hc.ARG_TOKENS))
+        self.assertEqual(set(claude_content.TOKENS) & set(claude_content.PROFILE_TOKENS), set())
+
+    def test_a_token_hosts_json_holds_is_read_from_it(self):
+        """No Claude token value repeats a hosts.json field: PROFILE_TOKENS reads those."""
+        host = registry.host('claude')
+        p = host.profile
+        values = claude_content.tokens()
+        self.assertEqual({k: values[k] for k in claude_content.PROFILE_TOKENS},
+                         {'worktrees_dir': p.worktrees_directory, 'owner_folder': '.claude/',
+                          'user_folder': '~/' + p.state_directory, 'coauthor_email': p.attribution.email,
+                          'long_context_model': 'the 1M-context %s model' % dict(host.tiers)['deep']})
+        self.assertIn(values['owner_folder'], p.owner_paths)
+        held = [v for v in (getattr(p, f) for f in p.__dataclass_fields__) if isinstance(v, str)]
+        held += [p.attribution.email] + [m for _, m in host.tiers]
+        for name, value in claude_content.TOKENS.items():
+            with self.subTest(name):
+                self.assertNotIn(value, held)
 
 
 class TempTreeTest(unittest.TestCase):

@@ -31,6 +31,7 @@ except its last 4 commits.
 | 13 | Folder layout | Uniform `hosts/<name>/` | `claude/` moves to `hosts/claude/` in step 7, and Codex lands as `hosts/codex/` in step 9. |
 | 14 | Form of the shared skill text | C: checklist + pointer | One line per step with its command, the "never" list, then the tool doc. A test checks that each `tools/*.py` command and flag a skill names exists (§5). |
 | 15 | Linux and macOS | A separate refactor after this plan | The host work keeps Windows behaviour identical. Rules in §6 stop it adding Windows debt. The OS work is §6. |
+| 16 | Owner paths in every repo | A deliberate tightening, a superset of before | `kitlib/config/schema.py` `OWNER_PATHS` (the default of `.kit.json` `owner.paths`) now also protects `AGENTS.md`, `docs/agent-profile.md` and `.codex/` (its worktrees folder excepted) in every repository, beside every host's `owner_paths`. Each path protected before still is; a repository that names its own `owner.paths` keeps its list. |
 
 ## 1. Where things stand
 
@@ -379,7 +380,11 @@ stop building on paths that are about to move.
 ## 4. What does not change
 - Standard library only and Windows only. No argparse or printing in kitlib.
 - Tool paths and exit codes. A merged flag keeps the old one as an alias for one release.
-- Guard semantics for Claude: every existing guard test passes through the adapter.
+- Guard semantics for Claude: every existing guard test passes through the adapter. Two
+  changes are deliberate: the role policy (docs/guard.md "Role policy"), which runs only where a
+  repository's `.kit.json` sets `guard.role_policy` (opt in; off, every call is judged as before),
+  and the owner paths' tightening of decision 16 (`AGENTS.md`, `docs/agent-profile.md` and `.codex/`
+  added to the default `owner.paths`, a superset of before).
 - The bridge's security posture: fail closed, no resend of unknown messages, routes chosen by
   the owner.
 

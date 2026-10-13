@@ -53,20 +53,34 @@ each flag shown.
 ## Tokens
 
 A body or description names a value that differs by host only as a token. An unknown token, or a
-`{{` that is not one, refuses the render.
+`{{` that is not one, refuses the render. A value `hosts.json` already holds is read from the host's
+profile there, never written a second time in the renderer (Claude: `PROFILE_TOKENS`).
 
-| token | Claude |
-|---|---|
-| `{{agent:<role>}}` | `pm-kit:<role>` |
-| `{{profile_path}}` | `.claude/agent-profile.md` |
-| `{{coordinator_profile_path}}` | `.claude/coordinator-profile.md` |
-| `{{instructions_file}}` | `CLAUDE.md` |
-| `{{worktrees_dir}}` | `.claude/worktrees` |
+| token | meaning | Claude |
+|---|---|---|
+| `{{agent:<role>}}` | the name the host dispatches a role by | `pm-kit:<role>` |
+| `{{model:<tier>}}` | the host's model for a tier | hosts.json `tiers`: `{{model:strong}}` is `opus` |
+| `{{tool:<capability>}}` | the host's tool for a capability (the front matter's names) | the renderer's `TOOLS`: `{{tool:message}}` is `SendMessage`, `{{tool:dispatch}}` `Agent` |
+| `{{profile_path}}` | a repository's agent profile | `.claude/agent-profile.md` |
+| `{{coordinator_profile_path}}` | a repository's coordinator profile | `.claude/coordinator-profile.md` |
+| `{{instructions_file}}` | the repository instructions file the host reads | `CLAUDE.md` |
+| `{{worktrees_dir}}` | the repository folder agent worktrees go in | `.claude/worktrees` (hosts.json profile `worktrees_directory`) |
+| `{{owner_folder}}` | the host's own folder in a repository, owner-only, with its final `/` | `.claude/` (the folder among hosts.json profile `owner_paths`) |
+| `{{user_folder}}` | the host's per-user folder, home-relative | `~/.claude` (`~/` and hosts.json profile `state_directory`) |
+| `{{config_dir_env}}` | the environment variable that moves that per-user folder | `CLAUDE_CONFIG_DIR` |
+| `{{long_context_model}}` | a noun phrase for the model a launched long-context session (deep-worker, consultant) runs on | `the 1M-context opus model` (the `deep` tier's model from hosts.json) |
+| `{{coauthor_email}}` | the address in the host's Co-Authored-By trailer | `noreply@anthropic.com` (hosts.json profile `attribution.email`) |
+| `{{launch_agent}}` | the command that starts the host's main session as a named agent; `{{agent:<role>}}` follows it | `claude --agent` |
+
+A neutral sentence is preferred to a token where it reads as well (`<kit>/optional/comfy/comfy_gen.py`,
+not a per-user link to it). tests/content `test_role_bodies_name_no_claude_value_a_token_covers`
+fails a role that writes a Claude value bare, and tests/host/test_leaks a host name in `content/`.
 
 ## Claude
 
 `hosts/claude/adapter/content.py` writes `hosts/claude/shell/agents/<name>.md` with `name`, `description` (quoted only
-when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model`,
+when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model` (hosts.json `tiers`, the
+one tier map),
 `effort` when set, and for `cache: long` the `experimental` map with `cacheTtl: 1h`. It copies each
 skill folder to `hosts/claude/shell/skills/<name>/`. It owns both folders.
 

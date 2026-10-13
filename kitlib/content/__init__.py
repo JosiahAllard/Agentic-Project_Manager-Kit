@@ -13,7 +13,7 @@ version) is asked for those files too, and they are checked and written like the
 The renderers are passed in: this package names no host and imports none (the host is chosen at
 the edge, tools/render_content.py). Pure file work: no printing, no exit.
 
-`role_modes(kit)` is {role: mode} from the role files under the kit root `kit`, for the guard's
+`names_of(name)` is a role's name with its old or new one (ALIASES). `role_modes(kit)` is {role: mode} from the role files under the kit root `kit`, for the guard's
 role policy (docs/guard.md "Role policy"); `role_mode(name, kit)` one role's, an old name
 (ALIASES) read as its new one; `role_writes(name, kit)` the paths its `writes` names. Read once
 per kit root and cached. It never raises: no
@@ -35,6 +35,17 @@ ALIASES = {'opus-worker': 'senior-worker'}
 _MODES = {}
 _KIT_NAME = re.compile(r'[a-z][a-z0-9-]*\Z')
 _VERSION = re.compile(r'\d+\.\d+\.\d+\Z')
+
+
+def names_of(name):
+    """(name, then every other name the same role goes by in ALIASES): its new name for an old
+    one, its old names for a new one."""
+    out = [name]
+    for old, new in ALIASES.items():
+        other = new if old == name else old if new == name else None
+        if other and other not in out:
+            out.append(other)
+    return tuple(out)
 
 
 def load_kit(root):

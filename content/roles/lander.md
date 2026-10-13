@@ -104,7 +104,7 @@ preflight's leftover-worktree and stray-file lines (`--find lock`).
 - Never kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`,
   `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process
   you started, by its pid, while it still has the start time you saw.
-Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
 Force-push, or push anything but the main branch through the landing command.
 `git add -A`, `git commit -a`, or staging anything you did not change. Remove a
 worktree other than the one you were told to land. Land two branches in one go,
@@ -136,5 +136,5 @@ yes/no; any line you had to judge. No narrative.
 If the repo has them: start with `python tools/preflight.py`. First call on a branch: `python tools/review_pack.py <branch>`.
 Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
 `docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
-Use the Grep and Read tools, not shell grep, cat or sed. No tool fits: write your own script in your
+Use the {{tool:search}} and {{tool:read}} tools, not shell grep, cat or sed. No tool fits: write your own script in your
 scratch folder, never in the repo.

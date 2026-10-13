@@ -19,9 +19,10 @@ A role file, `content/roles/<name>.md`, is front matter between two `---` lines,
                                      (docs/guard.md "Role policy"). Never rendered either
   model.<host>: <model>              optional: that host runs this role on <model>, not the tier's
 
-The body is neutral prose. Values that differ by host are tokens, `{{name}}` or
-`{{agent:<role>}}` (TOKENS); `substitute` fills them from the host's own table. A role file keeps
-its own line endings, and the body is copied byte for byte apart from its tokens.
+The body is neutral prose. Values that differ by host are tokens, `{{name}}`, `{{agent:<role>}}`,
+`{{model:<tier>}}` or `{{tool:<capability>}}` (TOKENS); `substitute` fills them from the host's own
+tables. A role file keeps its own line endings, and the body is copied byte for byte apart from its
+tokens.
 
 A skill is a folder, `content/skills/<name>/`, whose files every host ships unchanged.
 """
@@ -46,8 +47,24 @@ CAPABILITIES = (
     'dispatch', 'message', 'list-agents', 'stop-task', 'monitor', 'tool-search', 'skill',
     'ask-owner', 'cron-create', 'cron-list', 'cron-delete', 'web-search', 'web-fetch',
 )
-# The tokens a body or description may hold. `agent` takes a role name: `{{agent:test-runner}}`.
-TOKENS = ('agent', 'profile_path', 'coordinator_profile_path', 'instructions_file', 'worktrees_dir')
+# The tokens a body or description may hold (docs/content.md "Tokens"). Three take an argument
+# (ARG_TOKENS): `{{agent:<role>}}` the name the host dispatches a role by, `{{model:<tier>}}` the
+# host's model for a tier (TIERS) and `{{tool:<capability>}}` the host's tool for a capability
+# (CAPABILITIES). The rest are one value each on a host:
+#   profile_path, coordinator_profile_path  a repository's agent and coordinator profiles
+#   instructions_file   the repository instructions file the host reads
+#   worktrees_dir       the repository folder agent worktrees go in
+#   owner_folder        the host's own folder in a repository (owner-only), with its final /
+#   user_folder         the host's per-user folder, home-relative (~/...)
+#   config_dir_env      the environment variable that moves the host's per-user folder
+#   long_context_model  a noun phrase for the model a launched long-context session runs on
+#   coauthor_email      the address in the host's Co-Authored-By commit trailer
+#   launch_agent        the command that starts the host's main session as a named agent; the
+#                       agent's name ({{agent:<role>}}) follows it
+ARG_TOKENS = ('agent', 'model', 'tool')
+TOKENS = ARG_TOKENS + ('profile_path', 'coordinator_profile_path', 'instructions_file', 'worktrees_dir',
+                       'owner_folder', 'user_folder', 'config_dir_env', 'long_context_model', 'coauthor_email',
+                       'launch_agent')
 REQUIRED = ('name', 'description', 'tier', 'sandbox', 'capabilities')
 OPTIONAL = ('effort', 'cache', 'mode', 'writes')
 MODEL_KEY = 'model.'
@@ -231,10 +248,14 @@ def tokens_in(text):
     return [(m.group(1), m.group(2)) for m in _TOKEN.finditer(text)]
 
 
-def substitute(text, values, agent_name, roles, source='text'):
-    """`text` with every token filled: `{{agent:<role>}}` by agent_name(<role>), any other by
-    values[name]. A token outside TOKENS, an agent token naming no role in `roles`, a value the
-    host does not define, or a `{{` left over is a ContentError."""
+def substitute(text, values, agent_name, roles, source='text', models=None, tools=None):
+    """`text` with every token filled: `{{agent:<role>}}` by agent_name(<role>), `{{model:<tier>}}`
+    by models[<tier>] (the host's tier -> model map), `{{tool:<capability>}}` by tools[<capability>]
+    (the host's capability -> tool name), any other by values[name]. A token outside TOKENS, an
+    agent token naming no role in `roles`, a tier or capability the contract does not have, a
+    value the host does not define, or a `{{` left over is a ContentError."""
+    picks = {'model': (models, TIERS, 'tier'), 'tool': (tools, CAPABILITIES, 'capability')}
+
     def fill(m):
         name, arg = m.group(1), m.group(2)
         if name not in TOKENS:
@@ -243,6 +264,13 @@ def substitute(text, values, agent_name, roles, source='text'):
             if arg not in roles:
                 raise ContentError('%s: %s names no role' % (source, m.group(0)))
             return agent_name(arg)
+        if name in picks:
+            table, known, what = picks[name]
+            if arg not in known:
+                raise ContentError('%s: %s names no %s' % (source, m.group(0), what))
+            if not table or arg not in table:
+                raise ContentError('%s: %s has no value on this host' % (source, m.group(0)))
+            return table[arg]
         if arg is not None or name not in values:
             raise ContentError('%s: %s has no value on this host' % (source, m.group(0)))
         return values[name]

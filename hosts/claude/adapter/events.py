@@ -17,8 +17,9 @@ Every read of a Claude Code hook payload's field names is here, and nowhere in k
       payload: the guard reads it from its own environment, which Claude Code hands the hook.
   agent(payload)  the agent_id alone, for a deny when parse itself failed (kitlib.host.hookmain)
 
-A payload that is not an object, or a tool_input of the wrong shape for its tool, raises: the hook
-denies it (fail closed), as it did when the guard read the payload itself.
+A payload that is not an object (null, [], 0, "", false included), or a tool_input of the wrong
+shape for its tool, raises: the hook denies it (fail closed), as it did when the guard read the
+payload itself.
 """
 from kitlib import agentname
 from kitlib.host import Action
@@ -31,11 +32,19 @@ KINDS = {'SessionStart': 'session_start', 'SubagentStart': 'subagent_start'}
 
 
 def agent(payload):
-    return (payload or {}).get('agent_id') or None
+    return _object(payload).get('agent_id') or None
+
+
+def _object(payload):
+    """`payload` itself when it is a JSON object; anything else (null, a list, a number, a string,
+    false) raises, so the hook denies it (fail closed) rather than read it as an empty payload."""
+    if not isinstance(payload, dict):
+        raise ValueError('a hook payload is a JSON object, not %r' % (payload,))
+    return payload
 
 
 def parse(event_name, payload):
-    ev = payload or {}
+    ev = _object(payload)
     who = agent(ev)
     role = agentname.bare(ev.get('agent_type')) if who else None
     base = dict(cwd=ev.get('cwd'), agent=who, agent_role=role)

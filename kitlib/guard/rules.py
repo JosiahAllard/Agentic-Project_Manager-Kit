@@ -172,7 +172,7 @@ def host_mcp_prefix(profile):
     """The lock MCP's tool-name prefix on the host `profile` (kitlib.host.HostProfile) describes:
     its mcp_tool_format with the kit's plugin and the lock server's name filled in and the tool
     left off. INFERRED for Claude Code, not observed: the kit has no installed plugin yet."""
-    return profile.mcp_tool_format.format(plugin=lockmcp_names.CLAUDE_PLUGIN_NAME,
+    return profile.mcp_tool_format.format(plugin=lockmcp_names.PLUGIN_NAME,
                                           server=lockmcp_names.SERVER_NAME, tool='')
 
 

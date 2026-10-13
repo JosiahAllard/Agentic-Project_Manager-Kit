@@ -7,8 +7,6 @@ the guard can read them without loading the server."""
 # The kit plugin's name, as .claude-plugin/plugin.json gives it (tests/lockmcp checks the two
 # agree); every host's shell names the kit's plugin so.
 PLUGIN_NAME = 'pm-kit'
-# The old name of PLUGIN_NAME, kept while kitlib/guard and its tests still read it.
-CLAUDE_PLUGIN_NAME = PLUGIN_NAME
 # The lock MCP server's key under the plugin's mcpServers, and the name it reports.
 SERVER_NAME = 'machine-lock'
 
@@ -23,8 +21,3 @@ def tool_prefix(host=None, plugin=PLUGIN_NAME, server=SERVER_NAME, path=None):
     fmt = registry.host(name, path).profile.mcp_tool_format
     return fmt.split('{tool}', 1)[0].format(plugin=plugin, server=server)
 
-
-def claude_tool_prefix(plugin=PLUGIN_NAME, server=SERVER_NAME):
-    """tool_prefix() on the default host, under the name kitlib.guard.rules still imports (the
-    guard refactor moves it to tool_prefix)."""
-    return tool_prefix(None, plugin, server)

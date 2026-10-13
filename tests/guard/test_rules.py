@@ -599,7 +599,7 @@ class LockMcp(unittest.TestCase):
         self.w.user_config({'guard_mcp_prefix': 'mcp__lockx__'})
         self.assertEqual(rules.mcp_prefix(self.w.ctx()), 'mcp__lockx__')
         self.assertEqual(rules.mcp_prefix(W.World().ctx()), MCP_PREFIX)
-        self.assertEqual(MCP_PREFIX, lockmcp_names.claude_tool_prefix())
+        self.assertEqual(MCP_PREFIX, lockmcp_names.tool_prefix())
 
     def test_the_role_resolver_is_pluggable(self):
         ctx = self.w.ctx(role_resolver=lambda ev, env: 'owner-verified-by-test')
@@ -1043,7 +1043,7 @@ class RolesFromConfig(unittest.TestCase):
 
     def test_the_plugin_prefixed_lander_is_the_lander(self):
         # docs/guard.md "Agent names": <plugin>:lander holds the lander role, no other spelling does
-        p = lockmcp_names.CLAUDE_PLUGIN_NAME + ':'           # kitlib.agentname.PREFIX
+        p = lockmcp_names.PLUGIN_NAME + ':'           # kitlib.agentname.PREFIX
         w = W.World(kit={'repo': {'name': 'demo'}, 'roles': {'lander': {'edit_main_checkout': True, 'why': 'test'}}})
         self.addCleanup(w.cleanup)
         target = os.path.join(w.main, 'a.md')

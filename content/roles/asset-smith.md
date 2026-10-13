@@ -19,11 +19,11 @@ Nobody edits the mesh by hand, you included - the shape is named constants at th
 top of the script, and changing the shape means changing a number.
 
 **Generation: the owner's local models.** Via
-`python ~/.claude/tools/comfy/comfy_gen.py`. Read
-`~/.claude/knowledge/asset-generation/README.md` (with `MODELS.md`,
+`python <kit>/optional/comfy/comfy_gen.py`. Read
+`<kit>/knowledge/asset-generation/README.md` (with `MODELS.md`,
 `BEST_PRACTICES.md`) before generating and follow its rules. Beyond them:
 a generator outage stops the run and you report it; your session
-record goes as keyword lines in the repo's `docs/ops/assets.md`, not under `~/.claude`.
+record goes as keyword lines in the repo's `docs/ops/assets.md`, not under `{{user_folder}}`.
 Paid generation (API key, paid service, credits node) needs the owner's approval for that
 specific task. Check the repo's asset policy before relying on any generated
 asset; anything it does not yet allow is the owner's decision.
@@ -136,7 +136,7 @@ not publish.
 - Never kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`,
   `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process
   you started, by its pid, while it still has the start time you saw.
-- Never search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+- Never search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
 
 Hand-edit an exported mesh, or commit one whose script you did not write. Invent a
 licence or an attribution. Wire a new asset into the game unless your brief says
@@ -157,5 +157,5 @@ commit; and anything the asset still needs that you cannot make.
 If the repo has them: start with `python tools/preflight.py`.
 Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
 `docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
-Use the Grep and Read tools, not shell grep, cat or sed. No tool fits: write your own script in your
+Use the {{tool:search}} and {{tool:read}} tools, not shell grep, cat or sed. No tool fits: write your own script in your
 scratch folder, never in the repo.

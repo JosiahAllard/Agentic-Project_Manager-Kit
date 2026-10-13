@@ -193,12 +193,13 @@ def _survey_fresh(plan, path, ctx):
 
 def _moved(tok, ctx):
     """The file in HOOKS that `tok` names when it is a path into this kit's MOVED_HOOKS folder;
-    else None."""
+    else None. The part under the folder keeps the case `tok` gives it (norm folds case)."""
     p = expand(tok, ctx.home)
     old = kit_file(ctx.kit, MOVED_HOOKS)
     if not p or not under(p, old) or norm(p) == norm(old):
         return None
-    return os.path.join(kit_file(ctx.kit, HOOKS), os.path.relpath(norm(p), norm(old)))
+    full = lambda path: os.path.normpath(os.path.abspath(path))     # noqa: E731
+    return os.path.join(kit_file(ctx.kit, HOOKS), os.path.relpath(full(p), full(old)))
 
 
 def _sub_moved(s, ctx, event, did, whole):

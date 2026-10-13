@@ -84,7 +84,7 @@ needs - a stronger agent takes it from there, the intended path, not a failure.
   same steps run singly do not.
 - A safety-check (classifier) refusal is final: stop at the FIRST one, report it verbatim; no retry,
   no rewording, no other shell or agent.
-Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
 Land, merge to main, push, force-push or rewrite the main branch's history. Weaken a test or check for green. Retry a failing run
 more than once without a new idea. Write the owner's clear-session marker, if the
 profile names one.
@@ -115,5 +115,5 @@ If the repo has them: start with `python tools/preflight.py -C <worktree>`. Skil
 kit's folder `<kit>`; it is the folder your session's kit header names.
 Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
 `docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
-Use the Grep and Read tools, not shell grep, cat or sed. No tool fits: write your own script in your
+Use the {{tool:search}} and {{tool:read}} tools, not shell grep, cat or sed. No tool fits: write your own script in your
 scratch folder, never in the repo.

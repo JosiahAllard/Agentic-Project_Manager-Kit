@@ -11,13 +11,13 @@ from kitlib.git import repo
 from kitlib.guard import commands as cm
 from kitlib.guard import context, rules
 from kitlib.guard import shell as sh
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 
 from . import world as W
 from .claudehost import decide
 from .world import bash, event, ps
 
-P = CLAUDE_PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
+P = PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
 COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 OLD_MARK = {context.ROLE_ENV: 'conductor'}   # the old name of the coordinator's mark, still held
 PM = {context.ROLE_ENV: 'pm'}

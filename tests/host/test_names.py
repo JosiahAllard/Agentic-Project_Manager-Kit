@@ -30,8 +30,8 @@ class Names(unittest.TestCase):
 
     def test_the_kit_registry_gives_todays_names(self):
         self.assertEqual(lockmcp.tool_prefix(), 'mcp__plugin_pm-kit_machine-lock__')
-        self.assertEqual(lockmcp.claude_tool_prefix(), lockmcp.tool_prefix())
-        self.assertEqual(lockmcp.CLAUDE_PLUGIN_NAME, lockmcp.PLUGIN_NAME)
+        self.assertFalse(hasattr(lockmcp, 'claude_tool_prefix'), 'the old alias is gone: tool_prefix')
+        self.assertFalse(hasattr(lockmcp, 'CLAUDE_PLUGIN_NAME'), 'the old alias is gone: PLUGIN_NAME')
         self.assertEqual(agentname.PREFIX, 'pm-kit:')
         self.assertEqual(agentname.prefix(), agentname.PREFIX)
 

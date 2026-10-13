@@ -36,6 +36,8 @@ import os
 import re
 import sys
 
+from kitlib.content import names_of
+
 from . import schema
 from .types import ConfigError, check, is_note
 
@@ -121,13 +123,16 @@ def roles(cfg=None):
 
 
 def role_name(action, table=None):
-    """`main` (no Action.agent), the Action's agent_role when `table` names it, else `subagent`."""
+    """`main` (no Action.agent), the Action's agent_role when `table` names it, or the name `table`
+    gives the same role under its old or new name (kitlib.content.ALIASES: a roles key
+    `opus-worker` holds the senior-worker agent), else `subagent`."""
     if not getattr(action, 'agent', None):
         return 'main'
     kind = action.agent_role
-    if kind and kind in (table or ROLE_DEFAULTS) and kind != 'main':
-        return kind
-    return 'subagent'
+    if not kind or kind == 'main':
+        return 'subagent'
+    known = table or ROLE_DEFAULTS
+    return next((n for n in names_of(kind) if n in known and n != 'main'), 'subagent')
 
 
 def permissions(action, table=None):
