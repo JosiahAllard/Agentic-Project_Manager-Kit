@@ -78,6 +78,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `gate.errors` ({match, excuse, expect}): error-line policy
 - `gate.kind` (a kind name, default "engine-test"): the kinds-table kind a gate run books (gate.py and gate.py land)
 - `guard.data_roots` (list of {path, mode, why}, default []): folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")
+- `guard.role_policy` (bool, default false): reserved for holding roles to a role policy mode; accepted so a `.kit.json` that sets it loads, and read by nothing yet
 - `landing.lock_file` (string): legacy landing lock: git:<name>, a file in the git common dir; any other value refuses
 - `landing.log_dir` (repo path): where gate logs live
 - `landing.lanes` (map lane -> {branch_prefix, paths, why, merged_args}, default {}): lanes besides full that gate.py land --lane takes

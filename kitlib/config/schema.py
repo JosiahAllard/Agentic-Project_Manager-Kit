@@ -201,6 +201,7 @@ SECTIONS = {
     },
     'guard': {
         'data_roots': Field(ListOf(DATA_ROOT), [], 'folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")'),
+        'role_policy': Field(Bool(), False, 'reserved for holding roles to a role policy mode; accepted so a `.kit.json` that sets it loads, and read by nothing yet'),
     },
     'landing': {
         'lock_file': Field(Str(), None, 'legacy landing lock: git:<name>, a file in the git common dir; any other value refuses'),
