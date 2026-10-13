@@ -48,12 +48,17 @@ Each host maps a tier to a model in `hosts.json` `tiers`, which its renderer's `
 `agent_roster.py --check` holds this table to it. A role file may name a different model for one
 host (`model.<host>:`, docs/content.md); none does.
 
-| tier | claude |
-|---|---|
-| light | haiku |
-| standard | sonnet |
-| strong | opus |
-| deep | opus |
+| tier | claude | codex |
+|---|---|---|
+| light | haiku | account-default |
+| standard | sonnet | account-default |
+| strong | opus | account-default |
+| deep | opus | account-default |
+
+`account-default` writes no `model` line: the role runs on the model the Codex account is set to, as
+the Codex branch's roles had it. On Codex a tier differs by reasoning effort: a role's `effort`, else
+light `low`, standard `medium`, strong `high`, deep `xhigh` (hosts/codex/adapter/content.py
+`TIER_EFFORT`). The owner names Codex models per tier here and in hosts.json when they are chosen.
 
 Model choices rest on measured A/B runs: docs/model-ab.md.
 

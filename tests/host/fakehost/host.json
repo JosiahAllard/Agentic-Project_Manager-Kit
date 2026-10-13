@@ -26,7 +26,8 @@
         "model_pattern": null
       },
       "agent_name_format": "{plugin}/{name}",
-      "session_process": "fakehost.exe"
+      "session_process": "fakehost.exe",
+      "env_prefixes": ["FAKEHOST_"]
     },
     "tiers": {"light": "fake-small", "standard": "fake-medium", "strong": "fake-large", "deep": "fake-large"}
   }

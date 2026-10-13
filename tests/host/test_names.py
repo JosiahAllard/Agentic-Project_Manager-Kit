@@ -42,13 +42,13 @@ class Names(unittest.TestCase):
 
     def test_session_processes_are_every_hosts(self):
         from kitlib import pmstart
-        self.assertEqual(pmstart.session_images(), frozenset({'claude.exe'}))
+        self.assertEqual(pmstart.session_images(), frozenset({'claude.exe', 'codex.exe'}))
         with open(self.path, encoding='utf-8') as f:
             data = json.load(f)
         data['other']['profile']['session_process'] = 'other.exe'
         with open(self.path, 'w', encoding='utf-8') as f:
             json.dump(data, f)
-        self.assertEqual(pmstart.session_images(self.path), frozenset({'claude.exe', 'other.exe'}))
+        self.assertEqual(pmstart.session_images(self.path), frozenset({'claude.exe', 'codex.exe', 'other.exe'}))
         procs = [{'Name': 'other.exe', 'CommandLine': 'other.exe --remote-control x'}]
         self.assertEqual(pmstart.live_session_names(procs), set())   # not registered in the kit's
 

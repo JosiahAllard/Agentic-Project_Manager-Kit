@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -117,6 +118,128 @@ class Run(unittest.TestCase):
         with mock.patch('kitlib.guard.decide', lambda *x, **k: Decision('deny', 'r', 'why')):
             with self.assertRaises(OSError):
                 hookmain.run(FakeAdapter(), 'PreToolUse', io.StringIO('{}'), Closed(), environ={}, entry='h')
+
+
+class Several(unittest.TestCase):
+    """A call parsed into several Actions (one patch over several files): each is judged."""
+
+    class Multi(FakeAdapter):
+        def __init__(self, paths, screen=None, **kw):
+            super().__init__(**kw)
+            self.paths, self._screen = paths, screen
+
+        def parse(self, event_name, payload):
+            return tuple(Action('edit', path=p) for p in self.paths)
+
+        def screen(self, action, environ):
+            return self._screen(action) if self._screen else None
+
+    def by_path(self, verdicts):
+        seen = []
+
+        def decide(action, ctx=None, environ=None, profile=None):
+            seen.append(action.path)
+            v = verdicts.get(action.path, 'allow')
+            return Decision(v, 'r-' + action.path, 'about ' + action.path)
+        return decide, seen
+
+    def test_every_action_is_judged_and_all_allowed_allows(self):
+        decide, seen = self.by_path({})
+        self.assertEqual(run(self.Multi(('a', 'b', 'c')), {}, decide), (0, ''))
+        self.assertEqual(seen, ['a', 'b', 'c'])
+
+    def test_any_deny_denies_and_stops(self):
+        decide, seen = self.by_path({'b': 'deny', 'c': 'deny'})
+        a = self.Multi(('a', 'b', 'c'))
+        self.assertEqual(run(a, {}, decide), (3, 'deny r-b\n'))
+        self.assertEqual(seen, ['a', 'b'])
+
+    def test_a_deny_outranks_an_earlier_ask(self):
+        decide, _ = self.by_path({'a': 'ask', 'b': 'deny'})
+        self.assertEqual(run(self.Multi(('a', 'b')), {}, decide), (3, 'deny r-b\n'))
+        decide, _ = self.by_path({'b': 'ask'})
+        self.assertEqual(run(self.Multi(('a', 'b')), {}, decide), (0, 'ask r-b\n'))
+        self.assertEqual(run(self.Multi(('a', 'b'), supports_ask=False), {}, decide), (3, 'deny r-b\n'))
+
+    def test_no_action_is_refused(self):
+        a = self.Multi(())
+        self.assertEqual(run(a, {}, lambda *x, **k: Decision('allow')), (3, 'deny guard-error\n'))
+        self.assertIn('no action', a.last.reason)
+
+    def test_the_hosts_screen_judges_before_the_guard(self):
+        decide, seen = self.by_path({})
+        a = self.Multi(('a', 'b'), screen=lambda act: Decision('deny', 'host-rule', 'no') if act.path == 'b' else None)
+        self.assertEqual(run(a, {}, decide), (3, 'deny host-rule\n'))
+        self.assertEqual(seen, ['a'], 'a screened deny never reaches the guard')
+        allow = self.Multi(('a',), screen=lambda act: Decision('allow'))
+        self.assertEqual(run(allow, {}, decide), (0, ''))
+        self.assertEqual(seen, ['a', 'a'], 'a screen allow still meets the guard')
+
+
+class NoIdentity(unittest.TestCase):
+    """A host whose hooks carry no subagent identity: a marked session's call is judged as an
+    agent of its mark's role; the owner's unmarked session and a host with identity are not."""
+
+    def adapter(self, identity):
+        a = FakeAdapter()
+        a.capabilities = HostCapabilities(('PreToolUse',), True, identity, True, True, 'x')
+        return a
+
+    def seen(self, adapter, payload, environ):
+        got = []
+
+        def decide(action, ctx=None, environ=None, profile=None):
+            got.append(action)
+            return Decision('allow')
+        with mock.patch('kitlib.guard.decide', decide):
+            hookmain.run(adapter, 'PreToolUse', io.StringIO(json.dumps(payload)), io.StringIO(),
+                         environ=environ, entry='h.py')
+        return got[0]
+
+    def test_a_marked_call_is_an_unidentified_agent_of_its_role(self):
+        for kind in ('edit', 'shell', 'mcp'):
+            a = self.seen(self.adapter(False), {'kind': kind}, {'PM_KIT_ROLE': 'worker'})
+            self.assertEqual((a.agent, a.agent_role), (hookmain.UNIDENTIFIED, 'worker'), kind)
+
+    def test_the_owner_another_kind_and_a_host_with_identity_are_unchanged(self):
+        self.assertIsNone(self.seen(self.adapter(False), {'kind': 'edit'}, {}).agent)
+        self.assertIsNone(self.seen(self.adapter(False), {'kind': 'other'}, {'PM_KIT_ROLE': 'pm'}).agent)
+        self.assertIsNone(self.seen(self.adapter(True), {'kind': 'edit'}, {'PM_KIT_ROLE': 'pm'}).agent)
+        self.assertEqual(self.seen(self.adapter(True), {'kind': 'edit', 'who': 'a1'}, {}).agent, 'a1')
+
+    def test_the_deadline_is_one_budget_for_every_action(self):
+        class Many(FakeAdapter):
+            def parse(self, event_name, payload):
+                return tuple(Action('edit', path=str(i)) for i in range(5))
+        budgets = []
+
+        def fake(guard, action, environ, profile, deadline):
+            budgets.append(deadline)
+            time.sleep(0.03)
+            return Decision('allow')
+        with mock.patch.object(hookmain, '_decide', fake):
+            code = hookmain.run(Many(), 'PreToolUse', io.StringIO('{}'), io.StringIO(), environ={},
+                                entry='h.py', deadline=1.0)
+        self.assertEqual(code, 0)
+        self.assertTrue(all(b < a for a, b in zip(budgets, budgets[1:])), budgets)
+        self.assertLessEqual(budgets[0], 1.0)
+
+    def test_a_budget_started_before_the_hook_counts_that_time_and_is_named_whole(self):
+        """`started` (a time.monotonic() reading the entry took before its own work, a boot) starts
+        the budget early; the timeout reason names the whole budget, not what was left of it."""
+        budgets = []
+
+        def fake(guard, action, environ, profile, deadline):
+            budgets.append(deadline)
+            return None                                 # still deciding
+        a = FakeAdapter()
+        with mock.patch.object(hookmain, '_decide', fake):
+            code = hookmain.run(a, 'PreToolUse', io.StringIO('{}'), io.StringIO(), environ={}, entry='h.py',
+                                deadline=7, started=time.monotonic() - 3)
+        self.assertEqual(code, 3)
+        self.assertLessEqual(budgets[0], 4.0)
+        self.assertGreater(budgets[0], 3.5)
+        self.assertIn('within 7 s', a.last.reason)
 
 
 class CommandLine(unittest.TestCase):

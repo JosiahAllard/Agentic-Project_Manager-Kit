@@ -18,7 +18,8 @@ What a subclass supplies:
                               the capabilities' hook_events
                     "cases": [{"name", "event", "payload", "action": {Action field: value}}]: the
                               Action the payload must parse into, whole (fields left out are the
-                              Action defaults)
+                              Action defaults); or "actions": [{...}, ...] for a call that acts on
+                              several targets, which parse returns as a tuple in that order
                     "malformed": [{"event", "payload"}]: payloads parse must refuse
                     "render": [{"event", "decision": {verdict, rule, reason, instead}, "stdout",
                               "code"}]: the host's exact output for a decision
@@ -131,9 +132,18 @@ class HostConformance(object):
     def events_of(self, role):
         return [e for e, r in self.fixtures['events'].items() if r == role]
 
+    @staticmethod
+    def expected(case):
+        """The Actions a case parses into, as a list (one for an "action" case)."""
+        return [Action(**a) for a in case['actions']] if 'actions' in case else [Action(**case['action'])]
+
+    @staticmethod
+    def parsed(got):
+        return list(got) if isinstance(got, tuple) else [got]
+
     def cases(self, event=None, kind=None):
         return [c for c in self.fixtures['cases'] if (event is None or c['event'] == event)
-                and (kind is None or c['action']['kind'] == kind)]
+                and (kind is None or 'action' in c and c['action']['kind'] == kind)]
 
     def tool_payload(self):
         return self.cases(kind='shell')[0]
@@ -173,7 +183,8 @@ class HostConformance(object):
         self.assertTrue(set(self.fixtures['events'].values()) <= {'tool'} | set(START_KINDS))
         self.assertTrue(self.events_of('tool'), 'no event that judges a tool call')
         want = set(TOOL_KINDS) | ({'mcp'} if caps.mcp else set())
-        have = {c['action']['kind'] for c in self.cases() if self.fixtures['events'][c['event']] == 'tool'}
+        have = {a.kind for c in self.cases() if self.fixtures['events'][c['event']] == 'tool'
+                for a in self.expected(c)}
         self.assertEqual(want - have, set(), 'tool kinds with no recorded payload')
         for event in self.events_of('session_start') + self.events_of('subagent_start'):
             self.assertTrue(self.cases(event), 'no recorded payload for %s' % event)
@@ -183,14 +194,17 @@ class HostConformance(object):
         for c in self.cases():
             with self.subTest(case=c['name']):
                 got = self.adapter.parse(c['event'], c['payload'])
-                self.assertIsInstance(got, Action)
-                self.assertEqual(got, Action(**c['action']))
+                if 'actions' in c:
+                    self.assertIsInstance(got, tuple, 'a several-target call parses into a tuple')
+                else:
+                    self.assertIsInstance(got, Action)
+                self.assertEqual(self.parsed(got), self.expected(c))
                 role = self.fixtures['events'][c['event']]
                 if role != 'tool':
-                    self.assertEqual(got.kind, role)
+                    self.assertEqual([a.kind for a in self.parsed(got)], [role])
 
     def test_subagent_identity_is_carried_only_when_declared(self):
-        parsed = [self.adapter.parse(c['event'], c['payload']) for c in self.cases()]
+        parsed = [a for c in self.cases() for a in self.parsed(self.adapter.parse(c['event'], c['payload']))]
         if self.entry.capabilities.subagent_identity_in_hooks:
             subs = [a for a in parsed if a.agent and a.kind in ('edit', 'shell', 'mcp')]
             self.assertTrue(subs, 'a host with subagent identity must record a subagent tool call')
@@ -235,6 +249,23 @@ class HostConformance(object):
         self.assertEqual(ask[:2], (want, 'owner'), 'ask on a host without it is deny (kitlib.host.degrade)')
         if want == 'deny':
             self.assertEqual(ask[2], deny[2], 'a lowered ask exits as a deny does')
+
+    def test_a_several_target_call_is_denied_when_any_target_is(self):
+        multi = [c for c in self.fixtures['cases'] if 'actions' in c]
+        if not multi:
+            return                              # every call this host makes has one target
+        for c in multi:
+            want = self.expected(c)
+            with self.subTest(case=c['name']):
+                seen = []
+
+                def decide(action, ctx=None, environ=None, profile=None, last=want[-1]):
+                    seen.append(action)
+                    return Decision('deny', 'r', 'no') if action == last else Decision('allow')
+                self.assertEqual(self.hook(c['event'], c['payload'], decide)[:2], ('deny', 'no'))
+                self.assertEqual(seen, want, 'each target is judged, in order')
+                self.assertEqual(self.hook(c['event'], c['payload'], lambda *a, **k: Decision('allow'))[:2],
+                                 ('allow', None))
 
     def test_hookmain_fails_closed_to_the_hosts_deny(self):
         case = self.tool_payload()
@@ -411,7 +442,7 @@ class HostConformance(object):
                     if n:
                         counts[os.path.relpath(path, self.KIT_ROOT).replace(os.sep, '/')] = n
         others = ['hosts/' + n for n in os.listdir(os.path.join(self.KIT_ROOT, 'hosts'))
-                  if n != self.HOST and os.path.isdir(os.path.join(self.KIT_ROOT, 'hosts', n))]
+                  if n not in (self.HOST, '__pycache__') and os.path.isdir(os.path.join(self.KIT_ROOT, 'hosts', n))]
         for folder in TEXT_FOLDERS + tuple(others):
             for path in walk(folder):
                 with open(path, 'rb') as f:

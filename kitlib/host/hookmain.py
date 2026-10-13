@@ -3,15 +3,19 @@
 A host's hook entry is a few lines: put the kit on sys.path, build its adapter, call run(). What
 every host's hook needs besides its own parse and render lives here once:
 
-  run(adapter, event_name, stdin, stdout, environ, entry, deadline)
+  run(adapter, event_name, stdin, stdout, environ, entry, deadline, started)
         the hook: stdin's JSON -> adapter.parse -> kitlib.guard.decide -> degrade -> adapter.render
         -> stdout; returns the exit code render gives. Fails closed: any exception on the way (a
         kitlib.guard that will not import, a payload parse refuses, a rule that raises) is a deny,
         rule guard-error, naming the error and the command that reproduces it, rendered by the
         adapter like any other. An error writing the answer is raised to the entry, which exits
         with the host's blocking code (2 on Claude Code), since there is nothing left to say it with.
-        `deadline` (seconds; None: none) bounds decide: a guard still deciding then is a deny, rule
-        guard-timeout, so a host that gives up on a slow hook never reads silence as an allow.
+        `deadline` (seconds; None: none) bounds decide, every Action of the call together: a guard
+        still deciding then is a deny, rule guard-timeout, so a host that gives up on a slow hook
+        never reads silence as an allow. `started` (a time.monotonic() reading; None: now) is when
+        that budget began, for an entry whose own work before run (a boot) counts against it; the
+        timeout reason names the whole budget. On a host whose hooks carry no subagent identity, a call
+        in a marked session is judged as an agent of its mark's role (unidentified()).
   failure(e, role, entry)       that guard-error Decision
   command_line(script, executable)
         {"command", "args"} that starts `script` with no console window: the one place a hook
@@ -27,16 +31,23 @@ every host's hook needs besides its own parse and render lives here once:
         a settings.json hooks entry in exec form (no shell). Claude's --settings-entry prints it,
         and kitlib.machinesetup installs what that prints.
 
-The adapter is kitlib.host.HostAdapter; run() also reads two optional attributes:
-`capabilities` (HostCapabilities: a verdict the host cannot show is lowered by kitlib.host.degrade)
-and `agent(payload)` (the subagent a payload names, read even when parse refuses it, so a
-guard-error deny still carries the right role tag). Only the standard library and kitlib.host are
-imported at the top: the guard is imported inside run(), so its failure to import is a deny too.
+The adapter is kitlib.host.HostAdapter. Its parse may return one Action or a tuple of them, for a
+host whose one tool call acts on several targets (one patch that adds, deletes and renames files):
+each is judged, and the first deny decides, else the first ask, else allow. An empty tuple is
+refused (fail closed). run() also reads three optional attributes:
+`capabilities` (HostCapabilities: a verdict the host cannot show is lowered by kitlib.host.degrade),
+`agent(payload)` (the subagent a payload names, read even when parse refuses it, so a guard-error
+deny still carries the right role tag) and `screen(action, environ)` (the host's own policy, a
+Decision or None, judged before kitlib.guard.decide for each Action; a deny or an ask from it
+stands without the guard). Only the standard library and kitlib.host are imported at the top: the
+guard is imported inside run(), so its failure to import is a deny too.
 """
+import dataclasses
 import json
 import os
 import sys
 import threading
+import time
 
 from kitlib.host import Decision, degrade
 
@@ -55,6 +66,8 @@ def failure(e, role, entry):
 
 
 def _role(adapter, payload, action):
+    if isinstance(action, tuple):
+        action = action[0] if action else None
     agent = action.agent if action is not None else None
     if action is None and hasattr(adapter, 'agent'):
         try:
@@ -84,15 +97,64 @@ def _decide(guard, action, environ, profile, deadline):
     return box['d']
 
 
-def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=None):
+# The identity a host without subagent identity in its hooks gives a marked session's call
+# (unidentified): the guard then holds it as an agent of its mark's role, never as the owner's or
+# a lead's own main session, since a child there runs under its parent's mark.
+UNIDENTIFIED = 'unidentified'
+JUDGED_AS_AGENT = ('edit', 'shell', 'mcp')
+
+
+def unidentified(adapter, action, environ):
+    """`action` as the guard must judge it on `adapter`'s host. A host whose hooks carry no
+    subagent identity (HostCapabilities.subagent_identity_in_hooks false) cannot tell a marked
+    session from a child running under its mark, so an edit, shell or MCP call in a session the
+    launcher marked (kitlib.sessionmark) is judged as an agent of the mark's role: agent
+    UNIDENTIFIED, agent_role the mark. The owner's unmarked session, a host with identity, and an
+    Action that already names its agent are unchanged."""
+    caps = getattr(adapter, 'capabilities', None)
+    if caps is None or caps.subagent_identity_in_hooks or action.agent or action.kind not in JUDGED_AS_AGENT:
+        return action
+    from kitlib import sessionmark
+    mark = sessionmark.mark(environ)
+    if mark is None:
+        return action
+    return dataclasses.replace(action, agent=UNIDENTIFIED, agent_role=mark)
+
+
+def _judge(adapter, guard, actions, environ, deadline, started=None):
+    """The Decision on every Action of one call: the host's screen, then the guard, for each; the
+    first deny decides, else the first ask, else allow. `deadline` (seconds; None: none) is the
+    budget for the whole call, every Action's guard together. None when the guard was still
+    deciding when it ran out. `started`: run's."""
+    screen = getattr(adapter, 'screen', None)
+    end = None if deadline is None else (time.monotonic() if started is None else started) + deadline
+    found = []
+    for action in actions:
+        action = unidentified(adapter, action, environ)
+        d = screen(action, environ) if screen is not None else None
+        if d is None or d.verdict == 'allow':
+            left = None if end is None else max(0.0, end - time.monotonic())
+            d = _decide(guard, action, environ, lambda: adapter.profile, left)
+            if d is None:
+                return None
+        if d.verdict == 'deny':
+            return d
+        found.append(d)
+    return next((d for d in found if d.verdict == 'ask'), found[0])
+
+
+def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=None, started=None):
     environ = os.environ if environ is None else environ
     entry = (entry or sys.argv[0] or 'hook').replace(os.sep, '/')
     payload = action = None
     try:
         payload = json.loads(stdin.read() or '{}')
         action = adapter.parse(event_name, payload)
+        actions = action if isinstance(action, tuple) else (action,)
+        if not actions:
+            raise ValueError('the payload parsed into no action')
         from kitlib import guard
-        decision = _decide(guard, action, environ, lambda: adapter.profile, deadline)
+        decision = _judge(adapter, guard, actions, environ, deadline, started)
         if decision is None:                    # still deciding at the deadline
             role = _role(adapter, payload, action)
             decision = Decision('deny', TIMEOUT, 'The kit guard did not decide within %s s, so it cannot clear '

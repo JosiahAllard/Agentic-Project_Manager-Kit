@@ -164,8 +164,10 @@ def load(root):
 
 
 def render(root, renderers, content=None):
-    """{repo-relative posix path: bytes} of every file the renderers write; two renderers writing
-    one path is a ContentError."""
+    """{repo-relative posix path: bytes} of every file the renderers write: render(content), the
+    manifests(kit, content) of a renderer with them, and the vendored(root) copies of kit files a
+    renderer's plugin ships (read from `root`, so a copy that drifts from its source is drift); two
+    renderers writing one path is a ContentError."""
     content = load(root) if content is None else content
     out = {}
     kit = None
@@ -174,6 +176,8 @@ def render(root, renderers, content=None):
         if hasattr(r, 'manifests'):
             kit = load_kit(root) if kit is None else kit
             files.update(r.manifests(kit, content))
+        if hasattr(r, 'vendored'):                  # kit files the host's plugin ships a copy of
+            files.update(r.vendored(root))
         for path, data in files.items():
             if path in out:
                 raise ContentError('%s: written by two hosts' % path)

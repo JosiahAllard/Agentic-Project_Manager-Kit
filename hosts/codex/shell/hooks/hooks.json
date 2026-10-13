@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pythonw \"${PLUGIN_ROOT}/hooks/run.py\" SessionStart",
+            "timeout": 10,
+            "statusMessage": "Loading the PM kit header"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pythonw \"${PLUGIN_ROOT}/hooks/run.py\" PostCompact",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pythonw \"${PLUGIN_ROOT}/hooks/run.py\" SubagentStart",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pythonw \"${PLUGIN_ROOT}/hooks/run.py\" PreToolUse",
+            "timeout": 10,
+            "statusMessage": "Checking the PM kit guard"
+          }
+        ]
+      }
+    ]
+  }
+}
