@@ -540,6 +540,24 @@ class Follow(QueueCase):
         self.assertEqual(self.main_now(), out.merge)
         self.assertEqual(self.remote_main(), out.merge)
 
+    def test_head_switched_off_main_before_the_turn_is_refused_not_merged(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        take = land.Lander.take
+
+        def switch_then_take(lander):       # after preconditions() checked HEAD, before the lock
+            self.repo.git('switch', '-q', '-c', 'side')
+            return take(lander)
+        with mock.patch.object(land.Lander, 'take', switch_then_take):
+            out = self.lander(BRANCH, None, tip).run()
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertIn("the main checkout is on side, not main, at the landing's turn", out.lines[0])
+        self.assertIn('nothing was merged', out.lines[0])
+        self.assertEqual(self.repo.git('rev-parse', 'side'), self.main)
+        self.assertEqual(self.main_now(), self.main)
+        self.assertEqual(self.remote_main(), self.main)
+        self.assertIsNone(self.lock().read())
+        self.assertEqual(self.entries(), [])
+
     def test_a_main_behind_that_is_not_clean_is_not_fast_forwarded(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
         moved = self.pushed_elsewhere('o.py')

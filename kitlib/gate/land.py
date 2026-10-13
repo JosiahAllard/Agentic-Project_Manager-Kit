@@ -415,6 +415,12 @@ class Lander(object):
         why = self.fetch()
         if why:
             return why
+        # Again under the lock: the turn may have come long after preconditions(), and the merge
+        # goes onto HEAD.
+        current, why = refs.current_branch(self.root)
+        if current != self.cfg.main_branch:
+            return 'the main checkout is on %s, not %s, at the landing\'s turn' % (
+                current or why or '(detached HEAD)', self.cfg.main_branch)
         why = self.onto_origin()
         if why:
             return why
