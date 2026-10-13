@@ -55,10 +55,14 @@ def tool_of(payload, field):
 
 def skips(hook, payload, environ):
     """True for a call boot needs no kit for: a tool hook.guarded_tools does not name (an entry
-    ending in * is a prefix), in a session hook.fast_path lets through."""
+    ending in * is a prefix), in a session hook.fast_path lets through. Hook data of the wrong shape
+    (guarded_tools not a non-empty list of names) skips nothing: every call goes to the guard."""
+    guarded = hook['guarded_tools']
+    if not isinstance(guarded, (list, tuple)) or not guarded or not all(isinstance(g, str) and g for g in guarded):
+        return False
     tool = tool_of(payload, hook['tool_field'])
     if not isinstance(tool, str) or any(tool.startswith(g[:-1]) if g.endswith('*') else tool == g
-                                        for g in hook['guarded_tools']):
+                                        for g in guarded):
         return False
     return hook['fast_path'] == 'all' or hook['fast_path'] == 'unmarked' and not (environ.get(MARK) or '').strip()
 
@@ -109,20 +113,30 @@ def starts(argv, hosts=HOSTS):
         return False
 
 
+def setup_hint():
+    """For a hook command line this entry cannot use (a settings entry written by hand or before
+    plan step 14): the machine setup that rewrites it, when this file is in a kit checkout."""
+    tool = os.path.join(os.path.dirname(HERE), 'tools', 'machine_setup.py')
+    if not os.path.isfile(tool):
+        return ''
+    return ('; the hook command line may predate this kit: re-run python "%s" (dry run, then --apply; '
+            'docs/machine-setup.md)' % tool.replace(os.sep, '/'))
+
+
 def run(argv, stdin, stdout, stderr, environ=os.environ, hosts=HOSTS):
     """main(), failing as the event must: a start event says why in plain text (exit 0), any other
-    exits BLOCK with the reason on stderr."""
+    exits BLOCK with the reason on stderr. A SystemExit on the way is a failure too, never an exit
+    code a tool call could read as an allow."""
     try:
         return main(argv, stdin, stdout, environ, hosts)
-    except SystemExit:
-        raise
     except BaseException as e:                         # nothing written: block, or say why
         try:
             if starts(argv, hosts):
                 stdout.write('PM kit%s: the kit did not load: %s: %s\n'
                              % (' (%s)' % argv[2] if len(argv) > 2 else '', type(e).__name__, e))
                 return 0
-            stderr.write('kit hook: %s: %s\n' % (type(e).__name__, e))
+            hint = setup_hint() if isinstance(e, (ValueError, KeyError)) else ''
+            stderr.write('kit hook: %s: %s%s\n' % (type(e).__name__, e, hint))
         except BaseException:
             pass
         return 0 if starts(argv, hosts) else BLOCK

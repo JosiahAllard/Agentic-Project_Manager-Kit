@@ -574,7 +574,10 @@ class ExecFormAndPlugin(Base):
         other = [{'type': 'command', 'command': 'node %s' % self.kit_entry('SessionStart', 'coordinator')},
                  {'type': 'command', 'command': 'python %s' % fwd(os.path.join(self.kit, 'tools', 'machine_lock.py'))},
                  {'type': 'command', 'command': 'python %s' % fwd(os.path.join(self.kit, 'boot', 'missing.py'))},
-                 {'type': 'command', 'command': 'pythonw', 'args': self.entry('SessionStart', 'pm')}]
+                 {'type': 'command', 'command': 'pythonw', 'args': self.entry('SessionStart', 'pm')},
+                 # the shell's own redirect, and more words than the entry takes: kept in shell form
+                 {'type': 'command', 'command': 'python %s > C:/log.txt' % self.kit_entry('SessionStart', 'pm')},
+                 {'type': 'command', 'command': 'python %s a' % self.kit_entry('SessionStart', 'pm')}]
         doc = self.hook_doc(*other)
         doc['hooks']['Stop'] = [{'hooks': [
             {'type': 'command', 'command': 'python %s' % self.kit_entry('SessionStart', 'coordinator')}]}]

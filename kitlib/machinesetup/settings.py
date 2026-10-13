@@ -60,6 +60,7 @@ PYTHONS = ('python', 'python.exe', 'pythonw', 'pythonw.exe')
 PLUGIN_MANIFEST = '.claude-plugin/plugin.json'
 PLUGIN_ROOT = re.compile(r'\$\{CLAUDE_PLUGIN_ROOT\}|\$CLAUDE_PLUGIN_ROOT\b')
 TOKEN = re.compile(r'"[^"]*"|\'[^\']*\'|[^\s"\']+')
+WORD = re.compile(r'[A-Za-z0-9_.-]+')        # a word ENTRY takes: a host, an event, a part
 
 
 def survey(plan, d, ctx):
@@ -523,6 +524,8 @@ class _Editor(object):
         interp, script, *words = [t[1:-1] if len(t) > 1 and t[0] in '"\'' and t[-1] == t[0] else t for t in toks]
         if os.path.basename(interp.replace('\\', '/')).lower() not in PYTHONS:
             return
+        if len(words) > 3 or not all(WORD.fullmatch(w) for w in words):
+            return                              # a redirect or a pipe is the shell's: leave it in shell form
         p = expand(script, self.ctx.home)
         if not p or norm(p) != norm(kit_file(self.ctx.kit, ENTRY)) or not os.path.isfile(p):
             return

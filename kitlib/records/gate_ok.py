@@ -1,7 +1,7 @@
 """The gate-OK record: the gate's word that it passed exactly one commit (ARCHITECTURE.md
 "Gate-OK record").
 
-gate.py writes `<git common dir>/kit-gate-ok/<commit>.json` for the commit it passed; guard.py and
+gate.py writes `<git common dir>/kit-gate-ok/<commit>.json` for the commit it passed; the kit guard and
 the pre-push hook read it. The common dir is shared by every checkout of the repository and is
 never tracked. One record per commit; a later pass of the same commit replaces it (atomically:
 a temp file in the same folder, then os.replace).

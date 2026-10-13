@@ -66,7 +66,7 @@ def _quiet(_line):
 
 def gate_config(cfg):
     """The value a gate-OK record's `gate_config` hashes: `.kit.json` "gate" over its defaults.
-    guard.py and the pre-push hook verify a record with this same value."""
+    The kit guard and the pre-push hook verify a record with this same value."""
     return cfg.section('gate')
 
 

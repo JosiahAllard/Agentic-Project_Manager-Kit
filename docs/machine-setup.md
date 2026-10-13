@@ -54,7 +54,7 @@ A path through `<config>/tools/<link>` stays as written: the links step points i
 
 When no PreToolUse hook names `<kit>/boot/hook.py`, the entry `boot/hook.py claude --settings-entry` prints is appended (docs/guard.md). The host, `claude`, is hosts.json's default host, whose account settings these are.
 
-A SessionStart hook in shell form whose command is a Python interpreter (`python`, `python.exe`, `pythonw`, `pythonw.exe`, by base name), then `<kit>/boot/hook.py` and its words, is written in exec form: `command` becomes the interpreter of the guard entry `boot/hook.py claude --settings-entry` prints, and `args` holds the script with forward slashes, then its words. Exec form starts no shell. Any other command, a hook that already has `args`, and every other event are left as they are.
+A SessionStart hook in shell form whose command is a Python interpreter (`python`, `python.exe`, `pythonw`, `pythonw.exe`, by base name), then `<kit>/boot/hook.py` and its words (at most three plain words; a redirect or a pipe keeps the hook in shell form), is written in exec form: `command` becomes the interpreter of the guard entry `boot/hook.py claude --settings-entry` prints, and `args` holds the script with forward slashes, then its words. Exec form starts no shell. Any other command, a hook that already has `args`, and every other event are left as they are.
 
 When the kit's `.claude-plugin/plugin.json` names a `hooks` file, a settings hook that runs the same script with the same words as one of that file's hooks, for the same event, is noted (`${CLAUDE_PLUGIN_ROOT}` read as the kit): once the plugin is enabled the hook runs twice, so the settings entry is removed in the same step as the plugin install (docs/install.md "Plugin install"). The note changes nothing.
 
@@ -89,9 +89,16 @@ entry, `<kit>/boot/hook.py <host> <event> [<part>]`, and those scripts are gone;
   (`links.MOVED_SKILLS_DIR`; switch mode only, as the links step is).
 - **No stubs.** Plan decision 28 removed the `<kit>/claude/hooks/` stubs with step 14. An account
   whose settings still name a retired script runs no guard script at all, and Claude Code then
-  blocks every guarded tool call, so the owner re-runs machine setup once on each machine (dry run,
-  then `--apply`, in its mode: `--old-kit DIR` or `--fresh --pm-settings FILE`; go-live.md
-  "Switches").
+  blocks every guarded tool call (its message is Python's `can't open file '<kit>/.../guard.py'`),
+  so the owner re-runs machine setup once on each machine (dry run, then `--apply`, in its mode:
+  `--old-kit DIR` or `--fresh --pm-settings FILE`; go-live.md "Switches"). It runs from a terminal,
+  not from a Claude session, whose Bash calls are blocked until then, and only after the kit
+  checkout the settings name has `boot/hook.py` (before that it refuses). A Claude session reads its
+  hooks when it starts, so the sessions open at the time are restarted. A hook command line the entry
+  itself cannot use (no host, a host or event it does not know) is blocked with a message naming
+  `tools/machine_setup.py`. A PM repo's own settings file is re-pointed only with `--fresh
+  --pm-settings FILE`; under `--old-kit`, one that still runs `pm_session_start.py` is edited by hand
+  to the hook in docs/pm-start.md (a stale one drops the checklist and blocks nothing).
 
 ## Extras
 

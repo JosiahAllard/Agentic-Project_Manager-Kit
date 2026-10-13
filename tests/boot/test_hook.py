@@ -54,6 +54,12 @@ class BeforeBoot(Scratch):
             with self.subTest(payload=payload):
                 self.assertFalse(H.skips(HOOK, payload, {}))
 
+    def test_hook_data_of_the_wrong_shape_skips_nothing(self):
+        read = {'call': {'name': 'read'}}
+        for tools in ([], 'edit', ['edit', 3], ['edit', ''], None, {'edit': 1}):
+            with self.subTest(tools=tools):
+                self.assertFalse(H.skips(dict(HOOK, guarded_tools=tools), read, {}))
+
     def test_fast_path_unmarked_skips_only_an_unmarked_session(self):
         hook = dict(HOOK, fast_path='unmarked')
         read = {'call': {'name': 'read'}}
@@ -95,6 +101,27 @@ class Failures(Scratch):
         code, out, err = self.run_hook(['y', 'Pre'])
         self.assertEqual((code, out), (H.BLOCK, ''))
         self.assertIn("no host 'y'", err)
+
+    def test_a_command_line_the_entry_cannot_use_names_the_machine_setup(self):
+        for argv in (['x'], ['y', 'Pre']):
+            with self.subTest(argv=argv):
+                err = self.run_hook(argv)[2]
+                self.assertIn('re-run python "%s/tools/machine_setup.py"' % str(ROOT).replace(os.sep, '/'), err)
+
+    def test_unreadable_hook_data_blocks_every_call(self):
+        out, err = io.StringIO(), io.StringIO()
+        missing = os.path.join(self.dir, 'none.json')
+        self.assertEqual(H.run(['x', 'Pre'], io.StringIO('{"call": {"name": "read"}}'), out, err, {}, missing),
+                         H.BLOCK)
+        bad = self.hosts({'x': dict(ENTRY, hook=dict(HOOK, guarded_tools='edit'))})
+        with mock.patch.dict(os.environ, {'PM_KIT_ROOT': 'relative'}):
+            self.assertEqual(H.run(['x', 'Pre'], io.StringIO('{"call": {"name": "read"}}'), out, err, {}, bad),
+                             H.BLOCK, 'no skip: the kit boots, and here fails')
+
+    def test_a_system_exit_on_the_way_blocks_a_tool_call(self):
+        with mock.patch.object(H, 'main', side_effect=SystemExit(0)):
+            self.assertEqual(self.run_hook(['x', 'Pre'], '{"call": {"name": "edit"}}')[0], H.BLOCK)
+            self.assertEqual(self.run_hook(['x', 'Start'])[0], 0)
 
     def test_a_skipped_call_never_boots(self):
         self.assertEqual(self.run_hook(['x', 'Pre'], '{"call": {"name": "read"}}'), (0, '', ''))
