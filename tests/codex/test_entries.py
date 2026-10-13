@@ -56,7 +56,7 @@ class Entries(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout), (0, ''), r.stderr)
 
     def test_a_bad_payload_is_a_deny(self):
-        for text in ('{bad', self.tool('Bash', {'command': 'pwd'})):
+        for text in ('{bad', '[]', self.tool('Write', {})):
             r = self.run_entry(self.cached, 'hooks/run.py', text, ('PreToolUse',))
             self.assertEqual(r.returncode, 0, r.stderr)
             out = json.loads(r.stdout)['hookSpecificOutput']
@@ -65,11 +65,29 @@ class Entries(unittest.TestCase):
 
     def test_a_kit_that_will_not_boot_blocks_by_exit_code(self):
         self.env['PM_KIT_ROOT'] = str(self.base / 'missing')
-        r = self.run_entry(self.cached, 'hooks/run.py', self.tool('Read', {}), ('PreToolUse',))
+        r = self.run_entry(self.cached, 'hooks/run.py', self.tool('Write', {'file_path': 'a'}), ('PreToolUse',))
         self.assertEqual((r.returncode, r.stdout), (2, ''))
+        fast = self.run_entry(self.cached, 'hooks/run.py', self.tool('Read', {}), ('PreToolUse',))
+        self.assertEqual((fast.returncode, fast.stdout), (0, ''), 'the owner\'s read never boots the kit')
+        self.env['PM_KIT_ROLE'] = 'worker'
+        marked = self.run_entry(self.cached, 'hooks/run.py', self.tool('Read', {}), ('PreToolUse',))
+        self.assertEqual(marked.returncode, 2, 'a marked session boots the kit for every call')
         s = self.run_entry(self.cached, 'hooks/run.py', '{}', ('SessionStart',))
         self.assertEqual(s.returncode, 0, s.stderr)
         self.assertIn('the kit did not load', s.stdout)
+
+    def test_a_copied_plugin_boots_with_its_own_check_never_a_stray_one_above_it(self):
+        plugin = self.base / 'x' / 'y' / 'shell'          # four folders below base, as in a kit
+        shutil.copytree(SHELL, plugin, ignore=shutil.ignore_patterns('__pycache__'))
+        (self.base / 'boot').mkdir()
+        (self.base / 'boot' / 'kitboot.py').write_text('def boot(**k):\n    raise SystemExit(0)\n', encoding='utf-8')
+        self.assertEqual((plugin / 'boot' / 'kitboot.py').read_bytes(), (ROOT / 'boot' / 'kitboot.py').read_bytes())
+        payload = self.tool('Write', {'file_path': 'a'})
+        bound = self.run_entry(plugin, 'hooks/run.py', payload, ('PreToolUse',))
+        self.assertEqual(bound.returncode, 0, bound.stderr)          # PM_KIT_ROOT names the kit
+        self.env.pop('PM_KIT_ROOT')
+        unbound = self.run_entry(plugin, 'hooks/run.py', payload, ('PreToolUse',))
+        self.assertEqual((unbound.returncode, unbound.stdout), (2, ''), 'no kit.json beside it: no stray boot/')
 
     def test_a_start_event_adds_the_kit_header(self):
         for event in ('SessionStart', 'PostCompact', 'SubagentStart'):

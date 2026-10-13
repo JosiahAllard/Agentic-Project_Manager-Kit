@@ -1,5 +1,5 @@
 """Run the private native kit-command/child-role canary without model inference.
-A thin entry of the Codex shell (hosts/codex/README.md); it boots the kit first (boot/kitboot.py).
+A thin entry of the Codex shell (hosts/codex/README.md); it boots the kit first through the plugin's copy of boot/kitboot.py.
 """
 import argparse
 import json
@@ -8,10 +8,11 @@ from pathlib import Path
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BOOT = (os.path.join(HERE, '..', '..', '..', '..', 'boot'), os.path.join(os.environ.get('PM_KIT_ROOT') or HERE, 'boot'))
-sys.path.insert(0, next((b for b in BOOT if os.path.isfile(os.path.join(b, 'kitboot.py'))), BOOT[1]))
+SRC = os.path.join(HERE, '..', '..', '..', '..')                      # the kit checkout, when the plugin sits in one
+sys.path.insert(0, os.path.join(HERE, '..', 'boot'))                 # the plugin's own copy of boot/kitboot.py
 import kitboot                                                       # noqa: E402
-kitboot.boot()                                                       # the kit, checked, before kitlib
+kitboot.boot(here=os.path.join(SRC, 'boot', 'kitboot.py')            # the kit, checked, before kitlib
+             if os.path.isfile(os.path.join(SRC, 'kit.json')) else None)
 
 
 def main():

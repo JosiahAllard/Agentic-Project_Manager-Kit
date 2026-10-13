@@ -113,6 +113,24 @@ class Manifests(unittest.TestCase):
                 r.hooks()
 
 
+class Vendored(unittest.TestCase):
+    def test_the_plugin_ships_the_kits_boot_check_byte_for_byte(self):
+        files = cc.renderer().vendored(ROOT)
+        with open(os.path.join(ROOT, 'boot', 'kitboot.py'), 'rb') as f:
+            self.assertEqual(files, {'hosts/codex/shell/boot/kitboot.py': f.read()})
+        self.assertIn('hosts/codex/shell/boot/kitboot.py', kcontent.render(ROOT, [cc.renderer()]))
+
+    def test_the_entrys_fast_path_is_only_the_policys_read_and_bookkeeping_tools(self):
+        import importlib.util
+        from hosts.codex.adapter import policy
+        spec = importlib.util.spec_from_file_location(
+            'codex_run', os.path.join(ROOT, 'hosts', 'codex', 'shell', 'hooks', 'run.py'))
+        run = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(run)
+        self.assertTrue(run.FAST <= policy.ALLOWED_TOOLS - {'write_stdin'})
+        self.assertLess(run.DEADLINE, cc.HOOK_TIMEOUT, 'inside the timeout hooks.json gives Codex')
+
+
 import unittest.mock  # noqa: E402
 
 if __name__ == '__main__':

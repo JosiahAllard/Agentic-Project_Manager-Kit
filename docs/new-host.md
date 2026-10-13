@@ -84,6 +84,9 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   `{{model:<tier>}}` from `tier_models()` and `{{tool:<capability>}}` from its capability map, passed
   to `kitlib.host.content.substitute` (`models=`, `tools=`).
 - `command_host()`, `launcher()` and `plugin_installer()`: `None` until the host has them.
+- The renderer's optional `vendored(root)`: `{path: bytes}` of kit files the host's plugin ships a
+  copy of, read from the kit checkout `root` and drift-checked with the rest. A plugin root that is
+  not the whole kit ships `boot/kitboot.py` this way (Codex).
 
 ## 3. The shell: `hosts/<name>/shell/`
 

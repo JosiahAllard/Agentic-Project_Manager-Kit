@@ -98,8 +98,11 @@ as a TOML multi-line string. A Codex agent file has no tool list, so `capabiliti
 rendered. It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders. Its
 manifests are `hosts/codex/shell/plugin.json` (the name and version, the hooks file),
 `hosts/codex/shell/mcp.json` (the read-only lock server) and `hosts/codex/shell/hooks/hooks.json`
-(every declared hook event running `hooks/run.py <event>`, as one command string). Status:
-hosts/codex/README.md.
+(every declared hook event running `hooks/run.py <event>`, as one command string). Its
+`vendored(root)` ships a byte copy of `boot/kitboot.py` as `hosts/codex/shell/boot/kitboot.py`: the
+Codex plugin root is `hosts/codex/shell`, so a copied plugin carries the check that verifies the kit
+it binds; `--check` fails when the copy drifts. Claude needs none: its plugin root is the whole kit,
+`boot/` included. Status: hosts/codex/README.md.
 
 ## Manifests
 

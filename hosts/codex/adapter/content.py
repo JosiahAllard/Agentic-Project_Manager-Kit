@@ -18,10 +18,13 @@ manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a
 - `hosts/codex/shell/hooks/hooks.json`: every hosts.json hook event, each running the one entry
   hooks/run.py with the event's name. Codex reads a hook's command as one string, so it is
   kitlib.host.hookmain.manifest_command's command line joined, the script quoted.
-The plugin root is hosts/codex/shell (${PLUGIN_ROOT}); a plugin copied out of the kit finds the kit
-through PM_KIT_ROOT (boot/kitboot.py).
+vendored(root) copies the kit's boot check, boot/kitboot.py, to `hosts/codex/shell/boot/kitboot.py`
+byte for byte: the plugin root is hosts/codex/shell (${PLUGIN_ROOT}), and a plugin copied out of the
+kit must carry the check that verifies the kit it binds through PM_KIT_ROOT, as the Codex branch's
+plugin carried release_binding.py. render_content --check fails when the copy drifts.
 """
 import json
+import os
 
 from kitlib import agentname
 from kitlib.host import hookmain, registry
@@ -34,6 +37,8 @@ SKILLS_REL = SHELL_REL + '/skills'
 MANIFEST_REL = SHELL_REL + '/plugin.json'
 MCP_REL = SHELL_REL + '/mcp.json'
 HOOKS_REL = SHELL_REL + '/hooks/hooks.json'
+# Kit files the plugin ships a copy of: {copy: source}, both repo-relative.
+VENDORED = {SHELL_REL + '/boot/kitboot.py': 'boot/kitboot.py'}
 ENTRY = 'hooks/run.py'
 PLUGIN_ROOT = '${PLUGIN_ROOT}'
 PLUGIN_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json'
@@ -219,6 +224,14 @@ class CodexContent:
                 hook['statusMessage'] = status
             events[event] = [{'matcher': matcher, 'hooks': [hook]}]
         return {'hooks': events}
+
+    def vendored(self, root):
+        """{copy: bytes} of VENDORED, read from the kit checkout `root`."""
+        out = {}
+        for copy, source in VENDORED.items():
+            with open(os.path.join(root, *source.split('/')), 'rb') as f:
+                out[copy] = f.read()
+        return out
 
     def manifests(self, kit, content, registry_path=None):
         """{path: bytes} of plugin.json, mcp.json and hooks.json for `kit` ({"name", "version"})."""

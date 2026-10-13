@@ -292,8 +292,8 @@ class TempTreeTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.root, True)
-        for rel in ('content', '.claude-plugin', os.path.join('hosts', 'claude', 'shell', 'agents'),
-                    os.path.join('hosts', 'claude', 'shell', 'skills')):
+        for rel in ('content', '.claude-plugin', 'boot', os.path.join('hosts', 'claude', 'shell', 'agents'),
+                    os.path.join('hosts', 'claude', 'shell', 'skills')):      # boot/: a host's plugin ships a copy
             shutil.copytree(os.path.join(KIT_ROOT, rel), os.path.join(self.root, rel))
         for rel in ('kit.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json')):
             write(self.path(rel), read(os.path.join(KIT_ROOT, rel)))
