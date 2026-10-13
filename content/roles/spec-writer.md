@@ -16,7 +16,7 @@ disagree - that is how specs find real bugs. The caller may override your model
 upward for an unusually hard design; do not ask for it.
 
 Read `{{profile_path}}` sections **Branches and worktrees**, **Build and test** (the docs gate), **Records**;
-each names a topic, so `python tools/doc_index.py --find <topic>` and read the one section it
+each names a topic, so `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` and read the one section it
 names. Nothing else.
 No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
 {{instructions_file}} (or equivalent) where they exist.
@@ -96,10 +96,10 @@ marker, if the profile names one.
 Code findings first. Then the hash, sections written, tasks added with sizes, and
 open items with your proposed defaults.
 
-## Repo tools
+## Kit tools
 
-If the repo has them: start with `python tools/preflight.py`.
-Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
-`docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
+Start with `python <kit>/tools/preflight.py -C <worktree>`.
+Find what you need with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools` for tools); never read
+`docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
 Use the {{tool:search}} and {{tool:read}} tools, not shell grep, cat or sed. No tool fits: write your own script in your
 scratch folder, never in the repo.

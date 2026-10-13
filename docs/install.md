@@ -2,8 +2,12 @@
 
 Held for the joint review: no repository runs the kit yet. The installer and the steps below were run end to end on a scratch repository (a local bare origin, `-Stack python`): a green `gate.py`, a worktree that left main clean, and a `land.py` landing.
 
-A repository never holds a copy of the kit: only `.kit.json` (its settings) and stubs, small
-files in its tools folder that run the kit's tools.
+A repository never holds a copy of the kit, and by default no stubs either: only `.kit.json` (its
+settings, optional). Skills, roles and the default profile run every kit tool from the kit's
+folder, as `python <kit>/tools/<name>.py -C <worktree>` (decision 21 in docs/multi-host-plan.md
+section 7; the kit header names `<kit>`, docs/content.md "Kit header"). Stubs, small files in the
+repository's tools folder that run the kit's tools, are opt-in: `-Stubs` below, or
+`kit_stubs.py write` ("Stubs: tools/kit_stubs.py").
 
 ## Steps
 
@@ -34,18 +38,19 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 
 1. **A new repository** must be a git checkout with an `origin` remote and a first commit:
    `git init -b main`, `git remote add origin <url>`, a commit, `git push -u origin main`.
-   `tools/new_worktree.py` fetches `origin` (it refuses if the fetch fails), and `tools/preflight.py` does only with `--fetch`
+   `<kit>/tools/new_worktree.py` fetches `origin` (it refuses if the fetch fails), and `<kit>/tools/preflight.py` does only with `--fetch`
    (it never refuses for a missing remote); the installer warns, and prints the commands, when
    it finds none.
 2. **Dry run** `installer/new-repo.ps1` from the kit checkout:
 
    ```
-   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner> -AgentEmail <agents> [-MainBranch main] [-RepoName <name>] [-Stack python]
+   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner> -AgentEmail <agents> [-MainBranch main] [-RepoName <name>] [-Stack python] [-Stubs]
    ```
 
    It prints what it would write: `.kit.json` (`"repo".main_branch`, `"repo".name`, `"owner".email`,
-   `"owner".agent_emails`), the stubs (by `kit_stubs.py write -C <target>`), `.gitignore` and
-   `.gitattributes`, a starter `docs/INDEX.md`, and with `-Stack` the stack's `tools/gate.json`.
+   `"owner".agent_emails`), `.gitignore` and `.gitattributes`, a starter `docs/INDEX.md`, with
+   `-Stack` the stack's `tools/gate.json`, and with `-Stubs` only the stubs (by
+   `kit_stubs.py write -C <target>`; without it the dry run says `stubs: none`).
    `"repo".name` is the repository's rulings-ledger column (docs/backlog.md "Owner gates"): `-RepoName`,
    else the target folder's name lower-cased; either must match `[a-z0-9][a-z0-9-]*` or the script
    refuses (exit 2). The target must be a checkout's top level. Both emails are required and must differ, or an
@@ -81,9 +86,9 @@ down the longer the machine stays up: docs/windows-token-leak.md.
      (docs/kit-json.md).
 3. **Apply:** run it again with `-Apply`, then commit what it wrote. `.kit.json` and
    `tools/gate.json` are owner-only paths: commit them under the owner's identity, the rest
-   (stubs, `.gitignore`, `.gitattributes`, `docs/INDEX.md`) as usual. It refuses before writing
-   anything when `.kit.json` or `tools/gate.json` exists, or when a file that is not a stub sits
-   where a stub goes. A write that fails (a read-only file, a full disk) stops it with
+   (`.gitignore`, `.gitattributes`, `docs/INDEX.md`, and with `-Stubs` the stubs) as usual. It
+   refuses before writing anything when `.kit.json` or `tools/gate.json` exists, or, with
+   `-Stubs`, when a file that is not a stub sits where a stub goes. A write that fails (a read-only file, a full disk) stops it with
    `new-repo: FAILED`, the files already written, and exit 1. Exit codes: 0 done or dry run;
    1 refused or a write failed; 2 usage. Tests:
    `tests/stubs/test_new_repo.py`, against a throwaway repository only.
@@ -106,18 +111,20 @@ down the longer the machine stays up: docs/windows-token-leak.md.
      `-PrivateRemote` is dropped (a drive root is kept), and a `"` in either is a usage error. A repository already installed (its `.kit.json` makes the
      script refuse) runs that command directly.
 4. **An existing repository with its own copies of the tools** skips the installer. It needs a
-   `.kit.json` with the same keys (docs/kit-json.md), then
+   `.kit.json` with the same keys (docs/kit-json.md) when it wants more than the defaults; its
+   own copies are then removed, since agents run the kit's tools from `<kit>`. A repository that
+   wants stubs in their place instead runs
    `python <kit>/tools/kit_stubs.py write -C <repo> --replace`, then a commit.
-5. **Check the stubs:** `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0.
+5. **Stubs only:** `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0.
 6. **Git hooks:** `git -C <repo> config core.hooksPath <kit>/githooks`. The first-use prep does this when no hooks path is set, and it also excludes the worktree folders locally (docs/new-worktree.md "First-use prep"). This installs `pre-push` and `pre-commit`; `pre-commit` is inert unless the repository opts in (docs/ledger.md "Pre-commit check").
 7. **Gate:** with `-Stack` the gate section exists; otherwise the gate detects the stack
    (`source: auto`, docs/gate.md "Auto-detected gate"), or list the repository's checks as
    `gate.steps` in `.kit.json` (docs/kit-json.md; a start per language:
    `templates/stacks/<stack>/tools/gate.json`). Where landers edit the main checkout, also set
-   `roles.lander.edit_main_checkout: true`. `tools/gate.py` books the machine lock itself: do not
+   `roles.lander.edit_main_checkout: true`. `<kit>/tools/gate.py` books the machine lock itself: do not
    wrap it in `machine_lock.py run`: the gate would then run as a nested lock run, booking twice.
 8. **Later:** turn on `repo.push_block` only after the repository has landed once through
-   `tools/land.py` or `gate.py land` (docs/go-live.md "Universal gate").
+   `<kit>/tools/land.py` or `gate.py land` (docs/go-live.md "Universal gate").
 
 ### What the script does not install
 
@@ -136,14 +143,15 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 
 ### Tools without a stub
 
-The stubs cover the tools that act on a repository checkout, named by `-C` or the current
-directory (`kitlib.stubs.SHARED`), including `land.py`, `ledger.py`, `redfirst.py`, `trailers.py`
-and `daily_full.py` (which exits "off" unless `.kit.json` opts in, docs/daily-full.md). Every
-`tools/*.py` command is in exactly one of `SHARED` and `KIT_ONLY` (`kitlib.stubs`). The test
-`Partition` in `tests/stubs/test_kit_stubs.py` fails when a new tool is in neither; the tool's
-author picks the list. The `KIT_ONLY` tools run by the kit's path,
-`python <kit>/tools/<name>.py`, and get no stub, because they act on the machine, the owner's
-files or the kit itself:
+Every kit tool runs by the kit's path, `python <kit>/tools/<name>.py`; one that acts on a
+repository checkout takes `-C <checkout>` (tests/content/test_skill_commands.py holds the skills
+and roles to that). For a repository that opts into stubs, the stubs cover the tools that act on
+a checkout, named by `-C` or the current directory (`kitlib.stubs.SHARED`), including `land.py`,
+`ledger.py`, `redfirst.py`, `trailers.py` and `daily_full.py` (which exits "off" unless
+`.kit.json` opts in, docs/daily-full.md). Every `tools/*.py` command is in exactly one of
+`SHARED` and `KIT_ONLY` (`kitlib.stubs`). The test `Partition` in `tests/stubs/test_kit_stubs.py`
+fails when a new tool is in neither; the tool's author picks the list. The `KIT_ONLY` tools never
+get a stub, because they act on the machine, the owner's files or the kit itself:
 
 - `machine_lock.py`: one lock per machine, so it runs from the machine's lock install, never a
   repository's. `run` needs `--repo <name> --slug <slug>` (and `--kind`); `status` needs nothing.
@@ -162,8 +170,9 @@ files or the kit itself:
 A stub bakes in the kit it was written from, so one written from a kit worktree runs that
 worktree and is stale on main (`check` says `runs the kit at ...`). At session start the
 coordinator's and the PM's checklists print one `stubs (<repo>): N missing/stale: ...` line, with
-the `kit_stubs.py write -C <repo>` command, for a repository whose stubs are not current
-(docs/pm-start.md).
+the `kit_stubs.py write -C <repo>` command, for a repository that uses stubs (its `.kit.json`
+sets `"stubs".tools`, or it holds one) and whose stubs are not current; a repository with none
+gets no line (docs/pm-start.md).
 
 ### Plugin install (local marketplace)
 
@@ -180,9 +189,9 @@ the plugin with `"source": "./"`) is the old way, which `--migrate` replaces. Wh
 place or copies it into its plugin cache is not settled: the plugins reference
 (https://code.claude.com/docs/en/plugins/loading, "In-place and copied plugins") says in place, and
 an install from the checkout was observed copied into the cache (docs/plugin-source.md "Open
-questions"). Either way `${CLAUDE_PLUGIN_ROOT}` holds pushed kit main, not the checkout the stubs
-run: the skills and agents write every kit-only path (the tools above, `kitlib/`, `optional/`, the
-kit's docs) as `<kit>/<path>` (tests/skills checks it), and only stub tools repo-relative; the kit
+questions"). Either way `${CLAUDE_PLUGIN_ROOT}` holds pushed kit main, not the live checkout:
+the skills and agents write every kit path (every tool, `kitlib/`, `optional/`, the kit's docs)
+as `<kit>/<path>` (tests/skills and tests/content/test_skill_commands.py check it); the kit
 header hook tells each session and subagent the folder `<kit>` stands for (docs/content.md "Kit
 header"). Agent and skill text gets no `${CLAUDE_PLUGIN_ROOT}` substitution, so neither uses it.
 Source: https://code.claude.com/docs/en/plugin-marketplaces.
@@ -243,21 +252,25 @@ cmd /c rmdir "$env:USERPROFILE\.claude\agents"
 lock path, and `machine_setup.py --apply` recreates those links. Record KIT-JUNCTIONS-TOOLS-KNOWLEDGE
 retires them.
 
-`tools/backlog.py add` needs at least one `--scope <path>` (`none` for a record that touches no
+`<kit>/tools/backlog.py -C <worktree> add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or
 `--found-on none` when no branch found it) and `--why-not-folded "<reason>"` (docs/backlog.md
 "The fold-in guard").
 
 The rulings ledger is once per machine: set `ledger_path` (and optionally `ledger_repos`) in
-the machine config (docs/kit-json.md "Machine config keys"). The first `tools/ledger.py add` creates the file from
+the machine config (docs/kit-json.md "Machine config keys"). The first `<kit>/tools/ledger.py add` creates the file from
 `templates/common/LEDGER.md` (docs/ledger.md "A new ledger").
 
 ## Stubs: tools/kit_stubs.py
 
 ```
-python tools/kit_stubs.py write [-C DIR] [--tools a,b,...] [--replace] [--dry-run]
-python tools/kit_stubs.py check [-C DIR] [--tools a,b,...]
+python <kit>/tools/kit_stubs.py write [-C DIR] [--tools a,b,...] [--replace] [--dry-run]
+python <kit>/tools/kit_stubs.py check [-C DIR] [--tools a,b,...]
 ```
+
+Opt-in, for a repository that wants committed stubs (the old setup; decision 21 made the default
+none). Nothing in the kit needs them: the skills, roles and the default profile run
+`<kit>/tools/<name>.py -C <worktree>`, which works the same in a repository with stubs.
 
 Logic: `kitlib/stubs/__init__.py`; tests: `tests/stubs/test_kit_stubs.py`,
 `tests/stubs/test_live_root.py`.
@@ -299,6 +312,6 @@ paths must allow it (`machine_paths.allow`, docs/kit-json.md).
   the `PM_KIT`/`DEV_ROOT` kit lookup; library stubs and the import-as-library mode (the shared
   libraries are `kitlib` modules); the warnings those modes needed. The old tool had no tests.
 - new-repo.ps1: copying `kit\tools\**`, `templates\common` and `templates\stacks\<Stack>`
-  wholesale, with placeholder substitution (a repository holds stubs only; `-Stack` installs
+  wholesale, with placeholder substitution (a repository holds no copy of the kit; `-Stack` installs
   only the stack's `tools/` files (`gate.json` and the runners above), its skills and its ignore lines); writing the identities
   into `tools\doc_budget.json` (they go to `.kit.json` "owner").

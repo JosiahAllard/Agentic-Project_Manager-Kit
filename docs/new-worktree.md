@@ -78,7 +78,7 @@ Local `<base>` is not updated (`behind_count` in `kitlib/worktree/new.py` only r
 
 ## Keys read
 
-- `.kit.json` "repo": `main_branch`, `remote`, `worktrees_dir`, `tools_dir`.
+- `.kit.json` "repo": `main_branch`, `remote`, `worktrees_dir`. The commands its lines name (the `next` preflight, `worktree_remove.py --check`, `redfirst.py`) are the kit's own tools by absolute path with `-C`, never `<tools_dir>` copies (`kitlib.kitroot.command`).
 - "landing": `lock_file` (`git:<name>`), `lanes`, and `in_flight` (see "Waiting for a landing in flight").
 
 "new_worktree" has no keys.

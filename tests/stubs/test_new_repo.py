@@ -58,15 +58,27 @@ class NewRepo(unittest.TestCase):
 
     def test_the_dry_run_writes_nothing(self):
         before = sorted(os.listdir(self.root))
-        code, out = self.ps()
+        code, out = self.ps('-Stubs')
         self.assertEqual(code, 0, out)
         self.assertIn('DRY RUN', out)
         self.assertIn('"email": "%s"' % OWNER, out)
         self.assertIn('would write  %s' % os.path.join(self.root, 'tools', 'landed.py'), out)
         self.assertEqual(sorted(os.listdir(self.root)), before)
 
+    def test_no_stubs_without_the_switch(self):
+        """Decision 21 (docs/multi-host-plan.md section 7): a repository holds no stubs unless asked."""
+        code, out = self.ps()
+        self.assertEqual(code, 0, out)
+        self.assertIn('none (skills and roles run', out)
+        self.assertNotIn('would write  %s' % os.path.join(self.root, 'tools', 'landed.py'), out)
+        code, out = self.ps('-Apply')
+        self.assertEqual(code, 0, out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')), out)
+        self.assertIn('new-repo: wrote .kit.json and the starter files', out)
+        self.assertNotIn('kit_stubs.py', out)
+
     def test_apply_writes_the_config_and_the_stubs(self):
-        code, out = self.ps('-Apply', '-MainBranch', 'master')
+        code, out = self.ps('-Apply', '-Stubs', '-MainBranch', 'master')
         self.assertEqual(code, 0, out)
         with open(os.path.join(self.root, '.kit.json'), encoding='utf-8') as fh:
             data = json.load(fh)
@@ -134,7 +146,7 @@ class NewRepo(unittest.TestCase):
 
     def test_a_file_where_a_stub_goes_refuses_before_anything_is_written(self):
         self.fx.write('tools/landed.py', "print('own copy')\n")
-        code, out = self.ps('-Apply')
+        code, out = self.ps('-Apply', '-Stubs')
         self.assertEqual(code, 1, out)
         self.assertIn('not a stub (kept', out)
         self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
@@ -184,7 +196,7 @@ class NewRepo(unittest.TestCase):
         self.assertNotIn('WARNING', out)
 
     def test_stack_writes_the_gate_section_the_lists_and_loads(self):
-        code, out = self.ps('-Apply', '-Stack', 'python')
+        code, out = self.ps('-Apply', '-Stubs', '-Stack', 'python')
         self.assertEqual(code, 0, out)
         cfg = config.load(self.root)
         self.assertEqual(cfg.section_file('gate'), 'tools/gate.json')
@@ -257,7 +269,7 @@ class NewRepo(unittest.TestCase):
         self.fx.write('.gitignore', 'build/\n')
         os.chmod(path, stat.S_IREAD)
         self.addCleanup(os.chmod, path, stat.S_IWRITE | stat.S_IREAD)
-        code, out = self.ps('-Apply')
+        code, out = self.ps('-Apply', '-Stubs')
         self.assertEqual(code, 1, out)
         undo = [ln for ln in out.splitlines() if 'already written' in ln]
         self.assertEqual(len(undo), 1, out)
@@ -333,7 +345,7 @@ class NewRepo(unittest.TestCase):
         with open(os.path.join(kit, 'tools', 'kit_stubs.py'), 'w', encoding='utf-8') as fh:
             fh.write("print('would write something odd')\n")
         before = sorted(os.listdir(self.root))
-        code, out = self.ps(script=script)
+        code, out = self.ps('-Stubs', script=script)
         self.assertEqual(code, 1, out)
         self.assertIn('REFUSED - cannot read the stub plan', out)
         self.assertEqual(sorted(os.listdir(self.root)), before)
@@ -363,7 +375,7 @@ class NewRepo(unittest.TestCase):
         with open(os.path.join(stack, 'tools', 'Landed.py'), 'w', encoding='utf-8') as fh:
             fh.write("print('not a stub')\n")
         before = sorted(os.listdir(self.root))
-        for args in (('-Stack', 'clash'), ('-Apply', '-Stack', 'clash')):
+        for args in (('-Stubs', '-Stack', 'clash'), ('-Apply', '-Stubs', '-Stack', 'clash')):
             code, out = self.ps(*args, script=script)
             self.assertEqual(code, 1, out)
             self.assertIn("REFUSED - the clash stack's tools file Landed.py has the name of a kit tool stub", out)
@@ -400,7 +412,7 @@ class NewRepo(unittest.TestCase):
         self.assertNotIn('add these', out)  # the index exists now: it is the owner's to keep
 
     def test_the_stubs_cover_the_tools_a_repository_runs(self):
-        code, out = self.ps('-Apply')
+        code, out = self.ps('-Apply', '-Stubs')
         self.assertEqual(code, 0, out)
         for name in ('land', 'ledger', 'gate', 'preflight', 'new_worktree'):
             self.assertTrue(os.path.isfile(os.path.join(self.root, 'tools', name + '.py')), name)

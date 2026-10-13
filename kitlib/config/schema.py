@@ -131,7 +131,7 @@ SECTIONS = {
         'worktrees_by_host': Field(MapOf(RelPath(), what='host'), {},
                                    'per-host worktree folders, keyed by hosts.json host name '
                                    '(docs/new-worktree.md "Hosts")'),
-        'tools_dir': Field(RelPath(), 'tools', 'where repo tools, stubs and the hook module live'),
+        'tools_dir': Field(RelPath(), 'tools', 'where repo tools, the opt-in kit tool stubs and the hook module live'),
         'push_block': Field(Bool(), False, 'pre-push refuses a push to main without a gate-OK record; a delete or a forced push of main is refused whatever it says'),
     },
     'owner': {
@@ -274,7 +274,7 @@ SECTIONS = {
         'skip': Field(Strs, None, 'globs of paths not checked; unset: <tools_dir>/test_*.py and <tools_dir>/fixtures/*'),
     },
     'stubs': {
-        'tools': Field(Strs, None, 'kit tools stubbed into the repo'),
+        'tools': Field(Strs, None, 'kit tools stubbed into the repo; stubs are opt-in (none by default), and setting this opts in'),
     },
     'testlist': {
         'junit': Field(Strs, ['**/build/test-results/**/*.xml'], 'JUnit result globs'),

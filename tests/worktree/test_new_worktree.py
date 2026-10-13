@@ -16,6 +16,7 @@ import time
 import unittest
 from unittest import mock
 
+from kitlib import kitroot
 from kitlib.config import load
 from kitlib.records import inflight, landing
 from kitlib.worktree import new
@@ -213,10 +214,10 @@ class NewBranchMode(WorktreeCase):
         self.assertEqual(rc, 0, out)
         self.assertTrue(os.path.isdir(self.slug_path('second')))
 
-    def test_next_names_the_new_worktrees_preflight(self):
+    def test_next_names_the_kits_preflight_for_the_new_worktree(self):
+        """The worktree holds no copy of the kit's tools (decision 21): the kit's preflight, -C it."""
         out = self.tool('fix/fresh')[1]
-        want = os.path.join(self.slug_path('fresh'), 'tools', 'preflight.py')
-        self.assertIn('next      python "%s"' % want, out)
+        self.assertIn('next      %s' % kitroot.command('preflight', self.slug_path('fresh')), out)
 
 
 class PrepIsRun(WorktreeCase):
@@ -353,7 +354,8 @@ class ACallerWrongAboutTheBranchIsTold(WorktreeCase):
         rc, out = self.tool('fix/taken')
         self.assertEqual(rc, 1, out)
         self.assertIn('exists already', out)
-        self.assertIn('tools/worktree_remove.py --check', out)
+        self.assertIn('/tools/worktree_remove.py" -C ', out)
+        self.assertIn('" --check`', out)
 
 
 class UppercaseRecordIdBranches(WorktreeCase):
@@ -1238,13 +1240,16 @@ class ConfigKeys(WorktreeCase):
         self.assertEqual(self.printed(out, 'worktree'), [want], out)
         self.assertFalse(os.path.exists(self.slug_path('fresh')), out)
 
-    def test_the_tools_dir_spells_the_commands(self):
+    def test_the_tools_dir_never_spells_a_kit_command(self):
+        """The repository's tools folder holds no kit tool (decision 21): the hints name the kit's."""
         self.configure({'repo': {'tools_dir': 'devtools'}})
         out = self.tool('fix/fresh')[1]
-        self.assertIn(os.path.join(self.slug_path('fresh'), 'devtools', 'preflight.py'), out)
+        self.assertIn(kitroot.command('preflight', self.slug_path('fresh')), out)
+        self.assertNotIn('devtools', out)
         os.makedirs(self.slug_path('taken'))
         out = self.tool('fix/taken')[1]
-        self.assertIn('python devtools/worktree_remove.py --check', out)
+        self.assertIn(kitroot.tool('worktree_remove').replace('\\', '/'), out)
+        self.assertNotIn('devtools', out)
 
 
 class UsageIsRejectedNotGuessed(unittest.TestCase):

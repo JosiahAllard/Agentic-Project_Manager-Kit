@@ -4,7 +4,7 @@
 
 Rules only, no dated wording; owner-locked ("Owner decisions"). Propose a new rule to the owner;
 findings go to the doc owning the area, history to the commit message. Doc index: find what you
-need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read `docs/INDEX.md`
+need with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools` for tools); never read `docs/INDEX.md`
 whole. Rules not needed on every task: `docs/reference/WORKING-RULES.md`; per-agent rules:
 `.claude/agent-profile.md`, by heading.
 
@@ -15,9 +15,10 @@ anything the owner could approve in your terminal.
 ## Start here
 
 - `docs/INDEX.md`: every doc and tool, found by topic (see above); the tools replace routine calls.
-- Kit skills write the PM kit's folder as `<kit>` (`<kit>/docs/gate.md`); the `KIT =` line of any
-  kit stub in `tools/` names it.
-- What to work on: `python tools/backlog.py next` ("Backlog"). Plan: `<PLAN_DOC>`, `<PLAN_NEXT_SECTION>`.
+- Kit skills write the PM kit's folder as `<kit>` (`<kit>/docs/gate.md`); the kit header at the
+  start of every session names it. The kit's tools run from there, never from a copy here:
+  `python <kit>/tools/<name>.py -C <worktree>`.
+- What to work on: `python <kit>/tools/backlog.py -C <worktree> next` ("Backlog"). Plan: `<PLAN_DOC>`, `<PLAN_NEXT_SECTION>`.
 - <KEY_REFERENCE_DOCS: one line each, what it holds and when to read it; optional>
 
 ## Build
@@ -31,7 +32,7 @@ python -m unittest discover -s tests   # the kit's and the repo tools' own tests
 
 - Toolchain: <TOOLCHAIN_AND_VERSIONS>.
 - <PASS_FAIL_STRINGS: pass strings, failure strings, known-harmless noise, where exit codes lie; optional>
-- **The gate is ONE command: `python tools/gate.py`.** It picks steps from the files changed
+- **The gate is ONE command: `python <kit>/tools/gate.py -C <worktree>`.** It picks steps from the files changed
   (the `"gate"` section of `.kit.json`), books the machine lock itself, keeps full logs in the folder
   it names, and prints the verdict: exit 0 passed, 1 a step failed, 2 usage or git error (other
   codes: docs/gate.md); read a failure from the log it names. Never assemble a gate yourself or
@@ -47,14 +48,14 @@ Remote `origin` (<REMOTE_URL>), main branch `main`. One task = one branch `<area
 worktree `.claude/worktrees/<slug>` = one landing. The main checkout (`<MAIN_CHECKOUT_PATH>`) stays
 on `main` and is never worked in; only the lander writes to it.
 
-1. Start every task with the repo's preflight (`python tools/doc_index.py --find preflight`).
+1. Start every task with the repo's preflight (`python <kit>/tools/doc_index.py -C <worktree> --find preflight`).
 2. Worktree, from the main checkout: `git worktree add .claude/worktrees/<slug> -b <area>/<slug>`
    (the repo's own wrapper, if its profile names one). All work happens there.
 3. Commit by explicit path only: `git commit -m "<subject>" -- <paths>`; never `git add -A` or
    `commit -a`, never stage, revert or delete a file you did not change. The subject says what
    changed and why. The trailer `Co-Authored-By: <model name> <noreply@anthropic.com>` names the
    model you are actually running on, never the example's or the previous commit's.
-4. Done = `python tools/gate.py` green, the docs it touches updated on the same branch.
+4. Done = `python <kit>/tools/gate.py -C <worktree>` green, the docs it touches updated on the same branch.
 5. Ready = report it and leave the branch alone. You do not merge, push or delete branches.
 6. Main moved: merge the exact hash the coordinator sent (skill branch-sync; never local `main`,
    never a rebase), rerun the gate, report ready again.
@@ -66,7 +67,7 @@ on `main` and is never worked in; only the lander writes to it.
 Standing owner-approved work: the `pm-kit:lander` merges reviewed branches into `main` and pushes
 without asking each time. Only the lander, only with the coordinator's review verdict, one at a
 time, by ONE bare call from the main checkout:
-`python tools/gate.py land <branch> --expect-main <sha> --expect-tip <sha>` (skill land-branch).
+`python <kit>/tools/gate.py land <branch> --expect-main <sha> --expect-tip <sha> -C <repo>` (skill land-branch).
 No `cd` prefix, `Tee-Object`, pipe or chaining: the bare form is what the allow rule matches.
 Success, whatever the exit code: the call's `LANDED` line, `git rev-parse main origin/main` match
 **and** the branch tip is an ancestor of `origin/main` (`git merge-base --is-ancestor <tip> origin/main`).
@@ -100,7 +101,7 @@ Any denial: stop and report it.
 
 ## Backlog
 
-- The store is read and written only through `python tools/backlog.py` (docs/backlog.md; the
+- The store is read and written only through `python <kit>/tools/backlog.py -C <worktree>` (docs/backlog.md; the
   place is `"backlog".store` in `.kit.json`), never by hand. Skill backlog-ops has the forms.
 - Priority: `-` = not yet assessed (every new record), `1`-`5` = assessed (5 highest), `-1` =
   assessed, only the owner can settle; no other unvalued state. An agent pricing pass
@@ -108,7 +109,7 @@ Any denial: stop and report it.
   price a record sets `-1` with one owner ask: a question only the owner can answer - if the answer is
   in the tree, it isn't the owner's.
 - `blocked_on: owner` (the work waits on the owner) is not `priority: -1` (the price is the owner's).
-- Coordinators never wait for the owner for what is next: `python tools/backlog.py next` does.
+- Coordinators never wait for the owner for what is next: `python <kit>/tools/backlog.py -C <worktree> next` does.
 - The backlog store is the only progress tracker: no `STATUS.md` or `ROADMAP.md` that a story
   ticks or edits, no rename-log or changelog-per-story doc (git history already holds that). A
   story's only tracker step is setting or closing its own backlog record.
@@ -126,7 +127,7 @@ Any denial: stop and report it.
   a line number in anything durable (docs, records, DECISIONS lines, owner asks, profiles): line
   pins go stale within hours; `:line` only in transient output (reports, test output).
 - Docs land with the code they describe, on the same branch. An over-budget `.md` may not grow
-  (`python tools/doc_budget.py`). The rest: WORKING-RULES, "Docs".
+  (`python <kit>/tools/doc_budget.py -C <worktree>`). The rest: WORKING-RULES, "Docs".
 - Heavy runs take the machine lock (skill machine-lock-run); never kill a process you did not
   start (report its PID and command line). Detail: agent-profile, "Shared resources that must be
   serialised".

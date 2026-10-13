@@ -5,7 +5,7 @@ description: Use in a Godot repo when you must render a frame to look at it (a p
 
 # Godot render check and e2e tiers
 
-Repo values change: look them up in the repo, do not trust this text over them. The topics are `python tools/doc_index.py --find render` (preview scenes), `--find e2e`, `--find ports`, `--find orphan`; the pass and fail strings come from the repo's rules file's "Build" section (AGENTS.md; CLAUDE.md in an older repo) and `.kit.json` gate step (`tools/gate.json`). The values below in angle brackets are the repo's.
+Repo values change: look them up in the repo, do not trust this text over them. The topics are `python "{kit_root}/tools/doc_index.py" -C <worktree> --find render` (preview scenes), `--find e2e`, `--find ports`, `--find orphan`; the pass and fail strings come from the repo's rules file's "Build" section (AGENTS.md; CLAUDE.md in an older repo) and `.kit.json` gate step (`tools/gate.json`). The values below in angle brackets are the repo's.
 
 ## Render a frame (light run, no lock)
 

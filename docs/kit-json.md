@@ -41,7 +41,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `repo.remote` (string, default "origin"): the remote main is pushed to
 - `repo.worktrees_dir` (repo path, default ".claude/worktrees"): where agent worktrees live
 - `repo.worktrees_by_host` (map host -> repo path, default {}): per-host worktree folders, keyed by hosts.json host name (docs/new-worktree.md "Hosts")
-- `repo.tools_dir` (repo path, default "tools"): where repo tools, stubs and the hook module live
+- `repo.tools_dir` (repo path, default "tools"): where repo tools, the opt-in kit tool stubs and the hook module live
 - `repo.push_block` (bool, default false): pre-push refuses a push to main without a gate-OK record; a delete or a forced push of main is refused whatever it says
 - `owner.email` (email): author email of the owner's own commits; unset: the machine config's owner_email; neither: no owner commit is provable, so every owner-only change is refused
 - `owner.agent_emails` (list of email, default []): author emails known to be agents', never the owner's
@@ -126,7 +126,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `review_pack.coauthor` (bool, default false): list the branch's commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks
 - `ruling_cites.repo` (string): the ledger repo column cited
 - `ruling_cites.skip` (list of string): globs of paths not checked; unset: <tools_dir>/test_*.py and <tools_dir>/fixtures/*
-- `stubs.tools` (list of string): kit tools stubbed into the repo
+- `stubs.tools` (list of string): kit tools stubbed into the repo; stubs are opt-in (none by default), and setting this opts in
 - `testlist.junit` (list of string, default ["**/build/test-results/**/*.xml"]): JUnit result globs
 - `testlist.trx` (list of string, default ["**/*.trx"]): .NET result globs
 - `tool_tests.mentions` (path|tokens, default "path"): how a tool mention is found

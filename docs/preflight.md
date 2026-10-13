@@ -14,7 +14,7 @@ One rule runs through all three: a reading that failed is printed as `?`, `UNKNO
 - **dirty**: from `git status`, a new folder counting as one entry; up to 12 are listed.
 - **worktrees**: each with its head and branch.
 - **leftovers**: registered worktrees whose own commits are in `<remote>/<main_branch>` as it stands (`kitlib/preflight/leftovers.py`, `merged_worktrees` in docs/worktree-remove.md), as `leftovers WARN N under <worktrees_dir>` with the `worktree_remove.py <slug>` that removes each; `leftovers none` when there are none. The worktree preflight runs in, fresh worktrees and exempt folders are not listed. A failed read is `leftovers WARN ... not checked: <why>`. Ported from the PM preflight's merged-worktree WARN (its stump and orphan lines are not ported: `worktree_remove.py --check` lists those).
-- **NOTE**: in the main checkout only. It names `<tools_dir>/new_worktree.py` and `<worktrees_dir>/<slug>/`.
+- **NOTE**: in the main checkout only. It names `<kit>/tools/new_worktree.py -C <checkout>` and `<worktrees_dir>/<slug>/`.
 - **docs**: `<kit>/tools/doc_budget.py -C <checkout>`, judged by `kitlib.verdict.line`.
 - **doc index**: `<kit>/tools/doc_index.py -C <checkout>` (`kitlib.docs.callers`), judged on `DOC INDEX OK` / `DOC INDEX FAILED`; no line when `.kit.json` "doc_index".enabled is false. With no index file the line passes and quotes the tool's one-line note that the listing check was skipped (the doc index is opt-in; docs/doc-tools.md "doc_index").
 - **stray lines**: from `kitlib.git.stray.check`.
@@ -23,7 +23,7 @@ One rule runs through all three: a reading that failed is printed as `?`, `UNKNO
 - **config**: which machine config file is read, from `kitlib.preflight.configline` (docs/kit-json.md "Moving the machine config folder"): the file, `FALLBACK`, `WARN both`, `none` or `BROKEN`; keys are named, values never.
 - **traps**.
 - **index**.
-- **next**: the kit commands with this session's values, from `kitlib/preflight/nextblock.py`. In the main checkout this is only `new_worktree.py`. In a worktree it is `commit.py`, `review_pack.py` and `codemap.py`, plus `sync_base.py` when the branch is behind its base.
+- **next**: the kit commands with this session's values, from `kitlib/preflight/nextblock.py`. Each runs the kit's own tool by its absolute path and names the checkout with `-C` (a repository holds no copy of the kit's tools, decision 21 in docs/multi-host-plan.md section 7). In the main checkout this is only `new_worktree.py`. In a worktree it is `commit.py`, `review_pack.py` and `codemap.py`, plus `sync_base.py` when the branch is behind its base.
 - **lock**: the last line.
 
 Exit codes:
@@ -89,7 +89,7 @@ All of these keys are in docs/kit-json.md.
 - `repo`:
   - `main_branch`: the base. When unset, the base is `main` if it exists, else `master`.
   - `remote`.
-  - `tools_dir`: used for the next block's commands and the hooks folder.
+  - `tools_dir`: the hooks folder. The NOTE, index and next lines name the kit's tools, never `<tools_dir>`.
   - `worktrees_dir`: used in the NOTE.
 - `preflight`:
   - `traps`.

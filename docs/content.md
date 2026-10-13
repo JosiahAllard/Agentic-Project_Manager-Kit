@@ -66,11 +66,20 @@ A skill is not rendered, so it has no tokens and says nothing only one host unde
 (docs/multi-host-plan.md section 5, form C): a numbered checklist, one line per step with its
 command, a "Never" list, then "Details:" pointers. It names a role bare (the reviewer role), the
 kit's folder as `<kit>` (`<kit>/docs/gate.md`), and an edit as "your file-edit tool"; commits go
-through `python tools/commit.py`, which takes the host from `PM_KIT_HOST`. The coordinator, PM and
-worker role files say what a bare role name and `<kit>` are on their host. Tests:
-tests/skills `test_skills_are_host_neutral`; tests/content/test_skill_commands.py checks that every
-`python tools/<name>.py` command a skill or role shows exists and that the tool's parser defines
-each flag shown.
+through `python <kit>/tools/commit.py -C <worktree>`, which takes the host from `PM_KIT_HOST`. The
+coordinator, PM and worker role files say what a bare role name and `<kit>` are on their host.
+
+A repository holds no stubs of the kit's tools (decision 21): every command a skill, role or the
+default profile shows is `python <kit>/tools/<name>.py`, with `-C <worktree>` (or `<repo>`,
+`<main checkout>`) when the tool takes `-C`. The tools that take no `-C` act on the machine, not a
+checkout (`machine_lock.py`, `launch.py`, `ledger.py`, `pm_watch.py` and the like), or name their
+path another way (`checkout_guard.py [PATH]`). In the kit's own repository `<kit>` is that
+repository, so the same commands work there.
+
+Tests: tests/skills `test_skills_are_host_neutral`; tests/content/test_skill_commands.py checks
+that every kit tool command a skill or role shows is written `python <kit>/tools/<name>.py`,
+exists, shows `-C` when the tool's parser defines it, and that the parser defines each flag
+shown.
 
 ## Tokens
 
@@ -155,9 +164,10 @@ SessionStart (startup, resume, clear, compact) and on SubagentStart (every subag
 kit (docs/kitboot.md) and adds
 `kitlib.host.header.text(<kit folder>)` to the agent's context (`additionalContext`, rendered by the
 Claude adapter's `context`). The text names the kit's absolute folder, says that `<kit>` in skills
-and role files means that folder (with a worked command), that a tool path without `<kit>/` is the
-repository's own stub, and that `<worktree>`, `<repo>`, `<slug>` and the like are placeholders. A
-kit that does not load is said in plain text instead.
+and role files means that folder (with a worked command), that the kit's tools run from it and
+never from a copy in the repository, a tool that acts on a checkout named with `-C` (decision 21 in
+docs/multi-host-plan.md section 7), and that `<worktree>`, `<repo>`, `<slug>` and the like are
+placeholders. A kit that does not load is said in plain text instead.
 
 The coordinator's SessionStart hook stays a separate entry: hooks.json runs both, and Claude Code
 joins their context. Keeping it apart keeps its path, which settings re-pointed by machine setup

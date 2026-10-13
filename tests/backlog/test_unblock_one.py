@@ -4,6 +4,7 @@ refuses with the blockers listed and the command to run. The `check` hint for a 
 `item:` blocker names the same `--on` form."""
 import unittest
 
+from kitlib import kitroot
 from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Refusal, Usage
 
@@ -30,7 +31,8 @@ class UnblockOne(StoreCase):
             self.verb('unblock', 'FOO')
         msg = str(cm.exception)
         for m in ('item:BAR', 'live-client'):
-            self.assertIn('python tools/backlog.py unblock FOO --on %s --reason "' % m, msg)
+            self.assertIn('%s -C <worktree> unblock FOO --on %s --reason "' % (kitroot.command('backlog'), m), msg)
+        self.assertNotIn('python tools/', msg)
         r = self.get('FOO')
         self.assertEqual((r.get('state'), r.all('blocked_on')), ('blocked', ['item:BAR', 'live-client']))
 

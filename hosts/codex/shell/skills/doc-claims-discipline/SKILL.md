@@ -19,4 +19,4 @@ description: Use when you record a finding or conclusion, withdraw one, trim or 
 - Treat a reversal said in conversation as a reversal.
 - Delete a condition to fit a document budget.
 
-Details: the repo's doc rules (`python tools/doc_index.py --find docs`).
+Details: the repo's doc rules (`python <kit>/tools/doc_index.py -C <worktree> --find docs`).

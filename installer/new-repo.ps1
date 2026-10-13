@@ -2,17 +2,19 @@
 #
 #   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner>
 #                                -AgentEmail <agents> [-MainBranch main] [-RepoName <name>]
-#                                [-Stack python] [-PmData <folder> [-PrivateRemote <url>]] [-Apply]
+#                                [-Stack python] [-PmData <folder> [-PrivateRemote <url>]] [-Stubs] [-Apply]
 #
 # The target is an existing git checkout (`git init -b main` first for a new one); the folder -Target
-# names must be its top level. It writes these and nothing else (a repository holds stubs only,
-# never a copy of the kit):
+# names must be its top level. It writes these and nothing else (a repository holds no copy of the
+# kit, and by default no stubs either: skills and roles run `<kit>\tools\<x>.py -C <checkout>`,
+# decision 21 in docs/multi-host-plan.md section 7):
 #   <Target>\.kit.json            "repo".main_branch, "repo".name, "owner".email, "owner".agent_emails,
 #                                and with -Stack "gate": "tools/gate.json"
 # "repo".name is the repository's short name: -RepoName, else the target folder's name lower-cased.
 # Either must be a lower-case repo name ([a-z0-9][a-z0-9-]*); a folder name that is not one refuses,
 # asking for -RepoName.
-#   <Target>\<tools_dir>\<n>.py   the kit tool stubs, by `tools\kit_stubs.py write -C <Target>`
+#   <Target>\<tools_dir>\<n>.py   with -Stubs only: the kit tool stubs, by `tools\kit_stubs.py write
+#                                -C <Target>` (the old committed setup, for a repository that wants them)
 #   <Target>\.gitignore, .gitattributes   templates\common's lines (.claude/worktrees/ and .codex/worktrees/
 #                                keep the agents' worktrees out of the main checkout's status) plus the
 #                                stack's gitignore/gitattributes lists. An existing file is never
@@ -31,8 +33,8 @@
 # commit pass as the owner's.
 #
 # Dry run by default: prints what it would write. -Apply writes. It never overwrites: a .kit.json or
-# tools\gate.json already there, or a file where a stub goes that is not a stub, refuses before
-# anything is written. A missing `origin` remote (new_worktree and preflight need it) is a warning
+# tools\gate.json already there, or (with -Stubs) a file where a stub goes that is not a stub, refuses
+# before anything is written. A missing `origin` remote (new_worktree and preflight need it) is a warning
 # that says what to run.
 #
 # -PmData <folder> (docs/pm-data-branch.md "Other users"): after the setup above, run the kit's
@@ -45,8 +47,8 @@
 # "FAILED", what was already written (and the target that failed, which may be partly written), and exits 1.
 # It never prints "wrote" for a file it did not write. Every kit template (stack.json, gate.json,
 # common\.gitignore, gitattributes, INDEX.md) and an existing .gitignore / .gitattributes is read at
-# plan time: one that cannot be read, a stub plan that cannot be read, or a stack tools file named
-# like a stub, refuses before any write.
+# plan time: one that cannot be read, or (with -Stubs) a stub plan that cannot be read or a stack tools
+# file named like a stub, refuses before any write.
 #
 # Exit: 0 dry run printed or files written, 1 refused or a write failed, 2 usage; with -PmData and -Apply, a non-zero
 # exit of pm_data.py init (1 refused, 2 configuration, 3 made locally but the push failed, 4 stopped
@@ -60,6 +62,7 @@ param(
     [string]$Stack = '',
     [string]$PmData = '',
     [string]$PrivateRemote = '',
+    [switch]$Stubs,
     [switch]$Apply
 )
 
@@ -154,7 +157,7 @@ $top = & git -C $targetFull rev-parse --show-toplevel 2>$null
 if ($LASTEXITCODE -ne 0 -or -not $top) { Fail "$targetFull is not a git checkout (git init -b $MainBranch first)" }
 $topFull = [IO.Path]::GetFullPath(($top | Select-Object -First 1).Trim()).TrimEnd('\')
 if ($topFull -ine $targetFull) { Fail "$targetFull is inside the checkout $topFull; name its top level" }
-if (-not (Test-Path -LiteralPath $stubTool)) { Fail "the kit at $kit has no tools\kit_stubs.py" 2 }
+if ($Stubs -and -not (Test-Path -LiteralPath $stubTool)) { Fail "the kit at $kit has no tools\kit_stubs.py" 2 }
 # Every kit tool this script runs is a python script: with no python on PATH a call would only print an
 # error and the plan would look empty. Refuse here, before anything is written.
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) { Fail "python is not on PATH; the kit's tools need it (nothing was written)" 2 }
@@ -273,10 +276,14 @@ if ($indexNew) {
     $unindexed = @($lsOut.Split([char]0) | Where-Object { $_ -and ($named -notcontains $_) })
 }
 
-# The stubs the kit would write, from kit_stubs itself (it reads the target's .kit.json, which is
-# not there yet: the default tools_dir and tool list apply, as they will after -Apply).
-$plan = & python $stubTool write -C $targetFull --dry-run 2>&1
-$planCode = $LASTEXITCODE
+# With -Stubs, the stubs the kit would write, from kit_stubs itself (it reads the target's .kit.json,
+# which is not there yet: the default tools_dir and tool list apply, as they will after -Apply).
+$plan = @()
+$planCode = 0
+if ($Stubs) {
+    $plan = & python $stubTool write -C $targetFull --dry-run 2>&1
+    $planCode = $LASTEXITCODE
+}
 
 # The default remote name: .kit.json "repo".remote is not set by this script.
 $skillTool = Join-Path $kit 'tools\stack_skill.py'
@@ -299,7 +306,8 @@ Write-Host ".kit.json:"
 foreach ($line in ($text.TrimEnd("`n") -split "`n")) { Write-Host "  $line" }
 Write-Host ""
 Write-Host "stubs:"
-foreach ($line in @($plan)) { Write-Host "  $line" }
+if ($Stubs) { foreach ($line in @($plan)) { Write-Host "  $line" } }
+else { Write-Host "  none (skills and roles run $($kitFull.TrimEnd('\'))\tools\<x>.py -C <checkout>; -Stubs writes them)" }
 Write-Host ""
 Write-Host "other files:"
 foreach ($f in $lineFiles) {
@@ -378,16 +386,18 @@ try {
     Fail "cannot create $kitJson - $($_.Exception.Message); $did"
 }
 $written.Add($kitJson)
-$out = & python $stubTool write -C $targetFull 2>&1
-$code = $LASTEXITCODE
-foreach ($line in @($out)) { Write-Host "  $line" }
-if ($code -ne 0) {
-    $wrote = if ($Stack) { (@(".kit.json", $gateDst) + @($toolFiles | Where-Object { $written -contains $_.Dst } | ForEach-Object { $_.Dst }) + @($skillWritten)) -join ', ' } else { ".kit.json" }
-    Write-Host "new-repo: STOPPED - kit_stubs.py write exited $code after $wrote were written, and any stubs listed above."
-    Write-Host "  The .gitignore, .gitattributes and docs/INDEX.md were not touched. To undo: delete $wrote and the stubs listed, then run again."
-    exit 1
+if ($Stubs) {
+    $out = & python $stubTool write -C $targetFull 2>&1
+    $code = $LASTEXITCODE
+    foreach ($line in @($out)) { Write-Host "  $line" }
+    if ($code -ne 0) {
+        $wrote = if ($Stack) { (@(".kit.json", $gateDst) + @($toolFiles | Where-Object { $written -contains $_.Dst } | ForEach-Object { $_.Dst }) + @($skillWritten)) -join ', ' } else { ".kit.json" }
+        Write-Host "new-repo: STOPPED - kit_stubs.py write exited $code after $wrote were written, and any stubs listed above."
+        Write-Host "  The .gitignore, .gitattributes and docs/INDEX.md were not touched. To undo: delete $wrote and the stubs listed, then run again."
+        exit 1
+    }
+    $written.Add('(and the stubs listed above)')
 }
-$written.Add('(and the stubs listed above)')
 foreach ($f in $lineFiles) {
     if (-not $f.Body.Count) { continue }
     $chunk = ($f.Body -join "`n") + "`n"
@@ -407,7 +417,8 @@ if ($indexNew) {
     Write-Host "  wrote    $indexDst"
 }
 Write-Host ""
-Write-Host "new-repo: wrote .kit.json, the stubs and the starter files in $targetFull"
+$what = if ($Stubs) { '.kit.json, the stubs and the starter files' } else { '.kit.json and the starter files' }
+Write-Host "new-repo: wrote $what in $targetFull"
 $pmCode = 0
 if ($PmData) {
     Write-Host ""
@@ -437,9 +448,11 @@ Write-Host "Next:"
 $asUsual = @('.gitattributes', 'docs/INDEX.md') + @($toolFiles | ForEach-Object { "tools/$($_.Name)" })
 $asUsual = ($asUsual[0..($asUsual.Count - 2)] -join ', ') + ' and ' + $asUsual[-1]
 Write-Host "  1. review .kit.json (docs/kit-json.md names every key). Commit .kit.json and tools/gate.json under the"
-Write-Host "     owner's identity (owner-only paths: tools/commit.py refuses an agent's); commit the stubs, .gitignore,"
+$theStubs = if ($Stubs) { 'the stubs, ' } else { '' }
+Write-Host "     owner's identity (owner-only paths: the kit's tools\commit.py refuses an agent's); commit $theStubs.gitignore,"
 Write-Host "     $asUsual as usual"
-Write-Host "  2. python `"$stubTool`" check -C `"$targetFull`"   (exit 0: every stub current)"
+if ($Stubs) { Write-Host "  2. python `"$stubTool`" check -C `"$targetFull`"   (exit 0: every stub current)" }
+else { Write-Host "  2. agents run the kit's tools as python `"$kit\tools\<x>.py`" -C <checkout>; nothing to commit for them" }
 if ($Stack) {
     Write-Host "  3. tools/gate.json is the $Stack gate: edit its globs and test command to the project."
     $passNote = @{

@@ -13,13 +13,13 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
   finished work on an unpulled item that dropped out of the offer cannot close without a
   pre-emption. Keep the pulled record's scope to the files the branch will touch (it blocks other
   work); narrow it on main through a quick records landing right after the plan. A session-owned
-  item is pulled with its session: `python tools/backlog.py -C <worktree> --session <key> pull <ID>`.
+  item is pulled with its session: `python <kit>/tools/backlog.py -C <worktree> --session <key> pull <ID>`.
   Price before pull: an unpriced record refuses the pull, so a price set on an unlanded branch
   must land first. A worker never sets a price; if its pull is refused as unpriced it stops and
   reports to you.
 - **Bundle related work**: pull other open records in the same area onto the same branch, keeping
   it reviewable and never mixing a high-risk change with unrelated work.
-- 1 workstream = 1 branch = 1 worktree, per profile (`python tools/new_worktree.py <branch>`
+- 1 workstream = 1 branch = 1 worktree, per profile (`python <kit>/tools/new_worktree.py -C <repo> <branch>`
   where the profile names no other way; it picks the host's worktree folder). A brief that names a
   worktree you prepared is dispatched into it, without asking the host for an isolated worktree of
   its own: the host would otherwise confine writes to that one and deny the first edit.
@@ -37,10 +37,10 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
   report wanted; no land, merge or push; for code work the entry files and symbols you know
   (path:Symbol) - a brief with no paths costs the worker about 35 calls. Brief names doc topics
   to look up, never a pasted rule. Where the repo has a brief template (`--find brief`), follow it.
-- Every agent starts with `python tools/preflight.py`. Briefs point at `python tools/codemap.py`
-  and `python tools/doc_index.py --section "<heading>"` before any search; agents use their search
+- Every agent starts with `python <kit>/tools/preflight.py -C <worktree>`. Briefs point at `python <kit>/tools/codemap.py -C <worktree>`
+  and `python <kit>/tools/doc_index.py -C <worktree> --section "<heading>"` before any search; agents use their search
   and file-read tools, not shell grep, cat or sed. Reviewer and lander briefs name
-  `python tools/review_pack.py <branch>` as their first call, where the repo has it.
+  `python <kit>/tools/review_pack.py -C <repo> <branch>` as their first call.
 - In a large file the brief names the sections or line ranges to read; the agent reads ranges (codemap or a search first), never the whole file, unless it is rewriting all of it.
 - Every coding brief states its risk level and why (path in the risk map, or the reason it is
   higher); unlisted is not a reason - list routine paths at their real level.
@@ -108,7 +108,7 @@ each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
 
 ## Upkeep
 
-- **Prune daily.** Start each day with `python tools/doc_index.py --stale`: confirm (touch it),
+- **Prune daily.** Start each day with `python <kit>/tools/doc_index.py -C <repo> --stale`: confirm (touch it),
   rewrite or delete each line, in ONE records-role commit. A new `.md`, shard or section adds its
   index line in the same commit, or the doc-budget check refuses the branch.
 - Durable facts -> the repo's docs, landed like any docs change, never in the host's config

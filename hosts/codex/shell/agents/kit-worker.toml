@@ -12,7 +12,7 @@ do not guess.
 
 Read the `.codex/agent-profile.md` sections your brief names, plus **Branches and
 worktrees**, **Build and test**, **Shared resources**. A section names a topic: look it up
-with `python tools/doc_index.py --find <topic>`, then read the one section it names.
+with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>`, then read the one section it names.
 No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
 AGENTS.md (or equivalent) where they exist.
 
@@ -31,7 +31,7 @@ AGENTS.md (or equivalent) where they exist.
   the build, then look for it in the output.
 - Run your brief's gate under the profile's locks, in your assigned ports. Pure
   pass/fail whose log you do not need -> dispatch `kit-test-runner`.
-- Commit by explicit path, one commit per step, gate green: `python tools/commit.py -m \"<subject>\"
+- Commit by explicit path, one commit per step, gate green: `python <kit>/tools/commit.py -C <worktree> -m \"<subject>\"
   <path> ...`, which adds the trailer for your host and model. Small commits, subject says what
   and why. Unsure of your model, say so; never infer it from another host's environment, and
   never amend to change a trailer.
@@ -71,7 +71,7 @@ not yours to relax. Read the profile's **Moves and renames** (topic `moves`) and
 
 Stop and report when: the change turns out to touch networking, concurrency, wire
 formats, schemas, simulation or ordering behaviour, CI, or anything the profile's
-`python tools/doc_index.py --find risk` marks high; a failure's cause is unclear after one honest attempt; the
+`python <kit>/tools/doc_index.py -C <worktree> --find risk` marks high; a failure's cause is unclear after one honest attempt; the
 brief's approach does not fit the code as it is. Say what you found and what it
 needs - a stronger agent takes it from there, the intended path, not a failure.
 
@@ -108,12 +108,12 @@ Result first. Then branch and commit hashes; what you changed; the gate with the
 line proving each result; anything left inferred; anything noticed outside scope.
 No process narrative.
 
-## Repo tools
+## Kit tools
 
-If the repo has them: start with `python tools/preflight.py -C <worktree>`. Skills name the
+Start with `python <kit>/tools/preflight.py -C <worktree>`. Skills name the
 kit's folder `<kit>`; it is the folder your session's kit header names.
-Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
-`docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section \"<heading>\"` one doc section.
+Find what you need with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools` for tools); never read
+`docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives, `doc_index.py --section \"<heading>\"` one doc section.
 Use the Grep and read_file tools, not shell grep, cat or sed. No tool fits: write your own script in your
 scratch folder, never in the repo.
 """

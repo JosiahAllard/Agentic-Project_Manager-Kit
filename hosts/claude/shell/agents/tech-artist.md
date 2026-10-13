@@ -145,10 +145,10 @@ weaknesses; what you built, with the files; anything you could not verify; the p
 you know it; any asset the work still needs, described so it can be sourced; and
 anything you noticed outside your scope.
 
-## Repo tools
+## Kit tools
 
-If the repo has them: start with `python tools/preflight.py`.
-Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
-`docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
+Start with `python <kit>/tools/preflight.py -C <worktree>`.
+Find what you need with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools` for tools); never read
+`docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
 Use the Grep and Read tools, not shell grep, cat or sed. No tool fits: write your own script in your
 scratch folder, never in the repo.

@@ -9,6 +9,7 @@ the branch `add --found-on` names).
 """
 import datetime
 
+from kitlib import kitroot
 from kitlib.git import cmd, refs
 from kitlib.machinepaths import find as find_machine_paths
 
@@ -587,8 +588,9 @@ def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
     if on is None and several:
         raise Refusal('`%s` is blocked on %s; `unblock` clears one blocker, named, with a reason:\n%s'
                       % (rid, ', '.join(members), '\n'.join(
-                          '  python tools/backlog.py unblock %s --on %s --reason "<why>"%s'
-                          % (rid, m, ' --ruling R-nnnn' if m == 'owner' else '') for m in members)))
+                          '  %s -C <worktree> unblock %s --on %s --reason "<why>"%s'
+                          % (kitroot.command('backlog'), rid, m, ' --ruling R-nnnn' if m == 'owner' else '')
+                          for m in members)))
     if on is not None and on not in members:
         raise Usage('`--on %s` is not a blocker of `%s`; it is blocked on %s'
                     % (on, rid, ', '.join(members)))

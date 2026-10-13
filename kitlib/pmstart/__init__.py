@@ -479,8 +479,9 @@ def launcher_repos():
 
 def stubs(repos=None, check=None):
     """One line per repository in launcher.repos whose stubs are missing or stale (kitlib.stubs.problem_line),
-    none when all are current. A folder that is not there, or a check that raises, is that repo's
-    own "could not check stubs" line."""
+    none when all are current. Stubs are opt-in (decision 21 in docs/multi-host-plan.md section 7),
+    so a repository that uses none has no line. A folder that is not there, or a check that raises,
+    is that repo's own "could not check stubs" line."""
     from kitlib import stubs as kstubs
     check = check or kstubs.problem_line
     repos = launcher_repos() if repos is None else repos

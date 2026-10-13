@@ -48,7 +48,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
   explorer's or planner's answer that reads thin is asked once more raised to strong; say so in
   status.
 - **Reviewer model** (this is the rule's one home). Read the groups printed under the `files` line
-  of `python tools/review_pack.py <branch>`: `High (N)`, `unlisted (= High) (N)`, `Medium (N)`,
+  of `python <kit>/tools/review_pack.py -C <worktree> <branch>`: `High (N)`, `unlisted (= High) (N)`, `Medium (N)`,
   `Low (N)`; a group with no file is not printed. The first row that fits:
   1. A `High` group is printed, or a changed path matches a strict landing path
      (`STRICT_DEFAULTS` in `<kit>/kitlib/gate/strict_defaults.py`: guard, lock,

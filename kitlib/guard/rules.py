@@ -95,6 +95,13 @@ def lock_tool(ctx):
     return quote(kitroot.lock_tool(ctx.kit))
 
 
+def kit_tool(ctx, name):
+    """A kit tool an alternative names: tools/<name>.py of the kit the guard runs from (ctx.kit),
+    quoted. A repository holds no copy of the kit's tools (decision 21 in docs/multi-host-plan.md
+    section 7), so an alternative never names a repository's own tools folder."""
+    return quote(kitroot.tool(name, ctx.kit))
+
+
 def subagent(event):
     """True when the Action names a subagent (Action.agent): a host's hook told it apart."""
     return bool(getattr(event, 'agent', None))
@@ -417,8 +424,8 @@ def ledger_rule(ctx, target, role, what):
         return None
     return refuse('ledger', role, '%s writes the rulings ledger, which only ledger.py writes. '
                   "Add the entry with the kit's tools/ledger.py add (docs/ledger.md)." % what,
-                  'python tools/ledger.py add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
-                  '--decides "<what it decides>" --source "<source>"')
+                  'python %s add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
+                  '--decides "<what it decides>" --source "<source>"' % kit_tool(ctx, 'ledger'))
 
 
 def lock_state_dir(ctx):
@@ -1672,8 +1679,31 @@ def run_from(cmd, cwd):
     return ''
 
 
+def kit_wrapper(ctx, cmd, inv, cwd):
+    """cm.wrapper(inv) when the script it runs is the kit's own (tools/gate.py or
+    tools/machine_lock.py of the kit the guard runs from, ctx.kit, the path resolved from the
+    command's directory with links followed), else None. Only the kit's tool takes the machine lock
+    itself, so only it may run an interpreter a repository lists as heavy: a script that shares its
+    file name (a branch's copy, `python <temp>/gate.py`) is judged as any other script. A repository
+    holds no copy of the kit's tools (decision 21 in docs/multi-host-plan.md section 7), so an
+    opt-in stub fails closed here too."""
+    kind = cm.wrapper(inv)
+    if not kind:
+        return None
+    found = cm.python_script(inv)
+    word = inv.args[found[0]] if found else inv.word
+    if word is None or word.dyn:
+        return None
+    path = sh.resolve_path(word.text, cmd.cwd or cwd, cmd.shell) or (
+        word.text if os.path.isabs(word.text) else None)
+    if not path:
+        return None
+    tools = paths.norm(os.path.join(ctx.kit, 'tools'), real=True)
+    return kind if paths.norm(os.path.dirname(path), real=True) == tools else None
+
+
 def heavy(event, ctx, cmd, inv, cwd, role):
-    if inv is None or inv.dyn or cm.wrapper(inv):
+    if inv is None or inv.dyn or kit_wrapper(ctx, cmd, inv, cwd):
         return None
     where = cmd.cwd or cwd
     cfg = ctx.config(where) if where else None
@@ -2248,12 +2278,10 @@ def git_worktree_remove(ctx, gc, role, text):
     head, why = ctx.git.resolve('HEAD', target)
     merged, why2 = ctx.git.is_ancestor(head, main, gc.dir) if head else (None, why)
     if merged is not True:
-        tool = os.path.join(main_top, cfg.tools_dir, 'worktree_remove.py') if cfg is not None else None
-        if tool and os.path.isfile(tool):
-            how = ('Merge it first; unmerged work goes to the PM, who decides (%s %s --abandon "<why>" only on the '
-                   'PM\'s word).' % (fwd(tool), os.path.basename(target)))
-        else:
-            how = 'Merge it first; unmerged work goes to the PM, who decides; never removed by hand.'
+        how = ('Merge it first; unmerged work goes to the PM, who decides (python %s -C %s %s --abandon "<why>" '
+               'only on the PM\'s word).' % (kit_tool(ctx, 'worktree_remove'),
+                                             quote(main_top) if main_top else '"<main checkout>"',
+                                             os.path.basename(target)))
         return refuse('git-worktree-remove', role, '`%s` removes a worktree whose commit is not merged into %s (%s). '
                       '%s Its unmerged commits:' % (text, main, why2 or 'not an ancestor', how),
                       'git -C %s log --oneline %s..HEAD' % (quote(target), main))
@@ -2437,8 +2465,9 @@ def data_copy(event, ctx, where, role, what):
         return refuse('git-push-pmdata', role, '%s: the repository %s has no %s of its own, and the guard cannot read '
                       'the machine\'s PM data record to tell whether it holds PM data (%s), so it fails closed. When '
                       'the data worktree folder was deleted (docs/pm-data-branch.md "Failure modes"), pm_data.py init '
-                      '--adopt re-adds it; run from the kit checkout:' % (what, fwd(where), pmdata.FILE_NAME, why),
-                      'python tools/pm_data.py init --adopt --path %s' % (quote(path) if path else '"<pm_data.path>"'))
+                      '--adopt re-adds it:' % (what, fwd(where), pmdata.FILE_NAME, why),
+                      'python %s init --adopt --path %s' % (kit_tool(ctx, 'pm_data'),
+                                                            quote(path) if path else '"<pm_data.path>"'))
     found = None
     held, why = ctx.gitread.has_commit(where, root)
     if why is None and held:
@@ -2856,8 +2885,10 @@ def _guarded_mains(cfg):
 def landing_command(ctx, gc, cfg, remote, branch):
     main_sha, _ = ctx.git.remote_tip(remote, cfg.main_branch, gc.dir)
     tip, _ = ctx.git.resolve(branch, gc.dir) if branch else (None, None)
-    return 'python %s/land.py %s --expect-main %s --expect-tip %s' % (
-        cfg.tools_dir, branch if branch and branch != cfg.main_branch else '<branch>',
+    main_top = (ctx.main_top(gc.dir) if gc.dir else None) or gc.dir
+    return 'python %s -C %s %s --expect-main %s --expect-tip %s' % (
+        kit_tool(ctx, 'land'), quote(main_top) if main_top else '"<main checkout>"',
+        branch if branch and branch != cfg.main_branch else '<branch>',
         main_sha or '<%s/%s sha>' % (remote, cfg.main_branch),
         tip if branch and branch != cfg.main_branch and tip else '<branch tip sha>')
 
