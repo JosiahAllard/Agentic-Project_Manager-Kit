@@ -7,11 +7,12 @@ Heavy programs (ARCHITECTURE.md "Kinds": a program is heavy because it is on the
   and whose `unless_args` has none. An argument matches by itself or as `<arg>=<value>`. Finding
   the program in a command line (interpreters, shells, Start-Process) is the guard's job.
 
-Roles. role_name(event) is `main` for a PreToolUse event without `agent_id`, else its
-  `agent_type` when the roles table names it, else `subagent`. An agent_type with the kit plugin's
-  prefix (`<plugin>:lander`) names the same role as the bare one; no other prefix does
-  (kitlib.agentname.bare). permissions(event, roles) is that
-  role's entry over its base (`main` or `subagent`) over ROLE_DEFAULTS.
+Roles. role_name(action) is `main` for a kitlib.host.Action of the main session (no `agent`),
+  else its `agent_role` when the roles table names it, else `subagent`. The host adapter gives
+  agent_role in the kit's naming: Claude's adapter drops exactly the kit plugin's prefix
+  (`<plugin>:lander` is `lander`; kitlib.agentname.bare), and any other form names no role.
+  permissions(action, roles) is that role's entry over its base (`main` or `subagent`) over
+  ROLE_DEFAULTS.
 
 Kinds table: kitlib/lock/kinds.json, written by the lock package and committed by the
   PM; this module only reads it.
@@ -34,8 +35,6 @@ import ntpath
 import os
 import re
 import sys
-
-from kitlib import agentname
 
 from . import schema
 from .types import ConfigError, check, is_note
@@ -121,20 +120,19 @@ def roles(cfg=None):
     return out
 
 
-def role_name(event, table=None):
-    """`main` (no agent_id), the event's agent_type (bare or with the kit plugin's prefix,
-    kitlib.agentname.bare) when `table` names it, else `subagent`."""
-    if not (event or {}).get('agent_id'):
+def role_name(action, table=None):
+    """`main` (no Action.agent), the Action's agent_role when `table` names it, else `subagent`."""
+    if not getattr(action, 'agent', None):
         return 'main'
-    kind = agentname.bare(event.get('agent_type'))
+    kind = action.agent_role
     if kind and kind in (table or ROLE_DEFAULTS) and kind != 'main':
         return kind
     return 'subagent'
 
 
-def permissions(event, table=None):
+def permissions(action, table=None):
     table = table or roles()
-    return dict(table[role_name(event, table)])
+    return dict(table[role_name(action, table)])
 
 
 # ---------------------------------------------------------------- kinds table

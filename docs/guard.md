@@ -1,6 +1,6 @@
 # Shell guard and git hooks
 
-`claude/hooks/guard.py` is the kit's one PreToolUse hook (ARCHITECTURE.md "Layers": Guards). `githooks/pre-push` is the kit's guard git hook. Both are thin entries over `kitlib/guard/`. `githooks/` also holds `pre-commit`, the ledger check, inert unless a repository opts in (docs/ledger.md "Pre-commit check").
+`claude/hooks/guard.py` is the kit's one PreToolUse hook (ARCHITECTURE.md "Layers": Guards). `githooks/pre-push` is the kit's guard git hook. Both are thin entries over `kitlib/guard/` ("Hosts" below says how a hook reaches it). `githooks/` also holds `pre-commit`, the ledger check, inert unless a repository opts in (docs/ledger.md "Pre-commit check").
 
 **Live and enforcing:** `claude/hooks/guard.py` is registered as the PreToolUse hook in the user settings ("Go-live", step 1), and subagent calls are refused by it (observed: rules `main-checkout` and `write-jail`). `githooks/pre-push` is live only in a repository whose `core.hooksPath` names `githooks/` ("Go-live", step 2).
 
@@ -8,13 +8,23 @@
 
 - **Allow:** guard.py prints nothing and exits 0.
 - **Deny or ask:** it prints `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny"|"ask", "permissionDecisionReason": ...}}` and exits 0.
-- **Reason format:** `<what and why> Instead: <the exact command to use> [kit guard: rule=<rule> role=<main|subagent>]`. The role is what the event said (`agent_id` present or not). The self-test reads it.
+- **Reason format:** `<what and why> Instead: <the exact command to use> [kit guard: rule=<rule> role=<main|subagent>]`. The role is what the event said (on Claude, `agent_id` present or not; `Action.agent`). The self-test reads it. The command after `Instead:` is also the Decision's `instead`.
   - After `Instead:` comes one command, ready to run, with no prose after it. Any explanation goes in the sentence before it, which ends with `:` (tests/guard/test_rules.py `test_rows` checks this for every row).
 - **Unguarded tools:** a tool no rule can refuse (any tool but Edit, Write, MultiEdit, NotebookEdit, Bash, PowerShell and `mcp__*`) is allowed before kitlib is imported (`claude/hooks/guard.py` `unguarded`; tests/guard/test_entry.py `Unguarded`).
-- **Guard error:** if the guard fails on a guarded tool, it denies with rule `guard-error` (fail closed).
-  - This includes a kitlib that will not import: `claude/hooks/guard.py` imports kitlib inside its `try` and builds that deny by hand. Its `Instead:` reruns guard.py on the event.
-  - If even that cannot be written, guard.py exits 2, which Claude Code also reads as a block.
-  - Test: tests/guard/test_entry.py breaks the import.
+- **Guard error:** if the guard fails on a guarded tool, it denies with rule `guard-error` (fail closed; `kitlib.host.hookmain.run`).
+  - This includes a `kitlib.guard` that will not import and a payload the adapter cannot parse: hookmain imports the guard inside its `try` and has the adapter render the deny. Its `Instead:` reruns guard.py on the event.
+  - If the adapter or hookmain themselves will not import, or the answer cannot be written, guard.py exits 2, which Claude Code also reads as a block.
+  - Test: tests/guard/test_entry.py breaks each import.
+
+## Hosts
+
+The guard judges a neutral `kitlib.host.Action` and answers a `kitlib.host.Decision` (ARCHITECTURE.md "Host contract"); no module under `kitlib/guard/` reads a host's payload or writes its output.
+
+- **The hook:** `claude/hooks/guard.py` (the entry) hands Claude's adapter, `claude.adapter.host.ADAPTER`, to `kitlib.host.hookmain.run`: the event JSON is parsed by `claude/adapter/events.py` `parse`, judged by `kitlib.guard.decide(action)`, lowered by `kitlib.host.degrade` when the host cannot show an ask, and rendered by the adapter's `render` (nothing for an allow, the JSON in "Output" for a deny or an ask). The fail-closed deny, an optional deadline (rule `guard-timeout`; Claude passes none) and the settings entry (`hookmain.command_line`, the one place a hook command line is written) are hookmain's, the same for every host.
+- **What Claude's adapter reads:** `tool_name` sorts the call: a file tool (Edit, Write, MultiEdit: `file_path`; NotebookEdit: `notebook_path`) is an `edit`, Bash and PowerShell a `shell` (`command`, its dialect, `run_in_background`), `mcp__*` an `mcp` call, anything else `other`. `cwd` as sent. `agent_id` is `Action.agent`; `agent_type`, for a subagent only, is `Action.agent_role` with one kit plugin prefix dropped ("Agent names"). `PM_KIT_ROLE` is read from the hook's environment, as before.
+- **Host facts the rules need** arrive as Action fields or from `hosts.json`, never as host names in kitlib: the role a subagent runs as (`agent_role`), the shell dialect, whether the call is backgrounded, the host's form of the same edit at another path (`retarget`, for an `Instead:` line), and the lock MCP's tool names (the host profile's `mcp_tool_format`; "Lock MCP").
+- **Paths:** every path the guard folds to compare, key or make canonical goes through `kitlib/guard/paths.py` `norm` (today's Windows rules, unchanged), so the later OS work changes one function. A command line's text (drive letters, quoting) is the shell parser's, not a path rule.
+- **Tests:** the guard tests build Claude payloads and decide them through the adapter (`tests/guard/claudehost.py`); tests/guard/test_entry.py runs the hook end to end.
 
 ## Parsing
 
@@ -71,7 +81,7 @@ Every rule is a read-only check of real state. `kitlib/guard/context.py` `Ctx` g
 
 ## Rules
 
-`kitlib/guard/rules.py` `decide(event, ctx)`. Every row below is a row in tests/guard/test_rules.py with the exact `Instead:` text. `<main>` is the main checkout, quoted, and `<wt>` is the session's own worktree.
+`kitlib/guard/rules.py` `decide(action, ctx)`. Every row below is a row in tests/guard/test_rules.py with the exact `Instead:` text. `<main>` is the main checkout, quoted, and `<wt>` is the session's own worktree.
 
 | rule | denied | instead |
 |---|---|---|
@@ -210,14 +220,14 @@ The guard reads the command line, not the shell's state:
 ## Lock MCP
 
 - **Which tools:** a tool named `<prefix><owner-only tool>` is caught, so is any `mcp__*__<owner-only tool>`, and so is any full name listed in the user config `guard_mcp_tools`.
-- **Prefix:** the default is the Claude plugin's MCP prefix, `kitlib.lockmcp.claude_tool_prefix()` (built from `CLAUDE_PLUGIN_NAME`); it is INFERRED from Claude Code's plugin MCP naming; no real PreToolUse payload has been captured, as the server is not installed. The user config `guard_mcp_prefix` replaces it and `guard_mcp_tools` adds names, so an observed name goes in config, not code (tests/guard/test_session.py `LockMcpByMark`).
-- **Who is asking:** `Ctx.session_role(event)` decides (see "Session mark"); it is replaceable through `role_resolver`.
+- **Prefix:** the default is the asking host's: its `hosts.json` profile `mcp_tool_format` with the kit plugin (`CLAUDE_PLUGIN_NAME`) and the lock server's name filled in (`rules.host_mcp_prefix`; on Claude, the same text as `kitlib.lockmcp.claude_tool_prefix()`), and "any other server name" is the tail after the format's server separator (`__`). The Claude one is INFERRED from Claude Code's plugin MCP naming; no real PreToolUse payload has been captured, as the server is not installed. The user config `guard_mcp_prefix` replaces it and `guard_mcp_tools` adds names, so an observed name goes in config, not code (tests/guard/test_session.py `LockMcpByMark`).
+- **Who is asking:** `Ctx.session_role(action)` decides (see "Session mark"); it is replaceable through `role_resolver`.
   - `subagent`, or any mark (pm, coordinator): deny.
   - Unmarked, the owner's own session: allowed. The lock's own owner check still applies.
 
 ## Session mark
 
-`kitlib/sessionmark.py`. The launcher that starts an agent session sets `PM_KIT_ROLE` to its kind (`tools/launch.py`, docs/launcher.md "The window": `pm`, `coordinator`, `deep-worker`, `consultant`, `plain`, or another agent's name); a subagent is told apart by the hook payload's `agent_id`. `kitlib/guard/context.py` `default_session_role` gives `subagent`, else the mark, else `owner`.
+`kitlib/sessionmark.py`. The launcher that starts an agent session sets `PM_KIT_ROLE` to its kind (`tools/launch.py`, docs/launcher.md "The window": `pm`, `coordinator`, `deep-worker`, `consultant`, `plain`, or another agent's name); a subagent is told apart by the hook payload's `agent_id` (`Action.agent`). `kitlib/guard/context.py` `default_session_role` gives `subagent`, else the mark, else `owner`. The mark is the hook's own environment's, unless the host's adapter hands it over as `Action.role` (Claude's does not: the hook inherits the session's environment).
 
 - **Unmarked is the owner:** a main session nothing marks is the owner's own, exempt from `owner-lock`, `lock-mcp`, `owner-identity`, `git-push-pmdata`, `kill-by-name`, `lock-state`, `kit-json` and `write-jail`. Until the kit launcher is live, sessions the old launcher starts are unmarked and count as the owner ("Go-live", step 4).
 - **Reserved values:** a mark of `owner` or `subagent` reads as `marked-<value>`, never as that standing.
@@ -233,7 +243,7 @@ The guard reads the command line, not the shell's state:
 
 `kitlib/agentname.py`. Claude Code names an agent a plugin bundles `<plugin>:<name>` (INFERRED from its plugin naming, not observed); the kit's plugin is `kitlib.lockmcp.CLAUDE_PLUGIN_NAME`, and `agentname.PREFIX` is that name and a colon. Every place the guard compares an agent name accepts the bare name and that one prefixed form:
 
-- **Agent types** (`agentname.bare`): `kitlib/config/policy.py` `role_name` (so the `roles` table, and through it `main-checkout`, `git-main-history` and `rules.lander_check`) and `rules.lander_check` itself. Exactly one leading `PREFIX`, in its exact case, is dropped. Any other form keeps its name, which no role names, and is held as `subagent`: another plugin's prefix, the prefix twice, another case, the prefix alone, `PREFIX` + `main`. An event without `agent_id` is `main` whatever its `agent_type`.
+- **Agent types** (`agentname.bare`): Claude's adapter (`claude/adapter/events.py`) drops the prefix once, into `Action.agent_role`, which `kitlib/config/policy.py` `role_name` (so the `roles` table, and through it `main-checkout`, `git-main-history` and `rules.lander_check`) and `rules.lander_check` itself read. Exactly one leading `PREFIX`, in its exact case, is dropped. Any other form keeps its name, which no role names, and is held as `subagent`: another plugin's prefix, the prefix twice, another case, the prefix alone, `PREFIX` + `main`. An event without `agent_id` is `main` whatever its `agent_type`.
 - **Session marks** (`agentname.bare_mark`): `kitlib/sessionmark.py` `mark`, and again `rules.agent_session` and `rules.session_mark` (a `role_resolver` that does not strip it). The prefix is dropped in any case and as often as it repeats, since a mark that names a known kind is the restrictive reading; a mark that would be left empty keeps its value, since an empty mark would be the owner's.
 - **Tests:** tests/agentname, tests/config/test_policy.py, tests/guard/test_session.py, and tests/guard/test_prefix_parity.py, which runs every tests/guard test again with each subagent's `agent_type` and each mark prefixed and expects the same decisions.
 

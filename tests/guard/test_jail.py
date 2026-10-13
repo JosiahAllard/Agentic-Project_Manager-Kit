@@ -9,11 +9,12 @@ import unittest
 from kitlib import config as kconfig
 from kitlib.git import repo
 from kitlib.guard import commands as cm
-from kitlib.guard import context, decide, rules
+from kitlib.guard import context, rules
 from kitlib.guard import shell as sh
 from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
 
 from . import world as W
+from .claudehost import decide
 from .world import bash, event, ps
 
 P = CLAUDE_PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
@@ -88,7 +89,7 @@ class Base(unittest.TestCase):
 
     def jailed(self, d, rule='write-jail'):
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual((d.kind, d.rule), ('deny', rule), d.reason)
+        self.assertEqual((d.verdict, d.rule), ('deny', rule), d.reason)
         return d
 
 
@@ -583,7 +584,7 @@ class MainGit(Base):
 
     def denied(self, d):
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual(d.kind, 'deny', d.reason)
+        self.assertEqual(d.verdict, 'deny', d.reason)
 
     def each_denied(self, texts, tool='Bash'):
         for text in texts:
