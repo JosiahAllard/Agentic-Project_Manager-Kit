@@ -1,6 +1,6 @@
 """kitlib.pmstart: the PM session-start checklist.
 
-Pure functions that return data; the hook (hosts/claude/shell/hooks/pm_session_start.py) prints it. Every check
+Pure functions that return data; the hook (boot/hook.py claude SessionStart pm) prints it. Every check
 takes its process list or filesystem reads as parameters so tests can fake them.
 """
 import datetime

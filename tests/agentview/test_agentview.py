@@ -56,8 +56,10 @@ class Base(unittest.TestCase):
         place = gitrepo.Place(gitrepo.MAIN, self.repo, '', None, None)
         return Ctx(environ={}, home=self.home, kit=KIT, classify=lambda path: place)
 
-    def start_text(self, event, kit, payload, environ):
-        self.calls.append((event, payload, environ))
+    def start_text(self, event, kit, payload, environ, part=None):
+        self.calls.append((event, payload, environ) + ((part,) if part else ()))
+        if part:
+            return 'part %s for %s' % (part, environ['PM_KIT_ROLE']) if part != 'empty' else ''
         return header.text(kit) + '\nchecks for ' + environ['PM_KIT_ROLE']
 
     def view(self, name, **kw):
@@ -157,12 +159,31 @@ class Start(Base):
         self.assertEqual([c[0] for c in self.calls], ['SubagentStart'])
 
     def test_nothing_past_the_header_is_said(self):
-        got = self.view('worker', start_text=lambda event, kit, payload, environ: header.text(kit))
+        got = self.view('worker', start_text=lambda event, kit, payload, environ, part: header.text(kit))
         self.assertEqual(self.section(got, 'At start').lines, ['nothing'])
 
     def test_brief_runs_no_checks(self):
         self.assertIn('run without --brief', self.text(self.view('pm', brief=True), 'At start'))
         self.assertEqual(self.calls, [])
+
+    def test_each_part_the_role_runs_is_asked_as_the_hook_asks_it(self):
+        parts = lambda event, role: (None, 'empty') + (('pm',) if role == 'pm' else ())
+        got = self.view('pm', start_parts=parts)
+        self.assertEqual(self.section(got, 'At start').lines,
+                         [agentview.block('checks for pm'), 'part empty: nothing', 'part pm:',
+                          agentview.block('part pm for pm')])
+        self.assertEqual([c[3:] for c in self.calls], [(), ('empty',), ('pm',)])
+        self.calls[:] = []
+        self.view('coordinator', start_parts=parts)
+        self.assertEqual([c[3:] for c in self.calls], [(), ('empty',)])
+
+    def test_a_failing_part_is_a_line(self):
+        def boom(event, kit, payload, environ, part=None):
+            if part:
+                raise ValueError('no part')
+            return header.text(kit)
+        got = self.view('pm', start_text=boom, start_parts=lambda event, role: (None, 'x'))
+        self.assertEqual(self.section(got, 'At start').lines, ['part x: could not make it: ValueError: no part'])
 
     def test_a_host_with_no_start_text_is_not_guessed(self):
         self.assertIn('not known', self.text(self.view('pm', start_text=None), 'At start'))

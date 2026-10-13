@@ -41,7 +41,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    PM checklist prints no `agent_temp` lines (docs/pm-start.md "Agent temp (`agent_temp`)").
 
 6. **Turn on the guard** (hand step): the PreToolUse entry that
-   `python <kit>/hosts/claude/shell/hooks/guard.py --settings-entry` prints goes in the account's settings
+   `python <kit>/boot/hook.py claude --settings-entry` prints goes in the account's settings
    (docs/guard.md "Go-live (after the joint review)").
    Success: a Bash search from a drive root is denied with `rule=root-search`.
 

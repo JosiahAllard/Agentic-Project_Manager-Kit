@@ -171,10 +171,16 @@ class HostAdapter(Protocol):
     context(event_name, text)    (stdout text, exit code) of a session or subagent start hook that
                                  adds `text` to the agent's context (the kit header); ('', 0) for
                                  no text
-    start_text(event_name, kit, payload, environ)   optional: the whole text the host's start hooks
-                                 add to the agent's context at that start event (the kit header
-                                 first) for a session started in payload's cwd with `environ`; a
-                                 check that fails is a line in it (tools/agent_view.py shows it)
+    start_text(event_name, kit, payload, environ, part)   optional: the text one start hook adds
+                                 to the agent's context, for a session started in payload's cwd
+                                 with `environ`: the hook registered on that event with `part`
+                                 (None: the plain one, the kit header first; a part it does not
+                                 have raises). A check that fails is a line in it. boot/hook.py
+                                 writes it (hookmain.dispatch); tools/agent_view.py shows it.
+                                 Without it a start event gets the kit header and takes no part.
+    start_parts(event_name, role)  optional: the parts, None for the plain hook, that a session of
+                                 `role` runs at that event, every registration it loads (the
+                                 host's manifest, a role's own settings); without it (None,)
     sessions()                   a SessionHost
     command_host()               a CommandHost, or None for a host without one
     content()                    an object whose renderer() is the host's ContentRenderer

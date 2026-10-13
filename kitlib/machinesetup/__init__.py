@@ -7,12 +7,14 @@ dry run prints and the function --apply runs, plus the refusals that stop both. 
 - links (kitlib.machinesetup.links): `tools`, `knowledge/asset-generation` and the skill links
   that point into the old kit clone become directory junctions into this kit;
 - settings (kitlib.machinesetup.settings): each config folder's settings.json loses the old kit's
-  PreToolUse hooks, gains guard.py's entry and has its old hook and statusline paths re-pointed;
+  PreToolUse hooks, gains the guard's entry (boot/hook.py) and has its old hook and statusline paths
+  re-pointed;
 - extras (kitlib.machinesetup.extras): the machine schedule shortcut, the agents' temp folder
   (kitlib.machinesetup.agenttemp: the folder, AGENT_TEMP, the agent_temp_sweep config key, and the
   sweep task, registered only with `register_sweep_task`) and its ACL, and KIT_MACHINE_LOCK for comfy.
-A fresh run (`fresh`, no older kit clone) switches no links and rewrites no entry: it only appends guard.py's
-entry (creating a missing settings.json), writes the PM SessionStart hook to `pm_settings` alone,
+A fresh run (`fresh`, no older kit clone) switches no links and rewrites no entry but a retired
+kit hook script's (settings.repoint_moved): it only appends the guard's entry (creating a missing
+settings.json), writes the PM SessionStart hook to `pm_settings` alone,
 installs the kit plugin per account from the export of the kit's pushed main
 (kitlib.machinesetup.plugin) and runs the shortcut, agent temp and ACL extras, not KIT_MACHINE_LOCK. Its default
 config folders are the plugin refresh's account folders (account_dirs).
@@ -33,7 +35,7 @@ EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
 
 class Context(object):
     """What a survey reads. `host` is the Windows side (extras.Host): shortcuts, icacls, the user
-    environment, guard.py's settings entry and the `claude` runner; tests pass a fake. Exactly one of
+    environment, the guard's settings entry and the `claude` runner; tests pass a fake. Exactly one of
     `old_kit` and `fresh` is given; `pm_settings` goes with `fresh` only."""
 
     def __init__(self, home, kit, old_kit=None, config_dirs=None, agent_temp=None, desktop=None,

@@ -14,7 +14,7 @@ CHANGES = (
     'kitlib/host/hookmain.py',
     'kitlib/host/content.py',
     'hosts/claude/adapter/events.py',
-    'hosts/claude/shell/hooks/guard.py',
+    'boot/hook.py',
     'hosts/claude/shell/hub/hub_repos.py',
     'hosts/newhost/adapter/events.py',          # a host that does not exist yet
     'content/roles/worker.md',

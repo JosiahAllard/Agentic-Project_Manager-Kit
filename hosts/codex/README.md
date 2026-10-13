@@ -11,9 +11,9 @@ Every rendered agent file says so in its first line.
 | Part | Where | State |
 |---|---|---|
 | Registry entry | `hosts.json` `codex` | Windows; hooks PreToolUse, SessionStart, PostCompact, SubagentStart; no ask; no subagent identity in hooks; MCP; skills; TOML agents |
-| Hook entry | `shell/hooks/run.py <event>` | the owner's reads pass before boot; else PreToolUse through `kitlib.host.hookmain` (7 s for the whole call, boot included) with Codex's parse, screen and render; a start event adds the kit header (and a PM's or coordinator's start checks) |
+| Hook entry | none of its own: `shell/boot/hook.py codex <event>`, the plugin's copy of the kit's one entry `boot/hook.py` | in the owner's unmarked session a tool `hosts.json` `hook.guarded_tools` leaves out passes before boot (`fast_path: unmarked`); else PreToolUse through `kitlib.host.hookmain` (`ADAPTER.DEADLINE`, 7 s for the whole call, boot included) with Codex's parse, screen and render; a start event adds the kit header (and a PM's or coordinator's start checks, `ADAPTER.start_text`) |
 | Hook policy | `adapter/policy.py` | a marked session: unknown tools, other MCP servers' tools, `apply_patch` through the shell, calls the guard cannot fully judge (no named shell, cmd.exe, a TTY, fed input) and a read, test or lander role's edits in its own checkout refused |
-| Boot check | `shell/boot/kitboot.py` | a byte copy of `boot/kitboot.py`, drift-checked; a copied plugin verifies the kit it binds with it |
+| Boot folder | `shell/boot/kitboot.py`, `shell/boot/hook.py`, `shell/hosts.json` | byte copies of `boot/kitboot.py` and `boot/hook.py`, and `hosts.json`'s Codex entry alone, drift-checked; a copied plugin verifies the kit it binds with them, and reads its hook data before the kit boots |
 | Agents, skills | `shell/agents/kit-<role>.toml`, `shell/skills/` | every role and skill, rendered from `content/` (`python tools/render_content.py`); review templates, not installed |
 | Manifests | `shell/plugin.json`, `shell/mcp.json`, `shell/hooks/hooks.json` | rendered from `kit.json` |
 | Lock MCP | `shell/mcp/lock_server.py` | the lock's read tools only (`adapter/lock.py`), server `machine-lock` |
@@ -21,9 +21,11 @@ Every rendered agent file says so in its first line.
 | Runtime broker | `adapter/runtime.py`, `dispatch.py`, `controller.py`, `launcher.py`, `workflow.py` | runs kit tools in a bound native thread's sandbox, every call held as an agent of the bound role with the role policy on; launch, controller and landing execution refuse |
 | Native checks | `shell/scripts/runtime_probe.py`, `command_canary.py`, `permissions_canary.py`, `workflow_canary.py` | run by hand against an installed `codex.exe`; none runs in the gate |
 
-The plugin root is `shell/`. In a kit checkout its entries boot that kit; copied out of it (a plugin
-cache), they bind `PM_KIT_ROOT` and a pinned release `PM_KIT_RELEASE_ID`, verified by the plugin's own
-boot check (docs/kitboot.md).
+The plugin root is `shell/`, so its hooks cannot name the kit's `boot/hook.py`: a plugin cache holds
+the plugin folder alone. That is why the plugin ships its own copy of the kit's boot folder and of its
+`hosts.json` entry (plan step 14 kept them for this reason). In a kit checkout its entries boot that
+kit; copied out of it (a plugin cache), they bind `PM_KIT_ROOT` and a pinned release
+`PM_KIT_RELEASE_ID`, verified by the plugin's own boot check (docs/kitboot.md).
 
 ## How a session is held
 

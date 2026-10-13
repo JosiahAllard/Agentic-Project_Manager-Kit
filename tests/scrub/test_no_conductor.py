@@ -23,9 +23,6 @@ W1 = 'removed after the switch (W1)'
 HISTORY = 'history: stays'
 
 ALLOWED = (
-    # The coordinator start hook still fires for the old session mark (not this branch's file).
-    ('hosts/claude/shell/hooks/coordinator_session_start.py', '(or the old "conductor")', W2B),
-    ('hosts/claude/shell/hooks/coordinator_session_start.py', '("coordinator", "conductor")', W2B),
     # The old config key and the old role, read as fallbacks (kitlib/coordinatorstart is not this branch's).
     ('kitlib/coordinatorstart/__init__.py', 'LEGACY_KEY = "conductor_start"', W2B),
     ('kitlib/coordinatorstart/__init__.py', 'LEGACY_ROLE = "conductor"', W2B),

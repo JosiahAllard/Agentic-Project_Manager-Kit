@@ -4,7 +4,8 @@ content/ or hosts/ changed: the same conformance suite (tests/host/conformance.p
 
   host.json        its hosts.json entry; the tests add it to a copy of the kit's hosts.json
   adapter.py       its HostAdapter (parse, render, context, sessions, content renderer, manifests)
-  shell/           its shell: hooks/run.py (the one hook entry), the rendered agents/ and plugin.json
+  shell/           its shell: the rendered agents/ and plugin.json, which runs the kit's one hook
+                   entry, boot/hook.py (no hook script of its own)
   payloads.json    its recorded hook payloads
   sessions/        its recorded session files
 

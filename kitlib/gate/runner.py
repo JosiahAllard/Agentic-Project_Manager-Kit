@@ -69,7 +69,7 @@ def _quiet(_line):
 
 def gate_config(cfg):
     """The value a gate-OK record's `gate_config` hashes: `.kit.json` "gate" over its defaults.
-    guard.py and the pre-push hook verify a record with this same value. An auto-detected gate
+    The kit guard and the pre-push hook verify a record with this same value. An auto-detected gate
     (kitlib.gate.detect) hashes this too, not its detected steps: they are a function of the
     commit's tree (which the record names), its base's tree (`base`) and the kit (its `kit`), so
     the hash still names what decides the steps."""

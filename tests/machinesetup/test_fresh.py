@@ -36,9 +36,7 @@ MARKETPLACE = ('{\n  "name": "pm-kit",\n  "owner": {"name": "x"},\n'
 def _prepare_kit(repo):
     """What a fresh survey and the export read of a kit: the hooks, reserve_ui.pyw, plugin.json and
     marketplace.json; committed and pushed."""
-    rels = ['hosts/claude/shell/hooks/guard.py', 'hosts/claude/shell/hooks/pm_session_start.py',
-            'hosts/claude/shell/hooks/coordinator_session_start.py', 'reserve_ui.pyw',
-            '.claude-plugin/marketplace.json']
+    rels = ['boot/hook.py', 'reserve_ui.pyw', '.claude-plugin/marketplace.json']
     for rel in rels[:-1]:
         repo.write(rel, 'x\n')
     repo.write('.claude-plugin/marketplace.json', MARKETPLACE)
@@ -55,7 +53,7 @@ def load(path):
 
 
 def guard_in(data, kit):
-    want = T.fwd(os.path.join(kit, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))
+    want = T.fwd(os.path.join(kit, 'boot', 'hook.py'))
     hooks = (data.get('hooks') or {}).get('PreToolUse') or []
     return any(want in h.get('args', []) for g in hooks for h in g.get('hooks', []))
 
@@ -183,7 +181,7 @@ class Fresh(FreshBase):
         self.host.cli = False                                        # plugin step: a note, not a write
         code, out = self.run_it(apply=True)
         self.assertEqual(code, M.EXIT_OK, out)
-        self.assertIn('%s: create it; add guard.py\'s PreToolUse entry' % self.s1, out)
+        self.assertIn('%s: create it; add the guard\'s PreToolUse entry' % self.s1, out)
         want = json.dumps({'hooks': {'PreToolUse': self.guard_groups()}}, indent=2) + '\n'
         self.assertEqual(T.readb(self.s1), want.encode('utf-8'))     # indent 2, LF, no BOM, final newline
         self.assertEqual([n for n in os.listdir(self.c1) if n.endswith('.bak')], [])
@@ -242,11 +240,11 @@ class Fresh(FreshBase):
         self.assertFalse(os.path.exists(self.pm))
         code, out = self.run_it(apply=True, pm_settings=self.pm)
         self.assertEqual(code, M.EXIT_OK, out)
-        script = T.fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'pm_session_start.py'))
+        script = T.fwd(os.path.join(self.kit, 'boot', 'hook.py'))
         self.assertEqual(load(self.pm), {'hooks': {'SessionStart': [{'matcher': 'startup|resume|compact', 'hooks': [
-            {'type': 'command', 'command': T.PYW, 'args': [script]}]}]}})
+            {'type': 'command', 'command': T.PYW, 'args': [script, 'claude', 'SessionStart', 'pm']}]}]}})
         for s in (self.s1, self.s2):
-            self.assertNotIn(b'pm_session_start', T.readb(s))
+            self.assertNotIn(b'"pm"', T.readb(s))
         before = self.snapshot()
         code, out = self.run_it(apply=True, pm_settings=self.s2)
         self.assertEqual(code, M.EXIT_REFUSED, out)
@@ -265,13 +263,16 @@ class Fresh(FreshBase):
         self.assertEqual(self.snapshot(), before)
 
     def test_fresh_refuses_the_pm_hook_already_in_the_sibling_or_an_account_settings(self):
-        """The kit's own pm_session_start.py in the PM repo's .claude/settings.json (the PM session
-        loads it next to settings.local.json), or in an account settings.json under any event: the
-        checklist would run twice, so --pm-settings is refused."""
-        script = T.fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'pm_session_start.py'))
+        """The kit's own PM hook (boot/hook.py claude SessionStart pm) in the PM repo's
+        .claude/settings.json (the PM session loads it next to settings.local.json), or an old
+        pm_session_start.py in an account settings.json under any event: the checklist would run
+        twice, so --pm-settings is refused."""
+        entry = T.fwd(os.path.join(self.kit, 'boot', 'hook.py'))
         sibling = os.path.join(self.pmrepo, '.claude', 'settings.json')
         T.touch(sibling, json.dumps({'hooks': {'SessionStart': [{'hooks': [
-            {'type': 'command', 'command': T.PYW, 'args': [script]}]}]}}, indent=2) + '\n')
+            {'type': 'command', 'command': T.PYW, 'args': [entry, 'claude', 'SessionStart', 'pm']}]}]}},
+            indent=2) + '\n')
+        script = entry + ' claude SessionStart pm'
         before = self.snapshot()
         code, out = self.run_it(apply=True, pm_settings=self.pm)
         self.assertEqual(code, M.EXIT_REFUSED, out)
@@ -279,6 +280,7 @@ class Fresh(FreshBase):
                       out)
         self.assertEqual(self.snapshot(), before)
         os.remove(sibling)
+        script = T.fwd(os.path.join(self.root, 'old', 'hooks', 'pm_session_start.py'))
         doc = dict(self.doc2, hooks=dict(self.doc2['hooks'], UserPromptSubmit=[{'hooks': [
             {'type': 'command', 'command': 'python "%s"' % script}]}]))
         with open(self.s2, 'w', encoding='utf-8') as f:
@@ -305,7 +307,7 @@ class Fresh(FreshBase):
         self.assertTrue(pluginsource.migrated(state, self.c2))
         self.assertEqual(pluginsource.current_folder(self.export), sha[:12])
         done = [l for l in out.splitlines() if l.startswith('done: ')]
-        settings_done = max(i for i, l in enumerate(done) if 'guard.py' in l)
+        settings_done = max(i for i, l in enumerate(done) if 'the guard' in l)
         export_done = min(i for i, l in enumerate(done) if 'ensure_export' in l)
         plugin_done = min(i for i, l in enumerate(done) if 'enable the kit plugin' in l)
         self.assertLess(settings_done, export_done)

@@ -15,8 +15,10 @@ conformance suite pins to what the host writes:
   User instructions        that file name in the host's per-user folder (the `user_folder` token,
                            or the folder its `config_dir_env` names); never read
   Kit header               kitlib.host.header.text(kit), what every host's start hook adds
-  At start                 the adapter's start_text(event, kit, payload, environ) past the header,
-                           for a session marked with the role (optional: unknown without it)
+  At start                 the adapter's start_text(event, kit, payload, environ, part) for each
+                           part its start_parts(event, role) names (default: the plain hook alone),
+                           the call boot/hook.py makes, past the header, for a session marked with
+                           the role (optional: unknown without start_text)
   Skills                   content/skills, when the host has skills (hosts.json)
   Repo profile             the `profile_path` token in `repo` (and `coordinator_profile_path` when
                            the role's body names it)
@@ -67,9 +69,11 @@ def resolve(name, content):
         raise UnknownRole(name, content.role_names()) from None
 
 
-def view(kit, repo, name, host, renderer, start_text=None, environ=None, brief=False, ctx=None):
+def view(kit, repo, name, host, renderer, start_text=None, environ=None, brief=False, ctx=None,
+         start_parts=None):
     """The sections for role `name` on `host` (a kitlib.host.registry.Host, whose ContentRenderer is
-    `renderer` and whose adapter's start_text is `start_text`, None when it has none) in the
+    `renderer` and whose adapter's start_text and start_parts are `start_text` and `start_parts`,
+    None when it has none) in the
     checkout `repo`, for the kit at `kit`. `brief`: paths only, no file text and no start checks
     run. `ctx` (a kitlib.guard.context.Ctx) stands in for the live one (tests)."""
     environ = os.environ if environ is None else environ
@@ -82,7 +86,7 @@ def view(kit, repo, name, host, renderer, start_text=None, environ=None, brief=F
         instructions(repo, values, brief),
         user_instructions(values, environ),
         kit_header(kit, event, brief),
-        start(kit, repo, role, event, start_text, environ, brief),
+        start(kit, repo, role, event, start_text, environ, brief, start_parts),
         skills(content, role, host, renderer, brief),
         profile(repo, role, values),
         model_mode(role, renderer),
@@ -188,20 +192,37 @@ def _mark(environ, role):
     return env
 
 
-def start(kit, repo, role, event, start_text, environ, brief):
+def start(kit, repo, role, event, start_text, environ, brief, start_parts=None):
     title = 'At start (%s), past the header' % event
     if start_text is None:
         return Section(title, ['not known: the host\'s adapter has no start_text (docs/new-host.md)'])
-    if brief:
-        return Section(title, ['the adapter\'s start_text, for a session marked %s; run without --brief to see '
-                               'it (it runs the start checks)' % role.name])
     try:
-        text = start_text(event, kit, {'cwd': os.path.abspath(repo)}, _mark(environ, role))
+        parts = tuple(start_parts(event, role.name)) if start_parts is not None else (None,)
     except Exception as e:
-        return Section(title, ['could not make it: %s: %s' % (type(e).__name__, e)])
+        return Section(title, ['could not list its start hooks: %s: %s' % (type(e).__name__, e)])
+    named = ', '.join(p for p in parts if p)
+    if brief:
+        return Section(title, ['the adapter\'s start_text%s, for a session marked %s; run without --brief to see '
+                               'it (it runs the start checks)' % (' and its parts ' + named if named else '',
+                                                                   role.name)])
     head = header.text(kit)
-    text = (text[len(head):] if text.startswith(head) else text).strip('\n')
-    return Section(title, [block(text)] if text else ['nothing'])
+    payload, env = {'cwd': os.path.abspath(repo)}, _mark(environ, role)
+    lines = []
+    for part in parts:
+        label = 'part %s: ' % part if part else ''
+        try:
+            text = start_text(event, kit, payload, env, part)
+        except Exception as e:
+            lines.append('%scould not make it: %s: %s' % (label, type(e).__name__, e))
+            continue
+        text = (text[len(head):] if part is None and text.startswith(head) else text).strip('\n')
+        if text and part:
+            lines.extend([label.rstrip(), block(text)])
+        elif text:
+            lines.append(block(text))
+        elif part:
+            lines.append(label + 'nothing')
+    return Section(title, lines or ['nothing'])
 
 
 def skills(content, role, host, renderer, brief):

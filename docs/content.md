@@ -117,11 +117,13 @@ as a TOML multi-line string. A Codex agent file has no tool list, so `capabiliti
 rendered. It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders. Its
 manifests are `hosts/codex/shell/plugin.json` (the name and version, the hooks file),
 `hosts/codex/shell/mcp.json` (the read-only lock server) and `hosts/codex/shell/hooks/hooks.json`
-(every declared hook event running `hooks/run.py <event>`, as one command string). Its
-`vendored(root)` ships a byte copy of `boot/kitboot.py` as `hosts/codex/shell/boot/kitboot.py`: the
-Codex plugin root is `hosts/codex/shell`, so a copied plugin carries the check that verifies the kit
-it binds; `--check` fails when the copy drifts. Claude needs none: its plugin root is the whole kit,
-`boot/` included. Status: hosts/codex/README.md.
+(every declared hook event running `boot/hook.py codex <event>`, the plugin's copy, as one
+command string). Its `vendored(root)` ships byte copies of `boot/kitboot.py` and `boot/hook.py` in
+`hosts/codex/shell/boot/`, and `hosts/codex/shell/hosts.json`, hosts.json's Codex entry alone: the
+Codex plugin root is `hosts/codex/shell`, so a copied plugin carries the hook entry, the hook data it
+reads before the kit boots and the check that verifies the kit it binds; `--check` fails when a copy
+drifts. Claude needs none: its plugin root is the whole kit, `boot/` included. Status:
+hosts/codex/README.md.
 
 ## Manifests
 
@@ -136,7 +138,8 @@ version, nothing else). Claude's are each JSON with indent 2 and a final newline
   The export (docs/plugin-source.md) stamps its version as `<version>-main.<count>`.
 - `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin
   (`"source": "./"`), the version as `metadata.version`.
-- `hosts/claude/shell/hooks/hooks.json`: the plugin's hooks (`HOOKS` in the renderer). Each command
+- `hosts/claude/shell/hooks/hooks.json`: the plugin's hooks (`HOOKS` in the renderer), each running
+  the kit's one hook entry, `${CLAUDE_PLUGIN_ROOT}/boot/hook.py claude <event> [<part>]`. Each command
   line comes from `kitlib.host.hookmain.manifest_command`, the interpreter by name for the platforms
   hosts.json gives the host (`pythonw` on Windows), so no manifest spells it by hand.
 
@@ -144,8 +147,9 @@ A version bump is one edit to `kit.json`, then `--write`. tests/content `Manifes
 
 ## Kit header
 
-`hosts/claude/shell/hooks/kit_header.py <event>` runs on SessionStart (startup, resume, clear,
-compact) and on SubagentStart (every subagent). It boots the kit (docs/kitboot.md) and adds
+`boot/hook.py <host> <event>` adds it at every start event a host declares; on Claude it runs on
+SessionStart (startup, resume, clear, compact) and on SubagentStart (every subagent). It boots the
+kit (docs/kitboot.md) and adds
 `kitlib.host.header.text(<kit folder>)` to the agent's context (`additionalContext`, rendered by the
 Claude adapter's `context`). The text names the kit's absolute folder, says that `<kit>` in skills
 and role files means that folder (with a worked command), that a tool path without `<kit>/` is the
@@ -174,7 +178,7 @@ name (`kitlib.content.ALIASES`) shows its new role.
 It is built from the code that renders and enforces, so it cannot drift from it. The host's side
 comes only through the host contract (docs/new-host.md), which the conformance suite pins to what
 the host writes: the ContentRenderer's `role_path`, `settings`, `tokens` and `tools`, and the
-adapter's optional `start_text`. File text is indented under its label.
+adapter's optional `start_text` and `start_parts`. File text is indented under its label.
 
 Sections 1-7, what the agent is given, in the order it gets it:
 1. **Role file**: `renderer.role_path(role)`, the file the host loads, with its text as `render`
@@ -185,8 +189,10 @@ Sections 1-7, what the agent is given, in the order it gets it:
    or the folder `config_dir_env` names). The kit never reads it.
 4. **Kit header**: `kitlib.host.header.text`, at SubagentStart for a dispatched role and at
    SessionStart for a `run: session` one.
-5. **At start**: what the adapter's `start_text` adds past the header for a session marked with the
-   role (`PM_KIT_ROLE`) in the repository; for the PM and the coordinator that runs their start
+5. **At start**: what the start hooks add past the header for a session marked with the role
+   (`PM_KIT_ROLE`) in the repository: the adapter's `start_text` for each part `start_parts` says
+   the role runs (the plain hook, then each named part, labelled), the same call `boot/hook.py`
+   makes, so the view is what the hooks write. For the PM and the coordinator that runs their start
    checks. A host without `start_text` is shown as not known, never guessed.
 6. **Skills**: `content/skills`, where the host has skills, and a note when the role's tool list
    leaves out the host's skill tool.

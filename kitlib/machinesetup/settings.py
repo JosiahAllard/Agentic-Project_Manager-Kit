@@ -1,50 +1,66 @@
 """Per-account settings.json (docs/machine-setup.md "Settings"): drop the old kit's PreToolUse hooks,
-add guard.py's entry as `guard.py --settings-entry` prints it, re-point the old kit's SessionStart
-hooks and statusline scripts to this kit, write a SessionStart hook that runs a kit hook script in
-shell form (`python <script>`) in exec form (the guard entry's interpreter, `args: [<script>]`), and
-note a settings hook that the kit's plugin also carries (it runs twice once the plugin is enabled).
-statusLine stays in shell form: Claude Code gives it no `args` field.
+add the guard's entry as `boot/hook.py <host> --settings-entry` prints it, re-point the old kit's
+SessionStart hooks and statusline scripts to this kit, write a SessionStart hook that runs the kit's
+hook entry in shell form (`python <kit>/boot/hook.py <host> SessionStart <part>`) in exec form (the
+guard entry's interpreter, `args: [<script>, <words>...]`), and note a settings hook that the kit's
+plugin also carries (it runs twice once the plugin is enabled). statusLine stays in shell form:
+Claude Code gives it no `args` field. <host> is the default host (hosts.json), whose settings these
+are.
 
-In fresh mode (ctx.fresh, no older kit clone) none of that rewriting runs: guard.py's entry is appended
-where it is absent (a missing settings.json is created), and survey_pm appends the PM SessionStart
-hook to ctx.pm_settings alone.
+In fresh mode (ctx.fresh, no older kit clone) none of that rewriting runs: the guard's entry is
+appended where it is absent (a missing settings.json is created), and survey_pm appends the PM
+SessionStart hook to ctx.pm_settings alone.
 
 Every path in a hook's `command` and `args` and in statusLine.command is read; one that resolves
 into the old kit clone is either in REMOVE (its hook goes; a group or event left empty goes too),
-in REPOINT (rewritten to this kit's file, forward slashes, quotes kept) or refused, named. A path
+in REPOINT (rewritten to this kit's file, forward slashes, quotes kept; a retired hook script to
+ENTRY and its words) or refused, named. A path
 through `<config>/tools/<link>` is left: the links step points it at this kit, and it is refused
 only if this kit has no such file. The JSON is edited as data and written back in the layout it
 was read in (indent, ASCII escaping, line ends, BOM, final newline), so a dry run's diff shows
 only the changed lines.
 
-Moved hook paths (docs/machine-setup.md "Moved hook paths"): a hook path into this kit's own
-MOVED_HOOKS folder (`<kit>/claude/hooks/`, where the hooks were before the hosts/ move) is
-re-pointed to the same file in HOOKS, in every mode and in the PM settings too, so a settings file
-written before the move keeps its one guard entry and its PM hook. A moved name with no file in
-HOOKS is refused.
+Moved hook paths (docs/machine-setup.md "Moved hook paths"): a hook path to one of this kit's
+RETIRED hook scripts, in HOOKS (`<kit>/hosts/claude/shell/hooks/`, plan steps 7 to 13) or in
+MOVED_HOOKS (`<kit>/claude/hooks/`, before the hosts/ move), is re-pointed to the kit's one hook
+entry, ENTRY, followed by the host and the script's words (RETIRED): `guard.py` becomes
+`boot/hook.py <host> PreToolUse`. This runs in every mode and in the PM settings too, so a settings
+file written before plan step 14 keeps its one guard entry and its PM hook. Any other name in those
+folders, or a kit with no ENTRY, is refused.
 """
 import difflib
 import json
 import os
 import re
 
+from kitlib.host import registry
+
 from .common import MOVED_FROM, SHELL, free_name, kit_file, norm, under
 from . import links
 
+ENTRY = 'boot/hook.py'                                               # every host's one hook entry
 HOOKS = SHELL + '/hooks'
 MOVED_HOOKS = MOVED_FROM + '/hooks'
+# The hook scripts ENTRY replaced (plan step 14), each with the words ENTRY now takes after the host.
+RETIRED = {
+    'guard.py': ('PreToolUse',),
+    'pm_session_start.py': ('SessionStart', 'pm'),
+    'coordinator_session_start.py': ('SessionStart', 'coordinator'),
+}
+PM_WORDS = RETIRED['pm_session_start.py']
 REMOVE = ('no_root_search.py', 'main_checkout_redirect_guard.py')
 REPOINT = {
-    'pm_session_start.py': HOOKS + '/pm_session_start.py',
-    'coordinator_session_start.py': HOOKS + '/coordinator_session_start.py',
+    'pm_session_start.py': ENTRY,
+    'coordinator_session_start.py': ENTRY,
     'statusline-usage.ps1': 'optional/usage/statusline-usage.ps1',
     'write-usage-status.ps1': 'optional/usage/write-usage-status.ps1',
 }
-GUARD = HOOKS + '/guard.py'
+GUARD = ENTRY
 PYTHONS = ('python', 'python.exe', 'pythonw', 'pythonw.exe')
 PLUGIN_MANIFEST = '.claude-plugin/plugin.json'
 PLUGIN_ROOT = re.compile(r'\$\{CLAUDE_PLUGIN_ROOT\}|\$CLAUDE_PLUGIN_ROOT\b')
 TOKEN = re.compile(r'"[^"]*"|\'[^\']*\'|[^\s"\']+')
+WORD = re.compile(r'[A-Za-z0-9_.-]+')        # a word ENTRY takes: a host, an event, a part
 
 
 def survey(plan, d, ctx):
@@ -98,20 +114,20 @@ def survey(plan, d, ctx):
             del hooks[event]
     sl = data.get('statusLine')
     if isinstance(sl, dict) and isinstance(sl.get('command'), str):
-        sl['command'], _ = ed.rewrite(sl['command'], 'statusLine.command', removable=False)
+        sl['command'] = ed.rewrite(sl['command'], 'statusLine.command', removable=False)[0]
     _note_plugin_twins(plan, path, data, ctx)
     guard = norm(os.path.join(ctx.kit, *GUARD.split('/')))
     if not any(norm(p) == guard for p in _hook_paths(data, 'PreToolUse', ctx.home)):
         try:
             entry = ed.guard_entry()
         except (OSError, RuntimeError, ValueError) as e:
-            plan.refuse('cannot read guard.py --settings-entry: %s' % e)
+            plan.refuse('cannot read boot/hook.py --settings-entry: %s' % e)
             return
         if not isinstance(data.get('hooks'), dict):
             data['hooks'] = {}
         for event, groups in entry.items():
             data['hooks'].setdefault(event, []).extend(groups)
-        ed.did.append('add guard.py\'s PreToolUse entry')
+        ed.did.append('add the guard\'s PreToolUse entry')
     if not ed.did:
         return
     _plan_write(plan, ctx, path, raw, layout, data, ed.did)
@@ -121,12 +137,12 @@ def _note_plugin_twins(plan, path, data, ctx):
     rel, plugin = plugin_hooks(ctx.kit, ctx.home)
     for event in sorted(plugin):
         seen = set()
-        for p in _hook_paths(data, event, ctx.home):
-            if norm(p) in plugin[event] and norm(p) not in seen:
-                seen.add(norm(p))
+        for sig in _signatures(data, event, ctx.home):
+            if sig in plugin[event] and sig not in seen:
+                seen.add(sig)
                 plan.note('settings', '%s: the %s hook %s is also the kit plugin\'s hook (%s); with the plugin '
                                       'enabled it runs twice, so remove this entry in the same step as the '
-                                      'plugin install' % (path, event, os.path.basename(p), rel))
+                                      'plugin install' % (path, event, describe(sig), rel))
 
 
 def _plan_write(plan, ctx, path, raw, layout, data, did):
@@ -162,7 +178,7 @@ def _plan_write(plan, ctx, path, raw, layout, data, did):
 # the hosts/ move changed (repoint_moved); a missing file is created in NEW_LAYOUT; the PM
 # SessionStart hook goes to --pm-settings alone.
 NEW_LAYOUT = {'bom': False, 'crlf': False, 'final': True, 'indent': 2, 'ascii': False, 'exact': True}
-PM_HOOK = HOOKS + '/pm_session_start.py'
+PM_HOOK = ENTRY
 PM_MATCHER = 'startup|resume|compact'
 
 
@@ -182,60 +198,87 @@ def _survey_fresh(plan, path, ctx):
         try:
             entry = ctx.host.guard_entry(ctx.kit)
         except (OSError, RuntimeError, ValueError) as e:
-            plan.refuse('cannot read guard.py --settings-entry: %s' % e)
+            plan.refuse('cannot read boot/hook.py --settings-entry: %s' % e)
             return
         if not _append(plan, path, data, entry):
             return
-        did.append('add guard.py\'s PreToolUse entry')
+        did.append('add the guard\'s PreToolUse entry')
     if did:
         _plan_write(plan, ctx, path, raw, layout, data, did)
 
 
+def host_name():
+    """The host whose account settings these are: hosts.json's default host."""
+    return registry.default()
+
+
+def entry_words(base):
+    """The words after ENTRY for the RETIRED hook script `base`: the host, then its own."""
+    return [host_name()] + list(RETIRED[base])
+
+
 def _moved(tok, ctx):
-    """The file in HOOKS that `tok` names when it is a path into this kit's MOVED_HOOKS folder;
-    else None. The part under the folder keeps the case `tok` gives it (norm folds case)."""
+    """(the folder, the script's name) when `tok` is a path to a file in this kit's HOOKS or
+    MOVED_HOOKS folder, other than the hooks.json manifest; else None."""
     p = expand(tok, ctx.home)
-    old = kit_file(ctx.kit, MOVED_HOOKS)
-    if not p or not under(p, old) or norm(p) == norm(old):
+    if not p:
         return None
-    full = lambda path: os.path.normpath(os.path.abspath(path))     # noqa: E731
-    return os.path.join(kit_file(ctx.kit, HOOKS), os.path.relpath(full(p), full(old)))
+    for folder in (HOOKS, MOVED_HOOKS):
+        old = kit_file(ctx.kit, folder)
+        if under(p, old) and norm(p) != norm(old) and os.path.basename(p).lower() != 'hooks.json':
+            return folder, os.path.relpath(norm(p), norm(old))
+    return None
 
 
 def _sub_moved(s, ctx, event, did, whole):
+    """(`s` with each retired hook script path of this kit (_moved) replaced by ENTRY, [the words a
+    whole argument adds after it]). In a command line the words follow the path; for a whole
+    argument (`args` item) they are returned, for the caller to insert after it."""
     spans = [(0, len(s), s)] if whole else [(m.start(), m.end(), m.group()) for m in TOKEN.finditer(s)]
-    out, last = [], 0
+    out, last, words = [], 0, []
     for a, b, tok in spans:
         q = tok[0] if tok[:1] in '"\'' and len(tok) > 1 and tok[-1] == tok[0] else ''
         bare = tok[1:-1] if q else tok
-        new = _moved(bare, ctx)
-        if new is None:
+        moved = _moved(bare, ctx)
+        if moved is None:
             continue
+        folder, name = moved
+        if name.lower() not in RETIRED:
+            raise ValueError('a %s hook runs %s, a hook script the kit no longer has; %s runs every hook '
+                             '(re-point it by hand)' % (event, bare, ENTRY))
+        new = kit_file(ctx.kit, ENTRY)
         if not os.path.isfile(new):
-            raise ValueError('a %s hook runs %s, moved to %s, which the kit lacks' % (event, bare, new))
-        out.append(s[last:a] + q + new.replace('\\', '/') + q)
+            raise ValueError('a %s hook runs %s, now %s, which the kit lacks' % (event, bare, new))
+        added = entry_words(name.lower())
+        out.append(s[last:a] + q + new.replace('\\', '/') + q + ('' if whole else ' ' + ' '.join(added)))
+        words = added if whole else words
         last = b
-        did.append('re-point the %s hook %s from %s/ to %s/' % (event, os.path.basename(new),
-                                                                MOVED_HOOKS, HOOKS))
+        did.append('re-point the %s hook %s from %s/ to %s %s' % (event, name, folder, ENTRY, ' '.join(added)))
     out.append(s[last:])
-    return ''.join(out)
+    return ''.join(out), words
 
 
 def repoint_moved(data, ctx):
     """Re-point, in place, every hook path in `data` (any event; `command` and `args`) that names a
-    file in this kit's MOVED_HOOKS folder to the same file in HOOKS; [what it did, one line per
-    path]. ValueError when HOOKS has no such file. Runs in every mode: a settings file written
-    before the hosts/ move otherwise gets a second guard entry, or keeps a PM hook path that only
-    the compatibility stub still serves."""
+    RETIRED hook script in this kit's HOOKS or MOVED_HOOKS folder to ENTRY and its words; [what it
+    did, one line per path]. ValueError for another name there, or a kit with no ENTRY. Runs in
+    every mode: a settings file written before plan step 14 otherwise gets a second guard entry, or
+    keeps a hook path the kit no longer has (a missing guard script blocks every tool call)."""
     did = []
     hooks = data.get('hooks') if isinstance(data, dict) else None
     for event in sorted(hooks) if isinstance(hooks, dict) else []:
         for h in _hooks(data, event):
             if isinstance(h.get('command'), str):
-                h['command'] = _sub_moved(h['command'], ctx, event, did, False)
+                h['command'] = _sub_moved(h['command'], ctx, event, did, False)[0]
             if isinstance(h.get('args'), list):
-                h['args'] = [_sub_moved(a, ctx, event, did, True) if isinstance(a, str) else a
-                             for a in h['args']]
+                args = []
+                for a in h['args']:
+                    if isinstance(a, str):
+                        a, words = _sub_moved(a, ctx, event, did, True)
+                        args += [a] + words
+                    else:
+                        args.append(a)
+                h['args'] = args
     return did
 
 
@@ -268,18 +311,18 @@ def survey_pm(plan, ctx):
         plan.refuse('%s: %s' % (path, e))
         return
     want = os.path.join(ctx.kit, *PM_HOOK.split('/'))
+    ours = (norm(want), tuple([host_name()] + list(PM_WORDS)))
     found = False
     for h in _hooks(data, 'SessionStart'):
-        for tok in _tokens(h):
-            if os.path.basename(tok.replace('\\', '/')).lower() != 'pm_session_start.py':
-                continue
-            p = expand(tok, ctx.home)
-            if p and norm(p) == norm(want):
-                found = True
-                continue
-            plan.refuse('%s: a SessionStart hook already runs %s, not this kit\'s %s; two PM checklists '
-                        'would run (remove or re-point it by hand)' % (path, tok, PM_HOOK))
-            return
+        tok = _pm_call(h)
+        if tok is None:
+            continue
+        if _signature(h, ctx.home) == ours:
+            found = True
+            continue
+        plan.refuse('%s: a SessionStart hook already runs %s, not this kit\'s %s %s; two PM checklists '
+                    'would run (remove or re-point it by hand)' % (path, tok, PM_HOOK, ' '.join(ours[1])))
+        return
     if found:
         if did:
             _plan_write(plan, ctx, path, raw, layout, data, did)
@@ -289,13 +332,14 @@ def survey_pm(plan, ctx):
         if not isinstance(exe, str) or not exe.strip():
             raise ValueError('its command is %r' % (exe,))
     except (OSError, RuntimeError, ValueError, KeyError, IndexError, TypeError) as e:
-        plan.refuse('%s: cannot write the PM SessionStart hook: guard.py --settings-entry gave no '
+        plan.refuse('%s: cannot write the PM SessionStart hook: boot/hook.py --settings-entry gave no '
                     'interpreter (%s)' % (path, e))
         return
     entry = {'SessionStart': [{'matcher': PM_MATCHER, 'hooks': [
-        {'type': 'command', 'command': exe, 'args': [want.replace('\\', '/')]}]}]}
+        {'type': 'command', 'command': exe, 'args': [want.replace('\\', '/')] + list(ours[1])}]}]}
     if _append(plan, path, data, entry):
-        _plan_write(plan, ctx, path, raw, layout, data, did + ['add the PM SessionStart hook pm_session_start.py'])
+        _plan_write(plan, ctx, path, raw, layout, data,
+                    did + ['add the PM SessionStart hook %s %s' % (PM_HOOK, ' '.join(ours[1]))])
 
 
 PM_SETTINGS_PAIR = ('settings.json', 'settings.local.json')
@@ -336,14 +380,28 @@ def _pm_hook_elsewhere(plan, path, ctx):
     return False
 
 
+def _pm_call(h):
+    """What the hook `h` runs when it runs a PM checklist: a pm_session_start.py (any kit's), or a
+    boot/hook.py with the PM words after its host (PM_WORDS); else None."""
+    toks = _tokens(h)
+    for i, t in enumerate(toks):
+        name = t.replace('\\', '/').rstrip('/').split('/')
+        if name[-1].lower() == 'pm_session_start.py':
+            return t
+        if name[-2:] == ['boot', 'hook.py'] and tuple(toks[i + 2:i + 2 + len(PM_WORDS)]) == PM_WORDS:
+            return ' '.join(toks[i:i + 2 + len(PM_WORDS)])
+    return None
+
+
 def _pm_tokens(data):
-    """Every pm_session_start.py a hook of any event in `data` runs."""
+    """What every hook of any event in `data` that runs a PM checklist runs (_pm_call)."""
     hooks = data.get('hooks') if isinstance(data, dict) else None
     out = []
     for event in sorted(hooks) if isinstance(hooks, dict) else []:
         for h in _hooks(data, event):
-            out += [t for t in _tokens(h)
-                    if os.path.basename(t.replace('\\', '/')).lower() == 'pm_session_start.py']
+            tok = _pm_call(h)
+            if tok is not None:
+                out.append(tok)
     return out
 
 
@@ -423,62 +481,72 @@ class _Editor(object):
         self._entry = None
 
     def guard_entry(self):
-        """guard.py --settings-entry, read once per file; raises what the host raises."""
+        """The guard's settings entry (boot/hook.py --settings-entry), read once per file; raises what
+        the host raises."""
         if self._entry is None:
             self._entry = self.ctx.host.guard_entry(self.ctx.kit)
         return self._entry
 
     def hook(self, event, h):
         """True when `h` is an old kit hook to drop; otherwise its paths are re-pointed in place and a
-        shell-form SessionStart hook running a kit hook script is written in exec form."""
+        shell-form SessionStart hook running the kit's hook entry is written in exec form."""
         where = '%s hook' % event
         if isinstance(h.get('command'), str):
-            h['command'], drop = self.rewrite(h['command'], where, True)
+            h['command'], drop, _ = self.rewrite(h['command'], where, True)
             if drop:
                 return True
         args = h.get('args')
         if isinstance(args, list):
-            for i, a in enumerate(args):
+            out = []
+            for a in args:
                 if isinstance(a, str):
-                    args[i], drop = self.rewrite(a, where, True, whole=True)
+                    a, drop, words = self.rewrite(a, where, True, whole=True)
                     if drop:
                         return True
+                    out += [a] + words
+                else:
+                    out.append(a)
+            args[:] = out
         if event == 'SessionStart':
             self.exec_form(h, where)
         return False
 
     def exec_form(self, h, where):
-        """Rewrite `python <kit>/hosts/claude/shell/hooks/<x>.py` (shell form) as the guard entry's interpreter
-        with `args: [<script>]`, so no shell starts; any other command is left as it is."""
+        """Rewrite `python <kit>/boot/hook.py <words>...` (shell form) as the guard entry's
+        interpreter with `args: [<script>, <words>...]`, so no shell starts; any other command is
+        left as it is."""
         cmd = h.get('command')
         if not isinstance(cmd, str) or 'args' in h:
             return
         toks = [m.group() for m in TOKEN.finditer(cmd)]
-        if len(toks) != 2:
+        if len(toks) < 2:
             return
-        interp, script = [t[1:-1] if len(t) > 1 and t[0] in '"\'' and t[-1] == t[0] else t for t in toks]
+        interp, script, *words = [t[1:-1] if len(t) > 1 and t[0] in '"\'' and t[-1] == t[0] else t for t in toks]
         if os.path.basename(interp.replace('\\', '/')).lower() not in PYTHONS:
             return
+        if len(words) > 3 or not all(WORD.fullmatch(w) for w in words):
+            return                              # a redirect or a pipe is the shell's: leave it in shell form
         p = expand(script, self.ctx.home)
-        hooks_dir = kit_file(self.ctx.kit, HOOKS)
-        if not p or not p.lower().endswith('.py') or not under(p, hooks_dir) or not os.path.isfile(p):
+        if not p or norm(p) != norm(kit_file(self.ctx.kit, ENTRY)) or not os.path.isfile(p):
             return
         try:
             exe = self.guard_entry()['PreToolUse'][0]['hooks'][0]['command']
             if not isinstance(exe, str) or not exe.strip():
                 raise ValueError('its command is %r' % (exe,))
         except (OSError, RuntimeError, ValueError, KeyError, IndexError, TypeError) as e:
-            self.plan.refuse('%s: cannot write the %s %s in exec form: guard.py --settings-entry gave no '
-                             'interpreter (%s)' % (self.path, where, os.path.basename(p), e))
+            self.plan.refuse('%s: cannot write the %s %s in exec form: boot/hook.py --settings-entry gave no '
+                             'interpreter (%s)' % (self.path, where, ' '.join([ENTRY] + words), e))
             return
         h['command'] = exe
-        h['args'] = [p.replace('\\', '/')]
-        self.did.append('write the %s %s in exec form' % (where, os.path.basename(p)))
+        h['args'] = [p.replace('\\', '/')] + words
+        self.did.append('write the %s %s in exec form' % (where, ' '.join([ENTRY] + words)))
 
     def rewrite(self, s, where, removable, whole=False):
-        """(`s` with its old kit paths re-pointed, whether its hook is one to drop)."""
+        """(`s` with its old kit paths re-pointed, whether its hook is one to drop, [the words a whole
+        argument re-pointed to ENTRY adds after it]); in a command line those words follow the
+        path."""
         spans = [(0, len(s), s)] if whole else [(m.start(), m.end(), m.group()) for m in TOKEN.finditer(s)]
-        out, last = [], 0
+        out, last, words = [], 0, []
         for a, b, tok in spans:
             q = tok[0] if tok[:1] in '"\'' and len(tok) > 1 and tok[-1] == tok[0] else ''
             bare = tok[1:-1] if q else tok
@@ -496,7 +564,7 @@ class _Editor(object):
             if verdict == 'remove':
                 if removable:
                     self.did.append('drop the %s %s' % (where, os.path.basename(p)))
-                    return s, True
+                    return s, True, []
                 self.plan.refuse('%s: %s runs %s, which this step only removes from hooks' % (self.path, where, bare))
                 continue
             rel = REPOINT[base]
@@ -506,11 +574,14 @@ class _Editor(object):
                                  % (self.path, where, bare, rel))
                 continue
             fwd = target.replace('\\', '/')
-            out.append(s[last:a] + q + fwd + q)
+            added = entry_words(base) if rel == ENTRY else []
+            out.append(s[last:a] + q + fwd + q + ('' if whole or not added else ' ' + ' '.join(added)))
+            words = added if whole else words
             last = b
-            self.did.append('re-point the %s %s' % (where, os.path.basename(p)))
+            self.did.append('re-point the %s %s%s' % (where, os.path.basename(p),
+                                                    ' to %s' % ' '.join([rel] + added) if added else ''))
         out.append(s[last:])
-        return ''.join(out), False
+        return ''.join(out), False, words
 
     def classify(self, p):
         """None (not the old kit's, or kept as is), 'remove' or 'repoint'; refuses the rest."""
@@ -572,6 +643,30 @@ def unresolved_path(tok):
                 or re.search(r'%\w+%|\$env:|\$\{|\$\w', tok))
 
 
+def _signature(h, home):
+    """(the normalised path of the first file the hook `h` runs that is not a Python interpreter,
+    (the words after it)), or None when it runs none: what tells two hooks apart when every kit hook
+    runs one script, ENTRY, told its work by its words."""
+    toks = _tokens(h)
+    for i, t in enumerate(toks):
+        p = expand(t, home)
+        if p and os.path.basename(p).lower() not in PYTHONS:
+            return norm(p), tuple(toks[i + 1:])
+    return None
+
+
+def describe(sig):
+    """A _signature as a short name: the script's name and its words."""
+    return ' '.join([os.path.basename(sig[0])] + list(sig[1]))
+
+
+def _signatures(data, event, home):
+    for h in _hooks(data, event):
+        sig = _signature(h, home)
+        if sig is not None:
+            yield sig
+
+
 def _hook_paths(data, event, home):
     hooks = data.get('hooks')
     groups = hooks.get(event) if isinstance(hooks, dict) else None
@@ -589,8 +684,9 @@ def _hook_paths(data, event, home):
 
 
 def plugin_hooks(kit, home):
-    """(the hooks file the kit's plugin manifest names, {event: normalised paths its hooks run}), with
-    ${CLAUDE_PLUGIN_ROOT} read as `kit`; ('', {}) when the manifest names no hooks file this can read."""
+    """(the hooks file the kit's plugin manifest names, {event: the _signature of each of its hooks}),
+    with ${CLAUDE_PLUGIN_ROOT} read as `kit`; ('', {}) when the manifest names no hooks file this can
+    read."""
     try:
         with open(os.path.join(kit, *PLUGIN_MANIFEST.split('/')), encoding='utf-8-sig') as f:
             manifest = json.load(f)
@@ -617,9 +713,9 @@ def plugin_hooks(kit, home):
     hooks = data.get('hooks')
     out = {}
     for event in hooks if isinstance(hooks, dict) else []:
-        paths = set(norm(p) for p in _hook_paths(data, event, home))
-        if paths:
-            out[event] = paths
+        sigs = set(_signatures(data, event, home))
+        if sigs:
+            out[event] = sigs
     return (rel[2:] if rel.startswith('./') else rel), out
 
 

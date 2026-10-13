@@ -1,9 +1,15 @@
-"""The one hook runner every host's guard entry calls (multi-host plan section 2.2).
+"""The one hook runner (multi-host plan section 2.2), behind the one hook entry of every host,
+boot/hook.py (plan decision 20). What every host's hook needs besides its own parse and render
+lives here once:
 
-A host's hook entry is a few lines: put the kit on sys.path, build its adapter, call run(). What
-every host's hook needs besides its own parse and render lives here once:
-
-  run(adapter, event_name, stdin, stdout, environ, entry, deadline, started)
+  dispatch(adapter, event_name, kit, text, stdout, entry, args, part, environ, started)
+        boot/hook.py's work once the kit has booted and the adapter is imported. A start event
+        (adapter.CONTEXT_EVENTS): the context text, adapter.start_text(event_name, kit, payload,
+        environ, part) when the adapter has one, else the kit header (kitlib.host.header; no part
+        then), written through adapter.context; exit 0. Any other event: run() over the payload
+        `text`, the adapter's DEADLINE (None when it has none) for the whole call from `started`.
+        `entry` and `args` are the hook's own command line, for the reproduce line of a deny.
+  run(adapter, event_name, stdin, stdout, environ, entry, deadline, started, args)
         the hook: stdin's JSON -> adapter.parse -> kitlib.guard.decide -> degrade -> adapter.render
         -> stdout; returns the exit code render gives. Fails closed: any exception on the way (a
         kitlib.guard that will not import, a payload parse refuses, a rule that raises) is a deny,
@@ -15,8 +21,9 @@ every host's hook needs besides its own parse and render lives here once:
         never reads silence as an allow. `started` (a time.monotonic() reading; None: now) is when
         that budget began, for an entry whose own work before run (a boot) counts against it; the
         timeout reason names the whole budget. On a host whose hooks carry no subagent identity, a call
-        in a marked session is judged as an agent of its mark's role (unidentified()).
-  failure(e, role, entry)       that guard-error Decision
+        in a marked session is judged as an agent of its mark's role (unidentified()). `args`: the
+        entry's arguments, named in the reproduce line after `entry`.
+  failure(e, role, entry, args)       that guard-error Decision
   command_line(script, executable)
         {"command", "args"} that starts `script` with no console window: the one place a hook
         command line is rendered (plan section 6, rule 4). Today: pythonw.exe beside `executable`
@@ -26,10 +33,11 @@ every host's hook needs besides its own parse and render lives here once:
         windowless interpreter by name for the host's hosts.json `platforms` (INTERPRETERS), found
         on that machine's PATH, then `script` and `args` as given. The same on every machine that
         renders it, so a committed manifest has no drift.
-  settings_entry(event_name, matcher, script, executable, timeout)
+  settings_entry(event_name, matcher, script, executable, timeout, args)
         {event_name: [{"matcher", "hooks": [{"type": "command", "command", "args"[, "timeout"]}]}]}:
-        a settings.json hooks entry in exec form (no shell). Claude's --settings-entry prints it,
-        and kitlib.machinesetup installs what that prints.
+        a settings.json hooks entry in exec form (no shell), `script` then `args`. boot/hook.py
+        <host> --settings-entry prints the adapter's, and kitlib.machinesetup installs what that
+        prints.
 
 The adapter is kitlib.host.HostAdapter. Its parse may return one Action or a tuple of them, for a
 host whose one tool call acts on several targets (one patch that adds, deletes and renames files):
@@ -43,6 +51,7 @@ stands without the guard). Only the standard library and kitlib.host are importe
 guard is imported inside run(), so its failure to import is a deny too.
 """
 import dataclasses
+import io
 import json
 import os
 import sys
@@ -56,10 +65,15 @@ TIMEOUT = 'guard-timeout'
 TAG = '[kit guard: rule=%s role=%s]'
 
 
-def failure(e, role, entry):
+def reproduce(entry, args=()):
+    """The command that runs the hook `entry` with `args` on a saved event."""
+    return 'python "%s"%s < event.json' % (entry, ''.join(' ' + a for a in args))
+
+
+def failure(e, role, entry, args=()):
     """The deny for a guard that failed with `e`, in a session of `role` ('main' or 'subagent');
-    `entry` is the hook script whose run reproduces it."""
-    instead = 'python "%s" < event.json' % entry
+    `entry` is the hook script whose run with `args` reproduces it."""
+    instead = reproduce(entry, args)
     return Decision('deny', ERROR, 'The kit guard failed (%s: %s), so it cannot clear this call. Reproduce it '
                     'with the event JSON this call sent and report the error to the PM; do not reword the call. '
                     'Instead: %s %s' % (type(e).__name__, e, instead, TAG % (ERROR, role)), instead)
@@ -143,7 +157,7 @@ def _judge(adapter, guard, actions, environ, deadline, started=None):
     return next((d for d in found if d.verdict == 'ask'), found[0])
 
 
-def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=None, started=None):
+def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=None, started=None, args=()):
     environ = os.environ if environ is None else environ
     entry = (entry or sys.argv[0] or 'hook').replace(os.sep, '/')
     payload = action = None
@@ -159,18 +173,41 @@ def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=N
             role = _role(adapter, payload, action)
             decision = Decision('deny', TIMEOUT, 'The kit guard did not decide within %s s, so it cannot clear '
                                 'this call. Report it to the PM with the event JSON this call sent. Instead: '
-                                'python "%s" < event.json %s' % (deadline, entry, TAG % (TIMEOUT, role)),
-                                'python "%s" < event.json' % entry)
+                                '%s %s' % (deadline, reproduce(entry, args), TAG % (TIMEOUT, role)),
+                                reproduce(entry, args))
         if decision.verdict == 'ask':           # only an ask can need lowering: read the host's data then
             caps = getattr(adapter, 'capabilities', None)
             if caps is not None:
                 decision = degrade(decision, caps)
     except Exception as e:                      # fail closed, every tool
-        decision = failure(e, _role(adapter, payload, action), entry)
+        decision = failure(e, _role(adapter, payload, action), entry, args)
     text, code = adapter.render(event_name, decision)
     if text:
         stdout.write(text)
     return code
+
+
+def dispatch(adapter, event_name, kit, text, stdout, entry=None, args=(), part=None, environ=None, started=None):
+    if event_name in getattr(adapter, 'CONTEXT_EVENTS', ()):
+        try:
+            payload = json.loads(text or '{}')
+        except ValueError:
+            payload = {}
+        payload = payload if isinstance(payload, dict) else {}
+        start = getattr(adapter, 'start_text', None)
+        if start is not None:
+            body = start(event_name, kit, payload, environ, part)
+        elif part is None:
+            from kitlib.host import header
+            body = header.text(kit)
+        else:
+            raise ValueError('%s has no start check %r' % (adapter.name, part))
+        stdout.write(adapter.context(event_name, body)[0])
+        return 0
+    if part is not None:
+        raise ValueError('%s takes no part (%r)' % (event_name, part))
+    return run(adapter, event_name, io.StringIO(text), stdout, environ, entry, getattr(adapter, 'DEADLINE', None),
+               started, args)
 
 
 def windowless(executable=None):
@@ -195,9 +232,10 @@ def manifest_command(script, platforms, *args):
     return {'command': names[0], 'args': [script.replace(os.sep, '/')] + list(args)}
 
 
-def settings_entry(event_name, matcher, script, executable=None, timeout=None):
+def settings_entry(event_name, matcher, script, executable=None, timeout=None, args=()):
     hook = {'type': 'command'}
     hook.update(command_line(script, executable))
+    hook['args'] += list(args)
     if timeout is not None:
         hook['timeout'] = timeout
     return {event_name: [{'matcher': matcher, 'hooks': [hook]}]}

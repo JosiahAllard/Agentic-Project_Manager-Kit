@@ -29,6 +29,12 @@
       "session_process": "fakehost.exe",
       "env_prefixes": ["FAKEHOST_"]
     },
+    "hook": {
+      "tool_event": "before_tool",
+      "tool_field": "call.name",
+      "guarded_tools": ["write_file", "run_shell"],
+      "fast_path": "all"
+    },
     "tiers": {"light": "fake-small", "standard": "fake-medium", "strong": "fake-large", "deep": "fake-large"}
   }
 }

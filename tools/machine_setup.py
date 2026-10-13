@@ -4,8 +4,10 @@ kit checkout, or set up a fresh machine that has none, as one reviewed command (
   machine_setup.py --old-kit DIR                     DRY RUN: print every change and the settings diffs
   machine_setup.py --old-kit DIR --apply             make them (a .bak beside each settings.json)
   machine_setup.py --fresh [--pm-settings FILE]      DRY RUN of a fresh machine (no older kit clone):
-                                                     guard.py's entry, the PM hook in FILE, the kit plugin
-                                                     per account
+                                                     the guard's entry, the PM hook in FILE, the kit
+                                                     plugin per account. Either mode re-points
+                                                     settings hooks that run a retired kit hook
+                                                     script to boot/hook.py
   machine_setup.py --fresh ... --apply               make them
   options: --config-dir DIR (repeatable; default: ~/.claude and every ~/.claude-* folder but the
                              machine config's own; with --fresh, the plugin's account folders:
