@@ -427,7 +427,7 @@ class HostConformance(object):
                     if n:
                         counts[os.path.relpath(path, self.KIT_ROOT).replace(os.sep, '/')] = n
         others = ['hosts/' + n for n in os.listdir(os.path.join(self.KIT_ROOT, 'hosts'))
-                  if n != self.HOST and os.path.isdir(os.path.join(self.KIT_ROOT, 'hosts', n))]
+                  if n not in (self.HOST, '__pycache__') and os.path.isdir(os.path.join(self.KIT_ROOT, 'hosts', n))]
         for folder in TEXT_FOLDERS + tuple(others):
             for path in walk(folder):
                 with open(path, 'rb') as f:

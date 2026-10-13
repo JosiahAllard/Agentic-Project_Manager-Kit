@@ -138,7 +138,7 @@ class ManifestTest(unittest.TestCase):
         `<kit>`, the neutral name of the kit's folder (kit_root's Claude value too), is written bare."""
         for r in content.load(KIT_ROOT).roles:
             text = r.description + r.body
-            for value in [v for v in claude_content.TOKENS.values() if v != '<kit>'] + ['pm-kit:']:
+            for value in [v for v in claude_content.TOKENS.values() if isinstance(v, str)] + ['pm-kit:', 'claude --agent']:
                 with self.subTest(role=r.name, value=value):
                     self.assertNotIn(value, text)
 

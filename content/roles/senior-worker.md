@@ -35,7 +35,7 @@ guessing.
   progress, next, what is running - so a fresh agent can resume from the branch and the
   note if you are cut off.
 - Commits: explicit paths, small, subject says what and why, trailer
-  `Co-Authored-By: <the model you run on> <noreply@anthropic.com>` (unsure of your model,
+  `Co-Authored-By: {{coauthor}}` (unsure of your model,
   say so; never amend to change it). Base moved: merge the exact commit the coordinator named,
   never the local main, never rebase; re-run the gate. Never `reset --hard` or `git clean`.
 - Run the gate to a log and read it; never pipe it through grep, head or tail. Tests you write

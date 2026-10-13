@@ -58,10 +58,19 @@ A body or description names a value that differs by host only as a token. An unk
 | token | Claude |
 |---|---|
 | `{{agent:<role>}}` | `pm-kit:<role>` |
+| `{{launch:<role>}}` | `` `claude --agent pm-kit:<role>` `` |
 | `{{profile_path}}` | `.claude/agent-profile.md` |
 | `{{coordinator_profile_path}}` | `.claude/coordinator-profile.md` |
 | `{{instructions_file}}` | `CLAUDE.md` |
 | `{{worktrees_dir}}` | `.claude/worktrees` |
+| `{{host_folder}}` | `.claude` (the repository's host folder, owner-only) |
+| `{{config_folders}}` | a Claude config folder (`~/.claude`, `$env:CLAUDE_CONFIG_DIR`) |
+| `{{user_folder}}` | `~/.claude` (the host's per-user folder) |
+| `{{kit_home}}` | `~/.claude` (the kit's per-user folder: its installed tools and knowledge, on every host) |
+| `{{coauthor}}` | `<the model you run on> <noreply@anthropic.com>` (the commit trailer after `Co-Authored-By: `) |
+| `{{compact_window}}` | `` `autoCompactWindow` tokens `.claude/settings.local.json` `` |
+
+`{{agent:<role>}}` and `{{launch:<role>}}` take a role name; the rest take none.
 
 ## Claude
 

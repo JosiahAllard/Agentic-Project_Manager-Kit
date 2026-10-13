@@ -19,8 +19,9 @@ A role file, `content/roles/<name>.md`, is front matter between two `---` lines,
                                      (docs/guard.md "Role policy"). Never rendered either
   model.<host>: <model>              optional: that host runs this role on <model>, not the tier's
 
-The body is neutral prose. Values that differ by host are tokens, `{{name}}` or
-`{{agent:<role>}}` (TOKENS); `substitute` fills them from the host's own table. A role file keeps
+The body is neutral prose. Values that differ by host are tokens, `{{name}}`, or a role token
+`{{agent:<role>}}` / `{{launch:<role>}}` (TOKENS, ROLE_TOKENS); `substitute` fills them from the
+host's own table. A role file keeps
 its own line endings, and the body is copied byte for byte apart from its tokens.
 
 A skill is a folder, `content/skills/<name>/`, whose files every host ships unchanged.
@@ -46,8 +47,12 @@ CAPABILITIES = (
     'dispatch', 'message', 'list-agents', 'stop-task', 'monitor', 'tool-search', 'skill',
     'ask-owner', 'cron-create', 'cron-list', 'cron-delete', 'web-search', 'web-fetch',
 )
-# The tokens a body or description may hold. `agent` takes a role name: `{{agent:test-runner}}`.
-TOKENS = ('agent', 'profile_path', 'coordinator_profile_path', 'instructions_file', 'worktrees_dir')
+# The tokens a body or description may hold (docs/content.md "Tokens"). A role token takes a role
+# name: `{{agent:test-runner}}` the name the host dispatches it by, `{{launch:pm}}` how the role is
+# started as a host's main session.
+TOKENS = ('agent', 'launch', 'profile_path', 'coordinator_profile_path', 'instructions_file', 'worktrees_dir',
+          'host_folder', 'config_folders', 'user_folder', 'kit_home', 'coauthor', 'compact_window')
+ROLE_TOKENS = ('agent', 'launch')
 REQUIRED = ('name', 'description', 'tier', 'sandbox', 'capabilities')
 OPTIONAL = ('effort', 'cache', 'mode', 'writes')
 MODEL_KEY = 'model.'
@@ -232,17 +237,21 @@ def tokens_in(text):
 
 
 def substitute(text, values, agent_name, roles, source='text'):
-    """`text` with every token filled: `{{agent:<role>}}` by agent_name(<role>), any other by
-    values[name]. A token outside TOKENS, an agent token naming no role in `roles`, a value the
-    host does not define, or a `{{` left over is a ContentError."""
+    """`text` with every token filled: `{{agent:<role>}}` by agent_name(<role>), another role token
+    by values[name](<role>), any other by values[name]. A token outside TOKENS, a role token naming
+    no role in `roles`, a value the host does not define, or a `{{` left over is a ContentError."""
     def fill(m):
         name, arg = m.group(1), m.group(2)
         if name not in TOKENS:
             raise ContentError('%s: unknown token %s' % (source, m.group(0)))
-        if name == 'agent':
+        if name in ROLE_TOKENS:
             if arg not in roles:
                 raise ContentError('%s: %s names no role' % (source, m.group(0)))
-            return agent_name(arg)
+            if name == 'agent':
+                return agent_name(arg)
+            if not callable(values.get(name)):
+                raise ContentError('%s: %s has no value on this host' % (source, m.group(0)))
+            return values[name](arg)
         if arg is not None or name not in values:
             raise ContentError('%s: %s has no value on this host' % (source, m.group(0)))
         return values[name]

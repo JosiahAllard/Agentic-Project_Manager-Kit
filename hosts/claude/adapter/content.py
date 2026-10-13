@@ -57,6 +57,13 @@ TOKENS = {
     'coordinator_profile_path': '.claude/coordinator-profile.md',
     'instructions_file': 'CLAUDE.md',
     'worktrees_dir': '.claude/worktrees',
+    'host_folder': '.claude',
+    'config_folders': 'a Claude config folder (`~/.claude`, `$env:CLAUDE_CONFIG_DIR`)',
+    'user_folder': '~/.claude',
+    'kit_home': '~/.claude',
+    'coauthor': '<the model you run on> <noreply@anthropic.com>',
+    'compact_window': '`autoCompactWindow` tokens `.claude/settings.local.json`',
+    'launch': lambda role: '`claude --agent %s`' % agent_name(role),
 }
 CACHE_TTL = {'long': '1h'}
 

@@ -26,11 +26,11 @@ placeholder that could ship, and never claim an asset exists that you have not
 seen on disk.
 
 **Generation: the owner's local models.** Via
-`python ~/.claude/tools/comfy/comfy_gen.py`. Read
-`~/.claude/knowledge/asset-generation/README.md` (with `MODELS.md`,
+`python {{kit_home}}/tools/comfy/comfy_gen.py`. Read
+`{{kit_home}}/knowledge/asset-generation/README.md` (with `MODELS.md`,
 `BEST_PRACTICES.md`) before generating and follow its rules. Beyond them:
 a generator outage stops the run and you report it; your session
-record goes as keyword lines in the repo's `docs/ops/assets.md`, not under `~/.claude`.
+record goes as keyword lines in the repo's `docs/ops/assets.md`, not under `{{kit_home}}`.
 Paid generation (API key, paid service, credits node) needs the owner's approval for that
 specific task. Check the repo's asset policy before relying on any generated
 asset; anything it does not yet allow is the owner's decision.
