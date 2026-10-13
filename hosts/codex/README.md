@@ -11,8 +11,8 @@ Every rendered agent file says so in its first line.
 | Part | Where | State |
 |---|---|---|
 | Registry entry | `hosts.json` `codex` | Windows; hooks PreToolUse, SessionStart, PostCompact, SubagentStart; no ask; no subagent identity in hooks; MCP; skills; TOML agents |
-| Hook entry | `shell/hooks/run.py <event>` | the owner's reads pass before boot; else PreToolUse through `kitlib.host.hookmain` (7 s for the whole call) with Codex's parse, screen and render; a start event adds the kit header (and a PM's or coordinator's start checks) |
-| Hook policy | `adapter/policy.py` | a marked session: unknown tools, other MCP servers' tools, `apply_patch` through the shell, and calls the guard cannot fully judge (no named shell, cmd.exe, a TTY, fed input) refused |
+| Hook entry | `shell/hooks/run.py <event>` | the owner's reads pass before boot; else PreToolUse through `kitlib.host.hookmain` (7 s for the whole call, boot included) with Codex's parse, screen and render; a start event adds the kit header (and a PM's or coordinator's start checks) |
+| Hook policy | `adapter/policy.py` | a marked session: unknown tools, other MCP servers' tools, `apply_patch` through the shell, calls the guard cannot fully judge (no named shell, cmd.exe, a TTY, fed input) and a read, test or lander role's edits in its own checkout refused |
 | Boot check | `shell/boot/kitboot.py` | a byte copy of `boot/kitboot.py`, drift-checked; a copied plugin verifies the kit it binds with it |
 | Agents, skills | `shell/agents/kit-<role>.toml`, `shell/skills/` | every role and skill, rendered from `content/` (`python tools/render_content.py`); review templates, not installed |
 | Manifests | `shell/plugin.json`, `shell/mcp.json`, `shell/hooks/hooks.json` | rendered from `kit.json` |
@@ -37,6 +37,21 @@ branch, which denied every marked call outright. The owner's **unmarked** sessio
 shared rules alone, as on every host; the branch's hooks did nothing there. The runtime broker binds
 a role from native metadata, not the mark (`adapter/runtime.py`).
 
+Codex agent files carry no tool list, so the hook policy holds a read, test or lander role (its role
+file's `mode`) to no edits in its own checkout (`host-role-edit`) whatever the repository's
+`guard.role_policy` says, as the branch's guard adapter did. Files its role file's `writes` names,
+and temp and scratch folders under the write jail, stay open to it.
+
+What the owner's session leaves unjudged (a trade-off: the owner keeps an interactive shell):
+
+- A call with a TTY, input fed to a command, and text sent to a running process (`write_stdin`).
+  The guard sees the command that starts a process, never what is typed into it later. A marked
+  session refuses all three.
+- A cmd.exe call is judged as PowerShell's `cmd /c <text>`, so the shared git rules (reset --hard,
+  a force push or a push to main, commit -a, clean, checkout -- .) apply to it. What cmd.exe reads
+  differently from that is not judged further. A marked session refuses cmd.exe.
+- A call that names no shell is judged as PowerShell.
+
 ## Not verified
 
 - **Hook payloads.** The shapes come from the Codex hooks documentation and the branch's tests. No
@@ -53,6 +68,14 @@ a role from native metadata, not the mark (`adapter/runtime.py`).
   role never gets a writable sandbox on Codex, whatever its role file says for another host.
 - **Models.** Every tier runs the account's model (`account-default`); a tier differs by reasoning
   effort. The owner chooses model ids (docs/ROSTER.md).
+
+## Known limits
+
+- **A Codex PM or coordinator cannot dispatch or message agents.** Agent spawning and messaging
+  are refused in every marked session, and the launcher (`adapter/launcher.py`) plans a launch but
+  runs nothing. The rendered roles name spawn_agent and send_message as not available to a Codex
+  agent. On Codex the owner starts each agent session by hand.
+- Hook payloads carry no child identity (above), so a child is held as its parent's role.
 
 ## Not ported, with no replacement
 
