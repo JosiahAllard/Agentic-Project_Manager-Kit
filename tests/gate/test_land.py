@@ -269,7 +269,9 @@ class NoStepSelected(LandCase):
         self.assertTrue(out.lines[0].startswith('REFUSED: no gate step selected'), out.lines)
         self.assertTrue(out.undone)
         self.assert_untouched(out, G.REFUSED)             # no record, nothing pushed
-        self.assertEqual(self.store.history_records(1), [])
+        # the landing's one turn, booked before the merge and given back; the gate booked none
+        self.assertEqual([c.get('priority') for c in self.book_calls], ['land'], self.book_calls)
+        self.assertEqual([r['slug'] for r in self.store.history_records(1)], ['kit-feature'])
 
 
 class TakeTurns(LandCase):

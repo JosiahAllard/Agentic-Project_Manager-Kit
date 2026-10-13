@@ -380,7 +380,7 @@ class LandingWrites(fixtures.GateRepoCase):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         prior = result.build('kit/feature', tip, self.main, 'land', G.OK, summary='LANDED earlier')
         result.write(self.repo.root, prior)
-        out = self.lander('kit/feature', 'c' * 40, tip).run()          # wrong --expect-main
+        out = self.lander('kit/feature', self.main, 'c' * 40).run()    # wrong --expect-tip
         self.assertEqual(out.code, G.REFUSED, out.lines)
         self.assertIsNone(out.result_record)
         lock = landing.LandingLock(self.repo.root)
