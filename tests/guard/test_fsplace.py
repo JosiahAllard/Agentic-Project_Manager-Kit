@@ -48,6 +48,23 @@ class Counted(object):
         return repo.classify(path)
 
 
+def answers_like_git(test, cases):
+    """Each (name, path, kind, via): the filesystem's place equals git's, is of `kind` (None: any),
+    and came from the filesystem (FS) or from the fallback (GIT)."""
+    for name, path, kind, via in cases:
+        with test.subTest(name):
+            want = repo.classify(path)
+            fb = Counted()
+            got = place.classify(path, fallback=fb)
+            test.assertEqual(got, want)
+            if kind is not None:
+                test.assertEqual(got.kind, kind)
+            if via == FS and not MINE and kind != repo.NONE:
+                via = GIT                # OWNER_NOTE (NONE has no owner to check)
+            test.assertEqual(fb.calls, 1 if via == GIT else 0,
+                             '%s: expected the %s answer' % (name, via))
+
+
 @real_git("checks the filesystem's places against git's own rev-parse")
 class FilesystemPlaces(unittest.TestCase):
     @classmethod
@@ -139,7 +156,7 @@ class FilesystemPlaces(unittest.TestCase):
             ('gitfile to nowhere', self.deadlink, None, GIT),
             ('invalid .git folder', self.emptygit, repo.MAIN, GIT),
             ('core.worktree set', self.wtcfg, None, GIT),
-            ('extensions set', self.ext, repo.MAIN, GIT),
+            ('extensions.worktreeConfig set', self.ext, repo.MAIN, FS),
             ('core.bare true on the header line', self.headerbare, None, GIT),
             ('core.bare false on the header line', self.headerfalse, repo.MAIN, FS),
         ]
@@ -162,18 +179,7 @@ class FilesystemPlaces(unittest.TestCase):
             self.skipTest('subst could not map a free drive letter here')
 
     def test_every_case_answers_what_git_answers(self):
-        for name, path, kind, via in self.cases():
-            with self.subTest(name):
-                want = repo.classify(path)
-                fb = Counted()
-                got = place.classify(path, fallback=fb)
-                self.assertEqual(got, want)
-                if kind is not None:
-                    self.assertEqual(got.kind, kind)
-                if via == FS and not MINE and kind != repo.NONE:
-                    via = GIT                # OWNER_NOTE (NONE has no owner to check)
-                self.assertEqual(fb.calls, 1 if via == GIT else 0,
-                                 '%s: expected the %s answer' % (name, via))
+        answers_like_git(self, self.cases())
 
     def test_a_failing_read_hands_to_git(self):
         def broken(path):
@@ -201,6 +207,112 @@ class FilesystemPlaces(unittest.TestCase):
         self.assertEqual(ctx.main_top(os.path.join(self.wt, 'sub')),
                          context.Ctx(environ={}, home=self.repo.base, classify=repo.classify).main_top(
                              os.path.join(self.wt, 'sub')))
+
+
+DESKTOP_WT_CONFIG = '[core]\n\tlongpaths = true\n\thooksPath = C:/somewhere/githooks\n'
+
+
+def pair(r, name, common='', main_wt=None, linked_wt=None, ext=True):
+    """A main checkout base/<name> with one commit and its linked worktree base/<name>-wt.
+    `ext`: turn extensions.worktreeConfig on with `git config` (what the Claude desktop app does).
+    `common` is appended to the common config; `main_wt` and `linked_wt`, when given, are the
+    main's and the linked worktree's config.worktree."""
+    main = os.path.join(r.base, name)
+    linked = main + '-wt'
+    r.git('init', '-q', '-b', 'main', main, cwd=r.base)
+    r.git('-c', 'user.name=%s' % gitfixture.NAME, '-c', 'user.email=%s' % gitfixture.EMAIL,
+          'commit', '-q', '--allow-empty', '-m', 'one', cwd=main)
+    r.git('worktree', 'add', '-q', linked, cwd=main)
+    common_dir = os.path.join(main, '.git')
+    if ext:
+        r.git('config', 'extensions.worktreeConfig', 'true', cwd=main)
+    for path, text in ((os.path.join(common_dir, 'config'), common),
+                       (os.path.join(common_dir, 'config.worktree'), main_wt),
+                       (os.path.join(common_dir, 'worktrees', name + '-wt', 'config.worktree'), linked_wt)):
+        if text:
+            with open(path, 'a', encoding='utf-8', newline='\n') as f:
+                f.write(text)
+    return main, linked
+
+
+@real_git("checks the filesystem's places against git's own rev-parse")
+class WorktreeConfigPlaces(unittest.TestCase):
+    """extensions.worktreeConfig (git-worktree "CONFIGURATION FILE"): git then also reads the
+    work tree's own <gitdir>/config.worktree, after the common config, so a key there wins. The
+    filesystem reader reads it too and answers what git answers."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo = gitfixture.TempRepo()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.repo.cleanup()
+
+    def test_worktree_config_cases_answer_what_git_answers(self):
+        r = self.repo
+        today_main, today_linked = pair(r, 'today', linked_wt=DESKTOP_WT_CONFIG)
+        over_main, _ = pair(r, 'overmain', common='[core]\n\tbare = true\n', main_wt='[core]\n\tbare = false\n')
+        upper_main, upper_linked = pair(r, 'upper', ext=False,
+                                        common='[EXTENSIONS]\n\tWORKTREECONFIG\n[core]\n\tbare = true\n',
+                                        linked_wt='[core]\n\tbare = false\n')
+        main_bare, _ = pair(r, 'mainbare', main_wt='[core]\n\tbare = true\n')
+        _, linked_bare = pair(r, 'linkedbare', common='[core]\n\tbare = false\n', linked_wt='[core]\n\tbare = true\n')
+        other = os.path.join(r.base, 'elsewhere')
+        os.makedirs(other)
+        _, linked_wtree = pair(r, 'linkedwtree', linked_wt='[core]\n\tworktree = %s\n' % other.replace('\\', '/'))
+        incl, _ = pair(r, 'incl', main_wt='[include]\n\tpath = %s\n' % os.path.join(r.base, 'x.cfg').replace('\\', '/'))
+        off_main, _ = pair(r, 'off', ext=False, main_wt='[core]\n\tbare = true\n')
+        false_main, _ = pair(r, 'false', ext=False, common='[extensions]\n\tworktreeConfig = false\n',
+                             main_wt='[core]\n\tbare = true\n')
+        noop, _ = pair(r, 'noop', common='[extensions]\n\tnoop = true\n')
+        wt_ext, _ = pair(r, 'wtext', main_wt='[extensions]\n\tnoop = true\n')
+        v1, _ = pair(r, 'v1', common='[core]\n\trepositoryformatversion = 1\n')
+        answers_like_git(self, [
+            ("today's state: the main checkout", today_main, repo.MAIN, FS),
+            ("today's state: the linked worktree with the desktop app's config.worktree", today_linked, repo.LINKED, FS),
+            ("today's state: a path not yet there in it", os.path.join(today_linked, 'src', 'new.py'), repo.LINKED, FS),
+            ('main config.worktree bare = false wins over the common bare = true', over_main, repo.MAIN, FS),
+            ('upper-case [EXTENSIONS] WORKTREECONFIG with no value is on; linked bare = false wins',
+             upper_linked, repo.LINKED, FS),
+            ('the common bare = true holds where no config.worktree overrides it', upper_main, None, GIT),
+            ('main config.worktree bare = true', main_bare, None, GIT),
+            ('linked config.worktree bare = true over the common bare = false', linked_bare, None, GIT),
+            ('linked config.worktree core.worktree', linked_wtree, None, GIT),
+            ('an include in config.worktree', incl, None, GIT),
+            ('extension off: config.worktree is not read', off_main, repo.MAIN, FS),
+            ('worktreeConfig = false: config.worktree is not read', false_main, repo.MAIN, FS),
+            ('another extension beside worktreeConfig', noop, repo.MAIN, GIT),
+            ('an [extensions] section inside config.worktree', wt_ext, repo.MAIN, GIT),
+            ('repositoryformatversion 1 with worktreeConfig', v1, repo.MAIN, FS),
+        ])
+
+    def test_a_repository_format_git_refuses_hands_to_git(self):
+        r = self.repo
+        v2, v2_linked = pair(r, 'v2', ext=False, common='[core]\n\trepositoryformatversion = 2\n')
+        quoted, _ = pair(r, 'quoted', ext=False, common='[core]\n\trepositoryformatversion = " 0 "\n')
+        answers_like_git(self, [
+            ('repositoryformatversion 2: git refuses the repository', v2, repo.UNKNOWN, GIT),
+            ('repositoryformatversion 2, from a linked worktree', v2_linked, repo.UNKNOWN, GIT),
+            ('a repositoryformatversion git cannot read as a number', quoted, repo.UNKNOWN, GIT),
+        ])
+
+    def test_the_last_core_bare_wins(self):
+        r = self.repo
+        last_false, _ = pair(r, 'lastfalse', ext=False, common='[core]\n\tbare = true\n\tbare = false\n')
+        answers_like_git(self, [('core.bare true, then false', last_false, repo.MAIN, FS)])
+
+    def test_a_continued_line_hands_to_git(self):
+        # `x = a\` continues onto the next line, so the `bare = false` there is part of core.x:
+        # git still reads bare = true. A reader that took it for a key would answer MAIN.
+        r = self.repo
+        cont, _ = pair(r, 'cont', ext=False, common='[core]\n\tbare = true\n\tx = a\\\n\tbare = false\n')
+        cont_wt, _ = pair(r, 'contwt', common='[core]\n\tbare = true\n',
+                          main_wt='[core]\n\tx = a\\\n\tbare = false\n')
+        answers_like_git(self, [
+            ('a continued line in the common config', cont, None, GIT),
+            ('a continued line in config.worktree', cont_wt, None, GIT),
+        ])
 
 
 class NoGitLaunched(unittest.TestCase):
