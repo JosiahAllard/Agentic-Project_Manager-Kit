@@ -45,10 +45,12 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    (docs/guard.md "Go-live (after the joint review)").
    Success: a Bash search from a drive root is denied with `rule=root-search`.
 
-   On a fresh machine (no older kit clone), steps 3, 6 and 7's hook are one owner command instead:
-   from `<kit>`, `powershell -NoProfile -File installer\machine-setup.ps1 -Fresh -PmSettings
-   <PM repo>\.claude\settings.local.json` prints the plan, and the same command with `-Apply`
-   makes it (docs/machine-setup.md "Fresh machine (--fresh)"). It still runs as a hand step: the
+   On a machine with no older kit clone, steps 3, 5a, 6 and 7's hook are one owner command instead,
+   which also stores the owner's email in the machine config: from `<kit>`,
+   `powershell -NoProfile -File installer\machine-setup.ps1 -OwnerEmail <owner's commit email>
+   -PmSettings <PM repo>\.claude\settings.local.json` prints the plan, and the same command with
+   `-Apply` makes it (docs/machine-setup.md "Default mode"). It writes nothing into any
+   repository. It still runs as a hand step: the
    owner reviews the dry run and runs `-Apply`. Steps 3 and 6's success checks still apply. Step
    7's hook needs the file's folder to exist; create the rest of step 7's files either way.
 
@@ -62,7 +64,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    (docs/pm-watch.md "Config"). `pm_watch.py` reads usage
    in-process from the machine config's `launcher` key and exits 2 without it; `usage_script` is refused.
    Then, as a hand step, the owner adds the SessionStart hook from docs/pm-start.md to the
-   settings only the PM session loads (on a fresh machine, `-Fresh -PmSettings` above writes it).
+   settings only the PM session loads (machine setup's `-PmSettings` above writes it).
    Success: the next PM session starts with "PM session start checklist", not "no pm_start
    config ... checklist skipped".
 

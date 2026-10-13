@@ -126,8 +126,8 @@ in `kitlib.machinesetup.agenttemp.task_registered` (docs/daily-full.md "The sche
 repo's `.claude/settings.local.json`, which only that checkout loads. `tools/machine_setup.py`
 otherwise reads the account config folders (`~/.claude`, `~/.claude-*`, `default_config_dirs` in
 `kitlib/machinesetup`), never a repository's settings, so this file is edited by hand, except that
-`machine-setup.ps1 -Fresh -PmSettings <file>` writes the hook to the one file it names and refuses an
-account's `settings.json` (docs/machine-setup.md "Fresh machine (--fresh)").
+`machine-setup.ps1 -PmSettings <file>` (its default mode) writes the hook to the one file it names and
+refuses an account's `settings.json` (docs/machine-setup.md "Default mode").
 
 ```json
 {"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"<pythonw>","args":["<kit>/boot/hook.py","claude","SessionStart","pm"]}]}]}}

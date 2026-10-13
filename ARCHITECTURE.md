@@ -32,7 +32,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 - Tests target the library directly; the entry-point tests cover only arguments and exit codes.
 - Tests run on an in-process fake git (kitlib/git/fake), except the classes marked `real_git` (docs/test-tools.md "Fake git").
 - Once a repo uses `gate.py land`, the repo's own gate, landing, lock-wrapper, heavy-run and git-guard scripts are deleted (ported first).
-- The installer is `new-repo.ps1` (plus `kit_stubs.py` for a repository that opts into stubs with `-Stubs`) in the kit release, with nothing extra.
+- The installer is machine setup (`tools/machine_setup.py`, `installer/machine-setup.ps1`), once per machine; it writes nothing into any repository, and a repository needs nothing installed (plan decision 27; docs/install.md). The committed setup for a repository that wants one is `machine_setup.py --repo` (`installer/new-repo.ps1` is its PowerShell front end; `kit_stubs.py` for stubs with `--stubs`), in the kit release, with nothing extra.
 
 ## Build order
 

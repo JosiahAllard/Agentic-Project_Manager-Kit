@@ -57,8 +57,9 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
 - `templates/common/AGENTS.md`: the common rules file, with `<PLACEHOLDER>` slots a repository
   fills; `templates/common/CLAUDE.md` is the one line `@AGENTS.md` that makes Claude Code read it. `templates/common/LEDGER.md` starts a new rulings ledger. `templates/common/.gitignore`,
   `templates/common/gitattributes` (no leading dot: a tracked `.gitattributes` would apply to the kit
-  itself) and `INDEX.md` are what `installer/new-repo.ps1` writes into a new repository
-  (docs/install.md).
+  itself) and `INDEX.md` are what the committed repo setup (`tools/machine_setup.py --repo`,
+  `installer/new-repo.ps1`) writes into a repository that asks for it (docs/install.md
+  "Committed setup (--repo)").
   `templates/common/agent-profile.TEMPLATE.md` and `templates/common/coordinator-profile.TEMPLATE.md`
   are what the coordinator drafts a repository's two profiles from (hosts/claude/shell/agents/coordinator.md, "On start");
   their headings are the ones the agents read, and `tests/templates` checks them.
