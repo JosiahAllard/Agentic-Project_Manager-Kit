@@ -47,7 +47,7 @@ repository.
   `hub/` in the PM data worktree (docs/pm-data-branch.md). `--store PATH` serves a scratch copy
   with git sync off. The server needs no `hub` key: without one every default holds. A trial
   run with `--store` (and `migrate --store`) therefore never writes the `hub` key; the owner
-  writes that key only for the live store (docs/go-live.md "Action Hub site").
+  writes that key only for the live store (docs/go-live.md "Switches").
 - The PM session-start checklist (docs/pm-start.md) runs its site checks whether or not the `hub`
   key is written: it uses the key's settings, or the defaults (port 8790) when there is none.
   Writing the key does not switch the checklist.
@@ -72,7 +72,11 @@ repository.
   status and error code with the message `health could not be answered`.
 - Autostart (opt-in): `python tools/hub.py setup --autostart` registers a scheduled task that
   runs `hub serve` at logon; `--whatif` shows what it would do and changes nothing. Without the
-  flag nothing is registered.
+  flag nothing is registered. It is refused, with nothing registered, when no store folder is
+  set. The server then runs windowless, so Ctrl+C does not apply: end it with
+  `Stop-ScheduledTask -TaskName 'PM kit hub server'` and start it again with
+  `Start-ScheduledTask`. A server that was cut off without a clean close leaves its store lock,
+  which the next start takes over with a note (docs/hub-remote-access.md).
 - `hub.py validate [--store PATH]` checks the store folder against the field tables below, with
   no server, and prints `VALIDATE <LEVEL> <document> <field>: <message> [<code>]`.
 

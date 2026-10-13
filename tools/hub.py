@@ -449,6 +449,10 @@ def _status(a, stop):
 
 
 def _setup(a, stop):
+    if (a.autostart or a.whatif) and not settings.load().store:
+        raise serve.ServeError('no store folder is set, so a server started at sign-in would '
+                               'fail: set hub.store or pm_data in the machine config; '
+                               'nothing registered or written')
     if a.whatif:
         for line in hub_autostart.install(os.path.abspath(__file__), whatif=True):
             print(line)

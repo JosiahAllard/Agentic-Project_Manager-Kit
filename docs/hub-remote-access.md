@@ -89,7 +89,9 @@ All three fields are needed; with one missing the tunnel listener does not start
 
 - `hub.access.team`: one DNS label, no dots.
 - `hub.access.aud`: the AUD tag, no spaces.
-- `hub.access.emails`: the allow-list. Case is ignored for A to Z. An empty list allows nobody.
+- `hub.access.emails`: the allow-list. Case is ignored for A to Z. An empty list leaves the tunnel off:
+  `status` shows `tunnel: off: no allowed email is set (hub.access.emails)` and the listener never
+  starts.
 - `hub.tunnel_port`: only if you changed the port in step 2. Default 8791.
 
 The `hub` key holds no secret; the AUD tag is not a password. Keep the file out of git all the same.
@@ -100,6 +102,17 @@ Stop `hub serve` (Ctrl+C in its window), then start it again:
 python tools/hub.py serve
 ```
 
+A server started by `setup --autostart` runs windowless and has no window to press Ctrl+C in. There
+is no stop verb; end its scheduled task and start it again:
+
+```powershell
+Stop-ScheduledTask -TaskName 'PM kit hub server'
+Start-ScheduledTask -TaskName 'PM kit hub server'
+```
+
+If `status` still answers after the stop, end that one server process by its pid. A stop that is
+not a clean close leaves the store lock, and the next start takes it over with a note.
+
 The start-up notes say that the tunnel listener is on, or why it is off.
 
 ## 5. Check
@@ -108,7 +121,8 @@ The start-up notes say that the tunnel listener is on, or why it is off.
 python tools/hub.py status
 ```
 
-The last line is `tunnel: ` and one of:
+The tunnel line starts with `tunnel: ` and is one of the following (an `unavailable: ...` line may
+follow it):
 
 - `tunnel: on`: the listener is bound and the hub holds your team's Access signing keys.
 - `tunnel: bound, keys not fetched`: bound, but no key yet. This is normal right after a start:
@@ -122,7 +136,8 @@ The last line is `tunnel: ` and one of:
 
 Then open `https://<hostname>` on the phone and sign in with the allowed email. The page loads and
 `tunnel: on` shows once it did. A different email sees Cloudflare's block page, or, if it somehow
-passed, a plain `403` from the hub (the hub answers every refusal the same way and says nothing
+passed, a `403` from the hub in the API's JSON error shape (code `forbidden`, field `access`, the message
+"this listener needs a valid Cloudflare Access token"; the hub answers every refusal the same way and says nothing
 of why; its console logs the reason, at most once a minute per reason, never the token).
 
 If the phone reaches the page but the hub says it is not paired or is read-only, remember that the

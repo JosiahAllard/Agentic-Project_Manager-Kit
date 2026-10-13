@@ -117,6 +117,10 @@ class Install(unittest.TestCase):
 class SetupAutostartCli(CliCase):
     """hub.py setup with --autostart: install is replaced, so nothing is registered."""
 
+    def setUp(self):
+        super().setUp()
+        self.config({'hub': {'store': self.store_dir}})     # setup --autostart needs a store
+
     def patched(self, refusals=()):
         calls = []
 
@@ -138,12 +142,27 @@ class SetupAutostartCli(CliCase):
         self.assertFalse(os.path.exists(self.tokens))
 
     def test_the_real_whatif_from_this_checkout_prints_the_task(self):
-        with mock.patch.object(autostart.spawn, 'run', Recorder()) as run:
+        # install(run=spawn.run) binds spawn.run at import, so patching autostart.spawn.run would
+        # not reach it; spawn.run looks subprocess.run up at call time, so patch that.
+        with mock.patch('subprocess.run') as run:
             code, out, err = self.run_cli('setup', '--autostart', '--whatif')
         self.assertEqual((code, err), (0, ''))
         self.assertIn("-TaskName 'PM kit hub server'", out)
         self.assertIn('%s" serve' % os.path.abspath(HUB.__file__), out)
-        self.assertEqual(run.calls, [])
+        run.assert_not_called()
+        self.assertFalse(os.path.exists(self.tokens))
+
+    def test_no_store_folder_refuses_autostart_and_whatif_before_registering_anything(self):
+        self.config({})
+        calls = self.patched()
+        for argv in (('setup', '--autostart'), ('setup', '--autostart', '--whatif')):
+            with mock.patch('subprocess.run') as run:
+                code, out, err = self.run_cli(*argv)
+            self.assertEqual((code, out), (1, ''), argv)
+            self.assertIn('REFUSED: no store folder is set', err)
+            self.assertIn('hub.store', err)
+            run.assert_not_called()
+        self.assertEqual(calls, [])
         self.assertFalse(os.path.exists(self.tokens))
 
     def test_autostart_makes_the_tokens_then_installs(self):
