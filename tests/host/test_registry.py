@@ -114,6 +114,13 @@ class Validation(Case):
                 lambda e: e['profile'].update(session_env=''),
                 lambda e: e['profile'].pop('skills_directory'),
                 lambda e: e['profile'].update(skills_directory='../skills'),
+                lambda e: e['profile'].pop('attribution'),
+                lambda e: e['profile']['attribution'].pop('model_pattern'),
+                lambda e: e['profile']['attribution'].update(email='a b@c'),
+                lambda e: e['profile']['attribution'].update(name='Two  spaces'),
+                lambda e: e['profile']['attribution'].update(model_env='NOT A NAME'),
+                lambda e: e['profile']['attribution'].update(model_pattern='('),
+                lambda e: e['profile']['attribution'].update(model_pattern=''),
                 lambda e: e['tiers'].pop('deep'),
                 lambda e: e['tiers'].update(light='')):
             bad = copy.deepcopy(data)

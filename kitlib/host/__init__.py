@@ -8,6 +8,7 @@ import for that): kitlib never imports a host, the host is chosen at the edge.
 
   Action, Decision          one guarded event, and the verdict on it
   HostProfile               the host data the core reads (hosts.json "profile")
+  Attribution               how its commits name it (hosts.json "profile".attribution)
   HostCapabilities          what the host's hooks can carry (hosts.json "capabilities")
   degrade(decision, caps)   the one way a verdict the host cannot show is lowered
   HostAdapter, SessionHost, CommandHost   what an adapter supplies
@@ -54,6 +55,19 @@ class Decision:
 
 
 @dataclass(frozen=True)
+class Attribution:
+    """How a host's agent commits are attributed: the trailer `Co-Authored-By: <name ...> <email>`.
+    `model_env` the environment variable a model name falls back to (None: no fallback);
+    `model_pattern` None for a free model name, given `<name> ` in front unless it already starts
+    with it or is a co-author family, else a regex an explicit model id must match whole, always
+    written `<name> <id>`."""
+    name: str
+    email: str
+    model_env: Optional[str]
+    model_pattern: Optional[str]
+
+
+@dataclass(frozen=True)
 class HostProfile:
     """The host data the core reads, each field with a consumer (plan 2.1): `owner_paths` the
     host's own instruction and settings paths, `worktrees_directory` the repo path its agent
@@ -61,7 +75,7 @@ class HostProfile:
     images (the lock's agent-host test), `mcp_tool_format` how it names an MCP tool, with
     {plugin}, {server} and {tool} fields, `session_env` the environment variable its session id
     is in (the lock shows it, never trusts it), `skills_directory` the repo path it reads a
-    repository's own skills from."""
+    repository's own skills from, `attribution` its commits' Co-Authored-By (Attribution)."""
     owner_paths: tuple
     worktrees_directory: str
     state_directory: str
@@ -69,6 +83,7 @@ class HostProfile:
     mcp_tool_format: str
     session_env: str
     skills_directory: str
+    attribution: Attribution
 
 
 @dataclass(frozen=True)

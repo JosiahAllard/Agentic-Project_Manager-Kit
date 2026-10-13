@@ -29,7 +29,7 @@ import os
 import re
 
 from kitlib import kitroot
-from kitlib.host import HostCapabilities, HostProfile
+from kitlib.host import Attribution, HostCapabilities, HostProfile
 
 PATH = os.path.join(kitroot.root(), 'hosts.json')
 ENV = 'PM_KIT_HOST'
@@ -37,6 +37,7 @@ TIERS = ('light', 'standard', 'strong', 'deep')
 
 _NAME = re.compile(r'[a-z][a-z0-9-]*\Z')
 _ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+_EMAIL = re.compile(r'[^\s<>@]+@[^\s<>@]+\Z')
 _MODULE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z')
 _KEYS = {'adapter', 'shell', 'platforms', 'capabilities', 'profile', 'tiers'}
 # The operating systems a host can declare it runs on (multi-host plan section 6). Windows is
@@ -116,10 +117,27 @@ def _capabilities(name, raw):
         _text(w + '.agent_format', c['agent_format']))
 
 
+def _attribution(w, raw):
+    a = _object(w, raw, ('name', 'email', 'model_env', 'model_pattern'))
+    name, email = _text(w + '.name', a['name']), _text(w + '.email', a['email'])
+    if name != ' '.join(name.split()) or not _EMAIL.match(email):
+        raise RegistryError('hosts.json: %s needs a single-spaced name and a plain email' % w)
+    model_env, pattern = a['model_env'], a['model_pattern']
+    if model_env is not None and not (isinstance(model_env, str) and _ENV_NAME.match(model_env)):
+        raise RegistryError('hosts.json: %s.model_env must be an environment variable name or null' % w)
+    if pattern is not None:
+        _text(w + '.model_pattern', pattern)
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            raise RegistryError('hosts.json: %s.model_pattern is not a regex: %s' % (w, e)) from None
+    return Attribution(name, email, model_env, pattern)
+
+
 def _profile(name, raw):
     w = '%s.profile' % name
     p = _object(w, raw, ('owner_paths', 'worktrees_directory', 'state_directory', 'process_names',
-                         'mcp_tool_format', 'session_env', 'skills_directory'))
+                         'mcp_tool_format', 'session_env', 'skills_directory', 'attribution'))
     session_env = _text(w + '.session_env', p['session_env'])
     if not _ENV_NAME.match(session_env):
         raise RegistryError('hosts.json: %s.session_env must be an environment variable name' % w)
@@ -130,7 +148,8 @@ def _profile(name, raw):
         _texts(w + '.process_names', p['process_names']),
         _text(w + '.mcp_tool_format', p['mcp_tool_format']),
         session_env,
-        _relpath(w + '.skills_directory', p['skills_directory']))
+        _relpath(w + '.skills_directory', p['skills_directory']),
+        _attribution(w + '.attribution', p['attribution']))
 
 
 def _entry(name, raw):

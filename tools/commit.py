@@ -51,7 +51,8 @@ def parser():
     body.add_argument('--body-file', dest='body_file', default=None,
                       help='read the body from this file (UTF-8)')
     p.add_argument('--model', default=None,
-                   help='the model you run on (default: CLAUDE_AGENT_MODEL)')
+                   help='the model you run on (default: the host\'s model variable, %s on the '
+                        'default host)' % C.MODEL_ENV)
     p.add_argument('--host', '--provider', dest='host', default=None,
                    help='the agent host, for the Co-Authored-By trailer (default: $PM_KIT_HOST, '
                         'else the hosts.json default); --provider is its old name, kept for one release')

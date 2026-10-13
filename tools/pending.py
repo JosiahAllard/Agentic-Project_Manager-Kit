@@ -11,7 +11,8 @@
       --commit commits the file alone as `pending: <added|done|edited> N`; --push also pushes the
       current branch to the repository's `repo.remote` (origin by default). Both refuse, before
       writing, when the file has uncommitted changes or the branch is not its repository's main
-      branch (unless --branch-ok). The trailer names --model, else $CLAUDE_AGENT_MODEL.
+      branch (unless --branch-ok). The trailer names --model, else the host's model variable
+      (hosts.json "attribution".model_env).
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.pending, prints and exits.
 Exit codes: 0 ok; 1 no file configured or unreadable, a refused change, a file that cannot be
