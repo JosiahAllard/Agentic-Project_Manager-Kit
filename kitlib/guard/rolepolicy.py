@@ -2,11 +2,15 @@
 ARCHITECTURE.md "Roles"). Lifted from the Codex branch's guard_adapter and kit_adapter, with no host
 in it.
 
-Off unless the repository opts in: a role is held to it only when the main checkout's .kit.json
-`roles.<role>.mode` names its mode, so a session whose role has no mode is judged exactly as before.
-The role is the subagent's (config.policy.role_name: Action.agent_role when the roles table names
-it), else the main session's launcher mark when the table names it, else `main`. The owner's own
-session (nothing marks it) is never held, and its calls read no config here.
+Off unless the repository opts in: the main checkout's .kit.json `guard.role_policy` is true. With it
+off no role is held, whatever mode a role file or the roles table names, so every call is judged
+exactly as before. With it on, a role is held to its mode: `roles.<role>.mode` in that .kit.json,
+else the `mode` of its role file, `<kit>/content/roles/<role>.md` under the kit root the guard runs
+from (Ctx.kit; kitlib.content.role_mode, which reads an old name such as opus-worker as its new
+one). A role with neither, or whose role files are missing or unreadable, is judged as before.
+The role is the subagent's (config.policy.role_name: Action.agent_role when the roles table or a
+role file names it), else the main session's launcher mark when one of them names it, else `main`.
+The owner's own session (nothing marks it) is never held, and its calls read no config here.
 
   MODES   controller   a lead (pm, coordinator): shell and edits as before, plus the checks below
           write        a builder: the same
@@ -40,6 +44,8 @@ import os
 
 from kitlib import agentname
 from kitlib import config as kconfig
+from kitlib import content as kcontent
+from kitlib.host.content import MODES
 from kitlib.git import repo
 
 from . import commands as cm
@@ -48,7 +54,6 @@ from . import rules
 from . import shell as sh
 from .context import OWNER
 
-MODES = ('controller', 'write', 'read', 'test', 'lander')
 NO_EDIT = ('read', 'test', 'lander')
 READ_ONLY_CHECKOUT = ('read', 'test')
 LOCK_VERBS = ('status', 'stats', 'run', 'background', 'stop')
@@ -62,28 +67,35 @@ fwd = rules.fwd
 
 
 def role_of(action, ctx, table):
-    """The roles-table name the Action runs as (module docstring), or 'main'."""
+    """The name the Action runs as (module docstring), or 'main': `table` holds the role names
+    known (the roles table's and the role files')."""
     if getattr(action, 'agent', None):
         return kconfig.role_name(action, table)
     who = agentname.bare_mark(str(ctx.session_role(action) or ''))
     return who if who in table and who not in ('main', 'subagent') else 'main'
 
 
+def enabled(cfg):
+    """True when the .kit.json `cfg` turns the role policy on (guard.role_policy)."""
+    return cfg.section('guard').get('role_policy') is True
+
+
 def mode(action, ctx):
     """(role, mode) of the Action, mode None when the policy is off for it: an action no rule
-    here judges, the owner's own session, a session outside any checkout's .kit.json, or a role
-    whose entry names no mode."""
+    here judges, the owner's own session, a session outside any checkout's .kit.json, a .kit.json
+    that does not turn the policy on, or a role with no mode in the roles table or its role file."""
     if action is None or action.kind not in ('edit', 'shell'):
         return None, None
     if not getattr(action, 'agent', None) and ctx.session_role(action) == OWNER:
         return None, None                       # the owner's own session: no role, nothing read
     cwd = action.cwd or os.getcwd()
     cfg = ctx.config(cwd)
-    if cfg is None:
+    if cfg is None or not enabled(cfg):
         return None, None
     table = kconfig.roles(cfg)
-    role = role_of(action, ctx, table)
-    m = table.get(role, {}).get('mode')
+    files = kcontent.role_modes(ctx.kit)
+    role = role_of(action, ctx, set(table) | set(files) | set(kcontent.ALIASES))
+    m = table.get(role, {}).get('mode') or kcontent.role_mode(role, ctx.kit)
     return role, (m if m in MODES else None)
 
 

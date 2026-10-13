@@ -4,6 +4,7 @@ description: Extends a named design or spec document (a design doc, a plan secti
 tier: standard
 effort: high
 sandbox: workspace-write
+mode: write
 capabilities: [read, edit, write, search, find, powershell, bash]
 ---
 

@@ -4,6 +4,7 @@ description: A worker for high-risk changes - networking, concurrency, simulatio
 tier: strong
 effort: high
 sandbox: workspace-write
+mode: write
 capabilities: all
 ---
 

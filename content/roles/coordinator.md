@@ -4,6 +4,7 @@ description: Multi-agent coordinator for a software repository. Run it as the MA
 tier: strong
 effort: medium
 sandbox: workspace-write
+mode: controller
 capabilities: [dispatch, message, list-agents, stop-task, read, search, find, edit, write, powershell, bash, monitor, tool-search, skill, ask-owner, artifact, cron-create, cron-list, cron-delete]
 ---
 

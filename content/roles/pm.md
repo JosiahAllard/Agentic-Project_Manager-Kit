@@ -4,6 +4,7 @@ description: The project manager - the owner's one session across every reposito
 tier: strong
 effort: high
 sandbox: workspace-write
+mode: controller
 capabilities: all
 ---
 

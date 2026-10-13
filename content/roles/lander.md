@@ -4,6 +4,7 @@ description: Lands one finished branch on the main branch at a time, on the coor
 tier: light
 effort: medium
 sandbox: workspace-write
+mode: lander
 capabilities: [powershell, bash, read, search, find, dispatch]
 ---
 

@@ -14,6 +14,7 @@ import re
 import sys
 
 from kitlib import agentname
+from kitlib import content as kcontent
 from kitlib.launcher import accounts as A
 from kitlib.launcher import lookup, state, window
 from kitlib.launcher.settings import LaunchError
@@ -35,8 +36,9 @@ ROLE_AUTOCOMPACT = {'consultant': CONSULTANT_DEFAULT_AUTOCOMPACT, 'deep-worker':
 KIT_AGENTS = ('asset-smith', 'consultant', 'coordinator', 'deep-worker', 'lander', 'pm', 'records',
               'researcher', 'reviewer', 'senior-worker', 'sound-smith', 'spec-writer', 'strong-worker', 'tech-artist',
               'test-runner', 'worker')
-# a kit agent's old name -> its name now: started as the new one, for one release (docs/ROSTER.md)
-AGENT_ALIASES = {'opus-worker': 'senior-worker'}
+# a kit agent's old name -> its name now: started as the new one, for one release (docs/ROSTER.md);
+# the guard's role policy reads the same table (kitlib.content.ALIASES)
+AGENT_ALIASES = kcontent.ALIASES
 LONG_MODEL = 'opus[1m]'
 NOTES_DEFAULT = 'docs/ops/consultant-notes.local.md'
 DIGEST = os.path.join('docs', 'conventions-digest.md')

@@ -4,6 +4,7 @@ description: "NEVER dispatch with the Agent tool. deep-worker is its own launche
 tier: deep
 effort: xhigh
 sandbox: workspace-write
+mode: write
 capabilities: all
 ---
 

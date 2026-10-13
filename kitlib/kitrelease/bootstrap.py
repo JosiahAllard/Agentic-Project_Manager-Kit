@@ -16,8 +16,9 @@ import stat
 MARKER = '.kit-package.json'
 SUBTREE = 'shared-runtime'
 HOSTS = 'hosts.json'
+# content: the role files the guard reads each role's policy mode from (kitlib.content.role_modes)
 CORE_ROOTS = ('kitlib', 'tools', 'mcp', 'docs', 'templates', 'githooks', 'installer', 'optional',
-              'knowledge')
+              'knowledge', 'content')
 RESOURCES = ('AGENTS.md', 'ARCHITECTURE.md', 'CLAUDE.md', 'README.md',
              'LICENSE', 'reserve_ui.pyw', HOSTS)
 REQUIRED_FILE = 'kitlib/kitrelease/bootstrap.py'

@@ -4,6 +4,7 @@ description: "The default coder for High-risk build and fix work on standard pat
 tier: strong
 effort: medium
 sandbox: workspace-write
+mode: write
 capabilities: all
 cache: long
 ---

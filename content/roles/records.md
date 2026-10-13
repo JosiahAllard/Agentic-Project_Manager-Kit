@@ -4,6 +4,7 @@ description: Writes settled facts into a repository's docs - owner decisions, la
 tier: standard
 effort: low
 sandbox: workspace-write
+mode: write
 capabilities: [read, edit, write, search, find, powershell, bash]
 ---
 
