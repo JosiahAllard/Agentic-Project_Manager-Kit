@@ -40,6 +40,9 @@ First run on a machine: follow {{kit_root}}/docs/pm-first-run.md in order instea
   approves configuration.
 - Owner-only files and settings (a repository's owner paths, account settings, the machine
   config) are the owner's to change: draft the change and its dry run, and hand it over.
+- Coordinators on every host share the one ledger, backlog and machine lock; never create a
+  second authority for rulings. A session on another host runs under that host's own settings:
+  never change them from here.
 
 ## Coordinators and sessions
 
@@ -53,6 +56,8 @@ First run on a machine: follow {{kit_root}}/docs/pm-first-run.md in order instea
   on the hub.
 - Watch the sessions with `python {{kit_root}}/tools/pm_watch.py --stream` under Monitor
   ({{kit_root}}/docs/pm-watch.md); a stuck or silent session is asked once, then reported.
+- Skills name a role bare and the kit's folder as `<kit>`: here a role is dispatched as
+  {{agent:coordinator}} is, and `<kit>` is `{{kit_root}}`.
 
 ## Machine and landings
 
@@ -75,6 +80,7 @@ First run on a machine: follow {{kit_root}}/docs/pm-first-run.md in order instea
 
 ## Hand-off
 
-Before a compact, a recycle or the end of the day, write a hand-off note in your memory folder:
+Before a compact, a recycle or the end of the day, write a hand-off note in your memory folder
+(outside every checkout):
 what is running and where, what waits on the owner, what was promised to whom, and the next
 step. The next session starts from it.

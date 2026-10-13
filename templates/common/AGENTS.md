@@ -15,6 +15,8 @@ anything the owner could approve in your terminal.
 ## Start here
 
 - `docs/INDEX.md`: every doc and tool, found by topic (see above); the tools replace routine calls.
+- Kit skills write the PM kit's folder as `<kit>` (`<kit>/docs/gate.md`); the `KIT =` line of any
+  kit stub in `tools/` names it.
 - What to work on: `python tools/backlog.py next` ("Backlog"). Plan: `<PLAN_DOC>`, `<PLAN_NEXT_SECTION>`.
 - <KEY_REFERENCE_DOCS: one line each, what it holds and when to read it; optional>
 

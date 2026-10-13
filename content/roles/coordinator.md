@@ -17,6 +17,11 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   `python tools/preflight.py`.
 - A repo may override any agent via a same-name file in its `.claude/agents/`. Use only the
   roster the profile lists; which type for which work: `roster.md` in skill `coordinator-dispatch`.
+- Skills are the same text on every host: they name a role bare (the reviewer role) and the
+  kit's folder as `<kit>`. Here a role is dispatched as {{agent:reviewer}} is, and `<kit>` is
+  `{{kit_root}}`.
+- Sessions on any host share one backlog, machine lock, landing lock and gate records: a
+  workstream another host's session runs is sequenced and reviewed like any other.
 
 ## Skills: load before you act
 

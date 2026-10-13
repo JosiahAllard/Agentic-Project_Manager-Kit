@@ -1,11 +1,11 @@
 ---
 name: coordinator-dispatch
-description: Use as a coordinator before any dispatch - writing a brief, choosing the agent and model, pulling the record, a creative (art, 3D, sound) brief, assigning shared resources or a measurement, requesting a deep-worker session, resuming agents that all died at once, and the daily prune and weekly tool-set upkeep runs. Load skill subagent-dispatch too for the harness traps.
+description: Use as a coordinator before any dispatch - writing a brief, choosing the role and tier, pulling the record, a creative (art, 3D, sound) brief, assigning shared resources or a measurement, requesting a deep-worker session, resuming agents that all died at once, and the daily prune and weekly tool-set upkeep runs. Load skill subagent-dispatch too for the dispatch traps.
 ---
 
 # Coordinator: dispatch
 
-Harness traps (Plan cannot write, output files are no rescue path): skill `subagent-dispatch`.
+Dispatch traps (built-in planners that cannot write, output files are no rescue path): skill `subagent-dispatch`. Roles are named bare here; your host's instructions say how a role name becomes its dispatch name.
 
 ## Before the agent starts
 
@@ -19,9 +19,10 @@ Harness traps (Plan cannot write, output files are no rescue path): skill `subag
   reports to you.
 - **Bundle related work**: pull other open records in the same area onto the same branch, keeping
   it reviewable and never mixing a high-risk change with unrelated work.
-- 1 workstream = 1 branch = 1 isolated worktree, per profile. A brief that names a worktree you
-  prepared is dispatched without `isolation`: the harness otherwise confines writes to its own
-  worktree and denies the first edit.
+- 1 workstream = 1 branch = 1 worktree, per profile (`python tools/new_worktree.py <branch>`
+  where the profile names no other way; it picks the host's worktree folder). A brief that names a
+  worktree you prepared is dispatched into it, without asking the host for an isolated worktree of
+  its own: the host would otherwise confine writes to that one and deny the first edit.
 - Writes in another session's worktree (a sync, a commit, a stuck run) are made by the agent that
   owns it, or by a fresh agent dispatched into that worktree; never by you with `-C` from outside.
   Only for new work: a refused command is never rerouted this way.
@@ -37,28 +38,28 @@ Harness traps (Plan cannot write, output files are no rescue path): skill `subag
   (path:Symbol) - a brief with no paths costs the worker about 35 calls. Brief names doc topics
   to look up, never a pasted rule. Where the repo has a brief template (`--find brief`), follow it.
 - Every agent starts with `python tools/preflight.py`. Briefs point at `python tools/codemap.py`
-  and `doc_index.py --section "<heading>"` before any search; agents use Grep and Read, not shell
-  grep, cat or sed. Reviewer and lander briefs name `python tools/review_pack.py <branch>` as
-  their first call, where the repo has it.
-- In a large file the brief names the sections or line ranges to read; the agent reads ranges (codemap or Grep first), never the whole file, unless it is rewriting all of it.
+  and `python tools/doc_index.py --section "<heading>"` before any search; agents use their search
+  and file-read tools, not shell grep, cat or sed. Reviewer and lander briefs name
+  `python tools/review_pack.py <branch>` as their first call, where the repo has it.
+- In a large file the brief names the sections or line ranges to read; the agent reads ranges (codemap or a search first), never the whole file, unless it is rewriting all of it.
 - Every coding brief states its risk level and why (path in the risk map, or the reason it is
   higher); unlisted is not a reason - list routine paths at their real level.
-- Briefs to `pm-kit:records` and `pm-kit:spec-writer` give facts as keyword lines in the entry format
+- Briefs to the records and spec-writer roles give facts as keyword lines in the entry format
   `ID | status | area | keywords | ref`, 300 chars at most, not paragraphs to transcribe. Decision
   logs split into more per-area files as they fill.
 
-## Which agent, which model
+## Which role, which tier
 
-Read `roster.md` in this skill's folder (beside this file): the agent types and what each is for,
-the cheap/strong split, the coding ladder, model and effort rules, `pm-kit:deep-worker` requests, the
-`pm-kit:consultant`, `pm-kit:researcher` and pass/fail-check routing. The kit's roster doc (the pinned models) is
-`${CLAUDE_PLUGIN_ROOT}/docs/ROSTER.md`.
+Read `roster.md` in this skill's folder (beside this file): the roles and what each is for, the
+cheap/strong split, the coding ladder, tier and effort rules, deep-worker requests, the
+consultant, researcher and pass/fail-check routing. The kit's roster table (each role's tier, and
+each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
 
 ## Creative dispatches
 
-- `pm-kit:tech-artist` (art that is code), `pm-kit:asset-smith` (scripted 3D), `pm-kit:sound-smith` (sound; it cannot
-  hear, so its report ends in a question you put to the owner): via the owner's local models,
-  against an art direction the owner has decided or, where none exists, `pm-kit:tech-artist` proposes
+- The tech-artist (art that is code), asset-smith (scripted 3D) and sound-smith (sound; it cannot
+  hear, so its report ends in a question you put to the owner) roles: via the owner's local models,
+  against an art direction the owner has decided or, where none exists, the tech-artist proposes
   strongly different looks for the owner to pick; none hand-sculpts, rigs or animates. An asset
   generation cannot supply -> the owner, not another agent.
 - Every creative brief carries this block, filled in:
@@ -92,7 +93,11 @@ the cheap/strong split, the coding ladder, model and effort rules, `pm-kit:deep-
 
 - Continue an agent 2-3 rounds per artefact, then reseed from a short written summary. A message
   queued to a busy agent may never be read: if a report shows something was missed, resend in full.
-- Review a hand-back at once and continue the same agent within 5 minutes (its cache lasts 5; `pm-kit:senior-worker` asks for 60 in its frontmatter and has the hour where the client grants it); later, continue anyway unless its context is above about 150k tokens (opus coder types) or it is a reviewer, then start fresh from a short written summary; never park a large-context agent to resume later for a small fix.
+- Review a hand-back at once and continue the same agent while its prompt cache is warm (the
+  host's cache window; `<kit>/docs/ROSTER.md` names the role that asks for a longer one); later,
+  continue anyway unless its context is above about 150k tokens (strong- and deep-tier coders) or
+  it is a reviewer, then start fresh from a short written summary; never park a large-context
+  agent to resume later for a small fix.
 - A background run dies with its agent: tell its replacement to check logs first.
 - Few long-running agents: each notification costs a turn over your whole context.
 - **When agents die together** (an API error or usage limit stops every running agent at once):
@@ -104,11 +109,12 @@ the cheap/strong split, the coding ladder, model and effort rules, `pm-kit:deep-
 ## Upkeep
 
 - **Prune daily.** Start each day with `python tools/doc_index.py --stale`: confirm (touch it),
-  rewrite or delete each line, in ONE `pm-kit:records` commit. A new `.md`, shard or section adds its
+  rewrite or delete each line, in ONE records-role commit. A new `.md`, shard or section adds its
   index line in the same commit, or the doc-budget check refuses the branch.
-- Durable facts -> the repo's docs, landed like any docs change, never under `~/.claude`; session
-  state -> `docs/ops/state.local.md`. `.claude/worktrees/` is unaffected: create and remove
-  worktrees as the profile says.
-- **Grow the tool set.** Weekly, run the repetition report on the repo (the kit's
-  `${CLAUDE_PLUGIN_ROOT}/optional/usage/repetition_report.py`, installed under `~/.claude/tools/usage/`): repeated shell shapes, or a scratch script written twice, become lines in the repo's
-  `docs/ops/tool-requests.md`; build the top one as ordinary work (`tools/` is High risk).
+- Durable facts -> the repo's docs, landed like any docs change, never in the host's config
+  folder; session state -> `docs/ops/state.local.md`. Worktrees are created and removed as the
+  profile says.
+- **Grow the tool set.** Weekly, run the repetition report on the repo
+  (`<kit>/optional/usage/repetition_report.py`): repeated shell shapes, or a scratch script
+  written twice, become lines in the repo's `docs/ops/tool-requests.md`; build the top one as
+  ordinary work (`tools/` is High risk).

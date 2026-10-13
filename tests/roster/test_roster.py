@@ -228,7 +228,7 @@ class ReviewerRuleTest(unittest.TestCase):
         self.assertEqual(sorted(set(in_rows) - set(printed)), [])
         self.assertEqual(sorted(set(printed) - set(in_rows)), [], 'a printed group no row covers')
         # the strict landing paths: a name in a module, both as the rule spells them
-        m = re.search(r'`(\w+)` in `\$\{CLAUDE_PLUGIN_ROOT\}/(kitlib/[\w/]+)\.py`', rule)
+        m = re.search(r'`(\w+)` in `<kit>/(kitlib/[\w/]+)\.py`', rule)     # a skill writes the kit's root <kit>
         self.assertIsNotNone(m, 'the rule names no strict-path tuple')
         self.assertEqual(m.group(1), 'STRICT_DEFAULTS')
         module = importlib.import_module(m.group(2).replace('/', '.'))
