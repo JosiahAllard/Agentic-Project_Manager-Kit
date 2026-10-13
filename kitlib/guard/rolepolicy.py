@@ -31,10 +31,11 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   folder) is the write jail's, as for any session
     role-workdir  a shell call whose own working directory (Action.workdir, a host whose shell
                   call names one) is outside the checkout the session runs in
-    role-shell    an interactive interpreter (shell_gap): a shell, cmd, PowerShell or python run with
-                  no script, command or informational option, or told to stay open
-                  (-i, -, -s, -NoExit and any prefix of it, /k). Standard input fed by a pipe, a
-                  heredoc, a here-string or `<` is the script: bare, `-` and `-s` then pass
+    role-shell    an interactive interpreter (shell_gap): a shell, cmd, PowerShell or python whose
+                  own options (those before the script, the command or `-`) name no script,
+                  command or informational option, or tell it to stay open (-i, -Interactive,
+                  -NoExit and any prefix of it, /k). Standard input fed by a pipe, a heredoc, a
+                  here-string or `<` is the script: bare, `-` and bash's `-s` then pass
     role-lock     the lock CLI (machine_lock.py) run with a verb outside the mode's LOCK_VERBS, or
                   with --force in any abbreviation
   context(action, ctx)  the Ctx the shared rules then use: for a read, test or lander role, a view
@@ -76,13 +77,19 @@ AGENT_LOCK = {'status': None, 'stats': None, 'run': None, 'background': None, 's
 LOCK_VERBS = {'controller': AGENT_LOCK, 'write': AGENT_LOCK, 'test': AGENT_LOCK,
               'lander': {'status': None, 'stats': None, 'run': None},
               'read': {'status': None, 'stats': None}}
-INTERACTIVE = ('-', '-i', '-s', '-interactive', '-noexit', '/k')
 REAL_NOT_FORCE = ('--for',)   # a lock CLI option of its own (hold edit, window_args), not --force cut short
-FED = ('-', '-s')               # with standard input fed, the script comes from it
 STDIN_OPS = ('<', '<<', '<<<')
-FINITE = {'ps': ('-command', '-c', '-file', '-f', '-version', '-help', '-?'),
-          'cmd': ('/c', '/?'),
-          'other': ('-c', '-m', '-lc', '-cl', '--command', '-v', '--version', '-h', '--help')}
+# What an interpreter's own options say (shell_gap): it runs a script or command and ends, it reads
+# its script from standard input, it stays on the terminal, or (PowerShell) it stays open.
+FINITE, STDIN, INTERACTIVE, NOEXIT = 'finite', 'stdin', 'interactive', 'noexit'
+PY_INFO, PY_INFO_LONG = 'Vh?', ('--version', '--help')         # python -V, --help-env, ...
+PY_VALUE, PY_VALUE_LONG = 'WX', ('--check-hash-based-pycs',)   # options that take the next word
+SH_INFO_LONG = ('--version', '--help')
+SH_VALUE, SH_VALUE_LONG = 'oO', ('--rcfile', '--init-file')
+PS_INFO = ('version', 'v', 'help', 'h', '?')
+PS_VALUE_NAMES = ('executionpolicy', 'windowstyle', 'outputformat', 'inputformat', 'configurationname',
+                  'workingdirectory', 'psconsolefile', 'settingsfile', 'custompipename', 'encodedarguments')
+PS_VALUE_SHORT = ('ex', 'ep', 'w', 'of', 'o', 'if', 'wd')
 _deny = rules.refuse
 fwd = rules.fwd
 
@@ -205,8 +212,10 @@ def _interpreter(name):
         return 'ps'
     if name == 'cmd':
         return 'cmd'
-    if name in cm.BASH_SHELLS or cm.PYTHON_RE.fullmatch(name):
-        return 'other'
+    if name in cm.BASH_SHELLS:
+        return 'sh'
+    if cm.PYTHON_RE.fullmatch(name):
+        return 'py'
     return None
 
 
@@ -216,10 +225,117 @@ def stdin_fed(cmd):
     return bool(cmd.piped_in) or any(r.op in STDIN_OPS and not r.dup for r in cmd.redirects)
 
 
+def _ps_key(word, names, short=(), least=3):
+    """True when the PowerShell parameter `word` (lower case, `-` or `/` and any `:value` gone) is
+    one of `short` or a prefix of one of `names` at least `least` letters long."""
+    return word in short or (len(word) >= least and any(n.startswith(word) for n in names))
+
+
+def _python_opts(args):
+    """What python's own options say, read up to the operand that ends them (the script, `-`, or
+    the text after -c or -m): FINITE, STDIN, (INTERACTIVE, word) or None (no operand)."""
+    k = 0
+    while k < len(args):
+        a = args[k]
+        if a == '-':
+            return STDIN
+        if a == '--':
+            return FINITE if k + 1 < len(args) else None
+        if not a.startswith('-'):
+            return FINITE                       # the script; every later word is its own
+        if a.startswith('--'):
+            name = a.split('=', 1)[0]
+            if name in PY_INFO_LONG or name.startswith('--help'):
+                return FINITE
+            k += 2 if name in PY_VALUE_LONG and '=' not in a else 1
+            continue
+        for j, ch in enumerate(a[1:], 1):       # a cluster: -Bc "...", -Wignore, -OO
+            if ch in 'cm':
+                return FINITE                   # the rest of the word or the next is the command
+            if ch == 'i':
+                return INTERACTIVE, a
+            if ch in PY_INFO:
+                return FINITE
+            if ch in PY_VALUE:
+                k += 0 if j + 1 < len(a) else 1  # -Wignore holds its value; -W ignore takes the next
+                break
+        k += 1
+    return None
+
+
+def _bash_opts(args):
+    """bash's (or sh's) own options, read as _python_opts: the script or -c ends them, -s reads
+    the script from standard input, -i stays on the terminal."""
+    k = 0
+    while k < len(args):
+        a = args[k]
+        if a in ('-', '--'):
+            return FINITE if k + 1 < len(args) else STDIN
+        if not a.startswith(('-', '+')):
+            return FINITE
+        if a.startswith('--'):
+            if a in SH_INFO_LONG:
+                return FINITE
+            k += 2 if a in SH_VALUE_LONG else 1
+            continue
+        flags = a[1:]
+        if a[0] == '-' and 'i' in flags:
+            return INTERACTIVE, a
+        if a[0] == '-' and 'c' in flags:
+            return FINITE
+        if a[0] == '-' and 's' in flags:
+            return STDIN
+        k += 2 if any(f in SH_VALUE for f in flags) else 1
+    return None
+
+
+def _ps_opts(args):
+    """PowerShell's own parameters (lower case), read as _python_opts: -Command, -File and
+    -EncodedCommand end them (`-` after -Command or -File: standard input), a word that is no
+    parameter is the file; -NoExit (any prefix of it) and -Interactive stay open."""
+    k = 0
+    while k < len(args):
+        a = args[k]
+        if a == '-':
+            return STDIN
+        if a[:1] not in '-/':
+            return FINITE                       # the file pwsh runs; later words are the script's
+        key = a.lstrip('-/').split(':', 1)[0]
+        if key and 'noexit'.startswith(key):
+            return NOEXIT, a
+        if _ps_key(key, ('interactive',), ('i',)):
+            return INTERACTIVE, a
+        if _ps_key(key, ('encodedcommand',), ('e', 'ec')):
+            return FINITE
+        if _ps_key(key, ('command',), ('c',)) or _ps_key(key, ('file',), ('f',), 2):
+            return STDIN if k + 1 < len(args) and args[k + 1] == '-' else FINITE
+        if key in PS_INFO:
+            return FINITE
+        k += 2 if _ps_key(key, PS_VALUE_NAMES, PS_VALUE_SHORT) else 1
+    return None
+
+
+def _cmd_opts(args):
+    """cmd's own switches (lower case): /c (or /r) runs a command and ends them, /k stays open."""
+    for a in args:
+        if a.startswith(('/c', '/r')):
+            return FINITE
+        if a.startswith('/k'):
+            return INTERACTIVE, a
+        if a == '/?':
+            return FINITE
+    return None
+
+
+OPTS = {'py': _python_opts, 'sh': _bash_opts, 'ps': _ps_opts, 'cmd': _cmd_opts}
+
+
 def shell_gap(parsed):
     """(program, why, instead) for the first interpreter `parsed` starts that would wait for input,
-    else None. A nested shell's own commands are in `parsed` too (commands.read), so `bash -c bash`
-    is caught at the inner bash."""
+    else None. Only the interpreter's own options count: they end at the script, the command
+    (-c, -m, -Command, -File, -EncodedCommand, /c) or `-`, and every word after that belongs to
+    the program run (`python -m pytest -s`, `python x.py -i`). A nested shell's own commands are
+    in `parsed` too (commands.read), so `bash -c bash` is caught at the inner bash."""
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         if inv is None:
@@ -227,27 +343,22 @@ def shell_gap(parsed):
         kind = _interpreter(inv.name)
         if kind is None:
             continue
-        args = [a.lower() for a in inv.argv]
+        args = inv.argv if kind in ('py', 'sh') else [a.lower() for a in inv.argv]
         instead = {'ps': '%s -NoProfile -Command "<command>"', 'cmd': '%s /c <command>'}.get(
             kind, '%s -c "<command>"') % inv.name
-        fed = stdin_fed(cmd)
-        rest = [a for a in args if not (fed and a in FED)]
-        if fed and (not args or len(rest) < len(args)) and not any(a in INTERACTIVE for a in rest):
-            continue                            # its script is the pipe, heredoc or file on stdin
-        if not args or any(a in INTERACTIVE for a in args):
+        said = OPTS[kind](args)
+        if said == FINITE:
+            continue
+        if isinstance(said, tuple):
+            how, word = said
+            if how == NOEXIT:
+                return inv.name, 'keeps PowerShell open (%s is NoExit)' % word, instead
             return inv.name, 'starts an interactive interpreter', instead
-        if kind == 'ps':
-            for a in args:
-                key = a.lstrip('-/').split(':', 1)[0]
-                if a[:1] in '-/' and key and 'noexit'.startswith(key):
-                    return inv.name, 'keeps PowerShell open (%s is NoExit)' % a, instead
-            finite = any(a in FINITE['ps'] for a in args)
-        elif kind == 'cmd':
-            finite = any(a in FINITE['cmd'] for a in args)
-        else:
-            finite = any(a in FINITE['other'] for a in args) or any(not a.startswith('-') for a in args)
-        if not finite:
-            return inv.name, 'names no script, command or informational option', instead
+        if stdin_fed(cmd):
+            continue                            # its script is the pipe, heredoc or file on stdin
+        if not args or said == STDIN:
+            return inv.name, 'starts an interactive interpreter', instead
+        return inv.name, 'names no script, command or informational option', instead
     return None
 
 

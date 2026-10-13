@@ -249,6 +249,37 @@ class ShellGap(Base):
             with self.subTest(text):
                 self.denied(self.shell(text, shell='bash'), 'role-shell')
 
+    def test_only_the_interpreters_own_options_count(self):
+        """A word after the script, the -c command or the -m module is the program's, not the
+        interpreter's: `-i`, `-s` and `-` there are arguments."""
+        for text, shell in (('python -m pytest -s tests/', 'bash'), ('python -m pip install -i URL foo', 'bash'),
+                            ('python tools/foo.py -i input.txt', 'bash'), ('python tools/x.py --input -', 'bash'),
+                            ('cat x | python script.py -i', 'bash'), ('python -s script.py', 'bash'),
+                            ('bash script.sh -i', 'bash'), ('bash -c "echo hi" -', 'bash'),
+                            ('pwsh -NoProfile -File x.ps1 -n 5', 'powershell'),
+                            ('pwsh -EncodedCommand ZQBjAGgAbwA=', 'powershell'), ('pwsh -ec ZQBj', 'powershell'),
+                            ('powershell -e ZQBj', 'powershell'), ('pwsh -nop x.ps1 -i', 'powershell'),
+                            ('python -c "print(1)" -i', 'bash'), ('python -X utf8 -W ignore x.py -i', 'bash'),
+                            ('python -Wignore -Bc "print(1)"', 'bash'), ('py -3 x.py -', 'bash'),
+                            ('python -m pytest -s', 'powershell'), ('bash -- script.sh -i', 'bash'),
+                            ('bash -o pipefail script.sh', 'bash'), ('bash -lc "ls"', 'bash'),
+                            ('cmd /q /c dir /k', 'powershell'), ('python -V', 'bash'), ('python --help', 'bash'),
+                            ('bash --version', 'bash')):
+            with self.subTest(text):
+                self.assertIsNone(rolepolicy.check(self.shell(text, shell=shell), self.w.ctx()), text)
+
+    def test_interactive_options_of_the_interpreter_itself_are_still_refused(self):
+        for text, shell in (('python', 'bash'), ('python -i', 'bash'), ('python -i script.py', 'bash'),
+                            ('python -s', 'bash'), ('python -u', 'bash'), ('python -v', 'bash'),
+                            ('python -X utf8', 'bash'), ('bash -i', 'bash'), ('bash -i script.sh', 'bash'),
+                            ('bash -s foo', 'bash'), ('bash --', 'bash'), ('echo x | bash -i', 'bash'),
+                            ('pwsh -NoExit -File x.ps1', 'powershell'), ('pwsh -noe -c 1', 'powershell'),
+                            ('pwsh -NoProfile', 'powershell'), ('pwsh -Interactive', 'powershell'),
+                            ('pwsh -c -', 'powershell'), ('cmd /k dir', 'powershell'), ('cmd /q', 'powershell'),
+                            ('bash -c bash', 'bash'), ('bash -c "python -i"', 'bash')):
+            with self.subTest(text):
+                self.denied(self.shell(text, shell=shell), 'role-shell')
+
     def test_the_instead_names_a_finite_form(self):
         d = self.denied(self.shell('python -i'), 'role-shell')
         self.assertIn('Instead: python -c "<command>"', d.reason)
