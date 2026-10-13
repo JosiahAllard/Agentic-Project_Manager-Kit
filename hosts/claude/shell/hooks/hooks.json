@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "pythonw",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/claude/hooks/coordinator_session_start.py"]
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/coordinator_session_start.py"]
           }
         ]
       }

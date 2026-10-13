@@ -45,8 +45,8 @@ class KitRegistry(unittest.TestCase):
         self.assertEqual(len([h for h in hosts.values() if h.default]), 1)
         self.assertEqual(registry.default(), 'claude')
         claude = hosts['claude']
-        self.assertEqual(claude.adapter, 'claude.adapter')
-        self.assertEqual(claude.shell, 'claude')
+        self.assertEqual(claude.adapter, 'hosts.claude.adapter')
+        self.assertEqual(claude.shell, 'hosts/claude/shell')
         self.assertEqual(claude.platforms, ('windows',))
         self.assertIsInstance(claude.capabilities, HostCapabilities)
         self.assertIsInstance(claude.profile, HostProfile)
@@ -119,7 +119,7 @@ class Validation(Case):
         for change in (
                 lambda e: e.pop('adapter'),
                 lambda e: e.update(extra=1),
-                lambda e: e.update(adapter='claude/adapter'),
+                lambda e: e.update(adapter='hosts/claude/adapter'),
                 lambda e: e.update(adapter=''),
                 lambda e: e.update(shell='../outside'),
                 lambda e: e.update(shell='C:/abs'),

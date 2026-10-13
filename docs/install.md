@@ -182,9 +182,9 @@ agent and skill text is unverified: confirm it in one real loaded session before
 `claude plugin validate` passes with warnings only (no author field; CLAUDE.md is not loaded) and
 reports no reserved name.
 
-The plugin carries one hook: the coordinator SessionStart hook, `claude/hooks/hooks.json` (named by
+The plugin carries one hook: the coordinator SessionStart hook, `hosts/claude/shell/hooks/hooks.json` (named by
 `"hooks"` in `.claude-plugin/plugin.json`), run in exec form as `pythonw` with
-`${CLAUDE_PLUGIN_ROOT}/claude/hooks/coordinator_session_start.py` as its argument. Each account's
+`${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/coordinator_session_start.py` as its argument. Each account's
 settings already run that script, so the owner removes the settings SessionStart entry in the same
 step as the install, or it runs twice (`tools/machine_setup.py` notes it, docs/machine-setup.md
 "Settings"). guard.py stays in each account's settings and is never in the plugin (docs/guard.md
@@ -201,7 +201,7 @@ An account set up by `machine_setup.py` has per-item junctions under `~/.claude`
 skills, hooks and agents the plugin now loads. Remove them in stages, in this order.
 
 **Stage 1.** At install, remove the kit's `~/.claude/skills/*` junctions, or each skill appears twice.
-Only the 12 kit skill names are touched (the directories under `claude/skills`); any other link stays.
+Only the 12 kit skill names are touched (the directories under `hosts/claude/shell/skills`); any other link stays.
 `cmd /c rmdir` removes the link only, never the target:
 
 ```powershell

@@ -1,6 +1,6 @@
 # PM session-start checklist
 
-`claude/hooks/pm_session_start.py` prints a checklist at every PM session start (as
+`hosts/claude/shell/hooks/pm_session_start.py` prints a checklist at every PM session start (as
 `additionalContext`; logic `kitlib/pmstart`). A hook cannot call tools, so it lists steps for the
 PM. It always exits 0; a failed check becomes one "could not check X: reason" line.
 
@@ -73,7 +73,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 ```json
 {"pm_start": {
   "hub_urls": {"1": "https://claude.ai/artifact/<id>"},
-  "hub_source": "claude/hub/action-hub.html",
+  "hub_source": "hosts/claude/shell/hub/action-hub.html",
   "pm_watch_cmd": "python -u <kit>/tools/pm_watch.py --stream",
   "memory_dir": "<home>/.claude/projects/<project>/memory",
   "handoff_glob": "pm-handoff-*.md",
@@ -88,7 +88,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
   line; none gives the steps to publish a copy, record it and restore it from the mirror.
   `hub_url` (one URL) is read only while `hub_urls` has no entry; when both are set the checklist
   says `hub_url` is ignored. `hub_source`: the page to publish, absolute or relative to the kit
-  (default `claude/hub/action-hub.html`); the hub lines name it as an absolute path, and a file
+  (default `hosts/claude/shell/hub/action-hub.html`); the hub lines name it as an absolute path, and a file
   that does not exist, or a value that is not a string, replaces the publish step with a line
   saying so; the watch and process lines still print. `hub_mirror`: the absolute
   mirror folder for an install without `pm_data`. Code: `kitlib/pmstart` `hub`, `hub_source`;
@@ -105,7 +105,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
   a consultant or a coordinator) to the hub. Empty or absent prints nothing; a value that is not
   a list of non-empty strings prints "could not check eng_review".
 - Optional too: `standing` (strings, each printed as "standing rule:"), `repos` (more repo names
-  for the hub's menus) and `repo_paths` ({repo: folder} for `claude/hub/hub_backlog.py`; default
+  for the hub's menus) and `repo_paths` ({repo: folder} for `hosts/claude/shell/hub/hub_backlog.py`; default
   the PM repository's sibling folder).
 
 ## Hook (settings.json)
@@ -124,5 +124,5 @@ otherwise reads the account config folders (`~/.claude`, `~/.claude-*`, `default
 account's `settings.json` (docs/machine-setup.md "Fresh machine (--fresh)").
 
 ```json
-{"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"<pythonw>","args":["<kit>/claude/hooks/pm_session_start.py"]}]}]}}
+{"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"<pythonw>","args":["<kit>/hosts/claude/shell/hooks/pm_session_start.py"]}]}]}}
 ```

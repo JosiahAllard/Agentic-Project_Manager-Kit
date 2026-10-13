@@ -31,7 +31,7 @@ ALLOWED = (
     ('tests/backlog/', GOING),
     ('tests/backloglint/fixtures/', GOING),
     ('tools/backlog.py', GOING),
-    ('claude/skills/backlog-ops/SKILL.md', GOING),
+    ('hosts/claude/shell/skills/backlog-ops/SKILL.md', GOING),
     ('content/skills/backlog-ops/SKILL.md', GOING),   # the source the line above is rendered from
     ('docs/backlog.md', GOING),
     ('docs/backlog-store.md', GOING),

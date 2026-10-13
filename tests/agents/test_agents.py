@@ -5,7 +5,7 @@ from pathlib import Path
 
 from tests.shipped import scan
 
-AGENTS = Path(__file__).resolve().parents[2] / "claude" / "agents"
+AGENTS = Path(__file__).resolve().parents[2] / "hosts" / "claude" / "shell" / "agents"
 EXPECTED = {"pm", "coordinator", "worker", "senior-worker", "strong-worker", "deep-worker", "consultant", "reviewer",
             "lander", "records", "researcher", "spec-writer", "test-runner", "asset-smith",
             "sound-smith", "tech-artist"}
@@ -160,7 +160,7 @@ class AgentFilesTest(unittest.TestCase):
 
     def test_no_chatgpt_fallback_in_agents_or_knowledge(self):
         """A generator outage stops the run; an external-prompt fallback is a repo choice, not the kit's."""
-        root = AGENTS.parents[1]
+        root = AGENTS.parents[3]
         for p in list(AGENTS.glob("*.md")) + list((root / "knowledge").rglob("*.md")):
             self.assertNotIn("chatgpt", p.read_text(encoding="utf-8").lower(), p.name)
 
@@ -175,11 +175,11 @@ class AgentFilesTest(unittest.TestCase):
     def test_plugin_manifest_lists_every_agent_file(self):
         # plugin.json's `agents` takes files, not a folder, and replaces the default agents/
         # lookup: an agent file it does not list is never loaded.
-        manifest = json.loads((AGENTS.parents[1] / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        manifest = json.loads((AGENTS.parents[3] / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(sorted(manifest["agents"]),
-                         sorted("./claude/agents/%s" % p.name for p in AGENTS.glob("*.md")))
-        self.assertEqual(manifest["skills"], ["./claude/skills/"])
-        self.assertTrue((AGENTS.parents[1] / "claude" / "skills").is_dir())
+                         sorted("./hosts/claude/shell/agents/%s" % p.name for p in AGENTS.glob("*.md")))
+        self.assertEqual(manifest["skills"], ["./hosts/claude/shell/skills/"])
+        self.assertTrue((AGENTS.parents[3] / "hosts" / "claude" / "shell" / "skills").is_dir())
 
     def test_agent_naming_a_skill_can_load_skills(self):
         # An explicit `tools:` list without Skill stops the agent invoking any skill (also on the

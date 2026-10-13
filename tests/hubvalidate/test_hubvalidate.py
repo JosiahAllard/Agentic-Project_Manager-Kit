@@ -1,4 +1,4 @@
-"""kitlib.hubvalidate, claude/hub/hub_validate.py, and the validation lines of hub_mirror save."""
+"""kitlib.hubvalidate, hosts/claude/shell/hub/hub_validate.py, and the validation lines of hub_mirror save."""
 import importlib.util
 import io
 import json
@@ -155,7 +155,7 @@ class BatchTest(unittest.TestCase):
 class CliTest(unittest.TestCase):
     def setUp(self):
         spec = importlib.util.spec_from_file_location(
-            'hub_validate_tool', os.path.join(KIT, 'claude', 'hub', 'hub_validate.py'))
+            'hub_validate_tool', os.path.join(KIT, 'hosts', 'claude', 'shell', 'hub', 'hub_validate.py'))
         self.tool = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.tool)
         self.d = tmpdir(self)

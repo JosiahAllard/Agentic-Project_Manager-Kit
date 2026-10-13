@@ -12,7 +12,7 @@ Events:
   RESET account N               the weekly window reset (re-place coordinators, favour the sooner reset)
   BGFAIL run <id> <reason>      a machine_lock background run ended failed (alerts/<id>.json)
   LOCKNOTICE <id> <title>       a lock-window notice not yet posted to the Action Hub (--notice-dir);
-                                post with claude/hub/hub_notices.py
+                                post with hosts/claude/shell/hub/hub_notices.py
   IDLE <name> <N>m since <iso>  a session in sessions.json (named, not autostart=false) has its own
                                 main and subagent transcripts all older than --idle-minutes, found by
                                 the custom-title record; once per quiet spell
@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import pmwatch as W                                     # noqa: E402
 from kitlib.config import user as kuser                            # noqa: E402
-from claude import claude_host                                     # noqa: E402
+from hosts.claude.adapter import claude_host                        # noqa: E402
 
 
 RETIRED_USAGE_SCRIPT = ("--usage-script and pm_watch.usage_script are retired: usage is read in this "

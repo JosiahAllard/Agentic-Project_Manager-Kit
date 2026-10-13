@@ -1,7 +1,7 @@
 """The Action Hub page's alert text, status buckets, command list and freshness logic.
 
 These are the pure functions between the `pm-pure:begin` and `pm-pure:end` markers in
-claude/hub/action-hub.html (docs/action-hub.md "Alert the PM"), run under node like test_hubtopm.
+hosts/claude/shell/hub/action-hub.html (docs/action-hub.md "Alert the PM"), run under node like test_hubtopm.
 """
 import unittest
 

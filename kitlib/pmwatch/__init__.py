@@ -2,7 +2,7 @@
 
 Each check turns the previous state and a fresh reading into event lines. tools/pm_watch.py loops,
 prints the lines and exits. Event lines and state keys are those of the PM repo's
-launcher/pm_watch.py at 95f7262. Transcript reading is host-specific and lives in claude/claude_host.py.
+launcher/pm_watch.py at 95f7262. Transcript reading is host-specific and lives in hosts/claude/adapter/claude_host.py.
 """
 import json
 import os
@@ -307,7 +307,7 @@ def watched_sessions(sessions):
 
 def idle_baseline(names, newest, now, minutes):
     """{name: newest mtime} for sessions already quiet, so a relaunch-free first run stays silent.
-    newest(name) is the newest activity time of that session, or None (claude.claude_host.newest_finder)."""
+    newest(name) is the newest activity time of that session, or None (hosts.claude.adapter.claude_host.newest_finder)."""
     out = {}
     for n in names:
         m = newest(n)

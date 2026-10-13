@@ -36,8 +36,8 @@ MARKETPLACE = ('{\n  "name": "pm-kit",\n  "owner": {"name": "x"},\n'
 def _prepare_kit(repo):
     """What a fresh survey and the export read of a kit: the hooks, reserve_ui.pyw, plugin.json and
     marketplace.json; committed and pushed."""
-    rels = ['claude/hooks/guard.py', 'claude/hooks/pm_session_start.py',
-            'claude/hooks/coordinator_session_start.py', 'reserve_ui.pyw',
+    rels = ['hosts/claude/shell/hooks/guard.py', 'hosts/claude/shell/hooks/pm_session_start.py',
+            'hosts/claude/shell/hooks/coordinator_session_start.py', 'reserve_ui.pyw',
             '.claude-plugin/marketplace.json']
     for rel in rels[:-1]:
         repo.write(rel, 'x\n')
@@ -55,7 +55,7 @@ def load(path):
 
 
 def guard_in(data, kit):
-    want = T.fwd(os.path.join(kit, 'claude', 'hooks', 'guard.py'))
+    want = T.fwd(os.path.join(kit, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))
     hooks = (data.get('hooks') or {}).get('PreToolUse') or []
     return any(want in h.get('args', []) for g in hooks for h in g.get('hooks', []))
 
@@ -242,7 +242,7 @@ class Fresh(FreshBase):
         self.assertFalse(os.path.exists(self.pm))
         code, out = self.run_it(apply=True, pm_settings=self.pm)
         self.assertEqual(code, M.EXIT_OK, out)
-        script = T.fwd(os.path.join(self.kit, 'claude', 'hooks', 'pm_session_start.py'))
+        script = T.fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'pm_session_start.py'))
         self.assertEqual(load(self.pm), {'hooks': {'SessionStart': [{'matcher': 'startup|resume|compact', 'hooks': [
             {'type': 'command', 'command': T.PYW, 'args': [script]}]}]}})
         for s in (self.s1, self.s2):
@@ -268,7 +268,7 @@ class Fresh(FreshBase):
         """The kit's own pm_session_start.py in the PM repo's .claude/settings.json (the PM session
         loads it next to settings.local.json), or in an account settings.json under any event: the
         checklist would run twice, so --pm-settings is refused."""
-        script = T.fwd(os.path.join(self.kit, 'claude', 'hooks', 'pm_session_start.py'))
+        script = T.fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'pm_session_start.py'))
         sibling = os.path.join(self.pmrepo, '.claude', 'settings.json')
         T.touch(sibling, json.dumps({'hooks': {'SessionStart': [{'hooks': [
             {'type': 'command', 'command': T.PYW, 'args': [script]}]}]}}, indent=2) + '\n')

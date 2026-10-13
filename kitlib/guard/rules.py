@@ -1,12 +1,12 @@
 """The guard's rules (ARCHITECTURE.md "Guard rules"; docs/guard.md "Rules").
 
 decide(action, ctx) -> kitlib.host.Decision ('allow' when no rule refuses). `action` is the neutral
-kitlib.host.Action a host adapter parsed its hook payload into (claude/adapter/events.py for
+kitlib.host.Action a host adapter parsed its hook payload into (hosts/claude/adapter/events.py for
 Claude Code); no rule here reads a host's payload. Every rule is a read-only check of real state and
 every deny names the exact command to use instead (also in Decision.instead). Each rule below
 takes the Action as its first argument, named `event` from before the split; a rule answers None
 for an allow, and decide() turns that into Decision('allow'). A deny reason ends with the tag
-`[kit guard: rule=<rule> role=<role>]`; claude.guard_selftest reads those tags back out of
+`[kit guard: rule=<rule> role=<role>]`; hosts.claude.adapter.guard_selftest reads those tags back out of
 subagent transcripts.
 
 Rules, in the order they are checked:

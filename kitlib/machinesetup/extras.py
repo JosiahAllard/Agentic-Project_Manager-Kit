@@ -16,7 +16,7 @@ except ImportError:                                                  # not Windo
     winreg = None
 
 from . import agenttemp
-from .common import norm, under
+from .common import SHELL, kit_file, norm, under
 
 SHORTCUT = 'Machine schedule.lnk'
 LOCK_ENV = 'KIT_MACHINE_LOCK'
@@ -88,7 +88,7 @@ class Host(object):
         self._ps(line)
 
     def guard_entry(self, kit):
-        r = subprocess.run([sys.executable, os.path.join(kit, 'claude', 'hooks', 'guard.py'),
+        r = subprocess.run([sys.executable, kit_file(kit, SHELL + '/hooks/guard.py'),
                             '--settings-entry'], capture_output=True, text=True, creationflags=_NOWIN)
         if r.returncode != 0:
             raise RuntimeError('guard.py --settings-entry exit %d: %s' % (r.returncode, r.stderr.strip()))

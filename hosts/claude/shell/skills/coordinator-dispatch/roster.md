@@ -52,7 +52,8 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
   `Low (N)`; a group with no file is not printed. The first row that fits:
   1. A `High` group is printed, or a changed path matches a strict landing path
      (`STRICT_DEFAULTS` in `<kit>/kitlib/gate/strict_defaults.py`: guard, lock,
-     gate, proc and hook code, agent definitions) whatever group it is printed in -> raise to strong.
+     gate, proc and hook code, agent definitions, role and skill content) whatever group it is
+     printed in -> raise to strong.
   2. Only a `Low` group is printed -> no override: standard as pinned, never raised.
   3. Otherwise (a `Medium` or `unlisted (= High)` group, no `High` group) -> no override; you may
      raise to strong for a risk you name in status, never must.

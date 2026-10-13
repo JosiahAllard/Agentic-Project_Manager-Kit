@@ -31,7 +31,7 @@ class PluginHooks(unittest.TestCase):
                     yield event, h
 
     def test_the_manifest_names_the_hooks_file(self):
-        self.assertEqual(self.rel, './claude/hooks/hooks.json')
+        self.assertEqual(self.rel, './hosts/claude/shell/hooks/hooks.json')
         self.assertTrue(os.path.isfile(self.path), self.path)
 
     def test_only_the_coordinator_session_start_hook(self):

@@ -13,9 +13,9 @@ a test fails when they differ from what the renderer writes now (tests/content/t
   limits either to one host. Exit 2: usage, or a content file of the wrong shape (the line names
   the file and the problem).
 
-Never edit `claude/agents/` or `claude/skills/` by hand: edit `content/`, then `--write`, and
+Never edit `hosts/claude/shell/agents/` or `hosts/claude/shell/skills/` by hand: edit `content/`, then `--write`, and
 commit both. Code: `kitlib/content` (load, render, drift, write), `kitlib/host/content.py` (the
-role model, tokens, and the `ContentRenderer` protocol), `claude/adapter/content.py` (Claude's
+role model, tokens, and the `ContentRenderer` protocol), `hosts/claude/adapter/content.py` (Claude's
 renderer).
 
 ## Role front matter
@@ -61,7 +61,7 @@ A body or description names a value that differs by host only as a token. An unk
 
 ## Claude
 
-`claude/adapter/content.py` writes `claude/agents/<name>.md` with `name`, `description` (quoted only
+`hosts/claude/adapter/content.py` writes `hosts/claude/shell/agents/<name>.md` with `name`, `description` (quoted only
 when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model`,
 `effort` when set, and for `cache: long` the `experimental` map with `cacheTtl: 1h`. It copies each
-skill folder to `claude/skills/<name>/`. It owns both folders.
+skill folder to `hosts/claude/shell/skills/<name>/`. It owns both folders.

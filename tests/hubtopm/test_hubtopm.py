@@ -1,7 +1,7 @@
 """The Action Hub's To PM logic (docs/action-hub.md "to_pm/P-NNN").
 
 The page is one HTML file, so its pure functions sit between the `pm-pure:begin` and `pm-pure:end`
-markers in claude/hub/action-hub.html. These tests cut that block out and run it under node.
+markers in hosts/claude/shell/hub/action-hub.html. These tests cut that block out and run it under node.
 """
 import json
 import os
@@ -11,7 +11,7 @@ import subprocess
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PAGE = os.path.join(ROOT, "claude", "hub", "action-hub.html")
+PAGE = os.path.join(ROOT, "hosts", "claude", "shell", "hub", "action-hub.html")
 NODE = shutil.which("node")
 
 NOW = "2026-10-07T12:00:00Z"
@@ -24,7 +24,7 @@ def page():
 
 def block():
     m = re.search(r"// pm-pure:begin\r?\n(.*?)// pm-pure:end", page(), re.S)
-    assert m, "pm-pure markers missing from claude/hub/action-hub.html"
+    assert m, "pm-pure markers missing from hosts/claude/shell/hub/action-hub.html"
     return m.group(1)
 
 

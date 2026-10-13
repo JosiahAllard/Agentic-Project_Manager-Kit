@@ -12,7 +12,7 @@ from tests.home import temp_home
 from tests.pmstart import keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
-CFG = {"hub_url": "https://claude.ai/artifact/X", "hub_source": "claude/hub/action-hub.html",
+CFG = {"hub_url": "https://claude.ai/artifact/X", "hub_source": "hosts/claude/shell/hub/action-hub.html",
        "pm_watch_cmd": "python launcher/pm_watch.py --stream", "memory_dir": "M",
        "reminders_file": "r.json", "sessions_file": "s.json"}
 
@@ -65,11 +65,11 @@ class StandingTest(unittest.TestCase):
 class HubTest(unittest.TestCase):
     def test_step_names_url(self):
         s = pmstart.hub(CFG)[0]
-        src = os.path.join(pmstart.KIT_ROOT, "claude", "hub", "action-hub.html")
+        src = os.path.join(pmstart.KIT_ROOT, "hosts", "claude", "shell", "hub", "action-hub.html")
         self.assertIn("republish the kit's Action Hub page %s "
                       "to https://claude.ai/artifact/X with the Artifact tool" % src, s)
         self.assertIn("docs/action-hub.md (For the PM)", s)
-        self.assertNotIn("republish claude/hub/action-hub.html to", s)  # the old bare line
+        self.assertNotIn("republish hosts/claude/shell/hub/action-hub.html to", s)  # the old bare line
         self.assertIn("pm_ack", pmstart.hub(CFG)[-1])
 
 
@@ -301,7 +301,7 @@ class ConfigAndHookTest(unittest.TestCase):
 
     def test_hook_without_config_prints_json_exit_0(self):
         with tempfile.TemporaryDirectory() as d:
-            hook = os.path.join(os.path.dirname(__file__), "..", "..", "claude", "hooks", "pm_session_start.py")
+            hook = os.path.join(os.path.dirname(__file__), "..", "..", "hosts", "claude", "shell", "hooks", "pm_session_start.py")
             env = dict(os.environ, USERPROFILE=d, HOME=d)
             r = subprocess.run([sys.executable, hook], capture_output=True, text=True, env=env, timeout=30)
         self.assertEqual(r.returncode, 0)

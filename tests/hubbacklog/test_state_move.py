@@ -15,7 +15,7 @@ from unittest import mock
 from kitlib import hubbacklog, pmstart
 from kitlib.config import migration, user
 
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "claude", "hub"))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "hosts", "claude", "shell", "hub"))
 import hub_backlog                                                  # noqa: E402
 
 DOCS = ({"repo": "r", "items": [{"id": "A"}]}, {"repo": "r", "days": 90, "items": []})

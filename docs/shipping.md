@@ -40,9 +40,9 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
 
 ## The Claude Code plugin (`.claude-plugin/plugin.json`)
 
-- **Agents** (`claude/agents/`): the agent definitions; docs/ROSTER.md says which model and
+- **Agents** (`hosts/claude/shell/agents/`): the agent definitions; docs/ROSTER.md says which model and
   effort each runs at and what it is for.
-- **Skills** (`claude/skills/<name>/SKILL.md`): backlog-ops, branch-review, branch-sync,
+- **Skills** (`hosts/claude/shell/skills/<name>/SKILL.md`): backlog-ops, branch-review, branch-sync,
   coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch (uses
   `tools/land.py`), machine-lock-run, mutation-testing, session-handoff,
   shell-and-worktree-traps, subagent-dispatch. branch-review and coordinator-dispatch hold the
@@ -59,7 +59,7 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   itself) and `INDEX.md` are what `installer/new-repo.ps1` writes into a new repository
   (docs/install.md).
   `templates/common/agent-profile.TEMPLATE.md` and `templates/common/coordinator-profile.TEMPLATE.md`
-  are what the coordinator drafts a repository's two profiles from (claude/agents/coordinator.md, "On start");
+  are what the coordinator drafts a repository's two profiles from (hosts/claude/shell/agents/coordinator.md, "On start");
   their headings are the ones the agents read, and `tests/templates` checks them.
 - `templates/stacks/{dotnet,godot,java,python}`: `stack.json` (build and test commands,
   gitignore, gitattributes; `new-repo.ps1 -Stack` applies the two lists), `tools/gate.json` (a `"gate"` section of `.kit.json`; point to it

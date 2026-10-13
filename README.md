@@ -60,7 +60,8 @@ is still to switch on.
 |---|---|
 | `tools/` | The command-line tools: lock, gate and landing, worktrees, commit, backlog, ledger, preflight and more |
 | `kitlib/` | The library the tools call; all the logic lives here |
-| `claude/` | The Claude Code parts: agents, skills, hooks, the Action Hub page |
+| `hosts/claude/` | The Claude Code parts: `adapter/` (Python) and `shell/` (agents, skills, hooks, the Action Hub page) |
+| `boot/` | `kitboot.py`, the check every host entry runs before it imports kitlib |
 | `githooks/` | The git hooks: pre-push, and a pre-commit ledger check that does nothing unless a repository opts in |
 | `installer/` | `new-repo.ps1`, which sets a repository up to use the kit |
 | `templates/` | A starter CLAUDE.md and per-language gate settings |

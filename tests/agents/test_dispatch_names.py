@@ -15,7 +15,7 @@ from pathlib import Path
 from kitlib import agentname
 from tests.agents.test_agents import AGENTS
 
-ROOT = AGENTS.parents[1]
+ROOT = AGENTS.parents[3]
 KIT = sorted(p.stem for p in AGENTS.glob('*.md'))
 NAME = r'(?:%s)?(%s)' % (re.escape(agentname.PREFIX), '|'.join(re.escape(n) for n in sorted(KIT, key=len, reverse=True)))
 # a whole backticked span that is a kit agent type, bare or qualified

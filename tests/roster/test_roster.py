@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from claude.adapter import content as claude_content
+from hosts.claude.adapter import content as claude_content
 from kitlib import content, reviewpack, roster
 from tests.docs.test_cli import repo_with_docs
 from tests.gitfixture import fixture_env
@@ -48,7 +48,7 @@ class RealRosterTest(unittest.TestCase):
         """The model an agent file names is the roster's tier through the host's tier table."""
         rows, models = roster.parse_roster(read(os.path.join(KIT_ROOT, 'docs', 'ROSTER.md')).decode('utf-8'))
         for name, (tier, effort) in rows.items():
-            fm = roster.read_frontmatter(read(os.path.join(KIT_ROOT, 'claude', 'agents', name + '.md')))
+            fm = roster.read_frontmatter(read(os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'agents', name + '.md')))
             with self.subTest(role=name):
                 self.assertEqual(fm['model'], models['claude'][tier])
                 self.assertEqual(fm.get('effort', roster.NONE), effort)
@@ -59,7 +59,7 @@ class TempCopyTest(unittest.TestCase):
         top = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, top, True)
         self.top = top
-        for rel in ('content', 'docs', os.path.join('claude', 'agents'), os.path.join('claude', 'skills')):
+        for rel in ('content', 'docs', os.path.join('hosts', 'claude', 'shell', 'agents'), os.path.join('hosts', 'claude', 'shell', 'skills')):
             shutil.copytree(os.path.join(KIT_ROOT, rel), os.path.join(top, rel))
         self.dir = os.path.join(top, 'content', 'roles')
         self.roster = os.path.join(top, 'docs', 'ROSTER.md')
@@ -125,8 +125,8 @@ class TempCopyTest(unittest.TestCase):
         self.edit_row('worker', '| standard | medium |', '| strong | high |')
         out = io.StringIO()
         self.assertEqual(cli.main(['--write', '-C', self.top], out), 0)
-        self.assertIn('rendered claude/agents/worker.md', out.getvalue())
-        fm = roster.read_frontmatter(read(os.path.join(self.top, 'claude', 'agents', 'worker.md')))
+        self.assertIn('rendered hosts/claude/shell/agents/worker.md', out.getvalue())
+        fm = roster.read_frontmatter(read(os.path.join(self.top, 'hosts', 'claude', 'shell', 'agents', 'worker.md')))
         self.assertEqual((fm['model'], fm['effort']), ('opus', 'high'))
         self.assertEqual(content.drift(self.top, [claude_content.renderer()]), [])
 
@@ -178,7 +178,7 @@ class ReviewerRuleTest(unittest.TestCase):
     matching strings: the group labels the review pack prints and the name of the strict-path
     tuple. Each one it names must still be what the code prints or defines."""
 
-    RULE_FILE = os.path.join(KIT_ROOT, 'claude', 'skills', 'coordinator-dispatch', 'roster.md')
+    RULE_FILE = os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'skills', 'coordinator-dispatch', 'roster.md')
 
     def rule(self):
         text = read(self.RULE_FILE).decode('utf-8').replace('\r\n', '\n')
@@ -233,7 +233,7 @@ class ReviewerRuleTest(unittest.TestCase):
         self.assertEqual(m.group(1), 'STRICT_DEFAULTS')
         module = importlib.import_module(m.group(2).replace('/', '.'))
         self.assertTrue(getattr(module, m.group(1), None), '%s.%s' % (module.__name__, m.group(1)))
-        self.assertIn('claude/agents/**', getattr(module, m.group(1)))
+        self.assertIn('hosts/*/shell/agents/**', getattr(module, m.group(1)))
 
 
 if __name__ == '__main__':

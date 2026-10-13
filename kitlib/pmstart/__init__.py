@@ -1,6 +1,6 @@
 """kitlib.pmstart: the PM session-start checklist.
 
-Pure functions that return data; the hook (claude/hooks/pm_session_start.py) prints it. Every check
+Pure functions that return data; the hook (hosts/claude/shell/hooks/pm_session_start.py) prints it. Every check
 takes its process list or filesystem reads as parameters so tests can fake them.
 """
 import datetime
@@ -77,7 +77,7 @@ def eng_review(cfg):
 
 # This kit's checkout: the PM session's directory is not the kit, so kit paths are made absolute.
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-HUB_SOURCE = "claude/hub/action-hub.html"
+HUB_SOURCE = "hosts/claude/shell/hub/action-hub.html"
 HUB_MIRROR_TOOL = os.path.join(KIT_ROOT, "tools", "hub_mirror.py")
 # With no pm_watch_cmd, the watcher line names the kit's own pm_watch.py in stream mode.
 PM_WATCH_DEFAULT_CMD = 'python -u "%s" --stream' % os.path.join(KIT_ROOT, "tools", "pm_watch.py")

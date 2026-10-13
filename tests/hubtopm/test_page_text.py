@@ -1,4 +1,4 @@
-"""Text checks on claude/hub/action-hub.html for wiring that cannot run under node.
+"""Text checks on hosts/claude/shell/hub/action-hub.html for wiring that cannot run under node.
 
 They guard against deleting the wiring; the behaviour is checked by eye (docs/action-hub.md "Alert the PM").
 """

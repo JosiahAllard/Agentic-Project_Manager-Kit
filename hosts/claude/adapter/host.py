@@ -1,29 +1,34 @@
 """Claude Code's kitlib.host.HostAdapter (ARCHITECTURE.md "Hosts"; plan 2.1 and 2.2).
 
-ADAPTER is the one instance; claude/hooks/guard.py hands it to kitlib.host.hookmain.run.
+ADAPTER is the one instance; hosts/claude/shell/hooks/guard.py hands it to kitlib.host.hookmain.run.
 
   name                 'claude', its key in hosts.json
   profile, capabilities  hosts.json's "claude" entry (kitlib.host.registry), read on first use so
                        an unguarded call never reads the file
-  parse(event_name, payload)   claude.adapter.events.parse
-  agent(payload)               claude.adapter.events.agent
+  parse(event_name, payload)   hosts.claude.adapter.events.parse
+  agent(payload)               hosts.claude.adapter.events.agent
   render(event_name, decision) (stdout, exit code): nothing for an allow; for a deny or an ask
                        Claude Code's hook JSON, {"hookSpecificOutput": {"hookEventName",
                        "permissionDecision", "permissionDecisionReason"}} and a newline. Always
                        exit 0: the verdict is in the JSON (docs/guard.md "Output").
+  context(event_name, text)    (stdout, 0): text a session or subagent start hook adds to the
+                       agent's context, {"hookSpecificOutput": {"hookEventName",
+                       "additionalContext"}} and a newline; nothing for no text. Only the
+                       CONTEXT_EVENTS take it.
   settings_entry(script, executable)   the PreToolUse entry for settings.json (MATCHER, exec form)
-  sessions()           claude.claude_host, Claude's session files (kitlib.pmwatch's seam)
+  sessions()           hosts.claude.adapter.claude_host, Claude's session files (kitlib.pmwatch's seam)
   command_host(), launcher(), plugin_installer()   None: not behind the contract yet
-  content()            claude.adapter.content (the content renderer)
+  content()            hosts.claude.adapter.content (the content renderer)
 
 MATCHER is the PreToolUse matcher: exactly the tools a guard rule can refuse (events.FILE_TOOLS,
 events.SHELL_TOOLS, mcp__*); tests/guard/test_entry.py checks it against them.
 """
 import json
 
-from claude.adapter import events
+from hosts.claude.adapter import events
 
 MATCHER = 'Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|mcp__.*'
+CONTEXT_EVENTS = ('SessionStart', 'SubagentStart')
 
 
 class ClaudeAdapter(object):
@@ -63,19 +68,28 @@ class ClaudeAdapter(object):
                                                   'permissionDecisionReason': decision.reason}}) + '\n', 0
 
     @staticmethod
+    def context(event_name, text):
+        if event_name not in CONTEXT_EVENTS:
+            raise ValueError('%s carries no additionalContext' % event_name)
+        if not text:
+            return '', 0
+        return json.dumps({'hookSpecificOutput': {'hookEventName': event_name,
+                                                  'additionalContext': text}}) + '\n', 0
+
+    @staticmethod
     def settings_entry(script, executable=None):
         from kitlib.host import hookmain
         return hookmain.settings_entry('PreToolUse', MATCHER, script, executable)
 
     def sessions(self):
-        from claude import claude_host
+        from hosts.claude.adapter import claude_host
         return claude_host
 
     def command_host(self):
         return None
 
     def content(self):
-        from claude.adapter import content
+        from hosts.claude.adapter import content
         return content
 
     def launcher(self):

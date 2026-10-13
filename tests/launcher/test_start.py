@@ -485,7 +485,7 @@ class Start(Base):
 
     def test_kit_agents_are_the_plugins_agent_files(self):
         here = os.path.dirname(os.path.abspath(__file__))
-        folder = os.path.join(here, '..', '..', 'claude', 'agents')
+        folder = os.path.join(here, '..', '..', 'hosts', 'claude', 'shell', 'agents')
         stems = sorted(f[:-3] for f in os.listdir(folder) if f.endswith('.md'))
         self.assertEqual(sorted(start.KIT_AGENTS), stems)
         roles = os.path.join(here, '..', '..', 'content', 'roles')        # the source they render from

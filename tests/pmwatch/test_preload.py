@@ -14,7 +14,7 @@ WATCH_PATH = ('kitlib.pmwatch',) + PRELOADED + ('kitlib.launcher.accounts',)
 
 # As tools/pm_watch.py builds it: the host's entry point passes its own modules in.
 BUILD = """
-from claude import claude_host
+from hosts.claude.adapter import claude_host
 from kitlib import pmwatch
 pmwatch.Watcher({}, [], lambda: {}, 'alerts', 'sessions.json', lambda name: None,
                 preload_modules=claude_host.PRELOAD)

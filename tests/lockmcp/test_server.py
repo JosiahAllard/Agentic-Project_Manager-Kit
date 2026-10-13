@@ -279,7 +279,7 @@ class Manifest(unittest.TestCase):
 
     def test_the_guard_prefix_is_built_from_the_manifest_name(self):
         from kitlib import lockmcp
-        from claude.adapter.host import ADAPTER
+        from hosts.claude.adapter.host import ADAPTER
         from kitlib.guard import rules
         want = "mcp__plugin_%s_machine-lock__" % self._manifest("plugin.json")["name"]
         self.assertEqual(lockmcp.claude_tool_prefix(), want)

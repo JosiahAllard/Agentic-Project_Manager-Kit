@@ -1,18 +1,18 @@
 """Claude Code's ContentRenderer (kitlib.host.content; docs/content.md "Claude").
 
-Each role becomes `claude/agents/<name>.md`: front matter `name`, `description`, `tools` (the
+Each role becomes `hosts/claude/shell/agents/<name>.md`: front matter `name`, `description`, `tools` (the
 role's capabilities as Claude tool names, in order; no line for `capabilities: all`), `model`
 (the role's `model.claude` override, else TIER_MODEL of its tier), `effort` when the role has one,
 and for `cache: long` the `experimental` map with `cacheTtl: 1h`; then the body with its tokens
 filled from TOKENS. Lines end as the role file's do. Each skill folder is copied byte for byte to
-`claude/skills/<name>/`.
+`hosts/claude/shell/skills/<name>/`.
 """
 from kitlib import agentname
 from kitlib.host.content import ContentError, quote, substitute
 
 HOST = 'claude'
-AGENTS_REL = 'claude/agents'
-SKILLS_REL = 'claude/skills'
+AGENTS_REL = 'hosts/claude/shell/agents'
+SKILLS_REL = 'hosts/claude/shell/skills'
 TIER_MODEL = {'light': 'haiku', 'standard': 'sonnet', 'strong': 'opus', 'deep': 'opus'}
 TOOLS = {
     'read': 'Read', 'edit': 'Edit', 'write': 'Write', 'search': 'Grep', 'find': 'Glob',

@@ -6,7 +6,7 @@ from pathlib import Path
 from kitlib.stubs import SHARED
 from tests.shipped import ROOT, frontmatter, violations
 
-SKILLS = ROOT / "claude" / "skills"
+SKILLS = ROOT / "hosts" / "claude" / "shell" / "skills"
 GODOT_SKILL = ROOT / "templates" / "stacks" / "godot" / ".claude" / "skills"
 EXPECTED = {"backlog-ops", "branch-review", "branch-sync", "coordinator-dispatch", "doc-claims-discipline",
             "flaky-test-triage", "land-branch", "machine-lock-run", "mutation-testing", "session-handoff",
@@ -52,7 +52,7 @@ def _kit_form(p):
 
 def _shipped_text_files():
     return (list(SKILLS.glob("*/*.md")) + list(GODOT_SKILL.glob("*/SKILL.md"))
-            + list((ROOT / "claude" / "agents").glob("*.md")))
+            + list((ROOT / "hosts" / "claude" / "shell" / "agents").glob("*.md")))
 
 
 class SkillFilesTest(unittest.TestCase):

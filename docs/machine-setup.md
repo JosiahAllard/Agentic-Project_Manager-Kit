@@ -27,7 +27,7 @@ The wrapper runs the tool under `-Python <python.exe>` when given, else under th
 - `tools`: holds a junction per entry. `machine_lock` -> `<kit>/tools`, `kitlib` -> `<kit>/kitlib`, and `comfy`, `procwatch`, `usage`, `agenttemp` -> `<kit>/optional/<name>`.
   - It cannot be one junction onto a kit folder. The live lock path is `tools/machine_lock/machine_lock.py`, and the kit's `tools/machine_lock.py` imports `kitlib` from beside the folder it was started from, spelled through the junction (`os.path.abspath` does not resolve it).
 - `knowledge/asset-generation` -> `<kit>/knowledge/asset-generation`.
-- `skills/<name>` -> `<kit>/claude/skills/<name>`, for each old-kit skill the kit has. One it lacks (a repo-local skill) is noted and keeps pointing at the old kit, linked again when its container is replaced.
+- `skills/<name>` -> `<kit>/hosts/claude/shell/skills/<name>`, for each old-kit skill the kit has. One it lacks (a repo-local skill) is noted and keeps pointing at the old kit, linked again when its container is replaced.
 
 A container that is itself a junction into the old kit is replaced by a real folder of these links. The old-kit entries it no longer reaches are noted, not removed.
 
@@ -46,15 +46,15 @@ A path it cannot resolve to an absolute one (a relative path, a script name, ano
 A path that resolves into the old kit, into `<kit>/hooks` or to `<kit>/tools/guard.py` (the pre-move paths, go-live.md "Switches") gets one of three outcomes:
 - **Removed.** `no_root_search.py` and `main_checkout_redirect_guard.py`: the hook goes. A group or event that removal empties goes too; one that was already empty stays.
 - **Re-pointed.** The file is rewritten to the kit's copy with forward slashes, quotes kept:
-  - `pm_session_start.py` and `coordinator_session_start.py` go to `claude/hooks/`.
+  - `pm_session_start.py` and `coordinator_session_start.py` go to `hosts/claude/shell/hooks/`.
   - `statusline-usage.ps1` and `write-usage-status.ps1` go to `optional/usage/`.
 - **Refused.** Any other old-kit path, named.
 
 A path through `<config>/tools/<link>` stays as written: the links step points it at the kit. It is refused when the kit has no file there.
 
-When no PreToolUse hook names `<kit>/claude/hooks/guard.py`, the entry `guard.py --settings-entry` prints is appended (docs/guard.md).
+When no PreToolUse hook names `<kit>/hosts/claude/shell/hooks/guard.py`, the entry `guard.py --settings-entry` prints is appended (docs/guard.md).
 
-A SessionStart hook in shell form whose command is exactly a Python interpreter (`python`, `python.exe`, `pythonw`, `pythonw.exe`, by base name) and one `.py` file under `<kit>/claude/hooks/` is written in exec form: `command` becomes the interpreter of the guard entry `guard.py --settings-entry` prints, and `args` holds the script with forward slashes. Exec form starts no shell. Any other command, a hook that already has `args`, and every other event are left as they are.
+A SessionStart hook in shell form whose command is exactly a Python interpreter (`python`, `python.exe`, `pythonw`, `pythonw.exe`, by base name) and one `.py` file under `<kit>/hosts/claude/shell/hooks/` is written in exec form: `command` becomes the interpreter of the guard entry `guard.py --settings-entry` prints, and `args` holds the script with forward slashes. Exec form starts no shell. Any other command, a hook that already has `args`, and every other event are left as they are.
 
 When the kit's `.claude-plugin/plugin.json` names a `hooks` file, a settings hook that runs one of that file's scripts for the same event is noted (`${CLAUDE_PLUGIN_ROOT}` read as the kit): once the plugin is enabled the hook runs twice, so the settings entry is removed in the same step as the plugin install (docs/install.md "Plugin install"). The note changes nothing.
 
@@ -67,6 +67,25 @@ The file is edited as JSON and written back in its own layout: indent, ASCII esc
 A `settings.json` that is a symbolic link or has more than one hard link is refused when it needs a change: writing through a temp file would split it from the file it shares.
 
 `--apply` refuses if the file changed since the survey or has become a link. It then copies the file to `settings.json.machine-setup-<yyyymmdd>.bak` and writes through a temp file, which it removes if the write or the rename fails.
+
+### Moved hook paths
+
+The hooks lived in `<kit>/claude/hooks/` until the hosts/ move (docs/multi-host-plan.md step 7); they
+are now in `<kit>/hosts/claude/shell/hooks/`, and the skills in `<kit>/hosts/claude/shell/skills/`.
+Settings and links written before the move still name the old folder, so:
+
+- **Settings.** Before any other step, every hook path (any event, `command` and `args`) into
+  `<kit>/claude/hooks/` is re-pointed to the same file in `<kit>/hosts/claude/shell/hooks/`
+  (`settings.repoint_moved`). This runs in every mode, fresh too, and in the `--pm-settings` file,
+  so the guard entry is re-pointed instead of a second one being added, and the PM hook is
+  re-pointed instead of refused. A moved name the kit lacks is refused.
+- **Skill links.** A link in a real `skills` folder that points into `<kit>/claude/skills/` (dangling
+  after the move) is re-pointed to the same skill in `<kit>/hosts/claude/shell/skills/`
+  (`links.MOVED_SKILLS_DIR`; switch mode only, as the links step is).
+- **Until then.** `<kit>/claude/hooks/` keeps three stubs, `guard.py`, `pm_session_start.py` and
+  `coordinator_session_start.py`, each running the same-named entry in the new folder, so an
+  account whose settings were not re-pointed yet keeps its guard (a missing guard script would
+  block every tool call) and its session hooks. Delete `claude/` one release after the move.
 
 ## Extras
 
@@ -95,8 +114,8 @@ A `settings.json` that is a symbolic link or has more than one hard link is refu
 `--fresh` (`-Fresh`) is for a machine with no older kit clone. It cannot be given with `--old-kit`. It only appends: no entry is removed, re-pointed or rewritten into exec form. The dry run prints the sections links, settings, plugin, extras (`Plan.FRESH_SECTIONS`, `kitlib/machinesetup/common.py`). `--apply` makes the changes in the order the survey adds them (`survey`, `kitlib/machinesetup/__init__.py`): the settings writes, the PM hook, the plugin, the extras.
 
 - **Links.** None are switched; the plan notes `fresh: no older kit clone, no links switched`.
-- **Settings.** In each config folder's `settings.json`, the guard entry `guard.py --settings-entry` prints is appended when no PreToolUse hook names `<kit>/claude/hooks/guard.py`. A missing `settings.json` is created, with indent 2, LF and a final newline; the dry run shows it as a diff from nothing, and `--apply` refuses to replace a file that appeared since the survey. An existing file keeps its layout and gets the `.bak` described in "Settings".
-- **PM SessionStart hook.** It is written only to the file `--pm-settings` (`-PmSettings`) names: the settings the PM session loads, for example `<PM repo>/.claude/settings.local.json` (docs/pm-start.md "Hook (settings.json)"). The hook runs `claude/hooks/pm_session_start.py` in exec form with the guard entry's interpreter and the matcher `startup|resume|compact`. Without `--pm-settings` it is a note, not a change. It refuses a file that is an account's `settings.json`, a missing folder, and a file whose SessionStart hook already runs a `pm_session_start.py` other than this kit's. It also refuses when a `pm_session_start.py` hook, under any event, is already in the other file of the pair `settings.json` and `settings.local.json` next to it, or in any config folder's `settings.json`: the PM checklist would run twice (`_pm_hook_elsewhere`, `kitlib/machinesetup/settings.py`).
+- **Settings.** In each config folder's `settings.json`, the guard entry `guard.py --settings-entry` prints is appended when no PreToolUse hook names `<kit>/hosts/claude/shell/hooks/guard.py`. A missing `settings.json` is created, with indent 2, LF and a final newline; the dry run shows it as a diff from nothing, and `--apply` refuses to replace a file that appeared since the survey. An existing file keeps its layout and gets the `.bak` described in "Settings".
+- **PM SessionStart hook.** It is written only to the file `--pm-settings` (`-PmSettings`) names: the settings the PM session loads, for example `<PM repo>/.claude/settings.local.json` (docs/pm-start.md "Hook (settings.json)"). The hook runs `hosts/claude/shell/hooks/pm_session_start.py` in exec form with the guard entry's interpreter and the matcher `startup|resume|compact`. Without `--pm-settings` it is a note, not a change. It refuses a file that is an account's `settings.json`, a missing folder, and a file whose SessionStart hook already runs a `pm_session_start.py` other than this kit's. It also refuses when a `pm_session_start.py` hook, under any event, is already in the other file of the pair `settings.json` and `settings.local.json` next to it, or in any config folder's `settings.json`: the PM checklist would run twice (`_pm_hook_elsewhere`, `kitlib/machinesetup/settings.py`).
 - **Plugin.** The plugin is installed from the export of the kit's pushed main, never from the checkout (docs/plugin-source.md), the way `tools/plugin_refresh.py --migrate --apply` does it (`kitlib/machinesetup/plugin.py`). A config folder needs it when its `settings.json` has no `enabledPlugins["pm-kit@pm-kit"]`, or has `true` but the export's `state.json` does not record the folder as migrated (an install from the checkout, which `plugin_refresh.py --apply` refuses); the second case is noted. One change makes the export (`ensure_export`, `kitlib/pluginsource/__init__.py`; it runs no `claude` and refuses when the kit checkout has not fetched its remote's main). Then one change per folder runs `refresh` with migrate for that folder: `claude plugin marketplace remove pm-kit` (its failure tolerated), `marketplace add <export root>` and `install pm-kit@pm-kit -s user` through `Runner` (`kitlib/pluginsource/claude.py`), which removes `CLAUDE_CONFIG_DIR` for `~/.claude` and sets it to any other folder. `machine_setup.py --apply` gives `Runner` `run_tree` (`kitlib/machinesetup/extras.py`), which starts `claude` in a job object so a timeout ends its children too. The CLI also rewrites other keys of `settings.json`, so the change first copies it to `settings.json.machine-setup-<yyyymmdd>-plugin.bak`, and afterwards checks the entry is `true`; if a step fails or the entry is not `true`, the run stops there, and the undo text gives the folder's `--migrate --folder` command to run it again. An entry that is `false` or any other value is noted and left. With no `claude` on PATH each folder is a note giving that command. A `--config-dir` folder outside `account_folders` is never installed: `plugin_refresh.py` and `pm_start` would never update it, so it is a note giving the same three `claude` commands and the two update commands to run there by hand, and the export change is still made for it (`_split`, `_outside_note`, `kitlib/machinesetup/plugin.py`). It runs after the settings writes, so the `.bak` holds the guard entry. The export folder comes from the machine config's `plugin` key, by default under `%LOCALAPPDATA%` (docs/plugin-source.md).
 - **Extras.** The shortcut, the agent temp init, the sweep task and the agent temp permissions run as in "Extras". `KIT_MACHINE_LOCK` is not set: the plugin's lock tool is used, and the plan notes it.
 
@@ -118,5 +137,5 @@ A `settings.json` that is a symbolic link or has more than one hard link is refu
 | `kitlib/machinesetup/agenttemp.py` | the agent temp init and the sweep task (`default_agent_temp`, `task_line`, `write_sweep_key`, `unsafe_dir`, `task_registered`), called from `extras.py` |
 | `tools/machine_setup.py`, `installer/machine-setup.ps1` | the entry point and its PowerShell wrapper |
 | `tools/agent_temp_init.py` | the entry point for the agent temp steps alone |
-
+ `tests/machinesetup/test_moved.py` covers "Moved hook paths": the re-pointing in each mode and the PM settings, the skill links (Windows), and the stubs.
 `tests/machinesetup/test_machinesetup.py` builds a fake home, a fake old kit and a fake kit in a temp folder. It runs a dry run, then `--apply`, then a second run, and checks each refusal. `tests/machinesetup/test_fresh.py` does the same for `--fresh`, with a kit that is a temp git repository with a bare remote (so the export is made for real) and a fake `subprocess.run` under the real `Runner`; its `RealRunner` tests run `run_tree` against fake `claude` `.cmd` files for the arguments, the environment, the return code and the timeout. Neither touches the real home folder, desktop, environment or permissions. Every Python they start is `sys.executable`, and the wrapper gets it as `-Python`; `test_no_python_alias_is_started` runs the wrapper and a dry run with a temp `LOCALAPPDATA` on a PATH whose `python`, `pythonw`, `py` and `python3` are fakes that leave a mark, and checks none was started. `tests/machinesetup/test_agent_temp_init.py` covers the agent temp init and the sweep task against the same fake home and `FakeHost` (its `task_exists` and `task_register` stand in for the task scheduler). One test checks, by size and modification time only, that the real accounts' `settings.json` files are unchanged after a fresh `--apply` against a temp home.
