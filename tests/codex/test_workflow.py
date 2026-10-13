@@ -22,6 +22,12 @@ def task():
                   'probe-session', 'gpt-6.1-sol', 'a' * 40, ('value.txt',), discover())
 
 
+def linked(path):
+    """The tests run from the main checkout or a linked worktree alike: the place check is faked."""
+    from kitlib.git import repo
+    return SimpleNamespace(kind=repo.LINKED, top=path)
+
+
 def host(role='worker', cwd=None, model='gpt-6.1-sol'):
     result = mock.Mock(spec=BoundKitHost)
     result.binding = SimpleNamespace(role=role, cwd=cwd or str(Path.cwd()), model=model)
@@ -44,7 +50,7 @@ class Protocol(unittest.TestCase):
                 return {'config': {'windows': {'sandbox': 'unelevated'}}}
             return {'exitCode': 0, 'stdout': 'ok', 'stderr': ''}
         rpc = mock.Mock(side_effect=request)
-        registry = RoleBindings(rpc)
+        registry = RoleBindings(rpc, classify=linked)
         binding = registry.add_root(value, 'worker')
         return BoundKitHost(KitOperationExecutor(rpc, registry, guard=guard or mock.Mock(return_value=None)),
                             binding), live, rpc
@@ -74,7 +80,8 @@ class Protocol(unittest.TestCase):
 
     def test_unreadable_kit_configuration_is_a_preview_refusal(self):
         from kitlib.backlog.errors import Failure
-        with mock.patch('kitlib.backlog.opener.open_repo', side_effect=Failure('bad configuration')):
+        with mock.patch('kitlib.backlog.opener.open_repo', side_effect=Failure('bad configuration')), \
+                mock.patch('kitlib.git.repo.classify', side_effect=linked):
             with self.assertRaisesRegex(ValueError, 'bad configuration'):
                 W.plan(str(Path.cwd()), 'codex/probe', 'PROBE', 'probe-session',
                        'gpt-6.1-sol', ('value.txt',))
@@ -83,7 +90,7 @@ class Protocol(unittest.TestCase):
         from hosts.codex.adapter.runtime import SandboxCommandHost
         from tests.codex.test_runtime import snapshot
         request = mock.Mock()
-        binding = RoleBindings(request).add_root(snapshot(), 'worker')
+        binding = RoleBindings(request, classify=linked).add_root(snapshot(), 'worker')
         raw = SandboxCommandHost(request, binding)
         with self.assertRaisesRegex(W.Stopped, 'fresh-bound kit executor'):
             W._run(task(), 'preflight', (), 'worker', binding.cwd, raw)
