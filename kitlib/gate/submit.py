@@ -4,7 +4,7 @@
   submit    check the arguments (USAGE), write each branch's `running` land record, start the
             tool again, detached, with `--submitted <payload>`, and give the one line
             `SUBMITTED <branch>[+<branch>...] tip <sha>[,<sha>] wait: python <kit>/tools/gate.py
-            wait-result <branch> --tip <sha> --kind land`
+            wait-result <branch> --tip <sha> --kind land -C <main checkout>` (wait_line)
   restore   the payload, read back by the detached tool: the result.Run of each branch (the same
             run_id and started_at), the output file and the land records those runs replaced,
             for kitlib.gate.land.Lander(submitted=...)
@@ -36,6 +36,7 @@ from kitlib import gate as G
 from kitlib import pluginsource
 from kitlib.gate import pin
 from kitlib.gate import result
+from kitlib.git import repo
 from kitlib.lock import run as lockrun
 from kitlib.proc import process, spawn
 
@@ -95,13 +96,20 @@ def child_env(environ=None):
     return env
 
 
-def wait_line(branches, tips, kit=None):
+def _arg(path):
+    return '"%s"' % path if ' ' in path else path
+
+
+def wait_line(branches, tips, root, kit=None):
+    """The SUBMITTED line. Its wait command names the repository with -C: the main checkout of
+    `root` (where the landing runs, and a checkout no cleanup removes), or `root` itself when git
+    cannot place it. The record is in the git common dir, so any checkout of the repository reads
+    the same one."""
     kit = kit or pluginsource.live_root()
-    script = os.path.join(kit, 'tools', 'gate.py')
-    if ' ' in script:
-        script = '"%s"' % script
-    return 'SUBMITTED %s tip %s wait: python %s wait-result %s --tip %s --kind land' % (
-        '+'.join(branches), ','.join(tips), script, branches[0], tips[0])
+    main = repo.main_checkout_toplevel(root) or root
+    return 'SUBMITTED %s tip %s wait: python %s wait-result %s --tip %s --kind land -C %s' % (
+        '+'.join(branches), ','.join(tips), _arg(os.path.join(kit, 'tools', 'gate.py')),
+        branches[0], tips[0], _arg(main))
 
 
 def _write_json(path, data):
@@ -166,7 +174,7 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
         pin.lease_child(tool_file, pid, env)
     except OSError as e:        # the landing runs; a later pin may prune its export under it
         _note(output, 'WARNING: the pinned export could not be leased for pid %d: %s' % (pid, e))
-    return G.Outcome(G.OK, [wait_line(branches, tips, kit)], facts={'pid': pid, 'payload': payload,
+    return G.Outcome(G.OK, [wait_line(branches, tips, root, kit)], facts={'pid': pid, 'payload': payload,
                                                                     'output': output})
 
 

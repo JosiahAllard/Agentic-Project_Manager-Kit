@@ -243,10 +243,10 @@ At its turn the landing takes the landing lock file (kitlib/records/landing.py).
 kitlib/gate/submit.py. `land.py --submit` and `gate.py land --submit` check the arguments (USAGE as without `--submit`, nothing written), write each branch's `running` land record (Result record), start the same landing again as a detached, windowless process, and print exactly one line, then exit 0:
 
 ```
-SUBMITTED <branch>[+<branch>...] tip <sha>[,<sha>] wait: python <kit>/tools/gate.py wait-result <branch> --tip <sha> --kind land
+SUBMITTED <branch>[+<branch>...] tip <sha>[,<sha>] wait: python <kit>/tools/gate.py wait-result <branch> --tip <sha> --kind land -C <main checkout>
 ```
 
-The wait command names the batch's first branch and tip; `<kit>` is the kit's live folder (`pluginsource.live_root`), the script path in double quotes when it holds a space (`submit.wait_line`). The coordinator runs it in the background from any checkout of the repository and wakes on its exit (Waking a waiting session).
+The wait command names the batch's first branch and tip; `<kit>` is the kit's live folder (`pluginsource.live_root`); `-C` names the main checkout of the submitter's `-C` (`repo.main_checkout_toplevel`, that `-C` itself when git cannot place it), a checkout no branch cleanup removes; each path is in double quotes when it holds a space (`submit.wait_line`). The record is in the git common dir, so the command reads the same record from any working directory. The coordinator runs it, as printed, in the background and wakes on its exit (Waking a waiting session).
 
 The detached process is started as `machine_lock.py run --detach` starts its wrapper: `Win32_Process.Create` through PowerShell's CIM cmdlets with `ShowWindow` 0 (`submit.detach`), so it is outside the submitter's process tree and outlives it. Its environment is the submitter's, less `MACHINE_LOCK_RUN` (the landing books its own turn, never one nested in the submitter's run), with `MACHINE_LOCK_ORIGIN` set to the submitter's ancestry (the slot is booked `detached=True`, so the machine lock gives it the submitter's role), `PYTHONIOENCODING=utf-8` and `PYTHONUNBUFFERED=1` (`submit.child_env`). A tool run from a pinned export keeps `KIT_PINNED`, and `pin.lease_child` leases the export for the detached process (Pinned tools). It waits for its turn up to `--wait`, else `"landing".wait_s`.
 

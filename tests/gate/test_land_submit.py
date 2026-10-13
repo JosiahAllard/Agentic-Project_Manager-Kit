@@ -16,6 +16,7 @@ from unittest import mock
 
 from kitlib import gate as G
 from kitlib.gate import pin, result, submit
+from kitlib.git import repo
 from kitlib.lock.store import LockError
 from kitlib.proc import process
 from tests import gitfixture
@@ -44,6 +45,12 @@ class SubmitCase(LandCase):
                             environ=dict(environ or {}), detach_fn=detach, kit=kit, **kw)
         return out, detach
 
+    def main_top(self):
+        """The wait command's -C: the main checkout as git names it, quoted when it has a space."""
+        top = repo.main_checkout_toplevel(self.repo.root)
+        self.assertIsNotNone(top)
+        return '"%s"' % top if ' ' in top else top
+
     def record(self, branch):
         rec, why = result.read(self.repo.root, branch, 'land')
         self.assertIsNotNone(rec, why)
@@ -57,8 +64,9 @@ class TheLine(SubmitCase):
                                   environ={'MACHINE_LOCK_RUN': 'r9', 'KEEP': 'me'})
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertEqual(out.lines, ['SUBMITTED kit/feature tip %s wait: python %s wait-result '
-                                     'kit/feature --tip %s --kind land' % (
-                                         tip, os.path.join(r'C:\kit', 'tools', 'gate.py'), tip)])
+                                     'kit/feature --tip %s --kind land -C %s' % (
+                                         tip, os.path.join(r'C:\kit', 'tools', 'gate.py'), tip,
+                                         self.main_top())])
         payload, output = submit.files(self.repo.root, [BRANCH])
         rec = self.record(BRANCH)
         self.assertEqual((rec['verdict'], rec['tip'], rec['base'], rec['log']),
@@ -87,9 +95,9 @@ class TheLine(SubmitCase):
         _, t2 = self.branch('two', {'two.py': '2\n'})
         out, _ = self.submit(['kit/one', 'kit/two'], [t1, t2], kit=r'C:\the kit')
         self.assertEqual(out.lines, ['SUBMITTED kit/one+kit/two tip %s,%s wait: python "%s" '
-                                     'wait-result kit/one --tip %s --kind land' % (
+                                     'wait-result kit/one --tip %s --kind land -C %s' % (
                                          t1, t2, os.path.join(r'C:\the kit', 'tools', 'gate.py'),
-                                         t1)])
+                                         t1, self.main_top())])
         self.assertEqual([self.record(b)['verdict'] for b in ('kit/one', 'kit/two')],
                          ['running', 'running'])
         self.assertIsNone(self.record('kit/one')['base'])   # no --expect-main: none yet
@@ -275,8 +283,8 @@ class RealDetach(SubmitCase):
         self.assertEqual(len(lines), 1, r.stdout)
         self.assertTrue(lines[0].startswith('SUBMITTED kit/feature tip %s wait: python ' % tip),
                         lines)
-        self.assertTrue(lines[0].endswith(' wait-result kit/feature --tip %s --kind land' % tip),
-                        lines)
+        self.assertTrue(lines[0].endswith(' wait-result kit/feature --tip %s --kind land -C %s'
+                                          % (tip, self.main_top())), lines)  # not the worktree
         rec, why = result.wait(wt, BRANCH, tip, kind='land', timeout_s=HANG_S, poll_s=0.1)
         self.assertIsNone(why)
         self.until_closed(rec['log'])
