@@ -15,8 +15,14 @@ MAX_RECORD_BYTES = 8192
 
 
 def read_record(path):
-    """The one JSON object in `path`. Refuses a link, a reparse point, a file replaced while it
-    was opened, more than MAX_RECORD_BYTES, and anything but exactly one object."""
+    """The JSON object `path` holds on a single line, as a dict.
+
+    Trailing CR and LF bytes are dropped, and what is left must be one line that the bridge's
+    JSON-line decoder (core/jsonwire.py) accepts. Refused, as ProcError:
+    - a link, a reparse point, or a file replaced while it was opened
+    - more than MAX_RECORD_BYTES bytes
+    - an empty line, a second line, or an object spread over lines
+    - a value that is not an object, a duplicate key, NaN or Infinity"""
     path = Path(path)
     info = path.lstat()
     if (not stat.S_ISREG(info.st_mode) or path.is_symlink()
