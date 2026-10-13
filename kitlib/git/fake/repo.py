@@ -115,6 +115,17 @@ class Repo:
                     raise Unsupported('repository extension %s' % name)
         if vals.get('core.worktree') is not None:
             raise Unsupported('core.worktree')
+        # discover's gitfile branch: real git takes core.bare from the common config to make
+        # even a gitfile-found work tree bare (setup.c setup_discovered_git_dir); not modelled.
+        self.common_bare = ('core.bare' in vals
+                            and _config.parse_bool(vals['core.bare'], 'core.bare'))
+        if self.worktree_config:
+            # setup.c read_worktree_config: with the extension on, git takes core.bare and
+            # core.worktree from this worktree's config.worktree too. Neither is modelled, so
+            # either key there, at any value, is refused rather than answered wrongly.
+            for k, _v in _config.read_file(self.worktree_config_path):
+                if k in ('core.bare', 'core.worktree'):
+                    raise Unsupported('%s in config.worktree (extensions.worktreeConfig)' % k)
         self.hexlen = 40 if self.algo == 'sha1' else 64
 
     def reload_config(self):
@@ -239,6 +250,8 @@ def discover(cwd, env, cli_config, git_dir=None):
             if not is_git_directory(gd):
                 raise die('not a git repository: %s' % slash(gd))
             repo = Repo(gd, d, env, cli_config, gitdir_from_env=True)
+            if repo.common_bare:
+                raise Unsupported('core.bare true in the repository config, reached by a .git file')
             return repo, _prefix(d, start)
         if os.path.isdir(dotgit) and is_git_directory(dotgit):
             repo = Repo(dotgit, d, env, cli_config)
