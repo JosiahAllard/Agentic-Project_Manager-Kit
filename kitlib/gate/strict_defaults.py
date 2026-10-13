@@ -5,7 +5,9 @@ strong reviewer who is not its author and a --full --fresh merged gate, and
 never in a batch. land.py reads this file from main, never from the branch.
 A repo adds paths with .kit.json landing.strict_paths; it cannot remove these.
 Every host's hook entries and rendered agents are strict (hosts/<name>/shell/),
-and so is the content they are rendered from (content/roles, content/skills).
+and so is the content they are rendered from (content/roles, content/skills). boot/ (the pre-import
+check every entry runs) and each host's adapter (its hook payloads become the guard's Actions there)
+are strict as the guard is.
 """
 
 STRICT_DEFAULTS = (
@@ -14,6 +16,8 @@ STRICT_DEFAULTS = (
     'kitlib/gate/**',
     'kitlib/proc/**',
     'kitlib/lockmcp/**',
+    'boot/**',
+    'hosts/*/adapter/**',
     'hosts/*/shell/hooks/**',
     'hosts/*/shell/agents/**',
     'content/roles/**',
