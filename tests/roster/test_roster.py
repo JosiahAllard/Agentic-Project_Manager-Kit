@@ -156,6 +156,10 @@ class TempCopyTest(unittest.TestCase):
         self.assertIn('agent_roster: docs/ROSTER.md: needs exactly one <!-- rendered: roles -->', out.getvalue())
         with self.assertRaises(ContentError):
             roster.render('no regions\n', _content(self.top), MAPS)
+        text = read(self.roster).decode('utf-8')
+        twice = text.replace('<!-- rendered: roles -->\n', '<!-- rendered: roles -->\n<!-- rendered: roles -->\n', 1)
+        with self.assertRaises(ContentError):        # a repeated start marker, though only one region closes
+            roster.render(twice, _content(self.top), MAPS)
 
     def test_crlf_is_kept(self):
         write_file(self.roster, read(self.roster).replace(b'\n', b'\r\n'))

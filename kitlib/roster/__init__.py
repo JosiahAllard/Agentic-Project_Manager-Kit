@@ -54,7 +54,8 @@ def render(text, content, tier_maps, source=ROSTER_REL):
         start = START % name
         pat = re.compile(r'^%s[ \t]*\r?\n.*?^%s(?=[ \t]*\r?$)' % (re.escape(start), re.escape(END)), re.M | re.S)
         found = pat.findall(text)
-        if len(found) != 1:
+        starts = re.findall(r'^%s[ \t]*\r?$' % re.escape(start), text, re.M)
+        if len(found) != 1 or len(starts) != 1:
             raise ContentError('%s: needs exactly one %s ... %s region' % (source, start, END))
         block = nl.join([start] + lines + [END])
         text = pat.sub(lambda _: block, text, count=1)

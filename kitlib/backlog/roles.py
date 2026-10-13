@@ -1,4 +1,4 @@
-"""Who may take each backlog action (owner-authored; in OWNER_PATHS, so agents cannot widen it).
+"""Who may take each backlog action (owner-authored; in OWNER_PATHS, so agents cannot widen the rows).
 
 The guard reads this map from the installed kit, never from a branch. For each command it takes
 role = role_of(session mark or bare agent_type, subagent), sorts the command (a backlog.py verb, a
@@ -17,7 +17,10 @@ one file. A role's group is its `mode:`'s (controller: lead, write: builder, rea
 read-only, lander: lander) unless its file names `group:` (records and spec-writer: docs); a file
 that says `run: session` is SESSION_ONLY. An old name (kitlib.content.ALIASES) is in its new
 name's group for one release. Only OWNER, which no file defines, and PM, the one lead TOP adds to
-the owner, are named here.
+the owner, are named here; both are SESSION_ONLY whatever a role file says, so a TOP right never
+reaches a subagent. The role files are not owner paths: a change to a file's `mode:`, `group:` or
+`run:` moves that role between groups once it lands in the installed kit. A role file that cannot
+be read is in no group (its role is unlisted), and with none readable only the owner is listed.
 """
 import collections
 import os
@@ -41,8 +44,9 @@ DOCS = _names(lambda r: r.group == 'docs')
 READ_ONLY = _names(lambda r: r.group == 'read-only')
 LANDERS = _names(lambda r: r.group == 'lander')
 ROLES = LEADS + BUILDERS + LANDERS + DOCS + READ_ONLY
-SESSION_ONLY = (OWNER,) + _names(lambda r: r.run == 'session' and r.group is not None)
 TOP = (OWNER, PM)
+SESSION_ONLY = TOP + tuple(n for n in _names(lambda r: r.run == 'session' and r.group is not None)
+                           if n not in TOP)
 
 NONE, LOW, MEDIUM, HIGH, REFUSED = 'none', 'low', 'medium', 'high', 'refused'
 RISKS = (NONE, LOW, MEDIUM, HIGH, REFUSED)

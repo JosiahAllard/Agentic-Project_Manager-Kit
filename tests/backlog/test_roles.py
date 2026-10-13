@@ -1,8 +1,10 @@
 """kitlib.backlog.roles against the approved design table and the owner's answers."""
+import importlib
 import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib import content
 from kitlib.backlog import record
@@ -84,6 +86,29 @@ class RolesTest(unittest.TestCase):
         got = {r.name: (r.group, r.run) for r in content.roster(top)}
         self.assertEqual(got, {'boss': ('lead', 'session'), 'maker': ('builder', None),
                                'plain': (None, None), 'scribe': ('docs', None)})
+
+    def reloaded(self, entries):
+        """kitlib.backlog.roles as it reads with `entries` for the kit's roster; the real one after."""
+        self.addCleanup(importlib.reload, R)
+        with mock.patch.object(content, 'roster', return_value=tuple(entries)):
+            return importlib.reload(R)
+
+    def test_no_readable_role_file_lists_the_owner_alone(self):
+        """Fails closed: with no role file read, every other role is unlisted (UNLISTED_MAY only)."""
+        r = self.reloaded(())
+        self.assertEqual(r.ROLES, ('owner',))
+        self.assertEqual(r.role_of('pm', False), None)
+        self.assertEqual(r.role_of('worker', True), None)
+        self.assertTrue(r.allows('retarget', r.role_of('owner', False)))
+        self.assertFalse(r.allows('add', r.role_of('worker', True)))
+
+    def test_a_top_role_stays_session_only_whatever_its_file_says(self):
+        """pm's file losing `run: session` does not hand a subagent named pm the TOP rows."""
+        entries = [e._replace(run=None) if e.name == 'pm' else e for e in content.roster(R.KIT)]
+        r = self.reloaded(entries)
+        self.assertIn('pm', r.SESSION_ONLY)
+        self.assertEqual(r.role_of('pm', True), None)
+        self.assertEqual(r.role_of('pm', False), 'pm')
 
     def test_every_design_row_and_backlog_verb_is_present(self):
         self.assertEqual(set(R.ACTIONS), set(DESIGN))
