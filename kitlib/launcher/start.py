@@ -31,7 +31,7 @@ CONSULTANT_DEFAULT_AUTOCOMPACT = 350000
 ROLE_AUTOCOMPACT = {'consultant': CONSULTANT_DEFAULT_AUTOCOMPACT, 'deep-worker': DEEP_AUTOCOMPACT}
 # the kit plugin's agents (claude/agents/*.md stems; tests/launcher/test_start.py pins the set):
 # a bare one of these is started with the plugin's prefix, any other name as given
-KIT_AGENTS = ('asset-smith', 'consultant', 'coordinator', 'deep-worker', 'lander', 'records',
+KIT_AGENTS = ('asset-smith', 'consultant', 'coordinator', 'deep-worker', 'lander', 'pm', 'records',
               'researcher', 'reviewer', 'senior-worker', 'sound-smith', 'spec-writer', 'strong-worker', 'tech-artist',
               'test-runner', 'worker')
 # a kit agent's old name -> its name now: started as the new one, for one release (docs/ROSTER.md)

@@ -6,7 +6,7 @@ from pathlib import Path
 from tests.shipped import scan
 
 AGENTS = Path(__file__).resolve().parents[2] / "claude" / "agents"
-EXPECTED = {"coordinator", "worker", "senior-worker", "strong-worker", "deep-worker", "consultant", "reviewer",
+EXPECTED = {"pm", "coordinator", "worker", "senior-worker", "strong-worker", "deep-worker", "consultant", "reviewer",
             "lander", "records", "researcher", "spec-writer", "test-runner", "asset-smith",
             "sound-smith", "tech-artist"}
 BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),

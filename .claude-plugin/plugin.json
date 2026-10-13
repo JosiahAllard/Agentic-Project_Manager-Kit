@@ -8,6 +8,7 @@
     "./claude/agents/consultant.md",
     "./claude/agents/deep-worker.md",
     "./claude/agents/lander.md",
+    "./claude/agents/pm.md",
     "./claude/agents/records.md",
     "./claude/agents/researcher.md",
     "./claude/agents/reviewer.md",

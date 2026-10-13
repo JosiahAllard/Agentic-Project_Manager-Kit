@@ -28,6 +28,7 @@ built-in agent types (`general-purpose`, `Explore`, `Plan`), which this table ca
 | consultant | opus | high | Own long-lived launched session per repository (never an Agent dispatch; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked. |
 | deep-worker | opus | xhigh | Own launched session (never an Agent dispatch; 1M via launcher). Root cause or concurrency work strong-worker failed at or plainly cannot do; never builds or plans. |
 | lander | haiku | medium | Lands one reviewed branch (or a batch) on main on the coordinator's go. Never edits code. Dispatched with no `model`: never overridden. |
+| pm | opus | high | The project manager: the owner's one main session (`claude --agent pm-kit:pm`; after-reboot resumes it so), never a subagent. Keeps every repository's coordinator running and briefed, records owner decisions in the ledger, schedules the machine, runs the Action Hub. Builds and lands nothing itself. |
 | records | sonnet | low | Writes settled facts into docs only: decisions, landing notes, plan ticks. |
 | researcher | sonnet | high | Read-only ideas and prior art; proposes concepts for the owner to choose from, builds nothing. |
 | reviewer | sonnet | high | Read-only review of one branch against its brief; reports defects, scope creep and untested changes. Raised to opus per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file. |
