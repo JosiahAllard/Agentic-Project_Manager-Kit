@@ -208,5 +208,156 @@ class MovedToTop(unittest.TestCase):
         self.assertEqual(q["entries"][1]["ticket"], 3)          # it keeps its ticket
 
 
+LAND = "landing:z:\\repo\\.git"
+
+
+def land(rid, cpu, expect_s, ticket, **kw):
+    return waiter(rid, cpu, expect_s, ticket, priority="land", resource=LAND, **kw)
+
+
+@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+class LandPriority(unittest.TestCase):
+    """priority "land": behind own_turn and owner-moved entries, ahead of every other waiting
+    entry (gpu-free ones too), ticket order among landings; backfill as for any run ahead."""
+
+    def setUp(self):
+        self.L = lay.derive(lay.fake_hardware(threads=8, smt=2, gpus=1))
+        self.assertEqual((self.L["cpu_slots"], lay.size(self.L, "gpu")), (4, 2))
+
+    def plan(self, entries):
+        return qm.plan(self.L, {"ticket": 9, "entries": entries}, now=NOW)[0]
+
+    def test_the_full_order(self):
+        # Each run needs every core, so each starts only after the one ahead of it.
+        es = [waiter("r-plain", 4, 100, 2),
+              waiter("r-gpu", 4, 100, 3, need={"cpu": 4, "gpu": 1}),
+              waiter("r-land2", 4, 100, 7, priority="land"),
+              waiter("r-land1", 4, 100, 6, priority="land"),
+              waiter("r-moved", 4, 100, 5, moved=moved(1)),
+              waiter("r-own", 4, 100, 8, hold="h-x")]
+        got = self.plan(es)
+        self.assertEqual(sorted(got, key=lambda r: got[r]["position"]),
+                         ["r-own", "r-moved", "r-land1", "r-land2", "r-gpu", "r-plain"])
+        self.assertEqual([got[r]["start"] for r in ("r-own", "r-moved", "r-land1", "r-land2")],
+                         [NOW, NOW + 100, NOW + 200, NOW + 300])
+
+    def test_a_landing_goes_ahead_of_an_earlier_ordinary_run(self):
+        got = self.plan([holder("r-h", [0, 1], NOW - 100, 1000),
+                         waiter("r-a", 4, 100, 2), waiter("r-l", 4, 100, 3, priority="land")])
+        self.assertEqual((got["r-l"]["position"], got["r-l"]["start"]), (1, NOW + 900))
+        self.assertEqual((got["r-a"]["position"], got["r-a"]["start"]), (2, NOW + 1000))
+
+    def test_an_entry_without_the_fields_is_ordinary(self):
+        # An older queue.json entry: no "priority", no "resource" key at all.
+        old = waiter("r-old", 4, 100, 2)
+        self.assertNotIn("priority", old)
+        self.assertIsNone(qm.entry_priority(old))
+        self.assertIsNone(qm.entry_resource(old))
+        got = self.plan([old, waiter("r-l", 4, 100, 3, priority="land")])
+        self.assertEqual(got["r-l"]["position"], 1)
+        self.assertEqual(got["r-old"]["start"], NOW + 100)
+
+    def test_an_unknown_priority_on_disk_plans_as_ordinary(self):
+        got = self.plan([waiter("r-a", 4, 100, 2), waiter("r-x", 4, 100, 3, priority="urgent")])
+        self.assertEqual(got["r-a"]["position"], 1)
+
+    def test_a_short_run_backfills_ahead_of_a_landing_only_if_it_ends_first(self):
+        got = self.plan([holder("r-h", [0, 1], NOW - 100, 1000),
+                         land("r-l", 4, 100, 2),
+                         waiter("r-long", 2, 2000, 3), waiter("r-short", 2, 900, 4)])
+        self.assertEqual(got["r-l"]["start"], NOW + 900)
+        self.assertEqual((got["r-short"]["start"], got["r-short"]["backfill"]), (NOW, True))
+        self.assertLessEqual(got["r-short"]["start"] + 900, got["r-l"]["start"])
+        self.assertEqual((got["r-long"]["start"], got["r-long"]["backfill"]), (NOW + 1000, False))
+
+    def test_one_second_too_long_does_not_backfill(self):
+        got = self.plan([holder("r-h", [0, 1], NOW - 100, 1000),
+                         land("r-l", 4, 100, 2), waiter("r-over", 2, 901, 3)])
+        self.assertEqual(got["r-l"]["start"], NOW + 900)
+        self.assertEqual(got["r-over"]["start"], NOW + 1000)
+
+
+@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+class ResourceExclusion(unittest.TestCase):
+    """An entry naming a resource never starts while another live entry holds it, and two
+    entries naming it are never planned to overlap, however many slots are free."""
+
+    def setUp(self):
+        self.L = lay.derive(lay.fake_hardware(threads=8, smt=2, gpus=0))
+
+    def plan(self, entries):
+        return qm.plan(self.L, {"ticket": 9, "entries": entries}, now=NOW)[0]
+
+    def test_a_held_entry_with_the_resource_keeps_a_waiting_one_out(self):
+        h = holder("r-h", [0], NOW - 100, 1000)
+        h["resource"] = LAND
+        got = self.plan([h, land("r-l", 1, 100, 2)])
+        self.assertFalse(got["r-l"]["now"])
+        self.assertEqual(got["r-l"]["start"], NOW + 900)
+        del h["resource"]                                   # slots alone let it start now
+        self.assertTrue(self.plan([h, land("r-l", 1, 100, 2)])["r-l"]["now"])
+
+    def test_another_resource_or_none_does_not(self):
+        h = holder("r-h", [0], NOW - 100, 1000)
+        h["resource"] = "landing:z:\\other\\.git"
+        got = self.plan([h, land("r-l", 1, 100, 2), waiter("r-a", 1, 100, 3, resource=None)])
+        self.assertTrue(got["r-l"]["now"])
+        self.assertTrue(got["r-a"]["now"])
+
+    def test_two_waiting_entries_with_it_never_overlap(self):
+        got = self.plan([land("r-1", 1, 300, 2), land("r-2", 1, 100, 3), waiter("r-3", 1, 50, 4,
+                                                                                 resource=LAND)])
+        self.assertEqual(got["r-1"]["start"], NOW)
+        self.assertEqual(got["r-2"]["start"], NOW + 300)
+        self.assertEqual(got["r-3"]["start"], NOW + 400)
+        spans = sorted((got[r]["start"], got[r]["start"] + e) for r, e in
+                       (("r-1", 300), ("r-2", 100), ("r-3", 50)))
+        for (a0, a1), (b0, _b1) in zip(spans, spans[1:]):
+            self.assertLessEqual(a1, b0)
+
+    def test_a_background_run_naming_it_holds_it_but_its_slots_still_yield(self):
+        bg = {"id": "r-bg", "ticket": 1, "state": "bg", "need": {"cpu": 1, "gpu": 0},
+              "cores": [0], "gpus": [], "held_at": NOW, "expect_s": 600, "resource": LAND}
+        got, soft = qm.plan(self.L, {"ticket": 3, "entries": [bg, land("r-l", 1, 100, 2),
+                                                             waiter("r-a", 4, 10, 3)]}, now=NOW)
+        self.assertEqual(soft["cpu"], {0})
+        self.assertEqual(got["r-l"]["start"], NOW + 600)
+        self.assertTrue(got["r-a"]["now"])                  # background slots yield as before
+
+    def test_its_parent_holding_it_does_not_keep_it_out(self):
+        p = holder("r-p", [0], NOW - 100, 1000)
+        p["resource"] = LAND
+        got = self.plan([p, land("r-child", 1, 100, 2, parent="r-p"),
+                         land("r-other", 1, 100, 3)])
+        self.assertTrue(got["r-child"]["now"])
+        self.assertFalse(got["r-other"]["now"])
+
+    def test_an_own_turn_entry_waits_for_it_too(self):
+        h = holder("r-h", [0], NOW - 100, 1000)
+        h["resource"] = LAND
+        got = self.plan([h, land("r-l", 1, 100, 2, hold="h-x")])
+        self.assertEqual(got["r-l"]["start"], NOW + 900)
+
+    def test_the_resource_holder_is_named_in_why_it_waits(self):
+        h = holder("r-h", [0], NOW - 100, 1000)
+        h.update(resource=LAND, repo="kit", slug="other")
+        e = land("r-l", 1, 100, 2)
+        q = {"ticket": 3, "entries": [h, e]}
+        why = qm.busy_text(self.L, q, e, qm.plan(self.L, q, now=NOW)[0])
+        self.assertIn("resource %s is held by" % LAND, why)
+        self.assertIn("r-h", why)
+
+    def test_join_carries_both_and_leaves_them_none_for_an_ordinary_run(self):
+        q = {"ticket": 0, "entries": []}
+        rec = {"id": "r-x", "repo": "kit", "slug": "s", "kind": "engine-test", "pid": 1,
+               "ctime": 1, "expect_s": 60, "resource": LAND, "priority": "land"}
+        e = qm.join(q, rec, {"cpu": 1, "gpu": 0})
+        self.assertEqual((e["resource"], e["priority"]), (LAND, "land"))
+        rec2 = {k: v for k, v in rec.items() if k not in ("resource", "priority")}
+        rec2["id"] = "r-y"
+        e2 = qm.join(q, rec2, {"cpu": 1, "gpu": 0})
+        self.assertEqual((e2["resource"], e2["priority"]), (None, None))
+
+
 if __name__ == "__main__":
     unittest.main()

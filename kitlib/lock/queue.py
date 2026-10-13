@@ -3,8 +3,12 @@
 queue.json is {"ticket": the last ticket given, "entries": [entry]}; an entry is
 {id, ticket, state: waiting | held | bg, pid, ctime, repo, slug, kind, need {cpu, gpu},
 expect_s, since, held_at, cores, gpus, hold, avoid, prefer, parked, blocked_by, clear_at,
-avoid_after, parent, moved}. It is read and written only under the store's "queue" mutex. moved is
-set only on a waiting entry the owner moved to the top (move_to_top): {by, name, at, seq}.
+avoid_after, parent, resource, priority, moved}. It is read and written only under the store's
+"queue" mutex. moved is set only on a waiting entry the owner moved to the top (move_to_top):
+{by, name, at, seq}. resource and priority are set only by a library caller of kitlib.lock.run.book
+(None otherwise; an entry written before they existed has neither and loads as such): resource
+names an exclusive resource the run holds for its whole life, priority "land" plans it ahead of
+ordinary waiting runs (plan).
 
 Planning (plan) gives each waiting entry, in queue order, the earliest time what it needs is free
 for its whole expected time, around what holders and runs planned ahead of it take. A run may
@@ -24,6 +28,7 @@ from kitlib.lock.store import local_text, write_json
 POOLS = lay.POOLS
 PICK = {"cpu": "cores", "gpu": "gpus"}
 STATES = ("waiting", "held", "bg")
+PRIORITIES = ("land",)          # an entry's priority: None (ordinary) or one of these
 
 
 class QueueUnreadable(OSError):
@@ -94,6 +99,29 @@ def entry_slots(e, key, pool):
     return {i for i in ((e.get(key) or {}).get(pool) or []) if type(i) is int}
 
 
+def entry_resource(e):
+    """The exclusive resource entry e names, or None (an entry from before resources has none)."""
+    r = e.get("resource")
+    return r if isinstance(r, str) and r else None
+
+
+def entry_priority(e):
+    """Entry e's priority, one of PRIORITIES, or None: ordinary (an unknown value counts as
+    ordinary; book() refuses one before it is written)."""
+    p = e.get("priority")
+    return p if p in PRIORITIES else None
+
+
+def resource_holders(q, e):
+    """The entries of q that hold (state held or bg) the resource entry e names, but e itself and
+    e's parent: a nested run's parent holding it holds it for the run too."""
+    r = entry_resource(e)
+    if r is None:
+        return []
+    return [x for x in q["entries"] if x["state"] in ("held", "bg") and entry_resource(x) == r
+            and x["id"] not in (e["id"], e.get("parent"))]
+
+
 def entry_expect(e):
     try:
         return max(1.0, float(e.get("expect_s")))
@@ -151,7 +179,8 @@ def join(q, rec, need, state="waiting"):
          "expect_s": rec.get("expect_s"), "since": rec.get("since"), "held_at": None,
          "cores": [], "gpus": [], "hold": rec.get("hold"), "avoid": {}, "prefer": {},
          "parked": False, "blocked_by": None, "clear_at": None, "avoid_after": {},
-         "parent": rec.get("parent")}
+         "parent": rec.get("parent"), "resource": rec.get("resource"),
+         "priority": rec.get("priority")}
     q["entries"].append(e)
     return e
 
@@ -197,8 +226,12 @@ def prune(store, L, q, me=None, quiet=False):
         elif quiet or os.path.exists(store.path("ended", e["id"] + ".json")):
             continue
         elif held_text(L, e):
-            store.say("the %s's last holder (run %s) died holding it; it is free"
-                      % (held_text(L, e), e["id"]))
+            store.say("the %s's last holder (run %s) died holding it; it is free%s"
+                      % (held_text(L, e), e["id"], "; so is resource %s" % entry_resource(e)
+                         if entry_resource(e) else ""))
+        elif entry_resource(e) and e["state"] in ("held", "bg"):
+            store.say("run %s died holding resource %s; it is free"
+                      % (e["id"], entry_resource(e)))
         elif e["state"] == "waiting":
             store.say("run %s's caller died while it waited; its queue entry is dropped" % e["id"])
     q["entries"] = keep
@@ -232,26 +265,31 @@ def plan(L, q, now=None):
     waiting entries, {pool: slots background runs hold}).
 
     Order: own_turn entries, then entries the owner moved to the top (the latest move first),
-    then a gpu entry whose gpu slots are free, then ticket order. A moved entry is never planned
-    ahead of an own_turn one: a nested run held back behind it would keep its parent's slots
-    for ever. Each gets the earliest of now, a holder's planned end (holder_end), or a planned run's end or
-    start, at which what it needs is free for its whole expected time, never a slot its `avoid`
-    names. It picks its own hold's slots first, then those no background run holds (they yield),
-    then the lowest. It may not start before a run planned ahead of it and still be running when
-    that one starts (backfill), unless it is own_turn. A parked entry (holds not its own leave it
-    too little now) is planned from clear_at, around avoid_after, so no run behind it passes it."""
+    then priority "land" entries (ticket order), then a gpu entry whose gpu slots are free, then
+    ticket order. A moved entry is never planned ahead of an own_turn one: a nested run held back
+    behind it would keep its parent's slots for ever. Each gets the earliest of now, a holder's
+    planned end (holder_end), or a planned run's end or start, at which what it needs is free for
+    its whole expected time, never a slot its `avoid` names, and no other entry naming its
+    resource holds it or is planned to over that time (its parent's hold of it is its own). It
+    picks its own hold's slots first, then those no background run holds (they yield), then the
+    lowest. It may not start before a run planned ahead of it and still be running when that one
+    starts (backfill), unless it is own_turn. A parked entry (holds not its own leave it too
+    little now) is planned from clear_at, around avoid_after, so no run behind it passes it."""
     now = time.time() if now is None else now
     sizes = {p: lay.size(L, p) for p in POOLS}
+    # ivs: (start, end, {pool: slots it keeps from others}, resource or None, entry id). A
+    # background run's slots yield (soft), but a resource it names does not.
     ivs, soft = [], {p: set() for p in POOLS}
     for e in q["entries"]:
         res = {p: set(entry_holds(L, e, p)) for p in POOLS}
-        if not any(res.values()):
-            continue
+        rsc = entry_resource(e) if e["state"] in ("held", "bg") else None
         if e["state"] == "bg":
             for p in POOLS:
                 soft[p] |= res[p]
-            continue
-        ivs.append((-math.inf, holder_end(e.get("held_at"), entry_expect(e), now), res))
+            res = {p: set() for p in POOLS}
+        if any(res.values()) or rsc:
+            ivs.append((-math.inf, holder_end(e.get("held_at"), entry_expect(e), now), res, rsc,
+                        e["id"]))
     hard_gpu = set().union(*[iv[2]["gpu"] for iv in ivs]) if ivs else set()
     waiting = [e for e in q["entries"] if e["state"] == "waiting"]
 
@@ -260,15 +298,18 @@ def plan(L, q, now=None):
             return (0, 0, e.get("ticket") or 0)
         if moved_seq(e):
             return (1, -moved_seq(e), e.get("ticket") or 0)
+        if entry_priority(e) == "land":
+            return (2, 0, e.get("ticket") or 0)
         g = entry_need(e, "gpu")
         free = sizes["gpu"] - len(hard_gpu | entry_slots(e, "avoid", "gpu"))
-        return (2 if g and g <= free else 3, 0, e.get("ticket") or 0)
+        return (3 if g and g <= free else 4, 0, e.get("ticket") or 0)
 
     out, starts = {}, []
     for pos, e in enumerate(sorted(waiting, key=order), 1):
         info = out[e["id"]] = {"position": pos, "start": None, "cores": [], "gpus": [],
                                "now": False, "backfill": False}
         exp, own = entry_expect(e), own_turn(e)
+        rsc, parent = entry_resource(e), e.get("parent")
         t0, key = now, "avoid"
         if e.get("parked"):
             with contextlib.suppress(TypeError, ValueError):
@@ -280,8 +321,11 @@ def plan(L, q, now=None):
         for t in sorted(times):
             if not own and any(t < s < t + exp for s in starts):
                 continue
+            if rsc and any(r == rsc and o != parent and s0 < t + exp and s1 > t
+                           for s0, s1, _sl, r, o in ivs):
+                continue
             busy = {p: set() for p in POOLS}
-            for s0, s1, r in ivs:
+            for s0, s1, r, _rsc, _o in ivs:
                 if s0 < t + exp and s1 > t:
                     for p in POOLS:
                         busy[p] |= r[p]
@@ -295,7 +339,7 @@ def plan(L, q, now=None):
             else:
                 info.update(start=t, cores=pick["cpu"], gpus=pick["gpu"], now=t <= now,
                             backfill=not own and any(t < s for s in starts))
-                ivs.append((t, t + exp, {p: set(pick[p]) for p in POOLS}))
+                ivs.append((t, t + exp, {p: set(pick[p]) for p in POOLS}, rsc, e["id"]))
                 break
         if info["start"] is not None:
             starts.append(info["start"])
@@ -305,10 +349,11 @@ def plan(L, q, now=None):
 
 
 def busy_text(L, q, e, planned):
-    """Why entry e does not start now: the holders of a pool it is short of, what holds not its
-    own cover, then the runs planned ahead of it."""
+    """Why entry e does not start now: the runs holding the resource it names, the holders of a
+    pool it is short of, what holds not its own cover, then the runs planned ahead of it."""
     held = holders(L, q, e["id"])
-    parts = []
+    parts = ["resource %s is held by %s" % (entry_resource(e), run_text(x))
+             for x in resource_holders(q, e)]
     for p in POOLS:
         if not entry_need(e, p):
             continue
