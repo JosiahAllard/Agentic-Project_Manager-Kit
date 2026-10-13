@@ -26,7 +26,7 @@ guessing.
 1. Read the brief your first message names, all of it. Note the requester: the session named in
    your first message, the one you report to.
 2. Make your own worktree and branch before changing anything, with the repo's worktree tool
-   (`--find worktree`; `python <kit>/tools/new_worktree.py` if it has none). You start in the main checkout: never
+   (`--find worktree`; `python <kit>/tools/new_worktree.py -C <repo>` if it has none). You start in the main checkout: never
    edit there, and never check out, merge or reset in it.
 3. Work (below). Report by `send_message (not available to a Codex agent: ask the PM)` to the requester (Report, below).
 
