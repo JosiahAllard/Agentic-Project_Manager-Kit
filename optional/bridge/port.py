@@ -12,17 +12,19 @@ A half exports HOST, a BridgeHost:
     delivery(provider, runtime) -> DeliveryAdapter, or None when the half cannot deliver
     install(profile, *, python, marker, kit_root) -> InstallFragment
         What the half registers in its host when the bridge is installed (install.py)
-    channel_env: environment variables the MCP frontend may read to nominate a native app
-        channel it inherited (win/channel.py); () for none
+
+Its bridge-profile.json (data, read without importing the half; registry.py) lists the provider's
+settings and, as channel_env, the variables its app may nominate a tool pipe in.
 
 A Provider is called with each verified MCP frontend (win/frontend.NativeFrontend) and returns
-that frontend's SenderAttestor. It may also have sender_mode(binding) -> 'prompting' | 'bypass',
+that frontend's SenderAttestor: the service calls its attest() for every call, and its prepare()
+too when it has one (NativeSource). A plain callable is taken as attest itself. The Provider may also have sender_mode(binding) -> 'prompting' | 'bypass',
 hook_sink (a HookSink), refresh() and close(); the service uses each it finds and nothing else.
 
 None of these types attests anything by being constructed. Identity comes only from the half's
 own kernel and native checks inside attest() and send().
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional, Protocol, Tuple, runtime_checkable
 
 from .core.contracts import AdapterDescription, Capability, CONTRACT_VERSION
@@ -101,7 +103,6 @@ class BridgeHost:
     provider: Callable
     delivery: Optional[Callable] = None
     install: Optional[Callable] = None
-    channel_env: Tuple[str, ...] = field(default=())
 
 
 class OwnedDelivery:
@@ -151,8 +152,6 @@ def check_host(value, name):
     """`value` as the BridgeHost a half named `name` exports; DeliveryError otherwise."""
     if (type(value) is not BridgeHost or value.name != name or not callable(value.provider)
             or value.delivery is not None and not callable(value.delivery)
-            or value.install is not None and not callable(value.install)
-            or type(value.channel_env) is not tuple
-            or any(type(item) is not str or not item for item in value.channel_env)):
+            or value.install is not None and not callable(value.install)):
         raise DeliveryError('invalid-bridge-host')
     return value

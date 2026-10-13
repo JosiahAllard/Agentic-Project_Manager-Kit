@@ -2,7 +2,6 @@
 from optional.bridge.core.messages import DeliveryError
 from kitlib.proc.errors import ProcError
 from kitlib.proc.process import proc_ctime
-from optional.bridge.port import NativeSource
 from .rpc import PipeServer,encode
 
 
@@ -50,9 +49,11 @@ class BrokerService:
         if current is None:
             if len(self.frontends)>=128: raise DeliveryError('frontend-capacity')
             source=self.source_factory(native) if self.source_factory is not None else None
-            if type(source) is NativeSource:
-                self.sources[key]=source
-                observe=source.attest
+            attest=getattr(source,'attest',None)
+            if callable(attest):
+                # Any SenderAttestor (port.py); one with prepare() also leases hook metadata.
+                if callable(getattr(source,'prepare',None)): self.sources[key]=source
+                observe=attest
             else: observe=source
             current=(native,self.controller.frontend(observe))
             self.frontends[key]=current

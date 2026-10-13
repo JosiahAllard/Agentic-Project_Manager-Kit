@@ -171,7 +171,7 @@ class PrivateFrontendTests(unittest.TestCase):
         self.assertNotIn(old,self.controller._sources)
 
     def test_private_prepared_metadata_replaces_wire_claims_and_is_consumed_on_refusal(self):
-        from optional.bridge.win.service import NativeSource
+        from optional.bridge.port import NativeSource
         captured=object()
         consumed=[]
         def observe(metadata):
@@ -203,7 +203,7 @@ class PrivateFrontendTests(unittest.TestCase):
         from optional.bridge.hosts.claude.sessions import ClaudeDirectory
         from optional.bridge.hosts.claude.terminal import ClaudeTerminal,TerminalCalls
         from optional.bridge.hosts.claude.hook import entry_command
-        from optional.bridge.win.service import NativeSource
+        from optional.bridge.port import NativeSource
         session=str(uuid.uuid4())
         registry=self.root/'native-sessions'
         registry.mkdir()

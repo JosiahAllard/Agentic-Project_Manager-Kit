@@ -36,19 +36,6 @@ def _absolute(value, *, exists=True):
     return path.resolve(strict=exists)
 
 
-def profile_schema(schema):
-    """A half's bridge-profile.json as (required, optional, directories, names) sets of setting
-    names: directories and names are required or optional, and never both."""
-    if (type(schema) is not dict or set(schema)!={'required','optional','directories','names'}
-            or any(type(value) is not list or len(value)>16 or any(type(key) is not str for key in value)
-                or len(set(value))!=len(value) for value in schema.values())):
-        raise DeliveryError('invalid-native-profile-schema')
-    required,optional,directories,names=(set(schema[key]) for key in ('required','optional','directories','names'))
-    if required&optional or not (directories|names)<=required|optional or directories&names:
-        raise DeliveryError('invalid-native-profile-schema')
-    return required,optional,directories,names
-
-
 def _profiles(values,kit):
     result={}
     for kind,profile in values.items():
@@ -56,8 +43,8 @@ def _profiles(values,kit):
         # or an executable/import named by a model or profile.
         if not registry.has_half(kind,kit):raise DeliveryError('native-provider-unavailable')
         regular(registry.half_dir(kind,kit),directory=True)
-        required,optional,directories,names=profile_schema(
-            document(stable_bytes(registry.profile_schema(kind,kit),4096)))
+        required,optional,directories,names=registry.profile_schema(
+            document(stable_bytes(registry.profile_path(kind,kit),4096)))
         if not required<=set(profile) or set(profile)-required-optional:
             raise DeliveryError('invalid-native-provider-config')
         settings={}

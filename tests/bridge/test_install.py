@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from optional.bridge.hosts import claude as claude_half, codex as codex_half
+from tests.bridge.registered import codex_registered
 from optional.bridge.hosts.claude.runtime import hook_descriptor
 from optional.bridge.core.mcp import TOOLS
 from optional.bridge.core.messages import DeliveryError
@@ -22,13 +22,12 @@ from optional.bridge.win.lifecycle import _verify_root
 from kitlib.proc.pipe import INVALID,create_file
 
 
-# Both halves, whatever hosts.json registers: prepare() is handed them, as registry.installed() would.
-HOSTS={'claude':claude_half.HOST,'codex':codex_half.HOST}
-
-
 class InstallTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='bridge-prepare-')
+        # Codex is served in process through a test hosts.json (tests/bridge/registered.py).
+        registered=codex_registered();registered.__enter__()
+        self.addCleanup(registered.__exit__,None,None,None)
         self.root=Path(self.temp.name).resolve()
         self.kit=Path(__file__).resolve().parents[2]
         self.profile=self.root/'profiles'
@@ -54,10 +53,11 @@ class InstallTests(unittest.TestCase):
 
     def tearDown(self): self.temp.cleanup()
 
-    def prepare(self): return install.prepare(self.doc,self.output,HOSTS)
+    def prepare(self): return install.prepare(self.doc,self.output)
 
     def test_cli_arguments_exit_codes_and_inactive_preparation(self):
-        # The CLI serves the hosts hosts.json registers (registry.installed()); Claude always is.
+        # A subprocess reads the kit's own hosts.json, which may not register Codex yet (plan
+        # step 9), so the CLI case uses Claude alone; test_codex_cli_* covers the gap.
         for table in ('native_hosts','profiles'): del self.doc[table]['codex']
         config=self.root/'input.json';config.write_text(json.dumps(self.doc))
         argv=[sys.executable,'-I',str(self.kit/'optional/bridge/tools/bridge_prepare.py'),
@@ -72,6 +72,17 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(again.returncode,1)
         self.assertEqual((self.output/'runtime.json').read_bytes(),before)
         self.assertFalse(self.state.exists())
+
+    def test_codex_cli_preparation_waits_for_codex_in_hosts_json(self):
+        from kitlib.host import registry
+        config=self.root/'input.json';config.write_text(json.dumps(self.doc))
+        argv=[sys.executable,'-I',str(self.kit/'optional/bridge/tools/bridge_prepare.py'),
+            '--config',str(config),'--output',str(self.output)]
+        with open(registry.kit_path(),encoding='utf-8') as f: real=json.load(f)
+        done=subprocess.run(argv,capture_output=True,text=True,timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        # The kit's hosts.json decides: refused until step 9 registers Codex, then prepared.
+        self.assertEqual(done.returncode,0 if 'codex' in real else 1,done.stderr)
 
     def read(self,name): return json.loads((self.output/name).read_bytes())
 
@@ -187,14 +198,14 @@ class InstallTests(unittest.TestCase):
             self.profile/'desktop/stage',self.kit/'bridge-prepared-fixture')
         for path in candidates:
             with self.subTest(path=path),self.assertRaises(DeliveryError):
-                install.prepare(self.doc,path,HOSTS)
+                install.prepare(self.doc,path)
         self.assertFalse(self.state.exists())
         self.assertFalse((self.profile/'registry/stage').exists())
         self.assertFalse((self.kit/'bridge-prepared-fixture').exists())
 
     def test_missing_parent_refuses_without_creating_ancestor_directories(self):
         missing=self.root/'new-parent'
-        with self.assertRaises(DeliveryError): install.prepare(self.doc,missing/'bundle',HOSTS)
+        with self.assertRaises(DeliveryError): install.prepare(self.doc,missing/'bundle')
         self.assertFalse(missing.exists())
 
     def test_authority_fields_and_provider_overrides_refuse_before_staging(self):
@@ -233,7 +244,7 @@ class InstallTests(unittest.TestCase):
     def test_invalid_or_oversized_document_never_creates_output(self):
         for value in (None,[],{'protocol':1},dict(self.doc,host_id='x'*70000)):
             with self.subTest(value=type(value)),self.assertRaises(DeliveryError):
-                install.prepare(value,self.output,HOSTS)
+                install.prepare(value,self.output)
             self.assertFalse(self.output.exists())
 
     def test_failure_cleans_only_files_and_directory_created_by_this_prepare(self):

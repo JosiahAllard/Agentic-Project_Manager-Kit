@@ -45,9 +45,8 @@ class BridgeConformance(object):
         """A profile meeting the half's bridge-profile.json: a folder for each directory setting,
         a file for each other path, a plain name for each name setting."""
         from optional.bridge import registry
-        from optional.bridge.win.runtime import profile_schema
-        schema = json.loads(registry.profile_schema(self.HOST).read_text(encoding='utf-8'))
-        required, _optional, directories, names = profile_schema(schema)
+        schema = json.loads(registry.profile_path(self.HOST).read_text(encoding='utf-8'))
+        required, _optional, directories, names = registry.profile_schema(schema)
         profile = {}
         for name in sorted(required):
             path = Path(folder) / name
@@ -68,10 +67,10 @@ class BridgeConformance(object):
 
     def test_bridge_profile_schema_is_well_formed(self):
         from optional.bridge import registry
-        from optional.bridge.win.runtime import profile_schema
-        schema = json.loads(registry.profile_schema(self.HOST).read_text(encoding='utf-8'))
-        required, _optional, _directories, _names = profile_schema(schema)
+        schema = registry.read_profile(self.HOST)
+        required, _optional, _directories, _names = registry.profile_schema(schema)
         self.assertTrue(required, 'a half takes at least one setting')
+        registry.channel_names(schema)                 # channel_env, if any, is well formed
 
     def test_bridge_install_fragment(self):
         from optional.bridge.port import InstallFragment

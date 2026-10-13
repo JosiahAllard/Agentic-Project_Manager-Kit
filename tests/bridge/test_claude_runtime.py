@@ -17,7 +17,8 @@ from optional.bridge.core.messages import DeliveryError
 from optional.bridge.win.controller import Controller
 from optional.bridge.win.frontend import FrontendInspector,NativeFrontend
 from optional.bridge.win.leader import ServiceLeader
-from optional.bridge.win.service import BrokerService,NativeSource
+from optional.bridge.port import NativeSource
+from optional.bridge.win.service import BrokerService
 from kitlib.proc.job import Job
 from kitlib.proc.process import own_ctime,proc_ctime
 from tests.bridge.test_pairing import chat

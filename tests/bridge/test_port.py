@@ -10,6 +10,7 @@ import unittest
 from optional.bridge import port, registry
 from optional.bridge.core.contracts import AdapterDescription, Capability
 from optional.bridge.core.messages import BeforeWriteError, DeliveryError
+from tests.bridge.registered import codex_entry, codex_registered
 from tests.host.test_leaks import occurrences
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -87,9 +88,15 @@ class Layout(unittest.TestCase):
         self.assertEqual(found, [], 'installing the bridge registers it (optional/bridge/README.md "Install")')
 
     def test_every_half_has_its_profile_schema(self):
-        for module in registry.present():
-            schema = json.loads(registry.profile_schema(module).read_text(encoding='utf-8'))
-            self.assertEqual(set(schema), {'required', 'optional', 'directories', 'names'}, module)
+        for module in halves_on_disk():
+            schema = registry.read_profile(module)
+            self.assertTrue({'required', 'optional', 'directories', 'names'} <= set(schema), module)
+            self.assertTrue(set(schema) <= {'required', 'optional', 'directories', 'names', 'channel_env'}, module)
+
+
+def halves_on_disk():
+    root = BRIDGE / 'hosts'
+    return sorted(p.name for p in root.iterdir() if (p / '__init__.py').is_file())
 
 
 class Registry(unittest.TestCase):
@@ -101,7 +108,7 @@ class Registry(unittest.TestCase):
 
     def test_every_half_on_disk_exports_a_valid_host_of_its_name(self):
         import importlib
-        for module in registry.present():
+        for module in halves_on_disk():
             host = importlib.import_module(registry.PACKAGE + '.' + module).HOST
             self.assertIs(port.check_host(host, module), host)
             self.assertIsNotNone(host.install, module)
@@ -110,6 +117,29 @@ class Registry(unittest.TestCase):
         with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
             registry.half('no-such-host')
 
+    def test_codex_is_refused_until_hosts_json_registers_it(self):
+        """The known gap until plan step 9: the Codex half exists, but hosts.json is the source of
+        truth, so the service and the installer refuse a Codex profile until Codex is registered
+        there. This test flips by itself once step 9's entry lands."""
+        self.assertTrue(registry.has_half('codex'))
+        if 'codex' in registry.host_registry.names():
+            self.assertIn('codex', registry.names())
+            self.assertEqual(registry.half('codex').name, 'codex')
+        else:
+            self.assertEqual(registry.names(), tuple(n for n in registry.host_registry.names()
+                                                     if registry.has_half(n)))
+            self.assertNotIn('codex', registry.names())
+            with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
+                registry.half('codex')
+            self.assertNotIn('CODEX_APP_TOOLS_PIPE_PATH', registry.channel_env())
+
+    def test_once_registered_codex_is_served_with_its_channel_variable(self):
+        with codex_registered():
+            self.assertIn('codex', registry.names())
+            self.assertEqual(registry.half('codex').name, 'codex')
+            self.assertIn('codex', registry.installed())
+            self.assertIn('CODEX_APP_TOOLS_PIPE_PATH', registry.channel_env())
+
     def test_a_host_name_maps_to_a_module_name(self):
         self.assertEqual(registry.module_name('my-host'), 'my_host')
 
@@ -117,15 +147,82 @@ class Registry(unittest.TestCase):
         good = port.BridgeHost('x', lambda *a, **k: None)
         self.assertIs(port.check_host(good, 'x'), good)
         for bad in (None, good, port.BridgeHost('x', None), port.BridgeHost('x', len, delivery=1),
-                    port.BridgeHost('x', len, channel_env=['A']), port.BridgeHost('x', len, channel_env=('',))):
+                    port.BridgeHost('x', len, install='no')):
             name = 'y' if bad is good else 'x'
             with self.subTest(bad=bad), self.assertRaisesRegex(DeliveryError, 'invalid-bridge-host'):
                 port.check_host(bad, name)
 
-    def test_channel_env_collects_every_half(self):
-        names = registry.channel_env()
+    def test_channel_env_names_are_distinct_variable_names(self):
+        with codex_registered():
+            names = registry.channel_env()
         self.assertEqual(len(names), len(set(names)))
-        self.assertTrue(all(type(n) is str and n for n in names))
+        self.assertTrue(all(registry.ENV_NAME.fullmatch(n) for n in names))
+
+    def test_a_schema_with_a_bad_channel_variable_is_refused(self):
+        base = {'required': ['a'], 'optional': [], 'directories': [], 'names': ['a']}
+        self.assertEqual(registry.channel_names(base), ())
+        self.assertEqual(registry.channel_names({**base, 'channel_env': ['APP_PIPE']}), ('APP_PIPE',))
+        for bad in (['1X'], ['A B'], [''], 'APP_PIPE', ['A', 'A']):
+            with self.subTest(bad=bad), self.assertRaisesRegex(DeliveryError, 'invalid-native-profile-schema'):
+                registry.channel_names({**base, 'channel_env': bad})
+        with self.assertRaisesRegex(DeliveryError, 'invalid-native-profile-schema'):
+            registry.profile_schema({**base, 'other': []})
+
+
+class StrayHalves(unittest.TestCase):
+    """The MCP frontend reads only registered halves, as data: a stray or broken folder under
+    hosts/ is never imported and cannot take channel nomination down."""
+
+    def kit(self, folder, registered):
+        kit = Path(folder)
+        data = json.loads(Path(registry.host_registry.PATH).read_text(encoding='utf-8'))
+        base = next(iter(data.values()))
+        for name in registered:
+            if name not in data:
+                data[name] = codex_entry(base)
+        (kit / 'hosts.json').write_text(json.dumps(data), encoding='utf-8')
+        return kit, str(kit / 'hosts.json')
+
+    def half(self, kit, module, schema, init='HOST = None\n'):
+        folder = kit / 'optional' / 'bridge' / 'hosts' / module
+        folder.mkdir(parents=True)
+        (folder / '__init__.py').write_text(init, encoding='utf-8')
+        (folder / 'bridge-profile.json').write_text(schema, encoding='utf-8')
+
+    def test_a_stray_folder_is_neither_imported_nor_read(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            kit, hosts = self.kit(folder, ['codex'])
+            good = {'required': ['a'], 'optional': [], 'directories': [], 'names': ['a'],
+                    'channel_env': ['GOOD_PIPE']}
+            self.half(kit, 'codex', json.dumps(good))
+            marker = kit / 'imported'
+            self.half(kit, 'stray', '{broken', init='open(%r, "w").close()\nraise SystemExit(9)\n' % str(marker))
+            self.assertEqual(registry.channel_env(hosts, kit), ('GOOD_PIPE',))
+            self.assertNotIn('stray', registry.names(hosts, kit))
+            self.assertFalse(marker.exists())
+
+    def test_a_registered_half_with_a_broken_profile_nominates_nothing(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            kit, hosts = self.kit(folder, ['codex'])
+            self.half(kit, 'codex', '{broken')
+            first = next(iter(json.loads(Path(hosts).read_text(encoding='utf-8'))))
+            good = {'required': ['a'], 'optional': [], 'directories': [], 'names': ['a'],
+                    'channel_env': ['OTHER_PIPE']}
+            self.half(kit, registry.module_name(first), json.dumps(good))
+            self.assertEqual(registry.channel_env(hosts, kit), ('OTHER_PIPE',))
+
+    def test_reading_channel_variables_imports_no_half(self):
+        import subprocess
+        import sys
+        code = ('import sys; sys.path.insert(0, %r); from optional.bridge import registry; '
+                'registry.channel_env(); '
+                'print([m for m in sys.modules if m.startswith("optional.bridge.hosts.")])' % str(ROOT))
+        out = subprocess.run([sys.executable, '-I', '-c', code], capture_output=True, text=True, timeout=60,
+                             **({'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), '[]')
 
 
 class Adapter:
@@ -216,6 +313,17 @@ class Assembly(unittest.TestCase):
         with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
             factories(self.config(['a', 'missing']), {'a': port.BridgeHost('a', len)})
 
+    def test_a_codex_profile_is_refused_until_codex_is_registered_then_served(self):
+        from optional.bridge.win.runtime import factories
+        config = self.config(['codex'])
+        if 'codex' not in registry.host_registry.names():
+            with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
+                factories(config)
+        with codex_registered():
+            providers, deliveries = factories(config)
+        self.assertEqual(set(providers), {'codex'})
+        self.assertEqual(set(deliveries), {'codex'})
+
     def test_a_hook_frame_goes_to_the_one_provider_with_a_sink(self):
         from optional.bridge.win.runtime import Runtime
         seen = []
@@ -239,6 +347,57 @@ class Assembly(unittest.TestCase):
         none = Runtime(object(), self.config(['a']), {'a': Without})
         with self.assertRaisesRegex(DeliveryError, 'hook-producer-unavailable'):
             none.hook_sink('peer', b'{}')
+
+
+
+class ServiceAttests(unittest.TestCase):
+    """win/service.py calls attest() on any SenderAttestor a provider returns (port.py)."""
+
+    def handle(self, source):
+        from optional.bridge.win.service import BrokerService
+        observed = []
+
+        class Native:
+            pid, creation = 10, 20
+
+        class Server:
+            def handle(self, message):
+                return {'handled': message}
+
+        class Controller:
+            def frontend(self, observe):
+                observed.append(observe)
+                return Server()
+
+        class Inspector:
+            def inspect(self, peer, channel=None):
+                return Native()
+        service = BrokerService.__new__(BrokerService)
+        service.closed, service.controller, service.inspector = False, Controller(), Inspector()
+        service.source_factory, service.frontends, service.sources = (lambda native: source), {}, {}
+        reply = service.handle('peer', {'protocol': 1, 'request': {'method': 'ping'}})
+        self.assertEqual(reply, {'protocol': 1, 'response': {'handled': {'method': 'ping'}}})
+        return observed[0], service
+
+    def test_any_object_with_attest_is_called_through_attest(self):
+        class Attestor:
+            def attest(self, proof):
+                return ('attested', proof)
+        observe, service = self.handle(Attestor())
+        self.assertEqual(observe('p'), ('attested', 'p'))
+        self.assertEqual(service.sources, {})
+
+    def test_a_native_source_with_prepare_is_kept_for_its_lease(self):
+        source = port.NativeSource(lambda proof: proof, prepare=lambda request: ({}, lambda: None))
+        observe, service = self.handle(source)
+        self.assertEqual(observe('p'), 'p')
+        self.assertEqual(list(service.sources.values()), [source])
+
+    def test_a_plain_callable_is_attest_itself(self):
+        def attest(proof):
+            return proof
+        observe, _ = self.handle(attest)
+        self.assertIs(observe, attest)
 
 
 if __name__ == '__main__':

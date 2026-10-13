@@ -2,5 +2,6 @@
   "required": ["profile_root"],
   "optional": ["desktop_executable"],
   "directories": ["profile_root"],
-  "names": []
+  "names": [],
+  "channel_env": ["CODEX_APP_TOOLS_PIPE_PATH"]
 }
