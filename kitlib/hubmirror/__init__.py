@@ -349,7 +349,7 @@ def prepare_commit(mirror, model=None, environ=None, remote=None, env=None):
         sets = kcommit.settings(cfg)
     except kconfig.ConfigError as e:
         raise Refused("the mirror repository's .kit.json: %s" % e)
-    _kit_code_error(root)       # first, whatever HEAD is: the reason that matters most
+    _kit_code_error(root)       # before the HEAD checks, on any HEAD: the reason that matters most
     branch, why = refs.current_branch(root)
     if branch is None:
         raise Refused('cannot read the branch of %s: %s' % (root, why))

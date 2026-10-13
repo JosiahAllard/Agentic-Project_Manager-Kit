@@ -1,4 +1,4 @@
-"""kitlib.hubmirror: the Action Hub mirror (docs/action-hub.md "One copy per account")."""
+"""kitlib.hubmirror: the Action Hub mirror (docs/action-hub.md "Data from the old hub")."""
 import importlib.util
 import io
 import json
@@ -452,10 +452,16 @@ class CommitPushTest(unittest.TestCase):
         with self.assertRaises(hubmirror.Refused) as cm:
             self.plan()
         self.assertIn('a checkout of the kit itself', str(cm.exception))
-        with mock.patch.object(kcommit, 'KIT_ROOT', self.wt):   # the kit's own work tree, on a branch
-            with self.assertRaises(hubmirror.Refused) as cm:
-                self.plan()
+        with self.assertRaises(hubmirror.Refused) as cm:        # this very kit work tree, on any HEAD
+            self.plan(os.path.join(KIT, 'hub'))
         self.assertIn('a checkout of the kit itself', str(cm.exception))
+
+    def test_a_detached_head_outside_the_kit_is_refused_as_detached(self):
+        self.git('checkout', '--detach')
+        with self.assertRaises(hubmirror.Refused) as cm:
+            self.plan()
+        self.assertIn('HEAD is detached in', str(cm.exception))
+        self.assertNotIn('a checkout of the kit itself', str(cm.exception))
 
     def test_a_checkout_of_the_kit_on_a_detached_head_is_still_refused_as_the_kit(self):
         write_json(os.path.join(self.wt, 'kitlib', 'hubmirror', '__init__.py'), {})   # the kit's code
