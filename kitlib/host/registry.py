@@ -6,8 +6,10 @@
   default(path)               the one host marked "default": what an unset PM_KIT_HOST means
   selected(environ, path)     PM_KIT_HOST's host (blank or unset: the default), checked
   choose(flag, environ, path) a --host value when one was given, else selected()
+  default_profile(path)       the default host's HostProfile
   profiles(path)              every host's HostProfile, in file order
   union(field, path)          a profile field's distinct values over every host, in file order
+  host_folders(path)          the repo folder each host keeps its own files in (".claude")
 
 kitlib never imports a host's adapter. The registry hands out the adapter's module NAME, and the
 entry point that wants the adapter imports it (tools/_host.py); hosts.json is data, so reading it
@@ -217,3 +219,17 @@ def union(field, path=None):
         value = getattr(profile, field)
         out.extend(value if isinstance(value, tuple) else (value,))
     return tuple(dict.fromkeys(out))
+
+
+def default_profile(path=None):
+    """The default host's HostProfile: what a kit default that predates hosts stands for (the
+    repo's worktrees_dir, the machine's kit state folder)."""
+    return host(default(path), path).profile
+
+
+def host_folders(path=None):
+    """The top repo folder each host keeps its own files in (its settings, skills and agent
+    worktrees), from the folder entries of its owner_paths ("x/"), each once, in file order:
+    what a scan of a repository's own sources leaves out."""
+    return tuple(dict.fromkeys(p.rstrip('/').split('/')[0]
+                               for p in union('owner_paths', path) if p.endswith('/')))

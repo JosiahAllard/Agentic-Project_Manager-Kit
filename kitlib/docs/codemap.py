@@ -20,6 +20,7 @@ from collections import OrderedDict
 
 from kitlib.docs import budget
 from kitlib.git import cmd
+from kitlib.host import registry
 
 EXTS = ('.java', '.kt', '.kts', '.cs', '.razor', '.py', '.ps1', '.js', '.ts', '.tsx', '.go', '.rs',
         '.c', '.cpp', '.h', '.hpp', '.gd', '.gdshader')
@@ -31,19 +32,22 @@ MEMBER = re.compile(r'^\s{2,8}(?:(?:public|internal|protected|private|static|fin
 PYPS = re.compile(r'^\s*(?:def|class|function)\s+([A-Za-z_][\w-]*)', re.I)
 GD_TYPE = re.compile(r'^(class_name|class)\s+([A-Za-z_]\w*)')
 GD_FUNC = re.compile(r'^\s*(?:static\s+)?func\s+([A-Za-z_]\w*)')
-SKIP = ('.claude/', 'build/', 'bin/', 'obj/', 'node_modules/', 'target/', '.venv/', 'dist/', '.godot/')
+# Build output and tool folders; each host's own folder (registry.host_folders) is skipped too.
+SKIP = ('build/', 'bin/', 'obj/', 'node_modules/', 'target/', '.venv/', 'dist/', '.godot/')
 NOT_MEMBERS = ('if', 'for', 'while', 'switch', 'catch', 'return', 'using', 'lock')
 LIST_TIMEOUT = 120               # seconds; a large tree's listing is slow, not hung
 
 
 def files(root):
-    """`(source files, None)` git lists in `root`, filtered by EXTS and SKIP, or `(None, why)`
-    when git could not list them (an empty map would read as "no source here")."""
+    """`(source files, None)` git lists in `root`, filtered by EXTS, SKIP and the hosts' own
+    folders, or `(None, why)` when git could not list them (an empty map would read as "no source
+    here")."""
     r = cmd.call(['ls-files', '-co', '--exclude-standard', '-z'], root, timeout=LIST_TIMEOUT)
     if r.rc != 0:
         return None, r.err or 'git ls-files exited %s' % r.rc
+    skip = tuple(f + '/' for f in registry.host_folders()) + SKIP
     return [f for f in budget.names_from(cmd.text(r.out))
-            if f.endswith(EXTS) and not any(s in f for s in SKIP)], None
+            if f.endswith(EXTS) and not any(s in f for s in skip)], None
 
 
 def group(d):

@@ -41,6 +41,7 @@ class NewRepo(unittest.TestCase):
         for name in ('installer', 'tools', 'kitlib', 'templates'):
             shutil.copytree(os.path.join(stubs.KIT_ROOT, name), os.path.join(kit, name),
                             ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copy2(os.path.join(stubs.KIT_ROOT, 'hosts.json'), kit)    # the host registry kitlib reads
         return kit, os.path.join(kit, 'installer', 'new-repo.ps1')
 
     def lock(self, path):
@@ -420,6 +421,7 @@ class PmData(unittest.TestCase):
         for name in ('installer', 'tools', 'kitlib', 'templates'):
             shutil.copytree(os.path.join(stubs.KIT_ROOT, name), os.path.join(self.kit_root, name),
                             ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copy2(os.path.join(stubs.KIT_ROOT, 'hosts.json'), self.kit_root)    # the host registry kitlib reads
         self.target = gitfixture.TempRepo()
         self.addCleanup(self.target.cleanup)
         self.target_root = os.path.realpath(self.target.root)

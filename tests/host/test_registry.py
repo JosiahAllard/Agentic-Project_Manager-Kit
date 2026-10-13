@@ -137,6 +137,15 @@ class Profiles(Case):
     def test_the_kit_registry_names_claudes_session_variable(self):
         self.assertEqual(registry.union('session_env'), ('CLAUDE_CODE_SESSION_ID',))
 
+    def test_the_default_profile_and_the_host_folders(self):
+        data = second(kit_hosts())
+        data['other']['profile']['owner_paths'] = ['OTHER.md', '.other/', '.other/x/', '.claude/']
+        path = self.put(data)
+        self.assertEqual(registry.default_profile(path), registry.host('claude', path).profile)
+        self.assertEqual(registry.host_folders(path), ('.claude', '.other'))
+        self.assertEqual(registry.host_folders(), ('.claude',))
+        self.assertEqual(registry.default_profile().worktrees_directory, '.claude/worktrees')
+
 
 class Selection(Case):
     def setUp(self):

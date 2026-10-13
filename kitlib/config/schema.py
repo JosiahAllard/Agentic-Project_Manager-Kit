@@ -6,6 +6,8 @@ that holds the object. Defaults of None mean "absent": the tool that reads the k
 Kit-level sections (repo, owner, hook, heavy, roles) are read by kitlib itself; the rest are the
 per-tool sections the PM kit's tools read (kit/tools/_kit.py SECTIONS), checked here for shape only.
 """
+from kitlib.host import registry
+
 from .types import (Any, Bool, Either, Email, Enum, Field, Int, ListOf, MapOf, Obj, Regex, RelPath,
                     Str, T)
 
@@ -116,7 +118,8 @@ SECTIONS = {
         'name': Field(Str(nonempty=False), '', 'repository name for reports and the ledger'),
         'main_branch': Field(Str(), 'main', 'the branch landings target'),
         'remote': Field(Str(), 'origin', 'the remote main is pushed to'),
-        'worktrees_dir': Field(RelPath(), '.claude/worktrees', 'where agent worktrees live'),
+        'worktrees_dir': Field(RelPath(), registry.default_profile().worktrees_directory,
+                               'where agent worktrees live'),
         'worktrees_by_host': Field(MapOf(RelPath(), what='host'), {},
                                    'per-host worktree folders, keyed by hosts.json host name '
                                    '(docs/new-worktree.md "Hosts")'),
