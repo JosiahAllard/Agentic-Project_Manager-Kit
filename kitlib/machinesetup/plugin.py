@@ -1,4 +1,6 @@
-"""The kit plugin, enabled per account in fresh mode (docs/machine-setup.md "Fresh machine (--fresh)").
+"""The kit plugin, enabled per account in the default mode (docs/machine-setup.md "Default mode").
+survey is the default host's (Claude) step; survey_hosts runs it and notes every other registered
+host that machine setup does not install yet (installer).
 
 The plugin's source is the export of the kit's pushed main (docs/plugin-source.md), never the kit
 checkout. For each config folder, enabledPlugins["pm-kit@pm-kit"] in its settings.json and the
@@ -148,3 +150,26 @@ def _install(ctx, s, runner, d, path, pid, bak):
         raise RuntimeError('; '.join(bad) or 'the migrate exited %d' % rc)
     if enabled(path, pid) is not True:
         raise RuntimeError('claude exited 0, but enabledPlugins["%s"] in %s is not true' % (pid, path))
+
+
+def installer(name):
+    """The plugin install step for the hosts.json host `name`, or None. The default host's (the
+    host whose account settings machine setup edits) is survey; no other host has one yet: Codex's
+    plugin is a review template, not installed on any machine (its README, "Not verified": plugin
+    loading, hook trust, cached paths). A host gains one here once a live install is verified."""
+    from kitlib.host import registry
+    return survey if name == registry.default() else None
+
+
+def survey_hosts(plan, ctx):
+    """The plugin step for every registered host (kitlib.host.registry), in hosts.json order; a
+    host with no installer is a note naming its README."""
+    from kitlib.host import registry
+    for name in registry.names():
+        install = installer(name)
+        if install is not None:
+            install(plan, ctx)
+            continue
+        plan.note('plugin', '%s: not installed. Machine setup installs no plugin for this host yet: '
+                            'its files are review templates, not installed (hosts/%s/README.md)'
+                  % (name, name))

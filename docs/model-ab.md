@@ -43,7 +43,7 @@ L6 (clean merge, right answer GO) and L8 (DECISIONS.md conflict, right answer ST
 
 Round 2: Haiku followed the definition's "any conflict means STOP, even if the brief gives conflict rules"; Sonnet followed the brief's keep-both rule. Method: general-purpose agent with the definition and skill pasted in, effort set explicitly; the 48-run lander runs used the lander agent at effort low.
 
-**Decision: lander -> Haiku, effort medium** (about 6.6% of Sonnet's cost; round 2 correct 4/4 on Haiku against 1/2 on Sonnet, medium matching high at lower cost). Since 2026-10-12 the dispatch rule matches it: the lander is dispatched with no `model` and never overridden (claude/skills/coordinator-dispatch/roster.md, "Choosing").
+**Decision: lander -> Haiku, effort medium** (about 6.6% of Sonnet's cost; round 2 correct 4/4 on Haiku against 1/2 on Sonnet, medium matching high at lower cost). Since 2026-10-12 the dispatch rule matches it: the lander is dispatched with no `model` and never overridden (content/skills/coordinator-dispatch/roster.md, "Choosing").
 
 ## Reviewer A/B on planted bugs (final, 2026-10-10)
 
@@ -63,7 +63,7 @@ Reviewer costs use other assumed rates than the price table above: Opus $5/$25, 
 
 Missed: Sonnet B2 doc contradiction, B3 silent data loss, B10 removed refusal; Opus B8 silent data loss; Haiku B8, B10. Every arm missed at least one silent data loss; a second reviewer on a different model covers more. Caveats: 10 bugs, one run per cell (1-2 catch gaps are noise); plants small and local; no tests run; wall time confounded by concurrency.
 
-Decision (owner decision, 2026-10-10, recorded in the project's decision log outside this repository): the reviewer is split by the risk tier of the worker that built the branch. Worker branches (low and medium risk) get Haiku at high effort. Opus-worker, strong-worker and deep-worker branches (high risk) get Opus. The coordinator verifies any Haiku "blocking" claim before it holds a landing, because Haiku overstated severity twice. The work is a kit backlog item. The same decision set it at priority 2, held until go-live and the first item after it. State as read on 2026-10-11 from the project manager's backlog store (the kit's own store in this worktree has no such record): the item is held (blocked, waiting on a deliberate decision). Whether go-live has released it is not in that record. Until it is built, claude/agents/reviewer.md and docs/ROSTER.md still show Sonnet. Apart from that split, since 2026-10-12 one rule picks sonnet or opus per reviewed branch (claude/skills/coordinator-dispatch/roster.md, "Choosing", "Reviewer model"); it uses no Haiku reviewer. A re-check against real review outcomes is planned about a month after go-live.
+Decision (owner decision, 2026-10-10, recorded in the project's decision log outside this repository): the reviewer is split by the risk tier of the worker that built the branch. Worker branches (low and medium risk) get Haiku at high effort. Opus-worker, strong-worker and deep-worker branches (high risk) get Opus. The coordinator verifies any Haiku "blocking" claim before it holds a landing, because Haiku overstated severity twice. The work is a kit backlog item. The same decision set it at priority 2, held until go-live and the first item after it. State as read on 2026-10-11 from the project manager's backlog store (the kit's own store in this worktree has no such record): the item is held (blocked, waiting on a deliberate decision). Whether go-live has released it is not in that record. Until it is built, hosts/claude/shell/agents/reviewer.md and docs/ROSTER.md still show Sonnet. Apart from that split, since 2026-10-12 one rule picks sonnet or opus per reviewed branch (content/skills/coordinator-dispatch/roster.md, "Choosing", "Reviewer model"); it uses no Haiku reviewer. A re-check against real review outcomes is planned about a month after go-live.
 
 Findings added with the decision: every model missed at least one silent data loss. Opus and Haiku together still miss B8 (only Sonnet caught it), so a Haiku second pass is no cover on high-risk work. Haiku was the slowest (222s against 88s for Sonnet). Real review history could not separate the tiers either way: see "Reviewer miss history" in [agent-review.md](agent-review.md).
 
@@ -142,7 +142,7 @@ Cases 01, 05, 06, 07, 11, 12 and 16 to 19 had no miss in any cell.
 **Caveats**
 - One run per cell and 20 cases. One case is 5 points, so 90% against 85% is one answer. No variance is measured (run 1; see the second run section).
 - The candidates were general-purpose agents reading the coordinator rules from a file. This tests rule-following from a file, not a live coordinator session with tools, long context and compaction.
-- The cases come from sessions on 2026-10-03 to 2026-10-11 and can differ from the current claude/agents/coordinator.md. Cases 08, 10 and 12 are older peer traffic.
+- The cases come from sessions on 2026-10-03 to 2026-10-11 and can differ from the current hosts/claude/shell/agents/coordinator.md. Cases 08, 10 and 12 are older peer traffic.
 - The scorer was a blind Opus agent. The rubric check for cases 02 and 06 could not be done, because the scorer was not given the written rules.
 - Case 07: all 7 cells match if "hold, no lander while the lock is held" is the whole action. All would miss if the ping to the peer lane were required.
 - Cases 14 and 16 to 20 took lenient readings: later fresh landers or re-gates conditional on proof, refill from the work set, and a go on the internal parts of case 20's plan. Under a full-go reading of case 20, three more answers would miss.
@@ -152,7 +152,7 @@ Cases 01, 05, 06, 07, 11, 12 and 16 to 19 had no miss in any cell.
 - Coordinator on Haiku: not supported at any effort. All three cells fall under 90% as scored, and the misses are mostly declining to act.
 - Coordinator on Sonnet at medium: not supported. One safety break and 85%.
 - Coordinator on Sonnet at high: matched the Opus control (95%). That justifies a live shadow trial (a Sonnet coordinator proposes, the Opus one decides). It does not justify a switch. In the second run the same cell scored 78.9% on the strict key; one run is noisy, so the two runs do not agree.
-- Tighten the "no other agent after a block" wording in claude/agents/coordinator.md. It only adds strictness.
+- Tighten the "no other agent after a block" wording in hosts/claude/shell/agents/coordinator.md. It only adds strictness.
 
 ## 2026-10-11: coordinator shadow replay, second run
 

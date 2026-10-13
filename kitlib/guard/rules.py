@@ -1,8 +1,12 @@
 """The guard's rules (ARCHITECTURE.md "Guard rules"; docs/guard.md "Rules").
 
-decide(event, ctx) -> Decision or None (allow). Every rule is a read-only check of real state
-and every deny names the exact command to use instead. A deny reason ends with the tag
-`[kit guard: rule=<rule> role=<role>]`; claude.guard_selftest reads those tags back out of
+decide(action, ctx) -> kitlib.host.Decision ('allow' when no rule refuses). `action` is the neutral
+kitlib.host.Action a host adapter parsed its hook payload into (hosts/claude/adapter/events.py for
+Claude Code); no rule here reads a host's payload. Every rule is a read-only check of real state and
+every deny names the exact command to use instead (also in Decision.instead). Each rule below
+takes the Action as its first argument, named `event` from before the split; a rule answers None
+for an allow, and decide() turns that into Decision('allow'). A deny reason ends with the tag
+`[kit guard: rule=<rule> role=<role>]`; hosts.claude.adapter.guard_selftest reads those tags back out of
 subagent transcripts.
 
 Rules, in the order they are checked:
@@ -11,9 +15,14 @@ Rules, in the order they are checked:
   owner-lock       a shell command running reserve_ui, or running a lock CLI owner-only write
                    (reserve, release, hold whole|half|slots, division --set, game on|off|set,
                    top, stop/unbook --force), in any session but the owner's own
+  owner-setup      a shell command running machine setup to act (tools/machine_setup.py --apply, its
+                   PowerShell front ends with -Apply, python code importing kitlib.machinesetup), in
+                   any session but the owner's own: it writes the owner's email
   ledger           an edit of the machine config's ledger_path, by anyone
   lock-state       an agent session's edit of a file in the machine lock's state folder
   kit-json         an agent session's edit of a .kit.json in a checkout
+  generated-file   an edit of a file tools/render_content.py writes in a kit checkout (a host's
+                   agents, skills copies, plugin manifests: kitlib.guard.generated), in any session
   main-checkout    an edit in a main checkout by a role whose edit_main_checkout is false
   write-jail       an agent session's write outside its own checkout, its repository's other
                    worktrees, the temp folder and the .kit.json data roots (kitlib.guard.jail);
@@ -21,8 +30,9 @@ Rules, in the order they are checked:
   wrapped-gate     gate.py or `machine_lock.py run` piped into another command (P16)
   root-search      a recursive search from a drive or filesystem root
   heavy            a heavy program run with no lock held (MACHINE_LOCK_RUN verified by nest_check)
-  git-*            damaging git in a main checkout; branch -D anywhere; a push to main with no
-                   gate-OK record when the repo sets repo.push_block; push --no-verify, send-pack,
+  git-*            damaging git in a main checkout; branch -D anywhere; a push that deletes or
+                   force-pushes main, in every repository (with no .kit.json too); a push to main
+                   with no gate-OK record when the repo sets repo.push_block; push --no-verify, send-pack,
                    http-push, a remote helper or a git alias for one in a repository with a PM
                    data record, and any push from a copy of PM data without one; a remote
                    repointed (git-remote-rewrite) in a repository with one; all in any session
@@ -46,34 +56,21 @@ from kitlib import config as kconfig
 from kitlib import kitroot
 from kitlib import pmdata
 from kitlib.git import repo
-from kitlib.lockmcp import claude_tool_prefix
+from kitlib import lockmcp as lockmcp_names
+from kitlib.host import Decision
 
 from . import commands as cm
 from . import context
+from . import generated
 from . import jail
+from . import paths
 from . import shell as sh
 
-DENY, ASK = 'deny', 'ask'
-FILE_TOOLS = {'Edit': 'file_path', 'Write': 'file_path', 'MultiEdit': 'file_path',
-              'NotebookEdit': 'notebook_path'}
-SHELL_TOOLS = {'Bash': sh.BASH, 'PowerShell': sh.PS}
-
-# The Claude plugin's MCP prefix for the lock MCP's tools (kitlib.lockmcp.claude_tool_prefix, from
-# CLAUDE_PLUGIN_NAME). INFERRED, not observed: the kit has no installed plugin yet. The machine
-# config's guard_mcp_prefix replaces it.
-MCP_PREFIX = claude_tool_prefix()
+DENY, ASK, ALLOW = 'deny', 'ask', 'allow'
+# kitlib.host.Action.shell -> the parser's dialect
+SHELLS = {'bash': sh.BASH, 'powershell': sh.PS}
 TAG = '[kit guard: rule=%s role=%s]'
 NULL_TARGETS = {'/dev/null', '$null', 'nul', 'nul:', '&1', '&2'}
-
-
-class Decision(object):
-    __slots__ = ('kind', 'rule', 'reason')
-
-    def __init__(self, kind, rule, reason):
-        self.kind, self.rule, self.reason = kind, rule, reason
-
-    def __repr__(self):
-        return 'Decision(%s, %s)' % (self.kind, self.rule)
 
 
 def tag(rule, role):
@@ -81,7 +78,13 @@ def tag(rule, role):
 
 
 def refuse(rule, role, what, instead, kind=DENY):
-    return Decision(kind, rule, '%s Instead: %s %s' % (what.rstrip(), instead.strip(), tag(rule, role)))
+    return Decision(kind, rule, '%s Instead: %s %s' % (what.rstrip(), instead.strip(), tag(rule, role)),
+                    instead.strip())
+
+
+def reworded(d, reason):
+    """`d` with its reason replaced (a rule that adds what led to it)."""
+    return Decision(d.verdict, d.rule, reason, d.instead)
 
 
 def fwd(path):
@@ -99,34 +102,64 @@ def lock_tool(ctx):
     return quote(kitroot.lock_tool(ctx.kit))
 
 
+def kit_tool(ctx, name):
+    """A kit tool an alternative names: tools/<name>.py of the kit the guard runs from (ctx.kit),
+    quoted. A repository holds no copy of the kit's tools (decision 21 in docs/multi-host-plan.md
+    section 7), so an alternative never names a repository's own tools folder."""
+    return quote(kitroot.tool(name, ctx.kit))
+
+
+def subagent(event):
+    """True when the Action names a subagent (Action.agent): a host's hook told it apart."""
+    return bool(getattr(event, 'agent', None))
+
+
 def tag_role(event):
-    """'main' when the event has no agent_id, else 'subagent' (the tag the self-test reads)."""
-    return 'subagent' if (event or {}).get('agent_id') else 'main'
+    """'main' for the main session, else 'subagent' (the tag the self-test reads)."""
+    return 'subagent' if subagent(event) else 'main'
 
 
 # ---------------------------------------------------------------- entry
 
-def decide(event, ctx=None):
-    ctx = ctx or context.Ctx()
-    tool = (event or {}).get('tool_name') or ''
-    ti = (event or {}).get('tool_input') or {}
-    cwd = (event or {}).get('cwd') or os.getcwd()
+def decide(event, ctx=None, environ=None, profile=None):
+    """The Decision on the kitlib.host.Action `event`: 'allow', or the first rule's deny or ask.
+    With no `ctx`, a context.Ctx of `environ` (default os.environ) and the host `profile` (a
+    HostProfile or a callable returning one) is built here, so its reads fail inside decide.
+    The shared rules judge first, so a call they refuse is refused as it always was; a call they
+    allow then meets the role policy (kitlib.guard.rolepolicy), which is off for a role whose
+    .kit.json entry names no mode, and, when it adds write-jail roots, the shared rules again."""
+    from . import rolepolicy
+    ctx = ctx or context.Ctx(environ=environ, profile=profile)
+    d = judge(event, ctx)
+    if d:
+        return d
+    d, held = rolepolicy.screen(event, ctx)
+    if d is None and held is not ctx:
+        d = judge(event, held)
+    return d or Decision(ALLOW)
+
+
+def judge(event, ctx):
+    """decide() with None for an allow: the shared rules, before any role policy."""
+    tool = event.tool or ''
+    cwd = (event.workdir if event.kind == 'shell' else None) or event.cwd or os.getcwd()
     role = tag_role(event)
     d = lock_mcp(event, ctx, tool, role)
     if d:
         return d
-    if tool in FILE_TOOLS:
-        target = ti.get(FILE_TOOLS[tool])
+    if event.kind == 'edit':
+        target = event.path
         if not isinstance(target, str) or not target:
             return None
         target = sh.resolve_path(target, cwd) or target
+        form = event.retarget
         return edit_target(event, ctx, target, cwd, role, '%s of %s' % (tool, target),
-                           rewrite=lambda path: '%s(%s="%s")' % (tool, FILE_TOOLS[tool], fwd(path)))
-    if tool in SHELL_TOOLS:
-        text = ti.get('command')
-        if not isinstance(text, str) or not text.strip():
+                           rewrite=(lambda path: form.replace('{path}', fwd(path))) if form else None)
+    if event.kind == 'shell':
+        text = event.command
+        if not isinstance(text, str) or not text.strip() or event.shell not in SHELLS:
             return None
-        return shell_command(event, ctx, text, SHELL_TOOLS[tool], cwd, role)
+        return shell_command(event, ctx, text, SHELLS[event.shell], cwd, role)
     return None
 
 
@@ -134,7 +167,7 @@ def shell_command(event, ctx, text, shell, cwd, role):
     parsed = cm.read(text, shell, cwd)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
-        for rule in (owner_lock, wrapped_gate, root_search, heavy, git_rules, git_hooks_path, owner_identity,
+        for rule in (owner_lock, owner_setup, wrapped_gate, root_search, heavy, git_rules, git_hooks_path, owner_identity,
                      kill_by_name, heredoc_winpath, shell_writes):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
@@ -150,20 +183,39 @@ def shell_command(event, ctx, text, shell, cwd, role):
 
 # ---------------------------------------------------------------- lock MCP
 
+def host_mcp_prefix(profile):
+    """The lock MCP's tool-name prefix on the host `profile` (kitlib.host.HostProfile) describes:
+    its mcp_tool_format with the kit's plugin and the lock server's name filled in and the tool
+    left off. INFERRED for Claude Code, not observed: the kit has no installed plugin yet."""
+    return profile.mcp_tool_format.format(plugin=lockmcp_names.PLUGIN_NAME,
+                                          server=lockmcp_names.SERVER_NAME, tool='')
+
+
+def host_mcp_separator(profile):
+    """What the host's MCP tool names put between the server and the tool (`__` in
+    mcp__<server>__<tool>): the text between {server} and {tool} in mcp_tool_format."""
+    fmt = profile.mcp_tool_format
+    i, j = fmt.find('{server}'), fmt.find('{tool}')
+    return fmt[i + len('{server}'):j] if 0 <= i < j else ''
+
+
 def mcp_prefix(ctx):
-    return ctx.user().get('guard_mcp_prefix') or MCP_PREFIX
+    """The machine config's guard_mcp_prefix, else the session's host's (host_mcp_prefix)."""
+    return ctx.user().get('guard_mcp_prefix') or host_mcp_prefix(ctx.host_profile())
 
 
-def mcp_owner_tool(ctx, tool):
+def mcp_owner_tool(ctx, tool, kind='mcp'):
     """The owner-only lock MCP tool `tool` names, or None: under the configured prefix, under any
-    other server name (`mcp__<server>__<tool>`), or listed in full in guard_mcp_tools."""
-    if not tool.startswith('mcp__'):
+    other server name (the tail after the host's separator, `mcp__<server>__<tool>`), or listed in
+    full in guard_mcp_tools. Only an MCP call (Action kind 'mcp') names one."""
+    if kind != 'mcp' or not tool:
         return None
-    from kitlib.lockmcp import server as lockmcp   # here, not at the top: only mcp__ calls pay its import
+    from kitlib.lockmcp import server as lockmcp   # here, not at the top: only MCP calls pay its import
     prefix = mcp_prefix(ctx)
     if tool.startswith(prefix) and tool[len(prefix):] in lockmcp.OWNER_ONLY:
         return tool[len(prefix):]
-    tail = tool.rsplit('__', 1)[-1]
+    sep = host_mcp_separator(ctx.host_profile())
+    tail = tool.rsplit(sep, 1)[-1] if sep else tool
     if tail in lockmcp.OWNER_ONLY:
         return tail                             # the same tool under another server name
     if tool in (ctx.user().get('guard_mcp_tools') or ()):
@@ -172,7 +224,7 @@ def mcp_owner_tool(ctx, tool):
 
 
 def lock_mcp(event, ctx, tool, role):
-    name = mcp_owner_tool(ctx, tool)
+    name = mcp_owner_tool(ctx, tool, event.kind)
     if not name:
         return None
     who = ctx.session_role(event)
@@ -185,9 +237,9 @@ def lock_mcp(event, ctx, tool, role):
 
 
 def is_owner_session(event, ctx):
-    """True for the owner's own main session: no agent_id and no launcher mark (docs/guard.md
+    """True for the owner's own main session: no subagent and no launcher mark (docs/guard.md
     "Session mark")."""
-    return not (event or {}).get('agent_id') and ctx.session_role(event) == context.OWNER
+    return not subagent(event) and ctx.session_role(event) == context.OWNER
 
 
 def agent_session(event, ctx):
@@ -196,7 +248,7 @@ def agent_session(event, ctx):
     ignored; a guard_agent_marks value replaces the default list. The rules only agents are held to (kill by name, lock state,
     kit-json, the write jail) use it. The mark is compared without the kit plugin's prefix
     (kitlib.agentname.bare_mark), so a role_resolver that does not strip it fails closed too."""
-    if (event or {}).get('agent_id'):
+    if subagent(event):
         return True
     marks = ctx.user().get('guard_agent_marks') or AGENT_MARKS
     who = agentname.bare_mark(str(ctx.session_role(event) or ''))
@@ -360,10 +412,80 @@ def owner_lock(event, ctx, cmd, inv, cwd, role):
     return None
 
 
+# ---------------------------------------------------------------- owner machine setup
+
+# Machine setup's --apply writes the machine config, the owner's email among them (plan decision 27),
+# and the owner's email is what proves a commit the owner's (owner-only paths, owner-identity). An agent
+# that ran it could make its own address the owner's, so only the owner runs it to act. Its dry run stays
+# open. The entry points: tools/machine_setup.py and its PowerShell front ends; python -c or a script
+# on standard input that imports kitlib.machinesetup counts too.
+SETUP_SCRIPTS = {'machine_setup.py': 'py', 'machine-setup.ps1': 'ps', 'new-repo.ps1': 'ps'}
+SETUP_RE = re.compile(r'(?i)(?<![A-Za-z0-9_])(?:machine[_-]setup|new-repo|machinesetup)(?![A-Za-z0-9_])')
+SETUP_IMPORT_RE = re.compile(r'(?i)kitlib(?:[./\\]|\s+import\s+)machinesetup')
+# argparse takes a unique prefix of --apply (--ap..); PowerShell a prefix of -Apply, -Apply:$true too
+SETUP_APPLY = {'py': re.compile(r'^--ap(?:p(?:l(?:y)?)?)?(?:=.*)?$'),
+               'ps': re.compile(r'(?i)^-a(?:p(?:p(?:l(?:y)?)?)?)?(?::.*)?$')}
+OWNER_SETUP_WHY = ('machine setup writes the machine config, and the owner\'s email there decides which commits '
+                   'count as the owner\'s, so only the owner runs it to act. Ask the owner to run it. To see '
+                   'what it would do (the dry run):')
+
+
+def setup_run(cmd, inv):
+    """What `inv` runs of machine setup with its writes on, as text, or None: a setup entry point
+    (SETUP_SCRIPTS: its program, or its script after python, powershell -File, Start-Process) with
+    --apply / -Apply or a word the text does not show; python -c, or python reading a script on
+    standard input, that imports kitlib.machinesetup. Its dry run is None."""
+    source = cmd.source or ''
+    if not SETUP_RE.search(source):
+        return None
+    words = ([inv.word] if inv.word is not None else []) + list(inv.args)
+    py = UI_PYTHON_RE.match(inv.name or '') is not None
+    stdin = bool(cmd.piped_in) or any(r.op.startswith('<') for r in cmd.redirects)   # <, a heredoc, <<<
+    if py and (any(w.text == '-c' or re.match(r'^-[A-Za-z]*c', w.text) for w in inv.args) or stdin) \
+            and SETUP_IMPORT_RE.search(source):
+        return 'python code that imports kitlib.machinesetup'
+    for k, w in enumerate(words):
+        name = cm.base_name(w.text)
+        style = SETUP_SCRIPTS.get(name)
+        if style is None and k > 0 and words[k - 1].text == '-m' and w.text.lower().endswith('machine_setup'):
+            style = 'py'
+        if style is None:
+            continue
+        rest = []
+        for a in words[k + 1:]:
+            if a.dyn:
+                return '%s with an argument the text does not show' % name
+            if style == 'ps' and '"' in a.text:
+                # Windows PowerShell 5.1 does not escape it when it passes the value on to python
+                return '%s with a double quote inside an argument, which can split it into more' % name
+            rest.extend(a.text.split() if ' ' in a.text else [a.text])     # a Start-Process "-ArgumentList" string
+        for t in rest:
+            if t == '--':
+                break
+            if SETUP_APPLY[style].match(t):
+                return '%s %s' % (name, t)
+        return None
+    script = cm.python_script(inv) if py else None
+    if inv.dyn or (script is not None and inv.args[script[0]].dyn):
+        return 'a program or script the text does not show, on a line that names machine setup'
+    return None
+
+
+def owner_setup(event, ctx, cmd, inv, cwd, role):
+    """A command that runs machine setup to act (setup_run), in any session but the owner's own."""
+    if inv is None or is_owner_session(event, ctx):
+        return None
+    found = setup_run(cmd, inv)
+    if not found:
+        return None
+    return refuse('owner-setup', role, '`%s` runs %s: %s' % (bare(cmd), found, OWNER_SETUP_WHY),
+                  'python %s' % kit_tool(ctx, 'machine_setup'))
+
+
 # ---------------------------------------------------------------- edits: ledger and main checkout
 
 def same_file(a, b):
-    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    return paths.norm(a, absolute=True) == paths.norm(b, absolute=True)
 
 
 def ledger_rule(ctx, target, role, what):
@@ -379,8 +501,8 @@ def ledger_rule(ctx, target, role, what):
         return None
     return refuse('ledger', role, '%s writes the rulings ledger, which only ledger.py writes. '
                   "Add the entry with the kit's tools/ledger.py add (docs/ledger.md)." % what,
-                  'python tools/ledger.py add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
-                  '--decides "<what it decides>" --source "<source>"')
+                  'python %s add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
+                  '--decides "<what it decides>" --source "<source>"' % kit_tool(ctx, 'ledger'))
 
 
 def lock_state_dir(ctx):
@@ -501,7 +623,7 @@ def own_worktree(ctx, cwd, main_top=None):
         return None
     if main_top is not None:
         mine = ctx.main_top(cwd)
-        if not mine or os.path.normcase(mine) != os.path.normcase(main_top):
+        if not mine or paths.norm(mine) != paths.norm(main_top):
             return None
     return here_.top
 
@@ -512,7 +634,8 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     gives the same edit aimed at `path` (the alternative); `run` the command to rerun from the
     worktree when it writes into the directory it runs in."""
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
-        lock_state(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what)
+        lock_state(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what) or \
+        generated_file(ctx, target, role, what)
     if d:
         return d
     return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run) or \
@@ -565,10 +688,32 @@ def kit_json(event, ctx, target, role, what):
                   'python -m json.tool %s' % quote(target))
 
 
+def generated_file(ctx, target, role, what):
+    """An edit of a file the kit's renderer writes, in a kit checkout (kitlib.guard.generated):
+    the next render overwrites it and the drift check fails it, so the source is edited and the
+    file rendered. The renderer runs as a process, which no edit rule judges."""
+    if not target:
+        return None
+    top = ctx.place(target).top
+    if not top:
+        return None
+    try:
+        rel = os.path.relpath(target, top)
+    except ValueError:                          # another drive
+        return None
+    src = generated.source(top, rel)
+    if src is None:
+        return None
+    return refuse('generated-file', role, '%s: %s is generated from %s by tools/render_content.py; a hand edit '
+                  'is overwritten by the next render and fails the drift check. Edit %s, then render:'
+                  % (what, rel.replace('\\', '/'), src, src),
+                  'python %s --write' % quote(os.path.join(top, 'tools', 'render_content.py')))
+
+
 def session_mark(event, ctx):
     """The launcher mark of a main session without the kit plugin's prefix (guard_mark_roots looks
     it up), or None for a subagent and the owner's unmarked session."""
-    if (event or {}).get('agent_id'):
+    if subagent(event):
         return None
     who = agentname.bare_mark(ctx.session_role(event))
     return None if who in (context.OWNER, context.SUBAGENT) else who
@@ -1372,7 +1517,7 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
         if w.dyn:
             target, why = None, 'a target that is not literal: %s' % w.text
         elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
-            target, why = os.path.normpath(os.path.join(jail.bash_tmp(ctx), w.text[5:])), None
+            target, why = paths.norm(os.path.join(jail.bash_tmp(ctx), w.text[5:]), fold=False), None
         elif cmd.shell == sh.PS and PS_PROVIDER_ITEM_RE.match(w.text) and sh.ps_unplaceable(w.text):
             ps_drive = True                     # ps_provider_item did not skip it: the line may remap the drive
             target, why = None, ('a PowerShell provider item (%s) on a line that is not only plain cmdlet calls, '
@@ -1467,7 +1612,7 @@ def wrapped_gate(event, ctx, cmd, inv, cwd, role):
 
 
 def same_dir(a, b):
-    return bool(a and b) and os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+    return bool(a and b) and paths.norm(a) == paths.norm(b)
 
 
 # ---------------------------------------------------------------- root searches
@@ -1635,8 +1780,31 @@ def run_from(cmd, cwd):
     return ''
 
 
+def kit_wrapper(ctx, cmd, inv, cwd):
+    """cm.wrapper(inv) when the script it runs is the kit's own (tools/gate.py or
+    tools/machine_lock.py of the kit the guard runs from, ctx.kit, the path resolved from the
+    command's directory with links followed), else None. Only the kit's tool takes the machine lock
+    itself, so only it may run an interpreter a repository lists as heavy: a script that shares its
+    file name (a branch's copy, `python <temp>/gate.py`) is judged as any other script. A repository
+    holds no copy of the kit's tools (decision 21 in docs/multi-host-plan.md section 7), so an
+    opt-in stub fails closed here too."""
+    kind = cm.wrapper(inv)
+    if not kind:
+        return None
+    found = cm.python_script(inv)
+    word = inv.args[found[0]] if found else inv.word
+    if word is None or word.dyn:
+        return None
+    path = sh.resolve_path(word.text, cmd.cwd or cwd, cmd.shell) or (
+        word.text if os.path.isabs(word.text) else None)
+    if not path:
+        return None
+    tools = paths.norm(os.path.join(ctx.kit, 'tools'), real=True)
+    return kind if paths.norm(os.path.dirname(path), real=True) == tools else None
+
+
 def heavy(event, ctx, cmd, inv, cwd, role):
-    if inv is None or inv.dyn or cm.wrapper(inv):
+    if inv is None or inv.dyn or kit_wrapper(ctx, cmd, inv, cwd):
         return None
     where = cmd.cwd or cwd
     cfg = ctx.config(where) if where else None
@@ -2004,9 +2172,8 @@ def lander_alone(event, cmd, gc):
     Set-Location or pushd into the checkout git runs in, joined by && or ;. The line is read again
     from the event; an unclean parse, a pipe, a group, a nested shell or any third command is not
     alone."""
-    ti = (event or {}).get('tool_input') or {}
-    shell = SHELL_TOOLS.get((event or {}).get('tool_name'))
-    text, cwd = ti.get('command'), (event or {}).get('cwd')
+    shell = SHELLS.get(event.shell) if event is not None and event.kind == 'shell' else None
+    text, cwd = (event.command, event.workdir or event.cwd) if event is not None else (None, None)
     if shell is None or not isinstance(text, str) or cmd.depth or cmd.nested_in is not None:
         return False
     parsed = cm.read(text, shell, cwd)
@@ -2032,8 +2199,7 @@ def lander_check(event, ctx, cmd, inv, gc):
     roles.lander.edit_main_checkout: the one main-checkout write the jail leaves a lander that runs
     from a worktree. (False, <the first test that failed>) when one fails. (False, None) for any
     other session, verb or place: the other rules judge it as before."""
-    ev = event or {}
-    if not ev.get('agent_id') or agentname.bare(ev.get('agent_type')) != LANDER:
+    if not subagent(event) or event.agent_role != LANDER:
         return False, None
     if gc.unknown or gc.sub not in LANDER_VERBS or not gc.dir or ctx.place(gc.dir).kind != repo.MAIN:
         return False, None
@@ -2214,12 +2380,10 @@ def git_worktree_remove(ctx, gc, role, text):
     head, why = ctx.git.resolve('HEAD', target)
     merged, why2 = ctx.git.is_ancestor(head, main, gc.dir) if head else (None, why)
     if merged is not True:
-        tool = os.path.join(main_top, cfg.tools_dir, 'worktree_remove.py') if cfg is not None else None
-        if tool and os.path.isfile(tool):
-            how = ('Merge it first; unmerged work goes to the PM, who decides (%s %s --abandon "<why>" only on the '
-                   'PM\'s word).' % (fwd(tool), os.path.basename(target)))
-        else:
-            how = 'Merge it first; unmerged work goes to the PM, who decides; never removed by hand.'
+        how = ('Merge it first; unmerged work goes to the PM, who decides (python %s -C %s %s --abandon "<why>" '
+               'only on the PM\'s word).' % (kit_tool(ctx, 'worktree_remove'),
+                                             quote(main_top) if main_top else '"<main checkout>"',
+                                             os.path.basename(target)))
         return refuse('git-worktree-remove', role, '`%s` removes a worktree whose commit is not merged into %s (%s). '
                       '%s Its unmerged commits:' % (text, main, why2 or 'not an ancestor', how),
                       'git -C %s log --oneline %s..HEAD' % (quote(target), main))
@@ -2403,8 +2567,9 @@ def data_copy(event, ctx, where, role, what):
         return refuse('git-push-pmdata', role, '%s: the repository %s has no %s of its own, and the guard cannot read '
                       'the machine\'s PM data record to tell whether it holds PM data (%s), so it fails closed. When '
                       'the data worktree folder was deleted (docs/pm-data-branch.md "Failure modes"), pm_data.py init '
-                      '--adopt re-adds it; run from the kit checkout:' % (what, fwd(where), pmdata.FILE_NAME, why),
-                      'python tools/pm_data.py init --adopt --path %s' % (quote(path) if path else '"<pm_data.path>"'))
+                      '--adopt re-adds it:' % (what, fwd(where), pmdata.FILE_NAME, why),
+                      'python %s init --adopt --path %s' % (kit_tool(ctx, 'pm_data'),
+                                                            quote(path) if path else '"<pm_data.path>"'))
     found = None
     held, why = ctx.gitread.has_commit(where, root)
     if why is None and held:
@@ -2585,7 +2750,7 @@ def _alias_judged(event, ctx, gc, role, where, chain):
         d = None
     if d is None or len(chain) > 1:
         return d
-    return Decision(d.kind, d.rule, '`git %s` runs the git alias %s. %s' % (gc.sub, chain[0], d.reason))
+    return reworded(d, '`git %s` runs the git alias %s. %s' % (gc.sub, chain[0], d.reason))
 
 
 # ---------------------------------------------------------------- remotes repointed
@@ -2733,30 +2898,39 @@ def git_push(event, ctx, gc, role):
     if cfg is None:
         err = ctx.config_error(gc.dir)
         if not err:
-            return None                         # no .kit.json: push_block is off
+            return None                         # no checkout: no main branch to judge
         top = ctx.main_top(gc.dir) or gc.dir
         return refuse('git-push-main', role, '`git push` in a repository whose .kit.json does not load (%s). Fix it '
                       'so it loads (the message names the key; docs/kit-json.md lists them), then push. To see '
                       'the error:' % err, 'python -m json.tool %s' % quote(os.path.join(top, '.kit.json')))
-    if not cfg.push_block:
+    # A delete or a forced push of main is refused in every repository, with or without a
+    # .kit.json (docs/kit-json.md "With no file"); push_block adds the gate-OK record and
+    # --no-verify checks. The PM data branch (DataBranch) is judged by its own push_block only.
+    gated = cfg.push_block
+    if not gated and isinstance(cfg, DataBranch):
         return None
     main = cfg.main_branch
+    mains = _guarded_mains(cfg)
     short, longs, pos = _opts('push', gc.rest)
-    if any(w.dyn for w in pos):
+    delete = 'd' in short or 'delete' in longs
+    force = 'f' in short or bool({'force', 'force-with-lease', 'force-if-includes', 'mirror'} & longs)
+    no_verify = 'no-verify' in longs
+    dyn = [w for w in pos if w.dyn]
+    # A computed refspec may be `+<src>:main` or `:main`, so with no push_block too it is refused;
+    # a computed remote alone is, only with a flag that forces, deletes or skips the hook.
+    if dyn and (gated or delete or force or no_verify or any(w.dyn for w in pos[1:])):
         remote = pos[0].text if pos and not pos[0].dyn else cfg.remote
         return refuse('git-push-main', role, '`git push %s` has a refspec that is not literal, so the guard cannot '
-                      'tell whether it pushes %s. Name the refs literally:' % (rest, main),
+                      'tell whether it %s %s. Name the refs literally:'
+                      % (rest, 'pushes' if gated else 'rewrites or deletes', main),
                       'git -C %s push %s <branch>' % (quote(gc.dir), remote))
-    delete = 'd' in short or 'delete' in longs
-    force = 'f' in short or bool({'force', 'force-with-lease', 'force-if-includes'} & longs)
-    no_verify = 'no-verify' in longs
     every = bool({'all', 'mirror', 'branches'} & longs)
     remote = pos[0].text if pos else cfg.remote
     specs = [w.text for w in pos[1:]]
     branch, _why = ctx.git.current_branch(gc.dir)
     targets = []
     if every:
-        targets.append(('refs/heads/' + main, main, False))
+        targets.extend(('refs/heads/' + m, m, False) for m in mains)
     if not specs and not every:
         if branch:
             targets.append((branch, branch, False))
@@ -2770,13 +2944,21 @@ def git_push(event, ctx, gc, role):
             src, dst = '', dst or src
         targets.append((src, _branch_of(dst or ''), plus))
     for src, dst, plus in targets:
-        if dst != main:
+        if dst not in mains:
             continue
+        main = dst
         what = '`git push %s` to %s/%s' % (' '.join(w.text for w in gc.rest), remote, main)
-        land = landing_command(ctx, gc, cfg, remote, branch)
         if not src:
             return refuse('git-push-main', role, '%s deletes %s; main is never deleted. To see where it is:' %
                           (what, main), 'git -C %s ls-remote %s %s' % (quote(gc.dir), remote, main))
+        if not gated:
+            if force or plus:
+                return refuse('git-push-main', role, '%s rewrites %s; main is never force-pushed. Merge %s/%s into '
+                              'the branch, then push it without force:' % (what, main, remote, main),
+                              'git -C %s push %s %s' % (quote(gc.dir), remote, ' '.join(
+                                  s.lstrip('+') for s in specs) or main))
+            continue
+        land = landing_command(ctx, gc, cfg, remote, branch)
         if no_verify:
             return refuse('git-push-main', role, '%s skips the pre-push hook. %s' % (what, LAND_HOW), land)
         if force or plus:
@@ -2794,11 +2976,21 @@ def git_push(event, ctx, gc, role):
 LAND_HOW = 'Land it with the gate, which records the pass and pushes:'
 
 
+def _guarded_mains(cfg):
+    """The branches git_push holds as main (Config.guarded_mains); the PM data worktree's, and a
+    test's stand-in config without the method, just main_branch."""
+    if isinstance(cfg, DataBranch) or not hasattr(cfg, 'guarded_mains'):
+        return [cfg.main_branch]
+    return cfg.guarded_mains()
+
+
 def landing_command(ctx, gc, cfg, remote, branch):
     main_sha, _ = ctx.git.remote_tip(remote, cfg.main_branch, gc.dir)
     tip, _ = ctx.git.resolve(branch, gc.dir) if branch else (None, None)
-    return 'python %s/land.py %s --expect-main %s --expect-tip %s' % (
-        cfg.tools_dir, branch if branch and branch != cfg.main_branch else '<branch>',
+    main_top = (ctx.main_top(gc.dir) if gc.dir else None) or gc.dir
+    return 'python %s -C %s %s --expect-main %s --expect-tip %s' % (
+        kit_tool(ctx, 'land'), quote(main_top) if main_top else '"<main checkout>"',
+        branch if branch and branch != cfg.main_branch else '<branch>',
         main_sha or '<%s/%s sha>' % (remote, cfg.main_branch),
         tip if branch and branch != cfg.main_branch and tip else '<branch tip sha>')
 
@@ -3020,10 +3212,9 @@ def _backgrounded(cmd):
 
 def busy_wait(event, ctx, parsed, cwd, role):
     """A foreground while/until (bash) or while/do (PowerShell) loop that sleeps, with no counter,
-    clock or `timeout` bounding it. A call with run_in_background, or a loop sent to the background
-    with &, is left alone: neither holds the call."""
-    ti = (event or {}).get('tool_input') or {}
-    if ti.get('run_in_background') is True:
+    clock or `timeout` bounding it. A call the host runs in the background (Action.background),
+    or a loop sent to the background with &, is left alone: neither holds the call."""
+    if event is not None and event.background:
         return None
     for cmds in _segments(parsed):
         shell = cmds[0].shell
@@ -3311,8 +3502,8 @@ def _without(cmd, first, last):
 def _under_temp(ctx, d):
     if not d:
         return False
-    top = os.path.normcase(os.path.abspath(ctx.tempdir)).rstrip('\\/')
-    here_ = os.path.normcase(os.path.abspath(d))
+    top = paths.norm(ctx.tempdir, absolute=True).rstrip('\\/')
+    here_ = paths.norm(d, absolute=True)
     return here_ == top or here_.startswith(top + os.sep)
 
 

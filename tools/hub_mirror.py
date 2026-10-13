@@ -9,7 +9,8 @@
       kitlib.commit (tools/commit.py's checks) on the mirror's branch: a linked work tree on its
       main branch (the data branch), never a main checkout or a work tree of the kit itself;
       --push then pushes that branch to pm_data.remote with an explicit refspec. Prints one line
-      per change. The trailer names --model, else $CLAUDE_AGENT_MODEL.
+      per change. The trailer names --model, else the default host's model variable
+      (hosts.json "attribution".model_env).
   hub_mirror.py restore --out PATH
       writes ArtifactData batch files that `set` every mirrored document in a new copy of the hub;
       prints each file and its entry count, or that the mirror is empty (nothing to send).

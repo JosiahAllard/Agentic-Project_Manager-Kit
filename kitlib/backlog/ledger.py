@@ -31,8 +31,9 @@ NAME_KEYS = ('backlog.ledger_repo', 'repo.name')
 def ledger_name(cfg):
     """The ledger repo column that rules in the repository `cfg` was read from, lower-cased:
     `backlog.ledger_repo`, else `repo.name`, else ''. Never the folder name: a folder whose name
-    differs from its ledger column would silently rule nothing."""
-    return (cfg.section('backlog')['ledger_repo'] or cfg.repo.get('name') or '').lower()
+    differs from its ledger column would silently rule nothing, and for the same reason never the
+    name read from the remote when `repo.name` is unset (kitlib.config.load): only a written one."""
+    return (cfg.section('backlog')['ledger_repo'] or cfg.written('repo', 'name') or '').lower()
 
 
 class Ledger(object):

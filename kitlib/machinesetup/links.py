@@ -10,6 +10,11 @@ real folder holding one junction per entry, kitlib among them: `machine_lock` ->
 A link is replaced; a real folder where a link goes is renamed aside (`<name>.old-<yyyymmdd>`),
 never deleted. A container (`tools`, `knowledge`, `skills`) that is a link somewhere else (another
 account's folder following ~/.claude) is left alone; one that is absent is not made.
+
+A skill link in a real `skills` folder that points into one of this kit's MOVED_SKILLS_DIRS (the
+skills' folder before the hosts/ move, and the rendered copy in the Claude shell before decision 29
+in docs/multi-host-plan.md section 7) is re-pointed to the same skill in SKILLS_DIR, the kit's
+content/skills, like one into the replaced kit clone (docs/machine-setup.md "Moved hook paths").
 """
 import os
 
@@ -18,13 +23,16 @@ try:
 except ImportError:                                                  # not Windows: survey only
     _winapi = None
 
-from .common import free_name, is_link, link_target, norm, under
+from .common import MOVED_FROM, SHELL, free_name, is_link, link_target, norm, under
 
 TOOL_LINKS = (('machine_lock', 'tools'), ('kitlib', 'kitlib'), ('comfy', 'optional/comfy'),
               ('procwatch', 'optional/procwatch'), ('usage', 'optional/usage'),
               ('agenttemp', 'optional/agenttemp'))
 KNOWLEDGE_LINKS = (('asset-generation', 'knowledge/asset-generation'),)
-SKILLS_DIR = 'claude/skills'
+SKILLS_DIR = 'content/skills'                  # the skills, written once (no rendered copy)
+# Where the skills were before: claude/skills before the hosts/ move, then the Claude shell's
+# rendered copy until decision 29. A link into either is re-pointed to SKILLS_DIR.
+MOVED_SKILLS_DIRS = (MOVED_FROM + '/skills', SHELL + '/skills')
 CONTAINERS = ('tools', 'knowledge', 'skills')
 
 
@@ -90,8 +98,10 @@ def survey(plan, d, ctx):
             elif container == 'knowledge':
                 specs = list(KNOWLEDGE_LINKS)
             else:
+                moved = [kit_path(kit, m) for m in MOVED_SKILLS_DIRS]
                 names = [n for n in sorted(os.listdir(c))
-                         if is_link(os.path.join(c, n)) and under(link_target(os.path.join(c, n)), old)]
+                         if is_link(os.path.join(c, n))
+                         and any(under(link_target(os.path.join(c, n)), w) for w in [old] + moved)]
                 specs = _skill_specs(plan, names, kit, c)
             mine = set(n for n, _ in specs)
             for n in sorted(os.listdir(c)):

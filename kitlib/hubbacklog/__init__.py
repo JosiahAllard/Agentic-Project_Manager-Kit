@@ -16,6 +16,7 @@ from kitlib import config as kconfig
 from kitlib.backlog import store as bstore
 from kitlib.backlog.errors import Refusal
 from kitlib.git import cmd as gitcmd
+from kitlib.git import defaults as gitdefaults
 
 DAYS = 90
 TITLE_MAX = 160
@@ -77,9 +78,15 @@ def kit_json(root):
 
 
 def main_branch(root, cfg):
-    b = (cfg.get("repo") or {}).get("main_branch")
+    """`.kit.json` "repo".main_branch; unset, the branch `<remote>/HEAD` names when it exists
+    (kitlib.git.defaults), else main, else master."""
+    repo = cfg.get("repo") or {}
+    b = repo.get("main_branch")
     if b:
         return b
+    head, source = gitdefaults.main_branch_source(root, repo.get("remote") or "origin")
+    if source != "fallback" and has_rev(root, head):
+        return head
     for b in ("main", "master"):
         if has_rev(root, b):
             return b

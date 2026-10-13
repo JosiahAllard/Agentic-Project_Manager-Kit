@@ -2,7 +2,7 @@
 
 Each check turns the previous state and a fresh reading into event lines. tools/pm_watch.py loops,
 prints the lines and exits. Event lines and state keys are those of the PM repo's
-launcher/pm_watch.py at 95f7262. Transcript reading is host-specific and lives in claude/claude_host.py.
+launcher/pm_watch.py at 95f7262. Transcript reading is host-specific and lives in hosts/claude/adapter/claude_host.py.
 """
 import json
 import os
@@ -278,7 +278,7 @@ def watched_sessions(sessions):
 
 def idle_baseline(names, newest, now, minutes):
     """{name: newest mtime} for sessions already quiet, so a relaunch-free first run stays silent.
-    newest(name) is the newest activity time of that session, or None (claude.claude_host.newest_finder)."""
+    newest(name) is the newest activity time of that session, or None (hosts.claude.adapter.claude_host.newest_finder)."""
     out = {}
     for n in names:
         m = newest(n)
@@ -323,16 +323,20 @@ def plugin_check(kit=None, settings=None, spawn=None, alive=None, folders=None):
     return check
 
 
-def preload():
+def preload(modules=()):
     """Load, at start, every kit module a check imports on its first pass, so a landing that writes
     this checkout later cannot give the running watcher a mix of old and new modules
-    (kitlib.pluginsource.claude after the first PLUGIN difference, kitlib.launcher.usage at the
-    first usage read). The function-level imports stay where they are; they find these loaded."""
+    (kitlib.launcher.usage at the first usage read). `modules` names the host's own ones, which the
+    host's entry point passes in (on Claude, its plugin source module, imported after the first
+    PLUGIN difference), so no host is named here. The function-level imports stay where they are;
+    they find these loaded."""
+    import importlib
     import kitlib.launcher.settings
     import kitlib.launcher.usage
     import kitlib.machinesetup.extras
     import kitlib.pluginsource
-    import kitlib.pluginsource.claude
+    for name in modules:
+        importlib.import_module(name)
 
 
 class Watcher:
@@ -344,12 +348,13 @@ class Watcher:
     sessions: path of sessions.json; newest(name) -> mtime or None; tip(repo, ref) -> short sha;
     plugin: check(last) -> (lines, last) (plugin_check), or None for no PLUGIN check. Unlike the
     others it has no baseline: a plugin export already behind at the first run is reported then.
+    preload_modules: the host's own modules its checks import late (preload).
     """
 
     def __init__(self, state, branches, usage_reader, alerts_dir, sessions, newest,
                  idle_minutes=20, branch_poll=300, usage_poll=600, idle_poll=300, tip=branch_tip,
-                 notice_dir=None, plugin=None):
-        preload()
+                 notice_dir=None, plugin=None, preload_modules=()):
+        preload(preload_modules)
         self.s = state
         self.branches = branches
         self.usage_reader = usage_reader

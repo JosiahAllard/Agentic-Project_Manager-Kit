@@ -6,7 +6,7 @@ from pathlib import Path
 from kitlib.stubs import SHARED
 from tests.shipped import ROOT, frontmatter, violations
 
-SKILLS = ROOT / "claude" / "skills"
+SKILLS = ROOT / "content" / "skills"      # every host ships these (docs/content.md)
 GODOT_SKILL = ROOT / "templates" / "stacks" / "godot" / ".claude" / "skills"
 EXPECTED = {"backlog-ops", "branch-review", "branch-sync", "coordinator-dispatch", "doc-claims-discipline",
             "flaky-test-triage", "land-branch", "machine-lock-run", "mutation-testing", "session-handoff",
@@ -17,9 +17,15 @@ EXTRA_FILES = {"coordinator-dispatch": ["roster.md"]}
 REPO_LOCAL = {"worktree-start"}
 REPO_LOCAL_SUFFIX = "-train-eval"     # the training-and-evaluation workflow skill
 
-
-# kit-only paths, written for the plugin's root (substituted at load); and repo-relative kit paths
+# kit-only paths, in an agent file and in a skill (which every host ships byte for byte, docs/content.md),
+# as `<kit>/...`, the kit's folder the kit header names; PLUGIN_RX catches the plugin-root variable; and
+# repo-relative kit paths
 PLUGIN_RX = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([\w./-]*[\w-])")
+KIT_RX = re.compile(r"<kit>/([\w./-]*[\w-])")
+# what only one host understands, which a shared skill never says (docs/multi-host-plan.md, section 5)
+HOST_ONLY = (("${CLAUDE_PLUGIN_ROOT}", "write <kit>/..."), ("pm-kit:", "name the role bare"),
+             ("{{", "skills are not rendered: no tokens"), ("CLAUDE.md", "say the repo's instructions"),
+             (".claude/", "say the repo profile or name no host folder"))
 REPO_RX = re.compile(r"(?<![\w/}.~-])((?:tools|kitlib|optional)/[\w./-]+?\.(?:py|json))")
 DOC_RX = re.compile(r"(?<![\w/}.~-])docs/([\w-]+\.md)")
 TEMPLATE_RX = re.compile(r"(?<![\w/}.~-])templates/[\w./-]+")
@@ -38,9 +44,21 @@ def _repo_relative_kit_docs(text, kit_docs):
     return [n for n in DOC_RX.findall(text) if n not in REPO_OWNED_DOCS and (kit_docs / n).exists()]
 
 
+def _kit_form(p):
+    """How `p` writes the kit's root: `<kit>`, in a skill and in an agent file alike (the kit header says it)."""
+    return "<kit>"
+
+
+def _shipped_text(p):
+    """`p`'s text less the generated-file line an agent file's front matter opens with (a YAML
+    comment no agent reads, written for whoever edits the kit checkout: kitlib.host.content.banner)."""
+    return "".join(ln for ln in p.read_text(encoding="utf-8").splitlines(True)
+                   if not ln.startswith("# Generated from "))
+
+
 def _shipped_text_files():
     return (list(SKILLS.glob("*/*.md")) + list(GODOT_SKILL.glob("*/SKILL.md"))
-            + list((ROOT / "claude" / "agents").glob("*.md")))
+            + list((ROOT / "hosts" / "claude" / "shell" / "agents").glob("*.md")))
 
 
 class SkillFilesTest(unittest.TestCase):
@@ -68,32 +86,44 @@ class SkillFilesTest(unittest.TestCase):
         self.assertEqual(violations(GODOT_SKILL), [])
 
     def test_kit_tools_named_exist(self):
-        """Kit-only paths are written `${CLAUDE_PLUGIN_ROOT}/<path>` and exist in the kit; a repo-relative
-        `tools/<name>.py` is one a repo has through a stub (kitlib.stubs.SHARED) or supplies itself."""
+        """Kit-only paths are written `<kit>/<path>` in a skill and in an agent
+        file, and exist in the kit; a repo-relative `tools/<name>.py` is one a repo has through a stub
+        (kitlib.stubs.SHARED) or supplies itself."""
         for p in _shipped_text_files():
-            text = p.read_text(encoding="utf-8")
+            text = _shipped_text(p)
             for rel in PLUGIN_RX.findall(text):
                 self.assertTrue((ROOT / rel).exists(), f"{p.name} names ${{CLAUDE_PLUGIN_ROOT}}/{rel}")
+            for rel in KIT_RX.findall(text):
+                self.assertTrue((ROOT / rel).exists(), f"{p.parent.name}/{p.name} names <kit>/{rel}")
             for rel in REPO_RX.findall(text):
                 if GODOT_SKILL in p.parents:     # a repo-local template, not loaded as a plugin: no root variable
                     self.assertTrue(rel in REPO_FILES or (ROOT / rel).exists(), f"{p.parent.name} names {rel}")
                     continue
                 self.assertTrue(rel in REPO_FILES or (rel.startswith("tools/") and
                                                       rel[len("tools/"):-len(".py")] in SHARED),
-                                f"{p.parent.name}/{p.name} names {rel}: not a stub tool; write ${{CLAUDE_PLUGIN_ROOT}}/{rel}")
+                                f"{p.parent.name}/{p.name} names {rel}: not a stub tool; write {_kit_form(p)}/{rel}")
 
     def test_no_repo_relative_kit_doc_or_template(self):
-        """A kit doc (`docs/<name>.md` that exists in the kit's docs/) or a `templates/` file is
-        `${CLAUDE_PLUGIN_ROOT}/...`, never repo-relative, and no text says "kit checkout's"."""
+        """A kit doc (`docs/<name>.md` that exists in the kit's docs/) or a `templates/` file is written
+        from the kit's root (`<kit>/...` in a skill, `${CLAUDE_PLUGIN_ROOT}/...` in an agent file), never
+        repo-relative, and no text says "kit checkout's"."""
         for p in _shipped_text_files():
             if GODOT_SKILL in p.parents:     # a repo-local template, not loaded as a plugin
                 continue
             text = p.read_text(encoding="utf-8")
             where = f"{p.parent.name}/{p.name}"
             for name in _repo_relative_kit_docs(text, ROOT / "docs"):
-                self.fail(f"{where} names docs/{name}: a kit doc; write ${{CLAUDE_PLUGIN_ROOT}}/docs/{name}")
-            self.assertEqual(TEMPLATE_RX.findall(text), [], f"{where}: a kit template; write ${{CLAUDE_PLUGIN_ROOT}}/templates/...")
+                self.fail(f"{where} names docs/{name}: a kit doc; write {_kit_form(p)}/docs/{name}")
+            self.assertEqual(TEMPLATE_RX.findall(text), [], f"{where}: a kit template; write {_kit_form(p)}/templates/...")
             self.assertNotIn("kit checkout's", text, where)
+
+    def test_skills_are_host_neutral(self):
+        """A kit skill is the same bytes on every host (docs/content.md), so it says nothing only one
+        host understands: no plugin-root variable, no host's dispatch prefix, no token, no host folder."""
+        for p in sorted(SKILLS.glob("*/*.md")):
+            text = p.read_text(encoding="utf-8")
+            for needle, fix in HOST_ONLY:
+                self.assertNotIn(needle, text, f"{p.parent.name}/{p.name} says {needle!r}: {fix}")
 
     def test_repo_owned_doc_name_passes_though_kit_has_it(self):
         with tempfile.TemporaryDirectory() as d:

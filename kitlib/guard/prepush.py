@@ -29,21 +29,27 @@ replaced when this clone has it; else (a new branch, or a remote sha this clone 
 branch's committed .kit.json: the first of refs/remotes/<remote>/HEAD, <remote>/main,
 <remote>/master, local main, local master. The working tree is never the base, so an uncommitted
 edit cannot switch the check off; no such ref means the defaults. A .kit.json that does not load
-refuses the push (fail closed).
+refuses the push (fail closed). A base that sets no main branch (no .kit.json at all among them)
+reads it from the repository (kitlib.git.defaults: <remote>/HEAD, then main or master), so the
+delete and fast-forward rules guard the real main branch (docs/kit-json.md "With no file"), and
+`main` as well (Config.guarded_mains): <remote>/HEAD is local, so repointing it never takes the
+protection off `main`.
 """
 import hashlib
 import os
 import re
 
 from kitlib import config as kconfig
+from kitlib import kitroot
 from kitlib import pmdata
 from kitlib.config import schema as kschema
 from kitlib.git import cmd, refs
+from kitlib.git import defaults as gitdefaults
 from kitlib.git import repo as gitrepo
 from kitlib.guard import ownercommits
 
 ZERO = '0' * 40
-MAIN_DEFAULT = kschema.SECTIONS['repo']['main_branch'].default
+FIXED_MAIN = kschema.SECTIONS['repo']['main_branch'].default
 
 
 # ---------------------------------------------------------------- PM data branch (leak stage)
@@ -319,6 +325,16 @@ def _base_rev(root, remote_sha, remote):
     return None
 
 
+def _default_mains(root, remote):
+    """The branches held as main in a repository with no base commit: the main branch read from
+    its git files with the remote git named (an URL names none: the default remote's), and
+    `main` (kconfig.Config.guarded_mains)."""
+    name = remote if remote and not refs.bad_rev(remote) and '://' not in remote and ':' not in remote \
+        else kschema.SECTIONS['repo']['remote'].default
+    main = gitdefaults.main_branch(root, name)
+    return [main] if main == FIXED_MAIN else [main, FIXED_MAIN]
+
+
 def _cfg(root, remote_sha, remote):
     """The base Config, or None when there is no base commit at all (the defaults: no push_block)."""
     rev = _base_rev(root, remote_sha, remote)
@@ -394,8 +410,9 @@ def check(root, lines, gate_ok=None, remote='origin', url=None):
             cfg = _cfg(root, remote_sha, remote)
         except kconfig.ConfigError as e:
             return False, ('pre-push: refused, .kit.json does not load (%s). Fix it, then push again.' % e)
-        main = MAIN_DEFAULT if cfg is None else cfg.main_branch
-        if remote_ref != 'refs/heads/' + main:
+        mains = _default_mains(root, remote) if cfg is None else cfg.guarded_mains()
+        main = remote_ref[len('refs/heads/'):]
+        if main not in mains:
             continue
         if not local_sha.strip('0'):
             return False, 'pre-push: refused, this push deletes %s.' % main
@@ -406,9 +423,11 @@ def check(root, lines, gate_ok=None, remote='origin', url=None):
             continue
         rec, why = gate_ok(root, local_sha)
         if rec is None:
-            return False, ('pre-push: refused, %s has no gate-OK record (%s). Land with: python %s/land.py '
+            return False, ('pre-push: refused, %s has no gate-OK record (%s). Land with: python "%s" -C "%s" '
                            '<branch> --expect-main <%s sha> --expect-tip %s'
-                           % (local_sha[:12], why, cfg.tools_dir, main, local_sha))
+                           % (local_sha[:12], why, kitroot.tool('land').replace('\\', '/'),
+                              (gitrepo.main_checkout_toplevel(root) or root).replace('\\', '/'), main,
+                              local_sha))
         why = owner_refusal(root, cfg, local_sha, remote_sha, remote)
         if why:
             return False, 'pre-push: refused, %s.' % why

@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import pmwatch as W                                     # noqa: E402
 from kitlib.config import user as kuser                            # noqa: E402
-from claude import claude_host                                     # noqa: E402
+from hosts.claude.adapter import claude_host                        # noqa: E402
 
 
 RETIRED_USAGE_SCRIPT = ("--usage-script and pm_watch.usage_script are retired: usage is read in this "
@@ -94,7 +94,8 @@ def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None):
                   claude_host.newest_finder(), idle_minutes=a.idle_minutes,
                   branch_poll=a.branch_poll, usage_poll=a.usage_poll, idle_poll=a.idle_poll,
                   notice_dir=a.notice_dir,
-                  plugin=W.plugin_check() if plugin is None else (plugin or None))
+                  plugin=W.plugin_check() if plugin is None else (plugin or None),
+                  preload_modules=claude_host.PRELOAD)
     beat, started = W.heartbeat_file(a.state), W.own_start_time()
     return W.run(w, time.time, sleep, lambda s: W.save_state(a.state, s),
                  lambda text: print(text, flush=True),

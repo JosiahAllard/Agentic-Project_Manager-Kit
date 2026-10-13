@@ -11,7 +11,9 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     line written plainly. The location-dependent git patterns are checked when the call's
     directory is a main checkout or one git cannot place; the push --no-verify pattern when that
     directory's repository has a PM data record (or git cannot place it), in every session but
-    the owner's own.
+    the owner's own. The push-to-main pattern in a repository that does not set
+    repo.push_block (one with no .kit.json among them) gives only the re-read's own deny (a delete
+    or a forced push of main); no deny lets the line run.
   - a heavy program's name: the same, and a program named by a variable is denied as heavy with
     the lock line that runs it.
   - anything else: a subagent is denied (`unreadable`); another jailed session (a mark in
@@ -77,6 +79,9 @@ ANYWHERE = (
     # git http-push and the remote helpers, run by hand, talk to a remote without the hook too
     ('git-push-pmdata', G + r'(?:http-push|remote-[\w-]+)\b'),
     ('git-push-pmdata', r'(?i)(?<![\w.-])git-(?:send-pack|http-push|remote-[\w-]+)(?:\.exe)?\b'),
+    # machine setup run to act (rules.owner_setup): any session but the owner's own
+    ('owner-setup', r'(?i)(?<![A-Za-z0-9_])(?:machine[_-]setup(?:\.py|\.ps1)?|new-repo\.ps1)(?![A-Za-z0-9_])'
+                    r'[^|;&\n]*\s-{1,2}a|kitlib(?:[./\\]|\s+import\s+)machinesetup'),
     ('wrapped-gate', r'(?:\bgate\.py|\bmachine_lock\.py\s+run)\b[^;&]*?(?<!\|)\|(?!\|)'),
     ('root-search', r'\bfind\s+(?:-[HLP]\s+)*(?:/|/[a-zA-Z]/?|[A-Za-z]:[\\/]?)(?=\s|$|["\'])'),
     ('root-search', r'(?i)\b(?:get-childitem|gci|ls|dir)\b[^|;&]*\s["\']?[A-Za-z]:[\\/]?["\']?(?=\s|$)[^|;&]*\s-r'),
@@ -84,7 +89,7 @@ ANYWHERE = (
     ('root-search', r'(?i)\bdir\s+(?:/\w+\s+)*["\']?[A-Za-z]:\\?["\']?\s*(?:/\w+\s+)*/s\b'),
     ('root-search', r'(?i)\bdir\b[^|;&]*/s\b[^|;&]*\s["\']?[A-Za-z]:\\?["\']?(?=\s|$)'),
 )
-PARSED_RULES = ('owner_lock', 'wrapped_gate', 'root_search', 'heavy', 'git_rules', 'shell_writes')
+PARSED_RULES = ('owner_lock', 'owner_setup', 'wrapped_gate', 'root_search', 'heavy', 'git_rules', 'shell_writes')
 WHY = 'The guard could not read this command; write the program name literally. Why: %s.'
 PLAIN = ' Write it plainly:'
 
@@ -186,29 +191,34 @@ def check(event, ctx, text, cwd, role, parsed):
 
     def answer(d, rule):
         if d is not None:
-            return rules.Decision(d.kind, d.rule, '%s %s' % (why, d.reason))
+            return rules.reworded(d, '%s %s' % (why, d.reason))
         return rules.refuse('unreadable', role, '%s Its text matches the %s rule.%s' % (why, rule, PLAIN),
                             plain(parsed, text))
 
     main_rules = set(r for r, _p in MAIN_ONLY + SUBAGENT_MAIN)
     for rule, pat in list(ANYWHERE) + list(MAIN_ONLY) + list(SUBAGENT_MAIN):
+        ungated = False
         if rule == 'git-push-main':
             cfg = ctx.config(cwd) if cwd else None
             if cwd and ctx.is_pm_data(cwd):      # the kit's .kit.json decides; unloadable: read it again
                 kit, _why = rules.kit_judged(ctx, cwd)
                 cfg = kit.config(cwd) if kit is not None else None
-            if cfg is not None and not cfg.push_block:
-                continue
+            ungated = cfg is not None and not cfg.push_block
         m = re.search(pat, text)
         if not m:
             continue
         where = cwd_at(parsed, m.start(), cwd)
         if rule in main_rules and not main_like(ctx, where):
             continue
+        if rule == 'owner-setup' and rules.is_owner_session(event, ctx):
+            continue
         if rule == 'git-push-pmdata' and (rules.is_owner_session(event, ctx) or (
                 pat != XARGS_BARE_GIT and not rules.pmdata_recorded(ctx, where or cwd))):
             continue
-        return answer(reread(m.start(), where or cwd), rule)
+        d = reread(m.start(), where or cwd)
+        if ungated and d is None:
+            continue                            # no push_block: only a delete or a forced push of main is refused
+        return answer(d, rule)
     held = None
     cfg = ctx.config(cwd) if cwd else None
     for entry, pat in heavy_patterns(cfg):
@@ -244,7 +254,7 @@ def check(event, ctx, text, cwd, role, parsed):
             # `& (...)`: judged by rules.call_subexpr_pmdata (PM data, then agent sessions), never unreadable
             d = rules.call_subexpr_pmdata(event, ctx, c, inv, cwd, role)
             if d:
-                return rules.Decision(d.kind, d.rule, '%s %s' % (why, d.reason))
+                return rules.reworded(d, '%s %s' % (why, d.reason))
             continue
         if main_like(ctx, c.cwd):
             return rules.refuse('unreadable', role, '%s It runs %s in a main checkout or a place git cannot '

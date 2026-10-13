@@ -73,7 +73,6 @@ PENDING_HISTORY = {
     ('provenance', 'docs/worktree-paths.md'): 2,
     ('provenance', 'docs/worktree-remove.md'): 2,
     ('provenance', 'installer/machine-setup.ps1'): 2,
-    ('provenance', 'installer/new-repo.ps1'): 1,
     ('provenance', 'kitlib/backlog/check.py'): 2,
     ('provenance', 'kitlib/backlog/errors.py'): 2,
     ('provenance', 'kitlib/backlog/landable.py'): 2,

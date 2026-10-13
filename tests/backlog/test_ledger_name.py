@@ -21,6 +21,10 @@ class FakeConfig(object):
         assert name == 'backlog', name
         return dict(self._backlog)
 
+    def written(self, section, key):
+        assert section == 'repo', section
+        return self.repo.get(key)
+
 
 class LedgerName(unittest.TestCase):
 

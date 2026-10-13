@@ -34,6 +34,7 @@ It answers only when the answer cannot differ from git's, and otherwise calls `f
 import os
 
 from kitlib.git import repo
+from kitlib.guard import paths
 
 NOT_A_REPO = 'fatal: not a git repository (or any of the parent directories): .git'
 FALLBACK_ENV = ('GIT_OBJECT_DIRECTORY', 'GIT_DISCOVERY_ACROSS_FILESYSTEM', 'GIT_CONFIG_PARAMETERS',
@@ -60,7 +61,7 @@ def classify(path, fallback=None, environ=None, owned=None):
 def _walk(path, owned):
     written = os.path.abspath(repo.existing_dir(path))
     start = os.path.realpath(written)
-    if os.path.normcase(start) != os.path.normcase(written):
+    if paths.norm(start) != paths.norm(written):
         raise _Fallback()                   # a junction, symlink or subst drive on the way
     plain = (start[:1].isalpha() and start[1:3] == ':\\') if os.name == 'nt' else start.startswith('/')
     if not plain:
@@ -93,7 +94,7 @@ def _at(d, owned):
         if not (owned(d) and owned(dot)):
             raise _Fallback()
         g = repo.real(dot)
-        return repo.Place(repo.MAIN, os.path.normpath(d), '', g, g)
+        return repo.Place(repo.MAIN, paths.norm(d, fold=False), '', g, g)
     if os.path.isfile(dot):
         with open(dot, 'rb') as f:
             data = f.read(4096).decode('utf-8')
@@ -102,7 +103,7 @@ def _at(d, owned):
         target = data[len('gitdir: '):].strip()
         if not target or '\n' in target:
             raise _Fallback()
-        gitdir = os.path.normpath(os.path.join(d, target))
+        gitdir = paths.norm(os.path.join(d, target), fold=False)
         common = _common(gitdir)
         if not _is_git_dir(gitdir, common):
             raise _Fallback()
@@ -111,7 +112,7 @@ def _at(d, owned):
             raise _Fallback()
         g, c = repo.real(gitdir), repo.real(common)
         kind = repo.MAIN if g == c else repo.LINKED
-        return repo.Place(kind, os.path.normpath(d), '', g, c)
+        return repo.Place(kind, paths.norm(d, fold=False), '', g, c)
     if os.path.lexists(dot):
         raise _Fallback()                   # a .git that is neither file nor folder
     return None
@@ -125,7 +126,7 @@ def _common(gitdir):
         target = f.read(4096).decode('utf-8').strip()
     if not target or '\n' in target:
         raise _Fallback()
-    return os.path.normpath(os.path.join(gitdir, target))
+    return paths.norm(os.path.join(gitdir, target), fold=False)
 
 
 def _is_git_dir(gitdir, common=None):

@@ -4,7 +4,7 @@ holding run whose wrapper is an ancestor of this process. The variable alone is 
 import os
 import unittest
 
-from kitlib.guard import decide
+from .claudehost import decide
 
 from tests.lock.helpers import StoreCase
 

@@ -5,7 +5,8 @@ Modes of `run` (one each; tools/doc_index.py's argparse refuses two together):
   index check (default)  every check below at `head`; 1 on a miss
   stale                  report only; no stale line ever fails it
   section                print one section, found by heading text, from any tracked .md
-  find                   only the index entries that match; 1 and the keyword list when none does
+  find                   only the index entries that match; 1 and the keyword list when none does,
+                         1 and where to search instead when the repository has no index (tools too)
   tools                  only the `## Tools` section of the index
   role                   every doc section that role reads; 2 on an unknown role
 
@@ -19,9 +20,11 @@ after the keywords is allowed.
 
 Index checks (`.kit.json` "doc_budget".shard_indexes {"<dir>": "<index file>"}):
   0. the index exists, and every tracked .md (but a "doc_budget" retired path) is named in
-     backticks on an ENTRY line of it (listing_misses); skipped when "doc_index".enabled is false
-     or there is no `.kit.json` (moved here from doc_budget); with `config_ref` (doc_index.py
-     --config-ref) every setting, and whether a `.kit.json` exists, is read at that revision;
+     backticks on an ENTRY line of it (listing_misses; moved here from doc_budget). The index
+     file alone opts a repository in, `.kit.json` or not (docs/multi-host-plan.md decision 26):
+     absent at `head` (and at `config_ref`), the check is skipped with one line saying so;
+     "doc_index".enabled false skips it silently, index or not. With `config_ref` (doc_index.py
+     --config-ref) every setting is read at that revision;
   1. every .md under a shard dir is linked from its index file;
   2. in a doc that has an index block (a heading whose text starts with "Index"), every
      other `## ` heading's title appears in that block;
@@ -61,6 +64,7 @@ import time
 from kitlib.config import ConfigError, load, load_at
 from kitlib.docs import budget
 from kitlib.git import batch, cmd
+from kitlib.host import registry
 
 INDEX = 'docs/INDEX.md'          # the schema default of "doc_index".index
 # Every entry form (see the module docstring).
@@ -73,6 +77,11 @@ REF_EXTS = ('md', 'py', 'ps1', 'json', 'java', 'kt', 'kts', 'cs', 'razor', 'js',
             'yml', 'yaml', 'toml', 'txt', 'tscn', 'gd')
 PATH_REF_RE = re.compile(r'`([\w./\\-]+\.(?:%s))(?::\d+)?`' % '|'.join(REF_EXTS))
 WHERE = '.kit.json "doc_index"'
+# The doc index is opt-in: what the check and the lookups say in a repository without one.
+NO_INDEX_CHECK = ('doc_index: no %s in this repository, so the listing check is skipped (the doc '
+                  'index is opt-in: add one to turn it on)')
+NO_INDEX_LOOKUP = ('doc_index: this repository has no doc index (no %s). Search its docs instead '
+                   '(git grep -n -i "<topic>" -- docs README.md), or read its README.')
 BLAME_TIMEOUT = 120              # seconds; a long state doc's blame is slow, not hung
 _readers = {}
 
@@ -405,7 +414,8 @@ def print_section(root, title, files, out, doc=None, limit=220, ref='HEAD', inde
         out('no heading contains "%s": searched only %s. Try %s, or --section with fewer words.'
             % (title, searched, index))
         return False
-    hits.sort(key=lambda h: (h[0].startswith('.claude/'), len(h[3][h[1]]) - len(title)))
+    hosts = tuple(f + '/' for f in registry.host_folders())     # a host's own copies sort last
+    hits.sort(key=lambda h: (h[0].startswith(hosts), len(h[3][h[1]]) - len(title)))
     if len(hits) > 1:
         out('%d headings match; showing the first. Narrow with --doc <file>:' % len(hits))
         for f, i, end, lines in hits[:12]:
@@ -496,7 +506,8 @@ def print_role(root, role, cfg, files, out, ref='HEAD'):
         entry = resolve_topic(index_text, item, cfg['find_match']) if index_text is not None else None
         if entry is None:
             out('=== %s -> no %s entry matches it%s' % (item, index, '' if index_text is not None
-                                                        else ' (%s cannot be read)' % index))
+                                                        else ' (%s cannot be read: this '
+                                                        'repository has no doc index)' % index))
             status = 1
             continue
         line = entry[2]
@@ -514,6 +525,25 @@ def print_role(root, role, cfg, files, out, ref='HEAD'):
             lines = _read_lines(root, path) or []
             _print_span(path, lines, 0, len(lines), limit, out)
     return status
+
+
+def has_index(root, index, files, config_ref=None):
+    """True when the index file is in `files` (the listing of the head checked) or, with
+    `config_ref`, at that revision: a branch cannot switch the listing check off by deleting the
+    index its base has. A failed probe of the ref counts as present, so the check runs and fails
+    ("the index is missing") rather than being skipped."""
+    if index in files:
+        return True
+    if config_ref is None:
+        return False
+    r = git(root, 'ls-tree', '--name-only', config_ref, '--', index)
+    return r.returncode != 0 or bool(r.stdout.strip())
+
+
+def no_index(index, out):
+    """A lookup in a repository with no doc index: say so and where to look instead; exit 1."""
+    out(NO_INDEX_LOOKUP % index)
+    return 1
 
 
 def refuse(error, out):
@@ -543,6 +573,8 @@ def run(root, out, section=None, find=None, tools=False, stale=False, role=None,
         # Lookups read the index from the working tree, as section reads its docs; no listing.
         try:
             text = read_index(root, index)
+        except FileNotFoundError:
+            return no_index(index, out)
         except OSError as e:
             out('doc_index: cannot read %s: %s' % (index, e))
             return 2
@@ -575,10 +607,11 @@ def run(root, out, section=None, find=None, tools=False, stale=False, role=None,
         out('DOC INDEX FAILED: the git reader died, so the docs were not read: %s' % why)
         return 1
     bad = index_checks(files, cfg, text, index)
-    # A repo that turned the index off, or has no .kit.json (it has not opted in), needs none.
-    # Config.found comes from the read the settings came from: a git failure at the ref was a
-    # ConfigError (exit 2) above, never "no .kit.json, skip the listing".
-    if di['enabled'] and conf.found:
+    # The doc index is opt-in (docs/multi-host-plan.md decision 26): the index file is the opt-in,
+    # with or without a .kit.json; "doc_index".enabled false is the explicit opt-out.
+    if di['enabled'] and not has_index(root, index, files, config_ref):
+        out(NO_INDEX_CHECK % index)
+    elif di['enabled']:
         bad = listing_misses(files, cfg, text(index), index) + bad
     died = reader_died(root)
     if died:

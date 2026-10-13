@@ -71,8 +71,10 @@ class ToolTest(unittest.TestCase):
         os.remove(self.log)
         r = self.run_tool('--apply')                 # the default folder is not migrated yet
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn('REFUSED %s: not migrated to the export yet: python tools/plugin_refresh.py '
-                      '--migrate --apply --folder "%s"' % (self.default, self.default), r.stdout)
+        # the hint names the kit's own tool in full (docs/multi-host-plan.md section 7 decision 21)
+        self.assertIn('REFUSED %s: not migrated to the export yet: python "%s" --migrate --apply '
+                      '--folder "%s"' % (self.default, TOOL.replace('\\', '/'), self.default),
+                      r.stdout)
         self.assertEqual(self.calls(), [])           # two is current already
         self.k.repo.write('later.txt', 'z\n')
         self.k.repo.commit('later', 'later.txt')

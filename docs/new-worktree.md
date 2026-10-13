@@ -4,6 +4,15 @@ Held for the joint review: no repository runs it yet.
 
 `tools/new_worktree.py` makes a workstream's worktree in one call. Logic: `kitlib/worktree/new.py`; tests: `tests/worktree/test_new_worktree.py`. Ported from the PM kit's `tools/new_worktree.py`.
 
+## Hosts
+
+`--host NAME` picks the agent host whose worktree folder is used: a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude). A name `hosts.json` lacks is refused (exit 2) before any fetch. The folder (`kitlib/worktree/hostdirs.py`; tests `tests/worktree/test_host.py`):
+1. `.kit.json` `repo.worktrees_by_host.<host>` when set;
+2. else `repo.worktrees_dir` for the default host, so a repository that sets nothing keeps `.claude/worktrees`;
+3. else the host's `hosts.json` `profile.worktrees_directory`.
+
+A folder other than `repo.worktrees_dir` must stay inside the main checkout and be reached through no junction or link, or the call is refused. Creation keeps every branch, base, landing-lock and fetch check. `worktree_remove.py` and the sweep find a worktree under any host's folder and keep their registration, holder, dirty-file, landing and link checks; a bare slug still means `repo.worktrees_dir`, so name another host's worktree by the absolute path printed.
+
 ```
 python tools/new_worktree.py [-C DIR] <area>/<slug>                 a NEW branch off the main branch
 python tools/new_worktree.py [-C DIR] --existing <area>/<slug>      an EXISTING branch, resumed
@@ -18,6 +27,16 @@ Exit 0 made; 1 refused (nothing made, the lines say why); 2 usage, or the kit co
 - A new branch starts at the base's hash and tracks nothing.
 - The mode is what the caller said: the default refuses a branch that exists, `--existing` refuses one that does not.
 - Names: `<area>/<slug>`, ASCII letters, digits, `_ . -`, each part starting with a letter or digit, the area lowercase-first. A new slug is lowercase-first; `--existing` also takes a capital. A slug or branch that differs only in case from one already there is refused.
+
+## First-use prep
+
+Once a worktree is made, the tool runs the first-use repo prep on the main checkout (`kitlib/git/prep.py`; decisions 23 and 25 of docs/multi-host-plan.md). The PM session start runs the same prep on each `launcher.repos` repository (docs/pm-start.md "Repo prep"). Its lines follow the `worktree` line, as `prep      repo prep: ...`; a repository already prepared prints none. It writes local settings only: nothing tracked changes and nothing is committed.
+
+- **Exclude.** Each worktree folder (every host's `hosts.json` `profile.worktrees_directory`, `repo.worktrees_dir` and `repo.worktrees_by_host`) gets one anchored line, such as `/.claude/worktrees/`, in the repository's `info/exclude`. That file is in the git common dir, so a run from a linked worktree writes the main checkout's. A line already there, with or without its trailing slash, is not written again. The file's other lines and its line ending are kept, and `info/` is made when it is missing. The exclude only hides the folders from the main checkout's untracked list. A worktree has its own index and shares the repository's remotes, so its commits and pushes are untouched. A folder is refused, with a `did not exclude` line, when gitignore would not read it literally (`* ? [ ] ! #`, a line break, a part with a leading or trailing space), when it is not inside the repository, or when git tracks a file under it: `.kit.json` is the repository's own content, and an exclude of `*` or `src` would hide new source files from `git status` and the untracked-file checks.
+- **Hooks.** The local `core.hooksPath` is set to this kit's `githooks/` (beside the `kitlib` that runs) only when `git config --get core.hooksPath` finds no value at any level (local, global or system) and the repository's own `hooks/` folder holds no hook other than git's `*.sample` files. A hooks path would silently stop hooks a tool installed there, such as git-lfs's `pre-push` or the pre-commit framework's. An existing value is never overwritten, with one exception. A local value that is an absolute path to a folder named `githooks` that no longer exists is repointed. That is the kit's own setting from a kit folder that moved, and a hooks folder that is gone runs no hooks, so nothing anyone chose is lost. A global or system value is never repointed, even a stale one.
+- **Failures.** No git, a folder outside any repository, or a `.git` that cannot be written each give a line. Prep never stops the worktree or the session start.
+
+Tests: `tests/git/test_prep.py` (a fresh clone stays clean, a second run writes nothing, a worktree commit pushes to its remote branch with its `.claude/` files, local and global hooks paths are kept, a linked worktree writes the common exclude, pattern-like and tracked folders are refused, hooks in `.git/hooks` keep running, a prepared repository costs two git calls) and `PrepIsRun` in `tests/worktree/test_new_worktree.py`.
 
 ## The landing exception
 
@@ -59,7 +78,7 @@ Local `<base>` is not updated (`behind_count` in `kitlib/worktree/new.py` only r
 
 ## Keys read
 
-- `.kit.json` "repo": `main_branch`, `remote`, `worktrees_dir`, `tools_dir`.
+- `.kit.json` "repo": `main_branch`, `remote`, `worktrees_dir`. The commands its lines name (the `next` preflight, `worktree_remove.py --check`, `redfirst.py`) are the kit's own tools by absolute path with `-C`, never `<tools_dir>` copies (`kitlib.kitroot.command`).
 - "landing": `lock_file` (`git:<name>`), `lanes`, and `in_flight` (see "Waiting for a landing in flight").
 
 "new_worktree" has no keys.

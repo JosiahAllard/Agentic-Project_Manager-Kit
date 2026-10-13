@@ -1,0 +1,40 @@
+{
+  "fakehost": {
+    "adapter": "tests.host.fakehost.adapter",
+    "shell": "tests/host/fakehost/shell",
+    "platforms": ["windows"],
+    "capabilities": {
+      "hook_events": ["before_tool", "session_begin"],
+      "supports_ask": false,
+      "subagent_identity_in_hooks": false,
+      "mcp": false,
+      "skills": false,
+      "agent_format": "json"
+    },
+    "profile": {
+      "owner_paths": ["FAKE.md", ".fakehost/"],
+      "worktrees_directory": ".fakehost/worktrees",
+      "state_directory": ".fakehost",
+      "process_names": ["fakehost.exe"],
+      "mcp_tool_format": "{server}.{tool}",
+      "session_env": "FAKEHOST_SESSION_ID",
+      "skills_directory": ".fakehost/skills",
+      "attribution": {
+        "name": "Fake Host",
+        "email": "fakehost@example.invalid",
+        "model_env": null,
+        "model_pattern": null
+      },
+      "agent_name_format": "{plugin}/{name}",
+      "session_process": "fakehost.exe",
+      "env_prefixes": ["FAKEHOST_"]
+    },
+    "hook": {
+      "tool_event": "before_tool",
+      "tool_field": "call.name",
+      "guarded_tools": ["write_file", "run_shell"],
+      "fast_path": "all"
+    },
+    "tiers": {"light": "fake-small", "standard": "fake-medium", "strong": "fake-large", "deep": "fake-large"}
+  }
+}

@@ -1,8 +1,9 @@
 """Agent names with and without the kit plugin's prefix (docs/guard.md "Agent names").
 
-Claude Code names an agent a plugin bundles `<plugin>:<name>`; the kit's plugin is
-kitlib.lockmcp.CLAUDE_PLUGIN_NAME, so a kit agent can reach the guard, the launcher and the usage
-reports both as `lander` and as `PREFIX + 'lander'`. Two rules, because stripping more is the
+A host names an agent a plugin bundles by its hosts.json profile agent_name_format (Claude Code:
+`<plugin>:<name>`); the kit's plugin is kitlib.lockmcp.PLUGIN_NAME, so a kit agent can reach the
+guard, the launcher and the usage reports both as `lander` and as `PREFIX + 'lander'`. PREFIX is
+the default host's format up to {name}, read once at import. Two rules, because stripping more is the
 permissive direction for one and the restrictive direction for the other:
 
   bare(name)       an agent type (a hook payload's agent_type, a launcher --agent): exactly one
@@ -15,9 +16,19 @@ permissive direction for one and the restrictive direction for the other:
                    mark reads as an unmarked session, which is the owner's.
   qualified(name)  PREFIX + bare(name).
 """
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.host import registry
+from kitlib.lockmcp import PLUGIN_NAME
 
-PREFIX = CLAUDE_PLUGIN_NAME + ':'
+
+def prefix(host=None, plugin=PLUGIN_NAME, path=None):
+    """The qualified-name prefix of `host` (None: the default host): its agent_name_format up to
+    {name}, filled in with `plugin`."""
+    name = registry.default(path) if host is None else host
+    fmt = registry.host(name, path).profile.agent_name_format
+    return fmt.split('{name}', 1)[0].format(plugin=plugin)
+
+
+PREFIX = prefix()
 
 
 def bare(name):
