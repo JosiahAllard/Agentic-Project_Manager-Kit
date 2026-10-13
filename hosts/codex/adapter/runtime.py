@@ -116,7 +116,8 @@ class _PolicyConfig(object):
 def evaluate_bound(event, binding, ctx=None, profile=None, environ=None):
     """In-process broker guard. Only the freshly resolved native binding supplies the role: every
     Action is judged as an agent of the bound role (agent the binding's thread, root or child), with
-    the role policy on for it (PolicyOn)."""
+    the role policy on for it (PolicyOn). While the main checkout's .kit.json fails to load, every
+    call is refused (host-runtime-error)."""
     try:
         from kitlib import guard
         from kitlib.guard import context
@@ -131,6 +132,11 @@ def evaluate_bound(event, binding, ctx=None, profile=None, environ=None):
         parsed = events.parse('PreToolUse', event)
         env = dict(os.environ if environ is None else environ, **{ROLE_ENV: binding.role})
         base = ctx or context.Ctx(environ=env, profile=lambda: registry.host(HOST).profile)
+        if base.config(binding.cwd) is None and base.config_error(binding.cwd):
+            # PolicyOn keeps a broken .kit.json an error, which the role policy reads as off: the
+            # broker refuses every call until it loads.
+            raise ValueError("the main checkout's .kit.json does not load: fix it (%s)"
+                             % base.config_error(binding.cwd))
         held = PolicyOn(base)
         for action in parsed if isinstance(parsed, tuple) else (parsed,):
             action = replace(action, role=binding.role, agent=binding.thread, agent_role=binding.role)

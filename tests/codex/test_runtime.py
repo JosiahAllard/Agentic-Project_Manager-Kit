@@ -363,20 +363,49 @@ class BoundGuard(unittest.TestCase):
         self.assertIn('rule=role-shell', self.shell('worker', 'powershell.exe'))
         self.assertIn('rule=role-workdir', self.shell('worker', 'Get-Location', workdir=self.w.plain))
 
-    def test_a_broken_kit_json_stays_a_config_error_not_a_default(self):
-        """PolicyOn uses a default config only where no .kit.json exists: a file that fails to load
-        stays the error the guard refuses on, as for any subagent."""
-        with open(os.path.join(self.w.main, '.kit.json'), 'w', encoding='utf-8') as f:
-            f.write('{ broken')
-        for role in ('worker', 'coordinator'):
-            for command in ('git push origin HEAD:main', 'git push --force origin HEAD:main'):
-                with self.subTest(role=role, command=command):
-                    self.assertIsNotNone(self.shell(role, command))
-        self.assertIsNone(self.shell('worker', 'git status'))
+    # .kit.json shapes that fail to load: bad JSON, empty, a BOM alone, null, an array, a section
+    # file that is missing or bad, and a directory.
+    BROKEN = ('{ broken', '', '\ufeff', 'null', '[]', '{"guard": "missing.json"}', '{"guard": "g.json"}', 'dir')
+
+    def break_kit_json(self, shape):
+        from tests.guard.world import World
+        from tests.guard.test_rolepolicy import kit
+        self.w = World(kit=kit({}, on=None))
+        self.addCleanup(self.w.cleanup)
+        target = os.path.join(self.w.main, '.kit.json')
+        if os.path.exists(target):
+            os.remove(target)
+        if shape == 'dir':
+            os.mkdir(target)
+            return
+        with open(os.path.join(self.w.main, 'g.json'), 'w', encoding='utf-8') as f:
+            f.write('{bad')
+        with open(target, 'w', encoding='utf-8') as f:
+            f.write(shape)
+
+    def test_a_kit_json_that_does_not_load_refuses_every_call(self):
+        """PolicyOn uses a default config only where no .kit.json exists. One that fails to load
+        (any shape) would leave the bound role's policy off, so the broker refuses every call until
+        it is fixed, not only the calls the shared rules refuse on a config error."""
+        calls = {'role-shell': lambda role: self.shell(role, 'powershell.exe'),
+                 'role-workdir': lambda role: self.shell(role, 'Get-Location', workdir=self.w.plain),
+                 'commit': lambda role: self.shell(role, 'git commit -am x'),
+                 'push': lambda role: self.shell(role, 'git push --force origin HEAD:main'),
+                 'status': lambda role: self.shell(role, 'git status')}
+        for shape in self.BROKEN:
+            self.break_kit_json(shape)
+            for role in ('reviewer', 'test-runner', 'worker', 'coordinator'):
+                for name, call in calls.items():
+                    with self.subTest(shape=shape, role=role, call=name):
+                        reason = call(role) or ''
+                        self.assertIn('rule=host-runtime-error', reason)
+                        self.assertIn('.kit.json does not load', reason)
 
     def test_no_kit_json_gets_the_policy_default(self):
         os.remove(os.path.join(self.w.main, '.kit.json'))
-        self.assertIn('rule=host-role-edit', self.judge('reviewer', 'a.py'))
+        self.assertIn('rule=role-shell', self.shell('worker', 'powershell.exe'))
+        self.assertIn('rule=role-workdir', self.shell('worker', 'Get-Location', workdir=self.w.plain))
+        self.assertIsNone(self.shell('worker', 'git status'))
 
     def test_bound_guard_refuses_a_spoofed_checkout(self):
         from hosts.codex.adapter.runtime import evaluate_bound
