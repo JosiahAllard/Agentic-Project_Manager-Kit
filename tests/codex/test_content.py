@@ -131,6 +131,60 @@ class Vendored(unittest.TestCase):
         self.assertTrue(run.FAST <= policy.ALLOWED_TOOLS - {'write_stdin'})
         self.assertLess(run.DEADLINE, cc.HOOK_TIMEOUT, 'inside the timeout hooks.json gives Codex')
 
+    def load_run(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'codex_run', os.path.join(ROOT, 'hosts', 'codex', 'shell', 'hooks', 'run.py'))
+        run = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(run)
+        return run
+
+    def test_the_entrys_budget_counts_the_boot(self):
+        """DEADLINE is the whole call's: the time the boot took (a pinned verify hashes every file)
+        comes off what hookmain gets."""
+        import io
+        import sys
+        import types
+        run = self.load_run()
+        clock = [100.0]
+        boot = types.ModuleType('kitboot')
+
+        def slow_boot(here=None):
+            clock[0] += 3.0
+            return 'kit'
+        boot.boot = slow_boot
+        seen = {}
+
+        def fake_run(event, kit, text, stdout, entry, deadline):
+            seen['deadline'] = deadline
+            return 0
+        with unittest.mock.patch.dict(sys.modules, {'kitboot': boot}), \
+                unittest.mock.patch('time.monotonic', lambda: clock[0]), \
+                unittest.mock.patch('hosts.codex.adapter.entry.run', fake_run):
+            rc = run.main(['PreToolUse'], io.StringIO('{"tool_name": "Write"}'), io.StringIO(), {})
+        self.assertEqual(rc, 0)
+        self.assertAlmostEqual(seen['deadline'], run.DEADLINE - 3.0)
+
+    def test_the_entrys_fast_path_reads_the_mark_as_sessionmark_does(self):
+        """run.py reads the mark before the kit boots, so it cannot import kitlib.sessionmark: its
+        MARK and test are held to sessionmark.ENV and sessionmark.mark's None."""
+        import io
+        import sys
+        import types
+        from kitlib import sessionmark
+        run = self.load_run()
+        self.assertEqual(run.MARK, sessionmark.ENV)
+        boot = types.ModuleType('kitboot')
+
+        def no_boot(here=None):
+            raise RuntimeError('booted')
+        boot.boot = no_boot
+        for value in ('', '   ', 'worker', ' reviewer ', 'owner', 'pm-kit:worker', 'pm-kit:'):
+            with self.subTest(value=value), unittest.mock.patch.dict(sys.modules, {'kitboot': boot}):
+                rc = run.main(['PreToolUse'], io.StringIO('{"tool_name": "Read"}'), io.StringIO(),
+                              {sessionmark.ENV: value})
+                self.assertEqual(rc, 0 if sessionmark.mark({sessionmark.ENV: value}) is None else 2)
+
 
 import unittest.mock  # noqa: E402
 
