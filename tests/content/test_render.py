@@ -129,7 +129,7 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(content.role_writes('consultant', KIT_ROOT), ('docs/ops/consultant-notes.local.md',))
         for r in content.load(KIT_ROOT).roles:
             with self.subTest(r.name):
-                agent = read(os.path.join(KIT_ROOT, 'claude', 'agents', r.name + '.md'))
+                agent = read(os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'agents', r.name + '.md'))
                 self.assertNotIn(b'\nmode:', agent)
                 self.assertNotIn(b'\nwrites:', agent)
 
