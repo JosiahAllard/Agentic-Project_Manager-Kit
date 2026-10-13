@@ -6,7 +6,7 @@ import json
 import os
 import unittest
 
-from tests.host import conformance
+from tests.host import bridge_conformance, conformance
 from tests.host.test_leaks import ALLOWED
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -32,7 +32,8 @@ def recorded_request(path=os.path.join(HERE, 'codex', 'sessions.json')):
     return request
 
 
-class CodexConformance(conformance.HostConformance, unittest.TestCase):
+class CodexConformance(conformance.HostConformance, bridge_conformance.mixin('codex'),
+                       unittest.TestCase):
     HOST = 'codex'
     FIXTURES = os.path.join(HERE, 'codex', 'payloads.json')
     # Upper bounds on 'codex' where section 2.7 forbids it: test_leaks counts every host's name file by

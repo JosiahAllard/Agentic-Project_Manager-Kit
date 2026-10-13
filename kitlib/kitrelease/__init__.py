@@ -57,7 +57,8 @@ def launch_bindings(root, expected_identity, python):
     root = Path(result['root'])
     result.update({'python': str(python), 'python_args': ['-I', '-B'],
                    'env': {'PM_KIT_ROOT': str(root), 'PM_KIT_RELEASE_ID': expected_identity}})
-    for key, relative in (('front', 'mcp/bridge_frontend.py'), ('service', 'tools/bridge_service.py')):
+    for key, relative in (('front', 'optional/bridge/mcp_frontend.py'),
+                          ('service', 'optional/bridge/tools/bridge_service.py')):
         path = root / relative
         if path.is_file():
             result[key] = str(path)

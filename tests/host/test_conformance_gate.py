@@ -20,6 +20,8 @@ CHANGES = (
     'content/roles/worker.md',
     'content/skills/land-branch/SKILL.md',
     'tests/host/fakehost/adapter.py',
+    'optional/bridge/hosts/claude/peer.py',    # a bridge half: the bridge part of the suite
+    'optional/bridge/port.py',
 )
 
 
@@ -38,6 +40,7 @@ class Selection(unittest.TestCase):
     def test_the_suite_is_collected_only_through_its_subclasses(self):
         modules = selftree.test_modules(ROOT, ['host'])
         self.assertNotIn('tests.host.conformance', modules)
+        self.assertNotIn('tests.host.bridge_conformance', modules)
         self.assertIn('tests.host.test_conformance_claude', modules)
         self.assertIn('tests.host.test_conformance_fake', modules)
 

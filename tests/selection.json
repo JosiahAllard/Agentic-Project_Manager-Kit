@@ -45,6 +45,7 @@
     ["tests/oldpaths/**", ["oldpaths"]],
     ["templates/**", ["templates", "skills"]],
     ["knowledge/**", ["knowledge"]],
+    ["optional/bridge/**", ["bridge", "host"]],
     ["optional/**", ["optional", "knowledge", "skills"]],
     ["tests/optional/**", ["knowledge"]],
     ["tests/**", ["tooldeps"]],

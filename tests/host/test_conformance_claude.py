@@ -4,14 +4,15 @@ import json
 import os
 import unittest
 
-from tests.host import conformance
+from tests.host import bridge_conformance, conformance
 from tests.host.test_leaks import ALLOWED, CONTENT_ALLOWED
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = '${CLAUDE_PLUGIN_ROOT}/'
 
 
-class ClaudeConformance(conformance.HostConformance, unittest.TestCase):
+class ClaudeConformance(conformance.HostConformance, bridge_conformance.mixin('claude'),
+                        unittest.TestCase):
     HOST = 'claude'
     FIXTURES = os.path.join(HERE, 'claude', 'payloads.json')
     # Upper bounds: test_leaks counts every host's name file by file, exactly; this counts Claude's.
@@ -57,6 +58,25 @@ class ClaudeConformance(conformance.HostConformance, unittest.TestCase):
 
     # session_host(): None. ADAPTER.sessions() is hosts.claude.adapter.claude_host, the transcript
     # helpers kitlib.pmwatch is handed; it has no sessions/loaded/usage/models yet.
+
+    def bridge_delivery(self):
+        """The bridge half's peer adapter on the owned fake recipient pipe of tests/bridge/
+        test_claude_peer.py: a registry record and key for this process, and its private listener."""
+        from tests.bridge.test_claude_peer import ClaudePeerTests
+        fixture = ClaudePeerTests('test_native_auth_and_exact_operation_reach_original_chat_but_write_is_unconfirmed')
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+
+        def receive():
+            thread = fixture.listen()
+
+            def done():
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(fixture.errors, [])
+                return list(fixture.received)
+            return done
+        return fixture.adapter, fixture.message, receive
 
 
 if __name__ == '__main__':
