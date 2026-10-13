@@ -7,6 +7,13 @@ the recipient host's native channel, and never resends a message whose outcome i
 works today, per host and direction, is in `optional/bridge/STATUS.md`. Read it before relying on
 any of this: no message has yet been delivered end to end between live chats.
 
+**Only Claude is served until Codex is registered in `hosts.json`.** The bridge serves a host only
+when `hosts.json` registers it (`registry.py`), and on this branch only `claude` is registered.
+Until plan step 9 adds the `codex` entry, the service and `bridge_prepare.py` refuse a Codex profile
+(`native-provider-unavailable`), and the MCP frontend reads no Codex channel variable. The Codex
+half and its tests are complete, and the tests run it against a test `hosts.json`
+(`tests/bridge/registered.py`).
+
 This is the bridge from `codex/robust-bridge-plan`, ported as plan step 10
 (docs/multi-host-plan.md section 2.4). Its design history, the Phase 0 evidence and the
 24 bridge docs it replaces are in git history (that branch, up to 1cdc244).
@@ -43,11 +50,17 @@ calls. A half's package exports `HOST`, a `BridgeHost`:
 | `provider(controller, native_images, *, host_id, **profile)` | once per service start | return a Provider (below), from the half's validated `bridge-profile.json` settings |
 | `delivery(provider, runtime)` | after every provider is built, before the service marker is published | return a `DeliveryAdapter`, or be `None` for a half that cannot deliver |
 | `install(profile, *, python, marker, kit_root)` | by `bridge_prepare.py` | return an `InstallFragment`: the MCP server entry's name and metadata, files to add (such as a hook registration), and the paths they depend on |
-| `channel_env` | by the MCP frontend at start | name the environment variables in which the host's app may nominate its own tool pipe |
+
+Beside it, the half's `bridge-profile.json` is data, read without importing the half. It has the
+keys `required`, `optional`, `directories` and `names` (the provider's settings) and an optional
+`channel_env`: the environment variables in which the host's app may nominate its own tool pipe to
+the MCP frontend it launches.
 
 A Provider is called with each verified MCP frontend (`win.frontend.NativeFrontend`) and returns
-a `SenderAttestor` for it, normally a `port.NativeSource(observe, prepare)`. Its other methods are
-optional, and the service uses only those it finds:
+a `SenderAttestor` for it. The service calls `attest()` on whatever it returns, and also
+`prepare()` when that exists. `port.NativeSource(observe, prepare)` is the usual one, and a plain
+callable is taken as `attest` itself. The Provider's other methods are optional, and the service
+uses only those it finds:
 - `sender_mode(binding)`: `'prompting'` or `'bypass'`
 - `hook_sink`: a `HookSink`
 - `refresh()`
@@ -63,8 +76,10 @@ optional, and the service uses only those it finds:
 | `HookSink` | `(peer, payload)` | Takes a native hook event from a verified helper process. The service routes the frame to the one provider that has a sink. Two sinks refuse the frame. |
 
 `registry.py` serves a host when `hosts.json` registers it and `optional/bridge/hosts/<module>/`
-exists. The module is the host name with `-` replaced by `_`. Only the frontend's `channel_env`
-is read from every half on disk, since the frontend reads it before it knows its host.
+exists. The module is the host name with `-` replaced by `_`. A folder for an unregistered host is
+never imported or read. The MCP frontend reads only the served halves' `channel_env`, from their
+`bridge-profile.json`, and imports no host code. A served half whose profile cannot be read
+nominates no channel, and the other halves keep working.
 
 ## Contracts
 
@@ -165,8 +180,10 @@ absolute.
 
 Add `optional/bridge/hosts/<module>/` with:
 - `__init__.py` exporting `HOST = port.BridgeHost(...)`, with the native modules imported lazily
-- `bridge-profile.json`
+- `bridge-profile.json`, with `channel_env` if the host's app nominates a tool pipe
 - the provider, and optionally the delivery adapter
+
+The half is served only once the host is registered in `hosts.json` (docs/new-host.md).
 
 Its tests go in `tests/bridge/`. The host's conformance class then runs the bridge part of the
 suite by itself (`tests/host/bridge_conformance.py`, through `bridge_conformance.mixin(HOST)`).
@@ -196,8 +213,11 @@ Four helpers were load-bearing and moved instead:
 | `bridge/bootstrap.identifier`, `digest` and `integer` | `kitlib/ident.py` (`IdentError` replaces `BootstrapError` for these) |
 | `claude/bridge_phase0.read_record` | `hosts/claude/records.py` |
 
-`codex/pmkit_codex/bridge_client.py` is now `hosts/codex/client.py`. It is the Codex plugin's
-client of this frontend. The legacy `session_delivery.py` helper was not ported, since nothing in
+`codex/pmkit_codex/bridge_client.py` is now `hosts/codex/client.py`, and the bridge owns it. It is
+the Codex plugin's client of this frontend. Codex's diagnostics (`pmkit_codex/diagnostics.py` on
+the companion branch, plan step 9) must either drop it or probe for it lazily and optionally, by
+importing `optional.bridge.hosts.codex.client` when it is present. The diagnostics must never keep
+a duplicate copy. The legacy `session_delivery.py` helper was not ported, since nothing in
 the bridge uses it.
 
 ## Tests
