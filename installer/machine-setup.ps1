@@ -4,10 +4,10 @@
 #
 #   powershell -NoProfile -File installer\machine-setup.ps1 [-OwnerEmail <email>] [-PmSettings <file>]
 #                                [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>]
-#                                [-RegisterSweepTask] [-Shortcut] [-Apply]
+#                                [-NoSweepTask] [-Shortcut] [-Apply]
 #   powershell -NoProfile -File installer\machine-setup.ps1 -OldKit <old kit clone> [-OwnerEmail <email>]
 #                                [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>]
-#                                [-RegisterSweepTask] [-Apply]
+#                                [-NoSweepTask] [-Apply]
 #
 # The default (no -OldKit; -Fresh is its old name and still accepted): the guard's entry in each
 # account's settings.json, the kit plugin through the claude CLI per account, the owner's email in
@@ -15,8 +15,10 @@
 # console, offering `git config user.email`, never stored unconfirmed), and the agents' temp folder. -PmSettings writes the PM SessionStart hook
 # to that file; -Shortcut makes the machine schedule shortcut. -OldKit switches the config folders
 # from an older kit clone instead: links, settings, the owner's email, the extras.
-# -RegisterSweepTask, with -Apply, registers the agent-temp-sweep scheduled task (the owner's act);
-# without it the plan prints the line that registers it.
+# -Apply registers the agent-temp-sweep scheduled task by default, after one dry run of the sweep
+# that prints what it would remove; -NoSweepTask leaves it unregistered (the plan prints the line
+# that registers it). A task already registered is left as is. -RegisterSweepTask, the old opt-in,
+# is still accepted and changes nothing.
 #
 # Dry run by default: prints every change it would make. -Apply makes them, writing a .bak beside
 # each settings.json and renaming any real folder aside (never deleting one). A second run reports
@@ -31,8 +33,8 @@
 # on PATH.
 #
 # Exit: 0 dry run printed, changes made or nothing to do; 1 refused or stopped; 2 usage (both -OldKit
-# and -Fresh, -PmSettings with -OldKit, -Python not a file, no python on PATH, no
-# tools\machine_setup.py).
+# and -Fresh, both -NoSweepTask and -RegisterSweepTask, -PmSettings with -OldKit, -Python not a
+# file, no python on PATH, no tools\machine_setup.py).
 param(
     [string]$OldKit = '',
     [switch]$Fresh,
@@ -43,6 +45,7 @@ param(
     [string]$HomeDir = '',
     [string]$Desktop = '',
     [string]$Python = '',
+    [switch]$NoSweepTask,
     [switch]$RegisterSweepTask,
     [switch]$Shortcut,
     [switch]$Apply
@@ -58,6 +61,7 @@ foreach ($v in @($OldKit, $OwnerEmail, $PmSettings, $AgentTemp, $HomeDir, $Deskt
 if ($OldKit -and $Fresh) {
     Write-Host 'machine-setup: usage - give -OldKit <old kit clone> or -Fresh, not both'; exit 2
 }
+if ($NoSweepTask -and $RegisterSweepTask) { Write-Host 'machine-setup: usage - give -NoSweepTask or -RegisterSweepTask, not both'; exit 2 }
 if ($PmSettings -and $OldKit) { Write-Host 'machine-setup: usage - -PmSettings goes with the default mode only, not -OldKit'; exit 2 }
 $kit = Split-Path $PSScriptRoot -Parent
 $tool = Join-Path $kit 'tools\machine_setup.py'
@@ -81,7 +85,7 @@ foreach ($d in ($ConfigDir | ForEach-Object { $_ -split ',' } | Where-Object { $
 if ($AgentTemp) { $argv += @('--agent-temp', $AgentTemp) }
 if ($HomeDir) { $argv += @('--home', $HomeDir) }
 if ($Desktop) { $argv += @('--desktop', $Desktop) }
-if ($RegisterSweepTask) { $argv += '--register-sweep-task' }
+if ($NoSweepTask) { $argv += '--no-sweep-task' }
 if ($Shortcut) { $argv += '--shortcut' }
 if ($Apply) { $argv += '--apply' }
 
