@@ -20,6 +20,7 @@ from kitlib.config import load
 from kitlib.records import inflight, landing
 from kitlib.worktree import new
 from kitlib.git import cmd as gitcmd
+from kitlib.git import prep as gitprep
 from tests import gitfixture
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -58,6 +59,12 @@ class WorktreeCase(unittest.TestCase):
         env = mock.patch.dict(os.environ, gitfixture.fixture_env(), clear=True)
         env.start()
         self.addCleanup(env.stop)
+        # The first-use repo prep would set these repositories' core.hooksPath to the kit's
+        # githooks; the cases here test the worktree, PrepIsRun the prep's call and
+        # tests/git/test_prep.py the prep itself.
+        prep = mock.patch.object(gitprep, 'run', return_value=[])
+        self.prep = prep.start()
+        self.addCleanup(prep.stop)
         self.fx = gitfixture.TempRepo(branch=self.BASE, bare_remote=True)
         self.addCleanup(self.fx.cleanup)
         self.base_dir = os.path.realpath(self.fx.base)
@@ -210,6 +217,29 @@ class NewBranchMode(WorktreeCase):
         out = self.tool('fix/fresh')[1]
         want = os.path.join(self.slug_path('fresh'), 'tools', 'preflight.py')
         self.assertIn('next      python "%s"' % want, out)
+
+
+class PrepIsRun(WorktreeCase):
+    """A worktree that is made runs the first-use repo prep (kitlib.git.prep) on the main checkout,
+    with every host's worktree folder; its lines follow the worktree line. A refusal runs none."""
+
+    def test_a_new_worktree_preps_the_main_checkout_for_every_host_folder(self):
+        self.prep.return_value = ['repo prep: did a thing']
+        code, out = self.tool('fix/prepped')
+        self.assertEqual(code, 0, out)
+        (main, folders), _ = self.prep.call_args
+        self.assertEqual(os.path.realpath(main), self.repo)
+        self.assertIn('.claude/worktrees', [f.replace('\\', '/') for f in folders])
+        self.assertIn('.codex/worktrees', [f.replace('\\', '/') for f in folders])
+        lines = out.splitlines()
+        at = [i for i, l in enumerate(lines) if l.startswith('worktree ')][0]
+        self.assertEqual(lines[at + 1], 'prep      repo prep: did a thing')
+
+    def test_a_refusal_preps_nothing(self):
+        self.tool('fix/once')
+        self.prep.reset_mock()
+        self.assertEqual(self.tool('fix/once')[0], 1)
+        self.prep.assert_not_called()
 
 
 class BaseOption(WorktreeCase):

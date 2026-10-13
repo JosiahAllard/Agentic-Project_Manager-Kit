@@ -108,7 +108,7 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    `.kit.json` with the same keys (docs/kit-json.md), then
    `python <kit>/tools/kit_stubs.py write -C <repo> --replace`, then a commit.
 5. **Check the stubs:** `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0.
-6. **Git hooks:** `git -C <repo> config core.hooksPath <kit>/githooks`. This installs `pre-push` and `pre-commit`; `pre-commit` is inert unless the repository opts in (docs/ledger.md "Pre-commit check").
+6. **Git hooks:** `git -C <repo> config core.hooksPath <kit>/githooks`. The first-use prep does this when no hooks path is set, and it also excludes the worktree folders locally (docs/new-worktree.md "First-use prep"). This installs `pre-push` and `pre-commit`; `pre-commit` is inert unless the repository opts in (docs/ledger.md "Pre-commit check").
 7. **Gate:** with `-Stack` the gate section exists; otherwise the gate detects the stack
    (`source: auto`, docs/gate.md "Auto-detected gate"), or list the repository's checks as
    `gate.steps` in `.kit.json` (docs/kit-json.md; a start per language:

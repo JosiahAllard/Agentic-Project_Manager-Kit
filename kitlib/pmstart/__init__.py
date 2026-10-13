@@ -499,6 +499,25 @@ def stubs(repos=None, check=None):
     return lines
 
 
+def repo_prep(repos=None, prep=None):
+    """The first-use repo prep (kitlib.git.prep.run; docs/new-worktree.md "First-use prep") of each
+    repository in launcher.repos, the repositories the kit's workers make worktrees in: its lines,
+    none for a repository already prepared. A folder that is not there is that repo's own "could
+    not prep" line; prep never raises."""
+    if prep is None:
+        from kitlib.git import prep as gitprep
+        prep = gitprep.run
+    repos = launcher_repos() if repos is None else repos
+    lines = []
+    for name in sorted(repos):
+        path = repos[name]
+        if not os.path.isdir(path):
+            lines.append("could not prep %s: no repository folder %s" % (name, path))
+            continue
+        lines.extend(prep(path))
+    return lines
+
+
 def plugin_settings():
     """The machine config's plugin Settings (kitlib.pluginsource.load)."""
     from kitlib import pluginsource
@@ -592,6 +611,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
         ("plugin_current", lambda: plugin_current(**fakes.get("plugin_current", {}))),
         ("stubs", lambda: stubs(**fakes.get("stubs", {}))),
+        ("repo_prep", lambda: repo_prep(**fakes.get("repo_prep", {}))),
         ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
         ("foreground_lock", lambda: fglock.check(cfg, **fakes.get("foreground_lock", {}))),
     ]
