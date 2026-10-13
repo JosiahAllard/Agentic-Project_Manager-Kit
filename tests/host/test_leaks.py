@@ -24,7 +24,7 @@ ALLOWED = {
     'kitlib/config/migration.py':          1,    # OLD_DIR_NAME, a retired folder's name on disk
     'kitlib/config/schema.py':             3,    # .codex placeholders (step 9); a key's help text
     'kitlib/config/user.py':               1,    # a key's help text
-    'kitlib/guard/rules.py':               4,    # the guard refactor
+    'kitlib/guard/rules.py':               3,    # the guard refactor
     'kitlib/hubmirror/__init__.py':        3,    # the hub entries' paths in Claude's shell (hosts/claude/shell/hub)
     'kitlib/kitrelease/bootstrap.py':      3,    # release inventory, runs before kitlib
     'kitlib/launcher/accounts.py':         4,    # launcher wave
@@ -37,7 +37,6 @@ ALLOWED = {
     'kitlib/launcher/usage.py':            9,
     'kitlib/launcher/window.py':           9,
     'kitlib/lock/store.py':                2,    # legacy actor key read; codex.exe (step 9)
-    'kitlib/lockmcp/__init__.py':          2,    # aliases kitlib/guard still imports
     'kitlib/machinesetup/__init__.py':     12,   # machinesetup wave
     'kitlib/machinesetup/common.py':       2,    # Claude's shell path and its pre-move folder (step 7)
     'kitlib/machinesetup/extras.py':       7,
