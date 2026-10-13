@@ -29,14 +29,19 @@ No profile: stop, say so.
   the build, then look for it in the output.
 - Run your brief's gate under the profile's locks, in your assigned ports. Pure
   pass/fail whose log you do not need -> dispatch `pm-kit:test-runner`.
-- Commit by explicit path, one commit per step, gate green. Small commits, subject says
-  what and why. Trailer `Co-Authored-By: <the model you run on> <noreply@anthropic.com>`;
-  unsure of your model, say so; never amend to change it.
+- Commit by explicit path, one commit per step, gate green: `python tools/commit.py -m "<subject>"
+  <path> ...`, which adds the trailer for your host and model. Small commits, subject says what
+  and why. Unsure of your model, say so; never infer it from another host's environment, and
+  never amend to change a trailer.
 - Commit at each milestone, and before any revert, stash or checkout experiment; keep a short
   state note in your scratch folder (done, in progress, next) so a fresh agent can resume.
 - Base moved: merge the exact commit the coordinator named, never the local main, never rebase;
-  re-run the gate. Never `reset --hard`, never `git clean`. Resolve merge conflicts with the Edit
-  tool only, never a scratch script that rewrites a tracked file; one command per call.
+  re-run the gate (skill branch-sync). Never `reset --hard`, never `git clean`. Resolve merge
+  conflicts with your file-edit tool only, never a scratch script that rewrites a tracked file;
+  one command per call.
+- Heavy work beyond your gate (stress, mutation, renders, generation) takes the machine lock:
+  skill machine-lock-run.
+- A review or test-only brief: return findings or PASS/FAIL and edit nothing.
 - Run the gate to a log and read the log; never pipe it through grep, head or tail. Waiting on
   it: ${CLAUDE_PLUGIN_ROOT}/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
 - Docs land with the code they describe, on the same branch. Every doc sentence about code names
@@ -103,7 +108,8 @@ No process narrative.
 
 ## Repo tools
 
-If the repo has them: start with `python tools/preflight.py`.
+If the repo has them: start with `python tools/preflight.py -C <worktree>`. Skills name the
+kit's folder `<kit>`; here that is `${CLAUDE_PLUGIN_ROOT}`.
 Find what you need with `python tools/doc_index.py --find <topic>` (`--tools` for tools); never read
 `docs/INDEX.md` whole. `tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
 Use the Grep and Read tools, not shell grep, cat or sed. No tool fits: write your own script in your
