@@ -3,14 +3,15 @@ programs (node for the page, python children for the store's lock and crash test
 kitlib.proc.spawn, so a hub test run from a parent with no console opens no console window.
 
 The starts are read from the source of every .py file in this folder with the reader of
-tests/proc/test_spawn_sites.py (scan_source), which says what it finds and what it cannot see. A
-start made by a helper outside this folder (tests/gitfixture's git) is not read here."""
+tests/proc/spawnscan.py (scan_source); tests/proc/test_spawn_sites.py says what it finds and what
+it cannot see. A start made by a helper outside this folder (tests/gitfixture's git) is not read
+here."""
 import ast
 import os
 import unittest
 
 from kitlib import hubsite
-from tests.proc.test_spawn_sites import scan_source
+from tests.proc.spawnscan import scan_source
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPAWN = ('run', 'call', 'popen')
