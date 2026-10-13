@@ -109,14 +109,25 @@ def tag_role(event):
 def decide(event, ctx=None, environ=None, profile=None):
     """The Decision on the kitlib.host.Action `event`: 'allow', or the first rule's deny or ask.
     With no `ctx`, a context.Ctx of `environ` (default os.environ) and the host `profile` (a
-    HostProfile or a callable returning one) is built here, so its reads fail inside decide."""
-    return judge(event, ctx or context.Ctx(environ=environ, profile=profile)) or Decision(ALLOW)
+    HostProfile or a callable returning one) is built here, so its reads fail inside decide.
+    The shared rules judge first, so a call they refuse is refused as it always was; a call they
+    allow then meets the role policy (kitlib.guard.rolepolicy), which is off for a role whose
+    .kit.json entry names no mode, and, when it adds write-jail roots, the shared rules again."""
+    from . import rolepolicy
+    ctx = ctx or context.Ctx(environ=environ, profile=profile)
+    d = judge(event, ctx)
+    if d:
+        return d
+    d, held = rolepolicy.screen(event, ctx)
+    if d is None and held is not ctx:
+        d = judge(event, held)
+    return d or Decision(ALLOW)
 
 
 def judge(event, ctx):
     """decide() with None for an allow: the shared rules, before any role policy."""
     tool = event.tool or ''
-    cwd = event.cwd or os.getcwd()
+    cwd = (event.workdir if event.kind == 'shell' else None) or event.cwd or os.getcwd()
     role = tag_role(event)
     d = lock_mcp(event, ctx, tool, role)
     if d:
@@ -2030,7 +2041,7 @@ def lander_alone(event, cmd, gc):
     from the event; an unclean parse, a pipe, a group, a nested shell or any third command is not
     alone."""
     shell = SHELLS.get(event.shell) if event is not None and event.kind == 'shell' else None
-    text, cwd = (event.command, event.cwd) if event is not None else (None, None)
+    text, cwd = (event.command, event.workdir or event.cwd) if event is not None else (None, None)
     if shell is None or not isinstance(text, str) or cmd.depth or cmd.nested_in is not None:
         return False
     parsed = cm.read(text, shell, cwd)

@@ -32,8 +32,9 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `hook.module` (a module name): the one repo hook module, <tools_dir>/<module>.py
 - `hook.options` (map key -> any JSON value, default {}): passed to the hook unread
 - `heavy.programs` (list of {program, kind, when_args, unless_args, why}, default []): repo heavy programs, added to the kit defaults
-- `roles` (map role -> {edit_main_checkout, why}): agent type (or main, subagent) -> permissions, over the kit defaults
+- `roles` (map role -> {edit_main_checkout, mode, why}): agent type (or main, subagent) -> permissions, over the kit defaults
 - `roles.<role>.edit_main_checkout` (bool): may edit files in a main checkout; unset: the base role (main: true, any other: false)
+- `roles.<role>.mode` (controller|write|read|test|lander): the role policy this role is held to (docs/guard.md "Role policy"); unset: none
 - `roles.<role>.why` (string): the ruling that grants it
 - `backlog.store` (ref|branch|main or repo path, default "ref"): the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md)
 - `backlog.phases` (list of string, default []): phase names in order

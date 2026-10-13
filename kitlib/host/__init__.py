@@ -39,6 +39,9 @@ class Action:
                    None when the host does not say; read only when `agent` is set
       shell        a shell call's dialect, one of SHELLS
       background   the shell call runs in the background, so it does not hold the session
+      workdir      a shell call's own working directory, for a host whose shell call names one
+                   (the shell then runs there; the role policy holds it inside the checkout);
+                   None: `cwd`
       retarget     the same edit aimed elsewhere, as the host's call text with `{path}` for the
                    path (an Instead line); '' when the host has no such form
     """
@@ -53,6 +56,7 @@ class Action:
     shell: Optional[str] = None
     background: bool = False
     retarget: str = ''
+    workdir: Optional[str] = None
 
     def __post_init__(self):
         if self.kind not in KINDS:

@@ -156,6 +156,21 @@ A write target that is not literal (a variable, a substitution) is denied when t
 - **Not judged:** a target that is not literal, a command other than git whose directory is unknown, and git whose subcommand the text does not name in a checkout the text places. These meet the rules above them (the `main-checkout` rule fails closed in a main checkout) and the fallback, whose parsed rules include the shell writes and so the jail.
 - **Order:** `ledger`, `lock-state`, `kit-json` and `main-checkout` are checked first, so a subagent's edit of a main checkout still reads `main-checkout`.
 
+## Role policy
+
+`kitlib/guard/rolepolicy.py`, run by `decide` on a call the shared rules allow (a call they refuse is refused as before), the same on every host (ARCHITECTURE.md "Roles"). Lifted from the Codex branch's `guard_adapter` and `kit_adapter`.
+
+- **Off until opted in:** a role is held only when the main checkout's `.kit.json` names its mode, `roles.<role>.mode` (docs/kit-json.md). With no mode the shared rules judge alone, so nothing changes for a repository that names none. Which repositories opt in, and with which modes, is the owner's call.
+- **The role:** a subagent's role (`config.policy.role_name`: `Action.agent_role` when the `roles` table names it, else `subagent`); a main session's launcher mark when the table names it; else `main`. The owner's own session ("Session mark") is never held, and the policy reads nothing for it.
+- **Modes:** `controller` (pm, coordinator) and `write` (builders) get the checks below; `read` (reviewer, researcher) and `test` (test-runner) also have their whole checkout read-only; `lander` edits no files (its git landing is `rules.lander_check`'s, as before).
+- **Rules:**
+  - `role-edit`: an edit by a `read`, `test` or `lander` role. Its `Instead:` is prose (return the change in the report), the one rule whose alternative is not a command.
+  - `write-jail`, with more roots: every host's owner paths (`hosts.json` profile `owner_paths`: on Claude `CLAUDE.md` and `.claude/`) in the session's checkout are read-only, and for `read` and `test` the checkout itself. In a main checkout an owner path that holds the host's worktrees folder (`.claude/` holds `.claude/worktrees`) is left out, so the worktrees under it stay writable. The roots are added to an in-memory view of the `.kit.json`; the file is never changed.
+  - `role-workdir`: a shell call whose own working directory (`Action.workdir`, from a host whose shell call names one; Claude's does not) is outside the checkout the session runs in. Another drive is outside.
+  - `role-shell` (`shell_gap`): an interpreter that would wait for input, nested shells included: bash, sh, cmd, PowerShell or python with no arguments, with `-`, `-i`, `-s`, `-Interactive` or `/k`, PowerShell with `-NoExit` or any prefix of it (`-noe`), and any of them with no script, command or informational option. `bash -c bash` is caught at the inner bash. Codex's refusal of `apply_patch` run as a shell command is Codex's own and stays in its adapter.
+  - `role-lock`: `machine_lock.py` run with a verb other than `status`, `stats`, `run`, `background` and `stop` (`read` and `lander`: `status` and `stats` alone), or with `--force` in any abbreviation (`--forc`). Only the words before `--` are the lock's: `run ... -- prog --force` passes.
+- **Tests:** tests/guard/test_rolepolicy.py, over neutral Actions.
+
 ## Fallback
 
 `kitlib/guard/fallback.py` `check` runs only when the parse is unclean. It catches mistakes, not attackers: an unclean line fails closed when it touches a main checkout, a heavy program or a protected path, and a plain line is never denied by it.
