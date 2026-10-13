@@ -4,7 +4,8 @@ from here when the file does not set them.
 
 Read from the git files, never by starting git, so a guard hook pays no process launch for them:
 `<root>/.git` is the git dir (a folder) or names it (`gitdir: X`, a linked worktree, whose
-`commondir` names the common dir); refs and config are read from the common dir.
+`commondir` names the common dir); refs and config are read from the common dir, and the work
+tree's own `config.worktree` from the git dir (repo_name below).
 
   main_branch(root, remote)  the branch `refs/remotes/<remote>/HEAD` points at (what `git clone`
                              and `git remote set-head <remote> --auto` write); else `main` when
@@ -12,9 +13,12 @@ Read from the git files, never by starting git, so a guard hook pays no process 
                              `master` when only that exists (local or remote-tracking); else
                              `main`. A repository whose refs are in a reftable (no loose refs,
                              no packed-refs) is asked once: `git symbolic-ref`.
-  repo_name(root, remote)    the last part of `<remote>`'s URL in the common config, `.git`
-                             dropped; else the main checkout's folder name (the folder holding
-                             the common `.git`), else `root`'s own.
+  repo_name(root, remote)    the last part of `<remote>`'s URL, `.git` dropped: the first URL in
+                             the common config, else, while the common config turns
+                             extensions.worktreeConfig on, the first in the work tree's own
+                             `<gitdir>/config.worktree` (git reads it after the common config);
+                             else the main checkout's folder name (the folder holding the
+                             common `.git`), else `root`'s own.
 
 Anything that cannot be read is "not there": the answer falls to the next rule, never an error.
 So is a `<remote>/HEAD` naming a branch that starts with `-` or `/` or holds `..`.
@@ -39,8 +43,8 @@ def _read(path, limit=1 << 20):
         return None
 
 
-def common_dir(root):
-    """The git common dir of the work tree at `root`, read from files, or None."""
+def _dirs(root):
+    """`(gitdir, common)` of the work tree at `root`, read from files, or None."""
     if not root:
         return None
     dot = os.path.join(root, '.git')
@@ -54,13 +58,20 @@ def common_dir(root):
         if not target or '\n' in target:
             return None
         gitdir = os.path.normpath(os.path.join(root, target))
+    common = gitdir
     named = _read(os.path.join(gitdir, 'commondir'), 4096)
     if named is not None:
         named = named.strip()
         if not named or '\n' in named:
             return None
-        gitdir = os.path.normpath(os.path.join(gitdir, named))
-    return gitdir if os.path.isdir(gitdir) else None
+        common = os.path.normpath(os.path.join(gitdir, named))
+    return (gitdir, common) if os.path.isdir(common) else None
+
+
+def common_dir(root):
+    """The git common dir of the work tree at `root`, read from files, or None."""
+    dirs = _dirs(root)
+    return dirs[1] if dirs else None
 
 
 def _packed(common):
@@ -127,31 +138,60 @@ def main_branch(root, remote='origin'):
     return main_branch_source(root, remote)[0]
 
 
-def remote_url(common, remote):
-    """`url` of `[remote "<remote>"]` in the common config, or None."""
-    text = _read(os.path.join(common, 'config'))
+_HEADER_RE = re.compile(r'\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\Z')
+
+
+def _keys(path):
+    """`(section, subsection, key, value)` for each key in config file `path`, read leniently:
+    section and key lower-cased, subsection None when there is none, value None for a key with
+    no `=` and with one pair of surrounding quotes dropped. Nothing when the file cannot be read."""
+    text = _read(path)
     if text is None:
-        return None
-    section = None
+        return
+    section = sub = None
     for line in text.splitlines():
         s = line.strip()
         if not s or s[0] in '#;':
             continue
         if s.startswith('['):
             head, _, s = s[1:].partition(']')
-            m = re.match(r'\s*remote\s+"((?:[^"\\]|\\.)*)"\s*\Z', head, re.I)
-            section = m.group(1).replace('\\"', '"').replace('\\\\', '\\') if m else ''
+            m = _HEADER_RE.match(head)
+            section = m.group(1).lower() if m else ''
+            sub = m.group(2) if m else None
+            if sub is not None:
+                sub = sub.replace('\\"', '"').replace('\\\\', '\\')
             s = s.strip()
             if not s:
                 continue
-        if section != remote:
-            continue
         key, eq, value = s.partition('=')
-        if eq and key.strip().lower() == 'url':
-            value = value.strip()
-            if len(value) >= 2 and value[0] == value[-1] == '"':
-                value = value[1:-1]
-            return value or None
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            value = value[1:-1]
+        yield section, sub, key.strip().lower(), value if eq else None
+
+
+def _worktree_config(common):
+    """True when the common config turns extensions.worktreeConfig on (the last value wins)."""
+    on = False
+    for section, sub, key, value in _keys(os.path.join(common, 'config')):
+        if section == 'extensions' and sub is None and key == 'worktreeconfig':
+            v = (value or '').lower()
+            on = value is None or v in ('true', 'yes', 'on') or (v.isdigit() and int(v) != 0)
+    return on
+
+
+def remote_url(common, remote, gitdir=None):
+    """`url` of `[remote "<remote>"]`, or None: the first in the common config, else, while the
+    common config turns extensions.worktreeConfig on, the first in `<gitdir>/config.worktree`.
+    git reads that file after the common config, and `git remote get-url` gives the first url
+    it read."""
+    files = [os.path.join(common, 'config')]
+    if gitdir and _worktree_config(common):
+        files.append(os.path.join(gitdir, 'config.worktree'))
+    for path in files:
+        for section, sub, key, value in _keys(path):
+            if section == 'remote' and sub == remote and key == 'url' and value is not None:
+                return value or None
     return None
 
 
@@ -166,9 +206,9 @@ def name_from_url(url):
 
 def repo_name(root, remote='origin'):
     """The repository's name (module docstring)."""
-    common = common_dir(root)
+    gitdir, common = _dirs(root) or (None, None)
     if common is not None and _name_ok(remote):
-        name = name_from_url(remote_url(common, remote))
+        name = name_from_url(remote_url(common, remote, gitdir))
         if name:
             return name
     if common is not None and os.path.basename(os.path.normpath(common)).lower() == '.git':
