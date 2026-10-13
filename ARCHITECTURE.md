@@ -73,6 +73,7 @@ The kit ships as one release with a thin plugin per host, which the owner instal
 
 ## PM session start
 - `kitlib/pmstart` builds the checklist that `hosts/claude/shell/hooks/pm_session_start.py` injects at PM session start; see docs/pm-start.md.
+- First-use repo prep (`kitlib/git/prep.py`) runs from the PM session start and `tools/new_worktree.py`. It writes local settings only: the anchored worktree folder lines in the repository's `info/exclude`, and the local `core.hooksPath` when none is set. Nothing is committed (docs/new-worktree.md "First-use prep").
 
 ## Hosts
 - kitlib stays host-neutral and never imports a host. The host is chosen at the edge: a host's entry points build its adapter and pass it in; shared CLIs read `PM_KIT_HOST` (default `claude`) and resolve the adapter through `hosts.json`. One `--host` flag replaces `--provider`.

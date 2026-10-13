@@ -55,6 +55,7 @@ import time
 
 from kitlib.config import ConfigError, load
 from kitlib.git import cmd
+from kitlib.git import prep as gitprep
 from kitlib.git import refs as gitrefs
 from kitlib.records import inflight, landing
 from kitlib.host.registry import RegistryError
@@ -188,12 +189,13 @@ def main_checkout_of(common):
 
 
 def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=time.sleep,
-           clock=time.monotonic, host=None):
+           clock=time.monotonic, host=None, prep=None):
     """Outcome(code, lines) of making the worktree for `branch` in the repository `root` is in.
     `wait` False is --no-wait; `say(line)` gets the lines said while waiting for a landing in
     flight (None: they lead the Outcome's lines); `sleep` and `clock` are time's, for tests.
     `host` is a hosts.json name whose folder the worktree goes in (kitlib.worktree.hostdirs); None
-    is "repo".worktrees_dir, as before hosts."""
+    is "repo".worktrees_dir, as before hosts. `prep(main, folders)` is the first-use repo prep
+    (None: kitlib.git.prep.run) run once the worktree is made; its lines follow the worktree line."""
     rc, common, err = git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')
     if rc != 0 or not common:
         return Outcome(REFUSED, ['refused: %s is not a git checkout (no common dir: %s).'
@@ -322,6 +324,11 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
     if rc != 0:
         return refuse('worktree add failed: %s' % (err or said or 'exit %s' % rc))
     out.append('worktree  %s' % path)
+    try:
+        folders = hostdirs.folders(cfg)
+    except RegistryError:
+        folders = (cfg.repo['worktrees_dir'],)
+    out.extend('prep      %s' % line for line in (prep or gitprep.run)(main, folders))
     if existing:
         tip = git(main, 'rev-parse', 'refs/heads/' + branch)[1]
         missing = git(main, 'rev-list', '--count', '%s..%s' % (tip, start))[1]

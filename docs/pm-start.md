@@ -51,6 +51,10 @@ repository's own `could not check stubs (<repo>): ...` line. The coordinator's s
 same check for its own repository (docs/install.md "Tools without a stub"). Code: `kitlib/pmstart`
 `stubs`; tests: `tests/pmstart/test_stubs_check.py`.
 
+## Repo prep (`repo_prep`)
+
+After `stubs`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line. Code: `kitlib/pmstart` `repo_prep`; tests: `tests/pmstart/test_repo_prep.py`.
+
 ## Agent temp (`agent_temp`)
 
 After `stubs`, the `agent_temp` check prints one line for each part of the agents' temp folder set-up
