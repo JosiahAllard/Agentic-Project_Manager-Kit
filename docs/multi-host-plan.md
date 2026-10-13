@@ -1,6 +1,6 @@
 # Multi-host architecture plan
 
-Status: approved direction. The owner's decisions are in §0, and ARCHITECTURE.md was amended to match (step 0). Open: the form of the shared skill text (§5).
+Status: approved direction. The owner's decisions are in §0, and ARCHITECTURE.md was amended to match (step 0).
 
 **Goal:** one host-neutral kit, with a thin entry-point plugin for each AI platform. The platforms
 today are Claude Code and Codex, and adding another should mean adding a folder, not forking the
@@ -29,6 +29,7 @@ except its last 4 commits.
 | 11 | PM on Claude | The PM is an agent file | `content/roles/pm.md`, rendered for every host. On Claude the launcher starts it with `claude --agent pm-kit:pm`. |
 | 12 | Rename `opus-worker` | `senior-worker` | The rename lands with step 5. The old name stays as an alias in the launcher for one release. |
 | 13 | Folder layout | Uniform `hosts/<name>/` | `claude/` moves to `hosts/claude/` in step 7, and Codex lands as `hosts/codex/` in step 9. |
+| 14 | Form of the shared skill text | C: checklist + pointer | One line per step with its command, the "never" list, then the tool doc. A test checks that each `tools/*.py` command and flag a skill names exists (§5). |
 
 ## 1. Where things stand
 
@@ -379,7 +380,7 @@ stop building on paths that are about to move.
 - The bridge's security posture: fail closed, no resend of unknown messages, routes chosen by
   the owner.
 
-## 5. Still open: the form of the shared skill text
+## 5. The form of the shared skill text (decided: C)
 
 Decision 3 makes each skill's text identical on every host. The two forks differ in **form**,
 not only in host wording. Here is `branch-sync` side by side.
