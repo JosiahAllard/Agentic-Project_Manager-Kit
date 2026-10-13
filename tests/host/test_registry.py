@@ -121,6 +121,11 @@ class Validation(Case):
                 lambda e: e['profile']['attribution'].update(model_env='NOT A NAME'),
                 lambda e: e['profile']['attribution'].update(model_pattern='('),
                 lambda e: e['profile']['attribution'].update(model_pattern=''),
+                lambda e: e['profile'].pop('agent_name_format'),
+                lambda e: e['profile'].update(agent_name_format='{plugin}:'),
+                lambda e: e['profile'].update(agent_name_format='{name}:{plugin}'),
+                lambda e: e['profile'].update(agent_name_format='{other}:{name}'),
+                lambda e: e['profile'].update(agent_name_format='{name}{name}'),
                 lambda e: e['tiers'].pop('deep'),
                 lambda e: e['tiers'].update(light='')):
             bad = copy.deepcopy(data)

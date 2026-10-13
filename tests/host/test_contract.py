@@ -33,7 +33,7 @@ class Types(unittest.TestCase):
         self.assertEqual([f.name for f in dataclasses.fields(host.HostProfile)],
                          ['owner_paths', 'worktrees_directory', 'state_directory',
                           'process_names', 'mcp_tool_format', 'session_env',
-                          'skills_directory', 'attribution'])
+                          'skills_directory', 'attribution', 'agent_name_format'])
 
 
 class Degrade(unittest.TestCase):

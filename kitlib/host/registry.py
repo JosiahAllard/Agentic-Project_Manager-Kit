@@ -134,10 +134,22 @@ def _attribution(w, raw):
     return Attribution(name, email, model_env, pattern)
 
 
+def _name_format(where, value):
+    """An agent name format: {plugin} at most once, then {name} once and last, nothing else."""
+    _text(where, value)
+    head, sep, tail = value.partition('{name}')
+    if not sep or tail or '{name}' in head or head.replace('{plugin}', '', 1).count('{') \
+            or head.replace('{plugin}', '', 1).count('}'):
+        raise RegistryError('hosts.json: %s must end in {name} and have no field but {plugin}'
+                            % where)
+    return value
+
+
 def _profile(name, raw):
     w = '%s.profile' % name
     p = _object(w, raw, ('owner_paths', 'worktrees_directory', 'state_directory', 'process_names',
-                         'mcp_tool_format', 'session_env', 'skills_directory', 'attribution'))
+                         'mcp_tool_format', 'session_env', 'skills_directory', 'attribution',
+                         'agent_name_format'))
     session_env = _text(w + '.session_env', p['session_env'])
     if not _ENV_NAME.match(session_env):
         raise RegistryError('hosts.json: %s.session_env must be an environment variable name' % w)
@@ -149,7 +161,8 @@ def _profile(name, raw):
         _text(w + '.mcp_tool_format', p['mcp_tool_format']),
         session_env,
         _relpath(w + '.skills_directory', p['skills_directory']),
-        _attribution(w + '.attribution', p['attribution']))
+        _attribution(w + '.attribution', p['attribution']),
+        _name_format(w + '.agent_name_format', p['agent_name_format']))
 
 
 def _entry(name, raw):
