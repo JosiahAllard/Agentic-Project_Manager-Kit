@@ -359,7 +359,8 @@ class IndexCheck(RepoCase):
 
 class ListingCheck(RepoCase):
     """Every tracked .md is named on an entry line of the index (check 0, moved here from
-    doc_budget): only where `.kit.json` exists and "doc_index".enabled is not false."""
+    doc_budget): only where the index file exists (decision 26: it is the opt-in, `.kit.json` or
+    not) and "doc_index".enabled is not false."""
 
     SELF = '- `docs/INDEX.md` | this index | always | kw: index\n'
 
@@ -451,11 +452,20 @@ class ListingCheck(RepoCase):
         self.assertEqual(code, 0, out)
         self.assertNotIn('not in docs/INDEX.md', out)
 
-    def test_no_kit_json_skips_the_listing(self):
+    def test_no_kit_json_and_no_index_skips_the_listing(self):
         self.docs()
         code, out = self.capture()
         self.assertEqual(code, 0, out)
+        self.assertIn('so the listing check is skipped', out)
         self.assertIn('DOC INDEX OK', out)
+
+    def test_an_index_with_no_kit_json_is_checked(self):
+        # The index file alone opts in (decision 26); .kit.json only overrides.
+        self.docs(self.SELF)
+        code, out = self.capture()
+        self.assertEqual(code, 1, out)
+        self.assertIn('  docs/a.md: not in docs/INDEX.md (no entry line names it', out)
+        self.assertNotIn('skipped', out)
 
     def test_the_listing_reads_the_configured_index(self):
         self.write('docs/MAP.md', '# Map\n\n- `docs/MAP.md` | map | always | kw: map\n')

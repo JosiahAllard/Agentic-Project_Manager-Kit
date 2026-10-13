@@ -186,7 +186,7 @@ SECTIONS = {
         'stale_days': Field(Int(1), None, 'days before a state doc is stale'),
     },
     'doc_index': {
-        'enabled': Field(Bool(), True, 'false: doc_index does not require every .md on an index entry line, nor the index file (a repo with no .kit.json skips it too)'),
+        'enabled': Field(Bool(), True, 'false: doc_index does not require every .md on an index entry line, even with an index file; with no index file the check is skipped anyway (the index file is the opt-in)'),
         'index': Field(RelPath(), 'docs/INDEX.md', 'the doc index both doc tools read'),
         'find_match': Field(Enum('keywords', 'text'), 'keywords', 'how --find matches'),
         'roles': Field(MapOf(Strs, 'role'), None, 'role -> lookup topics'),

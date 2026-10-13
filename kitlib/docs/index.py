@@ -20,11 +20,11 @@ after the keywords is allowed.
 
 Index checks (`.kit.json` "doc_budget".shard_indexes {"<dir>": "<index file>"}):
   0. the index exists, and every tracked .md (but a "doc_budget" retired path) is named in
-     backticks on an ENTRY line of it (listing_misses); skipped when "doc_index".enabled is false
-     or there is no `.kit.json` (moved here from doc_budget), and skipped with one line saying so
-     when the index is absent at `head` (and at `config_ref`): the doc index is opt-in, so a
-     repository without one is not failed for it; with `config_ref` (doc_index.py
-     --config-ref) every setting, and whether a `.kit.json` exists, is read at that revision;
+     backticks on an ENTRY line of it (listing_misses; moved here from doc_budget). The index
+     file alone opts a repository in, `.kit.json` or not (docs/multi-host-plan.md decision 26):
+     absent at `head` (and at `config_ref`), the check is skipped with one line saying so;
+     "doc_index".enabled false skips it silently, index or not. With `config_ref` (doc_index.py
+     --config-ref) every setting is read at that revision;
   1. every .md under a shard dir is linked from its index file;
   2. in a doc that has an index block (a heading whose text starts with "Index"), every
      other `## ` heading's title appears in that block;
@@ -607,13 +607,11 @@ def run(root, out, section=None, find=None, tools=False, stale=False, role=None,
         out('DOC INDEX FAILED: the git reader died, so the docs were not read: %s' % why)
         return 1
     bad = index_checks(files, cfg, text, index)
-    # A repo that turned the index off, or has no .kit.json (it has not opted in), needs none.
-    # Config.found comes from the read the settings came from: a git failure at the ref was a
-    # ConfigError (exit 2) above, never "no .kit.json, skip the listing".
+    # The doc index is opt-in (docs/multi-host-plan.md decision 26): the index file is the opt-in,
+    # with or without a .kit.json; "doc_index".enabled false is the explicit opt-out.
     if di['enabled'] and not has_index(root, index, files, config_ref):
-        # The doc index is opt-in (docs/multi-host-plan.md decision 26): no index, no listing.
         out(NO_INDEX_CHECK % index)
-    elif di['enabled'] and conf.found:
+    elif di['enabled']:
         bad = listing_misses(files, cfg, text(index), index) + bad
     died = reader_died(root)
     if died:

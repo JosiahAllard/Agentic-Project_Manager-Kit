@@ -209,16 +209,19 @@ class ConfigRef(Case):
         self.assertIn('DOC INDEX FAILED', out)
         self.assertIn(UNLISTED, out)
 
-    def test_a_ref_with_no_kit_json_skips_the_listing(self):
+    def test_a_ref_with_no_kit_json_still_checks_an_index_the_head_has(self):
+        # The index file alone opts in (decision 26): no .kit.json at the ref is all defaults,
+        # "doc_index".enabled true, so the head's index is checked.
         first = self.repo.git('rev-list', '--max-parents=0', 'HEAD').strip()
         self.assertNotEqual(self.repo.git('ls-tree', '--name-only', first, '.kit.json').strip(),
                             '.kit.json')
         self.commit_unlisted()
-        code, out = self.check()
-        self.assertEqual(code, 1, out)                       # the working tree has a .kit.json
-        code, out = self.check(config_ref=first)
-        self.assertEqual(code, 0, out)
-        self.assertIn('DOC INDEX OK', out)
+        for ref in (None, first):
+            with self.subTest(config_ref=ref):
+                code, out = self.check(config_ref=ref)
+                self.assertEqual(code, 1, out)
+                self.assertIn('DOC INDEX FAILED', out)
+                self.assertIn(UNLISTED, out)
 
     def test_the_index_path_is_the_ref_s(self):
         base = self.repo.git('rev-parse', 'HEAD').strip()
