@@ -5,8 +5,8 @@ from pathlib import Path
 
 from tests.shipped import scan
 
-AGENTS = Path(__file__).resolve().parents[2] / "claude" / "agents"
-EXPECTED = {"coordinator", "worker", "opus-worker", "strong-worker", "deep-worker", "consultant", "reviewer",
+AGENTS = Path(__file__).resolve().parents[2] / "hosts" / "claude" / "shell" / "agents"
+EXPECTED = {"pm", "coordinator", "worker", "senior-worker", "strong-worker", "deep-worker", "consultant", "reviewer",
             "lander", "records", "researcher", "spec-writer", "test-runner", "asset-smith",
             "sound-smith", "tech-artist"}
 BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),
@@ -38,13 +38,15 @@ def strict_frontmatter(text):
     ': ' (or ' #') is a YAML error, and a quoted one must close its quote at the end of the line.
     Any other indent (a tab, four spaces, a line under a key that has a value, a map inside a map,
     a map under any key but `experimental`) is a problem: the files do not use it, so this parser
-    does not model it. So is a key with nothing after its colon and no map under it."""
+    does not model it. So is a key with nothing after its colon and no map under it. A whole-line
+    comment at the left margin (`# ...`, the generated-file line the renderer writes) is YAML a
+    loader skips, and so is skipped here."""
     m = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", text, re.S)
     if not m:
         return None, ["no frontmatter block"]
     top, problems, parent, opened = {}, [], None, []
     for line in m.group(1).splitlines():
-        if not line.strip():
+        if not line.strip() or line.startswith("#"):
             continue
         km = re.match(r"(  )?([A-Za-z][\w-]*):(?: +(.*))?$", line)
         if not km:
@@ -140,7 +142,7 @@ class AgentFilesTest(unittest.TestCase):
                 fm = frontmatter("---\nname: x\ntools: Read\nx:\n%stools: Skill\n---\nbody\n" % indent)
                 self.assertEqual(fm, {"name": "x", "tools": "Read", "x": ""})
 
-    def test_only_opus_worker_asks_for_the_one_hour_prompt_cache(self):
+    def test_only_senior_worker_asks_for_the_one_hour_prompt_cache(self):
         """The one-hour cache lifetime is one agent's setting (docs/ROSTER.md, "The one-hour prompt
         cache"); the client reads `cacheTtl` only inside the `experimental` map of a subagent file."""
         for p in sorted(AGENTS.glob("*.md")):
@@ -148,7 +150,7 @@ class AgentFilesTest(unittest.TestCase):
                 text = p.read_text(encoding="utf-8")
                 fm, _ = strict_frontmatter(text)
                 head = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", text, re.S).group(1)
-                if p.stem == "opus-worker":
+                if p.stem == "senior-worker":
                     self.assertEqual(fm.get("experimental"), {"cacheTtl": "1h"})
                     self.assertEqual(head.count("cacheTtl"), 1)
                 else:
@@ -160,7 +162,7 @@ class AgentFilesTest(unittest.TestCase):
 
     def test_no_chatgpt_fallback_in_agents_or_knowledge(self):
         """A generator outage stops the run; an external-prompt fallback is a repo choice, not the kit's."""
-        root = AGENTS.parents[1]
+        root = AGENTS.parents[3]
         for p in list(AGENTS.glob("*.md")) + list((root / "knowledge").rglob("*.md")):
             self.assertNotIn("chatgpt", p.read_text(encoding="utf-8").lower(), p.name)
 
@@ -175,16 +177,18 @@ class AgentFilesTest(unittest.TestCase):
     def test_plugin_manifest_lists_every_agent_file(self):
         # plugin.json's `agents` takes files, not a folder, and replaces the default agents/
         # lookup: an agent file it does not list is never loaded.
-        manifest = json.loads((AGENTS.parents[1] / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        manifest = json.loads((AGENTS.parents[3] / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(sorted(manifest["agents"]),
-                         sorted("./claude/agents/%s" % p.name for p in AGENTS.glob("*.md")))
-        self.assertEqual(manifest["skills"], ["./claude/skills/"])
-        self.assertTrue((AGENTS.parents[1] / "claude" / "skills").is_dir())
+                         sorted("./hosts/claude/shell/agents/%s" % p.name for p in AGENTS.glob("*.md")))
+        # the skills are content/skills itself: no rendered copy (decision 29, docs/content.md)
+        self.assertEqual(manifest["skills"], ["./content/skills/"])
+        self.assertTrue((AGENTS.parents[3] / "content" / "skills").is_dir())
+        self.assertFalse((AGENTS.parents[3] / "hosts" / "claude" / "shell" / "skills").exists())
 
     def test_agent_naming_a_skill_can_load_skills(self):
         # An explicit `tools:` list without Skill stops the agent invoking any skill (also on the
         # main thread under `claude --agent`), so a body that says to use one is unreachable.
-        skills = [d.name for d in (AGENTS.parent / "skills").iterdir() if d.is_dir()]
+        skills = [d.name for d in (AGENTS.parents[3] / "content" / "skills").iterdir() if d.is_dir()]
         for p in AGENTS.glob("*.md"):
             text = p.read_text(encoding="utf-8")
             tools = frontmatter(text).get("tools")

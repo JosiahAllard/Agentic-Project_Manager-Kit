@@ -16,7 +16,7 @@ from tests.gate import fixtures
 
 GATE_PY = os.path.join(steps.KIT_TOOLS, 'gate.py')
 FIELDS = ('schema', 'kind', 'branch', 'tip', 'base', 'run_id', 'started_at', 'finished_at',
-          'verdict', 'code', 'log', 'summary', 'gate_ok_record', 'cleanup')
+          'verdict', 'code', 'log', 'summary', 'gate_ok_record', 'cleanup', 'source')
 UTC = r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$'
 
 
@@ -132,6 +132,21 @@ class Records(unittest.TestCase):
         run.error(KeyboardInterrupt())
         err = result.read(self.repo.root, 'kit/x')[0]
         self.assertEqual((err['verdict'], err['code'], err['run_id']), ('error', None, got['run_id']))
+
+    def test_the_final_record_carries_the_gate_source(self):
+        run = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)
+        run.start()
+        self.assertIsNone(result.read(self.repo.root, 'kit/x')[0]['source'])   # not known yet
+        run.finish(G.Outcome(G.OK, ['GATE OK'], source='auto'))
+        self.assertEqual(result.read(self.repo.root, 'kit/x')[0]['source'], 'auto')
+        run.finish(G.Outcome(G.OK, ['LANDED x']), source='gate.json')     # a landing passes it
+        self.assertEqual(result.read(self.repo.root, 'kit/x')[0]['source'], 'gate.json')
+
+    def test_a_record_from_before_the_source_key_reads_as_none(self):
+        old = self.rec()
+        del old['source']
+        self.assertIsNone(result.source_of(old))
+        self.assertTrue(result.answers(old, 'kit/x', 'gate', self.tip))
 
     def test_run_never_raises_when_it_cannot_write(self):
         block_dir(self.repo.root)

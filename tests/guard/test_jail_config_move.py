@@ -8,7 +8,7 @@ import json
 import os
 
 from kitlib.config import migration, user
-from kitlib.guard import decide
+from .claudehost import decide
 
 from .test_jail import PM, Base
 from .world import event

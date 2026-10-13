@@ -16,6 +16,7 @@ import json
 import os
 import re
 
+from kitlib import kitroot
 from kitlib.config import user as kuser
 
 KEY = "backlog_lint"
@@ -150,9 +151,10 @@ class Rule:
         return None
 
 
-# How a printed fix runs the store's tool. A repository's tools/backlog.py may refuse write verbs
-# in its main checkout, so the fix runs it against a worktree with -C; <worktree> is for the reader.
-BACKLOG_CMD = "python tools/backlog.py -C <worktree>"
+# How a printed fix runs the store's tool: the kit's own backlog.py (a repository holds no copy of
+# the kit's tools, decision 21 in docs/multi-host-plan.md section 7). It may refuse write verbs in a
+# main checkout, so the fix runs it against a worktree with -C; <worktree> is for the reader.
+BACKLOG_CMD = 'python "%s" -C <worktree>' % kitroot.tool('backlog').replace('\\', '/')
 
 
 class RepoConfig:

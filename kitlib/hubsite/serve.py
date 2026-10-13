@@ -345,6 +345,18 @@ def _repo_pairs(cfg):
     return pairs
 
 
+def agents_dir(environ=None):
+    """The rendered agents folder of the host this server runs for (PM_KIT_HOST, else the
+    registry's default: kitlib.host.registry.selected): <kit>/<its shell>/agents. None when
+    hosts.json cannot name one, so the agents view is simply not there."""
+    from kitlib.host import registry
+    try:
+        shell = registry.host(registry.selected(environ)).shell
+    except registry.RegistryError:
+        return None
+    return os.path.join(pmstart.KIT_ROOT, os.path.normpath(shell), 'agents')
+
+
 def machine_sources(home=None, sync=True):
     """This machine's Sources, read from the machine config under `home` (default the user's).
     It writes nothing and starts no git. sync=False: no git sync (a scratch store). ConfigError
@@ -357,7 +369,7 @@ def machine_sources(home=None, sync=True):
         raise ConfigError(str(e))
     src = Sources(tokens=auth.folder(home), pm_data=pm,
                   notices=pmwatch.configured_notice_dir(path),
-                  agents=os.path.join(pmstart.KIT_ROOT, 'claude', 'agents'),
+                  agents=agents_dir(),
                   sync=gitsync.GitSync if sync else None)
     if pmwatch.launcher_configured(home):
         def report():

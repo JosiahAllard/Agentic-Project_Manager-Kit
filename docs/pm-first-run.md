@@ -41,14 +41,16 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    PM checklist prints no `agent_temp` lines (docs/pm-start.md "Agent temp (`agent_temp`)").
 
 6. **Turn on the guard** (hand step): the PreToolUse entry that
-   `python <kit>/claude/hooks/guard.py --settings-entry` prints goes in the account's settings
+   `python <kit>/boot/hook.py claude --settings-entry` prints goes in the account's settings
    (docs/guard.md "Go-live (after the joint review)").
    Success: a Bash search from a drive root is denied with `rule=root-search`.
 
-   On a fresh machine (no older kit clone), steps 3, 6 and 7's hook are one owner command instead:
-   from `<kit>`, `powershell -NoProfile -File installer\machine-setup.ps1 -Fresh -PmSettings
-   <PM repo>\.claude\settings.local.json` prints the plan, and the same command with `-Apply`
-   makes it (docs/machine-setup.md "Fresh machine (--fresh)"). It still runs as a hand step: the
+   On a machine with no older kit clone, steps 3, 5a, 6 and 7's hook are one owner command instead,
+   which also stores the owner's email in the machine config: from `<kit>`,
+   `powershell -NoProfile -File installer\machine-setup.ps1 -OwnerEmail <owner's commit email>
+   -PmSettings <PM repo>\.claude\settings.local.json` prints the plan, and the same command with
+   `-Apply` makes it (docs/machine-setup.md "Default mode"). It writes nothing into any
+   repository. It still runs as a hand step: the
    owner reviews the dry run and runs `-Apply`. Steps 3 and 6's success checks still apply. Step
    7's hook needs the file's folder to exist; create the rest of step 7's files either way.
 
@@ -62,7 +64,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    (docs/pm-watch.md "Config"). `pm_watch.py` reads usage
    in-process from the machine config's `launcher` key and exits 2 without it; `usage_script` is refused.
    Then, as a hand step, the owner adds the SessionStart hook from docs/pm-start.md to the
-   settings only the PM session loads (on a fresh machine, `-Fresh -PmSettings` above writes it).
+   settings only the PM session loads (machine setup's `-PmSettings` above writes it).
    Success: the next PM session starts with "PM session start checklist", not "no pm_start
    config ... checklist skipped".
 
@@ -76,13 +78,13 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    `hub: server up on port 8790, 0 pending`.
 
 9. **Install each repository** (docs/install.md).
-   Success: `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0 and
-   `git -C <repo> config core.hooksPath` prints `<kit>/githooks`.
+   Success: `git -C <repo> config core.hooksPath` prints `<kit>/githooks` (and, for a
+   repository installed with `-Stubs`, `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0).
 
-10. **Start its backlog.** In each repository the first `python tools/backlog.py add` creates the
+10. **Start its backlog.** In each repository the first `python <kit>/tools/backlog.py -C <repo> add` creates the
     store (docs/backlog.md); a first record found on no branch takes
     `--found-on none --why-not-folded "<reason>"` (docs/backlog.md "The fold-in guard").
-    Success: `python tools/backlog.py check` is GREEN (RED while the store is empty).
+    Success: `python <kit>/tools/backlog.py -C <repo> check` is GREEN (RED while the store is empty).
 
 11. **Add the coordinators.** For each repository, add an entry to the sessions file:
     `"<key>": {"name": "<name>", "repo": "<repo name>"}` (docs/pm-start.md). Start the coordinator
@@ -90,7 +92,8 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
     `stem` and `agent`, docs/launcher.md "State files"; it sets `PM_KIT_ROLE` to `coordinator`), or by hand in the repository with `PM_KIT_ROLE` set to `coordinator`:
     `claude --agent pm-kit:coordinator --remote-control "<name>"`. The name must match the entry
     exactly, case included: the checklist finds a coordinator only by that flag. On its first
-    start it drafts the repository's profiles for the owner to approve.
+    start it reads the repository's profiles; with none, agents use the kit's default profile
+    (docs/agent-profile.md) and it drafts one only when the owner asks.
     `--account current` starts it on the account you are on. Add the kit's own coordinator the same way
     (sessions.json key `kit`, repo `kit`, a launcher.repos name for the kit checkout; see docs/launcher.sessions.example.json):
     the PM runs from the pmdata folder and its write-jail keeps it and its subagents out of kit worktrees,

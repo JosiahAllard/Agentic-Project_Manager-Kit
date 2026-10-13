@@ -26,7 +26,7 @@ KINDS = {"kinds": {
 }}
 FAST = {"wait_change_poll_s": 0.05, "queue_read_s": 0.3, "queue_poll_s": 0.05,
         "store_lock_s": 5.0, "queue_lock_s": 5.0, "usage_sample_s": 0.5, "child_poll_s": 0.1}
-OWNER = {"role": "owner", "session": None, "claude": None, "ancestors": [], "name": "test-owner"}
+OWNER = {"role": "owner", "session": None, "host": None, "ancestors": [], "name": "test-owner"}
 
 
 def claude_of(session):
@@ -39,7 +39,7 @@ def agent(session):
     """The actor a session's agent is on a scratch store: its host is among its ancestors, so the
     holds it makes are its own (kitlib.lock.store.owns)."""
     c = claude_of(session)
-    return {"role": "agent", "session": session, "claude": c, "ancestors": [c],
+    return {"role": "agent", "session": session, "host": c, "ancestors": [c],
             "name": "test-agent"}
 
 

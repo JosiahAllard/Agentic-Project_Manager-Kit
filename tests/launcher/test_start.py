@@ -9,7 +9,7 @@ import unittest
 
 from kitlib.launcher import start, window
 from kitlib.launcher import settings as S
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 from tests.launcher.fakes import EXE, NOW, FakeHost, Home, role_of, session
 
 DAY = datetime.timedelta(days=1)
@@ -438,7 +438,7 @@ class Start(Base):
             self.assertIn('--autocompact %d ' % window_, out)
 
     def test_a_plugin_prefixed_agent_is_named_bare_and_keeps_its_roles_window(self):
-        p = CLAUDE_PLUGIN_NAME + ':'
+        p = PLUGIN_NAME + ':'
         out = self.go(agent=p + 'deep-worker')
         self.assertIn('--agent %sdeep-worker ' % p, out)
         self.assertIn("-n 'alpha-deep-worker-a1'", out)
@@ -469,11 +469,27 @@ class Start(Base):
             with self.subTest(agent):
                 self.assertIn('--agent %s ' % agent, self.go(agent=agent))
 
+    def test_the_pm_starts_as_the_kits_pm_agent_with_the_pm_mark(self):
+        """decision 11: the PM is an agent file; a launched PM runs --agent pm-kit:pm, marked pm."""
+        out = self.go(agent='pm')
+        self.assertIn('--agent pm-kit:pm ', out)
+        self.assertIn("PM_KIT_ROLE = 'pm'", out)
+
+    def test_an_old_kit_agent_name_starts_as_its_new_one(self):
+        """opus-worker became senior-worker; the old name is an alias for one release."""
+        self.assertEqual(start.run_as('opus-worker'), 'pm-kit:senior-worker')
+        self.assertIn('--agent pm-kit:senior-worker ', self.go(agent='opus-worker'))
+        for old, new in start.AGENT_ALIASES.items():
+            self.assertIn(new, start.KIT_AGENTS)
+            self.assertNotIn(old, start.KIT_AGENTS)
+
     def test_kit_agents_are_the_plugins_agent_files(self):
         here = os.path.dirname(os.path.abspath(__file__))
-        folder = os.path.join(here, '..', '..', 'claude', 'agents')
+        folder = os.path.join(here, '..', '..', 'hosts', 'claude', 'shell', 'agents')
         stems = sorted(f[:-3] for f in os.listdir(folder) if f.endswith('.md'))
         self.assertEqual(sorted(start.KIT_AGENTS), stems)
+        roles = os.path.join(here, '..', '..', 'content', 'roles')        # the source they render from
+        self.assertEqual(sorted(start.KIT_AGENTS), sorted(f[:-3] for f in os.listdir(roles) if f.endswith('.md')))
 
     def rec(self, **kw):
         e = {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord', 'state': 's.md', 'account': 1,

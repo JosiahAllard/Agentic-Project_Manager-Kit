@@ -31,6 +31,11 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   The model is required: --model, else CLAUDE_AGENT_MODEL (blank is unset).
 - The main checkout is refused (kitlib.git.checkout.main_refusal); --lander-main-checkout is the
   one way past it, and a usage error anywhere else.
+- Render on commit (kitlib.content.oncommit; docs/content.md "Render on commit"): in a work tree
+  with the kit's layout, when a named path is under `content/` or is `kit.json` or `hosts.json`,
+  the work tree's own tools/render_content.py --write runs first, and every rendered file it wrote
+  or removed is staged into the same commit (listed on a `rendered` line). A render that fails
+  refuses the commit, naming the command to run; what it wrote stays in the work tree.
 - After the commit: the hash, the files, and the doc-budget verdict when a .md or owner-only file
   was committed (the kit's tools/doc_budget.py run with `-C <root>`, judged by kitlib.verdict), then
   the doc-index verdict (tools/doc_index.py, same call; nothing when "doc_index".enabled is false).
@@ -46,15 +51,16 @@ import subprocess
 import sys
 
 from kitlib import config as kconfig
-from kitlib import machinepaths, verdict
+from kitlib import attribution, machinepaths, verdict
 from kitlib.docs import callers as doc_callers
 from kitlib.config import owner as ownermod
+from kitlib.content import oncommit
 from kitlib.git import checkout, cmd, repo
 from kitlib.proc import spawn
 
 OK, REFUSED, USAGE = 0, 1, 2
 TOOL = 'commit.py'
-MODEL_ENV = 'CLAUDE_AGENT_MODEL'
+MODEL_ENV = attribution.model_environment()       # the default host's (hosts.json)
 OWNER_AUTHORED_TRAILER = 'Owner-Authored: yes'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DOC_BUDGET_TIMEOUT = 600     # seconds
@@ -62,17 +68,18 @@ DOC_BUDGET_TIMEOUT = 600     # seconds
 norm = ownermod.norm
 
 # root: the work tree's top level; cwd: the caller's directory (a relative --body-file); env: the
-# environment CLAUDE_AGENT_MODEL is read from (None: os.environ).
+# environment the host's model variable is read from (None: os.environ); provider: the host name
+# (None: the hosts.json default).
 Request = collections.namedtuple(
     'Request', 'root subject b body_file model owner_authored owner_approved '
-               'lander_main_checkout paths cwd env')
+               'lander_main_checkout paths cwd env provider', defaults=(None,))
 Outcome = collections.namedtuple('Outcome', 'code lines')
 
 
 def request(root, subject, paths, b='', body_file=None, model=None, owner_authored=False,
-            owner_approved=(), lander_main_checkout=False, cwd=None, env=None):
+            owner_approved=(), lander_main_checkout=False, cwd=None, env=None, provider=None):
     return Request(root, subject, b, body_file, model, owner_authored, list(owner_approved),
-                   lander_main_checkout, list(paths), cwd or os.getcwd(), env)
+                   lander_main_checkout, list(paths), cwd or os.getcwd(), env, provider)
 
 
 class _Stop(Exception):
@@ -95,18 +102,11 @@ def settings(cfg):
             'rule_pointer': cfg.section('checkout_guard')['rule_pointer']}
 
 
-def coauthor(model, families=()):
+def coauthor(model, families=(), provider=None):
     """The co-author trailer for `model`: `Claude <model>`, never a bare model name - unless the
     name is one of `families` or starts with one followed by a space, '.' or '-' (`Codex GPT-5`,
     `Codex-mini`, `Codex.2`; never `Codexer`): that name is kept as given."""
-    name = ' '.join((model or '').split())
-    if not name:
-        raise ValueError('--model is empty')
-    if any(name == f or (name.startswith(f) and name[len(f)] in ' .-') for f in families):
-        return 'Co-Authored-By: %s <noreply@anthropic.com>' % name
-    if name != 'Claude' and not name.startswith('Claude '):
-        name = 'Claude ' + name
-    return 'Co-Authored-By: %s <noreply@anthropic.com>' % name
+    return attribution.coauthor(model, provider, families)
 
 
 def repo_path(path, root):
@@ -145,11 +145,17 @@ def canonical_approved(rules, owner_approved, paths):
     return [rules.canonical(value, paths) for value in owner_approved]
 
 
-def resolve_model(owner_authored, flag, env=None):
+def resolve_model(owner_authored, flag, env=None, provider=None):
     """`(model, where it came from, usage message or None)`. --model is required on every
     ordinary commit: the flag, else MODEL_ENV (blank is unset). --owner-authored takes none:
     --model there is contradictory, and MODEL_ENV is ignored."""
     env = os.environ if env is None else env
+    try:
+        model_env = attribution.model_environment(provider)
+        if not owner_authored and attribution.requires_model_id(provider):
+            attribution.coauthor(flag, provider)
+    except ValueError as error:
+        return None, None, str(error)
     if owner_authored:
         if flag:
             return None, None, ('--owner-authored and --model contradict each other - one commit '
@@ -157,12 +163,12 @@ def resolve_model(owner_authored, flag, env=None):
         return None, None, None
     if flag and flag.strip():
         return flag, '--model', None
-    fallback = (env.get(MODEL_ENV) or '').strip()
+    fallback = (env.get(model_env) or '').strip() if model_env else ''
     if fallback:
-        return fallback, MODEL_ENV, None
+        return fallback, model_env, None
     return None, None, ('--model is required: name the model you are running on, '
                         '--model "<model name>" (or set %s for this session only). If you do '
-                        'not know it, say so and stop.' % MODEL_ENV)
+                        'not know it, say so and stop.' % (model_env or MODEL_ENV))
 
 
 def model_requirement_error(rules, owner_authored, owner_approved, paths):
@@ -182,11 +188,11 @@ def model_requirement_error(rules, owner_authored, owner_approved, paths):
     return None
 
 
-def build_trailers(rules, owner_approved, owner_authored, model, families=()):
+def build_trailers(rules, owner_approved, owner_authored, model, families=(), provider=None):
     """`<owner trailer>: <value>` lines (the configured "owner".trailer), then Co-Authored-By on
     an agent's commit, or `Owner-Authored: yes` on the owner's own."""
     trailers = ['%s: %s' % (rules.trailer, o) for o in owner_approved]
-    trailers.append(OWNER_AUTHORED_TRAILER if owner_authored else coauthor(model, families))
+    trailers.append(OWNER_AUTHORED_TRAILER if owner_authored else coauthor(model, families, provider))
     return trailers
 
 
@@ -469,6 +475,20 @@ def main_checkout_error(lander_main_checkout, root, main_branch=None, rule_point
     return None
 
 
+def render_sources(root, paths):
+    """The repo-relative rendered paths the kit's renderer wrote or removed in `root`, when `root`
+    has the kit's layout and a path in `paths` is a render source (kitlib.content.oncommit); else
+    None (no render ran). A render that fails raises _Stop, naming the command to run."""
+    if not (oncommit.wants_render(paths) and oncommit.is_kit(root)):
+        return None
+    got, why = oncommit.render(root)
+    if got is None:
+        raise _Stop(REFUSED, 'refused: a render source is in this commit, and the render failed: %s. '
+                    'Fix it and render by hand, then commit again: %s. Nothing was committed.'
+                    % (why, oncommit.command(root)))
+    return got
+
+
 def commit(req):
     """Outcome(code, lines) for one commit request (module docstring)."""
     lines = []
@@ -492,11 +512,11 @@ def _commit(req, lines):
     except kconfig.ConfigError as e:
         raise _Stop(USAGE, 'REFUSED: the kit configuration is refused: %s. Nothing was committed.'
                     % e)
-    model, source, err = resolve_model(req.owner_authored, req.model, req.env)
+    model, source, err = resolve_model(req.owner_authored, req.model, req.env, req.provider)
     if err:
         raise _usage(err)
-    if source == MODEL_ENV:
-        lines.append('model     %s (from %s)' % (model, MODEL_ENV))
+    if source not in (None, '--model'):
+        lines.append('model     %s (from %s)' % (model, source))
 
     body, err = message_body(req.b, req.body_file, root, req.cwd)
     if err:
@@ -525,14 +545,17 @@ def _commit(req, lines):
     if err:
         raise _usage(err)
 
+    ran = render_sources(root, paths)
+    rendered = ran or []
+    named = set(paths) | set(rendered)
     status_before = staged_status(root)
     heads = merge_heads(root) if opts['merge_fold'] else []
-    merged, merge_why = merge_owned(root, rules, set(status_before) - set(paths), heads)
-    foreign = set(status_before) - set(paths) - merged
+    merged, merge_why = merge_owned(root, rules, set(status_before) - named, heads)
+    foreign = set(status_before) - named - merged
     if foreign:
         raise _Stop(REFUSED, foreign_refusal(foreign, merge_why, len(heads) == 1))
     approved = canonical_approved(rules, req.owner_approved, paths)
-    locked = locked_paths(rules, paths)
+    locked = locked_paths(rules, paths + [p for p in rendered if p not in paths])
     if locked and not req.owner_authored:
         raise _Stop(REFUSED, 'refused: %s is owner-only, and only a commit the owner authors (his '
                     'own git identity, --owner-authored) can carry its approval. Propose the '
@@ -543,7 +566,7 @@ def _commit(req, lines):
         err = owner_identity_error(rules, author_email(root))
         if err:
             raise _Stop(REFUSED, err)
-    trailers = build_trailers(rules, approved, req.owner_authored, model, opts['coauthor_families'])
+    trailers = build_trailers(rules, approved, req.owner_authored, model, opts['coauthor_families'], req.provider)
 
     # A listed path is always added again. The one skip: a listed path staged as a deletion and
     # absent from the work tree (`git add` would fail "pathspec did not match"); its deletion is
@@ -554,6 +577,10 @@ def _commit(req, lines):
         rc, _out, err = _git(root, 'add', '--', *to_add, timeout=None)
         if rc != 0:
             raise _Stop(REFUSED, 'git add failed: %s' % (err or 'exit %s' % rc))
+    err = oncommit.stage(root, rendered) if rendered else None
+    if err:
+        raise _Stop(REFUSED, *unstage_added(root, sorted(named), status_before, [
+            'refused: the rendered files could not be staged: %s.' % err]))
     status_after = staged_status(root)
     if not status_after:
         raise _Stop(REFUSED, 'nothing to commit in: %s' % ', '.join(paths))
@@ -569,6 +596,9 @@ def _commit(req, lines):
     lines.append('committed %s  %s' % (short.strip(), req.subject))
     lines.append('files     %s' % ', '.join(
         paths + sorted((merged & set(status_after)) - set(paths))))
+    if ran is not None:
+        lines.append('rendered  %s' % (', '.join(p for p in rendered if p not in paths)
+                                       or 'no rendered file changed'))
     if any(p.endswith('.md') for p in status_after) or locked:
         line, ok = doc_budget_check(root)
         lines.append(line)

@@ -11,6 +11,7 @@ switch, W2b). Remove it with: Unregister-ScheduledTask -TaskName '<TASK_NAME>'.
 import os
 import sys
 
+from kitlib.host import registry
 from kitlib.launcher import window
 from kitlib.launcher.settings import LaunchError
 from kitlib.proc import spawn
@@ -54,9 +55,14 @@ def task_script(python, launch_py):
 
 
 def in_worktree(path):
-    """True when path lies under a .claude/worktrees folder: a worktree that is removed after it lands."""
+    """True when path lies under a host's agent worktrees folder (hosts.json; .claude/worktrees on
+    Claude): a worktree that is removed after it lands."""
     parts = [p.lower() for p in os.path.normpath(os.path.abspath(path)).replace('\\', '/').split('/')]
-    return any(parts[i] == '.claude' and parts[i + 1] == 'worktrees' for i in range(len(parts) - 1))
+    for folder in registry.union('worktrees_directory'):
+        want = folder.lower().split('/')
+        if any(parts[i:i + len(want)] == want for i in range(len(parts) - len(want) + 1)):
+            return True
+    return False
 
 
 def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.isfile):

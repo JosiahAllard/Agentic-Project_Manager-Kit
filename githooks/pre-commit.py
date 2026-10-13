@@ -1,7 +1,9 @@
-"""Python half of the kit's git pre-commit hook (docs/ledger.md "Pre-commit check"). githooks/pre-commit
-runs it only when the repository's .kit.json text names pre_commit_check. It makes one call,
-kitlib.githooks.precommit.main, which runs the kit's pre-commit checks in order (today only the
-ledger check, kitlib.ledger.precommit). Kit code that cannot be imported refuses the commit."""
+"""Python half of the kit's git pre-commit hook (docs/ledger.md "Pre-commit check"; docs/content.md
+"Render on commit"). githooks/pre-commit runs it only when the repository's .kit.json text names
+pre_commit_check, or in a kit checkout when a render source is staged. It makes one call,
+kitlib.githooks.precommit.main, which runs the kit's pre-commit checks in order (the render step,
+kitlib.githooks.render, then the ledger check, kitlib.ledger.precommit). Kit code that cannot be
+imported refuses the commit."""
 import os
 import sys
 

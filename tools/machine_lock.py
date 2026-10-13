@@ -241,7 +241,7 @@ def actor(a, store):
     if test:
         if not store.testing:
             raise LockError(EXIT_USAGE, "usage: --test-actor needs --test-root")
-        me = dict(me, role=test, claude=None if test == "owner" else me["claude"])
+        me = dict(me, role=test, host=None if test == "owner" else me["host"])
     return me
 
 

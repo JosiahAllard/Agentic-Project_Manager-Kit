@@ -319,6 +319,15 @@ class TheDefaultLedgerNameIsTheRepoName(Fixture):
         self.assertEqual(code, 1, out)
         self.assertIn('not for some-folder or all', out)
 
+    def test_the_name_read_from_the_remote_is_not_the_ledger_name(self):
+        # "repo".name unset reads the remote's URL (docs/kit-json.md "With no file"); the ledger
+        # column takes a written name only, as kitlib.backlog.ledger.ledger_name does
+        gitcmd.subprocess_run(('git', '-C', self.root, 'remote', 'add', 'origin', 'https://example.com/x/beta.git'),
+                              check=True, capture_output=True, env=fixture_env())
+        self.assertEqual(RC.settings(self.root)[0], ('some-folder', 'all'))
+        self.set_config(repo={'name': 'Gamma'})
+        self.assertEqual(RC.settings(self.root)[0], ('gamma', 'all'))
+
 
 class TheSkipGlobs(Fixture):
 
@@ -350,7 +359,9 @@ class TheSkipGlobs(Fixture):
 
 
 class TheDefaultBaseIsTheMainBranch(Fixture):
-    """No `--base`: `.kit.json` "repo".main_branch, else `main`."""
+    """No `--base`: `.kit.json` "repo".main_branch, else the main branch read from the repository
+    (docs/multi-host-plan.md step 16 "Defaults without `.kit.json`"; docs/kit-json.md "With no
+    file": `master` when only that exists), else `main`."""
 
     MAIN = 'master'
 
@@ -362,8 +373,26 @@ class TheDefaultBaseIsTheMainBranch(Fixture):
         self.assertEqual(code, 1, out)
         self.assertIn('docs/b.md:1: `PM R-9099`', out)
 
-    def test_without_config_the_base_is_main(self):
-        code, out = self.run_tool(base=None)          # this repository has no `main`
+    def test_without_config_the_base_is_the_master_the_repository_has(self):
+        self.write('docs/b.md', 'PM R-9099\n')
+        self.commit('add')
+        code, out = self.run_tool(base=None)          # no .kit.json; only `master` exists
+        self.assertEqual(code, 1, out)
+        self.assertIn('docs/b.md:1: `PM R-9099`', out)
+        # read against master: the base's own retired citation is not this branch's line
+        self.assertIn('WARNING: docs/a.md:1: `PM R-9002` is retired', out)
+        self.assertIn('(a line this branch did not add)', out)
+        self.assertNotIn('against main', out)
+
+
+class TheDefaultBaseFallsBackToMain(Fixture):
+    """No `--base`, no `.kit.json` and neither `main` nor `master`: the base is `main`, which
+    this repository does not have, so the check is refused."""
+
+    MAIN = 'trunk'
+
+    def test_without_config_or_a_main_or_master_the_base_is_main(self):
+        code, out = self.run_tool(base=None)
         self.assertEqual(code, 2, out)
         self.assertIn('against main', out)
 

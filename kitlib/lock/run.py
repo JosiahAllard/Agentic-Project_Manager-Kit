@@ -37,8 +37,9 @@ from kitlib.lock import queue as qm
 from kitlib.lock import notice
 from kitlib.lock import site
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_TIMEOUT,
-                               EXIT_USAGE, SESSION_ENV, LockError, Store, caller, iso, local_text,
-                               new_id, parse_iso, read_json, remove, tree_role, utc_now, write_json)
+                               EXIT_USAGE, LockError, Store, caller, iso, local_text,
+                               new_id, parse_iso, read_json, remove, session_of, tree_role,
+                               utc_now, write_json)
 from kitlib.proc import bash, cpu, daemons, process, win32
 from kitlib.proc.job import Job, JobError, cores_text
 
@@ -231,7 +232,7 @@ class Run:
                     "kind": kind, "note": note, "pid": os.getpid(), "ctime": process.own_ctime(),
                     "since": iso(), "cmd": [str(c) for c in cmd or ()][:20],
                     "detached": bool(detached), "holding": [], "slots": {}, "cores": [],
-                    "gpus": [], "shares": {}, "session": env.get(SESSION_ENV) or None,
+                    "gpus": [], "shares": {}, "session": session_of(env),
                     "ancestors": run_ancestors(detached, env), "role": run_role(detached, env),
                     "layout": lay.slot_key(L),
                     "log": getattr(log, "name", None) if log is not None else None}

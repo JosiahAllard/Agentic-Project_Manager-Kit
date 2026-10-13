@@ -1,10 +1,13 @@
 """Text that dispatches a kit agent names it with the kit plugin's prefix (docs/ROSTER.md).
 
 The plugin registers every kit agent as `<plugin>:<name>` (kitlib.agentname.PREFIX); once the old
-~/.claude/agents link is gone, a bare kit name no longer resolves. So in the agent files, the skills
-and docs/ROSTER.md, every `subagent_type` value, every `--agent` argument and every backticked kit
+~/.claude/agents link is gone, a bare kit name no longer resolves. So in the agent files and
+docs/ROSTER.md, every `subagent_type` value, every `--agent` argument and every backticked kit
 agent type carries the prefix. Bare names stay where they are names, not dispatches: frontmatter
-`name:` lines and ROSTER.md's table keys (neither is backticked), and the ALLOWED pairs below."""
+`name:` lines and ROSTER.md's table keys (neither is backticked), and the ALLOWED pairs below.
+The skills are not scanned: every host ships them byte for byte, so they name a role bare and never
+carry a host's prefix (tests/skills, `test_skills_are_host_neutral`); the coordinator and PM agent
+files say how a bare role name is dispatched here."""
 import re
 import unittest
 from pathlib import Path
@@ -12,7 +15,7 @@ from pathlib import Path
 from kitlib import agentname
 from tests.agents.test_agents import AGENTS
 
-ROOT = AGENTS.parents[1]
+ROOT = AGENTS.parents[3]
 KIT = sorted(p.stem for p in AGENTS.glob('*.md'))
 NAME = r'(?:%s)?(%s)' % (re.escape(agentname.PREFIX), '|'.join(re.escape(n) for n in sorted(KIT, key=len, reverse=True)))
 # a whole backticked span that is a kit agent type, bare or qualified
@@ -25,8 +28,7 @@ ALLOWED = set()
 
 
 def scanned_files():
-    out = sorted(AGENTS.glob('*.md')) + sorted((ROOT / 'claude' / 'skills').rglob('*.md'))
-    return out + [ROOT / 'docs' / 'ROSTER.md']
+    return sorted(AGENTS.glob('*.md')) + [ROOT / 'docs' / 'ROSTER.md']
 
 
 def bare_uses(text):
@@ -53,7 +55,7 @@ class DispatchNamesTest(unittest.TestCase):
             with self.subTest(file=rel):
                 self.assertEqual([b for b in bad if (rel, b[1]) not in ALLOWED], [],
                                  '%s names a kit agent without %r' % (rel, agentname.PREFIX))
-        self.assertGreater(seen, 20, 'the scan found almost no qualified names: is it reading the files?')
+        self.assertGreater(seen, 10, 'the scan found almost no qualified names: is it reading the files?')
 
     def test_the_scan_catches_each_form_and_passes_the_qualified_one(self):
         p = agentname.PREFIX

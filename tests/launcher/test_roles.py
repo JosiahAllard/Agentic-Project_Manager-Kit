@@ -5,10 +5,10 @@ import unittest
 
 from kitlib import sessionmark
 from kitlib.launcher import reboot, start, window
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 from tests.launcher.fakes import FakeHost, Home, role_of
 
-P = CLAUDE_PLUGIN_NAME + ':'
+P = PLUGIN_NAME + ':'
 
 
 class RoleFor(unittest.TestCase):

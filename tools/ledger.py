@@ -2,7 +2,7 @@
 
   ledger.py add --repo REPO --prov PROV --q Q --a A --decides D --source S [--supersedes R-nnnn]
                 [--items A,B] [--when 'YYYY-MM-DD HH:MMZ'] [--commit | --push] [--title T]
-                [--branch-ok] [--model NAME]
+                [--branch-ok] [--model NAME] [--host NAME]
       append one entry, print its id. --repo is `all` or one of the machine config's
       `ledger_repos` (unset: any lower-case name). --commit commits the ledger file alone as
       `ledger: R-nnnn <title>`; --push also pushes the current branch to `repo.remote`
@@ -36,6 +36,7 @@ from kitlib import ledger                                          # noqa: E402
 from kitlib.backlog import ledger as backlog_ledger                # noqa: E402
 from kitlib.config import user                                     # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
+from kitlib.host import registry                                    # noqa: E402
 from kitlib.ledger import fmt, safepath, standing, vcs, write      # noqa: E402
 from kitlib.ledger.errors import Refused, Usage                    # noqa: E402
 
@@ -67,6 +68,9 @@ def parser():
     ad.add_argument('--branch-ok', action='store_true', help='allow --commit off the main branch')
     ad.add_argument('--model', help='the model named in the Co-Authored-By trailer (default: $%s)'
                     % vcs.MODEL_ENV)
+    ad.add_argument('--host', '--provider', dest='host', default=None,
+                    help='the agent host, for the Co-Authored-By trailer (default: $PM_KIT_HOST, '
+                         'else the hosts.json default); --provider is its old name, kept for one release')
     rt = sub.add_parser('retire', help='turn an entry into its tombstone')
     rt.add_argument('id')
     rt.add_argument('--class', dest='cls', required=True, choices=fmt.RETIRE_CLASSES)
@@ -88,6 +92,14 @@ def parser():
 def fail(msg, code=1):
     sys.stderr.write('ledger.py: %s\n' % msg)
     return code
+
+
+def host_of(a):
+    """--host, else PM_KIT_HOST, else the hosts.json default; a bad name is a usage error."""
+    try:
+        return registry.choose(a.host)
+    except registry.RegistryError as e:
+        raise Usage('--host: %s' % e) from None
 
 
 def run(a, p, path, repos):
@@ -119,7 +131,7 @@ def run(a, p, path, repos):
     if a.cmd == 'add':
         plan = None
         if a.commit or a.push:
-            plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model)
+            plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, provider=host_of(a))
         items = [i.strip() for i in (a.items or '').split(',') if i.strip()] or None
         got = write.add(path, a.repo, a.prov, a.q, a.a, a.decides, a.source, a.supersedes, items,
                         a.when, repos)

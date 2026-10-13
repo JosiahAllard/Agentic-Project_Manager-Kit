@@ -1,0 +1,5 @@
+{
+  "model": "fake-medium",
+  "name": "worker",
+  "sandbox": "workspace-write"
+}

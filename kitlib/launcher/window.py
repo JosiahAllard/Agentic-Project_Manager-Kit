@@ -12,7 +12,7 @@
   6. AGENT_TEMP set again, and TEMP and TMP pointed at it, when the launcher sees one (a session
      whose guard allows scratch writes only there finds all three; the PM resume too);
   7. the start folder, then `claude ... --permission-mode auto --remote-control '<name>' -n '<name>' '<prompt>'`
-     (a resume: `claude --resume '<id>' --remote-control ...`).
+     (a resume: `claude --resume '<id>' [--agent ...] --remote-control ...`).
 Every value is single-quoted with quotes doubled. `open_window` starts it minimized and unfocused:
 `conhost.exe powershell.exe -NoExit -EncodedCommand <base64 UTF-16LE>` through WScript.Shell.Run
 with show flag 7 (SW_SHOWMINNOACTIVE; conhost honours it), so quotes in a prompt survive.

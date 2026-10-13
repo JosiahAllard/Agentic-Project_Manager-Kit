@@ -9,7 +9,8 @@ remote, below; a base passed as `<remote>/<name>` names the branch `<name>`, bra
 `git worktree add <worktrees_dir>/<slug> <area>/<slug>` with `existing`. It never switches a
 branch in the main checkout and never touches another worktree. The start point is a hash, so
 `from <base> @ <hash>` stays true if the base moves in between, and the new branch tracks nothing.
-The repo values are `.kit.json` "repo".main_branch, .remote, .worktrees_dir and .tools_dir.
+The repo values are `.kit.json` "repo".main_branch, .remote and .worktrees_dir; the commands its
+lines name are the kit's own tools (kitlib.kitroot.command), never `<tools_dir>` copies.
 
 The mode is what the caller said, never what the repository holds: the default refuses a branch
 that exists, `existing` refuses one that does not.
@@ -53,10 +54,14 @@ import os
 import re
 import time
 
+from kitlib import kitroot
 from kitlib.config import ConfigError, load
 from kitlib.git import cmd
+from kitlib.git import prep as gitprep
 from kitlib.git import refs as gitrefs
 from kitlib.records import inflight, landing
+from kitlib.host.registry import RegistryError
+from kitlib.worktree import hostdirs
 
 OK, REFUSED, CONFIG = 0, 1, 2
 
@@ -146,15 +151,16 @@ def choose_base(m, om, held, reread, free_why=''):
         ', so the difference is no landing'
 
 
-def route_line(base, pushed, tools, remote, main_branch):
+def route_line(base, pushed, redfirst, remote, main_branch):
     """The `route` line ending a refusal of a non-main base that exists locally but has no pushed
-    branch: that refusal holds with the landing lock free or held, so waiting does not change it."""
+    branch: that refusal holds with the landing lock free or held, so waiting does not change it.
+    `redfirst` is the command that runs the kit's redfirst.py (kitroot.command)."""
     return ('route     %s has no pushed %s, so this is refused with or without a landing; waiting '
-            'will not change it. For red-first evidence make no worktree: `python %s/redfirst.py '
+            'will not change it. For red-first evidence make no worktree: `%s '
             '-C <your worktree> --tests <test file>` runs the committed tests at the pre-change '
             'commit in a tree of its own (`--base <commit>` when that is not the merge-base with '
             '%s/%s); it needs no pushed branch and waits for no landing. Otherwise push %s or tell '
-            'the coordinator.' % (base, pushed, tools, remote, main_branch, base))
+            'the coordinator.' % (base, pushed, redfirst, remote, main_branch, base))
 
 
 def behind_count(cwd, m, om):
@@ -186,10 +192,13 @@ def main_checkout_of(common):
 
 
 def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=time.sleep,
-           clock=time.monotonic):
+           clock=time.monotonic, host=None, prep=None):
     """Outcome(code, lines) of making the worktree for `branch` in the repository `root` is in.
     `wait` False is --no-wait; `say(line)` gets the lines said while waiting for a landing in
-    flight (None: they lead the Outcome's lines); `sleep` and `clock` are time's, for tests."""
+    flight (None: they lead the Outcome's lines); `sleep` and `clock` are time's, for tests.
+    `host` is a hosts.json name whose folder the worktree goes in (kitlib.worktree.hostdirs); None
+    is "repo".worktrees_dir, as before hosts. `prep(main, folders)` is the first-use repo prep
+    (None: kitlib.git.prep.run) run once the worktree is made; its lines follow the worktree line."""
     rc, common, err = git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')
     if rc != 0 or not common:
         return Outcome(REFUSED, ['refused: %s is not a git checkout (no common dir: %s).'
@@ -204,9 +213,25 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
         return Outcome(CONFIG, ['new_worktree: refused: kit configuration: %s' % e])
     remote = cfg.remote
     base = branch_name(base, remote) if base else cfg.main_branch
-    tools = cfg.tools_dir.replace('\\', '/').rstrip('/')
+    # The kit's own tools, named in the hints below: a repository holds no copy of them.
+    check = kitroot.command('worktree_remove', main) + ' --check'
     slug = branch.split('/', 1)[1]
-    parent = os.path.normpath(os.path.join(main, cfg.repo['worktrees_dir']))
+    try:
+        folder = cfg.repo['worktrees_dir'] if host is None else hostdirs.folder(cfg, host)
+    except RegistryError as error:
+        return Outcome(CONFIG, ['new_worktree: refused: %s' % error])
+    parent = os.path.normpath(os.path.join(main, folder))
+    if folder != cfg.repo['worktrees_dir']:
+        # A host's own folder never grants a destination outside this main checkout; the
+        # repository's worktrees_dir keeps the rules it had before hosts.
+        real_main, real_parent = os.path.realpath(main), os.path.realpath(parent)
+        try:
+            inside = os.path.commonpath((real_main, real_parent)) == real_main and real_parent != real_main
+        except ValueError:
+            inside = False
+        if not inside or os.path.normcase(real_parent) != os.path.normcase(os.path.abspath(parent)):
+            return Outcome(CONFIG, ['new_worktree: refused: host worktree folder must stay inside '
+                                    'the main checkout without a redirect'])
     path = os.path.join(parent, slug)
     out = []
 
@@ -216,8 +241,8 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
     twin = case_twin(os.listdir(parent) if os.path.isdir(parent) else [], slug)
     if twin is not None:
         return refuse('refused   %s differs only in case from the existing folder %s; pick another '
-                      'slug (`python %s/worktree_remove.py --check` says what that one is)'
-                      % (path, os.path.join(parent, twin), tools))
+                      'slug (`%s` says what that one is)'
+                      % (path, os.path.join(parent, twin), check))
     twin = case_twin(local_branches(main), branch)
     if twin is not None:
         return refuse('refused   branch %s differs only in case from the existing branch %s; on '
@@ -226,11 +251,10 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
     if os.path.exists(path):
         if existing:
             return refuse('exists already: %s (the commonest cause: a leftover directory from a '
-                          '`git worktree remove` that failed - `python %s/worktree_remove.py --check` '
-                          'says what it is and what holds it; never reuse it live)' % (path, tools))
-        return refuse('exists already: %s (pick another slug, or see what it is: `python '
-                      '%s/worktree_remove.py --check`; never reuse a name that failed to delete)'
-                      % (path, tools))
+                          '`git worktree remove` that failed - `%s` '
+                          'says what it is and what holds it; never reuse it live)' % (path, check))
+        return refuse('exists already: %s (pick another slug, or see what it is: `%s`; '
+                      'never reuse a name that failed to delete)' % (path, check))
     there = branch_exists(main, branch)       # local only: refuse before any wait or fetch
     if existing and not there:
         return refuse('no such branch: %s. --existing resumes a branch that is already there; '
@@ -282,7 +306,7 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
         start = om
         out.append('base      local %s is %d commit(s) behind %s; this branch starts at %s %s and '
                    'local %s is not updated' % (base, behind, pushed, pushed, om[:7], base))
-    route = [route_line(base, pushed, tools, remote, cfg.main_branch)] \
+    route = [route_line(base, pushed, kitroot.command('redfirst'), remote, cfg.main_branch)] \
         if start is None and m and not om and base != cfg.main_branch else []
     if start is None and held:
         return refuse('refused   %s, but %s %s: no pushed commit to base on. %s'
@@ -303,6 +327,11 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
     if rc != 0:
         return refuse('worktree add failed: %s' % (err or said or 'exit %s' % rc))
     out.append('worktree  %s' % path)
+    try:
+        folders = hostdirs.folders(cfg)
+    except RegistryError:
+        folders = (cfg.repo['worktrees_dir'],)
+    out.extend('prep      %s' % line for line in (prep or gitprep.run)(main, folders))
     if existing:
         tip = git(main, 'rev-parse', 'refs/heads/' + branch)[1]
         missing = git(main, 'rev-list', '--count', '%s..%s' % (tip, start))[1]
@@ -317,6 +346,5 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
         out.append('branch    %s from %s @ %s' % (branch, base, m[:7]))
     out.append('rules     absolute paths and `git -C "%s"`; do not cd into it in Bash; commit by '
                'explicit path; you do not land' % path)
-    out.append('next      python "%s" (run from the new worktree)'
-               % os.path.normpath(os.path.join(path, tools, 'preflight.py')))
+    out.append('next      %s' % kitroot.command('preflight', path))
     return Outcome(OK, out)

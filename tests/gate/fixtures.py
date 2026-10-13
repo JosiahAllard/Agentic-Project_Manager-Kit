@@ -31,15 +31,19 @@ def test_env():
 
 
 class GateRepoCase(StoreCase):
-    """self.repo: main with `.kit.json` (self.GATE) committed and pushed to a bare remote;
-    self.book_kw books one fake cpu slot on the scratch store."""
+    """self.repo: main with `.kit.json` (self.GATE; None: no "gate" section, so the gate is
+    auto-detected) committed and pushed to a bare remote; self.book_kw books one fake cpu slot
+    on the scratch store."""
     GATE = GATE
     KIT = None
 
     def setUp(self):
         StoreCase.setUp(self)
         self.confine(1)
-        text = json.dumps(dict(self.KIT or {}, gate=self.GATE), indent=1) + '\n'
+        kit = dict(self.KIT or {})
+        if self.GATE is not None:
+            kit['gate'] = self.GATE
+        text = json.dumps(kit, indent=1) + '\n'
 
         def prepare(repo):          # built once per process per .kit.json; each test gets a copy
             repo.write('.kit.json', text)

@@ -4,6 +4,9 @@
   "owner": {
     "name": "PM kit"
   },
+  "metadata": {
+    "version": "0.4.0"
+  },
   "plugins": [
     {
       "name": "pm-kit",

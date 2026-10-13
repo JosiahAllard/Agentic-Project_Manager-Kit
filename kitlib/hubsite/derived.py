@@ -11,8 +11,11 @@ each request (and may cache usage and agents for about a minute, which is the ca
   agents(agents_dir)            -> {"available", "agents"|"reason"}
 """
 import os
+import re
 
 from kitlib import pmstart, pmwatch, roster
+
+_FM = re.compile(rb'\A---(\r?\n)(.*?)\r?\n---(?=\r?\n)', re.S)
 
 
 def notices(notice_dir):
@@ -77,20 +80,34 @@ def usage(report, clock):
     return {"available": True, "accounts": accounts, "as_of": as_of}
 
 
+def _frontmatter(data):
+    """{key: value} of the single-line keys in the frontmatter of bytes `data`, or None."""
+    m = _FM.match(data)
+    if not m:
+        return None
+    out = {}
+    for line in m.group(2).decode('utf-8').splitlines():
+        k, sep, v = line.partition(':')
+        if sep and not line.startswith((' ', '\t')):
+            out[k.strip()] = v.strip()
+    return out
+
+
 def agents(agents_dir):
-    """The agent definitions in agents_dir (claude/agents): {"available": True, "agents": [{"name",
+    """The agent definitions in agents_dir (a host's rendered agents folder, <shell>/agents):
+    {"available": True, "agents": [{"name",
     "description", "model", "effort"}]} sorted by name, effort "-" where the file sets none (as
     docs/ROSTER.md writes it). A missing folder gives {"available": False, "reason"}. A file with no
     frontmatter is listed with empty fields rather than dropped."""
     try:
-        names = roster.agent_files(agents_dir)
+        names = sorted(n[:-3] for n in os.listdir(agents_dir) if n.endswith(".md"))
     except (OSError, TypeError) as e:
         return {"available": False, "reason": "cannot read %s: %s" % (agents_dir, e)}
     out = []
     for name in names:
         try:
             with open(os.path.join(agents_dir, name + ".md"), "rb") as f:
-                fm = roster.read_frontmatter(f.read()) or {}
+                fm = _frontmatter(f.read()) or {}
         except OSError:
             fm = {}
         out.append({"name": name, "description": fm.get("description", ""),

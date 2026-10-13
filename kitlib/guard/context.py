@@ -28,8 +28,11 @@ a constructor argument, and the defaults read this machine.
   gitread            kitlib.guard.gitread (alias, has_commit, is_shallow), or a test's fake
   config(path)       the .kit.json of the main checkout `path` belongs to (never a worktree's own:
                      an agent cannot loosen the rules from its branch; the PM data worktree,
-                     answered as MAIN, is the one worktree whose own .kit.json is read); None
-                     when there is none or it does not load (config_error(path) says why)
+                     answered as MAIN, is the one worktree whose own .kit.json is read); a
+                     checkout with no .kit.json answers the defaults (kitlib.config.load: main
+                     branch and name from its git files, owner email from the machine config
+                     under `home`); None when there is no checkout or it does not load
+                     (config_error(path) says why)
   lock_held()        (True, None) only when MACHINE_LOCK_RUN names a run nest_check accepts:
                      the named wrapper is an ancestor of this process, alive, and holding. The
                      variable alone is never proof.
@@ -48,9 +51,16 @@ a constructor argument, and the defaults read this machine.
   kit                the kit the guard runs from (kitlib.kitroot.root(): the checkout this module
                      is in), or a test's folder; the lock tool an alternative names is under it
                      (rules.lock_tool).
-  session_role(ev)   who runs the session (kitlib.sessionmark): 'subagent' when the payload has
-                     agent_id, else the launcher's mark (PM_KIT_ROLE), else 'owner': a session
-                     nothing marks is the owner's own. Replaceable (role_resolver).
+  session_role(a)    who runs the session of the kitlib.host.Action `a` (kitlib.sessionmark):
+                     'subagent' when the host named a subagent (Action.agent), else the launcher's
+                     mark (PM_KIT_ROLE: Action.role when the host hands it over, else this
+                     environment's), else 'owner': a session nothing marks is the owner's own.
+                     Replaceable (role_resolver, called with the Action and the environment).
+  host_profile()     the kitlib.host.HostProfile of the host whose hook asked (the `profile`
+                     argument, or a callable returning it, which kitlib.host.hookmain passes from
+                     its adapter), else the one PM_KIT_HOST
+                     selects in hosts.json (kitlib.host.registry), read once. Only an MCP call
+                     reads it (rules.mcp_prefix).
 
 The pm_data argument replaces the machine-config read (a callable returning
 kitlib.pmdata.machine_settings's answer, or raising its errors).
@@ -66,6 +76,7 @@ from kitlib import sessionmark
 from kitlib.config import user as kuser
 from kitlib.git import refs, repo
 from kitlib.guard import gitread as fsgitread
+from kitlib.guard import paths
 from kitlib.guard import place as fsplace
 
 ROLE_ENV = sessionmark.ENV
@@ -73,13 +84,15 @@ OWNER = 'owner'
 SUBAGENT = 'subagent'
 
 
-def default_session_role(event, environ):
-    """'subagent' when the event carries agent_id; else the launcher's mark (a PM, coordinator or
-    deep-worker session it started; kitlib.sessionmark.mark); else 'owner': a session nothing
-    marks is the owner's own (docs/guard.md "Session mark")."""
-    if (event or {}).get('agent_id'):
+def default_session_role(action, environ):
+    """'subagent' when the Action names a subagent (Action.agent); else the launcher's mark (a PM,
+    coordinator or deep-worker session it started; kitlib.sessionmark.mark), from Action.role when
+    the host handed it over, else from `environ`; else 'owner': a session nothing marks is the
+    owner's own (docs/guard.md "Session mark")."""
+    if getattr(action, 'agent', None):
         return SUBAGENT
-    return sessionmark.mark(environ) or OWNER
+    role = getattr(action, 'role', None)
+    return sessionmark.mark(environ if role is None else {sessionmark.ENV: role}) or OWNER
 
 
 def _default_lock_held(environ, store):
@@ -126,25 +139,26 @@ def _same_dir(a, b):
 class Ctx(object):
     def __init__(self, environ=None, home=None, store=None, classify=None, load=None,
                  gate_ok=None, git=None, lock_held=None, role_resolver=None, tempdir=None,
-                 pm_data=None, gitread=None, kit=None):
+                 pm_data=None, gitread=None, kit=None, profile=None):
         self.environ = dict(os.environ if environ is None else environ)
         self.home = home or kuser.home_dir()
         self.kit = kit or kitroot.root()
         self.store = store
         self._classify = classify or fsplace.classify
-        self._load = load or kconfig.load
+        self._load = load or (lambda top: kconfig.load(top, home=self.home, machine=self.user))
         self._gate_ok = gate_ok
         self.git = git or refs
         self.gitread = gitread or fsgitread
         self._lock_held = lock_held
         self._role = role_resolver or default_session_role
+        self._profile = profile
         self.tempdir = tempdir or self.environ.get('TEMP') or tempfile.gettempdir()
         self._places, self._configs, self._config_errors = {}, {}, {}
         self._user = None
         self._location = None
         self._pm_data = pm_data or (lambda: _machine_pm_data(self.home, self.config_location()))
         self._pm_settings = None                 # (settings or None, error or None), read once
-        self._pm_records = {}                    # normcase(common) -> (Record or None, error or None)
+        self._pm_records = {}                    # paths.norm(common) -> (Record or None, error or None)
         self._pm_places = {}                     # key of a place answered as the PM data worktree -> its branch
         self._pm_place_errors = {}               # key -> why the place could not be told
 
@@ -153,7 +167,7 @@ class Ctx(object):
     def place(self, path):
         if not path:
             return repo.Place(repo.UNKNOWN, None, 'no path', None, None)
-        key = os.path.normcase(os.path.abspath(path))
+        key = paths.norm(path, absolute=True)
         if key not in self._places:
             p = self._classify(path)
             branch = self._pm_data_top(key, p) if p.kind == repo.LINKED and p.top else None
@@ -172,7 +186,7 @@ class Ctx(object):
         if not path:
             return None
         self.place(path)
-        return self._pm_places.get(os.path.normcase(os.path.abspath(path)))
+        return self._pm_places.get(paths.norm(path, absolute=True))
 
     def repo_main_top(self, path):
         """The main worktree of the repository `path` is in: main_top, except that for the PM
@@ -194,7 +208,7 @@ class Ctx(object):
         if not path:
             return None
         self.place(path)
-        return self._pm_place_errors.get(os.path.normcase(os.path.abspath(path)))
+        return self._pm_place_errors.get(paths.norm(path, absolute=True))
 
     def pm_data_named(self):
         """True when the machine config names pm_data, or cannot be read (fail closed)."""
@@ -245,7 +259,7 @@ class Ctx(object):
             return settings['branch'] if _same_dir(p.top, settings['path']) else None
         if why or not p.common or not p.git_dir:
             return None
-        ck = os.path.normcase(p.common)
+        ck = paths.norm(p.common)
         if ck not in self._pm_records:
             try:
                 self._pm_records[ck] = (pmdata.read(p.common), None)
@@ -284,7 +298,7 @@ class Ctx(object):
         """The .kit.json of the main checkout `top` (cached), or None (config_error_at says why)."""
         if not top:
             return None
-        key = os.path.normcase(top)
+        key = paths.norm(top)
         if key not in self._configs:
             try:
                 self._configs[key] = self._load(top)
@@ -297,7 +311,7 @@ class Ctx(object):
         return self.config_error_at(self.main_top(path))
 
     def config_error_at(self, top):
-        return self._config_errors.get(os.path.normcase(top)) if top else None
+        return self._config_errors.get(paths.norm(top)) if top else None
 
     # ------------------------------------------------------------ lock, records
 
@@ -370,3 +384,11 @@ class Ctx(object):
 
     def session_role(self, event):
         return self._role(event, self.environ)
+
+    def host_profile(self):
+        if callable(self._profile):              # the hook's adapter, read only when a rule asks
+            self._profile = self._profile()
+        if self._profile is None:
+            from kitlib.host import registry
+            self._profile = registry.host(registry.selected(self.environ)).profile
+        return self._profile

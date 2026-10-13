@@ -16,7 +16,7 @@ the install's own names stay with `tests/scrub/test_generic.py` and `scrub_patte
 - `record-id`: a backlog record id. STOP_IDS lists the acronyms and markers that only look like
   one, and an invented id in a fixture starts with `EX-` (MADE_UP_ID_PREFIX).
 - `provenance`: the kit this one replaced, called old, earlier, previous or legacy, or one of its
-  files named; the bare title "PM kit" (CLAUDE.md) passes.
+  files named; the bare title "PM kit" (AGENTS.md) passes.
 - `pinned-hash`: a commit hash, outside tests/ only; git's empty tree and the hex alphabet pass
   (NOT_HASHES).
 - `hardware`: a GPU model, a CPU family or chiplet, or a total core or thread count of ten or
@@ -40,9 +40,10 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
 
 ## The Claude Code plugin (`.claude-plugin/plugin.json`)
 
-- **Agents** (`claude/agents/`): the agent definitions; docs/ROSTER.md says which model and
+- **Agents** (`hosts/claude/shell/agents/`): the agent definitions; docs/ROSTER.md says which model and
   effort each runs at and what it is for.
-- **Skills** (`claude/skills/<name>/SKILL.md`): backlog-ops, branch-review, branch-sync,
+- **Skills** (`content/skills/<name>/SKILL.md`, the plugin's skills folder itself, never copied:
+  docs/content.md): backlog-ops, branch-review, branch-sync,
   coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch (uses
   `tools/land.py`), machine-lock-run, mutation-testing, session-handoff,
   shell-and-worktree-traps, subagent-dispatch. branch-review and coordinator-dispatch hold the
@@ -53,13 +54,14 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
 
 ## Stack templates (`templates/`)
 
-- `templates/common/CLAUDE.md`: the common rules file, with `<PLACEHOLDER>` slots a repository
-  fills. `templates/common/LEDGER.md` starts a new rulings ledger. `templates/common/.gitignore`,
+- `templates/common/AGENTS.md`: the common rules file, with `<PLACEHOLDER>` slots a repository
+  fills; `templates/common/CLAUDE.md` is the one line `@AGENTS.md` that makes Claude Code read it. `templates/common/LEDGER.md` starts a new rulings ledger. `templates/common/.gitignore`,
   `templates/common/gitattributes` (no leading dot: a tracked `.gitattributes` would apply to the kit
-  itself) and `INDEX.md` are what `installer/new-repo.ps1` writes into a new repository
-  (docs/install.md).
+  itself) and `INDEX.md` are what the committed repo setup (`tools/machine_setup.py --repo`,
+  `installer/new-repo.ps1`) writes into a repository that asks for it (docs/install.md
+  "Committed setup (--repo)").
   `templates/common/agent-profile.TEMPLATE.md` and `templates/common/coordinator-profile.TEMPLATE.md`
-  are what the coordinator drafts a repository's two profiles from (claude/agents/coordinator.md, "On start");
+  are what the coordinator drafts a repository's two profiles from (hosts/claude/shell/agents/coordinator.md, "On start");
   their headings are the ones the agents read, and `tests/templates` checks them.
 - `templates/stacks/{dotnet,godot,java,python}`: `stack.json` (build and test commands,
   gitignore, gitattributes; `new-repo.ps1 -Stack` applies the two lists), `tools/gate.json` (a `"gate"` section of `.kit.json`; point to it
@@ -80,6 +82,9 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
 - `procwatch`: a process watcher. It spares ComfyUI; add patterns with env `PROCWATCH_PROTECT`
   (`;`-separated regexes).
 - `usage`: usage reports and the statusline (`statusline-usage.ps1`, `write-usage-status.ps1`).
+- `bridge`: agent-to-agent messaging between open host chats, an optional install that no host
+  shell mentions until the owner registers it (`optional/bridge/README.md`; what works:
+  `optional/bridge/STATUS.md`). Tests in `tests/bridge`.
 - `agenttemp`: `agent_temp_sweep.py` clears old entries from the agents' shared temp folder and its
   session folders, set by `agent_temp_sweep` in the machine config (docs/kit-json.md).
 

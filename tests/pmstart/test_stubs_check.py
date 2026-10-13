@@ -48,7 +48,13 @@ class StubsCheckTest(unittest.TestCase):
         self.assertEqual(got, ["could not check stubs (a): OSError: disk gone",
                                "stubs (b): 1 missing/stale: z"])
 
+    def test_the_real_check_is_silent_for_a_repo_with_no_stubs(self):
+        """Stubs are opt-in (decision 21): a repository that uses none gets no line."""
+        self.assertEqual(pmstart.stubs({"a": self.a}), [])
+
     def test_the_real_check_names_the_missing_stubs_of_a_repo(self):
+        with open(os.path.join(self.a, ".kit.json"), "w", encoding="utf-8") as f:
+            f.write('{"stubs": {"tools": ["backlog"]}}\n')    # the repository opts into stubs
         got = pmstart.stubs({"a": self.a})
         self.assertEqual(len(got), 1)
         self.assertTrue(got[0].startswith("stubs (a): ") and "missing/stale: backlog" in got[0], got)

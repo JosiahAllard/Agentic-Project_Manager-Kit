@@ -1,4 +1,5 @@
-"""Machine extras (docs/machine-setup.md "Extras"): the machine schedule shortcut, the agents' temp
+"""Machine extras (docs/machine-setup.md "Extras"): the machine schedule shortcut (in the default mode
+only with `shortcut`), the agents' temp
 folder with its AGENT_TEMP variable, sweep config key and sweep task (kitlib.machinesetup.agenttemp),
 that folder's permissions, and the comfy entry point's lock tool (not in fresh mode: the plugin's
 lock tool is used). Each is read first and planned only when it differs; Host is the Windows side (also the
@@ -16,7 +17,7 @@ except ImportError:                                                  # not Windo
     winreg = None
 
 from . import agenttemp
-from .common import norm, under
+from .common import kit_file, norm, under
 
 SHORTCUT = 'Machine schedule.lnk'
 LOCK_ENV = 'KIT_MACHINE_LOCK'
@@ -30,8 +31,8 @@ def _ps_quote(s):
 
 
 class Host(object):
-    """The real machine: PowerShell for shortcuts and the user environment, icacls, guard.py, the
-    `claude` runner."""
+    """The real machine: PowerShell for shortcuts and the user environment, icacls, the guard's
+    settings entry (boot/hook.py), the `claude` runner."""
 
     def _ps(self, script):
         r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
@@ -88,14 +89,26 @@ class Host(object):
         self._ps(line)
 
     def guard_entry(self, kit):
-        r = subprocess.run([sys.executable, os.path.join(kit, 'claude', 'hooks', 'guard.py'),
+        """The guard's settings entry, as the kit's hook entry prints it for the default host:
+        `boot/hook.py <host> --settings-entry`, run by this interpreter."""
+        from kitlib.host import registry
+        r = subprocess.run([sys.executable, kit_file(kit, 'boot/hook.py'), registry.default(),
                             '--settings-entry'], capture_output=True, text=True, creationflags=_NOWIN)
         if r.returncode != 0:
-            raise RuntimeError('guard.py --settings-entry exit %d: %s' % (r.returncode, r.stderr.strip()))
+            raise RuntimeError('boot/hook.py --settings-entry exit %d: %s' % (r.returncode, r.stderr.strip()))
         entry = json.loads(r.stdout)
         if not isinstance(entry, dict) or not all(isinstance(v, list) for v in entry.values()):
-            raise ValueError('guard.py --settings-entry printed no {event: [groups]} object')
+            raise ValueError('boot/hook.py --settings-entry printed no {event: [groups]} object')
         return entry
+
+    def git_email(self, kit):
+        """`git config user.email` in the kit checkout (the user's global value unless the kit
+        checkout sets its own), or None when it is unset or git cannot run."""
+        from kitlib.git import cmd
+        r = cmd.call(['config', 'user.email'], kit)
+        if r.rc != 0:
+            return None
+        return cmd.text(r.out or b'').strip() or None
 
     def plugin_runner(self, home, claude=None, timeout=None, environ=None):
         """The `claude` runner of the plugin step: kitlib.pluginsource.claude.Runner (the claude on
@@ -141,7 +154,11 @@ def pythonw():
 
 
 def survey(plan, ctx):
-    _shortcut(plan, ctx)
+    if getattr(ctx, 'shortcut', True):
+        _shortcut(plan, ctx)
+    else:
+        plan.note('extras', 'machine schedule shortcut: not made in the default mode (--shortcut '
+                            'makes it)')
     folder, made = agenttemp.survey(plan, ctx)        # before the ACL: it may make the folder
     if folder:
         _acl(plan, ctx, folder, made)

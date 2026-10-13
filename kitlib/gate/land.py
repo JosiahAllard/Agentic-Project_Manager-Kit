@@ -106,6 +106,7 @@ from kitlib.backlog import at_landing
 import kitlib.config as kconfig
 from kitlib.config.types import ConfigError
 from kitlib.gate import cleanup, result, reuse, runner
+from kitlib.gate import detect
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.guard import ownercommits
@@ -657,13 +658,18 @@ class Lander(object):
         self.gate_logs = out.facts.get('log_dir')
         return out
 
+    def source(self):
+        """The merged gate's source (kitlib.gate.detect), once it ran; else None."""
+        return self.gate_out.facts.get('source') if self.gate_out is not None else None
+
     def write_record(self, started, results):
         """The gate-OK record for the merge commit (pre-push reads it), its config_rev
         --expect-main; its path. Raises gate_ok.RecordError."""
         path, _ = gate_ok.record_pass(self.root, self.merge, runner.gate_config(self.cfg),
                                       runner.kit_identity(), runner.repo_name(self.cfg, self.root),
                                       started, runner.record_steps(results or []),
-                                      base=self.expect_main, config_rev=self.expect_main)
+                                      base=self.expect_main, config_rev=self.expect_main,
+                                      source=self.source())
         return path
 
     def push(self, started, results):
@@ -718,7 +724,8 @@ class Lander(object):
             self.leave_queue()
         paths = []
         for rr in self.result_runs:
-            path, line = rr.finish(out, base=self.expect_main, log=self.gate_logs)
+            path, line = rr.finish(out, base=self.expect_main, log=self.gate_logs,
+                                   source=self.source())
             self.say(line)
             paths.append(path)
         out.facts['result_record'] = (paths[0] if len(self.branches) == 1 else paths) if paths else None
@@ -1017,7 +1024,7 @@ class Lander(object):
         if not paths:
             return [], [], None
         try:
-            gate = runner.gate_config(self.cfg)
+            gate = detect.effective(self.cfg, self.root, base=self.expect_main).gate
             built = S.build(gate, self.root, self.expect_main, self.cfg.tools_dir, merged=True)
             chosen, _ = S.select(gate, built, paths, read=S.working_tree_reader(self.root))
         except Exception as e:      # noqa: BLE001 - landed already; what cannot be told is unseen

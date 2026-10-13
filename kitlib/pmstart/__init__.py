@@ -1,6 +1,6 @@
 """kitlib.pmstart: the PM session-start checklist.
 
-Pure functions that return data; the hook (claude/hooks/pm_session_start.py) prints it. Every check
+Pure functions that return data; the hook (boot/hook.py claude SessionStart pm) prints it. Every check
 takes its process list or filesystem reads as parameters so tests can fake them.
 """
 import datetime
@@ -12,6 +12,7 @@ import subprocess
 import time
 
 from kitlib.config import user as kuser
+from kitlib.host import registry
 from kitlib.pmstart import consoletasks, fglock
 from kitlib.proc import spawn
 
@@ -326,17 +327,24 @@ STORE_DIR = chr(92) + "WindowsApps" + chr(92)
 _RC = re.compile(r"""(?:^|\s)--remote-control(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S+))""")
 
 
+def session_images(path=None):
+    """The process images a host's launched session runs as (each hosts.json profile's
+    session_process; claude.exe on Claude), matched exactly against a process's Name."""
+    return frozenset(registry.union('session_process', path))
+
+
 def rc_name(cmd):
-    """The --remote-control value of a claude.exe command line, or None (kitlib.launcher.lookup uses it too)."""
+    """The --remote-control value of a session's command line, or None (kitlib.launcher.lookup uses it too)."""
     m = _RC.search(cmd or "")
     return next((g for g in m.groups() if g), None) if m else None
 
 
 def live_session_names(procs):
-    """Remote Control names of launched claude.exe sessions; the Store app (under WindowsApps) is not one."""
+    """Remote Control names of launched sessions (session_images); the Store app (under WindowsApps) is not one."""
     names = set()
+    images = session_images()
     for p in procs:
-        if (p.get("Name") == "claude.exe" and p.get("CommandLine")
+        if (p.get("Name") in images and p.get("CommandLine")
                 and STORE_DIR not in (p.get("ExecutablePath") or "")):
             n = rc_name(p["CommandLine"])
             if n:
@@ -496,8 +504,9 @@ def launcher_repos():
 
 def stubs(repos=None, check=None):
     """One line per repository in launcher.repos whose stubs are missing or stale (kitlib.stubs.problem_line),
-    none when all are current. A folder that is not there, or a check that raises, is that repo's
-    own "could not check stubs" line."""
+    none when all are current. Stubs are opt-in (decision 21 in docs/multi-host-plan.md section 7),
+    so a repository that uses none has no line. A folder that is not there, or a check that raises,
+    is that repo's own "could not check stubs" line."""
     from kitlib import stubs as kstubs
     check = check or kstubs.problem_line
     repos = launcher_repos() if repos is None else repos
@@ -513,6 +522,25 @@ def stubs(repos=None, check=None):
             line = "could not check stubs (%s): %s: %s" % (name, type(e).__name__, e)
         if line:
             lines.append(line)
+    return lines
+
+
+def repo_prep(repos=None, prep=None):
+    """The first-use repo prep (kitlib.git.prep.run; docs/new-worktree.md "First-use prep") of each
+    repository in launcher.repos, the repositories the kit's workers make worktrees in: its lines,
+    none for a repository already prepared. A folder that is not there is that repo's own "could
+    not prep" line; prep never raises."""
+    if prep is None:
+        from kitlib.git import prep as gitprep
+        prep = gitprep.run
+    repos = launcher_repos() if repos is None else repos
+    lines = []
+    for name in sorted(repos):
+        path = repos[name]
+        if not os.path.isdir(path):
+            lines.append("could not prep %s: no repository folder %s" % (name, path))
+            continue
+        lines.extend(prep(path))
     return lines
 
 
@@ -609,6 +637,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
         ("plugin_current", lambda: plugin_current(**fakes.get("plugin_current", {}))),
         ("stubs", lambda: stubs(**fakes.get("stubs", {}))),
+        ("repo_prep", lambda: repo_prep(**fakes.get("repo_prep", {}))),
         ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
         ("console_tasks", lambda: consoletasks.check(cfg, **fakes.get("console_tasks", {}))),
         ("foreground_lock", lambda: fglock.check(cfg, **fakes.get("foreground_lock", {}))),

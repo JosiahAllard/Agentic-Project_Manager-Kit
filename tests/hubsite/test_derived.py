@@ -145,6 +145,19 @@ class AgentsTests(Tmp):
         self.assertFalse(got['available'])
         self.assertIn('reason', got)
 
+    def test_the_server_reads_the_selected_hosts_rendered_agents(self):
+        from kitlib.host import registry
+        from kitlib.hubsite import serve
+        for name in registry.names():
+            with self.subTest(host=name):
+                want = os.path.join(serve.pmstart.KIT_ROOT, os.path.normpath(registry.host(name).shell), 'agents')
+                self.assertEqual(serve.agents_dir({registry.ENV: name}), want)
+        default = registry.host(registry.default()).shell
+        got = derived.agents(serve.agents_dir({}))
+        self.assertTrue(got['available'], (default, got))
+        self.assertIn('worker', [a['name'] for a in got['agents']])
+        self.assertIsNone(serve.agents_dir({registry.ENV: 'no-such-host'}))
+
 
 if __name__ == '__main__':
     unittest.main()

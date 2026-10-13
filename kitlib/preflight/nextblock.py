@@ -1,6 +1,8 @@
 """The `next` block (a repo's tools-adoption block, moved into the kit): the kit commands
 this session should run, with its own values filled in. Print-only, from readings already taken:
-it starts no process. `--model "<your model>"` is printed literally.
+it starts no process. `--model "<your model>"` is printed literally. Each command runs the kit's
+own tool (`tools`: the kit's tools folder; a repository holds no copy of them, decision 21 in
+docs/multi-host-plan.md section 7) and names its checkout with -C, so it runs from anywhere.
 """
 SHELL_UNSAFE = set('"$`\\!')
 MAX_COMMIT_PATHS = 12
@@ -21,15 +23,20 @@ def committable(xy, path):
     return 'R' not in xy and 'C' not in xy and not path.endswith('/')
 
 
+def command(tools, name):
+    """`python <tools>/<name>.py`, the path one shell word (quoted when it needs it)."""
+    path = '%s/%s.py' % (tools.replace('\\', '/').rstrip('/'), name)
+    return 'python %s' % (shell_word(path) or '"%s"' % path)
+
+
 def lines(root, tools, branch, base, main_branch, behind, dirty, in_main):
     """The block's lines, the first labelled `next`. `dirty` is [(xy, path)] (kitlib.git.refs
     status entries); `behind` the commit count as text, or None/'?' when not read."""
-    py = 'python %s/' % tools
+    # Always quoted, forward slashes: Git Bash drops the backslashes of an unquoted Windows path.
+    wt = '"%s"' % root.replace('\\', '/')
     if in_main:
-        body = [py + 'new_worktree.py <area>/<slug>']
+        body = [command(tools, 'new_worktree') + ' -C %s <area>/<slug>' % wt]
     else:
-        # Always quoted, forward slashes: Git Bash drops the backslashes of an unquoted Windows path.
-        wt = '"%s"' % root.replace('\\', '/')
         entries = [(shell_word(p), committable(xy, p)) for xy, p in dirty]
         # Any entry commit.py cannot take as typed (a folder, a rename, a name no quoting carries)
         # makes the whole list a placeholder: a partial list would read as the whole change.
@@ -41,12 +48,13 @@ def lines(root, tools, branch, base, main_branch, behind, dirty, in_main):
         else:
             shown = '<paths>'
         first = next((w for w in words if w and not w.rstrip('"').endswith('/')), None)
-        body = [py + 'commit.py -C %s -m "<subject>" --model "<your model>" %s' % (wt, shown),
-                py + 'review_pack.py %s' % (branch if branch and branch != 'HEAD' else '<branch>'),
-                py + 'codemap.py' + (' --file %s' % first if first else '')]
+        body = [command(tools, 'commit') + ' -C %s -m "<subject>" --model "<your model>" %s' % (wt, shown),
+                command(tools, 'review_pack') + ' -C %s %s' % (
+                    wt, branch if branch and branch != 'HEAD' else '<branch>'),
+                command(tools, 'codemap') + ' -C %s' % wt + (' --file %s' % first if first else '')]
         if behind not in ('0', '?', None):
-            body.append(py + 'sync_base.py -C %s <hash the coordinator names> --model "<your model>"%s'
-                        % (wt, '' if base == main_branch else ' --base %s' % base))
+            body.append(command(tools, 'sync_base') + ' -C %s <hash the coordinator names> --model '
+                        '"<your model>"%s' % (wt, '' if base == main_branch else ' --base %s' % base))
         body.append('patch scripts write through kitlib.git.checkout.write_text '
                     '(docs/worktree-paths.md), never a raw open()')
     return ['next      ' + body[0]] + [INDENT + l for l in body[1:]]
