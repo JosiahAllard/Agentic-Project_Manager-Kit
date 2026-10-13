@@ -38,6 +38,7 @@ def tracked_fixture():
              '.codex/session.json': b'private Codex state\n',
              'tests/private.py': b'private test\n',
              'knowledge/asset-generation/guide.md': b'shared knowledge resource\n',
+             'content/roles/worker.md': b'---\nname: worker\nmode: write\n---\n',
              'optional/agenttemp/agent_temp_sweep.py': b'pass\n',
              'hub/legacy.html': b'legacy duplicate\n'}
     for name, body in files.items():
@@ -71,6 +72,8 @@ class Release(unittest.TestCase):
         self.assertEqual((self.root / 'optional/agenttemp/agent_temp_sweep.py').read_bytes(), b'pass\n')
         self.assertEqual((self.root / 'knowledge/asset-generation/guide.md').read_bytes(),
                          b'shared knowledge resource\n')
+        # the guard reads each role's policy mode from the role files (kitlib.content.role_modes)
+        self.assertTrue((self.root / 'content/roles/worker.md').is_file())
         marker = P.verify(self.root)
         self.assertEqual(marker['commit'], self.commit)
         self.assertEqual(result['identity'], hashlib.sha256(P.encoded(marker)).hexdigest())
