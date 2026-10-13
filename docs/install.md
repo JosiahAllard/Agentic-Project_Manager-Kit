@@ -74,8 +74,9 @@ down the longer the machine stays up: docs/windows-token-leak.md.
      with N of 1 or more, so a run of none fails on every Python version. It runs without
      `-t .`, so test modules import as top-level names: a `tests/__init__.py` layout with
      relative imports breaks (use absolute imports, or change the command).
-     Without `-Stack` there is no gate section and `gate.py` refuses ("no gate step selected"):
-     the closing text prints the copy-and-point step, or write `gate.steps` yourself
+     Without `-Stack` there is no gate section and `gate.py` detects the stack and runs its usual
+     test and lint steps, labelled `source: auto` (docs/gate.md "Auto-detected gate"): the
+     closing text prints the copy-and-point step that replaces it, or write `gate.steps` yourself
      (docs/kit-json.md).
 3. **Apply:** run it again with `-Apply`, then commit what it wrote. `.kit.json` and
    `tools/gate.json` are owner-only paths: commit them under the owner's identity, the rest
@@ -108,7 +109,8 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    `python <kit>/tools/kit_stubs.py write -C <repo> --replace`, then a commit.
 5. **Check the stubs:** `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0.
 6. **Git hooks:** `git -C <repo> config core.hooksPath <kit>/githooks`. This installs `pre-push` and `pre-commit`; `pre-commit` is inert unless the repository opts in (docs/ledger.md "Pre-commit check").
-7. **Gate:** with `-Stack` the gate section exists; otherwise list the repository's checks as
+7. **Gate:** with `-Stack` the gate section exists; otherwise the gate detects the stack
+   (`source: auto`, docs/gate.md "Auto-detected gate"), or list the repository's checks as
    `gate.steps` in `.kit.json` (docs/kit-json.md; a start per language:
    `templates/stacks/<stack>/tools/gate.json`). Where landers edit the main checkout, also set
    `roles.lander.edit_main_checkout: true`. `tools/gate.py` books the machine lock itself: do not

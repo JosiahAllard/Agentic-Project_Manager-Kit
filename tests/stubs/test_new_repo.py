@@ -150,7 +150,7 @@ class NewRepo(unittest.TestCase):
         self.assertIn('.codex/worktrees/', self.read('.gitignore').splitlines())
         self.assertIn('* text=auto', self.read('.gitattributes').splitlines())
         self.assertIn('docs/INDEX.md', self.read('docs/INDEX.md'))
-        for text in ('core.hooksPath', 'no gate step selected', 'gate.steps'):
+        for text in ('core.hooksPath', 'source: auto', 'gate.steps'):
             self.assertIn(text, out)
 
     def test_an_existing_ignore_file_gets_only_its_missing_lines(self):

@@ -33,6 +33,11 @@ The record (SCHEMA 1), every key always present:
                   (kitlib.gate.cleanup: remote_branch, worktree, worktree_path, local_branch,
                   kept); null for a branch gate, a landing that did not land, and one whose
                   cleanup did not run
+  source          where the gate's steps came from (kitlib.gate.detect): "gate.json" (the
+                  configured "gate" section) or "auto" (detected from the tree); null while
+                  running, for error, and when the run ended before its gate config was read
+                  (a landing: before its merged gate). Added after the schema: a reader takes a
+                  record without the key as null (source_of)
 
 wait() is read-only: it polls for the final record of a branch and kind at a tip.
 """
@@ -100,8 +105,14 @@ def result_path(root, branch, kind='gate'):
     return os.path.join(result_dir(root), '%s.%s.json' % (file_stem(branch), kind))
 
 
+def source_of(rec):
+    """A record's `source`, None when it has none (a record written before the key)."""
+    return rec.get('source')
+
+
 def build(branch, tip, base, kind, code, log=None, summary=None, gate_ok_record=None,
-          finished_at=None, run_id=None, started_at=None, verdict=None, cleanup=None):
+          finished_at=None, run_id=None, started_at=None, verdict=None, cleanup=None,
+          source=None):
     """A record. `verdict` defaults to verdict_of(code); RUNNING and ERROR carry no code."""
     verdict = verdict or verdict_of(code)
     now = gate_ok.utc()
@@ -110,7 +121,7 @@ def build(branch, tip, base, kind, code, log=None, summary=None, gate_ok_record=
             'finished_at': None if verdict == RUNNING else (finished_at or now),
             'verdict': verdict, 'code': None if verdict in (RUNNING, ERROR) else code,
             'log': log, 'summary': summary or '', 'gate_ok_record': gate_ok_record,
-            'cleanup': cleanup}
+            'cleanup': cleanup, 'source': source}
 
 
 def _retry(fn, *args):
@@ -181,13 +192,14 @@ class Run(object):
         return self._write(verdict=RUNNING, summary='%s %s at %s started' % (
             self.kind, self.branch, self.tip[:10]))
 
-    def finish(self, outcome, base=None, log=None):
+    def finish(self, outcome, base=None, log=None, source=None):
         try:
             facts = outcome.facts
             kw = dict(code=outcome.code, base=base or facts.get('base') or self.base,
                       log=log or facts.get('log_dir'), summary=_summary(outcome),
                       gate_ok_record=facts.get('record'),
-                      cleanup=(facts.get('cleanup') or {}).get(self.branch))
+                      cleanup=(facts.get('cleanup') or {}).get(self.branch),
+                      source=source or facts.get('source'))
         except Exception as e:      # noqa: BLE001
             return None, 'WARNING: the result record could not be written: %s' % e
         return self._write(**kw)
