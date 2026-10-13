@@ -346,8 +346,8 @@ It is not the working bridge. Three of its helpers became load-bearing by accide
    - optionally `CommandHost`, `Launcher` and `Installer`
 3. **`hosts/<name>/shell/`:** a manifest template and the hook entries, each ≤20 lines and the
    same for every host apart from the host name.
-4. **Recorded payload fixtures** under `tests/hosts/<name>/`, and a test class that subclasses
-   the conformance mixin.
+4. **Recorded payload fixtures** under `tests/host/<name>/`, and a test class
+   (`tests/host/test_conformance_<name>.py`) that subclasses the conformance mixin.
 5. **Optionally,** `optional/bridge/hosts/<name>/` for messaging.
 
 No file in `kitlib/`, `content/` or another host's folder changes. A test enforces this by
@@ -369,7 +369,7 @@ behaviour unchanged.
 | 5 | `content/` and the renderer, starting with Claude. The rendered agents must be byte-identical to today's files before anything else changes. Then the reconciled roster, the neutral profile and AGENTS.md as the canonical instructions. The skill merge waits for the owner's skill-text decision. | 2 |
 | 6 | Remove the Claude leaks from kitlib, one PR per cluster: lock actor key → `host`, session env, worktree defaults, MCP prefix, commit model env, hub paths, launcher, pluginsource. | 2 |
 | 7 | Move `claude/` → `hosts/claude/{adapter,shell}`. `kit.json` and the one release value. `boot/kitboot.py`. **Done**, with the rendered manifests and the kit header hook (docs/content.md "Manifests", "Kit header"; docs/kitboot.md; docs/machine-setup.md "Moved hook paths"). | 5, 6 |
-| 8 | Conformance suite, required in the gate. `docs/new-host.md`. | 3, 7 |
+| 8 | Conformance suite, required in the gate. `docs/new-host.md`. **Done**: `tests/host/conformance.py`, run for Claude and for a test-only fake host (`tests/host/fakehost`); the bridge-port check waits for step 10. | 3, 7 |
 | 9 | **Rebase `codex/companion-plugin`** onto main as `hosts/codex/`: `actions.py` → adapter events, `guard_adapter` reduced to what only Codex has, roles rendered from `content/`, `PM_KIT_CODEX_ROLE` removed. It must pass the conformance suite. | 8 |
 | 10 | **Rebase `codex/robust-bridge-plan`** as `optional/bridge/`: promote the helpers, declare the port, move the host halves, delete the probe code, collapse the docs. | 9 |
 
