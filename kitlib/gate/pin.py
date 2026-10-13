@@ -217,6 +217,36 @@ def _write_lease(path, sha, child=None):
     os.replace(tmp, path)
 
 
+def lease_child(tool_file, pid, environ=None):
+    """A lease on the export `tool_file` runs from, held by process `pid`: a pinned tool's
+    detached child (kitlib.gate.submit), which outlives the tool and so the tool's own lease. The
+    path is pins/leases/<sha12>-<pid>.json, {sha, pid, ctime}; prune removes it once that process
+    is gone. True when written; False when there is nothing to lease (`tool_file` is not run
+    from an export of KIT_PINNED's commit, KIT_PINNED is unset or `live`, or `pid` is already
+    gone). OSError when the file cannot be written."""
+    from kitlib import pluginsource
+    from kitlib.proc import process
+    env = os.environ if environ is None else environ
+    sha = env.get(PINNED_ENV)
+    if not sha or sha == LIVE:
+        return False
+    folder = checkout_of(tool_file)
+    pins = os.path.dirname(folder)
+    if (os.path.normcase(os.path.basename(folder)) != os.path.normcase(pluginsource.folder_name(sha))
+            or os.path.normcase(os.path.basename(pins)) != os.path.normcase(PINS)):
+        return False
+    ctime = process.proc_ctime(pid)
+    if ctime is None:
+        return False
+    path = os.path.join(pins, LEASES, '%s-%d.json' % (sha[:12], pid))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8', newline='\n') as fh:
+        json.dump({'sha': sha, 'pid': pid, 'ctime': ctime}, fh)
+    os.replace(tmp, path)
+    return True
+
+
 def _remove(path):
     try:
         os.remove(path)

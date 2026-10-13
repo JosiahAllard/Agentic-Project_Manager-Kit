@@ -1,28 +1,34 @@
 """land.py: land a branch, or a batch, on the main branch: the one landing tool (docs/gate.md
 "Landing").
 
-  land.py BRANCH [BRANCH ...] --expect-main SHA --expect-tip SHA [--expect-tip SHA ...]
+  land.py BRANCH [BRANCH ...] --expect-tip SHA [--expect-tip SHA ...] [--expect-main SHA]
           [-C DIR] [--lane L] [--summary TEXT] [--full] [--fresh] [--wait SECONDS]
-          [--log-dir D] [--keep-branch]
-      from the main checkout: take a turn in the repository's landing queue and the landing lock,
-      merge each branch with --no-ff (one --expect-tip per branch, in the same order), gate the
-      merged tree, push, verify with ls-remote, release; undo on a red gate or a refused push.
+          [--log-dir D] [--keep-branch] [--submit]
+      from the main checkout: take the landing's turn in the machine lock's queue (one booking,
+      whose slot the merged gate runs in) and the landing lock, fetch, merge each branch onto
+      <remote>/<main> as it is then (main moved on since --expect-main: said, never refused) with
+      --no-ff (one --expect-tip per branch, in the same order), gate the merged tree, push, verify
+      with ls-remote, release; undo on a red gate, a conflict (CONFLICT) or a refused push.
       Landed: each branch's remote branch, worktree and local branch go, never forced (what main
       does not contain, or work, or a holder, keeps it); --keep-branch keeps all three. --fresh
-      runs every step of the merged gate (no gate reuse, docs/gate.md "Gate reuse")
+      runs every step of the merged gate (no gate reuse, docs/gate.md "Gate reuse").
+      --submit: the same landing, started detached and windowless; prints one line, SUBMITTED
+      ... wait: <the gate.py wait-result command that waits for its result record>, and exits 0
   land.py --queue [-C DIR]
-      read-only: the landing lock's holder and the landing queue, in turn order
+      read-only: the landing lock's holder and the landings in the machine lock's queue
   land.py --sweep-landed [--apply] [-C DIR]
       the same cleanup for every branch main already contains (docs/gate.md "Branch cleanup");
       a dry run names what would go, --apply cleans up
 
 --wait: seconds to wait for the turn and the lock (default "landing".wait_s of .kit.json; 0: BUSY
-at once). Every landing writes a result record per branch (gate.py wait-result --kind land).
+at once). Every landing writes a result record per branch (gate.py wait-result --kind land); a
+submitted landing writes them running before it starts, so every outcome, a refusal included,
+ends in a final record.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate.land, prints and exits.
-Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY, 9 LANDED_UNGATED
-(landed, but main was not gated whole); a machine lock refusal passes its own code through
-(6, 8, 10, 11, 12); 130 Ctrl+C.
+Exit codes (kitlib.gate): 0 OK (or SUBMITTED), 1 FAILED (CONFLICT included), 2 USAGE, 3 STUCK,
+4 REFUSED, 5 BUSY, 9 LANDED_UNGATED (landed, but main was not gated whole); a machine lock refusal
+passes its own code through (6, 8, 10, 11, 12); 130 Ctrl+C.
 """
 import argparse
 import os
@@ -42,6 +48,7 @@ from kitlib import gate as G                                       # noqa: E402
 from kitlib.gate import cleanup                                    # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
 from kitlib.gate import runner                                     # noqa: E402
+from kitlib.gate import submit as submitmod                        # noqa: E402
 from kitlib.lock.store import LockError, Store                     # noqa: E402
 
 
@@ -62,7 +69,9 @@ class Parser(argparse.ArgumentParser):
 def parser():
     p = Parser(prog='land.py', description='Land a branch, or a batch, from the main checkout.')
     p.add_argument('branches', nargs='*', metavar='BRANCH')
-    p.add_argument('--expect-main', metavar='SHA')
+    p.add_argument('--expect-main', metavar='SHA',
+                   help='the main the landing was planned on (optional): main moved on is said, '
+                        'never refused')
     p.add_argument('--expect-tip', action='append', default=[], metavar='SHA',
                    help='the tip of each BRANCH, in the same order')
     p.add_argument('-C', dest='root', default='.', help='the main checkout (default: here)')
@@ -80,7 +89,45 @@ def parser():
     p.add_argument('--sweep-landed', action='store_true',
                    help='clean up every branch main already contains (a dry run without --apply)')
     p.add_argument('--apply', action='store_true', help='--sweep-landed: clean up, not a dry run')
+    p.add_argument('--submit', action='store_true',
+                   help='start the landing detached; print the wait-result command and exit 0')
+    p.add_argument(submitmod.FLAG, dest='submitted', metavar='PAYLOAD', help=argparse.SUPPRESS)
     return p
+
+
+def child_args(a, root):
+    """The arguments of the detached landing a --submit starts: this landing's, -C and --log-dir
+    absolute."""
+    args = ['-C', root, '--lane', a.lane]
+    if a.expect_main:
+        args += ['--expect-main', a.expect_main]
+    for tip in a.expect_tip:
+        args += ['--expect-tip', tip]
+    if a.summary:
+        args += ['--summary', a.summary]
+    if a.wait is not None:
+        args += ['--wait', str(a.wait)]
+    if a.log_dir:
+        args += ['--log-dir', os.path.abspath(a.log_dir)]
+    args += [flag for flag, on in (('--full', a.full), ('--fresh', a.fresh),
+                                   ('--keep-branch', a.keep_branch)) if on]
+    return args + list(a.branches)
+
+
+def restore(root, payload):
+    """The detached landing's `submitted`, its output now going to the submission's log; None
+    when the payload cannot be read (said, on the hidden console)."""
+    try:
+        sub = submitmod.restore(root, payload)
+    except submitmod.SubmitError as e:
+        print('REFUSED: %s' % e, flush=True)
+        return None
+    if sub.get('output'):
+        try:
+            submitmod.redirect_output(sub['output'])
+        except OSError as e:
+            print('WARNING: the output stays on the hidden console: %s' % e, flush=True)
+    return sub
 
 
 def emit(outcome):
@@ -97,7 +144,8 @@ def main(argv):
         p.error('--apply goes with --sweep-landed')
     if a.sweep_landed:
         if (a.branches or a.expect_main or a.expect_tip or a.queue or a.keep_branch or a.full
-                or a.fresh or a.summary or a.wait is not None or a.log_dir or a.lane != 'full'):
+                or a.fresh or a.summary or a.wait is not None or a.log_dir or a.lane != 'full'
+                or a.submit or a.submitted):
             p.error('--sweep-landed takes only --apply and -C')
         try:
             return emit(cleanup.sweep(root, apply=a.apply))
@@ -105,22 +153,32 @@ def main(argv):
             print('Ctrl+C: the sweep stopped; run it again to finish')
             return 130
     if a.queue:
-        if a.branches or a.expect_main or a.expect_tip:
+        if a.branches or a.expect_main or a.expect_tip or a.submit or a.submitted:
             p.error('--queue takes only -C')
         return emit(landmod.queue(root, Store(say=say)))
     if not a.branches:
         p.error('name the branch to land (or several: a batch)')
-    if not a.expect_main or not a.expect_tip:
-        p.error('--expect-main and one --expect-tip per branch are required')
+    if not a.expect_tip:
+        p.error('one --expect-tip per branch is required')
     if a.wait is not None and a.wait < 0:
         p.error('--wait is 0 or more seconds')
+    if a.submit and a.submitted:
+        p.error('--submit starts the landing that --submitted runs; not both')
+    if a.submit:
+        return emit(submitmod.submit(root, __file__, child_args(a, root), a.branches,
+                                     a.expect_tip, expect_main=a.expect_main))
+    submitted = None
+    if a.submitted:
+        submitted = restore(root, a.submitted)
+        if submitted is None:
+            return G.REFUSED
     branch = a.branches[0] if len(a.branches) == 1 else a.branches
     tip = a.expect_tip[0] if len(a.expect_tip) == 1 else a.expect_tip
     try:
         out = landmod.land(root, branch, a.expect_main, tip, lane=a.lane, summary=a.summary,
                            full=a.full, wait_s=a.wait, say=say,
                            book_kw={'store': Store(say=say)}, log_dir=a.log_dir,
-                           keep_branch=a.keep_branch, fresh=a.fresh)
+                           keep_branch=a.keep_branch, fresh=a.fresh, submitted=submitted)
     except SystemExit as e:     # the repo's code calling exit is a FAILED landing, never exit 0
         out = G.Outcome(G.FAILED, ['NOT LANDED: something the landing ran called exit '
                                    '(SystemExit, code %r) instead of returning' % (e.code,)])
