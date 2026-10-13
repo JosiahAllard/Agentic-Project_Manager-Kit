@@ -48,7 +48,8 @@ Only the lander or the project manager lands; no other role merges or pushes to 
 There is no standing landing approval here: each landing needs the owner's go for that branch,
 relayed by the coordinator or project manager with the reviewer's verdict. Missing either: do not
 land; say what is missing. From the main checkout, on the main branch:
-`python <kit>/tools/gate.py land <branch> --expect-main <sha> --expect-tip <sha> -C <repo>`.
+`python <kit>/tools/gate.py land <branch> --expect-tip <sha> -C <repo>` (with `--submit` it queues the
+landing and prints the `gate.py wait-result` command to wait with).
 It queues, locks, merges, gates the merged tree, pushes and verifies (`<kit>/docs/gate.md`
 "Landing"). Success: a `LANDED ` line and exit 0, or exit 9 (landed, but commits on top were not
 gated: run the full gate on main and report). Any other verdict line (`NOT LANDED:`, `STUCK:`,
