@@ -57,7 +57,8 @@ class CodexConformance(conformance.HostConformance, bridge_conformance.mixin('co
         return json.loads(stdout)['hookSpecificOutput']['additionalContext']
 
     def hook_scripts(self, manifests):
-        """hooks.json's entries: every command runs ${PLUGIN_ROOT}/hooks/run.py <event>."""
+        """hooks.json's hooks: every command runs ${PLUGIN_ROOT}/boot/hook.py codex <event>, the
+        plugin's copy of the kit's one entry."""
         from hosts.codex.adapter import content
         out = []
         for event, groups in json.loads(manifests[content.HOOKS_REL])['hooks'].items():
@@ -66,8 +67,7 @@ class CodexConformance(conformance.HostConformance, bridge_conformance.mixin('co
                     words = hook['command'].split(' ')
                     script = words[1].strip('"')
                     self.assertTrue(script.startswith(PLUGIN_ROOT), script)
-                    self.assertEqual(words[2:], [event], 'the entry is told its event')
-                    out.append((event, SHELL + script[len(PLUGIN_ROOT):]))
+                    out.append((event, SHELL + script[len(PLUGIN_ROOT):], words[2:]))
         return out
 
     def session_host(self):

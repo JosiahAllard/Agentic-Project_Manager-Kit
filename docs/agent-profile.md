@@ -42,7 +42,7 @@ Never pre-empt a holder. Temp folders: the tools' own (`.kit.json`, docs/kit-jso
 hardcode a temp path.
 
 ## Risk map
-High: `hosts/claude/shell/hooks/`, `kitlib/guard/`, `kitlib/gate/`, `kitlib/lock/`, `kitlib/lockmcp/`,
+High: `boot/`, `kitlib/host/hookmain.py`, `kitlib/guard/`, `kitlib/gate/`, `kitlib/lock/`, `kitlib/lockmcp/`,
 `kitlib/proc/`, `kitlib/git/`, `kitlib/backlog/`. A High change gets a fresh reviewer before landing. Low: docs.
 
 ## Moves and renames
@@ -57,7 +57,7 @@ Equivalence check, in full, for every move or rename:
    the tip, and keep both suite logs. The `Ran N tests` count and the skip count must match, and no
    test name may be gone (a test that moved with its module keeps its name under the new path; list
    each pair in the report).
-3. Guard parity: when the move touches kitlib/guard, hosts/claude/shell/hooks, or any path or name the guard
+3. Guard parity: when the move touches kitlib/guard, boot/hook.py, or any path or name the guard
    matches, run the guard's `decide()` over every row in tests/guard on the base and on the tip.
    Every decision must be identical (rows whose expected text names the old path change only by the
    whitelisted substitution).

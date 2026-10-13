@@ -18,10 +18,11 @@ here keeps the layer rule. `path` defaults to PATH, the hosts.json at the kit ro
 their own. Each call reads the file again: it is small, and a cache would outlive a test's file.
 
 An entry: {"adapter": "<module>", "shell": "<repo path>", "platforms": ["windows", ...],
-"capabilities": {...}, "profile": {...},
+"capabilities": {...}, "profile": {...}, "hook": {...},
 "tiers": {"light", "standard", "strong", "deep" -> model}} and, on exactly one host,
 "default": true. kitlib.kitrelease.bootstrap reads "shell" itself, with json alone, because it
-runs before kitlib is trusted.
+runs before kitlib is trusted; boot/hook.py reads "shell" and "hook" the same way, before the kit
+boots (HookSpec).
 """
 from dataclasses import dataclass
 import json
@@ -55,7 +56,11 @@ _ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
 _ENV_PREFIX = re.compile(r'[A-Z][A-Z0-9_]*_\Z')
 _EMAIL = re.compile(r'[^\s<>@]+@[^\s<>@]+\Z')
 _MODULE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z')
-_KEYS = {'adapter', 'shell', 'platforms', 'capabilities', 'profile', 'tiers'}
+_KEYS = {'adapter', 'shell', 'platforms', 'capabilities', 'profile', 'hook', 'tiers'}
+# How boot/hook.py's fast path may skip a call to a tool not in guarded_tools: in every session, or
+# only in a session no launcher marked (kitlib.sessionmark), for a host whose own policy (an
+# adapter's screen) must see every call of a marked session.
+FAST_PATHS = ('all', 'unmarked')
 # The operating systems a host can declare it runs on (multi-host plan section 6). Windows is
 # the only one the kit supports today; the field says so per host instead of the code assuming it.
 PLATFORMS = ('windows', 'linux', 'macos')
@@ -63,6 +68,25 @@ PLATFORMS = ('windows', 'linux', 'macos')
 
 class RegistryError(ValueError):
     """hosts.json is missing or malformed, or names no such host."""
+
+
+@dataclass(frozen=True)
+class HookSpec:
+    """What boot/hook.py, the one hook entry of every host, reads before the kit boots (hosts.json
+    "hook", with json alone). `tool_event` the hook event (one of capabilities.hook_events) whose
+    calls the guard judges; every other hook event is a start event that adds context.
+    `tool_field` the dotted key of the tool's name in that event's payload ("tool_name",
+    "call.name"). `guarded_tools` the tools a guard rule or the host's own policy can refuse, each
+    a name or a prefix ending in `*` ("mcp__*"): a call to any other tool is allowed before the kit
+    boots, in every session or only in an unmarked one (`fast_path`, one of FAST_PATHS)."""
+    tool_event: str
+    tool_field: str
+    guarded_tools: tuple
+    fast_path: str
+
+    def guarded(self, tool):
+        """Whether a call to `tool` (a string) reaches the guard: boot/hook.py's rule, here for tests."""
+        return any(tool.startswith(g[:-1]) if g.endswith('*') else tool == g for g in self.guarded_tools)
 
 
 @dataclass(frozen=True)
@@ -75,6 +99,7 @@ class Host:
     platforms: tuple
     capabilities: HostCapabilities
     profile: HostProfile
+    hook: HookSpec
     tiers: tuple
     default: bool = False
 
@@ -131,6 +156,24 @@ def _capabilities(name, raw):
         _flag(w + '.subagent_identity_in_hooks', c['subagent_identity_in_hooks']),
         _flag(w + '.mcp', c['mcp']), _flag(w + '.skills', c['skills']),
         _text(w + '.agent_format', c['agent_format']))
+
+
+def _hook(name, raw, capabilities):
+    w = '%s.hook' % name
+    h = _object(w, raw, ('tool_event', 'tool_field', 'guarded_tools', 'fast_path'))
+    event = _text(w + '.tool_event', h['tool_event'])
+    if event not in capabilities.hook_events:
+        raise RegistryError('hosts.json: %s.tool_event must be one of %s.capabilities.hook_events' % (w, name))
+    field = _text(w + '.tool_field', h['tool_field'])
+    if any(not part for part in field.split('.')):
+        raise RegistryError('hosts.json: %s.tool_field must be a dotted key' % w)
+    tools = _texts(w + '.guarded_tools', h['guarded_tools'])
+    if any('*' in t[:-1] or t == '*' for t in tools) or len(set(tools)) != len(tools):
+        raise RegistryError('hosts.json: %s.guarded_tools must be distinct names, a prefix ending in * '
+                            'allowed' % w)
+    if h['fast_path'] not in FAST_PATHS:
+        raise RegistryError('hosts.json: %s.fast_path must be one of %s' % (w, ', '.join(FAST_PATHS)))
+    return HookSpec(event, field, tools, h['fast_path'])
 
 
 def _attribution(w, raw):
@@ -205,8 +248,9 @@ def _entry(name, raw):
     if not set(platforms) <= set(PLATFORMS) or len(set(platforms)) != len(platforms):
         raise RegistryError('hosts.json: %s.platforms must name each of %s at most once'
                             % (name, ', '.join(PLATFORMS)))
+    capabilities = _capabilities(name, raw['capabilities'])
     return Host(name, adapter, _relpath(name + '.shell', raw['shell']), platforms,
-                _capabilities(name, raw['capabilities']), _profile(name, raw['profile']),
+                capabilities, _profile(name, raw['profile']), _hook(name, raw['hook'], capabilities),
                 tuple((t, _text('%s.tiers.%s' % (name, t), tiers[t])) for t in TIERS),
                 _flag(name + '.default', raw.get('default', False)))
 

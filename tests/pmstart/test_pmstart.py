@@ -301,9 +301,10 @@ class ConfigAndHookTest(unittest.TestCase):
 
     def test_hook_without_config_prints_json_exit_0(self):
         with tempfile.TemporaryDirectory() as d:
-            hook = os.path.join(os.path.dirname(__file__), "..", "..", "hosts", "claude", "shell", "hooks", "pm_session_start.py")
+            hook = os.path.join(os.path.dirname(__file__), "..", "..", "boot", "hook.py")
             env = dict(os.environ, USERPROFILE=d, HOME=d)
-            r = subprocess.run([sys.executable, hook], capture_output=True, text=True, env=env, timeout=30)
+            r = subprocess.run([sys.executable, hook, "claude", "SessionStart", "pm"], capture_output=True, text=True,
+                               env=env, timeout=30, input="{}")
         self.assertEqual(r.returncode, 0)
         out = json.loads(r.stdout)["hookSpecificOutput"]
         self.assertEqual(out["hookEventName"], "SessionStart")

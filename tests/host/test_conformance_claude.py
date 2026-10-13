@@ -3,6 +3,7 @@ payloads (tests/host/claude/payloads.json)."""
 import json
 import os
 import unittest
+from unittest import mock
 
 from tests.host import bridge_conformance, conformance
 from tests.host.test_leaks import ALLOWED, CONTENT_ALLOWED
@@ -23,12 +24,6 @@ class ClaudeConformance(conformance.HostConformance, bridge_conformance.mixin('c
         'tools/launch.py': 1,
         'tools/plugin_refresh.py': 3,
     })
-    # Over the 20-line entry limit: the guard's no-boot fast path and --settings-entry, and the
-    # coordinator hook's role check before the kit loads. Shrink, then drop the line.
-    ENTRY_OVER = {
-        'hosts/claude/shell/hooks/guard.py': 32,
-        'hosts/claude/shell/hooks/coordinator_session_start.py': 28,
-    }
 
     def read_output(self, stdout, code):
         self.assertEqual(code, 0, 'Claude reads the verdict from the JSON, never the exit code')
@@ -41,8 +36,8 @@ class ClaudeConformance(conformance.HostConformance, bridge_conformance.mixin('c
         return json.loads(stdout)['hookSpecificOutput']['additionalContext']
 
     def hook_scripts(self, manifests):
-        """hooks.json's entries, plus the guard, which machine setup installs into each account's
-        settings (guard.py --settings-entry) rather than the plugin."""
+        """hooks.json's hooks, plus the guard, which machine setup installs into each account's
+        settings (boot/hook.py claude --settings-entry) rather than the plugin."""
         from hosts.claude.adapter import content
         out = []
         for event, groups in json.loads(manifests[content.HOOKS_REL])['hooks'].items():
@@ -50,11 +45,26 @@ class ClaudeConformance(conformance.HostConformance, bridge_conformance.mixin('c
                 for hook in group['hooks']:
                     script = hook['args'][0]
                     self.assertTrue(script.startswith(PLUGIN_ROOT), script)
-                    out.append((event, script[len(PLUGIN_ROOT):]))
-        entry = self.adapter.settings_entry('hosts/claude/shell/hooks/guard.py', executable='python')
+                    out.append((event, script[len(PLUGIN_ROOT):], hook['args'][1:]))
+        entry = self.adapter.settings_entry(conformance.ENTRY, executable='python')
         for event, groups in entry.items():
-            out.extend((event, hook['args'][0]) for g in groups for hook in g['hooks'])
+            out.extend((event, hook['args'][0], hook['args'][1:]) for g in groups for hook in g['hooks'])
         return out
+
+    def test_the_start_parts_run_through_the_one_entry(self):
+        """The coordinator rules (hooks.json) and the PM checklist (the PM settings, docs/pm-start.md)
+        are named parts of SessionStart; a part SubagentStart or the guard lacks fails."""
+        from hosts.claude.adapter import host
+        self.assertEqual(host.PARTS, ('coordinator', 'pm'))
+        code, out = self.run_hook('SessionStart', {'cwd': self.KIT_ROOT}, None, part='coordinator')
+        self.assertEqual((code, out), (0, ''), 'an unmarked session gets no coordinator rules')
+        with mock.patch('kitlib.pmstart.load_config', return_value={}), \
+                mock.patch('kitlib.pmstart.checklist', return_value='the PM checklist'):
+            code, out = self.run_hook('SessionStart', {}, None, part='pm')
+        self.assertEqual(self.read_context(out), 'the PM checklist')
+        for event, part in (('SubagentStart', 'pm'), ('SessionStart', 'nope'), ('PreToolUse', 'pm')):
+            with self.assertRaises(ValueError):
+                self.run_hook(event, {}, None, part=part)
 
     # session_host(): None. ADAPTER.sessions() is hosts.claude.adapter.claude_host, the transcript
     # helpers kitlib.pmwatch is handed; it has no sessions/loaded/usage/models yet.

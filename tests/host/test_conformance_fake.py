@@ -80,7 +80,7 @@ class FakeHostConformance(conformance.HostConformance, unittest.TestCase):
     def hook_scripts(self, manifests):
         hooks = json.loads(manifests[fake.MANIFEST_REL])['hooks']
         root = fake.PLUGIN_ROOT + '/'
-        return [(event, cmd['args'][0][len(root):]) for event, cmd in hooks.items()
+        return [(event, cmd['args'][0][len(root):], cmd['args'][1:]) for event, cmd in hooks.items()
                 if cmd['args'][0].startswith(root)]
 
     def session_host(self):
@@ -89,7 +89,8 @@ class FakeHostConformance(conformance.HostConformance, unittest.TestCase):
 
 
 class FakeHostSlot(unittest.TestCase):
-    """The slot takes the fake host with nothing outside it changed, and its entry works."""
+    """The slot takes the fake host with nothing outside it changed, and the kit's one hook entry
+    (boot/hook.py) runs it: the fake host has no hook script of its own."""
 
     def setUp(self):
         stack = contextlib.ExitStack()
@@ -99,7 +100,7 @@ class FakeHostSlot(unittest.TestCase):
         for name in ('PM_KIT_ROOT', 'PM_KIT_RELEASE_ID'):
             os.environ.pop(name, None)
         spec = importlib.util.spec_from_file_location(
-            'fakehost_run', os.path.join(ROOT, *fake.ENTRY_REL.split('/')))
+            'fakehost_hook', os.path.join(ROOT, *fake.ENTRY.split('/')))
         self.entry = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.entry)
 
@@ -116,7 +117,8 @@ class FakeHostSlot(unittest.TestCase):
     def run_entry(self, event, payload, decide):
         out = io.StringIO()
         with mock.patch('kitlib.guard.decide', decide):
-            code = self.entry.main([event], io.StringIO(json.dumps(payload)), out)
+            code = self.entry.main([fake.NAME, event], io.StringIO(json.dumps(payload)), out, environ={},
+                                   hosts=registry.PATH)
         return code, out.getvalue()
 
     def test_the_entry_judges_a_tool_call(self):
@@ -130,6 +132,19 @@ class FakeHostSlot(unittest.TestCase):
         self.assertEqual((code, json.loads(out)), (2, {'block': True, 'message': 'owner'}))
         self.assertEqual(seen[0][0].kind, 'edit')
         self.assertEqual(seen[0][1], registry.host(fake.NAME).profile)
+
+    def test_an_unguarded_call_is_allowed_before_the_kit_boots(self):
+        payload = {'cwd': 'C:/r', 'call': {'name': 'read_file', 'input': {}}}
+
+        def decide(*a, **k):
+            raise AssertionError('an unguarded call never reaches the guard')
+        with mock.patch.object(self.entry, 'kit_here', side_effect=AssertionError('no boot')):
+            self.assertEqual(self.run_entry('before_tool', payload, decide), (0, ''))
+
+    def test_the_shell_holds_no_hook_script(self):
+        shell = os.path.join(FAKE, 'shell')
+        scripts = [os.path.join(b, n) for b, _, files in os.walk(shell) for n in files if n.endswith('.py')]
+        self.assertEqual(scripts, [])
 
     def test_the_entry_adds_the_kit_header_at_session_begin(self):
         code, out = self.run_entry('session_begin', {'cwd': 'C:/r'}, None)

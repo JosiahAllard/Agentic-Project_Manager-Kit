@@ -19,6 +19,8 @@ from kitlib.host import registry
 from kitlib.launcher import start
 from kitlib.lockmcp import PLUGIN_NAME
 
+from hosts.claude.adapter import host as claude_host
+
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCAN = ('content', 'docs', 'kitlib', 'tools', 'hosts', 'boot', 'AGENTS.md', 'ARCHITECTURE.md')
 SKIP_DIRS = ('__pycache__', 'worktrees')
@@ -96,6 +98,7 @@ class RoleNamesTest(unittest.TestCase):
             'kitlib.backlog.roles.TOP': set(backlog_roles.TOP) - {backlog_roles.OWNER},
             'kitlib.launcher.start.KIT_AGENTS': set(start.KIT_AGENTS),
             'kitlib.launcher.start.ROLE_AUTOCOMPACT': set(start.ROLE_AUTOCOMPACT),
+            'hosts.claude.adapter.host.PARTS': set(claude_host.PARTS),     # each a role's start check
         }
         try:
             from hosts.codex.adapter import runtime as codex_runtime, start as codex_start

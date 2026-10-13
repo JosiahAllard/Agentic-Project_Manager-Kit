@@ -1,5 +1,5 @@
 """The kit header (kitlib.host.header), its Claude rendering (ADAPTER.context) and the hook entry that
-runs it on SessionStart and SubagentStart (hosts/claude/shell/hooks/kit_header.py)."""
+runs it on SessionStart and SubagentStart (boot/hook.py claude <event>)."""
 import json
 import os
 import subprocess
@@ -10,7 +10,7 @@ from hosts.claude.adapter.host import ADAPTER
 from kitlib.host import header
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ENTRY = os.path.join(ROOT, 'hosts', 'claude', 'shell', 'hooks', 'kit_header.py')
+ENTRY = os.path.join(ROOT, 'boot', 'hook.py')
 
 
 class HeaderText(unittest.TestCase):
@@ -44,7 +44,7 @@ class Entry(unittest.TestCase):
     def run_entry(self, *args, **env):
         environ = {k: v for k, v in os.environ.items() if k not in ('PM_KIT_ROOT', 'PM_KIT_RELEASE_ID')}
         environ.update(env)
-        return subprocess.run([sys.executable, ENTRY] + list(args), capture_output=True, text=True,
+        return subprocess.run([sys.executable, ENTRY, 'claude'] + list(args), capture_output=True, text=True,
                               encoding='utf-8', env=environ, timeout=60, stdin=subprocess.DEVNULL)
 
     def test_each_event_gets_the_header_for_this_kit(self):
@@ -58,13 +58,7 @@ class Entry(unittest.TestCase):
     def test_a_kit_that_will_not_boot_is_said_in_plain_text(self):
         r = self.run_entry('SessionStart', PM_KIT_ROOT='relative')
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue(r.stdout.startswith('PM kit header: the kit did not load: BootError:'), r.stdout)
-
-    def test_the_entry_is_short(self):
-        with open(ENTRY, encoding='utf-8') as f:
-            lines = f.read().split('"""')[2].splitlines()
-        code = [l for l in lines if l.strip() and not l.strip().startswith('#')]
-        self.assertLessEqual(len(code), 20, code)
+        self.assertTrue(r.stdout.startswith('PM kit: the kit did not load: BootError:'), r.stdout)
 
 
 if __name__ == '__main__':

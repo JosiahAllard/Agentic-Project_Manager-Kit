@@ -17,7 +17,8 @@ manifests(kit, content) writes the files that carry the kit's one version (kit.j
 - `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin
   (`"source": "./"`), its version as `metadata.version`.
 - HOOKS_REL: the plugin's hooks (HOOKS), each command line from kitlib.host.hookmain.manifest_command
-  for the platforms hosts.json gives Claude, the script under ${CLAUDE_PLUGIN_ROOT}.
+  for the platforms hosts.json gives Claude: the kit's one hook entry, ${CLAUDE_PLUGIN_ROOT}/ENTRY,
+  with `claude`, the event and, for the coordinator rules, its part (boot/hook.py).
 """
 import json
 
@@ -37,12 +38,14 @@ DESCRIPTION = ('The PM kit as a Claude Code plugin (ARCHITECTURE.md, Packaging):
                'rendered into hosts/claude/shell/, its hooks and the machine lock MCP server; templates, '
                'optional tools and knowledge ship beside them (docs/shipping.md). Rendered from kit.json '
                'and content/ by tools/render_content.py; never edit it by hand.')
-# The plugin's hooks: (event, matcher or None, script in hooks/, its arguments). The kit header runs at
-# every session and subagent start; the coordinator rules at a session's start, resume or compact.
+ENTRY = 'boot/hook.py'
+# The plugin's hooks: (event, matcher or None, the part boot/hook.py runs or None). The kit header
+# runs at every session and subagent start; the coordinator rules at a session's start, resume or
+# compact. The guard (PreToolUse) and the PM checklist are in settings (kitlib.machinesetup).
 HOOKS = (
-    ('SessionStart', 'startup|resume|clear|compact', 'kit_header.py', ('SessionStart',)),
-    ('SessionStart', 'startup|resume|compact', 'coordinator_session_start.py', ()),
-    ('SubagentStart', None, 'kit_header.py', ('SubagentStart',)),
+    ('SessionStart', 'startup|resume|clear|compact', None),
+    ('SessionStart', 'startup|resume|compact', 'coordinator'),
+    ('SubagentStart', None, None),
 )
 MCP_SERVERS = {'machine-lock': {'command': 'python', 'args': [PLUGIN_ROOT + '/mcp/lock_server.py']}}
 TOOLS = {
@@ -155,10 +158,10 @@ class ClaudeContent:
     def hooks(self, registry_path=None):
         platforms = registry.host(HOST, registry_path).platforms
         events = {}
-        for event, matcher, script, args in HOOKS:
+        for event, matcher, part in HOOKS:
             hook = {'type': 'command'}
-            hook.update(hookmain.manifest_command('%s/%s/hooks/%s' % (PLUGIN_ROOT, SHELL_REL, script),
-                                                  platforms, *args))
+            hook.update(hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), platforms, HOST, event,
+                                                  *([part] if part else [])))
             group = {'matcher': matcher} if matcher else {}
             group['hooks'] = [hook]
             events.setdefault(event, []).append(group)

@@ -158,12 +158,32 @@ class Validation(Case):
                 lambda e: e['profile'].update(env_prefixes=[]),
                 lambda e: e['profile'].update(env_prefixes=['claude_']),
                 lambda e: e['profile'].update(env_prefixes=['CLAUDE']),
+                lambda e: e.pop('hook'),
+                lambda e: e['hook'].update(extra=1),
+                lambda e: e['hook'].update(tool_event='Nope'),
+                lambda e: e['hook'].update(tool_field='a..b'),
+                lambda e: e['hook'].update(tool_field=''),
+                lambda e: e['hook'].update(guarded_tools=[]),
+                lambda e: e['hook'].update(guarded_tools=['*']),
+                lambda e: e['hook'].update(guarded_tools=['a*b']),
+                lambda e: e['hook'].update(guarded_tools=['Bash', 'Bash']),
+                lambda e: e['hook'].update(fast_path='sometimes'),
                 lambda e: e['tiers'].pop('deep'),
                 lambda e: e['tiers'].update(light='')):
             bad = copy.deepcopy(data)
             change(bad['claude'])
             with self.subTest(entry=bad['claude']):
                 self.refused(bad)
+
+    def test_the_hook_data_is_read_and_matches_names_and_prefixes(self):
+        hook = registry.host('claude', self.put(kit_hosts())).hook
+        self.assertIsInstance(hook, registry.HookSpec)
+        self.assertEqual((hook.tool_event, hook.tool_field, hook.fast_path), ('PreToolUse', 'tool_name', 'all'))
+        self.assertTrue(hook.guarded('Bash'))
+        self.assertTrue(hook.guarded('mcp__x__y'))
+        self.assertFalse(hook.guarded('Read'))
+        self.assertFalse(hook.guarded('Bash2'))
+        self.assertFalse(hook.guarded('mcp_x'))
 
     def test_host_names_are_lowercase_words(self):
         self.refused(second(kit_hosts(), 'Other'))

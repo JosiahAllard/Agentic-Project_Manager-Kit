@@ -1,6 +1,6 @@
 # PM session-start checklist
 
-`hosts/claude/shell/hooks/pm_session_start.py` prints a checklist at every PM session start (as
+`boot/hook.py claude SessionStart pm` (the kit's one hook entry, its `pm` part) prints a checklist at every PM session start (as
 `additionalContext`; logic `kitlib/pmstart`). A hook cannot call tools, so it lists steps for the
 PM. It always exits 0; a failed check becomes one "could not check X: reason" line.
 
@@ -116,7 +116,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 
 Only in settings the PM session loads; the hook does not check which session runs it. It is not
 in the plugin, which every session loads. Exec form, with `<pythonw>` the interpreter that
-`guard.py --settings-entry` prints (docs/guard.md "Go-live"), starts no shell. `pythonw` has no
+`boot/hook.py claude --settings-entry` prints (docs/guard.md "Go-live"), starts no shell. `pythonw` has no
 console, so each program the checklist starts is started with a console that has no window: git
 (`kitlib.git.cmd`) and the PowerShell that lists processes (`kitlib/pmstart` `list_processes`;
 `tests/pmstart/test_plumbing.py`) through `kitlib.proc.spawn`, `schtasks` with `CREATE_NO_WINDOW`
@@ -128,5 +128,5 @@ otherwise reads the account config folders (`~/.claude`, `~/.claude-*`, `default
 account's `settings.json` (docs/machine-setup.md "Fresh machine (--fresh)").
 
 ```json
-{"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"<pythonw>","args":["<kit>/hosts/claude/shell/hooks/pm_session_start.py"]}]}]}}
+{"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"<pythonw>","args":["<kit>/boot/hook.py","claude","SessionStart","pm"]}]}]}}
 ```

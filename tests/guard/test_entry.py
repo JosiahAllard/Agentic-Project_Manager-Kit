@@ -1,7 +1,8 @@
-"""hosts/claude/shell/hooks/guard.py as Claude Code runs it: a PreToolUse event on stdin, hook JSON (or nothing) on
-stdout, exit 0. HOME/USERPROFILE point at a scratch folder, so no real machine config is read,
-and the payloads touch no repository (a temp folder that is not a checkout). The entry hands the
-event to hosts.claude.adapter through kitlib.host.hookmain; these tests run it end to end."""
+"""The guard as Claude Code runs it, `boot/hook.py claude PreToolUse`: a PreToolUse event on stdin,
+hook JSON (or nothing) on stdout, exit 0. HOME/USERPROFILE point at a scratch folder, so no real
+machine config is read, and the payloads touch no repository (a temp folder that is not a checkout).
+The entry hands the event to hosts.claude.adapter through kitlib.host.hookmain; these tests run it
+end to end."""
 import importlib.util
 import io
 import json
@@ -15,10 +16,13 @@ import unittest
 from unittest import mock
 
 from hosts.claude.adapter import events, host
+from kitlib.host import registry
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ENTRY = os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'hooks', 'guard.py')
-# what a copy of the entry needs to deny by itself when kitlib.guard will not import
+ENTRY = os.path.join(KIT_ROOT, 'boot', 'hook.py')
+ARGS = ['claude', 'PreToolUse']
+# what a copy of the entry needs, beside boot/hook.py itself, to deny by itself when kitlib.guard
+# will not import: the hook imports these and nothing else of the kit
 HOOK_FILES = ('boot/kitboot.py', 'tools/machine_lock.py', 'hosts/__init__.py', 'hosts/claude/__init__.py',
               'hosts/claude/adapter/__init__.py', 'hosts/claude/adapter/events.py',
               'hosts/claude/adapter/host.py', 'kitlib/host/__init__.py', 'kitlib/host/hookmain.py',
@@ -26,10 +30,18 @@ HOOK_FILES = ('boot/kitboot.py', 'tools/machine_lock.py', 'hosts/__init__.py', '
               'kitlib/agentname.py', 'kitlib/lockmcp/__init__.py')
 
 
+def load():
+    """boot/hook.py as a module."""
+    spec = importlib.util.spec_from_file_location('kit_hook_entry', ENTRY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def settings(mod):
-    """What `guard.py --settings-entry` prints, from the loaded entry module."""
+    """What `hook.py claude --settings-entry` prints, from the loaded entry module."""
     out = io.StringIO()
-    if mod.main(io.StringIO(), out, ['--settings-entry']) != 0:
+    if mod.main(['claude', '--settings-entry'], io.StringIO(), out) != 0:
         raise AssertionError('--settings-entry did not exit 0')
     return json.loads(out.getvalue())
 
@@ -51,7 +63,7 @@ class Entry(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith('MACHINE_LOCK_')}
         env.update(HOME=self.home, USERPROFILE=self.home, GIT_CEILING_DIRECTORIES=self.base)
         env.pop('PM_KIT_ROLE', None)
-        r = subprocess.run([sys.executable, ENTRY], input=payload, capture_output=True, text=True,
+        r = subprocess.run([sys.executable, ENTRY] + ARGS, input=payload, capture_output=True, text=True,
                            encoding='utf-8', env=env, cwd=self.cwd, timeout=60)
         return r.returncode, r.stdout, r.stderr
 
@@ -79,16 +91,13 @@ class Entry(unittest.TestCase):
 
 
 class GoLive(unittest.TestCase):
-    """guard.py started exactly as the settings entry tells Claude Code to start it (docs/guard.md
+    """The guard started exactly as the settings entry tells Claude Code to start it (docs/guard.md
     "Go-live"): the entry's command (pythonw.exe) with its args, no shell, the event JSON piped on
     stdin. A known-denied command must come back denied."""
     setUp, event = Entry.setUp, Entry.event
 
     def test_a_known_denied_command_is_denied_the_go_live_way(self):
-        spec = importlib.util.spec_from_file_location('kit_guard_golive', ENTRY)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        (hook,) = settings(mod)['PreToolUse'][0]['hooks']
+        (hook,) = settings(load())['PreToolUse'][0]['hooks']
         self.assertTrue(re.fullmatch(host.MATCHER, 'Bash'))
         env = {k: v for k, v in os.environ.items() if not k.startswith('MACHINE_LOCK_')}
         env.update(HOME=self.home, USERPROFILE=self.home, GIT_CEILING_DIRECTORIES=self.base)
@@ -103,8 +112,8 @@ class GoLive(unittest.TestCase):
     def test_no_stdout_and_no_stderr_still_blocks(self):
         # pythonw started without std handles has sys.stdout and sys.stderr None: the deny cannot be
         # written, and the last-resort handler must still exit 2 (a block) rather than crash with 1.
-        code = ('import runpy, sys; sys.stdout = sys.stderr = None; '
-                'runpy.run_path(%r, run_name="__main__")' % ENTRY)
+        code = ('import runpy, sys; sys.stdout = sys.stderr = None; sys.argv[1:] = %r; '
+                'runpy.run_path(%r, run_name="__main__")' % (ARGS, ENTRY))
         r = subprocess.run([sys.executable, '-c', code], input=self.event('Bash', {'command': 'find / -name x'}),
                            capture_output=True, text=True, encoding='utf-8', cwd=self.cwd, timeout=60)
         self.assertEqual(r.returncode, 2, r.stderr)
@@ -115,10 +124,7 @@ class GuardError(unittest.TestCase):
     names a command that reproduces it; so does a kitlib that will not import."""
 
     def load(self):
-        spec = importlib.util.spec_from_file_location('kit_guard_entry', ENTRY)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
+        return load()
 
     def test_every_guarded_tool_is_denied_on_a_guard_error(self):
         mod = self.load()
@@ -130,22 +136,25 @@ class GuardError(unittest.TestCase):
                 with self.subTest(tool):
                     out = io.StringIO()
                     ev = {'tool_name': tool, 'tool_input': {}, 'cwd': '.', 'hook_event_name': 'PreToolUse'}
-                    self.assertEqual(mod.main(io.StringIO(json.dumps(ev)), out), 0)
+                    self.assertEqual(mod.main(ARGS, io.StringIO(json.dumps(ev)), out, environ={}), 0)
                     hso = json.loads(out.getvalue())['hookSpecificOutput']
                     self.assertEqual(hso['permissionDecision'], 'deny')
                     reason = hso['permissionDecisionReason']
                     self.assertIn('RuntimeError: boom', reason)
-                    self.assertIn('Instead: python "%s" < event.json [' % ENTRY.replace(chr(92), '/'), reason)
+                    self.assertIn('Instead: python "%s" claude PreToolUse < event.json ['
+                                  % ENTRY.replace(chr(92), '/'), reason)
                     self.assertTrue(reason.endswith('[kit guard: rule=guard-error role=main]'), reason)
 
     def copy(self, files=HOOK_FILES):
-        """A copy of hosts/claude/shell/hooks/guard.py, and `files`, beside a kitlib whose guard package
-        raises on import."""
+        """A copy of boot/hook.py, and `files`, beside a kitlib whose guard package raises on
+        import."""
         base = tempfile.mkdtemp(prefix='kit-guard-import-')
         self.addCleanup(shutil.rmtree, base, True)
-        os.makedirs(os.path.join(base, 'hosts', 'claude', 'shell', 'hooks'))
+        os.makedirs(os.path.join(base, 'boot'))
         os.makedirs(os.path.join(base, 'kitlib', 'guard'))
-        shutil.copy(ENTRY, os.path.join(base, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))
+        shutil.copy(ENTRY, os.path.join(base, 'boot', 'hook.py'))
+        if 'hosts.json' not in files:                  # the entry reads it before it boots
+            shutil.copy(os.path.join(KIT_ROOT, 'hosts.json'), os.path.join(base, 'hosts.json'))
         for rel in files:
             os.makedirs(os.path.dirname(os.path.join(base, rel)), exist_ok=True)
             shutil.copy(os.path.join(KIT_ROOT, rel), os.path.join(base, rel))
@@ -157,57 +166,95 @@ class GuardError(unittest.TestCase):
 
     def test_a_kitlib_that_will_not_import_denies(self):
         base = self.copy()
-        entry = os.path.join(base, 'hosts', 'claude', 'shell', 'hooks', 'guard.py')
+        entry = os.path.join(base, 'boot', 'hook.py')
         ev = json.dumps({'tool_name': 'mcp__x__y', 'tool_input': {}, 'cwd': base, 'agent_id': 'a1',
                          'hook_event_name': 'PreToolUse'})
         env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
-        r = subprocess.run([sys.executable, entry], input=ev, capture_output=True, text=True, encoding='utf-8',
-                           env=env, cwd=base, timeout=60)
+        r = subprocess.run([sys.executable, entry] + ARGS, input=ev, capture_output=True, text=True,
+                           encoding='utf-8', env=env, cwd=base, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
         hso = json.loads(r.stdout)['hookSpecificOutput']
         self.assertEqual(hso['permissionDecision'], 'deny')
         reason = hso['permissionDecisionReason']
         self.assertIn('ImportError: broken on purpose', reason)
-        self.assertIn('Instead: python "%s" < event.json [' % entry.replace(chr(92), '/'), reason)
+        self.assertIn('Instead: python "%s" claude PreToolUse < event.json [' % entry.replace(chr(92), '/'), reason)
         self.assertTrue(reason.endswith('[kit guard: rule=guard-error role=subagent]'), reason)
         # A tool no rule can refuse never reaches kitlib, so even this broken one allows it.
         for tool in ('Read', 'Grep', 'Glob', 'WebFetch'):
             ev = json.dumps({'tool_name': tool, 'tool_input': {}, 'cwd': base, 'agent_id': 'a1',
                              'hook_event_name': 'PreToolUse'})
-            r = subprocess.run([sys.executable, entry], input=ev, capture_output=True, text=True,
+            r = subprocess.run([sys.executable, entry] + ARGS, input=ev, capture_output=True, text=True,
                                encoding='utf-8', env=env, cwd=base, timeout=60)
             self.assertEqual((r.returncode, r.stdout), (0, ''), tool)
 
     def test_an_adapter_that_will_not_import_blocks_by_exit_code(self):
         # with no hosts.claude.adapter or kitlib.host beside it the entry cannot write a deny: it exits
         # 2, which Claude Code reads as a block; a tool no rule can refuse is still allowed
-        base = self.copy(files=())
-        entry = os.path.join(base, 'hosts', 'claude', 'shell', 'hooks', 'guard.py')
+        base = self.copy(files=('boot/kitboot.py', 'tools/machine_lock.py'))
+        entry = os.path.join(base, 'boot', 'hook.py')
         env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
         for tool, want in (('mcp__x__y', 2), ('Bash', 2), ('Read', 0)):
             ev = json.dumps({'tool_name': tool, 'tool_input': {}, 'cwd': base, 'hook_event_name': 'PreToolUse'})
-            r = subprocess.run([sys.executable, entry], input=ev, capture_output=True, text=True,
+            r = subprocess.run([sys.executable, entry] + ARGS, input=ev, capture_output=True, text=True,
                                encoding='utf-8', env=env, cwd=base, timeout=60)
             self.assertEqual((r.returncode, r.stdout), (want, ''), tool)
 
+    def test_an_unguarded_call_loads_no_kit_module(self):
+        """The fast path: a Read decides on hosts.json alone, so the hook loads no kit module but
+        itself (no kitboot, no kitlib, no adapter), and a guarded call loads HOOK_FILES' modules."""
+        code = ('import io, json, os, sys; sys.path.insert(0, %r); import hook; '
+                'code = hook.main(%r, io.StringIO(sys.stdin.read()), io.StringIO(), environ={}); '
+                'root = %r; '
+                'print(json.dumps([code, sorted(os.path.relpath(m.__file__, root).replace(os.sep, "/") '
+                'for m in list(sys.modules.values()) if getattr(m, "__file__", None) '
+                'and os.path.abspath(m.__file__).startswith(root + os.sep))]))'
+                % (os.path.dirname(ENTRY), ARGS, os.path.dirname(os.path.dirname(ENTRY))))
+        env = {k: v for k, v in os.environ.items() if k not in ('PYTHONPATH', 'PM_KIT_ROOT', 'PM_KIT_RELEASE_ID')}
+
+        def loaded(tool):
+            ev = json.dumps({'tool_name': tool, 'tool_input': {}, 'cwd': self.base, 'hook_event_name': 'PreToolUse'})
+            r = subprocess.run([sys.executable, '-c', code], input=ev, capture_output=True, text=True,
+                               encoding='utf-8', env=env, cwd=self.base, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return json.loads(r.stdout.splitlines()[-1])
+        self.assertEqual(loaded('Read'), [0, ['boot/hook.py']])
+        code_, files = loaded('mcp__x__y')
+        self.assertEqual(code_, 0)
+        need = {f for f in HOOK_FILES if f.endswith('.py') and f.startswith(('boot/', 'hosts/', 'kitlib/host/'))}
+        self.assertTrue(need <= set(files), files)
+
+    setUp = Entry.setUp
+
 
 class Unguarded(unittest.TestCase):
-    """The early exit and the settings entry cover exactly the tools kitlib.guard.decide can
-    refuse (KIT-HOOK-SPAWNS)."""
+    """The early exit (hosts.json's claude hook.guarded_tools, read by boot/hook.py) and the
+    settings entry cover exactly the tools kitlib.guard.decide can refuse (KIT-HOOK-SPAWNS)."""
 
     def load(self):
-        return GuardError.load(self)
+        return load()
+
+    def hook(self):
+        with open(os.path.join(KIT_ROOT, 'hosts.json'), encoding='utf-8') as f:
+            return json.load(f)['claude']['hook']
+
+    def unguarded(self, event):
+        return self.load().skips(self.hook(), event, {})
 
     def test_guarded_is_the_adapter_tool_tables(self):
-        self.assertEqual(self.load().GUARDED, frozenset(events.FILE_TOOLS) | frozenset(events.SHELL_TOOLS))
+        self.assertEqual(set(self.hook()['guarded_tools']),
+                         set(events.FILE_TOOLS) | set(events.SHELL_TOOLS) | {'mcp__*'})
+        self.assertEqual(registry.host('claude').hook.guarded_tools, tuple(self.hook()['guarded_tools']))
+        self.assertEqual(set(host.MATCHER.split('|')),
+                         {t[:-1] + '.*' if t.endswith('*') else t for t in self.hook()['guarded_tools']})
 
     def test_only_unguarded_tools_exit_early(self):
-        mod = self.load()
         for tool in ('Read', 'Grep', 'Glob', 'WebFetch', 'Agent', 'TodoWrite'):
-            self.assertTrue(mod.unguarded({'tool_name': tool}), tool)
+            self.assertTrue(self.unguarded({'tool_name': tool}), tool)
+            self.assertTrue(self.load().skips(self.hook(), {'tool_name': tool}, {'PM_KIT_ROLE': 'worker'}),
+                            'a marked session takes the fast path too on this host')
         for ev in ({'tool_name': 'Bash'}, {'tool_name': 'Edit'}, {'tool_name': 'NotebookEdit'},
                    {'tool_name': 'mcp__x__lock_free'}, {'tool_name': 3}, {}, [], None):
-            self.assertFalse(mod.unguarded(ev), ev)
+            self.assertFalse(self.unguarded(ev), ev)
 
     def test_every_rule_row_tool_is_matched_and_guarded(self):
         mod = self.load()
@@ -220,7 +267,7 @@ class Unguarded(unittest.TestCase):
         tools |= {tool_prefix() + 'lock_free', 'mcp__other__lock_free'}
         for tool in tools:
             self.assertTrue(re.fullmatch(host.MATCHER, tool), tool)
-            self.assertFalse(mod.unguarded({'tool_name': tool}), tool)
+            self.assertFalse(mod.skips(self.hook(), {'tool_name': tool}, {}), tool)
         for tool in ('Read', 'Grep', 'Glob'):
             self.assertIsNone(re.fullmatch(host.MATCHER, tool), tool)
 
@@ -230,7 +277,7 @@ class Unguarded(unittest.TestCase):
         self.assertEqual(entry['matcher'], host.MATCHER)
         (hook,) = entry['hooks']
         self.assertEqual(hook['type'], 'command')
-        self.assertEqual(hook['args'], [ENTRY.replace(chr(92), '/')])
+        self.assertEqual(hook['args'], [ENTRY.replace(chr(92), '/')] + ARGS)
         self.assertTrue(os.path.isfile(hook['command']), hook['command'])
         if os.name == 'nt':
             self.assertEqual(os.path.basename(hook['command']).lower(), 'pythonw.exe')

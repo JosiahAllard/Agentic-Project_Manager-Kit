@@ -132,10 +132,7 @@ class HostNames(unittest.TestCase):
 # so adding a host changes no other folder. kitlib is counted above. Below: the kit's top folders,
 # boot/ (code, as kitlib) and content/ (every occurrence, prose too, since content is what every
 # host renders). What is left is listed with its reason and can only shrink.
-TOP_ALLOWED = {
-    'claude': 'the hook paths settings written before step 7 still run (claude/hooks/*.py stubs, '
-              'docs/machine-setup.md "Moved hook paths"); delete one release after the move',
-}
+TOP_ALLOWED = {}            # claude/ (the pre-step-7 hook stubs) went with plan step 14
 CONTENT_ALLOWED = {}        # every host value in role prose is a token now (docs/content.md "Tokens")
 
 
@@ -168,17 +165,11 @@ class HostSlot(unittest.TestCase):
                 self.assertTrue(h.adapter.startswith('hosts.%s.' % h.name), h.adapter)
                 self.assertTrue(os.path.isdir(os.path.join(ROOT, 'hosts', h.name)))
 
-    def test_the_old_folder_holds_only_the_hook_stubs(self):
-        old = os.path.join(ROOT, 'claude')
-        if not os.path.isdir(old):
-            return                                  # retired: drop its TOP_ALLOWED entry
-        stubs = sorted(n for n in os.listdir(os.path.join(old, 'hooks')) if n != '__pycache__')
-        self.assertEqual(sorted(os.listdir(old)), ['hooks'])
-        self.assertEqual(stubs, ['coordinator_session_start.py', 'guard.py', 'pm_session_start.py'])
-
     def test_boot_names_no_host(self):
         with open(os.path.join(ROOT, 'boot', 'kitboot.py'), encoding='utf-8') as f:
             self.assertEqual(occurrences(f.read()), [])
+        with open(os.path.join(ROOT, 'boot', 'hook.py'), encoding='utf-8') as f:   # every host's one hook entry
+            self.assertEqual(HOST_WORDS.findall(f.read()), [], 'not even in its prose')
 
     def test_content_holds_no_more_host_names_than_listed(self):
         counts = content_counts()

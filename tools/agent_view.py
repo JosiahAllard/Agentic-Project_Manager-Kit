@@ -11,8 +11,8 @@ hosts.json default. -C: the repository checkout (default: here). --brief: paths 
 text, no start checks run.
 
 A thin entry point (ARCHITECTURE.md, Layers): it picks the host's adapter, calls kitlib.agentview
-with the adapter's ContentRenderer and start_text (the host contract), prints and exits. Exit
-codes: 0 shown; 2 usage, an unknown role or host, or content/ that will not load.
+with the adapter's ContentRenderer, start_text and start_parts (the host contract), prints and
+exits. Exit codes: 0 shown; 2 usage, an unknown role or host, or content/ that will not load.
 """
 import argparse
 import os
@@ -60,7 +60,8 @@ def main(argv=None, out=None, environ=None):
         return USAGE
     try:
         sections = agentview.view(KIT, os.path.abspath(a.repo), a.role, host, adapter.content().renderer(),
-                                  start_text=getattr(adapter, 'start_text', None), environ=environ, brief=a.brief)
+                                  start_text=getattr(adapter, 'start_text', None), environ=environ, brief=a.brief,
+                                  start_parts=getattr(adapter, 'start_parts', None))
     except (agentview.UnknownRole, ContentError, OSError) as e:
         out.write('agent_view: %s\n' % e)
         return USAGE

@@ -1,6 +1,6 @@
 """kitlib.machinesetup and tools/machine_setup.py (docs/machine-setup.md), against a fake home
 folder, a fake old kit clone and a fake kit, all in a temp folder. The Windows side (shortcuts,
-icacls, the user environment, guard.py's settings entry) is a FakeHost; nothing here reads or
+icacls, the user environment, the guard's settings entry) is a FakeHost; nothing here reads or
 writes the real home folder, desktop, environment or permissions.
 """
 import contextlib
@@ -115,7 +115,8 @@ class FakeHost(object):
 
     def guard_entry(self, kit):
         return {'PreToolUse': [{'matcher': 'Bash|PowerShell', 'hooks': [
-            {'type': 'command', 'command': PYW, 'args': [fwd(os.path.join(kit, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))]}]}]}
+            {'type': 'command', 'command': PYW,
+             'args': [fwd(os.path.join(kit, 'boot', 'hook.py')), 'claude', 'PreToolUse']}]}]}
 
 
 @unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')
@@ -137,8 +138,7 @@ class Base(unittest.TestCase):
                     'skills/land-branch/SKILL.md', 'skills/worktree-start/SKILL.md', 'agents/coordinator.md'):
             touch(os.path.join(self.old, *rel.split('/')))
         # the kit
-        for rel in ('hosts/claude/shell/hooks/guard.py', 'hosts/claude/shell/hooks/pm_session_start.py',
-                    'hosts/claude/shell/hooks/coordinator_session_start.py', 'tools/machine_lock.py', 'kitlib/__init__.py',
+        for rel in ('boot/hook.py', 'tools/machine_lock.py', 'kitlib/__init__.py',
                     'optional/comfy/comfy_gen.py', 'optional/procwatch/procwatch.py',
                     'optional/usage/statusline-usage.ps1', 'optional/usage/write-usage-status.ps1',
                     'optional/agenttemp/agent_temp_sweep.py', 'knowledge/asset-generation/README.md',
@@ -235,6 +235,10 @@ class Base(unittest.TestCase):
     def kitp(self, rel):
         return common.norm(os.path.join(self.kit, *rel.split('/')))
 
+    def entry(self, *words):
+        """The exec-form args of the kit's hook entry with `words` after the host."""
+        return [fwd(os.path.join(self.kit, 'boot', 'hook.py')), 'claude'] + list(words)
+
 
 class DryRunApplyAgain(Base):
     def test_dry_run_changes_nothing_and_prints_each_change_and_diff(self):
@@ -248,7 +252,7 @@ class DryRunApplyAgain(Base):
         self.assertIn('a real folder: rename it to comfy.old-%s' % TODAY, out)
         diff = [l.strip() for l in out.splitlines()]
         self.assertIn('-' + ' ' * 12 + '"command": "python %s/hooks/no_root_search.py"' % fwd(self.old), diff)
-        self.assertTrue(any(l.startswith('+') and 'hosts/claude/shell/hooks/guard.py' in l for l in diff), out)
+        self.assertTrue(any(l.startswith('+') and 'boot/hook.py' in l for l in diff), out)
         self.assertIn('the kit has no skill worktree-start', out)
         self.assertIn('agents', out)
         self.assertIn('left as is', out)
@@ -296,15 +300,13 @@ class DryRunApplyAgain(Base):
         self.assertEqual(doc['permissions'], self.settings_doc()['permissions'])
         pre = doc['hooks']['PreToolUse']
         self.assertEqual(len(pre), 2)
-        self.assertEqual(pre[1]['hooks'][0]['args'], [fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))])
+        self.assertEqual(pre[1]['hooks'][0]['args'], self.entry('PreToolUse'))
         self.assertEqual(doc['hooks']['SessionStart'][0]['hooks'][0],          # re-pointed, then exec form
-                         {'type': 'command', 'command': PYW,
-                          'args': [fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'pm_session_start.py'))]})
+                         {'type': 'command', 'command': PYW, 'args': self.entry('SessionStart', 'pm')})
         self.assertEqual(doc['statusLine'], self.settings_doc()['statusLine'])   # through tools/usage: kept
         doc2 = json.loads(readb(self.s2).decode('utf-8'))
         self.assertEqual(doc2['hooks']['SessionStart'][0]['hooks'][0],
-                         {'type': 'command', 'command': PYW,
-                          'args': [fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'coordinator_session_start.py'))]})
+                         {'type': 'command', 'command': PYW, 'args': self.entry('SessionStart', 'coordinator')})
         self.assertTrue(readb(self.s2).decode('utf-8').startswith('{\n    "model"'))
         # extras
         lnk = os.path.join(self.desk, extras.SHORTCUT)
@@ -349,8 +351,12 @@ class Refusals(Base):
         self.assertRefusedUnchanged('mystery.py')
 
     def test_a_repoint_target_missing_from_the_kit_refuses(self):
-        os.remove(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'pm_session_start.py'))
-        self.assertRefusedUnchanged('hosts/claude/shell/hooks/pm_session_start.py')
+        doc = self.settings_doc()
+        doc['hooks']['SessionStart'][0]['hooks'].append(
+            {'type': 'command', 'command': 'powershell -File %s/tools/usage/write-usage-status.ps1' % fwd(self.old)})
+        self.write_settings(self.s1, doc)
+        os.remove(os.path.join(self.kit, 'optional', 'usage', 'write-usage-status.ps1'))
+        self.assertRefusedUnchanged('optional/usage/write-usage-status.ps1, which the kit lacks')
 
     def test_a_path_through_a_tools_link_the_kit_cannot_serve_refuses(self):
         os.remove(os.path.join(self.kit, 'optional', 'usage', 'statusline-usage.ps1'))
@@ -371,7 +377,7 @@ class Refusals(Base):
         self.assertIn('the same folder', '\n'.join(lines))
 
     def test_a_folder_that_is_not_a_kit_refuses(self):
-        os.remove(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))
+        os.remove(os.path.join(self.kit, 'boot', 'hook.py'))
         self.assertRefusedUnchanged('not a kit checkout')
 
     def test_a_missing_config_folder_refuses(self):
@@ -494,8 +500,9 @@ class Edges(Base):
 
 
 class ExecFormAndPlugin(Base):
-    """A shell-form SessionStart hook running a kit hook script is written in exec form; a settings
-    hook the kit's plugin also carries is noted. Both go through the plan: a dry run writes nothing."""
+    """A shell-form SessionStart hook running the kit's hook entry is written in exec form; a
+    settings hook the kit's plugin also carries is noted; a retired hook script's path is
+    re-pointed to the entry first. All go through the plan: a dry run writes nothing."""
 
     def hook_doc(self, *hooks, **extra):
         doc = {'hooks': {'SessionStart': [{'matcher': 'startup|resume|compact', 'hooks': list(hooks)}]}}
@@ -504,7 +511,12 @@ class ExecFormAndPlugin(Base):
         return doc
 
     def kit_hook(self, name):
+        """Where a retired hook script was, plan steps 7 to 13."""
         return fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', name))
+
+    def kit_entry(self, *words):
+        """The kit's hook entry and `words` after the host, as one shell-form command tail."""
+        return ' '.join([fwd(os.path.join(self.kit, 'boot', 'hook.py')), 'claude'] + list(words))
 
     def add_plugin(self, name='any-plugin-name'):
         touch(os.path.join(self.kit, '.claude-plugin', 'plugin.json'),
@@ -512,43 +524,63 @@ class ExecFormAndPlugin(Base):
         touch(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'hooks.json'), json.dumps({'hooks': {'SessionStart': [
             {'matcher': 'startup|resume|compact', 'hooks': [
                 {'type': 'command', 'command': 'pythonw',
-                 'args': ['${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/coordinator_session_start.py']}]}]}}))
+                 'args': ['${CLAUDE_PLUGIN_ROOT}/boot/hook.py', 'claude', 'SessionStart', 'coordinator']}]}]}}))
 
     def test_a_shell_form_kit_hook_is_planned_in_exec_form_and_a_dry_run_writes_nothing(self):
         sl = {'type': 'command', 'command': 'powershell -NoProfile -File "%s"'
               % fwd(os.path.join(self.kit, 'optional', 'usage', 'statusline-usage.ps1'))}
         self.write_settings(self.s2, self.hook_doc(
-            {'type': 'command', 'command': 'python "%s"' % self.kit_hook('coordinator_session_start.py')},
-            {'type': 'command', 'command': '"C:/Py thon/python.exe" %s' % self.kit_hook('pm_session_start.py')},
+            {'type': 'command', 'command': 'python %s' % self.kit_entry('SessionStart', 'coordinator')},
+            {'type': 'command', 'command': '"C:/Py thon/python.exe" %s' % self.kit_entry('SessionStart', 'pm')},
             statusLine=sl))
         before = self.snapshot()
         code, out = self.run_it(config_dirs=[self.c2])
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertEqual(self.snapshot(), before)
-        self.assertIn('write the SessionStart hook coordinator_session_start.py in exec form', out)
-        self.assertIn('write the SessionStart hook pm_session_start.py in exec form', out)
+        self.assertIn('write the SessionStart hook boot/hook.py claude SessionStart coordinator in exec form', out)
+        self.assertIn('write the SessionStart hook boot/hook.py claude SessionStart pm in exec form', out)
         self.assertTrue(any(l.strip() == '+' + ' ' * 12 + '"command": "%s",' % PYW for l in out.splitlines()), out)
         code, out = self.run_it(apply=True, config_dirs=[self.c2])
         self.assertEqual(code, M.EXIT_OK, out)
         doc = json.loads(readb(self.s2).decode('utf-8'))
         self.assertEqual(doc['hooks']['SessionStart'][0]['hooks'], [
-            {'type': 'command', 'command': PYW, 'args': [self.kit_hook('coordinator_session_start.py')]},
-            {'type': 'command', 'command': PYW, 'args': [self.kit_hook('pm_session_start.py')]}])
+            {'type': 'command', 'command': PYW, 'args': self.entry('SessionStart', 'coordinator')},
+            {'type': 'command', 'command': PYW, 'args': self.entry('SessionStart', 'pm')}])
         self.assertEqual(doc['hooks']['PreToolUse'], self.host.guard_entry(self.kit)['PreToolUse'])
         self.assertEqual(doc['statusLine'], sl)                        # no exec form for a status line
         self.assertTrue(os.path.isfile(self.s2 + '.machine-setup-%s.bak' % TODAY))
         code, out = self.run_it(apply=True, config_dirs=[self.c2])
         self.assertIn('settings: nothing to do', out)
 
+    def test_a_retired_hook_script_is_re_pointed_to_the_entry_then_written_in_exec_form(self):
+        self.write_settings(self.s2, {'hooks': {
+            'PreToolUse': [{'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': PYW,
+                                                          'args': [self.kit_hook('guard.py')]}]}],
+            'SessionStart': [{'hooks': [
+                {'type': 'command', 'command': 'python "%s"' % self.kit_hook('coordinator_session_start.py')}]}]}})
+        code, out = self.run_it(apply=True, config_dirs=[self.c2])
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertIn('re-point the PreToolUse hook guard.py from hosts/claude/shell/hooks/ to boot/hook.py claude '
+                      'PreToolUse', out)
+        doc = json.loads(readb(self.s2).decode('utf-8'))
+        self.assertEqual(doc['hooks']['PreToolUse'], [{'matcher': 'Bash', 'hooks': [
+            {'type': 'command', 'command': PYW, 'args': self.entry('PreToolUse')}]}], 'no second guard entry')
+        self.assertEqual(doc['hooks']['SessionStart'][0]['hooks'],
+                         [{'type': 'command', 'command': PYW, 'args': self.entry('SessionStart', 'coordinator')}])
+        code, out = self.run_it(apply=True, config_dirs=[self.c2])
+        self.assertIn('settings: nothing to do', out)
+
     def test_other_commands_are_left_as_they_are(self):
-        other = [{'type': 'command', 'command': 'python %s --verbose' % self.kit_hook('coordinator_session_start.py')},
-                 {'type': 'command', 'command': 'node %s' % self.kit_hook('coordinator_session_start.py')},
+        other = [{'type': 'command', 'command': 'node %s' % self.kit_entry('SessionStart', 'coordinator')},
                  {'type': 'command', 'command': 'python %s' % fwd(os.path.join(self.kit, 'tools', 'machine_lock.py'))},
-                 {'type': 'command', 'command': 'python %s' % self.kit_hook('missing.py')},
-                 {'type': 'command', 'command': 'pythonw', 'args': [self.kit_hook('pm_session_start.py')]}]
+                 {'type': 'command', 'command': 'python %s' % fwd(os.path.join(self.kit, 'boot', 'missing.py'))},
+                 {'type': 'command', 'command': 'pythonw', 'args': self.entry('SessionStart', 'pm')},
+                 # the shell's own redirect, and more words than the entry takes: kept in shell form
+                 {'type': 'command', 'command': 'python %s > C:/log.txt' % self.kit_entry('SessionStart', 'pm')},
+                 {'type': 'command', 'command': 'python %s a' % self.kit_entry('SessionStart', 'pm')}]
         doc = self.hook_doc(*other)
         doc['hooks']['Stop'] = [{'hooks': [
-            {'type': 'command', 'command': 'python %s' % self.kit_hook('coordinator_session_start.py')}]}]
+            {'type': 'command', 'command': 'python %s' % self.kit_entry('SessionStart', 'coordinator')}]}]
         self.write_settings(self.s2, doc)
         code, out = self.run_it(config_dirs=[self.c2])
         self.assertEqual(code, M.EXIT_OK, out)
@@ -564,15 +596,15 @@ class ExecFormAndPlugin(Base):
 
     def assertExecFormRefused(self, guard_entry, why):
         guard = {'PreToolUse': [{'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': PYW,
-                 'args': [fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))]}]}]}
+                 'args': self.entry('PreToolUse')}]}]}
         self.write_settings(self.s2, {'hooks': dict(guard, SessionStart=[{'hooks': [
-            {'type': 'command', 'command': 'python %s' % self.kit_hook('coordinator_session_start.py')}]}])})
+            {'type': 'command', 'command': 'python %s' % self.kit_entry('SessionStart', 'coordinator')}]}])})
         self.host.guard_entry = guard_entry
         before = self.snapshot()
         code, out = self.run_it(apply=True, config_dirs=[self.c2])
         self.assertEqual(code, M.EXIT_REFUSED, out)
-        self.assertIn('cannot write the SessionStart hook coordinator_session_start.py in exec form: '
-                      'guard.py --settings-entry gave no interpreter (%s' % why, out)
+        self.assertIn('cannot write the SessionStart hook boot/hook.py claude SessionStart coordinator in exec '
+                      'form: boot/hook.py --settings-entry gave no interpreter (%s' % why, out)
         self.assertIn('nothing changed', out)
         self.assertEqual(self.snapshot(), before)
 
@@ -590,16 +622,16 @@ class ExecFormAndPlugin(Base):
     def test_a_hook_the_plugin_also_carries_is_noted_whatever_the_plugin_is_called(self):
         self.add_plugin()
         self.write_settings(self.s2, self.hook_doc(
-            {'type': 'command', 'command': 'pythonw', 'args': [self.kit_hook('coordinator_session_start.py')]},
-            {'type': 'command', 'command': 'pythonw', 'args': [self.kit_hook('pm_session_start.py')]}))
+            {'type': 'command', 'command': 'pythonw', 'args': self.entry('SessionStart', 'coordinator')},
+            {'type': 'command', 'command': 'pythonw', 'args': self.entry('SessionStart', 'pm')}))
         before = self.snapshot()
         code, out = self.run_it(config_dirs=[self.c2])
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertEqual(self.snapshot(), before)
         notes = [l for l in out.splitlines() if 'runs twice' in l]
         self.assertEqual(len(notes), 1, out)
-        self.assertIn('the SessionStart hook coordinator_session_start.py is also the kit plugin\'s hook '
-                      '(hosts/claude/shell/hooks/hooks.json)', notes[0])
+        self.assertIn('the SessionStart hook hook.py claude SessionStart coordinator is also the kit plugin\'s '
+                      'hook (hosts/claude/shell/hooks/hooks.json)', notes[0])
         self.assertIn('remove this entry in the same step as the plugin install', notes[0])
         self.assertNotIn('any-plugin-name', out)
         self.assertIn('settings: nothing to do', out)
@@ -607,7 +639,7 @@ class ExecFormAndPlugin(Base):
     def test_a_shell_form_hook_the_plugin_carries_is_noted_in_the_run_that_rewrites_it(self):
         self.add_plugin()
         self.write_settings(self.s2, self.hook_doc(
-            {'type': 'command', 'command': 'python %s' % self.kit_hook('coordinator_session_start.py')}))
+            {'type': 'command', 'command': 'python %s' % self.kit_entry('SessionStart', 'coordinator')}))
         before = self.snapshot()
         code, out = self.run_it(config_dirs=[self.c2])
         self.assertEqual(code, M.EXIT_OK, out)
@@ -617,7 +649,7 @@ class ExecFormAndPlugin(Base):
 
     def test_no_plugin_hooks_file_means_no_note(self):
         self.write_settings(self.s2, self.hook_doc(
-            {'type': 'command', 'command': 'pythonw', 'args': [self.kit_hook('coordinator_session_start.py')]}))
+            {'type': 'command', 'command': 'pythonw', 'args': self.entry('SessionStart', 'coordinator')}))
         code, out = self.run_it(config_dirs=[self.c2])
         self.assertNotIn('runs twice', out)
         touch(os.path.join(self.kit, '.claude-plugin', 'plugin.json'), json.dumps({'name': 'x'}))
@@ -682,7 +714,8 @@ class Parts(unittest.TestCase):
     def test_real_guard_entry_shape(self):
         entry = extras.Host().guard_entry(KIT)
         args = entry['PreToolUse'][0]['hooks'][0]['args']
-        self.assertEqual(common.norm(args[0]), common.norm(os.path.join(KIT, 'hosts', 'claude', 'shell', 'hooks', 'guard.py')))
+        self.assertEqual(common.norm(args[0]), common.norm(os.path.join(KIT, 'boot', 'hook.py')))
+        self.assertEqual(args[1:], ['claude', 'PreToolUse'])
 
 
 @unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')
