@@ -301,13 +301,13 @@ class LockVerbs(Base):
     def test_the_agent_rights_pass_for_write_controller_and_test(self):
         """docs/guard.md "Lock CLI owner writes" "Still open"."""
         for role in ('senior-worker', 'pm', 'test-runner'):
-            for args in ('book --kind build', '--repo x unbook b1', 'hold agent --for 1h', 'hold list',
-                         'hold end h-1', 'hold edit h-1 --for 2h', 'division', 'game', 'game show'):
+            for args in ('hold agent --for 1h', 'hold list', 'hold end h-1', 'hold edit h-1 --for 2h',
+                         'division', 'game', 'game show', '--repo x status'):
                 with self.subTest(role=role, args=args):
                     self.assertIsNone(rolepolicy.check(self.shell('%s %s' % (LOCK, args), role), self.w.ctx()))
 
     def test_a_writer_runs_locked_jobs(self):
-        for args in ('status', 'stats', 'run --repo x --kind engine-test -- python -m unittest --force',
+        for args in ('status', 'status --days 3', 'run --repo x --kind engine-test -- python -m unittest --force',
                      'background --repo x --kind build -- x', 'stop r-1'):
             with self.subTest(args):
                 self.assertIsNone(rolepolicy.check(self.shell('%s %s' % (LOCK, args)), self.w.ctx()))
@@ -316,14 +316,30 @@ class LockVerbs(Base):
     def test_a_read_role_only_reads_the_lock_and_a_lander_also_runs(self):
         self.assertIsNone(rolepolicy.check(self.shell(LOCK + ' status', 'reviewer'), self.w.ctx()))
         d = self.denied(self.shell(LOCK + ' run --kind build -- x', 'reviewer'), 'role-lock')
-        self.assertIn('(status, stats; never --force)', d.reason)
-        for args in ('status', 'stats', 'run --kind build -- python tools/gate.py'):
+        self.assertIn('(status; never --force)', d.reason)
+        for args in ('status', 'status --days 3', 'run --kind build -- python tools/gate.py'):
             with self.subTest(args):
                 self.assertIsNone(rolepolicy.check(self.shell('%s %s' % (LOCK, args), 'lander'), self.w.ctx()))
-        for args in ('background --kind build -- x', 'hold agent', 'book', 'run --forc -- x'):
+        for args in ('background --kind build -- x', 'hold agent', 'stop r-1', 'run --forc -- x'):
             with self.subTest(args):
                 d = self.denied(self.shell('%s %s' % (LOCK, args), 'lander'), 'role-lock')
-                self.assertIn('(status, stats, run; never --force)', d.reason)
+                self.assertIn('(status, run; never --force)', d.reason)
+
+    def test_only_the_verbs_the_lock_cli_has_are_named(self):
+        """tools/machine_lock.py's own parser: a verb it does not have (stats, book, unbook) is
+        nobody's right."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('machine_lock_cli', os.path.join(
+            kitroot.root(), 'tools', 'machine_lock.py'))
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        sub = next(a for a in cli.parser()._actions if a.dest == 'cmd')
+        for m, table in rolepolicy.LOCK_VERBS.items():
+            with self.subTest(m):
+                self.assertLessEqual(set(table), set(sub.choices), m)
+        for args in ('stats', 'book --kind build', 'unbook b1'):
+            with self.subTest(args):
+                self.denied(self.shell('%s %s' % (LOCK, args), 'senior-worker'), 'role-lock')
 
 
 class Switch(unittest.TestCase):

@@ -70,13 +70,14 @@ NO_EDIT = ('read', 'test', 'lander')
 READ_ONLY_CHECKOUT = ('read', 'test')
 OWNER_PATHS_READ_ONLY = NO_EDIT
 # The lock verbs a mode runs: verb -> None (any argument) or the sub-verbs it may take ('' none).
-# AGENT_LOCK is docs/guard.md "Lock CLI owner writes" "Still open": an agent's rights.
-AGENT_LOCK = {'status': None, 'stats': None, 'run': None, 'background': None, 'stop': None,
-              'book': None, 'unbook': None, 'hold': ('agent', 'list', 'end', 'edit'),
-              'division': ('',), 'game': ('', 'show')}
+# Only verbs tools/machine_lock.py has (its parser: run, background, status, stop, top, hold,
+# division, game); AGENT_LOCK is docs/guard.md "Lock CLI owner writes" "Still open" among them: an
+# agent's rights. `status` also gives the run history (--days).
+AGENT_LOCK = {'status': None, 'run': None, 'background': None, 'stop': None,
+              'hold': ('agent', 'list', 'end', 'edit'), 'division': ('',), 'game': ('', 'show')}
 LOCK_VERBS = {'controller': AGENT_LOCK, 'write': AGENT_LOCK, 'test': AGENT_LOCK,
-              'lander': {'status': None, 'stats': None, 'run': None},
-              'read': {'status': None, 'stats': None}}
+              'lander': {'status': None, 'run': None},
+              'read': {'status': None}}
 REAL_NOT_FORCE = ('--for',)   # a lock CLI option of its own (hold edit, window_args), not --force cut short
 STDIN_OPS = ('<', '<<', '<<<')
 # What an interpreter's own options say (shell_gap): it runs a script or command and ends, it reads
