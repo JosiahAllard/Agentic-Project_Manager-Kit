@@ -8,11 +8,12 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 ## Docs
 
 - `docs/INDEX.md` | this index | adding or finding a doc | kw: index, docs
-- `CLAUDE.md` | kit repo rules for agents | always | kw: rules, claude
-- `AGENTS.md` | the same rules for other agent hosts | always | kw: rules, agents
+- `CLAUDE.md` | Claude's pointer: imports AGENTS.md | always | kw: rules, claude
+- `AGENTS.md` | kit repo rules for every agent host (canonical) | always | kw: rules, agents
 - `README.md` | what the kit is | first look | kw: readme, overview
 - `ARCHITECTURE.md` | kit tool architecture (the contract; owner approves changes) | before changing a tool | kw: architecture, contract
-- `.claude/agent-profile.md` | this repo's profile for worker agents | starting a task | kw: profile, branches, build, test
+- `docs/agent-profile.md` | this repo's profile for worker agents | starting a task | kw: profile, branches, build, test
+- `.claude/agent-profile.md` | stub: the profile moved to docs/agent-profile.md | an agent names the old path | kw: profile
 - `docs/ROSTER.md` | agent roster | choosing an agent | kw: roster, agents
 - `docs/action-hub.md` | Action Hub | the PM action list | kw: action-hub, hub
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog
@@ -20,6 +21,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/backlog-store.md` | backlog store design | changing the store | kw: backlog-store, store
 - `docs/branch-overlap.md` | branch overlap: unmerged branches touching a file set | checking a sweep's exclusions | kw: branch_overlap, overlap
 - `docs/commit.md` | commit.py and machine_paths.py | committing | kw: commit, machine_paths
+- `docs/content.md` | content/ and render_content: roles and skills written once, rendered per host | editing an agent or a skill | kw: content, render_content, roles, render
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
 - `docs/engineering-rulings.md` | engineering rulings | before a design choice | kw: rulings, engineering
@@ -55,10 +57,13 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/windows-token-leak.md` | Windows token leak: slow process launches | slow launches | kw: windows, token-leak
 - `docs/worktree-paths.md` | worktree paths | where worktrees live | kw: worktree-paths
 - `docs/worktree-remove.md` | worktree remove | removing a worktree | kw: worktree-remove, sweep
-- `claude/agents/*.md` | one agent definition per file | editing an agent | kw: agents, agent-definition
-- `claude/skills/*/*.md` | one skill per folder | editing a skill | kw: skills, skill
+- `content/roles/*.md` | one role per file, the source of every host's agent file (`docs/content.md`) | editing an agent | kw: roles, agents, agent-definition
+- `content/skills/*/*.md` | one skill per folder, the source of every host's skills (`docs/content.md`) | editing a skill | kw: skills, skill
+- `claude/agents/*.md` | Claude's agent files, rendered from content/roles (never edit by hand) | reading what Claude loads | kw: agents, rendered
+- `claude/skills/*/*.md` | Claude's skills, copied from content/skills (never edit by hand) | reading what Claude loads | kw: skills, rendered
 - `templates/stacks/godot/.claude/skills/godot-render-check/SKILL.md` | Godot render check and e2e tiers | Godot repos | kw: godot, render, e2e
-- `templates/common/CLAUDE.md` | starter CLAUDE.md for a new repo | installing | kw: template, claude
+- `templates/common/AGENTS.md` | starter rules file (AGENTS.md) for a new repo | installing | kw: template, agents, rules
+- `templates/common/CLAUDE.md` | starter CLAUDE.md: imports AGENTS.md | installing | kw: template, claude
 - `templates/common/INDEX.md` | starter doc index for a new repo | installing | kw: template, index
 - `templates/common/LEDGER.md` | starter rulings ledger | installing | kw: template, ledger
 - `templates/common/agent-profile.TEMPLATE.md` | starter agent profile | installing | kw: template, profile
@@ -97,7 +102,8 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/tool_deps.py` | tests a changed file selects (`docs/test-tools.md`) | kw: tool_deps
 - `tools/pytests.py` | test runner (`docs/test-tools.md`) | kw: pytests
 - `tools/forbidden.py` | forbidden-text check (`docs/repo-checks.md`) | kw: forbidden
-- `tools/agent_roster.py` | docs/ROSTER.md against agent file model and effort (`docs/ROSTER.md`) | kw: agent_roster, roster
+- `tools/agent_roster.py` | docs/ROSTER.md against content/roles tier and effort and the hosts' tier maps (`docs/ROSTER.md`) | kw: agent_roster, roster
+- `tools/render_content.py` | render content/ into each host's agents and skills; --check for drift (`docs/content.md`) | kw: render_content, content, render
 - `tools/board.py` | the coordinator's whole board in one call (`docs/preflight.md`) | kw: board
 - `tools/checkout_guard.py` | is a path in the main checkout; strays in it (`docs/preflight.md`) | kw: checkout_guard, stray
 - `tools/kit_stubs.py` | write or check a repo's stubs for the kit tools (`docs/install.md`) | kw: kit_stubs, stubs

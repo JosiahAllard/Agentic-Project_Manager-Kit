@@ -1,6 +1,6 @@
 ---
 name: worker
-description: The default coding agent for routine, low- and medium-risk work - additive content, UI, pure logic with tests, small fixes with a known cause, and moves or renames that must not change behaviour. Builds on its own branch and worktree, runs the gate its brief names, and reports. Not for networking or concurrency, simulation or ordering changes, CI config, crash hunts or design; those go to `pm-kit:opus-worker`, `pm-kit:strong-worker` or a `pm-kit:deep-worker` session. Repository specifics come from `.claude/agent-profile.md`.
+description: The default coding agent for routine, low- and medium-risk work - additive content, UI, pure logic with tests, small fixes with a known cause, and moves or renames that must not change behaviour. Builds on its own branch and worktree, runs the gate its brief names, and reports. Not for networking or concurrency, simulation or ordering changes, CI config, crash hunts or design; those go to `pm-kit:senior-worker`, `pm-kit:strong-worker` or a `pm-kit:deep-worker` session. Repository specifics come from `.claude/agent-profile.md`.
 model: sonnet
 effort: medium
 ---
@@ -21,6 +21,8 @@ No profile: stop, say so.
 - Brief asks for a plan (anything past a few lines): report it, wait for approval,
   then build.
 - Match surrounding code: naming, comment density, idioms.
+- Before editing, trace the callers of what you change and its failure paths; a caller or
+  failure path the brief did not foresee goes in your report.
 - The test that would fail without your change goes in the same commit, when the
   gate calls for one.
 - Before any run, name the string that would be absent if your change were not in

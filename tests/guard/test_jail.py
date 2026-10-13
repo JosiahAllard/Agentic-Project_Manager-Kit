@@ -782,7 +782,7 @@ class LanderMainCheckout(MainGit):
 
     def test_no_other_role_may_fetch_or_merge_main(self):
         fetch, merge = 'git -C "%s" fetch origin main' % self.main, 'git -C "%s" merge --ff-only origin/main' % self.main
-        for agent_type in ('worker', 'opus-worker'):
+        for agent_type in ('worker', 'senior-worker'):
             with self.subTest(agent_type):
                 self.jailed(self.git(fetch, agent_type))
                 self.denied(self.git(merge, agent_type))
@@ -802,7 +802,7 @@ class LanderMainCheckout(MainGit):
         self.allowed(self.git(merge, P + 'lander'))
         self.allowed(self.git('& git -C "%s" fetch origin' % self.main, P + 'lander', tool='PowerShell'))
         self.jailed(self.git('git -C "%s" commit -m x' % self.main, P + 'lander'))
-        for kind in (P + 'worker', P + 'opus-worker', 'other:lander', P + P + 'lander', P.upper() + 'lander', P,
+        for kind in (P + 'worker', P + 'senior-worker', 'other:lander', P + P + 'lander', P.upper() + 'lander', P,
                      P + 'main', P.rstrip(':') + 'lander', 'x' + P + 'lander', P[1:] + 'lander'):
             with self.subTest(kind):
                 self.jailed(self.git(fetch, kind))

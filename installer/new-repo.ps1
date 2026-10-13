@@ -24,7 +24,7 @@
 #   <Target>\.claude\skills\...  with -Stack: the stack's skills, by `tools\stack_skill.py install` (Godot:
 #                                godot-render-check), the kit's absolute path written over {kit_root};
 #                                one already there is kept; a kit path it cannot write refuses
-# It does not install the stack's CI workflows or its other files outside tools\ and .claude\skills\, templates\common\CLAUDE.md,
+# It does not install the stack's CI workflows or its other files outside tools\ and .claude\skills\, templates\common\AGENTS.md and CLAUDE.md,
 # the agent profiles, or .claude\settings.json (docs/install.md "What the script does not install").
 # -OwnerEmail and -AgentEmail are required and must differ: an owner commit (Owner-Approved:) counts
 # only when its author email is "owner".email, so an empty or shared identity would let an agent's

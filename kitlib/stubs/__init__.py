@@ -65,7 +65,7 @@ SHARED = (
 KIT_ONLY = (
     'agent_roster', 'agent_temp_init', 'backlog_lint', 'branch_overlap', 'hub_mirror', 'kit_tests', 'launch', 'ledger_refs',
     'lock_release_check', 'machine_lock', 'machine_setup', 'no_window', 'pending', 'pm_data', 'pm_watch',
-    'plugin_refresh', 'worktree_sweep_task', 'kit_release',
+    'plugin_refresh', 'render_content', 'worktree_sweep_task', 'kit_release',
 )
 
 Outcome = collections.namedtuple('Outcome', 'code lines')

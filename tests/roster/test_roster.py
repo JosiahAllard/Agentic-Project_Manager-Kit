@@ -1,7 +1,8 @@
-"""kitlib.roster and tools/agent_roster.py: docs/ROSTER.md against the agent files' frontmatter.
+"""kitlib.roster and tools/agent_roster.py: docs/ROSTER.md against content/roles and each host's
+tier -> model map.
 
-The check runs on the real claude/agents/ folder; --write runs on a temp copy and must leave every byte
-outside the changed lines alone (CRLF files included).
+The check runs on the real content/roles/; --write runs on a temp copy and must leave every byte
+outside the changed lines alone (CRLF files included), then render the host files.
 """
 import importlib
 import io
@@ -13,14 +14,16 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib import reviewpack, roster
+from claude.adapter import content as claude_content
+from kitlib import content, reviewpack, roster
 from tests.docs.test_cli import repo_with_docs
 from tests.gitfixture import fixture_env
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-AGENTS = os.path.join(KIT_ROOT, 'claude', 'agents')
 sys.path.insert(0, os.path.join(KIT_ROOT, 'tools'))
 import agent_roster as cli  # noqa: E402
+
+MAPS = {'claude': claude_content.TIER_MODEL}
 
 
 def read(path):
@@ -33,13 +36,22 @@ def write_file(path, data):
         f.write(data)
 
 
-class RealAgentsTest(unittest.TestCase):
-    def test_roster_matches_frontmatter(self):
-        self.assertEqual(roster.check(AGENTS), [])
+class RealRosterTest(unittest.TestCase):
+    def test_roster_matches_the_roles_and_the_tier_maps(self):
+        self.assertEqual(roster.check(KIT_ROOT, MAPS), [])
 
     def test_cli_default_is_check(self):
         out = io.StringIO()
         self.assertEqual(cli.main([], out), 0, out.getvalue())
+
+    def test_every_rendered_model_is_the_roster_tiers(self):
+        """The model an agent file names is the roster's tier through the host's tier table."""
+        rows, models = roster.parse_roster(read(os.path.join(KIT_ROOT, 'docs', 'ROSTER.md')).decode('utf-8'))
+        for name, (tier, effort) in rows.items():
+            fm = roster.read_frontmatter(read(os.path.join(KIT_ROOT, 'claude', 'agents', name + '.md')))
+            with self.subTest(role=name):
+                self.assertEqual(fm['model'], models['claude'][tier])
+                self.assertEqual(fm.get('effort', roster.NONE), effort)
 
 
 class TempCopyTest(unittest.TestCase):
@@ -47,103 +59,118 @@ class TempCopyTest(unittest.TestCase):
         top = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, top, True)
         self.top = top
-        self.dir = os.path.join(top, 'claude', 'agents')    # the kit layout: docs/ two levels up
-        shutil.copytree(AGENTS, self.dir)
-        os.mkdir(os.path.join(top, 'docs'))
+        for rel in ('content', 'docs', os.path.join('claude', 'agents'), os.path.join('claude', 'skills')):
+            shutil.copytree(os.path.join(KIT_ROOT, rel), os.path.join(top, rel))
+        self.dir = os.path.join(top, 'content', 'roles')
         self.roster = os.path.join(top, 'docs', 'ROSTER.md')
-        shutil.copy(os.path.join(KIT_ROOT, 'docs', 'ROSTER.md'), self.roster)
 
-    def edit_row(self, agent, old, new):
+    def edit_row(self, role, old, new):
         text = read(self.roster).decode('utf-8')
         lines = text.split('\n')
-        i = next(i for i, l in enumerate(lines) if l.startswith('| %s |' % agent))
+        i = next(i for i, l in enumerate(lines) if l.startswith('| %s |' % role))
         self.assertIn(old, lines[i])
         lines[i] = lines[i].replace(old, new, 1)
         write_file(self.roster, '\n'.join(lines).encode('utf-8'))
 
-    def test_model_and_effort_mismatch_listed(self):
-        self.edit_row('worker', '| sonnet | medium |', '| opus | high |')
-        got = roster.check(self.dir)
+    def test_tier_and_effort_mismatch_listed(self):
+        self.edit_row('worker', '| standard | medium |', '| strong | high |')
+        got = roster.check(self.top, MAPS)
         self.assertEqual(len(got), 2, got)
         out = io.StringIO()
-        self.assertEqual(cli.main(['--check', '--dir', self.dir], out), 1)
-        self.assertIn('worker: model is opus', out.getvalue())
+        self.assertEqual(cli.main(['--check', '-C', self.top], out), 1)
+        self.assertIn('worker: tier is strong', out.getvalue())
+
+    def test_an_unknown_tier_is_listed(self):
+        self.edit_row('worker', '| standard |', '| huge |')
+        self.assertIn('worker: tier huge in ROSTER.md is not one of light, standard, strong, deep',
+                      roster.check(self.top, MAPS))
+
+    def test_tier_table_against_the_host_map(self):
+        self.assertEqual(roster.check(self.top, {'claude': dict(MAPS['claude'], deep='sonnet')}),
+                         ['claude: tier deep runs opus in ROSTER.md, sonnet in the host renderer'])
+        self.assertEqual(roster.check(self.top, dict(MAPS, other={'light': 'x'})),
+                         ['other: no column in the ROSTER.md tier table'])
+        self.assertEqual(roster.check(self.top, {}),
+                         ['claude: a column in the ROSTER.md tier table, but no such host renderer'])
 
     def test_missing_on_either_side(self):
         os.remove(os.path.join(self.dir, 'lander.md'))
-        write_file(self.roster, read(self.roster) + b'| ghost | opus | low | x |\n')
-        got = '\n'.join(roster.check(self.dir))
-        self.assertIn('lander: row in ROSTER.md has no agent file', got)
-        self.assertIn('ghost: row in ROSTER.md has no agent file', got)
-        write_file(os.path.join(self.dir, 'extra.md'), b'---\nname: extra\nmodel: opus\n---\nbody\n')
-        self.assertIn('extra: agent file has no row in ROSTER.md', '\n'.join(roster.check(self.dir)))
+        write_file(self.roster, read(self.roster).replace(b'| worker |', b'| ghost | strong | low | x |\n| worker |', 1))
+        got = '\n'.join(roster.check(self.top, MAPS))
+        self.assertIn('lander: row in ROSTER.md has no role file', got)
+        self.assertIn('ghost: row in ROSTER.md has no role file', got)
+        write_file(os.path.join(self.dir, 'extra.md'), b'---\nname: extra\ntier: strong\n---\nbody\n')
+        self.assertIn('extra: role file has no row in ROSTER.md', '\n'.join(roster.check(self.top, MAPS)))
 
-    def test_write_changes_only_the_two_lines(self):
+    def test_write_changes_only_the_two_lines_and_renders(self):
         before = {n: read(os.path.join(self.dir, n)) for n in os.listdir(self.dir)}
-        self.edit_row('worker', '| sonnet | medium |', '| opus | high |')
-        self.edit_row('coordinator', '| opus | medium |', '| sonnet | low |')   # CRLF file
-        self.assertEqual(roster.write(self.dir), ['coordinator', 'worker'])
-        self.assertEqual(roster.check(self.dir), [])
+        self.edit_row('worker', '| standard | medium |', '| strong | high |')       # CRLF file
+        self.edit_row('records', '| standard | low |', '| light | medium |')
+        self.assertEqual(roster.write(self.top), ['records', 'worker'])
+        self.assertEqual(roster.check(self.top, MAPS), [])
         for n, old in before.items():
             new = read(os.path.join(self.dir, n))
-            if n in ('worker.md', 'coordinator.md'):
+            if n in ('worker.md', 'records.md'):
                 nl = b'\r\n' if b'\r\n' in old else b'\n'
                 a, b = old.split(nl), new.split(nl)
                 self.assertEqual(len(a), len(b), n)
                 diff = [i for i in range(len(a)) if a[i] != b[i]]
                 self.assertEqual(len(diff), 2, n)
                 for i in diff:
-                    self.assertTrue(a[i].startswith((b'model:', b'effort:')), a[i])
+                    self.assertTrue(a[i].startswith((b'tier:', b'effort:')), a[i])
             else:
                 self.assertEqual(new, old, n)
 
+    def test_cli_write_renders_the_host_files(self):
+        self.edit_row('worker', '| standard | medium |', '| strong | high |')
+        out = io.StringIO()
+        self.assertEqual(cli.main(['--write', '-C', self.top], out), 0)
+        self.assertIn('rendered claude/agents/worker.md', out.getvalue())
+        fm = roster.read_frontmatter(read(os.path.join(self.top, 'claude', 'agents', 'worker.md')))
+        self.assertEqual((fm['model'], fm['effort']), ('opus', 'high'))
+        self.assertEqual(content.drift(self.top, [claude_content.renderer()]), [])
+
     def test_write_adds_and_removes_effort_line(self):
-        self.edit_row('test-runner', '| haiku | - |', '| haiku | low |')
-        self.edit_row('lander', '| haiku | medium |', '| haiku | - |')
-        roster.write(self.dir)
-        self.assertEqual(roster.check(self.dir), [])
-        self.assertIn(b'model: haiku\neffort: low\n', read(os.path.join(self.dir, 'test-runner.md')))
+        self.edit_row('test-runner', '| light | - |', '| light | low |')
+        self.edit_row('lander', '| light | medium |', '| light | - |')
+        roster.write(self.top)
+        self.assertEqual(roster.check(self.top, MAPS), [])
+        self.assertIn(b'tier: light\neffort: low\n', read(os.path.join(self.dir, 'test-runner.md')))
         self.assertNotIn(b'effort:', read(os.path.join(self.dir, 'lander.md')).split(b'---')[1])
 
     def test_removing_effort_spares_effort_text_in_description(self):
         path = os.path.join(self.dir, 'lander.md')
         text = read(path).decode('utf-8')
-        text = text.replace('description: ', 'description: Mind the effort: it is a word here. ', 1)
+        text = text.replace('description: ', 'description: Mind the effort it takes. ', 1)
         write_file(path, text.encode('utf-8'))
-        self.edit_row('lander', '| haiku | medium |', '| haiku | - |')
-        roster.write(self.dir)
+        self.edit_row('lander', '| light | medium |', '| light | - |')
+        roster.write(self.top)
         want = text.replace('effort: medium' + chr(10), '', 1)
         self.assertEqual(read(path).decode('utf-8'), want)
 
-    def test_write_leaves_a_frontmatter_map_alone(self):
-        # opus-worker.md carries a map (`experimental:` over an indented `cacheTtl: 1h`): the
-        # indented line is no key of its own to check, and a rewrite of effort: must not move it.
-        path = os.path.join(self.dir, 'opus-worker.md')
+    def test_write_leaves_other_keys_alone(self):
+        # senior-worker.md carries `cache: long` after its capabilities: a rewrite of effort:
+        # must not move or drop it.
+        path = os.path.join(self.dir, 'senior-worker.md')
         old = read(path)
         nl = b'\r\n' if b'\r\n' in old else b'\n'
-        block = nl + b'experimental:' + nl + b'  cacheTtl: 1h' + nl + b'---' + nl
-        self.assertIn(b'effort: medium' + block, old)
-        self.assertEqual(roster.read_frontmatter(old).get('experimental'), '')
-        self.assertNotIn('cacheTtl', roster.read_frontmatter(old))
-        self.edit_row('opus-worker', '| opus | medium |', '| opus | high |')
-        self.assertEqual(roster.write(self.dir), ['opus-worker'])
+        self.assertIn(nl + b'cache: long' + nl + b'---' + nl, old)
+        self.edit_row('senior-worker', '| strong | medium |', '| strong | high |')
+        self.assertEqual(roster.write(self.top), ['senior-worker'])
         self.assertEqual(read(path), old.replace(b'effort: medium', b'effort: high', 1))
-        self.edit_row('opus-worker', '| opus | high |', '| opus | - |')
-        self.assertEqual(roster.write(self.dir), ['opus-worker'])
+        self.edit_row('senior-worker', '| strong | high |', '| strong | - |')
+        self.assertEqual(roster.write(self.top), ['senior-worker'])
         self.assertEqual(read(path), old.replace(nl + b'effort: medium', b'', 1))
-        self.assertEqual(roster.check(self.dir), [])
+        self.assertEqual(roster.check(self.top, MAPS), [])
 
     def test_write_is_a_no_op_when_agreeing(self):
-        self.assertEqual(roster.write(self.dir), [])
+        self.assertEqual(roster.write(self.top), [])
 
-    def test_roster_found_one_level_up_from_claude_agents(self):
-        self.assertEqual(roster.roster_path(self.dir), self.roster)
-
-    def test_roster_beside_a_flat_agents_folder_wins(self):
-        flat = os.path.join(self.top, 'claude', 'docs')
-        os.mkdir(flat)
-        shutil.copy(self.roster, os.path.join(flat, 'ROSTER.md'))
-        self.assertEqual(roster.roster_path(self.dir), os.path.join(flat, 'ROSTER.md'))
+    def test_an_unreadable_roster_is_usage(self):
+        os.remove(self.roster)
+        out = io.StringIO()
+        self.assertEqual(cli.main(['-C', self.top], out), 2)
+        self.assertIn('agent_roster: cannot read', out.getvalue())
 
 
 class ReviewerRuleTest(unittest.TestCase):

@@ -28,6 +28,7 @@ from kitlib.launcher.settings import LaunchError
 LOG = 'after-reboot.log'
 TEST_NAME = 'autostart-test'
 FRESH_MINUTES = 15
+PM_AGENT = 'pm'    # the kit's PM agent (content/roles/pm.md), resumed as --agent pm-kit:pm
 WAIT_SECONDS = 60
 PROMPT = ('Start up now: the machine restarted and after-reboot launched you. Run your start-up routine, read your '
           'state note %s, check in with the PM (the session named %s) and say the machine restarted, then continue '
@@ -171,7 +172,7 @@ def resume_pm(settings, host, cfg, log, dry_run=False):
     try:
         d = A.launch_dir(settings, str(pm_account))
         config_dir = None if settings.is_default(d) else d
-        cmd = window.claude_command('pm-session', PM_PROMPT, resume=sid)
+        cmd = window.claude_command('pm-session', PM_PROMPT, S.run_as(PM_AGENT), resume=sid)
         text = window.script('pm-session', window.PM, folder, cmd, config_dir, host.env('AGENT_TEMP'))
         if dry_run:
             log('would resume pm-session (session %s, account %s) in %s' % (sid, pm_account, folder))
