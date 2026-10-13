@@ -19,8 +19,9 @@
   gate.py --measure --out PATH [--days N]
       write a proposed kinds table from the lock's run history (never the live table)
   gate.py wait-result BRANCH --tip SHA [--kind gate|land] [--timeout S] [-C DIR]
-      read-only: wait for BRANCH's result record at SHA, print it; 0 pass, 1 any other verdict,
-      7 no record at that tip within S seconds
+      wait for BRANCH's result record at SHA, print it; 0 pass, 1 any other verdict, 7 no record
+      at that tip within S seconds. Its one write: a running record at SHA whose process died is
+      finished `error` (kitlib.gate.result.finish_dead)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate, prints and exits.
 Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY, 9 LANDED_UNGATED
@@ -147,9 +148,8 @@ def do_land(argv):
     if a.submitted:
         try:
             submitted = submitmod.restore(root, a.submitted)
-        except submitmod.SubmitError as e:
-            print('REFUSED: %s' % e, flush=True)
-            return G.REFUSED
+        except submitmod.SubmitError as e:     # its records are finished, never left running
+            return emit(submitmod.abandon(root, a.submitted, str(e)))
         if submitted.get('output'):
             try:
                 submitmod.redirect_output(submitted['output'])
@@ -165,7 +165,8 @@ def do_land(argv):
 
 def wait_parser():
     p = Parser(prog='gate.py wait-result',
-               description='Wait (read-only) for the result record of BRANCH at SHA.')
+               description='Wait for the result record of BRANCH at SHA (a running one whose '
+                           'process died is finished error).')
     p.add_argument('branch')
     p.add_argument('--tip', required=True, metavar='SHA', help='the tip gated (7+ hex digits)')
     p.add_argument('--kind', choices=resultmod.KINDS, default='gate',

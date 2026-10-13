@@ -38,9 +38,16 @@ The record (SCHEMA 1), every key always present:
                   running, for error, and when the run ended before its gate config was read
                   (a landing: before its merged gate). Added after the schema: a reader takes a
                   record without the key as null (source_of)
+  pid, ctime      the process writing the run's records (its creation time, FILETIME), or null:
+                  a submitted landing's running records until the detached landing records
+                  itself (kitlib.gate.submit restore), and a record written before the keys.
+                  Added after the schema, like source
 
-wait() is read-only: it polls for the final record of a branch and kind at a tip.
+wait() polls for the final record of a branch and kind at a tip. It writes one thing: a running
+record at that tip whose process has died (running_state 'dead') is finished `error`, "the
+<landing|gate> process died: ..." (finish_dead), so a killed run is never waited for forever.
 """
+import calendar
 import hashlib
 import json
 import math
@@ -51,6 +58,7 @@ import time
 from kitlib import gate as G
 from kitlib.records import gate_ok
 from kitlib.git import refs, repo
+from kitlib.proc import process
 
 DIR_NAME = 'kit-gate-result'
 SCHEMA = 1
@@ -62,6 +70,10 @@ POLL_S = 2.0
 RETRIES = 5
 RETRY_SLEEP = 0.2
 MAX_STEM = 120      # longer stems are cut and given a hash, so the file name stays short
+# A running record with no pid this young is taken as live: a submitted landing's, whose detached
+# process has not recorded itself yet (kitlib.gate.submit). An older one is 'unknown'.
+CLAIM_S = 120
+WHAT = {'land': 'landing', 'gate': 'gate'}
 SAFE = frozenset('abcdefghijklmnopqrstuvwxyz0123456789._-')
 DEVICES = frozenset(['con', 'prn', 'aux', 'nul'] + ['com%d' % i for i in range(10)]
                     + ['lpt%d' % i for i in range(10)])
@@ -112,7 +124,7 @@ def source_of(rec):
 
 def build(branch, tip, base, kind, code, log=None, summary=None, gate_ok_record=None,
           finished_at=None, run_id=None, started_at=None, verdict=None, cleanup=None,
-          source=None):
+          source=None, pid=None, ctime=None):
     """A record. `verdict` defaults to verdict_of(code); RUNNING and ERROR carry no code."""
     verdict = verdict or verdict_of(code)
     now = gate_ok.utc()
@@ -121,7 +133,15 @@ def build(branch, tip, base, kind, code, log=None, summary=None, gate_ok_record=
             'finished_at': None if verdict == RUNNING else (finished_at or now),
             'verdict': verdict, 'code': None if verdict in (RUNNING, ERROR) else code,
             'log': log, 'summary': summary or '', 'gate_ok_record': gate_ok_record,
-            'cleanup': cleanup, 'source': source}
+            'cleanup': cleanup, 'source': source, 'pid': pid, 'ctime': ctime}
+
+
+def own_process():
+    """(pid, ctime) of this process; ctime None when it cannot be read."""
+    try:
+        return os.getpid(), process.own_ctime()
+    except Exception:       # noqa: BLE001 - the pid alone still names it
+        return os.getpid(), None
 
 
 def _retry(fn, *args):
@@ -166,12 +186,14 @@ class Run(object):
     """One gate or landing's records: start() writes `running`, finish() or error() the final
     record with the same run_id and started_at. Each returns `(path, line)`: the line to say as
     progress, `result record: <path>` or a WARNING (path None). Nothing here raises: a record
-    that cannot be written never changes the run's outcome."""
+    that cannot be written never changes the run's outcome. Its records name this process (pid,
+    ctime), the one doing the run; a submission clears them (kitlib.gate.submit)."""
 
     def __init__(self, root, kind, branch, tip, base=None):
         self.root, self.kind, self.branch, self.tip, self.base = root, kind, branch, tip, base
         self.run_id = secrets.token_hex(8)
         self.started_at = gate_ok.utc()
+        self.pid, self.ctime = own_process()
 
     @classmethod
     def maybe(cls, root, kind, branch, tip, base=None):
@@ -183,7 +205,8 @@ class Run(object):
     def _write(self, **kw):
         try:
             rec = build(self.branch, self.tip, kw.pop('base', self.base), self.kind,
-                        kw.pop('code', None), run_id=self.run_id, started_at=self.started_at, **kw)
+                        kw.pop('code', None), run_id=self.run_id, started_at=self.started_at,
+                        pid=self.pid, ctime=self.ctime, **kw)
             path = write(self.root, rec)
         except Exception as e:      # noqa: BLE001 - the run's outcome stands whatever happens here
             return None, 'WARNING: the result record could not be written: %s' % e
@@ -234,9 +257,84 @@ def read(root, branch, kind='gate'):
 
 def answers(rec, branch, kind, tip):
     """True when `rec` is the final record of `branch` and `kind` at a tip starting with `tip`."""
+    return rec.get('verdict') not in (None, RUNNING) and at_tip(rec, branch, kind, tip)
+
+
+def _age_s(stamp, now):
+    try:
+        return now - calendar.timegm(time.strptime(stamp, '%Y-%m-%dT%H:%M:%SZ'))
+    except (TypeError, ValueError):
+        return None
+
+
+def running_state(rec, now=None, alive=None):
+    """Whether the process of a running record still runs: 'live', 'dead' (surely gone:
+    process.alive), or 'unknown' (no pid, and started CLAIM_S or more ago: a record written
+    before the pid key). A record with no pid younger than CLAIM_S is 'live' (a submission whose
+    detached landing has not recorded itself yet). None for a record that is not running."""
+    if not isinstance(rec, dict) or rec.get('verdict') != RUNNING:
+        return None
+    pid = rec.get('pid')
+    if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+        ctime = rec.get('ctime')
+        try:
+            up = (alive or process.alive)(pid, ctime if isinstance(ctime, int) else None)
+        except Exception:   # noqa: BLE001 - not surely gone
+            return 'unknown'
+        return 'live' if up else 'dead'
+    age = _age_s(rec.get('started_at'), time.time() if now is None else now)
+    return 'live' if age is not None and age < CLAIM_S else 'unknown'
+
+
+def finish_dead(root, rec, why=None, unclaimed=False):
+    """Finish the running record `rec`, whose process died, as `error`: the record as it is
+    now, or None when it cannot be read. Only when the record on disk is still `rec`'s run and
+    running (`unclaimed`: and has no pid yet); anything else (finished, or a newer run's) is
+    returned untouched. The final record keeps the run's run_id, started_at, tip, base, log, pid
+    and ctime."""
+    try:
+        path = result_path(root, rec['branch'], rec['kind'])
+    except (KeyError, ResultError):
+        return None
+    now, _ = read_path(path)
+    if (not isinstance(now, dict) or now.get('verdict') != RUNNING
+            or now.get('run_id') != rec.get('run_id')
+            or (unclaimed and now.get('pid') is not None)):
+        return now
+    why = why or 'the %s process died: pid %s ended without finishing its record' % (
+        WHAT.get(now.get('kind'), now.get('kind')), now.get('pid'))
+    final = build(now['branch'], now.get('tip'), now.get('base'), now['kind'], None,
+                  log=now.get('log'), summary=why, run_id=now.get('run_id'),
+                  started_at=now.get('started_at'), verdict=ERROR, pid=now.get('pid'),
+                  ctime=now.get('ctime'))
+    try:
+        write(root, final)
+    except ResultError:
+        return now
+    return final
+
+
+def running_records(root, kind, run_id):
+    """The running `kind` records of run `run_id`, every branch: a submitted batch shares one."""
+    try:
+        folder = result_dir(root)
+        names = sorted(os.listdir(folder))
+    except (OSError, ResultError):
+        return []
+    found = []
+    for name in names:
+        if not name.endswith('.%s.json' % kind):
+            continue
+        rec, _ = read_path(os.path.join(folder, name))
+        if (isinstance(rec, dict) and rec.get('kind') == kind and rec.get('verdict') == RUNNING
+                and rec.get('run_id') == run_id):
+            found.append(rec)
+    return found
+
+
+def at_tip(rec, branch, kind, tip):
     got = rec.get('tip')
     return (rec.get('branch') == branch and rec.get('kind') == kind
-            and rec.get('verdict') not in (None, RUNNING)
             and isinstance(got, str) and got.lower().startswith(tip.lower()))
 
 
@@ -248,14 +346,19 @@ def wait(root, branch, tip, kind='gate', timeout_s=None, poll_s=POLL_S, clock=ti
          sleep=time.sleep):
     """Poll until the final `kind` record of `branch` names a tip starting with `tip`:
     `(record, None)`, or `(None, 'timeout')` once `timeout_s` passed (None: never). A running
-    record, one at another tip or of another branch, a missing one, or one that cannot be read
-    is waited past. ResultError when the record path cannot be worked out (not a repository)."""
+    record at that tip whose process died is finished `error` (finish_dead) and returned; any
+    other running record, one at another tip or of another branch, a missing one, or one that
+    cannot be read is waited past. ResultError when the record path cannot be worked out (not a
+    repository)."""
     if not valid_timeout(timeout_s):
         raise ValueError('timeout_s must be None or a finite number >= 0, not %r' % (timeout_s,))
     path = result_path(root, branch, kind)
     end = None if timeout_s is None else clock() + timeout_s
     while True:
         rec, _ = read_path(path)
+        if (rec is not None and rec.get('verdict') == RUNNING and at_tip(rec, branch, kind, tip)
+                and running_state(rec) == 'dead'):
+            rec = finish_dead(root, rec)
         if rec is not None and answers(rec, branch, kind, tip):
             return rec, None
         if end is not None and clock() >= end:

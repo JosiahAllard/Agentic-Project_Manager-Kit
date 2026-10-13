@@ -116,11 +116,12 @@ def child_args(a, root):
 
 def restore(root, payload):
     """The detached landing's `submitted`, its output now going to the submission's log; None
-    when the payload cannot be read (said, on the hidden console)."""
+    when the payload cannot be read: the submission's records are then finished refused
+    (submit.abandon) and that is said, on the hidden console."""
     try:
         sub = submitmod.restore(root, payload)
     except submitmod.SubmitError as e:
-        print('REFUSED: %s' % e, flush=True)
+        emit(submitmod.abandon(root, payload, str(e)))
         return None
     if sub.get('output'):
         try:

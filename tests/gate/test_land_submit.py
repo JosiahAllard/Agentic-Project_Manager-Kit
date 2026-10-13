@@ -19,7 +19,7 @@ from kitlib.gate import pin, result, submit
 from kitlib.git import repo
 from kitlib.lock.store import LockError
 from kitlib.proc import process
-from tests import gitfixture
+from tests import gitfixture, testutil
 from tests.gate.test_land import BRANCH, HANG_S, KIT_ROOT, LandCase
 
 LAND_PY = os.path.join(KIT_ROOT, 'tools', 'land.py')
@@ -40,6 +40,7 @@ class Detach(object):
 class SubmitCase(LandCase):
     def submit(self, branches, tips, detach=None, environ=None, kit=r'C:\kit', **kw):
         detach = detach or Detach(pid=os.getpid())
+        kw.setdefault('claim_wait_s', 0)        # the fake child never records itself
         args = ['-C', self.repo.root] + sum((['--expect-tip', t] for t in tips), []) + branches
         out = submit.submit(self.repo.root, LAND_PY, args, branches, tips,
                             environ=dict(environ or {}), detach_fn=detach, kit=kit, **kw)
@@ -67,7 +68,7 @@ class TheLine(SubmitCase):
                                      'kit/feature --tip %s --kind land -C %s' % (
                                          tip, os.path.join(r'C:\kit', 'tools', 'gate.py'), tip,
                                          self.main_top())])
-        payload, output = submit.files(self.repo.root, [BRANCH])
+        payload, output = out.facts['payload'], out.facts['output']
         rec = self.record(BRANCH)
         self.assertEqual((rec['verdict'], rec['tip'], rec['base'], rec['log']),
                          ('running', tip, self.main, output))
@@ -157,7 +158,7 @@ class TheDetachedLanding(SubmitCase):
         out, _ = self.submit(branches, tips, expect_main=self.main)
         self.assertEqual(out.code, G.OK, out.lines)
         running = {b: self.record(b)['run_id'] for b in branches}
-        sub = submit.restore(self.repo.root, submit.files(self.repo.root, branches)[0])
+        sub = submit.restore(self.repo.root, out.facts['payload'])
         self.assertEqual([rr.run_id for rr in sub['runs']], [running[b] for b in branches])
         lander = self.lander(branches if len(branches) > 1 else branches[0], self.main,
                              tips if len(tips) > 1 else tips[0], submitted=sub, **kw)
@@ -235,6 +236,176 @@ class TheDetachedLanding(SubmitCase):
         ids = [r['run_id'] for r in lander.prior_records()]
         self.assertIn(before.run_id, ids)
         self.assertNotIn(running[BRANCH], ids)
+
+
+class Resubmit(SubmitCase):
+    """One submission never overwrites another's files or records: the payload and log are named
+    by the run_id, a live running landing or a landed tip refuses the submission at once, and a
+    landing whose process died is finished, never left running."""
+
+    def dead_pid(self):
+        p = testutil.dead_process()
+        self.addCleanup(p.wait)             # holds the Popen, so Windows cannot reuse the pid
+        return p.pid
+
+    def test_each_submission_names_its_payload_and_log_by_its_run_id(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        first, _ = self.submit([BRANCH], [tip], detach=Detach(pid=self.dead_pid()))
+        self.assertEqual(first.code, G.REFUSED, first.lines)     # its landing died: not running
+        second, _ = self.submit([BRANCH], [tip])
+        self.assertEqual(second.code, G.OK, second.lines)
+        rid = self.record(BRANCH)['run_id']
+        p1, p2 = first.facts['payload'], second.facts['payload']
+        self.assertEqual(os.path.basename(p2), '%s.%s.land.submit' % (result.file_stem(BRANCH), rid))
+        self.assertEqual(os.path.basename(second.facts['output']),
+                         '%s.%s.land.log' % (result.file_stem(BRANCH), rid))
+        self.assertNotEqual(p1, p2)
+        self.assertNotEqual(first.facts['output'], second.facts['output'])
+        for path in (p1, p2):
+            with open(path, encoding='utf-8') as f:
+                self.assertEqual(json.load(f)['runs'][0]['run_id'], submit.run_id_of(path))
+        self.assertEqual(submit.run_id_of(p2), rid)
+
+    def test_a_batch_shares_one_run_id(self):
+        _, t1 = self.branch('one', {'one.py': '1\n'})
+        _, t2 = self.branch('two', {'two.py': '2\n'})
+        out, _ = self.submit(['kit/one', 'kit/two'], [t1, t2])
+        rid = submit.run_id_of(out.facts['payload'])
+        self.assertEqual([self.record(b)['run_id'] for b in ('kit/one', 'kit/two')], [rid, rid])
+
+    def test_a_live_running_landing_refuses_a_submit_and_changes_nothing(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        _, t2 = self.branch('two', {'two.py': '2\n'})
+        out, _ = self.submit([BRANCH], [tip])           # its landing is this process: live
+        self.assertEqual(out.code, G.OK, out.lines)
+        running = self.record(BRANCH)
+        for branches, tips in (([BRANCH], [tip]), (['kit/two', BRANCH], [t2, tip])):
+            again, detach = self.submit(branches, tips)
+            self.assertEqual(again.code, G.REFUSED, again.lines)
+            self.assertTrue(again.lines[0].startswith(
+                'REFUSED: a landing of kit/feature is already running (run %s, pid %d'
+                % (running['run_id'], os.getpid())), again.lines)
+            self.assertTrue(again.lines[0].endswith('; nothing was changed'), again.lines)
+            self.assertEqual(detach.calls, [])
+            self.assertEqual(self.record(BRANCH), running)
+        self.assertEqual(result.read(self.repo.root, 'kit/two', 'land'), (None, 'none'))
+
+    def test_a_running_landing_whose_process_died_does_not_refuse_a_submit(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        gone = result.Run(self.repo.root, 'land', BRANCH, tip)
+        gone.pid = self.dead_pid()
+        gone.start()
+        out, detach = self.submit([BRANCH], [tip])
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(len(detach.calls), 1)
+        self.assertNotEqual(self.record(BRANCH)['run_id'], gone.run_id)
+
+    def test_a_tip_that_landed_refuses_a_resubmit_and_keeps_its_record(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        for code in (G.OK, G.LANDED_UNGATED):
+            done = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
+            done.finish(G.Outcome(code, ['LANDED kit/feature']))
+            landed = self.record(BRANCH)
+            out, detach = self.submit([BRANCH], [tip])
+            self.assertEqual(out.code, G.REFUSED, out.lines)
+            self.assertEqual(out.lines, ['REFUSED: kit/feature at %s already landed (run %s, '
+                                         'LANDED kit/feature); nothing was changed' % (
+                                             tip[:10], done.run_id)])
+            self.assertEqual(detach.calls, [])
+            self.assertEqual(self.record(BRANCH), landed)
+        other = result.Run(self.repo.root, 'land', BRANCH, 'b' * 40)   # landed at another tip
+        other.finish(G.Outcome(G.OK, ['LANDED kit/feature']))
+        self.assertEqual(self.submit([BRANCH], [tip])[0].code, G.OK)
+
+    def test_a_landing_that_died_before_it_recorded_itself_is_finished_error(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        pid = self.dead_pid()
+        out, _ = self.submit([BRANCH], [tip], detach=Detach(pid=pid), claim_wait_s=5)
+        why = 'the landing process died before it started: pid %d ended without recording ' \
+              'itself' % pid
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertEqual(out.lines, ['REFUSED: %s; nothing was changed; its output: %s' % (
+            why, out.facts['output'])])
+        rec = self.record(BRANCH)
+        self.assertEqual((rec['verdict'], rec['run_id'], rec['pid']),
+                         ('error', submit.run_id_of(out.facts['payload']), None))
+        self.assertEqual(rec['summary'], '%s; its output: %s' % (why, out.facts['output']))
+        with open(out.facts['output'], encoding='utf-8') as f:
+            self.assertIn('ERROR: %s' % why, f.read())
+
+    def test_the_submitter_waits_for_the_landing_to_record_itself(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        now, slept, payload = [0.0], [], []
+
+        def detach(argv, cwd, env):
+            payload.append(argv[-1])
+            return 4242, None
+
+        def sleep(s):                       # the detached landing starts: restore claims
+            slept.append(s)
+            now[0] += s
+            if len(slept) == 2:
+                submit.restore(self.repo.root, payload[0])
+        with mock.patch.object(process, 'alive', return_value=True):
+            out, _ = self.submit([BRANCH], [tip], detach=detach, claim_wait_s=5,
+                                 clock=lambda: now[0], sleep=sleep)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(len(slept), 2)                     # no longer than until the claim
+        rec = self.record(BRANCH)
+        self.assertEqual((rec['verdict'], rec['pid'], rec['ctime']),
+                         ('running', os.getpid(), process.own_ctime()))   # the claimer's
+
+    def test_a_landing_still_starting_gets_its_pid_and_its_death_is_seen(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        pid = self.dead_pid()
+        with mock.patch.object(process, 'alive', return_value=True):  # alive while submitting
+            out, _ = self.submit([BRANCH], [tip], detach=Detach(pid=pid))
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual((self.record(BRANCH)['verdict'], self.record(BRANCH)['pid']),
+                         ('running', pid))
+        rec, why = result.wait(self.repo.root, BRANCH, tip, kind='land', timeout_s=0)
+        self.assertIsNone(why)
+        self.assertEqual((rec['verdict'], rec['summary']), (
+            'error', 'the landing process died: pid %d ended without finishing its record' % pid))
+
+    def unreadable(self, branches, tips):
+        out, _ = self.submit(branches, tips)
+        self.assertEqual(out.code, G.OK, out.lines)
+        with open(out.facts['payload'], 'w', encoding='utf-8') as f:
+            f.write('not json')
+        return out
+
+    def test_a_landing_that_cannot_read_its_payload_finishes_the_records_refused(self):
+        _, t1 = self.branch('one', {'one.py': '1\n'})
+        _, t2 = self.branch('two', {'two.py': '2\n'})
+        out = self.unreadable(['kit/one', 'kit/two'], [t1, t2])
+        rid = submit.run_id_of(out.facts['payload'])
+        with self.assertRaises(submit.SubmitError) as e:
+            submit.restore(self.repo.root, out.facts['payload'])
+        gave = submit.abandon(self.repo.root, out.facts['payload'], str(e.exception))
+        line = 'REFUSED: %s; nothing was changed' % e.exception
+        self.assertEqual((gave.code, gave.lines[-1]), (G.REFUSED, line))
+        for b in ('kit/one', 'kit/two'):
+            rec = self.record(b)
+            self.assertEqual((rec['verdict'], rec['code'], rec['run_id'], rec['summary']),
+                             ('refused', G.REFUSED, rid, line))
+        with open(out.facts['output'], encoding='utf-8') as f:
+            self.assertIn(line, f.read())
+
+    def test_the_tools_finish_the_records_of_a_payload_they_cannot_read(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        for tool in ([LAND_PY], [GATE_PY, 'land']):
+            out = self.unreadable([BRANCH], [tip])
+            r = subprocess.run([sys.executable] + tool + [BRANCH, '-C', self.repo.root,
+                                                          '--expect-tip', tip, submit.FLAG,
+                                                          out.facts['payload']],
+                               capture_output=True, text=True, timeout=HANG_S, env=self.env,
+                               stdin=subprocess.DEVNULL, cwd=KIT_ROOT)
+            self.assertEqual(r.returncode, G.REFUSED, (r.stdout, r.stderr))
+            self.assertIn('REFUSED: cannot read the submission', r.stdout)
+            rec = self.record(BRANCH)
+            self.assertEqual((rec['verdict'], rec['run_id']),
+                             ('refused', submit.run_id_of(out.facts['payload'])))
 
 
 class LeaseChild(unittest.TestCase):
