@@ -35,7 +35,7 @@ folders"). LOG_PATH overrides that (the tests). Over LOG_MAX bytes the log is mo
 `<log>.1` first. The log can fail in any way (a fenced test process, a bad machine config, a full
 disk): the start goes on. A command line can carry a token or a prompt, so both go in redacted
 (redact_command): the program and the first KEEP_WORDS words after it, each cut to WORD_MAX
-characters, with secrets masked.
+characters, with secrets masked (_mask); it never raises.
 
 Ctrl+C: a console Ctrl+C has no window to be typed into here; only GenerateConsoleCtrlEvent from a
 process on the same console sends one (no kit code calls it). A pythonw process that gains a
@@ -75,7 +75,7 @@ KEEP_WORDS = 6                          # a logged command line: the program and
 WORD_MAX = 120                          # each word cut to its start and end past this length
 MASK = '***'
 # a flag or NAME=VALUE name holding one of these hides its value
-SECRET_WORDS = ('token', 'secret', 'passw', 'pwd', 'key', 'auth', 'credential', 'cookie',
+SECRET_WORDS = ('token', 'secret', 'pass', 'pw', 'key', 'auth', 'credential', 'cookie',
                 'bearer')
 
 # ensure_windowless_console's answers
@@ -349,33 +349,79 @@ def _secret(name):
     return any(s in name for s in SECRET_WORDS)
 
 
+USER_FLAGS = ('-u', '--user')            # curl's: a `user:password` value hides the password
+
+
+def _user_value(v):
+    """`user:password` as `user:***`; anything else (a drive path `C:\\x`, a URL: pip's
+    `--user` takes no value) as it is."""
+    import re
+    m = re.fullmatch(r'(?![A-Za-z]:[\\/])(?!.*://)([^:\\/]+):.+', v, re.S)
+    return m.group(1) + ':' + MASK if m else v
+
+
+def _pairs(w):
+    """`w` with the value of each `name=value` (a URL query, a form body) and `"name": value`
+    (JSON) whose name holds a secret word masked, wherever in the word they stand."""
+    import re
+    pair = re.compile(r'(?<![\w.-])([\w.-]+)=|"([^"\\]*)"\s*:\s*')
+    plain = re.compile(r'[^&;\s"\']*')
+    json_value = re.compile(r'"(?:[^"\\]|\\.)*"|[^,}\]\s]*', re.S)
+    out, pos = [], 0
+    while True:
+        m = pair.search(w, pos)
+        if not m:
+            break
+        name, is_json = (m.group(1), False) if m.group(1) is not None else (m.group(2), True)
+        out.append(w[pos:m.end()])
+        pos = m.end()
+        if _secret(name):
+            v = (json_value if is_json else plain).match(w, pos)
+            out.append('"%s"' % MASK if is_json and v.group().startswith('"') else MASK)
+            pos = v.end()
+    out.append(w[pos:])
+    return ''.join(out)
+
+
 def _mask(words):
     """`words` with secrets masked: the value after a secret flag (`--token VALUE`, `/key VALUE`)
-    or after `Bearer`/`Basic`; the value of `--token=VALUE`, `/password:VALUE` and
-    `GITHUB_TOKEN=VALUE`; the password of `scheme://user:pass@`; and words shaped like
-    well-known API tokens."""
+    or after `Bearer`/`Basic`; the password of `-u`/`--user user:password`; the value of
+    `--token=VALUE`, `/password:VALUE` and `GITHUB_TOKEN=VALUE`; a secret `name=value` or
+    `"name": value` pair anywhere in a word (_pairs); the user info of `scheme://user:pass@`;
+    and words shaped like well-known API tokens."""
     import re
     flag = re.compile(r'(?:--?|/)([A-Za-z][\w.-]*)')
     named = re.compile(r'((?:--?|/)?([A-Za-z_][\w.-]*))([=:])(.*)', re.S)
-    url_user = re.compile(r'(://)[^/\s@]+@')
+    url_user = re.compile(r'(://)[^\s@/]*(?::[^\s@]*)?@')
     token = re.compile(r'(?:sk-|gh[pousr]_|github_pat_|xox[abprs]-|glpat-|AKIA|ASIA)'
                        r'[A-Za-z0-9_\-]{8,}|eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]*')
-    out, hide = [], False
+    out, hide = [], None
     for w in words:
+        if hide == 'user':
+            out.append(_user_value(w))
+            hide = None
+            continue
         if hide:
             out.append(MASK)
-            hide = False
+            hide = None
             continue
         m = flag.fullmatch(w)
         if (m and _secret(m.group(1))) or w.lower() in ('bearer', 'basic'):
             out.append(w)
-            hide = True
+            hide = 'all'
+            continue
+        if w.lower() in USER_FLAGS:
+            out.append(w)
+            hide = 'user'
             continue
         m = named.fullmatch(w)
         if m and _secret(m.group(2)):
             out.append(m.group(1) + m.group(3) + MASK)
             continue
-        out.append(token.sub(MASK, url_user.sub(r'\1' + MASK + '@', w)))
+        if m and m.group(1).lower() in USER_FLAGS and m.group(3) == '=':
+            out.append(m.group(1) + '=' + _user_value(m.group(4)))
+            continue
+        out.append(token.sub(MASK, url_user.sub(r'\1' + MASK + '@', _pairs(w))))
     return out
 
 
@@ -390,18 +436,30 @@ def _shorten(words):
     return kept
 
 
+def _text(b):
+    """Bytes as text: as the file system decodes them, else with each bad byte as `\\xNN`."""
+    try:
+        return os.fsdecode(bytes(b))
+    except UnicodeDecodeError:
+        return bytes(b).decode('utf-8', 'backslashreplace')
+
+
 def redact_command(cmd):
     """A command line as the incident log keeps it: secrets masked (_mask), then shortened
     (_shorten). A string (or bytes) command line gives a string, a list of words a list; None
-    gives None."""
+    gives None. It never raises: a command line it cannot read is logged as MASK alone."""
     if cmd is None:
         return None
-    if isinstance(cmd, (bytes, bytearray)):
-        cmd = os.fsdecode(cmd)
-    if isinstance(cmd, str):
-        import subprocess
-        return subprocess.list2cmdline(_shorten(_mask(split_command_line(cmd))))
-    return _shorten(_mask([os.fsdecode(w) if isinstance(w, bytes) else str(w) for w in cmd]))
+    try:
+        if isinstance(cmd, (bytes, bytearray)):
+            cmd = _text(cmd)
+        if isinstance(cmd, str):
+            import subprocess
+            return subprocess.list2cmdline(_shorten(_mask(split_command_line(cmd))))
+        return _shorten(_mask([_text(w) if isinstance(w, (bytes, bytearray)) else str(w)
+                               for w in cmd]))
+    except Exception:                   # noqa: BLE001 - the log keeps nothing it cannot read
+        return MASK if isinstance(cmd, (str, bytes, bytearray)) else [MASK]
 
 
 def _incident(how, child):

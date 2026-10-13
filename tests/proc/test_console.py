@@ -75,19 +75,41 @@ WAITER = "\n".join([
     "with open(sys.argv[1], 'w') as f:",
     "    f.write(end)"])
 
-# Run as a child on the parent's console: sends the console control event argv[2] (0 Ctrl+C,
-# 1 Ctrl+Break) to the whole console, but only when every process on it is itself or a pid in
-# argv[3:] (never a console the test shares).
+# The sender's guard: every process on the console is the sender, a root (the parent, the waiter)
+# or a descendant of one (a venv's python.exe redirector starts the real interpreter as its child,
+# on the same console). `parent_of` is {pid: parent pid}; a loop in it (a reused pid) ends the
+# walk, refused.
+SENDER_GUARD = "\n".join([
+    "def on_own_console(pids, me, roots, parent_of):",
+    "    allowed = {me} | set(roots)",
+    "    for pid in pids:",
+    "        seen, p = set(), pid",
+    "        while p not in allowed and p in parent_of and p not in seen:",
+    "            seen.add(p)",
+    "            p = parent_of[p]",
+    "        if p not in allowed:",
+    "            return False",
+    "    return len(pids) > 0"])
+
+# Run as a child on the parent's console: argv is <out> <event> <kit root> <send|dry> <root pid>...
+# It sends the console control event (0 Ctrl+C, 1 Ctrl+Break) to the whole console, but only when
+# SENDER_GUARD passes (never a console the test shares), and only in "send" mode.
 SENDER = "\n".join([
     "import ctypes, json, os, sys",
+    "sys.path.insert(0, sys.argv[3])",
+    "from kitlib.proc import process",
+    SENDER_GUARD,
     "k = ctypes.WinDLL('kernel32')",
     "keep = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)(lambda e: 1)   # it survives the event",
     "k.SetConsoleCtrlHandler(keep, 1)",
     "a = (ctypes.c_uint * 64)()",
     "n = k.GetConsoleProcessList(a, 64)",
     "pids = sorted(a[:min(n, 64)])",
-    "ok = 0 < n <= 64 and set(pids) <= {os.getpid()} | {int(p) for p in sys.argv[3:]}",
-    "sent = bool(k.GenerateConsoleCtrlEvent(int(sys.argv[2]), 0)) if ok else False",
+    "parent_of = {pid: pp for pid, pp, _name in process.snapshot()}",
+    "roots = [int(p) for p in sys.argv[5:]]",
+    "ok = n <= 64 and on_own_console(pids, os.getpid(), roots, parent_of)",
+    "send = ok and sys.argv[4] == 'send'",
+    "sent = bool(k.GenerateConsoleCtrlEvent(int(sys.argv[2]), 0)) if send else False",
     "with open(sys.argv[1], 'w') as f:",
     "    json.dump({'console_pids': pids, 'sent': sent, 'refused': not ok}, f)"])
 THREADS = 8
@@ -164,8 +186,8 @@ def main(root, folder, mode, py):
             time.sleep(0.02)
         r['parent_interrupted'] = False
         sender = subprocess.Popen([py, os.path.join(folder, 'sender.py'), out('sender'),
-                                   '0' if mode == 'ctrlc' else '1', str(os.getpid()),
-                                   str(waiter.pid)])
+                                   '0' if mode == 'ctrlc' else '1', root, 'send',
+                                   str(os.getpid()), str(waiter.pid)])
         try:
             while waiter.poll() is None and time.monotonic() < end:
                 time.sleep(0.02)
@@ -474,10 +496,46 @@ class RedactTest(unittest.TestCase):
              ["-H", "Authorization:***", "Bearer", "***"]),
             (["https://user:pw@host/x", "ghp_" + "a" * 36, "sk-" + "b" * 40, "C:\\kept\\a=b"],
              ["https://***@host/x", "***", "***", "C:\\kept\\a=b"]),
+            (["--pass", "abc", "--passphrase", "abc", "--pw", "abc", "-p", "kept"],
+             ["--pass", "***", "--passphrase", "***", "--pw", "***", "-p", "kept"]),
+            (["-u", "alice:abc", "--user", "alice:abc", "--user=alice:abc", "-U", "bob:abc"],
+             ["-u", "alice:***", "--user", "alice:***", "--user=alice:***", "-U", "bob:***"]),
+            (["-u", "C:\\kept\\x.py", "-u", "kept", "--user", "git+https://h/kept:1"],
+             ["-u", "C:\\kept\\x.py", "-u", "kept", "--user", "git+https://h/kept:1"]),
+            (["https://h/x?a=1&access_token=abc&b=2", "--data=a=1&password=abc", "--data=pw=abc"],
+             ["https://h/x?a=1&access_token=***&b=2", "--data=a=1&password=***", "--data=pw=***"]),
+            (['{"user":"kept","password":"abc","n":1}', '{"apiKey": 12345, "a": "pw=abc"}'],
+             ['{"user":"kept","password":"***","n":1}', '{"apiKey": ***, "a": "pw=***"}']),
+            (['{"token":"abc', '{"token":"a\\"bc"}', '{"token":"abc\\'],
+             ['{"token":"***"', '{"token":"***"}', '{"token":"***"']),
+            (["git://tok@h/r", "https://u:p/w@h/x", "ftp://h/kept@x"],
+             ["git://***@h/r", "https://***@h/x", "ftp://h/kept@x"]),
         ]
         for words, want in cases:
             with self.subTest(words[0]), mock.patch.object(console, "KEEP_WORDS", 99):
                 self.assertEqual(console.redact_command(["prog"] + words), ["prog"] + want)
+
+    def test_odd_input_never_raises(self):
+        cases = [
+            ('prog --token "abc def', 'prog --token ***'),           # an unterminated quote
+            ('prog --token abc\\', 'prog --token ***'),              # a trailing backslash
+            ('prog C:\\kept\\', 'prog C:\\kept\\'),
+            ('prog "', 'prog ""'),
+            ('', ''),
+        ]
+        for line, want in cases:
+            with self.subTest(line):
+                self.assertEqual(console.redact_command(line), want)
+        self.assertEqual(console.redact_command(b"prog \xff\xfe --pw x"),
+                         "prog \\xff\\xfe --pw ***")             # a bad byte is not a lost line
+        self.assertEqual(console.redact_command([b"prog", b"\xff", b"--pw", b"x"]),
+                         ["prog", "\\xff", "--pw", "***"])
+        for odd in (12, object(), [None, 3, b"\xff"], ["prog", "=" * 5000 + "token=x"]):
+            with self.subTest(type(odd).__name__):
+                console.redact_command(odd)          # no exception
+        with mock.patch.object(console, "_mask", side_effect=ValueError("boom")):
+            self.assertEqual(console.redact_command("prog --x"), console.MASK)
+            self.assertEqual(console.redact_command(["prog"]), [console.MASK])
 
     def test_it_keeps_the_program_and_the_first_words_each_cut(self):
         path = "C:\\" + "d" * 200 + "\\probe.py"
@@ -497,6 +555,44 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(console.split_command_line("  a\t b  "), ["a", "b"])
         got = console.redact_command(line.encode())
         self.assertEqual(console.split_command_line(got), words[:5] + ["--key", "***"])
+
+
+class SenderGuardTest(unittest.TestCase):
+    """The Ctrl+C sender's guard (SENDER_GUARD): it sends only on a console of the test's own."""
+
+    def setUp(self):
+        ns = {}
+        exec(SENDER_GUARD, ns)                  # noqa: S102 - the test's own source
+        self.guard = ns["on_own_console"]
+
+    def test_the_roots_and_their_descendants_pass(self):
+        # 1 parent, 2 waiter (a venv redirector), 3 its real interpreter, 4 that one's child
+        parent_of = {1: 100, 2: 1, 3: 2, 4: 3, 10: 1}
+        self.assertTrue(self.guard([1, 2, 3, 4, 10], 10, [1, 2], parent_of))
+        self.assertTrue(self.guard([10], 10, [], parent_of))
+
+    def test_any_other_process_is_refused(self):
+        parent_of = {1: 100, 2: 1, 10: 1, 100: 4, 7: 100, 8: 9, 9: 8}
+        for pid, why in ((100, "the parent's parent"), (7, "a sibling of the parent"),
+                         (8, "a pid in a parent loop"), (55, "not in the snapshot")):
+            with self.subTest(why):
+                self.assertFalse(self.guard([1, 2, 10, pid], 10, [1, 2], parent_of))
+        self.assertFalse(self.guard([], 10, [1, 2], parent_of))
+
+    @unittest.skipUnless(os.name == "nt", "Windows only")
+    def test_the_real_sender_refuses_the_test_s_console(self):
+        """The sender itself, run dry from this process, sees this process on its console (not
+        a root, not its descendant) and refuses."""
+        folder = tempfile.mkdtemp(prefix="kit-console-")
+        self.addCleanup(shutil.rmtree, folder, True)
+        script, out = os.path.join(folder, "sender.py"), os.path.join(folder, "sender.json")
+        with open(script, "w") as f:
+            f.write(SENDER)
+        subprocess.run([sys.executable, script, out, "0", ROOT, "dry"], timeout=60, check=True)
+        with open(out) as f:
+            got = json.load(f)
+        self.assertIn(os.getpid(), got["console_pids"], got)
+        self.assertEqual((got["refused"], got["sent"]), (True, False), got)
 
 
 @unittest.skipUnless(os.name == "nt", "Windows only")
@@ -628,7 +724,8 @@ class PythonwParentTest(unittest.TestCase):
 
     def check_ctrl(self, mode):
         """A child on the console the parent got sends it a console control event; the sender
-        sends only when the console holds just itself, the parent and the waiter. The parent is
+        sends only when the console holds just itself, the parent, the waiter and their
+        descendants (SENDER_GUARD). The parent is
         not ended by it (its report is written: run_parent) and is not interrupted."""
         r = self.run_parent(mode)
         sent = self.read("sender.json")
