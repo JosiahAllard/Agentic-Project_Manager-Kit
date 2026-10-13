@@ -242,15 +242,17 @@ class CarrierTest(_Folder):
         self.pythonw = pythonw_exe()
         if not self.pythonw:
             self.skipTest("no pythonw.exe beside %s" % sys.executable)
+        self.log = os.path.join(self.dir, "incidents.log")       # never the kit's own log
+        self.env = dict(os.environ, KIT_CONSOLE_INCIDENT_LOG=self.log)
 
     def carry(self, *argv):
-        return subprocess.run([self.pythonw, self.CARRIER] + list(argv), timeout=120,
+        return subprocess.run([self.pythonw, self.CARRIER] + list(argv), timeout=120, env=self.env,
                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL).returncode
 
     def carry_stderr(self, *argv):
         """(the carrier's exit code, what it wrote to a stderr it was given)."""
-        done = subprocess.run([self.pythonw, self.CARRIER] + list(argv), timeout=120,
+        done = subprocess.run([self.pythonw, self.CARRIER] + list(argv), timeout=120, env=self.env,
                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                               stderr=subprocess.PIPE)
         return done.returncode, done.stderr.decode("utf-8", "replace")
@@ -269,7 +271,19 @@ class CarrierTest(_Folder):
         self.assertEqual(self.read(out)["window"], 0)
 
     def test_a_program_that_is_not_there(self):
-        self.assertEqual(self.carry(os.path.join(self.dir, "none.exe")), 127)
+        self.assertEqual(self.carry(os.path.join(self.dir, "none.exe"), "secret-arg"), 127)
+        with open(self.log, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        self.assertEqual(len(lines), 1, lines)            # under pythonw: not silent
+        line = json.loads(lines[0])
+        self.assertEqual((line["how"], line["exe"]), ("carrier-fail", "none.exe"))
+        self.assertTrue(line["why"].startswith("exit 127"), line)
+        self.assertNotIn("secret-arg", lines[0])
+        self.assertNotIn(self.dir, lines[0])
+
+    def test_a_program_that_runs_leaves_no_line(self):
+        self.assertEqual(self.carry("python", "-c", "pass"), 0)
+        self.assertFalse(os.path.exists(self.log))
 
     def test_no_program_is_a_usage_error(self):
         """The usage line is the carrier's own: a pythonw that failed some other way with 2 (a
