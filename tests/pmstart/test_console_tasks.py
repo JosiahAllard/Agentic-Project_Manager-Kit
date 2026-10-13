@@ -63,7 +63,7 @@ class Judge(unittest.TestCase):
                                      r'"Z:\kit\tools\no_window.py" python "Z:\kit\tools\launch.py"')]), [])
 
     def test_a_task_that_is_not_the_kits_is_not_flagged(self):
-        self.assertEqual(judge([task(r"\RetributionBrain", "powershell.exe", r"-File C:\x\brain.ps1"),
+        self.assertEqual(judge([task(r"\SomeoneElsesTask", "powershell.exe", r"-File C:\x\brain.ps1"),
                                 task(r"\Microsoft\Windows\X", r"C:\Py\python.exe", r"C:\other\run.py")]), [])
 
     def test_a_task_naming_the_kit_folder_or_a_kit_tool_is_the_kits(self):
