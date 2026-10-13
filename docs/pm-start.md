@@ -51,7 +51,7 @@ Otherwise the line says whether it stopped polling, is an older copy with no hea
 running, and gives the command to start it under Monitor. A running watcher whose heartbeat says it
 does not stream gets a line to restart it with `--stream`, and a `pm_watch_cmd` without `--stream`
 gets a line too: either watcher exits after one batch of events. Tests:
-`tests/pmstart/test_pmstart.py` `WatcherTest`. The last check, always on and with no config key, is the live foreground lock timeout (docs/windows-token-leak.md): a line while it is not 0, with the command the owner runs in their own PowerShell window. Code: `kitlib/pmstart/fglock.py`; tests: `tests/pmstart/test_fglock.py`.
+`tests/pmstart/test_pmstart.py` `WatcherTest`. The last check, always on and with no config key (after `console_tasks`, below), is the live foreground lock timeout (docs/windows-token-leak.md): a line while it is not 0, with the command the owner runs in their own PowerShell window. Code: `kitlib/pmstart/fglock.py`; tests: `tests/pmstart/test_fglock.py`.
 
 ## Kit currency (`kit_sync`)
 
@@ -92,6 +92,23 @@ agent-temp-sweep: ...", after the other two lines, never "not registered"
 (`kitlib.machinesetup.agenttemp.task_registered`). It changes nothing. A failing environment or
 config reader is one `could not check agent_temp: ...` line. Code: `kitlib/pmstart` `agent_temp_lines`; tests:
 `tests/pmstart/test_agent_temp_check.py`.
+
+## Console tasks (`console_tasks`)
+
+After `agent_temp` and before the foreground lock check, always on and with no config key, the
+`console_tasks` check reads every registered scheduled task's actions from
+`schtasks /Query /XML ONE` (4 second limit) and prints one line for each action of a kit task whose
+program is a console program (`python.exe`, `py.exe`, `powershell.exe`, `pwsh.exe`, `cmd.exe`,
+`bash.exe`; `kitlib/pmstart/consoletasks.py` `CONSOLE`): "scheduled task <path> starts <program>, a
+console program: a console window opens each time it runs. Its program should be pythonw.exe with
+the carrier tools\no_window.py as its first argument (docs/daily-full.md "The schedule": ...)". Such
+a task opens a window on the desktop each time it runs (docs/daily-full.md "The schedule"). A kit
+task is one with a name the kit registers (the launcher's sign-in task, `agent-temp-sweep`, a name
+ending `-worktree-sweep` or `-daily-full`) or an action that names the kit's folder or
+`tools\<file>` for a file in the kit's tools folder (`is_kit`). A `pythonw.exe` program is never
+flagged, with or without the carrier. It changes nothing; a failed read (access denied, the time
+limit, no `schtasks`) is one `could not check console_tasks: ...` line. Code:
+`kitlib/pmstart/consoletasks.py`; tests: `tests/pmstart/test_console_tasks.py`.
 
 ## Config
 
