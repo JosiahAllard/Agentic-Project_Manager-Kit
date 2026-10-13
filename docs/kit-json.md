@@ -34,7 +34,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `heavy.programs` (list of {program, kind, when_args, unless_args, why}, default []): repo heavy programs, added to the kit defaults
 - `roles` (map role -> {edit_main_checkout, mode, why}): agent type (or main, subagent) -> permissions, over the kit defaults
 - `roles.<role>.edit_main_checkout` (bool): may edit files in a main checkout; unset: the base role (main: true, any other: false)
-- `roles.<role>.mode` (controller|write|read|test|lander): the role policy this role is held to (docs/guard.md "Role policy"); unset: none
+- `roles.<role>.mode` (controller|write|read|test|lander): the role policy this role is held to, over its role file's `mode` (docs/guard.md "Role policy"); unset: the role file's, else none
 - `roles.<role>.why` (string): the ruling that grants it
 - `backlog.store` (ref|branch|main or repo path, default "ref"): the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md)
 - `backlog.phases` (list of string, default []): phase names in order
@@ -80,6 +80,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `gate.errors` ({match, excuse, expect}): error-line policy
 - `gate.kind` (a kind name, default "engine-test"): the kinds-table kind a gate run books (gate.py and gate.py land)
 - `guard.data_roots` (list of {path, mode, why}, default []): folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")
+- `guard.role_policy` (bool, default false): hold roles to their role policy mode (docs/guard.md "Role policy"); off: no role is held, whatever its mode; read from the main checkout only
 - `landing.lock_file` (string): legacy landing lock: git:<name>, a file in the git common dir; any other value refuses
 - `landing.log_dir` (repo path): where gate logs live
 - `landing.lanes` (map lane -> {branch_prefix, paths, why, merged_args}, default {}): lanes besides full that gate.py land --lane takes

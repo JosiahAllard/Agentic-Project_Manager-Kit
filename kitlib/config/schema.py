@@ -7,6 +7,7 @@ Kit-level sections (repo, owner, hook, heavy, roles) are read by kitlib itself; 
 per-tool sections the PM kit's tools read (kit/tools/_kit.py SECTIONS), checked here for shape only.
 """
 from kitlib.host import registry
+from kitlib.host.content import MODES
 
 from .types import (Any, Bool, Either, Email, Enum, Field, Int, ListOf, MapOf, Obj, Regex, RelPath,
                     Str, T)
@@ -64,7 +65,7 @@ IN_FLIGHT = Obj({
 
 ROLE = Obj({
     'edit_main_checkout': Field(Bool(), None, 'may edit files in a main checkout; unset: the base role (main: true, any other: false)'),
-    'mode': Field(Enum('controller', 'write', 'read', 'test', 'lander'), None, 'the role policy this role is held to (docs/guard.md "Role policy"); unset: none'),
+    'mode': Field(Enum(*MODES), None, 'the role policy this role is held to, over its role file\'s `mode` (docs/guard.md "Role policy"); unset: the role file\'s, else none'),
     'why': Field(Str(), None, 'the ruling that grants it'),
 }, what='{edit_main_checkout, mode, why}')
 
@@ -218,6 +219,7 @@ SECTIONS = {
     },
     'guard': {
         'data_roots': Field(ListOf(DATA_ROOT), [], 'folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")'),
+        'role_policy': Field(Bool(), False, 'hold roles to their role policy mode (docs/guard.md "Role policy"); off: no role is held, whatever its mode; read from the main checkout only'),
     },
     'landing': {
         'lock_file': Field(Str(), None, 'legacy landing lock: git:<name>, a file in the git common dir; any other value refuses'),

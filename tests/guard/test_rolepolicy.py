@@ -3,14 +3,18 @@
 (lock verbs), with the Codex-only parts left out: apply_patch, the native-hook identity and
 the role binding are its adapter's.
 
-The World's main checkout names a mode for some roles; a role with none is judged by the shared
-rules alone, exactly as before."""
+The World's main checkout turns the policy on (guard.role_policy) and names a mode for some roles;
+a role with none is judged by the shared rules alone, exactly as before. The World's kit folder
+(Ctx.kit) holds no role files unless a test writes some (RoleFiles)."""
 import os
 import unittest
 
+from kitlib import content as kcontent
+from kitlib import kitroot
 from kitlib.guard import context, decide, rolepolicy
 from kitlib.host import Action
 
+from . import claudehost as CH
 from . import world as W
 
 MODES = {'senior-worker': 'write', 'reviewer': 'read', 'test-runner': 'test', 'lander': 'lander',
@@ -18,9 +22,25 @@ MODES = {'senior-worker': 'write', 'reviewer': 'read', 'test-runner': 'test', 'l
 LOCK = 'python tools/machine_lock.py'
 
 
-def kit(modes=MODES):
-    return {'repo': {'name': 'demo', 'push_block': True},
-            'roles': {name: {'mode': m, 'why': 'test'} for name, m in modes.items()}}
+def kit(modes=MODES, on=True):
+    out = {'repo': {'name': 'demo', 'push_block': True},
+           'roles': {name: {'mode': m, 'why': 'test'} for name, m in modes.items()}}
+    if on is not None:
+        out['guard'] = {'role_policy': on}
+    return out
+
+
+def role_file(name, mode=None):
+    return ('---\nname: %s\ndescription: A test role.\ntier: light\nsandbox: workspace-write\n%s'
+            'capabilities: all\n---\nbody\n' % (name, 'mode: %s\n' % mode if mode else '')).encode()
+
+
+def write_roles(kit_dir, modes):
+    folder = os.path.join(kit_dir, 'content', 'roles')
+    os.makedirs(folder, exist_ok=True)
+    for name, m in modes.items():
+        with open(os.path.join(folder, name + '.md'), 'wb') as f:
+            f.write(role_file(name, m))
 
 
 class Base(unittest.TestCase):
@@ -210,6 +230,122 @@ class LockVerbs(Base):
                 self.assertIsNone(rolepolicy.check(self.shell(LOCK + ' status', role), self.w.ctx()))
                 d = self.denied(self.shell(LOCK + ' run --kind build -- x', role), 'role-lock')
                 self.assertIn('(status, stats)', d.reason)
+
+
+class Switch(unittest.TestCase):
+    """guard.role_policy is the one switch: off (false or unset), no mode holds any role."""
+
+    def test_off_holds_no_role_whatever_the_roles_table_or_a_role_file_says(self):
+        for on in (False, None):
+            with self.subTest(on=on):
+                w = W.World(kit=kit(on=on))
+                self.addCleanup(w.cleanup)
+                write_roles(w.kit_dir, {'reviewer': 'read', 'worker': 'read'})
+                ctx = w.ctx()
+                for role in ('reviewer', 'worker', 'lander'):
+                    a = Action('edit', tool='Write', path=os.path.join(w.wt, 'a.py'), cwd=w.wt, agent='a1',
+                               agent_role=role)
+                    self.assertEqual(rolepolicy.mode(a, ctx), (None, None))
+                    self.assertEqual(rolepolicy.screen(a, ctx), (None, ctx))
+                    self.assertEqual(decide(a, ctx).verdict, 'allow')
+
+    def test_a_switch_that_is_not_a_boolean_does_not_load(self):
+        w = W.World(kit=kit(on='yes'))
+        self.addCleanup(w.cleanup)
+        self.assertIsNone(w.ctx().config(w.wt))
+
+
+class RoleFiles(Base):
+    """With the switch on, a role the roles table gives no mode takes its role file's."""
+    modes = {'reviewer': 'write'}
+    files = {'reviewer': 'read', 'worker': 'write', 'test-runner': 'test', 'lander': 'lander',
+             'senior-worker': 'read', 'coordinator': 'controller', 'plain-role': None}
+
+    def setUp(self):
+        super().setUp()
+        write_roles(self.w.kit_dir, self.files)
+
+    def test_a_role_file_mode_holds_its_role(self):
+        self.denied(self.edit(os.path.join(self.w.wt, 'a.py'), 'test-runner'), 'role-edit')
+        self.denied(self.edit(os.path.join(self.w.wt, 'CLAUDE.md'), 'worker'), 'write-jail')
+        self.allowed(self.edit(os.path.join(self.w.wt, 'a.py'), 'worker'))
+
+    def test_the_roles_table_wins_over_the_role_file(self):
+        a = self.edit(os.path.join(self.w.wt, 'a.py'), 'reviewer')
+        self.assertEqual(rolepolicy.mode(a, self.w.ctx()), ('reviewer', 'write'))
+        self.allowed(a)
+
+    def test_a_role_file_with_no_mode_or_no_file_is_not_held(self):
+        for role in ('plain-role', 'unknown-role'):
+            with self.subTest(role):
+                self.allowed(self.edit(os.path.join(self.w.wt, 'CLAUDE.md'), role))
+
+    def test_an_old_name_takes_its_new_names_mode(self):
+        a = self.edit(os.path.join(self.w.wt, 'a.py'), 'opus-worker')
+        self.assertEqual(rolepolicy.mode(a, self.w.ctx()), ('opus-worker', 'read'))
+        self.denied(a, 'role-edit')
+
+    def test_a_main_session_is_held_by_its_marks_role_file(self):
+        a = self.edit(os.path.join(self.w.wt, 'a.py'), role=None)
+        for mark, want in (('coordinator', ('coordinator', 'controller')),
+                           ('pm-kit:test-runner', ('test-runner', 'test')), ('plain', ('main', None))):
+            with self.subTest(mark):
+                self.assertEqual(rolepolicy.mode(a, self.w.ctx(environ={context.ROLE_ENV: mark})), want)
+
+    def test_claudes_subagent_type_is_the_role_file_name(self):
+        """Claude Code sends a kit subagent's type plugin-prefixed; the adapter's bare name is the
+        role file's stem, so the policy finds its mode. Another plugin's prefix names no role."""
+        ctx = self.w.ctx()
+        path = os.path.join(self.w.wt, 'a.py')
+        for agent_type, want in (('pm-kit:test-runner', ('test-runner', 'test')),
+                                 ('test-runner', ('test-runner', 'test')),
+                                 ('other:test-runner', ('subagent', None))):
+            with self.subTest(agent_type):
+                ev = W.event('Write', {'file_path': path, 'content': 'x'}, self.w.wt, sub=True,
+                             agent_type=agent_type)
+                self.assertEqual(rolepolicy.mode(CH.action(ev), ctx), want)
+
+
+class MissingContent(Base):
+    """The guard runs from a kit with no role files, or broken ones: the policy is off for the
+    roles it cannot read, and nothing raises."""
+    modes = {}
+
+    def test_no_content_folder_is_off_for_every_role(self):
+        ctx = self.w.ctx()
+        self.assertEqual(kcontent.role_modes(self.w.kit_dir), {})
+        for role in ('reviewer', 'test-runner', 'lander', 'worker'):
+            with self.subTest(role):
+                a = self.edit(os.path.join(self.w.wt, 'CLAUDE.md'), role)
+                self.assertIsNone(rolepolicy.mode(a, ctx)[1])
+                self.assertEqual(rolepolicy.screen(a, ctx), (None, ctx))
+                self.allowed(a)
+
+    def test_a_broken_role_file_is_left_out_and_the_rest_are_read(self):
+        write_roles(self.w.kit_dir, {'reviewer': 'read', 'lander': 'lander'})
+        folder = os.path.join(self.w.kit_dir, 'content', 'roles')
+        for name, data in (('reviewer', b'no front matter\n'), ('tester', role_file('tester', 'telepathy')),
+                           ('misnamed', role_file('other', 'read'))):
+            with open(os.path.join(folder, name + '.md'), 'wb') as f:
+                f.write(data)
+        self.assertEqual(kcontent.role_modes(self.w.kit_dir), {'lander': 'lander'})
+        self.allowed(self.edit(os.path.join(self.w.wt, 'a.py'), 'reviewer'))
+        self.denied(self.edit(os.path.join(self.w.wt, 'a.py'), 'lander'), 'role-edit')
+
+    def test_a_roles_path_that_is_a_file_is_no_role_files(self):
+        os.makedirs(os.path.join(self.w.kit_dir, 'content'))
+        with open(os.path.join(self.w.kit_dir, 'content', 'roles'), 'w') as f:
+            f.write('x')
+        self.assertEqual(kcontent.role_modes(self.w.kit_dir), {})
+        self.allowed(self.edit(os.path.join(self.w.wt, 'CLAUDE.md'), 'reviewer'))
+
+
+class KitRoleFiles(unittest.TestCase):
+    def test_every_kit_role_file_names_a_mode_the_policy_knows(self):
+        modes = kcontent.role_modes(kitroot.root())
+        roles = os.listdir(os.path.join(kitroot.root(), 'content', 'roles'))
+        self.assertEqual(sorted(modes), sorted(n[:-3] for n in roles if n.endswith('.md')))
+        self.assertEqual(set(modes.values()) - set(rolepolicy.MODES), set())
 
 
 if __name__ == '__main__':
