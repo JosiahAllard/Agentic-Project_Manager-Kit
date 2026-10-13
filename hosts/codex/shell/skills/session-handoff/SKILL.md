@@ -17,7 +17,7 @@ Old session (told to checkpoint and stand down, or winding down a finished set):
 
 Successor (started with "read <state file>"):
 1. Read the state note, and your brief if one is named.
-2. Before anything else, read `python <kit>/tools/land.py -C <main checkout> --queue` and the land result records of every landing the note lists (`python <kit>/tools/gate.py wait-result <branch> --tip <sha> --kind land`; it returns at once when the record exists). Then verify each claim before acting: `git ls-remote <remote>` for branches and main; process, job and port checks for agents and runs; `python <kit>/tools/machine_lock.py status` for lock runs. A landing still queued or running: start its `wait-result` again as a background command; never resubmit it.
+2. Before anything else, read `python <kit>/tools/land.py -C <main checkout> --queue` and the land result records of every landing the note lists (`python <kit>/tools/gate.py -C <main checkout> wait-result <branch> --tip <sha> --kind land`; it returns at once when the record exists). Then verify each claim before acting: `git ls-remote <remote>` for branches and main; process, job and port checks for agents and runs; `python <kit>/tools/machine_lock.py status` for lock runs. A landing still queued or running: start its `wait-result` again as a background command; never resubmit it.
 3. Before re-dispatching on any worktree, confirm the old session's agents there have stopped (no process with that worktree as cwd, no file change for 5 minutes); one still running: wait and tell the PM. After a wind-down never wait for their reports: re-dispatch from the branch once the agent has stopped.
 4. Check in with the PM, then act on the note; queue every LAND verdict it lists that is not already submitted.
 
