@@ -12,8 +12,11 @@
     "tools/gate.py"
   ],
   "paths": [
-    ["claude/agents/**", ["agents", "roster"]],
-    ["claude/skills/**", ["skills"]],
+    ["content/roles/**", ["content", "agents", "roster"]],
+    ["content/skills/**", ["content", "skills"]],
+    ["claude/adapter/**", ["content"]],
+    ["claude/agents/**", ["agents", "roster", "content"]],
+    ["claude/skills/**", ["skills", "content"]],
     ["claude/__init__.py", ["pmwatch", "guard"]],
     ["claude/claude_host.py", ["pmwatch"]],
     ["claude/guard_selftest.py", ["guard"]],
