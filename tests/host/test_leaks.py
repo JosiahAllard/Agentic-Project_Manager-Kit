@@ -82,14 +82,15 @@ def _texts(node, docstrings):
     return []
 
 
-def occurrences(source):
-    """[(line, text)] of each host name in `source`'s code, comments and docstrings left out."""
+def occurrences(source, words=HOST_WORDS):
+    """[(line, text)] of each match of `words` (default: every host name) in `source`'s code,
+    comments and docstrings left out."""
     tree = ast.parse(source)
     docstrings = _docstrings(tree)
     out = []
     for node in ast.walk(tree):
         for text in _texts(node, docstrings):
-            out.extend((getattr(node, 'lineno', 0), text) for _ in HOST_WORDS.findall(text))
+            out.extend((getattr(node, 'lineno', 0), text) for _ in words.findall(text))
     return out
 
 

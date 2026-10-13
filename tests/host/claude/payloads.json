@@ -1,0 +1,307 @@
+{
+ "comment": "Claude Code's hook payloads as it sends them (the shapes tests/guard/world.py records), the Action each parses into, and the hook output it reads back (tests/host/conformance.py).",
+ "events": {
+  "PreToolUse": "tool",
+  "SessionStart": "session_start",
+  "SubagentStart": "subagent_start"
+ },
+ "cases": [
+  {
+   "name": "write",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r",
+    "permission_mode": "default",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Write",
+    "tool_input": {
+     "file_path": "C:/r/a.py",
+     "content": "x\n"
+    }
+   },
+   "action": {
+    "kind": "edit",
+    "tool": "Write",
+    "path": "C:/r/a.py",
+    "cwd": "C:/r",
+    "retarget": "Write(file_path=\"{path}\")"
+   }
+  },
+  {
+   "name": "edit-by-subagent",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.claude/worktrees/w",
+    "permission_mode": "default",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Edit",
+    "tool_input": {
+     "file_path": "C:/r/.claude/worktrees/w/a.py",
+     "old_string": "a",
+     "new_string": "b"
+    },
+    "agent_id": "a0335183081908f5a",
+    "agent_type": "pm-kit:worker"
+   },
+   "action": {
+    "kind": "edit",
+    "tool": "Edit",
+    "path": "C:/r/.claude/worktrees/w/a.py",
+    "cwd": "C:/r/.claude/worktrees/w",
+    "agent": "a0335183081908f5a",
+    "agent_role": "worker",
+    "retarget": "Edit(file_path=\"{path}\")"
+   }
+  },
+  {
+   "name": "multiedit",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r",
+    "permission_mode": "default",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "MultiEdit",
+    "tool_input": {
+     "file_path": "C:/r/b.py",
+     "edits": [
+      {
+       "old_string": "a",
+       "new_string": "b"
+      }
+     ]
+    }
+   },
+   "action": {
+    "kind": "edit",
+    "tool": "MultiEdit",
+    "path": "C:/r/b.py",
+    "cwd": "C:/r",
+    "retarget": "MultiEdit(file_path=\"{path}\")"
+   }
+  },
+  {
+   "name": "notebook",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r",
+    "permission_mode": "default",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "NotebookEdit",
+    "tool_input": {
+     "notebook_path": "C:/r/n.ipynb",
+     "new_source": ""
+    }
+   },
+   "action": {
+    "kind": "edit",
+    "tool": "NotebookEdit",
+    "path": "C:/r/n.ipynb",
+    "cwd": "C:/r",
+    "retarget": "NotebookEdit(notebook_path=\"{path}\")"
+   }
+  },
+  {
+   "name": "bash",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r",
+    "permission_mode": "default",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "git status",
+     "description": "status"
+    }
+   },
+   "action": {
+    "kind": "shell",
+    "tool": "Bash",
+    "command": "git status",
+    "cwd": "C:/r",
+    "shell": "bash"
+   }
+  },
+  {
+   "name": "bash-background",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r",
+    "permission_mode": "default",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "python tools/gate.py --full",
+     "run_in_background": true
+    }
+   },
+   "action": {
+    "kind": "shell",
+    "tool": "Bash",
+    "command": "python tools/gate.py --full",
+    "cwd": "C:/r",
+    "shell": "bash",
+    "background": true
+   }
+  },
+  {
+   "name": "powershell-by-subagent",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r",
+    "permission_mode": "default",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "PowerShell",
+    "tool_input": {
+     "command": "Get-ChildItem",
+     "description": "list"
+    },
+    "agent_id": "a0335183081908f5a",
+    "agent_type": "pm-kit:worker"
+   },
+   "action": {
+    "kind": "shell",
+    "tool": "PowerShell",
+    "command": "Get-ChildItem",
+    "cwd": "C:/r",
+    "shell": "powershell",
+    "agent": "a0335183081908f5a",
+    "agent_role": "worker"
+   }
+  },
+  {
+   "name": "mcp",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r",
+    "permission_mode": "default",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "mcp__plugin_pm-kit_machine-lock__lock_snapshot",
+    "tool_input": {}
+   },
+   "action": {
+    "kind": "mcp",
+    "tool": "mcp__plugin_pm-kit_machine-lock__lock_snapshot",
+    "cwd": "C:/r"
+   }
+  },
+  {
+   "name": "read",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r",
+    "permission_mode": "default",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_input": {
+     "file_path": "C:/r/a.py"
+    }
+   },
+   "action": {
+    "kind": "other",
+    "tool": "Read",
+    "cwd": "C:/r"
+   }
+  },
+  {
+   "name": "session-start",
+   "event": "SessionStart",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r",
+    "hook_event_name": "SessionStart",
+    "source": "startup"
+   },
+   "action": {
+    "kind": "session_start",
+    "cwd": "C:/r"
+   }
+  },
+  {
+   "name": "subagent-start",
+   "event": "SubagentStart",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r",
+    "hook_event_name": "SubagentStart",
+    "agent_id": "a0335183081908f5a",
+    "agent_type": "pm-kit:reviewer"
+   },
+   "action": {
+    "kind": "subagent_start",
+    "cwd": "C:/r",
+    "agent": "a0335183081908f5a",
+    "agent_role": "reviewer"
+   }
+  }
+ ],
+ "malformed": [
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": 7,
+    "tool_input": {}
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Write",
+    "tool_input": "C:/r/a.py"
+   }
+  }
+ ],
+ "render": [
+  {
+   "event": "PreToolUse",
+   "decision": {
+    "verdict": "allow"
+   },
+   "stdout": "",
+   "code": 0
+  },
+  {
+   "event": "PreToolUse",
+   "decision": {
+    "verdict": "deny",
+    "rule": "main-checkout",
+    "reason": "Edits in the main checkout are denied. [kit guard: rule=main-checkout role=subagent]",
+    "instead": "python tools/new_worktree.py <slug>"
+   },
+   "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"Edits in the main checkout are denied. [kit guard: rule=main-checkout role=subagent]\"}}\n",
+   "code": 0
+  },
+  {
+   "event": "PreToolUse",
+   "decision": {
+    "verdict": "ask",
+    "rule": "lock-write",
+    "reason": "The owner approves lock writes.",
+    "instead": ""
+   },
+   "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"The owner approves lock writes.\"}}\n",
+   "code": 0
+  }
+ ]
+}

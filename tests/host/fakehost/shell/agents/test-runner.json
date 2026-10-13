@@ -1,0 +1,5 @@
+{
+  "model": "fake-small",
+  "name": "test-runner",
+  "sandbox": "workspace-write"
+}

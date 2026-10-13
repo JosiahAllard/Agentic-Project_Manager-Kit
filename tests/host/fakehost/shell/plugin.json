@@ -1,0 +1,38 @@
+{
+  "agents": [
+    "asset-smith",
+    "consultant",
+    "coordinator",
+    "deep-worker",
+    "lander",
+    "pm",
+    "records",
+    "researcher",
+    "reviewer",
+    "senior-worker",
+    "sound-smith",
+    "spec-writer",
+    "strong-worker",
+    "tech-artist",
+    "test-runner",
+    "worker"
+  ],
+  "hooks": {
+    "before_tool": {
+      "args": [
+        "${FAKEHOST_PLUGIN_ROOT}/tests/host/fakehost/shell/hooks/run.py",
+        "before_tool"
+      ],
+      "command": "pythonw"
+    },
+    "session_begin": {
+      "args": [
+        "${FAKEHOST_PLUGIN_ROOT}/tests/host/fakehost/shell/hooks/run.py",
+        "session_begin"
+      ],
+      "command": "pythonw"
+    }
+  },
+  "name": "pm-kit",
+  "version": "0.4.0"
+}
