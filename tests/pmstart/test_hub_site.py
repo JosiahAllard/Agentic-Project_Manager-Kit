@@ -113,6 +113,52 @@ class HubSiteTest(unittest.TestCase):
         self.assertEqual(out, ["hub: the hub key of the machine config cannot be used: "
                                "hub.port must be a whole number between 1 and 65535"])
 
+    def test_a_broken_hub_key_line_names_the_key_and_the_rule_and_no_rejected_value(self):
+        team = "hub.access.team must be an Access team name (one DNS label)"
+        aud = "hub.access.aud must be an audience tag without spaces"
+        store = "hub.store must be an absolute path"
+        head = "hub: the hub key of the machine config cannot be used: "
+        for said, line in (
+                # an email-like and a tag-like value, as kitlib.config echoes them
+                ("%s, not 'someone@mail.invalid'; %s, not '0f1e2d3c 4b5a6978'" % (team, aud),
+                 "%s; %s" % (team, aud)),
+                ("%s, not 'made-up\\\\folder'" % store, store),
+                # a value written with the other quote, with both, and with an escaped backslash
+                ("%s, not \"it's@mail.invalid\"; %s, not 'a\\'b\"c@mail.invalid'; hub.port must "
+                 "be a whole number" % (team, aud),
+                 "%s; %s; hub.port must be a whole number" % (team, aud)),
+                ("%s, not 'ends in a backslash@mail.invalid\\\\'; %s, not 'tag one'" % (team, aud),
+                 "%s; %s" % (team, aud)),
+                # a value that holds the words a problem is joined and ended with
+                ("%s, not 'x; %s, not y@mail.invalid'; %s, not 'tag one'" % (team, aud, aud),
+                 "%s; %s" % (team, aud)),
+                # a value over several lines, or with a run of spaces: gone before the line is
+                # joined, so no half of it is left
+                ("%s, not 'one@mail.invalid\n  two@mail.invalid'; %s, not 'tag   one'"
+                 % (team, aud), "%s; %s" % (team, aud)),
+                # a value that does not end as a written string does: cut, with what follows
+                ("%s, not 'someone@mail.invalid; %s" % (team, aud), team),
+                ("%s, not \"someone@mail.invalid" % team, team)):
+            with self.subTest(said=said):
+                def bad():
+                    raise pmstart.HubSettingsError(said)
+                out = site(FakeClient(), load=bad)
+                self.assertEqual(out, [head + line])
+                for word in ("mail.invalid", "@", "0f1e2d3c", "made-up", "tag one", "'", '"'):
+                    self.assertNotIn(word, out[0])
+
+    def test_a_long_rejected_value_is_taken_out_before_the_line_is_cut(self):
+        # cut first, the value would lose its end and stay in the line
+        value = "someone@mail.invalid" + "x" * (2 * pmstart.HUB_ERROR_MAX)
+        said = "hub.access.team must be an Access team name (one DNS label), not %r" % value
+
+        def bad():
+            raise pmstart.HubSettingsError("%s; %s" % (said, said))
+        out = site(FakeClient(), load=bad)
+        rule = "hub.access.team must be an Access team name (one DNS label)"
+        self.assertEqual(out, ["hub: the hub key of the machine config cannot be used: %s; %s"
+                               % (rule, rule)])
+
     def test_a_very_long_configuration_error_is_cut(self):
         def bad():
             raise pmstart.HubSettingsError("k" * 5000)

@@ -206,6 +206,23 @@ HUB_SWITCH_NOTE = ("hub key: writing the `hub` key in the machine config switche
                    "no longer show")
 
 
+# How kitlib.config ends a rule when it refuses a value: `, not ` and the value as Python writes
+# a string (repr: quoted, a quote or backslash inside it escaped).
+_ECHOED = re.compile(r""", not (?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")""", re.S)
+_ECHO_LEFT = re.compile(r""", not ['"]""")
+
+
+def _without_values(text):
+    """The configuration error `text` with every rejected value taken out: each `, not <value>`
+    goes, so a problem still names its key and its rule (`hub.access.team must be an Access team
+    name (one DNS label)`) and holds nothing the owner wrote as a value: no email, audience tag
+    or path. A `, not ` whose value does not end as a written string does is cut with all that
+    follows it. Key names stay, an unknown one the config named too."""
+    text = _ECHOED.sub("", text)
+    left = _ECHO_LEFT.search(text)
+    return text[:left.start()] if left else text
+
+
 class HubSettingsError(Exception):
     """The machine config has a `hub` key that cannot be used."""
 
@@ -267,12 +284,14 @@ def hub_site(procs=(), load=None, make_client=_hub_client):
     at all; the test home fence is not caught): the caller then shows the old hub lines. Asks only
     the loopback server, with HUB_SITE_TIMEOUT_S per ask; starts nothing. A failure of the server
     side is one line naming no more than the port and the exception's class, so no token, URL or
-    message of the server reaches the text. The one message shown is a rejected `hub` key's own
-    (key names and paths; the key holds no token)."""
+    message of the server reaches the text. The one message shown is a rejected `hub` key's own,
+    without the value it refused (_without_values): key names, the rules, and the machine
+    config's path when the settings name it; never a value written in the key."""
     try:
         site = (load or hub_settings)()      # looked up at the call, so a test can replace it
     except HubSettingsError as e:
-        text = " ".join(str(e).split())[:HUB_ERROR_MAX]
+        # the values go first: a cut or a joined line could split one and leave half of it
+        text = " ".join(_without_values(str(e)).split())[:HUB_ERROR_MAX]
         return ["hub: the hub key of the machine config cannot be used: %s" % text]
     except Exception:
         return None
