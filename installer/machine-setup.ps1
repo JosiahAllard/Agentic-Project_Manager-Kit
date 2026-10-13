@@ -11,8 +11,8 @@
 #
 # The default (no -OldKit; -Fresh is its old name and still accepted): the guard's entry in each
 # account's settings.json, the kit plugin through the claude CLI per account, the owner's email in
-# the machine config (-OwnerEmail, else the machine config's, else `git config user.email`, shown in
-# the dry run to confirm), and the agents' temp folder. -PmSettings writes the PM SessionStart hook
+# the machine config (-OwnerEmail, else the machine config's; with neither, -Apply asks in the
+# console, offering `git config user.email`, never stored unconfirmed), and the agents' temp folder. -PmSettings writes the PM SessionStart hook
 # to that file; -Shortcut makes the machine schedule shortcut. -OldKit switches the config folders
 # from an older kit clone instead: links, settings, the owner's email, the extras.
 # -RegisterSweepTask, with -Apply, registers the agent-temp-sweep scheduled task (the owner's act);
@@ -49,6 +49,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 passes a native argument with a space inside plain double quotes without
+# escaping one inside it, so a `"` in a value could split it into more arguments (an --apply the
+# command line does not show, say): refused in every parameter.
+foreach ($v in @($OldKit, $OwnerEmail, $PmSettings, $AgentTemp, $HomeDir, $Desktop, $Python) + @($ConfigDir)) {
+    if ($v -and "$v".Contains('"')) { Write-Host "machine-setup: usage - no parameter may contain a double quote ($v)"; exit 2 }
+}
 if ($OldKit -and $Fresh) {
     Write-Host 'machine-setup: usage - give -OldKit <old kit clone> or -Fresh, not both'; exit 2
 }

@@ -17,7 +17,7 @@
 # This script's own part: -Target and -PmData are taken from the PowerShell location (which differs
 # from the process folder once a session has used Set-Location); a trailing `\` is trimmed from them
 # and from -PrivateRemote (Windows PowerShell 5.1 passes a quoted argument that ends in `\` with its
-# closing quote escaped), and a double quote in them is refused for the same reason; the tool prints in the console's encoding; and with no
+# closing quote escaped), and a double quote in any parameter is refused (5.1 does not escape one); the tool prints in the console's encoding; and with no
 # python on PATH it refuses before anything runs.
 #
 # Exit: the tool's: 0 dry run printed or files written, 1 refused or a write failed, 2 usage; with
@@ -44,8 +44,11 @@ function Fail([string]$msg, [int]$code = 1) { Write-Host "new-repo: REFUSED - $m
 if (-not (Test-Path -LiteralPath $tool)) { Fail "the kit at $kit has no tools\machine_setup.py" 2 }
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) { Fail "python is not on PATH; the kit's tools need it (nothing was written)" 2 }
 $PmData = $PmData.Trim(); $PrivateRemote = $PrivateRemote.Trim()
-if ($Target.Contains('"') -or $PmData.Contains('"') -or $PrivateRemote.Contains('"')) {
-    Fail "-Target, -PmData and -PrivateRemote cannot contain a double quote" 2
+# Windows PowerShell 5.1 passes a native argument with a space inside plain double quotes without
+# escaping one inside it, so a `"` in any value could split it into more arguments (an --apply the
+# command line does not show, say): refused in every parameter.
+foreach ($v in @($Target, $OwnerEmail, $AgentEmail, $MainBranch, $RepoName, $Stack, $PmData, $PrivateRemote)) {
+    if ($v -and $v.Contains('"')) { Fail "no parameter may contain a double quote ($v)" 2 }
 }
 function Trim-Slash([string]$p) {
     $t = $p.TrimEnd('\')
