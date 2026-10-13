@@ -118,6 +118,37 @@ class RolePolicy(unittest.TestCase):
         self.assertEqual(verdict(guard_decide(self.shell(cmd, 'lander', self.w.main), self.w.ctx())), ('allow', None))
 
 
+class LookalikeWrappers(unittest.TestCase):
+    """Only the kit's own gate.py and `machine_lock.py run` may run an interpreter a repository
+    lists as heavy (they take the machine lock themselves). The kit is known by its resolved
+    folder, not by the file name: a branch's copy or a script in temp named gate.py is any script."""
+
+    def setUp(self):
+        self.w = W.World(kit={'repo': {'name': 'demo'},
+                              'heavy': {'programs': [{'program': 'python*', 'kind': 'build', 'why': 'test'}]}})
+        self.addCleanup(self.w.cleanup)
+
+    def judge(self, text):
+        return verdict(claude_decide(bash(text, self.w.wt), self.w.ctx()))
+
+    def test_the_kit_s_wrappers_run_a_heavy_interpreter(self):
+        kit, wt = W.fwd(self.w.kit_dir), W.fwd(self.w.wt)
+        self.assertEqual(self.judge('python "%s/tools/gate.py" -C "%s" --full' % (kit, wt)), ('allow', None))
+        self.assertEqual(self.judge('python "%s/tools/machine_lock.py" run --kind build -- python x.py' % kit),
+                         ('allow', None))
+
+    def test_a_script_that_shares_the_name_is_any_script(self):
+        temp = W.fwd(self.w.temp)
+        for text in ('python x.py',
+                     'python "%s/gate.py" --full' % temp,
+                     'python tools/gate.py --full',
+                     'python "%s/tools/gate.py" --full' % W.fwd(self.w.wt),
+                     'python "%s/machine_lock.py" run --kind build -- python x.py' % temp,
+                     'python "%s/kit/../tools/gate.py" --full' % W.fwd(self.w.base)):
+            with self.subTest(text):
+                self.assertEqual(self.judge(text), ('deny', 'heavy'))
+
+
 class Alternatives(unittest.TestCase):
     """What the guard tells an agent to run names the kit's tool with -C, never `tools/<x>.py`."""
 

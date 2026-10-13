@@ -1679,8 +1679,31 @@ def run_from(cmd, cwd):
     return ''
 
 
+def kit_wrapper(ctx, cmd, inv, cwd):
+    """cm.wrapper(inv) when the script it runs is the kit's own (tools/gate.py or
+    tools/machine_lock.py of the kit the guard runs from, ctx.kit, the path resolved from the
+    command's directory with links followed), else None. Only the kit's tool takes the machine lock
+    itself, so only it may run an interpreter a repository lists as heavy: a script that shares its
+    file name (a branch's copy, `python <temp>/gate.py`) is judged as any other script. A repository
+    holds no copy of the kit's tools (decision 21 in docs/multi-host-plan.md section 7), so an
+    opt-in stub fails closed here too."""
+    kind = cm.wrapper(inv)
+    if not kind:
+        return None
+    found = cm.python_script(inv)
+    word = inv.args[found[0]] if found else inv.word
+    if word is None or word.dyn:
+        return None
+    path = sh.resolve_path(word.text, cmd.cwd or cwd, cmd.shell) or (
+        word.text if os.path.isabs(word.text) else None)
+    if not path:
+        return None
+    tools = paths.norm(os.path.join(ctx.kit, 'tools'), real=True)
+    return kind if paths.norm(os.path.dirname(path), real=True) == tools else None
+
+
 def heavy(event, ctx, cmd, inv, cwd, role):
-    if inv is None or inv.dyn or cm.wrapper(inv):
+    if inv is None or inv.dyn or kit_wrapper(ctx, cmd, inv, cwd):
         return None
     where = cmd.cwd or cwd
     cfg = ctx.config(where) if where else None
