@@ -372,87 +372,6 @@
     "cwd": "C:/r/.codex/worktrees/w",
     "model": "gpt-6.1-sol",
     "hook_event_name": "PreToolUse",
-    "tool_name": "Bash",
-    "tool_input": {
-     "command": "pwd"
-    },
-    "tool_use_id": "call_1"
-   }
-  },
-  {
-   "event": "PreToolUse",
-   "payload": {
-    "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
-    "cwd": "C:/r/.codex/worktrees/w",
-    "model": "gpt-6.1-sol",
-    "hook_event_name": "PreToolUse",
-    "tool_name": "Bash",
-    "tool_input": {
-     "command": "dir",
-     "shell": "cmd.exe"
-    },
-    "tool_use_id": "call_1"
-   }
-  },
-  {
-   "event": "PreToolUse",
-   "payload": {
-    "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
-    "cwd": "C:/r/.codex/worktrees/w",
-    "model": "gpt-6.1-sol",
-    "hook_event_name": "PreToolUse",
-    "tool_name": "exec_command",
-    "tool_input": {
-     "cmd": "powershell",
-     "shell": "pwsh.exe",
-     "tty": true
-    },
-    "tool_use_id": "call_1"
-   }
-  },
-  {
-   "event": "PreToolUse",
-   "payload": {
-    "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
-    "cwd": "C:/r/.codex/worktrees/w",
-    "model": "gpt-6.1-sol",
-    "hook_event_name": "PreToolUse",
-    "tool_name": "exec_command",
-    "tool_input": {
-     "cmd": "pwd",
-     "shell": "pwsh.exe",
-     "stdin": "git push"
-    },
-    "tool_use_id": "call_1"
-   }
-  },
-  {
-   "event": "PreToolUse",
-   "payload": {
-    "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
-    "cwd": "C:/r/.codex/worktrees/w",
-    "model": "gpt-6.1-sol",
-    "hook_event_name": "PreToolUse",
-    "tool_name": "write_stdin",
-    "tool_input": {
-     "session_id": 3,
-     "chars": "git push\n"
-    },
-    "tool_use_id": "call_1"
-   }
-  },
-  {
-   "event": "PreToolUse",
-   "payload": {
-    "session_id": "019a0000-0000-7000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
-    "cwd": "C:/r/.codex/worktrees/w",
-    "model": "gpt-6.1-sol",
-    "hook_event_name": "PreToolUse",
     "tool_name": "apply_patch",
     "tool_input": {
      "command": "*** Begin Patch\n*** Delete File: a\n+bad\n*** End Patch"
@@ -485,6 +404,55 @@
     "hook_event_name": "PreToolUse",
     "tool_name": "Write",
     "tool_input": {},
+    "tool_use_id": "call_1"
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "exec_command",
+    "tool_input": {
+     "cmd": [
+      3
+     ],
+     "shell": "pwsh.exe"
+    },
+    "tool_use_id": "call_1"
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "exec_command",
+    "tool_input": {
+     "cmd": ""
+    },
+    "tool_use_id": "call_1"
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/Users/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "write_stdin",
+    "tool_input": {
+     "session_id": 3,
+     "extra": 1
+    },
     "tool_use_id": "call_1"
    }
   },

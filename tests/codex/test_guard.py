@@ -84,6 +84,43 @@ class MarkedSessions(Base):
             self.allowed(self.event('Write', {'file_path': path, 'content': 'x'}), role=None)
 
 
+class PayloadShapes(Base):
+    """A call the guard cannot fully judge (no named dialect, cmd.exe, a TTY, input fed to a running
+    process) is refused by Codex's policy in a marked session, with the policy's reason; the owner's
+    unmarked session is judged with the default dialect (PowerShell, Codex's on Windows) or allowed,
+    never refused for its shape."""
+    SHAPES = (('Bash', {'command': 'git status'}), ('exec_command', {'cmd': 'git status'}),
+              ('exec_command', {'cmd': 'git status', 'shell': 'C:/Windows/System32/cmd.exe'}),
+              ('exec_command', {'cmd': 'python', 'shell': 'bash', 'tty': True}),
+              ('exec_command', {'cmd': 'cat', 'shell': 'bash', 'stdin': 'y'}),
+              ('write_stdin', {'session_id': 1, 'chars': 'y\n'}),
+              ('shell', {'command': ['bash', '-lc', 'ls']}))
+
+    def raw(self, tool, data):
+        return {'hook_event_name': 'PreToolUse', 'tool_name': tool, 'tool_input': data, 'cwd': self.w.wt}
+
+    def test_the_owner_is_never_refused_for_a_shape(self):
+        for tool, data in self.SHAPES:
+            with self.subTest(tool=tool, data=data):
+                self.allowed(self.raw(tool, data), role=None)
+
+    def test_a_marked_session_is_refused_by_policy(self):
+        for tool, data in self.SHAPES[:-1]:
+            with self.subTest(tool=tool, data=data):
+                d = self.denied(self.raw(tool, data), 'host-shell')
+                self.assertNotIn('guard failed', d.reason)
+        self.allowed(self.raw('shell', {'command': ['bash', '-lc', 'ls']}))
+
+    def test_the_owner_is_still_judged_in_the_default_dialect(self):
+        self.denied(self.raw('Bash', {'command': 'Get-ChildItem $env:USERPROFILE -Recurse'}), 'root-search', role=None)
+
+    def test_a_legacy_argv_and_an_input_patch_parse(self):
+        a = ADAPTER.parse('PreToolUse', self.raw('shell', {'command': ['bash', '-lc', 'ls -la']}))
+        self.assertEqual((a.command, a.shell), ('ls -la', 'bash'))
+        got = ADAPTER.parse('PreToolUse', self.raw('apply_patch', {'input': '*** Begin Patch\n*** Add File: a\n+x\n*** End Patch'}))
+        self.assertEqual([x.path for x in got], ['a'])
+
+
 class Patches(Base):
     def test_a_patch_in_the_own_worktree_is_allowed_and_writes_nothing(self):
         self.allowed(self.patch('worker.py'))

@@ -13,13 +13,15 @@ client's payload has been captured yet (hosts/codex/README.md, "Not verified").
         each, and any deny refuses the whole patch. A patch of the wrong shape raises, so no part
         of it is judged as allowed.
       - a file tool (FILE_TOOLS) is one edit, its target from the tool's own key.
-      - a shell tool (SHELL_TOOLS) is kind shell: the command (`command`, else `cmd`), its dialect
-        from `shell` (an explicit PowerShell or Git Bash interpreter; only the PowerShell tool may
-        leave it out: the dialect is never guessed from the Windows default), and `workdir` made
-        absolute against cwd when the call names one. A TTY, an interactive call or standard input
-        handed to the command raises: the guard cannot judge what such a process is told later.
-      - write_stdin: kind other when it sends nothing (a poll); text sent to a running process
-        raises, for the same reason.
+      - a shell tool (SHELL_TOOLS) is kind shell: the command (`command`, else `cmd`; a legacy
+        argv list `[shell, -lc|-c|-Command, text]` gives its text), its dialect from `shell` (or the
+        argv's interpreter), and `workdir` made absolute against cwd when the call names one.
+        What the guard cannot fully judge is parsed anyway and carries a `refusal`
+        (CodexAction): no named interpreter (judged as PowerShell, Codex's shell on Windows), an
+        interpreter the guard cannot read (cmd.exe: no dialect, the shared shell rules pass it), a
+        TTY or interactive call, standard input handed to the command. hosts.codex.adapter.policy
+        refuses those in a marked session; the owner's own session is judged as parsed.
+      - write_stdin: kind other; text sent to a running process carries a refusal.
       - mcp__*: kind mcp, the full tool name.
       - anything else: kind other, the tool name kept (hosts.codex.adapter.policy holds a marked
         session to its allowlist).
@@ -29,11 +31,19 @@ client's payload has been captured yet (hosts/codex/README.md, "Not verified").
 
 PM_KIT_ROLE is not in the payload: the guard reads it from the hook's own environment.
 """
+import dataclasses
 import ntpath
 import os
 import posixpath
 
 from kitlib.host import Action
+
+
+@dataclasses.dataclass(frozen=True)
+class CodexAction(Action):
+    """An Action the guard judges as it is, with the reason Codex's policy refuses it in a marked
+    session (hosts.codex.adapter.policy): a shape the guard cannot see through."""
+    refusal: str = ''
 
 FILE_TOOLS = {'Edit': 'file_path', 'Write': 'file_path', 'MultiEdit': 'file_path',
               'NotebookEdit': 'notebook_path'}
@@ -45,6 +55,8 @@ MCP = 'mcp__'
 KINDS = {'SessionStart': 'session_start', 'PostCompact': 'session_start', 'SubagentStart': 'subagent_start'}
 TOOL_EVENT = 'PreToolUse'
 POWERSHELLS = {'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'}
+DEFAULT_DIALECT = 'powershell'          # Codex runs its shell tool in PowerShell on Windows
+ARGV_FLAGS = ('-lc', '-c', '-command', '-noprofile')
 BASHES = {'bash', 'bash.exe', 'sh', 'sh.exe'}
 PATCH_HEADERS = ('Add', 'Update', 'Delete')
 
@@ -59,22 +71,26 @@ def absolute(path):
                                                      or bool(ntpath.splitdrive(path)[0]))
 
 
+def dialect(value):
+    """'powershell' or 'bash' for an interpreter name or path, None for one the guard cannot read."""
+    if not isinstance(value, str):
+        return None
+    name = value.replace('\\', '/').rsplit('/', 1)[-1].lower()
+    return 'powershell' if name in POWERSHELLS else 'bash' if name in BASHES else None
+
+
 def shell_kind(tool, data):
-    """'powershell' or 'bash' from the call's explicit interpreter; ValueError when it names none
-    (except the PowerShell tool) or one the guard cannot read."""
+    """(dialect or None, refusal): the call's explicit interpreter's dialect; with none named, the
+    PowerShell tool's own, else DEFAULT_DIALECT and a refusal; one the guard cannot read, None."""
     value = data.get('shell')
     if value is None:
         if tool == 'PowerShell':
-            return 'powershell'
-        raise ValueError('shell identity is missing; an explicit PowerShell or Git Bash shell is required')
-    if not isinstance(value, str):
-        raise ValueError('shell must name a known interpreter')
-    name = value.replace('\\', '/').rsplit('/', 1)[-1].lower()
-    if name in POWERSHELLS:
-        return 'powershell'
-    if name in BASHES:
-        return 'bash'
-    raise ValueError('unsupported shell %r; use explicit PowerShell or Git Bash' % value)
+            return 'powershell', ''
+        return DEFAULT_DIALECT, 'the call names no shell; give an explicit PowerShell or Git Bash shell'
+    kind = dialect(value)
+    if kind is None:
+        return None, 'the guard cannot read the shell %r; use PowerShell or Git Bash' % (value,)
+    return kind, ''
 
 
 def patch_targets(command):
@@ -118,14 +134,22 @@ def _patch_line(operation):
     return 'apply_patch "*** %s: {path}"' % ('Move to' if operation == 'Move' else operation + ' File')
 
 
+def _argv(command, data):
+    """(command text, data) for a legacy argv list: `[shell, flag, text]` names its interpreter;
+    any other list is its words joined."""
+    if not command or not all(isinstance(w, str) for w in command):
+        raise ValueError('a shell argv is a list of strings')
+    if len(command) >= 3 and command[-2].lower() in ARGV_FLAGS and dialect(command[0]):
+        return command[-1], dict(data, shell=data.get('shell') or command[0])
+    return ' '.join(command), data
+
+
 def _shell(tool, data, cwd):
     if not isinstance(data, dict):
         raise ValueError('shell input must be an object')
-    if data.get('tty') not in (None, False) or data.get('interactive') not in (None, False):
-        raise ValueError('interactive/TTY execution is unsupported')
-    if any(data.get(key) not in (None, '') for key in ('stdin', 'input', 'chars')):
-        raise ValueError('shell stdin input is unsupported')
     command = data.get('command', data.get('cmd'))
+    if isinstance(command, list):
+        command, data = _argv(command, data)
     if not isinstance(command, str) or not command.strip():
         raise ValueError('shell command is required')
     workdir = data.get('workdir')
@@ -133,7 +157,13 @@ def _shell(tool, data, cwd):
         if not isinstance(workdir, str) or not workdir:
             raise ValueError('shell workdir must be a path')
         workdir = workdir if absolute(workdir) else os.path.normpath(os.path.join(cwd, workdir))
-    return Action('shell', tool=tool, command=command, cwd=cwd, shell=shell_kind(tool, data), workdir=workdir)
+    kind, refusal = shell_kind(tool, data)
+    if data.get('tty') not in (None, False) or data.get('interactive') not in (None, False):
+        refusal = 'an interactive or TTY command takes input the guard never sees'
+    elif any(data.get(key) not in (None, '') for key in ('stdin', 'input', 'chars')):
+        refusal = 'input handed to a command is a script the guard never sees'
+    fields = dict(tool=tool, command=command, cwd=cwd, shell=kind, workdir=workdir)
+    return CodexAction('shell', refusal=refusal, **fields) if refusal else Action('shell', **fields)
 
 
 def parse(event_name, payload):
@@ -153,7 +183,7 @@ def parse(event_name, payload):
     if not absolute(cwd):
         raise ValueError('cwd must be absolute')
     if tool == PATCH:
-        command = data.get('command') if isinstance(data, dict) else data
+        command = data.get('command', data.get('input')) if isinstance(data, dict) else data
         return tuple(Action('edit', tool=tool, path=path, cwd=cwd, retarget=_patch_line(op))
                      for op, path in patch_targets(command))
     if tool in SHELL_TOOLS:
@@ -167,7 +197,8 @@ def parse(event_name, payload):
         if not isinstance(data, dict) or set(data) - STDIN_KEYS:
             raise ValueError('unrecognized stdin transport input')
         if data.get('chars') not in (None, ''):
-            raise ValueError('sending stdin to an existing process is unsupported')
+            return CodexAction('other', tool=tool, cwd=cwd,
+                               refusal='text sent to a running process is input the guard never sees')
         return Action('other', tool=tool, cwd=cwd)
     if tool.startswith(MCP):
         return Action('mcp', tool=tool, cwd=cwd)

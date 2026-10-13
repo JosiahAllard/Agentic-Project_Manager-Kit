@@ -12,6 +12,8 @@ which nothing marks, is held only by the shared rules, as on every host.
                       hooks (README.md "Not verified").
     host-shell-patch  a shell command that runs apply_patch: a patch sent through the shell is not
                       seen as the edits it makes; the native apply_patch tool is (events.parse).
+    host-shell        a call whose shape the guard cannot fully judge (events.CodexAction refusal:
+                      no named shell, cmd.exe, a TTY, input fed to a command or a running process).
 """
 from kitlib import sessionmark
 from kitlib.host import Decision
@@ -55,6 +57,10 @@ def patch_in_shell(action):
 def screen(action, environ):
     if sessionmark.mark(environ) is None:
         return None                             # the owner's own session
+    refusal = getattr(action, 'refusal', '')
+    if refusal:
+        return _deny('host-shell', 'A Codex agent session runs only calls the kit guard can judge, and %s.' % refusal,
+                     'run it as one plain command in PowerShell or Git Bash, or return it to the PM')
     if action.kind == 'other' and action.tool not in ALLOWED_TOOLS:
         return _deny('host-tool', '%s is not a tool the kit has reviewed for a Codex agent session: no guard '
                      'rule can see what it does.' % (action.tool or 'This tool'),

@@ -3,7 +3,7 @@ Codex branch's tests/codex/test_actions.py)."""
 import os
 import unittest
 
-from hosts.codex.adapter.events import parse, patch_targets
+from hosts.codex.adapter.events import CodexAction, parse, patch_targets
 from kitlib.host import Action
 
 CWD = 'C:/r/.codex/worktrees/w'
@@ -56,11 +56,15 @@ class Shell(unittest.TestCase):
         self.assertEqual(parse('PreToolUse', bash('Get-Location', 'pwsh')).shell, 'powershell')
         self.assertEqual(parse('PreToolUse', event('PowerShell', {'command': 'Get-Location'})).shell, 'powershell')
 
-    def test_a_missing_or_unknown_interpreter_is_refused(self):
-        for ev in (event('Bash', {'command': 'pwd'}), bash('dir', 'cmd.exe'), bash('x', 3),
-                   event('shell_command', {'command': 'Get-Location'})):
-            with self.subTest(ev=ev), self.assertRaises(ValueError):
-                parse('PreToolUse', ev)
+    def test_a_missing_or_unknown_interpreter_carries_a_refusal(self):
+        for ev, shell in ((event('Bash', {'command': 'pwd'}), 'powershell'), (bash('dir', 'cmd.exe'), None),
+                          (bash('x', 3), None), (event('shell_command', {'command': 'Get-Location'}), 'powershell')):
+            with self.subTest(ev=ev):
+                a = parse('PreToolUse', ev)
+                self.assertIsInstance(a, CodexAction)
+                self.assertEqual((a.kind, a.shell), ('shell', shell))
+                self.assertTrue(a.refusal)
+        self.assertNotIsInstance(parse('PreToolUse', bash('pwd', 'bash.exe')), CodexAction)
 
     def test_the_command_and_a_workdir(self):
         a = parse('PreToolUse', event('exec_command', {'cmd': 'Get-Location', 'shell': 'pwsh.exe', 'workdir': 'sub'}))
@@ -70,13 +74,18 @@ class Shell(unittest.TestCase):
         self.assertEqual(b.workdir, 'D:/elsewhere')
         self.assertIsNone(parse('PreToolUse', bash('Get-Location')).workdir)
 
-    def test_interactive_input_is_refused(self):
+    def test_interactive_input_carries_a_refusal(self):
         for data in ({'cmd': 'powershell', 'tty': True}, {'cmd': 'pwd', 'interactive': True},
-                     {'cmd': 'pwd', 'stdin': 'git push'}, {'cmd': ''}, {'cmd': 3}):
+                     {'cmd': 'pwd', 'stdin': 'git push'}):
+            with self.subTest(data=data):
+                a = parse('PreToolUse', event('exec_command', dict(data, shell='pwsh.exe')))
+                self.assertEqual((a.kind, a.shell, a.command), ('shell', 'powershell', data['cmd']))
+                self.assertTrue(a.refusal)
+        for data in ({'cmd': ''}, {'cmd': 3}, {'cmd': [3]}):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 parse('PreToolUse', event('exec_command', dict(data, shell='pwsh.exe')))
-        with self.assertRaises(ValueError):
-            parse('PreToolUse', event('write_stdin', {'session_id': 1, 'chars': 'git push\n'}))
+        sent = parse('PreToolUse', event('write_stdin', {'session_id': 1, 'chars': 'git push\n'}))
+        self.assertEqual((sent.kind, bool(sent.refusal)), ('other', True))
         with self.assertRaises(ValueError):
             parse('PreToolUse', event('write_stdin', {'session_id': 1, 'extra': 1}))
         self.assertEqual(parse('PreToolUse', event('write_stdin', {'session_id': 1, 'chars': ''})).kind, 'other')
