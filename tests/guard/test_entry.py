@@ -21,6 +21,7 @@ ENTRY = os.path.join(KIT_ROOT, 'claude', 'hooks', 'guard.py')
 # what a copy of the entry needs to deny by itself when kitlib.guard will not import
 HOOK_FILES = ('claude/__init__.py', 'claude/adapter/__init__.py', 'claude/adapter/events.py',
               'claude/adapter/host.py', 'kitlib/host/__init__.py', 'kitlib/host/hookmain.py',
+              'kitlib/host/registry.py', 'hosts.json',
               'kitlib/agentname.py', 'kitlib/lockmcp/__init__.py')
 
 
