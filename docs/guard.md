@@ -114,6 +114,7 @@ Every rule is a read-only check of real state. `kitlib/guard/context.py` `Ctx` g
 | `kill-by-name` | an agent session (see "Session mark") ending processes by name: `taskkill /IM` or `/FI "IMAGENAME eq ..."`, `pkill`, `killall`, `Stop-Process -Name`, `Get-Process <name> \| Stop-Process`. The values of options that take one (`pkill -P 1234`, `-u <user>`, `-t <tty>`, `killall -s <signal>`) are not names; a `pkill` or `killall` with no name left passes | `tasklist /FI "IMAGENAME eq <name>"` (PowerShell: `Get-Process -Name <name> \| Select-Object Id, StartTime, Path`); the sentence before it says to stop the one started, by id |
 | `lock-state` | an agent session's file tool edit or shell write under `<home>/.claude/machine-lock`, which only the lock tool writes, judged by the resolved path (links, junctions and short names followed, `jail.real`) | the lock CLI's `status`, as for `lock-mcp` |
 | `kit-json` | an agent session's file tool edit or shell write of a file named `.kit.json` (by its name or the name its links resolve to) in a checkout, a linked worktree's included, or a place git cannot tell. One outside git passes | `python -m json.tool "<the file>"`; the sentence before it says to ask the coordinator to take the change to the owner |
+| `generated-file` | in any session, the owner's own too: a file tool edit or shell write, in a kit checkout, of a file `tools/render_content.py` writes (see "Generated files" below) | `python "<checkout>/tools/render_content.py" --write`; the sentence before it names the file's source (the role file, the skill under `content/skills/`, `boot/`, or for a manifest `kit.json`, `hosts.json` and the host's renderer) to edit first |
 | `write-jail` | an agent session's file tool edit or shell write outside its write roots, and git that changes a checkout outside them; see "Write jail" below. The sentence names every root and says to ask the coordinator. Also a marked agent session's PowerShell `& (<subexpression>)` outside a repository with `kit-pm-data.json` ("Fallback"), with `Instead: & <program> <arguments>` | the same tool call or command aimed at the same file name in `<wt>` (else the temp folder); for git, `git -C <wt> <the same subcommand and arguments>`; for an existing file in an add-only folder, the same write to `<folder>/<new file name>` |
 
 **Shell writes** (`kitlib/guard/rules.py` `write_targets`):
@@ -154,7 +155,28 @@ A write target that is not literal (a variable, a substitution) is denied when t
 
   Each must be alone on its line (`rules.lander_alone`, which reads the event's line again): nothing else, or one literal `cd`, `Set-Location` or `pushd` into that checkout before it, joined by `&&` or `;`. A pipe, a group, a nested shell, `||` or a third command is not alone. git may be spelt `git`, `git.exe` or PowerShell's `& git`, with `-C <main checkout>` or that `cd` before it. Anything else is denied: another option (`--prune`, `--no-ff`, `-s`, `-X`, `--squash`, ...), another ref or refspec (`main:main`, `+main`, `FETCH_HEAD`), a git option before the verb (`-c`, `--config-env`, `--git-dir`, `--work-tree`, `--no-pager`), an environment assignment or wrapper before git (`GIT_DIR=`, `env`), a word that is not literal, any other git write there, a file write there, and every other role. Any main checkout whose own `.kit.json` lets the lander in qualifies, not only the one the lander's session runs in (the PM lands kit branches from its own folder). When a lander's `git fetch` or `git merge` in a main checkout is refused (rule `write-jail`, or `git-main-history` for a merge in a repository that does not set the role), the refusal names the first test that failed, in this order: a `.kit.json` that does not load, `roles.lander.edit_main_checkout` not set (the repository's settings first, since until they allow it every form is refused), not alone, a wrapper or option, the arguments; its `Instead:` is the form to run, or `python -m json.tool "<main>/.kit.json"` when the config is the cause (`rules.lander_refusal`). The lander's own landing command (`land.py`, `gate.py land`) is a python program whose git the guard does not see ("Known limits", "write-jail reads the line, not the program"), so it needs no exception. git whose checkout the text cannot place (a variable from "Git spellings" set, `--git-dir`, `--work-tree`, `core.worktree`, `--config-env`, a computed `-C`, whatever the order of `-C`) and that writes is denied for every session the jail holds, the lander included (`rules.git_jail_unknown`): it may be a main checkout, where `symbolic-ref` or `branch -m` would re-point main's HEAD. The refusal names the cause: for a variable or option it says to drop it and run git in the worktree (`rules.git_unplaced`), for a computed `-C` to name the checkout literally. Only a plain read passes (`rules.git_reads` strict): no word that is not literal, no `--output` file (abbreviated too), no `grep -O`/`--open-files-in-pager` (it runs a pager program), and `branch`, `tag` and `config` only with options it names in full, so an abbreviation git expands (`branch --unset-up`) is denied.
 - **Not judged:** a target that is not literal, a command other than git whose directory is unknown, and git whose subcommand the text does not name in a checkout the text places. These meet the rules above them (the `main-checkout` rule fails closed in a main checkout) and the fallback, whose parsed rules include the shell writes and so the jail.
-- **Order:** `ledger`, `lock-state`, `kit-json` and `main-checkout` are checked first, so a subagent's edit of a main checkout still reads `main-checkout`.
+- **Order:** `ledger`, `lock-state`, `kit-json`, `generated-file` and `main-checkout` are checked first, so a subagent's edit of a main checkout still reads `main-checkout`.
+
+## Generated files
+
+`kitlib/guard/generated.py` `source(top, rel)`; rule `generated-file` (`rules.generated_file`), checked
+with the other edit rules for a file tool's target and each shell write target (decision 19 in
+docs/multi-host-plan.md section 7; docs/content.md "Generated files"). It judges only a checkout
+with the kit's layout (`content/roles/` and `tools/render_content.py`, `kitlib.content.oncommit.is_kit`),
+the checkout git places the target in, and these paths in it (case folded):
+
+| rendered | its source |
+|---|---|
+| `hosts/<host>/shell/agents/**` | `content/roles/<role>.md` (the host's agent-name prefix, `kit-` on Codex, dropped) |
+| `hosts/<host>/shell/skills/**` | the same file under `content/skills/`; Claude's old copy, a retired folder, too |
+| `hosts/<host>/shell/boot/**`, `hosts/<host>/shell/hosts.json` | `boot/`, `hosts.json` |
+| `hosts/<host>/shell/plugin.json`, `mcp.json`, `hooks/hooks.json`; `.<host>-plugin/plugin.json` and `marketplace.json` at the root | `kit.json`, `hosts.json` and `hosts/<host>/adapter/content.py` |
+
+The renderer writes these as a process (`python tools/render_content.py --write`, run by hand, by
+`tools/commit.py` or by the pre-commit hook), and a python script's own writes are not shell write
+targets ("Shell writes": only `-c` code or a script on stdin counts), so the render is never refused.
+A repository that is not the kit, a hand-written file in a host's shell (`scripts/`, `mcp/`, the
+Claude hub page) and the sources themselves pass. tests/guard/test_generated.py.
 
 ## Role policy
 

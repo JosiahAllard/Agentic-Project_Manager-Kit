@@ -142,7 +142,7 @@ class Base(unittest.TestCase):
                     'optional/comfy/comfy_gen.py', 'optional/procwatch/procwatch.py',
                     'optional/usage/statusline-usage.ps1', 'optional/usage/write-usage-status.ps1',
                     'optional/agenttemp/agent_temp_sweep.py', 'knowledge/asset-generation/README.md',
-                    'hosts/claude/shell/skills/land-branch/SKILL.md', 'reserve_ui.pyw'):
+                    'content/skills/land-branch/SKILL.md', 'reserve_ui.pyw'):
             touch(os.path.join(self.kit, *rel.split('/')))
         # account 1: every container a link into the old kit
         self.c1 = os.path.join(self.home, '.claude')
@@ -273,7 +273,7 @@ class DryRunApplyAgain(Base):
         self.assertEqual(self.target(self.c1, 'tools', 'machine_lock'), self.kitp('tools'))
         self.assertEqual(self.target(self.c1, 'tools', 'kitlib'), self.kitp('kitlib'))
         self.assertEqual(self.target(self.c1, 'tools', 'usage'), self.kitp('optional/usage'))
-        self.assertEqual(self.target(self.c1, 'skills', 'land-branch'), self.kitp('hosts/claude/shell/skills/land-branch'))
+        self.assertEqual(self.target(self.c1, 'skills', 'land-branch'), self.kitp('content/skills/land-branch'))
         self.assertEqual(self.target(self.c1, 'skills', 'worktree-start'),     # no kit skill: kept
                          common.norm(os.path.join(self.old, 'skills', 'worktree-start')))
         self.assertEqual(self.target(self.c1, 'knowledge', 'asset-generation'), self.kitp('knowledge/asset-generation'))

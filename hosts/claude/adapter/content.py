@@ -1,43 +1,49 @@
 """Claude Code's ContentRenderer (kitlib.host.content; docs/content.md "Claude").
 
-Each role becomes `hosts/claude/shell/agents/<name>.md`: front matter `name`, `description`, `tools` (the
+Each role becomes `hosts/claude/shell/agents/<name>.md`: front matter opening with the generated-file
+line as a YAML comment (kitlib.host.content.banner; the front matter stays the file's first thing),
+then `name`, `description`, `tools` (the
 role's capabilities as Claude tool names, in order; no line for `capabilities: all`), `model`
 (the role's `model.claude` override, else hosts.json's `tiers` model for its tier: tier_models), `effort`
 when the role has one, and for `cache: long` the `experimental` map with `cacheTtl: 1h`; then the
 body with its tokens filled from tokens(): TOKENS, and PROFILE_TOKENS read from hosts.json's Claude
 entry, so a value hosts.json holds is written once; `{{model:<tier>}}` from tier_models() and
-`{{tool:<capability>}}` from TOOLS, the map the `tools` line uses. Lines end as the role file's do. Each skill folder is copied byte for byte to
-`hosts/claude/shell/skills/<name>/`.
+`{{tool:<capability>}}` from TOOLS, the map the `tools` line uses. Lines end as the role file's do.
+Skills are not copied: the plugin manifest points at `content/skills/` itself (decision 29 in
+docs/multi-host-plan.md section 7).
 
 manifests(kit, content) writes the files that carry the kit's one version (kit.json; ARCHITECTURE.md
 "Packaging"), each JSON with indent 2 and a final newline:
-- `.claude-plugin/plugin.json`: kit.json's name and version, every agent file, the skills folder,
-  HOOKS_REL and the machine-lock MCP server. It stays at the kit root: the plugin root is the whole
-  kit, since its hooks and MCP server run kitlib and tools beside them (${CLAUDE_PLUGIN_ROOT}).
+- `.claude-plugin/plugin.json`: kit.json's name and version, every agent file, SKILLS_REL (the
+  kit's own `content/skills/`), HOOKS_REL and the machine-lock MCP server. It stays at the kit
+  root: the plugin root is the whole kit, since its hooks and MCP server run kitlib and tools beside them (${CLAUDE_PLUGIN_ROOT}).
 - `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin
   (`"source": "./"`), its version as `metadata.version`.
 - HOOKS_REL: the plugin's hooks (HOOKS), each command line from kitlib.host.hookmain.manifest_command
   for the platforms hosts.json gives Claude: the kit's one hook entry, ${CLAUDE_PLUGIN_ROOT}/ENTRY,
   with `claude`, the event and, for the coordinator rules, its part (boot/hook.py).
+JSON holds no comment, and these keep to the keys Claude Code documents, so they carry no
+generated-file line; plugin.json's description says it is rendered.
 """
 import json
 
 from kitlib import agentname
 from kitlib.host import hookmain, registry
-from kitlib.host.content import ContentError, quote, substitute
+from kitlib.host.content import ContentError, banner, quote, role_source, substitute
 
 HOST = 'claude'
 SHELL_REL = 'hosts/claude/shell'
 AGENTS_REL = SHELL_REL + '/agents'
-SKILLS_REL = SHELL_REL + '/skills'
+SKILLS_REL = 'content/skills'                  # the plugin's skills: the content folder itself
+RETIRED_SKILLS_REL = SHELL_REL + '/skills'     # the skills' copy before decision 29: any file there is stale
 HOOKS_REL = SHELL_REL + '/hooks/hooks.json'
 MANIFEST_REL = '.claude-plugin/plugin.json'
 MARKETPLACE_REL = '.claude-plugin/marketplace.json'
 PLUGIN_ROOT = '${CLAUDE_PLUGIN_ROOT}'
-DESCRIPTION = ('The PM kit as a Claude Code plugin (ARCHITECTURE.md, Packaging): the agents and skills '
-               'rendered into hosts/claude/shell/, its hooks and the machine lock MCP server; templates, '
-               'optional tools and knowledge ship beside them (docs/shipping.md). Rendered from kit.json '
-               'and content/ by tools/render_content.py; never edit it by hand.')
+DESCRIPTION = ('The PM kit as a Claude Code plugin (ARCHITECTURE.md, Packaging): the agents rendered into '
+               'hosts/claude/shell/agents/, the skills in content/skills/, its hooks and the machine lock MCP '
+               'server; templates, optional tools and knowledge ship beside them (docs/shipping.md). '
+               'Rendered from kit.json and content/ by tools/render_content.py; never edit it by hand.')
 ENTRY = 'boot/hook.py'
 # The plugin's hooks: (event, matcher or None, the part boot/hook.py runs or None). The kit header
 # runs at every session and subagent start; the coordinator rules at a session's start, resume or
@@ -97,7 +103,12 @@ class ClaudeContent:
         return dict(registry.host(HOST).tiers)
 
     def owned(self):
-        return (AGENTS_REL, SKILLS_REL)
+        return (AGENTS_REL,)
+
+    def retired(self):
+        """Folders this renderer once wrote and no longer does (kitlib.content: every file in
+        one is stale)."""
+        return (RETIRED_SKILLS_REL,)
 
     @staticmethod
     def tokens():
@@ -137,7 +148,8 @@ class ClaudeContent:
         tiers = self.tier_models() if tiers is None else tiers
         fill = lambda text: substitute(text, values, agent_name, names, src, models=tiers,    # noqa: E731
                                        tools=TOOLS)
-        lines = ['---', 'name: %s' % role.name, 'description: %s' % quote(fill(role.description))]
+        lines = ['---', '# ' + banner(role_source(role.name)), 'name: %s' % role.name,
+                 'description: %s' % quote(fill(role.description))]
         for key, value in self.settings(role, tiers):
             lines += ['experimental:', '  cacheTtl: %s' % value] if key == 'cacheTtl' else ['%s: %s' % (key, value)]
         lines.append('---')
@@ -150,9 +162,6 @@ class ClaudeContent:
         out = {}
         for role in content.roles:
             out[self.role_path(role.name)] = self.agent_file(role, names, values, tiers)
-        for skill in content.skills:
-            for rel, data in skill.files:
-                out['%s/%s/%s' % (SKILLS_REL, skill.name, rel)] = data
         return out
 
     def hooks(self, registry_path=None):

@@ -6,12 +6,14 @@ a test fails when they differ from what the renderer writes now (tests/content/t
 `RealContentTest`).
 
 - `content/roles/<name>.md`: one role. Front matter, then a neutral body.
-- `content/skills/<name>/`: one skill folder, shipped byte for byte on every host.
+- `content/skills/<name>/`: one skill folder, shipped byte for byte on every host. Claude's plugin
+  loads it from there; Codex still ships a copy (see "Codex").
 - `content/default-profile.md`: the agent profile every role reads when a repository has none
   (docs/agent-profile.md). Not rendered: it holds no tokens and names no host
   (tests/content/test_default_profile.py).
 - `python tools/render_content.py` (`--check`, the default) lists each rendered file that differs,
-  is missing, or is stale (in a folder a host renderer owns, but no longer rendered). Exit 1 if any.
+  is missing, or is stale (in a folder a host renderer owns but no longer rendered, or in a folder
+  it has retired: `retired()`, Claude's old `hosts/claude/shell/skills/`). Exit 1 if any.
 - `python tools/render_content.py --write` writes them and removes the stale ones. `--host <name>`
   limits either to one host. Exit 2: usage, or a content file of the wrong shape (the line names
   the file and the problem).
@@ -19,9 +21,9 @@ a test fails when they differ from what the renderer writes now (tests/content/t
 The renderer also writes each host's plugin manifests from `kit.json` (the kit's one name and
 version, ARCHITECTURE.md "Packaging"; see "Manifests" below), and the two tables in
 `docs/ROSTER.md` (see "The roster" below). Never edit
-`hosts/claude/shell/agents/`, `hosts/claude/shell/skills/`, `.claude-plugin/*.json` or
-`hosts/claude/shell/hooks/hooks.json` by hand: edit `content/` or `kit.json`, then `--write`, and
-commit both. Code: `kitlib/content` (load, render, drift, write), `kitlib/host/content.py` (the
+`hosts/*/shell/agents/`, `hosts/*/shell/skills/`, `.claude-plugin/*.json` or a host's other rendered
+manifests by hand: edit `content/` or `kit.json`, then `--write`, and commit both (see "Generated
+files" and "Render on commit" below). Code: `kitlib/content` (load, render, drift, write), `kitlib/host/content.py` (the
 role model, tokens, and the `ContentRenderer` protocol), `hosts/claude/adapter/content.py` (Claude's
 renderer).
 
@@ -103,8 +105,10 @@ fails a role that writes a Claude value bare, and tests/host/test_leaks a host n
 `hosts/claude/adapter/content.py` writes `hosts/claude/shell/agents/<name>.md` with `name`, `description` (quoted only
 when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model` (hosts.json `tiers`, the
 one tier map),
-`effort` when set, and for `cache: long` the `experimental` map with `cacheTtl: 1h`. It copies each
-skill folder to `hosts/claude/shell/skills/<name>/`. It owns both folders.
+`effort` when set, and for `cache: long` the `experimental` map with `cacheTtl: 1h`; the front matter
+opens with the generated-file line as a YAML comment. It owns that folder. It copies no skill: the
+plugin manifest's `skills` is `./content/skills/` (decision 29 in docs/multi-host-plan.md section 7),
+and `hosts/claude/shell/skills/`, the copy it wrote before, is a retired folder: a file there is stale.
 
 An agent body gets no `${CLAUDE_PLUGIN_ROOT}` substitution, so a role names the kit's folder
 `<kit>`, as a skill does, and the kit header says what it is (tests/content
@@ -112,12 +116,15 @@ An agent body gets no `${CLAUDE_PLUGIN_ROOT}` substitution, so a role names the 
 
 ## Codex
 
-`hosts/codex/adapter/content.py` writes `hosts/codex/shell/agents/kit-<name>.toml`: a header comment,
+`hosts/codex/adapter/content.py` writes `hosts/codex/shell/agents/kit-<name>.toml`: a header comment
+opening with the generated-file line,
 `name` (`kit-<name>`), `description`, `model` (none while the tier maps to `account-default`: the
 account's model runs; docs/ROSTER.md), `model_reasoning_effort` (the role's `effort`, else its tier's),
 `sandbox_mode` (the role's `sandbox`) and `developer_instructions`, the body with Codex's token values
 as a TOML multi-line string. A Codex agent file has no tool list, so `capabilities` and `cache` are not
-rendered. It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders. Its
+rendered. It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders; the
+copy stays until a live Codex install shows it loads skills from outside its plugin folder
+(hosts/codex/README.md "Not verified"). Its
 manifests are `hosts/codex/shell/plugin.json` (the name and version, the hooks file),
 `hosts/codex/shell/mcp.json` (the read-only lock server) and `hosts/codex/shell/hooks/hooks.json`
 (every declared hook event running `boot/hook.py codex <event>`, the plugin's copy, as one
@@ -134,7 +141,8 @@ A renderer with `manifests(kit, content)` also writes its host's plugin files, `
 `kitlib.content.load_kit` of `kit.json` (`{"name", "version"}`: a lowercase name and an `N.N.N`
 version, nothing else). Claude's are each JSON with indent 2 and a final newline:
 
-- `.claude-plugin/plugin.json`: the name and version, every agent file, the skills folder, the
+- `.claude-plugin/plugin.json`: the name and version, every agent file, the skills folder
+  (`./content/skills/`), the
   hooks file and the machine-lock MCP server (`python ${CLAUDE_PLUGIN_ROOT}/mcp/lock_server.py`).
   It stays at the kit root because the plugin root is the whole kit: the hooks and the MCP server
   run kitlib and tools beside them, and an installed plugin reaches only files under its root.
@@ -147,6 +155,37 @@ version, nothing else). Claude's are each JSON with indent 2 and a final newline
   hosts.json gives the host (`pythonw` on Windows), so no manifest spells it by hand.
 
 A version bump is one edit to `kit.json`, then `--write`. tests/content `ManifestTest`.
+
+## Generated files
+
+Every rendered file a comment can go in opens with one line (`kitlib.host.content.banner`, decision 19
+in docs/multi-host-plan.md section 7): `Generated from <source>: edit that, then run python
+tools/render_content.py --write. Never edit this file by hand.` A Claude agent file carries it as a
+YAML comment on the front matter's first line, so the front matter stays the file's first thing; a
+Codex agent file as its first `#` line. JSON holds no comment, and the manifests keep to the keys
+their host documents, so plugin.json, marketplace.json, mcp.json, hooks.json and the plugin's
+hosts.json carry none (plugin.json's description says it is rendered); neither do the byte-for-byte
+copies (skills, `boot/`), which must stay their source's bytes. The line is part of the render, so
+the drift check covers it.
+
+The guard refuses a hand edit of a rendered file in a kit checkout, in any session, and names its
+source and the render command (rule `generated-file`, docs/guard.md "Generated files").
+
+## Render on commit
+
+`tools/commit.py` renders when a path it commits is under `content/` or is `kit.json` or
+`hosts.json`, in a work tree with the kit's layout (`content/roles/` and
+`tools/render_content.py`): it runs that work tree's own `tools/render_content.py -C <work tree>
+--write` first, and stages every file the render wrote or removed into the same commit, listed on a
+`rendered` line (`kitlib.content.oncommit`). A render that fails refuses the commit and names the
+command to run. A rendered file written earlier by hand with `--write`, which this render then does
+not change, is not added: name it.
+
+The opt-in pre-commit hook (`githooks/pre-commit`, docs/ledger.md "Pre-commit check") does the same
+for a plain `git commit` in a kit checkout, through `kitlib.githooks.render`: its shell front end
+starts python only when the kit's layout is there and a render source is staged (one `git diff
+--cached` read), renders, and stages what changed into the commit's index; when it cannot, it
+refuses the commit with the command to run. The gate's drift check stays the backstop.
 
 ## Kit header
 

@@ -6,8 +6,8 @@ Status: findings only. Nothing here changed a definition. Every recommendation i
 
 Applied since, 2026-10-12 (everything else on this page is as the status line says). None of it has been measured after the change; the savings rows below are still pricing computations.
 - The one-hour prompt cache, on the opus-worker type only: the `experimental` map in the frontmatter of hosts/claude/shell/agents/senior-worker.md (named opus-worker until 2026-10-13; the data below keeps the old name) (docs/ROSTER.md, "The one-hour prompt cache"). No other type and no all-subagents setting.
-- Four rows of the savings table as dispatch rules in hosts/claude/shell/skills/coordinator-dispatch/roster.md, "Choosing": "general-purpose off opus" and "Explore and Plan off opus" (built-in types go out on `model: sonnet`), "Lander to haiku" (the lander is never overridden), and "Reviewer to sonnet, 25% of reviews" as a rule, not a quota: the rows are in that file's "Reviewer model" rule, their one home. What share of reviews that rule covers is not measured; the row's 25% is its pricing assumption.
-- Already in hosts/claude/shell/skills/coordinator-dispatch/SKILL.md before that date: continue an agent within 5 minutes or start fresh ("While agents run") and read file ranges, not whole large files ("The brief").
+- Four rows of the savings table as dispatch rules in content/skills/coordinator-dispatch/roster.md, "Choosing": "general-purpose off opus" and "Explore and Plan off opus" (built-in types go out on `model: sonnet`), "Lander to haiku" (the lander is never overridden), and "Reviewer to sonnet, 25% of reviews" as a rule, not a quota: the rows are in that file's "Reviewer model" rule, their one home. What share of reviews that rule covers is not measured; the row's 25% is its pricing assumption.
+- Already in the coordinator-dispatch skill's SKILL.md (content/skills/coordinator-dispatch/) before that date: continue an agent within 5 minutes or start fresh ("While agents run") and read file ranges, not whole large files ("The brief").
 
 Evidence labels:
 - **measured** (M): from a script or log in the source notes. Not re-run for this page.

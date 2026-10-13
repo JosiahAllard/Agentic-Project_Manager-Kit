@@ -1,4 +1,5 @@
 ---
+# Generated from content/roles/spec-writer.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: spec-writer
 description: Extends a named design or spec document (a design doc, a plan section) from answers the owner has already given, reading the code the spec depends on so it stays buildable. Docs only, no machine time beyond the docs gate. Must be given the document, the owner's answers verbatim, the code areas the spec touches, and a branch slug. Repository specifics come from `.claude/agent-profile.md`.
 tools: Read, Edit, Write, Grep, Glob, PowerShell, Bash

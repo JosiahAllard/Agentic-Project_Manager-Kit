@@ -6,7 +6,7 @@ from pathlib import Path
 from kitlib.stubs import SHARED
 from tests.shipped import ROOT, frontmatter, violations
 
-SKILLS = ROOT / "hosts" / "claude" / "shell" / "skills"
+SKILLS = ROOT / "content" / "skills"      # every host ships these (docs/content.md)
 GODOT_SKILL = ROOT / "templates" / "stacks" / "godot" / ".claude" / "skills"
 EXPECTED = {"backlog-ops", "branch-review", "branch-sync", "coordinator-dispatch", "doc-claims-discipline",
             "flaky-test-triage", "land-branch", "machine-lock-run", "mutation-testing", "session-handoff",
@@ -49,6 +49,13 @@ def _kit_form(p):
     return "<kit>"
 
 
+def _shipped_text(p):
+    """`p`'s text less the generated-file line an agent file's front matter opens with (a YAML
+    comment no agent reads, written for whoever edits the kit checkout: kitlib.host.content.banner)."""
+    return "".join(ln for ln in p.read_text(encoding="utf-8").splitlines(True)
+                   if not ln.startswith("# Generated from "))
+
+
 def _shipped_text_files():
     return (list(SKILLS.glob("*/*.md")) + list(GODOT_SKILL.glob("*/SKILL.md"))
             + list((ROOT / "hosts" / "claude" / "shell" / "agents").glob("*.md")))
@@ -83,7 +90,7 @@ class SkillFilesTest(unittest.TestCase):
         file, and exist in the kit; a repo-relative `tools/<name>.py` is one a repo has through a stub
         (kitlib.stubs.SHARED) or supplies itself."""
         for p in _shipped_text_files():
-            text = p.read_text(encoding="utf-8")
+            text = _shipped_text(p)
             for rel in PLUGIN_RX.findall(text):
                 self.assertTrue((ROOT / rel).exists(), f"{p.name} names ${{CLAUDE_PLUGIN_ROOT}}/{rel}")
             for rel in KIT_RX.findall(text):

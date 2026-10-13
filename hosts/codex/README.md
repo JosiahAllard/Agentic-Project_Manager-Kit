@@ -14,7 +14,7 @@ Every rendered agent file says so in its first line.
 | Hook entry | none of its own: `shell/boot/hook.py codex <event>`, the plugin's copy of the kit's one entry `boot/hook.py` | in the owner's unmarked session a tool `hosts.json` `hook.guarded_tools` leaves out passes before boot (`fast_path: unmarked`); else PreToolUse through `kitlib.host.hookmain` (`ADAPTER.DEADLINE`, 7 s for the whole call, boot included) with Codex's parse, screen and render; a start event adds the kit header (and a PM's or coordinator's start checks, `ADAPTER.start_text`) |
 | Hook policy | `adapter/policy.py` | a marked session: unknown tools, other MCP servers' tools, `apply_patch` through the shell, calls the guard cannot fully judge (no named shell, cmd.exe, a TTY, fed input) and a read, test or lander role's edits in its own checkout refused |
 | Boot folder | `shell/boot/kitboot.py`, `shell/boot/hook.py`, `shell/hosts.json` | byte copies of `boot/kitboot.py` and `boot/hook.py`, and `hosts.json`'s Codex entry alone, drift-checked; a copied plugin verifies the kit it binds with them, and reads its hook data before the kit boots |
-| Agents, skills | `shell/agents/kit-<role>.toml`, `shell/skills/` | every role and skill, rendered from `content/` (`python tools/render_content.py`); review templates, not installed |
+| Agents, skills | `shell/agents/kit-<role>.toml`, `shell/skills/` | every role and skill, rendered from `content/` (`python tools/render_content.py`), each agent file opening with the generated-file line; the skills a byte copy until the live check below; the guard refuses a hand edit of either (docs/guard.md "Generated files"); review templates, not installed |
 | Manifests | `shell/plugin.json`, `shell/mcp.json`, `shell/hooks/hooks.json` | rendered from `kit.json` |
 | Lock MCP | `shell/mcp/lock_server.py` | the lock's read tools only (`adapter/lock.py`), server `machine-lock` |
 | Sessions | `adapter/sessions.py` | read-only app-server reads (`ADAPTER.sessions()`) |
@@ -66,6 +66,13 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
   payload against a binding.
 - **Plugin loading.** The tested binary (0.162.0-alpha.17.2) found portable skills but not portable
   hooks or MCP. Hook trust, cached paths and client refresh are untested.
+- **Skills from outside the plugin folder.** The default host's plugin loads its skills from the kit's
+  `content/skills/` itself; Codex keeps its byte copy in `shell/skills/` (decision 29 in
+  docs/multi-host-plan.md section 7) until a live install shows that a Codex plugin can name a
+  skills folder outside its plugin root (here `../../../content/skills/`) and that a plugin cache
+  copied out of the kit still carries it. The check: install the plugin with `plugin.json` naming
+  that folder, start a session, and list its skills; then do the same from a plugin cache. Until
+  both pass, `adapter/content.py` copies the skills and owns `shell/skills/`.
 - **Runtime.** The branch's canaries passed on that binary against fixtures; the native local Git
   preparation stayed refused (`workflow_canary` reports `complete=false`). Rerun them for any new
   binary. Live controller, store and lock contention, and landing are not accepted. A read or lander

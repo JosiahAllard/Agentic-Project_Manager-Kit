@@ -727,6 +727,110 @@ class TheDocBudgetVerdict(LinkedCase):
         self.assertIn(os.path.basename(self.wt), out)
 
 
+# A stand-in for the kit's tools/render_content.py --write: out/role.txt follows content/roles/x.md,
+# out/old.txt is removed, and each change is a `wrote <path>` line, as the real tool prints.
+RENDER_STUB = """import os, sys
+root = sys.argv[sys.argv.index('-C') + 1]
+assert '--write' in sys.argv
+with open(os.path.join(root, 'content', 'roles', 'x.md'), encoding='utf-8') as f:
+    want = 'rendered ' + f.read()
+out = os.path.join(root, 'out', 'role.txt')
+have = open(out, encoding='utf-8').read() if os.path.exists(out) else None
+if have != want:
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, 'w', encoding='utf-8') as f:
+        f.write(want)
+    print('wrote out/role.txt')
+old = os.path.join(root, 'out', 'old.txt')
+if os.path.exists(old):
+    os.remove(old)
+    print('wrote out/old.txt')
+print('done')
+"""
+
+
+class RenderOnCommit(LinkedCase):
+    """In a work tree with the kit's layout, a commit naming a render source renders first and
+    commits what the render changed (kitlib.content.oncommit; docs/content.md "Render on commit")."""
+
+    def setUp(self):
+        LinkedCase.setUp(self)
+        self.put('content/roles/x.md', 'one\n')
+        self.put('out/old.txt', 'stale\n')
+        self.git('add', '--', 'content/roles/x.md', 'out/old.txt')
+        self.git('commit', '-q', '-m', 'kit layout')
+        self.stub(RENDER_STUB)
+
+    def stub(self, text):
+        self.put('tools/render_content.py', text)       # untracked: the commit names it never
+
+    def files(self):
+        return sorted(self.git('show', '--name-status', '--format=', 'HEAD').splitlines())
+
+    def test_a_role_edit_commits_the_rendered_files_with_it(self):
+        self.put('content/roles/x.md', 'two\n')
+        code, out = self.commit('edit x', 'content/roles/x.md')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.files(), ['A\tout/role.txt', 'D\tout/old.txt', 'M\tcontent/roles/x.md'])
+        self.assertIn('files     content/roles/x.md', out)
+        self.assertIn('rendered  out/old.txt, out/role.txt', out)
+        self.assertEqual(self.git('show', 'HEAD:out/role.txt'), 'rendered two')
+        self.assertEqual(self.git('status', '--porcelain', '--', 'out', 'content'), '')
+
+    def test_kit_json_and_hosts_json_are_sources_too(self):
+        for name in ('kit.json', 'hosts.json'):
+            with self.subTest(name):
+                self.put(name, '{"n": "%s"}\n' % name)
+                code, out = self.commit('edit ' + name, name)
+                self.assertEqual(code, 0, out)
+                self.assertIn('rendered  ', out)
+
+    def test_a_render_that_changes_nothing_says_so(self):
+        self.put('content/roles/x.md', 'two\n')
+        self.assertEqual(self.commit('one', 'content/roles/x.md')[0], 0)
+        self.put('content/roles/y.md', 'y\n')
+        code, out = self.commit('add y', 'content/roles/y.md')
+        self.assertEqual(code, 0, out)
+        self.assertIn('rendered  no rendered file changed', out)
+        self.assertEqual(self.files(), ['A\tcontent/roles/y.md'])
+
+    def test_a_commit_with_no_source_does_not_render(self):
+        self.put('a.py', 'x\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('rendered', out)
+        self.assertFalse(os.path.exists(os.path.join(self.wt, 'out', 'role.txt')))
+
+    def test_a_repository_without_the_kit_layout_does_not_render(self):
+        os.remove(os.path.join(self.wt, 'tools', 'render_content.py'))
+        self.put('content/roles/x.md', 'two\n')
+        code, out = self.commit('edit x', 'content/roles/x.md')
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('rendered', out)
+        self.assertEqual(self.files(), ['M\tcontent/roles/x.md'])
+
+    def test_a_failed_render_refuses_and_names_the_command(self):
+        self.stub('import sys\nprint("render_content: content/roles/x.md: bad")\nsys.exit(2)\n')
+        self.put('content/roles/x.md', 'two\n')
+        before = self.head()
+        code, out = self.commit('edit x', 'content/roles/x.md')
+        self.assertEqual(code, 1, out)
+        self.assertIn('the render failed: tools/render_content.py exited 2: '
+                      'render_content: content/roles/x.md: bad', out)
+        self.assertIn('render_content.py -C ', out)
+        self.assertIn('Nothing was committed', out)
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), '')
+
+    def test_a_rendered_file_staged_before_is_not_foreign(self):
+        self.put('content/roles/x.md', 'two\n')
+        self.put('out/role.txt', 'by hand\n')
+        self.git('add', '--', 'out/role.txt')
+        code, out = self.commit('edit x', 'content/roles/x.md')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('show', 'HEAD:out/role.txt'), 'rendered two')
+
+
 class MergeCase(LinkedCase):
 
     def setUp(self):

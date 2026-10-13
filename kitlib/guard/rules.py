@@ -18,6 +18,8 @@ Rules, in the order they are checked:
   ledger           an edit of the machine config's ledger_path, by anyone
   lock-state       an agent session's edit of a file in the machine lock's state folder
   kit-json         an agent session's edit of a .kit.json in a checkout
+  generated-file   an edit of a file tools/render_content.py writes in a kit checkout (a host's
+                   agents, skills copies, plugin manifests: kitlib.guard.generated), in any session
   main-checkout    an edit in a main checkout by a role whose edit_main_checkout is false
   write-jail       an agent session's write outside its own checkout, the temp folder and the
                    .kit.json data roots (kitlib.guard.jail); git that writes a checkout outside them
@@ -55,6 +57,7 @@ from kitlib.host import Decision
 
 from . import commands as cm
 from . import context
+from . import generated
 from . import jail
 from . import paths
 from . import shell as sh
@@ -550,7 +553,8 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     gives the same edit aimed at `path` (the alternative); `run` the command to rerun from the
     worktree when it writes into the directory it runs in."""
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
-        lock_state(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what)
+        lock_state(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what) or \
+        generated_file(ctx, target, role, what)
     if d:
         return d
     return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run) or \
@@ -601,6 +605,28 @@ def kit_json(event, ctx, target, role, what):
                   'write among them (guard.data_roots), and only the owner changes it (owner.paths). Ask the '
                   'coordinator to take the change to the owner. To read it:' % what,
                   'python -m json.tool %s' % quote(target))
+
+
+def generated_file(ctx, target, role, what):
+    """An edit of a file the kit's renderer writes, in a kit checkout (kitlib.guard.generated):
+    the next render overwrites it and the drift check fails it, so the source is edited and the
+    file rendered. The renderer runs as a process, which no edit rule judges."""
+    if not target:
+        return None
+    top = ctx.place(target).top
+    if not top:
+        return None
+    try:
+        rel = os.path.relpath(target, top)
+    except ValueError:                          # another drive
+        return None
+    src = generated.source(top, rel)
+    if src is None:
+        return None
+    return refuse('generated-file', role, '%s: %s is generated from %s by tools/render_content.py; a hand edit '
+                  'is overwritten by the next render and fails the drift check. Edit %s, then render:'
+                  % (what, rel.replace('\\', '/'), src, src),
+                  'python %s --write' % quote(os.path.join(top, 'tools', 'render_content.py')))
 
 
 def session_mark(event, ctx):

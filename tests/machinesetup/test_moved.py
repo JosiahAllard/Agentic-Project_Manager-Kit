@@ -162,19 +162,25 @@ class MovedHooks(unittest.TestCase):
 @unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')
 class MovedSkillLinks(unittest.TestCase):
     def test_a_skill_link_into_the_pre_move_folder_is_repointed(self):
+        self.repointed(common.MOVED_FROM + '/skills')
+
+    def test_a_skill_link_into_the_claude_shells_old_copy_is_repointed(self):
+        self.repointed(common.SHELL + '/skills')          # the rendered copy before decision 29
+
+    def repointed(self, moved):
         root = tempfile.mkdtemp(prefix='machinesetup-moved-links-')
         self.addCleanup(shutil.rmtree, root, True)
         kit, old, home = (os.path.join(root, n) for n in ('kit', 'old-kit', 'home'))
         acct = os.path.join(home, '.claude')
-        want = os.path.join(kit, *(common.SHELL + '/skills/land-branch').split('/'))
-        was = os.path.join(kit, common.MOVED_FROM, 'skills', 'land-branch')
+        want = os.path.join(kit, *(links.SKILLS_DIR + '/land-branch').split('/'))
+        was = os.path.join(kit, *(moved + '/land-branch').split('/'))
         T.touch(os.path.join(want, 'SKILL.md'))
         T.touch(os.path.join(was, 'SKILL.md'))
         os.makedirs(os.path.join(acct, 'skills'))
         os.makedirs(old)
         link = os.path.join(acct, 'skills', 'land-branch')
         T.junction(link, was)
-        shutil.rmtree(os.path.join(kit, common.MOVED_FROM))              # gone after the move: dangling
+        shutil.rmtree(os.path.dirname(was))                              # gone after the move: dangling
         ctx = M.Context(home, kit, old_kit=old, config_dirs=[acct], host=T.FakeHost(kit), today=T.TODAY)
         plan = M.Plan()
         links.survey(plan, acct, ctx)

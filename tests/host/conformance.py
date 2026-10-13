@@ -422,14 +422,21 @@ class HostConformance(object):
                     self.assertTrue(all(isinstance(p, str) and p for p in named), parts)
                     self.assertEqual(len(named), len(set(named)), parts)
 
-    def test_skills_ship_byte_for_byte_when_declared(self):
+    def test_skills_ship_when_declared(self):
+        """A host with skills ships every skill file: copied byte for byte by its renderer, or
+        loaded from content/skills itself, which its plugin manifest names (decision 29 in
+        docs/multi-host-plan.md section 7)."""
         if not self.entry.capabilities.skills:
             return
         c = kcontent.load(self.KIT_ROOT)
-        rendered = set(self.renderer().render(c).values())
-        for s in c.skills:
-            for rel, data in s.files:
-                self.assertIn(data, rendered, '%s/%s' % (s.name, rel))
+        r = self.renderer()
+        rendered = set(r.render(c).values())
+        missing = ['%s/%s' % (s.name, rel) for s in c.skills for rel, data in s.files if data not in rendered]
+        if not missing:
+            return
+        manifests = r.manifests(kcontent.load_kit(self.KIT_ROOT), c) if hasattr(r, 'manifests') else {}
+        self.assertTrue([p for p, d in manifests.items() if ('./%s/' % kcontent.SKILLS_REL).encode() in d],
+                        'skills neither copied nor named in a manifest: %s' % missing[:3])
 
     def test_manifests_carry_kit_json_version(self):
         r = self.renderer()

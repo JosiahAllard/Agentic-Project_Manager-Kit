@@ -1,7 +1,7 @@
 """kitlib.content, kitlib.host.content and hosts.claude.adapter.content (docs/content.md).
 
-The drift test runs on the real content/ and the committed hosts/claude/shell/agents and hosts/claude/shell/skills: they
-must be exactly what the renderer writes. The rest run on temp copies and small role files.
+The drift test runs on the real content/ and the committed hosts/claude/shell/agents and manifests: they
+must be exactly what the renderer writes (the skills are content/skills itself, never copied for Claude). The rest run on temp copies and small role files.
 """
 import contextlib
 import io
@@ -28,6 +28,12 @@ ROLE = (b'---\nname: alpha\ndescription: Builds things. Ask {{agent:beta}} first
 BETA = b'---\nname: beta\ndescription: "Two: parts"\ntier: deep\nsandbox: read-only\ncapabilities: all\n---\nbody\n'
 
 
+def banner(role):
+    """The generated-file line a Claude agent file's front matter opens with, as a YAML comment."""
+    return ('# Generated from content/roles/%s.md: edit that, then run python tools/render_content.py '
+            '--write. Never edit this file by hand.' % role).encode('utf-8')
+
+
 def read(path):
     with open(path, 'rb') as f:
         return f.read()
@@ -40,8 +46,8 @@ def write(path, data):
 
 
 class RealContentTest(unittest.TestCase):
-    """The committed files are the renderer's: an edit to hosts/claude/shell/agents or hosts/claude/shell/skills by hand
-    fails here; edit content/ and run `python tools/render_content.py --write`."""
+    """The committed files are the renderer's: an edit to hosts/claude/shell/agents by hand fails here; edit
+    content/ and run `python tools/render_content.py --write`."""
 
     def test_no_drift(self):
         self.assertEqual(content.drift(KIT_ROOT, [claude_content.renderer()]), [])
@@ -50,23 +56,34 @@ class RealContentTest(unittest.TestCase):
         out = io.StringIO()
         self.assertEqual(cli.main([], out), 0, out.getvalue())
 
-    def test_every_role_renders_to_an_agent_file_and_every_skill_to_its_folder(self):
+    def test_every_role_renders_to_an_agent_file_and_no_skill_is_copied(self):
         c = content.load(KIT_ROOT)
         agents = os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'agents')
         self.assertEqual(sorted(n[:-3] for n in os.listdir(agents) if n.endswith('.md')),
                          sorted(c.role_names()))
-        skills = os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'skills')
-        self.assertEqual(sorted(os.listdir(skills)), sorted(s.name for s in c.skills))
+        self.assertFalse(os.path.exists(os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'skills')))
+        rendered = claude_content.renderer().render(c)
+        self.assertEqual([p for p in rendered if not p.startswith(claude_content.AGENTS_REL + '/')], [])
 
     def test_the_plugin_manifest_lists_every_role(self):
         with open(os.path.join(KIT_ROOT, '.claude-plugin', 'plugin.json'), encoding='utf-8') as f:
             agents = json.load(f)['agents']
         self.assertEqual(sorted(agents), sorted('./hosts/claude/shell/agents/%s.md' % n for n in content.load(KIT_ROOT).role_names()))
 
-    def test_skills_are_copied_byte_for_byte(self):
-        for s in content.load(KIT_ROOT).skills:
-            for rel, data in s.files:
-                self.assertEqual(read(os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'skills', s.name, *rel.split('/'))), data)
+    def test_the_plugin_loads_the_skills_from_content(self):
+        with open(os.path.join(KIT_ROOT, '.claude-plugin', 'plugin.json'), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['skills'], ['./content/skills/'])
+
+    def test_every_agent_file_opens_its_front_matter_with_the_generated_line(self):
+        """The banner is a YAML comment inside the front matter, so the front matter stays first."""
+        agents = os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'agents')
+        for n in os.listdir(agents):
+            with self.subTest(agent=n):
+                lines = read(os.path.join(agents, n)).decode('utf-8').splitlines()
+                self.assertEqual(lines[0], '---')
+                self.assertEqual(lines[1], '# ' + hc.banner('content/roles/%s' % n))
+                self.assertIn('python tools/render_content.py --write', lines[1])
+                self.assertEqual(lines[2], 'name: %s' % n[:-3])
 
     def test_no_agent_file_names_the_plugin_root_variable(self):
         """An agent body gets no ${CLAUDE_PLUGIN_ROOT} substitution: the kit's folder is `<kit>`."""
@@ -266,11 +283,11 @@ class ClaudeRendererTest(unittest.TestCase):
     def test_agent_file(self):
         got = claude_content.renderer().render(self.content(ROLE, BETA))
         self.assertEqual(got['hosts/claude/shell/agents/alpha.md'],
-                         b'---\nname: alpha\ndescription: Builds things. Ask pm-kit:beta first.\n'
+                         b'---\n' + banner('alpha') + b'\nname: alpha\ndescription: Builds things. Ask pm-kit:beta first.\n'
                          b'tools: Read, Grep, Bash\nmodel: sonnet\neffort: low\n---\n\n'
                          b'Read .claude/agent-profile.md and CLAUDE.md; docs at <kit>/docs.\n')
         self.assertEqual(got['hosts/claude/shell/agents/beta.md'],
-                         b'---\nname: beta\ndescription: "Two: parts"\nmodel: opus\n---\nbody\n')
+                         b'---\n' + banner('beta') + b'\nname: beta\ndescription: "Two: parts"\nmodel: opus\n---\nbody\n')
 
     def test_a_mode_is_never_rendered(self):
         plain = claude_content.renderer().render(self.content(ROLE, BETA))
@@ -281,7 +298,7 @@ class ClaudeRendererTest(unittest.TestCase):
     def test_long_cache_and_crlf(self):
         role = BETA.replace(b'capabilities: all\n', b'capabilities: all\ncache: long\n').replace(b'\n', b'\r\n')
         got = claude_content.renderer().render(self.content(role))['hosts/claude/shell/agents/beta.md']
-        self.assertEqual(got, b'---\r\nname: beta\r\ndescription: "Two: parts"\r\nmodel: opus\r\n'
+        self.assertEqual(got, b'---\r\n' + banner('beta') + b'\r\nname: beta\r\ndescription: "Two: parts"\r\nmodel: opus\r\n'
                               b'experimental:\r\n  cacheTtl: 1h\r\n---\r\nbody\r\n')
 
     def test_every_tier_and_capability_has_a_claude_value(self):
@@ -314,8 +331,8 @@ class TempTreeTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.root, True)
-        for rel in ('content', '.claude-plugin', 'boot', os.path.join('hosts', 'claude', 'shell', 'agents'),
-                    os.path.join('hosts', 'claude', 'shell', 'skills')):      # boot/: a host's plugin ships a copy
+        for rel in ('content', '.claude-plugin', 'boot',      # boot/: a host's plugin ships a copy
+                    os.path.join('hosts', 'claude', 'shell', 'agents')):
             shutil.copytree(os.path.join(KIT_ROOT, rel), os.path.join(self.root, rel))
         # hosts.json: a plugin ships its host's entry
         for rel in ('kit.json', 'hosts.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json'),
@@ -331,7 +348,7 @@ class TempTreeTest(unittest.TestCase):
         write(worker, read(worker) + b'hand edit\n')
         os.remove(self.path('hosts', 'claude', 'shell', 'agents', 'lander.md'))
         write(self.path('hosts', 'claude', 'shell', 'agents', 'ghost.md'), b'---\nname: ghost\n---\n')
-        write(self.path('hosts', 'claude', 'shell', 'skills', 'ghost', 'SKILL.md'), b'x\n')
+        write(self.path('hosts', 'claude', 'shell', 'skills', 'ghost', 'SKILL.md'), b'x\n')   # a retired folder
         self.assertEqual(content.drift(self.root, self.rs),
                          ['missing: hosts/claude/shell/agents/lander.md', 'differs: hosts/claude/shell/agents/worker.md',
                           'stale: hosts/claude/shell/agents/ghost.md', 'stale: hosts/claude/shell/skills/ghost/SKILL.md'])

@@ -1,7 +1,7 @@
 {
   "name": "pm-kit",
   "version": "0.4.0",
-  "description": "The PM kit as a Claude Code plugin (ARCHITECTURE.md, Packaging): the agents and skills rendered into hosts/claude/shell/, its hooks and the machine lock MCP server; templates, optional tools and knowledge ship beside them (docs/shipping.md). Rendered from kit.json and content/ by tools/render_content.py; never edit it by hand.",
+  "description": "The PM kit as a Claude Code plugin (ARCHITECTURE.md, Packaging): the agents rendered into hosts/claude/shell/agents/, the skills in content/skills/, its hooks and the machine lock MCP server; templates, optional tools and knowledge ship beside them (docs/shipping.md). Rendered from kit.json and content/ by tools/render_content.py; never edit it by hand.",
   "agents": [
     "./hosts/claude/shell/agents/asset-smith.md",
     "./hosts/claude/shell/agents/consultant.md",
@@ -21,7 +21,7 @@
     "./hosts/claude/shell/agents/worker.md"
   ],
   "skills": [
-    "./hosts/claude/shell/skills/"
+    "./content/skills/"
   ],
   "hooks": "./hosts/claude/shell/hooks/hooks.json",
   "mcpServers": {

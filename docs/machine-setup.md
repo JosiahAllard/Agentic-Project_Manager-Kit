@@ -27,7 +27,7 @@ The wrapper runs the tool under `-Python <python.exe>` when given, else under th
 - `tools`: holds a junction per entry. `machine_lock` -> `<kit>/tools`, `kitlib` -> `<kit>/kitlib`, and `comfy`, `procwatch`, `usage`, `agenttemp` -> `<kit>/optional/<name>`.
   - It cannot be one junction onto a kit folder. The live lock path is `tools/machine_lock/machine_lock.py`, and the kit's `tools/machine_lock.py` imports `kitlib` from beside the folder it was started from, spelled through the junction (`os.path.abspath` does not resolve it).
 - `knowledge/asset-generation` -> `<kit>/knowledge/asset-generation`.
-- `skills/<name>` -> `<kit>/hosts/claude/shell/skills/<name>`, for each old-kit skill the kit has. One it lacks (a repo-local skill) is noted and keeps pointing at the old kit, linked again when its container is replaced.
+- `skills/<name>` -> `<kit>/content/skills/<name>`, for each old-kit skill the kit has. One it lacks (a repo-local skill) is noted and keeps pointing at the old kit, linked again when its container is replaced.
 
 A container that is itself a junction into the old kit is replaced by a real folder of these links. The old-kit entries it no longer reaches are noted, not removed.
 
@@ -72,8 +72,9 @@ A `settings.json` that is a symbolic link or has more than one hard link is refu
 
 The hooks lived in `<kit>/claude/hooks/` until the hosts/ move (docs/multi-host-plan.md step 7), then
 in `<kit>/hosts/claude/shell/hooks/` as one script each. Since step 14 every hook runs the kit's one
-entry, `<kit>/boot/hook.py <host> <event> [<part>]`, and those scripts are gone; the skills are in
-`<kit>/hosts/claude/shell/skills/`. Settings and links written before still name the old paths, so:
+entry, `<kit>/boot/hook.py <host> <event> [<part>]`, and those scripts are gone. The skills were in
+`<kit>/hosts/claude/shell/skills/` from that move until plan decision 29, and are in
+`<kit>/content/skills/` since. Settings and links written before still name the old paths, so:
 
 - **Settings.** Before any other step, every hook path (any event, `command` and `args`) to a retired
   script in `<kit>/claude/hooks/` or `<kit>/hosts/claude/shell/hooks/` is re-pointed to the entry
@@ -84,9 +85,9 @@ entry, `<kit>/boot/hook.py <host> <event> [<part>]`, and those scripts are gone;
   too, and in the `--pm-settings` file, so the guard entry is re-pointed instead of a second one
   being added, and the PM hook is re-pointed instead of refused. Any other script name in those
   folders, or a kit with no `boot/hook.py`, is refused.
-- **Skill links.** A link in a real `skills` folder that points into `<kit>/claude/skills/` (dangling
-  after the move) is re-pointed to the same skill in `<kit>/hosts/claude/shell/skills/`
-  (`links.MOVED_SKILLS_DIR`; switch mode only, as the links step is).
+- **Skill links.** A link in a real `skills` folder that points into `<kit>/claude/skills/` or
+  `<kit>/hosts/claude/shell/skills/` (dangling after each move) is re-pointed to the same skill in
+  `<kit>/content/skills/` (`links.MOVED_SKILLS_DIRS`; switch mode only, as the links step is).
 - **No stubs.** Plan decision 28 removed the `<kit>/claude/hooks/` stubs with step 14. An account
   whose settings still name a retired script runs no guard script at all, and Claude Code then
   blocks every guarded tool call (its message is Python's `can't open file '<kit>/.../guard.py'`),

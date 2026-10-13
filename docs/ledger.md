@@ -144,7 +144,7 @@ Hook `githooks/pre-commit`; dispatch `kitlib/githooks/precommit.py`; ledger step
 
 Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then judges each commit that adds, changes or deletes the ledger file the machine config's `ledger_path` names, or the standing digest beside it: it runs `tools/ledger.py check --base HEAD --root <repo>` and refuses the commit when that fails. Any other commit passes after one `git diff --cached` (the index the commit is built from, so `commit -a` and `commit -- <paths>` count). The check reads the working files of both, so such a commit is refused before it runs when either the ledger or the digest has unstaged changes, whichever of them is staged.
 
-`githooks/pre-commit.py` makes one call, `kitlib.githooks.precommit.main`, which runs the kit's checks (`CHECKS`, today the ledger step only) in order and stops at the first refusal. Nothing there runs a repository's own `hooks/pre-commit`; a later step would be one more entry in `CHECKS` (docs/pm-data-branch.md "Decided by the owner").
+`githooks/pre-commit.py` makes one call, `kitlib.githooks.precommit.main`, which runs the kit's checks (`CHECKS`: the render step, `kitlib.githooks.render`, which acts only in a kit checkout with a render source staged (docs/content.md "Render on commit"), then the ledger step) in order and stops at the first refusal. Nothing there runs a repository's own `hooks/pre-commit`; a later step would be one more entry in `CHECKS` (docs/pm-data-branch.md "Decided by the owner").
 
 | Case | Result |
 |---|---|
@@ -160,7 +160,7 @@ Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` 
 | Git cannot list the staged files, the check cannot start, a step raises, or the kit code cannot be imported | refused |
 | No python on PATH | pass with a note (the front end cannot tell what the commit holds) |
 
-- **Cost when not opted in:** `githooks/pre-commit` is a `sh` front end using builtins only. With no `.kit.json`, or one whose text never names `pre_commit_check`, it exits 0 and starts no other process. Otherwise it runs `githooks/pre-commit.py`.
+- **Cost when not opted in:** `githooks/pre-commit` is a `sh` front end using builtins only. With no `.kit.json`, or one whose text never names `pre_commit_check`, it exits 0 and starts no other process, except in a kit checkout (`content/roles/` and `tools/render_content.py`), where one `git diff --cached` tells whether a render source is staged. Otherwise it runs `githooks/pre-commit.py`. With no python on PATH and a render source staged it refuses the commit with the render command.
 
 ## Not ported
 

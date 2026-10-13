@@ -31,6 +31,11 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   The model is required: --model, else CLAUDE_AGENT_MODEL (blank is unset).
 - The main checkout is refused (kitlib.git.checkout.main_refusal); --lander-main-checkout is the
   one way past it, and a usage error anywhere else.
+- Render on commit (kitlib.content.oncommit; docs/content.md "Render on commit"): in a work tree
+  with the kit's layout, when a named path is under `content/` or is `kit.json` or `hosts.json`,
+  the work tree's own tools/render_content.py --write runs first, and every rendered file it wrote
+  or removed is staged into the same commit (listed on a `rendered` line). A render that fails
+  refuses the commit, naming the command to run; what it wrote stays in the work tree.
 - After the commit: the hash, the files, and the doc-budget verdict when a .md or owner-only file
   was committed (the kit's tools/doc_budget.py run with `-C <root>`, judged by kitlib.verdict), then
   the doc-index verdict (tools/doc_index.py, same call; nothing when "doc_index".enabled is false).
@@ -49,6 +54,7 @@ from kitlib import config as kconfig
 from kitlib import attribution, machinepaths, verdict
 from kitlib.docs import callers as doc_callers
 from kitlib.config import owner as ownermod
+from kitlib.content import oncommit
 from kitlib.git import checkout, cmd, repo
 from kitlib.proc import spawn
 
@@ -469,6 +475,20 @@ def main_checkout_error(lander_main_checkout, root, main_branch=None, rule_point
     return None
 
 
+def render_sources(root, paths):
+    """The repo-relative rendered paths the kit's renderer wrote or removed in `root`, when `root`
+    has the kit's layout and a path in `paths` is a render source (kitlib.content.oncommit); else
+    None (no render ran). A render that fails raises _Stop, naming the command to run."""
+    if not (oncommit.wants_render(paths) and oncommit.is_kit(root)):
+        return None
+    got, why = oncommit.render(root)
+    if got is None:
+        raise _Stop(REFUSED, 'refused: a render source is in this commit, and the render failed: %s. '
+                    'Fix it and render by hand, then commit again: %s. Nothing was committed.'
+                    % (why, oncommit.command(root)))
+    return got
+
+
 def commit(req):
     """Outcome(code, lines) for one commit request (module docstring)."""
     lines = []
@@ -525,14 +545,17 @@ def _commit(req, lines):
     if err:
         raise _usage(err)
 
+    ran = render_sources(root, paths)
+    rendered = ran or []
+    named = set(paths) | set(rendered)
     status_before = staged_status(root)
     heads = merge_heads(root) if opts['merge_fold'] else []
-    merged, merge_why = merge_owned(root, rules, set(status_before) - set(paths), heads)
-    foreign = set(status_before) - set(paths) - merged
+    merged, merge_why = merge_owned(root, rules, set(status_before) - named, heads)
+    foreign = set(status_before) - named - merged
     if foreign:
         raise _Stop(REFUSED, foreign_refusal(foreign, merge_why, len(heads) == 1))
     approved = canonical_approved(rules, req.owner_approved, paths)
-    locked = locked_paths(rules, paths)
+    locked = locked_paths(rules, paths + [p for p in rendered if p not in paths])
     if locked and not req.owner_authored:
         raise _Stop(REFUSED, 'refused: %s is owner-only, and only a commit the owner authors (his '
                     'own git identity, --owner-authored) can carry its approval. Propose the '
@@ -554,6 +577,10 @@ def _commit(req, lines):
         rc, _out, err = _git(root, 'add', '--', *to_add, timeout=None)
         if rc != 0:
             raise _Stop(REFUSED, 'git add failed: %s' % (err or 'exit %s' % rc))
+    err = oncommit.stage(root, rendered) if rendered else None
+    if err:
+        raise _Stop(REFUSED, *unstage_added(root, sorted(named), status_before, [
+            'refused: the rendered files could not be staged: %s.' % err]))
     status_after = staged_status(root)
     if not status_after:
         raise _Stop(REFUSED, 'nothing to commit in: %s' % ', '.join(paths))
@@ -569,6 +596,9 @@ def _commit(req, lines):
     lines.append('committed %s  %s' % (short.strip(), req.subject))
     lines.append('files     %s' % ', '.join(
         paths + sorted((merged & set(status_after)) - set(paths))))
+    if ran is not None:
+        lines.append('rendered  %s' % (', '.join(p for p in rendered if p not in paths)
+                                       or 'no rendered file changed'))
     if any(p.endswith('.md') for p in status_after) or locked:
         line, ok = doc_budget_check(root)
         lines.append(line)
