@@ -154,6 +154,18 @@ class Watch(StoreCase):
         self.assertEqual(s.window_lines(), ["windows opened: unknown (the window monitor did not "
                                             "run: RuntimeError: no thread)"])
 
+    def test_a_ctrl_c_inside_start_leaves_the_monitor_for_release_to_stop(self):
+        FakeMonitor.start_raises = KeyboardInterrupt()
+        s = self.book()
+        with self.assertRaises(KeyboardInterrupt):
+            with s:
+                self.child(s)
+        self.assertEqual(len(FakeMonitor.made), 1)
+        m = FakeMonitor.made[0]
+        self.assertEqual((m.starts, m.stops), (1, 1))  # release stopped it: no thread left
+        self.assertIsNone(s.watch)
+        self.assertEqual(s.ended["how"], "interrupted")
+
     def test_a_ctrl_c_inside_stop_leaves_the_monitor_to_stop_again(self):
         s = self.book()
         with s:

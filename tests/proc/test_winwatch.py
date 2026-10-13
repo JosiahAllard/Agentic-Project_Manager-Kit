@@ -21,6 +21,7 @@ if os.name == "nt":
 
 EVENT_WAIT_S = 15       # a window's events reach the monitor well within this
 EXIT_WAIT_S = 30
+PROBE_WAIT_S = 30       # the probe child prints its window's handle well within this
 WINDOW_TESTS_ENV = "KIT_WINDOW_TESTS"
 PROBE_CLASS = "KitWinwatchProbe"
 PROBE_TITLE = "kit winwatch probe"
@@ -150,19 +151,30 @@ class Watched(unittest.TestCase):
         return p
 
     def probe(self):
-        """The probe child (PROBE_CHILD), once its window shows; returns (Popen, hwnd)."""
+        """The probe child (PROBE_CHILD), once its window shows; returns (Popen, hwnd). A child
+        that prints no handle within PROBE_WAIT_S is killed and the test fails: the line is read
+        on a thread, so a stuck child cannot hang the test."""
         p = self.child(["-c", PROBE_CHILD, PROBE_CLASS, PROBE_TITLE], win32.CREATE_NO_WINDOW,
                        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        line = p.stdout.readline().strip()
+        got = []
+        reader = threading.Thread(target=lambda: got.append(p.stdout.readline()), daemon=True)
+        reader.start()
+        reader.join(PROBE_WAIT_S)
+        line = got[0].strip() if got else b""
         if not line:
-            self.end(p)
-            self.fail("the probe child showed no window (exit %s)" % p.returncode)
+            self.end(p)                 # the kill gives the reader its end of file
+            reader.join(EXIT_WAIT_S)
+            self.fail("the probe child showed no window in %ds (exit %s)" % (PROBE_WAIT_S,
+                                                                            p.returncode))
         return p, int(line)
 
     def end(self, p):
         if p.poll() is None:
             p.kill()
             p.wait(EXIT_WAIT_S)
+        for f in (p.stdin, p.stdout):
+            if f is not None:
+                f.close()
 
     def seen(self, pid):
         """The test monitor's windows of pid, once one shows (EVENT_WAIT_S at most). When none
@@ -203,6 +215,20 @@ class RealWindows(Watched):
         self.assertTrue(lines[0].startswith("windows opened: 1 - WARNING"), lines)
         self.assertIn("pid %d python.exe" % p.pid, lines[1])
         self.assertTrue(lines[1].endswith("[this run]"), lines)
+
+    def test_a_window_shown_just_before_stop_is_recorded(self):
+        """The tail: stop() straight after the probe's window shows (it prints its handle after
+        ShowWindow), with no wait for the event, still records it. It guards that contract, not
+        the drain itself: the event is queued before the probe prints and WM_QUIT is read after
+        it, so here it passes with the drain off too (a later-queued event is the drain's case)."""
+        p, hwnd = self.probe()
+        windows = self.mon.stop()
+        mine = [w for w in windows if w.pid == p.pid]
+        if not mine:
+            why = no_desktop()
+            if why:
+                self.skipTest("no window event came: %s" % why)
+        self.assertEqual([(w.cls, w.hwnd) for w in mine], [(PROBE_CLASS, hwnd)])
 
     def test_a_monitor_records_only_its_classes(self):
         """A monitor of the default classes (WATCHED), as a gate's is, does not record the probe."""

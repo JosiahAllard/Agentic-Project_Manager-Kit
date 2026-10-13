@@ -731,11 +731,14 @@ class Slot:
 
     def watch_start(self):
         """Starts the window monitor. Never raises: a monitor that cannot start is windows_error
-        (and the record's `windows_error`), and the run goes on unwatched."""
+        (and the record's `windows_error`), and the run goes on unwatched. self.watch is set before
+        m.start(), which can wait up to winwatch.START_WAIT_S: a Ctrl+C inside it leaves the monitor
+        for the release's watch_stop to stop, so its thread and hooks never outlive the run."""
         m = None
         try:
             m = winwatch.Monitor(ours=self.window_owner)
-            self.watch = m.start()
+            self.watch = m
+            m.start()
         except Exception as e:      # noqa: BLE001 - the monitor never fails a run
             self.watch = None
             with contextlib.suppress(Exception):

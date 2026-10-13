@@ -46,11 +46,11 @@ The title heuristic (looks_launched) and its limits:
   looks launched: kept only when a PseudoConsoleWindow record falls within CORRELATE_S, so a tab
   switch close in time to a real program start can be misread as a tab.
 - Events are read after the fact: a window shown and gone before the callback runs cannot be read.
+  One whose event thread belongs to a console host (conhost.exe or OpenConsole.exe) is counted
+  as `gone` (a separate line), not as a window: its class and program are not known.
 - The tail: stop() waits until no event has arrived for QUIET_S, at most DRAIN_S, before it ends the
   thread, so the events of a window shown just before stop() are read. An event Windows queues
   later than that (a busy desktop that keeps events coming for all of DRAIN_S) is missed.
-  One whose event thread belongs to a console host (conhost.exe or OpenConsole.exe) is counted
-  as `gone` (a separate line), not as a window: its class and program are not known.
 - The hooks are system-wide in this desktop session: other sessions' and the user's own windows
   are seen too, which is why `ours` exists. A process with no interactive desktop (session 0, a
   service) has no windows to see: the monitor then records nothing and cannot tell.
