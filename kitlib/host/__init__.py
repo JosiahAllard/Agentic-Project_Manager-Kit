@@ -155,20 +155,28 @@ class CommandHost(Protocol):
 
 
 class HostAdapter(Protocol):
-    """One per host, built by the host's own entry points and passed into the core.
+    """One per host, built by the host's own entry points and passed into the core. A supported host
+    passes the conformance suite (tests/host/conformance.py; docs/new-host.md).
 
+    capabilities                 its HostCapabilities (hosts.json), which hookmain degrades by
     parse(event_name, payload)   the host's hook payload as an Action
     render(event_name, decision) (stdout text, exit code) the host's hook reads back
+    context(event_name, text)    (stdout text, exit code) of a session or subagent start hook that
+                                 adds `text` to the agent's context (the kit header); ('', 0) for
+                                 no text
     sessions()                   a SessionHost
     command_host()               a CommandHost, or None for a host without one
-    content()                    the host's content renderer (rendered agents, skills, instructions)
+    content()                    an object whose renderer() is the host's ContentRenderer
+                                 (kitlib.host.content: rendered agents, skills, manifests)
     launcher(), plugin_installer()   None where the host has none
     """
     name: str
     profile: HostProfile
+    capabilities: HostCapabilities
 
     def parse(self, event_name, payload) -> Action: ...
     def render(self, event_name, decision) -> tuple: ...
+    def context(self, event_name, text) -> tuple: ...
     def sessions(self) -> SessionHost: ...
     def command_host(self) -> Optional[CommandHost]: ...
     def content(self): ...
