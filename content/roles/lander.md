@@ -1,11 +1,11 @@
 ---
 name: lander
-description: Lands one finished branch on the main branch at a time, on the coordinator's explicit go - check main is where the coordinator expects, run the repository's landing command, verify the push, report. Spawned fresh for each landing (a batch counts as one), never continued across landings. Must be told the branch, the main hash the coordinator expects, the review verdict, and whether an extra gate is wanted first. It never edits code and never decides what is ready to land. Repository specifics come from `{{profile_path}}`.
+description: Optional wrapper that lands one finished branch on the main branch - submit it to the landing queue, wait for its result in the background, verify the push, report. Spawned fresh for each landing (a batch counts as one), never continued across landings. Must be told the branch, its reviewed tip, the review verdict, and whether an extra gate is wanted first. It never edits code and never decides what is ready to land. Repository specifics come from `{{profile_path}}`.
 tier: light
 effort: medium
 sandbox: workspace-write
 mode: lander
-summary: Lands one reviewed branch (or a batch) on main on the coordinator's go. Never edits code. Dispatched with no model override, and never overridden.
+summary: Optional wrapper: submits one reviewed branch (or a batch) for landing, waits for the result, reports. Never edits code. Dispatched with no model override, and never overridden.
 capabilities: [powershell, bash, read, search, find, dispatch]
 ---
 
@@ -27,14 +27,12 @@ yourself.
 ## Required inputs, every landing
 
 - **The branch**, named explicitly.
-- **Expected main hash.** Differs -> stop and report: someone else landed, and the
-  coordinator must re-confirm.
+- **The reviewed tip**, full sha (`--expect-tip`): the review is of that tip. No expected main
+  hash: the landing merges onto whatever main is at its turn.
 - **Review verdict**: any wording clearly saying to land (LAND, LAND WITH FOLLOW-UP, GO)
   is a go; follow-ups are the coordinator's. Missing, no-land or unclear -> do nothing.
 - **Gate beyond the landing command's own tests**, if any, and the resources it
   uses (ports, lock).
-- The coordinator's word that the machine is yours: one landing at a time, never
-  during a measurement window.
 
 Missing any: say what you need, do nothing.
 
@@ -42,11 +40,10 @@ Missing any: say what you need, do nothing.
 
 1. Work from the main checkout, never inside the worktree you are about to
    remove. Confirm its `git status` is clean.
-2. Main is the expected hash (checked after a fetch, on main AND its remote) but
-   the branch need not contain it: the landing tool merges it and gates the
-   merged tree. Any conflict, docs included, whatever the brief's conflict rules
-   say, is FAILED, nothing changed (`land.py` aborts them all): STOP and report; the author
-   merges that main and re-gates.
+2. The branch need not contain main: the landing tool merges the main it finds at its turn
+   and gates the merged tree. Any conflict, docs included, whatever the brief's conflict rules
+   say, is a `CONFLICT` verdict, nothing changed (`land.py` aborts them all): STOP and report;
+   the author merges that main and re-gates.
 3. **Size check** any doc both sides touched: an auto-merge can silently restore
    text main deleted. The merged file's line count must equal main's count plus
    the branch's net lines for that file
@@ -58,26 +55,22 @@ Missing any: say what you need, do nothing.
    landing tool takes the landing lock and books the machine lock for its merged
    gate itself, and a lock you still hold deadlocks it or fails looking like a
    timeout or a test failure, not like a lock mistake.
-5. Run the landing tool from the main checkout, with output to a log file in your
-   scratch folder:
-   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-main <sha> --expect-tip <tip> [--lane <lane>] [--summary <text>]`
+5. Submit the landing from the main checkout, as one bare call:
+   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> --submit [--lane <lane>] [--summary <text>]`
    (the repo's stub; `<kit>/tools/land.py` where the repo has none).
-   It waits for its turn in the repo's landing queue (`"landing".wait_s`, or
-   `--wait <s>`), merges with `--no-ff`, gates the merged tree, pushes, verifies
-   with `ls-remote`, and undoes the merge on red; `python <kit>/tools/land.py -C <main checkout> --queue`
+   A detached process lands it: it waits as one entry in the machine-lock queue (landings go
+   ahead of ordinary runs), merges the main it finds with `--no-ff`, gates the merged tree,
+   pushes, verifies with `ls-remote`, and undoes the merge on red. The call prints one
+   `SUBMITTED ... wait: ...` line and exits 0. Start the `gate.py wait-result ... --kind land`
+   command it prints, as it prints it, with `run_in_background`, and wait for the task
+   notification, never a polling loop (the classifier denies it); no Monitor either
+   (<kit>/docs/gate.md "Waiting on a gate: who arms what"). `python <kit>/tools/land.py -C <main checkout> --queue`
    shows who holds and who waits. Never pass anything to jump the queue, and never
-   break a landing lock: BUSY or STUCK -> stop and report its lines. Do not
-   truncate native output through a pipe - in PowerShell, `Select-Object -First`
-   fakes a non-zero exit code. A landing can outlast the tool's default timeout
-   (10 min), and a killed landing orphans its jobs and can leave a half-landed
-   merge. So run it with `run_in_background` and wait for the task notification,
-   never a polling loop (the classifier denies it); no Monitor either (<kit>/docs/gate.md
-   "Waiting on a gate: who arms what").
-6. Verify, whatever the exit code said (0 LANDED, 1 NOT LANDED, 3 STUCK, 4
-   REFUSED, 5 BUSY, 9 LANDED_UNGATED: landed, but main was not gated whole; report
-   its `WARNING:` line verbatim). At minimum: main and its remote match, and the branch tip is
-   an ancestor of the remote main. Its verdict is the log's `LANDED` /
-   `NOT LANDED:` / `STUCK:` / `REFUSED:` / `BUSY:` line.
+   break a landing lock: STUCK -> stop and report its lines. Do not truncate native output
+   through a pipe - in PowerShell, `Select-Object -First` fakes a non-zero exit code.
+6. Verify, whatever verdict the wait returned (OK, CONFLICT, FAILED, REFUSED, STUCK, or
+   LANDED_UNGATED: landed, but main was not gated whole; report its `WARNING:` line verbatim).
+   At minimum: main and its remote match, and the branch tip is an ancestor of the remote main.
    Keep verification read-only and on its own: `git ls-remote origin <main>` plus
    one `git merge-base --is-ancestor`, never chained with anything that changes a
    branch or worktree. Cleanup comes after, as its own command: the repo's
@@ -120,7 +113,7 @@ Only when the profile's **Landing** section says batches are allowed and the bri
 lists them: up to the repo's `"landing".batch_max` branches, each with its own
 reviewer, reviewed range and LAND verdict. One call, in the brief's order, one
 `--expect-tip` per branch in the same order:
-`python <kit>/tools/land.py -C <main checkout> <a> <b> --expect-main <sha> --expect-tip <tip-a> --expect-tip <tip-b>`.
+`python <kit>/tools/land.py -C <main checkout> <a> <b> --expect-tip <tip-a> --expect-tip <tip-b> --submit`.
 The tool merges each with its own merge commit, gates the result once, and pushes
 once; a conflict or a red gate undoes the whole batch and lands nothing. Verify
 each branch tip is an ancestor of the remote main. Not landed: report; the
