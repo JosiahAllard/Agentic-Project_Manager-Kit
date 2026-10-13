@@ -126,6 +126,33 @@ class OneBooking(QueueCase):
         self.assertEqual(len(self.store.history_records(1)), 1)    # one run, ended
         self.assertEqual(self.entries(), [])
 
+    def test_the_gates_tree_is_ended_when_its_steps_finish_and_the_slot_stays_held(self):
+        # What the merged gate's steps leave (build daemons, stray children) is stopped as the
+        # steps finish, before the push, not at drop_slot; the slot is still held meanwhile.
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        events = []
+        slot_cls = sys.modules['kitlib.lock.run'].Slot
+        real = {n: getattr(slot_cls, n) for n in ('stop_daemons', 'end_tree', 'release')}
+
+        def spy(name):
+            def call(slot, *a, **kw):
+                events.append((name, len(self.queued(BRANCH))))
+                return real[name](slot, *a, **kw)
+            return call
+        real_push = land.Lander.push
+
+        def push(lander, *a, **kw):
+            events.append(('push', len(self.queued(BRANCH))))
+            return real_push(lander, *a, **kw)
+        with mock.patch.multiple(slot_cls, **{n: spy(n) for n in real}), \
+                mock.patch.object(land.Lander, 'push', push):
+            out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        names = [n for n, _ in events]
+        self.assertEqual(names[:4], ['stop_daemons', 'end_tree', 'push', 'release'], events)
+        self.assertTrue(all(held == 1 for _, held in events[:4]), events)   # the slot is held
+        self.assertEqual(self.entries(), [])
+
     def test_a_batch_books_once_by_its_branches(self):
         _, t1 = self.branch('one', {'one.py': '1\n'})
         _, t2 = self.branch('two', {'two.py': '2\n'})

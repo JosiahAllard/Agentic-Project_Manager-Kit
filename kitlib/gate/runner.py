@@ -479,8 +479,10 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
     job are stopped at its end (kitlib.lock.site, machine_lock.daemons; kitlib.proc.daemons).
     `gate`: the gate the steps are judged by (detect.effective); default the configured one.
     `slot`: a Slot the caller already holds (a landing's, kitlib.gate.land): the steps run in it,
-    nothing is booked and the slot is not released here (its holder releases it); an exception
-    or Ctrl+C ends the steps' tree first, so nothing the gate started runs on into an undo."""
+    nothing is booked and the slot is not released here (its holder releases it); once the steps
+    finish, their build daemons are stopped (Slot.stop_daemons, as a gate's release does) and
+    the rest of their tree is ended (Slot.end_tree), and an exception or Ctrl+C ends the tree
+    first, so nothing the gate started runs on into the push or an undo."""
     checks, options = {}, {}
     if any(s.check for s in chosen):
         try:
@@ -507,6 +509,11 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
             except BaseException:   # noqa: BLE001 - the holder's release ends the tree again
                 pass
             raise
+        # The steps are done: what they left is stopped now, as a gate's own release does
+        # (stop_daemons), and the rest of their tree is ended (end_tree), not left running in
+        # the slot through the push until the holder releases it. The slot stays held.
+        slot.stop_daemons()
+        slot.end_tree()
         return results, None
     try:
         slot = lockrun.book(kind, name, slug, **dict(book_kw or {}, gate=True))
