@@ -508,8 +508,32 @@ class RedactTest(unittest.TestCase):
              ['{"user":"kept","password":"***","n":1}', '{"apiKey": ***, "a": "pw=***"}']),
             (['{"token":"abc', '{"token":"a\\"bc"}', '{"token":"abc\\'],
              ['{"token":"***"', '{"token":"***"}', '{"token":"***"']),
-            (["git://tok@h/r", "https://u:p/w@h/x", "ftp://h/kept@x"],
+            (["git://tok@h/r", "https://u:p%2Fw@h/x", "ftp://h/kept@x"],
              ["git://***@h/r", "https://***@h/x", "ftp://h/kept@x"]),
+            # URL user info is the authority up to its last @, before the first / ? or #
+            (["https://host:8080/@scope/pkg", "https://u:p@ss@h/x", "https://h?q=@kept"],
+             ["https://host:8080/@scope/pkg", "https://***@h/x", "https://h?q=@kept"]),
+            # the value of -u/--user gets every other mask too, and a flag is not its value
+            (["-u", "https://user:" + "ghp_" + "a" * 36 + "@github.com/o/r.git", "main"],
+             ["-u", "https://***@github.com/o/r.git", "main"]),
+            (["-u", "ghp_" + "a" * 36, "-u", "GITHUB_TOKEN=abc", "--user=https://u:p@h/"],
+             ["-u", "***", "-u", "GITHUB_TOKEN=***", "--user=https://***@h/"]),
+            (["-u", "--token", "abc", "--token", "--password", "abc", "-u", "-v", "kept"],
+             ["-u", "--token", "***", "--token", "--password", "***", "-u", "-v", "kept"]),
+            # a quoted value is masked to its closing quote (or the end), keeping its quotes
+            (["f(password='hunter2')", "$env:TOKEN='abc'", "{'token': 'abc'}", 'f(pw="a b")'],
+             ["f(password='***')", "$env:TOKEN='***'", "{'token': '***'}", 'f(pw="***")']),
+            (["x=1;secret='a\\'b';y=kept", "f(password='abc def", '["token": "a,b", 2]'],
+             ["x=1;secret='***';y=kept", "f(password='***'", '["token": "***", 2]']),
+            # pass and pw are secret as a name's last part, not inside a longer word
+            (["-PassThru", "kept", "/passive", "kept", "--bypass-list", "kept", "--stopwatch",
+              "kept", "-PassThru:$true", "--pass-file", "kept"],
+             ["-PassThru", "kept", "/passive", "kept", "--bypass-list", "kept", "--stopwatch",
+              "kept", "-PassThru:$true", "--pass-file", "kept"]),
+            (["DB_PASS=abc", "dbPass=abc", "--smtp-pw", "abc", "MYPASSWORD=abc", "--passwd",
+              "abc"],
+             ["DB_PASS=***", "dbPass=***", "--smtp-pw", "***", "MYPASSWORD=***", "--passwd",
+              "***"]),
         ]
         for words, want in cases:
             with self.subTest(words[0]), mock.patch.object(console, "KEEP_WORDS", 99):
