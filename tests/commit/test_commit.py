@@ -18,6 +18,7 @@ from kitlib.config import owner as ownermod
 from kitlib.git import cmd
 from tests import gitfixture
 from tests.gitfixture import TempRepo
+from tests.home import no_machine_owner
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'commit.py')
@@ -611,6 +612,7 @@ class TheOwnersIdentity(LinkedCase):
         self.assertEqual(self.head(), head)
 
     def test_not_configured(self):
+        no_machine_owner(self)          # no owner email anywhere
         self.configure()
         self.put('a.py', 'x\n')
         self.assert_refused('not configured', 'a.py', owner_authored=True)

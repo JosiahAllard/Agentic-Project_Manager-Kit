@@ -24,8 +24,9 @@ Rules, in the order they are checked:
   wrapped-gate     gate.py or `machine_lock.py run` piped into another command (P16)
   root-search      a recursive search from a drive or filesystem root
   heavy            a heavy program run with no lock held (MACHINE_LOCK_RUN verified by nest_check)
-  git-*            damaging git in a main checkout; branch -D anywhere; a push to main with no
-                   gate-OK record when the repo sets repo.push_block; push --no-verify, send-pack,
+  git-*            damaging git in a main checkout; branch -D anywhere; a push that deletes or
+                   force-pushes main, in every repository (with no .kit.json too); a push to main
+                   with no gate-OK record when the repo sets repo.push_block; push --no-verify, send-pack,
                    http-push, a remote helper or a git alias for one in a repository with a PM
                    data record, and any push from a copy of PM data without one; a remote
                    repointed (git-remote-rewrite) in a repository with one; all in any session
@@ -2766,30 +2767,39 @@ def git_push(event, ctx, gc, role):
     if cfg is None:
         err = ctx.config_error(gc.dir)
         if not err:
-            return None                         # no .kit.json: push_block is off
+            return None                         # no checkout: no main branch to judge
         top = ctx.main_top(gc.dir) or gc.dir
         return refuse('git-push-main', role, '`git push` in a repository whose .kit.json does not load (%s). Fix it '
                       'so it loads (the message names the key; docs/kit-json.md lists them), then push. To see '
                       'the error:' % err, 'python -m json.tool %s' % quote(os.path.join(top, '.kit.json')))
-    if not cfg.push_block:
+    # A delete or a forced push of main is refused in every repository, with or without a
+    # .kit.json (docs/kit-json.md "With no file"); push_block adds the gate-OK record and
+    # --no-verify checks. The PM data branch (DataBranch) is judged by its own push_block only.
+    gated = cfg.push_block
+    if not gated and isinstance(cfg, DataBranch):
         return None
     main = cfg.main_branch
+    mains = _guarded_mains(cfg)
     short, longs, pos = _opts('push', gc.rest)
-    if any(w.dyn for w in pos):
+    delete = 'd' in short or 'delete' in longs
+    force = 'f' in short or bool({'force', 'force-with-lease', 'force-if-includes', 'mirror'} & longs)
+    no_verify = 'no-verify' in longs
+    dyn = [w for w in pos if w.dyn]
+    # A computed refspec may be `+<src>:main` or `:main`, so with no push_block too it is refused;
+    # a computed remote alone is, only with a flag that forces, deletes or skips the hook.
+    if dyn and (gated or delete or force or no_verify or any(w.dyn for w in pos[1:])):
         remote = pos[0].text if pos and not pos[0].dyn else cfg.remote
         return refuse('git-push-main', role, '`git push %s` has a refspec that is not literal, so the guard cannot '
-                      'tell whether it pushes %s. Name the refs literally:' % (rest, main),
+                      'tell whether it %s %s. Name the refs literally:'
+                      % (rest, 'pushes' if gated else 'rewrites or deletes', main),
                       'git -C %s push %s <branch>' % (quote(gc.dir), remote))
-    delete = 'd' in short or 'delete' in longs
-    force = 'f' in short or bool({'force', 'force-with-lease', 'force-if-includes'} & longs)
-    no_verify = 'no-verify' in longs
     every = bool({'all', 'mirror', 'branches'} & longs)
     remote = pos[0].text if pos else cfg.remote
     specs = [w.text for w in pos[1:]]
     branch, _why = ctx.git.current_branch(gc.dir)
     targets = []
     if every:
-        targets.append(('refs/heads/' + main, main, False))
+        targets.extend(('refs/heads/' + m, m, False) for m in mains)
     if not specs and not every:
         if branch:
             targets.append((branch, branch, False))
@@ -2803,13 +2813,21 @@ def git_push(event, ctx, gc, role):
             src, dst = '', dst or src
         targets.append((src, _branch_of(dst or ''), plus))
     for src, dst, plus in targets:
-        if dst != main:
+        if dst not in mains:
             continue
+        main = dst
         what = '`git push %s` to %s/%s' % (' '.join(w.text for w in gc.rest), remote, main)
-        land = landing_command(ctx, gc, cfg, remote, branch)
         if not src:
             return refuse('git-push-main', role, '%s deletes %s; main is never deleted. To see where it is:' %
                           (what, main), 'git -C %s ls-remote %s %s' % (quote(gc.dir), remote, main))
+        if not gated:
+            if force or plus:
+                return refuse('git-push-main', role, '%s rewrites %s; main is never force-pushed. Merge %s/%s into '
+                              'the branch, then push it without force:' % (what, main, remote, main),
+                              'git -C %s push %s %s' % (quote(gc.dir), remote, ' '.join(
+                                  s.lstrip('+') for s in specs) or main))
+            continue
+        land = landing_command(ctx, gc, cfg, remote, branch)
         if no_verify:
             return refuse('git-push-main', role, '%s skips the pre-push hook. %s' % (what, LAND_HOW), land)
         if force or plus:
@@ -2825,6 +2843,14 @@ def git_push(event, ctx, gc, role):
 
 
 LAND_HOW = 'Land it with the gate, which records the pass and pushes:'
+
+
+def _guarded_mains(cfg):
+    """The branches git_push holds as main (Config.guarded_mains); the PM data worktree's, and a
+    test's stand-in config without the method, just main_branch."""
+    if isinstance(cfg, DataBranch) or not hasattr(cfg, 'guarded_mains'):
+        return [cfg.main_branch]
+    return cfg.guarded_mains()
 
 
 def landing_command(ctx, gc, cfg, remote, branch):

@@ -10,6 +10,7 @@ import time
 import unittest
 from unittest import mock
 
+from kitlib.git import defaults as gitdefaults
 from kitlib.worktree import sweep
 from tests import gitfixture
 from tests.worktree.test_worktree_remove import RemoveCase
@@ -59,7 +60,7 @@ class Sweep(SweepCase):
         self.assertIn('removed   %s' % path, out)
         self.assertIn('deleted   branch kit/done', out)
         self.assertFalse(os.path.exists(path))
-        log = os.path.join(self.logs, '%s-worktree-sweep.log' % os.path.basename(self.repo))
+        log = os.path.join(self.logs, '%s-worktree-sweep.log' % gitdefaults.repo_name(self.repo))
         with open(log, encoding='utf-8') as f:
             text = f.read()
         self.assertIn('removed   %s' % path, text)

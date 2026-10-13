@@ -13,7 +13,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 | Content | `content/roles/`, `content/skills/`, `content/instructions/`: every role, skill and instruction written once, rendered into each host's shell by `tools/render_content.py` | Every role exists on every host. Skill text is identical on every host. Rendered files are committed and a test fails on drift. |
 | Optional | `optional/bridge/` (agent-to-agent messaging: core, service, MCP frontend, and each host's half under `optional/bridge/hosts/<name>/`) and the other `optional/` packages | Installed on demand. The core never imports them. |
 | Guards | each host's guard hook entry (`hosts/<name>/shell/hooks/`; every tool a rule can refuse), judged once by `kitlib.guard` over a neutral `Action`, and the kit git `pre-push` hook plus the opt-in `pre-commit` ledger check (inert unless `.kit.json` names pre_commit_check) | Read-only checks of real state. They deny with the exact command to use instead. |
-| Repo layer | `.kit.json` (data) plus at most one repo hook module the kit calls | Repos hold stubs only, never copies. |
+| Repo layer | `.kit.json` (data, optional: with none, the defaults of docs/kit-json.md "With no file") plus at most one repo hook module the kit calls | Repos hold stubs only, never copies. |
 
 ## Contracts
 

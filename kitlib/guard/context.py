@@ -28,8 +28,11 @@ a constructor argument, and the defaults read this machine.
   gitread            kitlib.guard.gitread (alias, has_commit, is_shallow), or a test's fake
   config(path)       the .kit.json of the main checkout `path` belongs to (never a worktree's own:
                      an agent cannot loosen the rules from its branch; the PM data worktree,
-                     answered as MAIN, is the one worktree whose own .kit.json is read); None
-                     when there is none or it does not load (config_error(path) says why)
+                     answered as MAIN, is the one worktree whose own .kit.json is read); a
+                     checkout with no .kit.json answers the defaults (kitlib.config.load: main
+                     branch and name from its git files, owner email from the machine config
+                     under `home`); None when there is no checkout or it does not load
+                     (config_error(path) says why)
   lock_held()        (True, None) only when MACHINE_LOCK_RUN names a run nest_check accepts:
                      the named wrapper is an ancestor of this process, alive, and holding. The
                      variable alone is never proof.
@@ -142,7 +145,7 @@ class Ctx(object):
         self.kit = kit or kitroot.root()
         self.store = store
         self._classify = classify or fsplace.classify
-        self._load = load or kconfig.load
+        self._load = load or (lambda top: kconfig.load(top, home=self.home, machine=self.user))
         self._gate_ok = gate_ok
         self.git = git or refs
         self.gitread = gitread or fsgitread
