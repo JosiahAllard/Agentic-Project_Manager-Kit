@@ -25,13 +25,23 @@ It answers only when the answer cannot differ from git's, and otherwise calls `f
   - a folder on the way is itself a git directory (git would answer from inside it)
   - .git is anything but the two shapes above, or a gitdir file that does not lead to a valid
     git directory
-  - the common config sets core.worktree or core.bare true, or has [extensions] or [include*]
-    (a key on its section's header line, `[core] bare = true`, is read too)
+  - the repository config sets core.worktree or leaves core.bare true. The config is the common
+    config and, while it turns extensions.worktreeConfig on, then <gitdir>/config.worktree (the
+    main checkout's .git/config.worktree, a linked worktree's .git/worktrees/<name>/
+    config.worktree), read after it so the last core.bare wins, as git reads them
+  - the common config has any extension other than worktreeConfig, or a
+    core.repositoryformatversion other than 0 or 1; config.worktree has [extensions] or
+    core.repositoryformatversion
+  - either file has [include] or [includeIf], a value continued onto the next line, a core.bare
+    or worktreeConfig value other than true, yes, on, false, no, off, 0 or empty, or a line
+    git's parser refuses (a key on its section's header line, `[core] bare = true`, is read as
+    git reads it)
   - the work tree, the gitdir file or a git directory is not owned by the current user (git's
     safe.directory check; Windows only)
   - anything else goes wrong while reading (any Exception): git answers instead
 """
 import os
+import re
 
 from kitlib.git import repo
 from kitlib.guard import paths
@@ -90,7 +100,7 @@ def _at(d, owned):
             raise _Fallback()               # git walks on past it; not worth reproducing
         if os.path.exists(os.path.join(dot, 'commondir')):
             raise _Fallback()
-        _config_ok(dot)
+        _config_ok(dot, dot)
         if not (owned(d) and owned(dot)):
             raise _Fallback()
         g = repo.real(dot)
@@ -107,7 +117,7 @@ def _at(d, owned):
         common = _common(gitdir)
         if not _is_git_dir(gitdir, common):
             raise _Fallback()
-        _config_ok(common)
+        _config_ok(common, gitdir)
         if not (owned(d) and owned(dot) and owned(gitdir)):
             raise _Fallback()
         g, c = repo.real(gitdir), repo.real(common)
@@ -153,35 +163,117 @@ def _common_if_dir(d):
     return _common(d)
 
 
-def _config_ok(common):
-    """Raise _Fallback when the repository config changes where git puts the work tree."""
-    p = os.path.join(common, 'config')
-    if not os.path.exists(p):
-        return
-    with open(p, 'rb') as f:
-        text = f.read().decode('utf-8', 'replace')
-    section = ''
-    for line in text.splitlines():
-        s = line.strip()
+def _config_ok(common, gitdir):
+    """Raise _Fallback when the repository config changes where git puts the work tree, or when
+    git would refuse the repository. git reads the common config, then, while the common config
+    turns extensions.worktreeConfig on, <gitdir>/config.worktree; the last core.bare read wins."""
+    bare, worktree_config, version = False, False, '0'
+    for section, key, value in _entries(os.path.join(common, 'config')):
+        if section == 'extensions':
+            if key != 'worktreeconfig':
+                raise _Fallback()           # git refuses some, ignores others: not worth telling apart
+            worktree_config = _bool(value)
+        elif section == 'core' and key == 'repositoryformatversion':
+            version = value
+        elif section == 'core' and key == 'bare':
+            bare = _bool(value)
+    if not version or not set(version) <= _DIGITS or int(version) > 1:
+        raise _Fallback()                   # git refuses a version above 1 or one it cannot read
+    if worktree_config:
+        for section, key, value in _entries(os.path.join(gitdir, 'config.worktree')):
+            if section == 'extensions' or (section == 'core' and key == 'repositoryformatversion'):
+                raise _Fallback()
+            if section == 'core' and key == 'bare':
+                bare = _bool(value)
+    if bare:
+        raise _Fallback()
+
+
+_DIGITS = frozenset('0123456789')
+_SPACE = ' \t\r'                            # git's isspace, less the \n lines are split on
+_HEADER = re.compile(r'\[([A-Za-z0-9.-]+)(?:[ \t\r]+"((?:[^"\\]|\\.)*)")?\](.*)$')
+_KEY = re.compile(r'([A-Za-z][A-Za-z0-9-]*)[ \t]*(?:=(.*))?$')
+_ESCAPES = {'t': '\t', 'b': '\b', 'n': '\n', '\\': '\\', '"': '"'}
+
+
+def _bool(value):
+    """git's boolean for a key that must be one (None: a key with no `=`, which is true)."""
+    if value is None:
+        return True
+    v = value.lower()
+    if v in ('true', 'yes', 'on'):
+        return True
+    if v in ('false', 'no', 'off', '0', ''):
+        return False
+    raise _Fallback()                       # a number, or a value git refuses
+
+
+def _entries(path):
+    """(section, key, value) for every key in config file `path`, as git's parser reads them:
+    section and key lower-cased, section '' for a key under a subsection, value None for a key
+    with no `=`. Raises _Fallback on what this reader does not reproduce: a line git refuses, a
+    value continued onto the next line, an [include] or [includeIf], an [extensions] subsection,
+    core.worktree."""
+    if not os.path.exists(path):
+        return []
+    with open(path, 'rb') as f:
+        text = f.read().decode('utf-8-sig', 'replace')
+    out, section = [], None
+    for line in text.split('\n'):
+        s = line.lstrip(_SPACE)
+        if s.startswith('['):
+            m = _HEADER.match(s)
+            if not m:
+                raise _Fallback()
+            name, sub, s = m.group(1).lower(), m.group(2), m.group(3).lstrip(_SPACE)
+            base = name.split('.', 1)[0]
+            if base in ('include', 'includeif') or (base == 'extensions' and (sub is not None or '.' in name)):
+                raise _Fallback()
+            section = name if sub is None and '.' not in name else ''
         if not s or s[0] in '#;':
             continue
-        if s.startswith('['):
-            if ']' not in s:
-                raise _Fallback()
-            header, s = s[1:].split(']', 1)
-            section = header.strip().lower()
-            name = (section.split(None, 1) or [''])[0].split('.', 1)[0].strip('"')
-            if name in ('extensions', 'include', 'includeif'):
-                raise _Fallback()
-            s = s.strip()                   # git reads a key on the header line too
-            if not s or s[0] in '#;':
-                continue
-        key, _, value = s.partition('=')
-        key, value = key.strip().lower(), value.strip().lower()
+        m = _KEY.match(s.rstrip('\r'))
+        if not m or section is None:
+            raise _Fallback()               # git refuses the line, or a key comes before any section
+        key, value = m.group(1).lower(), m.group(2)
+        if value is not None:
+            value = _value(value)
         if section == 'core' and key == 'worktree':
             raise _Fallback()
-        if section == 'core' and key == 'bare' and value not in ('false', 'no', 'off', '0'):
-            raise _Fallback()
+        out.append((section, key, value))
+    return out
+
+
+def _value(raw):
+    """git's parse_value for the text after `=` on one line."""
+    raw = raw[:-1] if raw.endswith('\r') else raw     # git reads \r\n as \n
+    out, space, quote, i = [], 0, False, 0
+    while i < len(raw):
+        c = raw[i]
+        i += 1
+        if c in _SPACE and not quote:
+            space += 1 if out else 0        # leading white space is dropped, inner kept
+            continue
+        if not quote and c in ';#':
+            break                           # a comment runs to the end of the line
+        if space:
+            out.append(' ' * space)
+            space = 0
+        if c == '\\':
+            if i == len(raw):
+                raise _Fallback()           # continued onto the next line
+            c = _ESCAPES.get(raw[i])
+            if c is None:
+                raise _Fallback()           # git refuses an unknown escape
+            i += 1
+            out.append(c)
+        elif c == '"':
+            quote = not quote
+        else:
+            out.append(c)
+    if quote:
+        raise _Fallback()                   # git refuses a quote left open
+    return ''.join(out)
 
 
 # ------------------------------------------------------------------ ownership (Windows)
