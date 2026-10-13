@@ -105,7 +105,9 @@ class HostProfile:
     repository's own skills from, `attribution` its commits' Co-Authored-By (Attribution),
     `agent_name_format` how it names an agent a plugin bundles, with {plugin} and {name} fields
     ({name} last), `session_process` the process image a session it launches runs as (whose
-    --remote-control value names the session)."""
+    --remote-control value names the session), `env_prefixes` the environment variable prefixes
+    its sessions own (a child launched on another host never inherits them;
+    kitlib.sessionmark.child_environment)."""
     owner_paths: tuple
     worktrees_directory: str
     state_directory: str
@@ -116,6 +118,7 @@ class HostProfile:
     attribution: Attribution
     agent_name_format: str
     session_process: str
+    env_prefixes: tuple = ()
 
 
 @dataclass(frozen=True)

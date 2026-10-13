@@ -152,6 +152,10 @@ class Validation(Case):
                 lambda e: e['profile'].update(agent_name_format='{name}{name}'),
                 lambda e: e['profile'].pop('session_process'),
                 lambda e: e['profile'].update(session_process=''),
+                lambda e: e['profile'].pop('env_prefixes'),
+                lambda e: e['profile'].update(env_prefixes=[]),
+                lambda e: e['profile'].update(env_prefixes=['claude_']),
+                lambda e: e['profile'].update(env_prefixes=['CLAUDE']),
                 lambda e: e['tiers'].pop('deep'),
                 lambda e: e['tiers'].update(light='')):
             bad = copy.deepcopy(data)

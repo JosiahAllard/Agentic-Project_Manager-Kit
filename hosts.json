@@ -27,7 +27,8 @@
         "model_pattern": null
       },
       "agent_name_format": "{plugin}:{name}",
-      "session_process": "claude.exe"
+      "session_process": "claude.exe",
+      "env_prefixes": ["CLAUDE_", "ANTHROPIC_"]
     },
     "tiers": {"light": "haiku", "standard": "sonnet", "strong": "opus", "deep": "opus"}
   }

@@ -50,6 +50,7 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 | `attribution` | The commit trailer: `name`, `email`, `model_env` (or `null`), and `model_pattern` (`null` allows any model name) |
 | `agent_name_format` | How it names a bundled agent: `{plugin}` once at most, then `{name}` last |
 | `session_process` | The process image of a session it launches |
+| `env_prefixes` | The environment variable prefixes its sessions own (`CLAUDE_`). A child launched on another host never inherits them (`kitlib.sessionmark.child_environment`). |
 
 ## 2. The adapter: `hosts/<name>/adapter/`
 
