@@ -179,6 +179,16 @@ class ProblemLine(StubCase):
         self.assertIn('missing/stale: ', line)
         self.assertNotIn('landed', line.split(';')[0].split(': ', 1)[1].split(', '))
 
+    def test_an_old_stub_running_another_kit_still_warns_without_a_stubs_section(self):
+        """A repository set up before stubs were opt-in has stubs and no "stubs" section: a stub
+        that runs an older kit still names it."""
+        other = os.path.join(self.tmp, 'other-kit')
+        self.put(self.stub('landed'), stubs.stub_text('landed', 'tools', other))
+        line = stubs.problem_line(self.root)
+        self.assertIsNotNone(line)
+        self.assertIn('landed', line.split(';')[0])
+        self.assertTrue(line.endswith('(stale ones run the kit at %s)' % os.path.normpath(other)), line)
+
 
 class WriteAndCheck(StubCase):
 
