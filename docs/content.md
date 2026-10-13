@@ -194,7 +194,8 @@ Sections 1-7, what the agent is given, in the order it gets it:
 6. **Skills**: `content/skills`, where the host has skills, and a note when the role's tool list
    leaves out the host's skill tool.
 7. **Repo profile**: the `profile_path` token (and `coordinator_profile_path` when the role's body
-   names it) if the repository has it, else none.
+   names it) if the repository has it, else none; for `profile_path`, none names the kit's
+   `content/default-profile.md`, the profile in use then (docs/agent-profile.md).
 
 Sections 8-11, what it is held to:
 8. **Model, tools and mode**: the role file's tier, effort and sandbox; what the host's file sets

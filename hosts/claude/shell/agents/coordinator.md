@@ -36,7 +36,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 1. `ListAgents`; another coordinator live -> stop, tell the owner. One at a time.
 2. Read both profiles; both are optional. No agent profile -> every agent uses
    `<kit>/content/default-profile.md` with the repo's README and CLAUDE.md (or
-   equivalent) where they exist: read them too. No coordinator profile -> read repo instructions,
+   equivalent) where they exist: read them too. It records no standing landing approval, so each
+   landing then waits for the owner's go, asked through the project manager. No coordinator profile -> read repo instructions,
    README, CI config, scripts, and mark every inference. A profile the owner asks for is drafted
    **in your scratch folder** (from `<kit>/templates/common/coordinator-profile.TEMPLATE.md`
    and `<kit>/templates/common/agent-profile.TEMPLATE.md`); writing into `.claude/` is

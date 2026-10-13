@@ -19,7 +19,8 @@ conformance suite pins to what the host writes:
                            for a session marked with the role (optional: unknown without it)
   Skills                   content/skills, when the host has skills (hosts.json)
   Repo profile             the `profile_path` token in `repo` (and `coordinator_profile_path` when
-                           the role's body names it)
+                           the role's body names it); no profile_path file: the kit's
+                           content/default-profile.md, the roles' fallback (decision 26)
   Model, tools and mode    the role file; renderer.settings(role) (what the host's file sets) and
                            renderer.tools() (its capability -> tool map)
   Guard rules              kitlib.guard.rolepolicy.rules_for(mode) and its LOCK_VERBS
@@ -48,6 +49,7 @@ IMPORT_DEPTH = 5
 INDENT = '    '
 DESCRIPTION = re.compile(r'^description:\s*(.*)$', re.M)
 SESSION, DISPATCHED = 'SessionStart', 'SubagentStart'
+DEFAULT_PROFILE = 'content/default-profile.md'   # a role's profile when the repo has none
 
 
 class UnknownRole(ValueError):
@@ -84,7 +86,7 @@ def view(kit, repo, name, host, renderer, start_text=None, environ=None, brief=F
         kit_header(kit, event, brief),
         start(kit, repo, role, event, start_text, environ, brief),
         skills(content, role, host, renderer, brief),
-        profile(repo, role, values),
+        profile(kit, repo, role, values),
         model_mode(role, renderer),
         guard_rules(role),
         switches(kit, repo, role, ctx),
@@ -222,17 +224,22 @@ def skills(content, role, host, renderer, brief):
     return Section('Skills', lines)
 
 
-def profile(repo, role, values):
+def profile(kit, repo, role, values):
+    """The profile in use: the repository's, or, with none (it is opt-in: decision 26), the kit's
+    default profile that the role falls back to for `profile_path`."""
     keys = ['profile_path'] + [k for k in ('coordinator_profile_path',)
                                if (k, None) in tokens_in(role.body)]
     lines = []
     for key in keys:
         rel = values.get(key)
-        if not rel:
-            lines.append('%s: the host names none' % key)
+        there = bool(rel) and os.path.isfile(os.path.join(repo, *rel.split('/')))
+        if there:
+            lines.append('%s: %s' % (key, rel))
             continue
-        there = os.path.isfile(os.path.join(repo, *rel.split('/')))
-        lines.append('%s: %s' % (key, rel if there else 'none (%s is not in the repository)' % rel))
+        why = 'the host names none' if not rel else 'none (%s is not in the repository)' % rel
+        if key == 'profile_path':
+            why += '; in use: the kit\'s default, %s' % os.path.join(kit, *DEFAULT_PROFILE.split('/'))
+        lines.append('%s: %s' % (key, why))
     return Section('Repo profile', lines)
 
 

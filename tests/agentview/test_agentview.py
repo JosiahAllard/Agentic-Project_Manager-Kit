@@ -193,7 +193,12 @@ class GivenAndHeld(Base):
 
     def test_the_profile_in_use_or_none(self):
         rel = VALUES['profile_path']
-        self.assertIn('none', self.text(self.view('worker', brief=True), 'Repo profile'))
+        none = self.section(self.view('worker', brief=True), 'Repo profile').lines[0]
+        self.assertIn('none', none)
+        # The profile is opt-in (decision 26): with none, the role reads the kit's default.
+        default = os.path.join(KIT, 'content', 'default-profile.md')
+        self.assertTrue(os.path.isfile(default))
+        self.assertTrue(none.endswith("; in use: the kit's default, %s" % default), none)
         write(os.path.join(self.repo, *rel.split('/')), 'profile\n')
         self.assertEqual(self.section(self.view('worker', brief=True), 'Repo profile').lines[0],
                          'profile_path: %s' % rel)
