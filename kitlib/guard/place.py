@@ -219,7 +219,10 @@ def _entries(path):
     with open(path, 'rb') as f:
         text = f.read().decode('utf-8-sig', 'replace')
     out, section = [], None
-    for line in text.split('\n'):
+    lines = text.split('\n')
+    for n, line in enumerate(lines):
+        if line.endswith('\r') and n < len(lines) - 1:
+            line = line[:-1]                # git reads one CR right before LF as the line end, no other CR
         s = line.lstrip(_SPACE)
         if s.startswith('['):
             m = _HEADER.match(s)
@@ -232,7 +235,7 @@ def _entries(path):
             section = name if sub is None and '.' not in name else ''
         if not s or s[0] in '#;':
             continue
-        m = _KEY.match(s.rstrip('\r'))
+        m = _KEY.match(s)
         if not m or section is None:
             raise _Fallback()               # git refuses the line, or a key comes before any section
         key, value = m.group(1).lower(), m.group(2)
@@ -245,8 +248,7 @@ def _entries(path):
 
 
 def _value(raw):
-    """git's parse_value for the text after `=` on one line."""
-    raw = raw[:-1] if raw.endswith('\r') else raw     # git reads \r\n as \n
+    """git's parse_value for the text after `=` on one line (its line-ending CR already gone)."""
     out, space, quote, i = [], 0, False, 0
     while i < len(raw):
         c = raw[i]
