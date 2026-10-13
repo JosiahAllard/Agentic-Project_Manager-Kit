@@ -57,7 +57,7 @@ class Shell(unittest.TestCase):
         self.assertEqual(parse('PreToolUse', event('PowerShell', {'command': 'Get-Location'})).shell, 'powershell')
 
     def test_a_missing_or_unknown_interpreter_carries_a_refusal(self):
-        for ev, shell in ((event('Bash', {'command': 'pwd'}), 'powershell'), (bash('dir', 'cmd.exe'), None),
+        for ev, shell in ((event('Bash', {'command': 'pwd'}), 'powershell'), (bash('dir', 'cmd.exe'), 'powershell'),
                           (bash('x', 3), None), (event('shell_command', {'command': 'Get-Location'}), 'powershell')):
             with self.subTest(ev=ev):
                 a = parse('PreToolUse', ev)

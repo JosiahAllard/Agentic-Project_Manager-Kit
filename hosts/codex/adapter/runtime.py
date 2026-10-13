@@ -70,8 +70,10 @@ def _deny(reason):
 
 class PolicyOn(object):
     """A guard Ctx whose every .kit.json turns the role policy on (guard.role_policy true), and a
-    checkout with none reads as one that does: the broker holds its bound role to the role policy
-    whatever the repository chose for its hooks. The rest is the base Ctx's."""
+    checkout with no .kit.json reads as one that does: the broker holds its bound role to the role
+    policy whatever the repository chose for its hooks. A .kit.json that fails to load stays None,
+    so the error the shared rules refuse on (a push, a landing) is never hidden behind a default.
+    The rest is the base Ctx's."""
 
     def __init__(self, base):
         self._base = base
@@ -79,17 +81,21 @@ class PolicyOn(object):
     def __getattr__(self, name):
         return getattr(self._base, name)
 
-    def _view(self, value, path):
+    def _view(self, value, path, error):
+        if value is None and error:
+            return None                             # a broken .kit.json: the guard's config error
         if value is None:
             from kitlib.config import Config
             value = Config(self._base.place(path).top or path, 'the Codex broker\'s default view', {}, {}, found=False)
         return _PolicyConfig(value)
 
     def config(self, path):
-        return self._view(self._base.config(path), path)
+        value = self._base.config(path)
+        return self._view(value, path, value is None and self._base.config_error(path))
 
     def config_at(self, top):
-        return self._view(self._base.config_at(top), top)
+        value = self._base.config_at(top)
+        return self._view(value, top, value is None and self._base.config_error_at(top))
 
 
 class _PolicyConfig(object):

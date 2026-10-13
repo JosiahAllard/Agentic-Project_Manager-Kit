@@ -18,7 +18,8 @@ client's payload has been captured yet (hosts/codex/README.md, "Not verified").
         argv's interpreter), and `workdir` made absolute against cwd when the call names one.
         What the guard cannot fully judge is parsed anyway and carries a `refusal`
         (CodexAction): no named interpreter (judged as PowerShell, Codex's shell on Windows), an
-        interpreter the guard cannot read (cmd.exe: no dialect, the shared shell rules pass it), a
+        interpreter it reads only through PowerShell (cmd.exe: judged as `cmd /c <text>`) or not at
+        all (no dialect, the shared shell rules pass it), a
         TTY or interactive call, standard input handed to the command. hosts.codex.adapter.policy
         refuses those in a marked session; the owner's own session is judged as parsed.
       - write_stdin: kind other; text sent to a running process carries a refusal.
@@ -71,6 +72,10 @@ def absolute(path):
                                                      or bool(ntpath.splitdrive(path)[0]))
 
 
+def is_cmd(value):
+    return isinstance(value, str) and value.replace('\\', '/').rsplit('/', 1)[-1].lower() in CMD
+
+
 def dialect(value):
     """'powershell' or 'bash' for an interpreter name or path, None for one the guard cannot read."""
     if not isinstance(value, str):
@@ -79,9 +84,13 @@ def dialect(value):
     return 'powershell' if name in POWERSHELLS else 'bash' if name in BASHES else None
 
 
+CMD = {'cmd', 'cmd.exe'}
+
+
 def shell_kind(tool, data):
     """(dialect or None, refusal): the call's explicit interpreter's dialect; with none named, the
-    PowerShell tool's own, else DEFAULT_DIALECT and a refusal; one the guard cannot read, None."""
+    PowerShell tool's own, else DEFAULT_DIALECT and a refusal; cmd.exe (_shell judges its text as
+    PowerShell's `cmd /c <text>`) and one the guard cannot read, with a refusal."""
     value = data.get('shell')
     if value is None:
         if tool == 'PowerShell':
@@ -89,7 +98,8 @@ def shell_kind(tool, data):
         return DEFAULT_DIALECT, 'the call names no shell; give an explicit PowerShell or Git Bash shell'
     kind = dialect(value)
     if kind is None:
-        return None, 'the guard cannot read the shell %r; use PowerShell or Git Bash' % (value,)
+        why = 'the guard reads the shell %r only through PowerShell; use PowerShell or Git Bash' % (value,)
+        return ('powershell' if is_cmd(value) else None), why
     return kind, ''
 
 
@@ -158,6 +168,8 @@ def _shell(tool, data, cwd):
             raise ValueError('shell workdir must be a path')
         workdir = workdir if absolute(workdir) else os.path.normpath(os.path.join(cwd, workdir))
     kind, refusal = shell_kind(tool, data)
+    if is_cmd(data.get('shell')):
+        command = 'cmd /c ' + command       # as PowerShell starts it: the guard reads cmd /c text
     if data.get('tty') not in (None, False) or data.get('interactive') not in (None, False):
         refusal = 'an interactive or TTY command takes input the guard never sees'
     elif any(data.get(key) not in (None, '') for key in ('stdin', 'input', 'chars')):

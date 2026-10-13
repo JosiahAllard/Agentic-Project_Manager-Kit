@@ -84,6 +84,30 @@ class MarkedSessions(Base):
             self.allowed(self.event('Write', {'file_path': path, 'content': 'x'}), role=None)
 
 
+class NoEditModes(Base):
+    """A marked read, test or lander session does not edit its own checkout, whatever the
+    repository's role-policy switch (the source's guard_adapter held them so); its role file's
+    `writes` (the consultant's notes file) stay open."""
+
+    def setUp(self):
+        self.w = W.World(kit=kit({}, on=None))
+        self.addCleanup(self.w.cleanup)
+
+    def test_test_read_and_lander_roles_do_not_edit_their_checkout(self):
+        for role in ('test-runner', 'reviewer', 'lander', 'consultant'):
+            with self.subTest(role=role):
+                self.denied(self.event('Write', {'file_path': os.path.join(self.w.wt, 'a.py'), 'content': 'x'}),
+                            'host-role-edit', role=role)
+                self.denied(self.patch('b.py'), 'host-role-edit', role=role)
+
+    def test_write_roles_the_writes_list_and_temp_stay_open(self):
+        self.allowed(self.event('Write', {'file_path': os.path.join(self.w.wt, 'a.py'), 'content': 'x'}), role='worker')
+        notes = os.path.join(self.w.wt, 'docs', 'ops', 'consultant-notes.local.md')
+        self.allowed(self.event('Write', {'file_path': notes, 'content': 'x'}), role='consultant')
+        self.allowed(self.event('Write', {'file_path': os.path.join(self.w.temp, 'a.py'), 'content': 'x'}),
+                     role='test-runner')
+
+
 class PayloadShapes(Base):
     """A call the guard cannot fully judge (no named dialect, cmd.exe, a TTY, input fed to a running
     process) is refused by Codex's policy in a marked session, with the policy's reason; the owner's
@@ -114,6 +138,17 @@ class PayloadShapes(Base):
     def test_the_owner_is_still_judged_in_the_default_dialect(self):
         self.denied(self.raw('Bash', {'command': 'Get-ChildItem $env:USERPROFILE -Recurse'}), 'root-search', role=None)
 
+    def test_the_owners_cmd_exe_call_is_judged_as_cmd_c(self):
+        for command, rule in (('git reset --hard', 'git-reset-hard'), ('git push --force origin main', 'git-push-main'),
+                              ('git commit -am x', 'git-commit-all'), ('git clean -fdx', 'git-clean'),
+                              ('git checkout -- .', 'git-checkout')):
+            with self.subTest(command=command):
+                payload = self.event('exec_command', {'cmd': command, 'shell': 'C:/Windows/System32/cmd.exe'},
+                                     cwd=self.w.main)
+                self.denied(payload, rule, role=None)
+        a = ADAPTER.parse('PreToolUse', self.raw('exec_command', {'cmd': 'dir', 'shell': 'cmd.exe'}))
+        self.assertEqual((a.shell, a.command), ('powershell', 'cmd /c dir'))
+
     def test_a_legacy_argv_and_an_input_patch_parse(self):
         a = ADAPTER.parse('PreToolUse', self.raw('shell', {'command': ['bash', '-lc', 'ls -la']}))
         self.assertEqual((a.command, a.shell), ('ls -la', 'bash'))
@@ -139,7 +174,7 @@ class Patches(Base):
     def test_read_test_and_lander_roles_do_not_patch_their_checkout(self):
         for role in ('reviewer', 'test-runner', 'lander'):
             with self.subTest(role=role):
-                self.denied(self.patch('worker.py'), 'role-edit', role=role)
+                self.denied(self.patch('worker.py'), 'host-role-edit', role=role)
 
     def test_host_configuration_is_read_only_to_a_reader(self):
         for path in ('AGENTS.md', '.codex/config.toml', '.codex/agents/worker.toml'):

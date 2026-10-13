@@ -341,12 +341,12 @@ class BoundGuard(unittest.TestCase):
 
     def test_bound_guard_ignores_the_inherited_role(self):
         self.assertIsNone(self.judge('worker', 'a.py'))
-        self.assertIn('rule=role-edit', self.judge('reviewer', 'a.py'))
+        self.assertIn('rule=host-role-edit', self.judge('reviewer', 'a.py'))
 
     def test_reader_lander_and_test_roles_cannot_patch_files(self):
         for role in ('reviewer', 'lander', 'test-runner'):
             with self.subTest(role=role):
-                self.assertIn('rule=role-edit', self.judge(role, 'worker.py'))
+                self.assertIn('rule=host-role-edit', self.judge(role, 'worker.py'))
 
     def test_test_and_lander_shell_writes_are_denied(self):
         self.assertIsNotNone(self.shell('test-runner', 'Set-Content -LiteralPath a.txt -Value changed'))
@@ -362,6 +362,21 @@ class BoundGuard(unittest.TestCase):
     def test_bound_guard_role_policy_checks_run_with_the_policy_off(self):
         self.assertIn('rule=role-shell', self.shell('worker', 'powershell.exe'))
         self.assertIn('rule=role-workdir', self.shell('worker', 'Get-Location', workdir=self.w.plain))
+
+    def test_a_broken_kit_json_stays_a_config_error_not_a_default(self):
+        """PolicyOn uses a default config only where no .kit.json exists: a file that fails to load
+        stays the error the guard refuses on, as for any subagent."""
+        with open(os.path.join(self.w.main, '.kit.json'), 'w', encoding='utf-8') as f:
+            f.write('{ broken')
+        for role in ('worker', 'coordinator'):
+            for command in ('git push origin HEAD:main', 'git push --force origin HEAD:main'):
+                with self.subTest(role=role, command=command):
+                    self.assertIsNotNone(self.shell(role, command))
+        self.assertIsNone(self.shell('worker', 'git status'))
+
+    def test_no_kit_json_gets_the_policy_default(self):
+        os.remove(os.path.join(self.w.main, '.kit.json'))
+        self.assertIn('rule=host-role-edit', self.judge('reviewer', 'a.py'))
 
     def test_bound_guard_refuses_a_spoofed_checkout(self):
         from hosts.codex.adapter.runtime import evaluate_bound
