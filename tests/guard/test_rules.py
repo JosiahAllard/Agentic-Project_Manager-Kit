@@ -818,6 +818,104 @@ class OwnerLockTools(unittest.TestCase):
                 self.assertIn(OWNER_ONLY, d.reason)
 
 
+class OwnerSetup(unittest.TestCase):
+    """Machine setup's writes (the machine config's owner_email among them, plan decision 27) are the
+    owner's to make: a session other than the owner's own that runs it to act is denied, its dry
+    run is not, and an agent session's edit of the machine config is the write jail's."""
+
+    KIT = 'C:/kit'
+    BLOCKED = [
+        ('bash', 'python tools/machine_setup.py --owner-email agent@example.invalid --apply'),
+        ('bash', 'python C:/kit/tools/machine_setup.py --apply --owner-email a@example.invalid'),
+        ('ps', 'py -3 C:\\kit\\tools\\machine_setup.py --apply'),
+        ('bash', 'python3 tools/machine_setup.py --app'),
+        ('bash', 'python tools/machine_setup.py --ap --owner-email a@example.invalid'),
+        ('bash', 'python tools/machine_setup.py --repo ../demo --owner-email a@example.invalid '
+                 '--agent-email b@example.invalid --apply'),
+        ('bash', 'cd C:/kit && python tools/machine_setup.py --apply'),
+        ('bash', 'python -m tools.machine_setup --apply'),
+        ('bash', 'f=--apply; python tools/machine_setup.py $f'),
+        ('ps', '$s = "C:\\kit\\tools\\machine_setup.py"; python $s --apply'),
+        ('ps', '& C:\\kit\\installer\\machine-setup.ps1 -OwnerEmail a@example.invalid -Apply'),
+        ('ps', 'powershell -NoProfile -File C:\\kit\\installer\\machine-setup.ps1 -apply'),
+        ('ps', 'powershell -File installer\\new-repo.ps1 -Target C:\\demo -OwnerEmail a@example.invalid '
+               '-AgentEmail b@example.invalid -App'),
+        ('ps', 'Start-Process python -ArgumentList "tools/machine_setup.py --apply"'),
+        # a double quote PowerShell 5.1 would pass on unescaped: it can carry an --apply in
+        ('ps', '& C:\\kit\\installer\\new-repo.ps1 -Target C:\\demo -OwnerEmail \'x" --apply --repo-name "n\' '
+               '-AgentEmail b@example.invalid'),
+        ('bash', 'python -c "from kitlib.machinesetup import owner; owner.write_owner_email(None, None, \'a@x.io\')"'),
+        ('bash', 'python -Sc "import kitlib.machinesetup.machineconfig"'),
+        ('bash', "python - <<'EOF'\nfrom kitlib.machinesetup import owner\nEOF"),
+    ]
+    ALLOWED = [
+        ('bash', 'python tools/machine_setup.py'),
+        ('bash', 'python tools/machine_setup.py --owner-email a@example.invalid'),
+        ('ps', '& C:\\kit\\installer\\machine-setup.ps1 -OwnerEmail a@example.invalid'),
+        ('bash', 'python tools/machine_setup.py --help'),
+        ('bash', 'cat tools/machine_setup.py'),
+        ('bash', 'git diff -- tools/machine_setup.py kitlib/machinesetup/owner.py'),
+        ('bash', 'python -m unittest discover -s tests/machinesetup -t .'),
+        ('bash', 'python tools/backlog.py add --title "machine_setup.py --apply needs a note"'),
+        ('bash', 'python tools/machine_setup.py --pm-settings x -- --apply'),
+    ]
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def run_one(self, shell, text, sub, environ=None):
+        make = bash if shell == 'bash' else ps
+        if environ is None:
+            environ = {} if sub else MARKED
+        return decide(make(text, self.w.wt, sub=sub), self.w.ctx(environ=environ))
+
+    def test_blocked(self):
+        dry = 'python "%s/tools/machine_setup.py"' % W.fwd(self.w.kit_dir)
+        for shell, text in self.BLOCKED:
+            for sub, environ in ((True, None), (False, None), (False, UNHELD)):
+                with self.subTest(text, sub=sub, environ=environ):
+                    d = self.run_one(shell, text, sub, environ)
+                    self.assertIsNotNone(d, 'allowed')
+                    self.assertEqual(d.verdict, 'deny', d.reason)
+                    if d.rule == 'unreadable':                 # a subagent's unclean line: refused whole
+                        continue
+                    self.assertEqual(d.rule, 'owner-setup', d.reason)
+                    self.assertIn("only the owner runs it to act", d.reason)
+                    self.assertTrue(d.reason.endswith(' Instead: %s %s' % (
+                        dry, rules.tag('owner-setup', 'subagent' if sub else 'main'))), d.reason)
+
+    def test_the_owner_session_may(self):
+        for shell, text in self.BLOCKED:
+            with self.subTest(text):
+                d = self.run_one(shell, text, False, environ={})
+                self.assertTrue(d is None or d.rule != 'owner-setup', d and d.reason)
+
+    def test_allowed(self):
+        for shell, text in self.ALLOWED:
+            for sub in (True, False):
+                with self.subTest(text, sub=sub):
+                    d = self.run_one(shell, text, sub)
+                    self.assertTrue(d is None or d.rule != 'owner-setup', d and d.reason)
+
+    def test_an_unread_line_that_runs_it_is_refused(self):
+        text = "echo 'x ; python tools/machine_setup.py --owner-email a@example.invalid --apply"
+        d = self.run_one('bash', text, False)
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual((d.verdict, d.rule), ('deny', 'owner-setup'), d.reason)
+        self.assertIn('could not read this command', d.reason)
+        self.assertIsNone(self.run_one('bash', text, False, environ={}))
+
+    def test_an_agent_session_may_not_edit_the_machine_config(self):
+        path = kuser.config_file(self.w.home)
+        for sub, environ in ((True, {}), (False, MARKED)):
+            with self.subTest(sub=sub):
+                ev = event('Write', {'file_path': path, 'content': '{"owner_email": "a@x.io"}'}, self.w.wt, sub=sub)
+                d = decide(ev, self.w.ctx(environ=environ))
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual((d.verdict, d.rule), ('deny', 'write-jail'), d.reason)
+
+
 class PushBlockOff(unittest.TestCase):
     def test_no_push_rule_without_push_block(self):
         w = W.World(kit={'repo': {'name': 'demo'}})

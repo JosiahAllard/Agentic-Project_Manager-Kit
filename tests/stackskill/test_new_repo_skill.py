@@ -1,5 +1,6 @@
-"""installer/new-repo.ps1 -Stack godot writes the render-check skill with the kit's path in it, and
-refuses (writing nothing) when the kit root cannot be written. A throwaway repository and a copy of
+"""installer/new-repo.ps1 -Stack godot (the committed repo setup, kitlib.machinesetup.repo) writes the
+render-check skill with the kit's path in it, and refuses (writing nothing) when the kit root cannot
+be written. A throwaway repository and a copy of
 the kit under a folder with a space in its name (tests/gitfixture.py); fake identities only."""
 import os
 import re
@@ -61,7 +62,7 @@ class NewRepoSkill(unittest.TestCase):
         for args in (['-Stack', 'godot'], ['-Apply', '-Stack', 'godot']):
             code, out = self.ps(*args)
             self.assertEqual(code, 1, out)
-            self.assertIn('stack_skill.py refused', out)
+            self.assertIn('stack_skill refused', out)
             self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
             self.assertFalse(os.path.exists(os.path.join(self.root, '.claude')))
             self.assertFalse(os.path.exists(os.path.join(self.root, 'tools', 'godot.cmd')))
@@ -82,20 +83,6 @@ class NewRepoSkill(unittest.TestCase):
         self.assertIn('python is not on PATH', out)
         self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
         self.assertFalse(os.path.exists(os.path.join(self.root, '.claude')))
-
-    def test_a_stub_failure_names_the_skill_files_in_the_undo_list(self):
-        with open(os.path.join(self.kit, 'tools', 'kit_stubs.py'), 'w', encoding='utf-8') as fh:
-            fh.write("import sys\n"
-                     "if '--dry-run' in sys.argv:\n"
-                     "    print('would write  C:\\\\x\\\\tools\\\\landed.py')\n"
-                     "    sys.exit(0)\n"
-                     "sys.exit(3)\n")
-        code, out = self.ps('-Apply', '-Stack', 'godot')
-        self.assertEqual(code, 1, out)
-        undo = [l for l in out.splitlines() if 'To undo: delete' in l]
-        self.assertEqual(len(undo), 1, out)
-        self.assertIn(os.path.join(self.root, SKILL), undo[0])
-        self.assertIn(os.path.join(self.root, SKILL), [l for l in out.splitlines() if 'STOPPED' in l][0])
 
     def test_a_stack_without_skills_writes_none(self):
         code, out = self.ps('-Apply', '-Stack', 'python')

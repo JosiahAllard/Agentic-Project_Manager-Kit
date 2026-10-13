@@ -1,5 +1,5 @@
-"""machine_setup --fresh (docs/machine-setup.md "Fresh machine (--fresh)"): a machine with no older
-kit clone. Against a fake home, a fake PM repo and a kit that is a temp git repository with a bare
+"""machine_setup's default mode (docs/machine-setup.md "Default mode"; --fresh is its old name): a
+machine with no older kit clone. Against a fake home, a fake PM repo and a kit that is a temp git repository with a bare
 remote (the plugin is installed from the export of its pushed main, kitlib.pluginsource); the
 Windows side is a FreshHost whose `claude` runner is kitlib.pluginsource.claude.Runner over a fake
 subprocess.run, so no claude process starts. RealRunner runs Host.plugin_runner's real path against
@@ -220,7 +220,7 @@ class Fresh(FreshBase):
         code, out = self.run_it(pm_settings=self.pm)
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertIn('DRY RUN', out)
-        self.assertIn(' kit:        none (--fresh)', out)                 # the old-kit header line
+        self.assertIn(' kit:        none (the default mode)', out)        # the old-kit header line
         self.assertIn('change(s) to make', out)
         self.assertIn('+        "matcher": "startup|resume|compact"', out)  # the PM hook's diff
         self.assertIn('kitlib.pluginsource.ensure_export', out)
@@ -456,9 +456,15 @@ class Fresh(FreshBase):
         self.assertEqual(len(self.host.fake.calls), 3)                   # no claude run for it
         self.assertTrue(os.path.isfile(os.path.join(self.export, pluginsource.STATE)))
 
+    def test_fresh_makes_no_shortcut_unless_asked(self):
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertFalse(os.path.exists(os.path.join(self.desk, extras.SHORTCUT)))
+        self.assertIn('machine schedule shortcut: not made in the default mode (--shortcut makes it)', out)
+
     def test_fresh_runs_shortcut_and_acl_but_not_the_lock_env(self):
         self.host.env[extras.LOCK_ENV] = 'somewhere-else'
-        code, out = self.run_it(apply=True)
+        code, out = self.run_it(apply=True, shortcut=True)
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertTrue(os.path.isfile(os.path.join(self.desk, extras.SHORTCUT)))
         self.assertTrue(self.host.acl_fixed)
@@ -595,29 +601,34 @@ class FreshTool(FreshBase):
         self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
         self.assertIn('is not a file', r.stdout)
 
-    def test_fresh_and_old_kit_together_or_neither_is_usage(self):
-        r = subprocess.run([sys.executable, T.TOOL], capture_output=True, text=True)
-        self.assertEqual(r.returncode, M.EXIT_USAGE)
-        self.assertIn('--fresh', r.stderr)
+    def test_fresh_and_old_kit_together_is_usage(self):
         r = subprocess.run([sys.executable, T.TOOL, '--fresh', '--old-kit', self.root], capture_output=True, text=True)
         self.assertEqual(r.returncode, M.EXIT_USAGE)
         self.assertIn('not allowed with', r.stderr)
         r = subprocess.run([sys.executable, T.TOOL, '--old-kit', self.root, '--pm-settings', self.pm],
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, M.EXIT_USAGE)
-        self.assertIn('--pm-settings goes with --fresh only', r.stderr)
-        for args in ([], ['-OldKit', self.root, '-Fresh']):
-            r = self.ps1(args)
-            self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
-            self.assertIn('usage - give -OldKit <', r.stdout)
-            self.assertIn('> or -Fresh (not both)', r.stdout)
+        self.assertIn('--pm-settings goes with the default mode only', r.stderr)
+        r = self.ps1(['-OldKit', self.root, '-Fresh'])
+        self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
+        self.assertIn('usage - give -OldKit <', r.stdout)
+        self.assertIn('> or -Fresh, not both', r.stdout)
         r = self.ps1(['-OldKit', self.root, '-PmSettings', self.pm])
         self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
-        self.assertIn('-PmSettings goes with -Fresh only', r.stdout)
-        with self.assertRaises(ValueError):
-            M.Context(self.home, self.kit)
+        self.assertIn('-PmSettings goes with the default mode only', r.stdout)
+        self.assertTrue(M.Context(self.home, self.kit).fresh)              # no mode: the default
         with self.assertRaises(ValueError):
             M.Context(self.home, self.kit, self.root, fresh=True)
+
+    def test_the_default_mode_needs_no_switch(self):
+        """No -Fresh and no -OldKit is the default mode, through the wrapper and the tool."""
+        missing = os.path.join(self.home, '.claude-none')
+        for r in (self.ps1(['-HomeDir', self.home, '-ConfigDir', missing, '-OwnerEmail', 'o@example.invalid']),
+                  subprocess.run([sys.executable, T.TOOL, '--home', self.home, '--config-dir', missing],
+                                 capture_output=True, text=True)):
+            self.assertEqual(r.returncode, M.EXIT_REFUSED, r.stdout + r.stderr)
+            self.assertIn('REFUSED - no config folder at %s' % missing, r.stdout)
+            self.assertIn(' kit:        none (the default mode)', r.stdout)
 
     def test_wrapper_passes_fresh_and_pm_settings(self):
         """A refusal that stops before anything is read (a missing config folder) proves -Fresh,
@@ -626,7 +637,7 @@ class FreshTool(FreshBase):
         r = self.ps1(['-Fresh', '-PmSettings', self.pm, '-HomeDir', self.home, '-ConfigDir', missing])
         self.assertEqual(r.returncode, M.EXIT_REFUSED, r.stdout + r.stderr)
         self.assertIn('REFUSED - no config folder at %s' % missing, r.stdout)
-        self.assertIn(' kit:        none (--fresh)', r.stdout)            # the old-kit header line
+        self.assertIn(' kit:        none (the default mode)', r.stdout)   # the old-kit header line
         self.assertIn('pm settings:    %s' % self.pm, r.stdout)
         self.assertIn('DRY RUN', r.stdout)
 

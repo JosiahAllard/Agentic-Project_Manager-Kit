@@ -15,6 +15,9 @@ Rules, in the order they are checked:
   owner-lock       a shell command running reserve_ui, or running a lock CLI owner-only write
                    (reserve, release, hold whole|half|slots, division --set, game on|off|set,
                    top, stop/unbook --force), in any session but the owner's own
+  owner-setup      a shell command running machine setup to act (tools/machine_setup.py --apply, its
+                   PowerShell front ends with -Apply, python code importing kitlib.machinesetup), in
+                   any session but the owner's own: it writes the owner's email
   ledger           an edit of the machine config's ledger_path, by anyone
   lock-state       an agent session's edit of a file in the machine lock's state folder
   kit-json         an agent session's edit of a .kit.json in a checkout
@@ -163,7 +166,7 @@ def shell_command(event, ctx, text, shell, cwd, role):
     parsed = cm.read(text, shell, cwd)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
-        for rule in (owner_lock, wrapped_gate, root_search, heavy, git_rules, git_hooks_path, owner_identity,
+        for rule in (owner_lock, owner_setup, wrapped_gate, root_search, heavy, git_rules, git_hooks_path, owner_identity,
                      kill_by_name, heredoc_winpath, shell_writes):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
@@ -406,6 +409,76 @@ def owner_lock(event, ctx, cmd, inv, cwd, role):
         if found:
             return owner_lock_refusal(ctx, role, '`%s` runs machine_lock.py %s' % (bare(cmd), found))
     return None
+
+
+# ---------------------------------------------------------------- owner machine setup
+
+# Machine setup's --apply writes the machine config, the owner's email among them (plan decision 27),
+# and the owner's email is what proves a commit the owner's (owner-only paths, owner-identity). An agent
+# that ran it could make its own address the owner's, so only the owner runs it to act. Its dry run stays
+# open. The entry points: tools/machine_setup.py and its PowerShell front ends; python -c or a script
+# on standard input that imports kitlib.machinesetup counts too.
+SETUP_SCRIPTS = {'machine_setup.py': 'py', 'machine-setup.ps1': 'ps', 'new-repo.ps1': 'ps'}
+SETUP_RE = re.compile(r'(?i)(?<![A-Za-z0-9_])(?:machine[_-]setup|new-repo|machinesetup)(?![A-Za-z0-9_])')
+SETUP_IMPORT_RE = re.compile(r'(?i)kitlib(?:[./\\]|\s+import\s+)machinesetup')
+# argparse takes a unique prefix of --apply (--ap..); PowerShell a prefix of -Apply, -Apply:$true too
+SETUP_APPLY = {'py': re.compile(r'^--ap(?:p(?:l(?:y)?)?)?(?:=.*)?$'),
+               'ps': re.compile(r'(?i)^-a(?:p(?:p(?:l(?:y)?)?)?)?(?::.*)?$')}
+OWNER_SETUP_WHY = ('machine setup writes the machine config, and the owner\'s email there decides which commits '
+                   'count as the owner\'s, so only the owner runs it to act. Ask the owner to run it. To see '
+                   'what it would do (the dry run):')
+
+
+def setup_run(cmd, inv):
+    """What `inv` runs of machine setup with its writes on, as text, or None: a setup entry point
+    (SETUP_SCRIPTS: its program, or its script after python, powershell -File, Start-Process) with
+    --apply / -Apply or a word the text does not show; python -c, or python reading a script on
+    standard input, that imports kitlib.machinesetup. Its dry run is None."""
+    source = cmd.source or ''
+    if not SETUP_RE.search(source):
+        return None
+    words = ([inv.word] if inv.word is not None else []) + list(inv.args)
+    py = UI_PYTHON_RE.match(inv.name or '') is not None
+    stdin = bool(cmd.piped_in) or any(r.op.startswith('<') for r in cmd.redirects)   # <, a heredoc, <<<
+    if py and (any(w.text == '-c' or re.match(r'^-[A-Za-z]*c', w.text) for w in inv.args) or stdin) \
+            and SETUP_IMPORT_RE.search(source):
+        return 'python code that imports kitlib.machinesetup'
+    for k, w in enumerate(words):
+        name = cm.base_name(w.text)
+        style = SETUP_SCRIPTS.get(name)
+        if style is None and k > 0 and words[k - 1].text == '-m' and w.text.lower().endswith('machine_setup'):
+            style = 'py'
+        if style is None:
+            continue
+        rest = []
+        for a in words[k + 1:]:
+            if a.dyn:
+                return '%s with an argument the text does not show' % name
+            if style == 'ps' and '"' in a.text:
+                # Windows PowerShell 5.1 does not escape it when it passes the value on to python
+                return '%s with a double quote inside an argument, which can split it into more' % name
+            rest.extend(a.text.split() if ' ' in a.text else [a.text])     # a Start-Process "-ArgumentList" string
+        for t in rest:
+            if t == '--':
+                break
+            if SETUP_APPLY[style].match(t):
+                return '%s %s' % (name, t)
+        return None
+    script = cm.python_script(inv) if py else None
+    if inv.dyn or (script is not None and inv.args[script[0]].dyn):
+        return 'a program or script the text does not show, on a line that names machine setup'
+    return None
+
+
+def owner_setup(event, ctx, cmd, inv, cwd, role):
+    """A command that runs machine setup to act (setup_run), in any session but the owner's own."""
+    if inv is None or is_owner_session(event, ctx):
+        return None
+    found = setup_run(cmd, inv)
+    if not found:
+        return None
+    return refuse('owner-setup', role, '`%s` runs %s: %s' % (bare(cmd), found, OWNER_SETUP_WHY),
+                  'python %s' % kit_tool(ctx, 'machine_setup'))
 
 
 # ---------------------------------------------------------------- edits: ledger and main checkout

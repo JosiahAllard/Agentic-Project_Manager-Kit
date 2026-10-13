@@ -79,6 +79,9 @@ ANYWHERE = (
     # git http-push and the remote helpers, run by hand, talk to a remote without the hook too
     ('git-push-pmdata', G + r'(?:http-push|remote-[\w-]+)\b'),
     ('git-push-pmdata', r'(?i)(?<![\w.-])git-(?:send-pack|http-push|remote-[\w-]+)(?:\.exe)?\b'),
+    # machine setup run to act (rules.owner_setup): any session but the owner's own
+    ('owner-setup', r'(?i)(?<![A-Za-z0-9_])(?:machine[_-]setup(?:\.py|\.ps1)?|new-repo\.ps1)(?![A-Za-z0-9_])'
+                    r'[^|;&\n]*\s-{1,2}a|kitlib(?:[./\\]|\s+import\s+)machinesetup'),
     ('wrapped-gate', r'(?:\bgate\.py|\bmachine_lock\.py\s+run)\b[^;&]*?(?<!\|)\|(?!\|)'),
     ('root-search', r'\bfind\s+(?:-[HLP]\s+)*(?:/|/[a-zA-Z]/?|[A-Za-z]:[\\/]?)(?=\s|$|["\'])'),
     ('root-search', r'(?i)\b(?:get-childitem|gci|ls|dir)\b[^|;&]*\s["\']?[A-Za-z]:[\\/]?["\']?(?=\s|$)[^|;&]*\s-r'),
@@ -86,7 +89,7 @@ ANYWHERE = (
     ('root-search', r'(?i)\bdir\s+(?:/\w+\s+)*["\']?[A-Za-z]:\\?["\']?\s*(?:/\w+\s+)*/s\b'),
     ('root-search', r'(?i)\bdir\b[^|;&]*/s\b[^|;&]*\s["\']?[A-Za-z]:\\?["\']?(?=\s|$)'),
 )
-PARSED_RULES = ('owner_lock', 'wrapped_gate', 'root_search', 'heavy', 'git_rules', 'shell_writes')
+PARSED_RULES = ('owner_lock', 'owner_setup', 'wrapped_gate', 'root_search', 'heavy', 'git_rules', 'shell_writes')
 WHY = 'The guard could not read this command; write the program name literally. Why: %s.'
 PLAIN = ' Write it plainly:'
 
@@ -206,6 +209,8 @@ def check(event, ctx, text, cwd, role, parsed):
             continue
         where = cwd_at(parsed, m.start(), cwd)
         if rule in main_rules and not main_like(ctx, where):
+            continue
+        if rule == 'owner-setup' and rules.is_owner_session(event, ctx):
             continue
         if rule == 'git-push-pmdata' and (rules.is_owner_session(event, ctx) or (
                 pat != XARGS_BARE_GIT and not rules.pmdata_recorded(ctx, where or cwd))):

@@ -113,6 +113,11 @@ class FakeHost(object):
         self.calls.append(('task', line))
         self.tasks = set(self.tasks) | {'agent-temp-sweep'}          # the only task machine setup registers
 
+    git_email_value = None                                           # `git config user.email`
+
+    def git_email(self, kit):
+        return self.git_email_value
+
     def guard_entry(self, kit):
         return {'PreToolUse': [{'matcher': 'Bash|PowerShell', 'hooks': [
             {'type': 'command', 'command': PYW,
