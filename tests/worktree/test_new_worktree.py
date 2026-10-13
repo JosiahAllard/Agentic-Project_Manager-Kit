@@ -223,6 +223,16 @@ class PrepIsRun(WorktreeCase):
     """A worktree that is made runs the first-use repo prep (kitlib.git.prep) on the main checkout,
     with every host's worktree folder; its lines follow the worktree line. A refusal runs none."""
 
+    def setUp(self):
+        # Config passed through the environment (GIT_CONFIG_COUNT/KEY_n/VALUE_n, which a sandbox
+        # may set and the fake git refuses) is dropped, as tests/git/test_prep.py does.
+        env = mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.upper()
+                                           .startswith(('GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_',
+                                                        'GIT_CONFIG_VALUE_'))}, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        super().setUp()
+
     def test_a_new_worktree_preps_the_main_checkout_for_every_host_folder(self):
         self.prep.return_value = ['repo prep: did a thing']
         code, out = self.tool('fix/prepped')

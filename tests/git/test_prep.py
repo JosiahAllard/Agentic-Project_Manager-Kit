@@ -105,6 +105,25 @@ class Exclude(PrepCase):
         self.assertEqual(self.exclude().decode().splitlines()[-1:], ['/.claude/worktrees/'])
         self.assertNotIn(b'elsewhere', self.exclude())
 
+    def test_a_folder_gitignore_would_read_as_a_pattern_is_refused(self):
+        bad = ('*', 'a/*', '[ab]', '#x', '!x', 'x?', 'a\nb', 'a\\*', 'x ', '/', '.')
+        lines = self.run_prep(folders=bad + ('.claude/worktrees',))
+        self.assertIn('did not exclude', lines[0])
+        got = self.exclude().decode().splitlines()
+        self.assertEqual(got[-1:], ['/.claude/worktrees/'])
+        for line in got:
+            self.assertTrue(line.startswith('#') or line in ('', '/.claude/worktrees/'), line)
+
+    def test_a_folder_holding_a_tracked_file_is_refused(self):
+        """An exclude there would hide new source files from the untracked-file checks."""
+        self.fx.write('src/a.txt', 'a\n')
+        self.fx.commit('src', 'src/a.txt')
+        lines = self.run_prep(folders=('src', '.claude/worktrees'))
+        self.assertIn("did not exclude 'src'", lines[0])
+        self.assertNotIn(b'/src', self.exclude())
+        self.fx.write('src/new.txt', 'n\n')
+        self.assertIn('src/new.txt', self.fx.git('status', '--porcelain', '-uall'))
+
     def test_a_linked_worktree_writes_the_common_exclude(self):
         wt = self.fx.worktree('w')
         self.run_prep(path=wt)
@@ -189,6 +208,36 @@ class Hooks(PrepCase):
         wt = self.fx.worktree('w')
         self.run_prep(path=wt)
         self.assertEqual(self.config('--local', '--get', 'core.hooksPath'), self.hooks)
+
+    def test_hooks_in_the_repositorys_own_hooks_folder_are_kept_running(self):
+        """A hooks path would stop them (git-lfs's pre-push, the pre-commit framework's)."""
+        own = os.path.join(self.fx.common_dir(), 'hooks')
+        os.makedirs(own, exist_ok=True)
+        with open(os.path.join(own, 'pre-push.sample'), 'w') as f:
+            f.write('#!/bin/sh\n')
+        self.run_prep()
+        self.assertEqual(self.config('--local', '--get', 'core.hooksPath'), self.hooks)
+        self.config('--local', '--unset', 'core.hooksPath')
+        with open(os.path.join(own, 'pre-push'), 'w') as f:
+            f.write('#!/bin/sh\ngit lfs pre-push "$@"\n')
+        lines = self.run_prep()
+        self.assertFalse(any('hooksPath' in l for l in lines), lines)
+        self.assertEqual(self.config('--get', 'core.hooksPath'), '')
+
+
+class Cost(PrepCase):
+
+    def test_a_prepared_repository_costs_two_git_calls_and_writes_nothing(self):
+        self.run_prep()
+        calls = []
+        real = gitcmd.call
+
+        def counted(args, *a, **kw):
+            calls.append(args[0])
+            return real(args, *a, **kw)
+        with mock.patch.object(gitcmd, 'call', counted):
+            self.assertEqual(self.run_prep(), [])
+        self.assertEqual(calls, ['rev-parse', 'config'])
 
 
 class GlobalHooks(PrepCase):
