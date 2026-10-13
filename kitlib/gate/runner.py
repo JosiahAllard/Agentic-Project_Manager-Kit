@@ -471,13 +471,16 @@ def plan_lines(chosen, why, all_steps, base_text, changed):
 
 
 def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book_kw, merged=False,
-          checks_rev=None, gate=None):
+          checks_rev=None, gate=None, slot=None):
     """Runs `chosen` in a slot of `kind`: `(results, None)`, or `(None, Outcome)` when the hook
     module or the booking refuses. The hook module's checks come from the work tree, or from
     commit `checks_rev` when given (a landing: --expect-main). `chosen` is never empty. The slot
     is booked as a gate run, so the build daemons the gate leaves that serve nothing outside its
     job are stopped at its end (kitlib.lock.site, machine_lock.daemons; kitlib.proc.daemons).
-    `gate`: the gate the steps are judged by (detect.effective); default the configured one."""
+    `gate`: the gate the steps are judged by (detect.effective); default the configured one.
+    `slot`: a Slot the caller already holds (a landing's, kitlib.gate.land): the steps run in it,
+    nothing is booked and the slot is not released here (its holder releases it); an exception
+    or Ctrl+C ends the steps' tree first, so nothing the gate started runs on into an undo."""
     checks, options = {}, {}
     if any(s.check for s in chosen):
         try:
@@ -493,6 +496,18 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
                 'nothing ran' % (e.code,)])
     ctx = {'root': root, 'base': base, 'merged': merged, 'changed': list(changed),
            'options': options}
+    if slot is not None:
+        say('the gate runs in the slot the landing holds (run %s)' % slot.id)
+        try:
+            results = run_steps(slot.launcher, chosen, gate or cfg.section('gate'), ctx, log_dir,
+                                say, checks)
+        except BaseException:
+            try:
+                slot.end_tree()
+            except BaseException:   # noqa: BLE001 - the holder's release ends the tree again
+                pass
+            raise
+        return results, None
     try:
         slot = lockrun.book(kind, name, slug, **dict(book_kw or {}, gate=True))
     except LockError as e:
@@ -710,10 +725,11 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
 # ---------------------------------------------------------------- the merged-tree gate
 
 def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None, book_kw=None,
-                lane_args=None, reuse=None):
+                lane_args=None, reuse=None, slot=None):
     """_merged_gate() with its source (kitlib.gate.detect) in facts['source'] and as the last
     line. With no "gate" section in `cfg` the gate is detected from the merged tree, plus the
-    steps `base` owes (detect.effective)."""
+    steps `base` owes (detect.effective). `slot`: the Slot the landing already holds; the steps
+    run in it and no second slot is booked (gated)."""
     try:
         eff = detect.effective(cfg, root, base=base)
     except detect.DetectError as e:
@@ -721,14 +737,14 @@ def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None
     if eff.source == detect.AUTO:
         (say or _quiet)(detect.label(eff))
     out = _merged_gate(root, cfg, eff, base, full=full, slug=slug, log_dir=log_dir, say=say,
-                       book_kw=book_kw, lane_args=lane_args, reuse=reuse)
+                       book_kw=book_kw, lane_args=lane_args, reuse=reuse, slot=slot)
     out.facts['source'] = eff.source
     out.lines.append(detect.label(eff))
     return out
 
 
 def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, say=None,
-                 book_kw=None, lane_args=None, reuse=None):
+                 book_kw=None, lane_args=None, reuse=None, slot=None):
     """Gate the merged tree at `root`'s HEAD (a landing's merge, in the main checkout) against
     `base` (the main it was merged into): the paths base..HEAD changes select the steps (every
     non-manual step with full, each running its full_cmd when it has one), and each step's
@@ -741,7 +757,7 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     and count as REUSED; its lines, then the lines of its keep (the results it stores in the gate
     cache), are said and kept in `<log dir>/reuse.log`. `setup` runs only when some step runs,
     and no slot is booked when none does. An auto-detected gate that found no stack runs nothing
-    and passes (NO_CHECKS)."""
+    and passes (NO_CHECKS). `slot`: a held Slot to run in instead of booking one (gated)."""
     say = say or _quiet
     gate = eff.gate
     empty = detect.nothing_detected(eff)
@@ -769,7 +785,8 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     results = []
     if run:
         results, refused = gated(cfg, root, base, changed, run, gate['kind'], name, slug_of(slug),
-                                 logs, say, book_kw, merged=True, checks_rev=base, gate=gate)
+                                 logs, say, book_kw, merged=True, checks_rev=base, gate=gate,
+                                 slot=slot)
         if refused is not None:
             return refused
     results = _with_reused(results, chosen, reused)
