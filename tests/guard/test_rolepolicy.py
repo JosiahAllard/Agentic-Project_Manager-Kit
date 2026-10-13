@@ -342,6 +342,56 @@ class LockVerbs(Base):
                 self.denied(self.shell('%s %s' % (LOCK, args), 'senior-worker'), 'role-lock')
 
 
+class LockMcp(Base):
+    """The lock MCP's tools are held to the same verbs as the CLI (rolepolicy.MCP_VERBS)."""
+
+    def mcp(self, name, role='reviewer', prefix=None):
+        from kitlib.guard import rules
+        tool = (prefix if prefix is not None else rules.mcp_prefix(self.w.ctx())) + name
+        return Action('mcp', tool=tool, cwd=self.w.wt, agent='a1' if role else None, agent_role=role)
+
+    def test_every_lock_tool_has_a_verb(self):
+        from kitlib.lockmcp import server
+        self.assertEqual(set(rolepolicy.MCP_VERBS), set(server.TOOLS))
+
+    def test_the_read_tools_are_status_for_every_mode(self):
+        for name in ('lock_snapshot', 'lock_wait_change', 'lock_stats', 'lock_run', 'lock_hold'):
+            for role in ('reviewer', 'lander', 'test-runner', 'senior-worker', 'pm'):
+                with self.subTest(name=name, role=role):
+                    a = self.mcp(name, role)
+                    self.assertEqual(rolepolicy.mode(a, self.w.ctx())[1], MODES[role])
+                    self.assertIsNone(rolepolicy.check(a, self.w.ctx()))
+                    self.allowed(a)
+
+    def test_a_write_tool_is_held_to_the_modes_verbs(self):
+        for name, role, refused in (('lock_end_run', 'reviewer', True), ('lock_end_run', 'lander', True),
+                                    ('lock_end_run', 'senior-worker', False), ('lock_hold_end', 'test-runner', False),
+                                    ('lock_hold_end', 'reviewer', True), ('lock_hold_edit', 'pm', False),
+                                    ('lock_hold_create', 'pm', True), ('lock_set_game_mode', 'senior-worker', True),
+                                    ('lock_set_games', 'pm', True), ('lock_set_division', 'test-runner', True)):
+            with self.subTest(name=name, role=role):
+                d = rolepolicy.check(self.mcp(name, role), self.w.ctx())
+                if refused:
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'))
+                    self.assertIn(name, d.reason)
+                else:
+                    self.assertIsNone(d)
+
+    def test_another_server_name_and_an_unknown_lock_tool(self):
+        d = rolepolicy.check(self.mcp('lock_end_run', 'reviewer', prefix='mcp__other__'), self.w.ctx())
+        self.assertEqual(d.rule, 'role-lock')
+        d = rolepolicy.check(self.mcp('lock_new_thing', 'pm'), self.w.ctx())
+        self.assertEqual(d.rule, 'role-lock')
+
+    def test_other_mcp_tools_and_the_owner_read_nothing(self):
+        def load(*a, **k):
+            raise AssertionError('the policy read a .kit.json for a call it does not judge')
+        for a in (self.mcp('search', prefix='mcp__github__'),
+                  Action('mcp', tool='mcp__github__search', cwd=self.w.wt)):
+            with self.subTest(a):
+                self.assertEqual(rolepolicy.mode(a, self.w.ctx(load=load)), (None, None))
+
+
 class Switch(unittest.TestCase):
     """guard.role_policy is the one switch: off (false or unset), no mode holds any role."""
 

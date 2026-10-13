@@ -37,7 +37,8 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   -NoExit and any prefix of it, /k). Standard input fed by a pipe, a heredoc, a
                   here-string or `<` is the script: bare, `-` and bash's `-s` then pass
     role-lock     the lock CLI (machine_lock.py) run with a verb outside the mode's LOCK_VERBS, or
-                  with --force in any abbreviation
+                  with --force in any abbreviation; a lock MCP tool (lock_mcp_tool) whose verb
+                  (MCP_VERBS) is outside them, or that the lock server does not have
   context(action, ctx)  the Ctx the shared rules then use: for a read, test or lander role, a view
                   whose .kit.json guard.data_roots also hold, read-only, every host's owner paths
                   (hosts.json profile owner_paths) in the session's checkout, and for a read or test
@@ -78,6 +79,13 @@ AGENT_LOCK = {'status': None, 'run': None, 'background': None, 'stop': None,
 LOCK_VERBS = {'controller': AGENT_LOCK, 'write': AGENT_LOCK, 'test': AGENT_LOCK,
               'lander': {'status': None, 'run': None},
               'read': {'status': None}}
+# The lock MCP's tools (kitlib.lockmcp.server.TOOLS) as the lock CLI's verbs they match, held to
+# LOCK_VERBS the same way. A tool under the lock's prefix that is not here is refused.
+MCP_VERBS = {'lock_snapshot': ('status',), 'lock_wait_change': ('status',), 'lock_stats': ('status',),
+             'lock_run': ('status',), 'lock_hold': ('status',), 'lock_hold_create': ('hold', 'create'),
+             'lock_hold_edit': ('hold', 'edit'), 'lock_hold_end': ('hold', 'end'),
+             'lock_set_game_mode': ('game', 'on'), 'lock_set_games': ('game', 'set'),
+             'lock_set_division': ('division', 'set'), 'lock_end_run': ('stop',)}
 REAL_NOT_FORCE = ('--for',)   # a lock CLI option of its own (hold edit, window_args), not --force cut short
 STDIN_OPS = ('<', '<<', '<<<')
 # What an interpreter's own options say (shell_gap): it runs a script or command and ends, it reads
@@ -111,10 +119,12 @@ def enabled(cfg):
 
 def mode(action, ctx):
     """(role, mode) of the Action, mode None when the policy is off for it: an action no rule
-    here judges, the owner's own session, a session outside any checkout's .kit.json, a .kit.json
+    here judges (only edits, shell calls and the lock's MCP tools are), the owner's own session, a session outside any checkout's .kit.json, a .kit.json
     that does not turn the policy on, or a role with no mode in the roles table or its role file."""
-    if action is None or action.kind not in ('edit', 'shell'):
+    if action is None or action.kind not in ('edit', 'shell', 'mcp'):
         return None, None
+    if action.kind == 'mcp' and lock_mcp_tool(action, ctx) is None:
+        return None, None                       # an MCP call that is not the lock's: not judged here
     if not getattr(action, 'agent', None) and ctx.session_role(action) == OWNER:
         return None, None                       # the owner's own session: no role, nothing read
     cwd = action.cwd or os.getcwd()
@@ -140,6 +150,15 @@ def check(action, ctx):
     if m is None:
         return None
     tag = rules.tag_role(action)
+    if action.kind == 'mcp':
+        name = lock_mcp_tool(action, ctx)
+        said = MCP_VERBS.get(name)
+        if said is not None and verb_allowed(list(said), LOCK_VERBS[m]):
+            return None
+        return _deny('role-lock', tag, 'The lock MCP tool %s (%s) is not one the %s role (mode %s) calls: its lock '
+                     'verbs are %s. To see the lock state:'
+                     % (name, 'machine_lock.py ' + ' '.join(said) if said else 'not a tool of the lock server',
+                        role, m, verbs_text(LOCK_VERBS[m])), 'python %s status' % rules.lock_tool(ctx))
     cwd = action.cwd or os.getcwd()
     top = checkout(ctx, cwd)
     if action.kind == 'edit':
@@ -397,12 +416,33 @@ def lock_verb(parsed, m):
                 continue
             said.append(t)
             k += 1
-        if not said or said[0] not in table:
-            return (said[0] if said else '(no verb)'), allowed
-        subs, sub = table[said[0]], (said[1] if len(said) > 1 else '')
-        if subs is not None and sub not in subs:
-            return ' '.join(said[:2]), allowed
+        if not verb_allowed(said, table):
+            return (said[0] if said and said[0] not in table else ' '.join(said[:2]) or '(no verb)'), allowed
     return None
+
+
+def verb_allowed(said, table):
+    """True when the lock words `said` ([verb, sub-verb, ...]) are a verb of the LOCK_VERBS entry
+    `table`, with a sub-verb it allows."""
+    if not said or said[0] not in table:
+        return False
+    subs, sub = table[said[0]], (said[1] if len(said) > 1 else '')
+    return subs is None or sub in subs
+
+
+def lock_mcp_tool(action, ctx):
+    """The lock MCP tool an MCP Action calls, or None: any tool under the lock's prefix
+    (rules.mcp_prefix: the machine config's, else the host profile's mcp_tool_format), or a tool
+    of the lock server (MCP_VERBS) under another server name (rules.host_mcp_separator)."""
+    tool = action.tool or ''
+    if action.kind != 'mcp' or not tool:
+        return None
+    prefix = rules.mcp_prefix(ctx)
+    if prefix and tool.startswith(prefix) and len(tool) > len(prefix):
+        return tool[len(prefix):]
+    sep = rules.host_mcp_separator(ctx.host_profile())
+    tail = tool.rsplit(sep, 1)[-1] if sep else tool
+    return tail if tail in MCP_VERBS else None
 
 
 def verbs_text(table):
@@ -448,7 +488,7 @@ def screen(action, ctx):
 
 def context(action, ctx):
     role, m = mode(action, ctx)
-    if m is None:
+    if m is None or action.kind == 'mcp':
         return ctx
     if m not in OWNER_PATHS_READ_ONLY:
         return ctx                              # write, controller: the owner-approval rules alone
