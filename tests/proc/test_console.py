@@ -319,6 +319,20 @@ class LogTest(unittest.TestCase):
             console._log_incident(console.ALLOCATED, "prog")
         self.assertTrue(os.path.isdir(self.path))
 
+    def test_the_logged_command_lines_are_redacted(self):
+        child = subprocess.list2cmdline(["C:\\Program Files\\x.exe", "--token", "tok one",
+                                         "API_KEY=sekrit", "a", "b", "c", "d", "e"])
+        argv = ["python.exe", "tool.py", "--password=hunter2"]
+        with mock.patch.object(console, "LOG_PATH", self.path), \
+                mock.patch.object(sys, "orig_argv", argv, create=True):
+            console._log_incident(console.ALLOCATED, child)
+        got = self.lines()[0]
+        self.assertEqual(got["argv"], ["python.exe", "tool.py", "--password=***"])
+        self.assertEqual(got["child"],
+                         '"C:\\Program Files\\x.exe" --token *** API_KEY=*** a b c ...(+2)')
+        for secret in ("tok one", "sekrit", "hunter2"):
+            self.assertNotIn(secret, json.dumps(got))
+
     def test_a_full_log_moves_aside(self):
         os.makedirs(os.path.dirname(self.path))
         with open(self.path, "w", encoding="utf-8") as f:
@@ -329,6 +343,47 @@ class LogTest(unittest.TestCase):
         self.assertEqual([g["how"] for g in self.lines()], [console.ALLOCATED])
         with open(self.path + ".1", encoding="utf-8") as f:
             self.assertIn('"old"', f.read())
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class RedactTest(unittest.TestCase):
+    """redact_command: what the incident log keeps of a command line."""
+
+    def test_secret_flags_and_values_are_masked(self):
+        cases = [
+            (["--token", "abc", "--api-key", "abc", "/Password", "abc", "-k", "kept"],
+             ["--token", "***", "--api-key", "***", "/Password", "***", "-k", "kept"]),
+            (["--token=abc", "--client-secret:abc", "/pwd:abc", "--name=kept"],
+             ["--token=***", "--client-secret:***", "/pwd:***", "--name=kept"]),
+            (["GITHUB_TOKEN=abc", "AWS_SECRET_ACCESS_KEY=abc", "MODE=kept"],
+             ["GITHUB_TOKEN=***", "AWS_SECRET_ACCESS_KEY=***", "MODE=kept"]),
+            (["-H", "Authorization: Bearer abc", "Bearer", "abc"],
+             ["-H", "Authorization:***", "Bearer", "***"]),
+            (["https://user:pw@host/x", "ghp_" + "a" * 36, "sk-" + "b" * 40, "C:\\kept\\a=b"],
+             ["https://***@host/x", "***", "***", "C:\\kept\\a=b"]),
+        ]
+        for words, want in cases:
+            with self.subTest(words[0]), mock.patch.object(console, "KEEP_WORDS", 99):
+                self.assertEqual(console.redact_command(["prog"] + words), ["prog"] + want)
+
+    def test_it_keeps_the_program_and_the_first_words_each_cut(self):
+        path = "C:\\" + "d" * 200 + "\\probe.py"
+        got = console.redact_command(["prog", path] + ["w%d" % i for i in range(10)])
+        self.assertEqual(len(got), 1 + console.KEEP_WORDS + 1)
+        self.assertEqual(got[-1], "...(+%d)" % (11 - console.KEEP_WORDS))
+        self.assertEqual(len(got[1]), console.WORD_MAX)
+        self.assertTrue(got[1].endswith("\\probe.py"), got[1])        # a path keeps its name
+        self.assertEqual(console.redact_command(["prog", "a"]), ["prog", "a"])
+        self.assertIsNone(console.redact_command(None))
+
+    def test_a_command_line_string_is_split_as_windows_does(self):
+        words = ["C:\\Program Files\\x.exe", 'say "hi"', "a\\\\", "b\\c", "", "--key", "k v"]
+        line = subprocess.list2cmdline(words)
+        self.assertEqual(console.split_command_line(line), words)
+        self.assertEqual(console.split_command_line('a "b ""c"" d" e'), ["a", 'b "c" d', "e"])
+        self.assertEqual(console.split_command_line("  a\t b  "), ["a", "b"])
+        got = console.redact_command(line.encode())
+        self.assertEqual(console.split_command_line(got), words[:5] + ["--key", "***"])
 
 
 @unittest.skipUnless(os.name == "nt", "Windows only")
