@@ -18,7 +18,7 @@ client's payload has been captured yet (hosts/codex/README.md, "Not verified").
         argv's interpreter), and `workdir` made absolute against cwd when the call names one.
         What the guard cannot fully judge is parsed anyway and carries a `refusal`
         (CodexAction): no named interpreter (judged as PowerShell, Codex's shell on Windows), an
-        interpreter it reads only through PowerShell (cmd.exe: judged as `cmd /c <text>`) or not at
+        interpreter it reads only through PowerShell (cmd.exe: its text judged in cmd.exe's dialect, as `cmd /c '<text>'`) or not at
         all (no dialect, the shared shell rules pass it), a
         TTY or interactive call, standard input handed to the command. hosts.codex.adapter.policy
         refuses those in a marked session; the owner's own session is judged as parsed.
@@ -72,6 +72,14 @@ def absolute(path):
                                                      or bool(ntpath.splitdrive(path)[0]))
 
 
+def cmd_c(text):
+    """cmd.exe `text` as a PowerShell `cmd /c '<text>'` call: one single-quoted literal (each ' doubled)
+    that the guard's PowerShell reading passes whole to its cmd.exe dialect (kitlib.guard.commands
+    reads `cmd /c` text as sh.CMD), so no PowerShell comment (#, <#), quote or operator in the text
+    hides what cmd.exe runs."""
+    return "cmd /c '%s'" % text.replace("'", "''")
+
+
 def is_cmd(value):
     return isinstance(value, str) and value.replace('\\', '/').rsplit('/', 1)[-1].lower() in CMD
 
@@ -89,8 +97,8 @@ CMD = {'cmd', 'cmd.exe'}
 
 def shell_kind(tool, data):
     """(dialect or None, refusal): the call's explicit interpreter's dialect; with none named, the
-    PowerShell tool's own, else DEFAULT_DIALECT and a refusal; cmd.exe (_shell judges its text as
-    PowerShell's `cmd /c <text>`) and one the guard cannot read, with a refusal."""
+    PowerShell tool's own, else DEFAULT_DIALECT and a refusal; cmd.exe (_shell judges its text in
+    cmd.exe's dialect, cmd_c) and one the guard cannot read, with a refusal."""
     value = data.get('shell')
     if value is None:
         if tool == 'PowerShell':
@@ -169,7 +177,7 @@ def _shell(tool, data, cwd):
         workdir = workdir if absolute(workdir) else os.path.normpath(os.path.join(cwd, workdir))
     kind, refusal = shell_kind(tool, data)
     if is_cmd(data.get('shell')):
-        command = 'cmd /c ' + command       # as PowerShell starts it: the guard reads cmd /c text
+        command = cmd_c(command)
     if data.get('tty') not in (None, False) or data.get('interactive') not in (None, False):
         refusal = 'an interactive or TTY command takes input the guard never sees'
     elif any(data.get(key) not in (None, '') for key in ('stdin', 'input', 'chars')):

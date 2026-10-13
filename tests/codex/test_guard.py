@@ -138,16 +138,44 @@ class PayloadShapes(Base):
     def test_the_owner_is_still_judged_in_the_default_dialect(self):
         self.denied(self.raw('Bash', {'command': 'Get-ChildItem $env:USERPROFILE -Recurse'}), 'root-search', role=None)
 
+    # cmd.exe text the guard must still see a reset --hard in. PowerShell would read the first three
+    # as a comment after `#` or `<#`; the guard reads the text as cmd.exe does.
+    CMD_RESETS = (
+        'echo # & git reset --hard', 'echo #&git reset --hard', 'echo <# & git reset --hard & echo #>',
+        'git reset --hard & echo x', 'echo x & git reset --hard', 'echo x&&git reset --hard', 'echo x|git reset --hard',
+        'g^it reset --hard', 'git reset ^--hard', '"git" reset --hard', 'git reset "--hard"', 'rem x & git reset --hard',
+        "echo ' & git reset --hard & echo '", 'echo $x & git reset --hard', 'echo { & git reset --hard & echo }',
+        'echo `" & git reset --hard', 'echo --% & git reset --hard', 'echo "x" & git reset --hard',
+        'echo ^" & git reset --hard', 'echo "a & git reset --hard', 'echo @( & git reset --hard',
+        '%COMSPEC% /c git reset --hard', 'echo ; & git reset --hard',
+        '(git reset --hard)', 'git reset --hard 2>nul', 'cmd /c git reset --hard', 'echo `& git reset --hard',
+        'echo ( & git reset --hard', 'echo $(x) & git reset --hard', 'echo x , & git reset --hard',
+        "echo ' & git reset --hard", "echo \u2019 & git reset --hard", "echo '' & git reset --hard",
+    )
+    # Text cmd.exe runs no reset from (`;` is no separator to it), and two the shared guard does not
+    # model in cmd.exe's dialect on any host (a caret joining words, a command named by %VAR%):
+    # allowed, as the default host's `cmd /c` allows them.
+    CMD_PASSES = ('echo x; git reset --hard', 'git^ reset --hard', 'set G=git& call %G% reset --hard')
+
     def test_the_owners_cmd_exe_call_is_judged_as_cmd_c(self):
         for command, rule in (('git reset --hard', 'git-reset-hard'), ('git push --force origin main', 'git-push-main'),
                               ('git commit -am x', 'git-commit-all'), ('git clean -fdx', 'git-clean'),
-                              ('git checkout -- .', 'git-checkout')):
+                              ('git checkout -- .', 'git-checkout'),
+                              ("echo '' & git push --force origin main", 'git-push-main')):
             with self.subTest(command=command):
                 payload = self.event('exec_command', {'cmd': command, 'shell': 'C:/Windows/System32/cmd.exe'},
                                      cwd=self.w.main)
                 self.denied(payload, rule, role=None)
-        a = ADAPTER.parse('PreToolUse', self.raw('exec_command', {'cmd': 'dir', 'shell': 'cmd.exe'}))
-        self.assertEqual((a.shell, a.command), ('powershell', 'cmd /c dir'))
+        for command in self.CMD_RESETS:
+            with self.subTest(command=command):
+                self.denied(self.event('exec_command', {'cmd': command, 'shell': 'cmd.exe'}, cwd=self.w.main),
+                            'git-reset-hard', role=None)
+        for command in self.CMD_PASSES:
+            with self.subTest(command=command):
+                self.allowed(self.event('exec_command', {'cmd': command, 'shell': 'cmd.exe'}, cwd=self.w.main),
+                             role=None)
+        a = ADAPTER.parse('PreToolUse', self.raw('exec_command', {'cmd': "dir 'x'", 'shell': 'cmd.exe'}))
+        self.assertEqual((a.shell, a.command), ('powershell', "cmd /c 'dir ''x'''"))
 
     def test_a_legacy_argv_and_an_input_patch_parse(self):
         a = ADAPTER.parse('PreToolUse', self.raw('shell', {'command': ['bash', '-lc', 'ls -la']}))
