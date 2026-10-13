@@ -31,12 +31,12 @@ class ClaudeAssemblyTests(unittest.TestCase):
         runtime=self.runtime()
         try:
             adapter=self.controller.core.adapters['claude-peer']
-            self.assertEqual(adapter.endpoint.registry,self.registry)
+            self.assertEqual(adapter.channel.registry,self.registry)
             self.assertEqual(json.loads(record.read_text())['cwd'],str(self.controller.root))
-            self.assertTrue(adapter.endpoint._thread.is_alive())
+            self.assertTrue(adapter.channel._thread.is_alive())
             self.assertTrue(adapter.describe().capabilities)
         finally: runtime.close()
-        self.assertFalse(adapter.endpoint._thread.is_alive())
+        self.assertFalse(adapter.channel._thread.is_alive())
         self.assertEqual(adapter.describe().capabilities,())
         self.assertEqual(set(self.registry.iterdir()),before)
 
