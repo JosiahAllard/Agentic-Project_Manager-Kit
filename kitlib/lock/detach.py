@@ -20,6 +20,7 @@ import os
 import subprocess
 import time
 
+from kitlib.host import hookmain
 from kitlib.proc import process, spawn
 
 # Reads {"cmd", "cwd", "env"} as JSON on stdin; prints "<ReturnValue> <ProcessId>".
@@ -35,16 +36,17 @@ WRAPPER_POLL_S = 0.05
 
 
 def pythons(python):
-    """(pythonw.exe, python.exe) in the folder of `python` (either of the two). Neither is checked
-    to exist here."""
-    folder = os.path.dirname(os.path.abspath(python))
-    return os.path.join(folder, 'pythonw.exe'), os.path.join(folder, 'python.exe')
+    """(pythonw.exe, python.exe) for the folder of `python` (either of the two): the windowless one
+    is kitlib.host.hookmain.windowless's, the one the hooks use, so where there is no pythonw.exe
+    the first is python.exe itself (and `missing` refuses it). python.exe is not checked here."""
+    console = os.path.join(os.path.dirname(os.path.abspath(python)), 'python.exe')
+    return hookmain.windowless(console), console
 
 
 def command(python, tool, head, rid, tail):
-    """The detached run's argv: the pythonw beside `python`, the carrier beside `tool`, the
-    python.exe beside `python`, then `-B tool` with `head` (the caller's arguments before `--`),
-    `--detached-id rid` and `tail` (`--` and the command)."""
+    """The detached run's argv: the pythonw beside `python`, the kit's carrier (tools/no_window.py
+    beside `tool`, by path), the python.exe beside `python`, then `-B tool` with `head` (the
+    caller's arguments before `--`), `--detached-id rid` and `tail` (`--` and the command)."""
     pythonw, console = pythons(python)
     carrier = os.path.join(os.path.dirname(os.path.abspath(tool)), spawn.CARRIER)
     return ([pythonw, carrier, console, '-B', os.path.abspath(tool)] + list(head)
@@ -52,8 +54,10 @@ def command(python, tool, head, rid, tail):
 
 
 def missing(argv):
-    """Why `command`'s argv cannot start (its pythonw, carrier or python.exe is not a file), or
-    None."""
+    """Why `command`'s argv cannot start (there is no pythonw.exe beside python.exe, or its
+    carrier or python.exe is not a file), or None."""
+    if os.path.basename(argv[0]).lower() != 'pythonw.exe':
+        return 'pythonw.exe is not a file: %s' % os.path.join(os.path.dirname(argv[0]), 'pythonw.exe')
     for what, path in zip(('pythonw.exe', 'the carrier', 'python.exe'), argv[:3]):
         if not os.path.isfile(path):
             return '%s is not a file: %s' % (what, path)

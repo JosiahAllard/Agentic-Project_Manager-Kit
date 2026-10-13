@@ -137,6 +137,13 @@ class LookalikeWrappers(unittest.TestCase):
         self.assertEqual(self.judge('python "%s/tools/machine_lock.py" run --kind build -- python x.py' % kit),
                          ('allow', None))
 
+    def test_a_detached_lock_run_is_the_kit_s_wrapper_too(self):
+        # The carrier chain WMI starts for --detach (pythonw no_window.py python machine_lock.py
+        # run ...) is never a shell call the guard sees; the call it does see is this one.
+        kit = W.fwd(self.w.kit_dir)
+        self.assertEqual(self.judge('python "%s/tools/machine_lock.py" run --detach --kind build -- python x.py'
+                                    % kit), ('allow', None))
+
     def test_a_script_that_shares_the_name_is_any_script(self):
         temp = W.fwd(self.w.temp)
         for text in ('python x.py',

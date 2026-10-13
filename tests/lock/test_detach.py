@@ -4,8 +4,10 @@ has no console window; ShowWindow is not asked for. Unit tests of the argv, the 
 wrapper lookup on fakes. Through the tool, and a real detach: tests/lock/test_detach_cli.py."""
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 from .helpers import REPO
@@ -19,31 +21,51 @@ TOOL = os.path.join(REPO, "tools", "machine_lock.py")
 
 @unittest.skipUnless(os.name == "nt", "the lock is Windows only")
 class Command(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.py = os.path.join(self.tmp, "python.exe")
+        self.pyw = os.path.join(self.tmp, "pythonw.exe")
+        for path in (self.py, self.pyw):
+            open(path, "wb").close()
+
     def test_pythonw_runs_the_carrier_which_runs_the_console_python(self):
-        py = r"C:\Py\python.exe"
-        argv = dt.command(py, r"C:\kit\tools\machine_lock.py", ["run", "--kind", "k", "--detach"],
+        argv = dt.command(self.py, r"C:\kit\tools\machine_lock.py", ["run", "--kind", "k", "--detach"],
                           "r-1", ["--", "cmd", "x y"])
-        self.assertEqual(argv, [r"C:\Py\pythonw.exe", r"C:\kit\tools\no_window.py",
-                                r"C:\Py\python.exe", "-B", r"C:\kit\tools\machine_lock.py",
+        self.assertEqual(argv, [self.pyw, r"C:\kit\tools\no_window.py",
+                                self.py, "-B", r"C:\kit\tools\machine_lock.py",
                                 "run", "--kind", "k", "--detach", "--detached-id", "r-1",
                                 "--", "cmd", "x y"])
 
     def test_from_pythonw_the_console_python_is_still_python_exe(self):
-        argv = dt.command(r"C:\Py\pythonw.exe", r"C:\kit\tools\machine_lock.py", [], "r-1", ["--"])
-        self.assertEqual(argv[:3], [r"C:\Py\pythonw.exe", r"C:\kit\tools\no_window.py",
-                                    r"C:\Py\python.exe"])
+        argv = dt.command(self.pyw, r"C:\kit\tools\machine_lock.py", [], "r-1", ["--"])
+        self.assertEqual(argv[:3], [self.pyw, r"C:\kit\tools\no_window.py", self.py])
 
-    def test_the_carrier_is_the_kit_one(self):
+    def test_the_windowless_python_is_the_hooks_one(self):
+        from kitlib.host import hookmain
+        self.assertEqual(dt.pythons(self.py), (hookmain.windowless(self.py), self.py))
+
+    def test_the_carrier_is_the_kit_one_by_path(self):
         argv = dt.command(sys.executable, TOOL, [], "r-1", ["--"])
-        self.assertEqual(os.path.basename(argv[1]), spawn.CARRIER)
+        self.assertEqual(os.path.normcase(argv[1]),
+                         os.path.normcase(os.path.join(REPO, "tools", spawn.CARRIER)))
+        self.assertEqual(spawn.CARRIER, "no_window.py")
         self.assertTrue(os.path.isfile(argv[1]), argv[1])
         self.assertIsNone(dt.missing(argv))
+
+    def test_no_pythonw_beside_python_is_missing_not_a_console_start(self):
+        os.remove(self.pyw)
+        argv = dt.command(self.py, TOOL, [], "r-1", ["--"])
+        self.assertEqual(dt.missing(argv), "pythonw.exe is not a file: %s" % self.pyw)
 
     def test_missing_names_the_first_file_that_is_not_there(self):
         tmp = os.path.join(REPO, "no-such-folder")
         argv = dt.command(os.path.join(tmp, "python.exe"), TOOL, [], "r-1", ["--"])
         self.assertIn("pythonw.exe is not a file", dt.missing(argv))
-        argv[0] = sys.executable
+        argv = dt.command(self.py, TOOL, [], "r-1", ["--"])
+        argv[1] = os.path.join(tmp, "no_window.py")
+        self.assertIn("the carrier is not a file", dt.missing(argv))
+        argv = dt.command(self.py, TOOL, [], "r-1", ["--"])
         argv[2] = os.path.join(tmp, "python.exe")
         self.assertIn("python.exe is not a file", dt.missing(argv))
 
