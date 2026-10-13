@@ -94,6 +94,12 @@ class Repo:
             vals[k] = v
         version = int((vals.get('core.repositoryformatversion') or '0').strip() or 0)
         self.algo = 'sha1'
+        # setup.c handle_extension_v0: worktreeConfig is honoured under every format version,
+        # read from the common config alone (a global or -c setting does not turn it on).
+        self.worktree_config = False
+        if 'extensions.worktreeconfig' in vals:
+            self.worktree_config = _config.parse_bool(vals['extensions.worktreeconfig'],
+                                                      'extensions.worktreeconfig')
         if version >= 1:
             for k, v in vals.items():
                 if not k.startswith('extensions.'):
@@ -103,7 +109,7 @@ class Repo:
                     if v.lower() not in ('sha1', 'sha256'):
                         raise Unsupported('object format %s' % v)
                     self.algo = v.lower()
-                elif name == 'noop':
+                elif name in ('noop', 'worktreeconfig'):
                     pass
                 else:
                     raise Unsupported('repository extension %s' % name)
@@ -123,12 +129,19 @@ class Repo:
             for p in _config.global_files(self.env):
                 layers.append(('global', _config.read_file(p)))
             layers.append(('local', _config.read_file(os.path.join(self.commondir, 'config'))))
+            if self.worktree_config:
+                # config.c do_git_config_sequence: this worktree's own file, a missing one empty.
+                layers.append(('worktree', _config.read_file(self.worktree_config_path)))
             layers.append(('command', _config.env_pairs(self.env)))
             layers.append(('command', list(self.cli_config)))
             self._config = _config.Config(layers)
-            if self._config.bool('extensions.worktreeconfig'):
-                raise Unsupported('extensions.worktreeConfig')
         return self._config
+
+    @property
+    def worktree_config_path(self):
+        """`$GIT_DIR/config.worktree`: per worktree (not in path.c's common list), so the main
+        worktree's is <commondir>/config.worktree and a linked one's <gitdir>/config.worktree."""
+        return os.path.join(self.gitdir, 'config.worktree')
 
     @property
     def objects(self):
