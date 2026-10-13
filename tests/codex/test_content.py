@@ -150,7 +150,7 @@ class Vendored(unittest.TestCase):
 
     def test_the_entrys_budget_counts_the_boot(self):
         """DEADLINE is the whole call's: the time the boot took (a pinned verify hashes every file)
-        comes off what hookmain gets."""
+        comes off what hookmain gets, which names the whole budget when it runs out."""
         import io
         import sys
         import types
@@ -164,15 +164,15 @@ class Vendored(unittest.TestCase):
         boot.boot = slow_boot
         seen = {}
 
-        def fake_run(event, kit, text, stdout, entry, deadline):
-            seen['deadline'] = deadline
+        def fake_run(event, kit, text, stdout, entry, deadline, started):
+            seen.update(deadline=deadline, started=started)
             return 0
         with unittest.mock.patch.dict(sys.modules, {'kitboot': boot}), \
                 unittest.mock.patch('time.monotonic', lambda: clock[0]), \
                 unittest.mock.patch('hosts.codex.adapter.entry.run', fake_run):
             rc = run.main(['PreToolUse'], io.StringIO('{"tool_name": "Write"}'), io.StringIO(), {})
         self.assertEqual(rc, 0)
-        self.assertAlmostEqual(seen['deadline'], run.DEADLINE - 3.0)
+        self.assertEqual((seen['deadline'], seen['started']), (run.DEADLINE, 100.0))
 
     def test_the_entrys_fast_path_reads_the_mark_as_sessionmark_does(self):
         """run.py reads the mark before the kit boots, so it cannot import kitlib.sessionmark: its

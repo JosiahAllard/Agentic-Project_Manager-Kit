@@ -12,8 +12,8 @@ from kitlib.host import hookmain
 from hosts.codex.adapter import ADAPTER, start
 
 
-def run(event, kit, text, stdout, entry, deadline):
+def run(event, kit, text, stdout, entry, deadline, started=None):
     if event in ADAPTER.CONTEXT_EVENTS:
         stdout.write(start.output(ADAPTER, event, kit, io.StringIO(text)))
         return 0
-    return hookmain.run(ADAPTER, event, io.StringIO(text), stdout, entry=entry, deadline=deadline)
+    return hookmain.run(ADAPTER, event, io.StringIO(text), stdout, entry=entry, deadline=deadline, started=started)

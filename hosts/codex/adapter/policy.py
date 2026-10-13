@@ -45,7 +45,8 @@ def _deny(rule, what, instead, action=None):
 
 def role_edit(action, mark):
     """The host-role-edit Decision for an edit by a read, test or lander role in its own checkout,
-    else None (module docstring)."""
+    else None (module docstring). The mode comes from the kit's role file only
+    (kitlib.content.role_mode): a repository's roles table cannot loosen it."""
     if action.kind != 'edit':
         return None
     import os

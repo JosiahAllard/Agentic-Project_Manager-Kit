@@ -224,6 +224,23 @@ class NoIdentity(unittest.TestCase):
         self.assertTrue(all(b < a for a, b in zip(budgets, budgets[1:])), budgets)
         self.assertLessEqual(budgets[0], 1.0)
 
+    def test_a_budget_started_before_the_hook_counts_that_time_and_is_named_whole(self):
+        """`started` (a time.monotonic() reading the entry took before its own work, a boot) starts
+        the budget early; the timeout reason names the whole budget, not what was left of it."""
+        budgets = []
+
+        def fake(guard, action, environ, profile, deadline):
+            budgets.append(deadline)
+            return None                                 # still deciding
+        a = FakeAdapter()
+        with mock.patch.object(hookmain, '_decide', fake):
+            code = hookmain.run(a, 'PreToolUse', io.StringIO('{}'), io.StringIO(), environ={}, entry='h.py',
+                                deadline=7, started=time.monotonic() - 3)
+        self.assertEqual(code, 3)
+        self.assertLessEqual(budgets[0], 4.0)
+        self.assertGreater(budgets[0], 3.5)
+        self.assertIn('within 7 s', a.last.reason)
+
 
 class CommandLine(unittest.TestCase):
     def test_the_one_hook_command_line_is_exec_form(self):

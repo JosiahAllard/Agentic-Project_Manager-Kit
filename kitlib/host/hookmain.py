@@ -3,7 +3,7 @@
 A host's hook entry is a few lines: put the kit on sys.path, build its adapter, call run(). What
 every host's hook needs besides its own parse and render lives here once:
 
-  run(adapter, event_name, stdin, stdout, environ, entry, deadline)
+  run(adapter, event_name, stdin, stdout, environ, entry, deadline, started)
         the hook: stdin's JSON -> adapter.parse -> kitlib.guard.decide -> degrade -> adapter.render
         -> stdout; returns the exit code render gives. Fails closed: any exception on the way (a
         kitlib.guard that will not import, a payload parse refuses, a rule that raises) is a deny,
@@ -12,7 +12,9 @@ every host's hook needs besides its own parse and render lives here once:
         with the host's blocking code (2 on Claude Code), since there is nothing left to say it with.
         `deadline` (seconds; None: none) bounds decide, every Action of the call together: a guard
         still deciding then is a deny, rule guard-timeout, so a host that gives up on a slow hook
-        never reads silence as an allow. On a host whose hooks carry no subagent identity, a call
+        never reads silence as an allow. `started` (a time.monotonic() reading; None: now) is when
+        that budget began, for an entry whose own work before run (a boot) counts against it; the
+        timeout reason names the whole budget. On a host whose hooks carry no subagent identity, a call
         in a marked session is judged as an agent of its mark's role (unidentified()).
   failure(e, role, entry)       that guard-error Decision
   command_line(script, executable)
@@ -119,13 +121,13 @@ def unidentified(adapter, action, environ):
     return dataclasses.replace(action, agent=UNIDENTIFIED, agent_role=mark)
 
 
-def _judge(adapter, guard, actions, environ, deadline):
+def _judge(adapter, guard, actions, environ, deadline, started=None):
     """The Decision on every Action of one call: the host's screen, then the guard, for each; the
     first deny decides, else the first ask, else allow. `deadline` (seconds; None: none) is the
     budget for the whole call, every Action's guard together. None when the guard was still
-    deciding when it ran out."""
+    deciding when it ran out. `started`: run's."""
     screen = getattr(adapter, 'screen', None)
-    end = None if deadline is None else time.monotonic() + deadline
+    end = None if deadline is None else (time.monotonic() if started is None else started) + deadline
     found = []
     for action in actions:
         action = unidentified(adapter, action, environ)
@@ -141,7 +143,7 @@ def _judge(adapter, guard, actions, environ, deadline):
     return next((d for d in found if d.verdict == 'ask'), found[0])
 
 
-def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=None):
+def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=None, started=None):
     environ = os.environ if environ is None else environ
     entry = (entry or sys.argv[0] or 'hook').replace(os.sep, '/')
     payload = action = None
@@ -152,7 +154,7 @@ def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=N
         if not actions:
             raise ValueError('the payload parsed into no action')
         from kitlib import guard
-        decision = _judge(adapter, guard, actions, environ, deadline)
+        decision = _judge(adapter, guard, actions, environ, deadline, started)
         if decision is None:                    # still deciding at the deadline
             role = _role(adapter, payload, action)
             decision = Decision('deny', TIMEOUT, 'The kit guard did not decide within %s s, so it cannot clear '
