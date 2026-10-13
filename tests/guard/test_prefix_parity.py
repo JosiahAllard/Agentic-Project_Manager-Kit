@@ -11,9 +11,10 @@ import unittest
 from unittest import mock
 
 from kitlib import agentname
-from kitlib.guard import context, decide
+from kitlib.guard import context
 
 from . import world as W
+from .claudehost import decide
 from .world import bash, event, ps
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,7 +31,7 @@ def tests_in(suite):
 
 
 def twin(d):
-    return None if d is None else (d.kind, d.rule, d.reason)
+    return None if d is None else (d.verdict, d.rule, d.reason)
 
 
 class Knob(object):
@@ -123,7 +124,7 @@ class Twins(unittest.TestCase):
                      ('PowerShell', {'command': 'Stop-Process -Name godot -Force'}, self.w.wt))
 
     def test_a_subagent_by_either_name(self):
-        for kind in ('lander', 'worker', 'records', 'main', 'opus-worker'):
+        for kind in ('lander', 'worker', 'records', 'main', 'senior-worker'):
             for tool, data, cwd in self.rows:
                 with self.subTest(kind, tool=tool, data=data):
                     bare = decide(event(tool, data, cwd, True, kind), self.w.ctx(environ={}))

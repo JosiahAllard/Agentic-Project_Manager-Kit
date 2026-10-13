@@ -3,7 +3,7 @@
     "repos": {
       "alpha": {
         "root": "D:/src/alpha",
-        "backlog_cmd": "python tools/backlog.py -C <worktree>",
+        "backlog_cmd": "python <kit>/tools/backlog.py -C <worktree>",
         "rules": [
           {"name": "gamma", "session": "gamma",
            "ids": ["EX-SIM-*", "EX-GAMMA-*"], "paths": ["artifacts/models/", "research/gamma/"]},

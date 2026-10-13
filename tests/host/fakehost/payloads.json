@@ -1,0 +1,30 @@
+{
+ "comment": "The fake host's hook payloads (tests/host/fakehost/adapter.py), the Action each parses into, and its recorded output (tests/host/conformance.py).",
+ "events": {"before_tool": "tool", "session_begin": "session_start"},
+ "cases": [
+  {"name": "write", "event": "before_tool",
+   "payload": {"cwd": "C:/r", "call": {"name": "write_file", "input": {"path": "C:/r/a.py", "text": "x\n"}}},
+   "action": {"kind": "edit", "tool": "write_file", "path": "C:/r/a.py", "cwd": "C:/r", "retarget": "write_file(path=\"{path}\")"}},
+  {"name": "powershell", "event": "before_tool",
+   "payload": {"cwd": "C:/r", "call": {"name": "run_shell", "input": {"text": "git status"}}},
+   "action": {"kind": "shell", "tool": "run_shell", "command": "git status", "cwd": "C:/r", "shell": "powershell"}},
+  {"name": "bash-in-a-workdir", "event": "before_tool",
+   "payload": {"cwd": "C:/r", "call": {"name": "run_shell", "input": {"text": "ls", "dialect": "bash", "workdir": "C:/r/sub"}}},
+   "action": {"kind": "shell", "tool": "run_shell", "command": "ls", "cwd": "C:/r", "shell": "bash", "workdir": "C:/r/sub"}},
+  {"name": "read", "event": "before_tool",
+   "payload": {"cwd": "C:/r", "call": {"name": "read_file", "input": {"path": "C:/r/a.py"}}},
+   "action": {"kind": "other", "tool": "read_file", "cwd": "C:/r"}},
+  {"name": "session-begin", "event": "session_begin",
+   "payload": {"cwd": "C:/r"},
+   "action": {"kind": "session_start", "cwd": "C:/r"}}
+ ],
+ "malformed": [
+  {"event": "before_tool", "payload": {"cwd": "C:/r", "call": "write_file"}},
+  {"event": "before_tool", "payload": {"cwd": "C:/r", "call": {"name": "run_shell", "input": {"text": "ls", "dialect": "cmd"}}}}
+ ],
+ "render": [
+  {"event": "before_tool", "decision": {"verdict": "allow"}, "stdout": "", "code": 0},
+  {"event": "before_tool", "decision": {"verdict": "deny", "rule": "main-checkout", "reason": "No edits in the main checkout.", "instead": ""},
+   "stdout": "{\"block\": true, \"message\": \"No edits in the main checkout.\"}\n", "code": 2}
+ ]
+}

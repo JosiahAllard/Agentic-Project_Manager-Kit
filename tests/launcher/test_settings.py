@@ -8,7 +8,7 @@ import unittest
 from kitlib.config.types import ConfigError
 from kitlib.launcher import settings as S
 from kitlib.config import user as kuser
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 
 
 class Check(unittest.TestCase):
@@ -27,7 +27,7 @@ class Check(unittest.TestCase):
             self.assertIn(want, text)
 
     def test_the_coordinator_agent_may_carry_the_plugin_prefix_and_no_other(self):
-        p = CLAUDE_PLUGIN_NAME + ':'
+        p = PLUGIN_NAME + ':'
         for good in ('coordinator', p + 'coordinator', p + 'lead_2'):
             with self.subTest(good):
                 self.assertEqual(S.check({'coordinator_agent': good}), [])

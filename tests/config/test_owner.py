@@ -42,9 +42,10 @@ class PathsTest(unittest.TestCase):
     def test_the_default_locks_and_its_exception(self):
         r = rules()
         for p in ('CLAUDE.md', 'claude.md', '.claude/settings.json', '.github/workflows/ci.yml',
-                  '.kit.json', 'tools\\gate.json'):
+                  '.kit.json', 'tools\\gate.json', 'AGENTS.md', 'docs/agent-profile.md'):
             self.assertTrue(r.is_locked(p), p)
-        for p in ('docs/CLAUDE.md', '.claude/worktrees/x/CLAUDE2.md', 'tools/gate.py', '.claudex'):
+        for p in ('docs/CLAUDE.md', '.claude/worktrees/x/CLAUDE2.md', 'tools/gate.py', '.claudex',
+                  'docs/AGENTS.md', 'docs/agent-profile.md.bak'):
             self.assertFalse(r.is_locked(p), p)
 
     def test_a_blanket_approves_only_the_paths_under_it(self):

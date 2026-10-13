@@ -28,6 +28,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from kitlib import kitroot                                         # noqa: E402
 from kitlib.backlog import check as checkmod                        # noqa: E402
 from kitlib.backlog import landable as landmod                      # noqa: E402
 from kitlib.backlog import migrate as mmod                          # noqa: E402
@@ -281,9 +282,10 @@ def do_landable(args, ctx, snap, backend):
             for rid in v.held:
                 say('NOT LANDABLE %s: %s is still pulled by it; landing deletes the branch and '
                     'would leave the pull dead.' % (v.branch, rid))
-                say('  Done:     python tools/backlog.py close %s --reason "<what was done>"' % rid)
-                say('  Not done: python tools/backlog.py --as %s release %s --reason "<why>"'
-                    % (v.branch, rid))
+                say('  Done:     %s -C <worktree> close %s --reason "<what was done>"'
+                    % (kitroot.command('backlog'), rid))
+                say('  Not done: %s -C <worktree> --as %s release %s --reason "<why>"'
+                    % (kitroot.command('backlog'), v.branch, rid))
     return worst
 
 

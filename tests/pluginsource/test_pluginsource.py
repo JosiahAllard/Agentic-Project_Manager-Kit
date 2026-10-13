@@ -241,13 +241,13 @@ class CurrentLinesTest(Base):
         lines = P.current_lines(self.k.kit, self.s, folders=both)
         self.assertEqual(len(lines), 1)
         self.assertIn('no export', lines[0])
-        self.assertTrue(lines[0].endswith(P.MIGRATE_CMD), lines[0])
+        self.assertTrue(lines[0].endswith(P.refresh_cmd(True)), lines[0])
         self.k.seed_migrated(both)
         self.refresh(both, FakeProc(fail={('.claude-two', 'update'): 2}))
         lines = P.current_lines(self.k.kit, self.s, folders=both)
         self.assertEqual(len(lines), 1)
         self.assertIn('refresh failed in %s' % two, lines[0])
-        self.assertIn(P.REFRESH_CMD, lines[0])
+        self.assertIn(P.refresh_cmd(), lines[0])
         self.refresh(both)
         self.assertEqual(P.current_lines(self.k.kit, self.s, folders=both), [])
         later = self.advance()
@@ -255,7 +255,7 @@ class CurrentLinesTest(Base):
         self.assertEqual(len(lines), 1)
         self.assertIn('behind kit main', lines[0])
         self.assertIn(later[:12], lines[0])
-        self.assertTrue(lines[0].endswith(P.REFRESH_CMD), lines[0])
+        self.assertTrue(lines[0].endswith(P.refresh_cmd()), lines[0])
 
     def test_a_folder_not_migrated_names_the_migrate_command(self):
         default, two = self.k.folders('.claude', '.claude-two')
@@ -264,13 +264,13 @@ class CurrentLinesTest(Base):
         lines = P.current_lines(self.k.kit, self.s, folders=[default, two])
         self.assertEqual(len(lines), 1)
         self.assertIn('not migrated to the export in %s' % two, lines[0])
-        self.assertIn('%s (one folder first: --folder DIR)' % P.MIGRATE_CMD, lines[0])
+        self.assertIn('%s (one folder first: --folder DIR)' % P.refresh_cmd(True), lines[0])
         self.advance()
         lines = P.current_lines(self.k.kit, self.s, folders=[default, two])
         self.assertEqual(len(lines), 2)
-        self.assertTrue(lines[1].endswith(P.MIGRATE_CMD), lines[1])
-        self.assertEqual(P.current_lines(self.k.kit, self.s, folders=[default])[0][-len(P.REFRESH_CMD):],
-                         P.REFRESH_CMD)
+        self.assertTrue(lines[1].endswith(P.refresh_cmd(True)), lines[1])
+        self.assertEqual(P.current_lines(self.k.kit, self.s, folders=[default])[0][-len(P.refresh_cmd()):],
+                         P.refresh_cmd())
 
     def advance(self):
         r = self.k.repo
@@ -285,7 +285,7 @@ class CurrentLinesTest(Base):
         _root, sha = P.ensure_export(self.k.kit, self.s, now=NOW, own=ME, alive=never_alive)
         lines = P.current_lines(self.k.kit, self.s, folders=[two])
         self.assertEqual(lines, ['pm-kit plugin in %s: not refreshed to %s: %s'
-                                 % (two, sha[:12], P.REFRESH_CMD)])
+                                 % (two, sha[:12], P.refresh_cmd())])
 
     def test_unreadable_state(self):
         os.makedirs(self.k.root)
@@ -304,7 +304,7 @@ class MigratedTest(Base):
         self.assertEqual(self.refresh([default, two], proc, apply=False), 1)
         self.assertEqual(proc.calls, [])
         self.assertIn('REFUSED %s: not migrated to the export yet: %s --folder "%s"'
-                      % (two, P.MIGRATE_CMD, two), self.lines)
+                      % (two, P.refresh_cmd(True), two), self.lines)
         self.assertEqual(self.refresh([default, two], proc), 1)
         self.assertEqual([c[1] for c in proc.calls], [None, None])
         state = P.read_state(self.k.root)

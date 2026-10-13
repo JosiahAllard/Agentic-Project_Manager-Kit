@@ -16,16 +16,22 @@ import time
 import unittest
 from unittest import mock
 
+from kitlib import kitroot
 from kitlib.config import load
 from kitlib.records import inflight, landing
 from kitlib.worktree import new
 from kitlib.git import cmd as gitcmd
+from kitlib.git import prep as gitprep
 from tests import gitfixture
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'new_worktree.py')
 REFUSAL = new.REFUSAL
 LOCK_NAME = 'test-landing.lock'
+# the red-first command a `route` line names: the kit's own tool, quoted in forward slashes
+# (docs/multi-host-plan.md section 7 decision 21; step 15 "No stubs")
+REDFIRST = '`python "%s/tools/redfirst.py" -C <your worktree> --tests <test file>`' % (
+    KIT.replace('\\', '/'))
 MASTER_CONFIG = {'repo': {'main_branch': 'master'}, 'landing': {'lock_file': 'git:' + LOCK_NAME}}
 
 
@@ -58,6 +64,12 @@ class WorktreeCase(unittest.TestCase):
         env = mock.patch.dict(os.environ, gitfixture.fixture_env(), clear=True)
         env.start()
         self.addCleanup(env.stop)
+        # The first-use repo prep would set these repositories' core.hooksPath to the kit's
+        # githooks; the cases here test the worktree, PrepIsRun the prep's call and
+        # tests/git/test_prep.py the prep itself.
+        prep = mock.patch.object(gitprep, 'run', return_value=[])
+        self.prep = prep.start()
+        self.addCleanup(prep.stop)
         self.fx = gitfixture.TempRepo(branch=self.BASE, bare_remote=True)
         self.addCleanup(self.fx.cleanup)
         self.base_dir = os.path.realpath(self.fx.base)
@@ -206,10 +218,43 @@ class NewBranchMode(WorktreeCase):
         self.assertEqual(rc, 0, out)
         self.assertTrue(os.path.isdir(self.slug_path('second')))
 
-    def test_next_names_the_new_worktrees_preflight(self):
+    def test_next_names_the_kits_preflight_for_the_new_worktree(self):
+        """The worktree holds no copy of the kit's tools (decision 21): the kit's preflight, -C it."""
         out = self.tool('fix/fresh')[1]
-        want = os.path.join(self.slug_path('fresh'), 'tools', 'preflight.py')
-        self.assertIn('next      python "%s"' % want, out)
+        self.assertIn('next      %s' % kitroot.command('preflight', self.slug_path('fresh')), out)
+
+
+class PrepIsRun(WorktreeCase):
+    """A worktree that is made runs the first-use repo prep (kitlib.git.prep) on the main checkout,
+    with every host's worktree folder; its lines follow the worktree line. A refusal runs none."""
+
+    def setUp(self):
+        # Config passed through the environment (GIT_CONFIG_COUNT/KEY_n/VALUE_n, which a sandbox
+        # may set and the fake git refuses) is dropped, as tests/git/test_prep.py does.
+        env = mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.upper()
+                                           .startswith(('GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_',
+                                                        'GIT_CONFIG_VALUE_'))}, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        super().setUp()
+
+    def test_a_new_worktree_preps_the_main_checkout_for_every_host_folder(self):
+        self.prep.return_value = ['repo prep: did a thing']
+        code, out = self.tool('fix/prepped')
+        self.assertEqual(code, 0, out)
+        (main, folders), _ = self.prep.call_args
+        self.assertEqual(os.path.realpath(main), self.repo)
+        self.assertIn('.claude/worktrees', [f.replace('\\', '/') for f in folders])
+        self.assertIn('.codex/worktrees', [f.replace('\\', '/') for f in folders])
+        lines = out.splitlines()
+        at = [i for i, l in enumerate(lines) if l.startswith('worktree ')][0]
+        self.assertEqual(lines[at + 1], 'prep      repo prep: did a thing')
+
+    def test_a_refusal_preps_nothing(self):
+        self.tool('fix/once')
+        self.prep.reset_mock()
+        self.assertEqual(self.tool('fix/once')[0], 1)
+        self.prep.assert_not_called()
 
 
 class BaseOption(WorktreeCase):
@@ -313,7 +358,8 @@ class ACallerWrongAboutTheBranchIsTold(WorktreeCase):
         rc, out = self.tool('fix/taken')
         self.assertEqual(rc, 1, out)
         self.assertIn('exists already', out)
-        self.assertIn('tools/worktree_remove.py --check', out)
+        self.assertIn('/tools/worktree_remove.py" -C ', out)
+        self.assertIn('" --check`', out)
 
 
 class UppercaseRecordIdBranches(WorktreeCase):
@@ -995,18 +1041,19 @@ class InFlightCommand(InFlightCase):
 
 class ALocalOnlyBaseNamesTheRoute(LandingCase):
     """`--base dev` with no pushed origin/dev is refused with the lock held or free; the refusal
-    ends with one `route` line naming tools/redfirst.py and saying a wait changes nothing."""
+    ends with one `route` line naming the kit's own tools/redfirst.py (REDFIRST) and saying a wait
+    changes nothing."""
 
     def routes(self, out):
         lines = self.printed(out, 'route')
         self.assertEqual(len(lines), 1, out)
         return lines[0]
 
-    def assert_route(self, out, tools='tools'):
+    def assert_route(self, out):
         line = self.routes(out)
         self.assertIn('dev has no pushed origin/dev', line)
         self.assertIn('with or without a landing', line)
-        self.assertIn('python %s/redfirst.py -C' % tools, line)
+        self.assertIn(REDFIRST, line)
         self.assertFalse(os.path.exists(self.slug_path('fresh')), out)
         self.assertFalse(new.branch_exists(self.repo, 'fix/fresh'), out)
         return line
@@ -1031,13 +1078,15 @@ class ALocalOnlyBaseNamesTheRoute(LandingCase):
         self.hold()
         self.assertEqual(self.routes(self.tool('fix/fresh', '--base', 'dev')[1]), free)
 
-    def test_the_route_spells_the_configured_tools_dir(self):
+    def test_the_route_names_the_kit_tool_not_the_configured_tools_dir(self):
+        # no repository holds a copy of the kit's tools, so "repo".tools_dir does not spell the
+        # route (docs/multi-host-plan.md section 7 decision 21; step 15 "No stubs")
         self.configure({'repo': {'main_branch': 'master', 'tools_dir': 'devtools'},
                         'landing': {'lock_file': 'git:' + LOCK_NAME}})
         self.make_dev()
         self.hold()
         out = self.tool('fix/fresh', '--base', 'dev')[1]
-        self.assert_route(out, tools='devtools')
+        self.assertNotIn('devtools', self.assert_route(out))
 
 
 class ALocalOnlyBaseUnderAnInFlightCommand(InFlightCase):
@@ -1050,7 +1099,7 @@ class ALocalOnlyBaseUnderAnInFlightCommand(InFlightCase):
         self.assertEqual(got.code, 1, out)
         self.assertIn('refused   a landing is in flight, but origin/dev did not resolve', out)
         self.assertEqual(len(self.printed(out, 'route')), 1, out)
-        self.assertIn('python tools/redfirst.py -C', out)
+        self.assertIn(REDFIRST, out)
 
 
 class NoRouteLineWhereItDoesNotApply(LandingCase):
@@ -1198,13 +1247,16 @@ class ConfigKeys(WorktreeCase):
         self.assertEqual(self.printed(out, 'worktree'), [want], out)
         self.assertFalse(os.path.exists(self.slug_path('fresh')), out)
 
-    def test_the_tools_dir_spells_the_commands(self):
+    def test_the_tools_dir_never_spells_a_kit_command(self):
+        """The repository's tools folder holds no kit tool (decision 21): the hints name the kit's."""
         self.configure({'repo': {'tools_dir': 'devtools'}})
         out = self.tool('fix/fresh')[1]
-        self.assertIn(os.path.join(self.slug_path('fresh'), 'devtools', 'preflight.py'), out)
+        self.assertIn(kitroot.command('preflight', self.slug_path('fresh')), out)
+        self.assertNotIn('devtools', out)
         os.makedirs(self.slug_path('taken'))
         out = self.tool('fix/taken')[1]
-        self.assertIn('python devtools/worktree_remove.py --check', out)
+        self.assertIn(kitroot.tool('worktree_remove').replace('\\', '/'), out)
+        self.assertNotIn('devtools', out)
 
 
 class UsageIsRejectedNotGuessed(unittest.TestCase):

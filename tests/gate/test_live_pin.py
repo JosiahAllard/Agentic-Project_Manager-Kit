@@ -384,9 +384,9 @@ class Identity(unittest.TestCase):
 
 
 def _kit_files():
-    """The files the two tools need from this tree: kitlib (no caches), the tools and the plugin
-    manifest the export reads."""
-    out = ['tools/land.py', 'tools/gate.py', '.claude-plugin/plugin.json']
+    """The files the two tools need from this tree: kitlib (no caches), the tools, the plugin
+    manifest the export reads and the host registry kitlib reads."""
+    out = ['tools/land.py', 'tools/gate.py', '.claude-plugin/plugin.json', 'hosts.json']
     for dirpath, dirnames, filenames in os.walk(os.path.join(HERE, 'kitlib')):
         dirnames[:] = [d for d in dirnames if d != '__pycache__']
         for f in filenames:

@@ -9,14 +9,15 @@ import unittest
 from kitlib import config as kconfig
 from kitlib.git import repo
 from kitlib.guard import commands as cm
-from kitlib.guard import context, decide, rules
+from kitlib.guard import context, rules
 from kitlib.guard import shell as sh
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 
 from . import world as W
+from .claudehost import decide
 from .world import bash, event, ps
 
-P = CLAUDE_PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
+P = PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
 COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 OLD_MARK = {context.ROLE_ENV: 'conductor'}   # the old name of the coordinator's mark, still held
 PM = {context.ROLE_ENV: 'pm'}
@@ -92,7 +93,7 @@ class Base(unittest.TestCase):
 
     def jailed(self, d, rule='write-jail'):
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual((d.kind, d.rule), ('deny', rule), d.reason)
+        self.assertEqual((d.verdict, d.rule), ('deny', rule), d.reason)
         return d
 
 
@@ -664,7 +665,7 @@ class MainGit(Base):
 
     def denied(self, d):
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual(d.kind, 'deny', d.reason)
+        self.assertEqual(d.verdict, 'deny', d.reason)
 
     def each_denied(self, texts, tool='Bash'):
         for text in texts:
@@ -863,7 +864,7 @@ class LanderMainCheckout(MainGit):
 
     def test_no_other_role_may_fetch_or_merge_main(self):
         fetch, merge = 'git -C "%s" fetch origin main' % self.main, 'git -C "%s" merge --ff-only origin/main' % self.main
-        for agent_type in ('worker', 'opus-worker'):
+        for agent_type in ('worker', 'senior-worker'):
             with self.subTest(agent_type):
                 self.jailed(self.git(fetch, agent_type))
                 self.denied(self.git(merge, agent_type))
@@ -883,7 +884,7 @@ class LanderMainCheckout(MainGit):
         self.allowed(self.git(merge, P + 'lander'))
         self.allowed(self.git('& git -C "%s" fetch origin' % self.main, P + 'lander', tool='PowerShell'))
         self.jailed(self.git('git -C "%s" commit -m x' % self.main, P + 'lander'))
-        for kind in (P + 'worker', P + 'opus-worker', 'other:lander', P + P + 'lander', P.upper() + 'lander', P,
+        for kind in (P + 'worker', P + 'senior-worker', 'other:lander', P + P + 'lander', P.upper() + 'lander', P,
                      P + 'main', P.rstrip(':') + 'lander', 'x' + P + 'lander', P[1:] + 'lander'):
             with self.subTest(kind):
                 self.jailed(self.git(fetch, kind))

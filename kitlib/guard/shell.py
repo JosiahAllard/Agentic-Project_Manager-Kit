@@ -19,6 +19,8 @@ Deliberate departures from the shells, all toward reading what a Windows user me
 import os
 import re
 
+from . import paths
+
 BASH, PS, CMD = 'bash', 'ps', 'cmd'
 MAX_DEPTH = 6
 
@@ -869,17 +871,17 @@ def resolve_path(p, cwd, shell=None):
             return None
     p = msys_to_win(p)
     if re.match(r'^[A-Za-z]:([\\/]|$)', p):
-        return os.path.normpath(p if len(p) > 2 else p + '\\')
+        return paths.norm(p if len(p) > 2 else p + '\\', fold=False)
     if re.match(r'^[A-Za-z]:', p):
         return None
     if p[:2] in ('\\\\', '//'):
-        return os.path.normpath(p)
+        return paths.norm(p, fold=False)
     if not cwd:
         return None
     if p[:1] in ('\\', '/'):
         drive = os.path.splitdrive(cwd)[0]
-        return os.path.normpath(drive + p) if drive else None
-    return os.path.normpath(os.path.join(cwd, p))
+        return paths.norm(drive + p, fold=False) if drive else None
+    return paths.norm(os.path.join(cwd, p), fold=False)
 
 
 def cd_target(cmd, cwd):

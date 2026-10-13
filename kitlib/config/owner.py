@@ -6,7 +6,10 @@ kit's tools/_owner_only.py; config moved from "doc_budget" to the `owner` sectio
                  exact path. No other prefix is a blanket.
   paths_except   what under a locked directory is not locked (`.claude/worktrees/`).
   email          the author email of the owner's own commits. A trailer counts only on a commit
-                 whose AUTHOR email is this one.
+                 whose AUTHOR email is this one. Unset in `.kit.json`: the machine config's
+                 owner_email (Config.owner_rules hands it over as a callable, read the first
+                 time the email is asked for, so rules that never judge an identity read no
+                 machine config).
   agent_emails   author emails known to be agents'. Never the owner's, whatever else says so.
 
 Fail-closed: an unset owner email (or one also listed as an agent's) proves nothing, so every
@@ -37,19 +40,28 @@ def email_of(ident):
 
 
 class Rules(object):
+    """`owner_email` is the email, or a callable returning it (or None), called once when the
+    email is first asked for."""
+
     def __init__(self, entries=DEFAULT, excepts=DEFAULT_EXCEPT, owner_email='', agent_emails=(),
                  trailer=TRAILER):
         self.entries = [e.replace('\\', '/') for e in entries]
         self.excepts = [e.replace('\\', '/') for e in excepts]
-        self.owner_email = (owner_email or '').strip().lower()
+        self._email = owner_email
         self.agent_emails = {e.strip().lower() for e in agent_emails if e and e.strip()}
         self.trailer = trailer
+
+    @property
+    def owner_email(self):
+        if callable(self._email):
+            self._email = self._email()
+        return (self._email or '').strip().lower()
 
     def identity_problem(self):
         """None when the owner's identity is usable, else why no commit can be proven his."""
         if not self.owner_email:
-            return ('the owner\'s identity is not configured ("owner".email in .kit.json), so no '
-                    'commit can be proven to be the owner\'s')
+            return ('the owner\'s identity is not configured ("owner".email in .kit.json, or '
+                    'owner_email in the machine config), so no commit can be proven to be the owner\'s')
         if self.owner_email in self.agent_emails:
             return '"owner".email is also listed in agent_emails, so it proves nothing'
         return None
@@ -113,9 +125,10 @@ class Rules(object):
         return any(norm(b) == norm(value) for b in self.blankets())
 
 
-def from_section(owner):
-    """Rules from a checked `owner` section dict (Config.owner())."""
-    return Rules(owner['paths'] or DEFAULT, owner['paths_except'], owner['email'] or '',
+def from_section(owner, fallback_email=None):
+    """Rules from a checked `owner` section dict (Config.owner()). `fallback_email`: a callable
+    giving the email when the section sets none (the machine config's)."""
+    return Rules(owner['paths'] or DEFAULT, owner['paths_except'], owner['email'] or fallback_email or '',
                  owner['agent_emails'] or (), owner['trailer'] or TRAILER)
 
 
@@ -126,5 +139,5 @@ def merge(work, base):
     entries = list(dict.fromkeys(list(b.entries) + list(work.entries)))
     base_except = {norm(x) for x in b.excepts}
     excepts = [e for e in work.excepts if norm(e) in base_except]
-    owner = b.owner_email if base is not None else ''
+    owner = b._email if base is not None else ''
     return Rules(entries, excepts, owner, sorted(b.agent_emails | work.agent_emails), b.trailer)

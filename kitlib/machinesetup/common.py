@@ -2,6 +2,18 @@
 import os
 import stat
 
+# The Claude shell in a kit checkout (hosts.json "shell"), and the folder it was before the hosts/
+# move (docs/multi-host-plan.md step 7). Settings and skill links written before the move name
+# MOVED_FROM paths; the settings and links steps re-point them into SHELL (docs/machine-setup.md
+# "Moved hook paths").
+SHELL = 'hosts/claude/shell'
+MOVED_FROM = 'claude'
+
+
+def kit_file(kit, rel):
+    """`rel` (posix, kit-relative) under the kit folder `kit`."""
+    return os.path.join(kit, *rel.split('/'))
+
 
 class Change(object):
     """One change: `text` is what a dry run prints, `do` makes it, `undo` (text) restores it by hand."""
@@ -13,12 +25,14 @@ class Change(object):
 
 class Plan(object):
     """A survey's changes, notes and refusals. lines() prints them grouped by section, in SECTIONS
-    order; a fresh run (--fresh) uses FRESH_SECTIONS, which adds a `plugin` section. The changes
-    are made (run()) in the order the survey added them, not by section: survey() adds each
-    folder's settings write, then the PM hook, then the plugin changes, then the extras, so claude's
-    write to a settings.json lands after the settings write the survey diffed."""
-    SECTIONS = ('links', 'settings', 'extras')
-    FRESH_SECTIONS = ('links', 'settings', 'plugin', 'extras')
+    order; the default mode (no older kit clone) uses FRESH_SECTIONS, which adds a `plugin`
+    section. The changes are made (run()) in the order the survey added them, not by section:
+    survey() adds each folder's settings write, then the PM hook, then the plugin changes, then
+    the owner's email, then the extras, so claude's write to a settings.json lands after the
+    settings write the survey diffed, and the owner's email before the sweep key (both write the
+    machine config)."""
+    SECTIONS = ('links', 'settings', 'owner', 'extras')
+    FRESH_SECTIONS = ('links', 'settings', 'plugin', 'owner', 'extras')
 
     def __init__(self, sections=None):
         self.SECTIONS = tuple(sections or self.SECTIONS)

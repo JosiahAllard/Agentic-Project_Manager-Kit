@@ -1,10 +1,10 @@
 """kitlib.coordinatorstart: the coordinator session-start context: standing rules, then live checks.
 
-Pure functions that return data; the hook (claude/hooks/coordinator_session_start.py) prints it. The text
+Pure functions that return data; the hook (boot/hook.py claude SessionStart coordinator) prints it. The text
 comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
 filing and pricing-pass lines (each switched on in the config), then the live checks (rulings, cap,
-machine state, other coordinators, and stubs: a line only when the repo's stubs are not current),
+machine state, other coordinators, and stubs: a line only when a repo that uses stubs has them not current),
 run as in kitlib.pmstart: each is a pure function over fakeable inputs (process list, file reads,
 a subprocess runner, now), and a failed one is one "could not check X: reason" line.
 
@@ -22,6 +22,7 @@ import sys
 from kitlib import pmstart, sessionmark, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
+from kitlib.host import registry
 from kitlib.ledger import safepath
 
 KEY = "coordinator_start"
@@ -45,11 +46,11 @@ ENG_LINE = ("ENG rulings: an engineering question (API shape, class versus recor
             "classifier, credentials, hooks that guard owner files); Money and accounts (purchases, cloud credit, "
             "game accounts, bans); Priority and pre-empts (one owner entry per change); Go-live and live-client "
             "runs, and removals of owner files; anything the owner flagged for review (eng_review).")
-# When a coordinator prices a record (claude/agents/coordinator.md, On start step 6 and Work sets,
+# When a coordinator prices a record (hosts/claude/shell/agents/coordinator.md, On start step 6 and Work sets,
 # Follow-ups): the start-up pricing pass leaves follow-up records unpriced.
 # Emitted only when coordinator_start.pricing_pass is true.
 PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, follow-up records excepted: run "
-                "`python tools/backlog.py list --needs-priority`. A follow-up record (filed from a finding on a "
+                "`python <kit>/tools/backlog.py -C <repo> list --needs-priority`. A follow-up record (filed from a finding on a "
                 "branch, a review or a worker's report; a new one says so in its summary) stays unpriced until "
                 "you or the PM promote it. Check "
                 "every other unpriced open record (an owner story, a record from the PM's brief) for duplicates, "
@@ -113,15 +114,17 @@ def _parse_time(text):
 
 
 def own_name(procs, env, pid):
-    """This session's Remote Control name: PM_KIT_SESSION_NAME, else the nearest claude.exe ancestor of pid; None if unknown."""
+    """This session's Remote Control name: PM_KIT_SESSION_NAME, else the nearest session process
+    (pmstart.session_images) above pid; None if unknown."""
     if env.get(NAME_VAR):
         return env[NAME_VAR]
     by_pid = {p.get("ProcessId"): p for p in procs}
+    images = pmstart.session_images()
     seen = set()
     while pid in by_pid and pid not in seen:
         seen.add(pid)
         p = by_pid[pid]
-        if p.get("Name") == "claude.exe":
+        if p.get("Name") in images:
             n = pmstart.rc_name(p.get("CommandLine"))
             if n:
                 return n
@@ -238,7 +241,7 @@ def machine(entry, run=_run, read=_read, now=None, home=None, root=None, lock_fi
     """Owner reservations and bookings in force or starting within 4 h, free gpu and cpu slots, landing lock."""
     home = home or kuser.home_dir()
     now = now or datetime.datetime.now().astimezone()
-    s = json.loads(run([sys.executable, os.path.join(home, ".claude", "tools", "machine_lock", "machine_lock.py"),
+    s = json.loads(run([sys.executable, registry.state_path(home, "tools", "machine_lock", "machine_lock.py"),
                         "status", "--json"]))
     soon = now + datetime.timedelta(hours=SOON_HOURS)
     res = s.get("reservations") or {}
@@ -261,7 +264,8 @@ def machine(entry, run=_run, read=_read, now=None, home=None, root=None, lock_fi
 
 
 def stubs_line(entry, root=None, check=stubs.problem_line):
-    """[the stubs line] for the coordinator's repo (repos_root/<repo>), [] when its stubs are current.
+    """[the stubs line] for the coordinator's repo (repos_root/<repo>), [] when its stubs are current
+    or it uses none (stubs are opt-in: kitlib.stubs.problem_line).
     KeyError without repos_root; a missing folder is a could-not-check line, not an error."""
     if not root:
         raise KeyError("repos_root not configured")
@@ -277,8 +281,9 @@ def others(entry, procs, env, pid):
     stem = _need(entry, "stem")
     me = own_name(procs, env, pid)
     cand = []
+    images = pmstart.session_images()
     for p in procs:
-        if (p.get("Name") == "claude.exe" and p.get("CommandLine")
+        if (p.get("Name") in images and p.get("CommandLine")
                 and pmstart.STORE_DIR not in (p.get("ExecutablePath") or "")):
             n = pmstart.rc_name(p["CommandLine"])
             if n and n.startswith(stem):

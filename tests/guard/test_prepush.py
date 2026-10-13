@@ -75,7 +75,9 @@ class HookTest(PrePushCase):
         code, err = self.push('origin', 'main')
         self.assertEqual(code, 1, err)
         self.assertIn('pre-push: refused, %s has no gate-OK record' % head[:12], err)
-        self.assertIn('python tools/land.py <branch> --expect-main <main sha> --expect-tip %s' % head, err)
+        self.assertIn('/tools/land.py" -C "', err)
+        self.assertIn('<branch> --expect-main <main sha> --expect-tip %s' % head, err)
+        self.assertNotIn('python tools/land.py', err)
         self.assertEqual(self.remote_main(), self.with_kit)
         self.passed(head)
         code, err = self.push('origin', 'main')
@@ -406,6 +408,21 @@ class CheckTest(PrePushCase):
             ok, msg = prepush.check(self.repo.root, [self.LINE])
         self.assertFalse(ok)
         self.assertIn('cannot read gate-OK records: OSError: boom', msg)
+
+    def test_a_base_that_names_no_main_branch_reads_origin_head(self):
+        # docs/kit-json.md "With no file": the base sets no repo.main_branch, so origin/HEAD names it
+        self.repo.git('push', '-q', 'origin', 'main:trunk')
+        self.repo.git('fetch', '-q', 'origin')
+        self.repo.git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk')
+        sha = self.repo.git('rev-parse', 'main')
+        ok, msg = self.check('(delete) %s refs/heads/trunk %s' % ('0' * 40, sha))
+        self.assertFalse(ok)
+        self.assertIn('this push deletes trunk', msg)
+        # origin/HEAD is local, so a session that repoints it never frees main (Config.guarded_mains)
+        ok, msg = self.check('(delete) %s refs/heads/main %s' % ('0' * 40, sha))
+        self.assertFalse(ok)
+        self.assertIn('this push deletes main', msg)
+        self.assertEqual(self.check('(delete) %s refs/heads/other %s' % ('0' * 40, sha)), (True, None))
 
     def test_tags_and_other_lines_pass(self):
         lines = ['refs/tags/v1 %s refs/tags/v1 %s' % ('1' * 40, '0' * 40), 'garbage']

@@ -1,21 +1,26 @@
-"""kitlib.machinesetup: switch a machine's Claude config folders from an older kit clone to this
-kit, or set up a fresh machine that has none (tools/machine_setup.py, installer/machine-setup.ps1;
-docs/machine-setup.md).
+"""kitlib.machinesetup: set up a machine for the kit (tools/machine_setup.py,
+installer/machine-setup.ps1; docs/machine-setup.md). Plan decision 27: it writes nothing into any
+repository; a repository works with the kit with nothing committed in it, and the kit's first use
+there writes only local git settings (kitlib.git.prep).
 
 survey() reads the machine and returns a Plan: the changes to make, in order, each with the text a
-dry run prints and the function --apply runs, plus the refusals that stop both. The parts:
-- links (kitlib.machinesetup.links): `tools`, `knowledge/asset-generation` and the skill links
-  that point into the old kit clone become directory junctions into this kit;
-- settings (kitlib.machinesetup.settings): each config folder's settings.json loses the old kit's
-  PreToolUse hooks, gains guard.py's entry and has its old hook and statusline paths re-pointed;
-- extras (kitlib.machinesetup.extras): the machine schedule shortcut, the agents' temp folder
-  (kitlib.machinesetup.agenttemp: the folder, AGENT_TEMP, the agent_temp_sweep config key, and the
-  sweep task, registered only with `register_sweep_task`) and its ACL, and KIT_MACHINE_LOCK for comfy.
-A fresh run (`fresh`, no older kit clone) switches no links and rewrites no entry: it only appends guard.py's
-entry (creating a missing settings.json), writes the PM SessionStart hook to `pm_settings` alone,
-installs the kit plugin per account from the export of the kit's pushed main
-(kitlib.machinesetup.plugin) and runs the shortcut, agent temp and ACL extras, not KIT_MACHINE_LOCK. Its default
-config folders are the plugin refresh's account folders (account_dirs).
+dry run prints and the function --apply runs, plus the refusals that stop both. Two modes:
+
+- The default (no older kit clone; `fresh`, the old --fresh, is the same): each Claude account's
+  settings.json gains the guard's entry (boot/hook.py <host> PreToolUse, until the plugin carries
+  the guard), with any hook path to a retired kit hook script re-pointed (settings.repoint_moved);
+  the kit plugin is installed on each registered host that machine setup can install
+  (kitlib.machinesetup.plugin; every other host is a note naming its README); the owner's email is
+  stored in the machine config (kitlib.machinesetup.owner); the agents' temp folder is made with
+  its AGENT_TEMP variable, sweep config key and permissions (kitlib.machinesetup.agenttemp,
+  extras). Opt-in: the PM SessionStart hook (`pm_settings`), the sweep task
+  (`register_sweep_task`), the machine schedule shortcut (`shortcut`).
+- The switch from an older kit clone (`old_kit`): the links (kitlib.machinesetup.links), each
+  config folder's settings.json (its old kit hooks removed or re-pointed, the guard's entry
+  added), the owner's email, and the extras: the shortcut, the agents' temp folder and
+  KIT_MACHINE_LOCK for comfy. No plugin install (tools/plugin_refresh.py --migrate does it).
+
+The committed repo setup is kitlib.machinesetup.repo (`--repo PATH`, run_repo), a mode of its own.
 run_agent_temp() does the agents' temp folder steps alone (tools/agent_temp_init.py).
 Nothing here prints or exits; run() gives the exit code and the lines.
 """
@@ -25,26 +30,32 @@ import os
 from kitlib.config import user
 from kitlib.config.migration import OLD_DIR_NAME
 
-from . import agenttemp, extras, links, plugin, settings
-from .common import Change, Plan
+from . import agenttemp, extras, links, owner, plugin, settings
+from .common import Change, Plan, kit_file
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
 
 
 class Context(object):
     """What a survey reads. `host` is the Windows side (extras.Host): shortcuts, icacls, the user
-    environment, guard.py's settings entry and the `claude` runner; tests pass a fake. Exactly one of
-    `old_kit` and `fresh` is given; `pm_settings` goes with `fresh` only."""
+    environment, the guard's settings entry, `git config user.email` and the `claude` runner; tests
+    pass a fake. No `old_kit` is the default mode (`fresh` says the same and may not go with
+    `old_kit`); `pm_settings` goes with the default mode only. `owner_email` is --owner-email.
+    `shortcut` None: the machine schedule shortcut in the old kit switch only."""
 
     def __init__(self, home, kit, old_kit=None, config_dirs=None, agent_temp=None, desktop=None,
-                 host=None, today=None, fresh=False, pm_settings=None, register_sweep_task=False):
-        if bool(fresh) == bool(old_kit):
-            raise ValueError('give old_kit or fresh, not both or neither')
+                 host=None, today=None, fresh=False, pm_settings=None, register_sweep_task=False,
+                 owner_email=None, shortcut=None):
+        if fresh and old_kit:
+            raise ValueError('give old_kit or fresh, not both')
+        fresh = not old_kit
         if pm_settings and not fresh:
-            raise ValueError('pm_settings goes with fresh only')
+            raise ValueError('pm_settings goes with the default mode only, not old_kit')
         self.home = os.path.abspath(home)
         self.kit = os.path.abspath(kit)
-        self.fresh = bool(fresh)
+        self.fresh = fresh
+        self.owner_email = (owner_email or '').strip() or None
+        self.shortcut = (not fresh) if shortcut is None else bool(shortcut)
         self.old_kit = None if fresh else os.path.abspath(old_kit)
         self.pm_settings = os.path.abspath(pm_settings) if pm_settings else None
         self.config_dirs_given = bool(config_dirs)
@@ -96,8 +107,8 @@ def dedupe(dirs):
 
 def survey(ctx):
     plan = Plan(Plan.FRESH_SECTIONS if ctx.fresh else None)
-    if not os.path.isfile(os.path.join(ctx.kit, 'claude', 'hooks', 'guard.py')):
-        plan.refuse('%s is not a kit checkout (no claude/hooks/guard.py)' % ctx.kit)
+    if not os.path.isfile(kit_file(ctx.kit, settings.GUARD)):
+        plan.refuse('%s is not a kit checkout (no %s)' % (ctx.kit, settings.GUARD))
         return plan
     if not ctx.fresh and os.path.normcase(ctx.kit) == os.path.normcase(ctx.old_kit):
         plan.refuse('the old kit and the kit are the same folder: %s' % ctx.kit)
@@ -124,7 +135,8 @@ def survey(ctx):
         settings.survey(plan, d, ctx)
     if ctx.fresh:
         settings.survey_pm(plan, ctx)
-        plugin.survey(plan, ctx)
+        plugin.survey_hosts(plan, ctx)
+    owner.survey(plan, ctx)
     extras.survey(plan, ctx)
     return plan
 
@@ -143,7 +155,7 @@ def run(ctx, apply=False, out=None):
 
     emit('machine-setup: %s' % ('APPLY' if apply else 'DRY RUN (nothing changed; add --apply to act)'),
          '  kit:            %s' % ctx.kit,
-         '  old kit:        %s' % (ctx.old_kit or 'none (--fresh)'),
+         '  old kit:        %s' % (ctx.old_kit or 'none (the default mode)'),
          '  config folders: %s' % ', '.join(ctx.config_dirs))
     if ctx.fresh:
         emit('  pm settings:    %s' % (ctx.pm_settings or 'none (no --pm-settings)'))
@@ -182,6 +194,13 @@ def _carry_out(name, plan, apply, emit, lines):
     return EXIT_OK, lines
 
 
+def run_repo(ctx, apply=False, out=None):
+    """(exit code, lines) of the committed repo setup (kitlib.machinesetup.repo.run; ctx a
+    repo.RepoContext): --repo PATH, and installer/new-repo.ps1."""
+    from . import repo
+    return repo.run(ctx, apply=apply, out=out)
+
+
 class AgentTempContext(object):
     """What the agent temp init alone (tools/agent_temp_init.py) reads: the subset of Context that
     kitlib.machinesetup.agenttemp and the folder's ACL step use."""
@@ -199,8 +218,8 @@ def survey_agent_temp(ctx):
     the agent_temp_sweep config key and the sweep task (kitlib.machinesetup.agenttemp.survey), then
     the folder's ACL (extras). No links, settings, plugin, shortcut or KIT_MACHINE_LOCK."""
     plan = Plan(('extras',))
-    if not os.path.isfile(os.path.join(ctx.kit, 'claude', 'hooks', 'guard.py')):
-        plan.refuse('%s is not a kit checkout (no claude/hooks/guard.py)' % ctx.kit)
+    if not os.path.isfile(kit_file(ctx.kit, settings.GUARD)):
+        plan.refuse('%s is not a kit checkout (no %s)' % (ctx.kit, settings.GUARD))
         return plan
     folder, made = agenttemp.survey(plan, ctx)
     if folder:
@@ -225,4 +244,4 @@ def run_agent_temp(ctx, apply=False, out=None):
 
 
 __all__ = ['AgentTempContext', 'Change', 'Context', 'Plan', 'account_dirs', 'dedupe', 'default_config_dirs',
-           'run', 'run_agent_temp', 'survey', 'survey_agent_temp']
+           'run', 'run_agent_temp', 'run_repo', 'survey', 'survey_agent_temp']

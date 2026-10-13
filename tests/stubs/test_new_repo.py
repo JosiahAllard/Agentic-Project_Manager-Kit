@@ -1,9 +1,13 @@
-"""installer/new-repo.ps1 against a throwaway repository (tests/gitfixture.py), never a real one:
-its dry run, -Apply, and its refusals. Fake identities only (example.invalid)."""
+"""installer/new-repo.ps1, the PowerShell front end of the committed repo setup
+(`tools/machine_setup.py --repo`, kitlib.machinesetup.repo), against a throwaway repository
+(tests/gitfixture.py), never a real one: that its parameters reach the tool (a dry run, -Apply, the
+refusals the tool gives), what the script itself does (the PowerShell location, a trailing
+backslash, the console encoding, a file Windows holds locked) and -PmData end to end on a copy of
+the kit. What the setup writes and refuses is tests/machinesetup/test_repo.py. Fake identities only
+(example.invalid)."""
 import json
 import os
 import shutil
-import stat
 import subprocess
 import unittest
 from unittest import mock
@@ -41,6 +45,7 @@ class NewRepo(unittest.TestCase):
         for name in ('installer', 'tools', 'kitlib', 'templates'):
             shutil.copytree(os.path.join(stubs.KIT_ROOT, name), os.path.join(kit, name),
                             ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copy2(os.path.join(stubs.KIT_ROOT, 'hosts.json'), kit)    # the host registry kitlib reads
         return kit, os.path.join(kit, 'installer', 'new-repo.ps1')
 
     def lock(self, path):
@@ -57,7 +62,7 @@ class NewRepo(unittest.TestCase):
 
     def test_the_dry_run_writes_nothing(self):
         before = sorted(os.listdir(self.root))
-        code, out = self.ps()
+        code, out = self.ps('-Stubs')
         self.assertEqual(code, 0, out)
         self.assertIn('DRY RUN', out)
         self.assertIn('"email": "%s"' % OWNER, out)
@@ -65,7 +70,7 @@ class NewRepo(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(self.root)), before)
 
     def test_apply_writes_the_config_and_the_stubs(self):
-        code, out = self.ps('-Apply', '-MainBranch', 'master')
+        code, out = self.ps('-Apply', '-Stubs', '-MainBranch', 'master')
         self.assertEqual(code, 0, out)
         with open(os.path.join(self.root, '.kit.json'), encoding='utf-8') as fh:
             data = json.load(fh)
@@ -98,17 +103,9 @@ class NewRepo(unittest.TestCase):
         code, out = self.ps('-Apply', target=odd)
         self.assertEqual(code, 2, out)
         self.assertIn("the folder name 'odd_name' is not a lower-case repo name", out)
-        self.assertIn('give -RepoName', out)
+        self.assertIn('give --repo-name', out)
         self.assertFalse(os.path.exists(os.path.join(odd, '.kit.json')))
         self.assertEqual(sorted(os.listdir(self.root)), before)
-
-    def test_an_upper_case_folder_name_is_lower_cased(self):
-        named = os.path.join(os.path.realpath(self.fx.base), 'MyRepo')
-        os.makedirs(named)
-        self.fx.git('init', '-q', '-b', 'main', named, cwd=named)
-        code, out = self.ps(target=named)
-        self.assertEqual(code, 0, out)
-        self.assertIn('"name": "myrepo"', out)
 
     def test_refusals(self):
         code, out = self.ps(owner=OWNER, agent=OWNER.upper())
@@ -131,45 +128,22 @@ class NewRepo(unittest.TestCase):
         self.assertIn('inside the kit itself', out)
         self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
 
-    def test_a_file_where_a_stub_goes_refuses_before_anything_is_written(self):
-        self.fx.write('tools/landed.py', "print('own copy')\n")
-        code, out = self.ps('-Apply')
-        self.assertEqual(code, 1, out)
-        self.assertIn('not a stub (kept', out)
-        self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
-
     def read(self, rel):
         with open(os.path.join(self.root, rel), encoding='utf-8') as fh:
             return fh.read()
 
-    def test_apply_writes_the_ignore_files_the_index_and_the_next_steps(self):
-        code, out = self.ps('-Apply')
-        self.assertEqual(code, 0, out)
-        self.assertIn('.claude/worktrees/', self.read('.gitignore').splitlines())
-        self.assertIn('.codex/worktrees/', self.read('.gitignore').splitlines())
-        self.assertIn('* text=auto', self.read('.gitattributes').splitlines())
-        self.assertIn('docs/INDEX.md', self.read('docs/INDEX.md'))
-        for text in ('core.hooksPath', 'no gate step selected', 'gate.steps'):
-            self.assertIn(text, out)
+    def test_a_relative_target_is_taken_from_the_powershell_location(self):
+        command = ("Set-Location -LiteralPath '%s'; & '%s' -Target repo -OwnerEmail %s -AgentEmail %s; "
+                   "exit $LASTEXITCODE" % (os.path.dirname(self.root), SCRIPT, OWNER, AGENT))
+        done = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', command],
+                              capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              env=gitfixture.fixture_env(), timeout=300, cwd=stubs.KIT_ROOT)
+        out = (done.stdout or '') + (done.stderr or '')
+        self.assertEqual(done.returncode, 0, out)
+        self.assertIn('  target:  %s' % self.root, out)
 
-    def test_an_existing_ignore_file_gets_only_its_missing_lines(self):
-        self.fx.write('.gitignore', 'build/\n.claude/worktrees/')
-        self.fx.write('.gitattributes', '*   text=auto\n*.sh text eol=lf\n')
-        code, out = self.ps('-Apply')
-        self.assertEqual(code, 0, out)
-        lines = self.read('.gitignore').splitlines()
-        self.assertEqual(lines[:2], ['build/', '.claude/worktrees/'])
-        self.assertEqual(lines.count('.claude/worktrees/'), 1)
-        self.assertEqual(lines.count('.codex/worktrees/'), 1)
-        self.assertIn('.claude/settings.local.json', lines)
-        self.assertEqual(self.read('.gitattributes'), '*   text=auto\n*.sh text eol=lf\n')
-        self.assertIn('unchanged', out)
-
-    def test_an_existing_index_is_kept(self):
-        self.fx.write('docs/INDEX.md', '# mine\n')
-        code, out = self.ps('-Apply')
-        self.assertEqual(code, 0, out)
-        self.assertEqual(self.read('docs/INDEX.md'), '# mine\n')
+    def test_an_unreadable_index_template_refuses_before_any_write(self):
+        self.refused_template(('common', 'INDEX.md'))
 
     def test_a_missing_origin_is_a_warning_and_a_present_one_is_not(self):
         code, out = self.ps()
@@ -183,7 +157,7 @@ class NewRepo(unittest.TestCase):
         self.assertNotIn('WARNING', out)
 
     def test_stack_writes_the_gate_section_the_lists_and_loads(self):
-        code, out = self.ps('-Apply', '-Stack', 'python')
+        code, out = self.ps('-Apply', '-Stubs', '-Stack', 'python')
         self.assertEqual(code, 0, out)
         cfg = config.load(self.root)
         self.assertEqual(cfg.section_file('gate'), 'tools/gate.json')
@@ -192,78 +166,6 @@ class NewRepo(unittest.TestCase):
         self.assertIn('*.pyc        binary', self.read('.gitattributes').splitlines())
         got = stubs.run(self.root, 'check')
         self.assertEqual(got.code, stubs.OK, got.lines)
-
-    def test_append_keeps_crlf_and_stack_comments_are_not_missing_lines(self):
-        path = os.path.join(self.root, '.gitattributes')
-        with open(path, 'wb') as fh:
-            fh.write(b'* text=auto\r\n*.sh text eol=lf\r\n')
-        code, out = self.ps('-Stack', 'dotnet')
-        self.assertEqual(code, 0, out)
-        append = [ln for ln in out.splitlines() if 'would append' in ln and 'gitattributes' in ln]
-        self.assertEqual(len(append), 1, out)
-        self.assertNotIn('Visual Studio', append[0])
-        code, out = self.ps('-Apply', '-Stack', 'dotnet')
-        self.assertEqual(code, 0, out)
-        with open(path, 'rb') as fh:
-            raw = fh.read()
-        self.assertIn(b'*.cs         text eol=lf\r\n', raw)
-        self.assertEqual(raw.count(b'\n'), raw.count(b'\r\n'), raw)
-
-    def test_stack_refusals_write_nothing(self):
-        code, out = self.ps('-Stack', 'cobol')
-        self.assertEqual(code, 2, out)
-        self.assertIn('not a stack the kit has', out)
-        self.fx.write('tools/gate.json', '{}\n')
-        code, out = self.ps('-Apply', '-Stack', 'python')
-        self.assertEqual(code, 1, out)
-        self.assertIn('gate.json exists already', out)
-        self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
-        self.assertEqual(self.read('tools/gate.json'), '{}\n')
-
-    def test_godot_copies_its_tools_files_keeps_an_existing_one_and_names_its_pass_string(self):
-        self.fx.write('tools/godot.cmd', 'rem mine\n')
-        code, out = self.ps('-Apply', '-Stack', 'godot')
-        self.assertEqual(code, 0, out)
-        self.assertEqual(self.read('tools/godot.cmd'), 'rem mine\n')
-        self.assertIn('kept', out)
-        self.assertIn('UNIT TESTS OK', out)
-        self.assertNotIn('Ran N tests', out)
-        os.remove(os.path.join(self.root, 'tools', 'godot.cmd'))
-        os.remove(os.path.join(self.root, '.kit.json'))
-        os.remove(os.path.join(self.root, 'tools', 'gate.json'))
-        code, out = self.ps('-Apply', '-Stack', 'godot')
-        self.assertEqual(code, 0, out)
-        src = os.path.join(stubs.KIT_ROOT, 'templates', 'stacks', 'godot', 'tools', 'godot.cmd')
-        with open(src, 'rb') as a, open(os.path.join(self.root, 'tools', 'godot.cmd'), 'rb') as b:
-            self.assertEqual(a.read(), b.read())
-        self.assertIn('wrote    %s' % os.path.join(self.root, 'tools', 'godot.cmd'), out)
-
-    def test_a_failed_write_stops_with_exit_1_and_never_says_wrote(self):
-        path = os.path.join(self.root, '.gitignore')
-        self.fx.write('.gitignore', 'build/\n')
-        os.chmod(path, stat.S_IREAD)
-        self.addCleanup(os.chmod, path, stat.S_IWRITE | stat.S_IREAD)
-        code, out = self.ps('-Apply')
-        self.assertEqual(code, 1, out)
-        self.assertIn('new-repo: FAILED - cannot write %s' % path, out)
-        self.assertIn('already written', out)
-        self.assertNotIn('new-repo: wrote', out)
-        self.assertNotIn('appended %s' % path, out)
-        self.assertFalse(os.path.exists(os.path.join(self.root, 'docs', 'INDEX.md')))
-
-    def test_a_failed_write_names_what_was_written_and_the_target_that_failed(self):
-        path = os.path.join(self.root, '.gitignore')
-        self.fx.write('.gitignore', 'build/\n')
-        os.chmod(path, stat.S_IREAD)
-        self.addCleanup(os.chmod, path, stat.S_IWRITE | stat.S_IREAD)
-        code, out = self.ps('-Apply')
-        self.assertEqual(code, 1, out)
-        undo = [ln for ln in out.splitlines() if 'already written' in ln]
-        self.assertEqual(len(undo), 1, out)
-        self.assertIn(os.path.join(self.root, '.kit.json'), undo[0])
-        self.assertIn('(and the stubs listed above)', undo[0])
-        self.assertNotIn(path, undo[0])
-        self.assertIn('%s may be partly written' % path, out)
 
     def test_a_locked_ignore_file_refuses_at_plan_time_before_anything_is_written(self):
         path = os.path.join(self.root, '.gitignore')
@@ -296,47 +198,6 @@ class NewRepo(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
         self.assertFalse(os.path.exists(os.path.join(self.root, 'docs')))
 
-    def test_an_unreadable_gate_template_refuses_before_any_write(self):
-        self.refused_template(('stacks', 'python', 'tools', 'gate.json'), '-Stack', 'python')
-
-    def test_an_unreadable_index_template_refuses_before_any_write(self):
-        self.refused_template(('common', 'INDEX.md'))
-
-    def test_an_unreadable_stack_json_refuses_before_any_write(self):
-        self.refused_template(('stacks', 'python', 'stack.json'), '-Stack', 'python')
-
-    def test_an_unreadable_common_gitignore_template_refuses_before_any_write(self):
-        self.refused_template(('common', '.gitignore'))
-
-    def test_an_unreadable_common_gitattributes_template_refuses_before_any_write(self):
-        self.refused_template(('common', 'gitattributes'))
-
-    def test_a_later_failure_does_not_tell_the_user_to_delete_an_appended_file(self):
-        gitignore = os.path.join(self.root, '.gitignore')
-        attrs = os.path.join(self.root, '.gitattributes')
-        self.fx.write('.gitignore', 'build/\n')
-        self.fx.write('.gitattributes', '* text=auto\n')
-        os.chmod(attrs, stat.S_IREAD)
-        self.addCleanup(os.chmod, attrs, stat.S_IWRITE | stat.S_IREAD)
-        code, out = self.ps('-Apply')
-        self.assertEqual(code, 1, out)
-        self.assertIn('new-repo: FAILED - cannot write %s' % attrs, out)
-        self.assertIn('.claude/worktrees/', self.read('.gitignore'))
-        undo = [ln for ln in out.splitlines() if 'already written' in ln]
-        self.assertEqual(len(undo), 1, out)
-        self.assertNotIn(gitignore, undo[0])
-        self.assertIn("appended to %s : remove the '# Added by the kit installer' block to undo" % gitignore, out)
-
-    def test_a_stub_plan_with_no_stub_names_is_refused_not_skipped(self):
-        kit, script = self.kit_copy()
-        with open(os.path.join(kit, 'tools', 'kit_stubs.py'), 'w', encoding='utf-8') as fh:
-            fh.write("print('would write something odd')\n")
-        before = sorted(os.listdir(self.root))
-        code, out = self.ps(script=script)
-        self.assertEqual(code, 1, out)
-        self.assertIn('REFUSED - cannot read the stub plan', out)
-        self.assertEqual(sorted(os.listdir(self.root)), before)
-
     def test_a_non_ascii_md_name_is_listed_as_it_is_not_quoted(self):
         name = 'déjà vu.md'
         self.fx.write(name, '# d\n')
@@ -351,58 +212,6 @@ class NewRepo(unittest.TestCase):
         self.assertEqual(done.returncode, 0, out)
         self.assertIn('    %s' % name, out.splitlines())
         self.assertNotIn('\\303', out)
-
-    def test_a_stack_tools_file_named_like_a_stub_refuses_at_plan_time(self):
-        kit, script = self.kit_copy()
-        stack = os.path.join(kit, 'templates', 'stacks', 'clash')
-        os.makedirs(os.path.join(stack, 'tools'))
-        shutil.copy(os.path.join(kit, 'templates', 'stacks', 'python', 'stack.json'), stack)
-        shutil.copy(os.path.join(kit, 'templates', 'stacks', 'python', 'tools', 'gate.json'),
-                    os.path.join(stack, 'tools'))
-        with open(os.path.join(stack, 'tools', 'Landed.py'), 'w', encoding='utf-8') as fh:
-            fh.write("print('not a stub')\n")
-        before = sorted(os.listdir(self.root))
-        for args in (('-Stack', 'clash'), ('-Apply', '-Stack', 'clash')):
-            code, out = self.ps(*args, script=script)
-            self.assertEqual(code, 1, out)
-            self.assertIn("REFUSED - the clash stack's tools file Landed.py has the name of a kit tool stub", out)
-            self.assertEqual(sorted(os.listdir(self.root)), before)
-
-    def test_a_godot_dry_run_writes_nothing(self):
-        before = sorted(os.listdir(self.root))
-        code, out = self.ps('-Stack', 'godot')
-        self.assertEqual(code, 0, out)
-        self.assertIn('DRY RUN', out)
-        self.assertIn('would create  %s' % os.path.join(self.root, 'tools', 'godot.cmd'), out)
-        self.assertEqual(sorted(os.listdir(self.root)), before)
-        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
-
-    def test_next_step_1_names_the_stacks_tools_files(self):
-        code, out = self.ps('-Apply', '-Stack', 'godot')
-        self.assertEqual(code, 0, out)
-        self.assertIn('.gitattributes, docs/INDEX.md and tools/godot.cmd as usual', out)
-
-    def test_tracked_md_files_the_starter_index_misses_are_listed_not_refused(self):
-        self.fx.write('README.md', '# r\n')
-        self.fx.write('docs/guide.md', '# g\n')
-        self.fx.git('add', '--', 'README.md', 'docs/guide.md')
-        code, out = self.ps()
-        self.assertEqual(code, 0, out)
-        self.assertIn('add these to docs/INDEX.md', out)
-        self.assertIn('    README.md', out)
-        self.assertIn('    docs/guide.md', out)
-        code, out = self.ps('-Apply')
-        self.assertEqual(code, 0, out)
-        self.assertIn('add these to docs/INDEX.md', out)
-        os.remove(os.path.join(self.root, '.kit.json'))
-        code, out = self.ps()
-        self.assertNotIn('add these', out)  # the index exists now: it is the owner's to keep
-
-    def test_the_stubs_cover_the_tools_a_repository_runs(self):
-        code, out = self.ps('-Apply')
-        self.assertEqual(code, 0, out)
-        for name in ('land', 'ledger', 'gate', 'preflight', 'new_worktree'):
-            self.assertTrue(os.path.isfile(os.path.join(self.root, 'tools', name + '.py')), name)
 
 
 class PmData(unittest.TestCase):
@@ -420,6 +229,7 @@ class PmData(unittest.TestCase):
         for name in ('installer', 'tools', 'kitlib', 'templates'):
             shutil.copytree(os.path.join(stubs.KIT_ROOT, name), os.path.join(self.kit_root, name),
                             ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copy2(os.path.join(stubs.KIT_ROOT, 'hosts.json'), self.kit_root)    # the host registry kitlib reads
         self.target = gitfixture.TempRepo()
         self.addCleanup(self.target.cleanup)
         self.target_root = os.path.realpath(self.target.root)
@@ -524,27 +334,11 @@ class PmData(unittest.TestCase):
         self.assertIn('pm_data.py init exited 3 (made locally', out)
         self.assertTrue(self.kit.git('rev-parse', 'refs/heads/pmdata'))
 
-    def test_a_crash_of_pm_data_is_not_called_a_refusal(self):
-        with open(os.path.join(self.kit_root, 'tools', 'pm_data.py'), 'w', encoding='utf-8') as fh:
-            fh.write("raise RuntimeError('boom')\n")
-        code, out = self.ps('-Apply', '-PmData', self.data)
-        self.assertEqual(code, 1, out)
-        self.assertIn('pm_data.py init exited 1 (it crashed;', out)
-        self.assertNotIn('changed nothing', out)
-
-    def test_exit_5_of_pm_data_is_reported_as_a_crash(self):
-        with open(os.path.join(self.kit_root, 'tools', 'pm_data.py'), 'w', encoding='utf-8') as fh:
-            fh.write("import sys\nprint('crashed: ValueError: x')\nsys.exit(5)\n")
-        code, out = self.ps('-Apply', '-PmData', self.data)
-        self.assertEqual(code, 5, out)
-        self.assertIn('  crashed: ValueError: x', out)
-        self.assertIn('pm_data.py init exited 5 (it crashed;', out)
-
     def test_private_remote_without_pm_data_is_usage(self):
         before = self.state()
         code, out = self.ps('-Apply', '-PrivateRemote', self.private)
         self.assertEqual(code, 2, out)
-        self.assertIn('-PrivateRemote needs -PmData', out)
+        self.assertIn('--private-remote needs --pm-data', out)
         self.assertEqual(self.state(), before)
 
 

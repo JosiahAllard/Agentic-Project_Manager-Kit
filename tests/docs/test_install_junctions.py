@@ -27,8 +27,8 @@ class InstallJunctionsSection(unittest.TestCase):
     def test_skills_removal_is_limited_to_the_kit_skill_names(self):
         section = self.text.split(HEADING, 1)[1]
         self.assertIn('$_.Name -in $kit', section)
-        names = sorted(n for n in os.listdir(os.path.join(KIT, 'claude', 'skills'))
-                       if os.path.isdir(os.path.join(KIT, 'claude', 'skills', n)))
+        names = sorted(n for n in os.listdir(os.path.join(KIT, 'content', 'skills'))
+                       if os.path.isdir(os.path.join(KIT, 'content', 'skills', n)))
         for name in names:
             self.assertIn("'%s'" % name, section)
 

@@ -149,7 +149,7 @@ class WaitChange(ApiCase):
 class OwnerHook(ApiCase):
     def test_default_check(self):
         self.assertTrue(api.default_owner_check(OWNER))
-        self.assertFalse(api.default_owner_check(dict(OWNER, claude=[4, 1])))
+        self.assertFalse(api.default_owner_check(dict(OWNER, host=[4, 1])))
         self.assertFalse(api.default_owner_check(agent("s")))
         self.assertFalse(api.default_owner_check(None))
 
@@ -709,7 +709,7 @@ FORGED = "\n".join([
     "from kitlib.lock import api",
     "from kitlib.lock.store import Store",
     "s = Store()",
-    "forged = {'role': 'owner', 'claude': None, 'ancestors': [], 'session': 'sess-A',",
+    "forged = {'role': 'owner', 'host': None, 'ancestors': [], 'session': 'sess-A',",
     "          'force': True, 'name': 'forger'}",
     "me = api.who(forged, s)",
     "run = {'id': 'r-x', 'session': 'sess-A', 'ancestors': [[1, 1]]}",
@@ -735,7 +735,8 @@ class Caller(StoreCase):
         self.assertEqual(code, 0, err)
         me = json.loads(out)
         self.assertEqual(me["role"], "agent")
-        self.assertIsNotNone(me["claude"])
+        self.assertIsNotNone(me["host"])
+        self.assertNotIn("claude", me)             # the legacy key is read, never written
         self.assertIsNone(me["session"])           # the environment was stripped
 
     def test_a_forged_role_force_or_session_counts_for_nothing_on_the_machines_store(self):

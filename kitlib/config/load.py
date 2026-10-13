@@ -9,19 +9,30 @@ only from `.kit.json` or a file it names: no tools/*.json is read because it exi
 audit pattern 6).
 
 There is no environment override of the config path or the root (no env flag counts).
+
+The file is optional, and every key in it an override (docs/kit-json.md "With no file"). Three
+defaults are not fixed values: unset, `repo.main_branch` and `repo.name` are read from the
+repository's git files (kitlib.git.defaults: `<remote>/HEAD`, then main or master; the remote's
+URL, then the folder), each when the `repo` section is first asked for, once per Config; and
+the owner rules' email (owner_rules) from the machine config's `owner_email`
+(kitlib.config.user), read the first time the rules need an identity. A machine config that
+cannot be read gives no owner email: every owner-only change is then refused, never allowed.
 """
 import copy
 import os
 import re
 
 from kitlib.git import cmd as gitcmd
+from kitlib.git import defaults as gitdefaults
 from kitlib.git import refs as gitrefs
 
 from . import owner as ownermod
 from . import schema
+from . import user as kuser
 from .types import ConfigError, check, is_note, parse_json
 
 CONFIG_NAME = '.kit.json'
+FIXED_MAIN = schema.SECTIONS['repo']['main_branch'].default   # guarded_mains
 KIT_SECTIONS = ('repo', 'owner', 'hook', 'heavy', 'roles')
 PLACEHOLDER = re.compile(r'\{([A-Za-z_]\w*)\}')
 PLACEHOLDERS = ('python', 'root', 'base', 'here', 'tools')    # gate.py's substitution mapping
@@ -112,14 +123,20 @@ class Config(object):
     """A repository's checked kit configuration. `section(name)` is the section over its defaults
     (every schema key present, notes dropped); `raw(name)` is the section as written. `found` is
     False only when the reader answered that no `.kit.json` exists (a read that failed raised
-    ConfigError instead), so it is the same read the sections came from."""
+    ConfigError instead), so it is the same read the sections came from. `home` is the home
+    folder whose machine config gives the owner email when `owner.email` is unset (None: the
+    user's); `machine`, when given, is a callable returning that machine config already read
+    (the guard's Ctx.user, so a hook reads it once), used instead of reading it again."""
 
-    def __init__(self, root, where, raw, files, found=True):
+    def __init__(self, root, where, raw, files, found=True, home=None, machine=None):
         self.root = root
         self.where = where
         self.found = found
+        self.home = home
+        self._machine = machine
         self._raw = raw          # name -> dict as written (absent sections are {})
         self._files = files      # name -> repo-relative file it came from, or None (inline/absent)
+        self._derived = {}       # repo.main_branch, repo.name, the machine owner email, each read once
 
     def raw(self, name):
         return copy.deepcopy(self._raw.get(name, {}))
@@ -136,7 +153,39 @@ class Config(object):
             return {k: copy.deepcopy(v) for k, v in raw.items() if not is_note(k)}
         out = schema.defaults(name)
         out.update({k: copy.deepcopy(v) for k, v in raw.items() if not is_note(k) and v is not None})
+        if name == 'repo':
+            if raw.get('main_branch') is None:
+                out['main_branch'] = self._derive('main_branch', lambda: gitdefaults.main_branch(
+                    self.root, out['remote']))
+            if not raw.get('name'):
+                out['name'] = self._derive('name', lambda: gitdefaults.repo_name(self.root, out['remote']))
         return out
+
+    def _derive(self, key, read):
+        if key not in self._derived:
+            self._derived[key] = read()
+        return self._derived[key]
+
+    def _machine_owner(self):
+        """The machine config's owner_email, or None; None too when the machine config cannot
+        be read (the owner rules then prove nothing: fail closed)."""
+        def read():
+            if self._machine is not None:
+                m = self._machine() or {}
+                if m.get('error'):              # Ctx.user's tolerant read of a broken config
+                    return None
+                value = m.get('owner_email')
+                return value.strip().lower() if isinstance(value, str) and value.strip() else None
+            try:
+                return kuser.owner_email(self.home)
+            except ConfigError:
+                return None
+        return self._derive('owner_email', read)
+
+    def written(self, section, key):
+        """The value `.kit.json` writes for `section`.`key`, or None when it writes none (a
+        default, fixed or read from the repository, is not written)."""
+        return copy.deepcopy(self._raw.get(section, {}).get(key))
 
     def section_file(self, name):
         """The repo-relative file a section lives in, or None when it is inline or absent."""
@@ -149,6 +198,16 @@ class Config(object):
     @property
     def main_branch(self):
         return self.repo['main_branch']
+
+    def guarded_mains(self):
+        """The branches the push rules (guard, pre-push) hold as main: main_branch, and, while
+        `.kit.json` writes no main_branch, `main` too, the fixed default before it was read from
+        the repository: `<remote>/HEAD` is local and any session can repoint it, so reading it
+        never takes the protection off `main`."""
+        main = self.main_branch
+        if self.written('repo', 'main_branch') is None and main != FIXED_MAIN:
+            return [main, FIXED_MAIN]
+        return [main]
 
     @property
     def remote(self):
@@ -167,7 +226,10 @@ class Config(object):
         return self.section('owner')
 
     def owner_rules(self):
-        return ownermod.from_section(self.owner())
+        """The owner rules; `owner.email` unset: the machine config's owner_email, read when
+        the rules first need it."""
+        owner = self.owner()
+        return ownermod.from_section(owner, None if owner['email'] else self._machine_owner)
 
     def hook(self):
         """`{'module': name, 'options': {...}}` of the repo hook module, or None when no
@@ -180,7 +242,7 @@ class Config(object):
         return {'module': h['module'], 'options': copy.deepcopy(h.get('options') or {})}
 
 
-def _build(root, where, reader):
+def _build(root, where, reader, home=None, machine=None):
     text = reader(None)
     top = {} if text is None else _parse(text, where)
     errs = []
@@ -232,23 +294,27 @@ def _build(root, where, reader):
                         % ', '.join(checks))
     if errs:
         raise ConfigError('%s: %s' % (where, '; '.join(errs)))
-    return Config(root, where, raw, files, found=text is not None)
+    return Config(root, where, raw, files, found=text is not None, home=home, machine=machine)
 
 
 def config_path(root):
     return os.path.join(root, CONFIG_NAME)
 
 
-def load(root):
-    """The working tree's checked Config (a repository with no `.kit.json` is all defaults)."""
+def load(root, home=None, machine=None):
+    """The working tree's checked Config (a repository with no `.kit.json` is all defaults).
+    `home`: the home folder whose machine config gives an unset owner email (None: the user's);
+    `machine`: that machine config already read (Config)."""
     path = config_path(root)
-    return _build(root, path, lambda rel: _read_file(path if rel is None else os.path.join(root, rel)))
+    return _build(root, path, lambda rel: _read_file(path if rel is None else os.path.join(root, rel)),
+                  home, machine)
 
 
-def load_at(root, rev):
-    """The Config revision `rev` holds (`.kit.json` and its section files read with git show)."""
+def load_at(root, rev, home=None):
+    """The Config revision `rev` holds (`.kit.json` and its section files read with git show).
+    The defaults read from the repository read `root`'s files as they are now."""
     return _build(root, '%s:%s' % (rev, CONFIG_NAME),
-                  lambda rel: _git_show(root, rev, CONFIG_NAME if rel is None else rel))
+                  lambda rel: _git_show(root, rev, CONFIG_NAME if rel is None else rel), home)
 
 
 def check_value(type_, value, where):

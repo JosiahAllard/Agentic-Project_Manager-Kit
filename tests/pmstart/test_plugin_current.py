@@ -36,7 +36,7 @@ class PluginCurrentTest(unittest.TestCase):
     def test_no_export_failed_folder_current_behind(self):
         got = self.check()
         self.assertEqual(len(got), 1)
-        self.assertTrue(got[0].endswith("python tools/plugin_refresh.py --migrate --apply"), got[0])
+        self.assertTrue(got[0].endswith('/tools/plugin_refresh.py" --migrate --apply'), got[0])
         default, two = self.folders = self.k.folders(".claude", ".claude-two")
         self.k.seed_migrated([default])
         self.refresh([default], FakeProc())

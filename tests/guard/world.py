@@ -120,7 +120,7 @@ class World(object):
 AGENT_TYPE = None
 
 
-def event(tool, tool_input, cwd, sub=False, agent_type='opus-worker'):
+def event(tool, tool_input, cwd, sub=False, agent_type='senior-worker'):
     """A PreToolUse payload as Claude Code sends it; a subagent's carries agent_id and agent_type."""
     ev = {'session_id': '8f5c9cf4-0000-4000-8000-000000000000',
           'transcript_path': 'C:/u/x/.claude/projects/p/8f5c9cf4.jsonl',

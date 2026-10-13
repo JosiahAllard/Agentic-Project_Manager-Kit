@@ -1,7 +1,7 @@
 """The coordinator was once called the conductor; no agent, profile or prose may say conductor again.
 
-- No `claude/agents/conductor.md`, and `.claude-plugin/plugin.json` lists no conductor.
-- No tracked file under claude/, kitlib/, tools/, templates/, optional/ or docs/, nor AGENTS.md,
+- No `hosts/claude/shell/agents/conductor.md`, and `.claude-plugin/plugin.json` lists no conductor.
+- No tracked file under hosts/, claude/, boot/, kitlib/, tools/, templates/, optional/ or docs/, nor AGENTS.md,
   has a line matching `(?i)conductor`, unless ALLOWED pairs that file with a substring of the line.
 - Each ALLOWED entry carries its reason: W2B or W1 (an old-name fallback or one-release guard, removed
   after the switch by that step) or HISTORY (the go-live migration record and the launcher's port map, which stay).
@@ -15,7 +15,7 @@ import unittest
 from tests.scrub.test_scrub import ROOT, read_text, tracked_files
 
 WORD = re.compile(r'conductor', re.I)
-SCOPE = ('claude/', 'kitlib/', 'tools/', 'templates/', 'optional/', 'docs/')
+SCOPE = ('hosts/', 'claude/', 'boot/', 'kitlib/', 'tools/', 'templates/', 'optional/', 'docs/')
 FILES = ('AGENTS.md',)
 
 W2B = 'removed after the switch (W2b)'
@@ -23,9 +23,6 @@ W1 = 'removed after the switch (W1)'
 HISTORY = 'history: stays'
 
 ALLOWED = (
-    # The coordinator start hook still fires for the old session mark (not this branch's file).
-    ('claude/hooks/coordinator_session_start.py', '(or the old "conductor")', W2B),
-    ('claude/hooks/coordinator_session_start.py', '("coordinator", "conductor")', W2B),
     # The old config key and the old role, read as fallbacks (kitlib/coordinatorstart is not this branch's).
     ('kitlib/coordinatorstart/__init__.py', 'LEGACY_KEY = "conductor_start"', W2B),
     ('kitlib/coordinatorstart/__init__.py', 'LEGACY_ROLE = "conductor"', W2B),
@@ -104,7 +101,7 @@ def findings(files, read, allowed=ALLOWED):
 class NoConductorTest(unittest.TestCase):
 
     def test_no_conductor_agent_file(self):
-        self.assertFalse(os.path.exists(os.path.join(ROOT, 'claude', 'agents', 'conductor.md')))
+        self.assertFalse(os.path.exists(os.path.join(ROOT, 'hosts', 'claude', 'shell', 'agents', 'conductor.md')))
 
     def test_the_plugin_lists_no_conductor(self):
         with open(os.path.join(ROOT, '.claude-plugin', 'plugin.json'), encoding='utf-8') as f:
@@ -124,12 +121,12 @@ class NoConductorTest(unittest.TestCase):
         self.assertEqual(stale, [], 'ALLOWED entries that match no line: remove them')
 
     def test_the_check_catches_a_new_line(self):
-        files = {'claude/agents/x.md': 'Run the Conductor.\n', 'tests/x.py': 'conductor\n',
+        files = {'hosts/claude/shell/agents/x.md': 'Run the Conductor.\n', 'tests/x.py': 'conductor\n',
                  'docs/launcher.md': '| `start-conductor.ps1` | x\n'}
         bad, stale = findings(sorted(files), files.get,
                               (('docs/launcher.md', '| `start-conductor.ps1` |', HISTORY),
                                ('docs/gone.md', 'conductor', W2B)))
-        self.assertEqual(bad, ['claude/agents/x.md:1: Run the Conductor.'])
+        self.assertEqual(bad, ['hosts/claude/shell/agents/x.md:1: Run the Conductor.'])
         self.assertEqual(stale, [('docs/gone.md', 'conductor')])
 
 

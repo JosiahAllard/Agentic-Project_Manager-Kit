@@ -1,6 +1,6 @@
 # PM session-start checklist
 
-`claude/hooks/pm_session_start.py` prints a checklist at every PM session start (as
+`boot/hook.py claude SessionStart pm` (the kit's one hook entry, its `pm` part) prints a checklist at every PM session start (as
 `additionalContext`; logic `kitlib/pmstart`). A hook cannot call tools, so it lists steps for the
 PM. It always exits 0; a failed check becomes one "could not check X: reason" line.
 
@@ -66,18 +66,24 @@ no git config and never rebases, resets or forces. The checks are a point in tim
 
 ## Plugin export (`plugin_current`)
 
-Right after `kit_sync`, the `plugin_current` check prints one line when the pm-kit plugin export is missing, behind the kit's `refs/remotes/<remote>/main`, or an account folder's last refresh failed, each with `python tools/plugin_refresh.py --apply`, and when there is no export or an account folder is not migrated, with `python tools/plugin_refresh.py --migrate --apply` instead; an unreadable export state is a `could not check the pm-kit plugin` line. It reads the export root only, never an account folder (docs/plugin-source.md "Behind warnings"). Code: `kitlib/pmstart` `plugin_current`, `kitlib.pluginsource` `current_lines`; tests: `tests/pmstart/test_plugin_current.py`.
+Right after `kit_sync`, the `plugin_current` check prints one line when the pm-kit plugin export is missing, behind the kit's `refs/remotes/<remote>/main`, or an account folder's last refresh failed, each with `python "<kit>/tools/plugin_refresh.py" --apply`, and when there is no export or an account folder is not migrated, with `python "<kit>/tools/plugin_refresh.py" --migrate --apply` instead (`<kit>` the kit's absolute path, `kitlib.pluginsource` `refresh_cmd`: the PM's session runs in another folder); an unreadable export state is a `could not check the pm-kit plugin` line. It reads the export root only, never an account folder (docs/plugin-source.md "Behind warnings"). Code: `kitlib/pmstart` `plugin_current`, `kitlib.pluginsource` `current_lines`; tests: `tests/pmstart/test_plugin_current.py`.
 
 ## Stubs (`stubs`)
 
 For each repository in the machine config's `launcher.repos`, the `stubs` check runs
-`kitlib.stubs.problem_line` and prints one line for a repository whose stubs are missing or stale:
+`kitlib.stubs.problem_line` and prints one line for a repository that uses stubs (its `.kit.json`
+sets `"stubs".tools`, or it holds at least one) whose stubs are missing or stale; stubs are opt-in
+(docs/install.md), so a repository with none prints nothing:
 `stubs (<repo>): N missing/stale: <names>; run python <kit>/tools/kit_stubs.py write -C <folder>`,
 with `(stale ones run the kit at <path>)` added when a stub runs another kit. A repository whose
 stubs are current prints nothing; a folder that is not there, or a check that fails, is that
 repository's own `could not check stubs (<repo>): ...` line. The coordinator's session start has the
 same check for its own repository (docs/install.md "Tools without a stub"). Code: `kitlib/pmstart`
 `stubs`; tests: `tests/pmstart/test_stubs_check.py`.
+
+## Repo prep (`repo_prep`)
+
+After `stubs`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line. Code: `kitlib/pmstart` `repo_prep`; tests: `tests/pmstart/test_repo_prep.py`.
 
 ## Agent temp (`agent_temp`)
 
@@ -130,7 +136,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 
 Only in settings the PM session loads; the hook does not check which session runs it. It is not
 in the plugin, which every session loads. Exec form, with `<pythonw>` the interpreter that
-`guard.py --settings-entry` prints (docs/guard.md "Go-live"), starts no shell. `pythonw` has no
+`boot/hook.py claude --settings-entry` prints (docs/guard.md "Go-live"), starts no shell. `pythonw` has no
 console, so each program the checklist starts is started with a console that has no window: git
 (`kitlib.git.cmd`) and the PowerShell that lists processes (`kitlib/pmstart` `list_processes`;
 `tests/pmstart/test_plumbing.py`) through `kitlib.proc.spawn`, `schtasks` with `CREATE_NO_WINDOW`
@@ -138,9 +144,9 @@ in `kitlib.machinesetup.agenttemp.task_registered` (docs/daily-full.md "The sche
 repo's `.claude/settings.local.json`, which only that checkout loads. `tools/machine_setup.py`
 otherwise reads the account config folders (`~/.claude`, `~/.claude-*`, `default_config_dirs` in
 `kitlib/machinesetup`), never a repository's settings, so this file is edited by hand, except that
-`machine-setup.ps1 -Fresh -PmSettings <file>` writes the hook to the one file it names and refuses an
-account's `settings.json` (docs/machine-setup.md "Fresh machine (--fresh)").
+`machine-setup.ps1 -PmSettings <file>` (its default mode) writes the hook to the one file it names and
+refuses an account's `settings.json` (docs/machine-setup.md "Default mode").
 
 ```json
-{"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"<pythonw>","args":["<kit>/claude/hooks/pm_session_start.py"]}]}]}}
+{"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"<pythonw>","args":["<kit>/boot/hook.py","claude","SessionStart","pm"]}]}]}}
 ```

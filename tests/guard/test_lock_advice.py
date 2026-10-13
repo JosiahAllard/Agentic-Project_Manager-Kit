@@ -10,10 +10,11 @@ import os
 import shlex
 import unittest
 
-from kitlib.guard import context, decide, rules
+from kitlib.guard import context, rules
 from kitlib.lock import kinds
 
 from . import world as W
+from .claudehost import MCP_PREFIX, decide
 from .world import bash, event, ps
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -46,7 +47,7 @@ class AdvisedLockLine(unittest.TestCase):
     def advice(self, d, rule, role='main'):
         """The command after "Instead: " of deny `d`, without the guard's tag."""
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual((d.kind, d.rule), ('deny', rule), d.reason)
+        self.assertEqual((d.verdict, d.rule), ('deny', rule), d.reason)
         text, tag = d.reason.split(' Instead: ', 1)[1], rules.tag(rule, role)
         self.assertTrue(text.endswith(tag), d.reason)
         return text[:-len(tag)].strip()
@@ -80,7 +81,7 @@ class AdvisedLockLine(unittest.TestCase):
         ctx = ctx or self.w.ctx()
         state = os.path.join(self.w.home, '.claude', 'machine-lock', 'state.json')
         return [
-            self.advice(decide(event(rules.MCP_PREFIX + 'lock_hold_create', {'id': 'h-1'}, self.w.wt, sub=True),
+            self.advice(decide(event(MCP_PREFIX + 'lock_hold_create', {'id': 'h-1'}, self.w.wt, sub=True),
                                ctx), 'lock-mcp', 'subagent'),
             self.advice(decide(bash('python tools/machine_lock.py hold whole --for 1h', self.w.wt, sub=True),
                                ctx), 'owner-lock', 'subagent'),

@@ -1,0 +1,6 @@
+{
+  "required": ["registry", "desktop_profile", "terminal_account", "terminal_projects", "mcp_server_name", "plugin_name"],
+  "optional": [],
+  "directories": ["registry", "desktop_profile", "terminal_projects"],
+  "names": ["mcp_server_name", "plugin_name"]
+}

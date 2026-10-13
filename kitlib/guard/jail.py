@@ -26,14 +26,15 @@ read-only (roots, touches_config): a data root, TMP or AGENT_TEMP at the home fo
 otherwise open the machine config. A root's mode holds wherever it nests: a target inside a read-only data root is denied though
 it also lies in the checkout or temp, and one inside an add-only root may only be new.
 
-Paths compare after os.path.realpath (symlinks and junctions resolved, `..` folded) and
-os.path.normcase.
+Paths compare after kitlib.guard.paths.norm(real=True): os.path.realpath (symlinks and junctions
+resolved, `..` folded), then os.path.normcase.
 """
 import os
 
 from kitlib.config import user as kuser
 from kitlib.config.migration import OLD_DIR_NAME
 from kitlib.git import repo
+from kitlib.guard import paths
 
 OPEN, ADD_ONLY, READ_ONLY = 'open', 'add-only', 'read-only'
 MODES = (ADD_ONLY, READ_ONLY, OPEN)
@@ -44,11 +45,7 @@ CHECKOUT, TEMP, DATA, MARK = 'your checkout', 'temp', 'data', 'mark'
 
 def real(path):
     """`path` as the filesystem reaches it, case folded: links and junctions resolved."""
-    try:
-        p = os.path.realpath(path)
-    except (OSError, ValueError):
-        p = os.path.abspath(path)
-    return os.path.normcase(p)
+    return paths.norm(path, real=True)
 
 
 def inside(path, root):
@@ -86,7 +83,7 @@ def own_root(ctx, cwd, is_root):
     elif is_root(cwd):
         return None
     else:
-        own = os.path.normpath(cwd)
+        own = paths.norm(cwd, fold=False)
     return None if touches_config(ctx, own) else own
 
 
@@ -212,10 +209,11 @@ def judge(target, rs):
 
 
 def destination(rs):
-    """Where the alternative aims: the session's own checkout, else the temp folder."""
+    """Where the alternative aims: the session's own checkout, else the temp folder; never one a
+    read-only or add-only root holds (a role whose checkout is read-only is pointed at temp)."""
     for kind in (CHECKOUT, TEMP):
         for r in rs:
-            if r.kind == kind:
+            if r.kind == kind and judge(r.path, rs)[0] is None:
                 return r
     return None
 

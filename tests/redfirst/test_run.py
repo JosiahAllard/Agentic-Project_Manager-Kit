@@ -361,7 +361,7 @@ class Runs(Case):
                            run=litter, cleanup=self.here)
         self.assertEqual(rc, V.EXIT_LEFTOVER, out.getvalue())
         self.assertIn('holds files the run left', out.getvalue())
-        self.assertIn('worktree_remove.py redfirst-', out.getvalue())
+        self.assertRegex(out.getvalue(), r'python "[^"]*/tools/worktree_remove\.py" -C "[^"]+" redfirst-')
         left = self.throwaways()
         self.assertEqual(len(left), 1)
         tw = os.path.join(self.home, left[0])

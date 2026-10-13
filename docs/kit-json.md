@@ -7,6 +7,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - An unknown section or key refuses, and so does a key written twice in one object. One error names every problem. A key starting `_`, or `comment`, is a note, allowed in every object.
 - A key whose default is unset may be `null`. Unset means the tool that reads it decides.
 - No environment variable overrides the file or the repository root.
+- With no `gate` section at all the gate detects the stack and runs its usual test and lint steps, labelled `source: auto` (docs/gate.md "Auto-detected gate"); a `gate` section, even an empty one, replaces that whole.
 - A `gate.steps` entry runs either `cmd` or `check`, a gate check the repo hook module provides in `GATE_CHECKS`; repo-specific gate settings go in `hook.options`. The step keys are `STEP` in `kitlib/config/schema.py`.
 - `gate.kind` names the kind a gate run books; the lock books that kind's size (kitlib/lock/kinds.json). A size is a whole number of cpu slots 1..the layout's agent_cap (`medium` and `heavy` remain as aliases), set only by `gate.py --measure` and a reviewed commit. No `.kit.json` key sets a gate's core count.
 - A `landing.lanes` entry is keyed by the lane name and has four keys (`LANE` in `kitlib/config/schema.py`): `branch_prefix` (list of string; a branch on the lane starts with one), `paths` (list of glob; every path the branch changes matches one), `why` (string; the ruling that made the lane) and `merged_args` (list of string; added to every step command of the lane's merged-tree gate, after the step's own `merged_args`, with the same `{root}`-style substitutions). `tools/land.py` reads `main_branch` and `remote` from `repo`, the lanes, `wait_s` and `batch_max` from `landing`, and the gate steps from `gate` (docs/gate.md, Landing).
@@ -15,24 +16,44 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - Retired keys are still accepted and ignored, so an older install loads: `backlog` may still carry `retired_docs` and `rename_script` (`RETIRED` in `kitlib/config/schema.py`); nothing reads them.
 - A repo lists its own heavy programs in `heavy.programs`; the kit defaults are general tools only (godot, blender, dotnet, gradle). For example `{"program": "run_tests.bat", "kind": "engine-test", "why": "runs the engine test suite"}`, `{"program": "graph_build*", "kind": "worldgraph", "why": "rebuilds the world graph"}` and `{"program": "local_model*", "kind": "local-ai", "unless_args": ["--help"], "why": "loads a model onto the gpu"}`.
 
+## With no file
+
+`.kit.json` is optional: a repository with none is all defaults, and every key a file writes is an override. A file that is there but does not parse, or holds an unknown section or key or a wrong type, still refuses every call that reads it (the guard, the gate, land, commit, pre-push), as before.
+
+Three defaults are read rather than fixed (`kitlib.config.load`, from `kitlib.git.defaults` and the machine config). Each applies whenever the file does not set the key, with a file or without one:
+
+- `repo.main_branch`: the branch `refs/remotes/<remote>/HEAD` points at (`git clone` writes it; `git remote set-head origin --auto` writes it in a clone that has none). With no such ref: `main` when `refs/heads/main` or `<remote>/main` exists, else `master` when only that exists, else `main`. Read from the git files (the `.git` folder, or the `gitdir:` file of a linked worktree and its `commondir`; loose refs and `packed-refs`), never by starting git; a repository whose refs are in a reftable is asked once (`git symbolic-ref`). A `<remote>/HEAD` naming a branch that starts with `-` or `/` or holds `..` is not read. Read once per load, so a guard hook pays one file read or two for it.
+- `repo.name`: the last part of the remote's URL in the repository's config, `.git` dropped; with no remote, the main checkout's folder name. It names the gate log folder (`<kit temp>/<name>-gate`), the worktree sweep's log and scheduled task, and the lock line's `--repo`; `landed.py` reads the gate logs under each checkout's folder name too, where a gate wrote them before the name was read from the remote. The rulings ledger's repo column is never derived: the ledger (`backlog.ledger_repo`) and the ruling citation check (`ruling_cites.repo`) read a written `repo.name` only, the citation check then the folder name as before.
+- `owner.email`: the machine config's `owner_email` (below). With neither, or with a machine config that cannot be read, no commit can be proven to be the owner's, so every change to an owner-only path is refused; it is never allowed. `tools/machine_setup.py` stores it (`--owner-email`, or the address the owner confirms at its `--apply` console question, which offers `git config user.email`; docs/machine-setup.md "Owner email").
+
+Protections on with no file:
+
+- No delete and no forced push of the main branch (`--force`, `--force-with-lease`, `--force-if-includes`, `--mirror`, a `+` refspec), from any session: the guard refuses it (rule `git-push-main`), and the pre-push hook refuses a delete or a push that is not a fast-forward of the remote's main whatever `repo.push_block` says. The guard and the pre-push hook name the main branch the defaults above give, and, while the file sets no `repo.main_branch`, guard `main` as well (`Config.guarded_mains`): `<remote>/HEAD` is local, and any session can repoint it (`git remote set-head`), so reading it never takes the protection off `main`. A refspec the guard cannot read literally (`git push origin $B`, `"+$B"`, `HEAD:$B`) is refused, since it may force or delete main; so is a computed remote with `--force`, `--delete` or `--no-verify`.
+- The owner-only paths (`owner.paths` default) and the owner identity rule: with the owner email from the machine config, an agent's change to an owner-only path is refused unless the owner approved it, and a session giving a commit the owner's email is refused.
+- The rules whose defaults are already the strict side: the kit-json rule (an agent session never writes a `.kit.json`), the write jail (no data roots: an agent writes its own checkout and temp only), the main-checkout rule (no subagent edits a main checkout), the lock rules and the kit's own heavy-program list.
+
+Off with no file, each switched on by its key: `repo.push_block` (a push to main needs a gate-OK record; it needs a gate), `guard.role_policy` (holding roles to their mode; the kit's own repo turns it on, and the Codex broker holds its role to it whatever the file says), `roles.lander.edit_main_checkout` (a lander fast-forwarding the main checkout), `ledger.pre_commit_check`, `daily_full.enabled` and `landing.in_flight`. The doc index listing check runs only in a repository with an index file (`docs/INDEX.md`, or the one `doc_index.index` names), with or without a `.kit.json`; `doc_index.enabled` false turns it off (docs/doc-tools.md "doc_index").
+
 ## `.kit.json` keys
 
-- `repo.name` (string, may be empty, default ""): repository name for reports and the ledger
-- `repo.main_branch` (string, default "main"): the branch landings target
+- `repo.name` (string, may be empty, default ""): repository name for reports and the ledger; unset or empty: the last part of the remote's URL, else the main checkout's folder name (the ledger reads a written name only)
+- `repo.main_branch` (string, default "main"): the branch landings target; unset: the branch <remote>/HEAD names, else main, else master when only that exists (docs/kit-json.md "With no file")
 - `repo.remote` (string, default "origin"): the remote main is pushed to
 - `repo.worktrees_dir` (repo path, default ".claude/worktrees"): where agent worktrees live
-- `repo.tools_dir` (repo path, default "tools"): where repo tools, stubs and the hook module live
-- `repo.push_block` (bool, default false): pre-push refuses a push to main without a gate-OK record
-- `owner.email` (email): author email of the owner's own commits; unset: no owner commit is provable
+- `repo.worktrees_by_host` (map host -> repo path, default {}): per-host worktree folders, keyed by hosts.json host name (docs/new-worktree.md "Hosts")
+- `repo.tools_dir` (repo path, default "tools"): where repo tools, the opt-in kit tool stubs and the hook module live
+- `repo.push_block` (bool, default false): pre-push refuses a push to main without a gate-OK record; a delete or a forced push of main is refused whatever it says
+- `owner.email` (email): author email of the owner's own commits; unset: the machine config's owner_email; neither: no owner commit is provable, so every owner-only change is refused
 - `owner.agent_emails` (list of email, default []): author emails known to be agents', never the owner's
-- `owner.paths` (list of string, default ["CLAUDE.md", ".claude/", ".github/workflows/", ".kit.json", "tools/gate.json", "kitlib/gate/strict_defaults.py", "kitlib/backlog/roles.py"]): owner-only paths; an entry ending / locks a directory; replaces the default
-- `owner.paths_except` (list of string, default [".claude/worktrees/"]): what under a locked directory is not locked
+- `owner.paths` (list of string, default ["AGENTS.md", "CLAUDE.md", ".claude/", ".codex/", "docs/agent-profile.md", ".github/workflows/", ".kit.json", "tools/gate.json", "kitlib/gate/strict_defaults.py", "kitlib/backlog/roles.py"]): owner-only paths; an entry ending / locks a directory; replaces the default
+- `owner.paths_except` (list of string, default [".claude/worktrees/", ".codex/worktrees/"]): what under a locked directory is not locked
 - `owner.trailer` (a trailer key, default "Owner-Approved"): the trailer key approving an owner-only change
 - `hook.module` (a module name): the one repo hook module, <tools_dir>/<module>.py
 - `hook.options` (map key -> any JSON value, default {}): passed to the hook unread
 - `heavy.programs` (list of {program, kind, when_args, unless_args, why}, default []): repo heavy programs, added to the kit defaults
-- `roles` (map role -> {edit_main_checkout, why}): agent type (or main, subagent) -> permissions, over the kit defaults
+- `roles` (map role -> {edit_main_checkout, mode, why}): agent type (or main, subagent) -> permissions, over the kit defaults
 - `roles.<role>.edit_main_checkout` (bool): may edit files in a main checkout; unset: the base role (main: true, any other: false)
+- `roles.<role>.mode` (controller|write|read|test|lander): the role policy this role is held to, over its role file's `mode` (docs/guard.md "Role policy"); unset: the role file's, else none
 - `roles.<role>.why` (string): the ruling that grants it
 - `backlog.store` (ref|branch|main or repo path, default "ref"): the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md)
 - `backlog.phases` (list of string, default []): phase names in order
@@ -57,7 +78,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `doc_budget.shard_indexes` (map folder -> repo path, default {}): shard folder -> its index doc
 - `doc_budget.state_docs` (list of repo path, default []): docs checked for staleness
 - `doc_budget.stale_days` (int >= 1): days before a state doc is stale
-- `doc_index.enabled` (bool, default true): false: doc_index does not require every .md on an index entry line, nor the index file (a repo with no .kit.json skips it too)
+- `doc_index.enabled` (bool, default true): false: doc_index does not require every .md on an index entry line, even with an index file; with no index file the check is skipped anyway (the index file is the opt-in)
 - `doc_index.index` (repo path, default "docs/INDEX.md"): the doc index both doc tools read
 - `doc_index.find_match` (keywords|text, default "keywords"): how --find matches
 - `doc_index.roles` (map role -> list of string): role -> lookup topics
@@ -78,6 +99,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `gate.errors` ({match, excuse, expect}): error-line policy
 - `gate.kind` (a kind name, default "engine-test"): the kinds-table kind a gate run books (gate.py and gate.py land)
 - `guard.data_roots` (list of {path, mode, why}, default []): folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")
+- `guard.role_policy` (bool, default false): hold roles to their role policy mode (docs/guard.md "Role policy"); off: no role is held, whatever its mode; read from the main checkout only
 - `landing.lock_file` (string): legacy landing lock: git:<name>, a file in the git common dir; any other value refuses
 - `landing.log_dir` (repo path): where gate logs live
 - `landing.lanes` (map lane -> {branch_prefix, paths, why, merged_args}, default {}): lanes besides full that gate.py land --lane takes
@@ -104,7 +126,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `review_pack.coauthor` (bool, default false): list the branch's commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks
 - `ruling_cites.repo` (string): the ledger repo column cited
 - `ruling_cites.skip` (list of string): globs of paths not checked; unset: <tools_dir>/test_*.py and <tools_dir>/fixtures/*
-- `stubs.tools` (list of string): kit tools stubbed into the repo
+- `stubs.tools` (list of string): kit tools stubbed into the repo; stubs are opt-in (none by default), and setting this opts in
 - `testlist.junit` (list of string, default ["**/build/test-results/**/*.xml"]): JUnit result globs
 - `testlist.trx` (list of string, default ["**/*.trx"]): .NET result globs
 - `tool_tests.mentions` (path|tokens, default "path"): how a tool mention is found
@@ -139,6 +161,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 
 The machine's own settings, read by `kitlib.config.user`: `config.json` in the folder `kitlib.config.user.DIR_NAME` names under the home folder, or, while that folder has none, in the retired folder ("Moving the machine config folder"); `python -c "from kitlib.config import user; print(user.config_file())"`, run in the kit, prints the path of the file read. Messages name the file read (`user.display()`), help text `user.DISPLAY`, and this page and the others write `<config-dir>` for that folder. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config. One key does not follow it: `machine_lock` is read from the config under the profile folder Windows itself reports (`kitlib.lock.site.load`, through `kitlib.lock.store.machine_home`), where the machine's lock store lives, so every session that shares the store reads one `machine_lock`, whatever its USERPROFILE. Every other key is read under the environment's home.
 
+- `owner_email` (email): the author email of the owner's own commits, for every repository whose .kit.json sets no "owner".email; unset there too: no commit is provable as the owner's, so every owner-only change is refused (docs/kit-json.md "With no file"); older kit copies reject the key
 - `ledger_path` (absolute path): the rulings ledger file; set here only
 - `ledger_repos` (list of a lower-case repo name): the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)
 - `pending_path` (absolute path): the owner's pending-steps file tools/pending.py edits (docs/pending.md)

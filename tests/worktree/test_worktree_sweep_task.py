@@ -7,6 +7,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
+from kitlib.git import defaults as gitdefaults
 from kitlib.worktree import task
 from tests import gitfixture
 from tests.worktree.test_worktree_remove import KIT, RemoveCase
@@ -44,8 +45,9 @@ class Task(TaskCase):
         rc, out, runner = self.run_task()
         self.assertEqual(rc, 0, out)
         self.assertEqual(runner.calls, [])
+        # no repo.name: the name read from the remote's URL (docs/kit-json.md "With no file")
         self.assertIn("Register-ScheduledTask -TaskName '%s-worktree-sweep'"
-                      % os.path.basename(self.repo), out)
+                      % gitdefaults.repo_name(self.repo), out)
         self.assertIn('-C "%s" --sweep-merged --apply' % self.repo, out)
         self.assertIn('"%s"' % os.path.normpath(self.tool), out)
         self.assertIn(task.NOT_THE_STORE_ALIAS, out)

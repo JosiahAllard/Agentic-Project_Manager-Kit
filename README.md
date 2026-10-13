@@ -39,8 +39,9 @@ test and land code at the same time. The kit lays the rails they run on:
   command outright; they do not rely on an agent remembering its instructions.
 - **Main only ever receives a tested merge.** The landing tool tests the merged result, not the
   branch on its own, and undoes the merge when that test fails.
-- **One kit, no copies.** A repository never holds a copy of the kit. It gets small stub files
-  that run the kit's tools, so a fix made in the kit reaches every repository at once.
+- **One kit, no copies.** A repository never holds a copy of the kit, or even stubs of its tools:
+  agents run the kit's tools from the kit's folder, naming the checkout with `-C`, so a fix made
+  in the kit reaches every repository at once.
 - **Nothing extra to install.** Python 3 standard library, git and Claude Code are the whole
   dependency list.
 
@@ -51,8 +52,8 @@ PC. It needs Windows, Python 3 (standard library only), git and Claude Code.
 
 ## Status
 
-Early. Most of the kit is built and tested but held for review before it goes live, and the
-repository installer has not yet been run against a real repository. docs/go-live.md lists what
+Early. Most of the kit is built and tested but held for review before it goes live, and machine
+setup has not yet been run on a real machine. docs/go-live.md lists what
 is still to switch on.
 
 ## What you get
@@ -61,9 +62,10 @@ is still to switch on.
 |---|---|
 | `tools/` | The command-line tools: lock, gate and landing, worktrees, commit, backlog, ledger, preflight and more |
 | `kitlib/` | The library the tools call; all the logic lives here |
-| `claude/` | The Claude Code parts: agents, skills, hooks |
+| `hosts/claude/` | The Claude Code parts: `adapter/` (Python) and `shell/` (agents, skills, hooks) |
+| `boot/` | `kitboot.py`, the check every host entry runs before it imports kitlib |
 | `githooks/` | The git hooks: pre-push, and a pre-commit ledger check that does nothing unless a repository opts in |
-| `installer/` | `new-repo.ps1`, which sets a repository up to use the kit |
+| `installer/` | `machine-setup.ps1`, which sets a machine up for the kit, and `new-repo.ps1`, the optional committed setup of a repository |
 | `templates/` | A starter CLAUDE.md and per-language gate settings |
 | `optional/` | Extras: an image-generation client, a process watcher, usage reports |
 | `reserve_ui.pyw` | The machine schedule window: double-click it to see and book the lock |
@@ -77,27 +79,34 @@ is still to switch on.
    performance mode, scanning after a file opens instead of in the way of it, and moving there
    cut that load. Put the kit, your repositories and their worktrees on one. docs/install.md
    step 0 has the requirements and setup.
-2. **Set up.** docs/install.md sets up a repository. A PM session setting up a fresh machine
-   follows docs/pm-first-run.md step by step.
+2. **Set the machine up, once.** From the kit checkout, in a terminal:
+   `powershell -NoProfile -File installer\machine-setup.ps1 -OwnerEmail <your commit email>`
+   prints what it will do (the guard hook, the Claude plugin, your email as the owner's, the
+   agents' temp folder); run it again with `-Apply` (docs/machine-setup.md). A PM session setting
+   up a machine follows docs/pm-first-run.md step by step.
+3. **Use any repository.** Nothing to install or commit in it: the first agent worktree writes two
+   local git settings and nothing else (docs/install.md "What first use writes"). A repository
+   that wants its kit settings committed runs `installer\new-repo.ps1` (docs/install.md
+   "Committed setup (--repo)").
 
 ## Day to day
 
-Kit tools run from the kit checkout; in a repository they run through the stubs, as
-`python tools/<name>.py`.
+Kit tools run from the kit checkout, in any repository: `python <kit>/tools/<name>.py -C <checkout>`
+(docs/install.md).
 
 1. **Start the PM.** Open Claude Code in the PM's own folder. A session-start hook prints a
    checklist of what needs doing (docs/pm-start.md).
 2. **Start a coordinator** in each repository you want worked on, with the environment variable
    `PM_KIT_ROLE` set to `coordinator`: `claude --agent pm-kit:coordinator --remote-control "<name>"`, or let
-   `tools/launch.py start` do it (docs/launcher.md).
+   `<kit>/tools/launch.py start` do it (docs/launcher.md).
    Use exactly the name its entry in the PM's sessions file has (docs/pm-start.md), or the PM's
    checklist reports it as not running. On its first start it drafts the repository's profiles
    for you to approve.
 3. **Let it run.** The coordinator gives each task to an agent in its own worktree. A reviewer
-   checks the branch, and a lander lands it with `tools/land.py`, run in the repository.
+   checks the branch, and a lander lands it with `<kit>/tools/land.py -C <repo>`.
 4. **Answer the hub.** Questions, hand steps and the backlog arrive on the Action Hub
    (docs/action-hub.md). The PM reads your answers and passes them on.
-5. **Watch the machine.** `python tools/machine_lock.py status` shows what is running and
+5. **Watch the machine.** `python <kit>/tools/machine_lock.py status` shows what is running and
    queued. `reserve_ui.pyw` holds the machine for you, for example while gaming.
 
 ## Slow process launches on Windows
@@ -113,7 +122,7 @@ it in place.
 
 | To learn about | Read |
 |---|---|
-| Setting up a repository | docs/install.md |
+| Setting up a machine and a repository | docs/install.md, docs/machine-setup.md |
 | A PM's first setup of a machine | docs/pm-first-run.md |
 | What the kit ships | docs/shipping.md |
 | The Action Hub | docs/action-hub.md |

@@ -13,7 +13,7 @@ from kitlib.config import ConfigError
 from kitlib.config import user as kuser
 from kitlib.worktree.task import CARRIER, FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted
 
-from . import settings
+from . import machineconfig
 from .common import is_link, norm
 
 ENV = 'AGENT_TEMP'
@@ -22,7 +22,6 @@ MAX_AGE_DAYS = 3
 TASK = 'agent-temp-sweep'
 AT = '04:00'
 SWEEP = os.path.join('optional', 'agenttemp', 'agent_temp_sweep.py')
-NEW_LAYOUT = {'bom': False, 'crlf': False, 'final': True, 'indent': 2, 'ascii': False}
 
 
 def default_agent_temp(kit):
@@ -240,75 +239,23 @@ def _key(plan, ctx, folder):
             plan.note('extras', 'the machine config\'s %s.dir is %s, not %s; left as is (the sweep '
                                 'sweeps the configured folder)' % (KEY, d, folder))
         return
-    try:
-        path = kuser.writable_file(ctx.home)
-    except ConfigError as e:
-        plan.refuse('cannot write %s to the machine config: %s' % (KEY, e))
+    snap, why = machineconfig.snapshot(ctx)
+    if snap is None:
+        plan.refuse('cannot write %s to the machine config: %s' % (KEY, why))
         return
-    try:
-        with open(path, 'rb') as f:
-            raw = f.read()
-    except FileNotFoundError:
-        raw = None
-    except OSError as e:
-        plan.refuse('cannot read %s: %s' % (path, e))
-        return
+    path, existed = snap.path, snap.raw is not None
     value = {'dir': folder, 'max_age_days': MAX_AGE_DAYS}
     plan.add('extras', 'machine config %s: add %s = %s' % (path, KEY, json.dumps(value)),
-             lambda: write_sweep_key(ctx.home, path, raw, folder),
-             undo='remove the %s key from %s' % (KEY, path) if raw is not None else 'delete %s' % path)
+             lambda: write_sweep_key(ctx.home, snap, folder),
+             undo='remove the %s key from %s' % (KEY, path) if existed else 'delete %s' % path)
 
 
-def write_sweep_key(home, path, raw, folder):
-    """Add KEY = {dir: folder, max_age_days: MAX_AGE_DAYS} to the machine config file `path`, whose
-    bytes the survey read as `raw` (None: no file), keeping every other key and the file's layout
-    (BOM, line ends, indent: kitlib.machinesetup.settings.read). RuntimeError, nothing written, when
-    the file changed since the survey, is a link or already has the key; the file is put back when
-    the machine config cannot be read after the write."""
-    try:
-        with open(path, 'rb') as f:
-            now = f.read()
-    except FileNotFoundError:
-        now = None
-    if now != raw:
-        raise RuntimeError('%s changed since the survey; run again' % path)
-    if raw is None:
-        layout, data = NEW_LAYOUT, {}
-    else:
-        if is_link(path) or os.path.islink(path):
-            raise RuntimeError('%s is a link; not replaced' % path)
-        layout, data = settings.read(raw)
-        if not isinstance(data, dict):
-            raise RuntimeError('%s holds no JSON object' % path)
-    if KEY in data:
-        raise RuntimeError('%s already has %s; not overwritten' % (path, KEY))
-    data[KEY] = {'dir': folder, 'max_age_days': MAX_AGE_DAYS}
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    _replace(path, settings.write(layout, data))
-    try:
-        kuser.user_config(home)
-    except ConfigError as e:
-        if raw is None:
-            os.remove(path)
-        else:
-            _replace(path, raw)
-        raise RuntimeError('the machine config could not be read after adding %s (%s); put back'
-                           % (KEY, e))
-
-
-def _replace(path, data):
-    tmp = path + '.machine-setup.tmp'
-    try:
-        with open(tmp, 'wb') as f:
-            f.write(data)
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.lexists(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-        raise
+def write_sweep_key(home, snap, folder):
+    """Add KEY = {dir: folder, max_age_days: MAX_AGE_DAYS} to the machine config file snap.path
+    (kitlib.machinesetup.machineconfig.set_key: every other key and the layout kept; RuntimeError,
+    nothing written, when the file changed since the run last read it, is a link or already has
+    the key; put back when the machine config cannot be read after the write)."""
+    machineconfig.set_key(home, snap, KEY, {'dir': folder, 'max_age_days': MAX_AGE_DAYS})
 
 
 def _task(plan, ctx):
