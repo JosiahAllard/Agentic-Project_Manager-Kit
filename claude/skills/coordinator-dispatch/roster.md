@@ -6,7 +6,7 @@ Read from skill `coordinator-dispatch`, "Which agent, which model". A repo's own
 ## Agent types and what each is for
 
 - `pm-kit:worker`: routine coding, low and medium risk; plan-only and sync or prep work (merging main into a branch, rebasing, conflict-free syncs, preparation).
-- `pm-kit:opus-worker`: High-risk build and fix work on standard paths (API changes, live fixes, ordinary tool features).
+- `pm-kit:senior-worker`: High-risk build and fix work on standard paths (API changes, live fixes, ordinary tool features).
 - `pm-kit:strong-worker`: concurrency, networking, simulation or ordering, landing or lock tools, migrations, CI config, known-area crash fixes.
 - `pm-kit:deep-worker`: its own launched session for the hardest issues; never an Agent dispatch.
 - `pm-kit:reviewer`: read-only review of one branch against its brief. Never the author.
@@ -28,11 +28,11 @@ Read from skill `coordinator-dispatch`, "Which agent, which model". A repo's own
 - `pm-kit:worker` = default coding, low/medium risk (`--find risk`): additive content, UI, pure logic
   with tests, known-cause fixes, behaviour-preserving moves and renames (brief names **Moves and
   renames**; its equivalence check is not optional). Coding ladder by need:
-  `pm-kit:worker` (sonnet/medium: Low, Medium) -> `pm-kit:opus-worker` (opus/medium: High-risk build and fix work - API
+  `pm-kit:worker` (sonnet/medium: Low, Medium) -> `pm-kit:senior-worker` (opus/medium: High-risk build and fix work - API
   changes, live fixes, ordinary tool features; never plan-only or sync/prep) -> `pm-kit:strong-worker` (opus/high: concurrency,
   networking, landing/lock tools, build-cache correctness, codegen design; builds and plans)
   -> `pm-kit:deep-worker` (opus 1M/xhigh, own session: root cause or concurrency work strong-worker
-  failed at or plainly cannot do). opus-worker not installed ->
+  failed at or plainly cannot do). senior-worker not installed ->
   `pm-kit:worker` + `model: opus`. Never `general-purpose` for code. An escalation = reassign upward
   with its findings, not a failure.
 - Model and effort per agent are pinned in each agent file's frontmatter (the kit sets them in its ROSTER.md doc; SKILL.md gives its path).
@@ -55,7 +55,7 @@ Read from skill `coordinator-dispatch`, "Which agent, which model". A repo's own
      raise to `opus` for a risk you name in status, never must.
 
   No review pack in the repo -> the same rows on the risk level the brief states.
-- Effort is not settable per dispatch: pick the agent for it. High risk -> `pm-kit:opus-worker`, or
+- Effort is not settable per dispatch: pick the agent for it. High risk -> `pm-kit:senior-worker`, or
   `pm-kit:strong-worker` for the kinds the ladder names. Only when `pm-kit:strong-worker` has been defeated, or
   plainly will be, on a race or crash root-cause or subtle concurrency (never a build or a
   plan): request a `pm-kit:deep-worker` session; say in status when and why.

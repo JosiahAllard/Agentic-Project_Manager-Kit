@@ -6,7 +6,7 @@ from pathlib import Path
 from tests.shipped import scan
 
 AGENTS = Path(__file__).resolve().parents[2] / "claude" / "agents"
-EXPECTED = {"coordinator", "worker", "opus-worker", "strong-worker", "deep-worker", "consultant", "reviewer",
+EXPECTED = {"pm", "coordinator", "worker", "senior-worker", "strong-worker", "deep-worker", "consultant", "reviewer",
             "lander", "records", "researcher", "spec-writer", "test-runner", "asset-smith",
             "sound-smith", "tech-artist"}
 BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),
@@ -140,7 +140,7 @@ class AgentFilesTest(unittest.TestCase):
                 fm = frontmatter("---\nname: x\ntools: Read\nx:\n%stools: Skill\n---\nbody\n" % indent)
                 self.assertEqual(fm, {"name": "x", "tools": "Read", "x": ""})
 
-    def test_only_opus_worker_asks_for_the_one_hour_prompt_cache(self):
+    def test_only_senior_worker_asks_for_the_one_hour_prompt_cache(self):
         """The one-hour cache lifetime is one agent's setting (docs/ROSTER.md, "The one-hour prompt
         cache"); the client reads `cacheTtl` only inside the `experimental` map of a subagent file."""
         for p in sorted(AGENTS.glob("*.md")):
@@ -148,7 +148,7 @@ class AgentFilesTest(unittest.TestCase):
                 text = p.read_text(encoding="utf-8")
                 fm, _ = strict_frontmatter(text)
                 head = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", text, re.S).group(1)
-                if p.stem == "opus-worker":
+                if p.stem == "senior-worker":
                     self.assertEqual(fm.get("experimental"), {"cacheTtl": "1h"})
                     self.assertEqual(head.count("cacheTtl"), 1)
                 else:

@@ -54,7 +54,7 @@ STOP_IDS = frozenset((
     'WORKING-RULES', 'CLAUDE-SPECIFIC', 'GATE-EXPECT-BEGIN', 'GATE-EXPECT-END'))
 # Invented ids in fixtures and examples start with this, as ruling fixtures use R-9nnn.
 MADE_UP_ID_PREFIX = 'EX-'
-# "PM kit" alone is this kit's own name (CLAUDE.md); what counts is the replaced one called
+# "PM kit" alone is this kit's own name (AGENTS.md); what counts is the replaced one called
 # old, earlier, previous or legacy, or one of its files named.
 _PM_KIT = r'P[M](?:\s+|-)kit'
 PROVENANCE = re.compile(

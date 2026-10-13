@@ -29,11 +29,14 @@ CONSULTANT_AUTOCOMPACT = (100000, 500000)
 CONSULTANT_DEFAULT_AUTOCOMPACT = 350000
 # a sessions.json entry of that agent, bare or with the kit plugin's prefix (kitlib.agentname)
 ROLE_AUTOCOMPACT = {'consultant': CONSULTANT_DEFAULT_AUTOCOMPACT, 'deep-worker': DEEP_AUTOCOMPACT}
-# the kit plugin's agents (claude/agents/*.md stems; tests/launcher/test_start.py pins the set):
+# the kit plugin's agents (content/roles/*.md, rendered as claude/agents/*.md; tests/launcher/test_start.py
+# pins the set to both):
 # a bare one of these is started with the plugin's prefix, any other name as given
-KIT_AGENTS = ('asset-smith', 'consultant', 'coordinator', 'deep-worker', 'lander', 'opus-worker', 'records',
-              'researcher', 'reviewer', 'sound-smith', 'spec-writer', 'strong-worker', 'tech-artist',
+KIT_AGENTS = ('asset-smith', 'consultant', 'coordinator', 'deep-worker', 'lander', 'pm', 'records',
+              'researcher', 'reviewer', 'senior-worker', 'sound-smith', 'spec-writer', 'strong-worker', 'tech-artist',
               'test-runner', 'worker')
+# a kit agent's old name -> its name now: started as the new one, for one release (docs/ROSTER.md)
+AGENT_ALIASES = {'opus-worker': 'senior-worker'}
 LONG_MODEL = 'opus[1m]'
 NOTES_DEFAULT = 'docs/ops/consultant-notes.local.md'
 DIGEST = os.path.join('docs', 'conventions-digest.md')
@@ -85,7 +88,9 @@ def account_folder(settings, account=None, org=None):
 
 def run_as(agent):
     """The --agent value for `agent`: a bare kit agent qualified with the plugin's prefix
-    (kitlib.agentname); a prefixed name, a repo's own agent or None unchanged."""
+    (kitlib.agentname), an old name (AGENT_ALIASES) as its new one; a prefixed name, a repo's own
+    agent or None unchanged."""
+    agent = AGENT_ALIASES.get(agent, agent)
     return agentname.qualified(agent) if agent in KIT_AGENTS else agent
 
 
