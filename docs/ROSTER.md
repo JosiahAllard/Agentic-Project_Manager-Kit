@@ -18,9 +18,10 @@ Every role exists on every host (content/roles/<role>.md; docs/content.md). Edit
 renders every host's agent files from it; `--check` (the default) lists any disagreement, here or in
 the tier table below. `-` = no effort key. Never `fable` unless the owner asks; override a dispatch
 only upward, and never the lander's. The per-dispatch rules have one home,
-claude/skills/coordinator-dispatch/roster.md, "Choosing": which reviews run on opus (from the review
-pack's printed risk groups and the strict landing paths), and the built-in agent types
-(`general-purpose`, `Explore`, `Plan`), which this table cannot pin, on `model: sonnet`.
+content/skills/coordinator-dispatch/roster.md, "Choosing", written in tiers for every host: which
+reviews are raised to the strong tier (from the review pack's printed risk groups and the strict
+landing paths), and the host's built-in agent types (on Claude `general-purpose`, `Explore`,
+`Plan`), which this table cannot pin, on the standard tier (Claude: `model: sonnet`).
 
 | role | tier | effort | use for |
 |---|---|---|---|
