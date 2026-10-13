@@ -1,4 +1,4 @@
-"""kitlib.hubvalidate, hosts/claude/shell/hub/hub_validate.py, and the validation lines of hub_mirror save."""
+"""kitlib.hubvalidate and the validation lines of hub_mirror save."""
 import importlib.util
 import io
 import json
@@ -150,90 +150,6 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(sorted(docs['todos']), ['T-1', 'T-2', 'T-3'])
         self.assertEqual(docs['todos']['T-3'], {'status': 'done'})
         self.assertEqual(codes(bad), [('todos/T-4', 'unreadable')])
-
-
-class CliTest(unittest.TestCase):
-    def setUp(self):
-        spec = importlib.util.spec_from_file_location(
-            'hub_validate_tool', os.path.join(KIT, 'hosts', 'claude', 'shell', 'hub', 'hub_validate.py'))
-        self.tool = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.tool)
-        self.d = tmpdir(self)
-
-    def run_tool(self, argv):
-        out, err = io.StringIO(), io.StringIO()
-        with mock.patch('sys.stdout', out), mock.patch('sys.stderr', err):
-            try:
-                code = self.tool.main(argv)
-            except SystemExit as e:
-                code = e.code
-        return code, out.getvalue(), err.getvalue()
-
-    def hub(self, **colls):
-        for c, docs in colls.items():
-            for i, d in docs.items():
-                write_json(os.path.join(self.d, 'hub', c, i + '.json'), d)
-        return os.path.join(self.d, 'hub')
-
-    def test_usage_errors_exit_2(self):
-        for argv in ([], ['--dir', 'x', '--batch', 'y'], ['--dir', 'x', '--against', 'y']):
-            self.assertEqual(self.run_tool(argv)[0], 2, msg=argv)
-        self.assertEqual(self.run_tool(['--dir', os.path.join(self.d, 'none')])[0], 2)
-        self.assertEqual(self.run_tool(['--batch', os.path.join(self.d, 'none.json')])[0], 2)
-
-    def test_dir_clean_warn_strict_and_error(self):
-        clean = self.hub(todos={'T-1': todo()})
-        self.assertEqual(self.run_tool(['--dir', clean])[0], 0)
-        shutil.rmtree(clean)
-        warn = self.hub(todos={'T-1': todo(commands=[])})
-        code, out, _ = self.run_tool(['--dir', warn])
-        self.assertEqual(code, 0)
-        self.assertIn('handstep-commands', out)
-        self.assertEqual(self.run_tool(['--dir', warn, '--strict'])[0], 1)
-        shutil.rmtree(warn)
-        bad = self.hub(todos={'T-1': todo(commands='dir')})
-        code, out, _ = self.run_tool(['--dir', bad])
-        self.assertEqual(code, 1)
-        self.assertIn('1 error(s), 0 warning(s)', out)
-
-    def test_dir_judges_repo_tags_against_repos(self):
-        h = self.hub(todos={'T-1': todo(repo='old')}, repos={'pm': {'name': 'pm', 'aliases': ['old']}})
-        self.assertEqual(self.run_tool(['--dir', h, '--strict'])[0], 0)
-
-    def test_batch_with_a_non_object_pages_document_is_an_error_not_a_traceback(self):
-        batch = os.path.join(self.d, 'b.json')
-        write_json(batch, [{'op': 'set', 'collection': 'pages', 'doc_id': 'p1', 'data': 'text'},
-                           {'op': 'set', 'collection': 'page_html', 'doc_id': 'p1', 'data': 'text'}])
-        code, out, _ = self.run_tool(['--batch', batch])
-        self.assertEqual(code, 1)
-        self.assertIn('ERROR pages/p1', out)
-        self.assertIn('ERROR page_html/p1', out)
-
-    def test_batch_without_against_does_not_judge_page_html_ids(self):
-        batch = os.path.join(self.d, 'b.json')
-        write_json(batch, [{'op': 'set', 'collection': 'pages', 'doc_id': 'p1', 'data': {'title': 't'}},
-                           {'op': 'set', 'collection': 'page_html', 'doc_id': 'p2',
-                            'data': {'html': '<p>'}}])
-        code, out, _ = self.run_tool(['--batch', batch, '--strict'])
-        self.assertEqual(code, 0, out)
-        self.assertIn('page_html ids not judged', out)
-        against = self.hub(pages={'p1': {'title': 't'}})
-        code, out, _ = self.run_tool(['--batch', batch, '--against', against, '--strict'])
-        self.assertEqual(code, 1)
-        self.assertIn('no pages/p2', out)
-
-    def test_batch_with_and_without_against(self):
-        batch = os.path.join(self.d, 'b.json')
-        write_json(batch, [{'op': 'set', 'collection': 'todos', 'doc_id': 'T-1',
-                            'data': todo(refs=['Q-9'])}])
-        code, out, _ = self.run_tool(['--batch', batch, '--strict'])
-        self.assertEqual(code, 0)
-        self.assertNotIn('ref-dangling: ', out.replace('[ref-dangling]', ''))
-        self.assertIn('not judged: no --against', out)
-        against = self.hub(questions={'Q-1': question()})
-        code, out, _ = self.run_tool(['--batch', batch, '--against', against, '--strict'])
-        self.assertEqual(code, 1)
-        self.assertIn('todos/T-1 refs', out)
 
 
 class SaveTest(unittest.TestCase):

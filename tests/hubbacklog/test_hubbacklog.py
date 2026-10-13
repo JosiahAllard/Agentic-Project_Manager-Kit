@@ -12,8 +12,6 @@ from kitlib.git import cmd as gitcmd
 from tests.gitfixture import fixture_env
 from tests.realgit import real_git
 
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "hosts", "claude", "shell", "hub"))
-import hub_backlog                                                  # noqa: E402
 
 NOW = datetime.datetime(2026, 10, 7, 12, 0, tzinfo=datetime.timezone.utc)
 
@@ -98,9 +96,8 @@ class SnapshotTest(unittest.TestCase):
         b, c = hubbacklog.snapshot("r", self.root, now=NOW)
         self.assertEqual((b["items"], c["items"]), ([], []))
 
-    def test_an_invalid_kit_json_fails_that_repo_and_the_others_still_render(self):
-        """store_at raises for a `.kit.json` the store cannot load; hub_backlog reports that repo
-        and still writes the others."""
+    def test_an_invalid_kit_json_is_a_backlog_store_error(self):
+        """store_at raises for a `.kit.json` the store cannot load."""
         with tempfile.TemporaryDirectory() as bad:
             run(bad, "init", "-q", "-b", "main")
             run(bad, "config", "user.email", "t@t")
@@ -113,12 +110,6 @@ class SnapshotTest(unittest.TestCase):
                     with self.assertRaises(RuntimeError) as cm:
                         hubbacklog.store_at(bad, "main")
                     self.assertTrue(str(cm.exception).startswith("backlog store: "), cm.exception)
-                    w, st, lines = hub_backlog.plan(["bad", "good"], {"bad": bad, "good": self.root}, {}, NOW)
-                    self.assertEqual(lines[0], "bad: could not read: %s" % cm.exception)
-                    self.assertEqual(lines[1], "good: 2 open, 2 completed; writes backlog, completed")
-                    self.assertEqual([(x["collection"], x["doc_id"]) for x in w],
-                                     [("backlog", "good"), ("completed", "good")])
-                    self.assertEqual(sorted(st), ["backlog/good", "completed/good"])
 
 
 class RefStoreTest(unittest.TestCase):
@@ -152,33 +143,6 @@ class RefStoreTest(unittest.TestCase):
     def test_no_store_yet_is_empty(self):
         b, c = hubbacklog.snapshot("r", self.root, now=NOW)
         self.assertEqual((b["items"], c["items"]), ([], []))
-
-
-class PlanTest(unittest.TestCase):
-    DOCS = ({"repo": "r", "items": [{"id": "A"}]}, {"repo": "r", "days": 90, "items": []})
-
-    def snap(self, n, root, now):
-        return self.DOCS
-
-    def test_writes_changed_only(self):
-        w, st, lines = hub_backlog.plan(["r", "x"], {"r": "/r", "x": None}, {}, NOW, snap=self.snap)
-        self.assertEqual([(x["collection"], x["doc_id"]) for x in w], [("backlog", "r"), ("completed", "r")])
-        self.assertEqual(w[0]["data"]["posted_at"], "2026-10-07T12:00:00Z")
-        self.assertIn("x: no folder, skipped", lines)
-        self.assertNotIn("if_version", w[0])
-        self.assertEqual(st["backlog/r"]["v"], 1)
-        w2, _, _ = hub_backlog.plan(["r"], {"r": "/r"}, st, NOW, snap=self.snap)
-        self.assertEqual(w2, [])
-        w3, st3, _ = hub_backlog.plan(["r"], {"r": "/r"}, st, NOW, snap=self.snap, force=True)
-        self.assertEqual([x["if_version"] for x in w3], [1, 1])
-        self.assertEqual(st3["completed/r"]["v"], 2)
-
-    def test_read_error_reported(self):
-        def bad(n, root, now):
-            raise RuntimeError("git log: boom")
-        w, st, lines = hub_backlog.plan(["r"], {"r": "/r"}, {"backlog/r": {"d": "old", "v": 3}}, NOW, snap=bad)
-        self.assertEqual((w, st), ([], {"backlog/r": {"d": "old", "v": 3}}))
-        self.assertEqual(lines, ["r: could not read: git log: boom"])
 
 
 # A git that is a launcher whose child holds the pipes (see tests/git/test_launcher.py): a bare

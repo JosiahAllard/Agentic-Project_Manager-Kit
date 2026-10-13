@@ -1,4 +1,4 @@
-"""kitlib.hubmirror: the Action Hub mirror (docs/action-hub.md "One copy per account")."""
+"""kitlib.hubmirror: the Action Hub mirror (docs/action-hub.md "Data from the old hub")."""
 import importlib.util
 import io
 import json
@@ -12,6 +12,7 @@ from kitlib import commit as kcommit
 from kitlib import hubmirror, pmdata
 from kitlib.config import user
 from kitlib.config.types import ConfigError
+from kitlib.hubsite import store as hubstore
 from tests.gitfixture import TempRepo, fixture_env
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -96,9 +97,37 @@ class SaveTest(unittest.TestCase):
     def put(self, coll, doc_id, obj):
         write_json(os.path.join(self.src, coll, doc_id + '.json'), obj)
 
-    def save(self):
+    def save(self, prune=False):
         found, notes = hubmirror.read_source(self.src)
-        return hubmirror.save(found, self.mirror), notes
+        return hubmirror.save(found, self.mirror, prune=prune), notes
+
+    def test_save_without_prune_keeps_docs_absent_from_the_source(self):
+        self.put('todos', 't1', {'text': 'one'})
+        self.put('todos', 't2', {'text': 'two'})
+        self.save()
+        os.remove(os.path.join(self.src, 'todos', 't1.json'))
+        changes, _ = self.save()
+        self.assertEqual(changes, [])
+        self.assertEqual(sorted(tree(self.mirror)), ['todos/t1.json', 'todos/t2.json'])
+
+    def test_save_with_prune_deletes_them(self):
+        self.put('todos', 't1', {'text': 'one'})
+        self.put('todos', 't2', {'text': 'two'})
+        self.save()
+        os.remove(os.path.join(self.src, 'todos', 't1.json'))
+        changes, _ = self.save(prune=True)
+        self.assertEqual([tuple(c) for c in changes], [('deleted', 'todos/t1.json')])
+        self.assertEqual(sorted(tree(self.mirror)), ['todos/t2.json'])
+
+    def test_save_refuses_a_live_site_store(self):
+        self.put('todos', 't1', {'text': 'one'})
+        write_json(os.path.join(self.mirror, hubstore.META_NAME), {'next': {}})
+        write_json(os.path.join(self.mirror, 'todos', 'site.json'), {'text': 'written by the site'})
+        for prune in (False, True):
+            with self.assertRaises(hubmirror.Refused) as cm:
+                self.save(prune=prune)
+            self.assertIn('live hub site store', str(cm.exception))
+        self.assertEqual(sorted(tree(self.mirror)), ['_meta.json', 'todos/site.json'])
 
     def test_add_change_delete_and_absent_collections_untouched(self):
         self.put('todos', 't1', {'id': 't1', 'version': 1, 'data': {'text': 'one'}})
@@ -117,7 +146,7 @@ class SaveTest(unittest.TestCase):
         shutil.rmtree(os.path.join(self.src, 'questions'))     # not listed this time: left alone
         os.remove(os.path.join(self.src, 'todos', 't1.json'))
         self.put('todos', 't2', {'text': 'two, edited', 'version': 5})
-        changes, _ = self.save()
+        changes, _ = self.save(prune=True)
         self.assertEqual([tuple(c) for c in changes], [('deleted', 'todos/t1.json'),
                                                        ('changed', 'todos/t2.json')])
         self.assertEqual(sorted(tree(self.mirror)), ['questions/q1.json', 'todos/t2.json'])
@@ -128,7 +157,7 @@ class SaveTest(unittest.TestCase):
         self.put('parked', 'p1', {'text': 'x'})
         self.save()
         os.remove(os.path.join(self.src, 'parked', 'p1.json'))
-        changes, _ = self.save()
+        changes, _ = self.save(prune=True)
         self.assertEqual([tuple(c) for c in changes], [('deleted', 'parked/p1.json')])
 
     def test_pages_and_page_html_are_mirrored(self):
@@ -407,7 +436,7 @@ class CommitPushTest(unittest.TestCase):
         hubmirror.commit(plan, self.save('todos', 't1', {'text': 'one'}))
         os.remove(os.path.join(self.src, 'todos', 't1.json'))
         found, _ = hubmirror.read_source(self.src)
-        changes = hubmirror.save(found, self.mirror)
+        changes = hubmirror.save(found, self.mirror, prune=True)
         self.assertEqual([tuple(c) for c in changes], [('deleted', 'todos/t1.json')])
         hubmirror.commit(plan, changes)
         self.assertEqual(self.git('ls-files', 'hub'), '')
@@ -423,10 +452,16 @@ class CommitPushTest(unittest.TestCase):
         with self.assertRaises(hubmirror.Refused) as cm:
             self.plan()
         self.assertIn('a checkout of the kit itself', str(cm.exception))
-        with mock.patch.object(kcommit, 'KIT_ROOT', self.wt):   # the kit's own work tree, on a branch
-            with self.assertRaises(hubmirror.Refused) as cm:
-                self.plan()
+        with self.assertRaises(hubmirror.Refused) as cm:        # this very kit work tree, on any HEAD
+            self.plan(os.path.join(KIT, 'hub'))
         self.assertIn('a checkout of the kit itself', str(cm.exception))
+
+    def test_a_detached_head_outside_the_kit_is_refused_as_detached(self):
+        self.git('checkout', '--detach')
+        with self.assertRaises(hubmirror.Refused) as cm:
+            self.plan()
+        self.assertIn('HEAD is detached in', str(cm.exception))
+        self.assertNotIn('a checkout of the kit itself', str(cm.exception))
 
     def test_a_checkout_of_the_kit_on_a_detached_head_is_still_refused_as_the_kit(self):
         write_json(os.path.join(self.wt, 'kitlib', 'hubmirror', '__init__.py'), {})   # the kit's code
@@ -506,6 +541,26 @@ class CliTest(unittest.TestCase):
             self.assertEqual(self.run_tool(['set-url', '--account', '2', 'https://x'])[0], 2)
         with mock.patch.object(self.tool.hubmirror, 'set_url', side_effect=hubmirror.Refused('no')):
             self.assertEqual(self.run_tool(['set-url', '--account', '2', 'https://x'])[0], 1)
+
+    def test_prune_flag_reaches_save_and_defaults_off(self):
+        d = tmpdir(self)
+        src = os.path.join(d, 'src')
+        os.makedirs(src)
+        settings = (None, {'hub_mirror': os.path.join(d, 'hub')})
+        for argv, want in ((['save', '--from', src], False), (['save', '--from', src, '--prune'], True)):
+            with mock.patch.object(self.tool.hubmirror, 'save', return_value=[]) as m:
+                code, _, _ = self.run_tool(argv, settings=settings)
+            self.assertEqual(code, 0, msg=argv)
+            self.assertIs(m.call_args.kwargs['prune'], want)
+
+    def test_save_into_a_live_site_store_exits_1(self):
+        d = tmpdir(self)
+        src = os.path.join(d, 'src')
+        os.makedirs(src)
+        write_json(os.path.join(d, 'hub', hubstore.META_NAME), {})
+        code, _, err = self.run_tool(['save', '--from', src], settings=(None, {'hub_mirror': os.path.join(d, 'hub')}))
+        self.assertEqual(code, 1)
+        self.assertIn('live hub site store', err)
 
 
 if __name__ == '__main__':

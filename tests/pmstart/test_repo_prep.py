@@ -8,17 +8,17 @@ import unittest
 
 from kitlib import pmstart
 from tests.home import temp_home
-from tests.pmstart import keep_off_launcher_repos
+from tests.pmstart import keep_off_hub_site, keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 13, 9, 0)
 FAKES = dict(pm_data=lambda: None, handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"}, stubs={"repos": {}},
-             watcher={"beat": lambda: None, "now": 0}, foreground_lock={"read": lambda: 0},
-             hub={"account": lambda: "default"})
+             watcher={"beat": lambda: None, "now": 0}, foreground_lock={"read": lambda: 0})
 
 
 def setUpModule():
     keep_off_launcher_repos()
+    keep_off_hub_site()         # the checklist's hub check reads no machine config, token or server
 
 
 class RepoPrep(unittest.TestCase):

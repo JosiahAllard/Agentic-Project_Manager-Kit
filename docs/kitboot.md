@@ -40,7 +40,7 @@ MCP server and the hub tools exit.
   so those calls never pay for a release check. A plugin whose root is not the kit (Codex) ships a
   byte copy of `boot/` and finds the kit through `PM_KIT_ROOT`, or the checkout it sits in
   (`boot/hook.py` `kit_here`).
-- `hosts/claude/shell/hub/*.py` and `mcp/lock_server.py`.
+- `mcp/lock_server.py`.
 
 Each puts `boot/` on `sys.path` relative to its own file, then calls `kitboot.boot()`. Tests:
 `tests/boot`.

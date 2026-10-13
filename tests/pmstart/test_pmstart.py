@@ -9,11 +9,10 @@ import unittest
 from kitlib import pmstart
 from kitlib.pmstart import fglock
 from tests.home import temp_home
-from tests.pmstart import keep_off_launcher_repos
+from tests.pmstart import HUB_KEPT_OFF, keep_off_hub_site, keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
-CFG = {"hub_url": "https://claude.ai/artifact/X", "hub_source": "hosts/claude/shell/hub/action-hub.html",
-       "pm_watch_cmd": "python launcher/pm_watch.py --stream", "memory_dir": "M",
+CFG = {"pm_watch_cmd": "python launcher/pm_watch.py --stream", "memory_dir": "M",
        "reminders_file": "r.json", "sessions_file": "s.json"}
 
 
@@ -29,6 +28,7 @@ def setUpModule():
     _orig_beat = pmstart.read_heartbeat
     pmstart.read_heartbeat = lambda: None     # nor this machine's pm_watch heartbeat
     keep_off_launcher_repos()   # nor this machine's launcher.repos (the stubs check)
+    keep_off_hub_site()         # nor its hub key (the hub check; the home fence is not caught)
 
 
 def tearDownModule():
@@ -59,18 +59,7 @@ class StandingTest(unittest.TestCase):
     def test_bad_value_isolated(self):
         txt = pmstart.checklist(dict(CFG, standing=5), NOW, procs=[], **self.FAKES)
         self.assertIn("could not check standing:", txt)
-        self.assertIn("republish", txt)
-
-
-class HubTest(unittest.TestCase):
-    def test_step_names_url(self):
-        s = pmstart.hub(CFG)[0]
-        src = os.path.join(pmstart.KIT_ROOT, "hosts", "claude", "shell", "hub", "action-hub.html")
-        self.assertIn("republish the kit's Action Hub page %s "
-                      "to https://claude.ai/artifact/X with the Artifact tool" % src, s)
-        self.assertIn("docs/action-hub.md (For the PM)", s)
-        self.assertNotIn("republish hosts/claude/shell/hub/action-hub.html to", s)  # the old bare line
-        self.assertIn("pm_ack", pmstart.hub(CFG)[-1])
+        self.assertIn(HUB_KEPT_OFF, txt)
 
 
 def wproc(pid, name="python.exe", cmd="python -u pm_watch.py --stream"):
@@ -261,16 +250,16 @@ class ChecklistTest(unittest.TestCase):
                                 handoff={"globber": lambda p: ["h.md"], "mtime": lambda f: 1},
                                 reminders={"read": lambda p: "[]"},
                                 liveness={"read": lambda p: "{}"})
-        self.assertIn("republish", txt)
+        self.assertIn(HUB_KEPT_OFF, txt)
         self.assertIn("read first: h.md", txt)
         self.assertNotIn("could not check", txt)
 
     def test_failures_isolated(self):
         def boom(p):
             raise OSError("disk gone")
-        txt = pmstart.checklist({"hub_url": "u"}, NOW, procs=[],
+        txt = pmstart.checklist({}, NOW, procs=[],
                                 handoff={"globber": boom}, reminders={"read": boom})
-        self.assertIn("republish", txt)  # hub still ran
+        self.assertIn(HUB_KEPT_OFF, txt)  # hub still ran
         for n in ("handoff", "reminders", "liveness"):
             self.assertIn("could not check %s:" % n, txt)
         self.assertIn("pm_watch.py is not running", txt)  # no pm_watch_cmd: the kit's own command
@@ -287,7 +276,7 @@ class ChecklistTest(unittest.TestCase):
             pmstart.list_processes = orig
         self.assertIn("could not check watcher", txt)
         self.assertIn("could not check liveness", txt)
-        self.assertIn("republish", txt)
+        self.assertIn(HUB_KEPT_OFF, txt)
 
 
 class ConfigAndHookTest(unittest.TestCase):
@@ -296,8 +285,8 @@ class ConfigAndHookTest(unittest.TestCase):
             p = os.path.join(d, "c.json")
             self.assertIsNone(pmstart.load_config(p))
             with open(p, "w") as f:
-                json.dump({"pm_start": {"hub_url": "u"}}, f)
-            self.assertEqual(pmstart.load_config(p), {"hub_url": "u"})
+                json.dump({"pm_start": {"memory_dir": "u"}}, f)
+            self.assertEqual(pmstart.load_config(p), {"memory_dir": "u"})
 
     def test_hook_without_config_prints_json_exit_0(self):
         with tempfile.TemporaryDirectory() as d:
@@ -374,8 +363,8 @@ class BomFileTest(unittest.TestCase):
 
     def test_load_config_reads_bom_file(self):
         with tempfile.TemporaryDirectory() as d:
-            p = self.write(d, "config.json", {"pm_start": {"hub_url": "u"}})
-            self.assertEqual(pmstart.load_config(p), {"hub_url": "u"})
+            p = self.write(d, "config.json", {"pm_start": {"memory_dir": "u"}})
+            self.assertEqual(pmstart.load_config(p), {"memory_dir": "u"})
 
 
 class EngReviewTest(unittest.TestCase):
@@ -403,4 +392,4 @@ class EngReviewTest(unittest.TestCase):
         self.assertIn("EX-API-*", pmstart.checklist(dict(CFG, eng_review=["EX-API-*"]), NOW, procs=[], **fakes))
         txt = pmstart.checklist(dict(CFG, eng_review="x"), NOW, procs=[], **fakes)
         self.assertIn("could not check eng_review:", txt)
-        self.assertIn("republish", txt)
+        self.assertIn(HUB_KEPT_OFF, txt)

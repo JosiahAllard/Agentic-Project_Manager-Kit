@@ -216,9 +216,8 @@ def alert_events(seen, alerts_dir):
     return ev, now
 
 
-# Lock-window notices (kitlib.lock.notice writes them): <dir>/<run id>-start|end.json, each an
-# Action Hub inbox doc with its id; posted ones move to <dir>/posted/.
-POSTED = "posted"
+# Lock-window notices (kitlib.lock.notice writes them): <dir>/<run id>-start|end.json, each a
+# doc with its id; the hub server lists them (kitlib.hubsite.derived). A subfolder is not read.
 
 
 def configured_notice_dir(path=None):
@@ -254,37 +253,9 @@ def pending_notices(d):
     return out
 
 
-def notice_batch(docs):
-    """An ArtifactData batch that sets each notice doc as inbox/<its id>."""
-    return [{"op": "set", "collection": "inbox", "doc_id": doc["id"],
-             "data": {k: v for k, v in doc.items() if k != "id"}} for doc in docs]
-
-
-def notice_file(doc_id):
-    """The file name of the notice whose inbox id is doc_id ("L-<run id>-<phase>"), or None."""
-    ok = (isinstance(doc_id, str) and doc_id.startswith("L-")
-          and doc_id.endswith(("-start", "-end")) and os.path.basename(doc_id) == doc_id)
-    return doc_id[2:] + ".json" if ok else None
-
-
-def mark_posted(d, names):
-    """Moves the named notice files into d/posted/. Returns the names moved."""
-    os.makedirs(os.path.join(d, POSTED), exist_ok=True)
-    moved = []
-    for n in names:
-        if not isinstance(n, str) or os.path.basename(n) != n or not n.endswith(".json"):
-            continue
-        try:
-            os.replace(os.path.join(d, n), os.path.join(d, POSTED, n))
-            moved.append(n)
-        except FileNotFoundError:
-            pass
-    return moved
-
-
 def notice_events(seen, notice_dir):
-    """(events, seen now): one LOCKNOTICE per notice in notice_dir not in seen and not yet posted
-    (posted ones move away, so they drop out of seen)."""
+    """(events, seen now): one LOCKNOTICE per notice in notice_dir not in seen (one that is
+    gone drops out of seen)."""
     ev, now = [], []
     for n, doc in pending_notices(notice_dir):
         if n not in seen:

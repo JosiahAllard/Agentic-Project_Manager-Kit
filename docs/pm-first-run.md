@@ -56,8 +56,8 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    holding `[]`, and a memory folder for handoff notes. The sessions file is `sessions.json` in
    `launcher.state_dir` (docs/launcher.md "State files"): start it from
    `docs/launcher.sessions.example.json`, or from `{}` until step 11. Put that folder inside the PM
-   repository (`hosts/claude/shell/hub/hub_backlog.py` finds the repository from the sessions file's folder
-   and fails outside a git repo). Fill `pm_start` in the user config with their paths, and
+   repository (the hub server's backlog view finds the repository from the sessions file's folder,
+   `kitlib.hubsite.serve` `_repo_pairs`, and fails outside a git repo). Fill `pm_start` in the user config with their paths, and
    `pm_watch_cmd` (docs/pm-start.md "Config"); set `pm_watch.sessions_file` to the same file
    (docs/pm-watch.md "Config"). `pm_watch.py` reads usage
    in-process from the machine config's `launcher` key and exits 2 without it; `usage_script` is refused.
@@ -66,18 +66,14 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    Success: the next PM session starts with "PM session start checklist", not "no pm_start
    config ... checklist skipped".
 
-8. **Publish the Action Hub.** Publish `hosts/claude/shell/hub/action-hub.html` with the Artifact tool and the
-   capabilities docs/action-hub.md "For the PM" gives, pin it, record its URL with
-   `python <kit>/tools/hub_mirror.py set-url --account <label> <url>` (the label:
-   `python <kit>/tools/hub_mirror.py account`), and run `ArtifactComments watch` on that URL.
-   The hub's data is mirrored in git (docs/action-hub.md "One copy per account"): with no
-   `pm_data` yet, set `pm_start.hub_mirror` to an absolute folder in a linked work tree of a
-   private repository, on its `.kit.json` main branch (`save --commit` refuses a main checkout
-   and any work tree of the kit itself). Then
-   `python <kit>/tools/hub_mirror.py restore --out <file>` says the mirror is empty: a new
-   install has nothing to send.
-   Success: the page opens, the watch is confirmed, and the next session start gives the
-   republish line.
+8. **Start the Action Hub.** `python <kit>/tools/hub.py setup` makes the token files, then the
+   owner starts `python <kit>/tools/hub.py serve` in a window of its own and runs
+   `python <kit>/tools/hub.py open` (docs/action-hub.md "Serving it"). The store is `hub/` in the
+   PM data worktree; with no `pm_data` yet, set `hub.store` to an absolute folder in the machine
+   config. The PM starts `python <kit>/tools/hub.py wait --pending` in the background
+   (docs/action-hub.md "For the PM").
+   Success: the page opens signed in, and the next session start says
+   `hub: server up on port 8790, 0 pending`.
 
 9. **Install each repository** (docs/install.md).
    Success: `git -C <repo> config core.hooksPath` prints `<kit>/githooks` (and, for a
@@ -102,13 +98,11 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
     so kit work and landings need a kit coordinator.
     Success: the next checklist does not list it as not running.
 
-12. **List the repositories on the hub.** `python <kit>/hosts/claude/shell/hub/hub_repos.py` prints the known
-    repositories (from the sessions file, so step 11 comes first, plus `pm_start.repos`). Then
-    `--have <names already stored> --out <file>`, and send the batch with ArtifactData. Do the same
-    with `hosts/claude/shell/hub/hub_backlog.py --out <file>` (docs/action-hub.md "repos/<name>", "Backlog
-    section").
-    A repository that is not a sibling of the PM repository needs `pm_start.repo_paths`, else the
-    backlog run says "no folder, skipped".
+12. **Check the repositories on the hub.** The hub server reads the known repositories live (from
+    the sessions file, so step 11 comes first, plus `pm_start.repos`) and each one's backlog
+    (docs/action-hub.md "repos/<name>", "Views read live").
+    A repository that is not a sibling of the PM repository needs `pm_start.repo_paths`, else its
+    backlog does not show.
     Success: each repository shows in the hub's backlog menu.
 
 13. **Preflight.** For each repository, `python <kit>/tools/preflight.py -C <repo>`

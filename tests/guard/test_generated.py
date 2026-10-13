@@ -55,7 +55,7 @@ class Source(unittest.TestCase):
     def test_sources_and_hand_written_host_files_are_not_rendered(self):
         for rel in ('content/roles/worker.md', 'content/skills/a/SKILL.md', 'kit.json', 'hosts.json',
                     'hosts/codex/shell/scripts/launch.py', 'hosts/codex/shell/mcp/lock_server.py',
-                    'hosts/claude/shell/hub/action-hub.html', 'hosts/claude/adapter/content.py',
+                    'hosts/claude/adapter/content.py',
                     'docs/ROSTER.md', 'hosts/claude/shell/../shell/agents/worker.md'):
             with self.subTest(rel):
                 self.assertIsNone(generated.source(self.top, rel))
