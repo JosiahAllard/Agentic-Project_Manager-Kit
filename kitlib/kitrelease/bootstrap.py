@@ -2,6 +2,8 @@
 
 Only the standard library is imported. The expected identity must come from trusted
 reviewed preparation, never from the artifact being checked. No Git or activation.
+The host shell folders shipped (ROOTS) come from the hosts.json beside it (host_roots), so no
+host is named here; that file is itself in every release's checked inventory.
 """
 import hashlib
 import json
@@ -13,10 +15,11 @@ import stat
 
 MARKER = '.kit-package.json'
 SUBTREE = 'shared-runtime'
-ROOTS = ('kitlib', 'tools', 'mcp', 'claude', 'codex', 'docs', 'templates',
-         'githooks', 'installer', 'optional', 'knowledge')
+HOSTS = 'hosts.json'
+CORE_ROOTS = ('kitlib', 'tools', 'mcp', 'docs', 'templates', 'githooks', 'installer', 'optional',
+              'knowledge')
 RESOURCES = ('AGENTS.md', 'ARCHITECTURE.md', 'CLAUDE.md', 'README.md',
-             'LICENSE', 'reserve_ui.pyw')
+             'LICENSE', 'reserve_ui.pyw', HOSTS)
 REQUIRED_FILE = 'kitlib/kitrelease/bootstrap.py'
 _SHA = re.compile(r'^[0-9a-f]{40}(?:[0-9a-f]{24})?$')
 _DIGEST = re.compile(r'^[0-9a-f]{64}$')
@@ -26,6 +29,27 @@ _DEVICES = {'CON', 'PRN', 'AUX', 'NUL'} | {
 
 class ReleaseError(ValueError):
     """Untrusted or changed runtime release, identity or path."""
+
+
+def host_roots(path=None):
+    """The top folder of each registered host's shell, in hosts.json order: the release ships every
+    host the registry names and no other. Read with json alone, not kitlib.host.registry, because
+    this file runs before kitlib is trusted. `path` defaults to the hosts.json beside this kit; in a
+    release that file is in the verified inventory (RESOURCES), so a changed one fails verify."""
+    path = Path(__file__).resolve().parents[2] / HOSTS if path is None else Path(path)
+    try:
+        hosts = json.loads(path.read_bytes(), object_pairs_hook=_pairs)
+    except (OSError, ValueError) as error:
+        raise ReleaseError('host registry missing or invalid') from error
+    if not isinstance(hosts, dict) or not hosts:
+        raise ReleaseError('host registry missing or invalid')
+    roots = []
+    for entry in hosts.values():
+        shell = entry.get('shell') if isinstance(entry, dict) else None
+        root = _relative(shell if isinstance(shell, str) else '').split('/')[0]
+        if root not in roots and root not in CORE_ROOTS:
+            roots.append(root)
+    return tuple(roots)
 
 
 def _relative(value):
@@ -61,6 +85,9 @@ def _pairs(items):
             raise ReleaseError('duplicate release metadata field')
         result[key] = value
     return result
+
+
+ROOTS = CORE_ROOTS + host_roots()
 
 
 def _allowed(name):

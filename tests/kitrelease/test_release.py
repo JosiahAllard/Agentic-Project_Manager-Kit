@@ -32,6 +32,7 @@ def tracked_fixture():
              'codex/skills/shared/SKILL.md': b'Codex entry\n',
              'templates/example/.claude/skills/check/SKILL.md': b'template entry\n',
              'AGENTS.md': b'Reviewed rules\n',
+             'hosts.json': (ROOT / 'hosts.json').read_bytes(),
              '.kit.json': b'{"private":"checkout only"}\n',
              '.claude/session.json': b'private Claude state\n',
              '.codex/session.json': b'private Codex state\n',
@@ -75,6 +76,23 @@ class Release(unittest.TestCase):
         self.assertEqual(result['identity'], hashlib.sha256(P.encoded(marker)).hexdigest())
         self.assertFalse(result['ready'])
         self.assertEqual(self.export(), result)
+
+    def test_host_shells_come_from_hosts_json_and_an_unregistered_folder_is_not_shipped(self):
+        self.export()
+        self.assertTrue((self.root / 'hosts.json').is_file())
+        self.assertTrue((self.root / 'claude/skills/shared/SKILL.md').is_file())
+        self.assertFalse((self.root / 'codex').exists())     # no hosts.json entry names it
+        self.assertEqual(B.ROOTS, B.CORE_ROOTS + B.host_roots(ROOT / 'hosts.json'))
+        path = Path(self.scratch.name) / 'hosts.json'
+        path.write_text(json.dumps({'a': {'shell': 'hosts/a/shell'}, 'b': {'shell': 'second'},
+                                    'c': {'shell': 'hosts/c/shell'}, 'd': {'shell': 'tools'}}))
+        self.assertEqual(B.host_roots(path), ('hosts', 'second'))
+        for bad in ('{', '{}', '[]', '{"a": {}}', '{"a": {"shell": "../x"}}'):
+            path.write_text(bad)
+            with self.subTest(bad=bad), self.assertRaises(B.ReleaseError):
+                B.host_roots(path)
+        with self.assertRaises(B.ReleaseError):
+            B.host_roots(Path(self.scratch.name) / 'missing.json')
 
     def test_new_commit_cannot_change_existing_publication(self):
         result = self.export()

@@ -1,6 +1,6 @@
 """sync_base.py: merge exactly the base commit the coordinator named into your branch (docs/sync-base.md).
 
-  sync_base.py [-C DIR] <hash> --model "<model name>" [--base BRANCH] [--no-wait]
+  sync_base.py [-C DIR] <hash> --model "<model name>" [--host NAME] [--base BRANCH] [--no-wait]
 
 Merges EXACTLY <hash>, never a rebase. Fetches <remote> <base> first and refuses a hash that is
 not on the fetched <remote>/<base> (use the `git ls-remote <remote> <base>` hash, never local
@@ -21,6 +21,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import syncbase                                         # noqa: E402
+from kitlib.host import registry                                    # noqa: E402
 
 
 class Parser(argparse.ArgumentParser):
@@ -40,8 +41,9 @@ def build_parser():
                    help='the worktree to merge into (default: here)')
     p.add_argument('hash', help='the base commit to merge, exactly as the coordinator named it')
     p.add_argument('--model', help='the model you are running on (else %s)' % syncbase.MODEL_ENV)
-    p.add_argument('--provider', choices=('claude', 'codex'), default='claude',
-                   help='agent provider (default: claude); Codex requires --model')
+    p.add_argument('--host', '--provider', dest='host', default=None,
+                   help='the agent host, for the Co-Authored-By trailer (default: $PM_KIT_HOST, '
+                        'else the hosts.json default); --provider is its old name, kept for one release')
     p.add_argument('--base', help='the base branch (default: .kit.json "repo".main_branch)')
     p.add_argument('--no-wait', dest='wait', action='store_false',
                    help='do not wait for a landing in flight (.kit.json "landing".in_flight); '
@@ -57,7 +59,11 @@ def main(argv=None):
     if a.base is not None and (not a.base.strip() or a.base.startswith('-')):
         p.error('--base needs a branch name')
     try:
-        model, source = syncbase.resolve_model(a.model, provider=a.provider)
+        host = registry.choose(a.host)
+    except registry.RegistryError as error:
+        p.error('--host: %s' % error)
+    try:
+        model, source = syncbase.resolve_model(a.model, provider=host)
     except ValueError as error:
         p.error(str(error))
     if model is None:
@@ -67,7 +73,7 @@ def main(argv=None):
                 % syncbase.MODEL_ENV)
     try:
         out = syncbase.sync(a.root, a.hash, model, source, a.base, wait=a.wait,
-                            say=lambda line: print(line, flush=True), provider=a.provider)
+                            say=lambda line: print(line, flush=True), provider=host)
     except KeyboardInterrupt:
         return 130
     for line in out.lines:

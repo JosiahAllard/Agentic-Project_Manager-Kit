@@ -118,7 +118,8 @@ SECTIONS = {
         'remote': Field(Str(), 'origin', 'the remote main is pushed to'),
         'worktrees_dir': Field(RelPath(), '.claude/worktrees', 'where agent worktrees live'),
         'worktrees_by_host': Field(MapOf(RelPath(), what='host'), {},
-                                   'per-host worktree folders; explicit --host selects one'),
+                                   'per-host worktree folders, keyed by hosts.json host name '
+                                   '(docs/new-worktree.md "Hosts")'),
         'tools_dir': Field(RelPath(), 'tools', 'where repo tools, stubs and the hook module live'),
         'push_block': Field(Bool(), False, 'pre-push refuses a push to main without a gate-OK record'),
     },

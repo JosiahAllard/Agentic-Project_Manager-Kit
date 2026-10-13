@@ -21,7 +21,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - `repo.main_branch` (string, default "main"): the branch landings target
 - `repo.remote` (string, default "origin"): the remote main is pushed to
 - `repo.worktrees_dir` (repo path, default ".claude/worktrees"): where agent worktrees live
-- `repo.worktrees_by_host` (map host -> repo path, default {}): per-host worktree folders; explicit --host selects one
+- `repo.worktrees_by_host` (map host -> repo path, default {}): per-host worktree folders, keyed by hosts.json host name (docs/new-worktree.md "Hosts")
 - `repo.tools_dir` (repo path, default "tools"): where repo tools, stubs and the hook module live
 - `repo.push_block` (bool, default false): pre-push refuses a push to main without a gate-OK record
 - `owner.email` (email): author email of the owner's own commits; unset: no owner commit is provable

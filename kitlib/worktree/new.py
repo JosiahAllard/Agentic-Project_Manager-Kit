@@ -57,6 +57,8 @@ from kitlib.config import ConfigError, load
 from kitlib.git import cmd
 from kitlib.git import refs as gitrefs
 from kitlib.records import inflight, landing
+from kitlib.host.registry import RegistryError
+from kitlib.worktree import hostdirs
 
 OK, REFUSED, CONFIG = 0, 1, 2
 
@@ -186,10 +188,12 @@ def main_checkout_of(common):
 
 
 def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=time.sleep,
-           clock=time.monotonic):
+           clock=time.monotonic, host=None):
     """Outcome(code, lines) of making the worktree for `branch` in the repository `root` is in.
     `wait` False is --no-wait; `say(line)` gets the lines said while waiting for a landing in
-    flight (None: they lead the Outcome's lines); `sleep` and `clock` are time's, for tests."""
+    flight (None: they lead the Outcome's lines); `sleep` and `clock` are time's, for tests.
+    `host` is a hosts.json name whose folder the worktree goes in (kitlib.worktree.hostdirs); None
+    is "repo".worktrees_dir, as before hosts."""
     rc, common, err = git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')
     if rc != 0 or not common:
         return Outcome(REFUSED, ['refused: %s is not a git checkout (no common dir: %s).'
@@ -206,7 +210,22 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
     base = branch_name(base, remote) if base else cfg.main_branch
     tools = cfg.tools_dir.replace('\\', '/').rstrip('/')
     slug = branch.split('/', 1)[1]
-    parent = os.path.normpath(os.path.join(main, cfg.repo['worktrees_dir']))
+    try:
+        folder = cfg.repo['worktrees_dir'] if host is None else hostdirs.folder(cfg, host)
+    except RegistryError as error:
+        return Outcome(CONFIG, ['new_worktree: refused: %s' % error])
+    parent = os.path.normpath(os.path.join(main, folder))
+    if folder != cfg.repo['worktrees_dir']:
+        # A host's own folder never grants a destination outside this main checkout; the
+        # repository's worktrees_dir keeps the rules it had before hosts.
+        real_main, real_parent = os.path.realpath(main), os.path.realpath(parent)
+        try:
+            inside = os.path.commonpath((real_main, real_parent)) == real_main and real_parent != real_main
+        except ValueError:
+            inside = False
+        if not inside or os.path.normcase(real_parent) != os.path.normcase(os.path.abspath(parent)):
+            return Outcome(CONFIG, ['new_worktree: refused: host worktree folder must stay inside '
+                                    'the main checkout without a redirect'])
     path = os.path.join(parent, slug)
     out = []
 

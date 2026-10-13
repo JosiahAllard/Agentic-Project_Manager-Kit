@@ -6,8 +6,10 @@ docs/worktree-remove.md). tools/worktree_remove.py is the entry point.
 the repository `top` is in (the main checkout or any linked worktree) and return Outcome(code,
 lines). Nothing here prints. The checks, in order, are the PM tool's:
 
-- the target: under `"repo".worktrees_dir`, not `"worktree_remove".exempt`, present, registered
-  (a stump is named and never deleted), and on `branch_template`'s branch when one is set;
+- the target: under `"repo".worktrees_dir` or another registered host's worktree folder
+  (kitlib.worktree.hostdirs; homes_of: a folder reached through a junction is not one), not
+  `"worktree_remove".exempt`, present, registered (a stump is named and never deleted), and on
+  `branch_template`'s branch when one is set;
 - landed: the branch (or detached HEAD) is an ancestor of `<remote>/<main_branch>` AS IT STANDS,
   never fetched (`merge_check`); UNLANDED work is the owner's to remove and the refusal prints his
   commands and the `--abandon` verb, running none of them;
@@ -41,8 +43,9 @@ from kitlib.backlog import store as backlog_store
 from kitlib.backlog.errors import Failure as BacklogFailure
 from kitlib.config import ConfigError, load
 from kitlib.git import cmd, refs
+from kitlib.host.registry import RegistryError
 
-from . import holders
+from . import holders, hostdirs
 from .holders import canon
 
 OK, REFUSED, CONFIG = 0, 1, 2
@@ -152,6 +155,15 @@ def piece_dirs(cfg, entries):
     return dirs, None
 
 
+def host_folders(cfg):
+    """Every host's worktree folder (kitlib.worktree.hostdirs). A hosts.json that cannot be read
+    leaves only "repo".worktrees_dir: removal then finds fewer worktrees, never more."""
+    try:
+        return hostdirs.folders(cfg)
+    except RegistryError:
+        return (os.path.normpath(cfg.repo['worktrees_dir']),)
+
+
 def settings(main, cfg):
     """This repository's values (the schema has already checked their shapes)."""
     wr = cfg.section(TOOL)
@@ -162,6 +174,7 @@ def settings(main, cfg):
         'base': cfg.main_branch, 'remote': cfg.remote,
         'upstream': '%s/%s' % (cfg.remote, cfg.main_branch),
         'worktrees_dir': os.path.normpath(cfg.repo['worktrees_dir']),
+        'worktrees_dirs': list(host_folders(cfg)),
         'tool': 'python %s/worktree_remove.py' % tools,
         'name': cfg.repo.get('name') or os.path.basename(os.path.normpath(main)),
         'exempt': dict(wr.get('exempt') or {}),
@@ -200,6 +213,26 @@ def open_ctx(top, cwd=None):
 
 def home_of(ctx):
     return os.path.normpath(os.path.join(ctx.main, ctx.s['worktrees_dir']))
+
+
+def homes_of(ctx):
+    """Primary root, plus non-redirected roots of other supported hosts."""
+    primary = home_of(ctx)
+    homes = [primary]
+    for folder in ctx.s.get('worktrees_dirs', ()):
+        candidate = os.path.abspath(os.path.join(ctx.main, folder))
+        if canon(candidate) == canon(primary):
+            continue
+        # Additional host roots cannot escape the checkout through a junction.
+        if os.path.normcase(os.path.realpath(candidate)) != os.path.normcase(candidate):
+            continue
+        if canon(candidate).startswith(canon(ctx.main) + os.sep):
+            homes.append(candidate)
+    return homes
+
+
+def is_workstream(ctx, path):
+    return any(canon(path).startswith(canon(home) + os.sep) for home in homes_of(ctx))
 
 
 def worktree_listing(main):
@@ -309,14 +342,13 @@ def leftovers(ctx, listing):
     """(stumps, orphans): directories git does not know about, and registered entries under the
     worktrees dir whose directory is gone. Exempt folders are neither."""
     known = registered(ctx.main, listing)
-    home = home_of(ctx)
     stumps = []
-    for name in sorted(os.listdir(home)) if os.path.isdir(home) else []:
-        path = os.path.join(home, name)
-        if os.path.isdir(path) and canon(path) not in known and not exemption(ctx.s, path):
-            stumps.append(path)
-    prefix = canon(home) + os.sep
-    orphans = [p for p in sorted(known) if p.startswith(prefix)
+    for home in homes_of(ctx):
+        for name in sorted(os.listdir(home)) if os.path.isdir(home) else []:
+            path = os.path.join(home, name)
+            if os.path.isdir(path) and canon(path) not in known and not exemption(ctx.s, path):
+                stumps.append(path)
+    orphans = [p for p in sorted(known) if is_workstream(ctx, p)
                and not os.path.isdir(p) and not exemption(ctx.s, p)]
     return stumps, orphans
 
@@ -345,7 +377,7 @@ def merged_worktrees(ctx, listing, skip=()):
     out = []
     for e in worktree_entries(listing):
         path = e['path']
-        if not canon(path).startswith(home + os.sep) or canon(path) in skipped \
+        if not is_workstream(ctx, path) or canon(path) in skipped \
                 or exemption(ctx.s, path) or not os.path.isdir(path):
             continue
         if not e['head'] or e['head'] in chain:
@@ -401,7 +433,8 @@ def check(top, cwd=None):
     for path, branch in merged or []:
         ctx.say('merged    %s [%s] landed: its own commits are in %s; `%s %s` removes it%s'
                 % (path, branch or 'detached', ctx.s['upstream'], ctx.s['tool'],
-                   os.path.basename(path), ' and its branch' if branch else ''))
+                   os.path.basename(path) if canon(path).startswith(canon(home_of(ctx)) + os.sep) else '"%s"' % path,
+                   ' and its branch' if branch else ''))
     if not stumps and not orphans:
         ctx.say('clean     every directory under %s is a registered worktree'
                 % ctx.s['worktrees_dir'])
@@ -446,7 +479,7 @@ def registered_target(ctx, argument):
     s = ctx.s
     path = target_path(ctx, argument)
     home = home_of(ctx)
-    if not canon(path).startswith(canon(home) + os.sep):
+    if not is_workstream(ctx, path):
         ctx.say('refused   %s is not under %s; this tool removes workstream worktrees only'
                 % (path, home))
         return REFUSED

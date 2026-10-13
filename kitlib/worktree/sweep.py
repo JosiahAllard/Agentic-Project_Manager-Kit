@@ -221,7 +221,7 @@ def sweep_skip(ctx, entry, home, base, chain, ancestors, entries, machine, now, 
     key = canon(path)
     if key == canon(main):
         return 'the main checkout: never touched'
-    if not key.startswith(home + os.sep):
+    if not remove.is_workstream(ctx, path):
         return 'not under %s: only workstream worktrees are swept' % s['worktrees_dir']
     if remove.exemption(s, path):
         return 'exempt (%s)' % remove.exemption(s, path)

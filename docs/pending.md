@@ -1,8 +1,6 @@
 # The pending-steps file
 
-Commit/push options accept --provider claude|codex, default Claude. Codex requires the actual
-explicit --model id and uses the shared OpenAI attribution formatter. Identity validation
-runs before writing; existing provenance, branch, path and owner checks retain their rules.
+The commit/push options take `--host NAME`: the agent host for the Co-Authored-By trailer, a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude); `--provider` is its old name, accepted for one release. The trailer comes from `kitlib.attribution` (docs/commit.md); a Codex trailer needs the actual explicit --model id. The host and model are checked before anything is written; the provenance, branch, path and owner checks keep their rules.
 
 The owner's list of hand steps the PM session keeps: one file, a flat numbered list. It is the file the machine config's `pending_path` names (docs/kit-json.md). Entry point `tools/pending.py`; logic `kitlib/pending`; tests `tests/pending`. Ported from the PM repository's `tools/pending.py`.
 
