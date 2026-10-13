@@ -1,6 +1,6 @@
 # Machine setup
 
-One reviewed command sets a machine up for the kit (plan decision 27, docs/multi-host-plan.md section 7). It writes nothing into any repository: a repository works with the kit with nothing committed in it, and the kit's first use there writes only local git settings (docs/install.md "What first use writes"). Nothing has run it on a real machine yet.
+One reviewed command sets a machine up for the kit (plan decision 27, docs/multi-host-plan.md section 7). It writes nothing into any repository (the one exception is opt-in: the `--pm-settings` file you name, a local settings file the PM repository keeps out of its commits): a repository works with the kit with nothing committed in it, and the kit's first use there writes only local git settings (docs/install.md "What first use writes"). Nothing has run it on a real machine yet.
 
 ```
 powershell -NoProfile -File installer\machine-setup.ps1 [-OwnerEmail <email>] [-PmSettings <file>] [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>] [-RegisterSweepTask] [-Shortcut] [-Apply]
@@ -148,9 +148,9 @@ The default (no `--old-kit`; `--fresh` and `-Fresh` say the same) is for any mac
 
 - `--owner-email` (`-OwnerEmail`): stored when the machine config holds another value or none; the change names the value it replaces, and its undo text sets it back.
 - None given and one stored: kept, nothing to do.
-- None given and none stored: `git config user.email`, read in the kit checkout (the user's global value unless the kit checkout sets its own; `Host.git_email`, `kitlib/machinesetup/extras.py`), is planned, and the dry run asks the owner to confirm it is the address their own commits are authored with, or to name another with `--owner-email`. That confirmation is the dry run: `--apply` stores what it showed.
-- None found anywhere: a note. With `--apply` in a console (stdin and stdout a terminal), `tools/machine_setup.py` asks for it first (`needs_prompt`); an empty answer stores nothing.
+- None given and none stored: a note, and nothing is stored on its own. `git config user.email`, read in the kit checkout (the user's global value unless the kit checkout sets its own; `Host.git_email`, `kitlib/machinesetup/extras.py`), is only suggested: the note names it and says to confirm it with `--owner-email <it>`. A git identity can be any address, an agent's among them, so it is never stored unconfirmed. With `--apply` in a console (stdin and stdout a terminal), `tools/machine_setup.py` asks first (`needs_prompt`, `suggestion`): `y` stores the suggested address, a typed address stores that, and an empty answer or `n` stores nothing. With no console (a redirected run), nothing is asked and nothing stored.
 - A value that is not an email address is refused when given, and a note when found in git config.
+- Only the owner runs it to act: the guard's `owner-setup` rule denies `machine_setup.py --apply` (and its front ends' `-Apply`) to every other session, and the write jail denies an agent session's edit of the machine config (docs/guard.md "Owner machine setup").
 
 The write keeps the machine config's other keys and its layout (`kitlib/machinesetup/machineconfig.py`, shared with the sweep key below): it refuses a file that changed since the survey, and puts the file back when the machine config cannot be read after it. The two keys planned in one run both land: each write moves the run's snapshot of the file on to what it wrote. A machine config only in the retired folder is refused (`kitlib.config.user.writable_file`).
 

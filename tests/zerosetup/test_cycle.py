@@ -4,8 +4,9 @@ committed in it, runs a PM-to-worker-to-land cycle through the kit's own library
 history afterwards holds the worker's change and nothing else.
 
 The cycle, in the order a PM and a worker run it:
-  1. machine setup stores the owner's email in the machine config (kitlib.machinesetup.owner),
-     the only machine state the cycle reads, and writes nothing into the clone;
+  1. machine setup's owner step (kitlib.machinesetup.owner.survey, as the default mode plans and
+     applies it) stores the owner's email in the machine config, the only machine state the cycle
+     reads, and writes nothing into the clone;
   2. the PM makes the worker's worktree (kitlib.worktree.new.create, tools/new_worktree.py),
      which runs the first-use repo prep (kitlib.git.prep: info/exclude, core.hooksPath);
   3. the worker commits in the worktree (kitlib.commit.commit, tools/commit.py);
@@ -31,11 +32,13 @@ import os
 import shutil
 import subprocess
 import tempfile
+import types
 import unittest
 from unittest import mock
 
 import kitlib.config as kconfig
 from kitlib import commit as kcommit
+from kitlib import kitroot
 from kitlib import gate as G
 from kitlib.config import user as kuser
 from kitlib.gate import land, runner
@@ -44,6 +47,7 @@ from kitlib.git.fake import repo as fakerepo
 from kitlib.guard import prepush
 from kitlib.lock import store as lockstore
 from kitlib.machinesetup import owner as mowner
+from kitlib.machinesetup.common import Plan
 from kitlib.worktree import new as wtnew
 from tests import gitfixture
 from tests.gate.fixtures import test_env
@@ -158,8 +162,14 @@ class Cycle(object):
         start = self.git('rev-parse', 'HEAD')
         tracked = sorted(self.git('ls-files').split())
         config_before = self.git('config', '--local', '--list')
-        # 1. machine setup: the owner's email, in the machine config only
-        mowner.write_owner_email(self.home, None, OWNER)
+        # 1. machine setup: the owner's email, in the machine config only (the default mode's
+        # owner step, planned and applied as machine_setup.py --owner-email ... --apply does)
+        plan = Plan(Plan.FRESH_SECTIONS)
+        mowner.survey(plan, types.SimpleNamespace(home=self.home, kit=kitroot.root(), host=None,
+                                                  owner_email=OWNER))
+        self.assertEqual((len(plan.changes), plan.refusals), (1, []), plan.lines())
+        for change in plan.changes:
+            change.do()
         self.assertEqual(kuser.owner_email(self.home), OWNER)
         cfg = kconfig.load(self.clone, home=self.home)      # no .kit.json: the defaults
         self.assertEqual((cfg.main_branch, cfg.remote, cfg.owner_rules().owner_email),
@@ -205,6 +215,12 @@ class Cycle(object):
         self.assertEqual(self.status(), '')
         self.assertFalse(os.path.exists(wt), landed.lines)
         self.assertEqual(self.remote_git('branch', '--list', 'kit/fix-add'), '')
+        # What the whole cycle left in the clone's own config: core.hooksPath, and nothing else.
+        added = set(self.git('config', '--local', '--list').splitlines()) - set(config_before.splitlines())
+        self.assertEqual({l.split('=', 1)[0].lower() for l in added}, {'core.hookspath'}, added)
+        # Every commit the remote's main gained is the worker's change or the landing's merge.
+        authors = set(self.remote_git('log', '--format=%ae', '%s..main' % start).split())
+        self.assertTrue(authors and authors <= {WORKER}, authors)
 
     def test_the_detected_gate_holds_a_red_branch_back(self):
         """The tests the gate found are the clone's own: a branch that leaves them red does not

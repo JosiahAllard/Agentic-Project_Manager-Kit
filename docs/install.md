@@ -46,10 +46,13 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 
    Read the dry run, then run it again with `-Apply`. It adds the guard's entry to each Claude
    account's `settings.json`, installs the kit plugin per account from the export of the kit's
-   pushed main, stores the owner's email in the machine config (`-OwnerEmail`, else the
-   `git config user.email` the dry run shows for you to confirm) and makes the agents' temp
-   folder. It writes nothing into any repository. A machine that ran an older kit clone uses
-   `-OldKit <that clone>` instead (docs/machine-setup.md).
+   pushed main, stores the owner's email in the machine config (`-OwnerEmail`; without it the
+   `-Apply` run asks in the console, offering your `git config user.email`, which is never
+   stored unconfirmed) and makes the agents' temp folder. It writes nothing into any
+   repository but the `-PmSettings` file, when you name one (a local settings file kept out of
+   commits). A machine that ran an older kit clone uses `-OldKit <that clone>` instead
+   (docs/machine-setup.md). Run it yourself: the guard refuses `-Apply` to agent sessions, since
+   it stores the owner's email (docs/guard.md "Owner machine setup").
 2. **A repository** needs nothing installed: any git checkout with an `origin` remote whose
    default branch is pushed (`origin/HEAD` names main) works as it is. `<kit>/tools/new_worktree.py`
    fetches `origin` (it refuses if the fetch fails), and `<kit>/tools/preflight.py` does only with
