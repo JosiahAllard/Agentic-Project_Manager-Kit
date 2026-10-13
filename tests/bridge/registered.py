@@ -35,6 +35,13 @@ def codex_entry(base):
     return entry
 
 
+def use_codex_registered(case):
+    """codex_registered() for the rest of a test case (call it in setUp)."""
+    registered = codex_registered()
+    registered.__enter__()
+    case.addCleanup(registered.__exit__, None, None, None)
+
+
 @contextlib.contextmanager
 def codex_registered():
     """The kit's hosts.json with Codex added (unchanged if it already registers Codex)."""

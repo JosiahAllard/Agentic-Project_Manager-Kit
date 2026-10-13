@@ -7,8 +7,8 @@ change is listed in "Changes from the source".
 
 **Only Claude is served until Codex is registered in `hosts.json`.** On this branch `hosts.json`
 registers only `claude`. Until plan step 9 adds `codex`:
-- the service refuses a Codex profile (`native-provider-unavailable`)
-- `bridge_prepare.py` refuses a Codex profile
+- the service and `bridge_prepare.py` refuse a Codex profile with `native-provider-unavailable`.
+  The refusal comes while the configuration is checked, before the Codex half's files are read.
 - the MCP frontend reads no Codex channel variable
 
 Every Codex row below therefore describes the Codex half's code, which the tests run against a
@@ -70,12 +70,16 @@ The port changes these behaviours, all visible to a caller or an operator:
 - **Hook routing:** a native hook frame goes to the one served provider that has a hook sink.
   When none or two have one, the frame is refused (`hook-producer-unavailable`). The source sent
   it to the provider named `claude`.
-- **Serving:** a host's half is used only when `hosts.json` registers the host. The source wired
-  Codex whenever a profile named it.
+- **Serving:** a host's half is used only when `hosts.json` registers the host. A profile for an
+  unregistered host fails the configuration check with `native-provider-unavailable`, and its
+  half's files are not read. The source wired Codex whenever a profile named it.
 - **Channel variables:** these are data in each half's `bridge-profile.json` (`channel_env`), read
   only for served hosts. The source's frontend read `CODEX_APP_TOOLS_PIPE_PATH` unconditionally.
 - **Attesting:** the service calls `attest()` on any object a provider returns that has one.
-  `NativeSource.attest` is its `observe`.
+  `NativeSource.attest` is its `observe`. A source whose `prepare` is present but not callable is
+  refused (`invalid-native-source`), so client `_meta` never reaches `attest()` unreplaced.
+- **Channel variable names** are compared without case, as Windows does: two names that differ
+  only by case are refused in one profile and counted once across halves.
 - **Paths:** the entry scripts moved:
   - the frontend is `optional/bridge/mcp_frontend.py`
   - the service, prepare, connection and helper entries are in `optional/bridge/tools/`
@@ -111,12 +115,15 @@ a relocated copy. Both need re-running against this layout before they count for
 
 This port was checked on Linux only, with a ctypes shim and no Win32, so nothing was run on
 Windows:
-- `tests/bridge`: 420 tests, of which 153 pass on Linux.
-  - 266 of the 267 that fail on Linux open real pipes, tokens or processes, and they are exactly
+- `tests/bridge`: 426 tests, of which 158 pass on Linux.
+  - 266 of the 268 that fail on Linux open real pipes, tokens or processes, and they are exactly
     the tests that failed the same way on the source branch.
-  - The other one is the new Windows-only CLI test for the Codex registration gap.
-  - On Windows, the native-channel tests that hand the frontend a Codex app pipe skip until Codex
-    is registered: the frontend subprocess reads the kit's real `hosts.json`.
+  - The other two are new and Windows-only: the CLI test and the frontend-subprocess test for the
+    Codex registration gap.
+  - On Windows, the native-channel tests that need a captured Codex app pipe skip until Codex is
+    registered, because the frontend subprocess reads the kit's real `hosts.json`. Meanwhile
+    `test_codex_channel_follows_registration` asserts that the frontend ignores the variable. It
+    flips to asserting the capture once Codex is registered.
 - `tests/proc/test_pipe.py`: 10 tests; the 9 Windows-only ones skip on Linux.
 - `tests/ident`: 7 tests, all passing on Linux.
 - The bridge part of the Claude conformance suite: 4 tests; 3 pass on Linux and the

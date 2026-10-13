@@ -41,7 +41,8 @@ def _profiles(values,kit):
     for kind,profile in values.items():
         # Schemas are installed native-provider data, never a configuration URL
         # or an executable/import named by a model or profile.
-        if not registry.has_half(kind,kit):raise DeliveryError('native-provider-unavailable')
+        # Only a host hosts.json registers, with a half: an unregistered half is never read.
+        if kind not in registry.names(kit=kit):raise DeliveryError('native-provider-unavailable')
         regular(registry.half_dir(kind,kit),directory=True)
         required,optional,directories,names=registry.profile_schema(
             document(stable_bytes(registry.profile_path(kind,kit),4096)))

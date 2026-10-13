@@ -52,7 +52,11 @@ class BrokerService:
             attest=getattr(source,'attest',None)
             if callable(attest):
                 # Any SenderAttestor (port.py); one with prepare() also leases hook metadata.
-                if callable(getattr(source,'prepare',None)): self.sources[key]=source
+                prepare=getattr(source,'prepare',None)
+                if prepare is not None and not callable(prepare):
+                    # A lease that cannot run must not let wire _meta reach attest() unreplaced.
+                    raise DeliveryError('invalid-native-source')
+                if prepare is not None: self.sources[key]=source
                 observe=attest
             else: observe=source
             current=(native,self.controller.frontend(observe))

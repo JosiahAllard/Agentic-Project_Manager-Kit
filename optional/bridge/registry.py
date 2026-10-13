@@ -54,6 +54,7 @@ def profile_schema(schema):
             or set(schema) - set(SCHEMA_KEYS) - {'channel_env'}
             or any(type(value) is not list or len(value) > 16 or any(type(key) is not str for key in value)
                    or len(set(value)) != len(value) for value in schema.values())
+            or len({item.upper() for item in schema.get('channel_env', ())}) != len(schema.get('channel_env', ()))
             or any(not ENV_NAME.fullmatch(item) for item in schema.get('channel_env', ()))):
         raise DeliveryError('invalid-native-profile-schema')
     required, optional, directories, names = (set(schema[key]) for key in SCHEMA_KEYS)
@@ -114,6 +115,7 @@ def channel_env(path=None, kit=None):
         except DeliveryError:
             continue
         for item in found:
-            if item not in out:
+            # Windows environment names ignore case: APP_PIPE and app_pipe are one variable.
+            if item.upper() not in {seen.upper() for seen in out}:
                 out.append(item)
     return tuple(out)

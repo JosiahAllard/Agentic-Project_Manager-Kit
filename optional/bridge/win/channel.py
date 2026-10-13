@@ -80,7 +80,8 @@ def capture_inherited_channel(names=None):
     """Called once inside the actual MCP frontend; no endpoint argument is accepted.
 
     `names`: the environment variables a host may nominate its app channel in (default:
-    registry.channel_env(): every served half's bridge-profile.json channel_env, read as data). Two nominations refuse."""
+    registry.channel_env(): every served half's bridge-profile.json channel_env, read as
+    data). Two nominations refuse."""
     if names is None:
         from optional.bridge import registry
         names=registry.channel_env()

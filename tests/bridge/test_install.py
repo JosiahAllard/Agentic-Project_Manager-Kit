@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tests.bridge.registered import codex_registered
+from tests.bridge.registered import use_codex_registered
 from optional.bridge.hosts.claude.runtime import hook_descriptor
 from optional.bridge.core.mcp import TOOLS
 from optional.bridge.core.messages import DeliveryError
@@ -26,8 +26,7 @@ class InstallTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='bridge-prepare-')
         # Codex is served in process through a test hosts.json (tests/bridge/registered.py).
-        registered=codex_registered();registered.__enter__()
-        self.addCleanup(registered.__exit__,None,None,None)
+        use_codex_registered(self)
         self.root=Path(self.temp.name).resolve()
         self.kit=Path(__file__).resolve().parents[2]
         self.profile=self.root/'profiles'

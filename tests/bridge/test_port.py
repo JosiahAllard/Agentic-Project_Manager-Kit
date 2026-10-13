@@ -213,6 +213,16 @@ class StrayHalves(unittest.TestCase):
             self.half(kit, registry.module_name(first), json.dumps(good))
             self.assertEqual(registry.channel_env(hosts, kit), ('OTHER_PIPE',))
 
+    def test_channel_variables_differing_only_by_case_are_one(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            kit, hosts = self.kit(folder, ['codex'])
+            first = next(iter(json.loads(Path(hosts).read_text(encoding='utf-8'))))
+            schema = {'required': ['a'], 'optional': [], 'directories': [], 'names': ['a']}
+            self.half(kit, registry.module_name(first), json.dumps({**schema, 'channel_env': ['APP_PIPE']}))
+            self.half(kit, 'codex', json.dumps({**schema, 'channel_env': ['app_pipe', 'OTHER']}))
+            self.assertEqual(registry.channel_env(hosts, kit), ('APP_PIPE', 'OTHER'))
+
     def test_reading_channel_variables_imports_no_half(self):
         import subprocess
         import sys
@@ -398,6 +408,63 @@ class ServiceAttests(unittest.TestCase):
             return proof
         observe, _ = self.handle(attest)
         self.assertIs(observe, attest)
+
+
+    def test_a_prepare_lease_that_is_not_callable_refuses_the_source(self):
+        class Attestor:
+            prepare = 'not callable'
+
+            def attest(self, proof):
+                return proof
+        with self.assertRaisesRegex(DeliveryError, 'invalid-native-source'):
+            self.handle(Attestor())
+
+
+class UnregisteredProfiles(unittest.TestCase):
+    """A profile for a host hosts.json does not register is refused before its half is read."""
+
+    def test_an_unregistered_kind_is_refused_without_reading_its_profile(self):
+        from unittest import mock
+        from optional.bridge import paths
+        from optional.bridge.win import runtime
+        read = []
+        real = registry.profile_path
+
+        def recorded(name, kit=None):
+            read.append(name)
+            return real(name, kit)
+        with mock.patch.object(registry, 'profile_path', side_effect=recorded):
+            with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
+                runtime._profiles({'unregistered-host': {}}, paths.KIT)
+            if 'codex' not in registry.host_registry.names():
+                with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
+                    runtime._profiles({'codex': {'profile_root': str(ROOT)}}, paths.KIT)
+        self.assertEqual(read, [])
+
+    def test_install_prepare_refuses_codex_with_the_provider_code_until_registered(self):
+        if 'codex' in registry.host_registry.names():
+            self.skipTest('Codex is registered: install preparation serves it (test_install)')
+        import sys
+        import tempfile
+        from optional.bridge import paths
+        from optional.bridge.win import install
+        with tempfile.TemporaryDirectory() as folder:
+            doc = {'protocol': 1, 'kit_root': str(paths.KIT), 'python': str(Path(sys.executable).resolve()),
+                   'state_root': str(Path(folder) / 'state'), 'host_id': 'gap-fixture',
+                   'native_hosts': {'codex': sys.executable}, 'profiles': {'codex': {'profile_root': folder}}}
+            from unittest import mock
+            images = {'codex': (Path(sys.executable).resolve(),)}
+            # The image check is Win32 evidence (it refuses a link such as a POSIX python3);
+            # the refusal under test comes after it, from the host registry.
+            with mock.patch('optional.bridge.win.runtime.native_hosts', return_value=images), \
+                    self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
+                install.prepare(doc, Path(folder) / 'prepared')
+            self.assertFalse((Path(folder) / 'prepared').exists())
+
+    def test_channel_variable_names_differ_by_case_only_once(self):
+        base = {'required': ['a'], 'optional': [], 'directories': [], 'names': ['a']}
+        with self.assertRaisesRegex(DeliveryError, 'invalid-native-profile-schema'):
+            registry.channel_names({**base, 'channel_env': ['APP_PIPE', 'app_pipe']})
 
 
 if __name__ == '__main__':

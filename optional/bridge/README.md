@@ -10,7 +10,8 @@ any of this: no message has yet been delivered end to end between live chats.
 **Only Claude is served until Codex is registered in `hosts.json`.** The bridge serves a host only
 when `hosts.json` registers it (`registry.py`), and on this branch only `claude` is registered.
 Until plan step 9 adds the `codex` entry, the service and `bridge_prepare.py` refuse a Codex profile
-(`native-provider-unavailable`), and the MCP frontend reads no Codex channel variable. The Codex
+with `native-provider-unavailable`. The refusal happens while the configuration is checked, before
+the Codex half's `bridge-profile.json` is read. The MCP frontend reads no Codex channel variable. The Codex
 half and its tests are complete, and the tests run it against a test `hosts.json`
 (`tests/bridge/registered.py`).
 

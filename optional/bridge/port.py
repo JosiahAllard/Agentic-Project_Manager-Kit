@@ -18,8 +18,10 @@ settings and, as channel_env, the variables its app may nominate a tool pipe in.
 
 A Provider is called with each verified MCP frontend (win/frontend.NativeFrontend) and returns
 that frontend's SenderAttestor: the service calls its attest() for every call, and its prepare()
-too when it has one (NativeSource). A plain callable is taken as attest itself. The Provider may also have sender_mode(binding) -> 'prompting' | 'bypass',
-hook_sink (a HookSink), refresh() and close(); the service uses each it finds and nothing else.
+too when it has one (NativeSource); a prepare that is not callable refuses the source. A plain
+callable is taken as attest itself. The Provider may also have sender_mode(binding) ->
+'prompting' | 'bypass', hook_sink (a HookSink), refresh() and close(); the service uses each it
+finds and nothing else.
 
 None of these types attests anything by being constructed. Identity comes only from the half's
 own kernel and native checks inside attest() and send().

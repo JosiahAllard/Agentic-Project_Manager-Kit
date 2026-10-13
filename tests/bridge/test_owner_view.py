@@ -5,6 +5,8 @@ import sys
 import tempfile
 import threading
 import unittest
+
+from tests.bridge.registered import use_codex_registered
 from unittest.mock import patch
 
 from optional.bridge.win.lifecycle import Supervisor
@@ -16,6 +18,8 @@ from optional.bridge.win.owner_view import open_connections
 
 class OwnerViewTests(unittest.TestCase):
     def setUp(self):
+        # Their configurations name Codex, served only once hosts.json registers it.
+        use_codex_registered(self)
         self.temp=tempfile.TemporaryDirectory(prefix='bridge-owner-view-')
         self.root=Path(self.temp.name)/'state'
         self.kit=Path(__file__).resolve().parents[2]
