@@ -11,7 +11,9 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     line written plainly. The location-dependent git patterns are checked when the call's
     directory is a main checkout or one git cannot place; the push --no-verify pattern when that
     directory's repository has a PM data record (or git cannot place it), in every session but
-    the owner's own.
+    the owner's own. The push-to-main pattern in a repository that does not set
+    repo.push_block (one with no .kit.json among them) gives only the re-read's own deny (a delete
+    or a forced push of main); no deny lets the line run.
   - a heavy program's name: the same, and a program named by a variable is denied as heavy with
     the lock line that runs it.
   - anything else: a subagent is denied (`unreadable`); another jailed session (a mark in
@@ -192,13 +194,13 @@ def check(event, ctx, text, cwd, role, parsed):
 
     main_rules = set(r for r, _p in MAIN_ONLY + SUBAGENT_MAIN)
     for rule, pat in list(ANYWHERE) + list(MAIN_ONLY) + list(SUBAGENT_MAIN):
+        ungated = False
         if rule == 'git-push-main':
             cfg = ctx.config(cwd) if cwd else None
             if cwd and ctx.is_pm_data(cwd):      # the kit's .kit.json decides; unloadable: read it again
                 kit, _why = rules.kit_judged(ctx, cwd)
                 cfg = kit.config(cwd) if kit is not None else None
-            if cfg is not None and not cfg.push_block:
-                continue
+            ungated = cfg is not None and not cfg.push_block
         m = re.search(pat, text)
         if not m:
             continue
@@ -208,7 +210,10 @@ def check(event, ctx, text, cwd, role, parsed):
         if rule == 'git-push-pmdata' and (rules.is_owner_session(event, ctx) or (
                 pat != XARGS_BARE_GIT and not rules.pmdata_recorded(ctx, where or cwd))):
             continue
-        return answer(reread(m.start(), where or cwd), rule)
+        d = reread(m.start(), where or cwd)
+        if ungated and d is None:
+            continue                            # no push_block: only a delete or a forced push of main is refused
+        return answer(d, rule)
     held = None
     cfg = ctx.config(cwd) if cwd else None
     for entry, pat in heavy_patterns(cfg):

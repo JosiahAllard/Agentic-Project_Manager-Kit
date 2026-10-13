@@ -86,7 +86,8 @@ class PolicyOn(object):
             return None                             # a broken .kit.json: the guard's config error
         if value is None:
             from kitlib.config import Config
-            value = Config(self._base.place(path).top or path, 'the Codex broker\'s default view', {}, {}, found=False)
+            value = Config(self._base.place(path).top or path, 'the Codex broker\'s default view', {}, {}, found=False,
+                           home=getattr(self._base, 'home', None))
         return _PolicyConfig(value)
 
     def config(self, path):

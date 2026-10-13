@@ -19,6 +19,7 @@ from kitlib import content, reviewpack, roster
 from kitlib.host import registry
 from tests.docs.test_cli import repo_with_docs
 from tests.gitfixture import fixture_env
+from tests.home import temp_home
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(KIT_ROOT, 'tools'))
@@ -199,6 +200,8 @@ class ReviewerRuleTest(unittest.TestCase):
         env = mock.patch.dict(os.environ, fixture_env(), clear=True)
         env.start()
         self.addCleanup(env.stop)
+        # no owner email in .kit.json: the owner rules read the machine config, so a temp home
+        temp_home(self)
         repo.write('docs/ops/risk-map.md', '- High | hi/\n- Medium | med/\n- Low | low/\n')
         repo.git('add', '-A')
         repo.git('commit', '-q', '-m', 'risk map')

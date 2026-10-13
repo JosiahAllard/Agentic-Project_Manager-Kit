@@ -17,6 +17,7 @@ import kitlib.landed as landed
 from kitlib.config import load
 from kitlib.config import user as kuser
 from kitlib.git import cmd
+from kitlib.git import defaults as gitdefaults
 from kitlib.records import gate_ok, landing
 from tests import gitfixture
 
@@ -283,10 +284,12 @@ class TheMainBranchAndRemoteComeFromConfig(Fixture):
         self.assertEqual(code, landed.LANDED, out)
         self.assertIn('contained  YES in upstream/master', out)
 
-    def test_the_default_main_is_main(self):
+    def test_the_default_main_is_the_repository_s_own(self):
+        # no repo.main_branch: read from the repository, here master (docs/kit-json.md "With no file")
         code, out = self.look()
         self.assertEqual(code, landed.NOT_YET, out)
-        self.assertIn('main (no such branch here)', out)
+        self.assertNotIn('no such branch here', out)
+        self.assertIn('origin/master', out)
 
 
 class Verdicts(Fixture):
@@ -368,10 +371,14 @@ class Verdicts(Fixture):
 
 
 class TheDefaultLogDirIsTheGates(Fixture):
-    """No "landing".log_dir: `<temp>/<checkout folder>-gate`, as kitlib.gate.runner.log_base."""
+    """No "landing".log_dir: `<temp>/<repo name>-gate`, as kitlib.gate.runner.log_base; with no
+    "repo".name the name is read from the remote's URL (docs/kit-json.md "With no file")."""
+
+    def gate_dir(self, base=None):
+        return os.path.join(base or self.temp, '%s-gate' % gitdefaults.repo_name(self.root))
 
     def test_the_temp_repo_gate_folder(self):
-        base = os.path.join(self.temp, 'repo-gate')
+        base = self.gate_dir()
         self.log('topic/1/gate.log', 'GATE FAILED: x\n', base=base)
         code, out = self.look()
         self.assertEqual(code, landed.FAILED, out)
@@ -388,15 +395,15 @@ class TheDefaultLogDirIsTheGates(Fixture):
         its folder there, or ran before, logged to the shared temp: both are read."""
         devdrive = os.path.join(self.tmp, 'devdrive')
         with mock.patch.object(kuser, 'work_temp', return_value=devdrive):
-            self.log('topic/1/gate.log', 'GATE FAILED: x\n', base=os.path.join(devdrive, 'repo-gate'))
+            self.log('topic/1/gate.log', 'GATE FAILED: x\n', base=self.gate_dir(devdrive))
             code, out = self.look()
             self.assertEqual(code, landed.FAILED, out)
-            self.assertIn(os.path.join(devdrive, 'repo-gate'), out)
-            os.remove(os.path.join(devdrive, 'repo-gate', 'topic', '1', 'gate.log'))
-            self.log('topic/2/gate.log', 'GATE FAILED: y\n', base=os.path.join(self.temp, 'repo-gate'))
+            self.assertIn(self.gate_dir(devdrive), out)
+            os.remove(os.path.join(self.gate_dir(devdrive), 'topic', '1', 'gate.log'))
+            self.log('topic/2/gate.log', 'GATE FAILED: y\n', base=self.gate_dir())
             code, out = self.look()
             self.assertEqual(code, landed.FAILED, out)
-            self.assertIn(os.path.join(self.temp, 'repo-gate'), out)
+            self.assertIn(self.gate_dir(), out)
 
     def test_a_machine_config_that_cannot_be_read_still_answers_from_the_shared_temp(self):
         """work_temp refuses a bad machine config; landed reads the shared temp's base and says
@@ -404,7 +411,7 @@ class TheDefaultLogDirIsTheGates(Fixture):
         os.makedirs(os.path.join(self.tmp, kuser.DIR_NAME), exist_ok=True)
         with open(kuser.config_file(self.tmp), 'w', encoding='utf-8') as fh:
             fh.write('{"temp_dir": "relative"}\n')
-        self.log('topic/1/gate.log', 'GATE FAILED: x\n', base=os.path.join(self.temp, 'repo-gate'))
+        self.log('topic/1/gate.log', 'GATE FAILED: x\n', base=self.gate_dir())
         code, out = self.look()
         self.assertEqual(code, landed.FAILED, out)
         self.assertIn('note       gate logs:', out)
@@ -414,7 +421,7 @@ class TheDefaultLogDirIsTheGates(Fixture):
         self.git('switch', '-q', self.MAIN)
         wt = os.path.realpath(self.fx.worktree('wt', branch='feat/y'))
         self.commit('y.txt', 'y work', cwd=wt)
-        self.log('feat-y/1/gate.log', 'GATE FAILED: x\n', base=os.path.join(self.temp, 'wt-gate'))
+        self.log('feat-y/1/gate.log', 'GATE FAILED: x\n', base=self.gate_dir())
         self.assertEqual(self.look('feat/y')[0], landed.FAILED)
         self.assertEqual(self.look('feat/y', root=wt)[0], landed.FAILED)
 

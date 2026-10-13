@@ -522,8 +522,10 @@ class TheNextBlock(Fixture):
                           'README.md' % fwd], block)
         self.assertIn('python tools/review_pack.py x/y', block)
         self.assertIn('python tools/codemap.py --file README.md', block)
+        # the fixture's main branch is master, and with no .kit.json the kit reads it from the
+        # repository (docs/kit-json.md "With no file"), so no --base is needed
         self.assertIn('python tools/sync_base.py -C "%s" <hash the coordinator names> --model '
-                      '"<your model>" --base master' % fwd, block)
+                      '"<your model>"' % fwd, block)
         self.assertTrue([l for l in block if 'kitlib.git.checkout.write_text' in l and 'docs/worktree-paths.md' in l],
                         block)
         self.assertFalse([l for l in block if 'new_worktree.py' in l], block)

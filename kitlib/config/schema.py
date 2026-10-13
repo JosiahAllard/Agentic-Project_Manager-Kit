@@ -123,8 +123,8 @@ RUNNER = Obj({
 
 SECTIONS = {
     'repo': {
-        'name': Field(Str(nonempty=False), '', 'repository name for reports and the ledger'),
-        'main_branch': Field(Str(), 'main', 'the branch landings target'),
+        'name': Field(Str(nonempty=False), '', 'repository name for reports and the ledger; unset or empty: the last part of the remote\'s URL, else the main checkout\'s folder name (the ledger reads a written name only)'),
+        'main_branch': Field(Str(), 'main', 'the branch landings target; unset: the branch <remote>/HEAD names, else main, else master when only that exists (docs/kit-json.md "With no file")'),
         'remote': Field(Str(), 'origin', 'the remote main is pushed to'),
         'worktrees_dir': Field(RelPath(), registry.default_profile().worktrees_directory,
                                'where agent worktrees live'),
@@ -132,10 +132,10 @@ SECTIONS = {
                                    'per-host worktree folders, keyed by hosts.json host name '
                                    '(docs/new-worktree.md "Hosts")'),
         'tools_dir': Field(RelPath(), 'tools', 'where repo tools, stubs and the hook module live'),
-        'push_block': Field(Bool(), False, 'pre-push refuses a push to main without a gate-OK record'),
+        'push_block': Field(Bool(), False, 'pre-push refuses a push to main without a gate-OK record; a delete or a forced push of main is refused whatever it says'),
     },
     'owner': {
-        'email': Field(Email(), None, 'author email of the owner\'s own commits; unset: no owner commit is provable'),
+        'email': Field(Email(), None, 'author email of the owner\'s own commits; unset: the machine config\'s owner_email; neither: no owner commit is provable, so every owner-only change is refused'),
         'agent_emails': Field(ListOf(Email()), [], 'author emails known to be agents\', never the owner\'s'),
         'paths': Field(Strs, OWNER_PATHS, 'owner-only paths; an entry ending / locks a directory; replaces the default'),
         'paths_except': Field(Strs, OWNER_PATHS_EXCEPT, 'what under a locked directory is not locked'),

@@ -29,7 +29,9 @@ replaced when this clone has it; else (a new branch, or a remote sha this clone 
 branch's committed .kit.json: the first of refs/remotes/<remote>/HEAD, <remote>/main,
 <remote>/master, local main, local master. The working tree is never the base, so an uncommitted
 edit cannot switch the check off; no such ref means the defaults. A .kit.json that does not load
-refuses the push (fail closed).
+refuses the push (fail closed). A base that sets no main branch (no .kit.json at all among them)
+reads it from the repository (kitlib.git.defaults: <remote>/HEAD, then main or master), so the
+delete and fast-forward rules guard the real main branch (docs/kit-json.md "With no file").
 """
 import hashlib
 import os
@@ -39,11 +41,11 @@ from kitlib import config as kconfig
 from kitlib import pmdata
 from kitlib.config import schema as kschema
 from kitlib.git import cmd, refs
+from kitlib.git import defaults as gitdefaults
 from kitlib.git import repo as gitrepo
 from kitlib.guard import ownercommits
 
 ZERO = '0' * 40
-MAIN_DEFAULT = kschema.SECTIONS['repo']['main_branch'].default
 
 
 # ---------------------------------------------------------------- PM data branch (leak stage)
@@ -319,6 +321,14 @@ def _base_rev(root, remote_sha, remote):
     return None
 
 
+def _default_main(root, remote):
+    """The main branch of a repository with no base commit: read from its git files with the
+    remote git named (an URL names none: the default remote's)."""
+    name = remote if remote and not refs.bad_rev(remote) and '://' not in remote and ':' not in remote \
+        else kschema.SECTIONS['repo']['remote'].default
+    return gitdefaults.main_branch(root, name)
+
+
 def _cfg(root, remote_sha, remote):
     """The base Config, or None when there is no base commit at all (the defaults: no push_block)."""
     rev = _base_rev(root, remote_sha, remote)
@@ -394,7 +404,7 @@ def check(root, lines, gate_ok=None, remote='origin', url=None):
             cfg = _cfg(root, remote_sha, remote)
         except kconfig.ConfigError as e:
             return False, ('pre-push: refused, .kit.json does not load (%s). Fix it, then push again.' % e)
-        main = MAIN_DEFAULT if cfg is None else cfg.main_branch
+        main = _default_main(root, remote) if cfg is None else cfg.main_branch
         if remote_ref != 'refs/heads/' + main:
             continue
         if not local_sha.strip('0'):
