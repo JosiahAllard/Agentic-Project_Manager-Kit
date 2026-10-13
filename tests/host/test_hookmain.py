@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -173,6 +174,55 @@ class Several(unittest.TestCase):
         allow = self.Multi(('a',), screen=lambda act: Decision('allow'))
         self.assertEqual(run(allow, {}, decide), (0, ''))
         self.assertEqual(seen, ['a', 'a'], 'a screen allow still meets the guard')
+
+
+class NoIdentity(unittest.TestCase):
+    """A host whose hooks carry no subagent identity: a marked session's call is judged as an
+    agent of its mark's role; the owner's unmarked session and a host with identity are not."""
+
+    def adapter(self, identity):
+        a = FakeAdapter()
+        a.capabilities = HostCapabilities(('PreToolUse',), True, identity, True, True, 'x')
+        return a
+
+    def seen(self, adapter, payload, environ):
+        got = []
+
+        def decide(action, ctx=None, environ=None, profile=None):
+            got.append(action)
+            return Decision('allow')
+        with mock.patch('kitlib.guard.decide', decide):
+            hookmain.run(adapter, 'PreToolUse', io.StringIO(json.dumps(payload)), io.StringIO(),
+                         environ=environ, entry='h.py')
+        return got[0]
+
+    def test_a_marked_call_is_an_unidentified_agent_of_its_role(self):
+        for kind in ('edit', 'shell', 'mcp'):
+            a = self.seen(self.adapter(False), {'kind': kind}, {'PM_KIT_ROLE': 'worker'})
+            self.assertEqual((a.agent, a.agent_role), (hookmain.UNIDENTIFIED, 'worker'), kind)
+
+    def test_the_owner_another_kind_and_a_host_with_identity_are_unchanged(self):
+        self.assertIsNone(self.seen(self.adapter(False), {'kind': 'edit'}, {}).agent)
+        self.assertIsNone(self.seen(self.adapter(False), {'kind': 'other'}, {'PM_KIT_ROLE': 'pm'}).agent)
+        self.assertIsNone(self.seen(self.adapter(True), {'kind': 'edit'}, {'PM_KIT_ROLE': 'pm'}).agent)
+        self.assertEqual(self.seen(self.adapter(True), {'kind': 'edit', 'who': 'a1'}, {}).agent, 'a1')
+
+    def test_the_deadline_is_one_budget_for_every_action(self):
+        class Many(FakeAdapter):
+            def parse(self, event_name, payload):
+                return tuple(Action('edit', path=str(i)) for i in range(5))
+        budgets = []
+
+        def fake(guard, action, environ, profile, deadline):
+            budgets.append(deadline)
+            time.sleep(0.03)
+            return Decision('allow')
+        with mock.patch.object(hookmain, '_decide', fake):
+            code = hookmain.run(Many(), 'PreToolUse', io.StringIO('{}'), io.StringIO(), environ={},
+                                entry='h.py', deadline=1.0)
+        self.assertEqual(code, 0)
+        self.assertTrue(all(b < a for a, b in zip(budgets, budgets[1:])), budgets)
+        self.assertLessEqual(budgets[0], 1.0)
 
 
 class CommandLine(unittest.TestCase):

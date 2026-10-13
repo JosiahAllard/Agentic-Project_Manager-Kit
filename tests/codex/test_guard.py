@@ -50,6 +50,40 @@ class Base(unittest.TestCase):
         self.assertEqual(d.verdict, 'allow', d.reason)
 
 
+class MarkedSessions(Base):
+    """Codex's hooks carry no subagent identity, so hookmain holds a marked session as an
+    unidentified agent of its mark's role (kitlib.host.hookmain): the main-checkout rule and the
+    write jail hold it as they hold a subagent elsewhere. The owner's unmarked session is unchanged."""
+    ROLES = ('worker', 'senior-worker', 'reviewer', 'test-runner', 'lander', 'pm', 'coordinator')
+
+    def test_root_session_patch_to_main_is_denied(self):
+        self.denied(self.patch(os.path.join(self.w.main, 'worker.py')), 'main-checkout')
+
+    def test_pm_workflow_does_not_gain_main_edit_privilege(self):
+        self.denied(self.patch(os.path.join(self.w.main, 'a.py')), 'main-checkout', role='pm')
+
+    def test_multi_file_patch_is_denied_if_any_target_is_in_main(self):
+        self.denied(self.patch('worker.py', os.path.join(self.w.main, 'a.py')), 'main-checkout')
+
+    def test_a_rename_into_main_is_denied(self):
+        dest = os.path.join(self.w.main, 'stolen.py')
+        patch = '*** Begin Patch\n*** Update File: worker.py\n*** Move to: %s\n@@\n-a\n+b\n*** End Patch' % dest
+        self.denied(self.event('apply_patch', {'command': patch}), 'main-checkout')
+
+    def test_every_marked_role_is_held_off_main_and_outside_its_checkout(self):
+        for role in self.ROLES:
+            with self.subTest(role=role):
+                for path, rule in ((os.path.join(self.w.main, 'src.py'), 'main-checkout'),
+                                   (os.path.join(self.w.main, 'AGENTS.md'), 'main-checkout'),
+                                   (os.path.join(self.w.plain, 'x.py'), 'write-jail')):
+                    d = self.denied(self.event('Write', {'file_path': path, 'content': 'x'}), rule, role=role)
+                    self.assertIn('role=subagent', d.reason)
+
+    def test_the_owners_unmarked_session_is_unchanged(self):
+        for path in (os.path.join(self.w.main, 'src.py'), os.path.join(self.w.plain, 'x.py')):
+            self.allowed(self.event('Write', {'file_path': path, 'content': 'x'}), role=None)
+
+
 class Patches(Base):
     def test_a_patch_in_the_own_worktree_is_allowed_and_writes_nothing(self):
         self.allowed(self.patch('worker.py'))
