@@ -133,7 +133,9 @@ HAZARD_EXEMPT = {
     ('kitlib/pluginsource/__init__.py', '<module>', 'DETACHED_PROCESS'): (
         1, '_DETACHED (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP) is used by one start only, '
            'Popen([pythonw(), plugin_refresh.py, ...]): pythonw is a GUI program that never gets '
-           'a console. The flag sits in a module constant, where the pythonw check cannot see it'),
+           'a console. The find is the bit in the constant definition; every use of the name '
+           '_DETACHED in a creationflags is followed, and one in a start that does not name '
+           'pythonw is reported on its own'),
     ('kitlib/proc/console.py', '<module>', 'CREATE_NEW_CONSOLE'): (
         2, 'the CreateProcess hook itself: it defines the bit and reads it in CONSOLE_CHOICE to '
            'leave a caller\'s own console choice alone; it never asks for one'),
@@ -153,13 +155,15 @@ HAZARD_EXEMPT = {
            'the owner installs it by hand.' + OPEN + 'python.exe gets a console of its own, '
            'hidden after the fact; it wants pythonw'),
     ('optional/comfy/comfy_gen.py', '_launch', 'DETACHED_PROCESS'): (
-        1, 'a standalone optional tool that imports nothing of the kit starts ComfyUI with '
+        2, 'a standalone optional tool that imports nothing of the kit starts ComfyUI with '
            'CREATE_NO_WINDOW | DETACHED_PROCESS.' + OPEN + 'with DETACHED_PROCESS the no-window '
-           'flag is ignored, and a console child of ComfyUI opens its own window'),
+           'flag is ignored, and a console child of ComfyUI opens its own window (two finds: '
+           'the getattr string and the `flags` name it is bound to, used in the start)'),
     ('optional/comfy/comfy_gen.py', '_ensure_watcher', 'DETACHED_PROCESS'): (
-        1, 'a standalone optional tool that imports nothing of the kit starts its watcher with '
+        2, 'a standalone optional tool that imports nothing of the kit starts its watcher with '
            'sys.executable and CREATE_NO_WINDOW | DETACHED_PROCESS.' + OPEN + 'python.exe '
-           'detached has no console, so any console program it starts opens a window'),
+           'detached has no console, so any console program it starts opens a window (two '
+           'finds: the getattr string and the `flags` name it is bound to, used in the start)'),
     ('tests/bridge/test_startup.py',
      'StartupTests.test_actual_hidden_launcher_preserves_path_arguments_and_child_exit_code',
      '-WindowStyle Hidden'): (
@@ -219,21 +223,6 @@ HAZARD_EXEMPT = {
 }
 
 
-def is_python(path):
-    """A .py or .pyw file, or a file with no extension whose first line is a python shebang."""
-    ext = os.path.splitext(path)[1].lower()
-    if ext in ('.py', '.pyw'):
-        return True
-    if ext:
-        return False
-    try:
-        with open(path, 'rb') as f:
-            first = f.readline(200)
-    except OSError:
-        return False
-    return first.startswith(b'#!') and b'python' in first
-
-
 def python_files(root):
     """[path relative to root, with /] of every file read, sorted.
 
@@ -242,7 +231,8 @@ def python_files(root):
     checkout as one folder name, if at all, and none of the files in it."""
     return [rel for rel in machinepaths.tree_files(root)
             if not set(rel.split('/')[:-1]).intersection(SKIP_DIRS)
-            and os.path.isfile(os.path.join(root, rel)) and is_python(os.path.join(root, rel))]
+            and os.path.isfile(os.path.join(root, rel))
+            and windowscan.is_python(os.path.join(root, rel))]
 
 
 def scan_tree(root):
@@ -280,7 +270,7 @@ def hazard_files(root):
         path = os.path.join(root, rel)
         if '.claude' in rel.split('/')[:-1] or rel in HAZARD_SKIP or not os.path.isfile(path):
             continue
-        if os.path.splitext(rel)[1].lower() in SCRIPT_EXTS or is_python(path):
+        if os.path.splitext(rel)[1].lower() in SCRIPT_EXTS or windowscan.is_python(path):
             out.append(rel)
     return sorted(out)
 
@@ -525,12 +515,31 @@ subprocess.run(["powershell", "-WindowStyle", "Hidden"], creationflags=0)  # -Wi
 CODE = ("import subprocess; " + "subprocess.Popen(['x'])")     # start in code text
 subprocess.Popen([PYTHONW, "-c", CODE], creationflags=0)
 subprocess.run([pythonw, "-c", f"import subprocess; subprocess.run(['{x}'])"], creationflags=0)  # start in code text
+TWO = ("import subprocess as s; s.Popen(['a'], creationflags=s.CREATE_NO_WINDOW); "  # start in code text
+       "s.Popen(['b'])")
+ZERO = "import subprocess; subprocess.run(['x'], creationflags=0)"     # start in code text
+SP = "import subprocess as sp; sp.run(['x'])"               # start in code text
+FROM = "from subprocess import Popen as P; P(['x'])"        # start in code text
+LATE = "import subprocess; subprocess.run(['x']); import kitlib"   # start in code text
+for code in (TWO, ZERO, SP, FROM, LATE):
+    subprocess.run([pythonw, "-c", code], creationflags=0)
+_DETACHED = 0x00000008 | 0x00000200                         # DETACHED_PROCESS
+subprocess.Popen([pythonw(), "t.py"], creationflags=_DETACHED)
+subprocess.Popen(["python.exe", "t.py"], creationflags=_DETACHED)     # DETACHED_PROCESS
+both = _DETACHED | 0x8000000
+subprocess.Popen(["python.exe"], creationflags=both)        # DETACHED_PROCESS
+NEW = getattr(subprocess, "CREATE_NEW_CONSOLE")             # CREATE_NEW_CONSOLE
+subprocess.Popen([pythonw(), "t.py"], creationflags=NEW)    # CREATE_NEW_CONSOLE
 '''
 HAZARD_PY_LABELS = ['from os import system', 'os.system', 'os.spawnl', 'os.execv', 'os.startfile',
                     'ShellExecuteW', 'CreateProcessW', 'CreateProcessAsUserW', 'CREATE_NEW_CONSOLE',
                     'DETACHED_PROCESS', 'AllocConsole', 'AllocConsoleWithOptions', 'AttachConsole',
                     'WMI Win32_Process Create', 'Start-Process', 'cmd /c start', 'start ""',
-                    '-WindowStyle Hidden', 'start in code text', 'start in code text']
+                    '-WindowStyle Hidden', 'start in code text', 'start in code text',
+                    'start in code text', 'start in code text', 'start in code text',
+                    'start in code text', 'start in code text', 'DETACHED_PROCESS',
+                    'DETACHED_PROCESS', 'DETACHED_PROCESS', 'CREATE_NEW_CONSOLE',
+                    'CREATE_NEW_CONSOLE']
 HAZARD_FINE = '''\
 """Mentions in a docstring are not hazards: os.system, CREATE_NEW_CONSOLE, Start-Process."""
 import subprocess
@@ -545,6 +554,14 @@ def go(pythonw):
     subprocess.run([pythonw(), "-c", hid], creationflags=0)
     subprocess.run([pythonw(), "-c", hooked], creationflags=0)
     subprocess.run(["python", "-c", "import subprocess; subprocess.run(['x'])"], creationflags=0)
+    named = "import subprocess as sp; NW = sp.CREATE_NO_WINDOW | 0x200; sp.run(['x'], creationflags=NW)"
+    bits = "from subprocess import run; run(['x'], creationflags=0x08000000)"
+    early = "import kitlib; from subprocess import Popen; Popen(['x'])"
+    for code in (named, bits, early):
+        subprocess.run([pythonw(), "-c", code], creationflags=0)
+    subprocess.Popen([pythonw(), "t.py"], creationflags=DETACHED | 0x8000000)
+    flags = DETACHED
+    subprocess.Popen([pythonw(), "t.py"], creationflags=flags)
 '''
 HAZARD_PS1 = ('# Start-Process in a comment is not read\n'
               'Start-Process -FilePath python -ArgumentList x\n'
