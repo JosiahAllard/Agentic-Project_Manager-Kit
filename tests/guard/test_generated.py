@@ -44,6 +44,9 @@ class Source(unittest.TestCase):
                 ('hosts/claude/shell/hooks/hooks.json', manifest % 'claude'),
                 ('.claude-plugin/plugin.json', manifest % 'claude'),
                 ('.claude-plugin/marketplace.json', manifest % 'claude'),
+                ('hosts/claude/shell/agents', 'content/roles/'),                  # the folders themselves
+                ('hosts/codex/shell/skills/', 'content/skills/'),
+                ('hosts/codex/shell/boot', 'boot/'),
                 ('hosts\\claude\\shell\\agents\\worker.md', 'content/roles/worker.md'),
                 ('HOSTS/Claude/Shell/Agents/worker.md', 'content/roles/worker.md')):
             with self.subTest(rel):
@@ -102,6 +105,17 @@ class Rule(unittest.TestCase):
         self.refused(decide(bash('echo x > hosts/claude/shell/agents/worker.md', self.w.wt, True), self.w.ctx()))
         text = 'Set-Content hosts/codex/shell/agents/kit-worker.toml x'
         self.refused(decide(ps(text, self.w.wt, True), self.w.ctx()))
+        for text in ('rm -rf hosts/claude/shell/agents', 'mv a hosts/codex/shell/skills/x/SKILL.md'):
+            with self.subTest(text):
+                self.refused(decide(bash(text, self.w.wt, False), self.w.ctx()))
+        self.refused(decide(ps('Remove-Item -Recurse hosts\\codex\\shell\\skills', self.w.wt, True), self.w.ctx()))
+
+    def test_git_that_restores_or_removes_rendered_files_is_not_judged_by_it(self):
+        """A checkout, merge or `git rm` writes what a commit holds, never a hand edit."""
+        for text in ('git checkout -- hosts/claude/shell/agents/worker.md', 'git rm hosts/claude/shell/agents/worker.md',
+                     'git restore --source main hosts/claude/shell/agents', 'git merge main'):
+            with self.subTest(text):
+                self.assertIsNone(decide(bash(text, self.w.wt, True), self.w.ctx()))
 
     def test_the_renderer_and_the_sources_are_not(self):
         for text in ('python tools/render_content.py --write',

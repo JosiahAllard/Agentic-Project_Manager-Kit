@@ -258,7 +258,8 @@ def drift(root, renderers, content=None, tiers=None):
 
 
 def write(root, renderers, content=None, tiers=None):
-    """Write every differing or missing rendered file and remove every stale one; the paths
+    """Write every differing or missing rendered file and remove every stale one, then each folder
+    above a removed file that is left empty (a retired folder goes, as git removes it); the paths
     touched, sorted."""
     changed, stale = diff(root, renderers, content, tiers)
     for p, data in changed.items():
@@ -268,4 +269,12 @@ def write(root, renderers, content=None, tiers=None):
             f.write(data)
     for p in stale:
         os.remove(_join(root, p))
+    for p in stale:
+        parts = p.split('/')[:-1]
+        while parts:
+            try:
+                os.rmdir(_join(root, '/'.join(parts)))     # only an empty folder
+            except OSError:
+                break
+            parts.pop()
     return sorted(set(changed) | set(stale))

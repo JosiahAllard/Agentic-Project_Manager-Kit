@@ -359,6 +359,8 @@ class TempTreeTest(unittest.TestCase):
         self.assertEqual(content.drift(self.root, self.rs), [])
         self.assertEqual(read(worker), read(os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'agents', 'worker.md')))
         self.assertFalse(os.path.exists(self.path('hosts', 'claude', 'shell', 'agents', 'ghost.md')))
+        self.assertFalse(os.path.exists(self.path('hosts', 'claude', 'shell', 'skills')))  # emptied: removed
+        self.assertTrue(os.path.isdir(self.path('hosts', 'claude', 'shell', 'agents')))
 
     def test_a_role_edit_reaches_the_agent_file(self):
         role = self.path('content', 'roles', 'worker.md')

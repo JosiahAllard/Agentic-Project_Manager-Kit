@@ -185,7 +185,11 @@ The opt-in pre-commit hook (`githooks/pre-commit`, docs/ledger.md "Pre-commit ch
 for a plain `git commit` in a kit checkout, through `kitlib.githooks.render`: its shell front end
 starts python only when the kit's layout is there and a render source is staged (one `git diff
 --cached` read), renders, and stages what changed into the commit's index; when it cannot, it
-refuses the commit with the command to run. The gate's drift check stays the backstop.
+refuses the commit with the command to run. A commit of named paths (`git commit <paths>`) that
+the render changes is refused too, naming the files to stage: git builds it from a temporary
+index and keeps its own index with only the named paths, so a rendered file staged into the
+commit would stay old in the index and the next commit would undo it. The gate's drift check
+stays the backstop.
 
 ## Kit header
 

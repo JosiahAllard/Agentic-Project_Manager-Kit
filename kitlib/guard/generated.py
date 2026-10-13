@@ -15,7 +15,9 @@ What is rendered, by path (case folded, as Windows reads it):
   hosts/<host>/shell/plugin.json, mcp.json, hooks/hooks.json, and .<host>-plugin/plugin.json and
   marketplace.json at the root     a plugin manifest: kit.json, hosts.json and the host's renderer
 A path matched here is refused even when the renderer no longer writes it (a retired folder): the
-render removes it. The renderer itself runs as a process, which the guard does not judge.
+render removes it. So is the agents, skills or boot folder itself (a shell `rm -r` of it), whose
+source is the folder of sources. The renderer itself runs as a process, which the guard does not
+judge.
 """
 import os
 
@@ -57,11 +59,12 @@ def source(top, rel):
     if len(low) < 4 or low[0] != 'hosts' or low[2] != 'shell':
         return None
     host, kind, rest = parts[1], low[3], parts[4:]
-    if kind == 'agents' and rest:
+    # the folder itself too (`rm -rf hosts/<host>/shell/agents`): its source is the sources' folder
+    if kind == 'agents':
         return _role_source(top, host, os.path.splitext(rest[-1])[0]) if len(rest) == 1 else ROLES
-    if kind == 'skills' and rest:
+    if kind == 'skills':
         return SKILLS + '/'.join(rest)
-    if kind == 'boot' and rest:
+    if kind == 'boot':
         return 'boot/' + '/'.join(rest)
     if low[3:] == ('hosts.json',):
         return 'hosts.json'

@@ -42,8 +42,10 @@ def is_kit(root):
 
 def wants_render(paths):
     """True when a repo-relative, `/`-separated path among `paths` is a render source: under a
-    SOURCE_DIRS folder or one of SOURCE_FILES."""
-    return any(p in SOURCE_FILES or p.startswith(SOURCE_DIRS) for p in paths)
+    SOURCE_DIRS folder or one of SOURCE_FILES, case folded (a name typed `Content/...` on Windows
+    is the same file)."""
+    low = [p.lower() for p in paths]
+    return any(p in SOURCE_FILES or p.startswith(SOURCE_DIRS) for p in low)
 
 
 def render(root, python=None):

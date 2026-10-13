@@ -50,6 +50,7 @@ class Dispatch(unittest.TestCase):
         self.assertTrue(oncommit.wants_render(['a.py', 'content/skills/x/SKILL.md']))
         self.assertTrue(oncommit.wants_render(['kit.json']))
         self.assertTrue(oncommit.wants_render(['hosts.json']))
+        self.assertTrue(oncommit.wants_render(['Content/Roles/x.md', 'KIT.json']))        # Windows case
         self.assertFalse(oncommit.wants_render(['docs/content.md', 'hosts/claude/shell/agents/pm.md',
                                                 'contents/x', 'tools/kit.json']))
 
@@ -85,6 +86,21 @@ class Staging(unittest.TestCase):
         self.assertIn('render_content.py -C ', message)
         self.assertIn('commit refused', message)
 
+    def test_a_partial_commit_that_the_render_changes_is_refused_naming_what_to_stage(self):
+        """git keeps its own index for `git commit <paths>`: a rendered file staged into the
+        temporary one would stay old there, and the next commit would undo it."""
+        self.repo.write('content/roles/x.md', 'two\n')
+        self.repo.git('add', '--', 'content/roles/x.md')
+        env = {'GIT_INDEX_FILE': os.path.join(self.repo.root, '.git', 'next-index-123.lock')}
+        code, message = render.check(precommit.Commit(self.repo.root), environ=env)
+        self.assertEqual(code, 1, message)
+        self.assertIn('git add -- out/old.txt out/role.txt, then git commit', message)
+        self.assertIn('commit refused', message)
+        self.assertEqual(self.staged(), ['M\tcontent/roles/x.md'])        # nothing staged by the step
+        self.assertTrue(render.partial(env))
+        self.assertFalse(render.partial({'GIT_INDEX_FILE': os.path.join(self.repo.root, '.git', 'index.lock')}))
+        self.assertFalse(render.partial({}))
+
     @unittest.skipUnless(SH and shutil.which('python'), 'no sh or python on PATH')
     def test_a_plain_git_commit_through_the_hook_carries_the_rendered_files(self):
         self.repo.git('config', 'core.hooksPath', HOOKS.replace(os.sep, '/'))
@@ -93,6 +109,18 @@ class Staging(unittest.TestCase):
         self.repo.git('commit', '-q', '-m', 'edit x')
         shown = sorted(self.repo.git('show', '--name-status', '--format=', 'HEAD').splitlines())
         self.assertEqual(shown, ['A\tout/role.txt', 'D\tout/old.txt', 'M\tcontent/roles/x.md'])
+
+    @unittest.skipUnless(SH and shutil.which('python'), 'no sh or python on PATH')
+    def test_a_git_commit_of_named_paths_through_the_hook_is_refused(self):
+        self.repo.git('config', 'core.hooksPath', HOOKS.replace(os.sep, '/'))
+        self.repo.write('content/roles/x.md', 'two\n')
+        before = self.repo.git('rev-parse', 'HEAD')
+        r = subprocess.run([GIT, 'commit', '-q', '-m', 'edit x', '--', 'content/roles/x.md'], cwd=self.repo.root,
+                           env=gitfixture.fixture_env({}), capture_output=True, text=True, encoding='utf-8',
+                           errors='replace', timeout=120)
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('commit without paths', r.stderr)
+        self.assertEqual(self.repo.git('rev-parse', 'HEAD'), before)
 
 
 @unittest.skipUnless(SH and GIT, 'no sh or git on PATH')

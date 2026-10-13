@@ -4,7 +4,7 @@ Codex's slot in the multi-host kit (docs/multi-host-plan.md step 9; docs/new-hos
 `codex/companion-plugin` branch onto the host contract. **Nothing here is installed or activated
 on any machine, and live parity with the default host is not verified.** The package passes the
 conformance suite on payloads in the branch's recorded shapes; no installed Codex client has run it.
-Every rendered agent file says so in its first line.
+Every rendered agent file says so in its header comment.
 
 ## What is here
 
