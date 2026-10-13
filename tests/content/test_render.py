@@ -22,7 +22,7 @@ import render_content as cli  # noqa: E402
 
 ROLE = (b'---\nname: alpha\ndescription: Builds things. Ask {{agent:beta}} first.\ntier: standard\n'
         b'effort: low\nsandbox: workspace-write\ncapabilities: [read, search, bash]\n---\n\n'
-        b'Read {{profile_path}} and {{instructions_file}}; docs at {{kit_root}}/docs.\n')
+        b'Read {{profile_path}} and {{instructions_file}}; docs at <kit>/docs.\n')
 BETA = b'---\nname: beta\ndescription: "Two: parts"\ntier: deep\nsandbox: read-only\ncapabilities: all\n---\nbody\n'
 
 
@@ -204,10 +204,10 @@ class ParseTest(unittest.TestCase):
 
 class SubstituteTest(unittest.TestCase):
     def sub(self, text, values=None):
-        return hc.substitute(text, values or {'kit_root': 'K'}, lambda n: 'p:' + n, ('beta',))
+        return hc.substitute(text, values or {'worktrees_dir': 'K'}, lambda n: 'p:' + n, ('beta',))
 
     def test_fills_every_token(self):
-        self.assertEqual(self.sub('{{agent:beta}} at {{kit_root}}/x'), 'p:beta at K/x')
+        self.assertEqual(self.sub('{{agent:beta}} at {{worktrees_dir}}/x'), 'p:beta at K/x')
 
     def test_refusals(self):
         for text in ('{{agent:gamma}}', '{{nonsense}}', '{{profile_path}}', '{{kit_root:x}}', '{{ kit_root }}'):

@@ -56,7 +56,6 @@ TOKENS = {
     'profile_path': '.claude/agent-profile.md',
     'coordinator_profile_path': '.claude/coordinator-profile.md',
     'instructions_file': 'CLAUDE.md',
-    'kit_root': '<kit>',            # an agent body gets no ${CLAUDE_PLUGIN_ROOT}; the kit header says <kit>
     'worktrees_dir': '.claude/worktrees',
 }
 CACHE_TTL = {'long': '1h'}

@@ -2,7 +2,7 @@
 section 5, form C; docs/content.md).
 
 For each `python tools/<name>.py ...` in content/skills/**.md and content/roles/*.md (also written
-`python <kit>/tools/...`, `python {{kit_root}}/tools/...` or `python <worktree>/tools/...`), the
+`python <kit>/tools/...` or `python <worktree>/tools/...`), the
 kit has tools/<name>.py, and every `-x` / `--flag` the command shows is an option string that
 tool's parser defines. The tools are never run: their source is parsed (ast) for the option
 strings given to `add_argument`, including flags a loop builds as `'--' + name` over a literal or
@@ -20,7 +20,7 @@ import unittest
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOLS = os.path.join(KIT_ROOT, 'tools')
 
-CMD = re.compile(r'python3?\s+(?:(?:<kit>|\{\{kit_root\}\}|\$\{CLAUDE_PLUGIN_ROOT\}|<worktree>)/)?'
+CMD = re.compile(r'python3?\s+(?:(?:<kit>|\$\{CLAUDE_PLUGIN_ROOT\}|<worktree>)/)?'
                  r'tools/(\w+)\.py\b(.*)')
 FLAG = re.compile(r'(?<![\w<>/.-])(--?[A-Za-z][\w-]*)')
 FLAG_SHAPE = re.compile(r'^--?[A-Za-z][\w-]*$')
@@ -137,7 +137,7 @@ class OptionStringsTest(unittest.TestCase):
     def test_commands_and_flags_read_from_text(self):
         text = ('Run `python tools/land.py <b> --expect-main <sha> [--wait <s>]`, then '
                 'python <kit>/tools/machine_lock.py run --kind build -- tool --nope (prose),\n'
-                '```\npython {{kit_root}}/tools/ledger.py add --q "x --not-a-flag"\n```\n')
+                '```\npython <kit>/tools/ledger.py add --q "x --not-a-flag"\n```\n')
         got = [(name, shown_flags(args)) for name, args in commands(text)]
         self.assertEqual(got, [('land', ['--expect-main', '--wait']), ('machine_lock', ['--kind']),
                                ('ledger', ['--q'])])

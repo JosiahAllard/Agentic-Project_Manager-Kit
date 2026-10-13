@@ -61,7 +61,6 @@ A body or description names a value that differs by host only as a token. An unk
 | `{{profile_path}}` | `.claude/agent-profile.md` |
 | `{{coordinator_profile_path}}` | `.claude/coordinator-profile.md` |
 | `{{instructions_file}}` | `CLAUDE.md` |
-| `{{kit_root}}` | `<kit>` (no role uses it: write `<kit>`, which the kit header explains) |
 | `{{worktrees_dir}}` | `.claude/worktrees` |
 
 ## Claude

@@ -47,8 +47,7 @@ CAPABILITIES = (
     'ask-owner', 'cron-create', 'cron-list', 'cron-delete', 'web-search', 'web-fetch',
 )
 # The tokens a body or description may hold. `agent` takes a role name: `{{agent:test-runner}}`.
-TOKENS = ('agent', 'profile_path', 'coordinator_profile_path', 'instructions_file', 'kit_root',
-          'worktrees_dir')
+TOKENS = ('agent', 'profile_path', 'coordinator_profile_path', 'instructions_file', 'worktrees_dir')
 REQUIRED = ('name', 'description', 'tier', 'sandbox', 'capabilities')
 OPTIONAL = ('effort', 'cache', 'mode', 'writes')
 MODEL_KEY = 'model.'
