@@ -272,9 +272,9 @@ class LandPriority(unittest.TestCase):
 
     def test_one_second_too_long_does_not_backfill(self):
         got = self.plan([holder("r-h", [0, 1], NOW - 100, 1000),
-                         land("r-l", 4, 100, 2), waiter("r-901", 2, 901, 3)])
+                         land("r-l", 4, 100, 2), waiter("r-over", 2, 901, 3)])
         self.assertEqual(got["r-l"]["start"], NOW + 900)
-        self.assertEqual(got["r-901"]["start"], NOW + 1000)
+        self.assertEqual(got["r-over"]["start"], NOW + 1000)
 
 
 @unittest.skipUnless(os.name == "nt", "the lock is Windows only")
