@@ -492,7 +492,7 @@ Separately and early: Windows CI (GitHub Actions) for the gate, so every step ha
 
 ## 7. Instructions, roles and zero repo setup (planned 2026-10-13)
 
-The §7 agenda was settled in a planning session with the owner. Nothing below is built yet.
+The §7 agenda was settled in a planning session with the owner. Steps 11-20 are built, each reviewed and merged on this branch (2026-10-13); the Windows gate and live host checks are still owed (docs/go-live.md).
 
 ### 7.0 Decisions
 
