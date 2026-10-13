@@ -99,7 +99,7 @@ class Render(unittest.TestCase):
 
 class Paths(unittest.TestCase):
     def test_norm_is_todays_normpath_and_normcase(self):
-        for p in ('a/b/../c', 'A//B', './x', 'C:\\Users\\X\\..\\y'):
+        for p in ('a/b/../c', 'A//B', './x', 'C:\\home\\X\\..\\y'):
             self.assertEqual(paths.norm(p), os.path.normcase(os.path.normpath(p)))
             self.assertEqual(paths.norm(p, fold=False), os.path.normpath(p))
             self.assertEqual(paths.norm(p, absolute=True), os.path.normcase(os.path.abspath(p)))

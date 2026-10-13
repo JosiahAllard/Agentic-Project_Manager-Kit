@@ -16,7 +16,7 @@ and the Codex terminal adapter is dead.
 
 This is the bridge from `codex/robust-bridge-plan`, ported as plan step 10
 (docs/multi-host-plan.md section 2.4). Its design history, the Phase 0 evidence and the
-24 bridge docs it replaces are in git history (that branch, up to 1cdc244).
+24 bridge docs it replaces are in git history (that branch, up to its tip when this port was made).
 
 ## Layout
 

@@ -80,9 +80,11 @@ EXCLUDES = ('/.claude/worktrees/', '/.codex/worktrees/')
 
 
 def _machine_env():
-    """os.environ without the session's GIT_CONFIG_COUNT/KEY/VALUE entries."""
+    """os.environ without the session's GIT_CONFIG_COUNT/KEY/VALUE entries and its git identity
+    (GIT_AUTHOR_*, GIT_COMMITTER_*): a machine's identity is its global config, which the cycle sets."""
     return {k: v for k, v in os.environ.items()
-            if not (k == 'GIT_CONFIG_COUNT' or k.startswith(('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')))}
+            if not (k == 'GIT_CONFIG_COUNT' or k.startswith(('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_',
+                                                             'GIT_AUTHOR_', 'GIT_COMMITTER_')))}
 
 
 class Cycle(object):

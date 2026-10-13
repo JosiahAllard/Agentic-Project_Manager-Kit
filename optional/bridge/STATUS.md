@@ -2,7 +2,7 @@
 
 What the bridge does today, per host and direction. Design and install are in
 `optional/bridge/README.md`. The evidence comes from the source branch's records, as of
-`codex/robust-bridge-plan` 1cdc244. The port moved code and changed little behaviour; what it did
+`codex/robust-bridge-plan` at its tip when the port was made. The port moved code and changed little behaviour; what it did
 change is listed in "Changes from the source".
 
 **Claude and Codex are both served.** `hosts.json` registers both (plan step 9), so the service
@@ -115,7 +115,7 @@ This port was checked on Linux only, with a ctypes shim and no Win32, so nothing
 Windows:
 - `tests/bridge`: 425 tests, of which 159 pass on Linux. The 266 that fail all open real pipes,
   tokens or processes, and they are exactly the tests that failed the same way on the source
-  branch. Checked after merging step 9 (8b6365a): there are no other new failing ids.
+  branch. Checked after merging step 9: there are no other new failing ids.
 - `tests/proc/test_pipe.py`: 10 tests; the 9 Windows-only ones skip on Linux.
 - `tests/ident`: 7 tests, all passing on Linux.
 - The bridge part of the conformance suite runs for Claude and for Codex: 4 tests each. 3 pass

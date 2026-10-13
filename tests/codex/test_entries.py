@@ -1,6 +1,5 @@
 """The Codex shell's entries run as Codex runs them: in place in the kit, and copied out of it as a
-plugin cache does, where they find the kit through PM_KIT_ROOT (ported from the Codex branch's
-tests/codex/test_entries.py). Each runs in a child Python with closed stdin."""
+plugin cache does, where they find the kit through PM_KIT_ROOT. Each runs in a child Python with closed stdin."""
 import json
 import os
 from pathlib import Path

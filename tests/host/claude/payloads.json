@@ -11,7 +11,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
     "cwd": "C:/r",
     "permission_mode": "default",
     "hook_event_name": "PreToolUse",
@@ -34,7 +34,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
     "cwd": "C:/r/.claude/worktrees/w",
     "permission_mode": "default",
     "hook_event_name": "PreToolUse",
@@ -62,7 +62,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
     "cwd": "C:/r",
     "permission_mode": "default",
     "hook_event_name": "PreToolUse",
@@ -90,7 +90,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
     "cwd": "C:/r",
     "permission_mode": "default",
     "hook_event_name": "PreToolUse",
@@ -113,7 +113,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
     "cwd": "C:/r",
     "permission_mode": "default",
     "hook_event_name": "PreToolUse",
@@ -136,7 +136,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
     "cwd": "C:/r",
     "permission_mode": "default",
     "hook_event_name": "PreToolUse",
@@ -160,7 +160,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
     "cwd": "C:/r",
     "permission_mode": "default",
     "hook_event_name": "PreToolUse",
@@ -187,7 +187,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
     "cwd": "C:/r",
     "permission_mode": "default",
     "hook_event_name": "PreToolUse",
@@ -205,7 +205,7 @@
    "event": "PreToolUse",
    "payload": {
     "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
     "cwd": "C:/r",
     "permission_mode": "default",
     "hook_event_name": "PreToolUse",
@@ -225,7 +225,7 @@
    "event": "SessionStart",
    "payload": {
     "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
     "cwd": "C:/r",
     "hook_event_name": "SessionStart",
     "source": "startup"
@@ -240,7 +240,7 @@
    "event": "SubagentStart",
    "payload": {
     "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
-    "transcript_path": "C:/Users/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
     "cwd": "C:/r",
     "hook_event_name": "SubagentStart",
     "agent_id": "a0335183081908f5a",

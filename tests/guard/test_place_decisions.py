@@ -69,7 +69,7 @@ class SameDecisions(unittest.TestCase):
             with self.subTest(name):
                 a = decide(make(self.w), self.w.ctx(classify=by_git))
                 b = decide(make(self.w), self.w.ctx(classify=by_fs))
-                want = a and (a.kind, a.rule, a.reason)
+                want = a and (a.verdict, a.rule, a.reason)
                 self.assertEqual(b and (b.verdict, b.rule, b.reason), want)
                 if a:
                     rules_seen.add(a.rule)

@@ -1,6 +1,5 @@
 """Codex hook payloads judged end to end: hosts.codex.adapter's parse and screen, then kitlib.guard with
-the role policy on, as kitlib.host.hookmain runs them (ported from the Codex branch's
-tests/codex/test_guard.py; the role policy every host shares is tests/guard/test_rolepolicy.py).
+the role policy on, as kitlib.host.hookmain runs them (the role policy every host shares is tests/guard/test_rolepolicy.py).
 
 Codex's hooks carry no subagent identity, so a session is held by its PM_KIT_ROLE mark alone (the
 role-only policy, hosts.json capabilities). The Codex branch held every marked call as a subagent;

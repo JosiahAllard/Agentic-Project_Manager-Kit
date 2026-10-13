@@ -214,7 +214,7 @@ def windowless(executable=None):
     """The pythonw.exe beside `executable` (default: this interpreter), else `executable` itself."""
     exe = executable or sys.executable
     w = os.path.join(os.path.dirname(exe), 'pythonw.exe')
-    return w if os.name == 'nt' and os.path.isfile(w) else exe
+    return w if os.name == 'nt' and os.path.isfile(exe) and os.path.isfile(w) else exe
 
 
 def command_line(script, executable=None):

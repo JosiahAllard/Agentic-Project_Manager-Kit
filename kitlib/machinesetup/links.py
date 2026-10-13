@@ -14,7 +14,7 @@ account's folder following ~/.claude) is left alone; one that is absent is not m
 A skill link in a real `skills` folder that points into one of this kit's MOVED_SKILLS_DIRS (the
 skills' folder before the hosts/ move, and the rendered copy in the Claude shell before decision 29
 in docs/multi-host-plan.md section 7) is re-pointed to the same skill in SKILLS_DIR, the kit's
-content/skills, like one into the old kit (docs/machine-setup.md "Moved hook paths").
+content/skills, like one into the replaced kit clone (docs/machine-setup.md "Moved hook paths").
 """
 import os
 

@@ -8,8 +8,8 @@ kit. The tools are shared already. The hooks, agent definitions, skills and inst
 still written separately for each host. The agent-to-agent bridge from the Codex branches is a
 host-neutral service that each host plugs into.
 
-Sources read: `main` @ 3e64fec, `origin/codex/companion-plugin` @ 82cff0d and
-`origin/codex/robust-bridge-plan` @ 1cdc244. The bridge branch carries all of companion-plugin
+Sources read: `main`, `origin/codex/companion-plugin` and
+`origin/codex/robust-bridge-plan` (their tips when the plan was written). The bridge branch carries all of companion-plugin
 except its last 4 commits.
 
 ## 0. Owner decisions (2026-10-13)

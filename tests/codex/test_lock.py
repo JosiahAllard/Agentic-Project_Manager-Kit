@@ -1,5 +1,4 @@
-"""hosts.codex.adapter.lock: the lock MCP server Codex runs lists and answers its read tools only
-(ported from the Codex branch's tests/codex/test_lock.py)."""
+"""hosts.codex.adapter.lock: the lock MCP server Codex runs lists and answers its read tools only."""
 import io
 import json
 import unittest
