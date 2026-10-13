@@ -449,7 +449,7 @@ if ($Stack) {
     if (-not $passNote) { $passNote = "its steps pass on their exit status and fail patterns (see the steps in tools/gate.json)" }
     Write-Host "     $passNote"
 } else {
-    Write-Host "  3. the gate: with no gate section gate.py refuses (no gate step selected). Copy a stack's"
+    Write-Host "  3. the gate: with no gate section gate.py detects the stack (source: auto; docs/gate.md). To choose the steps, copy a stack's"
     Write-Host "     $kit\templates\stacks\<stack>\tools\gate.json to tools\gate.json and add  `"gate`": `"tools/gate.json`"  to .kit.json,"
     Write-Host "     or write gate.steps in .kit.json (docs/kit-json.md)"
 }
