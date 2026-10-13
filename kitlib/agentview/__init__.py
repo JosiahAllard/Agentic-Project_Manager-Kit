@@ -1,50 +1,51 @@
 """kitlib.agentview: everything one role is given and held to, on one host (decision 18 in
 docs/multi-host-plan.md section 7; docs/content.md "Agent view"). tools/agent_view.py prints it.
 
-  view(kit, repo, name, host, renderer, ...)   [Section(title, lines)], in the order the agent
-                                               receives them, then the enforced side
+  view(kit, repo, name, host, renderer, ...)   [Section(title, lines)]: GIVEN sections in the order
+                                               the agent receives them, then the HELD ones
   UnknownRole                                  `name` is no role file's (.known: the roles there)
 
-Every section is built from the code that renders or enforces it, never from a list kept here:
+Every section is built from the code that renders or enforces it, never from a list kept here.
+The host's side comes only through the host contract (kitlib.host; docs/new-host.md), which the
+conformance suite pins to what the host writes:
 
-  Role file                the files the host's ContentRenderer writes from this role (the ones
-                           whose bytes change when only this role's body does), and their text
-  Repository instructions  the host's `instructions_file` token in `repo`, and the files its
+  Role file                renderer.role_path(role), and that file as renderer.render writes it
+  Repository instructions  renderer.tokens()'s `instructions_file` in `repo`, and the files its
                            `@<path>` lines import
-  User instructions        that file name in the host's per-user folder (hosts.json profile
-                           state_directory, or the folder its `config_dir_env` names); never read
+  User instructions        that file name in the host's per-user folder (the `user_folder` token,
+                           or the folder its `config_dir_env` names); never read
   Kit header               kitlib.host.header.text(kit), what every host's start hook adds
-  At start                 the host's own start text past the header (`host_start`, a host
-                           adapter's start.text when it has one), else the PM checklist
-                           (kitlib.pmstart) or the coordinator rules (kitlib.coordinatorstart)
-  Skills                   content/skills, when the host has skills
-  Repo profile             the host's `profile_path` token in `repo` (and `coordinator_profile_path`
-                           when the role's body names it)
-  Model, mode and writes   the role file, the host's tier map and capability map
+  At start                 the adapter's start_text(event, kit, payload, environ) past the header,
+                           for a session marked with the role (optional: unknown without it)
+  Skills                   content/skills, when the host has skills (hosts.json)
+  Repo profile             the `profile_path` token in `repo` (and `coordinator_profile_path` when
+                           the role's body names it)
+  Model, tools and mode    the role file; renderer.settings(role) (what the host's file sets) and
+                           renderer.tools() (its capability -> tool map)
+  Guard rules              kitlib.guard.rolepolicy.rules_for(mode) and its LOCK_VERBS
+  .kit.json switches       the guard's own Ctx and rolepolicy.mode: the main checkout's config,
+                           guard.role_policy, the roles entry, data_roots
   Backlog rights           kitlib.backlog.roles: role_of and allows over every ACTIONS row
-  .kit.json switches       the guard's own Ctx and kitlib.guard.rolepolicy.mode: the main
-                           checkout's config, guard.role_policy, the roles entry, data_roots
-  Guard rules for its mode kitlib.guard.rolepolicy's mode tables and its own docstring lines
 
-The host is chosen at the edge: `renderer` is the host's ContentRenderer, `values` its one-value
-tokens and `tools` its capability map (its adapter's content module; None when it has none).
 No printing, no exit; a check that fails is a line saying so, never raised, except UnknownRole and
 the ContentError of a content/ that does not load.
 """
 import collections
-import dataclasses
 import os
 import re
 
 from kitlib import content as kcontent
 from kitlib.host import header
-from kitlib.host.content import Content, tokens_in
+from kitlib.host.content import tokens_in
 
 Section = collections.namedtuple('Section', 'title lines')
+GIVEN = ('Role file', 'Repository instructions', 'User instructions', 'Kit header', 'At start', 'Skills',
+         'Repo profile')
+HELD = ('Model, tools and mode', 'Guard rules', '.kit.json switches', 'Backlog rights')
 # A line `@<path>` alone in an instructions file imports that file (relative to the file's folder).
 IMPORT = re.compile(r'^@(\S+)\s*$', re.M)
 IMPORT_DEPTH = 5
-MARK = '\n<!-- agent_view: this role -->\n'
+INDENT = '    '
 DESCRIPTION = re.compile(r'^description:\s*(.*)$', re.M)
 SESSION, DISPATCHED = 'SessionStart', 'SubagentStart'
 
@@ -66,31 +67,34 @@ def resolve(name, content):
         raise UnknownRole(name, content.role_names()) from None
 
 
-def view(kit, repo, name, host, renderer, values=None, tools=None, host_start=None, environ=None,
-         brief=False, checklists=None, ctx=None):
-    """The sections for role `name` on `host` (a kitlib.host.registry.Host) in the checkout `repo`,
-    for the kit at `kit`. `brief`: paths only, no file text and no start checks run. `checklists`
-    ({'pm': fn(), 'coordinator': fn(repo)}) and `ctx` (a kitlib.guard.context.Ctx) stand in for
-    the live ones (tests)."""
+def view(kit, repo, name, host, renderer, start_text=None, environ=None, brief=False, ctx=None):
+    """The sections for role `name` on `host` (a kitlib.host.registry.Host, whose ContentRenderer is
+    `renderer` and whose adapter's start_text is `start_text`, None when it has none) in the
+    checkout `repo`, for the kit at `kit`. `brief`: paths only, no file text and no start checks
+    run. `ctx` (a kitlib.guard.context.Ctx) stands in for the live one (tests)."""
     environ = os.environ if environ is None else environ
-    values = values or {}
     content = kcontent.load(kit)
     role = resolve(name, content)
+    values = renderer.tokens()
     event = SESSION if role.run == 'session' else DISPATCHED
     return [
         role_file(kit, role, content, renderer, brief),
         instructions(repo, values, brief),
-        user_instructions(host, values, environ),
-        Section('Kit header (%s)' % event, ['kitlib.host.header.text, added by every host\'s start hook:',
-                                            header.text(kit)]),
-        start(kit, repo, role, event, host_start, brief, checklists),
-        skills(content, role, host),
+        user_instructions(values, environ),
+        kit_header(kit, event, brief),
+        start(kit, repo, role, event, start_text, environ, brief),
+        skills(content, role, host, renderer, brief),
         profile(repo, role, values),
-        model_mode(role, host, renderer, tools),
-        backlog(role),
-        switches(kit, repo, role, ctx),
+        model_mode(role, renderer),
         guard_rules(role),
+        switches(kit, repo, role, ctx),
+        backlog(role),
     ]
+
+
+def block(text):
+    """`text` indented, so a file's own headings do not read as this view's."""
+    return '\n'.join(INDENT + line if line else '' for line in text.rstrip('\n').split('\n'))
 
 
 def _rel(path, root):
@@ -108,31 +112,21 @@ def _read_text(path):
         return None
 
 
-def role_files(role, content, renderer):
-    """{path: bytes} of the files `renderer` writes from `role` alone: the ones whose bytes change
-    when only its body does (skills left out)."""
-    base = Content(roles=content.roles, skills=())
-    marked = Content(roles=tuple(dataclasses.replace(r, body=r.body + MARK) if r is role else r
-                                 for r in content.roles), skills=())
-    want, other = renderer.render(base), renderer.render(marked)
-    return {p: d for p, d in sorted(want.items()) if other.get(p) != d}
-
-
 def role_file(kit, role, content, renderer, brief):
-    lines = ['source: %s/%s.md (edit it, then python tools/render_content.py --write)'
+    lines = ['source: %s/%s.md (edit it, then: python tools/render_content.py --write)'
              % (kcontent.ROLES_REL, role.name)]
-    files = role_files(role, content, renderer)
-    if not files:
-        lines.append('the host writes no file for this role')
-    for path, data in files.items():
-        on_disk = _read_text(os.path.join(kit, *path.split('/')))
-        state = '' if on_disk is None or on_disk.encode('utf-8') == data else \
-            ' (the committed copy differs: render again)'
-        lines.append('rendered: %s%s' % (path, state))
-        if not brief:
-            lines.append(data.decode('utf-8', 'replace'))
+    path = renderer.role_path(role.name)
+    data = renderer.render(content).get(path)
+    if data is None:
+        return Section('Role file', lines + ['the host\'s renderer writes no %s' % path])
+    on_disk = _read_text(os.path.join(kit, *path.split('/')))
+    state = '' if on_disk is not None and on_disk.encode('utf-8') == data else \
+        ' (the committed copy differs: render again)'
+    lines.append('the host loads: %s%s' % (path, state))
     if role.run == 'session':
-        lines.append('run: session (started only as its own launched session, never dispatched)')
+        lines.append('run: session (only ever its own launched session, never dispatched)')
+    if not brief:
+        lines.append(block(data.decode('utf-8', 'replace')))
     return Section('Role file', lines)
 
 
@@ -160,83 +154,71 @@ def instructions(repo, values, brief):
     lines = []
     for path, depth in imports(os.path.join(repo, name)):
         text = _read_text(path)
-        where = _rel(path, repo)
-        label = '%s%s' % ('  ' * depth + ('imports ' if depth else ''), where)
+        label = '  ' * depth + ('imports ' if depth else '') + _rel(path, repo)
         lines.append(label if text is not None else label + ' (not there)')
         if text is not None and not brief:
-            lines.append(text.rstrip('\n'))
+            lines.append(block(text))
     return Section('Repository instructions', lines)
 
 
-def user_instructions(host, values, environ):
-    name = values.get('instructions_file')
-    if not name:
-        return Section('User instructions', ['the host names no instructions file'])
+def user_instructions(values, environ):
+    name, home = values.get('instructions_file'), values.get('user_folder')
+    if not name or not home:
+        return Section('User instructions', ['the host names no per-user instructions file'])
     env = values.get('config_dir_env')
     folder = environ.get(env) if env else None
-    where = os.path.join(folder, name) if folder else '~/%s/%s' % (host.profile.state_directory, name)
+    where = os.path.join(folder, name) if folder else '%s/%s' % (home, name)
     moved = ' (%s moves the folder)' % env if folder else ''
-    return Section('User instructions', ['%s%s: not read by the kit, may exist' % (where, moved)])
+    return Section('User instructions',
+                   ['%s%s: the user\'s own, if it exists; the kit never reads it' % (where, moved)])
 
 
-def start(kit, repo, role, event, host_start, brief, checklists):
-    title = 'At start (%s), besides the header' % event
-    if host_start is not None:
-        if brief:
-            return Section(title, ['the host\'s start text (its adapter\'s start.text); run without --brief to see it'])
-        try:
-            text = host_start(event, kit, {'cwd': os.path.abspath(repo)},
-                              {'PM_KIT_ROLE': role.name})
-        except Exception as e:
-            return Section(title, ['could not make it: %s: %s' % (type(e).__name__, e)])
-        text = text[len(header.text(kit)):].lstrip('\n') if text.startswith(header.text(kit)) else text
-        return Section(title, [text] if text else ['nothing'])
-    if role.run != 'session':
-        return Section(title, ['nothing: a dispatched role gets the header alone'])
-    from kitlib import coordinatorstart
-    from kitlib.backlog import roles as broles
-    checklists = checklists or {}
-    if role.name == broles.PM:
-        how, fn = 'kitlib.pmstart.checklist (the PM settings\' SessionStart hook)', checklists.get('pm', _pm_checklist)
-        args = ()
-    elif coordinatorstart.is_coordinator({'PM_KIT_ROLE': role.name}):
-        how, fn = 'kitlib.coordinatorstart.render (the coordinator SessionStart hook)', \
-            checklists.get('coordinator', _coordinator_checklist)
-        args = (repo,)
-    else:
-        return Section(title, ['nothing: no start checklist for this role'])
+def kit_header(kit, event, brief):
+    title = 'Kit header (%s)' % event
+    lines = ['kitlib.host.header.text: the kit folder, and what <kit> and the other placeholders mean']
+    if not brief:
+        lines.append(block(header.text(kit)))
+    return Section(title, lines)
+
+
+def _mark(environ, role):
+    from kitlib import sessionmark
+    env = dict(environ)
+    env[sessionmark.ENV] = role.name
+    return env
+
+
+def start(kit, repo, role, event, start_text, environ, brief):
+    title = 'At start (%s), past the header' % event
+    if start_text is None:
+        return Section(title, ['not known: the host\'s adapter has no start_text (docs/new-host.md)'])
     if brief:
-        return Section(title, ['made by %s; run without --brief to see it' % how])
+        return Section(title, ['the adapter\'s start_text, for a session marked %s; run without --brief to see '
+                               'it (it runs the start checks)' % role.name])
     try:
-        text = fn(*args)
+        text = start_text(event, kit, {'cwd': os.path.abspath(repo)}, _mark(environ, role))
     except Exception as e:
-        text = 'could not check: %s: %s' % (type(e).__name__, e)
-    return Section(title, ['made by %s:' % how, text or 'nothing'])
+        return Section(title, ['could not make it: %s: %s' % (type(e).__name__, e)])
+    head = header.text(kit)
+    text = (text[len(head):] if text.startswith(head) else text).strip('\n')
+    return Section(title, [block(text)] if text else ['nothing'])
 
 
-def _pm_checklist():
-    from kitlib import pmstart
-    cfg = pmstart.load_config()
-    if cfg is None:
-        return 'no pm_start config in the machine config: the hook skips the checklist'
-    return pmstart.checklist(cfg)
-
-
-def _coordinator_checklist(repo):
-    from kitlib import coordinatorstart
-    return coordinatorstart.render(env={'PM_KIT_ROLE': 'coordinator'}, cwd=os.path.abspath(repo))
-
-
-def skills(content, role, host):
+def skills(content, role, host, renderer, brief):
     if not host.capabilities.skills:
         return Section('Skills', ['none: the host has no skills (hosts.json capabilities.skills)'])
     lines = []
-    if not role.all_tools and 'skill' not in role.capabilities:
-        lines.append('the role\'s capabilities do not name `skill`: where the host gives a tool list, it cannot load these')
+    listed = dict(renderer.settings(role)).get('tools')
+    tool = (renderer.tools() or {}).get('skill')
+    if listed is not None and 'skill' not in role.capabilities:
+        lines.append('its tool list has no %s tool: it cannot load these' % (tool or 'skill'))
+    if brief:
+        lines.append('%d, in %s/: %s' % (len(content.skills), kcontent.SKILLS_REL,
+                                          ', '.join(s.name for s in content.skills)))
+        return Section('Skills', lines)
     for s in content.skills:
         m = DESCRIPTION.search(dict(s.files).get('SKILL.md', b'').decode('utf-8', 'replace'))
-        lines.append('%s (%s/%s/SKILL.md)%s' % (s.name, kcontent.SKILLS_REL, s.name,
-                                                ': ' + m.group(1).strip() if m else ''))
+        lines.append('%s: %s' % (s.name, m.group(1).strip() if m else '(no description)'))
     return Section('Skills', lines)
 
 
@@ -254,39 +236,47 @@ def profile(repo, role, values):
     return Section('Repo profile', lines)
 
 
-def model_mode(role, host, renderer, tools):
-    tiers = renderer.tier_models()
-    lines = ['tier %s -> model %s%s' % (role.tier, role.model_for(host.name, tiers),
-                                         '; effort %s' % role.effort if role.effort else ''),
-             'sandbox: %s' % role.sandbox,
-             'mode: %s' % (role.mode or 'none (the role policy never holds it)'),
-             'writes: %s' % (', '.join(role.writes) if role.writes else 'none beyond its mode'),
-             'group: %s; run: %s' % (role.group or 'none', role.run or 'dispatched')]
+def model_mode(role, renderer):
+    lines = ['role file: tier %s, effort %s, sandbox %s' % (role.tier, role.effort or 'unset', role.sandbox)]
+    settings = renderer.settings(role)
+    lines.append('the host\'s file sets: %s' % ('; '.join('%s %s' % kv for kv in settings) or 'nothing'))
+    if 'model' not in dict(settings):
+        lines.append('  (no model in it: the host\'s own default model runs)')
+    tools = renderer.tools()
     if role.all_tools:
-        lines.append('capabilities: all (no tool list: every tool the host has)')
+        lines.append('capabilities: all (every tool the host has)')
     elif tools is None:
-        lines.append('capabilities: %s (the host gives no tool map)' % ', '.join(role.capabilities))
+        lines.append('capabilities: %s (the host maps them to no tool names)' % ', '.join(role.capabilities))
     else:
-        lines.append('capabilities -> host tools:')
-        lines.extend('  %s -> %s' % (c, tools.get(c, '(none)')) for c in role.capabilities)
-    return Section('Model, mode and capabilities', lines)
+        lines.append('capabilities, as the host\'s tools: %s'
+                     % ', '.join('%s -> %s' % (c, tools.get(c, '(none)')) for c in role.capabilities))
+    lines.append('mode: %s' % (role.mode or 'none (the role policy never holds it)'))
+    if role.writes:
+        lines.append('writes (allowed despite its mode): %s' % ', '.join(role.writes))
+    lines.append('backlog group: %s; run: %s' % (role.group or 'none', role.run or 'dispatched'))
+    return Section('Model, tools and mode', lines)
 
 
-def backlog(role):
-    from kitlib.backlog import roles as broles
-    subagent = role.run != 'session'
-    who = broles.role_of(role.name, subagent)
-    lines = ['as %s: %s' % ('a dispatched subagent' if subagent else 'a launched session',
-                            'role %s' % who if who else 'unlisted (only risk %s)' % ', '.join(broles.UNLISTED_MAY))]
-    for action, row in broles.ACTIONS.items():
-        verbs = ', '.join(row.verbs) or 'a raw write'
-        if broles.allows(action, who):
-            say = 'yes'
-        else:
-            facts = [f for r, f in row.when if r == who]
-            say = 'only with %s' % ', '.join(facts) if facts else 'no'
-        lines.append('%s (%s; risk %s): %s' % (action, verbs, row.risk, say))
-    return Section('Backlog rights (kitlib/backlog/roles.py)', lines)
+def guard_rules(role):
+    from kitlib.guard import rolepolicy
+    from kitlib.host import registry
+    m = role.mode
+    title = 'Guard rules for mode %s (kitlib/guard/rolepolicy.py RULES)' % (m or 'none')
+    if m is None:
+        return Section(title, ['none: the role names no mode, so only the shared guard rules hold it'])
+    owner = [t for r, modes, t in rolepolicy.RULES if r == 'write-jail' and modes is rolepolicy.OWNER_PATHS_READ_ONLY]
+    lines = []
+    for rule, text in rolepolicy.rules_for(m):
+        if rule == 'role-lock':
+            text += '; its verbs: %s' % rolepolicy.verbs_text(rolepolicy.LOCK_VERBS[m])
+        elif rule == 'role-edit' and role.writes:
+            text += ' (its writes: %s)' % ', '.join(role.writes)
+        elif text in owner:
+            text += ' (%s)' % ', '.join(registry.union('owner_paths'))
+        lines.append('- %s: %s' % (rule, text))
+    lines.append('These hold only where the repository\'s .kit.json turns guard.role_policy on (next '
+                 'section); the shared guard rules hold every role.')
+    return Section(title, lines)
 
 
 def _action(repo, role):
@@ -339,41 +329,24 @@ def switches(kit, repo, role, ctx=None):
         return Section(title, ['could not read: %s: %s' % (type(e).__name__, e)])
 
 
-def rule_text():
-    """{rule name: its text} from kitlib.guard.rolepolicy's docstring (the `role-...` entries)."""
-    from kitlib.guard import rolepolicy
-    out, name = {}, None
-    for line in (rolepolicy.__doc__ or '').splitlines():
-        m = re.match(r'^ {4}(role-[a-z]+)\s+(.*)$', line)
-        if m:
-            name = m.group(1)
-            out[name] = out.get(name, '') + (' ' if name in out else '') + m.group(2).strip()
-        elif name and re.match(r'^ {18}\S', line):
-            out[name] += ' ' + line.strip()
+def backlog(role):
+    """Its rights over every kitlib.backlog.roles ACTIONS row, grouped by the answer."""
+    from kitlib.backlog import roles as broles
+    subagent = role.run != 'session'
+    who = broles.role_of(role.name, subagent)
+    lines = ['as %s: %s' % ('a dispatched subagent' if subagent else 'a launched session',
+                            'role %s' % who if who else 'unlisted (only risk %s)' % ', '.join(broles.UNLISTED_MAY))]
+    # The grant facts (broles.FACTS) in plain words; one missing here shows as `with <fact>`.
+    plain = {broles.OWN_PULL: 'on a record it pulled itself', broles.VIA_LAND: 'through the landing tool'}
+    answers = {}
+    for action, row in broles.ACTIONS.items():
+        if broles.allows(action, who):
+            say = 'may'
         else:
-            name = None
-    return out
-
-
-def guard_rules(role):
-    from kitlib.guard import rolepolicy
-    from kitlib.host import registry
-    title = 'Guard rules for its mode (kitlib/guard/rolepolicy.py)'
-    m = role.mode
-    if m is None:
-        return Section(title, ['none: the role names no mode'])
-    texts = rule_text()
-    lines = []
-    if m in rolepolicy.NO_EDIT:
-        lines.append('role-edit: %s%s' % (texts.get('role-edit', ''),
-                                          '; its writes: %s' % ', '.join(role.writes) if role.writes else ''))
-    lines.append('role-workdir: %s' % texts.get('role-workdir', ''))
-    lines.append('role-shell: %s' % texts.get('role-shell', ''))
-    lines.append('role-lock: %s; this mode\'s verbs: %s' % (texts.get('role-lock', ''),
-                                                           rolepolicy.verbs_text(rolepolicy.LOCK_VERBS[m])))
-    if m in rolepolicy.READ_ONLY_CHECKOUT:
-        lines.append('write-jail: its checkout is read-only to the shell')
-    if m in rolepolicy.OWNER_PATHS_READ_ONLY:
-        lines.append('write-jail: the owner paths are read-only: %s' % ', '.join(registry.union('owner_paths')))
-    lines.append('(these hold only where .kit.json sets guard.role_policy; the shared guard rules hold for every role)')
-    return Section(title, lines)
+            facts = [f for r, f in row.when if r == who]
+            say = 'only %s' % ' or '.join(plain.get(f, 'with ' + f) for f in facts) if facts else 'may not'
+        answers.setdefault(say, []).append('%s (%s)' % (action, ', '.join(row.verbs) or 'a raw write'))
+    order = lambda say: (say != 'may', say == 'may not', say)     # noqa: E731
+    lines.extend('%s: %s' % (say, ', '.join(answers[say])) for say in sorted(answers, key=order))
+    lines.append('each action\'s risk and who may take it: kitlib/backlog/roles.py ACTIONS')
+    return Section('Backlog rights (kitlib/backlog/roles.py)', lines)

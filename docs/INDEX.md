@@ -14,6 +14,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `ARCHITECTURE.md` | kit tool architecture (the contract; owner approves changes) | before changing a tool | kw: architecture, contract
 - `docs/agent-profile.md` | this repo's profile for worker agents | starting a task | kw: profile, branches, build, test
 - `.claude/agent-profile.md` | stub: the profile moved to docs/agent-profile.md | an agent names the old path | kw: profile
+- `.codex/agent-profile.md` | stub: the profile is docs/agent-profile.md | an agent names the host's profile path | kw: profile
 - `docs/ROSTER.md` | agent roster | choosing an agent | kw: roster, agents
 - `docs/action-hub.md` | Action Hub | the PM action list | kw: action-hub, hub
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog

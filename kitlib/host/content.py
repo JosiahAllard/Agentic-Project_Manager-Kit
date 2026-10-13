@@ -143,7 +143,16 @@ class ContentRenderer(Protocol):
     """One host's renderer. `host` is the host's name. `tier_models()` is its tier -> model map.
     `owned()` lists the repo-relative folders whose every file it writes: a file there that
     `render` does not produce is stale. `render(content)` returns {repo-relative posix path: bytes}
-    for every file it writes. It reads nothing from disk and writes nothing."""
+    for every file it writes. It reads nothing from disk and writes nothing.
+
+    What the host gives one role, read by tools/agent_view.py (docs/content.md "Agent view") and
+    pinned to `render` by the conformance suite (tests/host/conformance.py):
+    `tokens()` is {one-value token: its value on this host} (TOKENS less ARG_TOKENS; {} for a host
+    whose files fill none). `tools()` is its capability -> tool map ({{tool:<capability>}}), or
+    None when it has none. `role_path(name)` is the repo-relative path `render` writes role `name`
+    to. `settings(role)` is [(key, value)]: what that file sets for the role to run with, each
+    value as the file writes it; key `model` when the file names one, `tools` when it limits the
+    role to a tool list (the host's tool names), nothing for what the file leaves to the host."""
 
     host = None
 
@@ -154,6 +163,18 @@ class ContentRenderer(Protocol):
         ...
 
     def render(self, content):
+        ...
+
+    def tokens(self):
+        ...
+
+    def tools(self):
+        ...
+
+    def role_path(self, name):
+        ...
+
+    def settings(self, role):
         ...
 
 

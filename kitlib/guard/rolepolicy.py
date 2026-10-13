@@ -25,6 +25,7 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
 
   screen(action, ctx)   (check's Decision, context's Ctx): what rules.decide runs once the shared
                         rules allow the call (a call they refuse never reaches the policy)
+  rules_for(mode)       [(rule, plain text)]: the RULES rows that hold a mode (tools/agent_view.py)
   check(action, ctx)    a Decision, or None to go on to the shared rules:
     role-edit     an edit inside the session's checkout by a read, test or lander role, unless its
                   role file's `writes` names the file; an edit outside it (temp, the scratch
@@ -70,6 +71,19 @@ from .context import OWNER
 NO_EDIT = ('read', 'test', 'lander')
 READ_ONLY_CHECKOUT = ('read', 'test')
 OWNER_PATHS_READ_ONLY = NO_EDIT
+# What each rule holds a mode to, in plain words: (rule, the modes it holds, what it says). check
+# and context read the same mode tuples; tests/guard/test_rolepolicy.py pins each row to the
+# answers the guard gives, and tools/agent_view.py shows a role the rows of its mode (rules_for).
+RULES = (
+    ('role-edit', NO_EDIT, 'no file-tool edit inside its checkout, except a file its role file\'s '
+                           '`writes` names; temp and scratch folders stay open'),
+    ('role-workdir', MODES, 'a shell call runs inside its checkout, not in another folder'),
+    ('role-shell', MODES, 'no interactive interpreter: a shell, cmd, PowerShell or python is given '
+                          'the script or command to run'),
+    ('role-lock', MODES, 'the machine lock only through its mode\'s verbs, and never with --force'),
+    ('write-jail', READ_ONLY_CHECKOUT, 'its checkout is read-only to the shell'),
+    ('write-jail', OWNER_PATHS_READ_ONLY, 'every host\'s owner paths in its checkout are read-only'),
+)
 # The lock verbs a mode runs: verb -> None (any argument) or the sub-verbs it may take ('' none).
 # Only verbs tools/machine_lock.py has (its parser: run, background, status, stop, top, hold,
 # division, game); AGENT_LOCK is docs/guard.md "Lock CLI owner writes" "Still open" among them: an
@@ -444,6 +458,11 @@ def lock_mcp_tool(action, ctx):
     sep = rules.host_mcp_separator(ctx.host_profile())
     tail = tool.rsplit(sep, 1)[-1] if sep else tool
     return tail if tail in MCP_VERBS else None
+
+
+def rules_for(m):
+    """[(rule, text)] of the RULES rows that hold mode `m`, in order."""
+    return [(rule, text) for rule, modes, text in RULES if m in modes]
 
 
 def verbs_text(table):

@@ -1,11 +1,13 @@
 """kitlib.agentview and tools/agent_view.py: what one role is given and held to (decision 18,
 docs/multi-host-plan.md section 7; docs/content.md "Agent view").
 
-Each section is checked against the live source it is built from (the host's renderer, the kit
-header, the skills folder, kitlib.backlog.roles, the guard's role policy), on the real kit content.
-The repository is a temp folder, and the guard's Ctx is given a classify that answers it as a main
-checkout, so nothing asks the repository. The CLI runs under a temp home (tests/home.py).
+Each section is checked against the live source it is built from (the host's ContentRenderer and
+start_text, the kit header, the skills folder, kitlib.backlog.roles, the guard's role policy), on
+the real kit content. The repository is a temp folder, and the guard's Ctx is given a classify that
+answers it as a main checkout, so nothing asks the repository. The CLI runs under a temp home
+(tests/home.py).
 """
+import dataclasses
 import io
 import json
 import os
@@ -30,11 +32,10 @@ KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(KIT, 'tools'))
 import agent_view as cli  # noqa: E402
 
-TITLES = ('Role file', 'Repository instructions', 'User instructions', 'Kit header', 'At start',
-          'Skills', 'Repo profile', 'Model, mode and capabilities', 'Backlog rights', '.kit.json switches',
-          'Guard rules for its mode')
+TITLES = agentview.GIVEN + agentview.HELD
 HOST = registry.host(claude_content.HOST)
-VALUES = claude_content.tokens()
+RENDERER = claude_content.renderer()
+VALUES = RENDERER.tokens()
 
 
 def write(path, text):
@@ -49,21 +50,21 @@ class Base(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.repo, True)
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, True)
-        self.ran = []
+        self.calls = []
 
     def ctx(self):
         place = gitrepo.Place(gitrepo.MAIN, self.repo, '', None, None)
         return Ctx(environ={}, home=self.home, kit=KIT, classify=lambda path: place)
 
+    def start_text(self, event, kit, payload, environ):
+        self.calls.append((event, payload, environ))
+        return header.text(kit) + '\nchecks for ' + environ['PM_KIT_ROLE']
+
     def view(self, name, **kw):
-        kw.setdefault('values', VALUES)
-        kw.setdefault('tools', claude_content.TOOLS)
         kw.setdefault('environ', {})
         kw.setdefault('ctx', self.ctx())
-        kw.setdefault('checklists', {'pm': lambda: self.ran.append('pm') or 'PM LIST',
-                                     'coordinator': lambda repo: self.ran.append(repo) or 'COORD LIST'})
-        return agentview.view(KIT, self.repo, name, kw.pop('host', HOST), kw.pop('renderer', claude_content.renderer()),
-                              **kw)
+        kw.setdefault('start_text', self.start_text)
+        return agentview.view(KIT, self.repo, name, kw.pop('host', HOST), kw.pop('renderer', RENDERER), **kw)
 
     def section(self, sections, title):
         found = [s for s in sections if s.title.startswith(title)]
@@ -75,7 +76,7 @@ class Base(unittest.TestCase):
 
 
 class Sections(Base):
-    def test_every_section_in_the_order_the_agent_gets_them(self):
+    def test_every_section_given_first_then_held(self):
         for name in ('worker', 'pm', 'consultant', 'reviewer'):
             with self.subTest(role=name):
                 got = [s.title for s in self.view(name, brief=True)]
@@ -95,26 +96,25 @@ class Sections(Base):
 
 
 class RoleFile(Base):
-    def test_the_rendered_file_is_the_renderers_and_its_text_is_shown(self):
-        r = claude_content.renderer()
-        c = content.load(KIT)
-        files = agentview.role_files(c.role('worker'), c, r)
-        self.assertEqual(list(files), ['%s/worker.md' % claude_content.AGENTS_REL])
-        self.assertEqual(files['%s/worker.md' % claude_content.AGENTS_REL], r.render(c)['%s/worker.md' % claude_content.AGENTS_REL])
+    def test_the_file_is_the_renderers_role_path_and_its_text_is_shown(self):
+        path = RENDERER.role_path('worker')
+        data = RENDERER.render(content.load(KIT))[path].decode('utf-8')
         full = self.text(self.view('worker'), 'Role file')
-        self.assertIn(files['%s/worker.md' % claude_content.AGENTS_REL].decode('utf-8').rstrip('\n'), full)
+        self.assertIn(agentview.block(data), full)
         brief = self.section(self.view('worker', brief=True), 'Role file').lines
-        self.assertIn('rendered: %s/worker.md' % claude_content.AGENTS_REL, brief)
-        self.assertFalse(any(line.startswith('---') for line in brief))
+        self.assertIn('the host loads: %s' % path, brief)
+        self.assertEqual(len(brief), 2)
 
-    def test_every_host_renders_one_file_per_role(self):
-        import importlib
-        c = content.load(KIT)
-        for h in registry.names():
-            module = importlib.import_module(registry.host(h).adapter).ADAPTER.content()
-            for role in c.roles:
-                with self.subTest(host=h, role=role.name):
-                    self.assertEqual(len(agentview.role_files(role, c, module.renderer())), 1)
+    def test_a_renderer_that_writes_no_file_there_says_so(self):
+        class Off(type(RENDERER)):
+            def render(self, c):
+                return {p: d for p, d in type(RENDERER).render(self, c).items() if p != self.role_path('worker')}
+        got = self.text(self.view('worker', renderer=Off(), brief=True), 'Role file')
+        self.assertIn('writes no %s' % RENDERER.role_path('worker'), got)
+
+    def test_a_session_role_says_it_is_never_dispatched(self):
+        self.assertIn('run: session', self.text(self.view('pm', brief=True), 'Role file'))
+        self.assertNotIn('run: session', self.text(self.view('worker', brief=True), 'Role file'))
 
 
 class Instructions(Base):
@@ -125,7 +125,7 @@ class Instructions(Base):
         lines = self.section(self.view('worker', brief=True), 'Repository instructions').lines
         self.assertEqual(lines, [name, '  imports AGENTS.md', '  imports docs/missing.md (not there)'])
         full = self.text(self.view('worker'), 'Repository instructions')
-        self.assertIn('# rules', full)
+        self.assertIn(agentview.INDENT + '# rules', full)
 
     def test_no_instructions_file_is_said(self):
         lines = self.section(self.view('worker', brief=True), 'Repository instructions').lines
@@ -133,8 +133,8 @@ class Instructions(Base):
 
     def test_the_user_file_is_in_the_hosts_per_user_folder_and_never_read(self):
         line = self.text(self.view('worker', brief=True), 'User instructions')
-        self.assertIn('~/%s/%s' % (HOST.profile.state_directory, VALUES['instructions_file']), line)
-        self.assertIn('not read by the kit, may exist', line)
+        self.assertIn('%s/%s' % (VALUES['user_folder'], VALUES['instructions_file']), line)
+        self.assertIn('the kit never reads it', line)
         moved = self.text(self.view('worker', brief=True, environ={VALUES['config_dir_env']: self.home}),
                           'User instructions')
         self.assertIn(os.path.join(self.home, VALUES['instructions_file']), moved)
@@ -142,43 +142,51 @@ class Instructions(Base):
 
 class Start(Base):
     def test_the_header_is_kitlib_host_header(self):
-        self.assertIn(header.text(KIT), self.section(self.view('worker', brief=True), 'Kit header').lines)
+        self.assertIn(agentview.block(header.text(KIT)), self.text(self.view('worker'), 'Kit header'))
+        self.assertNotIn(header.text(KIT), self.text(self.view('worker', brief=True), 'Kit header'))
 
-    def test_a_dispatched_role_gets_the_subagent_header_and_no_checklist(self):
-        got = self.view('worker')
-        self.assertIn('SubagentStart', self.section(got, 'Kit header').title)
-        self.assertIn('nothing', self.text(got, 'At start'))
-        self.assertEqual(self.ran, [])
+    def test_the_start_text_past_the_header_for_a_session_marked_with_the_role(self):
+        got = self.view('pm', environ={'OTHER': '1'})
+        self.assertEqual(self.section(got, 'At start').lines, [agentview.block('checks for pm')])
+        self.assertIn('SessionStart', self.section(got, 'Kit header').title)
+        self.assertEqual(self.calls, [('SessionStart', {'cwd': os.path.abspath(self.repo)},
+                                       {'OTHER': '1', 'PM_KIT_ROLE': 'pm'})])
 
-    def test_the_pm_and_the_coordinator_get_their_checklists(self):
-        self.assertIn('PM LIST', self.text(self.view('pm'), 'At start'))
-        self.assertIn('COORD LIST', self.text(self.view('coordinator'), 'At start'))
-        self.assertEqual(self.ran, ['pm', self.repo])
+    def test_a_dispatched_role_is_asked_at_subagent_start(self):
+        self.view('worker')
+        self.assertEqual([c[0] for c in self.calls], ['SubagentStart'])
+
+    def test_nothing_past_the_header_is_said(self):
+        got = self.view('worker', start_text=lambda event, kit, payload, environ: header.text(kit))
+        self.assertEqual(self.section(got, 'At start').lines, ['nothing'])
 
     def test_brief_runs_no_checks(self):
-        self.assertIn('kitlib.pmstart.checklist', self.text(self.view('pm', brief=True), 'At start'))
-        self.assertEqual(self.ran, [])
+        self.assertIn('run without --brief', self.text(self.view('pm', brief=True), 'At start'))
+        self.assertEqual(self.calls, [])
 
-    def test_a_host_start_text_past_the_header_is_shown(self):
-        calls = []
+    def test_a_host_with_no_start_text_is_not_guessed(self):
+        self.assertIn('not known', self.text(self.view('pm', start_text=None), 'At start'))
 
-        def host_start(event, kit, payload, environ):
-            calls.append((event, payload, environ))
-            return header.text(kit) + '\nchecks for ' + environ['PM_KIT_ROLE']
-        self.assertEqual(self.section(self.view('pm', host_start=host_start), 'At start').lines,
-                         ['checks for pm'])
-        self.assertEqual(calls, [('SessionStart', {'cwd': os.path.abspath(self.repo)}, {'PM_KIT_ROLE': 'pm'})])
-        self.assertEqual(self.ran, [])
+    def test_a_failing_start_text_is_a_line(self):
+        def boom(*a):
+            raise OSError('no disk')
+        self.assertIn('could not make it: OSError: no disk', self.text(self.view('pm', start_text=boom), 'At start'))
 
 
 class GivenAndHeld(Base):
     def test_skills_are_content_skills(self):
-        lines = self.section(self.view('worker', brief=True), 'Skills').lines
         names = [s.name for s in content.load(KIT).skills]
-        self.assertEqual([line.split(' ', 1)[0] for line in lines], names)
+        lines = self.section(self.view('worker'), 'Skills').lines
+        self.assertEqual([line.split(':', 1)[0] for line in lines], names)
+        brief = self.text(self.view('worker', brief=True), 'Skills')
+        self.assertIn(', '.join(names), brief)
+
+    def test_a_tool_list_without_the_skill_tool_is_said(self):
+        role = next(r for r in content.load(KIT).roles if not r.all_tools and 'skill' not in r.capabilities)
+        self.assertIn('cannot load these', self.text(self.view(role.name, brief=True), 'Skills'))
+        self.assertNotIn('cannot load these', self.text(self.view('worker', brief=True), 'Skills'))
 
     def test_a_host_without_skills_lists_none(self):
-        import dataclasses
         caps = dataclasses.replace(HOST.capabilities, skills=False)
         host = dataclasses.replace(HOST, capabilities=caps)
         self.assertIn('none', self.text(self.view('worker', brief=True, host=host), 'Skills'))
@@ -190,29 +198,36 @@ class GivenAndHeld(Base):
         self.assertEqual(self.section(self.view('worker', brief=True), 'Repo profile').lines[0],
                          'profile_path: %s' % rel)
 
-    def test_capabilities_are_the_hosts_tools_and_the_model_its_tier_map(self):
+    def test_settings_and_tools_are_the_renderers(self):
         c = content.load(KIT)
         role = next(r for r in c.roles if not r.all_tools)
-        text = self.text(self.view(role.name, brief=True), 'Model, mode')
+        text = self.text(self.view(role.name, brief=True), 'Model, tools')
+        tools = RENDERER.tools()
         for cap in role.capabilities:
-            self.assertIn('  %s -> %s' % (cap, claude_content.TOOLS[cap]), text)
-        model = role.model_for(HOST.name, claude_content.renderer().tier_models())
-        self.assertIn('tier %s -> model %s' % (role.tier, model), text)
+            self.assertIn('%s -> %s' % (cap, tools[cap]), text)
+        self.assertIn('; '.join('%s %s' % kv for kv in RENDERER.settings(role)), text)
         self.assertIn('mode: %s' % role.mode, text)
 
+    def test_a_file_with_no_model_says_the_host_default_runs(self):
+        class NoModel(type(RENDERER)):
+            def settings(self, role, *a):
+                return [kv for kv in type(RENDERER).settings(self, role, *a) if kv[0] != 'model']
+        self.assertIn('default model', self.text(self.view('worker', renderer=NoModel(), brief=True), 'Model, tools'))
+
     def test_backlog_rights_are_the_policy_rows(self):
-        for name, action, want in (('worker', 'pull', 'yes'), ('reviewer', 'add', 'no'),
-                                   ('reviewer', 'read', 'yes'), ('lander', 'close', 'only with %s' % broles.VIA_LAND)):
+        for name, action, want in (('worker', 'pull', 'may'), ('reviewer', 'add', 'may not'),
+                                   ('reviewer', 'read', 'may'), ('lander', 'close', 'only through the landing tool'),
+                                   ('worker', 'release', 'only on a record it pulled itself')):
             with self.subTest(role=name, action=action):
                 lines = self.section(self.view(name, brief=True), 'Backlog rights').lines
-                self.assertEqual(len(lines), 1 + len(broles.ACTIONS))
-                row = next(line for line in lines if line.startswith(action + ' ('))
-                self.assertTrue(row.endswith(': ' + want), row)
+                row = next(line for line in lines if (' %s (' % action) in ' ' + line.split(': ', 1)[-1])
+                self.assertEqual(row.split(': ', 1)[0], want, row)
 
-    def test_a_fact_grant_is_named(self):
+    def test_every_action_is_listed_once(self):
         lines = self.section(self.view('worker', brief=True), 'Backlog rights').lines
-        row = next(line for line in lines if line.startswith('release ('))
-        self.assertTrue(row.endswith('only with %s' % broles.OWN_PULL), row)
+        listed = ' '.join(lines[1:-1])
+        for action in broles.ACTIONS:
+            self.assertIn('%s (' % action, listed)
 
 
 class Switches(Base):
@@ -242,20 +257,24 @@ class Switches(Base):
 
 
 class GuardRules(Base):
-    def test_rule_text_comes_from_the_role_policy(self):
-        texts = agentview.rule_text()
-        self.assertEqual(sorted(texts), ['role-edit', 'role-lock', 'role-shell', 'role-workdir'])
-        self.assertTrue(all(t for t in texts.values()))
+    def test_the_rules_are_the_role_policys_rows_for_the_mode(self):
+        for name in ('reviewer', 'worker', 'lander', 'test-runner'):
+            role = content.load(KIT).role(name)
+            with self.subTest(role=name):
+                text = self.text(self.view(name, brief=True), 'Guard rules')
+                for rule, said in rolepolicy.rules_for(role.mode):
+                    self.assertIn('- %s: %s' % (rule, said), text)
+                self.assertIn(rolepolicy.verbs_text(rolepolicy.LOCK_VERBS[role.mode]), text)
 
     def test_a_read_mode_is_held_to_more_than_a_write_mode(self):
         read = self.text(self.view('reviewer', brief=True), 'Guard rules')
         write_ = self.text(self.view('worker', brief=True), 'Guard rules')
         self.assertIn('role-edit:', read)
         self.assertNotIn('role-edit:', write_)
-        self.assertIn(rolepolicy.verbs_text(rolepolicy.LOCK_VERBS['read']), read)
-        self.assertIn(rolepolicy.verbs_text(rolepolicy.LOCK_VERBS['write']), write_)
+        self.assertNotIn('write-jail', write_)
+        owner = next(line for line in read.splitlines() if 'owner paths' in line)
         for p in registry.union('owner_paths'):
-            self.assertIn(p, read)
+            self.assertIn(p, owner)
 
     def test_a_role_file_writes_list_is_named(self):
         role = next(r for r in content.load(KIT).roles if r.writes)
@@ -272,6 +291,7 @@ class Cli(TempHomeCase):
                                                                            classify=lambda path: nowhere))
         patch.start()
         self.addCleanup(patch.stop)
+
     def run_cli(self, *argv, environ=None):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stderr(err):
@@ -299,16 +319,17 @@ class Cli(TempHomeCase):
         self.assertEqual(code, cli.USAGE)
         self.assertIn('USAGE:', err)
 
-    def test_a_role_prints_every_section(self):
+    def test_a_role_prints_every_section_numbered(self):
         repo = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, repo, True)
         for host in registry.names():
             with self.subTest(host=host):
                 code, out, _ = self.run_cli('worker', '--brief', '--host', host, '-C', repo)
                 self.assertEqual(code, 0, out)
-                for t in TITLES:
-                    self.assertIn('== %s' % t, out)
+                for n, t in enumerate(TITLES, 1):
+                    self.assertIn('== %d. %s' % (n, t), out)
                 self.assertIn('on host %s' % host, out)
+                self.assertIn('Sections 1-%d: what it is given' % len(agentview.GIVEN), out)
 
     def test_the_default_host_is_pm_kit_host_else_the_registry_default(self):
         repo = tempfile.mkdtemp()

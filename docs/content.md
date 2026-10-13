@@ -171,27 +171,39 @@ works in (default: here); `--brief` prints paths only and runs no start check. E
 usage error, a role no role file defines (the line names every role) or an unknown host. An old
 name (`kitlib.content.ALIASES`) shows its new role.
 
-In the order the agent receives them:
-- **Role file**: the files the host's renderer writes from this role (those whose bytes change when
-  only its body does), with their text, and a note when the committed copy differs.
-- **Repository instructions**: the host's `instructions_file` token in the repository, and each
-  file it imports with a `@<path>` line, with their text.
-- **User instructions**: that file name in the host's per-user folder (hosts.json profile
-  `state_directory`, or the folder `config_dir_env` names). Not read by the kit.
-- **Kit header**: `kitlib.host.header.text`, at SubagentStart for a dispatched role and at
-  SessionStart for a `run: session` one.
-- **At start**: what the start hook adds past the header. A host adapter with a `start` module
-  (`start.text(event, kit, payload, environ)`, Codex) is asked; else the PM gets
-  `kitlib.pmstart.checklist` and the coordinator `kitlib.coordinatorstart.render`.
-- **Skills**: `content/skills`, where the host has skills.
-- **Repo profile**: the host's `profile_path` (and `coordinator_profile_path` when the role's body
-  names it) if the repository has it, else none.
+It is built from the code that renders and enforces, so it cannot drift from it. The host's side
+comes only through the host contract (docs/new-host.md), which the conformance suite pins to what
+the host writes: the ContentRenderer's `role_path`, `settings`, `tokens` and `tools`, and the
+adapter's optional `start_text`. File text is indented under its label.
 
-Then the enforced side: tier and model, sandbox, `mode`, `writes`, group and run, and each
-capability as the host's tool (its adapter's `TOOLS`); the backlog rights, one line per
-`kitlib/backlog/roles.py` `ACTIONS` row (`role_of`, `allows`, and a fact a grant needs); the
-`.kit.json` switches the guard reads from the main checkout (`guard.role_policy`, the role's
-`roles` entry, the mode `kitlib.guard.rolepolicy.mode` gives it, `edit_main_checkout`,
-`guard.data_roots`); and the role-policy rules its mode is held to, worded from
-`kitlib/guard/rolepolicy.py` itself. Code: `kitlib/agentview`; tests `tests/agentview`.
-`content/README.md` maps each thing shown to the file that changes it.
+Sections 1-7, what the agent is given, in the order it gets it:
+1. **Role file**: `renderer.role_path(role)`, the file the host loads, with its text as `render`
+   writes it, and a note when the committed copy differs.
+2. **Repository instructions**: the `instructions_file` token in the repository, and each file it
+   imports with a `@<path>` line.
+3. **User instructions**: that file name in the host's per-user folder (the `user_folder` token,
+   or the folder `config_dir_env` names). The kit never reads it.
+4. **Kit header**: `kitlib.host.header.text`, at SubagentStart for a dispatched role and at
+   SessionStart for a `run: session` one.
+5. **At start**: what the adapter's `start_text` adds past the header for a session marked with the
+   role (`PM_KIT_ROLE`) in the repository; for the PM and the coordinator that runs their start
+   checks. A host without `start_text` is shown as not known, never guessed.
+6. **Skills**: `content/skills`, where the host has skills, and a note when the role's tool list
+   leaves out the host's skill tool.
+7. **Repo profile**: the `profile_path` token (and `coordinator_profile_path` when the role's body
+   names it) if the repository has it, else none.
+
+Sections 8-11, what it is held to:
+8. **Model, tools and mode**: the role file's tier, effort and sandbox; what the host's file sets
+   (`renderer.settings`: its model, effort, sandbox or tool list as that file writes them); each
+   capability as the host's tool (`renderer.tools()`); `mode`, `writes`, group and run.
+9. **Guard rules**: the `kitlib/guard/rolepolicy.py` `RULES` rows for its mode (`rules_for`), with
+   its `LOCK_VERBS`; tests/guard/test_rolepolicy.py pins each row to the guard's answers.
+10. **.kit.json switches**: what the guard reads from the main checkout's `.kit.json`
+    (`guard.role_policy`, the role's `roles` entry, the mode `rolepolicy.mode` gives it,
+    `edit_main_checkout`, `guard.data_roots`).
+11. **Backlog rights**: every `kitlib/backlog/roles.py` `ACTIONS` row, grouped by the answer
+    (`role_of`, `allows`, and the fact a grant needs).
+
+Code: `kitlib/agentview`; tests `tests/agentview`. `content/README.md` maps each thing shown to
+the file that changes it.

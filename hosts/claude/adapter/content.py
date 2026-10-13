@@ -96,25 +96,47 @@ class ClaudeContent:
     def owned(self):
         return (AGENTS_REL, SKILLS_REL)
 
+    @staticmethod
+    def tokens():
+        return tokens()
+
+    @staticmethod
+    def tools():
+        return dict(TOOLS)
+
+    @staticmethod
+    def role_path(name):
+        return '%s/%s.md' % (AGENTS_REL, name)
+
+    def settings(self, role, tiers=None):
+        """[(key, value)] of the front matter `role`'s agent file runs it with, in the file's order:
+        `tools` (no line for `capabilities: all`), `model`, `effort`, and `cacheTtl` (under
+        `experimental`)."""
+        tiers = self.tier_models() if tiers is None else tiers
+        out = []
+        if not role.all_tools:
+            missing = [c for c in role.capabilities if c not in TOOLS]
+            if missing:
+                raise ContentError('%s: no Claude tool for %s' % (self.role_path(role.name), ', '.join(missing)))
+            out.append(('tools', ', '.join(TOOLS[c] for c in role.capabilities)))
+        out.append(('model', role.model_for(HOST, tiers)))
+        if role.effort:
+            out.append(('effort', role.effort))
+        if role.cache:
+            out.append(('cacheTtl', CACHE_TTL[role.cache]))
+        return out
+
     def agent_file(self, role, names, values=None, tiers=None):
         """The bytes of `role`'s agent file; `names` are every role's name (for agent tokens),
         `values` the tokens' values and `tiers` the tier -> model map (default: hosts.json's)."""
-        src = '%s/%s.md' % (AGENTS_REL, role.name)
+        src = self.role_path(role.name)
         values = tokens() if values is None else values
         tiers = self.tier_models() if tiers is None else tiers
         fill = lambda text: substitute(text, values, agent_name, names, src, models=tiers,    # noqa: E731
                                        tools=TOOLS)
         lines = ['---', 'name: %s' % role.name, 'description: %s' % quote(fill(role.description))]
-        if not role.all_tools:
-            missing = [c for c in role.capabilities if c not in TOOLS]
-            if missing:
-                raise ContentError('%s: no Claude tool for %s' % (src, ', '.join(missing)))
-            lines.append('tools: %s' % ', '.join(TOOLS[c] for c in role.capabilities))
-        lines.append('model: %s' % role.model_for(HOST, tiers))
-        if role.effort:
-            lines.append('effort: %s' % role.effort)
-        if role.cache:
-            lines += ['experimental:', '  cacheTtl: %s' % CACHE_TTL[role.cache]]
+        for key, value in self.settings(role, tiers):
+            lines += ['experimental:', '  cacheTtl: %s' % value] if key == 'cacheTtl' else ['%s: %s' % (key, value)]
         lines.append('---')
         nl = role.newline
         return (nl.join(lines) + nl + fill(role.body)).encode('utf-8')
@@ -124,7 +146,7 @@ class ClaudeContent:
         values, tiers = tokens(), self.tier_models()
         out = {}
         for role in content.roles:
-            out['%s/%s.md' % (AGENTS_REL, role.name)] = self.agent_file(role, names, values, tiers)
+            out[self.role_path(role.name)] = self.agent_file(role, names, values, tiers)
         for skill in content.skills:
             for rel, data in skill.files:
                 out['%s/%s/%s' % (SKILLS_REL, skill.name, rel)] = data
