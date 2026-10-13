@@ -60,7 +60,7 @@ class TempCopyTest(unittest.TestCase):
         top = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, top, True)
         self.top = top
-        for rel in ('content', 'docs', '.claude-plugin', os.path.join('hosts', 'claude', 'shell', 'agents'),
+        for rel in ('content', 'docs', 'boot', '.claude-plugin', os.path.join('hosts', 'claude', 'shell', 'agents'),
                     os.path.join('hosts', 'claude', 'shell', 'skills')):
             shutil.copytree(os.path.join(KIT_ROOT, rel), os.path.join(top, rel))
         for rel in ('kit.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json')):
