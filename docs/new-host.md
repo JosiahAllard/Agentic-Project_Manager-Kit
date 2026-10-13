@@ -123,6 +123,10 @@ Two lists cover what is left to fix: `LEAK_ALLOWED` and `ENTRY_OVER`. Both can o
 
 ## 5. Optional: the bridge half
 
-For agent-to-agent messaging, add `optional/bridge/hosts/<name>/`, which implements the bridge
-port (plan section 2.4). The core never imports it. With the bridge not installed, no host shell
-mentions it.
+For agent-to-agent messaging, add `optional/bridge/hosts/<name>/` (the name with `-` as `_`),
+which exports `HOST`, an `optional.bridge.port.BridgeHost`, and has a `bridge-profile.json`
+(optional/bridge/README.md "The port", "Adding a host half"). The core never imports it. With the
+bridge not installed, no host shell mentions it. Once the half exists, the conformance class runs the
+bridge part of the suite by itself: subclass `bridge_conformance.mixin(HOST)` beside
+`conformance.HostConformance` (`tests/host/bridge_conformance.py`), and supply `bridge_delivery()`
+for the fake-pipe delivery check.
