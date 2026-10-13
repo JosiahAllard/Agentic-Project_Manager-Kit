@@ -27,10 +27,15 @@ class TemplateFilesTest(unittest.TestCase):
             for key in ("BUILD_COMMAND", "TEST_COMMAND", "FAST_TEST_COMMAND", "gitignore", "gitattributes"):
                 self.assertIn(key, stack, f"{s}: {key}")
 
-    def test_common_claude_md_keeps_its_placeholders(self):
-        text = (TEMPLATES / "common" / "CLAUDE.md").read_text(encoding="utf-8")
+    def test_common_agents_md_keeps_its_placeholders(self):
+        text = (TEMPLATES / "common" / "AGENTS.md").read_text(encoding="utf-8")
         for ph in ("<PROJECT_NAME>", "<BUILD_COMMAND>","<OWNER_EMAIL>"):
             self.assertIn(ph, text)
+
+    def test_common_claude_md_imports_agents_md(self):
+        """AGENTS.md is the one rules file; Claude Code reads it through CLAUDE.md's import."""
+        self.assertEqual((TEMPLATES / "common" / "CLAUDE.md").read_bytes(), b"@AGENTS.md\n")
+        self.assertIn("`AGENTS.md`, `CLAUDE.md`", (TEMPLATES / "common" / "AGENTS.md").read_text(encoding="utf-8"))
 
     def test_godot_template_ships_the_render_check_skill(self):
         self.assertTrue((TEMPLATES / "stacks" / "godot" / ".claude" / "skills" / "godot-render-check"

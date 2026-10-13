@@ -121,7 +121,7 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 - The stack's other files: `.github/workflows/{quick,full}.yml` (owner-only paths; copy them by
   hand). The stack's `tools/` files (see above) and its skills (only Godot has one:
   `.claude/skills/godot-render-check/SKILL.md`, with the kit path written in) are installed.
-- `templates/common/CLAUDE.md` and the two profile templates (`agent-profile.TEMPLATE.md`,
+- `templates/common/AGENTS.md` (with `templates/common/CLAUDE.md`, the one line `@AGENTS.md`) and the two profile templates (`agent-profile.TEMPLATE.md`,
   `coordinator-profile.TEMPLATE.md`): the repository's rules file and profiles are drafted from
   them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates").
 - `.claude/settings.json`: the kit ships none (docs/go-live.md "Joint-review questions").

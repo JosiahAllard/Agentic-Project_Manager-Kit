@@ -8,11 +8,12 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 ## Docs
 
 - `docs/INDEX.md` | this index | adding or finding a doc | kw: index, docs
-- `CLAUDE.md` | kit repo rules for agents | always | kw: rules, claude
-- `AGENTS.md` | the same rules for other agent hosts | always | kw: rules, agents
+- `CLAUDE.md` | Claude's pointer: imports AGENTS.md | always | kw: rules, claude
+- `AGENTS.md` | kit repo rules for every agent host (canonical) | always | kw: rules, agents
 - `README.md` | what the kit is | first look | kw: readme, overview
 - `ARCHITECTURE.md` | kit tool architecture (the contract; owner approves changes) | before changing a tool | kw: architecture, contract
-- `.claude/agent-profile.md` | this repo's profile for worker agents | starting a task | kw: profile, branches, build, test
+- `docs/agent-profile.md` | this repo's profile for worker agents | starting a task | kw: profile, branches, build, test
+- `.claude/agent-profile.md` | stub: the profile moved to docs/agent-profile.md | an agent names the old path | kw: profile
 - `docs/ROSTER.md` | agent roster | choosing an agent | kw: roster, agents
 - `docs/action-hub.md` | Action Hub | the PM action list | kw: action-hub, hub
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog
@@ -61,7 +62,8 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `claude/agents/*.md` | Claude's agent files, rendered from content/roles (never edit by hand) | reading what Claude loads | kw: agents, rendered
 - `claude/skills/*/*.md` | Claude's skills, copied from content/skills (never edit by hand) | reading what Claude loads | kw: skills, rendered
 - `templates/stacks/godot/.claude/skills/godot-render-check/SKILL.md` | Godot render check and e2e tiers | Godot repos | kw: godot, render, e2e
-- `templates/common/CLAUDE.md` | starter CLAUDE.md for a new repo | installing | kw: template, claude
+- `templates/common/AGENTS.md` | starter rules file (AGENTS.md) for a new repo | installing | kw: template, agents, rules
+- `templates/common/CLAUDE.md` | starter CLAUDE.md: imports AGENTS.md | installing | kw: template, claude
 - `templates/common/INDEX.md` | starter doc index for a new repo | installing | kw: template, index
 - `templates/common/LEDGER.md` | starter rulings ledger | installing | kw: template, ledger
 - `templates/common/agent-profile.TEMPLATE.md` | starter agent profile | installing | kw: template, profile
