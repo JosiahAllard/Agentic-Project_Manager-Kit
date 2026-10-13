@@ -154,7 +154,8 @@ def write(root, record):
 
 
 def _summary(outcome):
-    keys = ('LANDED ', 'NOT LANDED', 'STUCK:', 'REFUSED:', 'BUSY:', 'USAGE:', 'NOT RUN:')
+    keys = ('LANDED ', 'NOT LANDED', 'CONFLICT ', 'STUCK:', 'REFUSED:', 'BUSY:', 'USAGE:',
+            'NOT RUN:')
     for line in outcome.lines:      # a landing's verdict line (docs/gate.md "Exit codes")
         if line.startswith(keys):
             return line
@@ -188,8 +189,8 @@ class Run(object):
             return None, 'WARNING: the result record could not be written: %s' % e
         return path, 'result record: %s' % path
 
-    def start(self):
-        return self._write(verdict=RUNNING, summary='%s %s at %s started' % (
+    def start(self, log=None):
+        return self._write(verdict=RUNNING, log=log, summary='%s %s at %s started' % (
             self.kind, self.branch, self.tip[:10]))
 
     def finish(self, outcome, base=None, log=None, source=None):
