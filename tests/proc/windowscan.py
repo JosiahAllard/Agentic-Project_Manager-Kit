@@ -25,6 +25,10 @@ is out of its reach. What scan_python finds (`what` is the label on the left):
 - 'Start-Process', 'cmd /c start', 'start ""', '-WindowStyle Hidden': PowerShell and cmd ways to
   start a program in a window of its own, or to hide one after Windows has shown it (Windows
   Terminal shows it anyway).
+- 'start in code text': Python code held as text that pythonw runs (`[pythonw, '-c', code]`)
+  and that starts a process through subprocess, with fewer creationflags or CREATE_NO_WINDOW
+  mentions than starts and no kitlib import. pythonw has no console, and a process that never
+  imports kitlib has no hook, so each console child it starts opens a window.
 
 How each is seen in Python source: a name or attribute (load, not the left side of an
 assignment), an imported name, or a string constant that is exactly that name (getattr(subprocess,
@@ -38,10 +42,16 @@ DETACHED_PROCESS inside the `creationflags=` of a call whose first argument is a
 whose first item's source text names pythonw is not reported: pythonw is a GUI program that never
 gets a console.
 
+Code text pythonw runs: a string expression (a constant, an f-string's constant parts, or a +
+chain of them, joined) that is an item after the first of a list or tuple whose first item's
+source text names pythonw, or is the value assigned to a bare name that is such an item (any
+assignment to that name in the module).
+
 scan_script reads every line that is not a comment ('#' in PowerShell, 'rem' or '::' in cmd)
 against SCRIPT_PATTERNS.
 
-What it cannot see: a name built at run time (getattr with a computed string, a flag value read
+What it cannot see: code text written to a file and run from there, code text that a console
+python runs detached, a name built at run time (getattr with a computed string, a flag value read
 from elsewhere), a start inside a string that is not one of the forms above, code in any other
 language, and a DETACHED_PROCESS value handed through a variable whose name does not say so.
 """
@@ -65,6 +75,7 @@ SCRIPT_PATTERNS = (
     ('-WindowStyle Hidden', re.compile(r'-w\w*\s+[\'"]?hidden\b', re.I)),
 )
 PROCESS_MODULES = ('subprocess', 'multiprocessing', 'concurrent.futures', 'asyncio')
+CODE_START = re.compile(r'\bsubprocess\s*\.\s*(?:Popen|run|call|check_call|check_output)\s*\(')
 
 
 def _docstrings(tree):
@@ -107,6 +118,51 @@ def _sequence_hits(items):
     return hits
 
 
+def _string_parts(node):
+    """The string constants a string expression is built from (a constant, an f-string, or a
+    chain of + between them), or None when the node is not one."""
+    if isinstance(node, ast.Constant):
+        return [node] if isinstance(node.value, str) else None
+    if isinstance(node, ast.JoinedStr):
+        return [v for v in node.values if isinstance(v, ast.Constant) and isinstance(v.value, str)]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _string_parts(node.left), _string_parts(node.right)
+        if left is None and right is None:
+            return None
+        return (left or []) + (right or [])
+    return None
+
+
+def _code_text_hit(text):
+    """True when Python code held as text starts a process through subprocess with nothing in
+    the text to keep its window away: fewer creationflags/CREATE_NO_WINDOW mentions than starts,
+    and no kitlib import (which installs the CreateProcess hook in the process that runs it)."""
+    starts = len(CODE_START.findall(text))
+    if not starts or re.search(r'\bimport\s+kitlib\b|\bfrom\s+kitlib\b', text):
+        return False
+    return len(re.findall(r'\bcreationflags\b|\bCREATE_NO_WINDOW\b', text)) < starts
+
+
+def _pythonw_code(tree):
+    """id() of every expression handed to pythonw in an argv written as a list or tuple whose
+    first item's source text names pythonw: the items after it, and for an item that is a bare
+    name, the value of each assignment to that name in the module."""
+    names, out = set(), set()
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.List, ast.Tuple)) and node.elts
+                and 'pythonw' in ast.unparse(node.elts[0]).lower()):
+            for e in node.elts[1:]:
+                if isinstance(e, ast.Name):
+                    names.add(e.id)
+                else:
+                    out.add(id(e))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id in names for t in node.targets):
+            out.add(id(node.value))
+    return out
+
+
 class _Scan(ast.NodeVisitor):
 
     def __init__(self, tree):
@@ -116,6 +172,7 @@ class _Scan(ast.NodeVisitor):
         self.docs = _docstrings(tree)
         self.pythonw_ok = set()         # id() of nodes inside the creationflags of a pythonw start
         self.flag_values = set()        # id() of nodes where an int literal is read as flags
+        self.in_text = set()            # id() of nodes inside a string expression already read as code
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for a in node.names:
@@ -133,6 +190,7 @@ class _Scan(ast.NodeVisitor):
                 if node.value is not None and any(
                         isinstance(t, ast.Name) and FLAG_TARGET.search(t.id) for t in targets):
                     self.flag_values |= set(id(n) for n in ast.walk(node.value))
+        self.pythonw_code = _pythonw_code(tree)     # id() of string expressions pythonw runs
 
     def add(self, what, node):
         if what == 'DETACHED_PROCESS' and id(node) in self.pythonw_ok:
@@ -176,6 +234,7 @@ class _Scan(ast.NodeVisitor):
         if isinstance(v, str):
             if id(node) in self.docs:
                 return
+            self.code_text(node)
             if v in NAMES or (v.startswith('ShellExecute') and v.isidentifier()):
                 self.add(v, node)
                 return
@@ -185,6 +244,27 @@ class _Scan(ast.NodeVisitor):
             for name, bit in FLAGS.items():
                 if v & bit:
                     self.add(name, node)
+
+    def code_text(self, node):
+        """'start in code text' for a string expression that holds Python code starting a process
+        with no window choice; each of its parts is then read only for the other forms."""
+        if id(node) in self.in_text or id(node) not in self.pythonw_code:
+            return
+        parts = _string_parts(node)
+        if not parts:
+            return
+        for sub in ast.walk(node):
+            self.in_text.add(id(sub))
+        if _code_text_hit(''.join(p.value for p in parts if id(p) not in self.docs)):
+            self.add('start in code text', node)
+
+    def visit_BinOp(self, node):
+        self.code_text(node)
+        self.generic_visit(node)
+
+    def visit_JoinedStr(self, node):
+        self.code_text(node)
+        self.generic_visit(node)
 
     def visit_List(self, node):
         items = [e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]

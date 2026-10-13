@@ -39,7 +39,8 @@ kitlib.proc.console installs does (tests/proc/windowscan.py says which, and how 
 os.system, os.spawn*, os.exec*, os.startfile, ShellExecute*, CreateProcess* reached through
 ctypes, CREATE_NEW_CONSOLE, DETACHED_PROCESS (unless the start's argv names pythonw), AllocConsole,
 AllocConsoleWithOptions, AttachConsole, a WMI Win32_Process Create, and Start-Process, `cmd /c
-start`, `start ""` and `-WindowStyle Hidden`. Each one is forbidden unless it is in its home
+start`, `start ""` and `-WindowStyle Hidden`, and Python code text pythonw runs (`-c`) that
+starts a console child with no window choice and no kitlib import. Each one is forbidden unless it is in its home
 (RULE_HOMES: the console calls in kitlib/proc/console.py, the WMI start in tools/machine_lock.py's
 detach path) or has a HAZARD_EXEMPT row, counted and reasoned the same way as EXEMPT. A row for a
 file another branch adds (SIBLING_FILES) is not stale while that file is absent here.
@@ -521,12 +522,15 @@ subprocess.run("powershell Start-Process x", creationflags=0)         # Start-Pr
 subprocess.run(["cmd", "/c", "start", "x"], creationflags=0)            # cmd /c start
 CMD = 'start "" x.exe'                                      # start ""
 subprocess.run(["powershell", "-WindowStyle", "Hidden"], creationflags=0)  # -WindowStyle Hidden
+CODE = ("import subprocess; " + "subprocess.Popen(['x'])")     # start in code text
+subprocess.Popen([PYTHONW, "-c", CODE], creationflags=0)
+subprocess.run([pythonw, "-c", f"import subprocess; subprocess.run(['{x}'])"], creationflags=0)  # start in code text
 '''
 HAZARD_PY_LABELS = ['from os import system', 'os.system', 'os.spawnl', 'os.execv', 'os.startfile',
                     'ShellExecuteW', 'CreateProcessW', 'CreateProcessAsUserW', 'CREATE_NEW_CONSOLE',
                     'DETACHED_PROCESS', 'AllocConsole', 'AllocConsoleWithOptions', 'AttachConsole',
                     'WMI Win32_Process Create', 'Start-Process', 'cmd /c start', 'start ""',
-                    '-WindowStyle Hidden']
+                    '-WindowStyle Hidden', 'start in code text', 'start in code text']
 HAZARD_FINE = '''\
 """Mentions in a docstring are not hazards: os.system, CREATE_NEW_CONSOLE, Start-Process."""
 import subprocess
@@ -536,6 +540,11 @@ def go(pythonw):
     """AllocConsole, cmd /c start, -WindowStyle Hidden."""
     subprocess.Popen([pythonw(), "tool.py"], creationflags=subprocess.DETACHED_PROCESS | 0x8000000)
     subprocess.Popen([r"C:/Python/pythonw.exe", "t.py"], creationflags=0x8)
+    hid = "import subprocess; subprocess.run(['x'], creationflags=subprocess.CREATE_NO_WINDOW)"
+    hooked = "import kitlib, subprocess; subprocess.run(['x'])"
+    subprocess.run([pythonw(), "-c", hid], creationflags=0)
+    subprocess.run([pythonw(), "-c", hooked], creationflags=0)
+    subprocess.run(["python", "-c", "import subprocess; subprocess.run(['x'])"], creationflags=0)
 '''
 HAZARD_PS1 = ('# Start-Process in a comment is not read\n'
               'Start-Process -FilePath python -ArgumentList x\n'
