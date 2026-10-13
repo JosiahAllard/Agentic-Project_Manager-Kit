@@ -8,7 +8,11 @@ The shape every kit tool follows. Change this file only with the owner's approva
 |---|---|---|
 | `kitlib/` (library) | `git` (repo, worktree, main-checkout detection), `proc` (pid shield, job objects, tree kills), `lock` (machine-lock mechanism, `book()`, `slot()`), `records` (landing lock, gate-OK record), `config` (kit defaults, `.kit.json`, roles, kinds table, heavy programs), and one package per ported tool: `commit`, `machinepaths`, `syncbase`, `reviewpack`, `landed`, `stubs`, `worktree` (new, remove/abandon/check, sweep, sweep-task, Windows holder probes; docs/worktree-remove.md), `preflight`, `board`, `forbidden`, `rulingcites`, `trailerscheck`, `pieces`, `pytests`, `tooldeps`, `testlist`, `roster` (docs/ROSTER.md against agent frontmatter), `verdict`, `docs` (budget, index, codemap; docs/doc-tools.md), `ledger` (rulings ledger, standing digest, opt-in pre-commit check; docs/ledger.md), `githooks` (the pre-commit hook's one dispatch over the kit's checks; docs/ledger.md "Pre-commit check"), `ledgerrefs` (docs/ledger.md "ledger_refs"), `pending` (docs/pending.md), `machinesetup` (switch a machine's Claude folders to the kit, or set up a fresh one; docs/machine-setup.md) | No command lines, no printing to the user, no `sys.exit`. Standard library only. All logic lives here once. |
 | Entry points | `gate.py` (gate and land), `machine_lock.py` (every other heavy run, status, admin), `commit.py`, `worktree_remove.py`, `worktree_sweep_task.py`, `lock_release_check.py` (pre-check before the release checkout moves), `landed.py`, `branch_overlap.py`, `preflight.py`, `board.py`, `sync_base.py`, `review_pack.py`, `new_worktree.py`, `worktree_paths.py`, `checkout_guard.py`, `machine_paths.py`, `forbidden.py`, `ruling_cites.py`, `trailers.py`, `ledger.py`, `pm_data.py` (PM data branch `init` / `--adopt`; docs/pm-data-branch.md "Making the branch"), `pieces.py`, `pytests.py`, `tool_deps.py`, `testlist.py`, `kit_stubs.py`, `agent_roster.py`, `doc_budget.py`, `doc_index.py`, `codemap.py`, `claude/hub/hub_notices.py` (posts the lock's window notices to the Action Hub inbox); `installer/new-repo.ps1` bootstraps a repo; `machine_setup.py` and `installer/machine-setup.ps1` switch a machine to the kit, `agent_temp_init.py` (the agents' temp folder steps of a machine setup alone), or set up a fresh one | Parse arguments, call the library, print, exit. Paths and exit codes stay stable; subcommands change only with the owner's approval: `book` became `hold`, and the `-C` hand-off is retired. |
-| Guards | `claude/hooks/guard.py` (the one Claude PreToolUse hook, every tool a rule can refuse) and the kit git `pre-push` hook plus the opt-in `pre-commit` ledger check (inert unless `.kit.json` names pre_commit_check) | Read-only checks of real state. They deny with the exact command to use instead. |
+| Host contract | `kitlib/host/`: the neutral `Action`/`Decision` types, `HostAdapter`, `HostProfile`, `SessionHost`, `CommandHost`, `ContentRenderer`, and `hookmain` (the one hook runner) | Protocols and data only. Names no host and imports nothing from `hosts/` or `optional/`. |
+| Hosts | `hosts.json` (registry: adapter module, shell folder, capabilities, tier → model map) and one `hosts/<name>/` per platform: `adapter/` (Python, implements `HostAdapter`) and `shell/` (manifests, hook registration, hook entries, rendered agents, skills and instructions) | A host name appears only in `hosts.json`, its own folder, `optional/bridge/hosts/<name>/` and tests. Hook entries are 20 lines or fewer. Adding a host changes no other folder (docs/new-host.md). |
+| Content | `content/roles/`, `content/skills/`, `content/instructions/`: every role, skill and instruction written once, rendered into each host's shell by `tools/render_content.py` | Every role exists on every host. Skill text is identical on every host. Rendered files are committed and a test fails on drift. |
+| Optional | `optional/bridge/` (agent-to-agent messaging: core, service, MCP frontend, and each host's half under `optional/bridge/hosts/<name>/`) and the other `optional/` packages | Installed on demand. The core never imports them. |
+| Guards | each host's guard hook entry (`hosts/<name>/shell/hooks/`; every tool a rule can refuse), judged once by `kitlib.guard` over a neutral `Action`, and the kit git `pre-push` hook plus the opt-in `pre-commit` ledger check (inert unless `.kit.json` names pre_commit_check) | Read-only checks of real state. They deny with the exact command to use instead. |
 | Repo layer | `.kit.json` (data) plus at most one repo hook module the kit calls | Repos hold stubs only, never copies. |
 
 ## Contracts
@@ -18,7 +22,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 - **Gate-OK record.** gate.py writes `<git common dir>/kit-gate-ok/<sha>.json` for exactly the commit it passed. The pre-push hook refuses a push to main without one, whoever pushes. It is on per repo once `.kit.json` says so, after that repo lands through `gate.py land`.
 - **Result record.** A branch gate or a landing writes `<git common dir>/kit-gate-result/<branch stem>.<gate|land>.json`, `running` at the start and the verdict at the end; `gate.py wait-result` waits on it read-only so another session wakes when a run ends (docs/gate.md "Result record").
 - **Landing.** `gate.py land <branch> --expect-main <sha> --expect-tip <sha> [--lane]`. It holds the repo's landing lock, merges, gates the merged tree under `book()`, pushes, and verifies. A red merge is undone by default. Landings into one repo take turns; branch gates and different repos run in parallel.
-- **Roles.** guard.py tells subagents apart by the PreToolUse `agent_id` field. A session-start self-test alarms if the field disappears. Roles, main-branch names and protected paths come from config.
+- **Roles.** `PM_KIT_ROLE` is the one role marker on every host, and `PM_KIT_HOST` names the host. The host adapter tells subagents apart (on Claude, the PreToolUse `agent_id` field) and passes the identity as `Action.agent`; a host whose hooks carry no subagent identity says so in `hosts.json` and gets the role-only policy. A session-start self-test alarms if the field disappears. Roles, main-branch names and protected paths come from config. Role policy (edit bans, read-only owner paths, the shell-cwd check, the lock-verb allowlist) is `kitlib/guard/rolepolicy.py`, the same on every host.
 - **Guard rules.** Raw heavy programs are denied unless the lock is held; they are allowed only as arguments of `gate.py` or `machine_lock.py run`. A subagent's edit in a main checkout is denied. Root searches are denied. Damaging git commands in a main checkout are denied (`checkout`/`switch`, `reset --hard`, `clean`, `stash`, push to main without a record). Bash and PowerShell are tokenized, and git_guard's patterns are the fallback.
 
 ## Details
@@ -38,12 +42,14 @@ The shape every kit tool follows. Change this file only with the owner's approva
 4. Then each repo switches through its coordinator and turns on the push block.
 
 ## Packaging
-The kit ships as a Claude Code plugin, which the owner installs once.
-- **Hooks:** the coordinator SessionStart hook (claude/hooks/hooks.json); guard.py stays in each account's settings.
-- **Bundled:** skills, the agent definitions, the lock MCP server and the coordinator SessionStart hook.
-- **Skills:** landing, red-first, ledger, backlog, machine-lock, refusal, handoff and action-hub. Profiles and CLAUDE.md become pointers to these skills.
+The kit ships as one release with a thin plugin per host, which the owner installs once per host.
+- **One release value:** `kit.json` holds the one version. The renderer writes it into every host manifest, and `kitlib.kitrelease` exports one release (core, every host shell, and the bridge when installed) with one `PM_KIT_RELEASE_ID`.
+- **Boot:** every host entry runs the stdlib-only `boot/kitboot.py` before importing kitlib. It verifies the pinned release, or uses the source checkout when nothing is pinned.
+- **Hooks:** each host's shell registers its hooks; on Claude the coordinator SessionStart hook ships in the plugin and guard.py stays in each account's settings.
+- **Bundled per host:** the rendered agents, skills and instructions, the lock MCP server and the host's hooks.
+- **Skills:** landing, red-first, ledger, backlog, machine-lock, refusal, handoff and action-hub. Profiles and instruction files become pointers to these skills.
+- **Instructions:** `AGENTS.md` is canonical; `CLAUDE.md` imports it. The repo profile is the neutral `docs/agent-profile.md`.
 - **Code:** tools and kitlib stay Python. Skills explain them, and enforcement stays in the hooks and the gate.
-- **Build order:** after kitlib and guard.
 
 ## Scheduler UI
 - **API:** kitlib/lock exposes one versioned, transport-neutral API, made of read snapshots, a revision number for changes, and validated owner writes. Every UI uses only this API.
@@ -68,9 +74,11 @@ The kit ships as a Claude Code plugin, which the owner installs once.
 ## PM session start
 - `kitlib/pmstart` builds the checklist that `claude/hooks/pm_session_start.py` injects at PM session start; see docs/pm-start.md.
 
-## Host split
-- kitlib stays host-neutral. Host specifics come through two interfaces: `HostProfile` (agent process names, session env var, state dir, worktree and owner-path defaults, lock tool path) and `SessionHost` (session names, live sessions, usage files).
-- Guard rules judge a neutral `Action(kind, path, command, role)`; a host adapter builds it from its hook payload and renders the reply.
-- `claude/` holds everything Claude-specific: plugin manifest, agents, hooks, guard adapter and self-test, the Claude host profile, the hub page and its artifact writer, and Claude-only tests. CLAUDE.md becomes a pointer to AGENTS.md. The lock actor key `claude` becomes `host`.
-- Another runtime adds its own folder (adapter plus profile) beside `claude/`.
-- Starts after kit/shell-guard and backlog store step 1 land.
+## Hosts
+- kitlib stays host-neutral and never imports a host. The host is chosen at the edge: a host's entry points build its adapter and pass it in; shared CLIs read `PM_KIT_HOST` (default `claude`) and resolve the adapter through `hosts.json`. One `--host` flag replaces `--provider`.
+- A `HostAdapter` parses its hook payloads into `Action`, renders `Decision` back, and supplies `SessionHost`, `ContentRenderer` and, where the host has them, `CommandHost`, a launcher and a plugin installer. `HostProfile` holds only consumed fields: owner paths, worktree root, state dir, agent process images, MCP tool-name format.
+- Capabilities a host lacks (no `ask`, no subagent identity in hooks) are declared in `hosts.json`; the core degrades them one way for every host (`ask` becomes deny with the reason).
+- One shared conformance suite (`tests/host/conformance.py`) defines a supported host; each host's tests subclass it with recorded payloads.
+- The roster: every role exists on every host, with a tier per role and a tier → model map per host (docs/ROSTER.md). Roles are referred to by bare name in content; each host's instructions say how a name maps to its dispatch name.
+- The lock actor key `claude` becomes `host`.
+- Migration from the current `claude/` and `codex/` folders: docs/multi-host-plan.md section 3. Until a step lands, the current paths stand.

@@ -1,6 +1,6 @@
 # Multi-host architecture plan
 
-Status: proposal. The owner has decided the questions in §0; ARCHITECTURE.md changes still need the owner's approval of the amendment in step 0.
+Status: approved direction. The owner's decisions are in §0, and ARCHITECTURE.md was amended to match (step 0). Open: the form of the shared skill text (§5).
 
 **Goal:** one host-neutral kit, with a thin entry-point plugin for each AI platform. The platforms
 today are Claude Code and Codex, and adding another should mean adding a folder, not forking the
@@ -24,6 +24,11 @@ except its last 4 commits.
 | 6 | Release binding | One release value for the entire plugin | One kit version and one release ID cover the core and every host shell. Every manifest takes it from one source. |
 | 7 | Generated files | Owner asked what these are | Answered in §2.3. |
 | 8 | Future hosts | Scale to any platform | A new host is one folder under `hosts/<name>/` that follows a written checklist and passes the conformance suite (§2.6, §2.7). |
+| 9 | ARCHITECTURE.md | Change it to match | Done with this plan (step 0). |
+| 10 | `implementation-worker` vs `worker` | Merge into one `worker` role | Codex's `implementation-worker` brief folds into `worker`. |
+| 11 | PM on Claude | The PM is an agent file | `content/roles/pm.md`, rendered for every host. On Claude the launcher starts it with `claude --agent pm-kit:pm`. |
+| 12 | Rename `opus-worker` | `senior-worker` | The rename lands with step 5. The old name stays as an alias in the launcher for one release. |
+| 13 | Folder layout | Uniform `hosts/<name>/` | `claude/` moves to `hosts/claude/` in step 7, and Codex lands as `hosts/codex/` in step 9. |
 
 ## 1. Where things stand
 
@@ -237,12 +242,10 @@ every install and update. It also means nobody reviews exactly what the agents r
   blocks.
 - **Reconciled roster.** One list, which is the union of today's two lists:
   - Claude's 15 roles.
-  - Codex's `pm`. Claude's PM today is the main session started by the launcher, so on Claude
-    `pm` becomes a role file that the launcher starts.
-  - `implementation-worker` merged into `worker`, or kept as a separate role, after comparing
-    the two briefs.
-  - `opus-worker` renamed to a host-neutral name such as `senior-worker`, since "opus" is a
-    Claude model name.
+  - `pm`, an agent file on every host. On Claude the launcher starts it with
+    `claude --agent pm-kit:pm` (decision 11).
+  - Codex's `implementation-worker` merged into `worker` (decision 10).
+  - `opus-worker` renamed `senior-worker` (decision 12).
 - **Skills.** `content/skills/<skill>/SKILL.md` is byte-identical on every host (decision 3).
   The 11 forked skills are merged into one text each, which the owner decides on later.
   Host-only skills (`coordinator-dispatch`, `kit-setup`, `kit-pm`, `kit-coordinator`,
@@ -354,7 +357,7 @@ behaviour unchanged.
 
 | Step | Work | Depends on |
 |---|---|---|
-| 0 | The owner approves an ARCHITECTURE.md amendment that replaces "Host split" and "Packaging" with §2. | — |
+| 0 | ARCHITECTURE.md amended: new Host contract, Hosts, Content and Optional layers, the Roles contract, Packaging, and a Hosts section in place of "Host split". **Done.** | — |
 | 1 | Cherry-pick the host-neutral library parts of the Codex branch onto main: `kitlib.attribution`, `packageexport`, `kitrelease`, `hostrpc`, `hoststart`, and the worktree `--host` support. These are needed by both hosts and conflict least. | 0 |
 | 2 | `kitlib/host/` (types and protocols), `hosts.json` and the `PM_KIT_HOST` / `PM_KIT_ROLE` selection. Delete `kitlib/hosts`' importlib of host folders. Merge `--host` and `--provider`. | 1 |
 | 3 | Move the guard to `Action`/`Decision`, with the Claude adapter doing parse and render. Add `hookmain`. Claude's hooks become ≤20-line entries. The existing guard tests run unchanged through Claude fixtures. | 2 |
@@ -376,13 +379,44 @@ stop building on paths that are about to move.
 - The bridge's security posture: fail closed, no resend of unknown messages, routes chosen by
   the owner.
 
-## 5. Still open
-1. **The form of the shared skill text** (decision 3, "decided later"). Step 5 can land roles
-   and instructions without it. The 11 skill merges wait.
-2. **`implementation-worker` vs `worker`.** Merge the two roles, or keep both on every host?
-3. **The PM as a role file on Claude.** Today the launcher starts the Claude PM as a normal
-   session. Is a `pm` agent definition, started with `claude --agent pm-kit:pm`, acceptable?
-4. **The rename of `opus-worker`.** Is `senior-worker` acceptable, or is there another name?
-5. **The move to `hosts/claude/`.** Accept the path churn for a uniform slot, or keep `claude/`
-   and `codex/` at the top level and put only new hosts under `hosts/`? The plan recommends the
-   uniform layout.
+## 5. Still open: the form of the shared skill text
+
+Decision 3 makes each skill's text identical on every host. The two forks differ in **form**,
+not only in host wording. Here is `branch-sync` side by side.
+
+**Claude's version (main, 19 lines): the full procedure.**
+- It has 10 numbered steps with the exact commands, such as `git merge --no-ff <hash>`,
+  `git merge-base --is-ancestor`, `git checkout <hash> -- <path>` and `git merge --abort`.
+- It names each trap, for example "a union resurrects rows the base retired", untracked `.uid`
+  files, and why `git commit --no-edit` is refused.
+- It names the tool to finish with (`tools/commit.py`) and what to prove after the merge.
+- An agent can follow it without opening another file.
+
+**Codex's version (branch, 16 lines): a pointer.**
+- Three paragraphs say: read `docs/sync-base.md` and the repo profile, use the shared sync
+  helper, never rebase or force-push, resolve only your own conflicts, re-gate and report.
+- The detail lives in the tool's doc, so an agent opens a second file to learn the steps.
+
+Neither is wrong. They trade off differently:
+
+| | A. Full procedure (Claude style) | B. Pointer (Codex style) | C. Checklist + pointer (hybrid) |
+|---|---|---|---|
+| Shape | Every step and command in the skill | A few lines; the doc holds the steps | One line per step with its command, the "never" list, then "details: docs/X.md" |
+| Strength | Followable alone. Weaker models make fewer mistakes. | One source of truth (the tool doc). Short, so less context per load. | Followable alone for the common path, with the doc for edge cases |
+| Weakness | Duplicates the tool docs, so the two can drift. Longest to load. | The agent must read a second file, and may skip it. Easier to miss a trap. | Some duplication, but only of commands, which a test can check against the CLI |
+| Typical size | 20–50 lines | 10–20 lines | 15–30 lines |
+
+Whichever form is chosen, merging the forks must also handle three things that are host
+differences today. None of them needs host blocks:
+
+1. **Tool names:** "the Edit tool" (Claude) vs "Codex's patch tool". Use neutral wording such
+   as "your file-edit tool"; each host's instructions say once what that is.
+2. **Commit identity:** `--provider codex --model <id>` vs a trailer naming your model. The
+   tools take the host from `PM_KIT_HOST` and the model from the environment, so the skill just
+   says "use `tools/commit.py`".
+3. **Repo-specific detail:** for example, Godot `.uid` files. This moves to the repo profile,
+   not the shared skill.
+
+**Recommendation: C.** Keep Claude's steps and "never" lists as one-liners, take the pointer
+from Codex, and add a test that every `tools/*.py` command a skill names exists and takes the
+flags it shows. The 11 merges in step 5 wait for this choice. Nothing else is blocked.
