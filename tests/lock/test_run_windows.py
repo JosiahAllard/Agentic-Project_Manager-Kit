@@ -25,6 +25,8 @@ class FakeMonitor:
     made = []
     pids = []
     error = None
+    start_raises = None             # an exception start() raises
+    stop_raises = []                # exceptions the next stop() calls raise, in turn
 
     def __init__(self, ours=None):
         self.ours, self.gone, self.windows = ours, 0, None
@@ -34,10 +36,14 @@ class FakeMonitor:
 
     def start(self):
         self.starts += 1
+        if FakeMonitor.start_raises is not None:
+            raise FakeMonitor.start_raises
         return self
 
     def stop(self):
         self.stops += 1
+        if FakeMonitor.stop_raises:
+            raise FakeMonitor.stop_raises.pop(0)
         if self.windows is None:
             self.windows = [winwatch.Window(winwatch.CONSOLE, "window", TOOL, pid=pid, exe=TOOL,
                                             ours=self.ours(pid), at=0, mono=0.0)
@@ -51,6 +57,7 @@ class Watch(StoreCase):
         super().setUp()
         self.confine(1)
         FakeMonitor.made, FakeMonitor.pids, FakeMonitor.error = [], [], None
+        FakeMonitor.start_raises, FakeMonitor.stop_raises = None, []
         patcher = mock.patch.object(rm.winwatch, "Monitor", FakeMonitor)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -133,6 +140,44 @@ class Watch(StoreCase):
         self.assertEqual(s.ended["windows_error"], "no hook")
         self.assertEqual(s.window_lines(),
                          ["windows opened: unknown (the window monitor did not run: no hook)"])
+
+    def test_a_monitor_that_raises_on_start_never_fails_the_run(self):
+        FakeMonitor.start_raises = RuntimeError("no thread")
+        with self.book() as s:
+            self.finish(s, self.child(s))           # the command ran
+            self.finish(s, self.child(s))           # a second start does not try again
+            self.assertIsNone(s.watch)
+        self.assertEqual(len(FakeMonitor.made), 1)
+        self.assertEqual(FakeMonitor.made[0].stops, 1)  # the half-started monitor was stopped
+        self.assertEqual(s.ended["windows_error"], "RuntimeError: no thread")
+        self.assertEqual(s.ended["code"], 0)
+        self.assertEqual(s.window_lines(), ["windows opened: unknown (the window monitor did not "
+                                            "run: RuntimeError: no thread)"])
+
+    def test_a_ctrl_c_inside_stop_leaves_the_monitor_to_stop_again(self):
+        s = self.book()
+        with s:
+            p = self.child(s)
+            m = FakeMonitor.made[0]
+            FakeMonitor.stop_raises = [KeyboardInterrupt()]
+            with self.assertRaises(KeyboardInterrupt):
+                s.watch_stop()
+            self.assertIs(s.watch, m)               # still there: the next call stops it
+            self.assertEqual(s.watch_stop(), [])
+            self.assertIsNone(s.watch)
+            self.assertEqual(m.stops, 2)
+            self.finish(s, p)
+
+    def test_the_record_keeps_at_most_the_cap(self):
+        s = self.book()
+        with s:
+            p = self.child(s)
+            FakeMonitor.pids = [p.pid] * (winwatch.RECORD_CAP + 3)
+            self.finish(s, p)
+        self.assertEqual(len(s.ended["windows"]), winwatch.RECORD_CAP)
+        self.assertEqual(s.ended["windows_truncated"], 3)
+        self.assertTrue(s.window_lines()[0].startswith(
+            "windows opened: %d - WARNING" % (winwatch.RECORD_CAP + 3)))
 
     def test_run_command_says_the_report(self):
         FakeMonitor.pids = [os.getpid()]                # another run's window: seen, not counted

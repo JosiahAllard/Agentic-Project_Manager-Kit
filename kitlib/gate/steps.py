@@ -38,7 +38,9 @@ import sys
 from kitlib.config.load import PLACEHOLDERS
 
 STAGES = ('first', 'main', 'last')
-RESERVED = ('setup', 'gate')            # setup is the configured "setup" argv; gate.log is the console's
+# setup is the configured "setup" argv; gate.log is the console's; windows is the window
+# monitor's result (kitlib.gate.runner.window_results)
+RESERVED = ('setup', 'gate', 'windows')
 RAN = re.compile(r'(?m)^Ran (\d+) tests? in ')
 PID_HOLD_FLAG = '--pid-hold'    # kitlib.pytests.runner.PID_HOLD_FLAG (the gate imports no runner)
 PID_HOLD_WHY = 'the pid hold is opt-in for agent test runs only, never in the gate'

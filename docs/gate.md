@@ -120,10 +120,10 @@ windows opened: 1 - WARNING: a console window opened (the verdict does not count
 ```
 
 - N counts the windows the run opened (`[this run]`: the program was in the run's job, `Slot.window_owner`) and those it cannot place (`[run unknown]`: the program had exited, or could not be opened, when the window was read). A window whose program is outside the job is listed under `also seen, another run's: M` and not counted. A console host window shown and gone before it could be read is listed under `also seen: K console host window(s) ...` and not counted.
-- A window warns: the verdict, the exit code and the gate-OK record do not change. `WINDOWS_FAIL = True` in `kitlib/gate/runner.py` is the one change that makes a counted window fail the gate: `window_results` then adds a FAIL result named `windows` (`GATE FAILED: windows (windows: N console window(s) opened)`), the report line reads `- FAILED: a console window opened`, and the lock run records code 1.
+- A window warns: the verdict, the exit code and the gate-OK record do not change. `WINDOWS_FAIL = True` in `kitlib/gate/runner.py` is the one change that makes a counted window fail the gate: `window_results` then adds a FAIL result named `windows` (`GATE FAILED: windows (windows: N console window(s) opened)`), the report line reads `- FAILED: a console window opened`, and the lock run records code 1. `windows` is a reserved step name (`kitlib/gate/steps.py` `RESERVED`), so no configured step shares that result's name.
 - Every gate run is watched, not only `--full`: a branch gate, a landing's merged-tree gate and the daily full run. The branch and merged-tree gates also return the windows as the outcome fact `windows` (each `Window.as_dict()`; None when no step ran).
-- A monitor that cannot run says `windows opened: unknown (the window monitor did not run: <why>)`, and the gate goes on.
-- What it sees and misses (Windows Terminal hosting, the title heuristic for new tabs, other programs' windows, session 0): the `kitlib/proc/winwatch.py` module docstring.
+- A monitor that cannot run, or that raises as it starts (`Slot.watch_start`), says `windows opened: unknown (the window monitor did not run: <why>)`, and the gate goes on.
+- What it sees and misses (Windows Terminal hosting, the title heuristic for new tabs, other programs' windows, session 0, the events still queued when it stops): the `kitlib/proc/winwatch.py` module docstring. The tests show no window the user can see (docs/test-tools.md "Window tests").
 
 Tests: tests/gate/test_windows.py, tests/lock/test_run_windows.py, tests/proc/test_winwatch.py.
 

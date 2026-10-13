@@ -720,7 +720,7 @@ class Slot:
         else:
             kw.setdefault("env", self.env)
         if WATCH_WINDOWS and self.watch is None and self.windows is None:
-            self.watch = winwatch.Monitor(ours=self.window_owner).start()
+            self.watch_start()
         pin = self.job.pin
         p = self.job.start(docker_cpu_env(cmd, bool(self.gpus)), **kw)
         self.started, self.tree_ended = True, False
@@ -728,6 +728,22 @@ class Slot:
             with contextlib.suppress(OSError):
                 self.run.save(**pin_fields(self.job))
         return p
+
+    def watch_start(self):
+        """Starts the window monitor. Never raises: a monitor that cannot start is windows_error
+        (and the record's `windows_error`), and the run goes on unwatched."""
+        m = None
+        try:
+            m = winwatch.Monitor(ours=self.window_owner)
+            self.watch = m.start()
+        except Exception as e:      # noqa: BLE001 - the monitor never fails a run
+            self.watch = None
+            with contextlib.suppress(Exception):
+                if m is not None:
+                    m.stop()
+            self.windows, self.windows_error = [], "%s: %s" % (type(e).__name__, e)
+            if self.run is not None:
+                self.run.rec["windows_error"] = self.windows_error
 
     def window_owner(self, pid):
         """Is process pid this run's, for the window monitor: True (in the run's job, or a job
@@ -738,9 +754,12 @@ class Slot:
     def watch_stop(self):
         """Stops the window monitor, once, and keeps what it saw: self.windows (a list of
         winwatch.Window), windows_error and windows_gone, and in the run's record `windows` (each
-        Window.as_dict(), when any was seen) and `windows_error`. Returns self.windows: None when
-        nothing was watched. Never raises: a monitor that fails to stop is its error."""
-        m, self.watch = self.watch, None
+        Window.as_dict(), when any was seen, at most winwatch.RECORD_CAP of them, with
+        `windows_truncated` the count left out) and `windows_error`. Returns self.windows: None
+        when nothing was watched. Never raises an Exception: a monitor that fails to stop is its
+        error. self.watch is cleared only once m.stop() has returned or raised an Exception, so a
+        Ctrl+C inside it leaves the monitor for the release's second call to stop."""
+        m = self.watch
         if m is None:
             return self.windows
         try:
@@ -748,11 +767,15 @@ class Slot:
         except Exception as e:      # noqa: BLE001 - the monitor never fails a run
             windows = []
             m.error = m.error or "%s: %s" % (type(e).__name__, e)
+        self.watch = None
         self.windows, self.windows_error = windows, m.error
         self.windows_gone = getattr(m, "gone", 0)
         if self.run is not None:
             if windows:
-                self.run.rec["windows"] = [w.as_dict() for w in windows]
+                kept, cut = winwatch.records(windows)
+                self.run.rec["windows"] = kept
+                if cut:
+                    self.run.rec["windows_truncated"] = cut
             if m.error:
                 self.run.rec["windows_error"] = m.error
         return self.windows

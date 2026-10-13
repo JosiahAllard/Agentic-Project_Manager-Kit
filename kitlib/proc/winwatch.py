@@ -17,7 +17,9 @@ What it records (Window), all top-level windows:
 - A title change of a Terminal window that existed before start, when the new title looks like a
   launched program (looks_launched): how a new tab in an open Terminal window shows. It is kept
   only when correlation finds the program (below); else it is taken for a tab switch and dropped.
-Windows that existed before start are ignored, whatever they do later.
+Windows that existed before start are ignored, whatever they do later. The two classes are WATCHED,
+the default; Monitor(classes=...) records any other class as it records a console window (a test
+passes a class of its own).
 
 Correlation. When a console program starts under Windows Terminal, its console host (OpenConsole or
 conhost) shows a `PseudoConsoleWindow` whose owning pid, as GetWindowThreadProcessId gives it, is
@@ -44,6 +46,9 @@ The title heuristic (looks_launched) and its limits:
   looks launched: kept only when a PseudoConsoleWindow record falls within CORRELATE_S, so a tab
   switch close in time to a real program start can be misread as a tab.
 - Events are read after the fact: a window shown and gone before the callback runs cannot be read.
+- The tail: stop() waits until no event has arrived for QUIET_S, at most DRAIN_S, before it ends the
+  thread, so the events of a window shown just before stop() are read. An event Windows queues
+  later than that (a busy desktop that keeps events coming for all of DRAIN_S) is missed.
   One whose event thread belongs to a console host (conhost.exe or OpenConsole.exe) is counted
   as `gone` (a separate line), not as a window: its class and program are not known.
 - The hooks are system-wide in this desktop session: other sessions' and the user's own windows
@@ -65,6 +70,7 @@ CONSOLE = "ConsoleWindowClass"
 TERMINAL = "CASCADIA_HOSTING_WINDOW_CLASS"
 PSEUDO = "PseudoConsoleWindow"
 HOSTS = ("conhost.exe", "openconsole.exe")
+WATCHED = (CONSOLE, TERMINAL)   # Monitor's classes: the windows it records
 
 EVENT_OBJECT_SHOW = 0x8002
 EVENT_OBJECT_NAMECHANGE = 0x800C
@@ -78,6 +84,9 @@ THREAD_QUERY_LIMITED_INFORMATION = 0x0800
 CORRELATE_S = 5.0       # a Terminal window or tab and its program's PseudoConsoleWindow
 START_WAIT_S = 5.0      # start(): the thread's hooks are in, or the monitor gives up
 STOP_WAIT_S = 5.0       # stop(): the thread has ended, or the monitor says it did not
+QUIET_S = 0.05          # stop(): no event for this long and the queue is taken as drained
+DRAIN_S = 0.2           # stop(): the most it waits for that quiet before it ends the thread
+RECORD_CAP = 50         # records(): the most windows a record keeps
 
 WINEVENTPROC = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
                                   wintypes.LONG, wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
@@ -281,10 +290,14 @@ def attribute(windows, pseudos, within=CORRELATE_S):
 class Monitor:
     """Records console windows that open between start() and stop(); a context manager.
     ours(pid) -> True, False or None says whose a program is (module docstring, "Whose window").
-    error: why the monitor could not watch (None while it can). stop() returns the windows."""
+    error: why the monitor could not watch (None while it can). stop() returns the windows.
+    classes: the window classes it records (WATCHED). A class other than TERMINAL is recorded as a
+    console window is, with its own pid; a test passes a class of its own, so the window it opens
+    to be seen counts in no other monitor (a gate's around the test run, say)."""
 
-    def __init__(self, ours=None):
+    def __init__(self, ours=None, classes=WATCHED):
         self._ours = ours
+        self._classes = tuple(classes)
         self._lock = threading.Lock()
         self._ready = threading.Event()
         self._thread = None
@@ -298,6 +311,7 @@ class Monitor:
         self.faults = 0
         self.error = None
         self.windows = None         # set by stop()
+        self._last = 0.0            # time.monotonic() of the last event delivered
 
     # -- the caller's side
     def start(self):
@@ -314,9 +328,12 @@ class Monitor:
 
     def stop(self):
         """Ends the thread (WM_QUIT; the thread removes its hooks) and returns the windows. Safe
-        to call twice, or without start()."""
+        to call twice, or without start(). First it lets the events already raised arrive: it waits
+        until none has come for QUIET_S, at most DRAIN_S (module docstring, "The tail")."""
         t = self._thread
         if t is not None and t.is_alive():
+            if self._ready.is_set() and not self.error:
+                self._drain()
             end = time.monotonic() + STOP_WAIT_S
             while t.is_alive() and time.monotonic() < end:
                 if self._tid:
@@ -327,6 +344,15 @@ class Monitor:
         if self.windows is None:
             self.windows = self.snapshot()
         return self.windows
+
+    def _drain(self):
+        start = time.monotonic()
+        end = start + DRAIN_S
+        while True:
+            now = time.monotonic()
+            if now >= end or now - max(self._last, start) >= QUIET_S:
+                return
+            time.sleep(0.01)
 
     def snapshot(self):
         """The windows seen so far, attributed."""
@@ -378,7 +404,7 @@ class Monitor:
     def _seed(self):
         def each(hwnd, _):
             cls = class_name(hwnd)
-            if cls in (CONSOLE, TERMINAL):
+            if cls in self._classes:
                 self._pre.add(hwnd)
                 if cls == TERMINAL:
                     self._tab_seen.add((hwnd, window_text(hwnd)))
@@ -395,6 +421,7 @@ class Monitor:
         return r if r in (True, False) else None
 
     def _on_event(self, hook, event, hwnd, id_object, id_child, thread, ms):
+        self._last = time.monotonic()
         try:
             if id_object == OBJID_WINDOW and id_child == CHILDID_SELF and hwnd:
                 self._event(event, hwnd, thread)
@@ -415,13 +442,14 @@ class Monitor:
                 with self._lock:
                     self._pseudo.append(p)
             return
-        if cls not in (CONSOLE, TERMINAL) or hwnd in self._pre:
-            if cls == TERMINAL and event == EVENT_OBJECT_NAMECHANGE:
+        if cls not in self._classes or hwnd in self._pre:
+            if (cls == TERMINAL and TERMINAL in self._classes
+                    and event == EVENT_OBJECT_NAMECHANGE):
                 self._retitled(hwnd)
             return
         if event == EVENT_OBJECT_SHOW and hwnd not in self._new:
             title, pid = window_text(hwnd), window_pid(hwnd)
-            if cls == CONSOLE:
+            if cls != TERMINAL:
                 host = thread_pid(thread)
                 w = Window(cls, "window", title, pid, exe_of(pid), host, exe_of(host),
                            self._owner(pid), hwnd=hwnd)
@@ -451,6 +479,12 @@ class Monitor:
 def counted(windows):
     """The windows that count: those not known to be another run's."""
     return [w for w in windows or () if w.ours is not False]
+
+
+def records(windows, cap=RECORD_CAP):
+    """(the first cap windows as Window.as_dict(), how many more there were): what a record keeps."""
+    windows = list(windows or ())
+    return [w.as_dict() for w in windows[:cap]], max(0, len(windows) - cap)
 
 
 def report_lines(windows, error=None, gone=0, fails=False):
