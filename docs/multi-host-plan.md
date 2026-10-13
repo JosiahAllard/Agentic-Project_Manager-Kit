@@ -490,43 +490,80 @@ Separately and early: Windows CI (GitHub Actions) for the gate, so every step ha
 3. Can GitHub Actions run Windows, Ubuntu and macOS runners for this repo?
 4. Does the bridge stay Windows-only at first?
 
-## 7. Agenda for the next planning session (owner asked: no changes until planned)
+## 7. Instructions, roles and zero repo setup (planned 2026-10-13)
 
-### 7.1 Agent instructions: what each agent loads, and changing roles
-- Today an agent's instructions come from six places: its role file (`content/roles/`, rendered
-  to `hosts/<name>/shell/agents/`), the repo's `AGENTS.md`, the user's own instructions file, the
-  kit header and start-checklist hooks, skills (`content/skills/`), and the repo profile read on
-  demand. Enforced rules live elsewhere again: `kitlib/guard/` code, the role file's `mode:`,
-  `writes:` and `capabilities:`, and the repo's `.kit.json`. Nothing shows a human the whole set
-  for one role.
-- Adding or removing a role touches up to six places: the role file, a re-render, `docs/ROSTER.md`,
-  `KIT_AGENTS` in `kitlib/launcher/start.py`, the separate groupings in `kitlib/backlog/roles.py`
-  (which duplicate `mode:` and already disagree with it: test-runner), and prose mentions.
-- Rendered files carry no "generated, edit the source" marker.
-- Options to weigh: a `tools/agent_view.py <role> [--host]` that prints everything a role gets;
-  a generated-file banner; role lists derived from `content/roles/` (one file + render to add or
-  remove a role); `content/README.md` ("where do I change X"); a check for role names in prose.
-- Related: one shared, parameterised hook entry for every host instead of near-identical
-  per-host entries (the guard's fast path would need each host's guarded tool list as data).
+The §7 agenda was settled in a planning session with the owner. Nothing below is built yet.
 
-### 7.2 Zero repo setup
-Goal: the kit works in any repository with nothing written into it. Today a repo needs
-`.kit.json`, ~30 tool stubs (each with the kit's absolute path written in), `.gitignore` worktree
-lines, `docs/INDEX.md`, `tools/gate.json`, `AGENTS.md`/`CLAUDE.md` and profiles, and a local
-`core.hooksPath`. Options to weigh:
-1. No stubs: skills and roles call `python <kit>/tools/<x>.py -C <worktree>`, using the kit header.
-2. `.kit.json` purely optional overrides: main branch from `origin/HEAD`, repo name from the folder
-   or remote, owner email from the machine config.
-3. Worktrees outside the checkout, or the worktree folder added to `.git/info/exclude` (local).
-4. Gate auto-detected from the stack when no steps are configured; `gate.json` only overrides.
-5. Doc index opt-in.
-6. Git hooks: the kit sets the local `core.hooksPath` on first use, or the push block relies on
-   the guard and gate record alone.
-7. Roles fall back to kit defaults when a repo has no profile.
-8. Machine setup shrinks to: plugin install, agent temp folder, guard (until the plugin carries it).
-Trade-offs: worktree location vs tools that assume `.claude/worktrees`; owner rules that depend
-on the machine config; an auto-detected gate running the wrong checks until overridden.
+### 7.0 Decisions
 
-### 7.3 Retiring the `claude/hooks/` stubs
-Three forwarding stubs keep machines whose settings still name `claude/hooks/` working. They go
-once every machine has re-run `tools/machine_setup.py --apply` (or one release after the move).
+| # | Question | Decision |
+|---|---|---|
+| 17 | Where the role list lives | Only in `content/roles/`. `docs/ROSTER.md` is rendered. `KIT_AGENTS` and the `kitlib/backlog/roles.py` groupings are read from the role files' `mode:`. A role is added or removed with one file and a render. |
+| 18 | Showing what a role is given | `tools/agent_view.py <role> [--host <name>]`, built from the same code that renders and enforces, plus `content/README.md` ("where do I change X"). |
+| 19 | Generated files | Every rendered file opens with a "Generated from `content/...`: edit that, then render" banner. The guard refuses hand edits to rendered folders and points to the source. |
+| 20 | Hook entries | One shared `boot/hook.py <host> <event>` for every host. Each host's guarded tool list is data in `hosts.json`, so the fast path still skips unguarded calls without importing kitlib. A new host adds no hook scripts. |
+| 21 | Tool stubs in repos | None. Skills and roles call `python <kit>/tools/<x>.py -C <worktree>`, using the kit header's path. |
+| 22 | `.kit.json` | Optional overrides only. Main branch from `origin/HEAD`, repo name from the remote or folder, owner from the machine config. The safe protections (no force push to main) are on with no file. |
+| 23 | Worktrees | They stay at each host's `worktrees_directory` (`.claude/worktrees/<slug>`). On first use the kit adds the anchored line (`/.claude/worktrees/`) to `.git/info/exclude`, which is local and never committed. The owner's condition: work in a worktree must still push to its remote branch. It does, because a worktree shares the repo's remotes and has its own index. The exclude only hides the folder from the main checkout's untracked list. A test proves the push. |
+| 24 | Gate with no `gate.json` | Detects the stack and runs its usual test and lint steps. The record and report are labelled "auto-detected". `gate.json` overrides. |
+| 25 | Git hooks | The kit sets the local `core.hooksPath` on first use, and leaves an existing hooks path alone. |
+| 26 | Doc index and repo profile | Both opt-in. The index check runs only if `docs/INDEX.md` exists. With no repo profile, roles use the kit's default profile and read the repo's README or AGENTS.md if there is one. |
+| 27 | Machine setup | Shrinks to installing the plugin on each host, making the agent temp folder, and storing the owner's email. It writes nothing into repos by default. A `--repo` mode keeps the old committed setup for those who want it. |
+| 28 | `claude/hooks/` stubs | Removed in the same change that adds `boot/hook.py`. The owner re-runs machine setup once on each machine. |
+
+### 7.1 Steps
+
+Each step is one branch, reviewed and merged before the next, in the same way as §3.
+
+11. **Role list from the role files.**
+    - `kitlib/content` gains a roster reader (name, mode, tier, group).
+    - `KIT_AGENTS` and the backlog groupings read it, which fixes the test-runner disagreement.
+    - `docs/ROSTER.md` is rendered.
+    - A test fails on a role name in prose or code that no role file defines.
+12. **Banner and guard.**
+    - The renderer writes the banner, in a comment form that suits each file type.
+    - The drift test checks it.
+    - The guard refuses edits under `hosts/*/shell/agents/**` and `hosts/*/shell/skills/**`, naming the source file.
+13. **Visibility.**
+    - `tools/agent_view.py` lists the role file, AGENTS.md, the user instructions file, the kit header text, the start checklist, skills, the profile in use, mode, writes, capabilities and the active `.kit.json` switches.
+    - Add `content/README.md`.
+14. **Shared hook entry.**
+    - `boot/hook.py` takes over the per-host entries, and `hosts.json` gains `guarded_tools`.
+    - Manifests are rendered to call it.
+    - `claude/hooks/` and the per-host entry scripts are deleted.
+    - Conformance covers the new entry.
+    - Owner action: re-run `tools/machine_setup.py --apply` on each machine.
+15. **No stubs.**
+    - Skills and roles use `python <kit>/tools/<x>.py -C <worktree>`.
+    - `machine_setup` stops writing stubs except under `--repo`.
+    - The kit's own repo keeps working through the same calls.
+16. **Defaults without `.kit.json`.**
+    - The config loader works out the main branch, name and owner.
+    - Protections are on by default.
+    - A broken file still refuses every call, as it does now.
+    - Document the defaults in `docs/kit-json.md`.
+17. **First-use repo prep (local only).**
+    - One idempotent `kitlib` routine runs from the PM's start and the worktree tool.
+    - It writes the `.git/info/exclude` lines for every registered host's worktree folder.
+    - It sets the local `core.hooksPath` only if none is set.
+    - Tests:
+      - Nothing tracked changes.
+      - A commit in a worktree pushes to its remote branch.
+      - An existing hooks path is kept.
+18. **Gate auto-detect.**
+    - Detectors for Python (unittest, pytest, pyproject), Node (package.json scripts), Rust, Go and .NET.
+    - The gate record and report carry `source: auto`.
+    - `gate.json` wins.
+19. **Opt-in docs and default profile.**
+    - The index check is skipped when `docs/INDEX.md` is missing.
+    - The kit ships `content/default-profile.md`.
+    - Roles fall back to it, then to the repo's README or AGENTS.md.
+20. **Machine setup shrink.**
+    - Plugin install per host, agent temp folder, owner email.
+    - `--repo` keeps the old behaviour.
+    - Proof: a fresh clone of an unrelated repo runs a PM-to-worker-to-land cycle with nothing committed.
+
+### 7.2 Risks to watch
+- With an auto-detected gate, the wrong checks can run until someone overrides them. The "auto-detected" label is how the PM sees this.
+- Owner rules depend on the machine config. With no owner email stored, owner-only paths refuse every edit; they never allow them.
+- Setting `core.hooksPath` changes how git behaves for humans in that repo too, so it is done only once and never overwrites an existing value.
