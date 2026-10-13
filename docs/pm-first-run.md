@@ -41,7 +41,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    PM checklist prints no `agent_temp` lines (docs/pm-start.md "Agent temp (`agent_temp`)").
 
 6. **Turn on the guard** (hand step): the PreToolUse entry that
-   `python <kit>/claude/hooks/guard.py --settings-entry` prints goes in the account's settings
+   `python <kit>/hosts/claude/shell/hooks/guard.py --settings-entry` prints goes in the account's settings
    (docs/guard.md "Go-live (after the joint review)").
    Success: a Bash search from a drive root is denied with `rule=root-search`.
 
@@ -56,7 +56,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    holding `[]`, and a memory folder for handoff notes. The sessions file is `sessions.json` in
    `launcher.state_dir` (docs/launcher.md "State files"): start it from
    `docs/launcher.sessions.example.json`, or from `{}` until step 11. Put that folder inside the PM
-   repository (`claude/hub/hub_backlog.py` finds the repository from the sessions file's folder
+   repository (`hosts/claude/shell/hub/hub_backlog.py` finds the repository from the sessions file's folder
    and fails outside a git repo). Fill `pm_start` in the user config with their paths, and
    `pm_watch_cmd` (docs/pm-start.md "Config"); set `pm_watch.sessions_file` to the same file
    (docs/pm-watch.md "Config"). `pm_watch.py` reads usage
@@ -66,7 +66,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    Success: the next PM session starts with "PM session start checklist", not "no pm_start
    config ... checklist skipped".
 
-8. **Publish the Action Hub.** Publish `claude/hub/action-hub.html` with the Artifact tool and the
+8. **Publish the Action Hub.** Publish `hosts/claude/shell/hub/action-hub.html` with the Artifact tool and the
    capabilities docs/action-hub.md "For the PM" gives, pin it, record its URL with
    `python <kit>/tools/hub_mirror.py set-url --account <label> <url>` (the label:
    `python <kit>/tools/hub_mirror.py account`), and run `ArtifactComments watch` on that URL.
@@ -101,10 +101,10 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
     so kit work and landings need a kit coordinator.
     Success: the next checklist does not list it as not running.
 
-12. **List the repositories on the hub.** `python <kit>/claude/hub/hub_repos.py` prints the known
+12. **List the repositories on the hub.** `python <kit>/hosts/claude/shell/hub/hub_repos.py` prints the known
     repositories (from the sessions file, so step 11 comes first, plus `pm_start.repos`). Then
     `--have <names already stored> --out <file>`, and send the batch with ArtifactData. Do the same
-    with `claude/hub/hub_backlog.py --out <file>` (docs/action-hub.md "repos/<name>", "Backlog
+    with `hosts/claude/shell/hub/hub_backlog.py --out <file>` (docs/action-hub.md "repos/<name>", "Backlog
     section").
     A repository that is not a sibling of the PM repository needs `pm_start.repo_paths`, else the
     backlog run says "no folder, skipped".

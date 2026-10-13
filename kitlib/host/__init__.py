@@ -15,6 +15,7 @@ import for that): kitlib never imports a host, the host is chosen at the edge.
   registry                  hosts.json read as data: names, selection, adapter module names
   hookmain                  the one hook runner: parse, kitlib.guard.decide, degrade, render, fail
                             closed; and the one place a hook command line is written
+  header                    the kit header every session and subagent start adds to the context
 """
 from dataclasses import dataclass
 from typing import Optional, Protocol

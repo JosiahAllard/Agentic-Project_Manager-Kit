@@ -6,6 +6,10 @@ host's ContentRenderer for its files. `drift` compares them with the committed f
 differs, one that is missing, and one in a folder a renderer owns that it no longer writes (stale).
 `write` makes the committed files what the renderers say, and removes the stale ones.
 
+`load_kit(root)` reads `kit.json`, the kit's one name and version (ARCHITECTURE.md "Packaging"). A
+renderer that also has `manifests(kit, content)` (a host's plugin manifests, which carry that
+version) is asked for those files too, and they are checked and written like the rest.
+
 The renderers are passed in: this package names no host and imports none (the host is chosen at
 the edge, tools/render_content.py). Pure file work: no printing, no exit.
 
@@ -16,16 +20,36 @@ per kit root and cached. It never raises: no
 `content/roles` folder gives {}, and a role file that cannot be read or parsed is left out, so
 the policy is off for that role rather than the guard failing.
 """
+import json
 import os
+import re
 
 from kitlib.host.content import MODES, Content, ContentError, Skill, parse_role
 
 ROLES_REL = 'content/roles'
 SKILLS_REL = 'content/skills'
+KIT_REL = 'kit.json'
 SKIP_DIRS = ('__pycache__',)
 # a role's old name -> its name now, for one release (docs/ROSTER.md; the launcher's AGENT_ALIASES)
 ALIASES = {'opus-worker': 'senior-worker'}
 _MODES = {}
+_KIT_NAME = re.compile(r'[a-z][a-z0-9-]*\Z')
+_VERSION = re.compile(r'\d+\.\d+\.\d+\Z')
+
+
+def load_kit(root):
+    """{"name", "version"} from `<root>/kit.json`: exactly those keys, a lowercase name and an
+    N.N.N version; ContentError otherwise."""
+    try:
+        with open(_join(root, KIT_REL), 'rb') as f:
+            kit = json.loads(f.read().decode('utf-8'))
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        raise ContentError('%s cannot be read: %s' % (KIT_REL, e)) from None
+    if not isinstance(kit, dict) or set(kit) != {'name', 'version'} \
+            or not isinstance(kit['name'], str) or not _KIT_NAME.match(kit['name']) \
+            or not isinstance(kit['version'], str) or not _VERSION.match(kit['version']):
+        raise ContentError('%s must be {"name": "<lowercase name>", "version": "N.N.N"}' % KIT_REL)
+    return kit
 
 
 def _join(root, rel):
@@ -133,8 +157,13 @@ def render(root, renderers, content=None):
     one path is a ContentError."""
     content = load(root) if content is None else content
     out = {}
+    kit = None
     for r in renderers:
-        for path, data in r.render(content).items():
+        files = dict(r.render(content))
+        if hasattr(r, 'manifests'):
+            kit = load_kit(root) if kit is None else kit
+            files.update(r.manifests(kit, content))
+        for path, data in files.items():
             if path in out:
                 raise ContentError('%s: written by two hosts' % path)
             out[path] = data

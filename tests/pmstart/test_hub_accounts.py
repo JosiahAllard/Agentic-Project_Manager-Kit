@@ -11,7 +11,7 @@ from tests.pmstart import keep_off_launcher_repos
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
-SRC = os.path.join(KIT, "claude", "hub", "action-hub.html")    # absolute: resolved from the kit
+SRC = os.path.join(KIT, "hosts", "claude", "shell", "hub", "action-hub.html")    # absolute: resolved from the kit
 FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"})
 

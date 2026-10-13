@@ -1,0 +1,45 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pythonw",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/kit_header.py",
+              "SessionStart"
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pythonw",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/coordinator_session_start.py"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pythonw",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/kit_header.py",
+              "SubagentStart"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

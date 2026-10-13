@@ -22,7 +22,9 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '..', 'boot'))
+import kitboot                                                      # noqa: E402
+kitboot.boot()                                                      # the kit, checked, before kitlib
 
 from kitlib import hubbacklog, pmstart                             # noqa: E402
 from kitlib.config import ConfigError, migration, user             # noqa: E402

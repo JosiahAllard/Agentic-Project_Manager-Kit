@@ -1,6 +1,6 @@
 # Agent roster
 
-The kit's plugin ships these agent definitions in `claude/agents/`, rendered from `content/roles/`
+The kit's plugin ships these agent definitions in `hosts/claude/shell/agents/`, rendered from `content/roles/`
 (docs/content.md). Each is a generic copy of the live definition; repo specifics live in the repo's `.claude/agent-profile.md` (every agent) and
 `.claude/coordinator-profile.md` (coordinator only). The plugin registers each one under its prefix:
 dispatch a row as `pm-kit:<row>` (`subagent_type`, `--agent`). A repo's own `.claude/agents/<row>.md`
@@ -44,7 +44,7 @@ landing paths), and the host's built-in agent types (on Claude `general-purpose`
 
 ## Tier to model, per host
 
-Each host's renderer maps a tier to a model (Claude: `claude/adapter/content.py` `TIER_MODEL`);
+Each host's renderer maps a tier to a model (Claude: `hosts/claude/adapter/content.py` `TIER_MODEL`);
 `agent_roster.py --check` holds this table to it. A role file may name a different model for one
 host (`model.<host>:`, docs/content.md); none does.
 
@@ -61,7 +61,7 @@ Model choices rest on measured A/B runs: docs/model-ab.md.
 
 content/roles/senior-worker.md says `cache: long`, outside this table and untouched by
 `agent_roster.py --write` (tests/roster/test_roster.py, `test_write_leaves_other_keys_alone`); Claude's
-renderer writes it into claude/agents/senior-worker.md as a second frontmatter setting (docs/content.md):
+renderer writes it into hosts/claude/shell/agents/senior-worker.md as a second frontmatter setting (docs/content.md):
 
 ```yaml
 experimental:

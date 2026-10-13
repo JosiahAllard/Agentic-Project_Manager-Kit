@@ -1,8 +1,8 @@
 {
   "claude": {
     "default": true,
-    "adapter": "claude.adapter",
-    "shell": "claude",
+    "adapter": "hosts.claude.adapter",
+    "shell": "hosts/claude/shell",
     "platforms": ["windows"],
     "capabilities": {
       "hook_events": ["PreToolUse", "SessionStart", "SubagentStart"],

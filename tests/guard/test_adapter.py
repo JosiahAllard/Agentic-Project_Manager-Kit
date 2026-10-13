@@ -1,4 +1,4 @@
-"""Claude Code's adapter (claude/adapter): its payloads parsed into kitlib.host.Action and the
+"""Claude Code's adapter (hosts/claude/adapter): its payloads parsed into kitlib.host.Action and the
 Decision rendered back, the guard's path normaliser, and the layer rule that keeps Claude's payload
 field names out of kitlib.guard (docs/guard.md "Hosts")."""
 import json
@@ -6,8 +6,8 @@ import os
 import re
 import unittest
 
-from claude.adapter import events
-from claude.adapter.host import ADAPTER, MATCHER
+from hosts.claude.adapter import events
+from hosts.claude.adapter.host import ADAPTER, MATCHER
 from kitlib import agentname
 from kitlib.guard import paths, rules
 from kitlib.host import Action, Decision, registry
@@ -87,9 +87,9 @@ class Render(unittest.TestCase):
         self.assertEqual(rules.host_mcp_separator(ADAPTER.profile), '__')
 
     def test_the_settings_entry_matches_the_guarded_tools(self):
-        entry = ADAPTER.settings_entry('C:/k/claude/hooks/guard.py', executable='py')
+        entry = ADAPTER.settings_entry('C:/k/hosts/claude/shell/hooks/guard.py', executable='py')
         self.assertEqual(entry, {'PreToolUse': [{'matcher': MATCHER, 'hooks': [
-            {'type': 'command', 'command': 'py', 'args': ['C:/k/claude/hooks/guard.py']}]}]})
+            {'type': 'command', 'command': 'py', 'args': ['C:/k/hosts/claude/shell/hooks/guard.py']}]}]})
         for tool in list(events.FILE_TOOLS) + list(events.SHELL_TOOLS) + ['mcp__a__b']:
             self.assertTrue(re.fullmatch(MATCHER, tool), tool)
 

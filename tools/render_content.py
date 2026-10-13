@@ -1,15 +1,15 @@
-"""render_content.py: write each host's agents and skills from content/ (docs/content.md).
+"""render_content.py: write each host's agents, skills and plugin manifests from content/ and kit.json
+(docs/content.md).
 
   render_content.py [--check]   list every rendered file that differs, is missing or is stale; exit 1 if any
   render_content.py --write     write the differing and missing files, remove the stale ones
-  --host NAME                   only that host (repeatable; default: every host in RENDERERS)
+  --host NAME                   only that host (repeatable; default: every host in hosts.json)
 
 A thin entry point (ARCHITECTURE.md, Layers): it picks the host renderers, calls kitlib.content,
 prints and exits. Exit codes: 0 agree / written, 1 drift, 2 USAGE or a content file of the wrong
 shape.
 """
 import argparse
-import importlib
 import os
 import sys
 
@@ -19,10 +19,13 @@ sys.path.insert(0, KIT)
 from kitlib import content                                          # noqa: E402
 from kitlib.host.content import ContentError                        # noqa: E402
 
+import _host                                                        # noqa: E402
+from kitlib.host import registry                                    # noqa: E402
+
 USAGE = 2
-# host -> the module whose renderer() is its ContentRenderer. Until hosts.json carries the
-# adapter modules (docs/multi-host-plan.md step 2), the hosts with a renderer are listed here.
-RENDERERS = {'claude': 'claude.adapter.content'}
+# Every host hosts.json registers; its adapter module's ADAPTER.content().renderer() is its
+# ContentRenderer (which also writes its plugin manifests from kit.json).
+RENDERERS = registry.names()
 
 
 class Parser(argparse.ArgumentParser):
@@ -46,7 +49,7 @@ def build_parser():
 
 def renderers(hosts=None):
     """The ContentRenderer of each named host (default: all of RENDERERS), in name order."""
-    return [importlib.import_module(RENDERERS[h]).renderer() for h in sorted(hosts or RENDERERS)]
+    return [_host.adapter_module(h).ADAPTER.content().renderer() for h in sorted(hosts or RENDERERS)]
 
 
 def main(argv=None, out=None):

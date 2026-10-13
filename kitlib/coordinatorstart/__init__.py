@@ -1,6 +1,6 @@
 """kitlib.coordinatorstart: the coordinator session-start context: standing rules, then live checks.
 
-Pure functions that return data; the hook (claude/hooks/coordinator_session_start.py) prints it. The text
+Pure functions that return data; the hook (hosts/claude/shell/hooks/coordinator_session_start.py) prints it. The text
 comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
 filing and pricing-pass lines (each switched on in the config), then the live checks (rulings, cap,
@@ -46,7 +46,7 @@ ENG_LINE = ("ENG rulings: an engineering question (API shape, class versus recor
             "classifier, credentials, hooks that guard owner files); Money and accounts (purchases, cloud credit, "
             "game accounts, bans); Priority and pre-empts (one owner entry per change); Go-live and live-client "
             "runs, and removals of owner files; anything the owner flagged for review (eng_review).")
-# When a coordinator prices a record (claude/agents/coordinator.md, On start step 6 and Work sets,
+# When a coordinator prices a record (hosts/claude/shell/agents/coordinator.md, On start step 6 and Work sets,
 # Follow-ups): the start-up pricing pass leaves follow-up records unpriced.
 # Emitted only when coordinator_start.pricing_pass is true.
 PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, follow-up records excepted: run "

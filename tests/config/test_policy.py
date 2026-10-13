@@ -13,8 +13,8 @@ from tests.config.helpers import TempTree
 
 
 def ev(payload):
-    """A Claude Code PreToolUse payload as the guard sees it (claude.adapter.events.parse)."""
-    from claude.adapter import events
+    """A Claude Code PreToolUse payload as the guard sees it (hosts.claude.adapter.events.parse)."""
+    from hosts.claude.adapter import events
     return events.parse('PreToolUse', payload)
 
 

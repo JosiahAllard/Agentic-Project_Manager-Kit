@@ -1,7 +1,7 @@
 """The Action Hub's repo-tag mapping, `canonRepo` (docs/action-hub.md "repos/<name>").
 
 An item's `repo` tag maps to the repo whose repos/ doc has that name, or lists it in `aliases`;
-the page holds no alias of its own. The function is cut out of claude/hub/action-hub.html and run
+the page holds no alias of its own. The function is cut out of hosts/claude/shell/hub/action-hub.html and run
 under node against a stub `state`.
 """
 import json
@@ -17,7 +17,7 @@ NODE = shutil.which("node")
 
 def canon(repos, tags):
     m = re.search(r"  function canonRepo\(r\)\{.*?return hit \? named\(hit\) : \"\"; \}", page(), re.S)
-    assert m, "canonRepo missing from claude/hub/action-hub.html"
+    assert m, "canonRepo missing from hosts/claude/shell/hub/action-hub.html"
     src = ("const state = {repos: %s};\n%s\nconsole.log(JSON.stringify(%s.map(canonRepo)));"
            % (json.dumps(repos), m.group(0), json.dumps(tags)))
     out = subprocess.run([NODE, "-e", src], capture_output=True, text=True, timeout=30)

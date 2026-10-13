@@ -1,5 +1,5 @@
 """The PM's side of the lock-window notices: the watcher's LOCKNOTICE check and
-claude/hub/hub_notices.py (the ArtifactData batch, then marking it posted). Scratch folders only."""
+hosts/claude/shell/hub/hub_notices.py (the ArtifactData batch, then marking it posted). Scratch folders only."""
 import io
 import json
 import os
@@ -11,7 +11,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from kitlib import pmwatch as W
 
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "claude", "hub"))
+    os.path.abspath(__file__)))), "hosts", "claude", "shell", "hub"))
 import hub_notices as cli                                           # noqa: E402
 
 RID = "r-20261008T120000Z-abcdef"

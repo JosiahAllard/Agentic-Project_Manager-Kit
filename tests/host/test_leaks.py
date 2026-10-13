@@ -14,19 +14,18 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOST_WORDS = re.compile(r'claude|codex|anthropic|openai', re.I)
 
-# What is left and why. Later step-6 waves: launcher, pluginsource, machinesetup, guard (the guard
-# refactor), hub paths and the gate's strict defaults (step 7 moves claude/). Until step 9 registers
-# Codex: its marked placeholders (attribution, lock, owner paths). Prose in help strings, and the
-# retired config folder's fixed name, stay.
+# What is left and why. Later step-6 waves: launcher, pluginsource, machinesetup and guard (the guard
+# refactor); the hub paths name Claude's shell (hosts/claude/shell since step 7). Until step 9
+# registers Codex: its marked placeholders (attribution, lock, owner paths). Prose in help strings,
+# and the retired config folder's fixed name, stay.
 ALLOWED = {
     'kitlib/attribution/__init__.py':      3,    # UNREGISTERED codex attribution (step 9)
     'kitlib/commit/__init__.py':           1,    # an example family in an error message
     'kitlib/config/migration.py':          1,    # OLD_DIR_NAME, a retired folder's name on disk
     'kitlib/config/schema.py':             3,    # .codex placeholders (step 9); a key's help text
     'kitlib/config/user.py':               1,    # a key's help text
-    'kitlib/gate/strict_defaults.py':      2,    # claude/ paths (step 7)
-    'kitlib/guard/rules.py':               5,    # the guard refactor
-    'kitlib/hubmirror/__init__.py':        3,    # claude/hub paths (step 7)
+    'kitlib/guard/rules.py':               4,    # the guard refactor
+    'kitlib/hubmirror/__init__.py':        3,    # the hub entries' paths in Claude's shell (hosts/claude/shell/hub)
     'kitlib/kitrelease/bootstrap.py':      3,    # release inventory, runs before kitlib
     'kitlib/launcher/accounts.py':         4,    # launcher wave
     'kitlib/launcher/autostart.py':        2,
@@ -39,14 +38,14 @@ ALLOWED = {
     'kitlib/launcher/window.py':           9,
     'kitlib/lock/store.py':                2,    # legacy actor key read; codex.exe (step 9)
     'kitlib/lockmcp/__init__.py':          2,    # aliases kitlib/guard still imports
-    'kitlib/machinesetup/__init__.py':     16,   # machinesetup wave
-    'kitlib/machinesetup/extras.py':       8,
-    'kitlib/machinesetup/links.py':        1,
+    'kitlib/machinesetup/__init__.py':     12,   # machinesetup wave
+    'kitlib/machinesetup/common.py':       2,    # Claude's shell path and its pre-move folder (step 7)
+    'kitlib/machinesetup/extras.py':       7,
     'kitlib/machinesetup/plugin.py':       18,
-    'kitlib/machinesetup/settings.py':     12,
+    'kitlib/machinesetup/settings.py':     7,
     'kitlib/pluginsource/__init__.py':     9,    # pluginsource wave
     'kitlib/pluginsource/claude.py':       15,
-    'kitlib/pmstart/__init__.py':          1,    # claude/hub path (step 7)
+    'kitlib/pmstart/__init__.py':          1,    # the hub page's path in Claude's shell
     'kitlib/pmwatch/__init__.py':          1,    # the usage line's codex account
     'kitlib/scrub/__init__.py':            1,    # a capitalised marker word the scrub allows
 }
@@ -128,6 +127,79 @@ class HostNames(unittest.TestCase):
                   'def codex_f(claude=1):\n    """codex docstring."""\n    return y.claude_z\n')
         self.assertEqual([t for _, t in occurrences(source)].count('kitlib.pluginsource.claude'), 1)
         self.assertEqual(len(occurrences(source)), 5)
+
+
+# Plan section 2.7: a host name appears only in hosts.json, hosts/, optional/bridge/hosts/ and tests,
+# so adding a host changes no other folder. kitlib is counted above. Below: the kit's top folders,
+# boot/ (code, as kitlib) and content/ (every occurrence, prose too, since content is what every
+# host renders). What is left is listed with its reason and can only shrink.
+TOP_ALLOWED = {
+    'claude': 'the hook paths settings written before step 7 still run (claude/hooks/*.py stubs, '
+              'docs/machine-setup.md "Moved hook paths"); delete one release after the move',
+}
+CONTENT_ALLOWED = {        # Claude folders and the launch line in role prose: the content wave (step 9)
+    'content/roles/asset-smith.md':   3,    # ~/.claude tools and knowledge paths
+    'content/roles/coordinator.md':   9,    # `claude --agent`, .claude/ owner paths, ~/.claude
+    'content/roles/deep-worker.md':   1,    # the attribution trailer's example address
+    'content/roles/pm.md':            1,    # `claude --agent`
+    'content/roles/records.md':       2,    # ~/.claude, .claude/
+    'content/roles/senior-worker.md': 1,    # the attribution trailer's example address
+    'content/roles/sound-smith.md':   2,    # ~/.claude tools and knowledge paths
+    'content/roles/spec-writer.md':   2,    # ~/.claude, .claude/
+    'content/roles/strong-worker.md': 1,    # the attribution trailer's example address
+    'content/roles/tech-artist.md':   3,    # ~/.claude tools and knowledge paths
+}
+
+
+def content_counts():
+    counts = {}
+    for base, dirs, files in os.walk(os.path.join(ROOT, 'content')):
+        dirs[:] = [d for d in dirs if d != '__pycache__']
+        for name in files:
+            path = os.path.join(base, name)
+            with open(path, encoding='utf-8') as f:
+                n = len(HOST_WORDS.findall(f.read()))
+            if n:
+                counts[os.path.relpath(path, ROOT).replace(os.sep, '/')] = n
+    return counts
+
+
+class HostSlot(unittest.TestCase):
+    def test_no_top_folder_is_named_for_a_host(self):
+        from kitlib.host import registry
+        names = set(registry.names()) | {'codex', 'claude', 'anthropic', 'openai'}
+        found = sorted(n for n in os.listdir(ROOT) if os.path.isdir(os.path.join(ROOT, n))
+                       and n.lower() in names and n not in TOP_ALLOWED)
+        self.assertEqual(found, [], 'a host\'s files go under hosts/<name>/ (docs/multi-host-plan.md 2.7)')
+
+    def test_every_registered_host_lives_under_hosts(self):
+        from kitlib.host import registry
+        for h in registry.load().values():
+            with self.subTest(host=h.name):
+                self.assertEqual(h.shell, 'hosts/%s/shell' % h.name)
+                self.assertTrue(h.adapter.startswith('hosts.%s.' % h.name), h.adapter)
+                self.assertTrue(os.path.isdir(os.path.join(ROOT, 'hosts', h.name)))
+
+    def test_the_old_folder_holds_only_the_hook_stubs(self):
+        old = os.path.join(ROOT, 'claude')
+        if not os.path.isdir(old):
+            return                                  # retired: drop its TOP_ALLOWED entry
+        stubs = sorted(n for n in os.listdir(os.path.join(old, 'hooks')) if n != '__pycache__')
+        self.assertEqual(sorted(os.listdir(old)), ['hooks'])
+        self.assertEqual(stubs, ['coordinator_session_start.py', 'guard.py', 'pm_session_start.py'])
+
+    def test_boot_names_no_host(self):
+        with open(os.path.join(ROOT, 'boot', 'kitboot.py'), encoding='utf-8') as f:
+            self.assertEqual(occurrences(f.read()), [])
+
+    def test_content_holds_no_more_host_names_than_listed(self):
+        counts = content_counts()
+        over = ['%s: %d, allowed %d' % (rel, n, CONTENT_ALLOWED.get(rel, 0))
+                for rel, n in sorted(counts.items()) if n > CONTENT_ALLOWED.get(rel, 0)]
+        self.assertEqual(over, [], 'host names in content/: write them as tokens or neutral prose '
+                                   '(docs/content.md "Tokens")')
+        for rel in CONTENT_ALLOWED:
+            self.assertTrue(os.path.isfile(os.path.join(ROOT, rel)), rel)
 
 
 if __name__ == '__main__':

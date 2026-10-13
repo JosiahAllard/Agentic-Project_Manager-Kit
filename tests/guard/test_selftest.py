@@ -1,4 +1,4 @@
-"""claude.guard_selftest.agent_id_check over a scratch projects folder shaped like
+"""hosts.claude.adapter.guard_selftest.agent_id_check over a scratch projects folder shaped like
 ~/.claude/projects/<project>/<session>/subagents/agent-*.jsonl."""
 import json
 import os
@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import unittest
 
-from claude import guard_selftest as selftest
+from hosts.claude.adapter import guard_selftest as selftest
 
 
 def result_entry(text, is_error=True):

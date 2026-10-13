@@ -2,6 +2,18 @@
 import os
 import stat
 
+# The Claude shell in a kit checkout (hosts.json "shell"), and the folder it was before the hosts/
+# move (docs/multi-host-plan.md step 7). Settings and skill links written before the move name
+# MOVED_FROM paths; the settings and links steps re-point them into SHELL (docs/machine-setup.md
+# "Moved hook paths").
+SHELL = 'hosts/claude/shell'
+MOVED_FROM = 'claude'
+
+
+def kit_file(kit, rel):
+    """`rel` (posix, kit-relative) under the kit folder `kit`."""
+    return os.path.join(kit, *rel.split('/'))
+
 
 class Change(object):
     """One change: `text` is what a dry run prints, `do` makes it, `undo` (text) restores it by hand."""

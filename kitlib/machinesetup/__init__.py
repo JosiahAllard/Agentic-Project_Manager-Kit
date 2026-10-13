@@ -26,7 +26,7 @@ from kitlib.config import user
 from kitlib.config.migration import OLD_DIR_NAME
 
 from . import agenttemp, extras, links, plugin, settings
-from .common import Change, Plan
+from .common import Change, Plan, kit_file
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
 
@@ -96,8 +96,8 @@ def dedupe(dirs):
 
 def survey(ctx):
     plan = Plan(Plan.FRESH_SECTIONS if ctx.fresh else None)
-    if not os.path.isfile(os.path.join(ctx.kit, 'claude', 'hooks', 'guard.py')):
-        plan.refuse('%s is not a kit checkout (no claude/hooks/guard.py)' % ctx.kit)
+    if not os.path.isfile(kit_file(ctx.kit, settings.GUARD)):
+        plan.refuse('%s is not a kit checkout (no %s)' % (ctx.kit, settings.GUARD))
         return plan
     if not ctx.fresh and os.path.normcase(ctx.kit) == os.path.normcase(ctx.old_kit):
         plan.refuse('the old kit and the kit are the same folder: %s' % ctx.kit)
@@ -199,8 +199,8 @@ def survey_agent_temp(ctx):
     the agent_temp_sweep config key and the sweep task (kitlib.machinesetup.agenttemp.survey), then
     the folder's ACL (extras). No links, settings, plugin, shortcut or KIT_MACHINE_LOCK."""
     plan = Plan(('extras',))
-    if not os.path.isfile(os.path.join(ctx.kit, 'claude', 'hooks', 'guard.py')):
-        plan.refuse('%s is not a kit checkout (no claude/hooks/guard.py)' % ctx.kit)
+    if not os.path.isfile(kit_file(ctx.kit, settings.GUARD)):
+        plan.refuse('%s is not a kit checkout (no %s)' % (ctx.kit, settings.GUARD))
         return plan
     folder, made = agenttemp.survey(plan, ctx)
     if folder:

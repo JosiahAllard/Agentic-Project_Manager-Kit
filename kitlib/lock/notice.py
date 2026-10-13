@@ -11,7 +11,7 @@ write two start notices and two end notices.
 
 Each notice is <dir>/<run id>-start.json or -end.json, an Action Hub inbox doc ready to post
 (docs/action-hub.md "Lock-window notices"): {id: "L-<run id>-start|end", title, text, at, repo, from,
-kind: "lock-window", run, phase}. claude/hub/hub_notices.py turns the pending ones into an ArtifactData
+kind: "lock-window", run, phase}. hosts/claude/shell/hub/hub_notices.py turns the pending ones into an ArtifactData
 batch and moves them to <dir>/posted/ once posted, and the PM watcher prints LOCKNOTICE for each
 new one (both through kitlib.pmwatch, which reads the folder without importing the lock).
 A notice that cannot be written is said and never fails the run. A start notice once written

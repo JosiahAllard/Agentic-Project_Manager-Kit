@@ -134,8 +134,10 @@ kit.json               the one version and release identity (§2.5)
 Moving `claude/` to `hosts/claude/` changes paths that kitlib refers to today: `claude/hub/...`,
 the gate's strict defaults and machine setup's guard path. Those references become lookups
 through the host registry as part of step 6, and the move itself is step 7. The Claude
-marketplace entry (`.claude-plugin/marketplace.json`) stays at the repo root and points at
-`hosts/claude/shell`.
+marketplace entry (`.claude-plugin/marketplace.json`) stays at the repo root. As built in step 7, so
+does `.claude-plugin/plugin.json`, pointing into `hosts/claude/shell`: the plugin root must hold
+the manifest, and it is the whole kit because the hooks and the MCP server run kitlib and tools
+beside them (an installed plugin reaches only files under its root).
 
 ### 2.1 The host contract (`kitlib/host/`)
 One package of protocols and frozen dataclasses. It contains no host names and imports nothing
@@ -366,7 +368,7 @@ behaviour unchanged.
 | 4 | `kitlib/guard/rolepolicy.py`. Lift the role policy from the Codex branch's `guard_adapter` and `kit_adapter`, so Claude gets it too. | 3 |
 | 5 | `content/` and the renderer, starting with Claude. The rendered agents must be byte-identical to today's files before anything else changes. Then the reconciled roster, the neutral profile and AGENTS.md as the canonical instructions. The skill merge waits for the owner's skill-text decision. | 2 |
 | 6 | Remove the Claude leaks from kitlib, one PR per cluster: lock actor key → `host`, session env, worktree defaults, MCP prefix, commit model env, hub paths, launcher, pluginsource. | 2 |
-| 7 | Move `claude/` → `hosts/claude/{adapter,shell}`. `kit.json` and the one release value. `boot/kitboot.py`. | 5, 6 |
+| 7 | Move `claude/` → `hosts/claude/{adapter,shell}`. `kit.json` and the one release value. `boot/kitboot.py`. **Done**, with the rendered manifests and the kit header hook (docs/content.md "Manifests", "Kit header"; docs/kitboot.md; docs/machine-setup.md "Moved hook paths"). | 5, 6 |
 | 8 | Conformance suite, required in the gate. `docs/new-host.md`. | 3, 7 |
 | 9 | **Rebase `codex/companion-plugin`** onto main as `hosts/codex/`: `actions.py` → adapter events, `guard_adapter` reduced to what only Codex has, roles rendered from `content/`, `PM_KIT_CODEX_ROLE` removed. It must pass the conformance suite. | 8 |
 | 10 | **Rebase `codex/robust-bridge-plan`** as `optional/bridge/`: promote the helpers, declare the port, move the host halves, delete the probe code, collapse the docs. | 9 |

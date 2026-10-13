@@ -40,9 +40,9 @@ MIRROR_FOLDER = 'hub'
 MIRRORED = ('questions', 'inbox', 'to_pm', 'todos', 'parked', 'stories', 'pages', 'page_html')
 # The collections a tool or a repost fills: never mirrored; refilled on a new copy by these.
 REGENERATED = (
-    ('backlog', 'claude/hub/hub_backlog.py --force'),
-    ('completed', 'claude/hub/hub_backlog.py --force'),
-    ('repos', 'claude/hub/hub_repos.py --have <names> --out <file>, then any aliases again'),
+    ('backlog', 'hosts/claude/shell/hub/hub_backlog.py --force'),
+    ('completed', 'hosts/claude/shell/hub/hub_backlog.py --force'),
+    ('repos', 'hosts/claude/shell/hub/hub_repos.py --have <names> --out <file>, then any aliases again'),
     ('usage', 'launch.py usage, posted as at session start'),
     ('agents', 'repost each agent definition'),
 )

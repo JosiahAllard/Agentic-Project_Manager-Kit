@@ -30,7 +30,7 @@ CONSULTANT_AUTOCOMPACT = (100000, 500000)
 CONSULTANT_DEFAULT_AUTOCOMPACT = 350000
 # a sessions.json entry of that agent, bare or with the kit plugin's prefix (kitlib.agentname)
 ROLE_AUTOCOMPACT = {'consultant': CONSULTANT_DEFAULT_AUTOCOMPACT, 'deep-worker': DEEP_AUTOCOMPACT}
-# the kit plugin's agents (content/roles/*.md, rendered as claude/agents/*.md; tests/launcher/test_start.py
+# the kit plugin's agents (content/roles/*.md, rendered as hosts/claude/shell/agents/*.md; tests/launcher/test_start.py
 # pins the set to both):
 # a bare one of these is started with the plugin's prefix, any other name as given
 KIT_AGENTS = ('asset-smith', 'consultant', 'coordinator', 'deep-worker', 'lander', 'pm', 'records',

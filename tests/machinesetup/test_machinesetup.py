@@ -115,7 +115,7 @@ class FakeHost(object):
 
     def guard_entry(self, kit):
         return {'PreToolUse': [{'matcher': 'Bash|PowerShell', 'hooks': [
-            {'type': 'command', 'command': PYW, 'args': [fwd(os.path.join(kit, 'claude', 'hooks', 'guard.py'))]}]}]}
+            {'type': 'command', 'command': PYW, 'args': [fwd(os.path.join(kit, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))]}]}]}
 
 
 @unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')
@@ -137,12 +137,12 @@ class Base(unittest.TestCase):
                     'skills/land-branch/SKILL.md', 'skills/worktree-start/SKILL.md', 'agents/coordinator.md'):
             touch(os.path.join(self.old, *rel.split('/')))
         # the kit
-        for rel in ('claude/hooks/guard.py', 'claude/hooks/pm_session_start.py',
-                    'claude/hooks/coordinator_session_start.py', 'tools/machine_lock.py', 'kitlib/__init__.py',
+        for rel in ('hosts/claude/shell/hooks/guard.py', 'hosts/claude/shell/hooks/pm_session_start.py',
+                    'hosts/claude/shell/hooks/coordinator_session_start.py', 'tools/machine_lock.py', 'kitlib/__init__.py',
                     'optional/comfy/comfy_gen.py', 'optional/procwatch/procwatch.py',
                     'optional/usage/statusline-usage.ps1', 'optional/usage/write-usage-status.ps1',
                     'optional/agenttemp/agent_temp_sweep.py', 'knowledge/asset-generation/README.md',
-                    'claude/skills/land-branch/SKILL.md', 'reserve_ui.pyw'):
+                    'hosts/claude/shell/skills/land-branch/SKILL.md', 'reserve_ui.pyw'):
             touch(os.path.join(self.kit, *rel.split('/')))
         # account 1: every container a link into the old kit
         self.c1 = os.path.join(self.home, '.claude')
@@ -248,7 +248,7 @@ class DryRunApplyAgain(Base):
         self.assertIn('a real folder: rename it to comfy.old-%s' % TODAY, out)
         diff = [l.strip() for l in out.splitlines()]
         self.assertIn('-' + ' ' * 12 + '"command": "python %s/hooks/no_root_search.py"' % fwd(self.old), diff)
-        self.assertTrue(any(l.startswith('+') and 'claude/hooks/guard.py' in l for l in diff), out)
+        self.assertTrue(any(l.startswith('+') and 'hosts/claude/shell/hooks/guard.py' in l for l in diff), out)
         self.assertIn('the kit has no skill worktree-start', out)
         self.assertIn('agents', out)
         self.assertIn('left as is', out)
@@ -269,7 +269,7 @@ class DryRunApplyAgain(Base):
         self.assertEqual(self.target(self.c1, 'tools', 'machine_lock'), self.kitp('tools'))
         self.assertEqual(self.target(self.c1, 'tools', 'kitlib'), self.kitp('kitlib'))
         self.assertEqual(self.target(self.c1, 'tools', 'usage'), self.kitp('optional/usage'))
-        self.assertEqual(self.target(self.c1, 'skills', 'land-branch'), self.kitp('claude/skills/land-branch'))
+        self.assertEqual(self.target(self.c1, 'skills', 'land-branch'), self.kitp('hosts/claude/shell/skills/land-branch'))
         self.assertEqual(self.target(self.c1, 'skills', 'worktree-start'),     # no kit skill: kept
                          common.norm(os.path.join(self.old, 'skills', 'worktree-start')))
         self.assertEqual(self.target(self.c1, 'knowledge', 'asset-generation'), self.kitp('knowledge/asset-generation'))
@@ -296,15 +296,15 @@ class DryRunApplyAgain(Base):
         self.assertEqual(doc['permissions'], self.settings_doc()['permissions'])
         pre = doc['hooks']['PreToolUse']
         self.assertEqual(len(pre), 2)
-        self.assertEqual(pre[1]['hooks'][0]['args'], [fwd(os.path.join(self.kit, 'claude', 'hooks', 'guard.py'))])
+        self.assertEqual(pre[1]['hooks'][0]['args'], [fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))])
         self.assertEqual(doc['hooks']['SessionStart'][0]['hooks'][0],          # re-pointed, then exec form
                          {'type': 'command', 'command': PYW,
-                          'args': [fwd(os.path.join(self.kit, 'claude', 'hooks', 'pm_session_start.py'))]})
+                          'args': [fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'pm_session_start.py'))]})
         self.assertEqual(doc['statusLine'], self.settings_doc()['statusLine'])   # through tools/usage: kept
         doc2 = json.loads(readb(self.s2).decode('utf-8'))
         self.assertEqual(doc2['hooks']['SessionStart'][0]['hooks'][0],
                          {'type': 'command', 'command': PYW,
-                          'args': [fwd(os.path.join(self.kit, 'claude', 'hooks', 'coordinator_session_start.py'))]})
+                          'args': [fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'coordinator_session_start.py'))]})
         self.assertTrue(readb(self.s2).decode('utf-8').startswith('{\n    "model"'))
         # extras
         lnk = os.path.join(self.desk, extras.SHORTCUT)
@@ -349,8 +349,8 @@ class Refusals(Base):
         self.assertRefusedUnchanged('mystery.py')
 
     def test_a_repoint_target_missing_from_the_kit_refuses(self):
-        os.remove(os.path.join(self.kit, 'claude', 'hooks', 'pm_session_start.py'))
-        self.assertRefusedUnchanged('claude/hooks/pm_session_start.py')
+        os.remove(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'pm_session_start.py'))
+        self.assertRefusedUnchanged('hosts/claude/shell/hooks/pm_session_start.py')
 
     def test_a_path_through_a_tools_link_the_kit_cannot_serve_refuses(self):
         os.remove(os.path.join(self.kit, 'optional', 'usage', 'statusline-usage.ps1'))
@@ -371,7 +371,7 @@ class Refusals(Base):
         self.assertIn('the same folder', '\n'.join(lines))
 
     def test_a_folder_that_is_not_a_kit_refuses(self):
-        os.remove(os.path.join(self.kit, 'claude', 'hooks', 'guard.py'))
+        os.remove(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))
         self.assertRefusedUnchanged('not a kit checkout')
 
     def test_a_missing_config_folder_refuses(self):
@@ -504,15 +504,15 @@ class ExecFormAndPlugin(Base):
         return doc
 
     def kit_hook(self, name):
-        return fwd(os.path.join(self.kit, 'claude', 'hooks', name))
+        return fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', name))
 
     def add_plugin(self, name='any-plugin-name'):
         touch(os.path.join(self.kit, '.claude-plugin', 'plugin.json'),
-              json.dumps({'name': name, 'hooks': './claude/hooks/hooks.json'}))
-        touch(os.path.join(self.kit, 'claude', 'hooks', 'hooks.json'), json.dumps({'hooks': {'SessionStart': [
+              json.dumps({'name': name, 'hooks': './hosts/claude/shell/hooks/hooks.json'}))
+        touch(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'hooks.json'), json.dumps({'hooks': {'SessionStart': [
             {'matcher': 'startup|resume|compact', 'hooks': [
                 {'type': 'command', 'command': 'pythonw',
-                 'args': ['${CLAUDE_PLUGIN_ROOT}/claude/hooks/coordinator_session_start.py']}]}]}}))
+                 'args': ['${CLAUDE_PLUGIN_ROOT}/hosts/claude/shell/hooks/coordinator_session_start.py']}]}]}}))
 
     def test_a_shell_form_kit_hook_is_planned_in_exec_form_and_a_dry_run_writes_nothing(self):
         sl = {'type': 'command', 'command': 'powershell -NoProfile -File "%s"'
@@ -564,7 +564,7 @@ class ExecFormAndPlugin(Base):
 
     def assertExecFormRefused(self, guard_entry, why):
         guard = {'PreToolUse': [{'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': PYW,
-                 'args': [fwd(os.path.join(self.kit, 'claude', 'hooks', 'guard.py'))]}]}]}
+                 'args': [fwd(os.path.join(self.kit, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))]}]}]}
         self.write_settings(self.s2, {'hooks': dict(guard, SessionStart=[{'hooks': [
             {'type': 'command', 'command': 'python %s' % self.kit_hook('coordinator_session_start.py')}]}])})
         self.host.guard_entry = guard_entry
@@ -599,7 +599,7 @@ class ExecFormAndPlugin(Base):
         notes = [l for l in out.splitlines() if 'runs twice' in l]
         self.assertEqual(len(notes), 1, out)
         self.assertIn('the SessionStart hook coordinator_session_start.py is also the kit plugin\'s hook '
-                      '(claude/hooks/hooks.json)', notes[0])
+                      '(hosts/claude/shell/hooks/hooks.json)', notes[0])
         self.assertIn('remove this entry in the same step as the plugin install', notes[0])
         self.assertNotIn('any-plugin-name', out)
         self.assertIn('settings: nothing to do', out)
@@ -682,7 +682,7 @@ class Parts(unittest.TestCase):
     def test_real_guard_entry_shape(self):
         entry = extras.Host().guard_entry(KIT)
         args = entry['PreToolUse'][0]['hooks'][0]['args']
-        self.assertEqual(common.norm(args[0]), common.norm(os.path.join(KIT, 'claude', 'hooks', 'guard.py')))
+        self.assertEqual(common.norm(args[0]), common.norm(os.path.join(KIT, 'hosts', 'claude', 'shell', 'hooks', 'guard.py')))
 
 
 @unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')

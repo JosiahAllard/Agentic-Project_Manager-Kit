@@ -28,11 +28,13 @@ def tracked_fixture():
              'tools/operation.py': b'pass\n',
              'mcp/bridge_frontend.py': b'pass\n',
              'tools/bridge_service.py': b'pass\n',
-             'claude/skills/shared/SKILL.md': b'Claude entry\n',
+             'hosts/claude/shell/skills/shared/SKILL.md': b'Claude entry\n',
              'codex/skills/shared/SKILL.md': b'Codex entry\n',
              'templates/example/.claude/skills/check/SKILL.md': b'template entry\n',
              'AGENTS.md': b'Reviewed rules\n',
              'hosts.json': (ROOT / 'hosts.json').read_bytes(),
+             'kit.json': b'{"name": "pm-kit", "version": "1.2.3"}\n',
+             'boot/kitboot.py': b'pass\n',
              '.kit.json': b'{"private":"checkout only"}\n',
              '.claude/session.json': b'private Claude state\n',
              '.codex/session.json': b'private Codex state\n',
@@ -78,12 +80,14 @@ class Release(unittest.TestCase):
         self.assertEqual(marker['commit'], self.commit)
         self.assertEqual(result['identity'], hashlib.sha256(P.encoded(marker)).hexdigest())
         self.assertFalse(result['ready'])
+        self.assertEqual(result['version'], '1.2.3')                # kit.json, the one version
+        self.assertTrue((self.root / 'boot/kitboot.py').is_file())
         self.assertEqual(self.export(), result)
 
     def test_host_shells_come_from_hosts_json_and_an_unregistered_folder_is_not_shipped(self):
         self.export()
         self.assertTrue((self.root / 'hosts.json').is_file())
-        self.assertTrue((self.root / 'claude/skills/shared/SKILL.md').is_file())
+        self.assertTrue((self.root / 'hosts/claude/shell/skills/shared/SKILL.md').is_file())
         self.assertFalse((self.root / 'codex').exists())     # no hosts.json entry names it
         self.assertEqual(B.ROOTS, B.CORE_ROOTS + B.host_roots(ROOT / 'hosts.json'))
         path = Path(self.scratch.name) / 'hosts.json'

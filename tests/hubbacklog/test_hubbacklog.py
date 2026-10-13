@@ -12,7 +12,7 @@ from kitlib.git import cmd as gitcmd
 from tests.gitfixture import fixture_env
 from tests.realgit import real_git
 
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "claude", "hub"))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "hosts", "claude", "shell", "hub"))
 import hub_backlog                                                  # noqa: E402
 
 NOW = datetime.datetime(2026, 10, 7, 12, 0, tzinfo=datetime.timezone.utc)

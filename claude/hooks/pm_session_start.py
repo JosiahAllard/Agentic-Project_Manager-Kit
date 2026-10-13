@@ -1,26 +1,18 @@
-"""SessionStart hook: prints the PM checklist as additionalContext. Always exits 0."""
-import json
-import os
-import sys
+"""A retired hook path (docs/machine-setup.md "Moved hook paths"). Settings written before the hosts/
+move (multi-host plan step 7) run <kit>/claude/hooks/<this file>; a missing guard would block every
+tool call, and a missing session hook would drop its checklist. So this runs the same-named entry in
+hosts/claude/shell/hooks/ in its place until tools/machine_setup.py has re-pointed each settings
+entry. Delete claude/ one release after the move. Exit 2 (a block) when the entry cannot be run.
+"""
+import os, runpy, sys
+NEW = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                   'hosts', 'claude', 'shell', 'hooks', os.path.basename(__file__))
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-
-
-def main():
+if __name__ == '__main__':
     try:
-        from kitlib import pmstart
-        cfg = pmstart.load_config()
-        if cfg is None:
-            from kitlib.config import user
-            text = "PM session start: no pm_start config in %s; checklist skipped." % user.display()
-        else:
-            text = pmstart.checklist(cfg)
-    except Exception as e:
-        text = "PM session start: checklist failed: %s: %s" % (type(e).__name__, e)
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
-                                             "additionalContext": text}}))
-
-
-if __name__ == "__main__":
-    main()
-    sys.exit(0)
+        sys.argv[0] = NEW
+        runpy.run_path(NEW, run_name='__main__')
+    except SystemExit:
+        raise
+    except BaseException:
+        sys.exit(2)

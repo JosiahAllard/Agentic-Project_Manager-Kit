@@ -4,6 +4,9 @@ Only the standard library is imported. The expected identity must come from trus
 reviewed preparation, never from the artifact being checked. No Git or activation.
 The host shell folders shipped (ROOTS) come from the hosts.json beside it (host_roots), so no
 host is named here; that file is itself in every release's checked inventory.
+The kit's one version is kit.json's (ARCHITECTURE.md "Packaging"); a verified release reports it as
+`version` (None for a release that ships no kit.json). boot/kitboot.py runs this file's verify()
+before any kitlib import.
 """
 import hashlib
 import json
@@ -17,10 +20,11 @@ MARKER = '.kit-package.json'
 SUBTREE = 'shared-runtime'
 HOSTS = 'hosts.json'
 # content: the role files the guard reads each role's policy mode from (kitlib.content.role_modes)
+KIT = 'kit.json'
 CORE_ROOTS = ('kitlib', 'tools', 'mcp', 'docs', 'templates', 'githooks', 'installer', 'optional',
-              'knowledge', 'content')
+              'knowledge', 'content', 'boot')
 RESOURCES = ('AGENTS.md', 'ARCHITECTURE.md', 'CLAUDE.md', 'README.md',
-             'LICENSE', 'reserve_ui.pyw', HOSTS)
+             'LICENSE', 'reserve_ui.pyw', HOSTS, KIT)
 REQUIRED_FILE = 'kitlib/kitrelease/bootstrap.py'
 _SHA = re.compile(r'^[0-9a-f]{40}(?:[0-9a-f]{24})?$')
 _DIGEST = re.compile(r'^[0-9a-f]{64}$')
@@ -176,4 +180,23 @@ def verify(root, expected_identity, expected_commit=None):
     if _metadata(root, expected_identity, expected_commit) != marker:
         raise ReleaseError('release metadata changed during verification')
     return {'root': str(root), 'commit': marker['commit'], 'identity': expected_identity,
-            'ready': False}
+            'version': _version(root, marker['files']), 'ready': False}
+
+
+def _version(root, files):
+    """kit.json's version in the verified release `root`, read only when its bytes still hash as
+    the inventory says; None when the release ships no kit.json."""
+    if KIT not in files:
+        return None
+    try:
+        body = _no_links(root / KIT).read_bytes()
+        if hashlib.sha256(body).hexdigest() != files[KIT]:
+            raise ReleaseError('release changed during verification')
+        version = json.loads(body, object_pairs_hook=_pairs).get('version')
+    except (OSError, ValueError, AttributeError) as error:
+        if isinstance(error, ReleaseError):
+            raise
+        raise ReleaseError('release kit.json missing or invalid') from error
+    if not isinstance(version, str) or not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise ReleaseError('release kit.json has no N.N.N version')
+    return version

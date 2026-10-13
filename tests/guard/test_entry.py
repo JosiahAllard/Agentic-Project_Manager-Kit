@@ -1,7 +1,7 @@
-"""claude/hooks/guard.py as Claude Code runs it: a PreToolUse event on stdin, hook JSON (or nothing) on
+"""hosts/claude/shell/hooks/guard.py as Claude Code runs it: a PreToolUse event on stdin, hook JSON (or nothing) on
 stdout, exit 0. HOME/USERPROFILE point at a scratch folder, so no real machine config is read,
 and the payloads touch no repository (a temp folder that is not a checkout). The entry hands the
-event to claude.adapter through kitlib.host.hookmain; these tests run it end to end."""
+event to hosts.claude.adapter through kitlib.host.hookmain; these tests run it end to end."""
 import importlib.util
 import io
 import json
@@ -14,13 +14,14 @@ import tempfile
 import unittest
 from unittest import mock
 
-from claude.adapter import events, host
+from hosts.claude.adapter import events, host
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ENTRY = os.path.join(KIT_ROOT, 'claude', 'hooks', 'guard.py')
+ENTRY = os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'hooks', 'guard.py')
 # what a copy of the entry needs to deny by itself when kitlib.guard will not import
-HOOK_FILES = ('claude/__init__.py', 'claude/adapter/__init__.py', 'claude/adapter/events.py',
-              'claude/adapter/host.py', 'kitlib/host/__init__.py', 'kitlib/host/hookmain.py',
+HOOK_FILES = ('boot/kitboot.py', 'tools/machine_lock.py', 'hosts/__init__.py', 'hosts/claude/__init__.py',
+              'hosts/claude/adapter/__init__.py', 'hosts/claude/adapter/events.py',
+              'hosts/claude/adapter/host.py', 'kitlib/host/__init__.py', 'kitlib/host/hookmain.py',
               'kitlib/host/registry.py', 'hosts.json',
               'kitlib/agentname.py', 'kitlib/lockmcp/__init__.py')
 
@@ -138,13 +139,13 @@ class GuardError(unittest.TestCase):
                     self.assertTrue(reason.endswith('[kit guard: rule=guard-error role=main]'), reason)
 
     def copy(self, files=HOOK_FILES):
-        """A copy of claude/hooks/guard.py, and `files`, beside a kitlib whose guard package
+        """A copy of hosts/claude/shell/hooks/guard.py, and `files`, beside a kitlib whose guard package
         raises on import."""
         base = tempfile.mkdtemp(prefix='kit-guard-import-')
         self.addCleanup(shutil.rmtree, base, True)
-        os.makedirs(os.path.join(base, 'claude', 'hooks'))
+        os.makedirs(os.path.join(base, 'hosts', 'claude', 'shell', 'hooks'))
         os.makedirs(os.path.join(base, 'kitlib', 'guard'))
-        shutil.copy(ENTRY, os.path.join(base, 'claude', 'hooks', 'guard.py'))
+        shutil.copy(ENTRY, os.path.join(base, 'hosts', 'claude', 'shell', 'hooks', 'guard.py'))
         for rel in files:
             os.makedirs(os.path.dirname(os.path.join(base, rel)), exist_ok=True)
             shutil.copy(os.path.join(KIT_ROOT, rel), os.path.join(base, rel))
@@ -156,7 +157,7 @@ class GuardError(unittest.TestCase):
 
     def test_a_kitlib_that_will_not_import_denies(self):
         base = self.copy()
-        entry = os.path.join(base, 'claude', 'hooks', 'guard.py')
+        entry = os.path.join(base, 'hosts', 'claude', 'shell', 'hooks', 'guard.py')
         ev = json.dumps({'tool_name': 'mcp__x__y', 'tool_input': {}, 'cwd': base, 'agent_id': 'a1',
                          'hook_event_name': 'PreToolUse'})
         env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
@@ -178,10 +179,10 @@ class GuardError(unittest.TestCase):
             self.assertEqual((r.returncode, r.stdout), (0, ''), tool)
 
     def test_an_adapter_that_will_not_import_blocks_by_exit_code(self):
-        # with no claude.adapter or kitlib.host beside it the entry cannot write a deny: it exits
+        # with no hosts.claude.adapter or kitlib.host beside it the entry cannot write a deny: it exits
         # 2, which Claude Code reads as a block; a tool no rule can refuse is still allowed
         base = self.copy(files=())
-        entry = os.path.join(base, 'claude', 'hooks', 'guard.py')
+        entry = os.path.join(base, 'hosts', 'claude', 'shell', 'hooks', 'guard.py')
         env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
         for tool, want in (('mcp__x__y', 2), ('Bash', 2), ('Read', 0)):
             ev = json.dumps({'tool_name': tool, 'tool_input': {}, 'cwd': base, 'hook_event_name': 'PreToolUse'})

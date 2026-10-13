@@ -1,5 +1,5 @@
 """The guard as Claude Code's hook reaches it, for the tests: a PreToolUse payload (world.event,
-bash, ps) parsed by claude.adapter into a kitlib.host.Action, then kitlib.guard.decide.
+bash, ps) parsed by hosts.claude.adapter into a kitlib.host.Action, then kitlib.guard.decide.
 
   action(payload)        ADAPTER.parse('PreToolUse', payload)
   decide(payload, ctx)   None for an allow, else the kitlib.host.Decision (verdict, rule, reason,
@@ -7,7 +7,7 @@ bash, ps) parsed by claude.adapter into a kitlib.host.Action, then kitlib.guard.
   output(payload, ctx)   the (stdout, exit code) Claude Code reads back (ADAPTER.render)
   MCP_PREFIX             the lock MCP's tool prefix on Claude (hosts.json mcp_tool_format)
 """
-from claude.adapter.host import ADAPTER
+from hosts.claude.adapter.host import ADAPTER
 from kitlib import guard
 from kitlib.guard import rules
 

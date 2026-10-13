@@ -255,7 +255,7 @@ class BadLocationCliTest(_Home):
 
     def test_each_says_machine_config_and_exits_2(self):
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        for d in (os.path.join(root, 'tools'), os.path.join(root, 'claude', 'hub')):
+        for d in (os.path.join(root, 'tools'), os.path.join(root, 'hosts', 'claude', 'shell', 'hub')):
             if d not in sys.path:
                 sys.path.append(d)
         import hub_notices
