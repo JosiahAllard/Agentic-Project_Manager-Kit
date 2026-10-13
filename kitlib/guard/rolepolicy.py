@@ -14,32 +14,43 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
 
   MODES   controller   a lead (pm, coordinator): shell and edits as before, plus the checks below
           write        a builder: the same
-          read         reads and reports: no file edits, the whole checkout read-only to shell
-          test         runs tests: as read, plus the lock's run verbs
-          lander       lands: no file edits (its git landing stays rules.lander_check's)
+          read         reads and reports: no file edits in its checkout, the checkout read-only to
+                       shell, the owner paths read-only
+          test         runs tests: as read, with the agent's lock verbs
+          lander       lands: no file edits in its checkout, the owner paths read-only (its git
+                       landing stays rules.lander_check's)
+  A role file's `writes` (kitlib.content.role_writes: repo-relative paths or globs) are the files a
+  read, test or lander role may still edit in its checkout with a file tool (the consultant's notes
+  file). A shell write to one stays refused: the jail's roots are folders, not globs.
 
   screen(action, ctx)   (check's Decision, context's Ctx): what rules.decide runs once the shared
                         rules allow the call (a call they refuse never reaches the policy)
   check(action, ctx)    a Decision, or None to go on to the shared rules:
-    role-edit     an edit by a read, test or lander role
+    role-edit     an edit inside the session's checkout by a read, test or lander role, unless its
+                  role file's `writes` names the file; an edit outside it (temp, the scratch
+                  folder) is the write jail's, as for any session
     role-workdir  a shell call whose own working directory (Action.workdir, a host whose shell
                   call names one) is outside the checkout the session runs in
     role-shell    an interactive interpreter (shell_gap): a shell, cmd, PowerShell or python run with
                   no script, command or informational option, or told to stay open
-                  (-i, -, -s, -NoExit and any prefix of it, /k)
-    role-lock     the lock CLI (machine_lock.py) run with a verb outside LOCK_VERBS, or with
-                  --force in any abbreviation; read and lander roles get READ_LOCK_VERBS alone
-  context(action, ctx)  the Ctx the shared rules then use: for a role with a mode, a view whose
-                  .kit.json guard.data_roots also hold, read-only, every host's owner paths
+                  (-i, -, -s, -NoExit and any prefix of it, /k). Standard input fed by a pipe, a
+                  heredoc, a here-string or `<` is the script: bare, `-` and `-s` then pass
+    role-lock     the lock CLI (machine_lock.py) run with a verb outside the mode's LOCK_VERBS, or
+                  with --force in any abbreviation
+  context(action, ctx)  the Ctx the shared rules then use: for a read, test or lander role, a view
+                  whose .kit.json guard.data_roots also hold, read-only, every host's owner paths
                   (hosts.json profile owner_paths) in the session's checkout, and for a read or test
-                  role the checkout itself, so the write jail refuses them (rule write-jail). An
-                  owner path that holds the host's worktrees folder is left out in a main checkout,
-                  so the worktrees under it stay writable. The real config is never changed.
+                  role the checkout itself (not for a file-tool edit of a `writes` file), so the
+                  write jail refuses them (rule write-jail). An owner path that holds the host's
+                  worktrees folder is left out in a main checkout, so the worktrees under it stay
+                  writable. Write and controller roles get no roots: the owner paths stay under the
+                  owner-approval rules, as before. The real config is never changed.
 
 Codex's shell-patch transport refusal (apply_patch run as a shell command) is Codex's own and stays
 in its adapter.
 """
 import copy
+import fnmatch
 import os
 
 from kitlib import agentname
@@ -56,9 +67,19 @@ from .context import OWNER
 
 NO_EDIT = ('read', 'test', 'lander')
 READ_ONLY_CHECKOUT = ('read', 'test')
-LOCK_VERBS = ('status', 'stats', 'run', 'background', 'stop')
-READ_LOCK_VERBS = ('status', 'stats')
+OWNER_PATHS_READ_ONLY = NO_EDIT
+# The lock verbs a mode runs: verb -> None (any argument) or the sub-verbs it may take ('' none).
+# AGENT_LOCK is docs/guard.md "Lock CLI owner writes" "Still open": an agent's rights.
+AGENT_LOCK = {'status': None, 'stats': None, 'run': None, 'background': None, 'stop': None,
+              'book': None, 'unbook': None, 'hold': ('agent', 'list', 'end', 'edit'),
+              'division': ('',), 'game': ('', 'show')}
+LOCK_VERBS = {'controller': AGENT_LOCK, 'write': AGENT_LOCK, 'test': AGENT_LOCK,
+              'lander': {'status': None, 'stats': None, 'run': None},
+              'read': {'status': None, 'stats': None}}
 INTERACTIVE = ('-', '-i', '-s', '-interactive', '-noexit', '/k')
+REAL_NOT_FORCE = ('--for',)   # a lock CLI option of its own (hold edit, window_args), not --force cut short
+FED = ('-', '-s')               # with standard input fed, the script comes from it
+STDIN_OPS = ('<', '<<', '<<<')
 FINITE = {'ps': ('-command', '-c', '-file', '-f', '-version', '-help', '-?'),
           'cmd': ('/c', '/?'),
           'other': ('-c', '-m', '-lc', '-cl', '--command', '-v', '--version', '-h', '--help')}
@@ -112,13 +133,15 @@ def check(action, ctx):
         return None
     tag = rules.tag_role(action)
     cwd = action.cwd or os.getcwd()
+    top = checkout(ctx, cwd)
     if action.kind == 'edit':
-        if m in NO_EDIT:
-            return _deny('role-edit', tag, '%s of %s: the %s role (mode %s) does not edit files.'
-                         % (action.tool or 'An edit', action.path, role, m),
+        target = edit_path(action, cwd)
+        if m in NO_EDIT and target and inside(target, top) and not role_may_write(ctx, role, target, top):
+            return _deny('role-edit', tag, '%s of %s: the %s role (mode %s) does not edit files in the '
+                         'checkout it works in (%s); its scratch and temp folders stay open.'
+                         % (action.tool or 'An edit', action.path, role, m, fwd(top)),
                          'return the change to the coordinator as text in your report')
         return None
-    top = checkout(ctx, cwd)
     where = getattr(action, 'workdir', None)
     if where and not inside(where, top):
         return _deny('role-workdir', tag, 'The shell call runs in %s, outside the checkout this session works in '
@@ -136,9 +159,35 @@ def check(action, ctx):
     if found:
         verb, allowed = found
         return _deny('role-lock', tag, 'machine_lock.py %s is not one of the lock verbs the %s role (mode %s) '
-                     'runs (%s). To see the lock state:' % (verb, role, m, ', '.join(allowed)),
+                     'runs (%s; never --force). To see the lock state:' % (verb, role, m, allowed),
                      'python %s status' % rules.lock_tool(ctx))
     return None
+
+
+def edit_path(action, cwd):
+    """The file an edit Action writes, made absolute against `cwd` as the shared rules do."""
+    path = action.path
+    if not isinstance(path, str) or not path:
+        return None
+    return sh.resolve_path(path, cwd) or path
+
+
+def role_may_write(ctx, role, target, top):
+    """True when `target`, inside the checkout `top`, matches a `writes` entry of the role's role
+    file (repo-relative, posix, glob_match; case-insensitive where the filesystem is)."""
+    pats = kcontent.role_writes(role, ctx.kit)
+    if not pats:
+        return False
+    rel = os.path.relpath(paths.norm(target, real=True), paths.norm(top, real=True)).replace(os.sep, '/')
+    if rel == '.' or rel.startswith('../'):
+        return False
+    return any(glob_match(rel, p) for p in pats)
+
+
+def glob_match(rel, pattern):
+    """True when the posix path `rel` matches `pattern` part by part: a `*` never crosses a `/`."""
+    have, want = rel.split('/'), pattern.split('/')
+    return len(have) == len(want) and all(fnmatch.fnmatch(h, w) for h, w in zip(have, want))
 
 
 def inside(path, top):
@@ -161,6 +210,12 @@ def _interpreter(name):
     return None
 
 
+def stdin_fed(cmd):
+    """True when the command's standard input is a pipe, a heredoc, a here-string or a `<` file,
+    not the terminal."""
+    return bool(cmd.piped_in) or any(r.op in STDIN_OPS and not r.dup for r in cmd.redirects)
+
+
 def shell_gap(parsed):
     """(program, why, instead) for the first interpreter `parsed` starts that would wait for input,
     else None. A nested shell's own commands are in `parsed` too (commands.read), so `bash -c bash`
@@ -175,6 +230,10 @@ def shell_gap(parsed):
         args = [a.lower() for a in inv.argv]
         instead = {'ps': '%s -NoProfile -Command "<command>"', 'cmd': '%s /c <command>'}.get(
             kind, '%s -c "<command>"') % inv.name
+        fed = stdin_fed(cmd)
+        rest = [a for a in args if not (fed and a in FED)]
+        if fed and (not args or len(rest) < len(args)) and not any(a in INTERACTIVE for a in rest):
+            continue                            # its script is the pipe, heredoc or file on stdin
         if not args or any(a in INTERACTIVE for a in args):
             return inv.name, 'starts an interactive interpreter', instead
         if kind == 'ps':
@@ -204,30 +263,48 @@ def _lock_words(inv):
 
 
 def lock_verb(parsed, m):
-    """(verb, allowed) for the first lock CLI call whose verb mode `m` may not run, or that forces;
-    None when every one is allowed. Only the words before `--` are the lock's (after it, `run`'s
-    command)."""
-    allowed = READ_LOCK_VERBS if m in ('read', 'lander') else LOCK_VERBS
+    """(verb, allowed) for the first lock CLI call whose verb (and sub-verb: `hold agent`) mode
+    `m` may not run (LOCK_VERBS), or that forces; None when every one is allowed. `allowed` is the
+    mode's verbs as text. Only the words before `--` are the lock's (after it, `run`'s command)."""
+    table = LOCK_VERBS[m]
+    allowed = verbs_text(table)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         words = _lock_words(inv) if inv is not None else None
         if words is None:
             continue
         head = words[:words.index('--')] if '--' in words else words
-        verb, k = None, 0
+        said, k = [], 0
         while k < len(head):
             t = head[k]
             if t.startswith('-'):
-                if len(t) > 2 and t.startswith('--') and '--force'.startswith(t.split('=', 1)[0]):
-                    return '%s %s' % (verb or '', t), allowed
+                key = t.split('=', 1)[0]
+                if len(key) > 2 and key.startswith('--') and key not in REAL_NOT_FORCE and '--force'.startswith(key):
+                    return '%s %s' % (' '.join(said[:1]), t), allowed
                 k += 2 if t in rules.LOCK_VALUE_OPTS else 1
                 continue
-            if verb is None:
-                verb = t
+            said.append(t)
             k += 1
-        if verb is None or verb not in allowed:
-            return verb or '(no verb)', allowed
+        if not said or said[0] not in table:
+            return (said[0] if said else '(no verb)'), allowed
+        subs, sub = table[said[0]], (said[1] if len(said) > 1 else '')
+        if subs is not None and sub not in subs:
+            return ' '.join(said[:2]), allowed
     return None
+
+
+def verbs_text(table):
+    """The verbs of a LOCK_VERBS entry as one line: `hold agent|list|end|edit`, `game [show]`."""
+    out = []
+    for verb, subs in table.items():
+        if subs is None:
+            out.append(verb)
+            continue
+        named = [s for s in subs if s]
+        text = '|'.join(named)
+        out.append('%s (bare)' % verb if not named else
+                   ('%s [%s]' % (verb, text) if '' in subs else '%s %s' % (verb, text)))
+    return ', '.join(out)
 
 
 # ---------------------------------------------------------------- context
@@ -261,11 +338,22 @@ def context(action, ctx):
     role, m = mode(action, ctx)
     if m is None:
         return ctx
-    top = checkout(ctx, action.cwd or os.getcwd())
+    if m not in OWNER_PATHS_READ_ONLY:
+        return ctx                              # write, controller: the owner-approval rules alone
+    cwd = action.cwd or os.getcwd()
+    top = checkout(ctx, cwd)
     extra = [{'path': p, 'mode': 'read-only'} for p in owner_roots(ctx, top)]
-    if m in READ_ONLY_CHECKOUT:
+    if m in READ_ONLY_CHECKOUT and not writes_file(action, ctx, role, cwd, top):
         extra.append({'path': top, 'mode': 'read-only'})
     return PolicyContext(ctx, extra)
+
+
+def writes_file(action, ctx, role, cwd, top):
+    """True for a file-tool edit of a file the role's `writes` names (role_may_write)."""
+    if action.kind != 'edit':
+        return False
+    target = edit_path(action, cwd)
+    return bool(target) and inside(target, top) and role_may_write(ctx, role, target, top)
 
 
 class ConfigView(object):

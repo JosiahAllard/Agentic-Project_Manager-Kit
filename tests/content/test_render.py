@@ -77,9 +77,14 @@ class RealContentTest(unittest.TestCase):
         self.assertEqual({r.name: r.mode for r in content.load(KIT_ROOT).roles}, want)
         self.assertEqual(content.role_modes(KIT_ROOT), want)
         self.assertEqual(content.role_mode('opus-worker', KIT_ROOT), 'write')
+        self.assertEqual({r.name: r.writes for r in content.load(KIT_ROOT).roles if r.writes},
+                         {'consultant': ('docs/ops/consultant-notes.local.md',)})
+        self.assertEqual(content.role_writes('consultant', KIT_ROOT), ('docs/ops/consultant-notes.local.md',))
         for r in content.load(KIT_ROOT).roles:
             with self.subTest(r.name):
-                self.assertNotIn(b'\nmode:', read(os.path.join(KIT_ROOT, 'claude', 'agents', r.name + '.md')))
+                agent = read(os.path.join(KIT_ROOT, 'claude', 'agents', r.name + '.md'))
+                self.assertNotIn(b'\nmode:', agent)
+                self.assertNotIn(b'\nwrites:', agent)
 
     def test_role_bodies_name_no_claude_value_a_token_covers(self):
         """The values in claude.adapter.content.TOKENS reach the agent files only through tokens."""
@@ -132,6 +137,15 @@ class ParseTest(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(hc.ContentError):
                 hc.parse_role(ROLE.replace(b'effort: low\n', b'effort: low\n' + bad))
 
+    def test_writes(self):
+        self.assertEqual(hc.parse_role(ROLE).writes, ())
+        r = hc.parse_role(ROLE.replace(b'effort: low\n', b'effort: low\nwrites: [docs/a.md, notes/*.txt]\n'))
+        self.assertEqual(r.writes, ('docs/a.md', 'notes/*.txt'))
+        for bad in (b'[]', b'all', b'docs/a.md', b'[/etc/x]', b'[../x]', b'[docs/../x]', b'[C:/x]',
+                    b'[docs\\\\x]', b'[docs/]', b'[a, a]', b'[./a]'):
+            with self.subTest(bad=bad), self.assertRaises(hc.ContentError):
+                hc.parse_role(ROLE.replace(b'effort: low\n', b'effort: low\nwrites: ' + bad + b'\n'))
+
     def test_quote_round_trip(self):
         for v in ('plain words', 'a: b', 'x #y', '"quoted"', 'back\\slash: x', '`tick` start'):
             with self.subTest(v=v):
@@ -170,7 +184,7 @@ class ClaudeRendererTest(unittest.TestCase):
     def test_a_mode_is_never_rendered(self):
         plain = claude_content.renderer().render(self.content(ROLE, BETA))
         moded = claude_content.renderer().render(self.content(
-            ROLE.replace(b'effort: low\n', b'effort: low\nmode: write\n'), BETA.replace(b'tier: deep\n', b'tier: deep\nmode: read\n')))
+            ROLE.replace(b'effort: low\n', b'effort: low\nmode: write\nwrites: [docs/x.md]\n'), BETA.replace(b'tier: deep\n', b'tier: deep\nmode: read\n')))
         self.assertEqual(moded, plain)
 
     def test_long_cache_and_crlf(self):

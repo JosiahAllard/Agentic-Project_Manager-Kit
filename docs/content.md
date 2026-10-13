@@ -31,6 +31,7 @@ renderer).
 | `cache` | optional: `long`, the host's long prompt cache |
 | `model.<host>` | optional: that host runs the role on this model instead of the tier's. None is in use. |
 | `mode` | optional: the role policy mode, `controller`, `write`, `read`, `test` or `lander` (`kitlib.host.content.MODES`). Every kit role names one. The guard reads it (`kitlib.content.role_modes`) where a repository sets `guard.role_policy` (docs/guard.md "Role policy"); no host's file carries it, so a change to it renders nothing |
+| `writes` | optional: `[path, ...]`, repo-relative posix paths or globs (no `..`, no drive, no `\`) a `read`, `test` or `lander` role may still edit in its checkout (docs/guard.md "Role policy"). The consultant names its notes file. Not rendered either |
 
 A role file keeps its own line endings; the host file gets the same ones.
 

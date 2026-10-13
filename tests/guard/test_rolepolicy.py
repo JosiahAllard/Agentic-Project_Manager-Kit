@@ -106,11 +106,19 @@ class Off(Base):
 
 
 class Edits(Base):
-    def test_read_test_and_lander_roles_do_not_edit(self):
+    def test_read_test_and_lander_roles_do_not_edit_their_checkout(self):
         for role in ('reviewer', 'test-runner', 'lander'):
             with self.subTest(role):
                 d = self.denied(self.edit(os.path.join(self.w.wt, 'worker.py'), role), 'role-edit')
                 self.assertIn('the %s role (mode %s)' % (role, MODES[role]), d.reason)
+                self.denied(self.edit('worker.py', role), 'role-edit')        # relative to the checkout
+
+    def test_they_edit_temp_and_scratch(self):
+        """A scratch script or notes file outside the checkout: the write jail's, as for any session."""
+        for role in ('reviewer', 'test-runner', 'lander'):
+            with self.subTest(role):
+                self.allowed(self.edit(os.path.join(self.w.temp, 'scratch', 'check.py'), role))
+                self.denied(self.edit(os.path.join(self.w.plain, 'x.py'), role), 'write-jail')
 
     def test_a_write_role_edits_its_worktree(self):
         self.allowed(self.edit(os.path.join(self.w.wt, 'worker.py')))
@@ -128,19 +136,28 @@ class Edits(Base):
 
 
 class OwnerPaths(Base):
-    def test_host_owner_paths_in_the_checkout_are_read_only(self):
-        for rel in ('CLAUDE.md', os.path.join('.claude', 'settings.json'), os.path.join('.claude', 'agents', 'x.md')):
-            with self.subTest(rel):
-                self.denied(self.edit(os.path.join(self.w.wt, rel)), 'write-jail')
+    def test_a_shell_write_to_one_is_read_only_for_read_test_and_lander(self):
+        for rel in ('CLAUDE.md', '.claude/settings.json', '.claude/agents/x.md'):
+            for role in ('reviewer', 'test-runner', 'lander'):
+                with self.subTest(rel=rel, role=role):
+                    self.denied(self.shell("Set-Content -LiteralPath %s -Value 'changed'" % rel, role), 'write-jail')
+        self.allowed(self.shell("Set-Content -LiteralPath a.txt -Value 'changed'", 'lander'))
 
-    def test_a_shell_write_to_one_is_read_only_too(self):
-        self.denied(self.shell("Set-Content -LiteralPath CLAUDE.md -Value 'changed'"), 'write-jail')
-        self.allowed(self.shell("Set-Content -LiteralPath a.txt -Value 'changed'"))
+    def test_write_and_controller_roles_stay_under_the_owner_approval_rules(self):
+        """No extra root: an owner-approved edit of CLAUDE.md or .claude/ by an agent stays possible
+        (pre-push checks the approval)."""
+        for role in ('senior-worker', 'pm'):
+            for rel in ('CLAUDE.md', os.path.join('.claude', 'agent-profile.md')):
+                with self.subTest(role=role, rel=rel):
+                    a = self.edit(os.path.join(self.w.wt, rel), role)
+                    self.allowed(a)
+                    ctx = self.w.ctx()
+                    self.assertIs(rolepolicy.context(a, ctx), ctx)
 
     def test_the_real_config_is_not_changed(self):
         ctx = self.w.ctx()
         before = ctx.config(self.w.wt).section('guard')
-        decide(self.edit(os.path.join(self.w.wt, 'CLAUDE.md')), ctx)
+        decide(self.shell('Set-Content -LiteralPath CLAUDE.md -Value x', 'lander'), ctx)
         self.assertEqual(ctx.config(self.w.wt).section('guard'), before)
 
     def test_the_worktrees_folder_stays_open_in_a_main_checkout(self):
@@ -160,6 +177,25 @@ class ReadOnlyCheckout(Base):
     def test_temp_stays_open(self):
         self.allowed(self.shell('Set-Content -LiteralPath "%s" -Value x' % W.fwd(os.path.join(self.w.temp, 'a.txt')),
                                 'reviewer'))
+
+    def test_a_scratch_script_and_a_log_in_temp_pass(self):
+        t = W.fwd(self.w.temp)
+        for role in ('reviewer', 'test-runner'):
+            for text in ('python "%s/check.py"' % t, 'python tools/gate.py --full > "%s/gate.log" 2>&1' % t,
+                         'python tools/gate.py --full', 'git diff main...feature'):
+                with self.subTest(role=role, text=text):
+                    self.allowed(self.shell(text, role, shell='bash'))
+            with self.subTest(role=role, text='log in the checkout'):
+                self.denied(self.shell('python tools/gate.py --full > gate.log', role, shell='bash'), 'write-jail')
+
+    def test_inline_code_runs_from_temp_not_from_the_checkout(self):
+        """python -c and a script on stdin may write where they run; the jail cannot read the code,
+        so it judges the folder: the checkout is refused, and the alternative names temp."""
+        for text in ('python3 -c "print(1)"', "python3 - <<'EOF'\nprint(1)\nEOF"):
+            with self.subTest(text):
+                d = self.denied(self.shell(text, 'reviewer', shell='bash'), 'write-jail')
+                self.assertIn('Run it with "%s" as the working directory' % W.fwd(self.w.temp), d.reason)
+                self.allowed(self.shell(text, 'reviewer', shell='bash', cwd=self.w.temp))
 
 
 class Workdir(Base):
@@ -199,6 +235,20 @@ class ShellGap(Base):
             with self.subTest(text):
                 self.assertIsNone(rolepolicy.check(self.shell(text), self.w.ctx()), text)
 
+    def test_a_script_on_standard_input_is_finite(self):
+        for text in ("python3 - <<'EOF'\nprint(1)\nEOF", 'echo "print(1)" | python3', 'python3 < s.py',
+                     "bash -s <<'EOF'\necho hi\nEOF", "python3 <<< 'print(1)'",
+                     'echo x | python3 -u -'):
+            with self.subTest(text):
+                self.assertIsNone(rolepolicy.check(self.shell(text, shell='bash'), self.w.ctx()), text)
+                self.allowed(self.shell(text, shell='bash'))
+
+    def test_an_interpreter_left_on_the_terminal_is_still_refused(self):
+        for text in ('python3 -', 'bash -s', 'echo x | python3 -i', 'echo x | python3 -; python3',
+                     'echo x | bash -c bash', 'echo x | cmd /k dir'):
+            with self.subTest(text):
+                self.denied(self.shell(text, shell='bash'), 'role-shell')
+
     def test_the_instead_names_a_finite_form(self):
         d = self.denied(self.shell('python -i'), 'role-shell')
         self.assertIn('Instead: python -c "<command>"', d.reason)
@@ -207,15 +257,23 @@ class ShellGap(Base):
 class LockVerbs(Base):
     def test_owner_and_forced_lock_commands_are_refused(self):
         # the shared owner-lock rule refuses the owner-only writes first; the policy refuses them too
-        for args in ('division --set x', 'hold whole', 'stop id --forc', 'stop id --force', 'reserve',
-                     'hold agent --for 1h', '--repo x unbook b1'):
+        for args in ('hold whole', 'hold slots 1', 'stop id --forc', 'stop id --force', 'reserve', 'top r-1',
+                     'game on', '--repo x unbook b1 --force', 'hold'):
             with self.subTest(args):
                 d = rolepolicy.check(self.shell('%s %s' % (LOCK, args), 'pm'), self.w.ctx())
                 self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), args)
         self.assertEqual(self.decide(self.shell(LOCK + ' hold whole', 'pm')).rule, 'owner-lock')
-        for args in ('stop id --forc', 'hold agent --for 1h', '--repo x unbook b1'):
-            with self.subTest(args):
-                self.denied(self.shell('%s %s' % (LOCK, args), 'pm'), 'role-lock')
+        self.assertEqual(self.decide(self.shell(LOCK + ' division --set x', 'pm')).rule, 'owner-lock')
+        self.assertEqual(self.decide(self.shell(LOCK + ' unbook b1 --force', 'pm')).rule, 'owner-lock')
+        self.denied(self.shell(LOCK + ' stop id --forc', 'pm'), 'role-lock')
+
+    def test_the_agent_rights_pass_for_write_controller_and_test(self):
+        """docs/guard.md "Lock CLI owner writes" "Still open"."""
+        for role in ('senior-worker', 'pm', 'test-runner'):
+            for args in ('book --kind build', '--repo x unbook b1', 'hold agent --for 1h', 'hold list',
+                         'hold end h-1', 'hold edit h-1 --for 2h', 'division', 'game', 'game show'):
+                with self.subTest(role=role, args=args):
+                    self.assertIsNone(rolepolicy.check(self.shell('%s %s' % (LOCK, args), role), self.w.ctx()))
 
     def test_a_writer_runs_locked_jobs(self):
         for args in ('status', 'stats', 'run --repo x --kind engine-test -- python -m unittest --force',
@@ -224,12 +282,17 @@ class LockVerbs(Base):
                 self.assertIsNone(rolepolicy.check(self.shell('%s %s' % (LOCK, args)), self.w.ctx()))
         self.assertIsNone(rolepolicy.check(self.shell('%s run --kind build -- x' % LOCK, 'test-runner'), self.w.ctx()))
 
-    def test_read_and_lander_roles_only_read_the_lock(self):
-        for role in ('reviewer', 'lander'):
-            with self.subTest(role):
-                self.assertIsNone(rolepolicy.check(self.shell(LOCK + ' status', role), self.w.ctx()))
-                d = self.denied(self.shell(LOCK + ' run --kind build -- x', role), 'role-lock')
-                self.assertIn('(status, stats)', d.reason)
+    def test_a_read_role_only_reads_the_lock_and_a_lander_also_runs(self):
+        self.assertIsNone(rolepolicy.check(self.shell(LOCK + ' status', 'reviewer'), self.w.ctx()))
+        d = self.denied(self.shell(LOCK + ' run --kind build -- x', 'reviewer'), 'role-lock')
+        self.assertIn('(status, stats; never --force)', d.reason)
+        for args in ('status', 'stats', 'run --kind build -- python tools/gate.py'):
+            with self.subTest(args):
+                self.assertIsNone(rolepolicy.check(self.shell('%s %s' % (LOCK, args), 'lander'), self.w.ctx()))
+        for args in ('background --kind build -- x', 'hold agent', 'book', 'run --forc -- x'):
+            with self.subTest(args):
+                d = self.denied(self.shell('%s %s' % (LOCK, args), 'lander'), 'role-lock')
+                self.assertIn('(status, stats, run; never --force)', d.reason)
 
 
 class Switch(unittest.TestCase):
@@ -267,7 +330,7 @@ class RoleFiles(Base):
 
     def test_a_role_file_mode_holds_its_role(self):
         self.denied(self.edit(os.path.join(self.w.wt, 'a.py'), 'test-runner'), 'role-edit')
-        self.denied(self.edit(os.path.join(self.w.wt, 'CLAUDE.md'), 'worker'), 'write-jail')
+        self.denied(self.shell('python3 -i', 'worker'), 'role-shell')
         self.allowed(self.edit(os.path.join(self.w.wt, 'a.py'), 'worker'))
 
     def test_the_roles_table_wins_over_the_role_file(self):
@@ -304,6 +367,46 @@ class RoleFiles(Base):
                 ev = W.event('Write', {'file_path': path, 'content': 'x'}, self.w.wt, sub=True,
                              agent_type=agent_type)
                 self.assertEqual(rolepolicy.mode(CH.action(ev), ctx), want)
+
+
+class Writes(Base):
+    """A role file's `writes`: files a read role may still edit in its checkout, that role alone."""
+    modes = {}
+
+    def setUp(self):
+        super().setUp()
+        write_roles(self.w.kit_dir, {'reviewer': 'read', 'test-runner': 'test'})
+        with open(os.path.join(self.w.kit_dir, 'content', 'roles', 'consultant.md'), 'wb') as f:
+            f.write(role_file('consultant', 'read').replace(
+                b'mode: read\n', b'mode: read\nwrites: [docs/ops/notes.local.md, scratch/*.txt]\n'))
+
+    def path(self, rel):
+        return os.path.join(self.w.main, *rel.split('/'))
+
+    def consultant(self, action):
+        return self.decide(action, environ={context.ROLE_ENV: 'consultant'})
+
+    def test_the_named_files_take_a_file_tool_edit(self):
+        for rel in ('docs/ops/notes.local.md', 'scratch/a.txt'):
+            with self.subTest(rel):
+                a = self.edit(self.path(rel), role=None, cwd=self.w.main)
+                self.assertEqual(self.consultant(a).verdict, 'allow')
+
+    def test_anything_else_in_the_checkout_is_refused(self):
+        for rel in ('docs/ops/other.md', 'scratch/a.py', 'scratch/sub/a.txt', 'CLAUDE.md'):
+            with self.subTest(rel):
+                a = self.edit(self.path(rel), role=None, cwd=self.w.main)
+                self.assertEqual(self.consultant(a).rule, 'role-edit')
+
+    def test_only_the_role_that_names_them(self):
+        a = self.edit(self.path('docs/ops/notes.local.md'), role=None, cwd=self.w.main)
+        for mark in ('reviewer', 'test-runner'):
+            with self.subTest(mark):
+                self.assertEqual(self.decide(a, environ={context.ROLE_ENV: mark}).rule, 'role-edit')
+
+    def test_a_shell_write_to_one_stays_refused(self):
+        a = Action('shell', tool='Shell', command='echo x >> docs/ops/notes.local.md', cwd=self.w.main, shell='bash')
+        self.assertEqual(self.consultant(a).rule, 'write-jail')
 
 
 class MissingContent(Base):

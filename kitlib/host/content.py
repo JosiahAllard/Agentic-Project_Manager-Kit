@@ -14,6 +14,9 @@ A role file, `content/roles/<name>.md`, is front matter between two `---` lines,
   mode: write                        optional: the role policy it is held to (MODES; docs/guard.md
                                      "Role policy"), where a repository turns that policy on.
                                      Read by the guard, never rendered into a host's file
+  writes: [docs/notes.local.md]      optional: repo-relative paths or globs (posix, no `..`) the
+                                     role may write though its mode makes the checkout read-only
+                                     (docs/guard.md "Role policy"). Never rendered either
   model.<host>: <model>              optional: that host runs this role on <model>, not the tier's
 
 The body is neutral prose. Values that differ by host are tokens, `{{name}}` or
@@ -47,7 +50,7 @@ CAPABILITIES = (
 TOKENS = ('agent', 'profile_path', 'coordinator_profile_path', 'instructions_file', 'kit_root',
           'worktrees_dir')
 REQUIRED = ('name', 'description', 'tier', 'sandbox', 'capabilities')
-OPTIONAL = ('effort', 'cache', 'mode')
+OPTIONAL = ('effort', 'cache', 'mode', 'writes')
 MODEL_KEY = 'model.'
 
 _FM = re.compile(r'\A---(\r?\n)(.*?)\r?\n---\r?\n', re.S)
@@ -71,6 +74,7 @@ class Role:
     cache: str = None
     mode: str = None             # the role-policy mode (MODES); a host's file never carries it
     models: tuple = ()           # ((host, model), ...): per-host overrides of the tier's model
+    writes: tuple = ()           # repo-relative posix paths or globs the role policy lets it write
     body: str = ''
     newline: str = '\n'          # the role file's line ending; a host's file keeps it
 
@@ -153,6 +157,21 @@ def _list(value, label):
     return tuple(items)
 
 
+def _writes(value, source):
+    """The `writes` list: each a repo-relative posix path or glob, no `..`, no drive, no `\\`."""
+    items = _list(value, '%s: writes' % source)
+    if not items:
+        raise ContentError('%s: writes: a [path, ...] list of at least one path' % source)
+    for p in items:
+        p = unquote(p, '%s: writes' % source)
+        if (not p or p.startswith('/') or '\\' in p or ':' in p
+                or any(part in ('', '.', '..') for part in p.split('/'))):
+            raise ContentError('%s: writes: %r is not a repo-relative path' % (source, p))
+    if len(set(items)) != len(items):
+        raise ContentError('%s: writes: a path twice' % source)
+    return tuple(unquote(p) for p in items)
+
+
 def parse_role(data, source='role'):
     """The Role in the bytes `data` of a role file; ContentError naming `source` on any problem."""
     try:
@@ -198,13 +217,14 @@ def parse_role(data, source='role'):
             raise ContentError('%s: unknown capability %r' % (source, c))
     if caps is not None and len(set(caps)) != len(caps):
         raise ContentError('%s: a capability twice' % source)
+    writes = _writes(fields['writes'], source) if 'writes' in fields else ()
     description = unquote(fields['description'], '%s: description' % source)
     if not description:
         raise ContentError('%s: empty description' % source)
     return Role(name=name, description=description, tier=fields['tier'], sandbox=fields['sandbox'],
                 capabilities=caps or (), all_tools=caps is None, effort=fields.get('effort'),
                 cache=fields.get('cache'), mode=fields.get('mode'), models=tuple(sorted(models.items())),
-                body=text[m.end():], newline=newline)
+                writes=writes, body=text[m.end():], newline=newline)
 
 
 def tokens_in(text):
