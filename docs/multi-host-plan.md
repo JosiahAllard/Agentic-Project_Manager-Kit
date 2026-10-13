@@ -1,6 +1,6 @@
 # Multi-host architecture plan
 
-Status: proposal for the owner. Nothing here changes ARCHITECTURE.md until the owner approves it.
+Status: proposal. The owner has decided the questions in §0; ARCHITECTURE.md changes still need the owner's approval of the amendment in step 0.
 
 **Goal:** one host-neutral kit, with a thin entry-point plugin for each AI platform. The platforms
 today are Claude Code and Codex, and adding another should mean adding a folder, not forking the
@@ -11,6 +11,19 @@ host-neutral service that each host plugs into.
 Sources read: `main` @ 3e64fec, `origin/codex/companion-plugin` @ 82cff0d and
 `origin/codex/robust-bridge-plan` @ 1cdc244. The bridge branch carries all of companion-plugin
 except its last 4 commits.
+
+## 0. Owner decisions (2026-10-13)
+
+| # | Question | Decision | What it means for the plan |
+|---|---|---|---|
+| 1 | Order with the Codex branches | Refactor main first, then rebase the branches | Steps 1–6 land on main. `codex/companion-plugin` and `codex/robust-bridge-plan` are rebased onto the result, not merged first. |
+| 2 | One roster or two | Every role exists on every host | One role list. A host differs only in how it maps tier to model and capability to tools. `pm`, `implementation-worker` and `opus-worker` are reconciled into the one list. |
+| 3 | Skill text | Identical on every host, in a form decided later | Skill bodies have no host blocks. Host differences live in the host's instructions and adapter, never in a skill. |
+| 4 | Role marker | Codex uses the same role variable | One `PM_KIT_ROLE` everywhere. `PM_KIT_CODEX_ROLE` is retired. The host is named by a separate `PM_KIT_HOST`. |
+| 5 | Bridge placement | An optional install | The bridge ships as an optional package that the core never imports. Phase 0 is explained in §2.4. |
+| 6 | Release binding | One release value for the entire plugin | One kit version and one release ID cover the core and every host shell. Every manifest takes it from one source. |
+| 7 | Generated files | Owner asked what these are | Answered in §2.3. |
+| 8 | Future hosts | Scale to any platform | A new host is one folder under `hosts/<name>/` that follows a written checklist and passes the conformance suite (§2.6, §2.7). |
 
 ## 1. Where things stand
 
@@ -66,63 +79,101 @@ except its last 4 commits.
    `bridge/bootstrap.py` helpers (`identifier`, `digest`) are imported almost everywhere.
    About 3,500 of the bridge's ~11,100 code lines are probe, Phase 0 or scaffold code.
 
+
 ## 2. Target shape
 
-Four layers, each depending only on the layers below it:
+Four layers, each depending only on the layers below it. Every host-specific thing sits in one
+folder per host, so a new platform is slotted in by adding a folder:
 
 ```
- ┌──────────────────────────────────────────────────────────────────┐
- │ 4. Plugin shells (per host, data + ≤20-line entries)             │
- │    .claude-plugin/plugin.json      codex/plugin.json, mcp.json    │
- │    claude/hooks/hooks.json         codex/hooks/hooks.json         │
- │    claude/agents/*.md  (generated) codex/agents/*.toml (generated)│
- │    claude/skills/      (generated) codex/skills/      (generated) │
- ├──────────────────────────────────────────────────────────────────┤
- │ 3. Host adapters (per host, Python)                              │
- │    claude/adapter/ … implements kitlib.host.HostAdapter          │
- │    codex/adapter/  … implements kitlib.host.HostAdapter          │
- │    (event parse/render, sessions, delivery, sender attestation,  │
- │     content renderer, launcher)                                  │
- ├──────────────────────────────────────────────────────────────────┤
- │ 2. Host contract (kitlib/host/) — protocols + neutral types only │
- │    Action, Decision, HostEvent, HostProfile, SessionHost,        │
- │    CommandHost, DeliveryAdapter, SenderAttestor, ContentRenderer │
- ├──────────────────────────────────────────────────────────────────┤
- │ 1. Core (kitlib/*) — tools' logic, guard rules, role policy,     │
- │    lock, gate, bridge core (outbox/dispatch/pairing/mcp), release│
- └──────────────────────────────────────────────────────────────────┘
-   content/ (canonical roles, skills, instructions) → rendered into layer 4
+ ┌───────────────────────────────────────────────────────────────────┐
+ │ 4. Host shells: hosts/<name>/shell/  (data + entries ≤20 lines)    │
+ │    manifests, hook registration, rendered agents/skills/instr.    │
+ ├───────────────────────────────────────────────────────────────────┤
+ │ 3. Host adapters: hosts/<name>/adapter/  (Python)                 │
+ │    implements kitlib.host.HostAdapter: event parse/render,        │
+ │    sessions, command host, content renderer, launcher,            │
+ │    and (if bridge installed) the bridge port                      │
+ ├───────────────────────────────────────────────────────────────────┤
+ │ 2. Host contract: kitlib/host/  (protocols + neutral types only)  │
+ ├───────────────────────────────────────────────────────────────────┤
+ │ 1. Core: kitlib/*  (tools' logic, guard rules, role policy, lock, │
+ │    gate, release); tools/ (thin CLIs)                             │
+ └───────────────────────────────────────────────────────────────────┘
+   content/   canonical roles, skills, instructions (host-neutral)
+   optional/bridge/  bridge core + per-host bridge halves (optional install)
+   hosts.json registry: host name → adapter module, shell dir
 ```
+
+Proposed tree:
+
+```
+kitlib/                core, never imports hosts/ or optional/
+kitlib/host/           the host contract
+tools/                 shared CLIs (read PM_KIT_HOST)
+content/roles/         one file per role
+content/skills/        one folder per skill, identical on every host
+content/instructions/  AGENTS.md body and the profile template
+hosts.json             {"claude": {...}, "codex": {...}}
+hosts/claude/adapter/  Python adapter
+hosts/claude/shell/    .claude-plugin/, hooks/hooks.json, agents/, skills/ (rendered)
+hosts/codex/adapter/
+hosts/codex/shell/     plugin.json, mcp.json, hooks/hooks.json, agents/, skills/ (rendered)
+optional/bridge/       bridge core, service, frontend; hosts' bridge halves under
+                       optional/bridge/hosts/<name>/
+kit.json               the one version and release identity (§2.5)
+```
+
+Moving `claude/` to `hosts/claude/` changes paths that kitlib refers to today: `claude/hub/...`,
+the gate's strict defaults and machine setup's guard path. Those references become lookups
+through the host registry as part of step 6, and the move itself is step 7. The Claude
+marketplace entry (`.claude-plugin/marketplace.json`) stays at the repo root and points at
+`hosts/claude/shell`.
 
 ### 2.1 The host contract (`kitlib/host/`)
 One package of protocols and frozen dataclasses. It contains no host names and imports nothing
-from the host folders.
+from `hosts/` or `optional/`.
 
 - `HostEvent` → `Action(kind, tool, path, command, cwd, role, agent)` and
   `Decision(allow | deny | ask, rule, reason, instead)`.
-  - `kind` is one of `edit`, `shell`, `mcp` or `session_start`.
+  - `kind` is one of `edit`, `shell`, `mcp`, `session_start` or `subagent_start`.
   - `agent` is an opaque subagent identity, or `None` for the main session.
 - `HostAdapter`, one per host. It has:
-  - `name`, `profile`
+  - `name` and `profile`
   - `parse(event_name, payload) -> Action`
   - `render(event_name, Decision) -> (stdout, exit_code)`
   - `sessions() -> SessionHost`
   - `command_host() -> CommandHost | None`
-  - `bridge() -> BridgeHostPort | None`
   - `content() -> ContentRenderer`
-- `HostProfile`: keep only the fields that have consumers, and make every field consumed. That
-  means owner paths, worktree root, state dir, the agent process image names (for the lock's
-  `AGENT_HOSTS`), the role env var and the MCP tool-name format.
-- **Registry inversion.** kitlib never imports a host. Host selection happens at the edge:
-  - Entry points under `claude/` and `codex/` construct their adapter and pass it in.
-  - Shared CLIs in `tools/` read `PM_KIT_HOST`. They find the adapter's module through a small
-    `hosts.json` at the kit root, which is data, not a kitlib import. If `PM_KIT_HOST` is unset,
-    they default to `claude` for back-compatibility.
+  - `launcher() -> Launcher | None`
+  - `plugin_installer() -> Installer | None`
+- `HostCapabilities`, declared as data in `hosts.json` and read by the core. It records:
+  - which hook events the host has
+  - whether it supports `ask`
+  - whether a subagent's identity reaches its hooks
+  - whether it has MCP and skills
+  - its agent file format and its MCP tool-name format
+
+  The core uses these to degrade one way for every host. For example, no `ask` becomes `deny`
+  with the reason, and no subagent identity in hooks becomes the role-only policy. Adapters do
+  not each improvise.
+- `HostProfile` keeps only fields that have consumers: owner paths, worktree root, state dir,
+  agent process image names (for the lock's `AGENT_HOSTS`) and the MCP tool-name format.
+  The role variable is no longer per host (decision 4).
+- **Registry inversion.** kitlib never imports a host. The host is selected at the edge:
+  - A host's entry points build their adapter and pass it in.
+  - Shared CLIs in `tools/` read `PM_KIT_HOST` and resolve the adapter through `hosts.json`,
+    which is data, not a kitlib import. Unset means `claude`, for back-compatibility.
   - `--host` and `--provider` merge into one `--host` flag, which defaults from `PM_KIT_HOST`.
+    `--provider` stays as an alias for one release.
+- **Roles.** `PM_KIT_ROLE` is the only role marker (decision 4). The host adapter sets
+  `PM_KIT_HOST`. The child-environment scrub that Codex does today (`environment.py`) becomes
+  core code: it clears every host's session variables when a child is launched on a different
+  host, so a Claude-marked parent cannot leak its role or session into a Codex child.
 
 ### 2.2 Guard and policy, once
 - `kitlib.guard.decide(action: Action, ctx) -> Decision`. Every Claude-payload field read moves
-  into `claude/adapter/events.py`:
+  into `hosts/claude/adapter/events.py`:
   - `rules.py` tool-name sets
   - `agent_id` / `agent_type`
   - `tag_role`
@@ -130,21 +181,45 @@ from the host folders.
   - `backlog/roles`
 
   `hook_output()` moves to the Claude adapter's `render`.
-- Codex's `actions.py` becomes `codex/adapter/events.py`. It produces `Action` directly instead
-  of Claude-shaped dicts.
-- Codex's policy that names no host moves into kitlib as `kitlib/guard/rolepolicy.py`, and
-  applies to both hosts: role edit bans, read-only owner paths (`ConfigView`), the
+- Codex's `actions.py` becomes `hosts/codex/adapter/events.py`. It produces `Action` directly,
+  not Claude-shaped dicts.
+- Codex's policy that names no host moves into kitlib as `kitlib/guard/rolepolicy.py` and
+  applies to every host: role edit bans, read-only owner paths (`ConfigView`), the
   shell-cwd-in-checkout check, the lock-verb allowlist and `shell_gap`.
-- Where a host cannot express something, the gap is declared as data in its profile. For
-  example, Codex has no `ask`. The core decides how to degrade: `ask` → `deny` with the reason.
-  Adapters do not each improvise their own mapping.
-- **One hook entry per host, ≤20 lines.** For example, `claude/hooks/run.py <event>` puts the
-  kit on the path, builds the adapter and calls `kitlib.host.hookmain.run(adapter, event,
-  stdin)`. The fail-closed deny, timeout handling and settings-entry rendering live in
-  `kitlib.host.hookmain` once.
+- **One hook entry per host event, ≤20 lines.** For example, `hosts/<name>/shell/hooks/run.py
+  <event>` runs the kit's boot check (§2.5), builds the adapter and calls
+  `kitlib.host.hookmain.run(adapter, event, stdin)`. The fail-closed deny, timeout handling and
+  settings-entry rendering live in `hookmain` once.
 
-### 2.3 Single-source content (`content/`)
-- **Roles.** Each role lives in `content/roles/<role>.md`, with neutral front matter and a body:
+### 2.3 Single-source content (`content/`) and the generated files
+**What "generated files" means.** A host needs agents, skills and instructions in its own file
+format:
+- Claude: agents as `.md` with YAML front matter, skills as `SKILL.md` folders, and `CLAUDE.md`.
+- Codex: agents as `.toml` with `developer_instructions`, skills as `SKILL.md` folders, and
+  `AGENTS.md`.
+
+Today both sets are written by hand. The plan writes each one **once** in `content/`. A script
+(`tools/render_content.py`, logic in `kitlib/content`) then asks every host adapter to write its
+own files from it. The written-out files are the "generated files":
+- `hosts/<name>/shell/agents/*`
+- `hosts/<name>/shell/skills/**`
+- the host's instructions file
+- the host's plugin manifest, which carries the one version (decision 6)
+
+Codex already works this way: `codex/roles.json` is rendered into `codex/agents/*.toml`, which
+are committed.
+
+**Recommendation:** commit the generated files, with a test that fails when they differ from
+what the renderer writes now.
+- Plugins load straight from the repo or the release, so no build step runs at install.
+- Reviewers see the real files each host reads.
+- The drift test stops anyone editing a generated file by hand.
+
+The other option is rendering at install. That keeps the repo smaller but adds a build step to
+every install and update. It also means nobody reviews exactly what the agents read.
+
+- **Roles.** Each role lives in `content/roles/<role>.md`, and every role exists on every host
+  (decision 2):
 
   ```yaml
   name: worker
@@ -152,129 +227,162 @@ from the host folders.
   tier: standard        # light | standard | strong | deep  (host maps tier→model)
   effort: medium
   sandbox: workspace-write   # read-only | workspace-write
-  capabilities: [dispatch, message]   # host maps to tool lists
-  hosts: [claude, codex]     # opt-out per host if a role cannot exist there
+  capabilities: [dispatch, message]   # host maps to its tool lists
   ```
 
-  In the body, host-specific words are tokens:
-  - `{{agent:test-runner}}` renders as `pm-kit:test-runner` for Claude and `kit-test-runner`
-    for Codex.
-  - `{{worktrees_dir}}`, `{{profile_path}}` and `{{instructions_file}}`.
-  - Fenced `<!-- host:claude -->…<!-- /host -->` blocks hold host-only paragraphs. They should
-    stay rare.
-- **Skills.** `content/skills/<skill>/SKILL.md` uses the same token and block rules. The 11
-  forked skills are merged into one text each. Where the forks differ, keep the more precise
-  procedure and lift the facts that are true for one host only into host blocks. Host-only skills
-  live there too: `coordinator-dispatch` for Claude, and `kit-setup` and `kit-pm` for Codex.
-- **Rendering.** `tools/render_content.py` (logic in `kitlib/content`) asks each host adapter's
-  `ContentRenderer` to write `claude/agents/*.md`, `claude/skills/**`, `codex/agents/*.toml` and
-  `codex/skills/**`. The output is **committed**: plugins load from the repo and no build step
-  runs at install. A test asserts that the rendered output equals the committed files, and the
-  gate fails on drift.
-- **Roster.** `docs/ROSTER.md` becomes the table of tier → model for each host, plus each role's
-  tier. `kitlib/roster` checks it against `content/roles`. The `KIT_AGENTS` list in
-  `kitlib/launcher/start.py` is derived from it, not hand-copied.
-- **Instructions.** `AGENTS.md` is canonical. `CLAUDE.md` becomes the one-line import
-  `@AGENTS.md` plus any Claude-only line. `templates/common/` gets `AGENTS.md`, and its
-  `CLAUDE.md` becomes the same pointer. The repo profile moves from `.claude/agent-profile.md` to
-  `{{profile_path}}`. That path is a neutral `docs/agent-profile.md` that each host's
-  instructions point at; the old path is kept as a stub during migration.
+  The body is neutral prose. A role or skill is named by its bare role name ("dispatch the
+  `test-runner` role"). The host's instructions say once how a role name maps to that host's
+  dispatch name (`pm-kit:test-runner` on Claude, `kit-test-runner` on Codex). The few values that
+  must differ, such as the worktree root, use tokens (`{{worktrees_dir}}`). There are no host
+  blocks.
+- **Reconciled roster.** One list, which is the union of today's two lists:
+  - Claude's 15 roles.
+  - Codex's `pm`. Claude's PM today is the main session started by the launcher, so on Claude
+    `pm` becomes a role file that the launcher starts.
+  - `implementation-worker` merged into `worker`, or kept as a separate role, after comparing
+    the two briefs.
+  - `opus-worker` renamed to a host-neutral name such as `senior-worker`, since "opus" is a
+    Claude model name.
+- **Skills.** `content/skills/<skill>/SKILL.md` is byte-identical on every host (decision 3).
+  The 11 forked skills are merged into one text each, which the owner decides on later.
+  Host-only skills (`coordinator-dispatch`, `kit-setup`, `kit-pm`, `kit-coordinator`,
+  `kit-worker`) are either made neutral and shipped everywhere, or their content moves into
+  role files or the host's instructions. A skill that only one host ships breaks decision 3.
+- **Roster table.** `docs/ROSTER.md` holds each role's tier, plus a tier → model table per host.
+  `kitlib/roster` checks it against `content/roles`. The `KIT_AGENTS` list in the launcher is
+  derived from it, not copied by hand.
+- **Instructions.** `content/instructions/AGENTS.md` is the canonical text and renders to
+  `AGENTS.md`. `CLAUDE.md` renders as `@AGENTS.md` plus the one Claude-specific line. The repo
+  profile moves from `.claude/agent-profile.md` to a neutral `docs/agent-profile.md`, and the
+  old path stays as a stub during migration. `templates/common/` follows the same pattern for
+  target repos.
 
-### 2.4 Bridge as a host-neutral service
-- **Core** (`kitlib/bridge/`): `messages`, `outbox`, `dispatch`, `pairing`, `mcp`, `callers`,
-  `owner`, `prompt` and `jsonwire`. This code is already neutral.
-- **Declared port.** Replace the dead `ports.py` with the seam that is actually used, as
-  `kitlib/host/bridge.py`:
+### 2.4 The bridge as an optional install
+**What the Phase 0 probe code is.** Before building the bridge, the Codex agent wrote throwaway
+experiments to test whether each idea was possible on Windows. They covered:
+- isolating a helper in an AppContainer sandbox
+- electing one leader among several bridge processes
+- handing pipe handles between processes
+- passing work to a worker broker
+- reading Claude's and Codex's live session files and wire schemas to see what they contain
+
+They saved the results as evidence (`docs/bridge-phase0-*.md` and three `*-evidence.json`
+files). That code is:
+- `kitlib/bridgeprobe/` (1,858 lines)
+- `claude/bridge_phase0.py`
+- `tools/bridge_live_probe.py` and `tools/bridge_schema_probe.py`
+- `kitlib/bridge/{bootstrap,journal,pipeline,restart,delegation,schema_probe}.py`
+- the unused scaffold `kitlib/bridge/{ports,disabled,status}.py` and `tools/bridge.py`
+
+It is not the working bridge. Three of its helpers became load-bearing by accident:
+- `bridgeprobe/winpipe.py`: named pipes, pipe ACLs and process SIDs
+- `bridgeprobe.runtime.ProbeError`
+- `bridge/bootstrap.identifier` and `bridge/bootstrap.digest`
+
+**Plan:**
+- **Layout:** `optional/bridge/` holds the bridge core (`messages`, `outbox`, `dispatch`,
+  `pairing`, `mcp`, `callers`, `owner`, `prompt`, `jsonwire`), the service and the MCP frontend.
+  Each host's half lives in `optional/bridge/hosts/<name>/`. The core kit never imports any of
+  it.
+- **Installing:** installing the bridge registers its MCP server and hook in each host's shell
+  through the host adapter. With the bridge not installed, no host shell mentions it.
+- **Declared port** (`optional/bridge/port.py`), replacing the dead `ports.py`:
   - `SenderAttestor.attest(caller_proof) -> SenderAuthority`
   - `DeliveryAdapter.describe() / send(msg) / reconcile(msg, native_id)`
-  - `ReturnChannel` (optional)
-  - `HookSink` (optional; any host may need one, not only Claude)
+  - optional `ReturnChannel` and `HookSink`
 
-  `tools/bridge_service.py` loops over the configured hosts' `adapter.bridge()` with no
-  per-host `if`.
-- **Host halves.** `claude/bridge_*.py` → `claude/adapter/bridge/`, and `codex/bridge_*.py` →
-  `codex/adapter/bridge/`.
-- **Windows IPC promoted.** `bridgeprobe/winpipe.py` → `kitlib/proc/pipe.py`, next to `job`
-  and `process`. `ProbeError`, `identifier` and `digest` move into `kitlib/bridge/errors.py` and
-  a small `kitlib/ident.py`.
-- **Probe code quarantined.** After the moves above, `kitlib/bridgeprobe/`,
-  `claude/bridge_phase0.py`, `bridge/{bootstrap,journal,pipeline,restart,delegation,
-  schema_probe,ports,disabled,status}.py` and `tools/bridge{,_live_probe,_schema_probe}.py`
-  have no production importers. Either delete them, keeping them in git history, or move them
-  to `optional/bridgeprobe/`. A test asserts that nothing under `kitlib/` imports them.
-- **Docs consolidated.** The 24 bridge docs and 3 evidence JSON files become:
-  - `docs/bridge.md`: design and contracts
-  - `docs/bridge-status.md`: a capability matrix per host and direction, kept current
-  - `docs/bridge-history/`: the milestone narrative, review docs and evidence, unindexed or
-    under one entry
+  The service loops over the installed hosts with no `if 'claude'` / `if 'codex'`.
+- **Promoted helpers:** `winpipe` → `kitlib/proc/pipe.py`, next to `job` and `process`.
+  `ProbeError`, `identifier` and `digest` → `kitlib/proc/errors.py` and a small
+  `kitlib/ident.py`.
+- **Probe code:** once nothing imports it, delete it. Git history keeps it. A test asserts that
+  nothing outside the deleted set imports it.
+- **Docs:** the 24 bridge docs and 3 evidence files collapse into:
+  - `optional/bridge/README.md`: design and contracts
+  - `optional/bridge/STATUS.md`: a capability matrix per host and direction
+  - the history, left in git
 
-### 2.5 Packaging and release
-- Both plugins bind to the same pinned runtime release (`kitlib.kitrelease`). The pre-import
-  verification in `codex/pmkit_codex/{profile,release_binding}.py` moves to a stdlib-only
-  `bootstrap/kitboot.py` at the kit root. Every host's entry point calls it before importing
-  kitlib. It is already written to run before kitlib is trusted, so moving it changes nothing
-  about its trust.
-- Claude's `.claude-plugin/plugin.json` gains `PM_KIT_ROOT` / `PM_KIT_RELEASE_ID` the way Codex's
-  `mcp.json` has them. With neither set, it keeps today's source-checkout behaviour.
-- `kitlib/launcher` and `kitlib/pluginsource/claude.py` become adapter capabilities
-  (`adapter.launcher()` and `adapter.plugin_installer()`), so a Codex launcher fits the same
-  slot later.
+### 2.5 One release value
+- `kit.json` at the root holds the one `version` and is the input to the release identity
+  (decision 6).
+- The renderer writes that version into every host manifest: `.claude-plugin/plugin.json` and
+  marketplace, and Codex `plugin.json` and `mcp.json`. Today Claude is at 0.1.0 and Codex at
+  0.3.5.
+- `kitlib.kitrelease` exports one release that contains the core, every host shell and, when
+  installed, the bridge. Each release has one `PM_KIT_RELEASE_ID`.
+- Every host's entry points run the same stdlib-only boot check, `boot/kitboot.py`. It is
+  lifted from Codex's `profile.py` and `release_binding.py`, and runs before any kitlib import.
+  With no `PM_KIT_ROOT` or release ID set, it uses the source checkout, which is today's
+  behaviour.
+- The release `ROOTS` list is read from `hosts.json` instead of naming `claude` and `codex`.
 
 ### 2.6 Conformance tests per adapter
-- `tests/host/conformance.py` is one shared `unittest` mixin. Each adapter's test module
-  subclasses it with recorded payload fixtures. It covers:
+- `tests/host/conformance.py` is one shared `unittest` mixin. Each host's test module subclasses
+  it with recorded payload fixtures. It covers:
   - parse → `Action` for every guarded tool
-  - render of allow, deny and ask (with the host's declared degradation)
+  - render of allow, deny and ask, with the host's declared degradation
   - session listing on fixture files
-  - the bridge port's describe and send on a fake pipe
-  - content rendering is stable
-- Adding a host means passing this suite. That is the definition of "supported host".
+  - content rendering matching the committed files
+  - the release boot check
+  - when the bridge is installed, the bridge port's describe and send on a fake pipe
+- Passing the suite is what "supported host" means.
+
+### 2.7 Adding a host (the slot)
+`docs/new-host.md` becomes the checklist. A new host needs:
+1. **An entry in `hosts.json`:** adapter module, shell directory, capabilities and tier → model
+   map.
+2. **`hosts/<name>/adapter/`**, implementing:
+   - `parse` and `render` for its hook events
+   - `SessionHost`
+   - `ContentRenderer`, which turns the neutral role, skill and instruction files into the
+     host's formats
+   - optionally `CommandHost`, `Launcher` and `Installer`
+3. **`hosts/<name>/shell/`:** a manifest template and the hook entries, each ≤20 lines and the
+   same for every host apart from the host name.
+4. **Recorded payload fixtures** under `tests/hosts/<name>/`, and a test class that subclasses
+   the conformance mixin.
+5. **Optionally,** `optional/bridge/hosts/<name>/` for messaging.
+
+No file in `kitlib/`, `content/` or another host's folder changes. A test enforces this by
+checking that host names appear only in `hosts.json`, `hosts/`, `optional/bridge/hosts/` and
+tests.
 
 ## 3. Migration order
 
-Each step lands on its own through the gate and keeps Claude's behaviour unchanged.
+Main is refactored first (decision 1). Each step lands through the gate and keeps Claude's
+behaviour unchanged.
 
 | Step | Work | Depends on |
 |---|---|---|
-| 0 | Owner decisions (§5). Merge the decisions into ARCHITECTURE.md "Host split" as an amendment. | — |
-| 1 | Land the shared, low-risk parts of the Codex branch on main: `kitlib.attribution`, `packageexport`, `kitrelease`, `hostrpc`, the worktree `--host` support and `hoststart`. Leave `codex/` itself and the bridge on their branches. | 0 |
-| 2 | Create `kitlib/host/` (types and protocols). Invert the registry (`hosts.json` plus `PM_KIT_HOST`) and delete `kitlib/hosts`' importlib of host folders. Unify `--host`/`--provider`. | 1 |
-| 3 | Move the guard to `Action`/`Decision`. Claude's adapter does parse and render. Add `hookmain`. Claude's hooks become ≤20-line entries. The existing guard tests run via the Claude fixtures. | 2 |
-| 4 | Lift the Codex role policy into `kitlib/guard/rolepolicy.py`, so Claude gets it too. Rebase `codex/` onto steps 2–4: `actions.py` → adapter, and `guard_adapter` shrinks to the host-specific parts. | 3 |
-| 5 | `content/` plus the renderer. Migrate Claude agents first, and check that the rendered output is byte-identical to today's files. Then merge the 11 forked skills, then generate the Codex TOMLs from the same roles. Make AGENTS.md canonical. | 2 |
-| 6 | Remove the Claude leaks from kitlib, one PR per cluster: lock actor key → `host`, session env, worktree defaults, MCP prefix, commit model env, launcher, pluginsource. | 2 |
-| 7 | Bridge refactor: winpipe promotion, declared port, host halves into adapters, probe quarantine, doc consolidation. Done on the bridge branch before it merges. | 2, 4 |
-| 8 | Shared `kitboot` and the Claude release binding. | 1 |
-| 9 | Conformance suite. It is required in the gate from then on. | 3, 5, 7 |
+| 0 | The owner approves an ARCHITECTURE.md amendment that replaces "Host split" and "Packaging" with §2. | — |
+| 1 | Cherry-pick the host-neutral library parts of the Codex branch onto main: `kitlib.attribution`, `packageexport`, `kitrelease`, `hostrpc`, `hoststart`, and the worktree `--host` support. These are needed by both hosts and conflict least. | 0 |
+| 2 | `kitlib/host/` (types and protocols), `hosts.json` and the `PM_KIT_HOST` / `PM_KIT_ROLE` selection. Delete `kitlib/hosts`' importlib of host folders. Merge `--host` and `--provider`. | 1 |
+| 3 | Move the guard to `Action`/`Decision`, with the Claude adapter doing parse and render. Add `hookmain`. Claude's hooks become ≤20-line entries. The existing guard tests run unchanged through Claude fixtures. | 2 |
+| 4 | `kitlib/guard/rolepolicy.py`. Lift the role policy from the Codex branch's `guard_adapter` and `kit_adapter`, so Claude gets it too. | 3 |
+| 5 | `content/` and the renderer, starting with Claude. The rendered agents must be byte-identical to today's files before anything else changes. Then the reconciled roster, the neutral profile and AGENTS.md as the canonical instructions. The skill merge waits for the owner's skill-text decision. | 2 |
+| 6 | Remove the Claude leaks from kitlib, one PR per cluster: lock actor key → `host`, session env, worktree defaults, MCP prefix, commit model env, hub paths, launcher, pluginsource. | 2 |
+| 7 | Move `claude/` → `hosts/claude/{adapter,shell}`. `kit.json` and the one release value. `boot/kitboot.py`. | 5, 6 |
+| 8 | Conformance suite, required in the gate. `docs/new-host.md`. | 3, 7 |
+| 9 | **Rebase `codex/companion-plugin`** onto main as `hosts/codex/`: `actions.py` → adapter events, `guard_adapter` reduced to what only Codex has, roles rendered from `content/`, `PM_KIT_CODEX_ROLE` removed. It must pass the conformance suite. | 8 |
+| 10 | **Rebase `codex/robust-bridge-plan`** as `optional/bridge/`: promote the helpers, declare the port, move the host halves, delete the probe code, collapse the docs. | 9 |
 
-Steps 5 and 6 can run alongside 3–4. Step 7 is the largest, and the bridge work in flight is
-the most exposed to it, so it should start once the Codex owner agrees the port shape.
+Steps 3–4 and 5–6 can run in parallel. Tell the Codex agent about steps 9–10 now, so it can
+stop building on paths that are about to move.
 
 ## 4. What does not change
-- Standard library only, Windows only, no argparse or printing in kitlib.
+- Standard library only and Windows only. No argparse or printing in kitlib.
 - Tool paths and exit codes. A merged flag keeps the old one as an alias for one release.
-- Guard semantics for Claude: every existing guard test passes unchanged through the adapter.
-- The bridge's security posture: fail closed, no resend of unknown messages, owner-selected
-  routes.
+- Guard semantics for Claude: every existing guard test passes through the adapter.
+- The bridge's security posture: fail closed, no resend of unknown messages, routes chosen by
+  the owner.
 
-## 5. Open questions for the owner
-1. **Order with the Codex branches.** Should the Codex branches merge first and the refactor
-   follow, or should main be refactored (steps 1–6) and the branches rebased onto it?
-   *Recommendation:* step 1 cherry-picks the shared parts now, and the rest of `codex/` waits
-   for step 4. The bridge is rebased after step 2.
-2. **One roster or two?** Should every role exist on every host, with differences only in tier
-   → model? Or are `pm`, `implementation-worker` and `opus-worker` intentionally host-specific?
-3. **One skill text.** Do you accept a single merged text per skill, which means the detailed
-   Claude procedures also become Codex's? Or should Codex stay deliberately terse?
-4. **Role marker.** Should there be one `PM_KIT_ROLE` plus a `PM_KIT_HOST`, or does Codex's
-   separate `PM_KIT_CODEX_ROLE` guard against something real, such as a Claude-marked parent
-   launching Codex?
-5. **Bridge placement.** Is the bridge part of the core kit, or an optional package or separate
-   plugin that hosts opt into? Can the Phase 0 probe code be deleted, or must it stay as
-   evidence?
-6. **Release binding for Claude.** Should Claude also run from the pinned shared release, or keep
-   loading from the source checkout?
-7. **Generated files committed.** Is committing rendered agents and skills, with a drift test,
-   acceptable, or should rendering happen at install?
-8. **Future hosts.** Is anything beyond Claude and Codex on the horizon (Gemini CLI, Cursor)? If
-   so, the content tokens and the `HostEvent` kinds should be checked against it now.
+## 5. Still open
+1. **The form of the shared skill text** (decision 3, "decided later"). Step 5 can land roles
+   and instructions without it. The 11 skill merges wait.
+2. **`implementation-worker` vs `worker`.** Merge the two roles, or keep both on every host?
+3. **The PM as a role file on Claude.** Today the launcher starts the Claude PM as a normal
+   session. Is a `pm` agent definition, started with `claude --agent pm-kit:pm`, acceptable?
+4. **The rename of `opus-worker`.** Is `senior-worker` acceptable, or is there another name?
+5. **The move to `hosts/claude/`.** Accept the path churn for a uniform slot, or keep `claude/`
+   and `codex/` at the top level and put only new hosts under `hosts/`? The plan recommends the
+   uniform layout.
