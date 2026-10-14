@@ -367,6 +367,40 @@ class BuildCase(ServeCase):
         self.assertEqual(r.status, 200)
         self.assertIn('store', r.json())
 
+    def test_a_paired_browser_stays_paired_when_the_server_is_built_again(self):
+        first = self.build()
+        port = first.port
+        # paired through the credentials: no connection is made to the first port, so the
+        # second build can bind it again at once
+        value = first.creds.pair(first.creds.new_pairing_code())
+        self.assertTrue(os.path.isfile(os.path.join(self.tokens, auth.sessions_file(port))))
+        self.assertIs(first.close(), True)
+        hub = self.build(self.settings._replace(port=port))
+        self.assertEqual(hub.port, port)
+        self.assertEqual(hub.notes, [])
+        hub.start()
+        cookie = ('Cookie', '%s=%s' % (auth.cookie_name(port), value))
+        r = get(port, HEALTH, headers=[cookie])
+        self.assertEqual(r.status, 200, r.body)
+        self.assertIn('store', r.json())
+        # the owner's token unpairs it, here and in the file the next build reads
+        self.assertEqual(post(port, httpd.UNPAIR_ROUTE, {}, self.owner).status, 200)
+        self.assertEqual(get(port, HEALTH, headers=[cookie]).status, 403)
+        self.assertEqual(auth.Credentials(self.tokens, port=port, persist=True)
+                         .role_for({}, {auth.cookie_name(port): value}), None)
+        self.assertEqual(self.errors(), [])
+
+    def test_a_sessions_file_that_cannot_be_read_is_a_start_up_note(self):
+        first = self.build()
+        port = first.port
+        self.assertIs(first.close(), True)
+        os.makedirs(self.tokens, exist_ok=True)
+        with open(os.path.join(self.tokens, auth.sessions_file(port)), 'w') as f:
+            f.write('not json')
+        hub = self.build(self.settings._replace(port=port))
+        self.assertEqual(len(hub.notes), 1, hub.notes)
+        self.assertIn(auth.sessions_file(port), hub.notes[0])
+
     def test_a_second_server_on_the_same_store_is_refused_at_once(self):
         first = self.build()
         self.assertTrue(self.locked())
