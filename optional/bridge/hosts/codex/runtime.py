@@ -30,7 +30,7 @@ from optional.bridge.win.controller import Controller
 from optional.bridge.win.frontend import NativeFrontend
 from optional.bridge.port import NativeSource
 from optional.bridge.win.transport import PipeTarget
-from kitlib.proc.process import handle_ctime,process_parents
+from kitlib.proc.process import handle_ctime,parent_pid
 from .account import CodexAccount
 from .calls import CodexCalls
 from .context import CodexObserver,_sha
@@ -74,7 +74,7 @@ class _Runtime:
                 or handle_ctime(self._frontend_handle)!=self.native.creation
                 or wait(self._frontend_handle,0)!=258 or process_image(self.native.pid)!=self._frontend_image
                 or process_sids(self.native.pid)[0]!=self.observer.user
-                or process_parents().get(self.native.pid)!=self.native.host_pid):
+                or parent_pid(self._frontend_handle)!=self.native.host_pid):
             raise DeliveryError('codex-native-frontend-changed')
         self.observer.require_host()
 
