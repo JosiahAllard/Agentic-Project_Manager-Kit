@@ -446,11 +446,16 @@ class OwnerVerbs(Hub):
                 self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
         self.denied(lambda sub: ps('python -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
         self.denied(lambda sub: ps('python -Bm tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
+        # over-reach, R-1955: an agent verb is allowed only in the one shape the guard reads in
+        # full (`-m tools.hub` as two words after plain options), so these are denied now
+        for line in ('python -Bm tools.hub questions', 'python -m runpy tools.hub questions',
+                     'python -Bc "print(1)" -m tools.hub answer'):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
         for line in ('python -m tools.hub questions', 'python -m tools.hub todos add --title t',
                      'python -m hubby answer Q-1', 'python -m tools.hubsite answer',
-                     'python -Bm tools.hub questions', 'python -m runpy tools.hub questions',
                      'python -m runpy tools.hubby answer Q-1', 'python -c "import hubby" answer Q-1',
-                     'python -c "import kitlib.hubmcp" answer Q-1', 'python -Bc "print(1)" -m tools.hub answer'):
+                     'python -c "import kitlib.hubmcp" answer Q-1'):
             with self.subTest(line):
                 self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
 
@@ -470,15 +475,17 @@ class OwnerVerbs(Hub):
                      'python -m trace --count --module tools.hub answer Q-1',
                      'python -m trace --count --module=tools.hub answer Q-1',
                      'cd tools && python -m cProfile -m hub answer Q-1',
-                     # what an unreadable word holds may be -c code: an owner verb after it counts
-                     'python $X -m hubby answer Q-1'):
+                     # over-reach, R-1955: hub named outside the allowed shape, whatever the verb
+                     'python $X -m tools.hub questions', 'python -m cProfile -m tools.hub questions'):
             with self.subTest(line):
                 self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
         self.denied(lambda sub: ps('python $X -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
         self.denied(lambda sub: ps('python -m cProfile -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
-        for line in ('python $X -m tools.hub questions', 'python -m cProfile -m tools.hub questions',
-                     'python -m cProfile -m unittest tests.guard', 'python -X $v -m unittest',
-                     'python -m pdb -m tools.hubsite answer'):
+        for line in ('python -m cProfile -m unittest tests.guard', 'python -X $v -m unittest',
+                     'python -m pdb -m tools.hubsite answer',
+                     # known limit (R-1955): what an unreadable word holds is not read; the text
+                     # names no hub module
+                     'python $X -m hubby answer Q-1'):
             with self.subTest(line):
                 self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
 
@@ -497,12 +504,14 @@ class OwnerVerbs(Hub):
         for line in ('python -c "from kitlib.guard import hub; print(hub.NAME_ONLY_PROGRAMS)"',
                      'python -c "from kitlib.guard import hub as h, os; print(h)"',
                      'python -c "from kitlib.guard import (hub)"',
-                     'python -c "import kitlib.guard.hub"',
-                     'python -c "print(1)" "import hub"', 'python -c "print(1)" import hub',
-                     'python -Bc "print(1)" "from tools import hub"'):
+                     'python -c "import kitlib.guard.hub"'):
             with self.subTest(line):
                 self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
         for line in ('python -c "from kitlib.guard import os; import hub; hub.main()"',
+                     # over-reach, R-1955: an import of hub anywhere in the text counts, even in
+                     # python's arguments after the -c code
+                     'python -c "print(1)" "import hub"', 'python -c "print(1)" import hub',
+                     'python -Bc "print(1)" "from tools import hub"',
                      'python -c "from kitlib.guard import hub; import tools.hub"',
                      'python -c "from os import path; from tools import hub"',
                      'python -cimport\\ hub', 'python -Bc "import hub"'):
@@ -525,7 +534,7 @@ class OwnerVerbs(Hub):
                      'uv run python -c "import hub; hub.main()"',
                      # python options the guard cannot read to the end are read closed: a word
                      # naming hub, or after an unreadable word an owner verb, counts
-                     'python -m $m answer Q-1', 'python -m cProfile -m -s time tools.hub answer Q-1',
+                     'python -m cProfile -m -s time tools.hub answer Q-1',
                      # an import mention in a string or comment of -c code is over-reach
                      # (docs/guard.md "Hub secrets", Over-reach)
                      'python -c "print(\'import hub\')"', 'python -c "import x  # import hub"'):
@@ -535,10 +544,17 @@ class OwnerVerbs(Hub):
                     'hub-owner-verb')
         self.denied(lambda sub: ps('Start-Process python -ArgumentList "-m tools.hub pair"', self.w.wt, sub),
                     'hub-owner-verb')
+        # over-reach, R-1955: any text naming hub as a module or script outside the allowed shape
+        # is denied, a search pattern, a message or an agent verb under a wrapper included
         for line in ('grep -rn "import hub" .', 'rg "import hub"', 'git log --grep "import hub"',
                      'echo "import hub"', 'python -m unittest -k "import hub"', 'python tools/x.py "import hub"',
-                     'py -3.12 tools/x.py', 'uv run python -m tools.hub questions', 'uv run python -m unittest',
-                     'python -m $m questions', 'python -m pip install hub'):
+                     'uv run python -m tools.hub questions'):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+        for line in ('py -3.12 tools/x.py', 'uv run python -m unittest', 'python -m $m questions',
+                     'python -m pip install hub',
+                     # known limit (R-1955): the module name is in a variable the text does not show
+                     'python -m $m answer Q-1'):
             with self.subTest(line):
                 self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
 
@@ -547,10 +563,15 @@ class OwnerVerbs(Hub):
             with self.subTest(args):
                 self.allowed(self.run_hub(args))
 
-    def test_quoted_variables_in_values_pass(self):
-        self.allowed(lambda sub: bash('t="Ask"; python "%s" todos add --title "$t"' % self.hub, self.w.wt, sub))
-        self.allowed(lambda sub: bash('python "%s" todos add --title="$t"' % self.hub, self.w.wt, sub))
-        self.allowed(lambda sub: bash('python "%s" questions add --title "$T"' % self.hub, self.w.wt, sub))
+    def test_quoted_variables_in_values_are_denied(self):
+        # over-reach, R-1955: the allowed shape has every word literal, so a quoted variable in an
+        # agent verb's value is denied too (these passed before the fail-closed rule)
+        self.denied(lambda sub: bash('t="Ask"; python "%s" todos add --title "$t"' % self.hub, self.w.wt, sub),
+                    'hub-owner-verb')
+        self.denied(lambda sub: bash('python "%s" todos add --title="$t"' % self.hub, self.w.wt, sub),
+                    'hub-owner-verb')
+        self.denied(lambda sub: bash('python "%s" questions add --title "$T"' % self.hub, self.w.wt, sub),
+                    'hub-owner-verb')
 
     def test_powershell_variables_after_hub_py_are_denied(self):
         # Windows PowerShell 5.1 passes a value holding a double quote on unescaped, so even a
@@ -595,15 +616,122 @@ class OwnerVerbs(Hub):
                 self.assertIsNotNone(d, 'allowed')
                 self.assertIn(d.rule, ('hub-owner-verb', 'hub-secrets'), d.reason)
 
-    def test_reading_hub_py_passes(self):
+    def test_reading_hub_py_is_denied(self):
+        # over-reach, R-1955: a command naming hub.py outside the allowed shape is denied, a read,
+        # a search or git included (the Read and Grep tools still reach the file); the owner's
+        # own session passes
         for cmd in ('cat tools/hub.py', 'grep -n answer tools/hub.py', 'git diff tools/hub.py',
                     'git add tools/hub.py tests/hubsite/test_cli.py'):
             with self.subTest(cmd):
-                self.allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub), (('subagent', True, OWNER),))
+                self.denied(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub), 'hub-owner-verb',
+                            (('subagent', True, OWNER),))
+                self.owner_allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub))
 
     def test_the_alternative_names_the_kit_hub_tool(self):
         d = decide(self.run_hub('answer Q-1 --choice 1')(True), self.ctx(OWNER))
         self.assertEqual(d.instead, 'python "%s" questions add --title "<what the owner should decide>"' % self.hub)
+
+
+class FailClosed(Hub):
+    """R-1955: in a held session, any command text naming hub as a module or script is denied
+    unless the parser reads that command in full as the one allowed shape (rules.hub_shape).
+    Names built at run time are out of scope: the rule guards against accidents, not an
+    adversary (docs/guard.md "Hub secrets", Limits)."""
+
+    def rows(self, rows, deny):
+        for shell, line in rows:
+            with self.subTest(line):
+                make = lambda sub, shell=shell, line=line: shell(line, self.w.wt, sub)
+                if deny:
+                    self.denied(make, 'hub-owner-verb')
+                    self.owner_allowed(make)
+                else:
+                    self.allowed(make)
+
+    def test_review_3_options_before_c(self):
+        # re-review 3 item 1: a -W or -X value holding a c hid the -c code
+        code = '"import tools.hub as h; h.main()"'
+        self.rows(((bash, 'python -Wonce -c %s' % code), (bash, 'python -Xtracemalloc -c %s' % code),
+                   (bash, 'python -Xpycache_prefix=x -c %s' % code), (ps, 'python -Wonce -c %s' % code),
+                   (ps, 'python -Xtracemalloc -c %s' % code)), True)
+
+    def test_review_3_other_ways_to_run_hub(self):
+        # re-review 3 item 2: modules that run code, code that runs a command line, other import
+        # spellings, git's own command runners and a wrapper option whose value names python
+        self.rows((
+            (bash, 'python -m timeit -n1 -s "import tools.hub as h" "h.main([\'answer\', \'Q-1\'])"'),
+            (bash, "printf 'import tools.hub as h; h.main()' | python -m code"),
+            (bash, "printf 'import tools.hub as h; h.main()' | python -m asyncio"),
+            (bash, 'python -m pdb -c "import tools.hub" -m json.tool'),
+            (bash, 'python -c "import os; os.system(\'python -m tools.hub answer Q-1\')"'),
+            (bash, 'python -c "import subprocess; subprocess.run([\'python\', \'-m\', \'tools.hub\', \'answer\'])"'),
+            (bash, 'python -c "__import__(\'tools\', fromlist=[\'hub\']).hub.main()"'),
+            (bash, 'python -c "import importlib; importlib.import_module(\'.hub\', \'tools\').main()"'),
+            (bash, 'git rebase --exec "python -m tools.hub answer Q-1" HEAD~1'),
+            (bash, 'git bisect run python -m tools.hub answer Q-1'),
+            (bash, 'git submodule foreach "python -m tools.hub answer Q-1"'),
+            (bash, 'uv run -p python python -c "import tools.hub as h; h.main()"'),
+            (ps, 'python -m timeit -s "import tools.hub as h" "h.main()"'),
+            (ps, 'git rebase --exec "python -m tools.hub answer Q-1" HEAD~1'),
+        ), True)
+
+    def test_names_the_shell_puts_together(self):
+        # quotes and escapes inside a word, and a wildcard python's script word expands to hub.py
+        self.rows((
+            (bash, 'python -m tools.h"u"b answer Q-1'), (bash, "python tools/h'u'b.py answer Q-1"),
+            (bash, 'python tools/h*.py answer Q-1'), (bash, 'python tools/hu?.py answer Q-1'),
+            (bash, "cd tools && python -m 'hub' answer Q-1"), (ps, 'python -m tools.h`ub answer Q-1'),
+        ), True)
+
+    def test_names_built_at_run_time_pass(self):
+        # known limit (R-1955): a name built at run time (string concatenation, an encoding, a
+        # variable's value, a script the agent wrote) is not read
+        self.rows((
+            (bash, 'python -c "import importlib; importlib.import_module(\'tools.h\' + \'ub\').main()"'),
+            (bash, 'python -c "__import__(\'tools\', fromlist=[\'h\' + \'ub\'])"'),
+            (bash, 'python -c "import base64; exec(base64.b64decode(\'aW1wb3J0IHRvb2xzLmh1Yg==\'))"'),
+            (bash, 'python -m $m answer Q-1'), (bash, 'python $X -m hubby answer Q-1'),
+            (bash, 'python scratch/run.py answer Q-1'),
+        ), False)
+
+    def test_ordinary_work_passes(self):
+        self.rows((
+            (bash, 'python -m unittest discover -s tests/guard -p "test_*.py"'), (bash, 'python -m unittest -k hub'),
+            (bash, 'python -m unittest -k owner tests.guard.test_rules_hub'), (bash, 'python tools/gate.py --full'),
+            (bash, 'python Z:/r/tools/gate.py -C Z:/r --full'), (bash, 'py -3 -m pip install x'),
+            (bash, 'python -m json.tool x.json'), (bash, 'python -c "print(1)"'),
+            (bash, 'python tools/backlog.py list --status open'), (bash, 'python $K/tools/doc_index.py --find open'),
+            (bash, 'python $K/tools/backlog.py list --status open'), (bash, 'git log --oneline -3'),
+            (bash, 'git commit -m "fix the hub page"'), (bash, 'git commit -m "hub: fix the page"'),
+            (bash, 'git merge kit/hub-sessions'), (bash, 'uv run python -m unittest'),
+            (bash, 'cat docs/action-hub.md'), (bash, 'python -m unittest discover -s tests/hubsite'),
+            (bash, 'python -c "from kitlib.guard import hub; print(hub.OWNER_VERBS)"'),
+            (bash, 'python -c "from kitlib.guard import rules, hub as h"'),
+            (bash, 'python -c "import kitlib.guard.hub as h"'), (bash, 'python -m kitlib.guard.hub'),
+            (bash, 'cat kitlib/guard/hub.py'), (bash, 'grep -rn hub kitlib/guard'),
+            (ps, 'py -3 -m pip list'), (ps, 'python -m unittest -k hub'),
+        ), False)
+
+    def test_the_allowed_shape(self):
+        hub = self.hub
+        self.rows((
+            (bash, 'python "%s" questions' % hub), (bash, 'python -B "%s" questions' % hub),
+            (bash, 'python -m tools.hub questions'), (bash, 'python3.12 -OO -m tools.hub todos'),
+            (bash, 'cd tools && python "%s" todos ack T-1' % hub),
+            (bash, 'python "%s" questions > out.txt 2>&1' % hub), (bash, 'python "%s" inbox | head -3' % hub),
+            (bash, 'python "%s" questions; python "%s" todos' % (hub, hub)),
+            (ps, 'py -3 tools\\hub.py questions'), (ps, '& python "%s" questions' % hub),
+        ), False)
+        self.rows((
+            (bash, 'python -i "%s" questions' % hub), (bash, 'python -X dev "%s" questions' % hub),
+            (bash, 'python -W ignore -m tools.hub questions'), (bash, 'python "%s" questions $(echo x)' % hub),
+            (bash, 'python "%s" questions "$t"' % hub), (bash, 'PYTHONINSPECT=1 python "%s" questions' % hub),
+            (bash, 'bash -c "python %s questions"' % hub), (bash, 'uv run python "%s" questions' % hub),
+            (bash, 'python "%s" questions; python -m tools.hub answer Q-1' % hub),
+            (bash, 'python "%s" questions <<EOF\nx\nEOF' % hub), (bash, 'python -m runpy tools.hub questions'),
+            (bash, 'python -mtools.hub questions'), (bash, './tools/hub.py questions'),
+            (bash, 'python "%s" questions; echo tools.hub' % hub),
+        ), True)
 
 
 # ---------------------------------------------------------------- hub-mcp
