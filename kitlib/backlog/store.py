@@ -648,7 +648,7 @@ class MainBackend(object):
     agent; the PM data worktree has several (every session's backlog.py, and a landing's close).
 
     In the PM data branch's worktree (commit_branch) a write holds git's own index lock there from
-    before it reads HEAD or the files until its index update (_lock_index; Busy after INDEX_WAIT
+    before it reads HEAD's commit or checks the files until its index update (_lock_index; Busy after INDEX_WAIT
     seconds, nothing written), so two store writes there run one after the other, and no git
     command writes that index meanwhile: no `git commit` there can commit an index that does not
     yet hold the write, which would put back what it committed. The write also commits exactly the
@@ -757,7 +757,8 @@ class MainBackend(object):
 
     def _lock_index(self, paths):
         """git's lock on this worktree's index, taken (an _IndexLock) before the write reads
-        anything, so between its reads and its index update no git command writes that index:
+        HEAD's commit or checks the files, so between those reads and its index update no git
+        command writes that index:
         no `git add` stages one of its paths and no `git commit` commits an index that does not
         yet hold the write (which would put back what the write committed). Busy when another
         git command holds it for INDEX_WAIT seconds; Failure when git cannot name the index or
@@ -793,7 +794,7 @@ class MainBackend(object):
             except Failure as exc:
                 raise Failure('%s; nothing was written' % exc)
             if self.clean:
-                self._require_clean(sorted(self.path_of(stem) for stem in writes))
+                self._require_clean(sorted(self.path_of(stem) for stem in writes), held.index)
         now = self._read()
         for stem in writes:
             if now.get(stem) != snap.raw.get(stem):
@@ -816,11 +817,16 @@ class MainBackend(object):
             raise self._overtaken(paths, exc.changed, exc.head,
                                   self._put_back(exc.head, wrote, exc.changed, before))
 
-    def _require_clean(self, paths):
+    def _require_clean(self, paths, index):
         """Dirty, before anything is written, when one of `paths` differs from HEAD in the
         worktree or the index, or is there and not in HEAD (ignored files included): a change made
-        here and not committed, which the write would delete or commit. Failure when git does not
-        answer. Read with no optional lock, so it never writes the index."""
+        here and not committed, which the write would delete or commit. When the worktree holds
+        HEAD's content for each of them and only the index differs (_index_only: an IndexStale
+        left unrepaired, or HEAD moved by a command that left the index alone), the Dirty carries
+        the index repair instead of a compare: `git reset -q -- <paths>`, or a whole `git reset
+        -q` when `index`, the index file, is missing (a path-limited reset would build an index
+        of those paths alone). Failure when git does not answer. Read with no optional lock, so it
+        never writes the index."""
         out, why = cmd.run(['--no-optional-locks', '-c', 'core.quotePath=false', 'status',
                             '--porcelain', '-z',
                             '--untracked-files=all', '--ignored', '--no-renames', '--'] + paths,
@@ -832,6 +838,16 @@ class MainBackend(object):
         dirty = sorted(set(e[3:] for e in entries))
         if not dirty:
             return
+        if self._index_only(dirty):
+            repair = ('git -C "%s" reset -q -- %s' % (self.root, quoted(dirty))
+                      if os.path.exists(index) else 'git -C "%s" reset -q' % self.root)
+            raise Dirty('%s not written in %s, and nothing was written: the index there is stale '
+                        'for %s (the worktree holds what HEAD holds and the index does not: a '
+                        'store write whose index update failed, or a command that moved HEAD and '
+                        'left the index alone), so a plain `git commit` there would revert it; '
+                        'repair the index first (the worktree files are left alone): %s'
+                        % (', '.join(paths), self.root, ', '.join(dirty), repair),
+                        dirty, repair=repair)
         if any(e[:2] in ('??', '!!') for e in entries):
             compare = 'git -C "%s" status --short -- %s' % (self.root, quoted(dirty))
         else:
@@ -842,6 +858,30 @@ class MainBackend(object):
                     'compare with HEAD first: %s'
                     % (', '.join(paths), self.root, ', '.join(dirty),
                        's' if len(dirty) == 1 else '', compare), dirty, compare)
+
+    def _index_only(self, paths):
+        """True when the worktree holds exactly HEAD's content for each of `paths` (as `git add`
+        would hash it; no file where HEAD has none), so what differs from HEAD there is the index
+        alone. False when one differs, or when git does not answer: the caller then names a
+        change to compare, which is never wrong to look at."""
+        out, _ = cmd.run(['ls-tree', '-z', '--full-tree', 'HEAD', '--'] + paths, self.root,
+                         env=_store_env())
+        if out is None:
+            return False
+        head = {}
+        for entry in cmd.text(out).split('\0'):
+            meta, tab, path = entry.partition('\t')
+            if tab:
+                head[path] = meta.split()[-1]
+        present = [p for p in paths if os.path.isfile(os.path.join(self.root, *p.split('/')))]
+        disk = {}
+        if present:
+            out, _ = cmd.run(['hash-object', '--'] + present, self.root, env=_store_env())
+            shas = [] if out is None else cmd.text(out).split()
+            if len(shas) != len(present):
+                return False
+            disk = dict(zip(present, shas))
+        return all(head.get(p) == disk.get(p) for p in paths)
 
     def _put_back(self, head, wrote, changed, before):
         """After an Overtaken refusal, undo the files of the refused write, so that no reader and
@@ -1074,7 +1114,9 @@ class MainBackend(object):
         the lock file (its modification time kept, which git's racy-entry check compares with),
         `update-index` writes that copy (GIT_INDEX_FILE), and the copy is moved over the index
         (_IndexLock.install). IndexStale when it cannot: the write stays committed, the index is
-        as it was, and the error carries the repair."""
+        as it was, and the error carries the repair: a reset of those paths, or of the whole
+        index when there is no index file (a reset of some paths would build one of those alone,
+        every other tracked file then a staged deletion)."""
         why = ''
         try:
             st = os.stat(held.index)
@@ -1092,7 +1134,10 @@ class MainBackend(object):
             why = held.install()
         if not why:
             return
-        repair = 'git -C "%s" reset -q -- %s' % (self.root, quoted(paths))
+        if os.path.exists(held.index):
+            repair = 'git -C "%s" reset -q -- %s' % (self.root, quoted(paths))
+        else:
+            repair = 'git -C "%s" reset -q' % self.root
         raise IndexStale(
             '%s committed in %s: HEAD %s, but the real index of that worktree was not updated '
             '(%s), so it is stale for them and a plain `git commit` there would revert them. '

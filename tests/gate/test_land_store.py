@@ -439,6 +439,34 @@ class PmDataClose(StoreLandCase):
         self.assert_not_closed(wt, out, 'git -C "%s" diff HEAD -- "kit/backlog/FOO.md"'
                                % self.pm_root(wt))
 
+    def test_a_close_over_a_stale_index_names_the_index_repair(self):
+        """HEAD there moved by a command that left the index alone (commit_beside): the worktree
+        holds what HEAD holds and only the index differs. The close is refused all the same,
+        but the WARNING gives the index repair (a diff with HEAD would print nothing), then the
+        close command; that repair makes status clean."""
+        def move(wt):
+            with open(self.record(wt, 'FOO'), 'rb') as f:
+                text = f.read()
+            commit_beside(wt, {'kit/backlog/FOO.md': text + b'\nmoved by plumbing\n'},
+                          'another session')
+        wt, out = self.dirty_close(move)
+        root = self.pm_root(wt)
+        repair = 'git -C "%s" reset -q -- "kit/backlog/FOO.md"' % root
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertFalse([l for l in out.lines if l.startswith('closed ')], out.lines)
+        self.assertIn('FOO, which it holds pulled, was not closed', warn[0])
+        self.assertIn('the index there is stale for kit/backlog/FOO.md', warn[0])
+        self.assertIn('; repair the index with: %s, then close it with: python "' % repair,
+                      warn[0])
+        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" close FOO --reason "landed %s"'
+                                         % (root, out.merge)), warn[0])
+        self.assertNotIn('compare with HEAD', warn[0])
+        self.assertNotIn('committed or put back', warn[0])
+        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
+        self.repo.git('reset', '-q', '--', 'kit/backlog/FOO.md', cwd=wt)
+        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'kit/backlog', cwd=wt), '')
+
     def test_a_record_never_committed_is_not_closed(self):
         """FOO.md exists only in the worktree: deleting it would leave no trace of it anywhere,
         so the close is refused and the compare is a status (a diff shows no untracked file)."""

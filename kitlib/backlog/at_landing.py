@@ -458,9 +458,11 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
                                                   quiet))
             continue
         except Dirty as exc:                # another session's uncommitted change: never over it
-            lines.append('WARNING: %s landed, and %s%s, was not closed (%s: %s); once that change '
-                         'is committed or put back, close it with: %s'
-                         % (branch, rid, how, exc.label, _one_line(str(exc)),
+            first = ('repair the index with: %s, then' % exc.repair if exc.repair
+                     else 'once that change is committed or put back,')
+            lines.append('WARNING: %s landed, and %s%s, was not closed (%s: %s); %s close it '
+                         'with: %s'
+                         % (branch, rid, how, exc.label, _one_line(str(exc)), first,
                             command(*close_args(rid))))
             continue
         except Exception as exc:            # one record's failure never stops the others

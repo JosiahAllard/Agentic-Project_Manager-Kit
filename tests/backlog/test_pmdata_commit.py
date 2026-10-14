@@ -31,7 +31,7 @@ def commit_beside(wt, files, message):
     worktree `wt` without git's index lock there, as a writer that moves HEAD by plumbing alone does
     (`update-ref`): the files are written or removed, the commit is built in an index of its own
     and HEAD moved by compare-and-swap. A store write there holds the index lock from before it
-    reads anything (MainBackend._lock_index), so a `git commit` or another store write in the
+    reads HEAD's commit (MainBackend._lock_index), so a `git commit` or another store write in the
     middle of one now fails or waits; this is the other commit such a write can still meet. The
     worktree's own index is left as it was: stale for those paths (`git reset -q -- <path>` is
     the mover's own repair). Returns the new commit."""
@@ -240,6 +240,47 @@ class PmDataStore(unittest.TestCase):
         before = self.head()
         _, tip = self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
         self.assert_committed(before, tip, [('D', DIR + '/BAR.md')])
+
+    def test_a_clean_write_where_only_the_index_is_stale_names_the_index_repair(self):
+        """HEAD moved by a command that left the index alone (commit_beside): the worktree holds
+        what HEAD holds and the index does not. The write is refused all the same, nothing
+        written, but the Dirty names the index repair, not a compare with HEAD that would show
+        nothing; that repair makes status clean, and the write then commits."""
+        commit_beside(self.wt, {DIR + '/BAR.md': self.read('BAR') + b'\nmoved by plumbing\n'},
+                      'moved by plumbing')
+        before, status = self.head(), self.status()
+        self.assertNotEqual(status, [])
+        with self.assertRaises(errors.Dirty) as cm:
+            self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        exc = cm.exception
+        repair = 'git -C "%s" reset -q -- "%s/BAR.md"' % (self.wt, DIR)
+        self.assertEqual((exc.paths, exc.compare, exc.repair), ([DIR + '/BAR.md'], '', repair))
+        self.assertEqual(str(exc), (
+            '{d}/BAR.md not written in {wt}, and nothing was written: the index there is stale '
+            'for {d}/BAR.md (the worktree holds what HEAD holds and the index does not: a store '
+            'write whose index update failed, or a command that moved HEAD and left the index '
+            'alone), so a plain `git commit` there would revert it; repair the index first (the '
+            'worktree files are left alone): {r}').format(d=DIR, wt=self.wt, r=repair))
+        self.assertEqual((self.head(), self.status()), (before, status))
+        self.assertTrue(os.path.exists(self.path('BAR')))
+        self.git('reset', '-q', '--', DIR + '/BAR.md')     # the repair, as it names it
+        self.assertEqual(self.status(), [])
+        _, tip = self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        self.assert_committed(before, tip, [('D', DIR + '/BAR.md')])
+
+    def test_a_clean_write_with_no_index_file_names_a_whole_index_repair(self):
+        """No index file at all (every tracked file then reads as a staged deletion): the repair
+        is a reset of the whole index, since one of the write's paths alone would leave every
+        other file staged as deleted."""
+        os.remove(self.worktree_index())
+        before = self.head()
+        with self.assertRaises(errors.Dirty) as cm:
+            self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        self.assertEqual((cm.exception.compare, cm.exception.repair),
+                         ('', 'git -C "%s" reset -q' % self.wt))
+        self.assertEqual(self.head(), before)
+        self.git('reset', '-q')
+        self.assertEqual(self.status(), [])
 
     def test_a_write_that_is_not_clean_still_writes_over_an_edit(self):
         """`clean` is the landing's (at_landing._pm_data_store): a backlog.py write keeps
@@ -684,7 +725,7 @@ class PmDataStore(unittest.TestCase):
         """A `git commit` in the PM data worktree between the close's commit and its index update
         would commit an index still holding the closed record (putting it back on HEAD) and leave
         its deletion staged for whoever commits next. The write holds git's index lock from
-        before it reads anything until the index holds the write, so that commit stops: the
+        before it reads HEAD's commit until the index holds the write, so that commit stops: the
         close stands, a change staged there stays staged, and the lock is given up."""
         self.repo.write('notes.txt', 'staged\n', root=self.wt)
         self.git('add', '--', 'notes.txt')
@@ -831,6 +872,28 @@ class PmDataStore(unittest.TestCase):
         self.git('reset', '-q', '--', DIR + '/BAR.md')
         self.assertEqual(self.status(), [])
 
+    def test_a_write_with_no_index_file_is_index_stale_with_a_whole_index_repair(self):
+        """No index file to copy into the lock file: the write is committed and IndexStale, and
+        its repair resets the whole index, which makes status clean; a reset of the write's own
+        path would build an index of that path alone."""
+        index = self.worktree_index()
+        os.remove(index)
+        before = self.head()
+        with self.assertRaises(errors.IndexStale) as cm:
+            self.store.write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        exc = cm.exception
+        self.assertEqual(exc.repair, 'git -C "%s" reset -q' % self.wt)
+        self.assertIn('cannot copy the index into its lock file', str(exc))
+        self.assertTrue(str(exc).endswith(exc.repair), str(exc))
+        self.assertEqual(self.git('rev-parse', exc.commit + '^'), before)
+        self.assertEqual(self.changed_in(exc.commit), [('D', DIR + '/BAR.md')])
+        self.assertFalse(os.path.exists(index + '.lock'))
+        self.git('reset', '-q', '--', DIR + '/BAR.md')     # what the repair said before
+        self.assertIn('D  %s/BAZ.md' % DIR, self.status())
+        os.remove(index)
+        self.git('reset', '-q')                            # the repair, as it names it
+        self.assertEqual(self.status(), [])
+
     def test_a_lock_file_that_cannot_be_removed_is_named_on_the_refusal(self):
         """The write stops (Dirty here) and the lock file it made cannot be removed: the
         refusal says so, since no git command can write that index until it is gone."""
@@ -849,10 +912,17 @@ class PmDataStore(unittest.TestCase):
                 self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
         self.assertTrue(os.path.exists(lock))
         os.remove(lock)
-        msg = str(cm.exception)
-        self.assertTrue(msg.startswith('%s/BAR.md' % DIR) or 'nothing was written' in msg, msg)
-        self.assertIn('could not be removed', msg)
-        self.assertIn('remove it by hand', msg)
+        held = os.path.normpath(self.git('rev-parse', '--path-format=absolute', '--git-path',
+                                         'index')) + '.lock'
+        self.assertEqual(os.path.normcase(held), os.path.normcase(lock))
+        self.assertEqual(str(cm.exception), (
+            '{d}/BAR.md not written in {wt}, and nothing was written: {d}/BAR.md differs from '
+            'HEAD there (a change made there and not committed: a hand edit, a staged change or '
+            'a record never committed), which this write would delete or commit over; compare '
+            'with HEAD first: git -C "{wt}" diff HEAD -- "{d}/BAR.md"; and git\'s index lock '
+            '{h} could not be removed ({e}): no git command can write that index until it is; '
+            'remove it by hand').format(d=DIR, wt=self.wt, h=held,
+                                        e=PermissionError(13, 'Access is denied', held)))
         self.assertEqual(cm.exception.paths, [DIR + '/BAR.md'])
 
     # -- which stores commit ---------------------------------------------------------------------

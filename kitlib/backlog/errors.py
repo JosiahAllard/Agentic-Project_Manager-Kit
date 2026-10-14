@@ -65,7 +65,7 @@ class IndexStale(Failure):
     """The write is committed (HEAD has `commit`, or already held the paths when it is None) but
     the PM data worktree's own index was not updated for `paths`, so a plain `git commit` there
     would revert them. `repair`: the command that resets those index entries to HEAD, each path
-    in double quotes."""
+    in double quotes, or the whole index (`git reset -q`, no paths) when it has no index file."""
 
     def __init__(self, message, commit=None, paths=(), repair=''):
         Failure.__init__(self, message)
@@ -80,12 +80,15 @@ class Dirty(Failure):
     committed (a hand edit, a staged change, a record never committed), which the write would
     delete or commit (kitlib.backlog.store.MainBackend with `clean`, the landing's close).
     `compare`: the command that shows them against HEAD (`git diff HEAD`, or `git status
-    --short` when one is not in HEAD, which a diff would not show)."""
+    --short` when one is not in HEAD, which a diff would not show). `repair` instead, `compare`
+    empty, when only the index differs from HEAD for them (the worktree holds HEAD's content):
+    the command that resets those index entries to HEAD."""
 
-    def __init__(self, message, paths=(), compare=''):
+    def __init__(self, message, paths=(), compare='', repair=''):
         Failure.__init__(self, message)
         self.paths = list(paths)
         self.compare = compare
+        self.repair = repair
 
 
 class Busy(Failure):
