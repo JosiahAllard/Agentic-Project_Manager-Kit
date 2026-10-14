@@ -17,6 +17,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `.codex/agent-profile.md` | stub: the profile is docs/agent-profile.md | an agent names the host's profile path | kw: profile
 - `docs/ROSTER.md` | agent roster | choosing an agent | kw: roster, agents
 - `docs/action-hub.md` | Action Hub | the PM action list | kw: action-hub, hub
+- `docs/hub-mcp.md` | hub MCP server: the Action Hub's api as MCP tools, the owner's tools pinned | the hub from an agent | kw: hub-mcp, hub, mcp
 - `docs/hub-remote-access.md` | Hub remote access | reaching the hub from a phone | kw: hub, remote-access, tunnel, cloudflared
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog
 - `docs/backlog-lint.md` | backlog lint | checking backlog records | kw: backlog-lint, lint
@@ -27,7 +28,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
 - `docs/engineering-rulings.md` | engineering rulings | before a design choice | kw: rulings, engineering
-- `docs/gate.md` | gate.py | running the gate | kw: gate, test
+- `docs/gate.md` | gate.py | running the gate | kw: gate, test, stash
 - `docs/go-live.md` | go-live list | switching a repo to the kit | kw: go-live
 - `docs/guard.md` | shell guard and git hooks | a command is refused | kw: guard, hooks, refusal
 - `docs/kitboot.md` | boot/kitboot.py: which kit a host entry runs, the pinned release check before kitlib | a hook or the lock server will not load the kit | kw: kitboot, boot, PM_KIT_ROOT, PM_KIT_RELEASE_ID, release

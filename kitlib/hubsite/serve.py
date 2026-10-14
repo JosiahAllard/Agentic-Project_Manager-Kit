@@ -203,6 +203,7 @@ POLL_S = 0.5                    # run()'s wait between two looks at `stop` (and 
 ASK_TIMEOUT_S = 10
 MAX_ANSWER = 16 << 20           # bytes of one answer ask() reads
 VIA_CLI = 'cli'
+VIA_MCP = 'mcp'                 # the hub MCP server's writes (kitlib.hubmcp, docs/hub-mcp.md)
 USER_AGENT = 'hub-client'       # what ask() calls itself: it names no person and no machine
 SYNC_OFF = 'git sync is off on this server'
 SYNC_REFUSED = 'git sync was refused at start-up: the server console says why'
@@ -1014,18 +1015,19 @@ def run(hub, started=None, stop=None):
 
 # ------------------------------------------------------------------ the local client
 
-def ask(port, method, path, token=None, body=None, timeout=ASK_TIMEOUT_S):
+def ask(port, method, path, token=None, body=None, timeout=ASK_TIMEOUT_S, via=VIA_CLI):
     """One request to the hub server on this machine's `port`: (status, the JSON object it
     answered). `token` is sent as a Bearer token; a POST carries `body` as JSON with the Origin
-    and Content-Type the listener requires and names itself VIA_CLI. NotRunning when nothing
-    listens there, ServeError when what answers is not the hub."""
+    and Content-Type the listener requires and names itself `via` (VIA_CLI by default; the hub
+    MCP server passes VIA_MCP). NotRunning when nothing listens there, ServeError when what
+    answers is not the hub."""
     headers = {'Accept': httpd.JSON, 'User-Agent': USER_AGENT}
     if token:
         headers['Authorization'] = 'Bearer %s' % token
     data = None
     if method == 'POST':
         data = json.dumps({} if body is None else body).encode('utf-8')
-        headers.update({'Content-Type': httpd.JSON, httpd.VIA_HEADER: VIA_CLI,
+        headers.update({'Content-Type': httpd.JSON, httpd.VIA_HEADER: via,
                         'Origin': 'http://%s:%d' % (httpd.LOOPBACK, port)})
     conn = http.client.HTTPConnection(httpd.LOOPBACK, port, timeout=timeout)
     try:
