@@ -387,15 +387,17 @@ def _pull_fold_hits(ctx, scopes, holding, branch):
     return hits, notes
 
 
-def _fold_refusal(rid, hits, form):
-    """The pull fold refusal: the overlapping pairs, where the work belongs, and the override."""
+def _fold_message(rid, hits, form):
+    """The pull fold refusal's text: the overlapping pairs, where the work belongs, and the
+    override. The caller raises it as a Refusal (tests/backlog/test_refusal_kinds.py audits each
+    raise by name)."""
     branches = []
     for h in hits:
         b = h.rpartition('(changed on ')[2].partition(')')[0]
         if b not in branches:
             branches.append(b)
     where = ', '.join(branches)
-    return Refusal('cannot pull %s: its scope overlaps the work of %s, so it belongs there:\n  %s\n'
+    return ('cannot pull %s: its scope overlaps the work of %s, so it belongs there:\n  %s\n'
                    'fold it into %s, or pull it after %s lands. Overriding that takes the PM\'s '
                    'ruling: `%s`' % (rid, where, '\n  '.join(hits), where, where, form))
 
@@ -809,7 +811,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
                       'collision with a live pull: `pull %s --reason "<why>" --ruling R-nnnn`, '
                       'citing the PM\'s ruling that allows it' % (rid, '; '.join(hits), rid))
     if folds and (ruling is None or reason is None):
-        raise _fold_refusal(rid, folds, 'pull %s --reason "<why>" --ruling R-nnnn' % rid)
+        raise Refusal(_fold_message(rid, folds, 'pull %s --reason "<why>" --ruling R-nnnn' % rid))
     if minus_one:
         lmod.refuse_unnamed_release(rid, rec, ruling, 'pull')
     if minus_one or hits or folds:
@@ -963,7 +965,7 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
                       'pull: %s. Taking it over anyway takes `pull %s --ruling R-nnnn`, citing '
                       'the PM\'s ruling that allows it' % (rid, '; '.join(hits), rid))
     if folds and ruling is None:
-        raise _fold_refusal(rid, folds, 'pull %s --ruling R-nnnn' % rid)
+        raise Refusal(_fold_message(rid, folds, 'pull %s --ruling R-nnnn' % rid))
     if hits or folds:
         _check_ruling(rid, rec, ruling, 'pull', hold_only=True)
     branch = ctx.current_branch()
