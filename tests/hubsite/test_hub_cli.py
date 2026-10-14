@@ -604,7 +604,7 @@ class SetupCase(CliCase):
 
 class SetupCheckCase(CliCase):
     """`setup --check`: read-only. It names the Access state, probes the Access keys when the
-    settings can serve, and lists each plugin copy that would refuse the `hub` key (R-1954 (3))."""
+    settings can serve, and lists each plugin copy that would refuse the `hub` key."""
     NEW = "SCHEMA = {'hub': 1, 'plugin': 1}\n"
     OLD = "SCHEMA = {'plugin': 1}\n"
 

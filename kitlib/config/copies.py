@@ -1,4 +1,5 @@
-"""Which kit copies on this machine would refuse a machine config key (R-1954 (3)).
+"""Which kit copies on this machine would refuse a machine config key, so the owner refreshes
+the plugin before setting a key a newer kit adds.
 
 Every kit copy reads the one machine config, and kitlib.config.user refuses a whole file that
 holds a top-level key its own SCHEMA does not know. So a key a newer kit adds (`hub`, say) is safe

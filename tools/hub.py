@@ -480,8 +480,7 @@ def _status(a, stop):
 
 def _check():
     """setup --check: reads only. 0 when ready, 1 when not."""
-    from kitlib import pluginsource
-    from kitlib.pluginsource import claude
+    from kitlib import machinesetup, pluginsource
     s = settings.load()
     why = []
     try:
@@ -506,7 +505,7 @@ def _check():
         why.append('the kit copies could not be looked at')
     else:
         report = copies.check(copies.find(root, pluginsource.current_folder(root),
-                                          claude.account_folders()), keys)
+                                          machinesetup.account_dirs(user.home_dir())), keys)
         print('kit copies, checked against the keys %s:' % ', '.join(keys))
         for line in report.lines:
             print('  %s' % line)
