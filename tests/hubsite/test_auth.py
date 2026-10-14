@@ -590,11 +590,14 @@ class RenewTest(PersistCase):
 
     def test_a_renewal_moves_the_session_to_the_newest(self):
         first = self.creds.pair(self.creds.new_pairing_code())
+        later = [self.creds.pair(self.creds.new_pairing_code())
+                 for _ in range(auth.MAX_SESSIONS - 1)]
         self.clock.now += self.HALF + 1
         self.assertEqual(self.creds.resolve({}, self.cookie(first)), (auth.OWNER, first))
-        later = [self.creds.pair(self.creds.new_pairing_code()) for _ in range(auth.MAX_SESSIONS)]
+        self.creds.pair(self.creds.new_pairing_code())                  # one past the cap
         self.assertEqual(self.creds.role_for({}, self.cookie(first)), auth.OWNER)
         self.assertIsNone(self.creds.role_for({}, self.cookie(later[0])))   # the oldest now
+        self.assertEqual(self.creds.role_for({}, self.cookie(later[1])), auth.OWNER)
 
 
 class ParseCookiesTest(unittest.TestCase):
