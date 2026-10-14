@@ -1,8 +1,16 @@
 """Bounded stable Windows native evidence; rejects links and replacement races."""
+import ctypes
 import json
+import msvcrt
 import os
 from pathlib import Path
 import stat
+
+from kitlib.proc.pipe import INVALID,close,create_file
+
+GENERIC_READ=0x80000000
+SHARE_ALL=7  # FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+OPEN_EXISTING=3
 
 
 class EvidenceError(ValueError):
@@ -25,11 +33,30 @@ def version(info):
         getattr(info,'st_birthtime_ns',info.st_ctime_ns))
 
 
+def _open_shared(path):
+    """Open for reading, sharing read, write AND delete.
+
+    Python's open() does not share delete. So it fails with a sharing violation (PermissionError
+    13) while os.replace is still landing the file under this name, because MoveFileEx holds a
+    DELETE-access handle on it for a moment after the name appears. For the same reason, while
+    such a reader holds the file, the writer's own os.replace or unlink of it fails. Substitution
+    is still caught: stable_bytes compares the file's version before, during and after the read."""
+    handle=create_file(str(path),GENERIC_READ,SHARE_ALL,None,OPEN_EXISTING,0,None)
+    if handle in (None,INVALID):
+        error=ctypes.get_last_error()
+        raise OSError(None,ctypes.FormatError(error).strip(),str(path),error)
+    try: descriptor=msvcrt.open_osfhandle(handle,os.O_RDONLY)
+    except BaseException:
+        close(handle)
+        raise
+    return os.fdopen(descriptor,'rb')
+
+
 def stable_bytes(path, limit):
     if type(limit) is not int or not 0<limit<=4*1024*1024: raise EvidenceError()
     before=regular(path)
     if not 0<before.st_size<=limit: raise EvidenceError()
-    with Path(path).open('rb') as source:
+    with _open_shared(path) as source:
         opened=os.fstat(source.fileno())
         if version(opened)!=version(before): raise EvidenceError()
         data=source.read(limit+1)
