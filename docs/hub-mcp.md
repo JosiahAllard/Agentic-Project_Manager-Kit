@@ -62,6 +62,6 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 | `hub_story_submit` | `POST /stories` |
 | `hub_to_pm_send` | `POST /to_pm/send` |
 
-- None ships yet. `tools/list` leaves them out, and `tools/call` refuses them without reading the owner's token: `forbidden` in a session a launcher marked, `not_available` (naming KIT-HUB-GUARD-OWNER-VERBS) otherwise.
-- They ship with KIT-HUB-GUARD-OWNER-VERBS, which teaches the guard to deny them to agents by these names. Until then the guard does not judge any hub tool: `kitlib/guard/rolepolicy.py` `mode` leaves every MCP call that is not the lock's alone.
+- None ships yet. `tools/list` leaves them out, and `tools/call` refuses them without reading the owner's token: `forbidden` in a session a launcher marked, `not_available` (saying it waits on the guard, `server.GUARD_WAIT`) otherwise.
+- They ship with the guard change that teaches the guard to deny them to agents by these names. Until then the guard does not judge any hub tool: `kitlib/guard/rolepolicy.py` `mode` leaves every MCP call that is not the lock's alone.
 - `tests/hubmcp/test_server.py` `Pinned` pins the four names, checks each maps to an OWNER route of `api.ROUTES`, and checks none is listed or ever reaches the hub.

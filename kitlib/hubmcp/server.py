@@ -11,7 +11,7 @@ Read tools carry the agent's token (the owner's when there is no agent token: Cl
 write tools carry the agent's and name their source serve.VIA_MCP. The owner's writes are pinned in
 kitlib.hubmcp.OWNER_ONLY and do not ship yet: tools/list leaves them out and tools/call refuses
 them (`not_available`; `forbidden` in a session the launcher marked), never reading the owner's
-token. They land with KIT-HUB-GUARD-OWNER-VERBS.
+token. They land once the guard denies them to agents by name (GUARD_WAIT).
 
 A refusal, a hub that is not running, or anything else that goes wrong comes back as a tool result
 with isError true and {ok: false, error: {code, message, field}}, never as a crashed server.
@@ -36,7 +36,7 @@ WAIT_DEFAULT_S = 30
 LISTS = ("questions", "todos", "stories", "to_pm")
 VIEWS = ("notices", "repos", "usage", "agents")
 ANY, AGENT = hubclient.ANY, hubclient.AGENT
-GUARD_RECORD = "KIT-HUB-GUARD-OWNER-VERBS"
+GUARD_WAIT = "the guard denies them to agents by name"
 INSTRUCTIONS = ("The Action Hub on this machine (docs/hub-mcp.md): read tools for its questions, "
                 "to-dos, stories, notes to the PM, inbox and views, and the agent's writes. The "
                 "owner's writes (answering, marking done, submitting, sending) are not tools here.")
@@ -251,7 +251,7 @@ class Server:
             return _error("forbidden", "%s is the owner's, and this session is marked %s"
                           % (name, self.marked))
         return _error("not_available", "%s is the owner's and is not available yet: the owner's "
-                      "hub tools land with %s" % (name, GUARD_RECORD))
+                      "hub tools land once %s" % (name, GUARD_WAIT))
 
     def _route(self, name, a):
         _, _, method, path, role = TOOLS[name]

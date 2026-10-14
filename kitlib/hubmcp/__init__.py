@@ -6,8 +6,8 @@ is imported at load: the guard reads these names without loading the server.
 SERVER_NAME     the server's name in the plugin manifest; a client shows its tools as
                 mcp__plugin_<plugin>_hub__<tool>
 OWNER_ONLY      the tool names pinned for the owner's hub writes. None of them ships yet: tools/list
-                never lists one and tools/call refuses it. They land together with the guard record
-                KIT-HUB-GUARD-OWNER-VERBS, which reads these names.
+                never lists one and tools/call refuses it. They land together with the guard change
+                that reads these names and denies them to agents.
 OWNER_ROUTES    each OWNER_ONLY name -> (method, path below kitlib.hubsite.api.BASE): the owner route
                 of kitlib.hubsite.api.ROUTES it is to call
 """

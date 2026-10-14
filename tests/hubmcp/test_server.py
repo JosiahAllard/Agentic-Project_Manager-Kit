@@ -73,7 +73,7 @@ class Case(unittest.TestCase):
 
 
 class Pinned(Case):
-    """The owner's tools are named now and ship with KIT-HUB-GUARD-OWNER-VERBS."""
+    """The owner's tools are named now and ship once the guard denies them to agents."""
 
     def test_the_pinned_names_are_these(self):
         self.assertEqual(hubmcp.OWNER_ONLY, PINNED)
@@ -101,9 +101,9 @@ class Pinned(Case):
                     self.assertEqual(payload["error"]["code"], code)
         self.assertEqual(self.ask.calls, [])
 
-    def test_the_not_available_answer_names_the_guard_record(self):
+    def test_the_not_available_answer_says_what_it_waits_on(self):
         payload, _ = self.server().call("hub_answer", {})
-        self.assertIn("KIT-HUB-GUARD-OWNER-VERBS", payload["error"]["message"])
+        self.assertIn(srv.GUARD_WAIT, payload["error"]["message"])
 
     def test_no_tool_reads_the_owner_token(self):
         roles = []
