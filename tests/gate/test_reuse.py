@@ -613,10 +613,13 @@ class AllReused(ReuseCase):
         self.assertIsNone(why)
         self.assertEqual([(s['name'], s['result']) for s in rec['steps']], [('unit', 'reused')])
 
-    def test_nothing_to_run_books_no_slot_and_runs_no_setup(self):
+    def test_nothing_to_run_books_only_the_landing_turn_and_runs_no_setup(self):
+        # the landing books its one turn before the merge (docs/gate.md "The landing queue"); the
+        # merged gate, with every step reused, books nothing more
         _, tip = self.gated_branch()
-        with mock.patch.object(runner.lockrun, 'book', side_effect=AssertionError('booked')):
-            lander, out = self.land(BRANCH, tip)
+        del self.book_calls[:]
+        lander, out = self.land(BRANCH, tip)
+        self.assertEqual([c.get('priority') for c in self.book_calls], ['land'], self.book_calls)
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertEqual(out.verdict, 'GATE OK (reused: unit)')
         self.assertEqual(sorted(os.listdir(lander.gate_logs)), ['reuse.log'])

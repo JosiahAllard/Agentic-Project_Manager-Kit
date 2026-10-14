@@ -129,9 +129,9 @@ ROWS = [
 
     # ---------------------------------------------------------------- push to main (push_block on)
     ('push main with no record', lambda w: bash('git push origin main', w.main), 'deny', 'git-push-main',
-     'python "{kit}/tools/land.py" -C "{main}" <branch> --expect-main %s --expect-tip <branch tip sha>' % W.SHA_REMOTE_MAIN),
+     'python "{kit}/tools/land.py" -C "{main}" <branch> --expect-tip <branch tip sha>'),
     ('push HEAD:main from a worktree', lambda w: bash('git push origin HEAD:main', w.wt), 'deny', 'git-push-main',
-     'python "{kit}/tools/land.py" -C "{main}" kit/wt --expect-main %s --expect-tip %s' % (W.SHA_REMOTE_MAIN, W.SHA_WT)),
+     'python "{kit}/tools/land.py" -C "{main}" kit/wt --expect-tip %s' % W.SHA_WT),
     ('push a gated commit to main', lambda w: bash('git push origin gated:main', w.wt), None, None, None),
     ('push --no-verify to main', lambda w: bash('git push --no-verify origin gated:main', w.wt), 'deny', 'git-push-main', None),
     ('force push to main', lambda w: bash('git push origin +gated:main', w.wt), 'deny', 'git-push-main', None),

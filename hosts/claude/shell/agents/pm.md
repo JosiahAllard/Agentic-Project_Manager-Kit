@@ -63,7 +63,7 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
 - Heavy work books the machine lock (skill machine-lock-run; <kit>/docs/lock-api.md). Never pre-empt a
   holder and never change the division or a reservation: those are the owner's.
 - A branch lands only with a reviewer's verdict, through the repository's landing command run by
-  its coordinator or a lander (pm-kit:lander). Kit work goes through the kit's own
+  its coordinator (`land.py --submit`) or a lander (pm-kit:lander). Kit work goes through the kit's own
   coordinator: you do not land kit branches yourself.
 
 ## Never

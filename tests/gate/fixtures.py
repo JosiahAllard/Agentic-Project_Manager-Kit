@@ -2,9 +2,12 @@
 remote in the same temp folder) holding a `.kit.json` gate, and the scratch machine-lock store of
 tests/lock/helpers.StoreCase. Nothing here touches the machine's lock store, a real repository or
 a real remote."""
+import inspect
 import json
 import os
+from unittest import mock
 
+from kitlib.lock import run as lockrun
 from tests import gitfixture
 from tests.home import child_home
 from tests.lock.helpers import StoreCase
@@ -30,15 +33,45 @@ def test_env():
     return env
 
 
+REAL_BOOK = lockrun.book
+# The machine lock's book takes resource= and priority= (its landing queue): only then does the
+# lock itself keep a second landing of one repository from its turn (docs/lock-api.md).
+HAS_RESOURCE = 'resource' in inspect.signature(REAL_BOOK).parameters
+
+
+def compat_book(calls, real=None):
+    """kitlib.lock.run.book that records each call in `calls` ({kind, repo, slug} and the
+    keywords), then books for real with the keywords the real book takes. The landing books with
+    resource= and priority= (the machine lock's landing queue); until a checkout's book takes them
+    they are recorded and dropped, so the tests run on either side of that change."""
+    real = real or REAL_BOOK
+    params = inspect.signature(real).parameters
+
+    def book(kind, repo, slug, **kw):
+        calls.append(dict(kw, kind=kind, repo=repo, slug=slug))
+        return real(kind, repo, slug, **{k: v for k, v in kw.items() if k in params})
+    return book
+
+
+def patch_book(case):
+    """Replace kitlib.lock.run.book for the test `case` with compat_book; the list of calls."""
+    calls = []
+    patcher = mock.patch.object(lockrun, 'book', compat_book(calls))
+    patcher.start()
+    case.addCleanup(patcher.stop)
+    return calls
+
+
 class GateRepoCase(StoreCase):
     """self.repo: main with `.kit.json` (self.GATE; None: no "gate" section, so the gate is
     auto-detected) committed and pushed to a bare remote; self.book_kw books one fake cpu slot
-    on the scratch store."""
+    on the scratch store; self.book_calls: every kitlib.lock.run.book call (compat_book)."""
     GATE = GATE
     KIT = None
 
     def setUp(self):
         StoreCase.setUp(self)
+        self.book_calls = patch_book(self)
         self.confine(1)
         kit = dict(self.KIT or {})
         if self.GATE is not None:
