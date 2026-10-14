@@ -137,11 +137,28 @@ def _cleanup(job, process, threads):
     return clean and ended and stopped
 
 
+def _seconds(value):
+    return type(value) in (int, float) and math.isfinite(value) and 0 < value <= 10
+
+
 class NativeToolsPipe:
-    def __init__(self, *, timeout=5):
-        if (type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 10):
+    """One helper per call, in two bounded phases.
+
+    start_timeout bounds everything before the commit: helper spawn and import, the
+    'connected' handshake and the host's before_write re-attestation. A miss there is a
+    BeforeWriteError, since no request byte has left the helper. timeout bounds the rest and
+    counts from the commit: body write, native response and helper exit; a miss there is an
+    uncertain DeliveryError. A slow helper start therefore cannot spend the response budget.
+
+    With the production defaults (start_timeout 2 s, timeout 5 s) a call reaches its outcome
+    within 7 s; before the split one 5 s budget covered both phases. Cleanup after a kill adds
+    at most 2 s waiting for the helper and .5 s per I/O thread (_cleanup).
+    """
+
+    def __init__(self, *, timeout=5, start_timeout=2):
+        if not _seconds(timeout) or not _seconds(start_timeout):
             raise BeforeWriteError('invalid-codex-native-timeout')
-        self.timeout = timeout
+        self.timeout, self.start_timeout = timeout, start_timeout
 
     def call(self, endpoint, request, *, before_write=None):
         if type(endpoint) is not NativeEndpoint or not callable(before_write):
@@ -155,7 +172,7 @@ class NativeToolsPipe:
         worker = Path(__file__).with_name('delivery_worker.py').resolve()
         if not worker.is_file():
             raise BeforeWriteError('codex-native-worker-unavailable')
-        deadline, committed = time.monotonic()+self.timeout, False
+        deadline, committed = time.monotonic()+self.start_timeout, False
         job, process, threads = None, None, []
         events = queue.Queue(maxsize=8)
         def event():
@@ -191,7 +208,8 @@ class NativeToolsPipe:
                 raise BeforeWriteError('codex-native-context-changed-before-write')
             if deadline-time.monotonic() <= 0:
                 raise BeforeWriteError('codex-native-deadline-before-write')
-            committed = True
+            # The response budget starts here: the start phase never spends it.
+            deadline, committed = time.monotonic()+self.timeout, True
             thread = threading.Thread(target=_write_input,
                 args=(process.stdin, packet, 'body', events), daemon=True)
             threads.append(thread)

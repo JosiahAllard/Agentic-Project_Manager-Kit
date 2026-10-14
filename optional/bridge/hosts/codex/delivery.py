@@ -42,11 +42,11 @@ def native_id(message):
 
 
 class CodexDesktopAdapter:
-    def __init__(self, *, lease=None, receipts=None, timeout=5):
+    def __init__(self, *, lease=None, receipts=None, timeout=5, start_timeout=2):
         if any(port is not None and not callable(port) for port in (lease, receipts)):
             raise BeforeWriteError('invalid-codex-host-ports')
         self._leases, self._receipts = lease, receipts
-        self._pipe = NativeToolsPipe(timeout=timeout)
+        self._pipe = NativeToolsPipe(timeout=timeout, start_timeout=start_timeout)
 
     def describe(self):
         capabilities = () if self._leases is None else (Capability.SEND,)

@@ -310,9 +310,9 @@ class CodexSources:
         except Exception:
             return False
 
-    def delivery_adapter(self, *, timeout=5):
+    def delivery_adapter(self, *, timeout=5, start_timeout=2):
         """Private bootstrap adapter; no SEND from a configured callback alone."""
-        return _DirectDesktopAdapter(self,timeout=timeout)
+        return _DirectDesktopAdapter(self,timeout=timeout,start_timeout=start_timeout)
 
     @contextmanager
     def _delivery_lease(self,message):
@@ -375,9 +375,9 @@ class CodexSources:
 
 
 class _DirectDesktopAdapter(CodexDesktopAdapter):
-    def __init__(self,factory, *, timeout):
+    def __init__(self,factory, *, timeout, start_timeout):
         self.factory=factory
-        super().__init__(lease=factory._delivery_lease,timeout=timeout)
+        super().__init__(lease=factory._delivery_lease,timeout=timeout,start_timeout=start_timeout)
 
     def describe(self):
         if not self.factory._has_desktop_facility():
