@@ -138,7 +138,10 @@ Then open `https://<hostname>` on the phone and sign in with the allowed email. 
 `tunnel: on` shows once it did. A different email sees Cloudflare's block page, or, if it somehow
 passed, a `403` from the hub in the API's JSON error shape (code `forbidden`, field `access`, the message
 "this listener needs a valid Cloudflare Access token"; the hub answers every refusal the same way and says nothing
-of why; its console logs the reason, at most once a minute per reason, never the token).
+of why; its console logs the reason, at most once a minute per reason, never the token). The page
+shows that refusal in the server's words ("The hub server refused the read (this listener needs a
+valid Cloudflare Access token)") and tries again; it never tells you to pair, since pairing cannot
+mend an Access refusal (`kitlib/hubsite/web/index.html`, the transport's `unpaired` rule).
 
 If the phone reaches the page but the hub says it is not paired or is read-only, remember that the
 tunnel listener has no pairing link: a valid Access token makes you the owner there. How long the
