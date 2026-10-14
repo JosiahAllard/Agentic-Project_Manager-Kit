@@ -24,6 +24,7 @@ has_console lives in kitlib.proc.console, whose process-wide CreateProcess hook 
 for a start that goes through neither.
 """
 import ctypes
+import signal
 import subprocess
 
 from . import bash, cpu, win32
@@ -101,6 +102,51 @@ def pid_list(h):
                                              ctypes.sizeof(ids), None) and not ids.listed:
             raise ctypes.WinError(ctypes.get_last_error())
     return [int(p) for p in ids.ids[:ids.listed]]
+
+
+class _CtrlCHeld:
+    """Ctrl+C held off while Job.start makes a suspended child and puts it in the job. A
+    KeyboardInterrupt between CreateProcess and the assign would leave the child suspended in no
+    job, never resumed or ended, so meanwhile SIGINT runs a handler that only counts.
+    kitlib.lock.run.settle masks SIGINT the same way (on the main thread, put back in a finally),
+    but with SIG_IGN; here the Ctrl+C is late, never lost. deliver() runs the handler it replaced
+    once per Ctrl+C counted so far, still held, so one that raises (Python's default raises
+    KeyboardInterrupt) raises where the caller can still end the child. close() puts that handler
+    back and re-raises with signal.raise_signal any Ctrl+C counted since: one that came while a
+    failed start ended its child, or one SIG_DFL must act on after the handler is back. Nothing
+    is held off the main thread (signal.signal raises ValueError there, and Ctrl+C raises only on
+    the main thread), or under a handler not set from Python (getsignal None: it could not be put
+    back)."""
+
+    def __init__(self):
+        self.before, self.count = None, 0
+        try:
+            before = signal.getsignal(signal.SIGINT)
+            if before is not None:
+                signal.signal(signal.SIGINT, self._count)
+                self.before = before
+        except ValueError:
+            pass
+
+    def _count(self, signum, frame):
+        self.count += 1
+
+    def deliver(self):
+        if self.before is signal.SIG_IGN:
+            self.count = 0
+        elif callable(self.before):
+            while self.count:
+                self.count -= 1
+                self.before(signal.SIGINT, None)
+
+    def close(self):
+        if self.before is None:
+            return
+        before, self.before = self.before, None
+        signal.signal(signal.SIGINT, before)
+        while self.count:
+            self.count -= 1
+            signal.raise_signal(signal.SIGINT)
 
 
 class JobError(OSError):
@@ -209,24 +255,31 @@ class Job:
         say). Raises OSError when the command cannot start, and JobError (the child ended) when it
         cannot be put in the job or resumed. A bare leading bash runs Git Bash, never WSL's
         (kitlib.proc.bash; BareBashError, an OSError, when there is none). `creationflags` go
-        through no_window_flags: from a parent with no console, no console window."""
+        through no_window_flags: from a parent with no console, no console window. A Ctrl+C from
+        making the child to its resume is held (_CtrlCHeld) and handed on once the child is in
+        the job; when it raises, the child is ended and start raises it."""
         cmd = bash.resolve(cmd, kw.get("shell", False), kw.get("env"))
         flags = no_window_flags(kw.pop("creationflags", 0)) | win32.CREATE_SUSPENDED
-        p = subprocess.Popen(cmd, creationflags=flags, **kw)
+        held = _CtrlCHeld()     # from making the child to its resume: see _CtrlCHeld
         try:
-            self.assign(p)
-            self.check_pin(p)
-            if before_resume is not None:
-                before_resume(p)
-            status = win32.resume(p)
-            if status != 0:
-                raise JobError("the suspended command could not be resumed (NTSTATUS 0x%08X)"
-                               % (status & 0xFFFFFFFF))
-        except BaseException:
-            p.kill()
-            p.wait()
-            raise
-        self.p = p
+            p = subprocess.Popen(cmd, creationflags=flags, **kw)
+            try:
+                self.assign(p)
+                self.check_pin(p)
+                if before_resume is not None:
+                    before_resume(p)
+                status = win32.resume(p)
+                if status != 0:
+                    raise JobError("the suspended command could not be resumed (NTSTATUS 0x%08X)"
+                                   % (status & 0xFFFFFFFF))
+                held.deliver()  # the child is in the job: a Ctrl+C that raises here ends it
+            except BaseException:
+                p.kill()
+                p.wait()
+                raise
+            self.p = p
+        finally:
+            held.close()
         return p
 
     def pids(self):
