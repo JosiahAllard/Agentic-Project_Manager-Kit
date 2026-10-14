@@ -7,8 +7,11 @@ export of the kit's remote-tracking main (refs/remotes/<remote>/main) is a folde
 writes: the tool runs whole from one commit.
 
   target  the main checkout to pin from, or None: run live (already pinned, KIT_PINNED set; a
-          linked worktree or an export, whose code a landing does not merge into; no
-          remote-tracking main)
+          linked worktree, whose code a landing does not merge into; an export whose marker
+          names no main checkout; no remote-tracking main). A tool started from an export (the
+          plugin's) pins through the main checkout its marker names, and so gets KIT_LIVE_ROOT
+          like a start from that checkout: a run from the export itself would name the export
+          in every stub it checks and every command it prints
   run     export the commit (once per commit, under the export root's refresh.pid), lease it,
           run the same tool from the export with the same arguments and wait: (exit code, None),
           or (None, warning) when it cannot, and the caller runs live (fail open)
@@ -22,7 +25,9 @@ pin, under the lock, removes the exports no live lease holds, except the commit 
 The child gets KIT_PINNED=<sha> (so it, and every process it starts, runs live) and KIT_LIVE_ROOT=
 <the main checkout> (kitlib.pluginsource.live_root: a printed command names the main checkout,
 never an export a later prune may remove). A pin that fails open sets KIT_PINNED=live in this
-process for the same reason. Nothing here prints or exits.
+process for the same reason; started from an export, run also sets KIT_LIVE_ROOT=<the main
+checkout> in this process when it is unset, so the tool that then runs live from the export still
+names the main checkout. Nothing here prints or exits.
 """
 import json
 import os
@@ -48,14 +53,17 @@ def checkout_of(tool_file):
 def target(tool_file, environ=None):
     """The checkout to pin `tool_file` from, or None to run live: KIT_PINNED is set (already
     pinned, or a pin that failed open), or the checkout is not a main checkout (a linked worktree
-    has a .git file, an export has none)."""
+    has a .git file). A tool started from an export (the plugin's, say) pins through the main
+    checkout its marker names (kitlib.pluginsource.export_checkout), as a start from that checkout
+    would; an export whose marker names none runs live."""
     env = os.environ if environ is None else environ
     if env.get(PINNED_ENV):
         return None
     checkout = checkout_of(tool_file)
-    if not os.path.isdir(os.path.join(checkout, '.git')):
-        return None
-    return checkout
+    if os.path.isdir(os.path.join(checkout, '.git')):
+        return checkout
+    from kitlib import pluginsource
+    return pluginsource.export_checkout(checkout)
 
 
 def warning(why):
@@ -71,12 +79,21 @@ def run(tool_file, argv, environ=None, wait_s=LOCK_WAIT_S):
     checkout = target(tool_file, env)
     if checkout is None:
         return None, None
+    if not _same(checkout, checkout_of(tool_file)):
+        # Started from an export: should the pin fail open, the tool runs live from the export,
+        # and what it names (stubs, printed commands) must still be the main checkout.
+        from kitlib import pluginsource
+        env.setdefault(pluginsource.LIVE_ROOT_ENV, checkout)
     try:
         return _run(checkout, tool_file, argv, env, wait_s)
     except KeyboardInterrupt:
         return 130, 'Ctrl+C: stopped while pinning to pushed main; the tool did not run'
     except Exception as exc:        # noqa: BLE001 - fail open: the tool still runs, live
         return _fail(env, '%s: %s' % (type(exc).__name__, exc))
+
+
+def _same(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
 def _fail(env, why):

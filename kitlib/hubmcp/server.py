@@ -23,6 +23,7 @@ notification); serve(server, rfile, wfile) runs it over two binary streams until
 import json
 import traceback
 
+from kitlib import mcpwire
 from kitlib.config.types import ConfigError
 from kitlib.hubmcp import OWNER_ONLY, SERVER_NAME
 from kitlib.hubsite import api as hubapi
@@ -239,8 +240,8 @@ class Server:
     # ---------------------------------------------------------------- tools
     def tool_list(self):
         return [{"name": n, "description": d, "inputSchema": s,
-                 "annotations": {"readOnlyHint": m == "GET", "destructiveHint": m != "GET"}}
-                for n, (d, s, m, _, _) in TOOLS.items()]
+                 "annotations": {"readOnlyHint": m == "GET", "destructiveHint": m != "GET" and "{" in p}}
+                for n, (d, s, m, p, _) in TOOLS.items()]
 
     def call(self, name, args):
         """(payload, is_error) for one tool call. Never raises."""
@@ -336,31 +337,4 @@ class Server:
         return _err(mid, -32601, "method not found: %s" % method)
 
 
-def _ok(mid, result):
-    return {"jsonrpc": "2.0", "id": mid, "result": result}
-
-
-def _err(mid, code, message):
-    return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}}
-
-
-def serve(server, rfile, wfile):
-    """Reads one JSON message per line from rfile (binary) and writes each response as one line to
-    wfile (binary) until rfile ends. A line that is not JSON gets a parse error (-32700)."""
-    for raw in iter(rfile.readline, b""):
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            resp = _err(None, -32700, "parse error")
-        else:
-            try:
-                resp = server.handle(msg)
-            except Exception as e:        # never down: the client gets an internal error
-                mid = msg.get("id") if isinstance(msg, dict) else None
-                resp = _err(mid, -32603, "internal error: %s: %s" % (type(e).__name__, e))
-        if resp is not None:
-            wfile.write(json.dumps(resp, ensure_ascii=True, default=str).encode("utf-8") + b"\n")
-            wfile.flush()
+_ok, _err, serve = mcpwire.ok, mcpwire.err, mcpwire.serve   # the wire both MCP servers share
