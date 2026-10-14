@@ -105,8 +105,8 @@ Any denial: stop and report it.
 - The store is read and written only through `python <kit>/tools/backlog.py -C <worktree>` (docs/backlog.md; the
   place is `"backlog".store` in `.kit.json`), never by hand. Skill backlog-ops has the forms.
 - Priority: `-` = not yet assessed (every new record), `1`-`5` = assessed (5 highest), `-1` =
-  assessed, only the owner can settle; no other unvalued state. An agent pricing pass
-  (`--priority-by agent`) makes a fresh store pullable; the owner overrides later. An agent that cannot
+  assessed, only the owner can settle; no other unvalued state. An agent prices (`--priority-by agent`)
+  only the records it puts into a work set; follow-up records stay unpriced until promoted into one. The owner overrides later. An agent that cannot
   price a record sets `-1` with one owner ask: a question only the owner can answer - if the answer is
   in the tree, it isn't the owner's.
 - `blocked_on: owner` (the work waits on the owner) is not `priority: -1` (the price is the owner's).
