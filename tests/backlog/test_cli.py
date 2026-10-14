@@ -58,6 +58,17 @@ class Cli(unittest.TestCase):
         log = self.repo.git('log', '--format=%s', smod.STORE_REF)
         self.assertEqual(log.split('\n')[0], 'closes FOO: the work is finished')
 
+    def test_a_pull_in_the_main_checkout_is_refused_and_as_a_branch_pulls(self):
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
+        self.ok('set', 'FOO', '--priority', '2', '--priority-by', 'agent', '--effort', 's')
+        tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)
+        rc, out = self.run_tool('pull', 'FOO')
+        self.assertEqual(rc, 2, out)
+        self.assertTrue(out.startswith('REFUSED: '), out)
+        self.assertIn('--as <branch>', out)
+        self.assertEqual(self.repo.git('ls-remote', 'origin', smod.STORE_REF), tip)
+        self.assertIn('pulled_by:  tools/wk', self.ok('--as', 'tools/wk', 'pull', 'FOO'))
+
     def test_refusals_exit_2_and_write_nothing(self):
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)

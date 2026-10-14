@@ -63,7 +63,10 @@ tools/land.py).
                  is fetched, the lock file and the slot released: OK (LANDED)
   11 close       after the lock: every record the `ref` or `branch` store still holds pulled by
                  the branch is closed with reason `landed <merge>`, one store commit each
-                 (kitlib.backlog.at_landing). A close that fails, or an exception or Ctrl+C here,
+                 (kitlib.backlog.at_landing), and so is every pulled record a `Closes: <ID>`
+                 trailer in `<tip> --not <the main it merged onto>` names, whoever pulled it (a
+                 pull made in the main checkout records main; a live holder outside the batch is
+                 a WARNING: tell its builder). A close that fails, or an exception or Ctrl+C here,
                  is a WARNING naming the command to finish it; the landing stands
   12 cleanup     then each landed branch goes (kitlib.gate.cleanup; docs/gate.md "Branch
                  cleanup"): its remote branch, its worktree (kitlib.worktree.remove, never
@@ -1171,12 +1174,19 @@ class Lander(object):
     def close_pulled(self):
         """After the verified push and the release: close what the branch holds pulled in the
         backlog store (kitlib.backlog.at_landing). The landing stands whatever happens here, so
-        every failure, Ctrl+C included, is a WARNING line and never reaches recover()."""
+        every failure, Ctrl+C included, is a WARNING line and never reaches recover().
+        Each branch's `Closes:` lines are read from its tip down to the main it was merged onto
+        (the batch's previous merge, else the base), so a stacked branch never re-reads the
+        lines of the branch merged before it; the batch's other branches are no holder to tell."""
         self.phase = 'landed'
         lines = []
-        for b in self.branches:
+        stacked = len(self.merges) == len(self.pairs)
+        for i, (b, t) in enumerate(self.pairs):
+            base = self.merges[i - 1] if stacked and i else self.expect_main
             try:
-                lines.extend(at_landing.close_landed(self.root, self.cfg, b, self.merge))
+                lines.extend(at_landing.close_landed(
+                    self.root, self.cfg, b, self.merge, tip=t, base=base,
+                    batch=[o for o in self.branches if o != b]))
             except BaseException as e:
                 what = 'Ctrl+C' if isinstance(e, KeyboardInterrupt) else '%s: %s' % (
                     type(e).__name__, e)
