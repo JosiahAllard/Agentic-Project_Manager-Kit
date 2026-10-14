@@ -5,9 +5,10 @@ plan inside the native sandbox).
   plan(tool, args, cwd, role, kit, review_verdict) -> ToolPlan(argv, cwd, role)
       `python <kit>/tools/<tool>.py <args>` for a tool in TOOLS, refused when the role's mode does
       not run it (a read, test or lander role runs reads; tests for a test role; the landing for
-      the lander with the coordinator's verdict and full hashes), when an argument names an owner
-      flag, a checkout other than cwd or an abbreviated option, or a lock verb an agent does not
-      run. A commit, a sync or a ledger or pending write needs an explicit --model, the actual
+      the lander with the coordinator's verdict and full hashes, --expect-main optional;
+      `land.py --queue` and `gate.py wait-result` are reads, with any -C), when an argument names
+      an owner flag, a checkout other than cwd or an abbreviated option, or a lock verb an agent
+      does not run. A commit, a sync or a ledger or pending write needs an explicit --model, the actual
       model id (Codex's attribution has no fallback: hosts.json). The host is not inserted: the
       run's environment carries PM_KIT_HOST=codex, which every shared tool reads; a --host or
       --provider naming another host is refused.
@@ -63,7 +64,57 @@ def _flag(args, name):
     return values[0] if values else None
 
 
-def _workflow(tool, args, role, review_verdict):
+def _without_dir(args):
+    """`(args less every -C <dir> / -C<dir>, [dir, ...])`."""
+    rest, dirs, i = [], [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            rest.extend(args[i:])
+            break
+        if arg == "-C":
+            if i + 1 == len(args):
+                raise ValueError("missing value for -C")
+            dirs.append(args[i + 1])
+            i += 2
+            continue
+        if arg.startswith("-C"):
+            dirs.append(arg[2:])
+        else:
+            rest.append(arg)
+        i += 1
+    return tuple(rest), dirs
+
+
+def _land_read(tool, args):
+    """`land.py --queue` and `gate.py wait-result ...`: reads of the landing queue and the result
+    records, whatever -C names (docs/gate.md "Commands")."""
+    rest, _ = _without_dir(args)
+    return (tool == "land" and rest == ("--queue",)) or (tool == "gate" and rest[:1] == ("wait-result",))
+
+
+def _landing(tool, args):
+    """`land.py <branch>...` (with or without --submit) or `gate.py land ...`."""
+    rest, _ = _without_dir(args)
+    return (tool == "land" and rest != ("--queue",)) or (tool == "gate" and rest[:1] == ("land",))
+
+
+def _same_dir(path, cwd):
+    try:
+        return cwd is not None and Path(path).resolve() == Path(cwd).resolve()
+    except (OSError, ValueError):
+        return False
+
+
+def _workflow(tool, args, role, review_verdict, cwd=None):
+    land_read, landing = _land_read(tool, args), _landing(tool, args)
+    if land_read or landing:
+        # A read names the repository with -C (the record is in its common dir); a landing may
+        # name only the checkout it runs in (--cwd).
+        for d in _without_dir(args)[1]:
+            if landing and not _same_dir(d, cwd):
+                raise ValueError("select the checkout with --cwd; -C may only repeat it")
+        args = _without_dir(args)[0]
     for arg in args:
         if arg == "--":
             break
@@ -82,7 +133,6 @@ def _workflow(tool, args, role, review_verdict):
                for flag in ("--write", "--fix", "--add", "--remove")):
             raise ValueError("shared configuration/tool edits require a separate reviewed owner change")
     mode = catalog()[role]["mode"]
-    landing = (tool == "land" and args != ("--queue",)) or (tool == "gate" and bool(args) and args[0] == "land")
     if tool == "machine_lock":
         verb = args[0] if args else ""
         forced = any("--force".startswith(a.split("=", 1)[0]) for a in args if a.startswith("--") and a != "--")
@@ -98,7 +148,7 @@ def _workflow(tool, args, role, review_verdict):
         reading = tool in READ_TOOLS or (tool == "backlog" and _backlog_verb(args) in READ_BACKLOG) or \
                   (tool == "ledger" and bool(args) and args[0] in READ_LEDGER) or \
                   (tool == "machine_lock" and bool(args) and args[0] in {"status", "stats"}) or \
-                  (tool == "land" and args == ("--queue",))
+                  land_read
         reading = reading or (tool == "pending" and args == ("list",))
         testing = mode == "test" and (tool in {"pytests", "redfirst"} or
                   (tool == "gate" and not landing) or
@@ -113,8 +163,10 @@ def _workflow(tool, args, role, review_verdict):
                 raise ValueError("use full expected-hash option names")
         if role != "lander" or review_verdict not in {"LAND", "LAND WITH FOLLOW-UP"}:
             raise ValueError("landing requires a dedicated lander workflow and coordinator review verdict")
-        if not re.fullmatch(r"[0-9a-fA-F]{40}", _flag(args, "--expect-main") or ""):
-            raise ValueError("landing requires a full hash for --expect-main")
+        # --expect-main is optional (a landing merges onto the main it finds); given, a full hash.
+        main = _flag(args, "--expect-main")
+        if main is not None and not re.fullmatch(r"[0-9a-fA-F]{40}", main):
+            raise ValueError("landing requires a full hash for --expect-main when it is given")
         tips = _flag_values(args, "--expect-tip")
         if tool == "gate":
             _flag(args, "--expect-tip")       # gate has one scalar tip, land has an append option
@@ -181,7 +233,7 @@ def plan(tool, args, cwd, role=None, profile=None, review_verdict=None):
     if not Path(cwd).is_dir():
         raise ValueError("checkout directory does not exist")
     args = tuple(args)
-    _workflow(tool, args, role, review_verdict)
+    _workflow(tool, args, role, review_verdict, cwd)
     args = _provider_args(tool, args)
     entry = profile.kit_root / "tools" / (tool + ".py")
     if not entry.is_file():
@@ -192,7 +244,7 @@ def plan(tool, args, cwd, role=None, profile=None, review_verdict=None):
 def execute(planned, runner=None):
     """Keep shared CLI output/exit semantics. No shell or library patching is involved."""
     entry, args = Path(planned.argv[1]).stem, planned.argv[2:]
-    if (entry == "land" and args != ("--queue",)) or (entry == "gate" and args[:1] == ("land",)):
+    if _landing(entry, args):
         raise ValueError("landing execution is disabled pending reviewed host authorization and sandbox design")
     from kitlib.proc import spawn
     run = runner or spawn.run
@@ -208,7 +260,7 @@ def execute_in_host(planned, host):
     if host is None or not callable(getattr(host, "run_argv", None)):
         raise ValueError("a runtime-bound sandboxed CommandHost is required")
     tool, args = Path(planned.argv[1]).stem, planned.argv[2:]
-    if (tool == "land" and args != ("--queue",)) or (tool == "gate" and args[:1] == ("land",)):
+    if _landing(tool, args):
         raise ValueError("landing execution is disabled pending reviewed host authorization")
     checked = plan(tool, args, planned.cwd, role=planned.role)
     return host.run_argv(checked.argv, cwd=checked.cwd, stdin_closed=True)

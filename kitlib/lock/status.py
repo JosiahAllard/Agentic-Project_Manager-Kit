@@ -124,6 +124,11 @@ def render(snap):
                 text += "; %s hold %s until %s" % (h["owner"], h["id"], h["end_local"])
             where = d.get("threads") if p == "cpu" else "card %s" % d.get("card")
             out.append("  %s slot %d (%s): %s" % (p, d["slot"], where, text))
+    for r in snap["runs"]:
+        if r.get("resource") and r.get("state") in ("held", "bg"):
+            out.append("resource %s: held by %s/%s (run %s%s)" % (
+                r["resource"], r["repo"], r["slug"], r["id"],
+                ", priority %s" % r["priority"] if r.get("priority") else ""))
     for w in snap["queue"]["entries"] or []:
         if w.get("position"):
             plan = "queue position %s, expected to start %s%s" % (
@@ -134,8 +139,10 @@ def render(snap):
         else:
             plan = "not yet planned"
         mv = w.get("moved") or {}
-        out.append("waiting: %s/%s (%s, %s, run %s) since %s; %s%s%s" % (
+        out.append("waiting: %s/%s (%s, %s, run %s%s%s) since %s; %s%s%s" % (
             w["repo"], w["slug"], w["kind"], lay.need_text(w["needs"]), w["id"],
+            ", priority %s" % w["priority"] if w.get("priority") else "",
+            ", resource %s" % w["resource"] if w.get("resource") else "",
             _local(w["since"]), plan, "; moved to the top by %s at %s" % (
                 moved_by(mv), _local(mv.get("at"))) if mv else "",
             "; " + w["why"] if w.get("why") else ""))

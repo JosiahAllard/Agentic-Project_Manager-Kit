@@ -45,15 +45,17 @@
   - cpu slots add `threads` and `pinned`; gpu slots add `card`.
 - **`runs`**: every live run (waiting, held or background).
   - The record's id, state, repo, slug, kind, note, pid, ctime, since, held_since, expect_s, expect_from, hold, parent, pinned, pin and pin_note.
+  - `resource` and `priority`: the run's exclusive resource and its priority (`"land"`), or null; see Run resources and landing priority.
   - `pin` is "pinned", null (no pin) or "overridden": an outer job's affinity limit won, so `pinned` is false and `threads` is what the command really runs on (`kitlib.proc.job.Job.check_pin`).
   - `cores`, `gpus` and `tree` (the pid tree).
   - `usage` {cpu_s, peak_cpu_cores, peak_mem_mb, peak_commit_mb, cpu_cores_now, mem_mb_now}.
   - `gpu_mem_mb`, from NVIDIA only; null elsewhere.
   - `expected_end` and `overrun` {s, planned_end}.
   - Waiting runs add `position`, `est_start`, `backfill` and `moved`.
-- **`queue`**: `entries` in plan order [{id, position, ticket, repo, slug, kind, needs, since, expect_s, est_start, backfill, parked, blocked_by, hold, moved, why}], and `error`.
+- **`queue`**: `entries` in plan order [{id, position, ticket, repo, slug, kind, needs, since, expect_s, est_start, backfill, parked, blocked_by, hold, moved, resource, priority, why}], and `error`.
   - `moved` is {by, name, at, seq} when the owner moved the entry to the top (`move_to_top`), else null.
-  - `why` is the reason the entry waits.
+  - `resource` and `priority` are the entry's (`kitlib.lock.queue.entry_resource`, `entry_priority`), else null.
+  - `why` is the reason the entry waits. It names first any live run holding the resource the entry names (`resource R is held by ...`).
   - `entries` is null while the queue is unreadable. Then no run takes slots and a new run exits 10 (fail closed).
 - **`holds`**: [`kitlib.lock.holds.entry`], and `holds_error`.
   - The record (without ancestors, with its `job`), `start_local`, `end_local`, `covers`, `slots_fixed` and `live`.
@@ -125,13 +127,28 @@ A held run can hand back cpu slots its command no longer needs, while the comman
 - The installed `machine_lock.py` reads a shrunk record and entry as any other. The request file is not a `.json`, so neither tool reads it as a run record; `Store.live_runs(prune=True)` removes an orphaned one.
 - The history line keeps `given_back`.
 
+## Run resources and landing priority
+
+`kitlib.lock.run.book` takes two keyword arguments for library callers: `resource=None` and `priority=None`. They are not on `machine_lock.py run` or `background` (argparse refuses `--resource` and `--priority`, exit 2: `tests/lock/test_cli.py`) and no MCP tool takes them (`tests/lockmcp/test_server.py`). The status text, `status --json` and the MCP snapshot show both (Snapshot: `runs`, `queue`).
+
+- **`resource`** is a non-empty string naming something the run holds for its whole life, for example `"landing:" + os.path.normcase(os.path.abspath(<git common dir>))`. Anything else is a usage error (`LockError`, exit 2), raised before the store is written.
+  - The run record and the queue entry carry `"resource"` (`kitlib.lock.queue.join`).
+  - The planner (`kitlib.lock.queue.plan`) never starts a waiting entry while an entry in state `held` or `bg` names the same resource, and never plans two entries naming it to overlap, however many slots are free. A background run's slots still yield to foreground runs; a resource it names does not.
+  - The run's parent (a nested run's `parent`) holding the same resource does not keep it out. A nested run naming a resource its parent does not hold joins the queue for it, with no slots of its own when the parent covers what it needs; one whose parent holds that resource inherits as before and takes no queue entry.
+  - The resource is free when the run's entry goes: on release (`settle`), and when the next look finds its wrapper dead (`queue.prune`, which says `run R died holding resource X; it is free`).
+- **`priority`** is null (an ordinary run) or `"land"` (`kitlib.lock.queue.PRIORITIES`); any other value is a usage error (`LockError`, exit 2). The entry carries `"priority"`.
+  - Plan order: own_turn entries (a hold's claimer, a nested run), then entries the owner moved to the top (latest move first), then `"land"` entries in ticket order, then a gpu entry whose gpu slots are free, then ticket order.
+  - Backfill: a run behind a landing may start first only when it ends before the landing is planned to start, unless the landing's start was put off by its resource alone (`queue.plan`: its slots were free at an earlier time when its resource was not, and it is not parked). Such a start keeps out only the entries naming its resource; the others plan around the slots it is planned to take, so they start now on idle cores, and the landing starts no later than it would have. Example (`tests/lock/test_queue.py` `ResourceExclusion`): repo X's first landing holds a quarter of the cores for 30 more minutes and X's second waits for it; a landing of repo Y and a 60-minute ordinary run both start now, and X's third still waits for X's second. A landing whose slots are not free either stays a barrier as before. Nothing holding slots is stopped for a landing.
+- An entry written before these fields existed has neither key and plans as an ordinary run with no resource; a `priority` value on disk that is not in `PRIORITIES` plans as ordinary too.
+- Tests: `tests/lock/test_queue.py` (LandPriority, ResourceExclusion) and `tests/lock/test_run.py` (Resources).
+
 ## Console windows
 
 A run booked by `book()` (`machine_lock.py run`, a gate, a `slot()`) watches for console windows from its first command's start to its release (`kitlib/lock/run.py` `Slot.start`; `Slot.watch_stop`, which the release calls before it ends the job; `kitlib/proc/winwatch.py`). A window is the run's when its program is in the run's job (`Slot.window_owner`, `Job.contains`). The ended record gets `windows` (a list of `at cls how title pid exe host_pid host_exe ours`, at most `winwatch.RECORD_CAP`, 50, with `windows_truncated` the count left out) when any window was seen, and `windows_error` when the monitor could not run or raised as it started (`Slot.watch_start`; the run goes on); the history line carries neither (`kitlib/lock/store.py` `Store.HISTORY_KEYS`). `machine_lock.py run` (`run_command`) says the report after the release (`Slot.window_lines`; the lines are in `docs/gate.md` "Console windows"); a gate says it itself; any other run says nothing. A window warns and never changes a run's exit code. `WATCH_WINDOWS = False` in `kitlib/lock/run.py` turns the monitor off.
 
 ## Exclusive resources
 
-`kitlib/lock/resource.py` keeps a second queue in the same store, `resources.json`, for things one caller holds at a time and that take no slot: a repository's landing (docs/gate.md "The landing queue"). It is not in the snapshot and has no write call here; its callers use the module directly.
+`kitlib/lock/resource.py` keeps a second queue in the same store, `resources.json`, for things one caller holds at a time and that take no slot. Nothing in the kit calls it now: a landing books `kitlib.lock.run.book(..., resource="landing:<git common dir>", priority="land")` instead, one entry in `queue.json` (Run resources and landing priority; docs/gate.md "The landing queue"), and only `tests/lock/test_resource.py` exercises the module. An installed kit from before that change still reads and writes `resources.json` for its landings, so the file can be present. The module is not in the snapshot and has no write call here. It is separate from a run's `resource`, which lives in the run's queue entry and is held only while that run is.
 
 - `join(store, resource, label)` puts a `Turn` at the back; `try_take()` returns `[]` when the caller holds the resource, else the live entries ahead of it, holder first; `wait(timeout_s)` repeats it for `timeout_s` from the first look that finds entries ahead; `leave()` gives the turn up and never raises. `entries(store, resource)` reads the queue without writing.
 - First come, first served: the lowest ticket for a resource holds it, nothing goes ahead of an earlier entry, and nothing takes a resource from its holder.
