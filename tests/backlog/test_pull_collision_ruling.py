@@ -7,7 +7,7 @@ import unittest
 from kitlib.backlog import plan as pmod
 from kitlib.backlog.errors import Refusal, Usage
 
-from tests.backlog.helpers import BRANCH, TODAY, StoreCase, priced, rec
+from tests.backlog.helpers import BRANCH, TODAY, StoreCase, parse, priced, rec
 
 HOLDER = 'kit/holder'
 
@@ -81,6 +81,18 @@ class PullCollision(StoreCase):
                          ('pulled', 'R-9001', 'the owner said go (PM R-9001)'))
         self.assertEqual(change.ruling, 'R-9001')
 
+    def test_a_pull_that_overlaps_a_record_on_the_callers_own_branch_takes_a_reason_alone(self):
+        # Bundling overlapping records onto one branch is not a collision: the branch already
+        # holds that scope. It is still out of `next`'s offer, so it takes `--reason`.
+        self.seed(mine('kitlib/backlog/**'), priced('FOO', scope='kitlib/backlog/scope.py'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'FOO')
+        self.assertNotIn('--ruling', str(cm.exception))
+        change = self.verb('pull', 'FOO', reason='bundled with MINE')
+        r = self.get('FOO')
+        self.assertEqual((r.get('state'), r.get('preempt')), ('pulled', 'bundled with MINE'))
+        self.assertIsNone(change.ruling)
+
 
 class SetScopeWidening(StoreCase):
     remote = False
@@ -131,6 +143,66 @@ class SetScopeWidening(StoreCase):
             self.verb('set', 'MINE', [('scope', ['kitlib/backlog/**']), ('priority', ['1']),
                                       ('priority_by', ['pm'])], ruling='R-9001')
         self.assertIn('one ruling, one change', str(cm.exception).lower())
+        self.assertIn('a price move', str(cm.exception))
+
+    def test_a_widening_with_a_ruling_and_an_owner_hold_release_is_usage(self):
+        self.seed(hold(scope='kitlib/backlog/offer.py'),
+                  priced('MINE', state='pulled', pulled_at=TODAY, pulled_by=BRANCH,
+                         scope='kitlib/backlog/plan.py', blocked_on='owner'))
+        with self.assertRaises(Usage) as cm:
+            self.verb('set', 'MINE', [('scope', ['kitlib/backlog/**']), ('blocked_on', ['-'])],
+                      ruling='R-9001')
+        self.assertIn('one ruling, one change', str(cm.exception).lower())
+        self.assertIn('an owner-hold release', str(cm.exception))
+        self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/plan.py'])
+
+    def test_widening_never_collides_with_the_record_itself(self):
+        # MINE is a live pull too; its own old scope is under the new one.
+        self.seed(mine('kitlib/backlog/plan.py'))
+        self.verb('set', 'MINE', [('scope', ['kitlib/backlog/**'])])
+        self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/**'])
+
+    def test_widening_into_a_sibling_on_the_same_branch_is_free(self):
+        self.seed(mine('kitlib/backlog/offer.py', rid='SIB'), mine('kitlib/backlog/plan.py'))
+        change = self.verb('set', 'MINE', [('scope', ['kitlib/backlog/**'])])
+        self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/**'])
+        self.assertIsNone(change.ruling)
+
+    def test_the_branch_that_counts_is_the_records_not_the_callers(self):
+        # A coordinator on another branch widens MINE into SIB: both are pulled by BRANCH, so it
+        # is free. Widening OTHER (pulled by HOLDER) into SIB still collides.
+        self.seed(mine('kitlib/backlog/offer.py', rid='SIB'), mine('kitlib/backlog/plan.py'),
+                  hold(scope='docs/x.md', rid='OTHER'))
+        self.ctx.branch = 'kit/coordinator'
+        self.repo.git('branch', 'kit/coordinator')
+        self.verb('set', 'MINE', [('scope', ['kitlib/backlog/**'])])
+        with self.assertRaises(Refusal) as cm:
+            self.verb('set', 'OTHER', [('scope', ['docs/x.md', 'kitlib/backlog/offer.py'])])
+        self.assertIn('SIB (in flight on %s)' % BRANCH, str(cm.exception))
+
+
+class LiveHits(unittest.TestCase):
+    """pmod.live_hits directly: the arms an end-to-end store cannot reach."""
+
+    def pulled(self, rid, scope, by=HOLDER):
+        return parse(stem=rid, id=rid, scope=scope, state='pulled', pulled_at=TODAY,
+                     pulled_by=by, priority='2', priority_by='agent')
+
+    def test_a_scope_that_cannot_be_compared_is_a_hit(self):
+        hits = pmod.live_hits(['kitlib/backlog/plan.py'], [self.pulled('BAD', 'kitlib/*.py')])
+        self.assertEqual(len(hits), 1, hits)
+        self.assertIn('cannot be compared with BAD (in flight on %s)' % HOLDER, hits[0])
+
+    def test_skip_drops_the_record_itself(self):
+        holding = [self.pulled('SELF', 'a/x.py'), self.pulled('OTHER', 'b/y.py')]
+        self.assertEqual(pmod.live_hits(['a/**'], holding, skip='SELF'), [])
+        self.assertEqual(len(pmod.live_hits(['a/**'], holding)), 1)
+
+    def test_a_pull_on_the_exempt_branch_is_no_hit(self):
+        holding = [self.pulled('SIB', 'a/x.py', by=BRANCH), self.pulled('OTHER', 'a/y.py')]
+        hits = pmod.live_hits(['a/**'], holding, branch=BRANCH)
+        self.assertEqual(len(hits), 1, hits)
+        self.assertIn('OTHER', hits[0])
 
 
 class Widened(unittest.TestCase):
@@ -187,6 +259,13 @@ class TakeoverCollision(StoreCase):
                   self.pulled('LIVE', 'kit/live-one', 'area/shared/x.py', session='other'))
         with self.assertRaises(Usage):
             self.verb('pull', 'DEAD', ruling='9001')
+
+    def test_a_takeover_that_overlaps_a_pull_on_the_callers_own_branch_needs_no_ruling(self):
+        self.seed(self.pulled('DEAD', 'kit/gone', 'area/shared/**'),
+                  self.pulled('SIB', BRANCH, 'area/shared/x.py'))
+        change = self.verb('pull', 'DEAD')
+        self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
+        self.assertIsNone(change.ruling)
 
 
 if __name__ == '__main__':
