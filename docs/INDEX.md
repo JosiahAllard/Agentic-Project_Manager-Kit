@@ -17,6 +17,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `.codex/agent-profile.md` | stub: the profile is docs/agent-profile.md | an agent names the host's profile path | kw: profile
 - `docs/ROSTER.md` | agent roster | choosing an agent | kw: roster, agents
 - `docs/action-hub.md` | Action Hub | the PM action list | kw: action-hub, hub
+- `docs/hub-mcp.md` | hub MCP server: the Action Hub's api as MCP tools, the owner's tools pinned | the hub from an agent | kw: hub-mcp, hub, mcp
 - `docs/hub-remote-access.md` | Hub remote access | reaching the hub from a phone | kw: hub, remote-access, tunnel, cloudflared
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog
 - `docs/backlog-lint.md` | backlog lint | checking backlog records | kw: backlog-lint, lint
@@ -27,7 +28,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
 - `docs/engineering-rulings.md` | engineering rulings | before a design choice | kw: rulings, engineering
-- `docs/gate.md` | gate.py | running the gate | kw: gate, test
+- `docs/gate.md` | gate.py | running the gate | kw: gate, test, stash
 - `docs/go-live.md` | go-live list | switching a repo to the kit | kw: go-live
 - `docs/guard.md` | shell guard and git hooks | a command is refused | kw: guard, hooks, refusal, hub secrets
 - `docs/kitboot.md` | boot/kitboot.py: which kit a host entry runs, the pinned release check before kitlib | a hook or the lock server will not load the kit | kw: kitboot, boot, PM_KIT_ROOT, PM_KIT_RELEASE_ID, release
@@ -55,7 +56,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/pm-watch.md` | PM watcher | watching sessions | kw: pm-watch, watcher
 - `docs/preflight.md` | preflight, board and checkout guard | starting any task | kw: preflight, board, checkout
 - `docs/redfirst.md` | redfirst | proving a test fails first | kw: redfirst, red
-- `docs/repo-checks.md` | forbidden, ruling_cites, trailers, pieces | repo checks | kw: forbidden, ruling_cites, trailers, pieces
+- `docs/repo-checks.md` | forbidden, trailers, pieces | repo checks | kw: forbidden, trailers, pieces
 - `docs/review-pack.md` | review_pack | preparing a review | kw: review-pack, review
 - `docs/shipping.md` | what ships | changing the shipped set | kw: shipping, ships
 - `docs/sync-base.md` | sync_base | main moved | kw: sync-base, merge
@@ -118,14 +119,12 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/checkout_guard.py` | is a path in the main checkout; strays in it (`docs/preflight.md`) | kw: checkout_guard, stray
 - `tools/kit_stubs.py` | write or check a repo's stubs for the kit tools (`docs/install.md`) | kw: kit_stubs, stubs
 - `tools/kit_tests.py` | run the kit test suite, whole or selected (`docs/test-tools.md`) | kw: kit_tests, tests
-- `tools/ledger_refs.py` | where each ruling id is cited (`docs/ledger.md`) | kw: ledger_refs
 - `tools/machine_paths.py` | refuse a hard-coded machine path (`docs/commit.md`) | kw: machine_paths
 - `tools/machine_setup.py` | set up a machine (guard entry, plugin, owner email, agent temp), switch from an older kit clone, or the committed repo setup with --repo (`docs/machine-setup.md`) | kw: machine_setup, fresh, owner email, repo setup
 - `tools/agent_temp_init.py` | set up the agents' temp folder alone (`docs/machine-setup.md` "Agent temp init") | kw: agent_temp_init, agent temp
 - `tools/plugin_refresh.py` | export pushed kit main and refresh the plugin in every account folder (`docs/plugin-source.md`) | kw: plugin_refresh, plugin
 - `tools/pieces.py` | the path-to-piece table (`docs/repo-checks.md`) | kw: pieces
 - `tools/pm_data.py` | make or re-link the PM-data branch (`docs/pm-data-branch.md`) | kw: pm_data
-- `tools/ruling_cites.py` | fail an added ruling citation the ledger cannot back (`docs/repo-checks.md`) | kw: ruling_cites
 - `tools/trailers.py` | fail a commit with no agent trailer (`docs/repo-checks.md`) | kw: trailers
 - `tools/worktree_paths.py` | which path a worktree write may go to (`docs/worktree-paths.md`) | kw: worktree_paths
 - `tools/worktree_sweep_task.py` | nightly worktree sweep scheduled task (`docs/worktree-remove.md`) | kw: worktree_sweep_task, sweep

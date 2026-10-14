@@ -9,7 +9,6 @@ import tempfile
 import unittest
 
 from kitlib import config
-from kitlib.backlog import ledger
 from kitlib.config import user
 from kitlib.git import defaults
 from tests import gitfixture
@@ -182,15 +181,6 @@ class RepoName(Case):
         r.config('[remote "origin"]\n\turl = https://example.com/x/Widget.git\n')
         r.kit({'repo': {'name': 'mine'}})
         self.assertEqual(r.load().repo['name'], 'mine')
-
-    def test_the_ledger_column_is_never_derived(self):
-        r = self.repo()
-        r.config('[remote "origin"]\n\turl = https://example.com/x/Widget.git\n')
-        cfg = r.load()
-        self.assertEqual(cfg.repo['name'], 'Widget')
-        self.assertEqual(ledger.ledger_name(cfg), '')
-        r.kit({'repo': {'name': 'Mine'}})
-        self.assertEqual(ledger.ledger_name(r.load()), 'mine')
 
 
 @real_git("checks the repository name against git's own `git remote get-url`")

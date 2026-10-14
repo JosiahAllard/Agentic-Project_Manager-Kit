@@ -59,10 +59,9 @@ class OpenStore(unittest.TestCase):
         self.assertEqual(ctx.current_branch(), 'main')
 
     def test_the_context_is_built_without_a_ledger(self):
-        with mock.patch.object(lmod, 'Ledger') as ledger, \
-                mock.patch.object(lmod, 'read_entries') as read_entries:
+        self.assertFalse(hasattr(lmod, 'Ledger'))
+        with mock.patch.object(lmod, 'read_entries') as read_entries:
             ctx = opener.open_store(self.repo.root, fetch=False)
-        ledger.assert_not_called()
         read_entries.assert_not_called()
         self.assertIsInstance(ctx, pmod.Context)
         self.assertFalse(hasattr(ctx, 'ledger'))

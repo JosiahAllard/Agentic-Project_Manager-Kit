@@ -149,6 +149,50 @@ class UserConfigTest(unittest.TestCase):
             self.assertEqual(user.ledger_path(), self.ledger)
 
 
+class RetiredKeyTest(unittest.TestCase):
+    """A machine config written before a key was removed still loads (user.RETIRED): the key is
+    dropped whatever it holds, and never returned."""
+
+    setUp = UserConfigTest.setUp
+    write = UserConfigTest.write
+
+    def test_a_retired_key_loads_and_is_not_returned(self):
+        self.assertIn('ledger_refs', user.RETIRED)
+        self.write({'ledger_path': self.ledger,
+                    'ledger_refs': {'repos': {'alpha': {'path': self.home, 'ref': 'origin/main'}},
+                                    'folders': {'notes': self.home}}})
+        got = user.user_config(self.home)
+        self.assertEqual(got['ledger_path'], self.ledger)
+        for key in user.RETIRED:
+            self.assertNotIn(key, got)
+
+    def test_a_retired_key_loads_whatever_it_holds(self):
+        for value in ('not an object', 7, [], None, {'no_such_key': 1}):
+            self.write({'ledger_path': self.ledger, 'ledger_refs': value})
+            self.assertEqual(user.user_config(self.home)['ledger_path'], self.ledger, repr(value))
+
+    def test_no_schema_key_is_retired_and_no_doc_line_names_one(self):
+        for key in user.RETIRED:
+            self.assertNotIn(key, user.SCHEMA)
+            self.assertFalse([line for line in user.doc_lines() if line.startswith('- `%s`' % key)])
+
+    def test_failing_keys_never_names_a_retired_key(self):
+        self.assertEqual(user.failing_keys({'ledger_refs': 'x', 'ledger_ref': 1}), ['ledger_ref'])
+
+
+class RetiredKeyUnchangedTest(unittest.TestCase):
+    """What the retirement leaves as it was: an unknown key still refuses."""
+
+    setUp = UserConfigTest.setUp
+    write = UserConfigTest.write
+
+    def test_an_unknown_key_beside_a_retired_one_still_refuses(self):
+        self.write({'ledger_refs': {}, 'ledger_ref': {}})
+        with self.assertRaises(config.ConfigError) as cm:
+            user.user_config(self.home)
+        self.assertIn('unknown key(s) ledger_ref (allowed:', str(cm.exception))
+
+
 class DocTest(unittest.TestCase):
     """docs/kit-json.md lists exactly the schema's lines: one per key, in schema order."""
 
