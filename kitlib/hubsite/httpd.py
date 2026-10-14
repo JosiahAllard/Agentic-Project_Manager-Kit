@@ -131,6 +131,7 @@ VIA_HEADER = 'X-Hub-Via'
 TUNNEL_VIA = 'tunnel'               # the tunnel listener's own source: no VIA_HEADER may claim it
 PAIR_ROUTE = _api.BASE + '/pair'    # POST, the owner's token: a one-time link for the browser
 PAIR_PATH = '/pair'                 # GET ?code=...: redeems it and sets the session cookie
+UNPAIR_ROUTE = _api.BASE + '/unpair'    # POST, the owner's token: ends every browser session
 BUSY = 'busy'
 RETRY_AFTER_S = 1
 INTERNAL = 'the server could not answer this request'
@@ -172,10 +173,12 @@ class Request(object):
     http.server parsed, itself: every value of a repeated header is in it. `path` is the target
     before its `?`, never percent-decoded. `query` ({name: first value}), `role`, `via` and
     `body` (the decoded JSON of a write, else None) are filled in as the request passes each
-    step; a gate sees them empty."""
+    step; a gate sees them empty. `reply_headers` ((name, value) pairs) is what the gate adds to
+    whatever answer the request gets, refusals too; they go before the answer's own headers, so
+    a header the answer sets as well (a route's Set-Cookie) comes last and wins."""
 
     __slots__ = ('method', 'target', 'path', 'query_text', 'query', 'headers', 'client', 'port',
-                 'role', 'via', 'body')
+                 'role', 'via', 'body', 'reply_headers')
 
     def __init__(self, method, target, headers, client='', port=None):
         self.method = method
@@ -188,6 +191,7 @@ class Request(object):
         self.role = None
         self.via = ''
         self.body = None
+        self.reply_headers = ()
 
     def header(self, name):
         """The header's value when it was sent exactly once, else None."""
@@ -227,26 +231,37 @@ def local_hosts(host, port):
 def local_gate(creds):
     """The local listener's gate: the role `creds` (auth.Credentials) gives the request's
     Authorization header or session cookie, or None. It never answers a Response: a request
-    with no credential still reaches the page's files, and the Api refuses it everything else."""
+    with no credential still reaches the page's files, and the Api refuses it everything else.
+    A session cookie that renewed its session (Credentials.resolve) is sent again with the
+    answer, auth.cookie_header on creds.port, so the browser's copy lives as long."""
     def gate(request):
         cookies = auth.parse_cookies('; '.join(request.headers.get_all('Cookie') or ()))
-        return creds.role_for(request.headers, cookies)
+        role, renewed = creds.resolve(request.headers, cookies)
+        if renewed is not None:
+            request.reply_headers = (('Set-Cookie', auth.cookie_header(renewed, creds.port)),)
+        return role
     return gate
 
 
 def pair_routes(creds):
-    """The routes that pair the PC's browser, for a Listener's `routes`.
+    """The routes that pair the PC's browser, and unpair every one, for a Listener's `routes`.
 
     POST PAIR_ROUTE, the owner's token only: {"ok", "path", "ttl"}; `path` is PAIR_PATH with a
     fresh one-time code, good for `ttl` seconds. The Authorization header alone must give the
     owner role: a session cookie is refused, so a paired browser (or a script in the page's
-    origin) cannot make the code of its own successor and a session ends at auth.SESSION_TTL_S.
+    origin) cannot make the code of its own successor and a session ends at auth.SESSION_TTL_S
+    unless it is used (auth, "Sessions").
     GET PAIR_PATH?code=...: redeems the code, sets the session cookie (auth.cookie_header on
     creds.port) and sends the browser to "/"; a code that is unknown, expired or already used
-    is a 403."""
-    def new(request):
+    is a 403.
+    POST UNPAIR_ROUTE, the owner's token only, as PAIR_ROUTE: {"ok": true}; every browser
+    session and every pairing code not yet redeemed ends (Credentials.unpair_all)."""
+    def owners(request):
         # role_for with no cookies: only a Bearer token can answer OWNER here
-        if request.role != auth.OWNER or creds.role_for(request.headers) != auth.OWNER:
+        return request.role == auth.OWNER and creds.role_for(request.headers) == auth.OWNER
+
+    def new(request):
+        if not owners(request):
             return refusal(403, 'forbidden', "only the owner's token may pair a browser, never "
                            'a browser session', 'role')
         code = creds.new_pairing_code()
@@ -261,7 +276,15 @@ def pair_routes(creds):
         return Response(303, b'', JSON, (('Location', '/'),
                                          ('Set-Cookie', auth.cookie_header(value, creds.port))))
 
-    return {('POST', PAIR_ROUTE): new, ('GET', PAIR_PATH): redeem}
+    def unpair(request):
+        if not owners(request):
+            return refusal(403, 'forbidden', "only the owner's token may unpair the browsers, "
+                           'never a browser session', 'role')
+        creds.unpair_all()
+        return json_response(200, {'ok': True})
+
+    return {('POST', PAIR_ROUTE): new, ('GET', PAIR_PATH): redeem,
+            ('POST', UNPAIR_ROUTE): unpair}
 
 
 def static_file(static_dir, path):
@@ -485,7 +508,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_response_only(response.status)
             self.send_header('Content-Type', response.content_type)
             self.send_header('Content-Length', str(len(response.body)))
-            for name, value in SECURITY_HEADERS + response.headers:
+            extra = request.reply_headers if request is not None else ()
+            for name, value in SECURITY_HEADERS + tuple(extra) + response.headers:
                 self.send_header(name, value)
             self.send_header('Connection', 'close')
             self.end_headers()

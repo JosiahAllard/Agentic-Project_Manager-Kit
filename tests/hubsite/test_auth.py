@@ -1,9 +1,13 @@
 """kitlib.hubsite.auth: the local listener's roles. Token files live in a temp folder; the real
 machine config folder is never read or written."""
 import email.message
+import hashlib
+import hmac
+import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -31,8 +35,9 @@ class Case(unittest.TestCase):
         self.paths = auth.ensure_tokens(self.folder)
         self.owner = auth.read_token(self.folder, auth.OWNER)
         self.agent = auth.read_token(self.folder, auth.AGENT)
-        self.clock = Clock()
-        self.creds = auth.Credentials(self.folder, clock=self.clock)
+        self.clock = Clock()                # the wall clock: sessions
+        self.mono = Clock()                 # the monotonic clock: pairing codes
+        self.creds = auth.Credentials(self.folder, clock=self.clock, monotonic=self.mono)
 
     def put(self, role, text):
         with open(self.paths[role], 'w', encoding='utf-8') as f:
@@ -235,7 +240,32 @@ class PairingTest(Case):
 
     def test_an_expired_code_pairs_nothing(self):
         code = self.creds.new_pairing_code()
-        self.clock.now += auth.PAIR_TTL_S
+        self.mono.now += auth.PAIR_TTL_S
+        self.assertIsNone(self.creds.pair(code))
+
+    def test_a_code_lives_on_the_monotonic_clock_and_never_the_wall_clock(self):
+        code = self.creds.new_pairing_code()
+        self.clock.now += 10 * auth.PAIR_TTL_S          # the wall clock jumps forward
+        self.assertIsNotNone(self.creds.pair(code))
+        code = self.creds.new_pairing_code()
+        self.clock.now -= 20 * auth.PAIR_TTL_S          # and back
+        self.mono.now += auth.PAIR_TTL_S - 1
+        self.assertIsNotNone(self.creds.pair(code))
+        code = self.creds.new_pairing_code()
+        self.mono.now += auth.PAIR_TTL_S
+        self.assertIsNone(self.creds.pair(code))
+
+    def test_an_unpair_while_a_code_is_redeemed_leaves_no_session(self):
+        code = self.creds.new_pairing_code()
+        real = self.creds._owner_key
+
+        def racing():                   # an unpair lands between the steps of the redeem
+            self.creds.unpair_all()
+            return real()
+        self.creds._owner_key = racing
+        value = self.creds.pair(code)
+        self.creds._owner_key = real
+        self.assertIsNone(value)
         self.assertIsNone(self.creds.pair(code))
 
     def test_only_the_newest_codes_are_kept(self):
@@ -260,10 +290,27 @@ class PairingTest(Case):
         self.assertIsNone(self.creds.role_for(bearer('x' * 43), self.cookie(value)))
         self.assertEqual(self.creds.role_for(bearer(self.agent), self.cookie(value)), auth.AGENT)
 
-    def test_a_session_ends_with_its_lifetime_and_with_the_process(self):
+    def test_a_session_ends_with_its_lifetime_with_unpair_and_with_a_new_owner_token(self):
         value = self.creds.pair(self.creds.new_pairing_code())
+        # a Credentials made without persist keeps its sessions to itself
         self.assertIsNone(auth.Credentials(self.folder).role_for({}, self.cookie(value)))
         self.clock.now += auth.SESSION_TTL_S
+        self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+        value = self.creds.pair(self.creds.new_pairing_code())
+        self.creds.unpair_all()
+        self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+        value = self.creds.pair(self.creds.new_pairing_code())
+        self.put(auth.OWNER, 'n' * 43 + '\n')
+        self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+
+    def test_no_readable_owner_token_means_no_cookie_role_and_no_pairing(self):
+        value = self.creds.pair(self.creds.new_pairing_code())
+        self.put(auth.OWNER, '')
+        self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+        self.assertIsNone(self.creds.pair(self.creds.new_pairing_code()))
+        self.put(auth.OWNER, self.owner + '\n')
+        self.assertEqual(self.creds.role_for({}, self.cookie(value)), auth.OWNER)
+        self.put(auth.AGENT, self.owner)                 # one token for both roles: no cookie role
         self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
 
     def test_the_cookie_is_http_only_and_same_site_strict(self):
@@ -325,6 +372,272 @@ class PairingTest(Case):
         self.assertIsNone(self.creds.role_for({}, self.cookie(values[0])))
         for value in values[1:]:
             self.assertEqual(self.creds.role_for({}, self.cookie(value)), auth.OWNER)
+
+
+def mac(key, value):
+    """A session's entry in the sessions file: the SHA-256 HMAC of its value under the owner token."""
+    return hmac.new(key.encode('ascii'), value.encode('ascii'), hashlib.sha256).hexdigest()
+
+
+class PersistCase(Case):
+    PORT = 8790
+
+    def setUp(self):
+        Case.setUp(self)
+        self.logged = []
+        self.creds = self.fresh()
+        self.path = os.path.join(self.folder, auth.sessions_file(self.PORT))
+
+    def fresh(self, port=None):
+        return auth.Credentials(self.folder, clock=self.clock, port=port or self.PORT,
+                                persist=True, log=lambda level, text: self.logged.append(
+                                    (level, text)))
+
+    def cookie(self, value, port=None):
+        return {auth.cookie_name(port or self.PORT): value}
+
+    def write(self, obj):
+        with open(self.path, 'w', encoding='ascii') as f:
+            f.write(obj if isinstance(obj, str) else json.dumps(obj))
+
+    def read(self):
+        with open(self.path, encoding='ascii') as f:
+            return json.load(f)
+
+
+class PersistTest(PersistCase):
+    def test_the_file_is_named_for_the_port_beside_the_tokens(self):
+        self.assertEqual(auth.SESSIONS_FILE % 8790, 'browser-sessions-8790.json')
+        self.assertEqual(auth.sessions_file(8790), 'browser-sessions-8790.json')
+        self.assertFalse(os.path.exists(self.path))             # nothing written before a pair
+        self.creds.pair(self.creds.new_pairing_code())
+        self.assertEqual(sorted(os.listdir(self.folder)),
+                         ['agent.token', 'browser-sessions-8790.json', 'owner.token'])
+
+    def test_persist_needs_a_port(self):
+        for port in (None, '8790', True):
+            with self.assertRaises(ValueError, msg=repr(port)):
+                auth.Credentials(self.folder, port=port, persist=True)
+
+    def test_a_session_survives_a_new_credentials_on_the_same_folder_and_port(self):
+        value = self.creds.pair(self.creds.new_pairing_code())
+        again = self.fresh()
+        self.assertEqual(again.role_for({}, self.cookie(value)), auth.OWNER)
+        self.assertEqual(again.notes, [])
+        self.clock.now += auth.SESSION_TTL_S - 1
+        self.assertEqual(self.fresh().role_for({}, self.cookie(value)), auth.OWNER)
+        self.clock.now += 1
+        self.assertIsNone(self.fresh().role_for({}, self.cookie(value)))
+
+    def test_the_file_holds_the_sessions_mac_and_never_its_value(self):
+        values = [self.creds.pair(self.creds.new_pairing_code()) for _ in range(3)]
+        with open(self.path, 'rb') as f:
+            raw = f.read()
+        for value in values:
+            self.assertNotIn(value.encode('ascii'), raw)
+        self.assertNotIn(self.owner.encode('ascii'), raw)
+        self.assertNotIn(self.agent.encode('ascii'), raw)
+        exp = int(self.clock.now + auth.SESSION_TTL_S)
+        self.assertEqual(self.read(), {'v': 1, 'sessions': [
+            {'mac': mac(self.owner, v), 'exp': exp} for v in values]})
+        self.assertFalse(raw.endswith(b'\r\n'))
+        self.assertEqual([n for n in os.listdir(self.folder) if n.endswith('.tmp')], [])
+
+    def test_an_entry_without_the_owner_tokens_mac_is_refused(self):
+        value = 'v' * 43
+        exp = int(self.clock.now + 1000)
+        real = mac(self.owner, value)
+        flipped = real[:-1] + ('1' if real.endswith('0') else '0')    # never the real one
+        for forged in (hashlib.sha256(value.encode('ascii')).hexdigest(), mac(self.agent, value),
+                       mac(self.owner, value + 'x'), flipped):
+            self.write({'v': 1, 'sessions': [{'mac': forged, 'exp': exp}]})
+            self.assertIsNone(self.fresh().role_for({}, self.cookie(value)), forged)
+        self.write({'v': 1, 'sessions': [{'mac': mac(self.owner, value), 'exp': exp}]})
+        self.assertEqual(self.fresh().role_for({}, self.cookie(value)), auth.OWNER)
+
+    def test_a_new_owner_token_ends_every_session_in_this_and_a_new_instance(self):
+        value = self.creds.pair(self.creds.new_pairing_code())
+        self.put(auth.OWNER, 'n' * 43 + '\n')
+        self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+        self.assertIsNone(self.fresh().role_for({}, self.cookie(value)))
+        self.put(auth.OWNER, self.owner + '\n')                  # the old token back: honoured
+        self.assertEqual(self.fresh().role_for({}, self.cookie(value)), auth.OWNER)
+
+    def test_expired_entries_are_dropped_on_load_and_on_the_next_write(self):
+        now = int(self.clock.now)
+        self.write({'v': 1, 'sessions': [{'mac': mac(self.owner, 'a' * 43), 'exp': now},
+                                         {'mac': mac(self.owner, 'b' * 43), 'exp': now - 5},
+                                         {'mac': mac(self.owner, 'c' * 43), 'exp': now + 9}]})
+        creds = self.fresh()
+        self.assertIsNone(creds.role_for({}, self.cookie('a' * 43)))
+        self.assertIsNone(creds.role_for({}, self.cookie('b' * 43)))
+        self.assertEqual(creds.role_for({}, self.cookie('c' * 43)), auth.OWNER)
+        value = creds.pair(creds.new_pairing_code())
+        self.assertEqual([e['mac'] for e in self.read()['sessions']],
+                         [mac(self.owner, 'c' * 43), mac(self.owner, value)])
+
+    def test_expired_entries_do_not_count_toward_the_cap_on_load(self):
+        now = int(self.clock.now)
+        live = [{'mac': mac(self.owner, '%043d' % i), 'exp': now + 100}
+                for i in range(auth.MAX_SESSIONS)]
+        dead = [{'mac': mac(self.owner, 'd%042d' % i), 'exp': now - 1} for i in range(3)]
+        self.write({'v': 1, 'sessions': dead + live})
+        creds = self.fresh()
+        self.assertEqual(creds.notes, [])
+        for i in range(auth.MAX_SESSIONS):
+            self.assertEqual(creds.role_for({}, self.cookie('%043d' % i)), auth.OWNER, i)
+
+    def test_a_far_future_entry_is_held_to_one_lifetime_from_the_load(self):
+        self.write({'v': 1, 'sessions': [{'mac': mac(self.owner, 'f' * 43),
+                                          'exp': int(self.clock.now) + 50 * auth.SESSION_TTL_S}]})
+        creds = self.fresh()
+        self.clock.now += auth.SESSION_TTL_S - 1
+        self.assertEqual(creds.role_for({}, self.cookie('f' * 43)), auth.OWNER)
+        self.clock.now += 1
+        self.assertIsNone(creds.role_for({}, self.cookie('f' * 43)))
+
+    def test_only_the_newest_entries_are_loaded(self):
+        now = int(self.clock.now)
+        entries = [{'mac': mac(self.owner, '%043d' % i), 'exp': now + 100 + i}
+                   for i in range(auth.MAX_SESSIONS + 3)]
+        self.write({'v': 1, 'sessions': list(reversed(entries))})
+        creds = self.fresh()
+        for i in range(auth.MAX_SESSIONS + 3):
+            want = auth.OWNER if i >= 3 else None
+            self.assertEqual(creds.role_for({}, self.cookie('%043d' % i)), want, i)
+
+    def test_a_file_that_cannot_be_read_loads_empty_with_a_note_and_is_kept(self):
+        good = {'mac': mac(self.owner, 'g' * 43), 'exp': int(self.clock.now) + 50}
+        for text in ('', 'not json', '[]', '{"v": 2, "sessions": []}', '{"v": 1}',
+                     '{"v": 1, "sessions": {}}', '\xff\xfe', json.dumps({'v': True,
+                                                                         'sessions': [good]})):
+            with open(self.path, 'wb') as f:
+                f.write(text.encode('latin-1'))
+            creds = self.fresh()
+            self.assertIsNone(creds.role_for({}, self.cookie('g' * 43)), repr(text))
+            self.assertEqual(len(creds.notes), 1, repr(text))
+            self.assertIn(self.path, creds.notes[0])
+            with open(self.path, 'rb') as f:
+                self.assertEqual(f.read(), text.encode('latin-1'))     # never deleted
+        os.remove(self.path)
+        os.mkdir(self.path)
+        creds = self.fresh()
+        self.assertEqual(len(creds.notes), 1)
+        self.assertTrue(os.path.isdir(self.path))
+
+    def test_a_bad_entry_is_skipped_and_the_good_ones_kept(self):
+        now = int(self.clock.now)
+        good = {'mac': mac(self.owner, 'g' * 43), 'exp': now + 50}
+        bad = [{'mac': 'z' * 64, 'exp': now + 50}, {'mac': mac(self.owner, 'h' * 43).upper(),
+                                                    'exp': now + 50},
+               {'mac': mac(self.owner, 'i' * 43)[:-2], 'exp': now + 50},
+               {'mac': mac(self.owner, 'j' * 43), 'exp': True},
+               {'mac': mac(self.owner, 'k' * 43), 'exp': '%d' % (now + 50)},
+               {'mac': mac(self.owner, 'l' * 43), 'exp': float(now + 50)},
+               {'mac': 7, 'exp': now + 50}, {'exp': now + 50}, 'x', None]
+        self.write({'v': 1, 'sessions': bad + [good]})
+        creds = self.fresh()
+        self.assertEqual(creds.role_for({}, self.cookie('g' * 43)), auth.OWNER)
+        for c in 'hijkl':
+            self.assertIsNone(creds.role_for({}, self.cookie(c * 43)), c)
+        self.assertEqual(len(creds.notes), 1)
+        self.assertIn('has %d entries this hub cannot read' % len(bad), creds.notes[0])
+
+    def test_another_ports_file_is_not_read(self):
+        value = self.creds.pair(self.creds.new_pairing_code())
+        other = self.fresh(port=9001)
+        self.assertIsNone(other.role_for({}, self.cookie(value, 9001)))
+        self.assertFalse(os.path.exists(os.path.join(self.folder, auth.sessions_file(9001))))
+
+    def test_without_persist_nothing_is_written(self):
+        creds = auth.Credentials(self.folder, clock=self.clock, port=self.PORT)
+        value = creds.pair(creds.new_pairing_code())
+        creds.resolve({}, {creds.cookie: value})
+        creds.unpair_all()
+        self.assertEqual(sorted(os.listdir(self.folder)), ['agent.token', 'owner.token'])
+
+    def test_unpair_all_ends_every_session_here_and_in_a_new_instance(self):
+        values = [self.creds.pair(self.creds.new_pairing_code()) for _ in range(3)]
+        self.creds.unpair_all()
+        for value in values:
+            self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+            self.assertIsNone(self.fresh().role_for({}, self.cookie(value)))
+        self.assertEqual(self.read(), {'v': 1, 'sessions': []})
+        self.assertEqual(self.creds.role_for(bearer(self.owner), {}), auth.OWNER)
+
+    def test_a_failed_write_still_pairs_and_says_so(self):
+        with mock.patch.object(auth.os, 'replace', side_effect=PermissionError('the replace failed')):
+            value = self.creds.pair(self.creds.new_pairing_code())
+        self.assertEqual(self.creds.role_for({}, self.cookie(value)), auth.OWNER)
+        (level, text), = self.logged
+        self.assertEqual(level, 'error')
+        self.assertIn('restart', text)
+        self.assertIn('the replace failed', text)
+        self.assertNotIn(value, text)
+        self.assertEqual(sorted(os.listdir(self.folder)), ['agent.token', 'owner.token'])
+
+    def test_the_default_clock_is_the_wall_clock(self):
+        creds = auth.Credentials(self.folder, port=self.PORT, persist=True)
+        before = time.time()
+        creds.pair(creds.new_pairing_code())
+        (entry,) = self.read()['sessions']
+        self.assertLessEqual(int(before) + auth.SESSION_TTL_S - 1, entry['exp'])
+        self.assertLessEqual(entry['exp'], time.time() + auth.SESSION_TTL_S)
+
+
+class RenewTest(PersistCase):
+    HALF = auth.SESSION_TTL_S // 2
+
+    def test_a_session_with_half_or_more_left_is_not_renewed(self):
+        start = self.clock.now
+        value = self.creds.pair(self.creds.new_pairing_code())
+        self.clock.now = start + self.HALF
+        self.assertEqual(self.creds.resolve({}, self.cookie(value)), (auth.OWNER, None))
+        self.clock.now = start + auth.SESSION_TTL_S
+        self.assertEqual(self.creds.resolve({}, self.cookie(value)), (None, None))
+
+    def test_a_session_with_less_than_half_left_slides_a_full_lifetime_and_is_saved(self):
+        start = self.clock.now
+        value = self.creds.pair(self.creds.new_pairing_code())
+        self.clock.now = start + self.HALF + 1
+        self.assertEqual(self.creds.resolve({}, self.cookie(value)), (auth.OWNER, value))
+        self.assertEqual(self.read()['sessions'][0]['exp'], int(self.clock.now) + auth.SESSION_TTL_S)
+        self.assertEqual(self.creds.resolve({}, self.cookie(value)), (auth.OWNER, None))
+        renewed = self.clock.now
+        self.clock.now = renewed + auth.SESSION_TTL_S - 1
+        self.assertEqual(self.creds.role_for({}, self.cookie(value)), auth.OWNER)
+        self.assertEqual(self.fresh().role_for({}, self.cookie(value)), auth.OWNER)
+        self.clock.now = renewed + auth.SESSION_TTL_S
+        self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+
+    def test_role_for_alone_never_renews(self):
+        start = self.clock.now
+        value = self.creds.pair(self.creds.new_pairing_code())
+        self.clock.now = start + auth.SESSION_TTL_S - 1
+        self.assertEqual(self.creds.role_for({}, self.cookie(value)), auth.OWNER)
+        self.clock.now = start + auth.SESSION_TTL_S
+        self.assertIsNone(self.creds.role_for({}, self.cookie(value)))
+
+    def test_a_bearer_request_renews_nothing(self):
+        value = self.creds.pair(self.creds.new_pairing_code())
+        self.clock.now += self.HALF + 1
+        self.assertEqual(self.creds.resolve(bearer(self.owner), self.cookie(value)),
+                         (auth.OWNER, None))
+        self.assertEqual(self.creds.resolve(bearer(self.agent), self.cookie(value)),
+                         (auth.AGENT, None))
+        self.assertEqual(self.creds.resolve(bearer('x' * 43), self.cookie(value)), (None, None))
+        self.assertEqual(self.creds.resolve({}, {}), (None, None))
+
+    def test_a_renewal_moves_the_session_to_the_newest(self):
+        first = self.creds.pair(self.creds.new_pairing_code())
+        later = [self.creds.pair(self.creds.new_pairing_code())
+                 for _ in range(auth.MAX_SESSIONS - 1)]
+        self.clock.now += self.HALF + 1
+        self.assertEqual(self.creds.resolve({}, self.cookie(first)), (auth.OWNER, first))
+        self.creds.pair(self.creds.new_pairing_code())                  # one past the cap
+        self.assertEqual(self.creds.role_for({}, self.cookie(first)), auth.OWNER)
+        self.assertIsNone(self.creds.role_for({}, self.cookie(later[0])))   # the oldest now
+        self.assertEqual(self.creds.role_for({}, self.cookie(later[1])), auth.OWNER)
 
 
 class ParseCookiesTest(unittest.TestCase):
