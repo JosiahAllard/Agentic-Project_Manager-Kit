@@ -8,16 +8,18 @@ test runs `git stash push`. Scratch repositories with a bare remote in temp and 
 store only."""
 import json
 import os
+import subprocess
 import sys
 import unittest
 from unittest import mock
 
 from kitlib import gate as G
-from kitlib.gate import runner
+from kitlib.gate import result, runner, submit
 from kitlib.git import refs
 from kitlib.records import gate_ok
 from tests.gate import fixtures
-from tests.gate.test_land import BRANCH, LandCase
+from tests.gate.test_land import BRANCH, HANG_S, KIT_ROOT, LandCase
+from tests.gate.test_land_submit import GATE_PY, SubmitCase
 from tests.realgit import real_git
 
 REF = 'refs/stash'
@@ -213,6 +215,69 @@ class LandingRefuses(_Stack, LandCase):
         self.assertTrue(out.undone)
         self.assert_untouched(out, G.FAILED)
         self.assertFalse(os.path.exists(self.repo.path('a.py')))
+
+    def test_a_stack_git_cannot_read_after_the_merged_gate_undoes_the_merge(self):
+        """Fail closed after the run too: a green merged gate, then no answer from git about
+        refs/stash, is NOT LANDED and the merge undone, never an empty stack."""
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        real, broken, calls = refs.ref_commit, [], []
+
+        def ref_commit(ref, cwd):
+            if ref == REF:
+                calls.append(bool(broken))
+                if broken:                      # the reads after the merged gate get no answer
+                    return None, 'git said no'
+            return real(ref, cwd)
+
+        def gate(lander):
+            broken.append(True)
+            return GREEN
+        with mock.patch.object(refs, 'ref_commit', ref_commit):
+            out = self.lander(BRANCH, self.main, tip, merged_gate=gate).run()
+        self.assertEqual(calls, [False, True], calls)   # read before the merge, and after the gate
+        self.assertIn('NOT LANDED: the merged gate passed, and git cannot tell whether the stash '
+                      'stack is empty: git said no', joined(out))
+        self.assertIn('nothing was pushed', joined(out))
+        self.assertTrue(out.undone)
+        self.assert_untouched(out, G.FAILED)
+        self.assertFalse(os.path.exists(self.repo.path('a.py')))
+
+
+class SubmittedLandingRefuses(_Stack, SubmitCase):
+    """A --submit landing (kitlib.gate.submit) with an entry on the stack: the submitter, which
+    checks nothing, prints SUBMITTED and exits 0; the detached landing refuses before any merge,
+    and the refusal is its final land result record, which wait-result prints."""
+
+    def test_the_refusal_reaches_wait_result(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        self.stash_entry()
+        sub_out, _ = self.submit([BRANCH], [tip], expect_main=self.main)
+        self.assertEqual(sub_out.code, G.OK, sub_out.lines)
+        self.assertTrue(sub_out.lines[0].startswith('SUBMITTED kit/feature'), sub_out.lines)
+        running = self.record(BRANCH)
+        self.assertEqual(running['verdict'], 'running')
+        # what the detached tool runs (tests/gate/test_land_submit.py TheDetachedLanding)
+        sub = submit.restore(self.repo.root, sub_out.facts['payload'])
+        out = self.lander(BRANCH, self.main, tip, submitted=sub).run()
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertTrue(out.lines[0].startswith('REFUSED: the stash stack is not empty'), out.lines)
+        self.assert_untouched(out, G.REFUSED)
+
+        rec, why = result.wait(self.repo.root, BRANCH, tip, kind='land', timeout_s=0)
+        self.assertIsNone(why)
+        self.assertEqual((rec['run_id'], rec['verdict'], rec['code']),
+                         (running['run_id'], 'refused', G.REFUSED))
+        self.assertTrue(rec['summary'].startswith('REFUSED: the stash stack is not empty'), rec)
+        self.assertIsNotNone(rec['finished_at'])
+
+        r = subprocess.run([sys.executable, GATE_PY, 'wait-result', BRANCH, '--tip', tip,
+                            '--kind', 'land', '--timeout', '0', '-C', self.repo.root],
+                           capture_output=True, text=True, timeout=HANG_S, env=self.env,
+                           stdin=subprocess.DEVNULL, cwd=KIT_ROOT)
+        self.assertEqual(r.returncode, G.FAILED, (r.stdout, r.stderr))    # any verdict but pass
+        first = r.stdout.splitlines()[0]
+        self.assertTrue(first.startswith('RESULT refused land kit/feature at %s: REFUSED: the '
+                                         'stash stack is not empty' % tip[:10]), r.stdout)
 
 
 class EmptyStack(_Stack, LandCase):
