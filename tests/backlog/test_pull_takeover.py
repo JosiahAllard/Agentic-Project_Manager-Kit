@@ -68,11 +68,14 @@ class PullTakeover(StoreCase):
                 self.assertIn('with no %s' % flag, str(cm.exception))
                 self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
 
-    def test_a_takeover_warns_of_a_live_pull_whose_scope_collides(self):
+    def test_a_takeover_whose_scope_collides_with_a_live_pull_needs_a_ruling(self):
         self.repo.git('branch', 'kit/live-one')
         self.seed(self.pulled('DEAD', GONE, scope='area/shared/**'),
                   self.pulled('LIVE', 'kit/live-one', session='other', scope='area/shared/x.py'))
-        change = self.verb('pull', 'DEAD')
+        with self.assertRaises(Refusal):
+            self.verb('pull', 'DEAD')
+        self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
+        change = self.verb('pull', 'DEAD', ruling='R-9001')
         self.assertIn('warning: scope collides with `LIVE`, in flight on kit/live-one',
                       change.lines)
         self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)

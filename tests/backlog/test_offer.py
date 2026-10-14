@@ -133,6 +133,14 @@ class NextOffer(unittest.TestCase):
         (offers, _), _, _ = omod.next_offer(s, [], seeds=['BBB'])
         self.assertEqual([(o.rec.id, o.seeded) for o in offers], [('BBB', True)])
 
+    def test_a_seed_that_collides_with_a_live_pull_is_passed_over(self):
+        s = snap(priced('BBB', priority='5', scope='link/x/**'),
+                 priced('HOLD', state='pulled', pulled_at='2026-10-01', pulled_by='b',
+                        scope='link/**'))
+        (offers, passed), _, _ = omod.next_offer(s, [s.get('HOLD')], seeds=['BBB'])
+        self.assertEqual([o.rec.id for o in offers], [])
+        self.assertIn('already taken by HOLD', {p.rec.id: p.why for p in passed}['BBB'])
+
     def test_an_unmet_requires_is_passed_over(self):
         s = snap(priced('AAA', priority='1', requires='item:BBB'), priced('BBB', priority='2'))
         ids, passed = offer_ids(s, unmet=lambda r: [('item:BBB', 'open')] if r.id == 'AAA' else [])
