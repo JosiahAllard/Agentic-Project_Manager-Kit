@@ -131,19 +131,32 @@ class _Held:
     deliver(), or while a failed start ended its child. Nothing is held off the main thread
     (signal.signal raises ValueError there, and a signal's handler runs only on the main
     thread), and a signal whose handler was not set from Python (getsignal None: it could not be
-    put back) is not held."""
+    put back) is not held.
+
+    signal.signal runs any pending handler before it swaps, and one may raise there: a Ctrl+C
+    while the next handler is set back, or a Ctrl+Break whose own handler raises while it is
+    held. Either way every handler is still put back (close() sets each again until it takes,
+    up to RETRIES tries: every failed try ran a handler, so the signal behind it is not lost),
+    the queue is still raised again, and the first error is raised after. A _Held whose
+    __init__ raises has put back what it held, so Job.start makes it before its try."""
+
+    RETRIES = 32        # failed sets of one handler in close(), each a signal's handler raising
 
     def __init__(self, signals=HELD_SIGNALS):
         self.before, self.queue = {}, []
-        for s in signals:
-            try:
+        try:
+            for s in signals:
                 before = signal.getsignal(s)
                 if before is None:
                     continue
-                signal.signal(s, self._note)
-            except ValueError:                  # not the main thread
-                return
-            self.before[s] = before
+                try:
+                    signal.signal(s, self._note)
+                except ValueError:              # not the main thread
+                    return
+                self.before[s] = before
+        except BaseException:
+            self.close()
+            raise
 
     def _note(self, signum, frame):
         self.queue.append(signum)
@@ -160,12 +173,23 @@ class _Held:
                 before(s, frame)
 
     def close(self):
-        before, self.before = self.before, {}
-        for s, handler in before.items():
-            signal.signal(s, handler)
-        queue, self.queue = self.queue, []
-        for s in queue:
-            signal.raise_signal(s)
+        first = None
+        for s, handler in list(self.before.items()):
+            for _ in range(self.RETRIES):
+                try:
+                    signal.signal(s, handler)
+                    break
+                except BaseException as e:      # a pending signal's handler ran and raised
+                    first = e if first is None else first
+            del self.before[s]
+        while self.queue:                       # read after the sets: _note may add to it
+            s = self.queue.pop(0)
+            try:
+                signal.raise_signal(s)
+            except BaseException as e:
+                first = e if first is None else first
+        if first is not None:
+            raise first
 
 
 class JobError(OSError):
@@ -281,12 +305,14 @@ class Job:
         reached: one that raises ends the child unrun and start raises it; under SIG_DFL the
         child is ended, then the default ends this process. One that comes during the resume is
         handed on just after it, the same way. One in the last instants, after that hand-on and
-        before the handlers are back, is raised as start returns: start then raises it with
-        self.p the child, running in the job, and the caller ends the job (end(kill=True), or
-        kill-on-close when the job is closed) as for a Ctrl+C one instant after start."""
+        before the handlers are back, is raised as start returns, with self.p the child, running
+        in the job. Under a handler that raises, start raises it, and the caller ends the child
+        as for a Ctrl+C one instant after start: end(kill=True), or closing a kill-on-close job.
+        Under SIG_DFL the default ends this process there; a kill-on-close job ends the child
+        with it, but with Job(kill_on_close=False) nothing ends the child, and it runs on."""
         cmd = bash.resolve(cmd, kw.get("shell", False), kw.get("env"))
         flags = no_window_flags(kw.pop("creationflags", 0)) | win32.CREATE_SUSPENDED
-        held = _Held()          # from making the child to its resume: see _Held
+        held = _Held()      # making the child to its resume; one that raises holds nothing
         try:
             p = subprocess.Popen(cmd, creationflags=flags, **kw)
             try:

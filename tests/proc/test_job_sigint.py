@@ -80,6 +80,22 @@ class _Signal:
         return getattr(signal, name)
 
 
+class _SignalHook:
+    """job.signal whose signal(s, h) calls hook(s, h) first: CPython's signal.signal runs any
+    pending handler before it swaps, so a signal raised from the hook lands where a real one
+    would, and a handler that raises there leaves the swap undone."""
+
+    def __init__(self, hook):
+        self.hook = hook
+
+    def signal(self, s, h):
+        self.hook(s, h)
+        return signal.signal(s, h)
+
+    def __getattr__(self, name):
+        return getattr(signal, name)
+
+
 @unittest.skipUnless(os.name == "nt", "Windows only")
 class CtrlCWhileStarting(unittest.TestCase):
     def setUp(self):
@@ -211,6 +227,42 @@ class CtrlCWhileStarting(unittest.TestCase):
         self.assertIsNot(on_break, _break, "SIGBREAK not held")
         self.restored()
 
+    def test_a_ctrl_c_while_the_handlers_are_put_back_leaves_none_held_and_loses_none(self):
+        """A Ctrl+Break comes while SIGINT is set back (SIGBREAK still held: queued), then a
+        Ctrl+C while SIGBREAK is set back (SIGINT's own handler raises before the swap)."""
+        breaks, fired = [], set()
+        signal.signal(signal.SIGBREAK, lambda signum, frame: breaks.append(signum))
+        restore_break = signal.getsignal(signal.SIGBREAK)
+
+        def hook(s, h):
+            if s == signal.SIGINT and h is _sentinel and "int" not in fired:
+                fired.add("int")
+                signal.raise_signal(signal.SIGBREAK)
+            elif s == signal.SIGBREAK and h is restore_break and "break" not in fired:
+                fired.add("break")
+                signal.raise_signal(signal.SIGINT)
+        with mock.patch.object(job, "signal", _SignalHook(hook)), self.popen():
+            with self.assertRaises(KeyboardInterrupt):
+                self.j.start(PASS)
+        self.assertEqual(fired, {"int", "break"})
+        self.assertIs(signal.getsignal(signal.SIGINT), _sentinel)
+        self.assertIs(signal.getsignal(signal.SIGBREAK), restore_break,
+                      "SIGBREAK left held after start")
+        self.assertEqual(breaks, [signal.SIGBREAK], "the Ctrl+Break held at the end was lost")
+        self.assertEqual(self.j.contains(self.started[0].pid), "in")
+
+    def test_a_handler_that_raises_while_a_signal_is_being_held_leaves_none_held(self):
+        """A pending Ctrl+Break whose handler raises as SIGBREAK is about to be held: start
+        raises it before any child is made, and SIGINT (held a moment before) is put back."""
+        def hook(s, h):
+            if s == signal.SIGBREAK and h is not _break:
+                signal.raise_signal(signal.SIGBREAK)
+        with mock.patch.object(job, "signal", _SignalHook(hook)), self.popen():
+            with self.assertRaises(KeyboardInterrupt):
+                self.j.start(PASS)
+        self.assertEqual(self.seen, [], "a child was made")
+        self.restored()
+
     def test_a_start_that_cannot_create_puts_the_handler_back(self):
         with self.popen(fail=OSError("no such program")):
             with self.assertRaises(OSError):
@@ -259,11 +311,16 @@ class UnderSigDfl(unittest.TestCase):
         # Output to a file, never a pipe: a child left behind would hold a pipe open and hang the
         # run where this test should fail.
         with open(os.path.join(tmp, "out"), "w+b") as out:
-            r = spawn.run([sys.executable, "-c", UNDER_DEFAULT, signame, pidfile, marker],
-                          env=dict(os.environ, PYTHONPATH=ROOT), stdin=subprocess.DEVNULL,
-                          stdout=out, stderr=subprocess.STDOUT, timeout=120)
+            try:
+                r = spawn.run([sys.executable, "-c", UNDER_DEFAULT, signame, pidfile, marker],
+                              env=dict(os.environ, PYTHONPATH=ROOT), stdin=subprocess.DEVNULL,
+                              stdout=out, stderr=subprocess.STDOUT, timeout=120)
+            except subprocess.TimeoutExpired:   # still reap the child below, then fail
+                r = subprocess.CompletedProcess([], None)
             out.seek(0)
             r.stdout = out.read()
+        if not os.path.exists(pidfile):
+            self.fail("no child was made: %r" % r.stdout)
         with open(pidfile) as f:
             pid = int(f.read())
         h = process.open_process(pid, process.SYNCHRONIZE | process.PROCESS_TERMINATE)
@@ -282,6 +339,7 @@ class UnderSigDfl(unittest.TestCase):
             with self.subTest(signame):
                 r, left, ran = self.run_under_default(signame)
                 self.assertNotIn(b"start returned", r.stdout)
+                self.assertIsNotNone(r.returncode, "its process did not end within 120 s")
                 self.assertNotEqual(r.returncode, 0, r.stdout)
                 self.assertFalse(left, "the child outlived its parent, which %s ended" % signame)
                 self.assertFalse(ran, "the child ran before %s ended it" % signame)
