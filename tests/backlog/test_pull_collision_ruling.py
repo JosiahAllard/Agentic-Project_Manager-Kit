@@ -1,5 +1,5 @@
 """A pull whose scope collides with a live pull needs `--ruling R-nnnn`; `--reason` alone is not
-enough (KIT-PULL-COLLISION-RULING). `set --scope` on a pulled record runs the same check when it
+enough. `set --scope` on a pulled record runs the same check when it
 widens the scope, and narrowing stays free, so `set` is not a second door around the pull check.
 End to end through Store.write on a no-remote ref store."""
 import unittest
