@@ -38,8 +38,10 @@ def _open_shared(path):
 
     Python's open() does not share delete. So it fails with a sharing violation (PermissionError
     13) while os.replace is still landing the file under this name, because MoveFileEx holds a
-    DELETE-access handle on it for a moment after the name appears. For the same reason, while
-    such a reader holds the file, the writer's own os.replace or unlink of it fails. Substitution
+    DELETE-access handle on it for a moment after the name appears. Sharing delete also lets a
+    writer unlink the file while this reader holds it. It does not let a writer os.replace over it:
+    replacing a file that any handle holds open still fails (WinError 5, access denied) under
+    either share mode, so a writer's os.replace racing a marker reader can still fail. Substitution
     is still caught: stable_bytes compares the file's version before, during and after the read."""
     handle=create_file(str(path),GENERIC_READ,SHARE_ALL,None,OPEN_EXISTING,0,None)
     if handle in (None,INVALID):

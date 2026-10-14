@@ -347,10 +347,10 @@ class CodexDeliveryTests(unittest.TestCase):
         self.serve()
         original = Job.start
         def start(job, command, **options):
-            time.sleep(1)
+            time.sleep(2.5)
             return original(job, command, **options)
         with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start):
-            result = CodexDesktopAdapter(lease=self.lease, timeout=.7, start_timeout=5).send(self.message)
+            result = CodexDesktopAdapter(lease=self.lease, timeout=2, start_timeout=6).send(self.message)
         self.threads[0].join(3)
         self.assertEqual(result.state, 'recipient-accepted')
         self.assertEqual(len(self.requests), 1)

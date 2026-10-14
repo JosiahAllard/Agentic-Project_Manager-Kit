@@ -150,12 +150,14 @@ class NativeToolsPipe:
     counts from the commit: body write, native response and helper exit; a miss there is an
     uncertain DeliveryError. A slow helper start therefore cannot spend the response budget.
 
-    With the production defaults (start_timeout 2 s, timeout 5 s) a call reaches its outcome
-    within 7 s; before the split one 5 s budget covered both phases. Cleanup after a kill adds
-    at most 2 s waiting for the helper and .5 s per I/O thread (_cleanup).
+    With the production defaults (start_timeout 3 s, timeout 5 s) a call reaches its outcome
+    within 8 s; before the split one 5 s budget covered both phases. Cleanup after a kill adds
+    at most 2 s waiting for the helper and .5 s for each of the three I/O threads (_cleanup), so
+    a call ends within 11.5 s, inside the service's 12 s worker join (win/runtime.py
+    run_service). Raising either default must keep that sum under the join.
     """
 
-    def __init__(self, *, timeout=5, start_timeout=2):
+    def __init__(self, *, timeout=5, start_timeout=3):
         if not _seconds(timeout) or not _seconds(start_timeout):
             raise BeforeWriteError('invalid-codex-native-timeout')
         self.timeout, self.start_timeout = timeout, start_timeout

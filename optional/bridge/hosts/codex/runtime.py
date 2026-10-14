@@ -310,7 +310,7 @@ class CodexSources:
         except Exception:
             return False
 
-    def delivery_adapter(self, *, timeout=5, start_timeout=2):
+    def delivery_adapter(self, *, timeout=5, start_timeout=3):
         """Private bootstrap adapter; no SEND from a configured callback alone."""
         return _DirectDesktopAdapter(self,timeout=timeout,start_timeout=start_timeout)
 
