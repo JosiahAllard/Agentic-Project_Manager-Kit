@@ -13,7 +13,9 @@ where it was called from (the gate refuses a caller in another checkout); a stub
 variable. A stub whose kit tool is missing exits 2 and says so; Ctrl+C exits 130.
 
 Which tools: `.kit.json` "stubs".tools when set, else every SHARED name the kit has as a command
-(a `tools/<name>.py` with a `__main__` block). Naming a tool the kit does not have is a ConfigError.
+(a `tools/<name>.py` with a `__main__` block). Naming a tool the kit does not have is a ConfigError,
+but for a RETIRED one in "stubs".tools: that name is dropped, and write and check print
+`retired  <path> (delete it)` for a stub of it still in the repository (a note, not a problem).
 
 write: writes each stub (creating or replacing it), one line per file; it never replaces a file that
 is not a stub unless `replace` (the switch-over from a repository's own copies); `dry_run` says what
@@ -55,15 +57,19 @@ CALLER_VAR = 'KIT_STUB_CALLER'
 SHARED = (
     'backlog', 'board', 'checkout_guard', 'codemap', 'commit', 'daily_full', 'doc_budget',
     'doc_index', 'forbidden', 'gate', 'land', 'landed', 'ledger', 'machine_paths', 'new_worktree',
-    'pieces', 'preflight', 'pytests', 'redfirst', 'review_pack', 'ruling_cites', 'stack_skill',
+    'pieces', 'preflight', 'pytests', 'redfirst', 'review_pack', 'stack_skill',
     'sync_base', 'testlist', 'tool_deps', 'trailers', 'verdict', 'worktree_paths',
     'worktree_remove',
 )
+# Tools the kit no longer has. A "stubs".tools list written before the removal still loads: the
+# name is dropped, never refused, and a stub of it left in the repository is named for deletion
+# (a note line, not a problem). An unknown name is still a ConfigError.
+RETIRED = ('ruling_cites',)
 # The kit tools that get no stub: they act on the machine, the owner's files or the kit itself,
 # not on a repository checkout named by -C or the current directory. Every `tools/*.py` command
 # is in exactly one of SHARED and KIT_ONLY (tests/stubs: a new tool fails until it is classified).
 KIT_ONLY = (
-    'agent_roster', 'agent_temp_init', 'agent_view', 'backlog_lint', 'branch_overlap', 'hub', 'hub_mirror', 'kit_tests', 'launch', 'ledger_refs',
+    'agent_roster', 'agent_temp_init', 'agent_view', 'backlog_lint', 'branch_overlap', 'hub', 'hub_mirror', 'kit_tests', 'launch',
     'lock_release_check', 'machine_lock', 'machine_setup', 'no_window', 'pending', 'pm_data', 'pm_watch',
     'plugin_refresh', 'render_content', 'worktree_sweep_task', 'kit_release',
 )
@@ -133,10 +139,15 @@ def commands(kit=None):
 
 def wanted(cfg, kit=None, tools=None):
     """The names to stub: `tools`, else "stubs".tools, else SHARED as far as the kit has them.
-    ConfigError for a name the kit has no command for."""
+    A RETIRED name in "stubs".tools is dropped. ConfigError for any other name the kit has no
+    command for, and for a RETIRED name given as `tools`."""
     kit = kit or kit_root()
     have = commands(kit)
-    names = tools if tools is not None else cfg.section('stubs').get('tools')
+    names = tools
+    if names is None:
+        names = cfg.section('stubs').get('tools')
+        if names is not None:
+            names = [n for n in names if n not in RETIRED]
     if names is None:
         return [n for n in SHARED if n in have]
     bad = sorted(set(names) - set(have))
@@ -225,6 +236,18 @@ def problem_line(root, kit=None):
         ' (stale ones run the kit at %s)' % ', '.join(others) if others else '')
 
 
+def _retired_notes(tdir):
+    """One `retired  <path> (delete it)` line per stub of a RETIRED tool still in `tdir`. A note:
+    it is no problem and changes no exit code, and nothing here deletes the file. A file of that
+    name that is not a stub (the repository's own) is left unnamed."""
+    out = []
+    for name in RETIRED:
+        path = os.path.join(tdir, name + '.py')
+        if MARK in (_read(path) or ''):
+            out.append('retired  %s (delete it)' % path)
+    return out
+
+
 def run(root, verb, tools=None, replace=False, dry_run=False, kit=None):
     """Outcome(code, lines) of `write` or `check` for the checkout `root`."""
     if verb not in ('write', 'check'):
@@ -264,6 +287,7 @@ def run(root, verb, tools=None, replace=False, dry_run=False, kit=None):
         with open(path, 'w', encoding='utf-8', newline='\n') as f:
             f.write(want)
         lines.append('wrote    %s' % path)
+    lines.extend(_retired_notes(tdir))
     lines.extend(problems)
     if verb == 'check':
         lines.append('kit_stubs: %s' % ('%d problem(s)' % len(problems) if problems

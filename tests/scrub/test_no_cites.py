@@ -36,14 +36,7 @@ ALLOWED = (
     ('docs/backlog.md', GOING),
     ('docs/backlog-store.md', GOING),
     ('docs/kit-json.md', GOING),
-    ('docs/repo-checks.md', GOING),
     ('kitlib/config/user.py', GOING),
-    ('kitlib/ledgerrefs/', GOING),
-    ('tools/ledger_refs.py', GOING),
-    ('kitlib/rulingcites/', GOING),
-    ('tools/ruling_cites.py', GOING),
-    ('tests/rulingcites/', GOING),
-    ('tests/coordinatorstart/', GOING),
     ('tests/gate/test_land_store.py', GOING),
 )
 

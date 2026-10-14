@@ -58,7 +58,7 @@ def names_opt_in(root):
 
 
 def command(root):
-    return [sys.executable, LEDGER_TOOL, 'check', '--base', 'HEAD', '--root', root]
+    return [sys.executable, LEDGER_TOOL, 'check', '--base', 'HEAD']
 
 
 def targets(home=None):

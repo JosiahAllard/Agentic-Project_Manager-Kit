@@ -27,11 +27,11 @@ from .kit import HOST, catalog, child_environment, current_role, discover, load_
 TOOLS = frozenset(("preflight", "board", "backlog", "gate", "land", "landed", "review_pack",
                    "machine_lock", "worktree_paths", "new_worktree", "worktree_remove",
                    "worktree_sweep_task", "lock_release_check", "commit", "sync_base", "ledger",
-                   "ledger_refs", "pending", "doc_budget", "doc_index", "codemap", "pieces",
-                   "forbidden", "ruling_cites", "trailers", "machine_paths", "checkout_guard",
+                   "pending", "doc_budget", "doc_index", "codemap", "pieces",
+                   "forbidden", "trailers", "machine_paths", "checkout_guard",
                    "agent_roster", "pytests", "testlist", "tool_deps", "redfirst", "daily_full"))
 READ_TOOLS = {"preflight", "board", "landed", "review_pack", "worktree_paths", "lock_release_check",
-              "ledger_refs", "doc_index", "codemap", "ruling_cites", "trailers", "machine_paths",
+              "doc_index", "codemap", "trailers", "machine_paths",
               "checkout_guard", "agent_roster", "testlist", "tool_deps"}
 READ_BACKLOG = {"next", "show", "list", "check", "landable", "stale"}
 READ_LEDGER = {"show", "grep", "check", "list", "standing"}
