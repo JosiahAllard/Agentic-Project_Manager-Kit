@@ -38,10 +38,10 @@ class ClaudeImagesTests(unittest.TestCase):
 
     def host(self):
         child_argv=[sys.executable,'-I','-c','import sys; sys.stdin.read()']
-        code=("import sys,subprocess,json; p=subprocess.Popen("+repr(child_argv)+",stdin=subprocess.PIPE); "
+        code=("import sys,subprocess,json; p=subprocess.Popen("+repr(child_argv)+",stdin=subprocess.PIPE,creationflags=subprocess.CREATE_NO_WINDOW); "
             "print(json.dumps({'frontend':p.pid}),flush=True); "
             "event=json.loads(sys.stdin.readline()); "
-            "hook=subprocess.Popen("+repr(self.sources.hook_argv)+",stdin=subprocess.PIPE); "
+            "hook=subprocess.Popen("+repr(self.sources.hook_argv)+",stdin=subprocess.PIPE,creationflags=subprocess.CREATE_NO_WINDOW); "
             "hook.communicate(json.dumps(event).encode(),timeout=8); print('hook-done',flush=True); "
             "sys.stdin.readline(); p.stdin.close(); p.wait(timeout=3)")
         child=self.job.start([str(self.pythonw),'-I','-c',code],stdin=subprocess.PIPE,stdout=subprocess.PIPE,
