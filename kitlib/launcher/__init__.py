@@ -11,6 +11,7 @@ minimized window with Remote Control (docs/launcher.md). tools/launch.py is its 
   handoff    a successor on another account, or a recycle on the same one
   reboot     after a restart: every session in sessions.json, then the PM resumed
   autostart  the scheduled task that runs reboot at sign-in
+  pythonw    the pythonw.exe a scheduled task runs: the base install's, never a WindowsApps alias
   host       the outside world, faked by tests
 
 Nothing here names a machine path, a drive, an account folder, an owner or a repository: each
