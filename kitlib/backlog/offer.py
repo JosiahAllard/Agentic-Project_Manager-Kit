@@ -246,7 +246,9 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
     equals `session` are offered; another session's record takes its scope silently. A record
     passed over on a collision names the holder: a live pull by id and branch, another session's
     record by id and session, a record already in this offer as `(offered above)`. Scopes are each record's current `scope:` lines, so a pulled record
-    narrowed with `set --scope` frees what it gave up."""
+    narrowed with `set --scope` frees what it gave up. A seed (`next --with`) goes first and is
+    not passed over for the rest of the offer, but one that collides with a live pull is passed
+    over like any record: only `pull --reason --ruling` takes scope a live pull holds."""
     ranks = ranked(snap)
     occupied = []
     for rec in holding:
@@ -255,6 +257,7 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
            for m in occupied if smod.scope_member_error(m, True) is not None]
     if bad:
         return None, bad, ranks
+    live = list(occupied)
 
     def own(r):
         return r.get('session') == session
@@ -285,14 +288,16 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
                 passed.append(PassedOver(rec, ranks.get(rid, '-'), 'scope undecidable, so this '
                                          'is a collision: `%s` - %s' % errs[0]))
             continue
+        # A seed goes first over the rest of this offer, never over a live pull's scope.
+        against = live if id(rec) in seeded else occupied
         try:
-            hit = smod.colliding_pairs(scopes, occupied) if occupied else []
+            hit = smod.colliding_pairs(scopes, against) if against else []
         except smod.UndecidableScope as exc:
             if own(rec):
                 passed.append(PassedOver(rec, ranks.get(rid, '-'),
                                          'scope undecidable, so this is a collision: %s' % exc))
             continue
-        if hit and id(rec) not in seeded:
+        if hit:
             if own(rec):
                 holder = holders.get(hit[0][1])
                 passed.append(PassedOver(rec, ranks.get(rid, '-'), 'scope %s collides with %s '
