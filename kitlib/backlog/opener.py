@@ -97,9 +97,10 @@ def retarget_dry(args, store):
     checked as a write would be; nothing is published."""
     snap = store.load()
     smod.require_readable(snap)
-    with smod.plan_notes() as notes:
+    with smod.plan_notes() as notes, smod.notes_on_refusal(notes):
         change = retmod.plan_retarget(snap, args.old, args.new)
     change = smod.with_plan_notes(change, notes)
     if change.writes:
-        smod.check_change(snap, change)
+        with smod.notes_on_refusal(notes):
+            smod.check_change(snap, change)
     return change

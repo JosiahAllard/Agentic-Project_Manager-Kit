@@ -31,7 +31,7 @@ from kitlib.git import batch, cmd, refs
 from kitlib.git import repo as gitrepo
 
 from . import record as rmod
-from .errors import Failure, IndexStale, Overtaken, Uncommitted, Usage
+from .errors import Failure, IndexStale, Overtaken, Refusal, Uncommitted, Usage
 
 STORE_REF = 'refs/backlog/main'
 STORE_DIR = 'backlog'
@@ -1093,6 +1093,22 @@ def add_plan_note(line):
         notes.append(line)
 
 
+@contextlib.contextmanager
+def notes_on_refusal(notes):
+    """Re-raise a Refusal (any of kitlib.backlog.errors) raised inside with each line of `notes`
+    its message does not already hold added on a line of its own, as commit.py adds its machine
+    config WARNING to the stop lines: a plan that stops for another reason still prints it. The
+    same exception object, so its type and attributes are kept."""
+    try:
+        yield
+    except Refusal as exc:
+        msg = str(exc)
+        extra = ''.join('\n' + n for n in notes if n not in msg)
+        if extra:
+            exc.args = (msg + extra,) + tuple(exc.args[1:])
+        raise
+
+
 def with_plan_notes(change, notes):
     """`change` with `notes` it does not already print put before its lines."""
     change.lines = [n for n in notes if n not in change.lines] + change.lines
@@ -1138,12 +1154,13 @@ class Store(object):
         for attempt in range(ATTEMPTS):
             snap = self.load()
             require_readable(snap)
-            with plan_notes() as notes:
+            with plan_notes() as notes, notes_on_refusal(notes):
                 change = plan(snap)
             change = with_plan_notes(change, notes)
             if not change.writes:
                 return change, snap.tip
-            check_change(snap, change)
+            with notes_on_refusal(notes):
+                check_change(snap, change)
             if self.before_publish is not None:
                 self.before_publish(attempt)
             try:

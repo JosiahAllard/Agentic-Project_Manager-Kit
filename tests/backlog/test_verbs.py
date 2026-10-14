@@ -323,6 +323,17 @@ class MachinePaths(VerbCase):
         self.assertIn('machine path', str(ctx.exception))
         self.assertIn('WARNING: machine config', str(ctx.exception))
 
+    def test_an_unreadable_machine_config_warning_ends_a_refusal_for_another_reason(self):
+        # The text is clean, so the plan collects the WARNING and then stops on the missing id:
+        # the stop still names the narrower check, once.
+        self.seed(priced('FOO'))
+        machine_config(self.home, '{not json')
+        with self.assertRaises(NotFound) as ctx:
+            self.verb('set', 'NOPE', [('summary', ['a clean replacement summary'])])
+        msg = str(ctx.exception)
+        self.assertEqual(msg.count('WARNING: machine config'), 1, msg)
+        self.assertTrue(msg.splitlines()[-1].startswith('WARNING: machine config'), msg)
+
     def test_a_readable_machine_config_adds_no_warning(self):
         self.seed(priced('FOO'))
         change = self.verb('set', 'FOO', [('summary', ['a clean replacement summary'])])
