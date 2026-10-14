@@ -41,6 +41,20 @@
       console window; refused, before any file is written, from a kit worktree or with no
       pythonw.exe beside python. --whatif prints the task's PowerShell and any refusal and
       changes nothing, not even a token file.
+  hub.py setup --check
+      reads, never writes (no token file, no machine config, no task): it says whether the
+      machine is ready for the `hub` key and the tunnel. One line for hub.access: `access: not
+      set (hub.access)`, `access: set`, or `access: cannot serve: ` and the fixed phrase of
+      kitlib.hubsite.tunnel.check. With settings that can serve, one fetch of the team's Access
+      keys (kitlib.hubsite.access.probe, its `access keys: ` line). Then one line for each kit
+      copy on this machine (kitlib.config.copies: the plugin export folders, the pins and each
+      account folder's install): `knows every key`, `would refuse ` and the keys, or `cannot
+      tell: ` and why, checked against the machine config's keys plus `hub`; a copy that
+      refuses a key refuses the whole file. Last, `READY: ...` and exit 0, or `NOT READY: ...`
+      and exit 1: a copy in use would refuse a key or cannot be read, the Access settings
+      cannot serve, or the keys were not fetched. Export folders not in use decide nothing; a
+      NOTE counts those that would refuse. Refresh the plugin and restart the sessions of
+      older copies before setting `hub` (docs/hub-remote-access.md "Before you start").
   hub.py open [--port N] [--print]
       opens the hub page in the browser, signed in as the owner through a one-time pairing link
       the running server gives for the owner's token. --print prints the link instead. A paired
@@ -131,8 +145,9 @@ import webbrowser
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import hubvalidate                                     # noqa: E402
+from kitlib.config import copies, user                             # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
-from kitlib.hubsite import api, auth, client, httpd, serve, settings   # noqa: E402
+from kitlib.hubsite import access, api, auth, client, httpd, serve, settings, tunnel   # noqa: E402
 from kitlib.hubsite import autostart as hub_autostart              # noqa: E402
 from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
 
@@ -366,6 +381,9 @@ def parser():
                    help='also register the scheduled task that starts the server at sign-in')
     u.add_argument('--whatif', action='store_true',
                    help='with --autostart: print the task, change nothing (no token file either)')
+    u.add_argument('--check', action='store_true',
+                   help='write nothing: say whether the Access settings serve and which kit '
+                        'copies would refuse the hub key')
     o = sub.add_parser('open', help='open the hub page, signed in as the owner')
     o.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
     o.add_argument('--print', dest='show', action='store_true',
@@ -460,7 +478,55 @@ def _status(a, stop):
     return 0
 
 
+def _check():
+    """setup --check: reads only. 0 when ready, 1 when not."""
+    from kitlib import pluginsource
+    from kitlib.pluginsource import claude
+    s = settings.load()
+    why = []
+    try:
+        tunnel.check(s.access)
+    except tunnel.TunnelConfigError as e:
+        if e.unset:
+            print('access: not set (hub.access): the tunnel listener stays off')
+        else:
+            print('access: cannot serve: %s' % e)
+            why.append('the Access settings cannot serve')
+    else:
+        print('access: set')
+        ok, line = access.probe(s.access.team)
+        print(line)
+        if not ok:
+            why.append('the Access keys were not fetched')
+    keys = copies.config_keys(user.readable_file(), (settings.KEY,))
+    try:
+        root = pluginsource.load().export_dir
+    except pluginsource.RefreshError as e:
+        print('kit copies: cannot look: %s' % e)
+        why.append('the kit copies could not be looked at')
+    else:
+        report = copies.check(copies.find(root, pluginsource.current_folder(root),
+                                          claude.account_folders()), keys)
+        print('kit copies, checked against the keys %s:' % ', '.join(keys))
+        for line in report.lines:
+            print('  %s' % line)
+        if not report.ready:
+            why.append('a kit copy in use would refuse a key or cannot be read')
+        if report.stale:
+            print('NOTE: %d export folder(s) not in use would refuse a key or cannot be read: '
+                  'a session started from one before the last refresh still runs it; restart '
+                  'such sessions before setting %s' % (report.stale, settings.KEY))
+    if why:
+        print('NOT READY: %s' % '; '.join(why))
+        return client.REFUSED
+    print('READY: every kit copy in use knows these keys, and the Access settings serve or are '
+          'not set')
+    return 0
+
+
 def _setup(a, stop):
+    if a.check:
+        return _check()
     if (a.autostart or a.whatif) and not settings.load().store:
         raise serve.ServeError('no store folder is set, so a server started at sign-in would '
                                'fail: set hub.store or pm_data in the machine config; '
@@ -771,6 +837,8 @@ def main(argv=None, stop=None):
     a = p.parse_args(argv)
     if not a.verb:
         p.error(NO_VERB)
+    if a.verb == 'setup' and a.check and (a.autostart or a.whatif):
+        p.error('--check takes no other option: it writes nothing')
     if a.verb == 'setup' and a.whatif and not a.autostart:
         p.error('--whatif needs --autostart')
     try:
