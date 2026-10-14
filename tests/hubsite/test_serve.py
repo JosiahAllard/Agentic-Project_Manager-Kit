@@ -367,9 +367,17 @@ class BuildCase(ServeCase):
         self.assertEqual(r.status, 200)
         self.assertIn('store', r.json())
 
+    def test_a_server_on_port_0_keeps_no_sessions_file(self):
+        hub = self.build()
+        self.assertIsNotNone(hub.creds.pair(hub.creds.new_pairing_code()))
+        self.assertIsNone(hub.creds.path)
+        self.assertEqual([n for n in os.listdir(self.tokens) if n.startswith('browser-')], [])
+
     def test_a_paired_browser_stays_paired_when_the_server_is_built_again(self):
-        first = self.build()
-        port = first.port
+        probe = self.build()                # port 0 keeps no sessions: find a port, then ask it
+        port = probe.port
+        self.assertIs(probe.close(), True)
+        first = self.build(self.settings._replace(port=port))
         # paired through the credentials: no connection is made to the first port, so the
         # second build can bind it again at once
         value = first.creds.pair(first.creds.new_pairing_code())

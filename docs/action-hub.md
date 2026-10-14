@@ -14,7 +14,9 @@ page signed in as you (a one-time pairing link sets the browser's session cookie
 the link instead). `serve` prints the full `open` command on its start line. A paired browser stays
 paired when the server restarts: the server keeps each session, as a keyed hash and never the
 cookie itself, in a `browser-sessions-<port>.json` file beside the token files
-(`kitlib/hubsite/auth.py`, "Sessions"). A session lasts 30 days (`auth.SESSION_TTL_S`) and is
+(`kitlib/hubsite/auth.py`, "Sessions"). `serve --port 0` binds a new port each run, so it keeps
+no such file and its browsers are paired again after a restart (`kitlib/hubsite/serve.py`,
+`build`). A session lasts 30 days (`auth.SESSION_TTL_S`) and is
 renewed to a full 30 days when the browser uses it with less than half of that left, so a browser
 you use at least every two weeks never needs pairing again. `python tools/hub.py unpair` ends
 every browser's session (the owner's token only; with no server running it empties that file

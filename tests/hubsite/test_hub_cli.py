@@ -71,9 +71,10 @@ class CliCase(unittest.TestCase):
         s.bind((httpd.LOOPBACK, 0))
         return s.getsockname()[1]
 
-    def server(self, tokens=None):
-        """A started hub on a free port, with the temp home's token files unless given others."""
-        cfg = hub_settings.settings(None)._replace(port=0, store=self.store_dir)
+    def server(self, tokens=None, port=0):
+        """A started hub on a free port (or `port`), with the temp home's token files unless
+        given others. Only a hub given its port keeps a sessions file (serve.build)."""
+        cfg = hub_settings.settings(None)._replace(port=port, store=self.store_dir)
         hub = serve.build(cfg, serve.Sources(tokens=tokens or self.tokens,
                                              static_dir=os.path.join(self.home, 'web')))
         self.addCleanup(hub.close)
@@ -670,7 +671,10 @@ class ClientCase(CliCase):
 
     def test_unpair_ends_every_browser_the_running_server_paired(self):
         self.assertEqual(self.run_cli('setup')[0], 0)
-        hub = self.server()
+        probe = self.server()               # port 0 keeps no sessions file: find a port, ask it
+        port = probe.port
+        self.assertIs(probe.close(), True)
+        hub = self.server(port=port)
         base = 'http://127.0.0.1:%d' % hub.port
         cookies = []
         for _ in range(2):
@@ -701,6 +705,43 @@ class ClientCase(CliCase):
         self.assertIn(auth.sessions_file(port), out)
         reread = auth.Credentials(self.tokens, port=port, persist=True)
         self.assertEqual((reread.role_for({}, cookie), reread.notes), (None, []))
+
+    def unpair_racing_a_start(self, second):
+        """unpair with no server at its first ask, and `second` the answer to the next one:
+        a server that bound the port and read the sessions file before the file was emptied."""
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        asked = []
+
+        def ask(p, method, path, token=None, **kw):
+            asked.append((p, method, path))
+            if len(asked) == 1:
+                raise serve.NotRunning(p)
+            if isinstance(second, Exception):
+                raise second
+            return second
+
+        with mock.patch.object(HUB.serve, 'ask', ask):
+            got = self.run_cli('unpair', '--port', str(port))
+        self.assertEqual(asked, [(port, 'POST', httpd.UNPAIR_ROUTE)] * 2)
+        return port, got
+
+    def test_unpair_with_no_server_asks_again_after_the_file_and_unpairs_one_that_started(self):
+        port, (code, out, err) = self.unpair_racing_a_start((200, {'ok': True}))
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn(auth.sessions_file(port), out)
+        self.assertIn('unpaired every browser of the hub server on port %d' % port, out)
+
+    def test_unpair_with_a_server_that_started_and_refuses_is_refused(self):
+        port, (code, out, err) = self.unpair_racing_a_start((403, {'error': 'forbidden'}))
+        self.assertEqual(code, 1)
+        self.assertIn('REFUSED: the server on port %d answered 403' % port, err)
+
+    def test_unpair_with_still_no_server_at_the_second_ask_is_the_file_alone(self):
+        port, (code, out, err) = self.unpair_racing_a_start(serve.NotRunning(self.dead_port()))
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn(auth.sessions_file(port), out)
+        self.assertNotIn('of the hub server', out)
 
     def test_unpair_with_no_server_and_a_file_it_cannot_write_is_refused(self):
         self.assertEqual(self.run_cli('setup')[0], 0)

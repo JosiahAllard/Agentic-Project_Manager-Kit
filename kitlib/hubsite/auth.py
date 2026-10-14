@@ -225,13 +225,17 @@ def _mac(key, value):
 class Credentials(object):
     """The local listener's credentials: the token files in `folder`, read at every request (a
     replaced token file takes effect at once), this process's pairing codes, and the browser
-    sessions (module docstring, "Sessions"). `clock` is the wall clock in seconds. `port` is the
+    sessions (module docstring, "Sessions"). `clock` is the wall clock in seconds, read for the
+    sessions only: their expiries are kept in the sessions file and must mean the same after a
+    restart. `monotonic` is the clock of the pairing codes, which live in this process only, so
+    a change of the system time neither ends nor stretches one. `port` is the
     listener's: `.cookie` is cookie_name(port), the one cookie role_for reads. `persist` keeps
     the sessions in sessions_file(port) in `folder` (ValueError without an int port). `log(level,
     text)` gets the line of a sessions write that failed. `.notes` holds the lines the load of
     the sessions file left, for the console. Safe to call from several threads."""
 
-    def __init__(self, folder, clock=time.time, port=None, persist=False, log=None):
+    def __init__(self, folder, clock=time.time, port=None, persist=False, log=None,
+                 monotonic=time.monotonic):
         if persist and (isinstance(port, bool) or not isinstance(port, int)):
             raise ValueError('a Credentials that keeps its sessions needs the listener port, '
                              'not %r' % (port,))
@@ -241,6 +245,7 @@ class Credentials(object):
         self.notes = []
         self.path = os.path.join(folder, sessions_file(port)) if persist else None
         self._clock = clock
+        self._mono = monotonic
         self._log = log
         self._lock = threading.Lock()
         self._codes = collections.OrderedDict()       # code -> expiry
@@ -304,47 +309,45 @@ class Credentials(object):
             return OWNER
         return AGENT if is_agent else None
 
-    def _live(self, table, value, take=False):
-        """True when `value` is an unexpired key of `table`; with `take` it is removed, so a
-        second look fails. Expired entries are dropped on every look."""
-        now = self._clock()
-        with self._lock:
-            for k in [k for k, exp in table.items() if exp <= now]:
-                del table[k]
-            found = None
-            for k in table:
-                if _same(k, value):
-                    found = k
-            if found is not None and take:
-                del table[found]
-            return found is not None
-
-    def _add(self, table, ttl, cap):
-        value = secrets.token_urlsafe(32)
-        with self._lock:
-            table[value] = self._clock() + ttl
-            while len(table) > cap:
-                table.popitem(last=False)
-        return value
+    def _take_code(self, code):
+        """True when `code` is a live pairing code, which is then removed, so a second look
+        fails. Expired codes are dropped on every look. Under self._lock."""
+        now = self._mono()
+        for k in [k for k, exp in self._codes.items() if exp <= now]:
+            del self._codes[k]
+        found = None
+        for k in self._codes:
+            if _same(k, code):
+                found = k
+        if found is not None:
+            del self._codes[found]
+        return found is not None
 
     def new_pairing_code(self):
-        """A fresh one-time pairing code, good for PAIR_TTL_S. The caller has already checked
-        that the request is the owner's: whoever holds a code becomes the owner's browser."""
-        return self._add(self._codes, PAIR_TTL_S, MAX_CODES)
+        """A fresh one-time pairing code, good for PAIR_TTL_S on the monotonic clock. The caller
+        has already checked that the request is the owner's: whoever holds a code becomes the
+        owner's browser."""
+        code = secrets.token_urlsafe(32)
+        with self._lock:
+            self._codes[code] = self._mono() + PAIR_TTL_S
+            while len(self._codes) > MAX_CODES:
+                self._codes.popitem(last=False)
+        return code
 
     def pair(self, code):
         """Redeem `code`: the session value to send as cookie_header(value, self.port), or None
         when the code is unknown, expired or already redeemed, or no owner token can bind the
         session (_owner_key). A code works once. Past MAX_SESSIONS the session renewed or made
-        longest ago ends."""
-        if not isinstance(code, str) or not code or not self._live(self._codes, code, take=True):
+        longest ago ends. The code is taken and the session added under one hold of the lock,
+        so an unpair_all either ends the code first or the session after."""
+        if not isinstance(code, str) or not code:
             return None
-        key = self._owner_key()
-        if key is None:
-            return None
+        key = self._owner_key()         # files: read before the lock
         value = secrets.token_urlsafe(32)
-        now = self._clock()
         with self._lock:
+            if not self._take_code(code) or key is None:
+                return None
+            now = self._clock()
             self._expire(now)
             self._sessions[_mac(key, value)] = int(now + SESSION_TTL_S)
             while len(self._sessions) > MAX_SESSIONS:

@@ -35,8 +35,9 @@ class Case(unittest.TestCase):
         self.paths = auth.ensure_tokens(self.folder)
         self.owner = auth.read_token(self.folder, auth.OWNER)
         self.agent = auth.read_token(self.folder, auth.AGENT)
-        self.clock = Clock()
-        self.creds = auth.Credentials(self.folder, clock=self.clock)
+        self.clock = Clock()                # the wall clock: sessions
+        self.mono = Clock()                 # the monotonic clock: pairing codes
+        self.creds = auth.Credentials(self.folder, clock=self.clock, monotonic=self.mono)
 
     def put(self, role, text):
         with open(self.paths[role], 'w', encoding='utf-8') as f:
@@ -239,7 +240,32 @@ class PairingTest(Case):
 
     def test_an_expired_code_pairs_nothing(self):
         code = self.creds.new_pairing_code()
-        self.clock.now += auth.PAIR_TTL_S
+        self.mono.now += auth.PAIR_TTL_S
+        self.assertIsNone(self.creds.pair(code))
+
+    def test_a_code_lives_on_the_monotonic_clock_and_never_the_wall_clock(self):
+        code = self.creds.new_pairing_code()
+        self.clock.now += 10 * auth.PAIR_TTL_S          # the wall clock jumps forward
+        self.assertIsNotNone(self.creds.pair(code))
+        code = self.creds.new_pairing_code()
+        self.clock.now -= 20 * auth.PAIR_TTL_S          # and back
+        self.mono.now += auth.PAIR_TTL_S - 1
+        self.assertIsNotNone(self.creds.pair(code))
+        code = self.creds.new_pairing_code()
+        self.mono.now += auth.PAIR_TTL_S
+        self.assertIsNone(self.creds.pair(code))
+
+    def test_an_unpair_while_a_code_is_redeemed_leaves_no_session(self):
+        code = self.creds.new_pairing_code()
+        real = self.creds._owner_key
+
+        def racing():                   # an unpair lands between the steps of the redeem
+            self.creds.unpair_all()
+            return real()
+        self.creds._owner_key = racing
+        value = self.creds.pair(code)
+        self.creds._owner_key = real
+        self.assertIsNone(value)
         self.assertIsNone(self.creds.pair(code))
 
     def test_only_the_newest_codes_are_kept(self):

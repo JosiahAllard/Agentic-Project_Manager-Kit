@@ -530,7 +530,11 @@ def _unpair(a, stop):
             raise serve.ServeError(failed[0])
         print('%s: unpaired every browser in %s, the sessions file the server on that port '
               'reads at its start' % (e, creds.path))
-        return 0
+        # a server may have bound the port and read the file between the first ask and the write
+        try:
+            status, obj = serve.ask(port, 'POST', httpd.UNPAIR_ROUTE, token)
+        except serve.NotRunning:
+            return 0
     if status != 200 or obj.get('ok') is not True:
         return _refused(port, status, obj)
     print('unpaired every browser of the hub server on port %d' % port)
