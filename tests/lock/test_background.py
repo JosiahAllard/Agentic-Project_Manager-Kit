@@ -10,10 +10,12 @@ import warnings
 from unittest import mock
 
 from .helpers import StoreCase, clean_env
+from .test_run import store_files
 
 if os.name == "nt":
     from kitlib.lock import background as bg
     from kitlib.lock import run as rm
+    from kitlib.lock.store import EXIT_REQUIRE, LockError
     from kitlib.proc import process
 
 REAL_SLEEP = time.sleep
@@ -58,6 +60,41 @@ class Background(StoreCase):
         e = self.ended()
         self.assertEqual((e["how"], e["code"]), ("done", 0))
         self.assertEqual([d["id"] for d in self.store.history_records()], [e["id"]])
+
+    def live_background(self, rid):
+        """A live background run rid: its run mutex held, its record, its control file."""
+        m = self.store.run_mutex(rid)
+        self.addCleanup(m.release)
+        self.live_record(rid, state="bg", background=True)
+        self.store.write("background/%s.d/control.json" % rid, {"seq": 3, "pause": False})
+
+    def test_a_given_id_a_live_background_run_has_is_refused_and_that_run_is_untouched(self):
+        """Red before the id was claimed first: the refused run's finally wrote pause into the
+        live run's control file and its settle removed the live run's record."""
+        rid = "r-20261006T120000Z-b9b9b9"
+        self.live_background(rid)
+        before = store_files(self.root)
+        with self.assertRaises(LockError) as cm:
+            bg.run_background([sys.executable, "-c", "import sys; sys.exit(0)"], "kit", "bg",
+                              store=self.store, env=clean_env(), rid=rid)
+        self.assertEqual(store_files(self.root), before)
+        self.assertEqual(cm.exception.code, EXIT_REQUIRE)
+        self.assertIn("run id %s is taken" % rid, cm.exception.message)
+
+    def test_an_id_a_live_background_run_has_is_drawn_again(self):
+        rid, fresh = "r-20261006T120000Z-b9b9b9", "r-20261006T120000Z-b9b9ba"
+        self.live_background(rid)
+        rec = self.store.read("active/%s.json" % rid)
+        ctl = self.store.read("background/%s.d/control.json" % rid)
+        with mock.patch.object(rm, "new_id", side_effect=[rid, fresh]) as ids:
+            code = bg.run_background([sys.executable, "-c", "import sys; sys.exit(0)"], "kit",
+                                     "bg", store=self.store, env=clean_env())
+        self.assertEqual(code, 0)
+        self.assertEqual(ids.call_count, 2)
+        self.assertEqual(self.store.read("active/%s.json" % rid), rec)
+        self.assertEqual(self.store.read("background/%s.d/control.json" % rid), ctl)
+        self.assertEqual(self.store.read("ended/%s.json" % fresh)["how"], "done")
+        self.assertIsNone(self.store.read("ended/%s.json" % rid))
 
     def test_its_command_goes_through_r1415_holding_its_gpu(self):
         # A background run always holds a gpu slot, so a docker exec it runs is left alone.
