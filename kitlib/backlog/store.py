@@ -29,12 +29,14 @@ from kitlib.git import batch, cmd, refs
 from kitlib.git import repo as gitrepo
 
 from . import record as rmod
-from .errors import Dirty, Failure, IndexStale, Overtaken, Uncommitted, Usage
+from .errors import Busy, Dirty, Failure, IndexStale, Overtaken, Refusal, Uncommitted, Usage
 
 STORE_REF = 'refs/backlog/main'
 STORE_DIR = 'backlog'
 BRANCH = 'backlog'
 ATTEMPTS = 5
+INDEX_WAIT = 2.0        # seconds a PM data worktree write waits for git's index lock (Busy after)
+REPLACE_WAIT = 1.0      # seconds it retries a refused move of its index over the index (Windows)
 FETCH_TIMEOUT = 60
 MAX_ID_LEN = 64
 WINDOWS_DEVICE_NAMES = frozenset(['CON', 'PRN', 'AUX', 'NUL'] + ['COM%d' % i for i in range(1, 10)]
@@ -552,6 +554,74 @@ def _store_env():
     return {k: v for k, v in cmd.scrubbed_env().items() if k.upper() != 'GIT_INDEX_FILE'}
 
 
+class _IndexLock(object):
+    """git's own lock on a worktree's index, taken as git takes it: `<index>.lock` created
+    exclusively. While it is held no git command writes that index (`git commit`, `git add`,
+    `git reset` and the like stop with "Unable to create ... index.lock: File exists"), so none
+    commits the index between a write's commit and its index update. `install` puts the new index
+    in place by moving the lock file over the index, as git does, which also gives the lock up;
+    `release` removes the file only while this holds it."""
+
+    def __init__(self, index):
+        self.index = index
+        self.path = index + '.lock'
+        self.held = False
+
+    def take(self, wait):
+        """True once the lock file is made, False when it still exists after `wait` seconds.
+        OSError for any other refusal to make it."""
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                os.close(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY
+                                 | getattr(os, 'O_BINARY', 0)))
+                self.held = True
+                return True
+            except FileExistsError:
+                pass
+            except PermissionError:          # Windows: a lock file another git is deleting
+                if not os.path.exists(self.path):
+                    raise
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+
+    def install(self):
+        """Move the lock file over the index ('' when done, else why not). A move Windows
+        refuses (a reader has the index open) is retried for REPLACE_WAIT seconds."""
+        deadline = time.monotonic() + REPLACE_WAIT
+        while True:
+            try:
+                os.replace(self.path, self.index)
+                self.held = False
+                return ''
+            except PermissionError as exc:
+                if time.monotonic() >= deadline:
+                    return 'cannot move %s over the index: %s' % (self.path, exc)
+            except OSError as exc:
+                return 'cannot move %s over the index: %s' % (self.path, exc)
+            time.sleep(0.05)
+
+    def release(self):
+        """Remove the lock file if this still holds it ('' when it is gone, else why not)."""
+        if not self.held:
+            return ''
+        deadline = time.monotonic() + REPLACE_WAIT
+        while True:
+            try:
+                os.remove(self.path)
+                self.held = False
+                return ''
+            except FileNotFoundError:
+                self.held = False
+                return ''
+            except OSError as exc:
+                if not isinstance(exc, PermissionError) or time.monotonic() >= deadline:
+                    return ('git\'s index lock %s could not be removed (%s): no git command can '
+                            'write that index until it is; remove it by hand' % (self.path, exc))
+            time.sleep(0.05)
+
+
 def _replace_file(full, data):
     """Give `full` the bytes `data` in one step: written to a file beside it, then moved
     over it. An OSError leaves `full` as it was, whole, and removes the other file."""
@@ -577,12 +647,17 @@ class MainBackend(object):
     a linked worktree (a main checkout is the landers'). A branch worktree has one writer, its
     agent; the PM data worktree has several (every session's backlog.py, and a landing's close).
 
-    In the PM data branch's worktree (commit_branch) the write also commits exactly the record
-    paths it wrote, as one commit on HEAD by compare-and-swap (`update-ref HEAD <new> <old>`,
+    In the PM data branch's worktree (commit_branch) a write holds git's own index lock there from
+    before it reads HEAD or the files until its index update (_lock_index; Busy after INDEX_WAIT
+    seconds, nothing written), so two store writes there run one after the other, and no git
+    command writes that index meanwhile: no `git commit` there can commit an index that does not
+    yet hold the write, which would put back what it committed. The write also commits exactly the
+    record paths it wrote, as one commit on HEAD by compare-and-swap (`update-ref HEAD <new> <old>`,
     rebuilt on a HEAD that moved unless the move changed one of those paths since publish read
     HEAD, before it checked the files: Overtaken, and the files the write wrote are put back,
-    _put_back: a changed path to HEAD's content, any other to what it held before the write),
-    and sets those paths in the real index; nothing
+    _put_back: a changed path to HEAD's content, any other to what it held before the write;
+    only a writer that moves HEAD without the index lock, `git update-ref` say, gets there now),
+    and sets those paths in the real index (_sync_index, through the lock file); nothing
     else in that worktree is staged or committed. Any other commit that fails is Uncommitted (the
     files stay written); an index left stale after the commit is IndexStale. Its git calls drop an
     inherited GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE
@@ -655,6 +730,60 @@ class MainBackend(object):
                           % (self.root, 'the main checkout' if place.kind == gitrepo.MAIN
                              else 'not one (%s)' % (place.detail or place.kind)))
         branch = self.commit_branch(place)
+        if not branch:
+            return self._publish(snap, writes, message, None, None)
+        paths = [self.path_of(stem) for stem in sorted(writes)]
+        return self._locked(paths, lambda held: self._publish(snap, writes, message, branch, held))
+
+    def _locked(self, paths, act):
+        """`act(lock)` while this holds git's index lock in the PM data worktree (_lock_index),
+        given up afterwards whatever happened. A lock file that cannot be removed is named on the
+        Refusal in flight, or raised as a Failure when there is none."""
+        held = self._lock_index(paths)
+        try:
+            done = act(held)
+        except Refusal as exc:
+            why = held.release()
+            if why:
+                exc.args = ('%s; and %s' % (exc, why),) + exc.args[1:]
+            raise
+        except BaseException:
+            held.release()                  # one left behind: the next write there says Busy
+            raise
+        why = held.release()
+        if why:
+            raise Failure(why)
+        return done
+
+    def _lock_index(self, paths):
+        """git's lock on this worktree's index, taken (an _IndexLock) before the write reads
+        anything, so between its reads and its index update no git command writes that index:
+        no `git add` stages one of its paths and no `git commit` commits an index that does not
+        yet hold the write (which would put back what the write committed). Busy when another
+        git command holds it for INDEX_WAIT seconds; Failure when git cannot name the index or
+        the lock cannot be made. Nothing is written either way."""
+        out, why = cmd.run_text(['rev-parse', '--path-format=absolute', '--git-path', 'index'],
+                                self.root, env=_store_env())
+        if not out:
+            raise Failure('cannot find the index of %s: %s; nothing was written'
+                          % (self.root, why or 'git rev-parse --git-path printed nothing'))
+        held = _IndexLock(os.path.normpath(out))
+        try:
+            took = held.take(INDEX_WAIT)
+        except OSError as exc:
+            raise Failure('cannot take git\'s index lock %s: %s; nothing was written'
+                          % (held.path, exc))
+        if not took:
+            raise Busy('%s not written in %s, and nothing was written: git\'s index lock %s '
+                       'stayed held for %g s (another git command is writing that index; if none '
+                       'runs there, one that was stopped left it behind: remove it only then). '
+                       'Repeat the write once it is gone'
+                       % (', '.join(paths), self.root, held.path, INDEX_WAIT), held.path)
+        return held
+
+    def _publish(self, snap, writes, message, branch, held):
+        """publish, once the worktree is known: `branch` the PM data branch (None elsewhere) and
+        `held` its index lock."""
         # HEAD before the files are checked: a commit of one of these paths that lands after the
         # check and before the first commit attempt is then seen by _publish_commit's compare.
         base = None
@@ -679,7 +808,7 @@ class MainBackend(object):
         if not branch:
             return None
         try:
-            return self._commit(blobs, message, paths, base)
+            return self._commit(blobs, message, paths, held, base)
         except Overtaken as exc:                     # the files must not outlive the refusal
             wrote = dict((self.path_of(stem), None if text is None else text.encode('utf-8'))
                          for stem, text in writes.items())
@@ -883,21 +1012,22 @@ class MainBackend(object):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def _commit(self, blobs, message, paths, base=None):
+    def _commit(self, blobs, message, paths, held, base=None):
         """Commit `blobs` ({path: blob id, or None to delete}) on HEAD as one commit: built in a
         temporary index, published by `update-ref HEAD <new> <old>` and rebuilt on a HEAD another
         commit moved (ATTEMPTS times). Then the real index takes the same entries for those paths
         alone. Returns the new commit, or None when HEAD already holds them. No ref moves until the
         whole commit exists, so a failure leaves no commit holding part of the write; it is
-        raised as Uncommitted, never swallowed. `base`: HEAD when the write began (publish reads
-        it before it checks the files), or None for the HEAD the first attempt finds."""
+        raised as Uncommitted, never swallowed. `held`: git's index lock there (_lock_index),
+        held by the caller. `base`: HEAD when the write began (publish reads it before it checks
+        the files), or None for the HEAD the first attempt finds."""
         try:
             new, lines = self._publish_commit(blobs, message, paths, base)
         except Uncommitted:
             raise
         except Failure as exc:                       # HEAD unreadable: the files are still written
             raise self._uncommitted(paths, str(exc))
-        self._sync_index(lines, new, paths)
+        self._sync_index(lines, new, paths, held)
         return new
 
     def _publish_commit(self, blobs, message, paths, base=None):
@@ -938,19 +1068,30 @@ class MainBackend(object):
         raise self._uncommitted(paths, 'HEAD moved or stayed locked under %d attempts (%s)'
                                 % (ATTEMPTS, last))
 
-    def _sync_index(self, lines, new, paths):
-        """Give the real index `lines` for those paths only, so `git status` shows them clean.
-        IndexStale when it cannot: the write stays committed, and the error carries the repair."""
+    def _sync_index(self, lines, new, paths, held):
+        """Give the real index `lines` for those paths only, so `git status` shows them clean,
+        under git's index lock `held`, as git itself writes an index: the index is copied into
+        the lock file (its modification time kept, which git's racy-entry check compares with),
+        `update-index` writes that copy (GIT_INDEX_FILE), and the copy is moved over the index
+        (_IndexLock.install). IndexStale when it cannot: the write stays committed, the index is
+        as it was, and the error carries the repair."""
         why = ''
-        for attempt in range(ATTEMPTS):
-            r = cmd.call(['update-index', '--index-info'], self.root, env=_store_env(),
+        try:
+            st = os.stat(held.index)
+            shutil.copyfile(held.index, held.path)
+            os.utime(held.path, ns=(st.st_atime_ns, st.st_mtime_ns))
+        except OSError as exc:
+            why = 'cannot copy the index into its lock file: %s' % exc
+        if not why:
+            r = cmd.call(['update-index', '--index-info'], self.root,
+                         env=dict(_store_env(), GIT_INDEX_FILE=held.path),
                          stdin=('\n'.join(lines) + '\n').encode('utf-8'))
-            if r.rc == 0:
-                return
-            why = r.err or 'git update-index exited %s' % r.rc
-            if 'index.lock' not in why:
-                break
-            time.sleep(random.uniform(0.05, 0.25) * (attempt + 1))
+            if r.rc != 0:
+                why = r.err or 'git update-index exited %s' % r.rc
+        if not why:
+            why = held.install()
+        if not why:
+            return
         repair = 'git -C "%s" reset -q -- %s' % (self.root, quoted(paths))
         raise IndexStale(
             '%s committed in %s: HEAD %s, but the real index of that worktree was not updated '
@@ -1004,7 +1145,8 @@ class MainBackend(object):
         """Commit the worktree's state of `paths` (record paths, as git spells them; a missing
         file is a deletion) as one commit on HEAD, as a write does: `catch-up --apply`. Only in
         the PM data worktree and only record paths (Failure otherwise, before anything moves).
-        Returns the new commit, or None when HEAD already holds them."""
+        Returns the new commit, or None when HEAD already holds them. It holds git's index lock
+        there from before it reads the files (_lock_index: Busy, nothing committed)."""
         if not self.commit_branch():
             raise Failure('%s is not the PM data worktree: its store writes are not committed '
                           'here' % self.root)
@@ -1012,6 +1154,9 @@ class MainBackend(object):
         if bad or not paths:
             raise Failure('not a record path of %s/: %s' % (self.rel, ', '.join(bad) or 'none given'))
         paths = sorted(set(paths))
+        return self._locked(paths, lambda held: self._commit_paths(paths, message, held))
+
+    def _commit_paths(self, paths, message, held):
         present = [p for p in paths if os.path.isfile(os.path.join(self.root, *p.split('/')))]
         blobs = dict.fromkeys(paths)
         if present:                                   # as `git add` would: the path's filters
@@ -1020,7 +1165,7 @@ class MainBackend(object):
                 raise self._uncommitted(paths, 'git hash-object printed %d ids for %d files'
                                         % (len(shas), len(present)))
             blobs.update(zip(present, shas))
-        return self._commit(blobs, message, paths)
+        return self._commit(blobs, message, paths, held)
 
     def history(self, rid, snap):
         return _last_closing(self.root, rid, 'HEAD')

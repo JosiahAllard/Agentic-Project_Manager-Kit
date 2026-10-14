@@ -1,8 +1,8 @@
 """The four ways a backlog verb stops (ported from an earlier tools/backlog.py). Each fixes the
 label the CLI prints and its exit code; nothing was written when one is raised, except
 Uncommitted (an Overtaken only for the paths in its `left`) and IndexStale (each a Failure). IndexStale's write is committed, so tools/backlog.py
-reports it as written, with a WARNING line and exit 0, not by this label and code. Dirty is a
-Failure raised before anything is written."""
+reports it as written, with a WARNING line and exit 0, not by this label and code. Dirty and
+Busy are Failures raised before anything is written."""
 
 
 class Refusal(Exception):
@@ -86,3 +86,14 @@ class Dirty(Failure):
         Failure.__init__(self, message)
         self.paths = list(paths)
         self.compare = compare
+
+
+class Busy(Failure):
+    """Refused before anything was written: git's lock on the PM data worktree's index (`lock`,
+    its `index.lock`) stayed held while the write waited for it (kitlib.backlog.store
+    MainBackend._lock_index): a git command there is writing the index, or one that was stopped
+    left the file behind."""
+
+    def __init__(self, message, lock=''):
+        Failure.__init__(self, message)
+        self.lock = lock

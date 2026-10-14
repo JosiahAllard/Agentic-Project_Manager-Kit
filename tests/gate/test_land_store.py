@@ -15,6 +15,7 @@ from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from kitlib.git import cmd, refs
 from tests.backlog.helpers import priced, rec
+from tests.backlog.test_pmdata_commit import commit_beside, index_move_fails
 from tests.gate import test_land
 from tests.gitfixture import fixture_env
 from tests.realgit import real_git
@@ -488,24 +489,24 @@ class PmDataClose(StoreLandCase):
         (an added line, with `removes` the file's removal, with `garbles` bytes no record
         parses from) after the close checked the files
         and before its first commit attempt. BAR is blocked on FOO, so the close writes it too.
-        `after_my_files()` runs once the close's own file change is on disk."""
+        `after_my_files()` runs once the close's own file change is on disk. That commit moves
+        HEAD without the index lock the close holds (commit_beside; a `git commit` there would
+        fail): the close leaves the index as it was, and the mover's own repair then resets
+        FOO's entry to HEAD."""
         wt = self.pm_worktree(pulled('FOO'), rec('BAR', state='blocked', blocked_on='item:FOO'))
         self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        index = self.repo.git('ls-files', '-s', '--', 'kit/backlog', cwd=wt)
         real = smod.MainBackend._write_files
         theirs = []
+        path = 'kit/backlog/FOO.md'
+        with open(self.record(wt, 'FOO'), encoding='utf-8') as f:
+            added = f.read() + '\nanother session wrote this\n'
 
         def another_commit_then_write(backend, writes, before, paths, branch):
             first = branch and not theirs
-            if first and removes:
-                os.remove(self.record(wt, 'FOO'))
-            elif first and garbles:
-                with open(self.record(wt, 'FOO'), 'wb') as f:
-                    f.write(b'\xff\xfe not a record\n')
-            elif first:
-                with open(self.record(wt, 'FOO'), 'a', encoding='utf-8', newline='\n') as f:
-                    f.write('\nanother session wrote this\n')
             if first:
-                theirs.append(self.repo.commit('another session', 'kit/backlog/FOO.md', cwd=wt))
+                change = None if removes else (b'\xff\xfe not a record\n' if garbles else added)
+                theirs.append(commit_beside(wt, {path: change}, 'another session'))
             real(backend, writes, before, paths, branch)
             if first and after_my_files is not None:
                 after_my_files(wt)
@@ -514,6 +515,8 @@ class PmDataClose(StoreLandCase):
         self.assertEqual(len(theirs), 1)
         self.assertEqual(self.repo.git('rev-parse', 'HEAD', cwd=wt), theirs[0])
         self.assertEqual(self.main_now(), out.merge)
+        self.assertEqual(self.repo.git('ls-files', '-s', '--', 'kit/backlog', cwd=wt), index)
+        self.repo.git('reset', '-q', '--', path, cwd=wt)
         return wt, theirs[0], out
 
     def test_a_close_another_commit_overtook_is_put_back_and_reported_unclosed(self):
@@ -626,21 +629,23 @@ class PmDataClose(StoreLandCase):
         self.assertIn('backlog.py" -C "%s" catch-up --apply "kit/backlog/BAR.md" '
                       '"kit/backlog/FOO.md"' % self.pm_root(wt), command)
 
-    def test_a_close_committed_with_a_stale_index_is_not_reported_unclosed(self):
-        """The close commits but the PM worktree's index is locked: the WARNING says it was
-        closed and committed and gives the index repair, never `close it with`."""
-        wt = self.pm_worktree(pulled('FOO'))
-        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
-        before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+    def pm_index(self, wt):
+        """The PM data worktree's own index file."""
         gitdir = self.repo.git('rev-parse', '--git-dir', cwd=wt)
         if not os.path.isabs(gitdir):
             gitdir = os.path.join(wt, gitdir)
-        lock = os.path.join(gitdir, 'index.lock')
-        with open(lock, 'w') as f:
-            f.write('')
-        self.addCleanup(os.remove, lock)
-        with mock.patch.object(smod, 'ATTEMPTS', 1):
+        return os.path.join(gitdir, 'index')
+
+    def test_a_close_committed_with_a_stale_index_is_not_reported_unclosed(self):
+        """The close commits but the PM worktree's index cannot be updated (the updated copy
+        cannot be moved over it): the WARNING says it was closed and committed and gives the
+        index repair, never `close it with`."""
+        wt = self.pm_worktree(pulled('FOO'))
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        with index_move_fails(self.pm_index(wt)):
             out = self.land()
+        self.assertFalse(os.path.exists(self.pm_index(wt) + '.lock'))
         tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
         self.assertEqual(self.repo.git('rev-parse', tip + '^', cwd=wt), before)
         warn = [l for l in out.lines if l.startswith('WARNING')]
@@ -650,6 +655,33 @@ class PmDataClose(StoreLandCase):
         self.assertIn('FOO was closed in the backlog store kit/backlog in ', warn[0])
         self.assertIn('HEAD has the commit %s' % tip[:10], warn[0])
         self.assertIn('reset -q -- "kit/backlog/FOO.md"', warn[0])
+
+    def test_a_close_while_another_git_command_holds_the_index_names_the_close_command(self):
+        """git's index lock in the PM data worktree stays held (store.MainBackend._lock_index,
+        errors.Busy): nothing is written, the WARNING names the lock and the close command, and
+        the landing stands."""
+        wt = self.pm_worktree(pulled('FOO'))
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        lock = self.pm_index(wt) + '.lock'
+        with open(lock, 'w') as f:
+            f.write('')
+        self.addCleanup(os.remove, lock)
+        with mock.patch.object(smod, 'INDEX_WAIT', 0.2):
+            out = self.land()
+        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
+        self.assertEqual(self.repo.git('rev-parse', 'HEAD', cwd=wt), before)
+        self.assertTrue(os.path.exists(lock))               # never another command's to remove
+        self.assertEqual(self.main_now(), out.merge)
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertFalse([l for l in out.lines if l.startswith('closed ')], out.lines)
+        self.assertIn('FOO, which it holds pulled, was not closed (ERROR: ', warn[0])
+        self.assertIn('nothing was written', warn[0])
+        self.assertIn("git's index lock", warn[0])
+        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" close FOO --reason "landed %s"'
+                                         % (self.pm_root(wt), out.merge)), warn[0])
+        self.assertNotIn('catch-up', warn[0])
 
     def test_a_record_the_pm_data_store_cannot_close_names_the_command_and_the_landing_stands(self):
         wt = self.pm_worktree(pulled('FOO', priority='-1', priority_by='-',
