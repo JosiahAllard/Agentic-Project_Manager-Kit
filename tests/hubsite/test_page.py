@@ -397,8 +397,10 @@ class DomTest(unittest.TestCase):
                     snapshot(collections={"todos": {"T-1": {"status": "open", "title": "kept on the page", "from": "pm"}}}),
                     hash="#todo")
                 with self.subTest(status=status, field=field, where=where):
-                    self.assertIn("no longer paired", got["first"]["err"])
-                    self.assertIn("`hub open` on the PC", got["first"]["err"])
+                    self.assertIn("not paired with the hub (yet, or any more after the hub server restarted)", got["first"]["err"])
+                    self.assertIn("`python tools/hub.py open`", got["first"]["err"])
+                    self.assertIn("in the kit folder", got["first"]["err"])
+                    self.assertNotIn("no longer paired", got["first"]["err"])
                     self.assertNotIn("Trying again", got["first"]["err"])
                     self.assertFalse(got["first"]["hidden"])
                     self.assertEqual(got["first"]["sleeps"], [])                 # no later try is waiting
@@ -641,9 +643,9 @@ class DomTest(unittest.TestCase):
             return { origin, role: text($("#pm-addstatus")), kept: $("#pm-fields textarea").value, err: text($("#loaderr")) };
         """, snapshot(collections=LISTS), hash="#topm")
         self.assertIn("the Origin header is not the hub server's own", got["origin"])
-        self.assertNotIn("no longer paired", got["origin"])
-        self.assertIn("no longer paired", got["role"])
-        self.assertIn("`hub open` on the PC", got["role"])
+        self.assertNotIn("not paired", got["origin"])
+        self.assertIn("not paired with the hub", got["role"])
+        self.assertIn("`python tools/hub.py open`", got["role"])
         self.assertNotIn("carries no owner", got["role"])
         self.assertEqual(got["kept"], "kept text")
         self.assertEqual(got["err"], "")

@@ -10,7 +10,10 @@ PM uses the same API through the `tools/hub.py` verbs.
 
 Start the server with `python tools/hub.py serve`, then `python tools/hub.py open`: it opens the
 page signed in as you (a one-time pairing link sets the browser's session cookie; `--print` prints
-the link instead). A browser that is no longer paired is told to run `hub open` again.
+the link instead). `serve` prints the full `open` command on its start line. A browser that is not
+paired (a first visit, or any browser after the server restarts: sessions live in the server's
+memory) is told so on the page and to run `python tools/hub.py open` in the kit folder and open
+the link it prints. The server's health is `GET /api/v1/health`.
 
 - **Inbox.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
   options and a recommendation; pick one and add a note if you like. Its own tabs are Open,
