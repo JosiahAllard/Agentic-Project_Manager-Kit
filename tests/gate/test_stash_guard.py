@@ -62,7 +62,9 @@ class _Stack:
     def assert_refused_and_nothing_ran(self, out, wt, tip):
         self.assertEqual(out.code, G.REFUSED, out.lines)
         self.assertTrue(out.lines[0].startswith('REFUSED: the stash stack is not empty'), out.lines)
-        self.assertEqual(len(out.lines), 1, out.lines)
+        # the refusal, then only the source line runner._branch_gate ends every outcome with
+        # once the config is read (kitlib.gate.detect.label)
+        self.assertEqual(out.lines[1:], ['source: gate.json'], out.lines)
         self.assertFalse(os.path.exists(gate_ok.record_path(wt, tip)))
         self.assertEqual(self.store.history_records(1), [])          # nothing booked or run
         self.assertFalse(os.path.exists(self.logs))
