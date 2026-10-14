@@ -90,6 +90,11 @@ repository.
   `Stop-ScheduledTask -TaskName 'PM kit hub server'` and start it again with
   `Start-ScheduledTask`. A server that was cut off without a clean close leaves its store lock,
   which the next start takes over with a note (docs/hub-remote-access.md).
+- `python tools/hub.py setup --check` writes nothing: it says whether `hub.access` is unset, set
+  or cannot serve, fetches the Access keys once when it can serve (`access keys: ...`), and lists
+  each kit copy on the machine that would refuse the `hub` key (`kitlib.config.copies`). It ends
+  `READY: ...` (exit 0) or `NOT READY: ...` (exit 1). Run it before writing the `hub` key
+  (docs/hub-remote-access.md "Before you start").
 - `hub.py validate [--store PATH]` checks the store folder against the field tables below, with
   no server, and prints `VALIDATE <LEVEL> <document> <field>: <message> [<code>]`.
 
