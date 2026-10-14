@@ -15,6 +15,7 @@ from kitlib.backlog import store as smod
 from kitlib.git import refs
 
 from tests.backlog.helpers import priced
+from tests.backlog.test_pmdata_commit import commit_beside, index_move_fails
 from tests.gate import test_land_store as tls
 from tests.gate.test_land_store import BRANCH, StoreLandCase, pulled
 
@@ -262,7 +263,7 @@ class ClosesByTrailerInThePmDataStore(StoreLandCase):
     branch_with = ClosesByTrailer.branch_with
 
     def test_a_record_a_trailer_names_is_closed_in_the_pm_data_store(self):
-        wt = self.pm_worktree(pulled('D2', by='main'), pulled('KEEP', by='main'))
+        wt = self.seeded(pulled('D2', by='main'), pulled('KEEP', by='main'))
         tip = self.branch_with('fix\n\nCloses: D2\n%s\n' % TRAILERS)
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.OK, out.lines)
@@ -294,6 +295,15 @@ class ClosesByTrailerInThePmDataStore(StoreLandCase):
             f.write('')
         self.addCleanup(os.remove, path)
 
+    def another_commit(self, wt):
+        """Another session's commit of an added line in D2.md, made without the index lock the
+        close holds (commit_beside; a `git commit` there would fail), so the index is left as it
+        was: the mover's own repair, run here once the landing is over, resets it."""
+        with open(self.record(wt, 'D2'), encoding='utf-8') as f:
+            text = f.read() + '\nanother session wrote this\n'
+        self.addCleanup(self.repo.git, 'reset', '-q', '--', 'kit/backlog/D2.md', cwd=wt)
+        return commit_beside(wt, {'kit/backlog/D2.md': text}, 'another session')
+
     def test_an_overtaken_close_of_a_record_a_trailer_names_gives_the_close_command(self):
         """D2 is pulled by main and another commit changes its file under the close: the files
         are put back, D2 is still pulled, and the trailer closes it whoever holds it, so the
@@ -304,9 +314,7 @@ class ClosesByTrailerInThePmDataStore(StoreLandCase):
 
         def another_commit_then_write(backend, writes, before, paths, branch):
             if branch and not theirs:
-                with open(self.record(wt, 'D2'), 'a', encoding='utf-8', newline='\n') as f:
-                    f.write('\nanother session wrote this\n')
-                theirs.append(self.repo.commit('another session', 'kit/backlog/D2.md', cwd=wt))
+                theirs.append(self.another_commit(wt))
             real(backend, writes, before, paths, branch)
         with mock.patch.object(smod.MainBackend, '_write_files', another_commit_then_write):
             out, warn = self.land_closing('D2')
@@ -344,9 +352,7 @@ class ClosesByTrailerInThePmDataStore(StoreLandCase):
         def another_commit_then_write(backend, writes, before, paths, branch):
             first = branch and not theirs
             if first:
-                with open(self.record(wt, 'D2'), 'a', encoding='utf-8', newline='\n') as f:
-                    f.write('\nanother session wrote this\n')
-                theirs.append(self.repo.commit('another session', 'kit/backlog/D2.md', cwd=wt))
+                theirs.append(self.another_commit(wt))
             real(backend, writes, before, paths, branch)
             if first:
                 with open(self.record(wt, 'D2'), 'w', encoding='utf-8', newline='\n') as f:
@@ -378,11 +384,7 @@ class ClosesByTrailerInThePmDataStore(StoreLandCase):
     def test_a_trailer_close_committed_with_a_stale_index_still_tells_the_live_holder(self):
         self.repo.git('branch', 'kit/other', self.main)
         wt = self.seeded(pulled('BBB', by='kit/other'))
-        gitdir = self.repo.git('rev-parse', '--git-dir', cwd=wt)
-        if not os.path.isabs(gitdir):
-            gitdir = os.path.join(wt, gitdir)
-        self.locked(os.path.join(gitdir, 'index.lock'))
-        with mock.patch.object(smod, 'ATTEMPTS', 1):
+        with index_move_fails(tls.PmDataClose.pm_index(self, wt)):
             out, warn = self.land_closing('BBB')
         self.assertEqual(len(warn), 2, out.lines)
         self.assertIn('BBB was closed in the backlog store kit/backlog in ', warn[0])
