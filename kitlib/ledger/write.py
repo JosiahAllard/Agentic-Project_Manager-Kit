@@ -63,10 +63,10 @@ def now_utc():
     return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%MZ')
 
 
-def add(path, repo, prov, q, a, decides, source, supersedes='-', items=None, when=None, repos=None):
+def add(path, repo, prov, q, a, decides, source, supersedes='-', when=None, repos=None):
     """Append one entry and return Added(id, warnings). `repos` is the configured repo columns
-    (None: any well-formed name; `all` is always accepted). `items` a list of record ids or None.
-    `when` 'YYYY-MM-DD HH:MMZ' UTC, default now."""
+    (None: any well-formed name; `all` is always accepted). `when` 'YYYY-MM-DD HH:MMZ' UTC,
+    default now."""
     for name, value in (('q', q), ('a', a), ('decides', decides), ('source', source)):
         if not (value or '').strip():
             raise Usage('--%s is empty' % name)
@@ -81,8 +81,7 @@ def add(path, repo, prov, q, a, decides, source, supersedes='-', items=None, whe
     _valid_or_refuse(text, repos, 'the ledger is already invalid')
     _, blocks = E.split_entries(text)
     rid = E.next_id(blocks)
-    items = [i.strip() for i in (items or []) if i.strip()] or None
-    block = E.render(rid, when or now_utc(), repo, prov, q, a, decides, source, supersedes, items)
+    block = E.render(rid, when or now_utc(), repo, prov, q, a, decides, source, supersedes)
     new = text.rstrip('\n') + '\n\n' + block
     _valid_or_refuse(new, repos, 'the new entry is invalid')
     write_atomic(path, new)

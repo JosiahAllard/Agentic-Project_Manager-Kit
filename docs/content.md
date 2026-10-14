@@ -152,8 +152,9 @@ version, nothing else). Claude's are each JSON with indent 2 and a final newline
 
 - `.claude-plugin/plugin.json`: the name and version, every agent file, the skills folder
   (`./content/skills/`), the
-  hooks file and the machine-lock MCP server (`python ${CLAUDE_PLUGIN_ROOT}/mcp/lock_server.py`).
-  It stays at the kit root because the plugin root is the whole kit: the hooks and the MCP server
+  hooks file and the MCP servers of `MCP_SERVERS`: `machine-lock`
+  (`python ${CLAUDE_PLUGIN_ROOT}/mcp/lock_server.py`) and `hub` (`mcp/hub_server.py`, docs/hub-mcp.md).
+  It stays at the kit root because the plugin root is the whole kit: the hooks and the MCP servers
   run kitlib and tools beside them, and an installed plugin reaches only files under its root.
   The export (docs/plugin-source.md) stamps its version as `<version>-main.<count>`.
 - `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin

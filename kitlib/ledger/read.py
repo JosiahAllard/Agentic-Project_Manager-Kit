@@ -1,5 +1,6 @@
 """The one ledger reader: every consumer of the rulings ledger's entries reads through here (the
-digest feed `list`, the backlog's ruling gates, ruling_cites, `check`'s orphan scan).
+digest feed `list` in kitlib.ledger, `check`'s standing-digest check in kitlib.ledger.standing, and
+kitlib.backlog.ledger, which re-exports `Entry` and `read_entries`).
 
 A header is read leniently, `## R-nnnn | <when> | <repo> | <kind>`; `strict` says it also has the
 form the writer produces (kitlib.ledger.fmt, docs/ledger.md "Format"). Beneath a header only the
