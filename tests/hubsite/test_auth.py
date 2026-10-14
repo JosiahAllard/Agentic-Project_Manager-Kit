@@ -446,8 +446,10 @@ class PersistTest(PersistCase):
     def test_an_entry_without_the_owner_tokens_mac_is_refused(self):
         value = 'v' * 43
         exp = int(self.clock.now + 1000)
+        real = mac(self.owner, value)
+        flipped = real[:-1] + ('1' if real.endswith('0') else '0')    # never the real one
         for forged in (hashlib.sha256(value.encode('ascii')).hexdigest(), mac(self.agent, value),
-                       mac(self.owner, value + 'x'), mac(self.owner, value)[:-1] + '0'):
+                       mac(self.owner, value + 'x'), flipped):
             self.write({'v': 1, 'sessions': [{'mac': forged, 'exp': exp}]})
             self.assertIsNone(self.fresh().role_for({}, self.cookie(value)), forged)
         self.write({'v': 1, 'sessions': [{'mac': mac(self.owner, value), 'exp': exp}]})
@@ -473,6 +475,17 @@ class PersistTest(PersistCase):
         value = creds.pair(creds.new_pairing_code())
         self.assertEqual([e['mac'] for e in self.read()['sessions']],
                          [mac(self.owner, 'c' * 43), mac(self.owner, value)])
+
+    def test_expired_entries_do_not_count_toward_the_cap_on_load(self):
+        now = int(self.clock.now)
+        live = [{'mac': mac(self.owner, '%043d' % i), 'exp': now + 100}
+                for i in range(auth.MAX_SESSIONS)]
+        dead = [{'mac': mac(self.owner, 'd%042d' % i), 'exp': now - 1} for i in range(3)]
+        self.write({'v': 1, 'sessions': dead + live})
+        creds = self.fresh()
+        self.assertEqual(creds.notes, [])
+        for i in range(auth.MAX_SESSIONS):
+            self.assertEqual(creds.role_for({}, self.cookie('%043d' % i)), auth.OWNER, i)
 
     def test_a_far_future_entry_is_held_to_one_lifetime_from_the_load(self):
         self.write({'v': 1, 'sessions': [{'mac': mac(self.owner, 'f' * 43),
@@ -528,6 +541,7 @@ class PersistTest(PersistCase):
         for c in 'hijkl':
             self.assertIsNone(creds.role_for({}, self.cookie(c * 43)), c)
         self.assertEqual(len(creds.notes), 1)
+        self.assertIn('has %d entries this hub cannot read' % len(bad), creds.notes[0])
 
     def test_another_ports_file_is_not_read(self):
         value = self.creds.pair(self.creds.new_pairing_code())
