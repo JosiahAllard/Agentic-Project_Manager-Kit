@@ -53,7 +53,10 @@ Leave the connector's HTTP Host header setting empty. The tunnel listener has no
 write (a POST) must carry an `https` Origin whose host equals the Host header the hub receives
 (`kitlib.hubsite.httpd`). Cloudflare's origin-parameter page does not say that cloudflared passes
 the public host name on by default; the hub's code assumes it does. If every write from the phone
-is refused with an Origin message while reads work, this is the first thing to check.
+is refused with an Origin message while reads work, this is the first thing to check. The hub's
+console then says so, at most once a minute, naming the two host names and no token: "the tunnel
+listener refused a write: its Origin host <hostname> is not the Host 127.0.0.1:8791 it arrived
+with; leave the tunnel route's HTTP Host Header setting empty" (`kitlib.hubsite.tunnel.HOST_LINE`).
 
 ## 3. Protect it with Access
 

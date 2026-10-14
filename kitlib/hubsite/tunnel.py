@@ -10,6 +10,7 @@
             .stop()             shut it for good: every request from now on is refused
             .keys()             (True, '') when there are keys to check a token with, else
                                 (False, one of access.REASONS or '')
+  host_note(log, clock=None)    fn(origin_host, host): the throttled HOST_LINE (What the log says)
   TunnelConfigError             .unset: nothing of hub.access is set at all
   HEADER                        the one header the Access token is read from
   VIA                           the source a write through this listener is recorded with
@@ -39,7 +40,11 @@ server's (its keys, its clock, its settings, the gate itself) and 'note' when it
 One line a reason every SAY_EVERY_S seconds: a port open to the internet through a tunnel is
 asked by strangers all day, and a line a request would bury the console. The next line of that
 reason says how many were refused in between (MORE). No line holds a token, a header, a claim or
-a value of the settings.
+a value of the settings, with one exception: a write that passed the gate and was refused by the
+Origin rule because the host of its Origin is not its Host logs HOST_LINE, which names those two
+hosts (cut to host characters and HOST_CHARS), as an 'error' on the same once-a-minute rule
+(host_note, wired as httpd's origin_refused). That is what a tunnel route that rewrites the Host
+header does to every write, and the line says which setting to empty.
 
 The listener differs from the local one in this and no more: its gate; no Host rule (the tunnel
 hands on the public host name); writes need an `https` Origin that names that Host; no pairing
@@ -65,6 +70,7 @@ Hub.close. The gate does not fetch keys until a token arrives: start() makes
 the key source and asks it nothing, and Gate.keys() says "no keys" until the first request that
 carried a token made a good fetch.
 """
+import re
 import threading
 import time
 
@@ -80,6 +86,13 @@ CLOSING = 'closing'                     # refused because Gate.stop() was called
 SAY_EVERY_S = 60                        # one log line a reason in this many seconds
 REFUSAL_LINE = 'the tunnel listener refused a request: %s'
 MORE = '; %d more were refused for this reason since the last line'
+# a write the Origin rule refused because the host of its Origin is not its Host: what a tunnel
+# route that rewrites the Host header (its HTTP Host Header setting) does to every write
+HOST_LINE = ("the tunnel listener refused a write: its Origin host %s is not the Host %s it "
+             "arrived with; leave the tunnel route's HTTP Host Header setting empty")
+HOST_KEY = 'origin-host'                # HOST_LINE's own count, apart from the gate's reasons
+HOST_CHARS = 100                        # the most of one host a log line holds
+_NOT_HOST = re.compile(r'[^A-Za-z0-9.:\[\]-]')
 
 # why the listener does not start: fixed words, for the console and for GET health. None holds
 # a value of the settings.
@@ -131,35 +144,64 @@ def check(access_settings):
 
 class _Lines(object):
     """The gate's log lines: one a reason every SAY_EVERY_S on `clock`, with the count of the
-    refusals in between. say() never raises."""
+    refusals in between. say() and once() never raise."""
 
     def __init__(self, log, clock):
         self._log = log
         self._clock = clock
         self._lock = threading.Lock()
-        self._said = {}                 # reason -> [clock time of its last line, refusals since]
+        self._said = {}                 # key -> [clock time of its last line, refusals since]
 
     def say(self, reason, detail):
+        try:
+            text = REFUSAL_LINE % reason
+            if detail:
+                text += ' (%s)' % detail
+            ours = reason in _OURS or reason.startswith(_OURS_PREFIX)
+            self.once(reason, text, 'error' if ours else 'note')
+        except Exception:               # a console that is gone must not open or break the gate
+            pass
+
+    def once(self, key, text, level):
+        """Log `text` at `level` unless a line of `key` was logged less than SAY_EVERY_S ago;
+        the next line of `key` then says how many were held back (MORE)."""
         if self._log is None:
             return
         try:
             with self._lock:
                 now = self._clock()
-                state = self._said.get(reason)
+                state = self._said.get(key)
                 if state is not None and 0 <= now - state[0] < SAY_EVERY_S:
                     state[1] += 1
                     return
                 skipped = state[1] if state is not None else 0
-                self._said[reason] = [now, 0]
-            text = REFUSAL_LINE % reason
-            if detail:
-                text += ' (%s)' % detail
+                self._said[key] = [now, 0]
             if skipped:
                 text += MORE % skipped
-            ours = reason in _OURS or reason.startswith(_OURS_PREFIX)
-            self._log('error' if ours else 'note', text)
-        except Exception:               # a console that is gone must not open or break the gate
+            self._log(level, text)
+        except Exception:               # a console that is gone must not break a request
             pass
+
+
+def _host_word(text):
+    """`text` (a host name from a request header) as a log may hold it: at most HOST_CHARS
+    characters, each a letter, a digit or one of `.-:[]`, any other one a `?`."""
+    return _NOT_HOST.sub('?', str(text)[:HOST_CHARS])
+
+
+def host_note(log, clock=None):
+    """fn(origin_host, host) for httpd.Listener's origin_refused: logs HOST_LINE ('error') for a
+    write refused because the host of its Origin is not its Host, at most once every SAY_EVERY_S
+    on `clock` (time.monotonic), the next line with the count of those held back. The hosts are
+    cut to host characters (_host_word). Never raises."""
+    lines = _Lines(log, clock or time.monotonic)
+
+    def note(origin_host, host):
+        try:
+            lines.once(HOST_KEY, HOST_LINE % (_host_word(origin_host), _host_word(host)), 'error')
+        except Exception:
+            pass
+    return note
 
 
 class Gate(object):
@@ -250,4 +292,5 @@ def start(settings, api, static_dir=None, log=None, keys=None, now=None):
     return httpd.Listener((httpd.LOOPBACK, settings.tunnel_port), api,
                           gate(settings.access, source, now=now, log=log),
                           static_dir=static_dir, host_rule=None, origin_scheme=ORIGIN_SCHEME,
-                          via=VIA, via_header=False, agent_words=True, log=log)
+                          via=VIA, via_header=False, agent_words=True, log=log,
+                          origin_refused=host_note(log))

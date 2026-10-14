@@ -322,6 +322,70 @@ class TunnelHostTest(TunnelCase):
                          ['through the tunnel'])
         self.assertNoSecret(self.good)
 
+    def test_a_write_refused_for_a_rewritten_host_is_logged_once_a_minute_with_both_hosts(self):
+        for _ in range(2):
+            r = self.ask('POST', TODOS, token=self.good, obj={'title': 'never written'},
+                         host=self.rewritten, origin='https://' + PUBLIC)
+            self.assertEqual((r.status, r.json()['error']['field']), (403, 'origin'))
+        said = [(level, text) for level, text in self.lines if level != 'access']
+        self.assertEqual(said, [('error', tunnel.HOST_LINE % (PUBLIC, self.rewritten))])
+        self.assertIn('HTTP Host Header', said[0][1])
+        # a write whose Origin names its Host, refused for its scheme, says nothing of hosts
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'x'}, origin='http://' + PUBLIC)
+        self.assertEqual(r.status, 403)
+        self.assertEqual(len([1 for level, _ in self.lines if level != 'access']), 1)
+        self.assertNoSecret(self.good)
+
+    def test_a_write_with_no_token_never_reaches_the_host_line(self):
+        r = self.ask('POST', TODOS, obj={'title': 'never written'}, host=self.rewritten,
+                     origin='https://' + PUBLIC)
+        self.assertEqual(r.status, 403)
+        self.assertEqual(r.json(), REFUSAL)
+        self.assertEqual([text for level, text in self.lines if level == 'error'], [])
+
+
+class HostNoteTest(unittest.TestCase):
+    """tunnel.host_note: the throttled line of a write refused because its Origin's host is not
+    its Host."""
+
+    def setUp(self):
+        self.lines = []
+        self.t = 1000.0
+
+    def note(self, log=True):
+        return tunnel.host_note(self.log if log else None, clock=lambda: self.t)
+
+    def log(self, level, text):
+        self.lines.append((level, text))
+
+    def test_one_line_a_minute_then_the_count_of_the_rest(self):
+        note = self.note()
+        note(PUBLIC, '127.0.0.1:8791')
+        self.t += 10
+        note(PUBLIC, '127.0.0.1:8791')
+        note('another.example.invalid', '127.0.0.1:8791')
+        self.assertEqual(self.lines, [('error', tunnel.HOST_LINE % (PUBLIC, '127.0.0.1:8791'))])
+        self.t += tunnel.SAY_EVERY_S
+        note(PUBLIC, 'localhost:8791')
+        self.assertEqual(self.lines[1:], [('error', tunnel.HOST_LINE % (PUBLIC, 'localhost:8791')
+                                           + tunnel.MORE % 2)])
+
+    def test_a_host_is_cut_short_and_holds_only_host_characters(self):
+        note = self.note()
+        note('evil.example.invalid\r\nforged line', 'a' * 500)
+        (level, text), = self.lines
+        self.assertNotIn('\n', text)
+        self.assertNotIn('\r', text)
+        self.assertNotIn(' line', text)
+        self.assertNotIn('a' * (tunnel.HOST_CHARS + 1), text)
+
+    def test_no_log_and_a_broken_log_raise_nothing(self):
+        self.note(log=False)(PUBLIC, '127.0.0.1:8791')
+
+        def broken(level, text):
+            raise OSError('the console is gone')
+        tunnel.host_note(broken, clock=lambda: self.t)(PUBLIC, '127.0.0.1:8791')
+
 
 class NoExceptionTest(TunnelCase):
     def setUp(self):
