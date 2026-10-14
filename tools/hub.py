@@ -48,8 +48,9 @@
       kitlib.hubsite.tunnel.check. With settings that can serve, one fetch of the team's Access
       keys (kitlib.hubsite.access.probe, its `access keys: ` line). Then one line for each kit
       copy on this machine (kitlib.config.copies: the plugin export folders, the pins and each
-      account folder's install): `knows every key`, `would refuse ` and the keys, or `cannot
-      tell: ` and why, checked against the machine config's keys plus `hub`; a copy that
+      account folder's install, kitlib.pluginsource.installs): `knows every key`, `would refuse `
+      and the keys, or `cannot tell: ` and why (an install whose folder is gone names the
+      refresh command), checked against the machine config's keys plus `hub`; a copy that
       refuses a key refuses the whole file. Last, `READY: ...` and exit 0, or `NOT READY: ...`
       and exit 1: a copy in use would refuse a key or cannot be read, the Access settings
       cannot serve, or the keys were not fetched. Export folders not in use decide nothing; a
@@ -480,7 +481,7 @@ def _status(a, stop):
 
 def _check():
     """setup --check: reads only. 0 when ready, 1 when not."""
-    from kitlib import machinesetup, pluginsource
+    from kitlib import pluginsource
     s = settings.load()
     why = []
     try:
@@ -505,7 +506,8 @@ def _check():
         why.append('the kit copies could not be looked at')
     else:
         report = copies.check(copies.find(root, pluginsource.current_folder(root),
-                                          machinesetup.account_dirs(user.home_dir())), keys)
+                                          pluginsource.installs()), keys,
+                              pluginsource.refresh_cmd())
         print('kit copies, checked against the keys %s:' % ', '.join(keys))
         for line in report.lines:
             print('  %s' % line)

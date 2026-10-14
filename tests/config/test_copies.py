@@ -40,14 +40,18 @@ class CopiesCase(unittest.TestCase):
                 f.write(text)
         return folder
 
-    def installed(self, account, path):
-        os.makedirs(os.path.join(account, 'plugins'), exist_ok=True)
-        with open(os.path.join(account, *copies.INSTALLED), 'w', encoding='utf-8') as f:
-            json.dump({'version': 2, 'plugins': {copies.PLUGIN_ID: [
-                {'scope': 'user', 'installPath': path, 'version': '0.0.0'}]}}, f)
-
 
 class SchemaKeysTest(CopiesCase):
+    def test_this_checkouts_own_schema_is_read_and_knows_hub(self):
+        """The live module, not a fixture: a SCHEMA rewritten into a form this reader cannot
+        parse would make every copy 'cannot tell'."""
+        kit = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        known, retired = copies.schema_keys(kit)
+        self.assertIn('hub', known)
+        self.assertIn('owner_email', known)
+        self.assertEqual(copies.refused(kit, ['hub', 'owner_email', 'plugin']), ())
+
+
     def test_the_keys_and_the_retired_keys_are_read_without_importing(self):
         folder = self.copy(os.path.join(self.top, 'a'), NEW + '\nraise SystemExit("imported")\n')
         known, retired = copies.schema_keys(folder)
@@ -105,10 +109,9 @@ class FindTest(CopiesCase):
         os.makedirs(os.path.join(self.root, 'not-an-export'))
         one, two = os.path.join(self.top, 'acct1'), os.path.join(self.top, 'acct2')
         cache = self.copy(os.path.join(one, 'plugins', 'cache', 'pm-kit', 'pm-kit', '1.0'), OLD)
-        self.installed(one, cache)
-        self.installed(two, current)           # loaded in place: the same copy, two roles
+        installs = [(cache, one), (current, two)]   # two loads in place: one copy, two roles
         found = {os.path.normcase(c.path): c for c in copies.find(self.root, 'aaaaaaaaaaaa',
-                                                                 [one, two])}
+                                                                 installs)}
         self.assertEqual(set(found), {os.path.normcase(p) for p in (current, stale, pin, cache)})
         self.assertTrue(found[os.path.normcase(current)].in_use)
         self.assertIn('current export', found[os.path.normcase(current)].role)
@@ -118,12 +121,8 @@ class FindTest(CopiesCase):
         self.assertTrue(found[os.path.normcase(cache)].in_use)
         self.assertEqual(found[os.path.normcase(cache)].role, 'installed in %s' % one)
 
-    def test_an_unreadable_install_record_and_an_absent_root_find_nothing(self):
-        acct = os.path.join(self.top, 'acct')
-        os.makedirs(os.path.join(acct, 'plugins'))
-        with open(os.path.join(acct, *copies.INSTALLED), 'w', encoding='utf-8') as f:
-            f.write('{not json')
-        self.assertEqual(copies.find(os.path.join(self.top, 'none'), None, [acct]), [])
+    def test_an_absent_root_and_no_installs_find_nothing(self):
+        self.assertEqual(copies.find(os.path.join(self.top, 'none'), None, []), [])
 
 
 class CheckTest(CopiesCase):
@@ -145,6 +144,15 @@ class CheckTest(CopiesCase):
         text = '\n'.join(report.lines)
         self.assertIn('aaaaaaaaaaaa (current export): would refuse hub', text)
         self.assertIn('cccccccccccc (pin): cannot tell: cannot parse', text)
+
+    def test_an_install_whose_folder_is_gone_says_to_refresh_that_account(self):
+        self.copy(os.path.join(self.root, 'aaaaaaaaaaaa'), NEW)
+        gone, acct = os.path.join(self.top, 'gone'), os.path.join(self.top, 'acct')
+        report = copies.check(copies.find(self.root, 'aaaaaaaaaaaa', [(gone, acct)]), ('hub',),
+                              'python plugin_refresh.py --apply')
+        self.assertFalse(report.ready)
+        self.assertIn('%s (installed in %s): cannot tell: the folder is missing: refresh that '
+                      'account (python plugin_refresh.py --apply)' % (gone, acct), report.lines)
 
     def test_no_copy_found_is_not_ready(self):
         report = copies.check([], ('hub',))
