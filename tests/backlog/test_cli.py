@@ -59,7 +59,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(log.split('\n')[0], 'closes FOO: the work is finished')
 
     def test_a_pull_in_the_main_checkout_is_refused_and_as_a_branch_pulls(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         self.ok('set', 'FOO', '--priority', '2', '--priority-by', 'agent', '--effort', 's')
         tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)
         rc, out = self.run_tool('pull', 'FOO')

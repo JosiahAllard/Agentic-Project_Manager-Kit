@@ -9,10 +9,11 @@ branch checked out) takes part too: the PM's records of this repository live the
                     branch's recorded root (pmdata_refusal; docs/pm-data-branch.md), else None
   close_landed      after the push is verified: close every record the landed branch still holds
                     pulled, in the configured store (one commit each, "closes <ID>: landed <merge
-                    sha>") and in the PM data store (the record file deleted in that worktree, not
-                    committed); and every record a `Closes: <ID>[, <ID>]` line in the messages of
-                    the branch's commits names (closes_trailers), while pulled, whoever pulled it (a holder
-                    that is a live branch other than main is a WARNING: tell its builder). What
+                    sha>") and in the PM data store (the record file deleted in that worktree and
+                    the deletion committed on the PM data branch); and every record a `Closes:
+                    <ID>[, <ID>]` line in the messages of the branch's commits names
+                    (closes_trailers), while pulled, whoever pulled it (a holder that is a live
+                    branch other than main is a WARNING: tell its builder). What
                     cannot be closed is a WARNING line naming the command, and the landing
                     stands; trailer ids no store holds are one NOTE line
   landable_commands the `backlog.py landable` command of each store that takes part
@@ -300,8 +301,8 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None)
             named = []
             lines.append('WARNING: %s landed, and the Closes trailers of its commits could not be '
                          'read (%s), so only the records it holds pulled are closed; see the '
-                         'trailers with: git log --format=%%(trailers:key=Closes,valueonly) %s '
-                         '--not %s' % (branch, _one_line(why), tip, base))
+                         'Closes lines in: git log --format=%%B %s --not %s'
+                         % (branch, _one_line(why), tip, base))
     backend = ref_store(root, cfg, fetch=True)
     if backend is not None:
         lines.extend(_close_in(backend, root, cfg, branch, merge, session,

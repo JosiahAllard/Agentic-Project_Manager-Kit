@@ -177,6 +177,8 @@ class ClosesByTrailer(StoreLandCase):
         self.assertEqual(len(warn), 1, out.lines)
         self.assertIn('Closes trailers', warn[0])
         self.assertIn('boom', warn[0])
+        # whole messages: git's trailer parser misses a Closes line above commit.py's attribution
+        self.assertIn('git log --format=%%B %s --not ' % tip, warn[0])
 
 
 class ClosesByTrailerInThePmDataStore(StoreLandCase):
