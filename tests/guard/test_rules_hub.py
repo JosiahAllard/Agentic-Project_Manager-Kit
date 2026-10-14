@@ -3,8 +3,9 @@ hub-browser. Each holds every session but the owner's own: a subagent, a launche
 session (coordinator, pm, plain). The owner's unmarked session is never held. Agents still run
 the agent verbs of tools/hub.py and its validate, serve and status, which read agent.token
 in-process; those pass."""
-import importlib.util
 import os
+import subprocess
+import sys
 import unittest
 
 from kitlib.guard import context
@@ -344,6 +345,18 @@ class OwnerVerbs(Hub):
                 self.denied(self.run_hub(args), 'hub-owner-verb')
                 self.owner_allowed(self.run_hub(args))
 
+    def test_hub_run_as_a_module(self):
+        # `python -m tools.hub` from the kit folder, or `-m hub` from tools/, runs the same parser
+        for line in ('python -m tools.hub answer Q-1 --choice 1', 'cd tools && python -m hub todos done T-1',
+                     'python -mtools.hub open', 'python -B -m tools.hub to-pm send'):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+        self.denied(lambda sub: ps('python -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
+        for line in ('python -m tools.hub questions', 'python -m tools.hub todos add --title t',
+                     'python -m hubby answer Q-1', 'python -m tools.hubsite answer'):
+            with self.subTest(line):
+                self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
+
     def test_agent_verbs_pass(self):
         for args in self.ALLOWED:
             with self.subTest(args):
@@ -429,13 +442,21 @@ class HubMcp(Hub):
             with self.subTest(tool):
                 self.allowed(self.call(tool))
 
-    @unittest.skipUnless(importlib.util.find_spec('kitlib.hubmcp'), 'kitlib.hubmcp is not on this branch yet')
     def test_the_list_is_the_servers(self):
-        # whichever of this branch and kit/hub-mcp lands second keeps this test: the guard's list
-        # of owner-only hub tools is the server's own
+        # the guard's list of owner-only hub tools is the server's own
         from kitlib import hubmcp
         from kitlib.guard import hub
         self.assertEqual(set(hub.OWNER_MCP_TOOLS), set(hubmcp.OWNER_ONLY))
+
+    def test_the_guard_does_not_load_the_server(self):
+        # a fresh interpreter: loading the guard's rules imports kitlib.hubmcp's names only
+        code = ('import sys; import kitlib.guard.rules; '
+                'print(sorted(m for m in sys.modules if m.startswith(("kitlib.hubmcp", "kitlib.hubsite"))))')
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        out = subprocess.run([sys.executable, '-I', '-c', 'import sys; sys.path.insert(0, %r); %s' % (root, code)],
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "['kitlib.hubmcp']")
 
 
 # ---------------------------------------------------------------- hub-browser

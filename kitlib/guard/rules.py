@@ -622,15 +622,32 @@ def hub_script_run(inv):
     return bool(found) and found[1] == HUB_SCRIPT and not inv.args[found[0]].dyn
 
 
+def hub_module(words, k):
+    """True when words[k] is the module python's -m runs (`-m tools.hub`, `-mtools.hub`) and its
+    last part is `hub`: tools/hub.py run as a module."""
+    w = words[k]
+    if w.dyn:
+        return False
+    if w.text.startswith('-m') and len(w.text) > 2:
+        mod = w.text[2:]
+    elif k > 0 and words[k - 1].text == '-m' and not words[k - 1].dyn:
+        mod = w.text
+    else:
+        return False
+    return mod.rsplit('.', 1)[-1].lower() == HUB_SCRIPT[:-len('.py')]
+
+
 def hub_owner_run(cmd, inv):
     """What `inv` runs of tools/hub.py that is the owner's (kitlib.guard.hub.owner_verb), as text,
     or None. Its arguments are read after the first literal word named hub.py (python's script,
-    a direct run, Start-Process's -ArgumentList); python running a script the text does not show
-    on a line that names hub.py counts as the owner's."""
+    a direct run, Start-Process's -ArgumentList) or, for python, after the module its -m names
+    when that module's last part is `hub` (hub_module); python running a script the text does
+    not show on a line that names hub.py counts as the owner's."""
     words = ([inv.word] if inv.word is not None else []) + list(inv.args)
+    py = UI_PYTHON_RE.match(inv.name or '') is not None
     rest = None
     for k, w in enumerate(words):
-        if not w.dyn and cm.base_name(w.text) == HUB_SCRIPT:
+        if (not w.dyn and cm.base_name(w.text) == HUB_SCRIPT) or (py and hub_module(words, k)):
             rest = words[k + 1:]
             break
     if rest is None:

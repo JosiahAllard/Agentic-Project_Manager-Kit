@@ -12,7 +12,8 @@ for kitlib.guard.rules' hub-secrets, hub-owner-verb, hub-mcp and hub-browser.
 
 The names are kitlib.hubsite's (auth, settings), copied rather than imported: the guard runs on
 every tool call and stays free of the hub site's imports. tests/guard/test_rules_hub.py checks
-they are the same. Nothing here reads a file or the environment.
+they are the same. The owner-only MCP tool names are kitlib.hubmcp's own OWNER_ONLY, imported:
+that package's __init__ imports nothing. Nothing here reads a file or the environment.
 """
 import fnmatch
 import ipaddress
@@ -20,6 +21,8 @@ import ntpath
 import os
 import re
 import urllib.parse
+
+from kitlib.hubmcp import OWNER_ONLY
 
 # kitlib.hubsite.auth: the token folder beside the machine config, and its files
 FOLDER_NAME = 'hub'
@@ -33,10 +36,9 @@ STORE_DIR = 'hub'
 PORT = 8790
 TUNNEL_PORT = 8791
 
-# The hub MCP server's owner-only tools. Whichever of this branch and kit/hub-mcp lands second
-# adds the test that this list equals kitlib.hubmcp.OWNER_ONLY (tests/guard/test_rules_hub.py
-# test_the_list_is_the_servers skips until kitlib.hubmcp exists); the guard does not import it.
-OWNER_MCP_TOOLS = ('hub_answer', 'hub_todo_done', 'hub_story_submit', 'hub_to_pm_send')
+# The hub MCP server's owner-only tools: the server's own list (kitlib.hubmcp, which imports
+# nothing, so the server is not loaded)
+OWNER_MCP_TOOLS = OWNER_ONLY
 # words in a hub tool's name that make it the owner's too, whatever a later server calls it
 OWNER_MCP_WORDS = ('decide', 'approve')
 HUB_SERVER = 'hub'
