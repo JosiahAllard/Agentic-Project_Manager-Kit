@@ -44,7 +44,8 @@ def code_mains(root):
     """The code repository's main branches when `root` is its PM data worktree (the repository has
     a PM data record and `root` has the recorded data branch checked out): the main checkout's
     configured mains (Config.guarded_mains), or FALLBACK_MAINS when that cannot be read. () for
-    any other checkout, or when the PM data record cannot be read (no data branch is known)."""
+    any other checkout, or when the PM data record cannot be read (no data branch is known).
+    Failing open there is deliberate: a landing warns that it could not read that store."""
     common, _why = gitrepo.common_dir(root)
     if common is None:
         return ()

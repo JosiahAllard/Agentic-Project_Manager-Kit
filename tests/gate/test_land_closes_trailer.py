@@ -9,6 +9,7 @@ from unittest import mock
 
 import kitlib.config as kconfig
 from kitlib import gate as G
+from kitlib import pmdata
 from kitlib.backlog import at_landing, offer
 from kitlib.backlog import store as smod
 from kitlib.git import refs
@@ -168,6 +169,20 @@ class ClosesByTrailer(StoreLandCase):
         self.assertEqual(len(unread), 1, unread)
         self.assertTrue(unread[0].startswith('WARNING: %s landed' % BRANCH), unread)
         self.assertIn('boom', unread[0])
+        self.assertEqual(self.stems(), ['KEEP'])
+
+    def test_an_unknown_id_is_no_note_when_one_store_was_read_and_another_was_not(self):
+        # The ref store is read (seen.read is 1), and the PM data store cannot be opened: a PM
+        # data record names a branch no worktree has checked out. NOPE may be in that store.
+        self.seed(pulled('KEEP', by='main'))
+        tree = self.repo.git('rev-parse', self.main + '^{tree}')
+        root = self.repo.git('commit-tree', tree, '-m', 'PM data root')
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', root)
+        lines = self.close_naming(self.branch_with('fix\n\nCloses: NOPE\n%s\n' % TRAILERS))
+        self.assertEqual(len(lines), 1, lines)
+        self.assertTrue(lines[0].startswith('WARNING: %s landed, and the PM data branch'
+                                            % BRANCH), lines)
+        self.assertIn('no worktree has the PM data branch pmdata checked out', lines[0])
         self.assertEqual(self.stems(), ['KEEP'])
 
     def test_a_trailer_naming_a_record_that_is_not_pulled_is_a_warning_with_the_command(self):
