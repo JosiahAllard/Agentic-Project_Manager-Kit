@@ -16,7 +16,7 @@ they are the same. The owner-only MCP tool names are kitlib.hubmcp's own OWNER_O
 that package's __init__ imports nothing. Nothing here reads a file or the environment.
 
 owner_verb judges only the one command shape kitlib.guard.rules.hub_shape reads in full; any other
-text naming the hub tool is refused there (R-1955). Known limit: a name built at run time (string
+text naming the hub tool is refused there. Known limit: a name built at run time (string
 concatenation, an encoding, a variable, a script the agent wrote) is not read. The hub rules
 guard against accidents and are not an adversary boundary.
 """

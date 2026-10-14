@@ -446,7 +446,7 @@ class OwnerVerbs(Hub):
                 self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
         self.denied(lambda sub: ps('python -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
         self.denied(lambda sub: ps('python -Bm tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
-        # over-reach, R-1955: an agent verb is allowed only in the one shape the guard reads in
+        # over-reach, fail-closed rule: an agent verb is allowed only in the one shape the guard reads in
         # full (`-m tools.hub` as two words after plain options), so these are denied now
         for line in ('python -Bm tools.hub questions', 'python -m runpy tools.hub questions',
                      'python -Bc "print(1)" -m tools.hub answer'):
@@ -462,7 +462,7 @@ class OwnerVerbs(Hub):
     def test_a_module_after_options_the_guard_cannot_read(self):
         # a word the text does not show, or another module's -m (cProfile, pdb, runpy), is outside
         # the allowed shape: any literal -m (or --module) naming hub on the line counts
-        # (rules.HUB_NAME_RES, R-1955)
+        # (rules.HUB_NAME_RES)
         for line in ('python $X -m tools.hub answer Q-1 --choice 1', 'python "$@" -m tools.hub answer Q-1',
                      'python -X $v -m tools.hub answer Q-1', 'python -W "$w" -m tools.hub answer Q-1',
                      'python $X -Bm tools.hub answer Q-1', 'python $X -mtools.hub answer Q-1',
@@ -475,7 +475,7 @@ class OwnerVerbs(Hub):
                      'python -m trace --count --module tools.hub answer Q-1',
                      'python -m trace --count --module=tools.hub answer Q-1',
                      'cd tools && python -m cProfile -m hub answer Q-1',
-                     # over-reach, R-1955: hub named outside the allowed shape, whatever the verb
+                     # over-reach, fail-closed rule: hub named outside the allowed shape, whatever the verb
                      'python $X -m tools.hub questions', 'python -m cProfile -m tools.hub questions'):
             with self.subTest(line):
                 self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
@@ -483,7 +483,7 @@ class OwnerVerbs(Hub):
         self.denied(lambda sub: ps('python -m cProfile -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
         for line in ('python -m cProfile -m unittest tests.guard', 'python -X $v -m unittest',
                      'python -m pdb -m tools.hubsite answer',
-                     # known limit (R-1955): what an unreadable word holds is not read; the text
+                     # known limit: what an unreadable word holds is not read; the text
                      # names no hub module
                      'python $X -m hubby answer Q-1'):
             with self.subTest(line):
@@ -508,7 +508,7 @@ class OwnerVerbs(Hub):
             with self.subTest(line):
                 self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
         for line in ('python -c "from kitlib.guard import os; import hub; hub.main()"',
-                     # over-reach, R-1955: an import of hub anywhere in the text counts, even in
+                     # over-reach, fail-closed rule: an import of hub anywhere in the text counts, even in
                      # python's arguments after the -c code
                      'python -c "print(1)" "import hub"', 'python -c "print(1)" import hub',
                      'python -Bc "print(1)" "from tools import hub"',
@@ -544,7 +544,7 @@ class OwnerVerbs(Hub):
                     'hub-owner-verb')
         self.denied(lambda sub: ps('Start-Process python -ArgumentList "-m tools.hub pair"', self.w.wt, sub),
                     'hub-owner-verb')
-        # over-reach, R-1955: any text naming hub as a module or script outside the allowed shape
+        # over-reach, fail-closed rule: any text naming hub as a module or script outside the allowed shape
         # is denied, a search pattern, a message or an agent verb under a wrapper included
         for line in ('grep -rn "import hub" .', 'rg "import hub"', 'git log --grep "import hub"',
                      'echo "import hub"', 'python -m unittest -k "import hub"', 'python tools/x.py "import hub"',
@@ -553,7 +553,7 @@ class OwnerVerbs(Hub):
                 self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
         for line in ('py -3.12 tools/x.py', 'uv run python -m unittest', 'python -m $m questions',
                      'python -m pip install hub',
-                     # known limit (R-1955): the module name is in a variable the text does not show
+                     # known limit: the module name is in a variable the text does not show
                      'python -m $m answer Q-1'):
             with self.subTest(line):
                 self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
@@ -564,7 +564,7 @@ class OwnerVerbs(Hub):
                 self.allowed(self.run_hub(args))
 
     def test_quoted_variables_in_values_are_denied(self):
-        # over-reach, R-1955: the allowed shape has every word literal, so a quoted variable in an
+        # over-reach, fail-closed rule: the allowed shape has every word literal, so a quoted variable in an
         # agent verb's value is denied too (these passed before the fail-closed rule)
         self.denied(lambda sub: bash('t="Ask"; python "%s" todos add --title "$t"' % self.hub, self.w.wt, sub),
                     'hub-owner-verb')
@@ -617,7 +617,7 @@ class OwnerVerbs(Hub):
                 self.assertIn(d.rule, ('hub-owner-verb', 'hub-secrets'), d.reason)
 
     def test_reading_hub_py_is_denied(self):
-        # over-reach, R-1955: a command naming hub.py outside the allowed shape is denied, a read,
+        # over-reach, fail-closed rule: a command naming hub.py outside the allowed shape is denied, a read,
         # a search or git included (the Read and Grep tools still reach the file); the owner's
         # own session passes
         for cmd in ('cat tools/hub.py', 'grep -n answer tools/hub.py', 'git diff tools/hub.py',
@@ -633,7 +633,7 @@ class OwnerVerbs(Hub):
 
 
 class FailClosed(Hub):
-    """R-1955: in a held session, any command text naming hub as a module or script is denied
+    """Fail-closed: in a held session, any command text naming hub as a module or script is denied
     unless the parser reads that command in full as the one allowed shape (rules.hub_shape).
     Names built at run time are out of scope: the rule guards against accidents, not an
     adversary (docs/guard.md "Hub secrets", Limits)."""
@@ -684,7 +684,7 @@ class FailClosed(Hub):
         ), True)
 
     def test_names_built_at_run_time_pass(self):
-        # known limit (R-1955): a name built at run time (string concatenation, an encoding, a
+        # known limit: a name built at run time (string concatenation, an encoding, a
         # variable's value, a script the agent wrote) is not read
         self.rows((
             (bash, 'python -c "import importlib; importlib.import_module(\'tools.h\' + \'ub\').main()"'),

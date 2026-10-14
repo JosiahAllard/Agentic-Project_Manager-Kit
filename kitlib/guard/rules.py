@@ -28,7 +28,7 @@ Rules, in the order they are checked:
                    store through tools/hub.py's own --store excepted), or python or node code that
                    names them or the hub site; an edit of a file in either folder; in any session
                    but the owner's own (kitlib.guard.hub)
-  hub-owner-verb   fail-closed (R-1955): a shell line whose text names the hub tool as a module or
+  hub-owner-verb   fail-closed: a shell line whose text names the hub tool as a module or
                    a script (tools/hub.py, tools.hub, an import of hub, python -m hub) anywhere
                    outside the one shape the guard reads in full (HUB_SHAPE: python, plain options,
                    tools/hub.py or -m tools.hub, an agent verb, every word literal), and that shape
@@ -522,7 +522,7 @@ def owner_setup(event, ctx, cmd, inv, cwd, role):
 # owner-lock holds it: each is the owner's power, not a place an agent works.
 HUB_SCRIPT = 'hub.py'
 HUB_MODULE = 'tools.hub'
-# hub-owner-verb is fail-closed (R-1955): in a held session any command text that names the hub
+# hub-owner-verb is fail-closed: in a held session any command text that names the hub
 # tool as a module or a script is refused, unless the command is the one shape hub_shape reads in
 # full. HUB_NAME_RES are the namings, each searched with the case ignored, in the line's own text
 # and in every command's words as the shell passes them (hub_named):
@@ -748,7 +748,7 @@ def hub_command_texts(cmd):
 
 def hub_named(parsed):
     """What the line `parsed` names of the hub tool outside the allowed shape, as text, or None
-    (docs/guard.md "Hub secrets"; R-1955). The line's own text is read with every command of the
+    (docs/guard.md "Hub secrets"). The line's own text is read with every command of the
     allowed shape (hub_shape) blanked out, and every other command, at any depth (a substitution,
     a nested shell, a heredoc's body), by its words as the shell passes them (hub_command_texts:
     quotes and escapes inside a name are gone). A name the code builds at run time (string
