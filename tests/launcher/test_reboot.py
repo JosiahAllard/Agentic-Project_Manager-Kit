@@ -255,5 +255,56 @@ class TopLevelFailures(unittest.TestCase):
         self.assertEqual([role_of(t) for t in host.opened], ['coordinator'])
 
 
+class SaidAsItHappens(unittest.TestCase):
+    """`after-reboot --test` waited WAIT_SECONDS with nothing said, then opened its window
+    minimized: the owner took the silence for a failure."""
+
+    class Watching(FakeHost):
+        """Records what had been said when the run slept and when it opened a window."""
+
+        def __init__(self, home, said):
+            FakeHost.__init__(self, home)
+            self.said, self.at_sleep, self.at_open = said, None, None
+
+        def sleep(self, seconds):
+            self.at_sleep = list(self.said)
+            FakeHost.sleep(self, seconds)
+
+        def open_window(self, text):
+            self.at_open = list(self.said)
+            FakeHost.open_window(self, text)
+
+    def test_the_wait_is_said_before_it_starts_and_say_takes_every_line(self):
+        h = Home(self)
+        said = []
+        host = self.Watching(h.root, said)
+        out = reboot.run(h.settings, host, test=True, say=said.append)
+        self.assertEqual(out, [])                                    # said, so not returned twice
+        self.assertEqual(host.slept, [reboot.WAIT_SECONDS])
+        self.assertEqual(host.at_sleep, ['start (test=True, dry_run=False)',
+                                         'waiting %d s for the network before starting anything'
+                                         % reboot.WAIT_SECONDS])
+        self.assertEqual(host.at_open, host.at_sleep)
+        self.assertEqual(len(said), 3, said)
+        with open(os.path.join(h.state, reboot.LOG), encoding='utf-8') as f:
+            self.assertEqual(f.read().count('waiting %d s' % reboot.WAIT_SECONDS), 1)
+
+    def test_the_test_session_line_says_its_window_opens_minimized(self):
+        h = Home(self)
+        host = FakeHost(h.root)
+        out = reboot.run(h.settings, host, test=True)
+        self.assertEqual(len(host.opened), 1)
+        self.assertTrue(out[-1].startswith('started %s' % reboot.TEST_NAME), out)
+        self.assertIn('minimized', out[-1])
+        self.assertIn('taskbar', out[-1])
+
+    def test_a_dry_run_says_its_lines_too(self):
+        h = Home(self)
+        h.write_state('sessions.json', {'alpha': dict(ALPHA)})
+        said = []
+        self.assertEqual(reboot.run(h.settings, FakeHost(h.root), dry_run=True, say=said.append), [])
+        self.assertTrue(any(line.startswith('would start alpha-coord-a1 (alpha)') for line in said), said)
+
+
 if __name__ == '__main__':
     unittest.main()
