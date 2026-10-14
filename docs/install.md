@@ -345,7 +345,10 @@ with the stub's arguments.
 - That location is the live kit checkout (`kitlib.stubs.kit_root`). When `kit_stubs.py` runs
   from a pinned export of pushed main (a gate's `kit-stubs` step under a pinned gate.py or
   land.py, docs/gate.md "Pinned tools"), it is `KIT_LIVE_ROOT` (`kitlib.pluginsource.live_root`), never the
-  export: `write` names the main checkout and `check` holds stubs that name it current.
+  export: `write` names the main checkout and `check` holds stubs that name it current. That holds
+  for a gate started from the plugin's export too (`<kit>/tools/gate.py -C <checkout>`): it pins
+  through the main checkout the export's marker names (`kitlib.pluginsource.export_checkout`,
+  docs/plugin-source.md "Layout"; `tests/gate/test_export_stubs.py`).
 - The child runs in the caller's directory when that is inside the stub's checkout, else in the
   stub's checkout. So a kit tool's default `-C .` names the stub's checkout, and a linked
   worktree's stub acts on that worktree.

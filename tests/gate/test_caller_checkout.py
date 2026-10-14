@@ -439,12 +439,13 @@ class RunByPath(unittest.TestCase):
         here = os.getcwd()
         self.addCleanup(os.chdir, here)
 
-    def gate(self, cwd, kit, *args):
+    def gate(self, cwd, kit, *args, extra_env=None):
         """(exit code, output) of main(['--plan', '--base', 'HEAD', *args]) from `cwd`, as the
-        gate.py of the checkout `kit`."""
+        gate.py of the checkout `kit`, with `extra_env` over the test environment."""
         os.chdir(cwd)
         env = dict(fixtures.test_env())
         env.pop(caller.VAR, None)
+        env.update(extra_env or {})
         buf = io.StringIO()
         # create=True: the tool names its own checkout KIT; patched so it is the throwaway one
         with mock.patch.dict(os.environ, env, clear=True), \
@@ -546,6 +547,36 @@ class RunByPath(unittest.TestCase):
         """main's gate.py with an absolute -C naming the worktree runs main's code on it, as
         documented: an absolute -C names the tree on purpose."""
         code, out = self.gate(self.main, self.main, '-C', self.wt)
+        self.assertEqual(code, 0, out)
+        self.assertIn('RUN   unit (always)', out)
+
+    def test_the_plugins_gate_py_from_a_worktree_is_the_main_checkouts_own(self):
+        """A gate.py in an export whose marker names the main checkout pins through it
+        (kitlib.gate.pin target), and the run gets KIT_LIVE_ROOT=<main checkout>, which the
+        own-copy refusal compares against (pluginsource.live_root): from a linked worktree with no
+        -C or a relative one it is refused as the main checkout's own gate.py is. An absolute -C
+        still gates the tree it names."""
+        from kitlib import pluginsource
+        from kitlib.gate import pin
+        export = os.path.join(self.repo.base, 'plugin', '0123456789ab')
+        os.makedirs(os.path.join(export, 'tools'))
+        with open(os.path.join(export, pluginsource.MARKER), 'w', encoding='utf-8') as fh:
+            json.dump({'sha': '0123456789ab' * 3 + 'abcd', 'checkout': self.main}, fh)
+        live = pin.target(os.path.join(export, 'tools', 'gate.py'), environ={})
+        self.assertEqual(live, self.main)
+        env = {pluginsource.LIVE_ROOT_ENV: live}
+        for args in ((), ('-C', '.')):
+            with self.subTest(args=args):
+                code, out = self.gate(self.wt, export, *args, extra_env=env)
+                self.assertEqual(code, G.REFUSED, out)
+                self.assertIn(advice(self.wt, None if args else RAN_FROM).lower(), out.lower())
+                self.assertNotIn('RUN   unit', out)
+        code, out = self.gate(self.wt, export, '-C', self.wt, extra_env=env)
+        self.assertEqual(code, 0, out)
+        self.assertIn('RUN   unit (always)', out)
+        # the control: with no KIT_LIVE_ROOT (an export whose marker names no checkout runs live)
+        # the export is in no repository, so it runs
+        code, out = self.gate(self.wt, export)
         self.assertEqual(code, 0, out)
         self.assertIn('RUN   unit (always)', out)
 
