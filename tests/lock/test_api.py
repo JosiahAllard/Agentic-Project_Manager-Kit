@@ -97,6 +97,13 @@ class Snapshot(ApiCase):
         self.assertEqual(len(warn), 1)
         self.assertTrue(warn[0].startswith("WARNING: "))
         self.assertIn("older lock tool", warn[0])
+        # A foreign label is another writer's text: one with a line break stays escaped in the
+        # one WARNING line instead of starting a line of its own.
+        self.live_record(R_B, layout=other + "\nlayout (forged)")
+        self.assertEqual([x for x in "\n".join(st.render(self.snap())).split("\n") if "WARNING: a live" in x or "forged" in x],
+                         ["WARNING: a live run carries another slot numbering (%r): an older lock tool "
+                          "that counts this machine's cpu or gpu slots its own way writes to this store, "
+                          "and its slot numbers are not this layout's" % (other + "\nlayout (forged)")])
 
     def test_an_unreadable_queue_is_reported_not_emptied(self):
         os.makedirs(os.path.dirname(self.store.path("queue.json")), exist_ok=True)
