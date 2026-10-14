@@ -7,8 +7,9 @@ loopback listener only, so the server's checks (roles, fields, versions) are the
 and this process never opens the hub store. The port is read from the machine's hub settings
 (kitlib.hubsite.settings) at each call, so a server started later, or on another port, is found.
 
-Read tools carry the agent's token (the owner's when there is no agent token: Client.token ANY);
-write tools carry the agent's and name their source serve.VIA_MCP. The owner's writes are pinned in
+Every tool carries the agent's token and nothing else (AgentClient: a route open to ANY is called
+with it too, and with no usable agent token a tool answers `no_agent_token` instead of falling
+back to the owner's); write tools name their source serve.VIA_MCP. The owner's writes are pinned in
 kitlib.hubmcp.OWNER_ONLY and do not ship yet: tools/list leaves them out and tools/call refuses
 them (`not_available`; `forbidden` in a session the launcher marked), never reading the owner's
 token. They land once the guard denies them to agents by name (GUARD_WAIT).
@@ -25,6 +26,7 @@ import traceback
 from kitlib.config.types import ConfigError
 from kitlib.hubmcp import OWNER_ONLY, SERVER_NAME
 from kitlib.hubsite import api as hubapi
+from kitlib.hubsite import auth as hubauth
 from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import serve as hubserve
 from kitlib.hubsite import settings as hubsettings
@@ -60,7 +62,8 @@ def _one_of(values, what):
     return {"type": "string", "enum": list(values), "description": what}
 
 
-# name -> (description, input schema, HTTP method, path below hubapi.BASE, role of the token).
+# name -> (description, input schema, HTTP method, path below hubapi.BASE, the route's role in
+# hubapi.ROUTES). AgentClient carries the agent's token whatever the role says.
 # A `{name}` in the path is filled from the argument of that name; every other argument is the
 # query of a GET or the body of a POST.
 TOOLS = {
@@ -149,6 +152,22 @@ TOOLS = {
 assert not set(TOOLS) & set(OWNER_ONLY)
 
 
+class NoAgentToken(hubserve.ServeError):
+    """There is no usable agent token: the hub MCP server never falls back to the owner's."""
+
+
+class AgentClient(hubclient.Client):
+    """kitlib.hubsite.client.Client that carries the agent's token on every call, a route open to
+    ANY included. The owner's token file is never opened."""
+
+    def token(self, role):
+        token = hubauth.read_token(self.tokens, AGENT)
+        if not token:
+            raise NoAgentToken("no usable agent token in %s: the hub MCP server carries the "
+                               "agent's token only (tools/hub.py setup writes it)" % self.tokens)
+        return token
+
+
 class ToolError(Exception):
     def __init__(self, code, message, field=None):
         Exception.__init__(self, message)
@@ -215,7 +234,7 @@ class Server:
 
     def client(self):
         port = self.port if self.port is not None else self.load_settings().port
-        return hubclient.Client(port, tokens=self.tokens, ask=self.ask, via=hubserve.VIA_MCP)
+        return AgentClient(port, tokens=self.tokens, ask=self.ask, via=hubserve.VIA_MCP)
 
     # ---------------------------------------------------------------- tools
     def tool_list(self):
@@ -235,6 +254,8 @@ class Server:
             return {"ok": False, "error": e.error}, True
         except hubclient.Refused as e:
             return _error(e.code, e.message, e.field, status=e.status)
+        except NoAgentToken as e:
+            return _error("no_agent_token", str(e))
         except hubserve.NotRunning as e:
             return _error("not_running", "%s (tools/hub.py serve starts it)" % e)
         except hubserve.ServeError as e:
@@ -279,6 +300,8 @@ class Server:
     def handle(self, msg):
         """One JSON-RPC message (or a batch list) -> the response, or None for notifications."""
         if isinstance(msg, list):
+            if not msg:
+                return _err(None, -32600, "invalid request: an empty batch")
             out = [r for r in (self.handle(m) for m in msg) if r is not None]
             return out or None
         if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0" or not isinstance(

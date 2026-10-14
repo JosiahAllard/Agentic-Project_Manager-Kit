@@ -30,7 +30,8 @@ class Client:
 
     def __init__(self, test, argv):
         self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE, env=clean_env(), cwd=REPO)
+                                  stderr=subprocess.PIPE, env=clean_env(), cwd=REPO,
+                                  creationflags=subprocess.CREATE_NO_WINDOW)
         test.addCleanup(self.close)
         self.lines = queue.Queue()
         threading.Thread(target=self._pump, daemon=True).start()
@@ -252,6 +253,7 @@ class Manifest(unittest.TestCase):
     def test_the_plugin_starts_this_server(self):
         with open(os.path.join(REPO, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
             m = json.load(f)
+        self.assertEqual(set(m["mcpServers"]), {"machine-lock", "hub"})   # the whole set, pinned
         s = m["mcpServers"]["machine-lock"]
         self.assertEqual(s["args"], ["${CLAUDE_PLUGIN_ROOT}/mcp/lock_server.py"])
         self.assertTrue(os.path.isfile(ENTRY))

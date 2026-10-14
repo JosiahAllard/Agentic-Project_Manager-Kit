@@ -5,7 +5,7 @@
 - **Transport:** JSON-RPC 2.0, one message per line on stdin and stdout, on the standard library, in the shape of the lock MCP server (docs/lock-mcp.md). It answers `initialize` (protocol 2025-06-18, 2025-03-26 or 2024-11-05), `ping`, `tools/list` and `tools/call`.
 - **Plugin:** `.claude-plugin/plugin.json` names it `hub` (`kitlib.hubmcp.SERVER_NAME`), rendered from `hosts/claude/adapter/content.py` `MCP_SERVERS`. A client shows its tools as `mcp__plugin_pm-kit_hub__<tool>`. Codex's plugin does not carry it.
 - **Port:** read from the machine's hub settings (`kitlib.hubsite.settings.load().port`: `hub.port`, docs/action-hub.md "Serving it") at each call, so a hub started later or on another port is found. A setting that cannot be read is the `config` tool error.
-- **Tokens:** the token files of `kitlib.hubsite.auth.folder()`. Read tools carry the agent's token (the owner's when there is no agent token, as `Client.token` does for `ANY` routes); write tools carry the agent's. While the agent's token file exists, no tool reads the owner's (`tests/hubmcp/test_server.py`, `Pinned.test_no_tool_reads_the_owner_token`).
+- **Tokens:** the token files of `kitlib.hubsite.auth.folder()`. Every tool carries the agent's token, reads included (`server.AgentClient`; unlike the CLI's `Client.token`, it never falls back to the owner's for an `ANY` route). With no usable agent token a tool answers `no_agent_token`, and no tool ever opens the owner's token file (`tests/hubmcp/test_server.py`, `Pinned.test_no_tool_reads_the_owner_token` and `Errors.test_a_read_never_falls_back_to_the_owner_token`).
 - **Source:** every write names itself `mcp` (`kitlib.hubsite.serve.VIA_MCP`, the `X-Hub-Via` header), so the hub records `via: mcp` on what it writes; `tools/hub.py` writes `cli`.
 - **Session mark:** `mcp/hub_server.py` reads the session's mark once at start (`kitlib.sessionmark.mark`, docs/guard.md "Session mark").
 
@@ -15,11 +15,12 @@
 - A failure is a tool result with `isError: true` and `{"ok": false, "error": {code, message, field}}`; the server keeps answering.
   - A refusal from the hub (`kitlib.hubsite.client.Refused`) keeps the hub's code, message and field, plus `status`, the HTTP status (docs/action-hub.md "For the PM").
   - `not_running`: nothing listens on the port (`serve.NotRunning`); `tools/hub.py serve` starts it.
-  - `client`: no token file, or what answered is not the hub (`serve.ServeError`).
+  - `no_agent_token`: the agent's token file is absent or unusable (`server.NoAgentToken`); nothing is sent.
+  - `client`: what answered is not the hub (`serve.ServeError`).
   - `config`: the machine's hub settings cannot be read.
   - `invalid`: arguments that fail the tool's schema (unknown or missing keys, wrong types, a value outside an enum, a blank id), with `field` naming the key; nothing is sent.
   - `internal`: a bug in the server, with a short trace.
-- An unknown tool is JSON-RPC error -32602, and a line that is not JSON is -32700.
+- An unknown tool is JSON-RPC error -32602, an empty batch `[]` is -32600, and a line that is not JSON is -32700.
 - Ids are quoted as one path segment (`kitlib.hubsite.client.part`); the hub checks their shape.
 
 ## Read tools

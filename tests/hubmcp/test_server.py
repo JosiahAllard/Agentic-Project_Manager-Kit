@@ -226,11 +226,38 @@ class Errors(Case):
         payload, is_error = self.rpc(self.server(load_settings=bad), "hub_health")
         self.assertEqual((is_error, payload["error"]["code"]), (True, "config"))
 
-    def test_no_agent_token_is_a_client_error(self):
+    def test_no_agent_token_is_its_own_error(self):
         s = self.server(tokens=os.path.join(self.tokens, "absent"))
         payload, is_error = self.rpc(s, "hub_inbox_post", {"text": "x"})
-        self.assertEqual((is_error, payload["error"]["code"]), (True, "client"))
+        self.assertEqual((is_error, payload["error"]["code"]), (True, "no_agent_token"))
         self.assertEqual(self.ask.calls, [])
+
+    def test_a_read_never_falls_back_to_the_owner_token(self):
+        opened = []
+        real = open
+
+        def spy(path, *a, **kw):
+            opened.append(os.path.basename(path))
+            return real(path, *a, **kw)
+        agent_file = os.path.join(self.tokens, auth.TOKEN_FILES[auth.AGENT])
+        for state in ("deleted", "unusable"):
+            if state == "deleted":
+                os.remove(agent_file)
+            else:
+                with open(agent_file, "w") as f:
+                    f.write("short")
+            self.assertIsNotNone(auth.read_token(self.tokens, auth.OWNER))
+            for name, args in (("hub_pending", {}), ("hub_health", {}), ("hub_inbox", {}),
+                               ("hub_wait", {"timeout_s": 0}), ("hub_ask", {"title": "t"})):
+                with self.subTest(state=state, name=name):
+                    with mock.patch("builtins.open", spy):
+                        payload, is_error = self.rpc(self.server(), name, args)
+                    self.assertEqual((is_error, payload["error"]["code"]),
+                                     (True, "no_agent_token"))
+                    self.assertIn("agent's token only", payload["error"]["message"])
+        self.assertEqual(self.ask.calls, [])
+        self.assertIn(auth.TOKEN_FILES[auth.AGENT], opened)
+        self.assertNotIn(auth.TOKEN_FILES[auth.OWNER], opened)
 
 
 class JsonRpc(Case):
@@ -247,6 +274,13 @@ class JsonRpc(Case):
         self.assertEqual(s.handle({"jsonrpc": "2.0", "id": 4, "method": "x"})["error"]["code"],
                          -32601)
         self.assertEqual(s.handle({"id": 5})["error"]["code"], -32600)
+
+    def test_an_empty_batch_is_an_invalid_request(self):
+        r = self.server().handle([])
+        self.assertEqual((r["id"], r["error"]["code"]), (None, -32600))
+        out = io.BytesIO()
+        srv.serve(self.server(), io.BytesIO(b"[]\n"), out)
+        self.assertEqual(json.loads(out.getvalue())["error"]["code"], -32600)
 
     def test_a_line_that_is_not_json_is_a_parse_error(self):
         out = io.BytesIO()
@@ -308,7 +342,8 @@ class EntryPoint(unittest.TestCase):
         p = subprocess.run([sys.executable, ENTRY], input=json.dumps(
             {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
              "params": {"name": "hub_answer", "arguments": {}}}).encode("utf-8") + b"\n",
-            capture_output=True, env=env, cwd=REPO, timeout=60)
+            capture_output=True, env=env, cwd=REPO, timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW)
         res = json.loads(p.stdout.decode("utf-8"))["result"]
         self.assertTrue(res["isError"])
         self.assertEqual(res["structuredContent"]["error"]["code"], "forbidden")
