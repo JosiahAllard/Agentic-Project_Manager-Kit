@@ -1,6 +1,7 @@
-"""What the shipped-text scrub tests share: the forbidden patterns (no ruling ids, user or machine
-paths, and none of the install's own names: the machine config's `scrub_patterns`) and the
-frontmatter parse, as in tests/agents/test_agents.py."""
+"""What the shipped-text scrub tests share: the forbidden patterns (no ruling ids or user-profile
+paths in BASE_FORBIDDEN; then the install's own: the machine config's `scrub_patterns` as install
+names and its `machine_path_folders` as machine paths) and the frontmatter parse, as in
+tests/agents/test_agents.py."""
 import re
 import unittest
 from pathlib import Path
@@ -11,30 +12,44 @@ ROOT = Path(__file__).resolve().parents[1]
 NO_INSTALL_NAMES = "no install names to scrub for: %s"
 
 
+def machine_path_pattern(folders):
+    """The compiled pattern for a drive-rooted path into one of `folders` (the machine config's
+    `machine_path_folders`), case-insensitive, separators as kitlib.machinepaths reads them; None
+    when there are none."""
+    if not folders:
+        return None
+    from kitlib.machinepaths import SEP
+    names = '|'.join(re.escape(f) for f in folders)
+    return re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:" + SEP + r"(?:" + names + r")(?![A-Za-z0-9_])",
+                      re.I)
+
+
 def install_patterns(home=None):
-    """The install's own names (repositories, owner, accounts) from the machine config's
-    `scrub_patterns`, case-insensitive. Under `home` when given (none when it sets none); with no
-    home, the real machine config's through the home fence's one exception
-    (tests.real_install_config), and when that has none the calling test is skipped
+    """The install's own: its names (repositories, owner, accounts) from the machine config's
+    `scrub_patterns`, case-insensitive, as "install name"; then one "machine path" pattern for
+    its `machine_path_folders` (machine_path_pattern). Under `home` when given (none when it sets
+    neither); with no home, the real machine config's through the home fence's one exception
+    (tests.real_install_config), and when that sets neither key the calling test is skipped
     (unittest.SkipTest, NO_INSTALL_NAMES) rather than passing without them. Read at call time,
     never at import, so a malformed machine config fails the test that reads it (ConfigError)
     instead of breaking test collection."""
     if home is None:
         from tests import real_install_config
         cfg, why = real_install_config()
-        if cfg is not None and not cfg['scrub_patterns']:
-            why = 'the machine config sets no scrub_patterns'
+        if cfg is not None and not cfg['scrub_patterns'] and not cfg['machine_path_folders']:
+            why = 'the machine config sets no scrub_patterns or machine_path_folders'
         if cfg is None or why:
             raise unittest.SkipTest(NO_INSTALL_NAMES % why)
-        pats = cfg['scrub_patterns']
     else:
         from kitlib.config.user import user_config
-        pats = user_config(home)["scrub_patterns"] or []
-    return [(re.compile(p, re.I), "install name") for p in pats]
+        cfg = user_config(home)
+    out = [(re.compile(p, re.I), "install name") for p in cfg["scrub_patterns"] or []]
+    rx = machine_path_pattern(cfg["machine_path_folders"])
+    return out + ([(rx, "machine path")] if rx else [])
 
 
-# The one machine folder is a user profile: the kit codes no other folder name, and the machine
-# config's `machine_path_folders` is not read, so shipped text is checked the same on every machine.
+# The one coded machine folder is a user profile: the kit codes no other folder name. The machine
+# config's `machine_path_folders` are the install's own and run with its names (install_patterns).
 BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),
                   (re.compile(r"[A-Za-z]:[\\/]+Users[\\/]", re.I), "Windows user path")]
 

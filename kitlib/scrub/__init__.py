@@ -2,7 +2,8 @@
 "The built-in scrub").
 
 tests/scrub/test_generic.py takes the install's own names from the machine config, so a clone
-with no config checks no names. This package needs no config: each class in CLASSES is a shape
+with no config checks no names. This package reads no config (a caller passes the configured
+machine folders to classes()): each class in CLASSES is a shape
 that owner-specific text takes whoever the owner is, and NAME_STORE holds salted digests of names
 that are never written down (kitlib/forbidden's hashing; empty until the owner fills it).
 
@@ -17,8 +18,10 @@ Classes (CLASSES, each `(name, regex, in_tests)`):
 - `hardware`: one machine's parts (a GPU model, a CPU family or its chiplet, a total core or
   thread count of ten or more).
 - `drive`: a drive path whose first folder is one of MACHINE_FOLDERS (a user profile), the
-  machine folders tests/shipped.py BASE_FORBIDDEN also refuses. Other drive paths (an invented source root)
-  are the fixtures tests need; test_generic refuses every drive path outside tests/.
+  machine folders tests/shipped.py BASE_FORBIDDEN also refuses, or one of the folders a caller
+  passes to classes() (tests/scrub/test_builtin.py passes the machine config's
+  `machine_path_folders`). Other drive paths (an invented source root) are the fixtures tests
+  need; test_generic refuses every drive path outside tests/.
 - `name`: a window of the normalised text hashes to one of NAME_STORE's digests.
 
 Every class matches the whole text, so a phrase a markdown wrap splits over two lines is still
@@ -75,12 +78,19 @@ HARDWARE = re.compile(
     r'|\b[1-9]\d+(?:\s+|-)(?:core[s]?|(?:hardware\s+)?thread[s]?)\b')
 # The machine folders a drive path must not lead into (tests/shipped.py BASE_FORBIDDEN refuses
 # the same ones in shipped text; tests/scrub/test_builtin.py checks the two agree): a user
-# profile only. The kit codes no other folder name, and the machine config's
-# `machine_path_folders` is not read here, so the scrub reads no configuration and finds the same
-# on every machine; a configured folder is refused by tools/machine_paths.py and the commit check.
+# profile only. The kit codes no other folder name. This package reads no configuration: the
+# machine config's `machine_path_folders` reach it only from a caller, through classes(folders).
 MACHINE_FOLDERS = ('Users',)
-DRIVE = re.compile(r'(?<![A-Za-z0-9_?%$])[A-Za-z]:(?:\\|/)+(?:'
-                   + '|'.join(re.escape(f) for f in MACHINE_FOLDERS) + r')(?![A-Za-z0-9_])', re.I)
+
+
+def drive_pattern(folders=()):
+    """The `drive` regex for MACHINE_FOLDERS plus `folders`."""
+    names = MACHINE_FOLDERS + tuple(f for f in folders if f not in MACHINE_FOLDERS)
+    return re.compile(r'(?<![A-Za-z0-9_?%$])[A-Za-z]:(?:\\|/)+(?:'
+                      + '|'.join(re.escape(f) for f in names) + r')(?![A-Za-z0-9_])', re.I)
+
+
+DRIVE = drive_pattern()
 
 # (name, regex, scans tests/)
 CLASSES = (
@@ -91,6 +101,15 @@ CLASSES = (
     ('hardware', HARDWARE, True),
     ('drive', DRIVE, True),
 )
+
+
+def classes(folders=()):
+    """CLASSES, with the `drive` class also refusing a drive path into one of `folders` (the
+    caller's machine config `machine_path_folders`); CLASSES itself when there are none."""
+    if not folders:
+        return CLASSES
+    rx = drive_pattern(tuple(folders))
+    return tuple((name, rx if name == 'drive' else r, t) for name, r, t in CLASSES)
 NAME = 'name'
 # Salted SHA-256 digests of names that must not appear (kitlib/forbidden's store shape, without
 # its canary: a name class with no tokens finds nothing, and tests/scrub proves it bites).
