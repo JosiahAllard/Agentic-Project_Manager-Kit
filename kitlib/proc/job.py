@@ -20,22 +20,18 @@ GetConsoleWindow: measured 2026-10-10, a python started with CREATE_NO_WINDOW, a
 shell, have a console whose GetConsoleWindow() is 0. A caller that wants a visible window passes
 CREATE_NEW_CONSOLE. A start that needs no job gets the same flags through kitlib.proc.spawn (run,
 call, popen); tests/proc/test_spawn_sites.py holds every start in the kit to one of the two.
+has_console lives in kitlib.proc.console, whose process-wide CreateProcess hook is the backstop
+for a start that goes through neither.
 """
 import ctypes
 import subprocess
 
 from . import bash, cpu, win32
+from .console import CONSOLE_CHOICE, has_console  # noqa: F401  (job.has_console stays a name)
 from .process import process_working_set
 from .win32 import K32
 
 ERROR_MORE_DATA = win32.ERROR_MORE_DATA
-CONSOLE_CHOICE = win32.CREATE_NEW_CONSOLE | win32.DETACHED_PROCESS | win32.CREATE_NO_WINDOW
-
-
-def has_console():
-    """True when this process is attached to a console, with a window or without one."""
-    one = (win32.DW * 1)()
-    return K32.GetConsoleProcessList(one, 1) != 0
 
 
 def no_window_flags(flags, console=None):
