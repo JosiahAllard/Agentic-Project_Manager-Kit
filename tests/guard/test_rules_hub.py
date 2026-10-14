@@ -230,6 +230,53 @@ class HomeAndWildcards(Hub):
             (bash, 'cd -; cat .pm-kit/h*/o*'),
         ))
 
+    def test_a_cd_behind_builtin_or_command(self):
+        # bash's `builtin cd` and `command cd` are the cd itself; PowerShell 7's `cd $null` goes
+        # home as a cd with no place does
+        self.rows_denied((
+            (bash, 'builtin cd ~ && cat .pm-kit/h*/o*'),
+            (bash, 'command cd ~/.pm-kit && cat h*/o*'),
+            (bash, 'builtin cd && cat .pm-kit/h*/o*'),
+            (bash, 'command cd -- $HOME && cat .pm-kit/h*/o*'),
+            (ps, 'cd $null; gc .pm-kit\\h*\\o*'),
+            (ps, 'Set-Location $NULL; gc .pm-kit\\h*\\o*'),
+        ))
+        self.rows_allowed((
+            (bash, 'command -v cd && cat .pm-kit/h*/o*'),
+            (bash, 'builtin cd ~ && cd "%s" && cat h*/o*' % W.fwd(self.w.wt)),
+            (ps, 'cd $null; gc README.md'),
+        ))
+
+    def test_review_rows_for_the_home_folder(self):
+        # every home-folder string from the branch's two re-reviews, with its verdict
+        self.rows_denied((
+            (bash, 'chdir && cat .pm-kit/h*/o*'),
+            (ps, 'chdir; gc .pm-kit\\h*\\o*'),
+            (ps, 'sl; gc .pm-kit\\h*\\o*'),
+            (bash, 'cd -e && cat .pm-kit/h*/o*'),
+            (bash, 'cd -L -P -- && cat .pm-kit/h*/o*'),
+            (bash, '(cd && cat .pm-kit/h*/o*)'),
+            (bash, 'pushd ~ && cat .pm-kit/h*/o*'),
+            (ps, 'gc ${ENV:HomeDrive}$Env:HOMEPATH\\.pm-kit\\h*\\o*'),
+        ))
+        self.rows_allowed((
+            (bash, "cd '' && cat .pm-kit/h*/o*"),
+            (bash, 'cd "" && cat .pm-kit/h*/o*'),
+            (bash, 'pushd && cat .pm-kit/h*/o*'),
+            (ps, 'Push-Location; gc .pm-kit\\h*\\o*'),
+        ))
+        # a home folder the line computes is not read (docs/guard.md "Hub secrets", Limits):
+        # these pass, and a change here means updating that list
+        self.rows_allowed((
+            (bash, 'H=$HOME; cat $H/.pm-kit/h*/o*'),
+            (bash, 'cat $(echo ~)/.pm-kit/h*/o*'),
+            (ps, "gc ($HOME + '\\.pm-kit\\h*\\o*')"),
+            (ps, "gc ([Environment]::GetFolderPath('UserProfile') + '\\.pm-kit\\h*\\o*')"),
+            (ps, "gc (Join-Path $HOME '.pm-kit\\h*\\o*')"),
+            (bash, 'cd ~ && cd - && cd - && cat .pm-kit/h*/o*'),
+            (bash, 'pushd ~ && pushd /tmp && popd && cat .pm-kit/h*/o*'),
+        ))
+
     def test_a_cd_into_the_home_folder_is_followed(self):
         self.rows_denied((
             (bash, 'cd ~/.pm-kit && cat h*/o*'),
@@ -404,6 +451,94 @@ class OwnerVerbs(Hub):
                      'python -Bm tools.hub questions', 'python -m runpy tools.hub questions',
                      'python -m runpy tools.hubby answer Q-1', 'python -c "import hubby" answer Q-1',
                      'python -c "import kitlib.hubmcp" answer Q-1', 'python -Bc "print(1)" -m tools.hub answer'):
+            with self.subTest(line):
+                self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
+
+    def test_a_module_after_options_the_guard_cannot_read(self):
+        # python's options stop being readable at a word the text does not show, or at another
+        # module's -m that runs a module itself (cProfile, pdb, profile, trace, runpy): any
+        # literal -m (or --module) naming hub after it counts (hub_module_scan)
+        for line in ('python $X -m tools.hub answer Q-1 --choice 1', 'python "$@" -m tools.hub answer Q-1',
+                     'python -X $v -m tools.hub answer Q-1', 'python -W "$w" -m tools.hub answer Q-1',
+                     'python $X -Bm tools.hub answer Q-1', 'python $X -mtools.hub answer Q-1',
+                     'python $X -m runpy tools.hub answer Q-1',
+                     'python -m cProfile -m tools.hub answer Q-1 --choice 1',
+                     'python -m cProfile -o out.prof -m tools.hub answer Q-1',
+                     'python -m cProfile -mtools.hub answer Q-1', 'python -m pdb -m tools.hub answer Q-1',
+                     'python -m profile -m tools.hub todos done T-1',
+                     'python -m cProfile -m runpy tools.hub answer Q-1',
+                     'python -m trace --count --module tools.hub answer Q-1',
+                     'python -m trace --count --module=tools.hub answer Q-1',
+                     'cd tools && python -m cProfile -m hub answer Q-1',
+                     # what an unreadable word holds may be -c code: an owner verb after it counts
+                     'python $X -m hubby answer Q-1'):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+        self.denied(lambda sub: ps('python $X -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
+        self.denied(lambda sub: ps('python -m cProfile -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
+        for line in ('python $X -m tools.hub questions', 'python -m cProfile -m tools.hub questions',
+                     'python -m cProfile -m unittest tests.guard', 'python -X $v -m unittest',
+                     'python -m pdb -m tools.hubsite answer'):
+            with self.subTest(line):
+                self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
+
+    def test_ordinary_python_passes(self):
+        for line in ('python -m unittest', 'python -m unittest tests.guard.test_rules_hub',
+                     'python tools/gate.py --full', 'python -c "print(1)"', 'py -3 -m pip install x',
+                     'python -m tools.hub questions', 'python -I -c "import sys; print(sys.path)"',
+                     'python -m json.tool x.json', 'python -m runpy tools.gate'):
+            with self.subTest(line):
+                self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
+        self.allowed(lambda sub: ps('py -3 -m pip list', self.w.wt, sub))
+
+    def test_hub_code_reads_imports_of_hub_only(self):
+        # the guard's own kitlib.guard.hub is not tools/hub.py; a from-import of another module
+        # does not import hub, and python's arguments after the -c code are not code
+        for line in ('python -c "from kitlib.guard import hub; print(hub.NAME_ONLY_PROGRAMS)"',
+                     'python -c "from kitlib.guard import hub as h, os; print(h)"',
+                     'python -c "from kitlib.guard import (hub)"',
+                     'python -c "import kitlib.guard.hub"',
+                     'python -c "print(1)" "import hub"', 'python -c "print(1)" import hub',
+                     'python -Bc "print(1)" "from tools import hub"'):
+            with self.subTest(line):
+                self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
+        for line in ('python -c "from kitlib.guard import os; import hub; hub.main()"',
+                     'python -c "from kitlib.guard import hub; import tools.hub"',
+                     'python -c "from os import path; from tools import hub"',
+                     'python -cimport\\ hub', 'python -Bc "import hub"'):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+        self.denied(lambda sub: bash('python - <<EOF\nimport hub\nEOF', self.w.wt, sub), 'hub-owner-verb')
+
+    def test_review_rows_for_owner_verbs(self):
+        # every owner-verb string from the branch's two re-reviews, with its verdict
+        for line in ('python -OOm tools.hub answer Q-1', 'python -W x -m tools.hub answer Q-1',
+                     'python -Wignore -m tools.hub answer Q-1', 'python -X dev -m tools.hub answer Q-1',
+                     'py -3.12-64 -m tools.hub answer Q-1', 'py -V:3.12 -m tools.hub answer Q-1',
+                     'python3.12 -m tools.hub answer Q-1', 'pythonw -m tools.hub answer Q-1',
+                     'python.exe -m tools.hub answer Q-1', 'env python -m tools.hub answer Q-1',
+                     'python -m runpy hub answer Q-1',
+                     'bash -c "python -m tools.hub answer Q-1"', 'cmd /c python -m tools.hub answer Q-1',
+                     # a program the guard does not unwrap is read closed
+                     'uv run python -m tools.hub answer Q-1', 'uv run -m tools.hub answer Q-1',
+                     'poetry run python -m tools.hub todos done T-1',
+                     'uv run python -c "import hub; hub.main()"',
+                     # python options the guard cannot read to the end are read closed: a word
+                     # naming hub, or after an unreadable word an owner verb, counts
+                     'python -m $m answer Q-1', 'python -m cProfile -m -s time tools.hub answer Q-1',
+                     # an import mention in a string or comment of -c code is over-reach
+                     # (docs/guard.md "Hub secrets", Over-reach)
+                     'python -c "print(\'import hub\')"', 'python -c "import x  # import hub"'):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+        self.denied(lambda sub: ps('powershell -Command "python -m tools.hub pair"', self.w.wt, sub),
+                    'hub-owner-verb')
+        self.denied(lambda sub: ps('Start-Process python -ArgumentList "-m tools.hub pair"', self.w.wt, sub),
+                    'hub-owner-verb')
+        for line in ('grep -rn "import hub" .', 'rg "import hub"', 'git log --grep "import hub"',
+                     'echo "import hub"', 'python -m unittest -k "import hub"', 'python tools/x.py "import hub"',
+                     'py -3.12 tools/x.py', 'uv run python -m tools.hub questions', 'uv run python -m unittest',
+                     'python -m $m questions', 'python -m pip install hub'):
             with self.subTest(line):
                 self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
 

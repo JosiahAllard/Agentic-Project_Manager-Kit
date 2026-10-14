@@ -518,15 +518,19 @@ HUB_SAFE_EQ_RE = re.compile(r'^-[^"\'$`]*=["\']')
 # python's one-letter options that take no value (a cluster: -BIm); c, m, W and X take one
 PY_FLAG_LETTERS = set('bBdEhiIOPqRsSuvVx?')
 PY_LONG_VALUE_OPTS = {'--check-hash-based-pycs'}
-# python code that loads tools/hub.py as a module: import hub, import os, tools.hub,
-# from tools import hub, from hub import main, runpy.run_module('tools.hub'),
-# importlib.import_module('hub'), __import__('tools.hub')
+# python code that loads tools/hub.py as a module (hub_code): from tools import hub,
+# from hub import main, runpy.run_module('tools.hub'), importlib.import_module('hub'),
+# __import__('tools.hub'); and HUB_IMPORT_RE, import hub or import os, tools.hub, read with
+# every other module's from-import taken out (`from kitlib.guard import hub` is the guard's own)
 HUB_CODE_RE = re.compile(r'''(?x)
-    \bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*(?:tools\s*\.\s*)?hub\b(?!\s*\.)
-  | \bfrom\s+(?:tools\s*\.\s*)?hub\s+import\b
+    \bfrom\s+(?:tools\s*\.\s*)?hub\s+import\b
   | \bfrom\s+tools\s+import\s+\(?\s*(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*hub\b
   | \b(?:run_module|import_module|__import__)\s*\(\s*(?:\w+\s*=\s*)?[rbuRBU]?['"](?:tools\.)?hub['"]
 ''')
+HUB_IMPORT_RE = re.compile(r'\bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*(?:tools\s*\.\s*)?hub\b(?!\s*\.)')
+FROM_IMPORT_RE = re.compile(r'\bfrom\s+[\w.]+\s+import\b')
+# python's -m with its module in the same word (-mtools.hub) or the next (-m, -Bm): hub_module_scan
+PY_M_RE = re.compile(r'^-[%s]*m(.*)$' % re.escape(''.join(sorted(PY_FLAG_LETTERS))))
 NODE_EVAL = ('-e', '--eval', '-p', '--print')
 HUB_SECRETS_WHY = ('the Action Hub\'s token folder holds the owner\'s key to the hub (owner.token answers as the '
                    'owner) and its store is the hub server\'s to write; an agent reaches the hub only through its '
@@ -640,18 +644,23 @@ def hub_module_name(text):
 
 
 def hub_module(args):
-    """The arguments tools/hub.py gets when python's own options (`args`, after the program)
-    run it as a module, else None: `-m tools.hub`, `-mtools.hub`, -m at the end of a cluster
-    (`-Bm`, `-BIm tools.hub`), -m after other options, and `-m runpy tools.hub`. The options are
-    read the way python reads them: one-letter flags may share a word, and the first of c, m, W
-    or X takes the rest of the word or the next word as its value; -c, `--`, a script or a word
-    the guard cannot read ends them."""
+    """(rest, unsure) for python's own options `args` (after the program): rest the arguments
+    tools/hub.py gets when they run it as a module, else None: `-m tools.hub`, `-mtools.hub`, -m
+    at the end of a cluster (`-Bm`, `-BIm tools.hub`), -m after other options, and
+    `-m runpy tools.hub`. The options are read the way python reads them: one-letter flags may
+    share a word, and the first of c, m, W or X takes the rest of the word or the next word as
+    its value; -c, `--`, `-` or a script ends them. `unsure` is 'unread' when the reading stopped
+    at a word the guard cannot read (`$X`, `"$@"`, `-X $v`), 'module' at another module's -m,
+    which may run a module itself (cProfile, pdb, profile, trace), else False: hub_module_scan
+    and hub_named_rest read those."""
     k, n = 0, len(args)
     while k < n:
         w = args[k]
         t = w.text
-        if w.dyn or t == '--' or t == '-' or not t.startswith('-'):
-            return None
+        if w.dyn:
+            return None, 'unread'
+        if t == '--' or t == '-' or not t.startswith('-'):
+            return None, False
         if t.startswith('--'):
             k += 2 if t in PY_LONG_VALUE_OPTS else 1
             continue
@@ -668,41 +677,118 @@ def hub_module(args):
         if not value:
             k += 1
             if k >= n or args[k].dyn:
-                return None
+                return None, 'unread'
             value = args[k].text
         if opt == 'c':
-            return None
+            return None, False
         k += 1
         if opt != 'm':
             continue
         rest = list(args[k:])
         if hub_module_name(value):
-            return rest
+            return rest, False
         if value.lower() == 'runpy' and rest and not rest[0].dyn and hub_module_name(rest[0].text):
-            return rest[1:]
-        return None
+            return rest[1:], False
+        return None, 'module'
+    return None, False
+
+
+def hub_module_scan(args):
+    """The arguments after the first literal -m (`-m tools.hub`, `-mtools.hub`, `-Bm tools.hub`)
+    or `--module` (trace's; `--module=tools.hub`) anywhere in `args` whose module is hub, or
+    `runpy` then hub; else None. It is the reading for options hub_module could not finish
+    (`python $X -m tools.hub`, `python -m cProfile -m tools.hub`): any such word counts."""
+    n = len(args)
+    for k, w in enumerate(args):
+        if w.dyn:
+            continue
+        t, module, nxt = w.text, None, k + 1
+        m = PY_M_RE.match(t)
+        if t.startswith('--module='):
+            module = t[len('--module='):]
+        elif m and m.group(1):
+            module = m.group(1)
+        elif (m or t == '--module') and k + 1 < n and not args[k + 1].dyn:
+            module, nxt = args[k + 1].text, k + 2
+        if module is None:
+            continue
+        if hub_module_name(module):
+            return list(args[nxt:])
+        if module.lower() == 'runpy' and nxt < n and not args[nxt].dyn and hub_module_name(args[nxt].text):
+            return list(args[nxt + 1:])
     return None
+
+
+def hub_named_rest(args, verbs):
+    """The fail-closed reading of python options hub_module could not finish when no -m names
+    hub (hub_module_scan): the arguments after the first literal word naming hub as a module
+    (`-m cProfile -m -s time tools.hub answer`) or, with `verbs` (a word the guard cannot read
+    came first: `python -m $m answer`), from the first word that is an owner verb or a verb with
+    owner sub-verbs (hub.OWNER_VERBS, hub.OWNER_SUBS); else None."""
+    for k, w in enumerate(args):
+        if w.dyn:
+            continue
+        if hub_module_name(w.text):
+            return list(args[k + 1:])
+        if verbs and (w.text in hubg.OWNER_VERBS or w.text in hubg.OWNER_SUBS):
+            return list(args[k:])
+    return None
+
+
+def hub_wrapped_python(cmd, inv):
+    """An Invocation of the python that another program's arguments run (`uv run python -m
+    tools.hub`: the first literal word named python, py or pythonw, with the words after it),
+    or None."""
+    for k, w in enumerate(inv.args):
+        if not w.dyn and UI_PYTHON_RE.match(cm.base_name(w.text)):
+            return cm.Invocation(cm.base_name(w.text), w.text, list(inv.args[k + 1:]), cmd, False, inv.index,
+                                 via=inv.via, word=w)
+    return None
+
+
+def hub_code(text):
+    """The text of python code `text` that loads tools/hub.py as a module (HUB_CODE_RE, or
+    HUB_IMPORT_RE once every other from-import is taken out), else None."""
+    m = HUB_CODE_RE.search(text) or HUB_IMPORT_RE.search(FROM_IMPORT_RE.sub(' ', text))
+    return m.group(0) if m else None
 
 
 def hub_owner_run(cmd, inv):
     """What `inv` runs of tools/hub.py that is the owner's (kitlib.guard.hub.owner_verb), as text,
     or None. Its arguments are read after the first literal word named hub.py (python's script,
     a direct run, Start-Process's -ArgumentList) or, for python, after the module its -m names
-    when that module's last part is `hub` (hub_module). Python code from -c or standard input
-    that loads hub as a module (HUB_CODE_RE) counts as the owner's whatever it calls, and so does
-    python running a script the text does not show on a line that names hub.py."""
+    when that module's last part is `hub` (hub_module; hub_module_scan when its options cannot
+    be read to the end). Python code from -c or standard input that loads hub as a module
+    (hub_code) counts as the owner's whatever it calls, and so does python running a script the
+    text does not show on a line that names hub.py. A program the guard does not unwrap
+    (`uv run`, `poetry run`, `pipx run`; not a search or git, hub.NAME_ONLY_PROGRAMS) is read
+    closed: python among its literal words is read as python from there (hub_wrapped_python),
+    and any literal -m naming hub counts (hub_module_scan)."""
     words = ([inv.word] if inv.word is not None else []) + list(inv.args)
     py = UI_PYTHON_RE.match(inv.name or '') is not None
-    rest = hub_module(list(inv.args)) if py else None
+    rest = None
+    if py:
+        rest, unsure = hub_module(list(inv.args))
+        if rest is None and unsure:
+            rest = hub_module_scan(list(inv.args))
+            if rest is None:
+                rest = hub_named_rest(list(inv.args), unsure == 'unread')
+    elif inv.name not in hubg.NAME_ONLY_PROGRAMS:
+        inner = hub_wrapped_python(cmd, inv)
+        found = hub_owner_run(cmd, inner) if inner is not None else None
+        if found:
+            return found
+        rest = hub_module_scan(list(inv.args))
     if rest is None:
         for k, w in enumerate(words):
             if not w.dyn and cm.base_name(w.text) == HUB_SCRIPT:
                 rest = words[k + 1:]
                 break
     if rest is None and py:
-        for text in inline_code(cmd, inv):
-            if HUB_CODE_RE.search(text):
-                return 'from python code that loads it as a module (%s)' % HUB_CODE_RE.search(text).group(0)
+        for text in inline_code(cmd, inv, code_only=True):
+            found = hub_code(text)
+            if found:
+                return 'from python code that loads it as a module (%s)' % found
     if rest is None:
         script = cm.python_script(inv) if py else None
         if (inv.dyn or (script is not None and inv.args[script[0]].dyn)) and HUB_LINE_RE.search(cmd.source or ''):
@@ -741,10 +827,11 @@ def hub_path_texts(text):
     return []
 
 
-def inline_code(cmd, inv):
+def inline_code(cmd, inv, code_only=False):
     """The code python or node runs from its own command line (-c, -e) or from standard input
     (a heredoc, a here-string, the command piped in), as texts; [] for a script run or another
-    program."""
+    program. The command line's texts are every argument (a path the code is given counts), or
+    with `code_only` python's -c code alone (its arguments after the code are not code)."""
     if inv is None:
         return []
     py, node = UI_PYTHON_RE.match(inv.name or '') is not None, inv.name == 'node'
@@ -769,6 +856,10 @@ def inline_code(cmd, inv):
         stdin = t == '-'                        # a script file, or `-`: standard input
         break
     texts = list(args) if code else []
+    if code and code_only and py:
+        t = args[k]
+        split = re.match(r'^-[A-Za-z]*?c', t).end()
+        texts = [t[split:]] if split < len(t) else args[k + 1:k + 2]
     if stdin or code:
         for c in (cmd, cmd.pipe_from):
             if c is None:

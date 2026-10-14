@@ -920,20 +920,34 @@ def resolve_path(p, cwd, shell=None, home=None):
     return paths.norm(os.path.join(cwd, p), fold=False)
 
 
+def cd_words(cmd):
+    """The command's words, with a bash `builtin` or `command` before a cd or popd left out
+    (`builtin cd ~`, `command cd x`: the cd itself runs)."""
+    words = cmd.words
+    if (cmd.shell == BASH and len(words) > 1 and not words[0].dyn and words[0].text in ('builtin', 'command')
+            and words[1].text.lower() in CD_VERBS | CD_UNKNOWN):
+        return words[1:]
+    return words
+
+
 def cd_target(cmd, cwd, home=None, home_vars=False):
     """(is a cd, the directory after it): None when the text cannot tell. `~` is `home`
     (home_folder); with `home_vars`, a target that starts with a home variable (home_text) is
     read too, bash cd's own options and a `--` are passed over, and a bash or PowerShell cd with
     no place goes home (bash's cd, and PowerShell 7's; Windows PowerShell's stays put, but only a
-    deny reads it)."""
-    if not cmd.words:
+    deny reads it). A bash cd behind `builtin` or `command` is the cd itself (cd_words), and
+    PowerShell's `cd $null` is a cd with no place."""
+    words = cd_words(cmd)
+    if not words:
         return False, cwd
-    verb = cmd.words[0].text.lower()
+    verb = words[0].text.lower()
     if verb in CD_UNKNOWN:
         return True, None
     if verb not in CD_VERBS:
         return False, cwd
-    rest = cmd.words[1:]
+    rest = words[1:]
+    if cmd.shell == PS and len(rest) == 1 and rest[0].text.lower() == '$null':
+        rest = []                               # no place, never a folder named $null
     if rest and rest[0].text.lower() in ('-path', '-literalpath', '-lp'):
         rest = rest[1:]
     elif rest and verb in ('cd', 'chdir') and rest[0].text.lower() == '/d':
@@ -978,7 +992,10 @@ def _keyword_cd(c):
     k = 0
     while k < len(c.words) and c.words[k].text in BASH_PREFIX_WORDS:
         k += 1
-    return 0 < k < len(c.words) and c.words[k].text.lower() in CD_VERBS | CD_UNKNOWN
+    first = k
+    if k + 1 < len(c.words) and c.words[k].text in ('builtin', 'command'):
+        k += 1
+    return 0 < first and k < len(c.words) and c.words[k].text.lower() in CD_VERBS | CD_UNKNOWN
 
 
 def track(cmds, cwd, ps_drive=False, home=None, cwd_home=None):
