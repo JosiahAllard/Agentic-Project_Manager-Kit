@@ -33,8 +33,11 @@ SWEEP = '--sweep-merged --apply'
 # PowerShell ends a single-quoted string at any of these, not only at ' (its own
 # CodeGeneration.EscapeSingleQuotedStringContent doubles all five).
 SINGLE_QUOTES = ("'", '‘', '’', '‚', '‛')
-# `$py` is the resolved pythonw.exe, a literal (FIND_PYTHONW % its quoted path).
-FIND_PYTHONW = '$py = %s'
+# `$py` is the resolved pythonw.exe, a literal (PYTHONW_IS % its quoted path).
+PYTHONW_IS = '$py = %s'
+# The old lookup, kept only for kitlib/machinesetup/agenttemp.py's task line, which still finds
+# pythonw on PATH (the WindowsApps alias when that folder is first); the sweep task never uses it.
+FIND_PYTHONW = '$py = (Get-Command pythonw).Source'
 NOT_THE_STORE_ALIAS = (r"if (-not $py -or $py -match '\\WindowsApps\\') { throw ('pythonw is ' + $py +"
                        r" ': no pythonw, or the Microsoft Store alias; nothing was registered') }")
 
@@ -71,7 +74,7 @@ def command(root, name, tool, pythonw):
             " -Action (New-ScheduledTaskAction -Execute $py -Argument %s -WorkingDirectory %s)"
             " -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)"
             " -User $env:USERNAME -RunLevel Limited -Description %s"
-            % (FIND_PYTHONW % quoted(pythonw), NOT_THE_STORE_ALIAS, quoted(task_name(name)), AT,
+            % (PYTHONW_IS % quoted(pythonw), NOT_THE_STORE_ALIAS, quoted(task_name(name)), AT,
                quoted(argument(tool, root)), quoted(root), quoted(description(name))))
 
 
