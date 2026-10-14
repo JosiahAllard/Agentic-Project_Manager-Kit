@@ -1,7 +1,7 @@
 """kitlib.hubvalidate: checks on the Action Hub's data (docs/action-hub.md field tables).
 
 Pure logic over the hub's JSON shape, `docs = {collection: {doc_id: fields}}` (what
-kitlib.hubmirror.read_source returns); it knows nothing of the page, ArtifactData or any transport.
+kitlib.hubsite.migrate.check takes); it knows nothing of the page, ArtifactData or any transport.
 Nothing here prints, parses arguments or exits.
 
   validate(docs, only=None)   [Finding] for every document; `only` (a set of "collection/doc_id")

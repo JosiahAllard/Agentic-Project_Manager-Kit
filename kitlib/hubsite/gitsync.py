@@ -128,7 +128,7 @@ branch other than the one the caller named, a store folder that is the work tree
 pathspec would then cover the whole data worktree) or whose path git would read as a pattern, a
 store folder git tracks under another spelling than the folder has on disk, a remote that is not
 a plain name or that the repository does not have, and a work tree of the kit itself, through
-kitlib.hubmirror's own checks (_kit_code_error, _kit_checkout_error): a checkout holding the kit's code, a work tree
+this module's checks (_kit_code_error, _kit_checkout_error): a checkout holding the kit's code, a work tree
 of the kit's repository that is not on its recorded data branch, or a remote other than the
 recorded one. The hub holds the owner's private data and the kit's history is public.
 
@@ -166,7 +166,8 @@ import re
 import threading
 import time
 
-from kitlib import hubmirror
+from kitlib import commit as kcommit
+from kitlib import pmdata
 from kitlib.git import cmd, refs, repo
 
 from . import store as _store
@@ -202,6 +203,43 @@ Plan = collections.namedtuple('Plan', 'root rel branch remote')
 
 class Refused(Exception):
     """The store folder cannot be synced from where it is; the message says why."""
+
+
+def _kit_code_error(root):
+    """Refused when the work tree `root` holds the kit's code (any clone), on any HEAD state. The
+    marker is this very file, kitlib/hubsite/gitsync.py."""
+    if os.path.isfile(os.path.join(root, 'kitlib', 'hubsite', 'gitsync.py')):
+        raise Refused('the hub store is in %s, a checkout of the kit itself: the hub holds the '
+                      "owner's private to-dos and answers and the kit is public; keep the store in "
+                      'the PM data worktree (pm_data) or a private repository' % root)
+
+
+def _kit_checkout_error(root, branch, remote):
+    """Refused when the work tree `root` is a work tree of the repository this kit runs from that
+    is not on the data branch recorded in its kit-pm-data.json (docs/pm-data-branch.md "Layout"),
+    or one pushing to another remote than the recorded one (a checkout holding the kit's code is
+    _kit_code_error's). Returns the recorded remote for the data branch, else None."""
+    same, why = repo.same_repository(root, kcommit.KIT_ROOT)
+    if same is None:
+        kit_common, _ = repo.common_dir(kcommit.KIT_ROOT)
+        if kit_common is not None:      # the kit is in git; the store's repository could not be told
+            raise Refused('cannot tell whether %s is the kit\'s repository: %s' % (root, why))
+        return None
+    if not same:
+        return None
+    try:
+        rec = pmdata.locate(root)
+    except pmdata.PmDataError as e:
+        raise Refused(str(e))
+    if rec is None or branch != rec.branch:
+        raise Refused('the hub store is in %s, a work tree of the kit\'s repository on %r, not its '
+                      'data branch%s: committing would put the owner\'s private hub data in the '
+                      "kit's history" % (root, branch, ' %s' % rec.branch if rec else
+                                         ' (no kit-pm-data.json: run pm_data.py init)'))
+    if remote is not None and remote != rec.remote:
+        raise Refused('the data branch %s pushes to %s (kit-pm-data.json), not %s'
+                      % (rec.branch, rec.remote, remote))
+    return rec.remote
 
 
 def skipped(path):
@@ -273,7 +311,7 @@ def prepare(store_dir, remote=None, branch=None):
     `branch`: the data branch the caller expects (pm_data.branch); a work tree on any other
     branch is Refused. None means the caller does not know its name, and the branch checked out
     when prepare() runs IS then the data branch for the life of the Plan: in the kit's own
-    repository that can only be the recorded data branch (the hubmirror check), in any other
+    repository that can only be the recorded data branch (the _kit_checkout_error check), in any other
     repository nothing else vouches for it, so a caller that has the name passes it. Either way
     the branch has to be readable and attached: a detached HEAD, or a work tree whose branch git
     cannot name, is Refused.
@@ -304,9 +342,9 @@ def prepare(store_dir, remote=None, branch=None):
     if remote is not None and not _name_ok(remote):
         raise Refused('the remote must be a remote name, not %r' % (remote,))
     try:
-        hubmirror._kit_code_error(root)
-        recorded = hubmirror._kit_checkout_error(root, current, remote)
-    except hubmirror.Refused as e:
+        _kit_code_error(root)
+        recorded = _kit_checkout_error(root, current, remote)
+    except Refused as e:
         raise Refused('the hub store cannot be synced from %s: %s' % (root, e))
     if branch is not None and current != branch:
         raise Refused('%s is on %r, not the data branch %s' % (root, current, branch))
