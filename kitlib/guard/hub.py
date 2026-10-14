@@ -15,10 +15,18 @@ every tool call and stays free of the hub site's imports. tests/guard/test_rules
 they are the same. The owner-only MCP tool names are kitlib.hubmcp's own OWNER_ONLY, imported:
 that package's __init__ imports nothing. Nothing here reads a file or the environment.
 
-owner_verb judges only the one command shape kitlib.guard.rules.hub_shape reads in full; any other
-text naming the hub tool is refused there. Known limit: a name built at run time (string
-concatenation, an encoding, a variable, a script the agent wrote) is not read. The hub rules
-guard against accidents and are not an adversary boundary.
+owner_verb judges only the one command shape kitlib.guard.rules.hub_shape reads in full. The
+other text naming the hub tool that passes is the path family (kitlib.guard.rules.hub_path_family,
+from the owner's ruling on reading and committing the hub tool): one simple command of a reader
+(cat, Get-Content, type, grep, rg, Select-String), git's add, diff, log, show, blame, status or
+restore --staged, commit.py or backlog.py, naming hub.py only as a path word, or anyhow in
+commit.py's -m/-b or backlog.py's message options. Inside it the options that run a program are
+denied: git's -c and --exec-path (only -C, --no-pager and -P precede the subcommand), --ext-diff,
+--textconv, add's editor and prompts, restore's work-tree writes, and rg's --pre and --pre-glob.
+Any other text naming the hub tool is refused. Known limit: a name built at run time (string
+concatenation, an encoding, an escape a program expands, Unicode compatibility characters Python
+folds to hub, a variable, a script the agent wrote) is not read. The hub rules guard against
+accidents and are not an adversary boundary.
 """
 import fnmatch
 import ipaddress

@@ -625,16 +625,18 @@ class OwnerVerbs(Hub):
                 self.assertIsNotNone(d, 'allowed')
                 self.assertIn(d.rule, ('hub-owner-verb', 'hub-secrets'), d.reason)
 
-    def test_reading_hub_py_is_denied(self):
-        # over-reach, fail-closed rule: a command naming hub.py outside the allowed shape is denied, a read,
-        # a search or git included (the Read and Grep tools still reach the file); the owner's
-        # own session passes
+    def test_reading_hub_py_is_the_path_family(self):
+        # these were denied by the fail-closed rule; the path family (rules.hub_path_family) now
+        # reads them in full: one simple command of a reader or git, hub.py only as a path word
         for cmd in ('cat tools/hub.py', 'grep -n answer tools/hub.py', 'git diff tools/hub.py',
                     'git add tools/hub.py tests/hubsite/test_cli.py'):
             with self.subTest(cmd):
-                self.denied(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub), 'hub-owner-verb',
-                            (('subagent', True, OWNER),))
+                self.allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub))
                 self.owner_allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub))
+        # the same read with anything beside it is outside the family, and is denied
+        for cmd in ('cat tools/hub.py; echo x', 'cd tools && cat hub.py', 'cat tools/hub.py | head'):
+            with self.subTest(cmd):
+                self.denied(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub), 'hub-owner-verb')
 
     def test_the_alternative_names_the_kit_hub_tool(self):
         d = decide(self.run_hub('answer Q-1 --choice 1')(True), self.ctx(OWNER))
@@ -741,6 +743,132 @@ class FailClosed(Hub):
             (bash, 'python -mtools.hub questions'), (bash, './tools/hub.py questions'),
             (bash, 'python "%s" questions; echo tools.hub' % hub),
         ), True)
+
+    def test_wildcard_words_leave_the_allowed_shape(self):
+        # the shell may expand an unquoted wildcard to a file named like an owner verb or --owner,
+        # so a word holding one is no literal word (rules.hub_word_globs); a redirect target too
+        hub = self.hub
+        self.rows((
+            (bash, 'python "%s" a*' % hub), (bash, 'python -m tools.hub todos d?ne T-1'),
+            (bash, 'python "%s" todos add --title t --o*' % hub), (bash, 'python "%s" [a]nswer Q-1' % hub),
+            (bash, 'python "%s" questions > o*' % hub), (bash, 'python "%s" questions add --title "a"*' % hub),
+            (ps, 'python "%s" a*' % hub), (ps, 'python -m tools.hub todos d?ne T-1'),
+        ), True)
+        # a quoted or escaped wildcard is literal text
+        self.rows((
+            (bash, 'python "%s" questions add --title "Which way?"' % hub),
+            (bash, "python \"%s\" questions add --title 'a*b'" % hub),
+            (bash, 'python "%s" questions add --title a\\*b' % hub),
+            (bash, "python \"%s\" questions add --title $'a\\'*'" % hub),
+            (ps, "python \"%s\" questions add --title 'Which way?'" % hub),
+            (ps, 'python "%s" questions add --title a`*b' % hub),
+        ), False)
+
+    def test_hub_in_python_code_that_imports(self):
+        # Python joins a line ending in a backslash, and takes a comment inside a bracketed import
+        # list, so any standalone hub in python code that imports counts (rules.hub_code_names)
+        self.rows((
+            (bash, "python - <<'EOF'\nimport tools.\\\nhub\nEOF"),
+            (bash, "python - <<'EOF'\nimport tools\\\n.hub as h\nEOF"),
+            (bash, "python - <<'EOF'\nfrom tools import (os,\n# a comment\nhub)\nEOF"),
+            (bash, "python -c 'from tools import (\n# x\nhub)'"),
+            (bash, "python -c 'import tools.\\\nhub as h; h.main()'"),
+            (bash, "uv run python -c 'import tools.\\\nhub'"),
+            (bash, "printf 'import tools.\\\\\nhub' | python"),
+            (bash, "python <<< 'from tools import \\\nhub'"),
+            # over-reach: hub in a string of python code that imports
+            (bash, "python - <<'EOF'\nimport json\nprint('hub page')\nEOF"),
+        ), True)
+        self.rows((
+            (bash, "python - <<'EOF'\nimport json\nprint('the page')\nEOF"),
+            (bash, "python -c 'print(\"hub\")'"),
+            (bash, "python - <<'EOF'\nfrom kitlib.guard import hub\nprint(hub.OWNER_VERBS)\nEOF"),
+        ), False)
+
+    def test_the_path_family(self):
+        # a single simple command of a reader, git's reads and staging, commit.py or backlog.py,
+        # naming the hub tool only as a path word (or anyhow in a commit or backlog message), is read
+        # in full (rules.hub_path_family); these were denied by the fail-closed rule
+        self.rows((
+            (bash, 'cat tools/hub.py'), (bash, 'grep -n answer tools/hub.py'), (bash, 'rg -n answer tools/hub.py'),
+            (bash, 'rg --pretty answer tools/hub.py'),
+            (bash, 'git diff tools/hub.py'), (bash, 'git diff tools/hub.py 2>&1'),
+            (bash, 'git -C Z:/r diff -- tools/hub.py'), (bash, 'git --no-pager log -p -- tools/hub.py'),
+            (bash, 'git show HEAD:tools/hub.py'), (bash, 'git blame tools/hub.py'), (bash, 'git status tools/hub.py'),
+            (bash, 'git add tools/hub.py tests/hubsite/test_cli.py'), (bash, 'git restore --staged tools/hub.py'),
+            (bash, 'cat tools/hub.py > notes.txt'),
+            (ps, 'Get-Content tools/hub.py'), (ps, 'type tools\\hub.py'), (ps, '& git diff tools/hub.py'),
+            (ps, 'Select-String -Path tools/hub.py -Pattern answer'),
+            (bash, 'python Z:/k/tools/commit.py -C Z:/r -m "guard: read tools/hub.py" --model M tools/hub.py'),
+            (bash, 'python -B Z:/k/tools/commit.py -m x --owner-authored -- tools/hub.py'),
+        ), False)
+        # anything beside it, a program or form outside the list, or a wildcard leaves the family
+        self.rows((
+            (bash, 'git diff tools/hub.py; python -m tools.hub answer Q-1'), (bash, 'git diff tools/hub.py && echo ok'),
+            (bash, 'cat tools/hub.py | python'), (bash, 'cat $(echo tools/hub.py)'), (bash, 'cat tools/hub.py &'),
+            (bash, 'cat tools/hub.py # import hub'), (bash, 'GIT_EXTERNAL_DIFF=x git diff tools/hub.py'),
+            (bash, 'command cat tools/hub.py'), (bash, 'sudo cat tools/hub.py'), (bash, 'less tools/hub.py'),
+            (bash, 'cat tools/hub.py > tools/h*.py'), (bash, 'grep -n answer tools/hub.py tools/hu?.py'),
+            (bash, 'git commit -m x tools/hub.py'), (bash, 'git restore tools/hub.py'),
+            (bash, 'git log --grep tools.hub'), (bash, 'grep -rn tools.hub kitlib'), (bash, 'grep "import hub" tools/hub.py'),
+            (bash, 'python -i Z:/k/tools/commit.py -m x tools/hub.py'),
+            (bash, 'python Z:/k/tools/commit.py -m "$m" tools/hub.py'),
+            (bash, 'python Z:/k/tools/commit.py -m x tools/h*.py'),
+            (bash, 'python Z:/k/tools/commit.py -m x tools.hub'),
+            (bash, 'python Z:/k/tools/commit.py -m x --body-file tools/hub.py tools/x.py'),
+            (bash, 'python Z:/k/tools/commit.py -m x --model tools.hub tools/x.py'),
+            (bash, 'python Z:/k/tools/commit.py -m x --unknown tools/hub.py'),
+            (bash, 'python Z:/k/tools/backlog.py show tools/hub.py'),
+        ), True)
+
+    def test_the_path_family_refuses_options_that_run_a_program(self):
+        # git's -c and --exec-path (only -C, --no-pager and -P come before git's subcommand),
+        # --ext-diff and --textconv (a unique prefix too), add's editor and prompts, restore's
+        # writes to the work tree, and rg's --pre and --pre-glob
+        self.rows((
+            (bash, 'git -c diff.external=x diff tools/hub.py'), (bash, 'git -c core.pager=x log tools/hub.py'),
+            (bash, 'git --exec-path=x diff tools/hub.py'), (bash, 'git --exec-path x diff tools/hub.py'),
+            (bash, 'git diff --ext-diff tools/hub.py'), (bash, 'git diff --ext tools/hub.py'),
+            (bash, 'git log --textconv -p tools/hub.py'), (bash, 'git show --textconv=1 HEAD:tools/hub.py'),
+            (bash, 'git blame --textc tools/hub.py'),
+            (bash, 'git add -e tools/hub.py'), (bash, 'git add --edit tools/hub.py'), (bash, 'git add -p tools/hub.py'),
+            (bash, 'git add -Ai tools/hub.py'), (bash, 'git add --interactive tools/hub.py'),
+            (bash, 'git restore --staged --worktree tools/hub.py'), (bash, 'git restore -SW tools/hub.py'),
+            (bash, 'git restore --staged -p tools/hub.py'),
+            (bash, 'rg --pre x answer tools/hub.py'), (bash, 'rg --pre=x answer tools/hub.py'),
+            (bash, "rg --pre-glob '*.py' --pre x answer tools/hub.py"), (bash, 'rg --pre-glob=x answer tools/hub.py'),
+            (ps, 'git -c diff.external=x diff tools/hub.py'), (ps, 'rg --pre x answer tools/hub.py'),
+        ), True)
+
+    def test_messages_naming_the_hub_tool(self):
+        # commit.py's -m and -b, and backlog.py's message options, are message text: the hub tool
+        # may be named there in any spelling; elsewhere on the line it is still denied
+        self.rows((
+            (bash, 'python Z:/k/tools/commit.py -m "guard: fix tools.hub parsing" tools/x.py'),
+            (bash, 'python Z:/k/tools/commit.py -m "import hub fix" -b "tools/hub.py and tools.hub" tools/hub.py'),
+            (bash, 'python Z:/k/tools/commit.py -mtools.hub tools/x.py'),
+            (bash, 'python Z:/k/tools/backlog.py add K-1 --summary "tools.hub answers twice" --found-on none '
+                   '--why-not-folded "needs tools/hub.py"'),
+            (bash, 'python Z:/k/tools/backlog.py add K-1 --summary="python -m tools.hub" --found-on none '
+                   '--why-not-folded x'),
+            (bash, 'python Z:/k/tools/backlog.py close K-1 --reason "fixed in tools/hub.py"'),
+            (ps, 'python Z:/k/tools/commit.py -m "guard: fix tools.hub" tools/x.py'),
+        ), False)
+        self.rows((
+            # argparse reads --summ as --summary, the guard reads only the option written in full
+            (bash, 'python Z:/k/tools/backlog.py add K-1 --summ "tools.hub" --found-on none --why-not-folded x'),
+            (bash, 'python Z:/k/tools/backlog.py add K-1 --summary x --found-on tools.hub --why-not-folded x'),
+            (bash, 'git commit -m "fix tools.hub"'), (bash, 'echo "tools.hub" | python Z:/k/tools/commit.py -m x a'),
+            (bash, 'python Z:/k/tools/commit.py -m "fix tools.hub" tools/x.py; python -m tools.hub answer Q-1'),
+            (bash, 'python -c "import x" Z:/k/tools/commit.py -m "tools.hub" tools/x.py'),
+        ), True)
+
+    def test_whole_tree_commits_pass(self):
+        # a commit or staging that names no hub path passes whatever it holds (tools/hub.py among
+        # the changes included); only text naming the hub tool is read
+        self.rows((
+            (bash, 'git add -A'), (bash, 'git add tools'), (bash, 'python Z:/k/tools/commit.py -m x tools'),
+        ), False)
 
 
 # ---------------------------------------------------------------- hub-mcp
