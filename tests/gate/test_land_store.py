@@ -17,6 +17,7 @@ from kitlib.git import cmd, refs
 from tests.backlog.helpers import priced, rec
 from tests.gate import test_land
 from tests.gitfixture import fixture_env
+from tests.home import temp_home
 from tests.realgit import real_git
 
 BRANCH = test_land.BRANCH
@@ -29,13 +30,15 @@ def pulled(rid, by=BRANCH, **over):
 
 class StoreLandCase(test_land.LandCase):
     """A LandCase whose store layer (which inherits os.environ) runs on the fixture's git
-    environment, with helpers to seed and read the store on the bare remote."""
+    environment and under a temp home (a close reads the machine config's machine_path_folders
+    for its reason), with helpers to seed and read the store on the bare remote."""
     STORE = 'ref'
 
     def setUp(self):
         patch = mock.patch.dict(os.environ, fixture_env(), clear=True)
         patch.start()
         self.addCleanup(patch.stop)
+        self.home = temp_home(self)
         test_land.LandCase.setUp(self)
 
     def backend(self):
