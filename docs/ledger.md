@@ -18,7 +18,7 @@ Supersedes: R-nnnn | -
 ```
 
 - **Ids** are four or more digits, numbered from 1 in file order, one apart. The time is UTC.
-- **Repo column:** `all`, or a repository's ledger name.
+- **Repo column:** `all`, or a name from the machine config's `ledger_repos` (unset: any lower-case name; "Configuration").
 - **Provenance:** `typed`, `selected`, `relayed-from-terminal` (the owner's own answer) or `delegated`. A delegated entry's Source says `under R-nnnn`, naming an earlier owner entry.
 - **Values:** a value's continuation lines start with two spaces. An older entry may end with an `Items: A, B` line. It is still read and validated; `add` no longer writes one.
 - **Tombstone:** keeps its header, and its body is one line: `Retired: spent|superseded|duplicate - <why> (see R-nnnn|-)`.
