@@ -1,7 +1,8 @@
 """The four ways a backlog verb stops (ported from an earlier tools/backlog.py). Each fixes the
 label the CLI prints and its exit code; nothing was written when one is raised, except
 Uncommitted (an Overtaken only for the paths in its `left`) and IndexStale (each a Failure). IndexStale's write is committed, so tools/backlog.py
-reports it as written, with a WARNING line and exit 0, not by this label and code."""
+reports it as written, with a WARNING line and exit 0, not by this label and code. Dirty is a
+Failure raised before anything is written."""
 
 
 class Refusal(Exception):
@@ -71,3 +72,17 @@ class IndexStale(Failure):
         self.commit = commit
         self.paths = list(paths)
         self.repair = repair
+
+
+class Dirty(Failure):
+    """Refused before anything was written: `paths` (the record paths the write would change, as
+    git spells them) differ from HEAD in the PM data worktree, a change made there and not
+    committed (a hand edit, a staged change, a record never committed), which the write would
+    delete or commit (kitlib.backlog.store.MainBackend with `clean`, the landing's close).
+    `compare`: the command that shows them against HEAD (`git diff HEAD`, or `git status
+    --short` when one is not in HEAD, which a diff would not show)."""
+
+    def __init__(self, message, paths=(), compare=''):
+        Failure.__init__(self, message)
+        self.paths = list(paths)
+        self.compare = compare

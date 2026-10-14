@@ -33,7 +33,7 @@ from . import offer
 from . import plan as pmod
 from . import record as rmod
 from . import store as smod
-from .errors import IndexStale, Overtaken, Refusal, Uncommitted
+from .errors import Dirty, IndexStale, Overtaken, Refusal, Uncommitted
 
 SESSION = 'gate-land'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -269,7 +269,7 @@ def _pm_data_store(root, configured):
         return None, None, None, None
     try:
         pm_cfg = kconfig.load(pm_root)
-        backend = smod.open_backend(pm_root, pm_cfg, fetch=True)
+        backend = smod.open_backend(pm_root, pm_cfg, fetch=True, clean=True)
     except (kconfig.ConfigError, Refusal, OSError) as exc:
         return None, None, None, 'cannot open the backlog store in %s: %s' % (pm_root, exc)
     if configured is not None and backend.describe() == configured:
@@ -456,6 +456,12 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
             if rid in by_trailer:
                 lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root,
                                                   quiet))
+            continue
+        except Dirty as exc:                # another session's uncommitted change: never over it
+            lines.append('WARNING: %s landed, and %s%s, was not closed (%s: %s); once that change '
+                         'is committed or put back, close it with: %s'
+                         % (branch, rid, how, exc.label, _one_line(str(exc)),
+                            command(*close_args(rid))))
             continue
         except Exception as exc:            # one record's failure never stops the others
             what = ('%s: %s' % (exc.label, exc) if isinstance(exc, Refusal)

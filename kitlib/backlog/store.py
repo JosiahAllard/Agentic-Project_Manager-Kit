@@ -29,7 +29,7 @@ from kitlib.git import batch, cmd, refs
 from kitlib.git import repo as gitrepo
 
 from . import record as rmod
-from .errors import Failure, IndexStale, Overtaken, Uncommitted, Usage
+from .errors import Dirty, Failure, IndexStale, Overtaken, Uncommitted, Usage
 
 STORE_REF = 'refs/backlog/main'
 STORE_DIR = 'backlog'
@@ -572,9 +572,10 @@ def _replace_file(full, data):
 class MainBackend(object):
     """`<dir>/<ID>.md` in a worktree. A write writes the files; the caller's branch carries them
     to main through a landing. There is no compare-and-swap on the files: a write checks that
-    each record it rewrites still holds the bytes it read, then writes, so it is safe only where
-    one writer works - it refuses anywhere but a linked worktree (a main checkout is the
-    landers').
+    each record it rewrites still holds the bytes it read, then writes, so two writers in one
+    worktree can still lose an update between that check and the write. It refuses anywhere but
+    a linked worktree (a main checkout is the landers'). A branch worktree has one writer, its
+    agent; the PM data worktree has several (every session's backlog.py, and a landing's close).
 
     In the PM data branch's worktree (commit_branch) the write also commits exactly the record
     paths it wrote, as one commit on HEAD by compare-and-swap (`update-ref HEAD <new> <old>`,
@@ -585,12 +586,16 @@ class MainBackend(object):
     else in that worktree is staged or committed. Any other commit that fails is Uncommitted (the
     files stay written); an index left stale after the commit is IndexStale. Its git calls drop an
     inherited GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE
-    (_store_env). Elsewhere it commits nothing."""
+    (_store_env). Elsewhere it commits nothing. With `clean` (a landing's close,
+    at_landing._pm_data_store) a write there first requires every path it writes to match HEAD in
+    the worktree and the index (_require_clean): else Dirty, and nothing is written, so it never
+    deletes or commits a change another session made there and did not commit."""
 
-    def __init__(self, root, rel):
+    def __init__(self, root, rel, clean=False):
         self.root = root
         self.rel = rel.strip('/')
         self.dir = os.path.join(root, *self.rel.split('/'))
+        self.clean = clean
         self._branch = _UNSET
 
     def commit_branch(self, place=None):
@@ -658,6 +663,8 @@ class MainBackend(object):
                 base = self._head()
             except Failure as exc:
                 raise Failure('%s; nothing was written' % exc)
+            if self.clean:
+                self._require_clean(sorted(self.path_of(stem) for stem in writes))
         now = self._read()
         for stem in writes:
             if now.get(stem) != snap.raw.get(stem):
@@ -679,6 +686,33 @@ class MainBackend(object):
             before = dict((self.path_of(stem), now.get(stem)) for stem in writes)
             raise self._overtaken(paths, exc.changed, exc.head,
                                   self._put_back(exc.head, wrote, exc.changed, before))
+
+    def _require_clean(self, paths):
+        """Dirty, before anything is written, when one of `paths` differs from HEAD in the
+        worktree or the index, or is there and not in HEAD (ignored files included): a change made
+        here and not committed, which the write would delete or commit. Failure when git does not
+        answer. Read with no optional lock, so it never writes the index."""
+        out, why = cmd.run(['--no-optional-locks', '-c', 'core.quotePath=false', 'status',
+                            '--porcelain', '-z',
+                            '--untracked-files=all', '--ignored', '--no-renames', '--'] + paths,
+                           self.root, env=_store_env())
+        if out is None:
+            raise Failure('cannot read the status of %s in %s: %s; nothing was written'
+                          % (', '.join(paths), self.root, why))
+        entries = [e for e in cmd.text(out).split('\0') if len(e) > 3]
+        dirty = sorted(set(e[3:] for e in entries))
+        if not dirty:
+            return
+        if any(e[:2] in ('??', '!!') for e in entries):
+            compare = 'git -C "%s" status --short -- %s' % (self.root, quoted(dirty))
+        else:
+            compare = 'git -C "%s" diff HEAD -- %s' % (self.root, quoted(dirty))
+        raise Dirty('%s not written in %s, and nothing was written: %s differ%s from HEAD there '
+                    '(a change made there and not committed: a hand edit, a staged change or a '
+                    'record never committed), which this write would delete or commit over; '
+                    'compare with HEAD first: %s'
+                    % (', '.join(paths), self.root, ', '.join(dirty),
+                       's' if len(dirty) == 1 else '', compare), dirty, compare)
 
     def _put_back(self, head, wrote, changed, before):
         """After an Overtaken refusal, undo the files of the refused write, so that no reader and
@@ -1040,10 +1074,11 @@ def catch_up(backend, paths, session):
                                                    session or '-'))
 
 
-def open_backend(root, cfg, fetch=True, store=None):
+def open_backend(root, cfg, fetch=True, store=None, clean=False):
     """The backend `.kit.json` "backlog".store names (absent: the schema default, `ref`), or
     `store` when given (`migrate --to`): `ref` the hidden ref, `branch` the `backlog` branch,
-    `main` docs/backlog in `root`, any other path that folder in `root`."""
+    `main` docs/backlog in `root`, any other path that folder in `root`. `clean`: a folder
+    store's MainBackend writes over no uncommitted change (Dirty); a ref store ignores it."""
     store = store or cfg.section('backlog')['store']
     remote = cfg.remote
     if store == 'ref':
@@ -1052,7 +1087,7 @@ def open_backend(root, cfg, fetch=True, store=None):
         return RefBackend(root, remote, 'refs/heads/' + BRANCH,
                           'refs/remotes/%s/%s' % (remote, BRANCH),
                           no_remote_ref='refs/heads/' + BRANCH, fetch=fetch)
-    return MainBackend(root, 'docs/backlog' if store == 'main' else store)
+    return MainBackend(root, 'docs/backlog' if store == 'main' else store, clean=clean)
 
 
 # --- the write loop -------------------------------------------------------------------------------

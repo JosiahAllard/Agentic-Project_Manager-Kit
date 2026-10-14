@@ -262,7 +262,7 @@ class ClosesByTrailerInThePmDataStore(StoreLandCase):
     branch_with = ClosesByTrailer.branch_with
 
     def test_a_record_a_trailer_names_is_closed_in_the_pm_data_store(self):
-        wt = self.pm_worktree(pulled('D2', by='main'), pulled('KEEP', by='main'))
+        wt = self.seeded(pulled('D2', by='main'), pulled('KEEP', by='main'))
         tip = self.branch_with('fix\n\nCloses: D2\n%s\n' % TRAILERS)
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.OK, out.lines)

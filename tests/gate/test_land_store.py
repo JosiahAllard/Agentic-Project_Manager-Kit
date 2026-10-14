@@ -353,6 +353,7 @@ class PmDataClose(StoreLandCase):
 
     def test_a_landing_closes_the_records_the_branch_holds_in_the_pm_data_store(self):
         wt = self.pm_worktree(pulled('FOO'), pulled('QUX', by='kit/other'), priced('BAZ'))
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
         out = self.land()
         self.assertFalse(os.path.exists(self.record(wt, 'FOO')), out.lines)
         self.assertTrue(os.path.exists(self.record(wt, 'QUX')))
@@ -384,6 +385,81 @@ class PmDataClose(StoreLandCase):
         self.assertEqual(len(closed), 1, out.lines)
         self.assertIn('closed FOO in the backlog store kit/backlog in ', closed[0])
         self.assertIn('(committed %s)' % tip[:10], closed[0])
+
+    # A change the PM made in the PM data worktree and did not commit is never deleted or committed
+    # by the landing's close (store.MainBackend `clean`, errors.Dirty): nothing is written, and the
+    # WARNING gives the compare and the close command.
+
+    def dirty_close(self, change, seed=True):
+        """`(wt, the landing)`: FOO (committed on the PM data branch unless not `seed`), then
+        `change(wt)` before the landing; HEAD there does not move."""
+        wt = self.pm_worktree(pulled('FOO'))
+        if seed:
+            self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        change(wt)
+        before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        out = self.land()
+        self.assertEqual(self.repo.git('rev-parse', 'HEAD', cwd=wt), before)
+        self.assertEqual(self.main_now(), out.merge)
+        return wt, out
+
+    def assert_not_closed(self, wt, out, compare):
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertFalse([l for l in out.lines if l.startswith('closed ')], out.lines)
+        self.assertIn('FOO, which it holds pulled, was not closed', warn[0])
+        self.assertIn('nothing was written', warn[0])
+        self.assertIn('compare with HEAD first: %s' % compare, warn[0])
+        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" close FOO --reason "landed %s"'
+                                         % (self.pm_root(wt), out.merge)), warn[0])
+        self.assertNotIn('catch-up --apply "', warn[0])
+
+    def edit(self, wt, rid='FOO'):
+        with open(self.record(wt, rid), 'a', encoding='utf-8', newline='\n') as f:
+            f.write('\nthe PM wrote this by hand\n')
+
+    def test_a_close_over_an_uncommitted_edit_keeps_the_edit(self):
+        wt, out = self.dirty_close(self.edit)
+        with open(self.record(wt, 'FOO'), encoding='utf-8') as f:
+            self.assertIn('the PM wrote this by hand', f.read())
+        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'kit/backlog', cwd=wt),
+                         'M kit/backlog/FOO.md')
+        self.assert_not_closed(wt, out, 'git -C "%s" diff HEAD -- "kit/backlog/FOO.md"'
+                               % self.pm_root(wt))
+
+    def test_a_close_over_a_staged_change_leaves_the_index_entry(self):
+        def stage(wt):
+            self.edit(wt)
+            self.repo.git('add', '--', 'kit/backlog/FOO.md', cwd=wt)
+        wt, out = self.dirty_close(stage)
+        staged = self.repo.git('ls-files', '-s', '--', 'kit/backlog/FOO.md', cwd=wt).split()[1]
+        self.assertEqual(staged, self.repo.git('hash-object', 'kit/backlog/FOO.md', cwd=wt))
+        self.assertNotEqual(staged, self.repo.git('rev-parse', 'HEAD:kit/backlog/FOO.md', cwd=wt))
+        self.assert_not_closed(wt, out, 'git -C "%s" diff HEAD -- "kit/backlog/FOO.md"'
+                               % self.pm_root(wt))
+
+    def test_a_record_never_committed_is_not_closed(self):
+        """FOO.md exists only in the worktree: deleting it would leave no trace of it anywhere,
+        so the close is refused and the compare is a status (a diff shows no untracked file)."""
+        wt, out = self.dirty_close(lambda wt: None, seed=False)
+        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
+        self.assert_not_closed(wt, out, 'git -C "%s" status --short -- "kit/backlog/FOO.md"'
+                               % self.pm_root(wt))
+
+    def test_an_uncommitted_edit_to_a_record_the_close_rewrites_stops_it(self):
+        """BAR is blocked on FOO, so the close rewrites BAR too: BAR's uncommitted edit stops
+        the whole close and FOO stays; only BAR is named in the compare."""
+        wt = self.pm_worktree(pulled('FOO'), rec('BAR', state='blocked', blocked_on='item:FOO'))
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        self.edit(wt, 'BAR')
+        out = self.land()
+        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
+        with open(self.record(wt, 'BAR'), encoding='utf-8') as f:
+            text = f.read()
+        self.assertIn('blocked_on: item:FOO', text)
+        self.assertIn('the PM wrote this by hand', text)
+        self.assert_not_closed(wt, out, 'git -C "%s" diff HEAD -- "kit/backlog/BAR.md"'
+                               % self.pm_root(wt))
 
     def test_a_close_the_pm_data_store_cannot_commit_names_catch_up(self):
         wt = self.pm_worktree(pulled('FOO'))

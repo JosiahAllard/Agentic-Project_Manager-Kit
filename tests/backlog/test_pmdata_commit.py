@@ -122,6 +122,63 @@ class PmDataStore(unittest.TestCase):
         self.assertEqual(self.head(), before)
         self.assertEqual(self.status(), [])
 
+    # -- a clean backend writes over no uncommitted change ----------------------------------------
+
+    def clean_store(self):
+        backend = smod.MainBackend(self.wt, DIR, clean=True)
+        return smod.Store(backend, rmod.Rules(), session='kit-test')
+
+    def test_a_clean_write_over_an_uncommitted_edit_is_dirty_and_writes_nothing(self):
+        with open(self.path('BAR'), 'a', encoding='utf-8', newline='\n') as f:
+            f.write('\nedited by hand\n')
+        before, status = self.head(), self.status()
+        with self.assertRaises(errors.Dirty) as cm:
+            self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        exc = cm.exception
+        self.assertIsInstance(exc, Failure)
+        self.assertNotIsInstance(exc, Uncommitted)
+        self.assertEqual(exc.paths, [DIR + '/BAR.md'])
+        self.assertEqual(exc.compare, 'git -C "%s" diff HEAD -- "%s/BAR.md"' % (self.wt, DIR))
+        self.assertIn('nothing was written', str(exc))
+        self.assertIn(exc.compare, str(exc))
+        self.assertEqual((self.head(), self.status()), (before, status))
+        with open(self.path('BAR'), encoding='utf-8') as f:
+            self.assertIn('edited by hand', f.read())
+
+    def test_a_clean_write_names_only_the_paths_that_differ(self):
+        """A record never committed and a staged change are dirty too; a path the write touches
+        that matches HEAD is not named."""
+        self.repo.write('%s/NEW.md' % DIR, priced('NEW')['NEW'], root=self.wt)
+        with open(self.path('BAZ'), 'a', encoding='utf-8', newline='\n') as f:
+            f.write('\nstaged by hand\n')
+        self.git('add', '--', DIR + '/BAZ.md')
+
+        def plan(s):
+            change = pmod.plan_close(s, self.ctx, 'NEW', REASON)
+            change.writes.update(pmod.plan_close(s, self.ctx, 'BAZ', REASON).writes)
+            change.writes.update(pmod.plan_close(s, self.ctx, 'BAR', REASON).writes)
+            return change
+        with self.assertRaises(errors.Dirty) as cm:
+            self.clean_store().write(plan)
+        self.assertEqual(cm.exception.paths, [DIR + '/BAZ.md', DIR + '/NEW.md'])
+        self.assertEqual(cm.exception.compare, 'git -C "%s" status --short -- "%s/BAZ.md" '
+                         '"%s/NEW.md"' % (self.wt, DIR, DIR))
+        self.assertTrue(os.path.exists(self.path('BAR')))
+
+    def test_a_clean_write_over_clean_paths_commits_as_ever(self):
+        before = self.head()
+        _, tip = self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        self.assert_committed(before, tip, [('D', DIR + '/BAR.md')])
+
+    def test_a_write_that_is_not_clean_still_writes_over_an_edit(self):
+        """`clean` is the landing's (at_landing._pm_data_store): a backlog.py write keeps
+        committing the record as the worktree holds it."""
+        with open(self.path('BAR'), 'a', encoding='utf-8', newline='\n') as f:
+            f.write('\nedited by hand\n')
+        before = self.head()
+        _, tip = self.store.write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        self.assert_committed(before, tip, [('D', DIR + '/BAR.md')])
+
     # -- races and failures ----------------------------------------------------------------------
 
     def test_a_head_moved_by_another_commit_is_built_on_not_lost(self):
