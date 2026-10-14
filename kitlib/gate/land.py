@@ -26,9 +26,10 @@ tools/land.py).
                  same main branch, remote and landing lock, and still take this landing). With
                  --expect-main given and not the base, it says `main moved on from X to Y; merging
                  onto Y`; it never refuses for that. Then the locked checks: the branch tip ==
-                 --expect-tip, a clean main checkout, no merge in progress, the branch not already
-                 in main, (a lane) every changed path in the lane's globs, every branch commit that
-                 changes an owner-only path the landing would change authored by the owner
+                 --expect-tip, a clean main checkout, an empty stash stack (kitlib.gate.stash: the
+                 repository's, whichever checkout pushed), no merge in progress, the branch not
+                 already in main, (a lane) every changed path in the lane's globs, every branch
+                 commit that changes an owner-only path the landing would change authored by the owner
                  (kitlib.guard.ownercommits; rules of the base merged with the tip's), and the
                  branch's history free of the backlog store's root commit (`ref` and `branch`
                  stores; kitlib.backlog.at_landing). Any miss: REFUSED, the lock released, nothing
@@ -45,7 +46,8 @@ tools/land.py).
                  step left are kept and named), the lock released: FAILED / REFUSED. Never
                  undone once <remote>/<main> holds the merge (someone pushed it while the gate
                  ran): STUCK, and the report says no reset
-  7b unchanged   green: HEAD on main at the merge, no tracked change, no untracked file; else
+  7b unchanged   green: HEAD on main at the merge, no tracked change, no untracked file, the
+                 stash stack still empty; else
                  undone as on red and nothing pushed (the pushed commit is the gated one).
                  Except (adopt): someone committed on top of the merge in the main checkout and
                  pushed while the gate ran: <remote>/<main> == the tracking ref == main, HEAD on
@@ -61,7 +63,10 @@ tools/land.py).
                  is fetched, the lock file and the slot released: OK (LANDED)
   11 close       after the lock: every record the `ref` or `branch` store still holds pulled by
                  the branch is closed with reason `landed <merge>`, one store commit each
-                 (kitlib.backlog.at_landing). A close that fails, or an exception or Ctrl+C here,
+                 (kitlib.backlog.at_landing), and so is every pulled record a `Closes: <ID>`
+                 trailer in `<tip> --not <the main it merged onto>` names, whoever pulled it (a
+                 pull made in the main checkout records main; a live holder outside the batch is
+                 a WARNING: tell its builder). A close that fails, or an exception or Ctrl+C here,
                  is a WARNING naming the command to finish it; the landing stands
   12 cleanup     then each landed branch goes (kitlib.gate.cleanup; docs/gate.md "Branch
                  cleanup"): its remote branch, its worktree (kitlib.worktree.remove, never
@@ -112,7 +117,7 @@ from kitlib import gate as G
 from kitlib.backlog import at_landing
 import kitlib.config as kconfig
 from kitlib.config.types import ConfigError
-from kitlib.gate import cleanup, result, reuse, runner
+from kitlib.gate import cleanup, result, reuse, runner, stash
 from kitlib.gate import detect
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
@@ -434,6 +439,9 @@ class Lander(object):
         if entries:
             return 'the main checkout is not clean: %s' % ', '.join(
                 '%s %s' % (xy.strip(), p) for xy, p in entries[:10])
+        why = stash.refusal(self.root)      # the repository's one stack, whichever checkout pushed
+        if why:
+            return why
         merging, why = refs.merge_in_progress(self.root)
         if merging is not False:
             return why or 'a merge is in progress in the main checkout'
@@ -706,7 +714,8 @@ class Lander(object):
 
     def unchanged(self):
         """None when the main checkout is exactly the merge the gate passed (HEAD on main, main
-        at the merge, no tracked change, no untracked file), else why not."""
+        at the merge, no tracked change, no untracked file) and the repository's stash stack is
+        still empty (kitlib.gate.stash; the locked checks found it empty), else why not."""
         problems = []
         current, _ = refs.current_branch(self.root)
         head, main = self.ref('HEAD'), self.ref(self.main_ref)
@@ -722,6 +731,9 @@ class Lander(object):
                 problems.append('a step changed tracked files: %s' % _paths(tracked))
             if untracked:
                 problems.append('a step left untracked files: %s' % ', '.join(untracked[:10]))
+        stashed = stash.appeared(self.root)
+        if stashed:
+            problems.append(stashed)
         return '; '.join(problems) or None
 
     def gate(self):
@@ -1162,12 +1174,19 @@ class Lander(object):
     def close_pulled(self):
         """After the verified push and the release: close what the branch holds pulled in the
         backlog store (kitlib.backlog.at_landing). The landing stands whatever happens here, so
-        every failure, Ctrl+C included, is a WARNING line and never reaches recover()."""
+        every failure, Ctrl+C included, is a WARNING line and never reaches recover().
+        Each branch's `Closes:` lines are read from its tip down to the main it was merged onto
+        (the batch's previous merge, else the base), so a stacked branch never re-reads the
+        lines of the branch merged before it; the batch's other branches are no holder to tell."""
         self.phase = 'landed'
         lines = []
-        for b in self.branches:
+        stacked = len(self.merges) == len(self.pairs)
+        for i, (b, t) in enumerate(self.pairs):
+            base = self.merges[i - 1] if stacked and i else self.expect_main
             try:
-                lines.extend(at_landing.close_landed(self.root, self.cfg, b, self.merge))
+                lines.extend(at_landing.close_landed(
+                    self.root, self.cfg, b, self.merge, tip=t, base=base,
+                    batch=[o for o in self.branches if o != b]))
             except BaseException as e:
                 what = 'Ctrl+C' if isinstance(e, KeyboardInterrupt) else '%s: %s' % (
                     type(e).__name__, e)

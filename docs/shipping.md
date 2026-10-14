@@ -53,6 +53,7 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   (`tests/skills` checks each exists); `tools/doc_index.py`, `tools/doc_budget.py` and
   `tools/gate.json` are each repository's own.
 - **Lock MCP server** (`mcp/lock_server.py`, docs/lock-mcp.md).
+- **Hub MCP server** (`mcp/hub_server.py`, docs/hub-mcp.md).
 
 ## Stack templates (`templates/`)
 
