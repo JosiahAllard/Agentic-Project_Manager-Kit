@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 from kitlib.config.types import ConfigError
-from kitlib.hubsite import access, auth, backlog, gitsync, httpd, serve, tunnel
+from kitlib.hubsite import access, auth, backlog, client, gitsync, httpd, serve, tunnel
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.api import BASE
 from kitlib.hubsite.store import Store, StoreBusy
@@ -1673,6 +1673,20 @@ class ClientCase(ServeCase):
         self.assertEqual(status, 200, obj)
         self.assertEqual([d.get('via') for d in hub.store.docs('todos').values()],
                          [serve.VIA_CLI])
+        self.assertEqual(self.errors(), [])
+
+    def test_ask_names_the_via_it_is_given_and_a_client_passes_its_own(self):
+        hub = self.build()
+        hub.start()
+        status, obj = serve.ask(hub.port, 'POST', BASE + '/todos', self.owner, {'title': 'a'},
+                                via=serve.VIA_MCP)
+        self.assertEqual(status, 200, obj)
+        c = client.Client(hub.port, tokens=self.tokens, via=serve.VIA_MCP)
+        c.post('/inbox', client.AGENT, {'text': 'b'})
+        self.assertEqual([d.get('via') for d in hub.store.docs('todos').values()],
+                         [serve.VIA_MCP])
+        self.assertEqual([d.get('via') for d in hub.store.docs('inbox').values()],
+                         [serve.VIA_MCP])
         self.assertEqual(self.errors(), [])
 
     def test_ask_tells_a_server_that_is_not_running_from_one_that_is_not_the_hub(self):
