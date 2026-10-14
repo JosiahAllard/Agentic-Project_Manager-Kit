@@ -121,11 +121,12 @@ class RealScrubPatternsTest(unittest.TestCase):
         self.assertIn('sets no scrub_patterns', str(cm.exception))
 
     def shipped_folder(self):
-        """A temp folder of shipped text: one file with a ruling id, a user path and a machine path
-        (each built here, so this file holds none), one clean file."""
+        """A temp folder of shipped text: one file with a ruling id and a user path (each built
+        here, so this file holds none) and a drive path into another folder, which the base
+        patterns do not refuse; one clean file."""
         folder = Path(self.home) / 'shipped'
         folder.mkdir()
-        bad = 'see %s-%d, %s:\\%s\\x and %s:/%s/y\n' % ('R', 7, 'C', 'Users', 'D', 'AgentTemp')
+        bad = 'see %s-%d, %s:\\%s\\x and %s:/%s/y\n' % ('R', 7, 'C', 'Users', 'D', 'Src')
         (folder / 'a.md').write_text(bad, encoding='utf-8')
         (folder / 'b.md').write_text('Nothing specific.\n', encoding='utf-8')
         return folder
@@ -136,8 +137,7 @@ class RealScrubPatternsTest(unittest.TestCase):
             found = shipped.violations(folder, root=Path(self.home))
         except unittest.SkipTest:
             self.fail('base patterns were skipped')
-        self.assertEqual(found, [('shipped/a.md', 'ruling id'), ('shipped/a.md', 'Windows user path'),
-                                 ('shipped/a.md', 'machine path')])
+        self.assertEqual(found, [('shipped/a.md', 'ruling id'), ('shipped/a.md', 'Windows user path')])
         (folder / 'a.md').unlink()
         with self.assertRaises(unittest.SkipTest) as cm:          # clean base scan: the named skip
             shipped.violations(folder, root=Path(self.home))
@@ -150,7 +150,7 @@ class RealScrubPatternsTest(unittest.TestCase):
             found = shipped.scan([('a', (folder / 'a.md').read_text(encoding='utf-8'))])
         except unittest.SkipTest:
             self.fail('base patterns were skipped')
-        self.assertEqual(found, [('a', 'ruling id'), ('a', 'Windows user path'), ('a', 'machine path')])
+        self.assertEqual(found, [('a', 'ruling id'), ('a', 'Windows user path')])
         with self.assertRaises(unittest.SkipTest) as cm:
             shipped.scan([('b', 'Nothing specific.')])
         self.assertIn('sets no scrub_patterns', str(cm.exception))

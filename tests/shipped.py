@@ -5,8 +5,6 @@ import re
 import unittest
 from pathlib import Path
 
-from kitlib.config.user import DEFAULT_MACHINE_FOLDERS
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -35,13 +33,10 @@ def install_patterns(home=None):
     return [(re.compile(p, re.I), "install name") for p in pats]
 
 
-# The machine folders are the kit's default list (kitlib.config.user.DEFAULT_MACHINE_FOLDERS),
-# never the machine config's `machine_folders`: shipped text is checked the same on every machine.
+# The one machine folder is a user profile: the kit codes no other folder name, and the machine
+# config's `machine_path_folders` is not read, so shipped text is checked the same on every machine.
 BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),
-                  (re.compile(r"[A-Za-z]:[\\/]+Users[\\/]", re.I), "Windows user path"),
-                  (re.compile(r"[A-Za-z]:[\\/]+(%s)[\\/]"
-                              % "|".join(re.escape(f) for f in DEFAULT_MACHINE_FOLDERS), re.I),
-                   "machine path")]
+                  (re.compile(r"[A-Za-z]:[\\/]+Users[\\/]", re.I), "Windows user path")]
 
 
 def forbidden(home=None):

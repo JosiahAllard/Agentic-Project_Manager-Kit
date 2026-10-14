@@ -18,7 +18,7 @@ from kitlib.config import owner as ownermod
 from kitlib.git import cmd
 from tests import gitfixture
 from tests.gitfixture import TempRepo
-from tests.home import TempHomeCase, no_machine_owner
+from tests.home import TempHomeCase, machine_config, no_machine_owner
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'commit.py')
@@ -264,11 +264,14 @@ class MessagePieces(unittest.TestCase):
 
     def test_a_machine_path_in_the_message(self):
         drive = 'C:' + '\\'
-        self.assertIsNone(C.machine_path_error('subject', 'body %AGENT_TEMP%\\x'))
-        self.assertIn('machine path', C.machine_path_error('see %sGitHub\\x' % drive, ''))
+        gh = ('GitHub',)
+        self.assertIsNone(C.machine_path_error('subject', 'body %AGENT_TEMP%\\x', folders=gh))
+        self.assertIn('machine path', C.machine_path_error('see %sGitHub\\x' % drive, '', folders=gh))
+        self.assertIsNone(C.machine_path_error('see %sGitHub\\x' % drive, '', folders=()))
         # The typed form is scanned too: `\n` would cut `...\Users\nick` short.
         typed = 'in %sUsers\\nick\\x' % drive
-        self.assertIn('machine path', C.machine_path_error('s', typed.replace('\\n', '\n'), typed))
+        self.assertIn('machine path', C.machine_path_error('s', typed.replace('\\n', '\n'), typed,
+                                                           folders=()))
 
 
 # ---------------------------------------------------------------------------------- end to end
@@ -281,8 +284,8 @@ def _seed(t):
 
 class LinkedCase(TempHomeCase):
     """A throwaway repo with a linked worktree `self.wt` on kit/wt; the commit is made there,
-    under a temp home: the staged machine-path check reads the machine config's machine_folders
-    (kitlib.machinepaths.load_config), and a child started with fixture_env() inherits the home."""
+    under a temp home: the machine-path checks read the machine config's machine_path_folders
+    (kitlib.machinepaths), and a child started with fixture_env() inherits the home."""
 
     def setUp(self):
         super().setUp()
@@ -478,6 +481,30 @@ class ABodyFromAFile(LinkedCase):
 class AMachinePathInTheMessageIsRefused(LinkedCase):
     DRIVE = 'C:' + '\\'
 
+    def setUp(self):
+        super().setUp()
+        machine_config(self.home, {'machine_path_folders': ['GitHub', 'research']})
+
+    def test_the_configured_folder_list_is_the_one_refused(self):
+        self.put('a.py', 'x\n')
+        machine_config(self.home, {'machine_path_folders': ['Src']})
+        head = self.head()
+        code, out = self.commit('see %sSrc\\x' % self.DRIVE, 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('carries a machine path', out)
+        self.assertEqual(self.head(), head)
+        code, out = self.commit('see %sGitHub\\x' % self.DRIVE, 'a.py')
+        self.assertEqual(code, 0, out)
+
+    def test_unset_only_a_user_profile_is_refused(self):
+        machine_config(self.home, {})
+        self.put('a.py', 'x\n')
+        code, out = self.commit('see %sUsers\\someone\\x' % self.DRIVE, 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('carries a machine path', out)
+        code, out = self.commit('see %sSrc\\x' % self.DRIVE, 'a.py')
+        self.assertEqual(code, 0, out)
+
     def test_in_the_subject_and_the_body(self):
         self.put('a.py', 'x\n')
         head = self.head()
@@ -504,6 +531,21 @@ class AMachinePathInTheMessageIsRefused(LinkedCase):
 
 class AStagedMachinePathIsRefused(LinkedCase):
     LINE = 'root = "D:' + '\\\\' + 'GitHub' + '\\\\' + 'kit"\n'
+
+    def setUp(self):
+        super().setUp()
+        machine_config(self.home, {'machine_path_folders': ['GitHub']})
+
+    def test_a_machine_config_it_cannot_read_is_a_warning_and_the_profile_is_still_refused(self):
+        machine_config(self.home, '{not json')
+        self.put('a.py', self.LINE)
+        code, out = self.commit('s', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertIn('WARNING: machine config', out)
+        self.put('b.py', 'p = "D:' + '\\\\' + 'Users' + '\\\\' + 'someone"\n')
+        code, out = self.commit('s', 'b.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('b.py:1: hard-coded machine path', out)
 
     def test_a_staged_hit_is_refused_and_this_calls_additions_are_unstaged(self):
         self.put('ok.py', 'x\n')

@@ -22,9 +22,9 @@ the install's own names stay with `tests/scrub/test_generic.py` and `scrub_patte
 - `hardware`: a GPU model, a CPU family or chiplet, or a total core or thread count of ten or
   more.
 - `drive`: a drive path into one of MACHINE_FOLDERS, the machine folders that tests/shipped.py
-  BASE_FORBIDDEN also refuses (a test checks the two agree): `Users` and the kit's default list,
-  `kitlib.config.user.DEFAULT_MACHINE_FOLDERS`. Neither reads the machine config's
-  `machine_folders`, so the shipped text is checked the same on every machine. It reads tests/
+  BASE_FORBIDDEN also refuses (a test checks the two agree): `Users` only, since the kit codes no
+  other folder name. Neither reads the machine config's `machine_path_folders`, so the shipped
+  text is checked the same on every machine. It reads tests/
   too; other drive paths there are invented fixtures, and `tests/scrub/test_generic.py` refuses every drive path
   outside tests/.
 - `name`: a salted digest in NAME_STORE, hashed the way `kitlib/forbidden` hashes (docs/repo-checks.md,

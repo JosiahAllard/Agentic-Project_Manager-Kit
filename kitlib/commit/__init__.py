@@ -12,10 +12,12 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   (UTF-8, a BOM dropped, CRLF made LF; empty, unreadable or not UTF-8 is a usage error). A `-b`
   whose whole value is one line naming an existing file, or shaped like an absolute path, is a
   usage error: pass --body-file.
-- A machine path in the subject or body is refused (kitlib.machinepaths.find); an
-  --owner-authored commit is exempt. A machine path in the STAGED copy of a file the commit would
-  record is refused by kitlib.machinepaths.scan_staged under the repository's own "machine_paths"
-  config, with no --owner-authored exemption; the paths this call staged are unstaged again.
+- A machine path in the subject or body is refused (kitlib.machinepaths.find, over the machine
+  config's `machine_path_folders` and a user profile); an --owner-authored commit is exempt. A
+  machine path in the STAGED copy of a file the commit would record is refused by
+  kitlib.machinepaths.scan_staged under the repository's own "machine_paths" config, with no
+  --owner-authored exemption; the paths this call staged are unstaged again. A machine config the
+  kit cannot read is a WARNING, and user-profile paths are still refused.
 - Anything ELSE already staged is refused (it may be another session's), with one exception: with
   .kit.json "commit".merge_fold, during a merge in progress (one MERGE_HEAD), the files the merge
   staged itself (merge_owned), so only the resolved conflicts are named.
@@ -411,12 +413,16 @@ def message_body(b, body_file, root, cwd):
     return b.replace('\\n', '\n').replace('~~', '\n'), None
 
 
-def machine_path_error(subject, body, typed=''):
+def machine_path_error(subject, body, typed='', folders=None):
     """The refusal when the subject or body carries a machine path, else None. `typed` is -b as
-    typed, scanned too: the `\\n` conversion cuts a `<drive>:\\Users\\nick` path short."""
+    typed, scanned too: the `\\n` conversion cuts a `<drive>:\\Users\\nick` path short. `folders`
+    are the drive-rooted folder names refused besides a user profile (None: the machine config's,
+    machinepaths.folders(); one it cannot read refuses user-profile paths only)."""
+    if folders is None:
+        folders = machinepaths.folders()[0]
     found = []
     for text in (subject, typed, body):
-        found += [f for f in machinepaths.find(text) if f not in found]
+        found += [f for f in machinepaths.find(text, folders) if f not in found]
     if not found:
         return None
     return ('refused: the commit message carries a machine path: %s. '
@@ -438,20 +444,24 @@ def unstage_added(root, rels, status_before, lines):
 def staged_machine_path_error(root, status_after, status_before):
     """`(refusal lines or None, warning lines)`: kitlib.machinepaths.scan_staged over the STAGED
     copy of every staged file but a deletion. Fail-closed: an index that cannot be read, a staged
-    path with no blob, or a refused config is a refusal too. Every refusal unstages the paths this
-    call staged that were not staged before it."""
+    path with no blob, or a refused config is a refusal too. A machine config the kit cannot read
+    is not: its WARNING leads the warning lines. Every refusal unstages the paths this call staged
+    that were not staged before it."""
     rels = sorted(p for p, s in status_after.items() if s != 'D')
     staged = sorted(status_after)
+    note = []
     try:
-        got = machinepaths.scan_staged(root, rels)
+        cfg = machinepaths.load_config(root)
+        note = [cfg.note] if cfg.note else []
+        got = machinepaths.scan_staged(root, rels, cfg)
     except kconfig.ConfigError as e:
         got = (None, 'its .kit.json "machine_paths" config is refused: %s' % e)
     if got[0] is None:
-        return unstage_added(root, staged, status_before, [
+        return unstage_added(root, staged, status_before, note + [
             'refused: the staged files could not be checked for a machine path: %s.'
             % got[1]]), []
     hits, _used, read, skipped = got
-    warnings = machinepaths.skipped_lines(skipped)
+    warnings = note + machinepaths.skipped_lines(skipped)
     if not hits:
         return None, warnings
     lines = warnings + machinepaths.hit_lines(hits, len(read))

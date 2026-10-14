@@ -8,8 +8,9 @@ tracked file, and every untracked file git does not ignore, is read from the WOR
 in progress counts) and searched for
 
   - a drive-rooted machine folder: `<drive>:` then `\`, `\\` or `/`, then one of the folder
-    names folders() gives - the machine config's `machine_folders` (kitlib.config.user), else
-    DEFAULT_FOLDERS (`GitHub`, `research`, `AgentTemp`);
+    names folders() gives - the machine config's `machine_path_folders` (kitlib.config.user).
+    The kit codes no folder name (DEFAULT_FOLDERS is empty): unset, no drive-rooted folder is
+    searched and check() prints a NOTE saying so;
   - a drive-rooted user profile: `<drive>:` + separator + `Users` + separator + a name, which
     covers every `AppData`, `Documents` and `.claude` path under one. A placeholder name in angle
     brackets or a `%VAR%` is not a name and never matches.
@@ -36,11 +37,11 @@ Not searched: a file listed but gone from the working tree, files outside `scan`
 `known_binary`. Any OTHER file this cannot search - binary (a NUL in its first 8 KiB), over 4 MiB,
 or unreadable - is a WARNING naming it, so a skip is never silent.
 
-A machine config the kit cannot read does not stop the check: the default folders are searched
-and a WARNING (naming no value from the file) says so, never NOT CHECKED.
+A machine config the kit cannot read does not stop the check: user-profile paths are still
+searched and a WARNING (naming no value from the file) says so, never NOT CHECKED.
 
 find(text, folders=None) is the same search over one string and reads no configuration: `folders`
-names the folders (default DEFAULT_FOLDERS). scan_staged(root, rels)
+names the folders (default none: a user profile only). scan_staged(root, rels)
 is the same rule over the STAGED copies (the index) of `rels`, in one `git cat-file --batch`;
 kitlib.commit runs it on every file it is about to commit. It fails closed: an index git cannot
 read, or a named path with no staged blob, is `(None, why)`.
@@ -59,7 +60,7 @@ from kitlib.config import user as kuser
 from kitlib.git import batch, cmd
 
 SEP = r'(?:\\\\|\\|/)+'
-DEFAULT_FOLDERS = kuser.DEFAULT_MACHINE_FOLDERS
+DEFAULT_FOLDERS = ()
 _PATTERNS = {}
 
 
@@ -69,7 +70,8 @@ def pattern(folders):
     key = tuple(folders)
     got = _PATTERNS.get(key)
     if got is None:
-        named = r'(?:%s)\b|' % '|'.join(re.escape(f) for f in key) if key else ''
+        # (?![A-Za-z0-9_]), not \b: a name ending in a symbol (`C#`) has no word boundary after it.
+        named = r'(?:%s)(?![A-Za-z0-9_])|' % '|'.join(re.escape(f) for f in key) if key else ''
         got = _PATTERNS[key] = re.compile(
             r'(?<![A-Za-z0-9])[A-Za-z]:' + SEP +
             r'(?:' + named + r'Users' + SEP + r'[^\\/\s\'"`<>%$*]+)',
@@ -86,7 +88,7 @@ OK, FAILED, NOT_CHECKED = 0, 1, 2
 
 Allow = collections.namedtuple('Allow', 'glob line_re hit_re reason temporary')
 # folders: the drive-rooted folder names searched (None: DEFAULT_FOLDERS); note: the WARNING line
-# when the machine config could not be read, else None.
+# when the machine config could not be read, else None (check() adds the NOTE for an unset list).
 Config = collections.namedtuple('Config', 'allow known_binary scan fallback folders note',
                                 defaults=(None, None))
 
@@ -145,14 +147,14 @@ def from_section(data, where='.kit.json "%s"' % SECTION):
 
 
 def folders(home=None):
-    """(folder names, note): the machine config's `machine_folders` (else DEFAULT_FOLDERS) and
-    None; or, when the machine config cannot be read, DEFAULT_FOLDERS and a WARNING line that
-    names no value from the file. HomeFenced is a BaseException and is never caught here."""
+    """(folder names, note): the machine config's `machine_path_folders` (unset: none) and None;
+    or, when the machine config cannot be read, no folder names and a WARNING line that names no
+    value from the file. HomeFenced is a BaseException and is never caught here."""
     try:
-        return kuser.machine_folders(home), None
+        return kuser.machine_path_folders(home), None
     except ConfigError:
-        return DEFAULT_FOLDERS, ('WARNING: machine config %s could not be read, so the default '
-                                 'machine folders were searched - run tools/preflight.py to see '
+        return DEFAULT_FOLDERS, ('WARNING: machine config %s could not be read, so only '
+                                 'user-profile paths were searched - run tools/preflight.py to see '
                                  'what it refuses' % kuser.DISPLAY)
 
 
@@ -196,7 +198,7 @@ def allowed(allow, rel, line, hit):
 
 def find(text, folders=None):
     """Every machine path in `text`, as matched strings, for the drive-rooted folder names
-    `folders` (default DEFAULT_FOLDERS). Reads no configuration."""
+    `folders` (default none: user-profile paths only). Reads no configuration."""
     rx = MACHINE_PATH if folders is None else pattern(folders)
     return [m.group(0) for m in rx.finditer(text or '')]
 
@@ -302,6 +304,19 @@ def stale_lines(cfg, used, read):
     return out
 
 
+UNSET_NOTE = ('NOTE: the machine config sets no "machine_path_folders", so only drive-rooted '
+              'user-profile paths were searched - name the folders of this machine there '
+              '(docs/commit.md "machine_paths.py")')
+
+
+def note_lines(cfg):
+    """The config's WARNING when the machine config could not be read; else UNSET_NOTE when it
+    names no folder; else nothing."""
+    if cfg.note:
+        return [cfg.note]
+    return [] if cfg.folders else [UNSET_NOTE]
+
+
 def check(root):
     """The tree sweep: `(code, lines)` with code OK, FAILED or NOT_CHECKED (module docstring)."""
     try:
@@ -316,7 +331,7 @@ def check(root):
                              % (root, e)]
     if not read:
         return NOT_CHECKED, ['MACHINE PATHS NOT CHECKED: no file was read under %s' % root]
-    lines = ([cfg.note] if cfg.note else []) + skipped_lines(skipped) + \
+    lines = note_lines(cfg) + skipped_lines(skipped) + \
         stale_lines(cfg, used, read) + hit_lines(hits, len(read))
     if hits:
         return FAILED, lines

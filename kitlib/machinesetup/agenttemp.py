@@ -27,7 +27,7 @@ SWEEP = os.path.join('optional', 'agenttemp', 'agent_temp_sweep.py')
 
 
 def default_agent_temp(kit):
-    """`<drive of kit>\\AgentTemp` (kitlib.config.user.TEMP_DIR_NAME), or None for a kit with no
+    """`<drive of kit>\\kit-temp` (kitlib.config.user.TEMP_DIR_NAME), or None for a kit with no
     drive letter (a UNC path). Makes nothing."""
     drive = os.path.splitdrive(os.path.abspath(kit))[0]
     if len(drive) != 2 or drive[1] != ':':

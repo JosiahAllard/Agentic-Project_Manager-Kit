@@ -11,7 +11,7 @@ import datetime
 
 from kitlib import kitroot
 from kitlib.git import cmd, refs
-from kitlib.machinepaths import find as find_machine_paths
+from kitlib import machinepaths
 
 from . import ledger as lmod
 from . import offer as omod
@@ -126,10 +126,14 @@ def clears_owner_blocker(rec, after):
 
 def refuse_machine_paths(field, *texts):
     """Usage when free text carries a machine path: it reaches a record or a commit subject, and
-    history cannot be fixed once it lands (commit.machine_path_error, same rule)."""
+    history cannot be fixed once it lands (commit.machine_path_error, same rule: the machine
+    config's `machine_path_folders` and a user profile). Empty texts read no machine config."""
+    if not any(texts):
+        return
+    folders = machinepaths.folders()[0]
     found = []
     for t in texts:
-        found += [f for f in find_machine_paths(t or '') if f not in found]
+        found += [f for f in machinepaths.find(t or '', folders) if f not in found]
     if found:
         raise Usage('refused: `%s` carries a machine path: %s. tools/machine_paths.py fails a '
                     'file with one. Write %%VAR%%\\... (the variable that applies), or leave it out.'

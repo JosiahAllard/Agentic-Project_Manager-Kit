@@ -379,19 +379,22 @@ class TheChecks(unittest.TestCase):
             'docs/a.md:2: ' + j('Inte', 'l Core i7') + ' (hardware)',
             'docs/a.md:3: ' + j('RT', 'X 3080') + ' (hardware)'])
 
-    def test_a_drive_path_into_a_machine_folder_is_found_in_tests_too(self):
+    def test_a_drive_path_into_a_user_profile_is_found_in_tests_too(self):
+        # The scrub reads no configuration, and the kit codes no machine folder list (the machine
+        # config's machine_path_folders): only a user profile is a machine folder here.
         bs = chr(92)
         files = {'tests/x/test_y.py': '\n'.join([
-            j('a = "', 'Z', ':', bs * 2, 'Git', 'Hub', bs * 2, 'repo"'),
-            j('b = "', 'z', ':/', 're', 'search/x"'),
-            j('c = "', 'C', ':/', 'us', 'ers/x and ', 'D', ':/', 'Agent', 'Temp"'),
+            j('a = "', 'Z', ':', bs * 2, 'Src', bs * 2, 'repo"'),
+            j('b = "', 'z', ':/', 'us', 'ers', bs, 'x"'),
+            j('c = "', 'C', ':/', 'us', 'ers/x and ', 'D', ':/', 'kit', '-temp"'),
             j('d = "', 'D', ':/src/alpha", "', 'C', ':/', 'Users', 'x/y"'),
             ''])}
         self.assertEqual(self.found(files), [
-            'tests/x/test_y.py:1: ' + j('Z', ':', bs * 2, 'Git', 'Hub') + ' (drive)',
-            'tests/x/test_y.py:2: ' + j('z', ':/', 're', 'search') + ' (drive)',
-            'tests/x/test_y.py:3: ' + j('C', ':/', 'us', 'ers') + ' (drive)',
-            'tests/x/test_y.py:3: ' + j('D', ':/', 'Agent', 'Temp') + ' (drive)'])
+            'tests/x/test_y.py:2: ' + j('z', ':/', 'us', 'ers') + ' (drive)',
+            'tests/x/test_y.py:3: ' + j('C', ':/', 'us', 'ers') + ' (drive)'])
+
+    def test_the_scrub_codes_no_folder_but_a_user_profile(self):
+        self.assertEqual(scrub.MACHINE_FOLDERS, ('Users',))
 
     def test_machine_folders_agree_with_the_shipped_text_scrub(self):
         import re

@@ -16,8 +16,8 @@ Classes (CLASSES, each `(name, regex, in_tests)`):
   (test fixtures need invented hashes); NOT_HASHES (git's empty tree, the hex alphabet) pass.
 - `hardware`: one machine's parts (a GPU model, a CPU family or its chiplet, a total core or
   thread count of ten or more).
-- `drive`: a drive path whose first folder is one of MACHINE_FOLDERS, the machine folders
-  tests/shipped.py BASE_FORBIDDEN also refuses. Other drive paths (an invented source root)
+- `drive`: a drive path whose first folder is one of MACHINE_FOLDERS (a user profile), the
+  machine folders tests/shipped.py BASE_FORBIDDEN also refuses. Other drive paths (an invented source root)
   are the fixtures tests need; test_generic refuses every drive path outside tests/.
 - `name`: a window of the normalised text hashes to one of NAME_STORE's digests.
 
@@ -36,7 +36,6 @@ import fnmatch
 import re
 
 from kitlib import forbidden
-from kitlib.config.user import DEFAULT_MACHINE_FOLDERS
 
 GENDER = re.compile(r'\bh(?:e|is|im|imself)\b', re.I)
 RECORD_ID = re.compile(r'(?<![A-Za-z0-9_-])[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+(?![A-Za-z0-9_])')
@@ -76,9 +75,10 @@ HARDWARE = re.compile(
     r'|\b[1-9]\d+(?:\s+|-)(?:core[s]?|(?:hardware\s+)?thread[s]?)\b')
 # The machine folders a drive path must not lead into (tests/shipped.py BASE_FORBIDDEN refuses
 # the same ones in shipped text; tests/scrub/test_builtin.py checks the two agree): a user
-# profile and the kit's default machine folders, never the machine config's `machine_folders`, so
-# the scrub reads no configuration and finds the same on every machine.
-MACHINE_FOLDERS = ('Users',) + DEFAULT_MACHINE_FOLDERS
+# profile only. The kit codes no other folder name, and the machine config's
+# `machine_path_folders` is not read here, so the scrub reads no configuration and finds the same
+# on every machine; a configured folder is refused by tools/machine_paths.py and the commit check.
+MACHINE_FOLDERS = ('Users',)
 DRIVE = re.compile(r'(?<![A-Za-z0-9_?%$])[A-Za-z]:(?:\\|/)+(?:'
                    + '|'.join(re.escape(f) for f in MACHINE_FOLDERS) + r')(?![A-Za-z0-9_])', re.I)
 

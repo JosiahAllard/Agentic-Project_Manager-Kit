@@ -102,7 +102,7 @@ class Commit(Case):
 
     def setUp(self):
         super().setUp()
-        # commit's staged machine-path check reads the machine config's machine_folders
+        # commit's staged machine-path check reads the machine config's machine_path_folders
         temp_home(self)
 
     def commit(self):

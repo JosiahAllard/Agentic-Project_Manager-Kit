@@ -8,6 +8,7 @@ import unittest
 from kitlib.backlog.errors import NotFound, Refusal, Usage
 
 from tests.backlog.helpers import ADD_NONE, BRANCH, TODAY, StoreCase, priced, rec
+from tests.home import machine_config
 
 OWNER_PRICED = dict(priority='2', priority_by='owner', priority_ruling='R-9001')
 OWNER_BLOCKED = dict(state='blocked', blocked_on='owner', owner_ask='which one?')
@@ -300,6 +301,14 @@ class MachinePaths(VerbCase):
             with self.subTest(drive=d):
                 self.refused('set', 'FOO', [('summary', ['a clean replacement summary'])],
                              body='notes at %s here\n' % d)
+
+    def test_the_machine_configs_folder_list_is_refused_too(self):
+        self.seed(priced('FOO'))
+        src = 'D:' + chr(92) + 'Src' + chr(92) + 'x'
+        self.verb('set', 'FOO', [('summary', ['see %s first' % src])])
+        machine_config(self.home, {'machine_path_folders': ['Src']})
+        self.refused('set', 'FOO', [('summary', ['see %s again' % src])])
+        self.refused('close', 'FOO', 'done, see %s' % self.DRIVES[0])
 
     def test_a_refused_close_leaves_the_record_and_clean_text_still_closes(self):
         self.seed(priced('FOO'))
