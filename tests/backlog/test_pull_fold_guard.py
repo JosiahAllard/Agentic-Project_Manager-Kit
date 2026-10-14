@@ -159,13 +159,17 @@ class PullFold(_Branches):
                       change.lines)
         self.assertEqual(self.get('FOO').get('state'), 'pulled')
 
-    def test_a_live_branch_with_no_merge_base_fails_closed(self):
-        self.branch_with('kit/orphan', 'elsewhere.txt', orphan=True)
+    def test_a_live_branch_with_no_merge_base_is_noted_and_skipped(self):
+        # No history shared with the code main: the code main is not this branch's history (a
+        # store whose code_main is unset), the same case as a code main that does not resolve.
+        self.branch_with('kit/orphan', 'docs/y.md', orphan=True)
         self.seed(held('ORPH', 'kit/orphan', 'docs/orph.md'), priced('FOO', scope='docs/y.md'))
-        with self.assertRaises(Failure) as cm:
-            self.verb('pull', 'FOO')
-        self.assertIn('kit/orphan', str(cm.exception))
-        self.assertEqual(self.get('FOO').get('state'), 'open')
+        change = self.verb('pull', 'FOO')
+        base = refs.default_base(self.repo.root, 'origin', 'main')[0]
+        self.assertIn('NOTE: code main %s shares no history with kit/orphan; set '
+                      'backlog.code_main; branch diffs not compared' % base, change.lines)
+        self.assertEqual(self.get('FOO').get('state'), 'pulled')
+        self.assertIsNone(change.ruling)
 
     def assert_git_failure(self):
         self.seed(priced('FOO', scope='docs/y.md'))

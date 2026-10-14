@@ -338,11 +338,11 @@ def _overlaps(scopes, others, source):
     return out
 
 
-def _diff_hits(ctx, branch, tip, scopes, base=None):
+def _diff_hits(ctx, branch, tip, scopes, base=None, mb=None):
     """An overlap line for each member of `scopes` that overlaps a path `branch` (at `tip`)
     changed since its merge base with the code main; one that cannot be compared counts."""
     hits = []
-    for path in _branch_changes(ctx, branch, tip, base):
+    for path in _branch_changes(ctx, branch, tip, base, mb):
         hits += _overlaps(scopes, [path], '(changed on %s)' % branch)
     return hits
 
@@ -362,8 +362,10 @@ def _pull_fold_hits(ctx, scopes, holding, branch):
     overlaps of `scopes` with the paths each live pull's branch in `holding` changed since its
     merge base with the code main, the caller's `branch` (any letter case) and its own pulls
     aside; each branch is diffed once. A code main that does not resolve here (a store whose git
-    is not the code's) skips every diff with a NOTE; a live branch only a remote has is noted, not
-    compared. Failure when git cannot read a ref, find a merge base or diff."""
+    is not the code's) skips every diff with a NOTE, and so does a live branch that shares no
+    history with it (the code main is not that branch's history: backlog.code_main unset); a live
+    branch only a remote has is noted, not compared. Failure when git cannot read a ref, cannot
+    answer the merge-base question, or cannot diff."""
     names = []
     for other in holding:
         name = other.get('pulled_by') or ''
@@ -383,7 +385,14 @@ def _pull_fold_hits(ctx, scopes, holding, branch):
             notes.append('NOTE: branch %s is not a local branch (only on %s); its diff was not '
                          'compared' % (name, ', '.join(_remotes_with(ctx, name)) or 'a remote'))
             continue
-        hits += _diff_hits(ctx, name, tip, scopes, (base, sha))
+        mb, why = refs.merge_base(sha, tip, ctx.root)
+        if mb is None:
+            raise Failure('cannot find the merge base of %s and %s: %s' % (name, base, why))
+        if not mb:
+            notes.append('NOTE: code main %s shares no history with %s; set backlog.code_main; '
+                         'branch diffs not compared' % (base, name))
+            continue
+        hits += _diff_hits(ctx, name, tip, scopes, (base, sha), mb)
     return hits, notes
 
 
@@ -402,16 +411,18 @@ def _fold_message(rid, hits, form):
                    'ruling: `%s`' % (rid, where, '\n  '.join(hits), where, where, form))
 
 
-def _branch_changes(ctx, branch, tip, base=None):
+def _branch_changes(ctx, branch, tip, base=None, mb=None):
     """The paths `branch` changed since its merge base with the code main (no rename pairing,
     so a rename names both paths). `base` is `(rev, sha)` when the caller already resolved the
-    code main."""
+    code main, `mb` the merge base when it already found it."""
     key = 'set `backlog.code_main` in .kit.json to the branch code lands on'
     base, sha = base or _code_main(ctx)
     if not sha:
         raise Failure('the code main `%s` does not resolve here, so the diff of %s cannot be '
                       'measured: %s' % (base, branch, key))
-    mb, why = refs.merge_base(sha, tip, ctx.root)
+    why = None
+    if not mb:
+        mb, why = refs.merge_base(sha, tip, ctx.root)
     if mb is None:
         raise Failure('cannot find the merge base of %s and %s: %s' % (branch, base, why))
     if not mb:
