@@ -1,8 +1,8 @@
 """kitlib.hubsite.migrate: copy the earlier Action Hub's documents into the hub store.
 
-A source is a folder of <collection>/<id>.json files: the mirror folder (kitlib.hubmirror) or an
-ArtifactData out_dir export of one account's copy. Both spellings of a document are read, the
-bare fields and the wrapped one, through kitlib.hubmirror.fields_of.
+A source is a folder of <collection>/<id>.json files: the old hub's data folder (hub/ in the PM data
+worktree) or an ArtifactData out_dir export of one account's copy. Both spellings of a document
+are read, the bare fields and the wrapped one, through fields_of.
 
   migrate(root, sources, dry_run=False)  -> Result   copy the sources' documents into the store
   validate(root)                         -> [Finding] the store's findings, read only, no lock
@@ -69,11 +69,13 @@ import json
 import os
 import re
 
-from kitlib import hubmirror, hubvalidate
+from kitlib import hubvalidate
 
 from . import schema
 from . import store as hubstore
 
+# A wrapped out_dir document: a `data` object plus only these keys (fields_of).
+WRAPPER_KEYS = frozenset(('data', 'id', 'version', 'doc_id', 'collection'))
 LOCK_WINDOW = 'lock-window'         # the `kind` of an inbox document that is a lock-window notice
 # the fields whose time says how new a document is, for a conflict's `later`
 STAMPS = ('updated_at', 'done_at', 'asked_at')
@@ -162,6 +164,36 @@ def _doc_files(folder):
     return out
 
 
+class NotADocument(ValueError):
+    """A source file that cannot be read as one document; the message says why."""
+
+
+def fields_of(collection, obj):
+    """The document's own fields from one ArtifactData out_dir file or one old-hub data file. An
+    object whose `data` is an object and whose other keys are all in WRAPPER_KEYS (none at all
+    included) is a wrapped document and gives its `data`. An object with a `data` object beside
+    any other key is refused (NotADocument): it is either a wrapper with keys this module does not
+    know or a document with a `data` field, and reading the wrong one would store nested garbage
+    (no hub collection has a `data` field, docs/action-hub.md). Otherwise the object is the
+    fields. `id` and `version` are never kept: a document's id is its file name."""
+    if not isinstance(obj, dict):
+        raise NotADocument('a %s document is not a JSON object' % collection)
+    if isinstance(obj.get('data'), dict):
+        extra = sorted(set(obj) - WRAPPER_KEYS)
+        if extra:
+            raise NotADocument(
+                'a %s document has a `data` object beside %s: cannot tell a wrapped ArtifactData '
+                'document from one with a `data` field, so it was not read. If these are '
+                "ArtifactData's own keys, add them to kitlib.hubsite.migrate.WRAPPER_KEYS"
+                % (collection, ', '.join(extra)))
+        out = dict(obj['data'])
+    else:
+        out = dict(obj)
+    out.pop('version', None)
+    out.pop('id', None)
+    return out
+
+
 def _read_json(path):
     with open(path, encoding='utf-8-sig') as f:
         return json.load(f)
@@ -170,7 +202,7 @@ def _read_json(path):
 def _misplaced(coll, doc_id, obj):
     """Why the file's own keys name another document than its path coll/doc_id, or ''. A wrapped
     document's `id`, `doc_id` and `collection`, the `id` inside its `data`, and a bare document's
-    `id` are not stored (hubmirror.fields_of): one that disagrees with the path would be dropped
+    `id` are not stored (fields_of): one that disagrees with the path would be dropped
     unseen. A whole number is read as its text: the `id` 7 names the file 7.json."""
     if not isinstance(obj, dict):
         return ''
@@ -217,8 +249,8 @@ def read_source(src):
                     continue
                 try:
                     obj = _read_json(path)
-                    fields = hubmirror.fields_of(name, obj)
-                except (OSError, ValueError, hubmirror.Refused) as e:
+                    fields = fields_of(name, obj)
+                except (OSError, ValueError) as e:
                     skipped.append(Skipped(src, rel, 'cannot be read as a document: %s' % e))
                     continue
                 why = _misplaced(name, doc_id, obj)
