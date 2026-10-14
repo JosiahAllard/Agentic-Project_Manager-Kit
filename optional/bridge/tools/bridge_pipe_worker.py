@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+import kitlib  # noqa: E402,F401  (installs the CreateProcess hook before anything starts)
 
 from optional.bridge.core.jsonwire import encode_frame
 from optional.bridge.win.worker import pipe_write
