@@ -161,7 +161,11 @@ class LandingRefuses(_Stack, LandCase):
         self.assertTrue(out.lines[0].startswith('REFUSED: the stash stack is not empty'), out.lines)
         self.assertTrue(out.lines[0].endswith('; nothing was merged'), out.lines)
         self.assert_untouched(out, G.REFUSED)
-        self.assertEqual(self.store.history_records(1), [])          # the merged gate never ran
+        # the landing's one turn (booked before the locked checks, since the landing queue) and
+        # given back; the merged gate, which runs in that slot, never ran (no GATE verdict line)
+        self.assertEqual([c.get('priority') for c in self.book_calls], ['land'], self.book_calls)
+        self.assertEqual([r['slug'] for r in self.store.history_records(1)], ['kit-feature'])
+        self.assertFalse([l for l in out.lines if l.startswith('GATE ')], out.lines)
 
     def test_an_entry_made_in_a_linked_worktree_refuses_the_landing(self):
         wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
@@ -186,6 +190,8 @@ class LandingRefuses(_Stack, LandCase):
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertEqual(self.remote_main(), out.merge)
+        # the control for the refusal's check: a merged gate that ran prints its GATE verdict
+        self.assertIn('GATE OK', out.lines)
 
     def test_an_entry_made_while_the_merged_gate_ran_undoes_the_merge(self):
         """A green merged gate, a clean main checkout at the merge, and a stash entry that was not
