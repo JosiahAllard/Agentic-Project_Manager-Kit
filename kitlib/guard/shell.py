@@ -19,6 +19,8 @@ Deliberate departures from the shells, all toward reading what a Windows user me
 import os
 import re
 
+from kitlib.config import user as kuser
+
 from . import paths
 
 BASH, PS, CMD = 'bash', 'ps', 'cmd'
@@ -855,7 +857,9 @@ def resolve_path(p, cwd, shell=None):
     """`p` (a word's text) as an absolute normalised path, or None when the text cannot tell (a
     drive-relative C:x, ~user, a rooted \\x with no cwd to take the drive from). With `shell` PS,
     `FileSystem::<abs>` is <abs> and any other provider or a drive not named by one ASCII letter
-    is None (ps_unplaceable); bash and cmd text is read as it always was."""
+    is None (ps_unplaceable); bash and cmd text is read as it always was. A leading `~` or `~/`
+    is the home folder kitlib.config.user.home_dir() gives, so the tests' home fence applies
+    (docs/test-tools.md "Home fence")."""
     if not p:
         return None
     if shell == PS:
@@ -866,7 +870,7 @@ def resolve_path(p, cwd, shell=None):
             return None
     if p.startswith('~'):
         if p == '~' or p[1:2] in ('/', '\\'):
-            p = os.path.expanduser('~') + p[1:]
+            p = kuser.home_dir() + p[1:]
         else:
             return None
     p = msys_to_win(p)

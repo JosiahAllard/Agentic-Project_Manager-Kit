@@ -3,8 +3,11 @@ Quoted text is not a command or a redirect; cd chains move the working directory
 redirects, here-docs, here-strings and command substitutions are seen; an unclosed quote marks
 the parse unclean so the fallback patterns run."""
 import unittest
+from unittest import mock
 
+from kitlib.config import user as kuser
 from kitlib.guard import shell as s
+from tests.home import fence_decoy
 
 CWD = 'D:\\w'
 
@@ -60,6 +63,38 @@ class Tokeniser(unittest.TestCase):
             with self.subTest(text=text):
                 p, _ = cmds(text, s.BASH)
                 self.assertEqual(p.unclean, ['an unclosed quote'])
+
+
+ROUTED = 'C:\\routed-home'
+
+
+class HomeTilde(unittest.TestCase):
+    """resolve_path reads a leading `~` as the folder kitlib.config.user.home_dir() gives, so a
+    guard test that reaches a `~` path with the real home meets the home fence instead of reading
+    the real home (docs/test-tools.md "Home fence")."""
+
+    def test_tilde_is_the_folder_home_dir_gives(self):
+        with mock.patch.object(kuser, 'home_dir', return_value=ROUTED) as home_dir:
+            for shell in (None, s.BASH, s.PS, s.CMD):
+                with self.subTest(shell=shell):
+                    self.assertEqual(s.resolve_path('~', CWD, shell), ROUTED)
+                    self.assertEqual(s.resolve_path('~/a/b', CWD, shell), ROUTED + '\\a\\b')
+                    self.assertEqual(s.resolve_path('~\\a', CWD, shell), ROUTED + '\\a')
+                    self.assertIsNone(s.resolve_path('~user/a', CWD, shell))
+        self.assertTrue(home_dir.called)
+
+    def test_tilde_meets_the_fence(self):
+        fence_decoy(self)
+        for text in ('~', '~/a', '~\\a'):
+            with self.subTest(text=text):
+                with self.assertRaises(kuser.HomeFenced):
+                    s.resolve_path(text, CWD)
+        self.assertEqual(s.resolve_path('C:\\m\\x', CWD), 'C:\\m\\x')
+
+    def test_a_cd_to_tilde_meets_the_fence(self):
+        fence_decoy(self)
+        with self.assertRaises(kuser.HomeFenced):
+            cmds('cd ~/a && echo x > f', s.BASH)
 
 
 if __name__ == '__main__':
