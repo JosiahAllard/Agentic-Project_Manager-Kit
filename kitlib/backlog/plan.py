@@ -375,6 +375,9 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
     - A result of `priority_by: agent` drops `priority_ruling`.
     - `state: pulled` is entered only by `pull` and left only by `release`.
     - `hold_ruling` R re-cites the record's hold ruling to R and changes nothing else.
+    - On a pulled record, `scope` members no old member covers (widened_members) that collide
+      with a live pull need `--ruling` (the commit's `Ruling:` line), and that ruling covers the
+      widening alone. Narrowing, and widening into free scope, are free.
     """
     for key, vals in changes:
         refuse_machine_paths('--' + key, *vals)
@@ -433,7 +436,23 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
     released_minus_one = rec.get('priority') == rmod.OWNER_PRIORITY and \
         get('priority') != [rmod.OWNER_PRIORITY]
     releases = unheld or released_minus_one
-    if ruling is not None:
+    widen_hits = []
+    if 'scope' in keys and was_pulled:
+        added = widened_members(rec.all('scope'), get('scope'))
+        if added:
+            holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
+            widen_hits = live_hits(added, holding, skip=rid, branch=rec.get('pulled_by'))
+    if widen_hits:
+        if ruling is None:
+            raise Refusal('`%s` is pulled, and this widens its scope into a live pull: %s. '
+                          'Narrowing is free; widening into a live pull takes `--ruling R-nnnn`, '
+                          'citing the PM\'s ruling that allows it' % (rid, '; '.join(widen_hits)))
+        if priced or releases:
+            raise Usage('`--ruling %s` would allow both this scope widening and %s. One ruling, '
+                        'one change: widen the scope in its own `set`'
+                        % (ruling, 'a price move' if priced else 'an owner-hold release'))
+        _check_ruling(rid, rec, ruling, 'set', hold_only=True)
+    elif ruling is not None:
         if not priced and not releases:
             raise Usage('`--ruling %s` was given, and this write moves no price and releases no '
                         'owner hold: there is nothing for it to record' % ruling)
@@ -467,6 +486,7 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
                                            ' / '.join(rmod.values(pairs, key)) or '(absent)'))
     if body is not None:
         lines.append('  body:       replaced (%d bytes)' % len(body.encode('utf-8')))
+    lines += ['  widened into a live pull on %s: %s' % (ruling, h) for h in widen_hits]
     if dropped is not None:
         lines.append('  priority_ruling %s dropped: `priority_by: agent` carries no ruling' % dropped)
     acts = [a for a, on in (('priority', priced), ('unblock', unheld),
@@ -679,7 +699,9 @@ def plan_unpark(snap, ctx, rid, ruling=None):
 def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     """Take an open, priced record and record the branch. One in `next`'s offer pulls plainly;
     one outside it needs `--reason` and records `preempt` and the `displaced` offer, computed
-    here. A `priority: -1` record needs `--ruling` (a hold release). An unmet `requires:` refuses.
+    here. A `priority: -1` record needs `--ruling` (a hold release). One whose scope collides with
+    a live pull on another branch (one on the caller's branch is no collision) needs `--reason` and `--ruling` (the PM's ruling, cited in `preempt`); one ruling
+    covers a `-1` record that also collides. An unmet `requires:` refuses.
     A pulled record refuses, unless its pull is dead and it is this session's: see
     `_plan_takeover`."""
     refuse_machine_paths('--reason', reason)
@@ -714,12 +736,19 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     branch = ctx.current_branch()
     offers, passed, holding = current_offer(snap, ctx)
     offered = rec in [o.rec for o in offers]
+    hits = live_hits(rec.all('scope'), holding, skip=rid, branch=branch)
     if not offered and reason is None:
         raise Refusal('`%s` is not in `next`\'s offer - %s. An out-of-order pull is allowed and '
-                      'recorded: `pull %s --reason "<why>"`'
-                      % (rid, omod.not_offered_why(rec, passed, ctx.session), rid))
+                      'recorded: `pull %s --reason "<why>"%s`'
+                      % (rid, omod.not_offered_why(rec, passed, ctx.session), rid,
+                         ' --ruling R-nnnn' if hits else ''))
+    if hits and ruling is None:
+        raise Refusal('`%s` collides with a live pull: %s. `--reason` alone never overrides a '
+                      'collision with a live pull: `pull %s --reason "<why>" --ruling R-nnnn`, '
+                      'citing the PM\'s ruling that allows it' % (rid, '; '.join(hits), rid))
     if minus_one:
         lmod.refuse_unnamed_release(rid, rec, ruling, 'pull')
+    if minus_one or hits:
         _check_ruling(rid, rec, ruling, 'pull', hold_only=True)
     lines = ['PULLED %s - state: open -> pulled' % rid, '  pulled_at:  %s' % ctx.date(),
              '  pulled_by:  %s' % branch]
@@ -730,7 +759,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
         changes += [(k, []) for k in rmod.PREEMPT_KEYS]
     else:
         recorded = reason
-        if ruling is not None and not minus_one:
+        if ruling is not None and (hits or not minus_one):
             recorded = '%s (PM %s)' % (reason, ruling)
         if blocker is not None:
             recorded += ' (unblocks %s)' % blocker
@@ -750,7 +779,49 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
             subject += ', releasing the owner hold'
     pairs = rmod.apply_changes(rec.pairs(), changes)
     return Change({rid: _text(pairs, rec.body)}, subject, lines,
-                  ruling=ruling if (minus_one or not offered) else None)
+                  ruling=ruling if (minus_one or hits or not offered) else None)
+
+
+def live_hits(scopes, holding, skip=None, branch=None):
+    """`scope A collides with B already taken by ID (in flight on BRANCH)` for each collision of
+    `scopes` with a live pull in `holding`, bar the record id `skip` and any pull by `branch`: one
+    branch holding overlapping records is not a collision. A comparison that cannot be decided is
+    a hit, never a clearance."""
+    hits = []
+    for other in holding:
+        if other.id == skip or (branch and other.get('pulled_by') == branch):
+            continue
+        who = '%s (in flight on %s)' % (other.id, other.get('pulled_by') or '?')
+        try:
+            pairs = smod.colliding_pairs(scopes, other.all('scope'))
+        except smod.UndecidableScope as exc:
+            hits.append('scope cannot be compared with %s, so it is a collision: %s' % (who, exc))
+            continue
+        hits += ['scope %s collides with %s already taken by %s' % (a, b, who) for a, b in pairs]
+    return hits
+
+
+def widened_members(old, new):
+    """The members of `new` that no member of `old` covers: what a `set --scope` adds. An old
+    member covers a new one when they are equal (components casefolded, the same `/**`-ness), or
+    when the old one is `X/**` and the new one lies under X. `none` covers only `none`, and a new
+    `none` adds nothing. A member the grammar cannot read is never covered."""
+    def shape(m):
+        if m == smod.NONE:
+            return None
+        try:
+            return smod.scope_components(m), m.endswith(smod.GLOB_SUFFIX)
+        except smod.UndecidableScope:
+            return False
+    olds = [s for s in (shape(m) for m in old) if s]
+    added = []
+    for m in new:
+        if m == smod.NONE:
+            continue
+        s = shape(m)
+        if s is False or not any(o == s or (o[1] and s[0][:len(o[0])] == o[0]) for o in olds):
+            added.append(m)
+    return added
 
 
 def _collisions(rec, holding):
@@ -795,7 +866,9 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     the caller's session and its pull is dead by `next`'s test (omod.in_flight_split: git
     answered and no branch, remote-tracking branch or worktree has its `pulled_by`); then the
     pull moves to this branch, `pulled_at` restamped, any pre-emption lines kept as the first pull
-    wrote them, with the scope-collision warnings a pre-empting pull prints. A failed git probe
+    wrote them, with the scope-collision warnings a pre-empting pull prints. A takeover whose scope
+    collides with a live pull on another branch needs `--ruling R-nnnn`, as a pull does; it takes no other flag, and
+    no `--ruling` when nothing collides. A failed git probe
     holds the pull (fail closed). A `pulled_by` that landed on the main branch (a `Merge <branch>`
     merge in its history, committed on or after the `pulled_at` day) is not dead but unclosed:
     that refuses, and a git that cannot say fails."""
@@ -807,8 +880,9 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     holding, dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
     if rec not in dead:
         raise busy
-    given = [f for f, v in (('--reason', reason), ('--ruling', ruling), ('--blocker', blocker))
-             if v is not None]
+    hits = live_hits(rec.all('scope'), holding, skip=rid, branch=ctx.current_branch())
+    given =[f for f, v in (('--reason', reason), ('--ruling', None if hits else ruling),
+                            ('--blocker', blocker)) if v is not None]
     if given:
         raise Usage('`%s` is a dead pull of this session (pulled_by %s has no branch): `pull %s` '
                     'takes it over as it stands, with no %s' % (rid, old, rid, ', '.join(given)))
@@ -816,6 +890,12 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     if merge:
         raise Refusal('`%s` was pulled by %s, which has landed on %s (%s): close the record, do '
                       'not take it over' % (rid, old, ctx.main_branch, merge))
+    if hits:
+        if ruling is None:
+            raise Refusal('`%s` is a dead pull of this session, and its scope collides with a live '
+                          'pull: %s. Taking it over anyway takes `pull %s --ruling R-nnnn`, citing '
+                          'the PM\'s ruling that allows it' % (rid, '; '.join(hits), rid))
+        _check_ruling(rid, rec, ruling, 'pull', hold_only=True)
     branch = ctx.current_branch()
     today = ctx.date()
     pairs = rmod.apply_changes(rec.pairs(), [('pulled_at', [today]), ('pulled_by', [branch])])
@@ -825,7 +905,7 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     lines += _collisions(rec, holding)
     return Change({rid: _text(pairs, rec.body)},
                   'backlog: pull %s onto %s, taking over a dead pull from %s' % (rid, branch, old),
-                  lines)
+                  lines, ruling=ruling)
 
 
 def branch_name_error(name, root):

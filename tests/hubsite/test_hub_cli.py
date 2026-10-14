@@ -71,9 +71,10 @@ class CliCase(unittest.TestCase):
         s.bind((httpd.LOOPBACK, 0))
         return s.getsockname()[1]
 
-    def server(self, tokens=None):
-        """A started hub on a free port, with the temp home's token files unless given others."""
-        cfg = hub_settings.settings(None)._replace(port=0, store=self.store_dir)
+    def server(self, tokens=None, port=0):
+        """A started hub on a free port (or `port`), with the temp home's token files unless
+        given others. Only a hub given its port keeps a sessions file (serve.build)."""
+        cfg = hub_settings.settings(None)._replace(port=port, store=self.store_dir)
         hub = serve.build(cfg, serve.Sources(tokens=tokens or self.tokens,
                                              static_dir=os.path.join(self.home, 'web')))
         self.addCleanup(hub.close)
@@ -92,8 +93,9 @@ class UsageCase(CliCase):
     def test_no_verb_and_an_unknown_verb_are_usage_errors(self):
         code, out, err = self.run_cli()
         self.assertEqual((code, out), (2, ''))
-        self.assertIn('USAGE: give a verb: serve, status, setup, open, migrate, questions, '
-                      'answer, todos, stories, to-pm, inbox, pending, wait or validate\n', err)
+        self.assertIn('USAGE: give a verb: serve, status, setup, open, unpair, migrate, '
+                      'questions, answer, todos, stories, to-pm, inbox, pending, wait or '
+                      'validate\n', err)
         self.assertEqual(sorted(HUB.VERBS), sorted(HUB.VERB_NAMES))     # every verb it has
         self.assertEqual(self.run_cli('launch')[0], 2)
         self.assertEqual(self.run_cli('serve', '--bind', '0.0.0.0')[0], 2)
@@ -102,14 +104,15 @@ class UsageCase(CliCase):
     def test_a_port_that_is_no_port_is_a_usage_error(self):
         for argv in (('serve', '--port', 'x'), ('serve', '--port', '70000'),
                      ('serve', '--port', '-1'), ('status', '--port', '0'),
-                     ('open', '--port', '65536'), ('status', '--port', '')):
+                     ('open', '--port', '65536'), ('status', '--port', ''),
+                     ('unpair', '--port', '0'), ('unpair', '--all')):
             code, out, err = self.run_cli(*argv)
             self.assertEqual((code, out), (2, ''), argv)
             self.assertIn('USAGE: ', err)
 
     def test_a_machine_config_that_cannot_be_used_is_exit_2(self):
         self.config({'hub': {'port': 'eighty'}})
-        for argv in (('serve', '--port', '0'), ('status',), ('setup',), ('open',)):
+        for argv in (('serve', '--port', '0'), ('status',), ('setup',), ('open',), ('unpair',)):
             code, out, err = self.run_cli(*argv)
             self.assertEqual((code, out), (2, ''), argv)
             self.assertIn('machine config: ', err)
@@ -666,6 +669,101 @@ class ClientCase(CliCase):
         self.assertEqual((code, out), (1, ''))
         self.assertIn('answered 403', err)
 
+    def test_unpair_ends_every_browser_the_running_server_paired(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        probe = self.server()               # port 0 keeps no sessions file: find a port, ask it
+        port = probe.port
+        self.assertIs(probe.close(), True)
+        hub = self.server(port=port)
+        base = 'http://127.0.0.1:%d' % hub.port
+        cookies = []
+        for _ in range(2):
+            link = self.run_cli('open', '--print', '--port', str(hub.port))[1].strip()
+            set_cookie = httpfix.get(hub.port, link[len(base):]).header('Set-Cookie')[0]
+            cookies.append(('Cookie', set_cookie.split(';')[0]))
+        for cookie in cookies:
+            self.assertEqual(httpfix.get(hub.port, HUB.HEALTH, headers=[cookie]).status, 200)
+        code, out, err = self.run_cli('unpair', '--port', str(hub.port))
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(out, 'unpaired every browser of the hub server on port %d\n' % hub.port)
+        for cookie in cookies:
+            self.assertEqual(httpfix.get(hub.port, HUB.HEALTH, headers=[cookie]).status, 403)
+        with open(os.path.join(self.tokens, auth.sessions_file(hub.port)), encoding='ascii') as f:
+            self.assertEqual(json.load(f)['sessions'], [])
+
+    def test_unpair_with_no_server_empties_the_sessions_file_itself(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        creds = auth.Credentials(self.tokens, port=port, persist=True)
+        value = creds.pair(creds.new_pairing_code())
+        cookie = {auth.cookie_name(port): value}
+        reread = auth.Credentials(self.tokens, port=port, persist=True)
+        self.assertEqual(reread.role_for({}, cookie), auth.OWNER)
+        code, out, err = self.run_cli('unpair', '--port', str(port))
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn('no hub server is listening on port %d' % port, out)
+        self.assertIn(auth.sessions_file(port), out)
+        reread = auth.Credentials(self.tokens, port=port, persist=True)
+        self.assertEqual((reread.role_for({}, cookie), reread.notes), (None, []))
+
+    def unpair_racing_a_start(self, second):
+        """unpair with no server at its first ask, and `second` the answer to the next one:
+        a server that bound the port and read the sessions file before the file was emptied."""
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        asked = []
+
+        def ask(p, method, path, token=None, **kw):
+            asked.append((p, method, path))
+            if len(asked) == 1:
+                raise serve.NotRunning(p)
+            if isinstance(second, Exception):
+                raise second
+            return second
+
+        with mock.patch.object(HUB.serve, 'ask', ask):
+            got = self.run_cli('unpair', '--port', str(port))
+        self.assertEqual(asked, [(port, 'POST', httpd.UNPAIR_ROUTE)] * 2)
+        return port, got
+
+    def test_unpair_with_no_server_asks_again_after_the_file_and_unpairs_one_that_started(self):
+        port, (code, out, err) = self.unpair_racing_a_start((200, {'ok': True}))
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn(auth.sessions_file(port), out)
+        self.assertIn('unpaired every browser of the hub server on port %d' % port, out)
+
+    def test_unpair_with_a_server_that_started_and_refuses_is_refused(self):
+        port, (code, out, err) = self.unpair_racing_a_start((403, {'error': 'forbidden'}))
+        self.assertEqual(code, 1)
+        self.assertIn('REFUSED: the server on port %d answered 403' % port, err)
+
+    def test_unpair_with_still_no_server_at_the_second_ask_is_the_file_alone(self):
+        port, (code, out, err) = self.unpair_racing_a_start(serve.NotRunning(self.dead_port()))
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn(auth.sessions_file(port), out)
+        self.assertNotIn('of the hub server', out)
+
+    def test_unpair_with_no_server_and_a_file_it_cannot_write_is_refused(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        os.makedirs(os.path.join(self.tokens, auth.sessions_file(port)))   # a folder in its place
+        code, out, err = self.run_cli('unpair', '--port', str(port))
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('REFUSED: ', err)
+        self.assertIn('could not be written', err)
+
+    def test_unpair_needs_the_owners_token(self):
+        port = self.dead_port()
+        code, out, err = self.run_cli('unpair', '--port', str(port))
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('REFUSED: no owner token', err)
+        self.assertFalse(os.path.exists(os.path.join(self.tokens, auth.sessions_file(port))))
+        hub = self.server(tokens=os.path.join(self.home, 'other-tokens'))
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        code, out, err = self.run_cli('unpair', '--port', str(hub.port))
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('REFUSED: the server on port %d answered 403 forbidden' % hub.port, err)
+
 
 class ClosedConsoleCase(CliCase):
     """`serve` beside a console that was closed while it served: every line of it is lost, and
@@ -1058,7 +1156,8 @@ class ArgumentCase(CliCase):
         # each verb of the tool is in that list, but for those that ask no running server
         self.assertEqual(sorted({v[0] for v in self.VERBS}),
                          sorted(set(HUB.VERB_NAMES)
-                                - {'serve', 'status', 'setup', 'open', 'migrate', 'validate'}))
+                                - {'serve', 'status', 'setup', 'open', 'migrate', 'validate',
+                               'unpair'}))     # unpair with no server: ClientCase
 
     def test_the_port_is_the_configured_one_unless_given(self):
         self.assertEqual(self.run_cli('setup')[0], 0)
