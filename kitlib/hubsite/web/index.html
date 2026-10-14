@@ -263,7 +263,7 @@ button.danger{color:var(--warn)}
   // call with no session, a read or a write), any 403 on a read, or a 401. A 403 on a write that names
   // another field (the Origin rule) is a plain refusal, shown in the server's words.
   const PAIR_HOW = "On the PC, in the kit folder, run `python tools/hub.py open` and open the link it prints.";
-  const PAIR_AGAIN = "this browser is not paired with the hub (yet, or any more after the hub server restarted). " + PAIR_HOW;
+  const PAIR_AGAIN = "this browser is not paired with the hub (yet, or any more: it was unpaired, or its session ran out). " + PAIR_HOW;
   const noAnswer = () => { const err = new Error("the hub server did not answer"); err.status = 0; err.code = "network"; err.field = ""; err.retryAfter = 0; err.unpaired = false; return err; };
   const hub = {
     base: "/api/v1",
@@ -1258,7 +1258,7 @@ button.danger{color:var(--warn)}
         fails = 0; loadSay("");
       } catch (e) {
         const old = ready ? " The lists may be out of date." : "";
-        if (e && e.unpaired) { loadSay("This browser is not paired with the hub (yet, or any more after the hub server restarted). " + PAIR_HOW + " This page has stopped reading the hub server." + old); return; }
+        if (e && e.unpaired) { loadSay("This browser is not paired with the hub (yet, or any more: it was unpaired, or its session ran out). " + PAIR_HOW + " This page has stopped reading the hub server." + old); return; }
         fails++; again = true;
         const ms = hubRetryMs(fails, e && e.retryAfter), msg = (e && e.message) || "no reason given";
         loadSay(e && e.status === 429 ? "The hub server is busy and asked this page to wait. Reading again in " + Math.round(ms / 1000) + " s." + old
