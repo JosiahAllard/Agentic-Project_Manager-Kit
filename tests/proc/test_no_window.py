@@ -35,7 +35,9 @@ PARENT = "\n".join([
     "    j.end(kill=True)",
     "    import ctypes",
     "    attached = ctypes.WinDLL('kernel32').GetConsoleProcessList((ctypes.c_uint * 1)(), 1) != 0",
+    "    import _winapi",
     "    r = {'parent_pid': os.getpid(), 'parent_console': attached,",
+    "         'hooked': getattr(_winapi.CreateProcess, '__kit_windowless__', False),",
     "         'child': json.loads(text)}",
     "except BaseException:",
     "    r = {'error': traceback.format_exc()}",
@@ -112,6 +114,9 @@ class ConsoleWindowTest(unittest.TestCase):
         if not os.path.exists(pythonw):
             self.skipTest("no pythonw.exe beside %s" % sys.executable)
         r = self.run_parent(pythonw)
+        # kitlib.proc.console's hook is in the parent, yet it gains no console: Job.start names a
+        # console choice (CREATE_NO_WINDOW), and the hook leaves such a start alone.
+        self.assertTrue(r["hooked"], r)
         self.assertFalse(r["parent_console"], r)
         self.assertEqual(r["child"]["window"], 0, r)              # no console window
         self.assertIn(r["child"]["pid"], r["child"]["console_pids"], r)   # yet a console
@@ -157,7 +162,9 @@ SPAWN_PARENT = "\n".join([
     "        else:",
     "            code = spawn.run(argv, timeout=60).returncode",
     "    attached = ctypes.WinDLL('kernel32').GetConsoleProcessList((ctypes.c_uint * 1)(), 1) != 0",
-    "    r = {'parent_pid': os.getpid(), 'parent_console': attached, 'code': code}",
+    "    import _winapi",
+    "    r = {'parent_pid': os.getpid(), 'parent_console': attached, 'code': code,",
+    "         'hooked': getattr(_winapi.CreateProcess, '__kit_windowless__', False)}",
     "except BaseException:",
     "    r = {'error': traceback.format_exc()}",
     "with open(out, 'w') as f:",
@@ -216,6 +223,8 @@ class SpawnWindowTest(_Folder):
         for mode in MODES:
             with self.subTest(mode):
                 r = self.run_parent(pythonw, mode)
+                # the hook is in, but spawn's CREATE_NO_WINDOW is a console choice it leaves alone
+                self.assertTrue(r["hooked"], r)
                 self.assertFalse(r["parent_console"], r)
                 self.assertEqual(r["child"]["window"], 0, r)                  # no console window
                 self.assertIn(r["child"]["pid"], r["child"]["console_pids"], r)   # yet a console

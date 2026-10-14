@@ -104,7 +104,7 @@ kitlib/git/fake answers git inside the test process (`fake.run(args, cwd, stdin,
 
 ## Temp folders
 
-The kit temp folder for a checkout is `kitlib.config.user.work_temp`. It holds kit_tests' run folders and the default gate log base (docs/gate.md). In order:
+The kit temp folder for a checkout is `kitlib.config.user.work_temp`. It holds kit_tests' run folders, the default gate log base (docs/gate.md) and `kit-console-incidents.log` (`kitlib.proc.console`, docs/daily-full.md "The schedule"). In order:
 
 - the machine config's `temp_dir` (docs/kit-json.md), when set;
 - on Windows, `AgentTemp` at the root of the checkout's drive, when the checkout is not on the drive of the user's temp folder (a Dev Drive, say);
