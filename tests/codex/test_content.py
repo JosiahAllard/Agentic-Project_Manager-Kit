@@ -139,10 +139,21 @@ class Manifests(unittest.TestCase):
         mcp = json.loads(files[cc.MCP_REL])['mcpServers']['machine-lock']
         self.assertEqual(mcp['args'], ['${PLUGIN_ROOT}/mcp/lock_server.py'])
         self.assertTrue(os.path.isfile(os.path.join(ROOT, *cc.SHELL_REL.split('/'), 'mcp', 'lock_server.py')))
+        hub = json.loads(files[cc.MCP_REL])['mcpServers']['hub']
+        self.assertEqual(hub['args'], ['${PLUGIN_ROOT}/mcp/hub_server.py'])
+        self.assertTrue(os.path.isfile(os.path.join(ROOT, *cc.SHELL_REL.split('/'), 'mcp', 'hub_server.py')))
         hooks = json.loads(files[cc.HOOKS_REL])['hooks']
         self.assertEqual(sorted(hooks), sorted(registry.host('codex').capabilities.hook_events))
         for event, groups in hooks.items():
             self.assertEqual(groups[0]['hooks'][0]['command'], 'pythonw "${PLUGIN_ROOT}/boot/hook.py" codex ' + event)
+
+    def test_claude_and_codex_list_the_same_mcp_servers(self):
+        files = cc.renderer().manifests(kcontent.load_kit(ROOT), kcontent.load(ROOT))
+        codex = set(json.loads(files[cc.MCP_REL])['mcpServers'])
+        with open(os.path.join(ROOT, '.claude-plugin', 'plugin.json'), encoding='utf-8') as f:
+            claude = set(json.load(f)['mcpServers'])
+        self.assertEqual(codex, claude)
+        self.assertEqual(codex, {'machine-lock', 'hub'})
 
     def test_the_hook_events_must_match_hosts_json(self):
         r = cc.renderer()
