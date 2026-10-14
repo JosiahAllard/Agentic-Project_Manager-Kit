@@ -130,6 +130,8 @@ class ServeCase(CliCase):
                                      'is released')
         start = 'hub serving %s on http://127.0.0.1:' % os.path.abspath(self.store_dir)
         self.assertTrue(lines[0].startswith(start), lines[0])
+        self.assertTrue(lines[0].endswith('to pair a browser run: ' + HUB.OPEN), lines[0])
+        self.assertIn(' open', HUB.OPEN)
         port = int(lines[0][len(start):].split()[0])
         self.assertNotEqual(port, 0)
         self.assertFalse(self.locked(), 'the store lock outlived the server')

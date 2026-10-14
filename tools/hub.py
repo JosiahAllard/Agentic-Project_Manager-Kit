@@ -129,6 +129,7 @@ from kitlib.hubsite import autostart as hub_autostart              # noqa: E402
 from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
 
 START = 'python "%s" serve' % os.path.abspath(__file__)
+OPEN = 'python "%s" open' % os.path.abspath(__file__)
 HEALTH = api.BASE + '/health'
 # every verb, in the order the usage error names them
 VERB_NAMES = ('serve', 'status', 'setup', 'open', 'migrate', 'questions', 'answer', 'todos',
@@ -413,7 +414,8 @@ def _serve(a, stop):
     def started(h):
         for note in h.notes:
             _log('note', note)
-        _say('hub serving %s on %s (Ctrl+C stops it)' % (h.store.root, h.url))
+        _say('hub serving %s on %s (Ctrl+C stops it); to pair a browser run: %s'
+             % (h.store.root, h.url, OPEN))
 
     try:
         clean = serve.run(hub, started, stop)
