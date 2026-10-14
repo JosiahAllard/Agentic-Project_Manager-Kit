@@ -19,7 +19,7 @@ from kitlib.docs import callers as doc_callers, index
 from kitlib.preflight import report
 from tests.docs.test_cli import call, doc_index_cli, repo_with_docs
 from tests.gitfixture import fixture_env
-from tests.home import no_machine_owner
+from tests.home import no_machine_owner, temp_home
 from tests.preflight.test_preflight import free_reader
 from tools import preflight
 
@@ -99,6 +99,11 @@ class Preflight(Case):
 
 
 class Commit(Case):
+
+    def setUp(self):
+        super().setUp()
+        # commit's staged machine-path check reads the machine config's machine_folders
+        temp_home(self)
 
     def commit(self):
         wt = self.repo.worktree('wt')
