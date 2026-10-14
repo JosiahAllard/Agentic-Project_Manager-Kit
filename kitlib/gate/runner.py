@@ -22,9 +22,11 @@ A gate where no selected step PASSed, WARNed, FAILed or was REUSED (all skipped 
 `requires`) is REFUSED (nothing_ran). The branch gate writes the gate-OK record
 (kitlib.records.gate_ok) for HEAD only when every selected step passed, warned, was reused or
 was skipped, no --only was given, the base is the default base, the work tree was clean (no
-tracked change, no untracked file) when the gate started and when it ended, and HEAD did not
-move: the record then names exactly the commit whose tree was gated, and its config_rev is that
-commit. A REUSED step did not run in this gate: a pass of its key is in the gate cache
+tracked change, no untracked file) when the gate started and when it ended, HEAD did not
+move, and the repository's stash stack was empty when the gate started (else REFUSED, before
+--plan; kitlib.gate.stash) and when it ended: the record then names exactly the commit whose tree
+was gated, and its config_rev is that commit. A REUSED step did not run in this gate: a pass of
+its key is in the gate cache
 (kitlib.gate.reuse), stored by an earlier gate of the same inputs. A rerun with every step
 reused therefore writes a gate-OK record for a commit on which no step ran; its record says
 `reused` for each step.
@@ -46,6 +48,7 @@ from kitlib.config.types import ConfigError
 from kitlib.gate import detect
 from kitlib.gate import hookrev
 from kitlib.gate import result
+from kitlib.gate import stash
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.lock import run as lockrun
@@ -644,6 +647,9 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     if gate.get('worktree_guard') and repo.classify(top).kind == repo.MAIN:
         return G.Outcome(G.REFUSED, ['REFUSED: %s is a main checkout, and "gate".worktree_guard '
                                      'gates only linked worktrees' % top])
+    why = stash.refusal(top)          # before --plan too: no gate command answers past an entry
+    if why:
+        return G.Outcome(G.REFUSED, ['REFUSED: %s' % why])
     head, why = refs.head(top)
     if not head:
         return G.Outcome(G.REFUSED, ['REFUSED: no HEAD commit: %s' % why])
@@ -742,6 +748,8 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
         no = 'the work tree changed while the gate ran'
     elif head_now != head:
         no = 'HEAD moved while the gate ran (%s -> %s)' % (head[:10], (head_now or '?')[:10])
+    else:
+        no = stash.appeared(top)      # empty when the gate started (above); clean and at HEAD now
     if no:
         facts['no_record'] = no
         lines.append('no gate-OK record: %s' % no)
