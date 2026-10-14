@@ -16,7 +16,7 @@ exit_code(e) gives the number for one of these; OK (0), REFUSED (1), USAGE (2), 
 and TIMED_OUT (4) are the exit codes of tools/hub.py, here as data. TIMED_OUT is never raised:
 Client.wait() answers with `timed_out` true.
 
-Client(port, tokens)
+Client(port, tokens, via=serve.VIA_CLI)
   get(path, role, query), post(path, role, body)   one call; `path` is below api.BASE
   listing(collection, status, repo)     the items of GET /<collection>
   pending()                             the items of GET /pending
@@ -71,15 +71,18 @@ def part(doc_id):
 
 class Client(object):
     """`tokens`: the folder of the token files (default auth.folder()). `timeout`: seconds one
-    call waits for its answer. `ask`: serve.ask or a stand-in."""
+    call waits for its answer. `ask`: serve.ask or a stand-in. `via`: the name a write gives
+    as its source (serve.VIA_CLI; the hub MCP server gives serve.VIA_MCP); a stand-in `ask` is
+    passed it as a keyword only when it is not VIA_CLI."""
 
     def __init__(self, port, tokens=None, timeout=serve.ASK_TIMEOUT_S, ask=None,
-                 clock=time.monotonic):
+                 clock=time.monotonic, via=serve.VIA_CLI):
         self.port = port
         self.tokens = tokens if tokens is not None else auth.folder()
         self.timeout = timeout
         self._ask = ask or serve.ask
         self._clock = clock
+        self.via = via
 
     def token(self, role):
         """The token a call of a `role` route carries. ServeError when its file is absent."""
@@ -94,8 +97,9 @@ class Client(object):
         return token
 
     def call(self, method, path, role, body=None, query=None, timeout=None):
+        extra = {} if self.via == serve.VIA_CLI else {'via': self.via}
         status, obj = self._ask(self.port, method, _path(path, query), self.token(role), body,
-                                self.timeout if timeout is None else timeout)
+                                self.timeout if timeout is None else timeout, **extra)
         if status != 200 or obj.get('ok') is False:
             raise Refused(status, obj)
         return obj
