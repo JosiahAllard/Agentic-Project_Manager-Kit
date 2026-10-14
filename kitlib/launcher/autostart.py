@@ -75,6 +75,7 @@ def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.
     and then not start at sign-in. whatif says so in a third line."""
     if in_worktree(launch_py):
         raise LaunchError('install-autostart from the main kit checkout, not a worktree: %s' % launch_py)
+    given = python is not None
     python = python or pythonw_mod.base_pythonw(base_prefix)
     text = task_script(python, launch_py)
     test = 'python "%s" after-reboot --test' % launch_py
@@ -82,8 +83,9 @@ def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.
     if pythonw_mod.under_windows_apps(pythonw):
         missing = '%s; nothing registered' % pythonw_mod.refusal(pythonw, isfile)
     elif not isfile(pythonw):
-        missing = ('no pythonw.exe beside %s (looked for %s): the task runs it so that no console '
-                   'window opens at sign-in; nothing registered' % (python, pythonw))
+        where = 'beside %s (looked for %s)' % (python, pythonw) if given else 'at %s' % pythonw
+        missing = ('no pythonw.exe %s: the task runs it so that no console window opens at '
+                   'sign-in; nothing registered' % where)
     else:
         missing = None
     if whatif:

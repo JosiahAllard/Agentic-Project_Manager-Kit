@@ -79,10 +79,18 @@ class Task(TaskCase):
         rc, out, _ = self.run_task()
         self.assertEqual(rc, 0, out)
         self.assertNotIn('Get-Command', out)
-        got = task.run([], Runner(), self.repo, self.tool)
+        # No `pythonw=`: the default is base_pythonw(); a stand-in base install keeps this
+        # independent of the host's sys.base_prefix (a Store or venv-less install may have none).
+        base = os.path.join(self.fx.base, 'base_install')
+        os.makedirs(base)
+        want = os.path.join(base, 'pythonw.exe')
+        with open(want, 'w', encoding='utf-8') as f:
+            f.write('')
+        with mock.patch.object(sys, 'base_prefix', base):
+            got = task.run([], Runner(), self.repo, self.tool)
+        self.assertEqual(got.code, 0, got.lines)
         line = got.lines[0]
-        self.assertTrue(line.startswith('$py = %s; '
-                                        % task.quoted(os.path.join(sys.base_prefix, 'pythonw.exe'))), line)
+        self.assertTrue(line.startswith('$py = %s; ' % task.quoted(want)), line)
 
     def test_a_windows_apps_pythonw_is_refused_before_anything_is_printed(self):
         alias = os.path.join(self.fx.base, 'Microsoft', 'WindowsApps', 'pythonw.exe')
