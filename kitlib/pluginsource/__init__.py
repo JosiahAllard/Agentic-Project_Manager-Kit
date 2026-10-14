@@ -2,7 +2,9 @@
 installs from (docs/plugin-source.md).
 
   remote_main(kit, remote)         the sha the remote's main points at; refuses one not fetched
-  export(kit, sha, root)           <root>/<sha12>/: the tracked files at sha, plugin.json stamped
+  export(kit, sha, root)           <root>/<sha12>/: the tracked files at sha, plugin.json stamped,
+                                   the marker naming the kit's main checkout
+  export_checkout(folder)          that main checkout, while it still is one, or None
   write_marketplace(root, folder)  <root>/.claude-plugin/marketplace.json names that folder
   prune(root)                      old export folders removed (never the named one, the 3 newest, or
                                    one replaced less than 7 days ago); stale <sha12>.tmp folders removed
@@ -30,7 +32,7 @@ import sys
 import time
 
 from kitlib import kitroot
-from kitlib.git import batch, cmd, refs
+from kitlib.git import batch, cmd, refs, repo
 
 NAME = 'pm-kit'                      # the marketplace's and the plugin's name
 PLUGIN_ID = 'pm-kit@pm-kit'
@@ -300,7 +302,8 @@ def folder_name(sha):
 
 def export(kit, sha, root, now=None, made_by='tools/plugin_refresh.py'):
     """<root>/<sha12>: the tracked files at `sha`, plugin.json's version stamped, and the marker
-    (`made_by`: the tool that wrote it). Written into <sha12>.tmp and renamed, so a folder by the
+    (`made_by`: the tool that wrote it; `checkout`: the main checkout of `kit`'s repository, left
+    out when git cannot place it). Written into <sha12>.tmp and renamed, so a folder by the
     final name is always whole. An existing folder whose marker names `sha` is kept as it is.
     Returns (folder, version)."""
     name = folder_name(sha)
@@ -340,6 +343,9 @@ def export(kit, sha, root, now=None, made_by='tools/plugin_refresh.py'):
     skipped = [e[3] for e in entries if e not in blobs]
     marker = {'sha': sha, 'version': version, 'exported_at': _stamp(now),
               'skipped': skipped, 'made_by': made_by}
+    checkout = repo.main_checkout_toplevel(kit)
+    if checkout:
+        marker['checkout'] = checkout
     with open(os.path.join(tmp, MARKER), 'w', encoding='utf-8', newline='\n') as fh:
         json.dump(marker, fh, indent=2)
         fh.write('\n')
@@ -355,6 +361,20 @@ def read_marker(folder):
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def export_checkout(folder):
+    """The kit main checkout an export folder was made from: its marker's `checkout`, when that
+    names a folder holding a .git folder (a main checkout; a linked worktree's .git is a file).
+    None for a folder with no marker, an older marker without the key, or a checkout that has
+    moved or gone. kitlib.gate.pin pins a tool started from the export through it."""
+    marker = read_marker(folder)
+    checkout = marker.get('checkout') if marker else None
+    if not isinstance(checkout, str) or not checkout:
+        return None
+    if not os.path.isdir(os.path.join(checkout, '.git')):
+        return None
+    return checkout
 
 
 # ---------------------------------------------------------------- the marketplace and state
