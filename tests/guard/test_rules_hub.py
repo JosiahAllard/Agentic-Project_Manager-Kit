@@ -460,9 +460,9 @@ class OwnerVerbs(Hub):
                 self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
 
     def test_a_module_after_options_the_guard_cannot_read(self):
-        # python's options stop being readable at a word the text does not show, or at another
-        # module's -m that runs a module itself (cProfile, pdb, profile, trace, runpy): any
-        # literal -m (or --module) naming hub after it counts (hub_module_scan)
+        # a word the text does not show, or another module's -m (cProfile, pdb, runpy), is outside
+        # the allowed shape: any literal -m (or --module) naming hub on the line counts
+        # (rules.HUB_NAME_RES, R-1955)
         for line in ('python $X -m tools.hub answer Q-1 --choice 1', 'python "$@" -m tools.hub answer Q-1',
                      'python -X $v -m tools.hub answer Q-1', 'python -W "$w" -m tools.hub answer Q-1',
                      'python $X -Bm tools.hub answer Q-1', 'python $X -mtools.hub answer Q-1',

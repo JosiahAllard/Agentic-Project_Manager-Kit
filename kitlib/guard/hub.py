@@ -14,6 +14,11 @@ The names are kitlib.hubsite's (auth, settings), copied rather than imported: th
 every tool call and stays free of the hub site's imports. tests/guard/test_rules_hub.py checks
 they are the same. The owner-only MCP tool names are kitlib.hubmcp's own OWNER_ONLY, imported:
 that package's __init__ imports nothing. Nothing here reads a file or the environment.
+
+owner_verb judges only the one command shape kitlib.guard.rules.hub_shape reads in full; any other
+text naming the hub tool is refused there (R-1955). Known limit: a name built at run time (string
+concatenation, an encoding, a variable, a script the agent wrote) is not read. The hub rules
+guard against accidents and are not an adversary boundary.
 """
 import fnmatch
 import ipaddress
