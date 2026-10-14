@@ -128,7 +128,9 @@ def ports(hub):
 
 # tools/hub.py's parser (argparse: subcommand names are exact; a long option may be cut to a
 # unique prefix). Verbs with no sub-verb that are the owner's, and the owner sub-verbs.
-OWNER_VERBS = ('answer', 'open', 'pair')
+# unpair ends every paired browser's session; stop and restart (the hub server's) are held before
+# tools/hub.py has them
+OWNER_VERBS = ('answer', 'open', 'pair', 'unpair', 'stop', 'restart')
 OWNER_SUBS = {'todos': ('done',), 'stories': ('add', 'withdraw'), 'to-pm': ('add', 'send'),
               'inbox': ('read',), 'approvals': ('approve', 'deny')}
 # options a listed verb takes before its sub-verb, and those that take a value

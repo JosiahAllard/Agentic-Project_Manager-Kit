@@ -423,6 +423,15 @@ class OwnerVerbs(Hub):
                 self.denied(self.run_hub(args), 'hub-owner-verb')
                 self.owner_allowed(self.run_hub(args))
 
+    def test_server_and_device_verbs_are_the_owners(self):
+        # stop and restart (the hub server) and unpair (every paired browser) are owner verbs, in both
+        # forms of the allowed shape; the owner's own session runs them
+        for verb in ('stop', 'restart', 'unpair'):
+            for line in ('python "%s" %s' % (self.hub, verb), 'python -m tools.hub %s' % verb):
+                with self.subTest(line):
+                    self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+                    self.owner_allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
+
     def test_hub_run_as_a_module(self):
         # `python -m tools.hub` from the kit folder, or `-m hub` from tools/, runs the same parser
         for line in ('python -m tools.hub answer Q-1 --choice 1', 'cd tools && python -m hub todos done T-1',

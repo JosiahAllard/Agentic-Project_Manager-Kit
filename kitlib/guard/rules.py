@@ -32,8 +32,8 @@ Rules, in the order they are checked:
                    a script (tools/hub.py, tools.hub, an import of hub, python -m hub) anywhere
                    outside the one shape the guard reads in full (HUB_SHAPE: python, plain options,
                    tools/hub.py or -m tools.hub, an agent verb, every word literal), and that shape
-                   running an owner verb (answer, open, pair, todos done, stories add|withdraw,
-                   to-pm add|send, inbox read, approvals approve|deny, todos add --owner), in any
+                   running an owner verb (answer, open, pair, unpair, stop, restart, todos done,
+                   stories add|withdraw, to-pm add|send, inbox read, approvals approve|deny, todos add --owner), in any
                    session but the owner's own. Known limit: a name built at run time (string
                    concatenation, an encoding, a variable, a script the agent wrote) is not read;
                    the rule guards against accidents and is not an adversary boundary
