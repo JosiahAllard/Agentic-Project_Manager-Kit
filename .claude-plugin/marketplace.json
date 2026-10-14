@@ -11,7 +11,7 @@
     {
       "name": "pm-kit",
       "source": "./",
-      "description": "The PM kit: agents, skills and the machine lock MCP server."
+      "description": "The PM kit: agents, skills and the machine lock and hub MCP servers."
     }
   ]
 }

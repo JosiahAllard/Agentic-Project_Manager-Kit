@@ -382,7 +382,7 @@ def write_marketplace(root, folder):
         'description': 'The PM kit\'s plugin, exported from pushed kit main (docs/plugin-source.md).',
         'owner': {'name': 'PM kit'},
         'plugins': [{'name': NAME, 'source': './%s' % folder,
-                     'description': 'The PM kit: agents, skills and the machine lock MCP server.'}],
+                     'description': 'The PM kit: agents, skills and the machine lock and hub MCP servers.'}],
     })
 
 
