@@ -2985,13 +2985,12 @@ def _guarded_mains(cfg):
 
 
 def landing_command(ctx, gc, cfg, remote, branch):
-    main_sha, _ = ctx.git.remote_tip(remote, cfg.main_branch, gc.dir)
+    # No --expect-main: a landing merges onto the main it finds at its turn (docs/gate.md "Landing").
     tip, _ = ctx.git.resolve(branch, gc.dir) if branch else (None, None)
     main_top = (ctx.main_top(gc.dir) if gc.dir else None) or gc.dir
-    return 'python %s -C %s %s --expect-main %s --expect-tip %s' % (
+    return 'python %s -C %s %s --expect-tip %s' % (
         kit_tool(ctx, 'land'), quote(main_top) if main_top else '"<main checkout>"',
         branch if branch and branch != cfg.main_branch else '<branch>',
-        main_sha or '<%s/%s sha>' % (remote, cfg.main_branch),
         tip if branch and branch != cfg.main_branch and tip else '<branch tip sha>')
 
 

@@ -424,9 +424,9 @@ def check(root, lines, gate_ok=None, remote='origin', url=None):
         rec, why = gate_ok(root, local_sha)
         if rec is None:
             return False, ('pre-push: refused, %s has no gate-OK record (%s). Land with: python "%s" -C "%s" '
-                           '<branch> --expect-main <%s sha> --expect-tip %s'
+                           '<branch> --expect-tip %s'
                            % (local_sha[:12], why, kitroot.tool('land').replace('\\', '/'),
-                              (gitrepo.main_checkout_toplevel(root) or root).replace('\\', '/'), main,
+                              (gitrepo.main_checkout_toplevel(root) or root).replace('\\', '/'),
                               local_sha))
         why = owner_refusal(root, cfg, local_sha, remote_sha, remote)
         if why:

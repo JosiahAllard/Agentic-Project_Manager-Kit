@@ -102,7 +102,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `landing.lock_file` (string): legacy landing lock: git:<name>, a file in the git common dir; any other value refuses
 - `landing.log_dir` (repo path): where gate logs live
 - `landing.lanes` (map lane -> {branch_prefix, paths, why, merged_args}, default {}): lanes besides full that gate.py land --lane takes
-- `landing.wait_s` (int from 0 to 86400, default 3600): seconds tools/land.py waits for its turn at the landing lock unless --wait says otherwise
+- `landing.wait_s` (int from 0 to 86400, default 3600): seconds tools/land.py waits for its turn (its machine-lock booking, then the landing lock) unless --wait says otherwise
 - `landing.batch_max` (int from 1 to 20, default 3): most branches one tools/land.py landing merges and gates together
 - `landing.reuse_max_age_h` (int from 0 to 168, default 24): hours a pass stored in the gate cache serves a branch gate rerun or a landing; 0: no gate reads or stores a step result
 - `landing.reuse_never` (list of string, default []): globs of paths whose change makes a gate (branch or landing) read and store no step result in the gate cache

@@ -10,7 +10,9 @@ import sys
 
 from kitlib.gate import land, runner
 from kitlib.lock import layout as lay
+from kitlib.lock import run as lockrun
 from kitlib.lock.store import Settings, Store
+from tests.gate.fixtures import compat_book
 from tests.lock.helpers import FAST
 
 
@@ -28,6 +30,7 @@ def scratch_store(spec):
 def main(argv):
     a = json.loads(argv[1])
     book_kw = {'cores': 1, 'store': scratch_store(a['store']), 'env': dict(os.environ)}
+    lockrun.book = compat_book([])
     held = None
     if a.get('hold'):
         def held(lander):
@@ -35,8 +38,8 @@ def main(argv):
             if not sys.stdin.readline():
                 raise SystemExit('land_child: stdin closed before go')
             return runner.merged_gate(lander.root, lander.cfg, lander.expect_main,
-                                      log_dir=a['logs'], book_kw=book_kw)
-    out = land.Lander(a['repo'], a['branch'], a['expect_main'], a['expect_tip'],
+                                      log_dir=a['logs'], book_kw=book_kw, slot=lander.slot)
+    out = land.Lander(a['repo'], a['branch'], a.get('expect_main'), a['expect_tip'],
                       wait_s=a.get('wait', 0), git_env=dict(os.environ), book_kw=book_kw,
                       log_dir=a['logs'], merged_gate=held).run()
     for line in out.lines:
