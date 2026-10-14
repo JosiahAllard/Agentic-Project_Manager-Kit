@@ -860,9 +860,14 @@ def home_folder(home=None):
 
 # a word's text that starts with a variable naming the home folder, in any shell's spelling,
 # then ends or goes on with a separator: $HOME ${HOME} $USERPROFILE $env:USERPROFILE ${env:HOME}
-# %USERPROFILE% (case ignored: PowerShell and cmd ignore it, and only a deny reads it)
-HOME_VAR_RE = re.compile(r'(?i)^(?:\$(?:env:)?(?:HOME|USERPROFILE)|\$\{(?:env:)?(?:HOME|USERPROFILE)\}|'
+# %USERPROFILE%, and the drive and path pair $env:HOMEDRIVE$env:HOMEPATH ${HOMEDRIVE}${HOMEPATH}
+# %HOMEDRIVE%%HOMEPATH% (case ignored: PowerShell and cmd ignore it, and only a deny reads it)
+HOME_VAR_RE = re.compile(r'(?i)^(?:(?:\$(?:env:)?HOMEDRIVE|\$\{(?:env:)?HOMEDRIVE\})'
+                         r'(?:\$(?:env:)?HOMEPATH|\$\{(?:env:)?HOMEPATH\})|%HOMEDRIVE%%HOMEPATH%|'
+                         r'\$(?:env:)?(?:HOME|USERPROFILE)|\$\{(?:env:)?(?:HOME|USERPROFILE)\}|'
                          r'%(?:HOME|USERPROFILE)%)(?=$|[\\/])')
+# bash cd's own options (cd -P, cd -L -e)
+BASH_CD_OPT_RE = re.compile(r'^-[LPe@]+$')
 
 
 def home_text(text, home=None, dyn=False):
@@ -918,7 +923,9 @@ def resolve_path(p, cwd, shell=None, home=None):
 def cd_target(cmd, cwd, home=None, home_vars=False):
     """(is a cd, the directory after it): None when the text cannot tell. `~` is `home`
     (home_folder); with `home_vars`, a target that starts with a home variable (home_text) is
-    read too."""
+    read too, bash cd's own options and a `--` are passed over, and a bash or PowerShell cd with
+    no place goes home (bash's cd, and PowerShell 7's; Windows PowerShell's stays put, but only a
+    deny reads it)."""
     if not cmd.words:
         return False, cwd
     verb = cmd.words[0].text.lower()
@@ -931,6 +938,13 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
         rest = rest[1:]
     elif rest and verb in ('cd', 'chdir') and rest[0].text.lower() == '/d':
         rest = rest[1:]
+    if home_vars and cmd.shell in (BASH, PS):
+        while cmd.shell == BASH and rest and not rest[0].dyn and BASH_CD_OPT_RE.match(rest[0].text):
+            rest = rest[1:]
+        if rest and not rest[0].dyn and rest[0].text == '--':
+            rest = rest[1:]
+        if not rest and verb in ('cd', 'chdir', 'set-location', 'sl'):
+            return True, resolve_path(home_folder(home), cwd, cmd.shell, home)
     if len(rest) != 1:
         return True, None
     p = rest[0].text

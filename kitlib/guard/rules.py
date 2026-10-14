@@ -515,6 +515,18 @@ HUB_SCRIPT = 'hub.py'
 HUB_LINE_RE = re.compile(r'(?i)(?<![\w-])hub\.py\b')
 # `--title="$t"`: the value is quoted after the `=`, so it stays one argument
 HUB_SAFE_EQ_RE = re.compile(r'^-[^"\'$`]*=["\']')
+# python's one-letter options that take no value (a cluster: -BIm); c, m, W and X take one
+PY_FLAG_LETTERS = set('bBdEhiIOPqRsSuvVx?')
+PY_LONG_VALUE_OPTS = {'--check-hash-based-pycs'}
+# python code that loads tools/hub.py as a module: import hub, import os, tools.hub,
+# from tools import hub, from hub import main, runpy.run_module('tools.hub'),
+# importlib.import_module('hub'), __import__('tools.hub')
+HUB_CODE_RE = re.compile(r'''(?x)
+    \bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*(?:tools\s*\.\s*)?hub\b(?!\s*\.)
+  | \bfrom\s+(?:tools\s*\.\s*)?hub\s+import\b
+  | \bfrom\s+tools\s+import\s+\(?\s*(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*hub\b
+  | \b(?:run_module|import_module|__import__)\s*\(\s*(?:\w+\s*=\s*)?[rbuRBU]?['"](?:tools\.)?hub['"]
+''')
 NODE_EVAL = ('-e', '--eval', '-p', '--print')
 HUB_SECRETS_WHY = ('the Action Hub\'s token folder holds the owner\'s key to the hub (owner.token answers as the '
                    'owner) and its store is the hub server\'s to write; an agent reaches the hub only through its '
@@ -622,36 +634,77 @@ def hub_script_run(inv):
     return bool(found) and found[1] == HUB_SCRIPT and not inv.args[found[0]].dyn
 
 
-def hub_module(words, k):
-    """True when words[k] is the module python's -m runs (`-m tools.hub`, `-mtools.hub`) and its
-    last part is `hub`: tools/hub.py run as a module."""
-    w = words[k]
-    if w.dyn:
-        return False
-    if w.text.startswith('-m') and len(w.text) > 2:
-        mod = w.text[2:]
-    elif k > 0 and words[k - 1].text == '-m' and not words[k - 1].dyn:
-        mod = w.text
-    else:
-        return False
-    return mod.rsplit('.', 1)[-1].lower() == HUB_SCRIPT[:-len('.py')]
+def hub_module_name(text):
+    """True when the module name `text` has `hub` as its last part (tools.hub, hub)."""
+    return text.rsplit('.', 1)[-1].lower() == HUB_SCRIPT[:-len('.py')]
+
+
+def hub_module(args):
+    """The arguments tools/hub.py gets when python's own options (`args`, after the program)
+    run it as a module, else None: `-m tools.hub`, `-mtools.hub`, -m at the end of a cluster
+    (`-Bm`, `-BIm tools.hub`), -m after other options, and `-m runpy tools.hub`. The options are
+    read the way python reads them: one-letter flags may share a word, and the first of c, m, W
+    or X takes the rest of the word or the next word as its value; -c, `--`, a script or a word
+    the guard cannot read ends them."""
+    k, n = 0, len(args)
+    while k < n:
+        w = args[k]
+        t = w.text
+        if w.dyn or t == '--' or t == '-' or not t.startswith('-'):
+            return None
+        if t.startswith('--'):
+            k += 2 if t in PY_LONG_VALUE_OPTS else 1
+            continue
+        j, opt = 1, None
+        while j < len(t) and t[j] in PY_FLAG_LETTERS:
+            j += 1
+        if j == len(t):
+            k += 1
+            continue
+        opt, value = t[j], t[j + 1:]
+        if opt not in 'cmWX':                   # the py launcher's -3, -3.12, -V:3.12
+            k += 1
+            continue
+        if not value:
+            k += 1
+            if k >= n or args[k].dyn:
+                return None
+            value = args[k].text
+        if opt == 'c':
+            return None
+        k += 1
+        if opt != 'm':
+            continue
+        rest = list(args[k:])
+        if hub_module_name(value):
+            return rest
+        if value.lower() == 'runpy' and rest and not rest[0].dyn and hub_module_name(rest[0].text):
+            return rest[1:]
+        return None
+    return None
 
 
 def hub_owner_run(cmd, inv):
     """What `inv` runs of tools/hub.py that is the owner's (kitlib.guard.hub.owner_verb), as text,
     or None. Its arguments are read after the first literal word named hub.py (python's script,
     a direct run, Start-Process's -ArgumentList) or, for python, after the module its -m names
-    when that module's last part is `hub` (hub_module); python running a script the text does
-    not show on a line that names hub.py counts as the owner's."""
+    when that module's last part is `hub` (hub_module). Python code from -c or standard input
+    that loads hub as a module (HUB_CODE_RE) counts as the owner's whatever it calls, and so does
+    python running a script the text does not show on a line that names hub.py."""
     words = ([inv.word] if inv.word is not None else []) + list(inv.args)
     py = UI_PYTHON_RE.match(inv.name or '') is not None
-    rest = None
-    for k, w in enumerate(words):
-        if (not w.dyn and cm.base_name(w.text) == HUB_SCRIPT) or (py and hub_module(words, k)):
-            rest = words[k + 1:]
-            break
+    rest = hub_module(list(inv.args)) if py else None
     if rest is None:
-        script = cm.python_script(inv) if UI_PYTHON_RE.match(inv.name or '') else None
+        for k, w in enumerate(words):
+            if not w.dyn and cm.base_name(w.text) == HUB_SCRIPT:
+                rest = words[k + 1:]
+                break
+    if rest is None and py:
+        for text in inline_code(cmd, inv):
+            if HUB_CODE_RE.search(text):
+                return 'from python code that loads it as a module (%s)' % HUB_CODE_RE.search(text).group(0)
+    if rest is None:
+        script = cm.python_script(inv) if py else None
         if (inv.dyn or (script is not None and inv.args[script[0]].dyn)) and HUB_LINE_RE.search(cmd.source or ''):
             return 'a script the text does not show, on a line that names hub.py'
         return None
@@ -733,9 +786,10 @@ def hub_secret_shell(ctx, cmd, inv, places):
     and messages, so only their words that are not literal count), a literal path in the token
     folder, in the store (unless tools/hub.py runs: its own --store), or wildcards that can name
     either, and python or node code that names them or the hub site (kitlib.guard.hub.INLINE_RE).
-    A path may start with the home folder however the line spells it (`~`, $HOME,
-    $env:USERPROFILE, %USERPROFILE%: shell.home_text, read as ctx.home), and a relative one is
-    read from the directory a cd to the home folder moved to (the command's cwd_home).
+    A path may start with the home folder as `~` or a home variable ($HOME, $env:USERPROFILE,
+    %USERPROFILE%, $env:HOMEDRIVE$env:HOMEPATH: shell.home_text, read as ctx.home), and a
+    relative one is read from the directory a cd to the home folder, or a bare cd, moved to
+    (the command's cwd_home).
     `places()` gives the HubPlaces."""
     name_only = inv is not None and inv.name in hubg.NAME_ONLY_PROGRAMS
     targets = [r.target for r in cmd.redirects if r.target is not None and not r.body and r.op != '<<<']

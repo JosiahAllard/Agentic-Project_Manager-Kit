@@ -174,8 +174,9 @@ class SecretShell(Hub):
 
 
 class HomeAndWildcards(Hub):
-    """The home folder however a line spells it (`~`, $HOME, ${HOME}, $env:USERPROFILE,
-    $env:HOME, %USERPROFILE%), in a word or in the directory a cd moves to, read as the guard's
+    """The home folder spelled as `~` or a home variable ($HOME, ${HOME}, $env:USERPROFILE,
+    $env:HOME, %USERPROFILE%, $env:HOMEDRIVE$env:HOMEPATH, %HOMEDRIVE%%HOMEPATH%), in a word or
+    in the directory a cd (or a bare cd) moves to, read as the guard's
     home (the World's, never the real one); and wildcard paths that can name the folders."""
 
     def rows_denied(self, rows):
@@ -200,6 +201,33 @@ class HomeAndWildcards(Hub):
             (ps, 'gc ${env:USERPROFILE}\\.pm-kit\\h*\\o*'),
             (ps, 'Get-Content -Path:$HOME\\.pm-kit\\h*\\o*'),
             (ps, 'cmd /c "type %USERPROFILE%\\.pm-kit\\h*\\o*"'),
+        ))
+
+    def test_the_home_drive_and_path_pair(self):
+        self.rows_denied((
+            (ps, 'gc $env:HOMEDRIVE$env:HOMEPATH\\.pm-kit\\h*\\o*'),
+            (ps, 'gc "${env:HOMEDRIVE}${env:HOMEPATH}\\.pm-kit\\h*\\o*"'),
+            (ps, 'cd $env:HOMEDRIVE$env:HOMEPATH; gc .pm-kit\\h*\\o*'),
+            (bash, 'cat $HOMEDRIVE$HOMEPATH/.pm-kit/h*/o*'),
+            (ps, 'cmd /c "type %HOMEDRIVE%%HOMEPATH%\\.pm-kit\\h*\\o*"'),
+        ))
+        self.rows_allowed(((ps, 'gc $env:HOMEDRIVE\\.pm-kit\\h*\\o*'), (ps, 'gc $env:HOMEPATH$x\\h*\\o*')))
+
+    def test_a_cd_with_no_place_goes_home(self):
+        # bash's cd, and PowerShell 7's, go home with no place; cd's own options and -- change nothing
+        self.rows_denied((
+            (bash, 'cd && cat .pm-kit/h*/o*'),
+            (bash, 'cd; cat .pm-kit/h*/o*'),
+            (bash, 'cd -- ~ && cat .pm-kit/h*/o*'),
+            (bash, 'cd -P && cat .pm-kit/h*/o*'),
+            (bash, 'cd -L -- $HOME/.pm-kit && cat h*/o*'),
+            (ps, 'cd; gc .pm-kit\\h*\\o*'),
+            (ps, 'Set-Location; gc .pm-kit\\h*\\o*'),
+        ))
+        self.rows_allowed((
+            (bash, 'cd && cat .gitconfig'),
+            (bash, 'cd && cd "%s" && cat h*/o*' % W.fwd(self.w.wt)),
+            (bash, 'cd -; cat .pm-kit/h*/o*'),
         ))
 
     def test_a_cd_into_the_home_folder_is_followed(self):
@@ -233,6 +261,9 @@ class HomeAndWildcards(Hub):
             (bash, 'cat $HOME/$x/h*'),
             (bash, 'cd ~ && ls'),
             (bash, 'cd $HOME && cat .gitconfig'),
+            (bash, 'cd ~ && cat .gitconfig'),
+            (bash, 'cd ~ && cd /tmp && cat .pm-kit/h*/o*'),
+            (bash, 'cd $HOME && cd $x && cat .pm-kit/h*/o*'),
             (ps, 'gc $env:USERPROFILE\\.pm-kit\\hub.json'),
             (ps, 'Set-Location $env:USERPROFILE; gc .gitconfig'),
         ))
@@ -348,12 +379,31 @@ class OwnerVerbs(Hub):
     def test_hub_run_as_a_module(self):
         # `python -m tools.hub` from the kit folder, or `-m hub` from tools/, runs the same parser
         for line in ('python -m tools.hub answer Q-1 --choice 1', 'cd tools && python -m hub todos done T-1',
-                     'python -mtools.hub open', 'python -B -m tools.hub to-pm send'):
+                     'python -mtools.hub open', 'python -B -m tools.hub to-pm send',
+                     # -m at the end of a cluster of python's flags, or after options with values
+                     'python -Bm tools.hub answer Q-1 --choice 1', 'python -Im tools.hub answer Q-1 --choice 1',
+                     'python -um tools.hub answer Q-1', 'python -Em tools.hub answer Q-1',
+                     'python -BImtools.hub answer Q-1', 'python -X utf8 -W ignore -m tools.hub answer Q-1',
+                     'python --check-hash-based-pycs never -m tools.hub answer Q-1',
+                     'py -3 -m tools.hub answer Q-1', 'python -m "tools.hub" answer Q-1',
+                     # runpy running it, from the command line or from code
+                     'python -m runpy tools.hub answer Q-1 --choice 1', 'python -Im runpy hub answer Q-1',
+                     'cd tools && python -c "import hub; hub.main()" answer Q-1 --choice 1',
+                     'python -c "from tools import hub; hub.main()" answer Q-1',
+                     'python -c "from tools.hub import main; main()" answer Q-1',
+                     'python -c "import os, tools.hub as h; h.main()" answer Q-1',
+                     'python -c "import runpy,sys; sys.argv=[\'x\',\'answer\']; '
+                     'runpy.run_module(\'tools.hub\', run_name=\'__main__\')"',
+                     'python -c "import importlib; importlib.import_module(\'hub\')"'):
             with self.subTest(line):
                 self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
         self.denied(lambda sub: ps('python -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
+        self.denied(lambda sub: ps('python -Bm tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
         for line in ('python -m tools.hub questions', 'python -m tools.hub todos add --title t',
-                     'python -m hubby answer Q-1', 'python -m tools.hubsite answer'):
+                     'python -m hubby answer Q-1', 'python -m tools.hubsite answer',
+                     'python -Bm tools.hub questions', 'python -m runpy tools.hub questions',
+                     'python -m runpy tools.hubby answer Q-1', 'python -c "import hubby" answer Q-1',
+                     'python -c "import kitlib.hubmcp" answer Q-1', 'python -Bc "print(1)" -m tools.hub answer'):
             with self.subTest(line):
                 self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
 
