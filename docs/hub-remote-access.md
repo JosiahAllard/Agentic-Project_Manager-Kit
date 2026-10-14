@@ -141,7 +141,9 @@ passed, a `403` from the hub in the API's JSON error shape (code `forbidden`, fi
 of why; its console logs the reason, at most once a minute per reason, never the token).
 
 If the phone reaches the page but the hub says it is not paired or is read-only, remember that the
-tunnel listener has no pairing link: a valid Access token makes you the owner there.
+tunnel listener has no pairing link: a valid Access token makes you the owner there. How long the
+phone stays signed in is Cloudflare Access's own session; the hub's browser sessions and
+`hub.py unpair` are for the PC's browser on the local port only.
 
 ## What the hub does and does not trust
 

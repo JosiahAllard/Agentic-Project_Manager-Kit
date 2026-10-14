@@ -70,6 +70,20 @@ class Derive(unittest.TestCase):
                 self.assertEqual(L["key"], want)
                 self.assertEqual(lay.layout_key(L), want)
 
+    def test_other_labels_names_each_foreign_label_once(self):
+        # Every writer in this kit labels its record with slot_key of the one layout in force
+        # (layout.json), so another label on a live record means an older writer that counts
+        # this machine its own way: other_labels names each such label once, sorted. A record
+        # with no label, or one that is not text, names nothing.
+        L = lay.derive(lay.fake_hardware(threads=24, smt=2, gpus=1, vram_mb=12288))
+        own = lay.slot_key(L)
+        old, two = "t24 cpu 12 x 2 gpu 2 m90bcd92d", "t24 g2 cpu 12 x 2 gpu 4 m0123abcd"
+        recs = [{"layout": own}, {"layout": two}, {"layout": old}, {"layout": two}, {},
+                {"layout": None}, {"layout": ""}, {"layout": 5}]
+        self.assertEqual(lay.other_labels(recs, L), [old, two])
+        self.assertEqual(lay.other_labels([{"layout": own}, {}], L), [])
+        self.assertEqual(lay.other_labels([], L), [])
+
     def test_a_small_machine_keeps_one_slot_out_of_half(self):
         L = lay.derive(lay.fake_hardware(threads=4, smt=2, gpus=0))
         self.assertEqual((L["cpu_slots"], L["agent_cap"], L["medium_cores"], L["half"]["cpu"]),

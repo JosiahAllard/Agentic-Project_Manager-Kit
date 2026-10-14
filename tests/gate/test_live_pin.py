@@ -1,7 +1,9 @@
 """kitlib.gate.pin (docs/gate.md "Pinned tools"): tools/land.py and tools/gate.py, started from
 the kit's main checkout, run from an export of its remote-tracking main, so a landing that merges
-into that checkout cannot load a mixed generation of the kit's own modules. A linked worktree, an
-export and a run already pinned stay live; a pin that cannot be made fails open, loudly.
+into that checkout cannot load a mixed generation of the kit's own modules. A tool started from an
+export (the plugin's) pins through the main checkout its marker names. A linked worktree, an export
+whose marker names none and a run already pinned stay live; a pin that cannot be made fails open,
+loudly.
 
 Temp repositories, temp homes and temp export roots only: every run here sets USERPROFILE, HOME
 and LOCALAPPDATA to temp folders, and drops KIT_PINNED and KIT_LIVE_ROOT inherited from a pinned
@@ -90,14 +92,41 @@ class Target(unittest.TestCase):
             fh.write('gitdir: elsewhere\n')
         self.assertIsNone(_pin().target(self.tool, {}))
 
-    def test_an_export_runs_live(self):
+    def marker(self, **fields):
+        with open(os.path.join(self.base, pluginsource.MARKER), 'w', encoding='utf-8') as fh:
+            json.dump(dict({'sha': 'ab' * 20}, **fields), fh)
+
+    def test_an_export_whose_marker_names_no_checkout_runs_live(self):
         self.assertIsNone(_pin().target(self.tool, {}))
+        self.marker()
+        self.assertIsNone(_pin().target(self.tool, {}))
+
+    def test_an_export_pins_through_the_main_checkout_its_marker_names(self):
+        main = temp_dir(self, 'kit-pin-main-')
+        os.makedirs(os.path.join(main, '.git'))
+        self.marker(checkout=main)
+        self.assertEqual(_pin().target(self.tool, {}), main)
+
+    def test_an_export_naming_a_linked_worktree_or_a_gone_checkout_runs_live(self):
+        linked = temp_dir(self, 'kit-pin-linked-')
+        with open(os.path.join(linked, '.git'), 'w', encoding='utf-8') as fh:
+            fh.write('gitdir: elsewhere\n')
+        for checkout in (linked, os.path.join(linked, 'gone')):
+            self.marker(checkout=checkout)
+            self.assertIsNone(_pin().target(self.tool, {}), checkout)
 
     def test_a_run_already_pinned_or_failed_open_runs_live(self):
         os.makedirs(os.path.join(self.base, '.git'))
         pin = _pin()
         for value in ('0123456789ab' * 3 + '0123', pin.LIVE):
             self.assertIsNone(pin.target(self.tool, {pin.PINNED_ENV: value}))
+
+    def test_an_export_already_pinned_runs_live(self):
+        main = temp_dir(self, 'kit-pin-main-')
+        os.makedirs(os.path.join(main, '.git'))
+        self.marker(checkout=main)
+        pin = _pin()
+        self.assertIsNone(pin.target(self.tool, {pin.PINNED_ENV: 'ab' * 20}))
 
 
 class LiveRoot(unittest.TestCase):
@@ -272,8 +301,8 @@ class Ensure(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.root, self.sha[:12])))
 
 
-class Run(unittest.TestCase):
-    """pin.run on a kit fixture: the tool runs from the export, once, with the pin's variables."""
+class ProbeKit(unittest.TestCase):
+    """A kit fixture whose pushed main holds tools/probe.py (PROBE), temp places, no pin."""
 
     def setUp(self):
         self.k = Kit(self)
@@ -288,6 +317,10 @@ class Run(unittest.TestCase):
     def read_probe(self):
         with open(self.out, encoding='utf-8') as fh:
             return json.load(fh)
+
+
+class Run(ProbeKit):
+    """pin.run on a kit fixture: the tool runs from the export, once, with the pin's variables."""
 
     def test_the_tool_runs_from_the_export_of_pushed_main(self):
         pin = _pin()
@@ -368,6 +401,68 @@ class Run(unittest.TestCase):
         self.assertIn('has no tools/unpushed.py', said)
 
 
+def same(a, b):
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+class RunFromExport(ProbeKit):
+    """pin.run for a tool started from an export of the kit (the plugin's, made by
+    pluginsource.export, whose marker names the main checkout): it pins as a start from that
+    checkout would, and a pin that fails open still names the checkout, not the export."""
+
+    def setUp(self):
+        super().setUp()
+        plugin = os.path.join(self.places['LOCALAPPDATA'], 'pm-kit', 'plugin')
+        self.export, _v = pluginsource.export(self.k.kit, self.sha, plugin)
+        self.tool = os.path.join(self.export, 'tools', 'probe.py')
+
+    def assert_names_the_checkout(self, path):
+        self.assertTrue(path and same(path, self.k.kit), path)
+
+    def test_the_tool_runs_from_the_pin_of_the_checkout_the_marker_names(self):
+        pin = _pin()
+        code, said = pin.run(self.tool, [self.out, '--x'], environ=self.env)
+        self.assertEqual((code, said), (7, None))
+        got = self.read_probe()
+        folder = os.path.join(pins_root(self.places), self.sha[:12])
+        self.assertTrue(same(got['file'], os.path.join(folder, 'tools', 'probe.py')), got['file'])
+        self.assertEqual(got['pinned'], self.sha)
+        self.assert_names_the_checkout(got['live'])
+        self.assertEqual(pluginsource.read_marker(folder)['made_by'], pin.MADE_BY)
+
+    def test_a_pin_that_fails_open_still_names_the_checkout(self):
+        del self.env['LOCALAPPDATA']
+        os.environ.pop('LOCALAPPDATA')
+        pin = _pin()
+        code, said = pin.run(self.tool, [self.out], environ=self.env)
+        self.assertIsNone(code)
+        self.assertIn("WARNING: pin: running the live checkout's code", said)
+        self.assertEqual(self.env[pin.PINNED_ENV], pin.LIVE)
+        self.assert_names_the_checkout(self.env[pluginsource.LIVE_ROOT_ENV])
+        self.assert_names_the_checkout(pluginsource.live_root(self.export, self.env))
+
+    def test_nothing_pushed_runs_live_naming_the_checkout(self):
+        self.k.repo.git('update-ref', '-d', 'refs/remotes/origin/main')
+        pin = _pin()
+        self.assertEqual(pin.run(self.tool, [self.out], environ=self.env), (None, None))
+        self.assertEqual(self.env[pin.PINNED_ENV], pin.LIVE)
+        self.assert_names_the_checkout(self.env[pluginsource.LIVE_ROOT_ENV])
+
+    def test_a_live_root_already_set_is_kept(self):
+        other = temp_dir(self, 'kit-pin-other-')
+        self.env[pluginsource.LIVE_ROOT_ENV] = other
+        self.k.repo.git('update-ref', '-d', 'refs/remotes/origin/main')
+        self.assertEqual(_pin().run(self.tool, [self.out], environ=self.env), (None, None))
+        self.assertEqual(self.env[pluginsource.LIVE_ROOT_ENV], other)
+
+    def test_a_tool_the_export_lacks_fails_open(self):
+        tool = os.path.join(self.export, 'tools', 'unpushed.py')
+        code, said = _pin().run(tool, [self.out], environ=self.env)
+        self.assertIsNone(code)
+        self.assertIn('has no tools/unpushed.py', said)
+        self.assert_names_the_checkout(self.env[pluginsource.LIVE_ROOT_ENV])
+
+
 class Identity(unittest.TestCase):
 
     def test_a_pinned_gate_names_the_exported_commit_clean(self):
@@ -414,6 +509,10 @@ class Tools(unittest.TestCase):
             shutil.copyfile(os.path.join(HERE, *rel.split('/')), dest)
         cls.sha = cls.repo.commit('the kit', *files)
         cls.repo.git('update-ref', 'refs/remotes/origin/main', cls.sha)
+        # The plugin's export of that commit, made before the checkout is broken (it reads git).
+        plugin = tempfile.mkdtemp(prefix='kit-pin-plugin-')
+        cls.addClassCleanup(gitfixture.rmtree, plugin)
+        cls.export, _v = pluginsource.export(cls.repo.root, cls.sha, plugin)
         cls.repo.write('kitlib/gate/land.py', BROKEN)
 
     def setUp(self):
@@ -436,6 +535,7 @@ class Tools(unittest.TestCase):
         self.assertNotIn('WARNING: pin', said)
         pins = pins_root(self.places)
         marker = pluginsource.read_marker(os.path.join(pins, self.sha[:12]))
+        self.assertIsNotNone(marker, 'no pinned export: the tool ran live\n' + said)
         self.assertEqual((marker['sha'], marker['made_by']), (self.sha, 'kitlib.gate.pin'))
         self.assertEqual(os.listdir(os.path.join(pins, 'leases')), [])
 
@@ -451,6 +551,15 @@ class Tools(unittest.TestCase):
 
     def test_gate_from_the_main_checkout_runs_pushed_main(self):
         self.assert_pinned(self.run_tool(self.repo.root, 'gate.py', '--out', 'x'),
+                           'USAGE: --out goes with --measure')
+
+    def test_land_from_the_plugins_export_pins_through_the_checkout(self):
+        """Started from the plugin's export (as `<kit>/tools/land.py` is), it pins like a start
+        from the main checkout its marker names: pins/<sha12> holds the run, with its lease gone."""
+        self.assert_pinned(self.run_tool(self.export, 'land.py'), 'USAGE: name the branch to land')
+
+    def test_gate_from_the_plugins_export_pins_through_the_checkout(self):
+        self.assert_pinned(self.run_tool(self.export, 'gate.py', '--out', 'x'),
                            'USAGE: --out goes with --measure')
 
     def test_a_run_already_pinned_stays_live(self):

@@ -397,7 +397,8 @@ class DomTest(unittest.TestCase):
                     snapshot(collections={"todos": {"T-1": {"status": "open", "title": "kept on the page", "from": "pm"}}}),
                     hash="#todo")
                 with self.subTest(status=status, field=field, where=where):
-                    self.assertIn("not paired with the hub (yet, or any more after the hub server restarted)", got["first"]["err"])
+                    self.assertIn("not paired with the hub (yet, or any more: it was unpaired, or its session ran out)", got["first"]["err"])
+                    self.assertNotIn("restarted", got["first"]["err"])
                     self.assertIn("`python tools/hub.py open`", got["first"]["err"])
                     self.assertIn("in the kit folder", got["first"]["err"])
                     self.assertNotIn("no longer paired", got["first"]["err"])
