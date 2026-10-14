@@ -53,6 +53,17 @@ class WriteTest(GateOkCase):
         with open(path, encoding='utf-8') as f:
             self.assertEqual(json.load(f), rec)
 
+    def test_the_source_is_written_and_an_older_record_reads_as_gate_json(self):
+        path, rec = self.passed(source='auto')
+        self.assertEqual(rec['source'], 'auto')
+        self.assertEqual(gate_ok.source_of(rec), 'auto')
+        self.assertIsNone(gate_ok.verify(self.repo.root, self.head, GATE)[1])
+        self.rewrite(path, source=gate_ok)              # a record from before the key
+        rec, why = gate_ok.verify(self.repo.root, self.head, GATE)
+        self.assertIsNone(why)
+        self.assertNotIn('source', rec)
+        self.assertEqual(gate_ok.source_of(rec), 'gate.json')
+
     def test_the_record_is_in_the_common_dir_whichever_checkout_writes_it(self):
         wt = self.repo.worktree('a')
         path, _ = self.passed(root=wt)

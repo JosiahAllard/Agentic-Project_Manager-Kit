@@ -14,13 +14,17 @@ or a line break (inside a bash double-quoted command the last two expand, the ot
 quoting or the placeholder); a stack the kit has no folder for; any skill file, .md or not, that has
 the placeholder after rendering (a non-.md file is copied as it is, so it must have none).
 A stack with a folder but no `.claude/skills` has nothing to copy and is not a refusal.
+The skills folder (SKILLS_REL) is the default host's profile skills_directory in hosts.json, the
+host the stack templates are written for.
 """
 import os
 import re
 
+from kitlib.host import registry
+
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 KIT_ROOT_PLACEHOLDER = '{kit_root}'
-SKILLS_REL = os.path.join('.claude', 'skills')
+SKILLS_REL = os.path.join(*registry.default_profile().skills_directory.split('/'))
 TEXT_SUFFIXES = ('.md',)
 _STACK = re.compile(r'^[a-z0-9]+$')
 

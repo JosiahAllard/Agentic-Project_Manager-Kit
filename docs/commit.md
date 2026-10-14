@@ -4,7 +4,9 @@ Two tools, both ported from the PM kit (PM 9813c73). `tools/commit.py` is the en
 
 ## commit.py
 
-`commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME] [--owner-authored] [--owner-approved VALUE ...] [--lander-main-checkout] PATH ...`
+`commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME] [--host NAME] [--owner-authored] [--owner-approved VALUE ...] [--lander-main-checkout] PATH ...`
+
+`--host NAME` names the agent host for the Co-Authored-By trailer: a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude). `--provider` is its old name, accepted for one release. A name `hosts.json` lacks is a usage error (exit 2) before any work. The trailer comes from `kitlib.attribution`: Claude's is `Claude <model>` as below; Codex's needs the actual explicit model id, emits `Codex <model-id> <noreply@openai.com>` and never uses CLAUDE_AGENT_MODEL. Explicit paths, owner identity/approval, staged-file and document checks keep their rules. The shared trailer classifier recognizes both forms.
 
 It stages exactly the PATHs named and commits them in the work tree that DIR is in (default: here). `-C` is resolved by `kitlib.git.repo.toplevel`.
 - A path is relative to that work tree's root, or absolute inside it.
@@ -35,6 +37,8 @@ The message is the subject, then the body, then the trailers:
   - `-m` takes the subject once; a second `-m` is a usage error (exit 2) pointing at `-b` / `--body-file`, and nothing is committed.
   - A `-b` whose whole value names an existing file, or looks like an absolute path, is a usage error.
 
+**Render on commit** (docs/content.md "Render on commit"; `kitlib.content.oncommit`): in a work tree with the kit's layout, a named path under `content/`, or `kit.json` or `hosts.json`, makes it run that work tree's `tools/render_content.py --write` before staging. Every rendered file the render wrote or removed is staged into the same commit, under the same foreign-file and owner-only checks, and a `rendered  <paths>` line follows `files` (`no rendered file changed` when the render changed nothing). A render that fails is refused (exit 1) with the command to run; what it wrote stays in the work tree. Any other repository, or a commit naming no render source, starts no render.
+
 After a commit that includes a `.md` file or an owner-only file, it prints the doc-budget verdict.
 - The kit's `tools/doc_budget.py -C <root>` produces it, and `kitlib.verdict` judges it.
 - A `doc index` verdict follows (`kitlib.commit.doc_index_check`: `tools/doc_index.py -C <root>`, judged on `DOC INDEX OK` / `DOC INDEX FAILED`). Either failing prints the follow-up-commit notice. `.kit.json` "doc_index".enabled false prints nothing.
@@ -43,7 +47,7 @@ After a commit that includes a `.md` file or an owner-only file, it prints the d
 
 | Code | Meaning |
 |---|---|
-| 0 | committed (`committed <hash>  <subject>`, `files     ...`) |
+| 0 | committed (`committed <hash>  <subject>`, `files     ...`, and `rendered  ...` after a render) |
 | 1 | refused (`refused: ...`), or git failed (`git add failed`, `commit failed`, `nothing to commit in`) |
 | 2 | `USAGE: ...`, the main-checkout refusal, or a refused `.kit.json` |
 

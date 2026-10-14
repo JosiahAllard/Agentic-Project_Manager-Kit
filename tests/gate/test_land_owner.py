@@ -6,6 +6,7 @@ import json
 
 from kitlib import gate as G
 from tests.gate import test_land
+from tests.home import no_machine_owner
 
 BRANCH = test_land.BRANCH
 OWNER = 'owner@example.invalid'
@@ -103,8 +104,13 @@ class OwnerPaths(OwnerLandCase):
 
 
 class NoOwnerEmail(test_land.LandCase):
-    """The base names no owner: no commit is provable as his, so every owner-only change is
-    refused (fail closed)."""
+    """The base names no owner, and neither does the machine config (no_machine_owner: the lander
+    runs in this process and would otherwise read the real home's, which the home fence refuses):
+    no commit is provable as his, so every owner-only change is refused (fail closed)."""
+
+    def setUp(self):
+        super().setUp()
+        no_machine_owner(self)
 
     def test_any_owner_only_change_is_refused(self):
         wt = self.repo.worktree('feature')

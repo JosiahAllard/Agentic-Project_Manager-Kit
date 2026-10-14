@@ -20,7 +20,7 @@ import sys
 import tempfile
 
 from .migration import MOVE_STEPS, OLD_DIR_NAME
-from .types import ConfigError, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, is_note, parse_json
+from .types import ConfigError, Email, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, is_note, parse_json
 
 # The machine config's folder in the home folder. The one place the kit names it: code derives
 # the folder from config_dir() and messages from DISPLAY or display(), so a new name changes this
@@ -127,6 +127,7 @@ LEDGER_REFS = Obj({
 
 # One line per key. A key another module owns is registered as Owned(<that module>), which checks it.
 SCHEMA = {
+    'owner_email': Field(Email(), None, 'the author email of the owner\'s own commits, for every repository whose .kit.json sets no "owner".email; unset there too: no commit is provable as the owner\'s, so every owner-only change is refused (docs/kit-json.md "With no file"); older kit copies reject the key'),
     'ledger_path': Field(AbsPath(), None, 'the rulings ledger file; set here only'),
     'ledger_repos': Field(ListOf(Str(pattern=r'[a-z0-9][a-z0-9-]*', what='a lower-case repo name')), None, 'the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)'),
     'pending_path': Field(AbsPath(), None, "the owner's pending-steps file tools/pending.py edits (docs/pending.md)"),
@@ -138,7 +139,8 @@ SCHEMA = {
     'guard_agent_marks': Field(ListOf(Str()), None, 'the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json and write-jail rules; it replaces the default list, so it names every mark it holds; unset: coordinator, conductor (removed after the switch), deep-worker, consultant and pm (docs/guard.md "Session mark")'),
     'guard_mark_roots': Field(MarkMap(ListOf(MARK_ROOT), what='mark'), None, 'more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside either machine config folder, the current or the retired one, is ignored unless it is read-only (docs/guard.md "Write jail")'),
     'pm_data': Field(Owned('kitlib.pmdata'), None, 'the worktree of the PM data branch: {path, branch, remote} (docs/pm-data-branch.md "Layout")'),
-    'pm_start': Field(Owned('kitlib.pmstart'), None, 'the PM session-start checklist settings (docs/pm-start.md "Config"); among them hub_urls: account label -> Action Hub URL, one copy per account; hub_url: the single copy, read only while hub_urls has no entry; hub_mirror: the absolute mirror folder for an install without pm_data (docs/action-hub.md "One copy per account")'),
+    'hub': Field(Owned('kitlib.hubsite.settings'), None, 'the Action Hub site settings: port, tunnel_port, store, commit_every_s, push (unset: on only when store is unset and pm_data is set), backlog_refresh_s, access: {team, aud, emails}, relay: {source}; unset: every default, and the site still runs; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
+    'pm_start': Field(Owned('kitlib.pmstart'), None, 'the PM session-start checklist settings (docs/pm-start.md "Config"); among them hub_mirror: the absolute folder of the old hub\'s mirror for an install without pm_data (docs/action-hub.md "Data from the old hub")'),
     'coordinator_start': Field(Owned('kitlib.coordinatorstart'), None, 'the coordinator session-start settings'),
     'conductor_start': Field(Owned('kitlib.coordinatorstart'), None, 'the old name of coordinator_start, read when coordinator_start is absent; removed after the switch'),
     'pm_watch': Field(Owned('kitlib.pmwatch'), None, 'the PM watcher settings'),
@@ -506,6 +508,13 @@ def failing_keys(data):
         if errs:
             out.append(k)
     return sorted(out)
+
+
+def owner_email(home=None, location=None):
+    """The machine's owner email (lower case), or None when the machine config sets none. A
+    machine config that cannot be read raises ConfigError; the caller fails closed on it."""
+    value = user_config(home, location)['owner_email']
+    return value.strip().lower() if isinstance(value, str) and value.strip() else None
 
 
 def ledger_path(home=None):

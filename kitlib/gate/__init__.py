@@ -1,6 +1,7 @@
 """The universal gate (ARCHITECTURE.md "Contracts": Gate-OK record, Landing; "Details").
 
   steps    the configured steps: built, selected by what changed, judged by their logs
+  detect   with no "gate" section, the steps detected from the checkout (source auto)
   runner   the steps run in a machine-lock slot; the branch gate and the merged-tree gate
   land     one branch landed: landing lock, expected refs, merge, merged gate, push, verify
   stash    the stash guard: no gate and no landing while the repository's stash stack has an entry

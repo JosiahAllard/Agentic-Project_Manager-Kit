@@ -34,6 +34,7 @@ import threading
 import time
 from ctypes import wintypes
 
+from kitlib.host import registry
 from kitlib.proc import process
 from kitlib.proc import win32
 from kitlib.proc.win32 import K32, ADV
@@ -108,7 +109,9 @@ def profile_dir():
 
 
 def real_root():
-    return os.path.join(profile_dir(), ".claude", "machine-lock")
+    """The machine's store: machine-lock in the kit's per-user state folder (registry.state_path;
+    ~/.claude/machine-lock, where it has always been)."""
+    return registry.state_path(profile_dir(), "machine-lock")
 
 
 FENCED = ("the machine's lock store is refused under the kit's tests (asked for: %s): this "
@@ -190,28 +193,58 @@ def local_ok(*times):
 
 
 # ------------------------------------------------------------------ who is asking
-SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
-# Processes that host agents: Claude Code (claude.exe; node.exe when installed from npm), the Claude
-# desktop app (also claude.exe; its terminal panel runs agents' commands) and Codex.
-AGENT_HOSTS = frozenset({"claude.exe", "node.exe", "codex.exe"})
+# An actor's agent host [pid, ctime] is under HOST_KEY. Actors made before the key was neutral
+# carry it under LEGACY_HOST_KEY, which is read too (actor_host) and never written.
+HOST_KEY = "host"
+LEGACY_HOST_KEY = "claude"
 
 
-def chain_host(chain, names):
+def agent_hosts(registry_path=None):
+    """The lower-case image names of the processes that host agents: every registered host's
+    profile process_names (hosts.json; Claude Code runs as claude.exe, or node.exe when installed
+    from npm, and so does its desktop app's terminal panel; Codex as codex.exe). A hosts.json
+    that cannot be read raises RegistryError, which each caller here treats as an agent (fail
+    closed)."""
+    names = registry.union("process_names", registry_path)
+    return frozenset(n.lower() for n in names)
+
+
+def session_of(env, registry_path=None):
+    """The agent session id `env` carries (shown, never trusted): the first set one of the
+    registered hosts' profile session_env variables, else None, as it is when hosts.json cannot
+    be read."""
+    try:
+        names = registry.union("session_env", registry_path)
+    except registry.RegistryError:
+        return None
+    return next((env.get(n) for n in names if env.get(n)), None)
+
+
+def actor_host(actor):
+    """The actor's agent host [pid, ctime] as it carries it: under HOST_KEY, else under
+    LEGACY_HOST_KEY (an actor made before the rename); None when neither is set."""
+    if not isinstance(actor, dict):
+        return None
+    return actor.get(HOST_KEY) or actor.get(LEGACY_HOST_KEY)
+
+
+def chain_host(chain, names, hosts=None):
     """The nearest agent host [pid, ctime] in chain ([(pid, ctime)], nearest first) by exe name
-    (names {pid: exe}), or None. A pid with no name (a parent that has exited but is still
-    open somewhere) is not a host."""
+    (names {pid: exe}; hosts the agent images, default agent_hosts()), or None. A pid with no
+    name (a parent that has exited but is still open somewhere) is not a host."""
+    hosts = agent_hosts() if hosts is None else hosts
     for pid, ct in chain:
-        if (names.get(pid) or "").lower() in AGENT_HOSTS:
+        if (names.get(pid) or "").lower() in hosts:
             return [int(pid), int(ct)]
     return None
 
 
 def caller(name=None, env=None):
     """Who is asking, from this process's tree, never from what a caller says: {role:
-    owner | agent, claude: [pid, ctime] of the nearest agent host above this process or None,
-    ancestors: [[pid, ctime]], session: CLAUDE_CODE_SESSION_ID (shown, never trusted), name}.
-    The role is agent when any ancestor is an agent host (AGENT_HOSTS), whatever the
-    environment says, and when the tree cannot be read (fail closed)."""
+    owner | agent, host: [pid, ctime] of the nearest agent host above this process or None,
+    ancestors: [[pid, ctime]], session: the host's session id (session_of; shown, never trusted),
+    name}. The role is agent when any ancestor is an agent host (agent_hosts), whatever the
+    environment says, and when the tree or the host registry cannot be read (fail closed)."""
     env = os.environ if env is None else env
     try:
         snap = process.snapshot()
@@ -221,24 +254,25 @@ def caller(name=None, env=None):
         role = "agent" if host or not chain else "owner"
     except Exception:
         chain, host, role = [], None, "agent"
-    return {"role": role, "claude": host, "ancestors": sorted([p, c] for p, c in chain),
-            "session": env.get(SESSION_ENV) or None, "name": name}
+    return {"role": role, HOST_KEY: host, "ancestors": sorted([p, c] for p, c in chain),
+            "session": session_of(env), "name": name}
 
 
 def tree_role(pairs):
     """owner or agent for a run started under the processes pairs ([pid, ctime], a detached
     run's launcher ancestry; for holds.admits): agent when any is a live agent host, when any can no
     longer be named (it exited, or its pid now names another process), when there are none, or
-    when the processes cannot be listed (fail closed)."""
+    when the processes or the host registry cannot be read (fail closed)."""
     try:
         names = {p: n for p, _pp, n in process.snapshot()}
         if not pairs:
             return "agent"
+        hosts = agent_hosts()
         for pid, ct in pairs:
             n = names.get(int(pid))
             if n is None or process.proc_ctime(int(pid)) != int(ct):
                 return "agent"
-            if n.lower() in AGENT_HOSTS:
+            if n.lower() in hosts:
                 return "agent"
         return "owner"
     except Exception:
@@ -246,11 +280,11 @@ def tree_role(pairs):
 
 
 def owns(actor, rec):
-    """Whether record rec (a run or a hold) is the actor's: the actor's nearest agent host (its
-    Claude Code process, read from its tree by caller()) is among rec's recorded ancestors, so
-    the record was made inside that session (its subagents run in the same process). A session
-    id, which anyone can copy from snapshot(), grants nothing."""
-    host = (actor or {}).get("claude")
+    """Whether record rec (a run or a hold) is the actor's: the actor's nearest agent host
+    (actor_host; read from its tree by caller()) is among rec's recorded ancestors, so the record
+    was made inside that session (its subagents run in the same process). A session id, which
+    anyone can copy from snapshot(), grants nothing."""
+    host = actor_host(actor)
     if not (isinstance(host, (list, tuple)) and len(host) == 2):
         return False
     return [int(host[0]), int(host[1])] in [list(a) for a in rec.get("ancestors") or []]

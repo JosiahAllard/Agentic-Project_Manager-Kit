@@ -87,6 +87,7 @@ def _fail(env, why):
 def _run(checkout, tool_file, argv, env, wait_s):
     from kitlib import pluginsource
     from kitlib.config import ConfigError
+    from kitlib.proc import job
     try:
         settings = pluginsource.load(environ=env, kit=checkout)
     except (pluginsource.RefreshError, ConfigError) as exc:
@@ -113,6 +114,9 @@ def _run(checkout, tool_file, argv, env, wait_s):
         flags = getattr(subprocess, '_args_from_interpreter_flags', list)()
         if getattr(sys.__stdout__, 'write_through', False):
             flags.append('-u')                              # ... and -u, which that leaves out
+        # No console window for the tool when this process has no console (kitlib.proc.job); 0,
+        # the start as it always was, when it has one. Read here, before the start.
+        no_window = job.no_window_flags(0)
         # From the start the tool runs: nothing may fail open (that would run it twice). Ctrl+C
         # reaches the child too (the same console; a child does not inherit SIG_IGN,
         # tests/gate/test_pin_sigint.py) and it stops itself; this process ignores it from just
@@ -122,7 +126,7 @@ def _run(checkout, tool_file, argv, env, wait_s):
         before = _ignore_ctrl_c()
         try:
             proc = subprocess.Popen([sys.executable] + flags + [tool] + list(argv),
-                                    env=child_env)
+                                    env=child_env, creationflags=no_window)
             try:
                 _write_lease(lease, sha, child=proc.pid)
             except (Exception, KeyboardInterrupt):  # noqa: BLE001 - this process's lease holds it

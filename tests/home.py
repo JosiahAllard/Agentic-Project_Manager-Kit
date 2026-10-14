@@ -80,3 +80,13 @@ def fence_decoy(case):
     patch.start()
     case.addCleanup(patch.stop)
     return home
+
+
+def no_machine_owner(case, email=None):
+    """The machine config's owner_email is `email` (default: none) for the rest of the test
+    `case`, with no home looked up: kitlib.config.user.owner_email is patched, so a Config whose
+    .kit.json names no "owner".email reads it there (docs/kit-json.md "With no file"). A temp
+    home would not do where the fence cannot prove a home temp (Windows names no profile)."""
+    patch = mock.patch.object(kuser, 'owner_email', return_value=email)
+    patch.start()
+    case.addCleanup(patch.stop)

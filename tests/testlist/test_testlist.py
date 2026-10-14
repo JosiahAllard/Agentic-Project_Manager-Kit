@@ -96,7 +96,7 @@ class TestNames(Tree):
         self.addCleanup(rmtree, empty)
         out = io.StringIO()
         self.assertEqual(cli.main(['--names', '--dir', empty, '-C', self.top], out=out), 2)
-        self.assertIn('python tools/gate.py', out.getvalue())
+        self.assertIn('/tools/gate.py" -C ', out.getvalue())     # the kit's gate, never a repository copy
 
 
 class MoreThanRepathTested(Tree):
@@ -195,11 +195,12 @@ class TheResultGlobsComeFromConfig(Tree):
         self.set_config({'testlist': {'junit': [], 'trx': ['net/*.trx']}})
         self.assertEqual(self.run_main('--names'), (0, 'N.T.fail\nN.T.pass\nN.T.skip\n'))
 
-    def test_the_hint_names_the_configured_tools_dir(self):
+    def test_the_hint_names_the_kits_gate_whatever_the_tools_dir(self):
         self.set_config({'repo': {'tools_dir': 'scripts'}, 'testlist': {'junit': ['none/*.xml']}})
         code, text = self.run_main('--names')
         self.assertEqual(code, 2)
-        self.assertIn('python scripts/gate.py', text)
+        self.assertIn('/tools/gate.py" -C ', text)
+        self.assertNotIn('scripts/gate.py', text)
 
     def refused(self, section):
         self.set_config({'testlist': section})

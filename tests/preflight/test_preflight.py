@@ -25,6 +25,13 @@ from tests import gitfixture
 from tools import preflight
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CODEMAP = 'python tools/codemap.py -C "D:/src/Repo/.claude/worktrees/y"'    # TheNextBlockLines
+
+
+def kit(name, root):
+    """How the report names the tool `name` of the kit at `root`: every command it prints runs the
+    kit's own tools (nextblock.command over the kit's tools folder)."""
+    return nextblock.command(root.replace('\\', '/') + '/tools', name)
 FREE = {'at': '2026-10-07T12:00:00Z', 'slots': {'cpu': [{'slot': i, 'holder': None} for i in range(4)],
                                                 'gpu': [{'slot': i, 'holder': None} for i in range(2)]},
         'runs': [], 'queue': {'entries': [], 'error': None}, 'holds': [], 'holds_error': None}
@@ -340,13 +347,16 @@ class TheLinesAfterTheWorktrees(Fixture):
 
     def test_the_main_checkout_gets_a_note(self):
         note = self.line(self.run_preflight()[1], 'NOTE: this is the MAIN checkout')
-        self.assertIn('python tools/new_worktree.py <area>/<slug>', note)
+        self.assertIn('%s -C "%s" <area>/<slug>' % (kit('new_worktree', self.kit), self.root.replace('\\', '/')), note)
+        self.assertNotIn('python tools/', note)
         self.assertIn('only under .claude/worktrees/<slug>/', note)
 
     def test_the_note_names_the_configured_folders(self):
+        """The worktrees folder is the repository's; the tool is the kit's, whatever tools_dir says."""
         self.config(repo={'tools_dir': 'scripts', 'worktrees_dir': 'trees'})
         note = self.line(self.run_preflight()[1], 'NOTE: ')
-        self.assertIn('python scripts/new_worktree.py', note)
+        self.assertIn(kit('new_worktree', self.kit), note)
+        self.assertNotIn('scripts/', note)
         self.assertIn('only under trees/<slug>/', note)
 
     def test_a_worktree_gets_no_note(self):
@@ -384,7 +394,7 @@ class TheLinesAfterTheWorktrees(Fixture):
     def test_the_index_line_keeps_the_docs_pointers(self):
         index = self.line(self.run_preflight()[1], 'index ')
         self.assertIn('docs/INDEX.md', index)
-        self.assertIn('doc_index.py --section', index)
+        self.assertIn('%s -C "%s" --section' % (kit('doc_index', self.kit), self.root.replace('\\', '/')), index)
 
     def test_the_index_line_names_the_configured_index(self):
         self.config(doc_index={'index': 'handbook/MAP.md'})
@@ -395,9 +405,9 @@ class TheLinesAfterTheWorktrees(Fixture):
         self.assertIn('docs: handbook/MAP.md |', index)
         self.assertNotIn('docs/INDEX.md', index)
 
-    def test_the_index_line_says_missing_when_the_index_file_is_absent(self):
+    def test_the_index_line_says_opt_in_when_the_index_file_is_absent(self):
         index = self.line(self.run_preflight()[1], 'index ')
-        self.assertIn('docs: docs/INDEX.md (missing) |', index)
+        self.assertIn('docs: docs/INDEX.md (none: the doc index is opt-in) |', index)
 
     def test_the_index_line_has_no_marker_when_the_index_file_exists(self):
         os.makedirs(os.path.join(self.root, 'docs'))
@@ -446,8 +456,8 @@ class TheLeftoversLine(Fixture):
         out = self.run_preflight()[1]
         self.assertEqual(self.line(out, 'leftovers '),
                          'leftovers WARN 1 under .claude/worktrees - drive each to an end:')
-        self.assertIn("\n            done [x/done]  landed (its own commits are in origin's master): "
-                      'python tools/worktree_remove.py done\n', out)
+        self.assertRegex(out, r"\n            done \[x/done\]  landed \(its own commits are in origin's master\): "
+                         r'python "[^"]*/tools/worktree_remove\.py" -C "[^"]+" done\n')
 
     def test_the_worktree_preflight_runs_in_is_not_listed(self):
         wt = self.landed('done', 'x/done')
@@ -518,12 +528,14 @@ class TheNextBlock(Fixture):
         block = self.block(out)
         fwd = wt.replace('\\', '/')
         self.assertEqual([l for l in block if 'commit.py' in l],
-                         ['python tools/commit.py -C "%s" -m "<subject>" --model "<your model>" '
-                          'README.md' % fwd], block)
-        self.assertIn('python tools/review_pack.py x/y', block)
-        self.assertIn('python tools/codemap.py --file README.md', block)
-        self.assertIn('python tools/sync_base.py -C "%s" <hash the coordinator names> --model '
-                      '"<your model>" --base master' % fwd, block)
+                         ['%s -C "%s" -m "<subject>" --model "<your model>" '
+                          'README.md' % (kit('commit', self.kit), fwd)], block)
+        self.assertIn('%s -C "%s" x/y' % (kit('review_pack', self.kit), fwd), block)
+        self.assertIn('%s -C "%s" --file README.md' % (kit('codemap', self.kit), fwd), block)
+        # the fixture's main branch is master, and with no .kit.json the kit reads it from the
+        # repository (docs/kit-json.md "With no file"), so no --base is needed
+        self.assertIn('%s -C "%s" <hash the coordinator names> --model '
+                      '"<your model>"' % (kit('sync_base', self.kit), fwd), block)
         self.assertTrue([l for l in block if 'kitlib.git.checkout.write_text' in l and 'docs/worktree-paths.md' in l],
                         block)
         self.assertFalse([l for l in block if 'new_worktree.py' in l], block)
@@ -531,12 +543,12 @@ class TheNextBlock(Fixture):
     def test_a_worktree_level_with_its_base_gets_no_sync_line(self):
         wt = self.worktree(base_ahead=0)
         block = self.block(self.run_preflight(where=wt)[1])
-        self.assertIn('python tools/review_pack.py x/y', block)
+        self.assertIn('%s -C "%s" x/y' % (kit('review_pack', self.kit), wt.replace('\\', '/')), block)
         self.assertFalse([l for l in block if 'sync_base.py' in l], block)
 
     def test_the_main_checkout_gets_only_new_worktree(self):
         self.assertEqual(self.block(self.run_preflight()[1]),
-                         ['python tools/new_worktree.py <area>/<slug>'])
+                         ['%s -C "%s" <area>/<slug>' % (kit('new_worktree', self.kit), self.root.replace('\\', '/'))])
 
     def test_the_block_adds_no_git_process(self):
         wt = self.worktree(base_ahead=1)
@@ -554,7 +566,7 @@ class TheNextBlock(Fixture):
         commit = [l for l in block if 'commit.py' in l]
         self.assertEqual(len(commit), 1, block)
         self.assertTrue(commit[0].endswith('" README.md "s p.txt"'), commit)
-        self.assertIn('python tools/codemap.py --file README.md', block)
+        self.assertIn('%s -C "%s" --file README.md' % (kit('codemap', self.kit), wt.replace('\\', '/')), block)
         self.repo.write('nd/f.txt', 'x\n', root=wt)
         block = self.block(self.run_preflight(where=wt)[1])
         self.assertTrue([l for l in block if 'commit.py' in l][0].endswith(' <paths>'), block)
@@ -592,12 +604,12 @@ class TheNextBlockLines(unittest.TestCase):
     def test_a_path_with_a_space_is_quoted_on_both_lines(self):
         block = self.block([('??', 'a b.txt'), (' M', 'c.txt')])
         self.assertTrue(self.commit(block).endswith('"<your model>" "a b.txt" c.txt'), block)
-        self.assertIn('python tools/codemap.py --file "a b.txt"', block)
+        self.assertIn(CODEMAP + ' --file "a b.txt"', block)
 
     def test_a_name_no_shell_word_can_carry_gives_paths(self):
         block = self.block([('??', 'a"b.txt'), (' M', 'c.txt')])
         self.assertTrue(self.commit(block).endswith(' <paths>'), block)
-        self.assertIn('python tools/codemap.py --file c.txt', block)
+        self.assertIn(CODEMAP + ' --file c.txt', block)
 
     def test_more_than_12_paths_are_capped(self):
         names = ['f%02d.txt' % i for i in range(14)]
@@ -607,17 +619,17 @@ class TheNextBlockLines(unittest.TestCase):
     def test_an_untracked_folder_gives_paths(self):
         block = self.block([('??', 'newdir/')])
         self.assertTrue(self.commit(block).endswith(' <paths>'), block)
-        self.assertIn('python tools/codemap.py', block)
+        self.assertIn(CODEMAP, block)
         block = self.block([(' M', 'a.txt'), ('??', 'newdir/')])
         self.assertTrue(self.commit(block).endswith(' <paths>'), block)
-        self.assertIn('python tools/codemap.py --file a.txt', block)
+        self.assertIn(CODEMAP + ' --file a.txt', block)
 
     def test_a_rename_gives_paths_and_the_new_name_to_codemap(self):
         block = self.block([('R ', 'new.txt')])          # refs.status gives a rename's new path
         self.assertTrue(self.commit(block).endswith(' <paths>'), block)
-        self.assertIn('python tools/codemap.py --file new.txt', block)
+        self.assertIn(CODEMAP + ' --file new.txt', block)
         block = self.block([('R ', 'n e.txt')])
-        self.assertIn('python tools/codemap.py --file "n e.txt"', block)
+        self.assertIn(CODEMAP + ' --file "n e.txt"', block)
 
     def test_a_copy_gives_paths(self):
         self.assertTrue(self.commit(self.block([('C ', 'b.txt')])).endswith(' <paths>'))
@@ -625,7 +637,7 @@ class TheNextBlockLines(unittest.TestCase):
     def test_a_clean_tree_prints_paths_and_a_bare_codemap(self):
         block = self.block([])
         self.assertTrue(self.commit(block).endswith('"<your model>" <paths>'), block)
-        self.assertIn('python tools/codemap.py', block)
+        self.assertIn(CODEMAP, block)
 
     def test_the_base_flag_only_when_the_base_is_not_the_main_branch(self):
         [sync] = [l for l in self.block(behind='1', base='main') if 'sync_base.py' in l]
@@ -638,7 +650,13 @@ class TheNextBlockLines(unittest.TestCase):
         self.assertFalse([l for l in self.block(behind=None) if 'sync_base.py' in l])
 
     def test_a_detached_head_prints_a_branch_placeholder(self):
-        self.assertIn('python tools/review_pack.py <branch>', self.block(branch='HEAD'))
+        self.assertIn('python tools/review_pack.py -C %s <branch>' % self.WT, self.block(branch='HEAD'))
+
+    def test_a_kit_folder_with_a_space_is_quoted(self):
+        lines = nextblock.lines(self.ROOT, 'C:/my kits/pm-kit/tools', 'x/y', 'main', 'main', '0', [],
+                                False)
+        self.assertTrue(lines[0].startswith('next      python "C:/my kits/pm-kit/tools/commit.py" -C '),
+                        lines)
 
     def test_shell_word(self):
         self.assertEqual(nextblock.shell_word('a/b-c_d.txt'), 'a/b-c_d.txt')

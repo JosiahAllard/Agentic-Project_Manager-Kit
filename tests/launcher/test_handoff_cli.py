@@ -7,7 +7,7 @@ import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
-from kitlib.launcher import autostart, handoff, reboot, window
+from kitlib.launcher import autostart, handoff, reboot
 from kitlib.launcher import host as hostmod
 from tests.launcher.fakes import FakeHost, Home, role_of, session
 
@@ -108,8 +108,56 @@ class Autostart(unittest.TestCase):
         script = out[1]
         self.assertIn("-TaskName 'Claude coordinators after reboot'", script)
         self.assertIn('-LogonType Interactive -RunLevel Limited', script)
-        enc = script.split('-EncodedCommand ')[1].split("'")[0]
-        self.assertEqual(window.decode(enc), "& '/py/python.exe' '/kit/tools/launch.py' after-reboot")
+        self.assertIn("-Execute '%s' -Argument '\"%s\" \"/py/python.exe\" \"/kit/tools/launch.py\" after-reboot'"
+                      % (os.path.join('/py', 'pythonw.exe'), os.path.join('/kit/tools', 'no_window.py')), script)
+
+    def test_the_task_opens_no_console_window_of_its_own(self):
+        """The task runs pythonw (no console) on the kit's carrier, which starts the console python
+        on launch.py with no window: no PowerShell window flashes at sign-in."""
+        script = autostart.task_script('/py/pythonw.exe', '/kit/tools/launch.py')
+        self.assertIn("-Execute '%s' -Argument '\"%s\" \"%s\" \"/kit/tools/launch.py\" after-reboot'"
+                      % (os.path.join('/py', 'pythonw.exe'), os.path.join('/kit/tools', 'no_window.py'),
+                         os.path.join('/py', 'python.exe')), script)
+        self.assertNotIn('powershell.exe', script)
+        self.assertNotIn('-WindowStyle', script)
+        self.assertNotIn('-EncodedCommand', script)
+        kit = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.assertTrue(os.path.isfile(os.path.join(kit, 'tools', 'no_window.py')))
+
+    def test_no_pythonw_beside_the_python_is_refused_and_nothing_is_registered(self):
+        """The task's program would be a file that is not there: it would register and never
+        start. /py is not a folder, so the default check itself says no."""
+        def run(*a, **k):
+            raise AssertionError('a refused install ran PowerShell')
+        with self.assertRaisesRegex(autostart.LaunchError, 'no pythonw.exe beside') as cm:
+            autostart.install('/kit/tools/launch.py', python='/py/python.exe', run=run)
+        self.assertIn(os.path.join('/py', 'pythonw.exe'), str(cm.exception))
+        self.assertIn('nothing registered', str(cm.exception))
+
+    def test_the_pythonw_asked_about_is_the_one_registered(self):
+        asked, calls = [], []
+
+        class R(object):
+            returncode, stderr = 0, ''
+
+        def isfile(path):
+            asked.append(path)
+            return True
+
+        def run(*a, **k):
+            calls.append(a[0])
+            return R()
+        autostart.install('/kit/tools/launch.py', python='/py/python.exe', run=run, isfile=isfile)
+        self.assertEqual(asked, [os.path.join('/py', 'pythonw.exe')])
+        self.assertIn("-Execute '%s'" % asked[0], calls[0][-1])
+
+    def test_what_if_says_the_install_would_refuse(self):
+        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True)
+        self.assertEqual(len(out), 3)
+        self.assertIn('install-autostart would refuse: no pythonw.exe beside', out[2])
+        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True,
+                                isfile=lambda p: True)
+        self.assertEqual(len(out), 2)
 
     def test_a_worktree_copy_is_refused(self):
         def run(*a, **k):

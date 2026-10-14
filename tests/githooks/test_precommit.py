@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from kitlib.githooks import precommit
+from kitlib.githooks import precommit, render
 from kitlib.ledger import precommit as ledger_precommit
 from tests import gitfixture
 from tests.realgit import real_git
@@ -29,8 +29,8 @@ class DispatchTest(unittest.TestCase):
     def setUp(self):
         self.root = os.path.abspath(tempfile.gettempdir())
 
-    def test_the_kit_checks_are_the_ledger_check_only(self):
-        self.assertEqual(precommit.CHECKS, (ledger_precommit.check,))
+    def test_the_kit_checks_are_the_render_step_then_the_ledger_check(self):
+        self.assertEqual(precommit.CHECKS, (render.check, ledger_precommit.check))
 
     def test_checks_run_in_order_on_one_commit(self):
         seen = []

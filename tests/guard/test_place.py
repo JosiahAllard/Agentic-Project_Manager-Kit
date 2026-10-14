@@ -8,9 +8,10 @@ import unittest
 from unittest import mock
 
 from kitlib.git import repo
-from kitlib.guard import context, decide
+from kitlib.guard import context
 from tests import gitfixture
 
+from .claudehost import decide
 from .test_fsplace import MINE, OWNER_NOTE
 from .world import bash, event
 

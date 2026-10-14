@@ -21,6 +21,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from kitlib import kitroot                                         # noqa: E402
 from kitlib.config import ConfigError, load as load_config          # noqa: E402
 from kitlib.git import repo as gitrepo                              # noqa: E402
 from kitlib.testlist import results                                 # noqa: E402
@@ -80,9 +81,8 @@ def main(argv=None, out=None):
     if a.status:
         tests = ['%s\t%s' % (n, statuses[n]) for n in tests]
     if not tests:
-        tools = cfg.tools_dir.replace('\\', '/').strip('/')
-        say('no test results under %s (run the gate first: python %s/gate.py)'
-            % (a.dir or where, tools))
+        say('no test results under %s (run the gate first: %s)'
+            % (a.dir or where, kitroot.command('gate', top)))
         return USAGE
     if a.names:
         out.write('\n'.join(tests) + '\n')

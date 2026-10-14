@@ -257,13 +257,13 @@ class Manifest(unittest.TestCase):
         self.assertTrue(os.path.isfile(ENTRY))
 
     def test_the_kit_names_the_plugin_and_server_as_the_manifest_does(self):
-        # kitlib.lockmcp.claude_tool_prefix (the guard's MCP prefix) is built from these two names.
+        # kitlib.lockmcp.tool_prefix (the guard's MCP prefix) is built from these two names.
         from kitlib import lockmcp
         with open(os.path.join(REPO, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
             m = json.load(f)
-        self.assertEqual(m["name"], lockmcp.CLAUDE_PLUGIN_NAME)
+        self.assertEqual(m["name"], lockmcp.PLUGIN_NAME)
         self.assertEqual(list(m["mcpServers"]), [lockmcp.SERVER_NAME])
-        self.assertEqual(lockmcp.claude_tool_prefix("p", "s"), "mcp__plugin_p_s__")
+        self.assertEqual(lockmcp.tool_prefix("claude", "p", "s"), "mcp__plugin_p_s__")
 
     def _manifest(self, name):
         with open(os.path.join(REPO, ".claude-plugin", name), encoding="utf-8") as f:
@@ -279,10 +279,11 @@ class Manifest(unittest.TestCase):
 
     def test_the_guard_prefix_is_built_from_the_manifest_name(self):
         from kitlib import lockmcp
+        from hosts.claude.adapter.host import ADAPTER
         from kitlib.guard import rules
         want = "mcp__plugin_%s_machine-lock__" % self._manifest("plugin.json")["name"]
-        self.assertEqual(lockmcp.claude_tool_prefix(), want)
-        self.assertEqual(rules.MCP_PREFIX, want)
+        self.assertEqual(lockmcp.tool_prefix(), want)
+        self.assertEqual(rules.host_mcp_prefix(ADAPTER.profile), want)
 
 
 if __name__ == "__main__":

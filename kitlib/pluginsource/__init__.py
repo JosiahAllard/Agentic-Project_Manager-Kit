@@ -29,6 +29,7 @@ import subprocess
 import sys
 import time
 
+from kitlib import kitroot
 from kitlib.git import batch, cmd, refs
 
 NAME = 'pm-kit'                      # the marketplace's and the plugin's name
@@ -44,8 +45,6 @@ YOUNG_DAYS = 7                       # prune keeps every export replaced less th
 LOCK_GRACE_S = 10                    # an empty or unreadable refresh.pid younger than this is live
 MANIFEST = '.claude-plugin/plugin.json'
 MARKETPLACE = '.claude-plugin/marketplace.json'
-REFRESH_CMD = 'python tools/plugin_refresh.py --apply'
-MIGRATE_CMD = 'python tools/plugin_refresh.py --migrate --apply'
 CONFIG_KEY = 'plugin'
 _SHA12 = re.compile(r'^[0-9a-f]{12}$')
 _TMP = re.compile(r'^([0-9a-f]{12})\.tmp$')
@@ -173,6 +172,14 @@ def live_root(kit=None, environ=None):
     if live and os.path.isdir(live) and os.path.isfile(os.path.join(kit, MARKER)):
         return live
     return kit
+
+
+def refresh_cmd(migrate=False):
+    """`python "<kit>/tools/plugin_refresh.py" [--migrate] --apply`, the kit (live_root) named in
+    full: the line reaches a PM whose session runs in another folder, and no repository holds a
+    copy of the kit's tools (decision 21 in docs/multi-host-plan.md section 7)."""
+    return '%s%s --apply' % (kitroot.command('plugin_refresh', kit=live_root()),
+                             ' --migrate' if migrate else '')
 
 
 # ---------------------------------------------------------------- git side
@@ -632,7 +639,7 @@ def pick_folders(folders, wanted):
 
 
 def migrate_cmd(folder):
-    return '%s --folder "%s"' % (MIGRATE_CMD, folder)
+    return '%s --folder "%s"' % (refresh_cmd(True), folder)
 
 
 def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=None, own=None,
@@ -829,16 +836,16 @@ def current_lines(kit, s, folders=None):
     except StateError as e:
         return ['could not check the pm-kit plugin: %s' % e]
     if state is None:
-        return ['pm-kit plugin: no export at %s yet: %s' % (s.export_dir, MIGRATE_CMD)]
+        return ['pm-kit plugin: no export at %s yet: %s' % (s.export_dir, refresh_cmd(True))]
     main, why = tracking_main(kit, s.remote)
     if main is None:
         return ['could not check the pm-kit plugin: %s' % why]
     todo = unmigrated(state, _folders(folders))
-    cmd = MIGRATE_CMD if todo else REFRESH_CMD
+    cmd = refresh_cmd(bool(todo))
     lines = []
     if todo:
         lines.append('pm-kit plugin: not migrated to the export in %s: %s (one folder first: '
-                     '--folder DIR)' % (', '.join(todo), MIGRATE_CMD))
+                     '--folder DIR)' % (', '.join(todo), refresh_cmd(True)))
     if main and main != state.get('sha'):
         lines.append('pm-kit plugin behind kit main (exported %s, %s/%s %s): %s'
                      % (str(state.get('sha') or '?')[:12], s.remote, MAIN, main[:12], cmd))
@@ -848,10 +855,10 @@ def current_lines(kit, s, folders=None):
             continue
         if r.get('rc') is None:     # migrated, carried into this export, never refreshed to it
             lines.append('pm-kit plugin in %s: not refreshed to %s: %s'
-                         % (f, str(state.get('sha') or '?')[:12], REFRESH_CMD))
+                         % (f, str(state.get('sha') or '?')[:12], refresh_cmd()))
         else:
             lines.append('pm-kit plugin refresh failed in %s (claude %s exited %s at %s): %s'
-                         % (f, r.get('step') or '?', r.get('rc'), r.get('at') or '?', REFRESH_CMD))
+                         % (f, r.get('step') or '?', r.get('rc'), r.get('at') or '?', refresh_cmd()))
     return lines
 
 
@@ -889,12 +896,12 @@ def poll(kit, s, last, spawn=None, alive=None, folders=None):
         return [], last
     todo = None if state is None else unmigrated(state, _folders(folders))
     if state is None or todo:
-        line = 'pm-kit plugin behind kit main %s: %s' % (main[:12], MIGRATE_CMD)
+        line = 'pm-kit plugin behind kit main %s: %s' % (main[:12], refresh_cmd(True))
         if s.auto_refresh:
             line += (' (auto_refresh: not started: no export yet)' if state is None else
                      ' (auto_refresh: not started: not migrated in %s)' % ', '.join(todo))
         return [line], main
-    line = 'pm-kit plugin behind kit main %s: %s' % (main[:12], REFRESH_CMD)
+    line = 'pm-kit plugin behind kit main %s: %s' % (main[:12], refresh_cmd())
     if s.auto_refresh:
         if lock_live(s.export_dir, alive):
             line += ' (auto_refresh: a refresh is already running)'

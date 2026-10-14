@@ -1,0 +1,1 @@
+"""Shared startup adapter tests."""

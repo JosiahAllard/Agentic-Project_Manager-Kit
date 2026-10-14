@@ -5,6 +5,8 @@ A failed tasklist or netstat is UNKNOWN, never a count of 0: a measurement nobod
 """
 import subprocess
 
+from kitlib.proc import spawn
+
 TIMEOUT = 60
 
 
@@ -12,8 +14,8 @@ def run(argv, timeout=TIMEOUT):
     """(rc, stdout, stderr) text of a command; rc 1 with the reason when it could not start or
     did not finish within `timeout`. The one seam tests replace."""
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
-                           errors='replace', timeout=timeout)
+        r = spawn.run(argv, capture_output=True, text=True, encoding='utf-8',
+                      errors='replace', timeout=timeout)
         return r.returncode, r.stdout or '', (r.stderr or '').strip()
     except (OSError, subprocess.TimeoutExpired) as e:
         return 1, '', str(e)

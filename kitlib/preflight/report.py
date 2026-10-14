@@ -73,12 +73,16 @@ def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read
                                  else 'UNKNOWN - git worktree list failed here'))
     out.extend(LIST_INDENT + _worktree_line(w) for w in (wts or [])[:MAX_LISTED])
     out.extend(leftovers.lines(top))
-    tools = _slash(cfg.tools_dir)
+    # The kit's own tools folder: a repository holds no copy of the kit's tools (decision 21 in
+    # docs/multi-host-plan.md section 7), so every command printed runs them from the kit, with -C.
+    tools = kit_root.replace('\\', '/').rstrip('/') + '/tools'
+    here = '"%s"' % top.replace('\\', '/')
     in_main = repo.classify(top).kind == repo.MAIN
     if in_main:
-        out.append('NOTE: this is the MAIN checkout %s. Agents: create your worktree (python %s/'
-                   'new_worktree.py <area>/<slug>) and edit only under %s/<slug>/.'
-                   % (top, tools, _slash(cfg.repo['worktrees_dir'])))
+        out.append('NOTE: this is the MAIN checkout %s. Agents: create your worktree (%s -C %s '
+                   '<area>/<slug>) and edit only under %s/<slug>/.'
+                   % (top, nextblock.command(tools, 'new_worktree'), here,
+                      _slash(cfg.repo['worktrees_dir'])))
     budget = os.path.join(kit_root, 'tools', 'doc_budget.py')
     if os.path.isfile(budget):
         rc, o, e = machine.run([sys.executable, budget, '-C', top], timeout=120)
@@ -101,9 +105,9 @@ def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read
     out.append(configline.line(home))
     out.append('traps     %s' % s['traps'])
     index = cfg.section('doc_index')['index']
-    gone = '' if os.path.isfile(os.path.join(top, index)) else ' (missing)'
-    out.append('index     docs: %s%s | a doc section: python %s/doc_index.py '
-               '--section "<title>"' % (index, gone, tools))
+    gone = '' if os.path.isfile(os.path.join(top, index)) else ' (none: the doc index is opt-in)'
+    out.append('index     docs: %s%s | a doc section: %s -C %s --section "<title>"'
+               % (index, gone, nextblock.command(tools, 'doc_index'), here))
     out.extend(nextblock.lines(top, tools, branch, base, cfg.main_branch, behind, dirty or [],
                                in_main))
     out.append('lock      %s' % lockline.line_for(kit_root, lock_reader))

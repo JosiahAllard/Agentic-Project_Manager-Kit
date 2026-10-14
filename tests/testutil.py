@@ -10,6 +10,9 @@ import sys
 import time
 
 WINDOWS = os.name == 'nt'
+# A console of its own with no window, for every process started here: none opens a window,
+# whether or not this test process has a console (kitlib.proc.console is the process-wide backstop).
+CREATE_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 # A process's own check, from inside: may it be opened for PROCESS_TERMINATE? Source text that a
 # test prepends to a child's `-c` code; `shielded()` is True only on ERROR_ACCESS_DENIED (5), the
@@ -59,7 +62,7 @@ def ancestor_reach():
     if WINDOWS:
         canary = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'],
                                   stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL)
+                                  stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
         start = time.monotonic()
         try:
             while time.monotonic() - start < 1.0 and can_terminate(canary.pid):
@@ -89,7 +92,7 @@ def dead_process():
     again (kitlib.records.landing.process_alive) and another process tried if it reads alive."""
     from kitlib.records import landing
     for _ in range(50):
-        p = subprocess.Popen([sys.executable, '-c', 'pass'])
+        p = subprocess.Popen([sys.executable, '-c', 'pass'], creationflags=CREATE_NO_WINDOW)
         p.wait()
         if not landing.process_alive(p.pid, None):
             return p

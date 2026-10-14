@@ -7,7 +7,9 @@ own docs and tools rather than copying them; keep machine values in config, not 
 
 ## Branches and worktrees
 Branch naming, where worktrees go and how they are made, how to commit, and which worktrees an
-agent may remove (only its own).
+agent may remove (only its own). For a sync (skill branch-sync): the untracked generated files the
+base may now track, which make git refuse the merge and may be deleted first, and only those (a
+Godot repo: the `.uid` files of scripts the agent does not own); or "None.".
 
 ## Build and test
 The gate command and what it covers, faster commands for one area, and how red-first is done.

@@ -1,7 +1,7 @@
 """The gate-OK record: the gate's word that it passed exactly one commit (ARCHITECTURE.md
 "Gate-OK record").
 
-gate.py writes `<git common dir>/kit-gate-ok/<commit>.json` for the commit it passed; guard.py and
+gate.py writes `<git common dir>/kit-gate-ok/<commit>.json` for the commit it passed; the kit guard and
 the pre-push hook read it. The common dir is shared by every checkout of the repository and is
 never tracked. One record per commit; a later pass of the same commit replaces it (atomically:
 a temp file in the same folder, then os.replace).
@@ -27,6 +27,10 @@ unless the caller asks for what they carry):
 
   config_rev    the full hash of the commit whose `.kit.json` the gate config came from (the
                 branch gate: the commit gated; a landing: --expect-main), or null
+  source        where the gate's steps came from: "gate.json" (the "gate" section of
+                `.kit.json`, inline or in its file) or "auto" (detected from the tree,
+                kitlib.gate.detect), or null. A reader takes a record without it as "gate.json"
+                (source_of)
 
 verify() re-derives everything git can answer: the record's file name, `commit`, `tree` and
 `author` must match the repository now, and `gate_config` must match the caller's config when it
@@ -48,7 +52,7 @@ SCHEMA = 1
 VERDICT = 'OK'
 KEYS = ('schema', 'verdict', 'commit', 'tree', 'base', 'gate_config', 'kit', 'author', 'repo',
         'started_utc', 'ended_utc', 'steps')
-ADDED_KEYS = ('config_rev',)
+ADDED_KEYS = ('config_rev', 'source')
 RETRIES = 5
 RETRY_SLEEP = 0.2
 
@@ -116,10 +120,17 @@ def _step(s, i):
     return {'name': s['name'], 'result': s.get('result', 'pass'), 'seconds': secs}
 
 
+def source_of(record):
+    """A record's `source`: "auto" or "gate.json"; a record written before the key, or with
+    null, is "gate.json" (every gate then ran its configured steps)."""
+    return record.get('source') or 'gate.json'
+
+
 def build(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None, ended_utc=None,
-          config_rev=None):
+          config_rev=None, source=None):
     """The record for `rev` (resolved here: commit, tree and author come from git, never the
-    caller). `config_rev`: the commit the gate config was read from (resolved to a full hash)."""
+    caller). `config_rev`: the commit the gate config was read from (resolved to a full hash).
+    `source`: "gate.json" or "auto" (kitlib.gate.detect), or None."""
     commit, tree, author = _facts(root, rev)
     if base is not None and not refs.is_sha(base):
         resolved, why = refs.resolve(base, root)
@@ -138,7 +149,7 @@ def build(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None,
         'gate_config': config_hash(gate_config), 'kit': dict(kit), 'author': author,
         'repo': repo_name or '', 'started_utc': started_utc, 'ended_utc': ended_utc or utc(),
         'steps': [_step(s, i) for i, s in enumerate(steps or [])],
-        'config_rev': config_rev,
+        'config_rev': config_rev, 'source': source,
     }
 
 
@@ -172,10 +183,10 @@ def write(root, record):
 
 
 def record_pass(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None,
-                config_rev=None):
+                config_rev=None, source=None):
     """build() then write(): `(path, record)`. Only a passing gate calls this."""
     rec = build(root, rev, gate_config, kit, repo_name, started_utc, steps, base,
-                config_rev=config_rev)
+                config_rev=config_rev, source=source)
     return write(root, rec), rec
 
 

@@ -55,7 +55,7 @@ class PluginEventTest(unittest.TestCase):
         new = self.advance()
         w = self.watcher(auto=False)
         self.assertEqual(w.poll(1.0), ["PLUGIN pm-kit plugin behind kit main %s: %s"
-                                       % (new[:12], P.REFRESH_CMD)])
+                                       % (new[:12], P.refresh_cmd())])
         self.assertEqual(w.poll(2.0), [])
         w2 = self.watcher(auto=False, state=json.loads(json.dumps(w.s)))   # a relaunch: saved state
         self.assertEqual(w2.poll(3.0), [])
@@ -102,14 +102,14 @@ class PluginEventTest(unittest.TestCase):
         w = self.watcher(auto=True)
         ev = w.poll(1.0)
         self.assertEqual(ev, ["PLUGIN pm-kit plugin behind kit main %s: %s (auto_refresh: not started: "
-                              "no export yet)" % (self.main()[:12], P.MIGRATE_CMD)])
+                              "no export yet)" % (self.main()[:12], P.refresh_cmd(True))])
         os.makedirs(self.k.root)
         (two,) = self.k.folders(".claude-two")
         self.export_at(self.main())
         new = self.advance()
         w = self.watcher(auto=True, folders=[two])
         self.assertEqual(w.poll(2.0), ["PLUGIN pm-kit plugin behind kit main %s: %s (auto_refresh: not "
-                                       "started: not migrated in %s)" % (new[:12], P.MIGRATE_CMD, two)])
+                                       "started: not migrated in %s)" % (new[:12], P.refresh_cmd(True), two)])
         self.assertEqual(self.spawned, [])
 
     def test_an_unreadable_ref_or_state_is_an_error_on_the_third(self):

@@ -37,9 +37,10 @@ from kitlib.lock import queue as qm
 from kitlib.lock import notice
 from kitlib.lock import site
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_TIMEOUT,
-                               EXIT_USAGE, SESSION_ENV, LockError, Store, caller, iso, local_text,
-                               new_id, parse_iso, read_json, remove, tree_role, utc_now, write_json)
-from kitlib.proc import bash, cpu, daemons, process, win32
+                               EXIT_USAGE, LockError, Store, caller, iso, local_text,
+                               new_id, parse_iso, read_json, remove, session_of, tree_role,
+                               utc_now, write_json)
+from kitlib.proc import bash, cpu, daemons, process, win32, winwatch
 from kitlib.proc.job import Job, JobError, cores_text
 
 POOLS, PICK = lay.POOLS, qm.PICK
@@ -52,6 +53,9 @@ GPUS_ENV = "MACHINE_LOCK_GPUS"          # the gpu cards the run holds, by adapte
 END_ENV = "MACHINE_LOCK_END"            # how the run ended, for --on-release
 XLA_FRACTION_ENV, XLA_DEFAULT_FRACTION = "XLA_PYTHON_CLIENT_MEM_FRACTION", "0.3"
 KILL_HOW = ("interrupted", "cancelled", "error")
+# A run watches for console windows (kitlib.proc.winwatch) from its first command's start to
+# its release (Slot.watch_stop); False turns the monitor off.
+WATCH_WINDOWS = True
 # Slot.end_tree, when it spares a shared daemon: how many passes it ends the job's other
 # processes in, how long it waits after each for them to leave the job, and how long after the
 # last for one still listed to exit before it says it runs on.
@@ -231,7 +235,7 @@ class Run:
                     "kind": kind, "note": note, "pid": os.getpid(), "ctime": process.own_ctime(),
                     "since": iso(), "cmd": [str(c) for c in cmd or ()][:20],
                     "detached": bool(detached), "holding": [], "slots": {}, "cores": [],
-                    "gpus": [], "shares": {}, "session": env.get(SESSION_ENV) or None,
+                    "gpus": [], "shares": {}, "session": session_of(env),
                     "ancestors": run_ancestors(detached, env), "role": run_role(detached, env),
                     "layout": lay.slot_key(L),
                     "log": getattr(log, "name", None) if log is not None else None}
@@ -665,6 +669,8 @@ class Slot:
         # Only the command start(give_back=True) starts may give slots back (kitlib.lock.giveback).
         self.env.pop(gbk.GIVE_ENV, None)
         self.offer, self.offer_bad, self.given = None, 0, []
+        # The window monitor (start, watch_stop) and what it saw: None until it stops.
+        self.watch, self.windows, self.windows_error, self.windows_gone = None, None, None, 0
         mask = None
         if not self.nested:
             self.env[NEST_ENV] = "%s:%d:%d" % (run.id, run.rec["pid"], run.rec["ctime"])
@@ -713,6 +719,8 @@ class Slot:
                 kw.setdefault(k, v)
         else:
             kw.setdefault("env", self.env)
+        if WATCH_WINDOWS and self.watch is None and self.windows is None:
+            self.watch_start()
         pin = self.job.pin
         p = self.job.start(docker_cpu_env(cmd, bool(self.gpus)), **kw)
         self.started, self.tree_ended = True, False
@@ -720,6 +728,67 @@ class Slot:
             with contextlib.suppress(OSError):
                 self.run.save(**pin_fields(self.job))
         return p
+
+    def watch_start(self):
+        """Starts the window monitor. Never raises: a monitor that cannot start is windows_error
+        (and the record's `windows_error`), and the run goes on unwatched. self.watch is set before
+        m.start(), which can wait up to winwatch.START_WAIT_S: a Ctrl+C inside it leaves the monitor
+        for the release's watch_stop to stop, so its thread and hooks never outlive the run."""
+        m = None
+        try:
+            m = winwatch.Monitor(ours=self.window_owner)
+            self.watch = m
+            m.start()
+        except Exception as e:      # noqa: BLE001 - the monitor never fails a run
+            self.watch = None
+            with contextlib.suppress(Exception):
+                if m is not None:
+                    m.stop()
+            self.windows, self.windows_error = [], "%s: %s" % (type(e).__name__, e)
+            if self.run is not None:
+                self.run.rec["windows_error"] = self.windows_error
+
+    def window_owner(self, pid):
+        """Is process pid this run's, for the window monitor: True (in the run's job, or a job
+        nested in it), False (not in it) or None (gone, or Windows will not say)."""
+        job = self.job
+        return {"in": True, "out": False}.get(job.contains(pid) if job is not None else None)
+
+    def watch_stop(self):
+        """Stops the window monitor, once, and keeps what it saw: self.windows (a list of
+        winwatch.Window), windows_error and windows_gone, and in the run's record `windows` (each
+        Window.as_dict(), when any was seen, at most winwatch.RECORD_CAP of them, with
+        `windows_truncated` the count left out) and `windows_error`. Returns self.windows: None
+        when nothing was watched. Never raises an Exception: a monitor that fails to stop is its
+        error. self.watch is cleared only once m.stop() has returned or raised an Exception, so a
+        Ctrl+C inside it leaves the monitor for the release's second call to stop."""
+        m = self.watch
+        if m is None:
+            return self.windows
+        try:
+            windows = list(m.stop())
+        except Exception as e:      # noqa: BLE001 - the monitor never fails a run
+            windows = []
+            m.error = m.error or "%s: %s" % (type(e).__name__, e)
+        self.watch = None
+        self.windows, self.windows_error = windows, m.error
+        self.windows_gone = getattr(m, "gone", 0)
+        if self.run is not None:
+            if windows:
+                kept, cut = winwatch.records(windows)
+                self.run.rec["windows"] = kept
+                if cut:
+                    self.run.rec["windows_truncated"] = cut
+            if m.error:
+                self.run.rec["windows_error"] = m.error
+        return self.windows
+
+    def window_lines(self, fails=False):
+        """The window report (winwatch.report_lines) once the monitor has stopped; [] when
+        nothing was watched. fails: the caller's verdict counts a window."""
+        if self.windows is None:
+            return []
+        return winwatch.report_lines(self.windows, self.windows_error, self.windows_gone, fails)
 
     def stop_asked(self):
         return self.run is not None and self.run.stop_asked()
@@ -1043,12 +1112,14 @@ class Slot:
                     except BaseException:   # Ctrl+C again mid-kill: the whole job, as before
                         self.job.end(kill=True)
                         raise
+                self.watch_stop()           # while the job can still say whose a window is
                 # A spared daemon's tree is still in the job: closing it with kill-on-close set,
                 # or TerminateJobObject, would end it.
                 self.job.end(kill=how in KILL_HOW and not self.spared)
                 if self.started:
                     on_release(self.store, self.on_release_cmd, self.env, how, self.run)
         finally:
+            self.watch_stop()
             if self.run is not None:
                 self.ended = settle(self.store, self.run, code, how, self.mutex)
         return self.ended
@@ -1233,10 +1304,11 @@ def slot(kind, repo, slug, **kw):
 
 
 def run_command(cmd, kind, repo, slug, **kw):
-    """`machine_lock.py run`: book, run cmd in the run's job, release. Returns the command's exit
-    code (130 on Ctrl+C, 1 when it could not start or stop cancelled it). Raises LockError when
-    the run is refused or gives up waiting. A bare bash with no Git Bash to run it
-    (kitlib.proc.bash) is refused before the run books: 1, no record."""
+    """`machine_lock.py run`: book, run cmd in the run's job, release, then say the run's window
+    report (Slot.window_lines). Returns the command's exit code (130 on Ctrl+C, 1 when it could
+    not start or stop cancelled it). Raises LockError when the run is refused or gives up
+    waiting. A bare bash with no Git Bash to run it (kitlib.proc.bash) is refused before the run
+    books: 1, no record."""
     store = kw.get("store") or Store()
     kw["store"] = store
     try:
@@ -1261,6 +1333,8 @@ def run_command(cmd, kind, repo, slug, **kw):
         return 130
     finally:
         s.release(code, how)
+        for line in s.window_lines():
+            store.say(line)
 
 
 def expected_end(since, expect_s, max_s=10 * 365 * 86400):

@@ -1,6 +1,6 @@
 """kitlib.pmstart: the PM session-start checklist.
 
-Pure functions that return data; the hook (claude/hooks/pm_session_start.py) prints it. Every check
+Pure functions that return data; the hook (boot/hook.py claude SessionStart pm) prints it. Every check
 takes its process list or filesystem reads as parameters so tests can fake them.
 """
 import datetime
@@ -12,7 +12,9 @@ import subprocess
 import time
 
 from kitlib.config import user as kuser
-from kitlib.pmstart import fglock
+from kitlib.host import registry
+from kitlib.pmstart import consoletasks, fglock
+from kitlib.proc import spawn
 
 KEY = "pm_start"
 TIMEOUT = 4
@@ -44,8 +46,8 @@ def _read(path):
 def list_processes(timeout=TIMEOUT):
     """All processes as dicts with Name, CommandLine, ExecutablePath, ProcessId, ParentProcessId, Created (PowerShell Get-CimInstance).
     subprocess.TimeoutExpired after `timeout` seconds (the session start's TIMEOUT by default)."""
-    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS],
-                       capture_output=True, text=True, timeout=timeout)
+    r = spawn.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS],
+                  capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError("powershell exit %d: %s" % (r.returncode, r.stderr.strip()[:200]))
     data = json.loads(r.stdout or "[]")
@@ -75,14 +77,9 @@ def eng_review(cfg):
 
 # This kit's checkout: the PM session's directory is not the kit, so kit paths are made absolute.
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-HUB_SOURCE = "claude/hub/action-hub.html"
-HUB_MIRROR_TOOL = os.path.join(KIT_ROOT, "tools", "hub_mirror.py")
 # With no pm_watch_cmd, the watcher line names the kit's own pm_watch.py in stream mode.
 PM_WATCH_DEFAULT_CMD = 'python -u "%s" --stream' % os.path.join(KIT_ROOT, "tools", "pm_watch.py")
 BEAT_STALE = 300      # seconds: a heartbeat older than this is a watcher that stopped polling
-# The capabilities docs/action-hub.md "For the PM" declares on every publish of the hub page.
-HUB_CAPABILITIES = ('{db: {rules: [{path: "parked", read: "view", write: "admin"}]}, '
-                    'user: {}, comments: {}}')
 
 
 def machine_config(path=None):
@@ -105,94 +102,126 @@ def current_account():
     return accounts.current_account(machine_config())
 
 
-def hub_urls(cfg):
-    """cfg["hub_urls"] ({account label: artifact URL}), or None when unset. TypeError for
-    anything but an object of non-empty strings."""
-    urls = cfg.get("hub_urls")
-    if urls is None:
-        return None
-    if not isinstance(urls, dict) or not all(isinstance(k, str) and k.strip() and isinstance(v, str)
-                                             and v.strip() for k, v in urls.items()):
-        raise TypeError("hub_urls must be an object of account label: artifact URL")
-    return urls
+HUB_SITE_TIMEOUT_S = 1.5    # seconds each ask of the hub server waits (two asks at most)
+HUB_TOOL = os.path.join(KIT_ROOT, "tools", "hub.py")
+HUB_ERROR_MAX = 400         # characters of a rejected `hub` key's message shown in its line
 
 
-def hub_source(cfg, isfile=os.path.isfile):
-    """(absolute path, exists) of the hub page source: cfg["hub_source"] or HUB_SOURCE, a relative
-    path taken from KIT_ROOT (the PM session's directory is not the kit). TypeError for a value
-    that is not a non-empty string."""
-    src = cfg.get("hub_source") or HUB_SOURCE
-    if not isinstance(src, str):
-        raise TypeError("hub_source must be a path string")
-    path = os.path.normpath(src if os.path.isabs(src) else os.path.join(KIT_ROOT, src))
-    return path, bool(isfile(path))
+# How kitlib.config and kitlib.pmdata end a rule when they refuse a value: `, not ` and the value
+# as Python writes it (repr): a string quoted, a quote or backslash inside it escaped; a number,
+# true/false or null as one word, ended by the `; ` that joins problems or by the text's end.
+_ECHOED = re.compile(r""", not (?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|[-+\w.]+(?=;|\Z))""", re.S)
+_ECHO_LEFT = re.compile(r""", not """)
 
 
-def _hub_watch_line(url):
-    """The ArtifactComments watch step, the same text in both hub branches."""
-    return ("hub: start ArtifactComments watch on %s (the owner's sends reach only a session that "
-            "watches it), or start it again after a resume or compact" % (url or "the new copy's URL"))
+def _without_values(text):
+    """The configuration error `text` with every rejected value taken out: each `, not <value>`
+    goes, so a problem still names its key and its rule (`hub.access.team must be an Access team
+    name (one DNS label)`) and holds nothing the owner wrote as a value: no email, audience tag
+    or path. A `, not ` whose value is neither a whole written string nor one word (a list, an
+    object, a string cut short) is cut with all that follows it. Key names stay, an unknown one
+    the config named too."""
+    text = _ECHOED.sub("", text)
+    left = _ECHO_LEFT.search(text)
+    return text[:left.start()] if left else text
 
 
-HUB_PROCESS_LINE = "hub: then process the hub (answers, stories, to-dos, pm_ack)"
+class HubSettingsError(Exception):
+    """The machine config has a `hub` key that cannot be used."""
 
 
-def hub(cfg, account=None, isfile=os.path.isfile):
-    """The hub lines. The URL is hub_urls[<this account>] when hub_urls holds any entry (then
-    hub_url is not read, and a set hub_url gets a line saying so); with no hub_urls (or an empty
-    one) it is hub_url, the single-copy setting of an install that has not moved to the map.
-    A URL: republish the page to it, the watch step, the refill check and the process step.
-    None: publish a copy on this account, record it (hub_mirror.py set-url), fill it from the mirror
-    (hub_mirror.py restore) and refill it, then the watch and process steps. A page source that
-    is not there, or a hub_source that is not a string, replaces the republish or publish step
-    with a line saying so; the watch and process steps still print. `account` is a callable giving the label (default
-    current_account); it is called only when the label is needed. The hook cannot see the
-    session's watch or the live hub, so watch and refill are steps the PM runs, not checks."""
-    from kitlib import hubmirror
+class NoHubToken(Exception):
+    """Neither token file of the hub (agent or owner) is there to read."""
+
+
+def hub_settings():
+    """The hub Settings (kitlib.hubsite.settings.load): the `hub` key's, or every default (port
+    8790) when the machine config has no `hub` key. HubSettingsError when they cannot be had and
+    the raw file holds a `hub` key, also when it is the machine config's check that refuses; any
+    other error as it is raised: the config could not be read, with no `hub` key in it."""
+    from kitlib.config.types import ConfigError
+    from kitlib.hubsite import settings as hubsettings
     try:
-        src, exists = hub_source(cfg, isfile)
-        bad_src = None
-    except TypeError as e:
-        src, exists, bad_src = None, False, e
-    urls = hub_urls(cfg)
-    label = None
-    if urls:
-        label = (account or current_account)()
-        url = urls.get(label)
+        return hubsettings.load()
+    except Exception as e:
+        try:
+            has_key = machine_config().get(hubsettings.KEY) is not None
+        except ConfigError:
+            has_key = False
+        if has_key:
+            raise HubSettingsError(str(e))
+        raise
+
+
+def _hub_client(port):
+    """The real client, after a look that a token file is there: NoHubToken when neither is."""
+    from kitlib.hubsite import auth, client
+    folder = auth.folder()
+    if not any(auth.read_token(folder, role) for role in auth.ROLES):
+        raise NoHubToken()
+    return client.Client(port, tokens=folder, timeout=HUB_SITE_TIMEOUT_S)
+
+
+def _wait_running(procs):
+    """Whether a `hub.py wait --pending` process is in `procs` (a list, or a function giving
+    one: asked only when the server is up; a list that cannot be had counts as none)."""
+    try:
+        procs = procs() if callable(procs) else procs
+    except Exception:
+        return False
+    for p in procs or []:
+        cmd = p.get("CommandLine") or ""
+        if (p.get("Name") or "").lower().startswith("python") and "hub.py" in cmd \
+                and " wait" in cmd and "--pending" in cmd:
+            return True
+    return False
+
+
+def hub_site(procs=(), load=None, make_client=_hub_client):
+    """The hub site's lines, on the `hub` key's settings or, with no key, on the defaults (port
+    8790): the site is the hub whether or not the key is written. Asks only the loopback server,
+    with HUB_SITE_TIMEOUT_S per ask; starts nothing. A machine config that cannot be read is one
+    line naming the exception's class (the test home fence is not caught). A failure of the
+    server side is one line naming no more than the port and the exception's class, so no token,
+    URL or message of the server reaches the text. The one message shown is a rejected `hub`
+    key's own, without the value it refused (_without_values): key names, the rules, and the
+    machine config's path when the settings name it; never a value written in the key."""
+    try:
+        site = (load or hub_settings)()      # looked up at the call, so a test can replace it
+    except HubSettingsError as e:
+        # the values go first: a cut or a joined line could split one and leave half of it
+        text = " ".join(_without_values(str(e)).split())[:HUB_ERROR_MAX]
+        return ["hub: the hub key of the machine config cannot be used: %s" % text]
+    except Exception as e:
+        return ["hub: the machine config could not be read (%s)" % type(e).__name__]
+    from kitlib.hubsite import serve
+    port = site.port
+    try:
+        hub = make_client(port)
+        health = hub.get("/health", timeout=HUB_SITE_TIMEOUT_S)
+    except NoHubToken:
+        return ["hub: no hub token file is there to read: run python \"%s\" setup" % HUB_TOOL]
+    except serve.NotRunning:
+        return ["hub: hub server down (nothing listens on port %d): start it with python \"%s\" serve"
+                % (port, HUB_TOOL)]
+    except Exception as e:
+        return ["hub: server did not answer as the hub does (%s)" % type(e).__name__]
+    if health.get("ok") is False:
+        return ["hub: server did not answer as the hub does (health not ok)"]
+    try:
+        items = hub.get("/pending", timeout=HUB_SITE_TIMEOUT_S).get("items")
+        items = items if isinstance(items, list) else []
+    except Exception as e:
+        return ["hub: server up on port %d, pending not asked (%s)" % (port, type(e).__name__)]
+    lines = ["hub: server up on port %d, %d pending" % (port, len(items))]
+    if items:
+        lines.append("hub: process the %d pending item(s): python \"%s\" pending, then handle, ack or log "
+                     "each" % (len(items), HUB_TOOL))
+    if _wait_running(procs):
+        lines.append("hub: wait --pending is running")
     else:
-        url = cfg.get("hub_url")
-    lines = []
-    if urls and cfg.get("hub_url"):
-        lines.append("hub: pm_start.hub_url is ignored because hub_urls is set; remove it from the "
-                     "machine config")
-    default_src = os.path.join(KIT_ROOT, os.path.normpath(HUB_SOURCE))
-    if bad_src is not None:
-        lines.append("hub: pm_start.hub_source is %s, not a path string: fix it in the machine "
-                     "config, or remove it to use %s" % (type(cfg.get("hub_source")).__name__, default_src))
-    elif not exists:
-        lines.append("hub: the page source %s does not exist (pm_start.hub_source); point it at %s"
-                     % (src, default_src))
-    elif url:
-        lines.append("hub: republish the kit's Action Hub page %s to %s with the Artifact tool, "
-                     "restating the capabilities in docs/action-hub.md (For the PM), to arm the alert"
-                     % (src, url))
-    else:
-        if label is None:
-            label = (account or current_account)()
-        lines.append("hub: no Action Hub copy is recorded for account %s: publish the kit's page %s "
-                     "with the Artifact tool declaring capabilities %s (docs/action-hub.md, For the PM) "
-                     "and pin it; record its URL with `python \"%s\" set-url --account %s <url>`; fill "
-                     "it from the mirror with `python \"%s\" restore --out <file>` and send "
-                     "every batch file it names with ArtifactData (an empty mirror gives none); refill "
-                     "the regenerated collections (%s)"
-                     % (label, src, HUB_CAPABILITIES, HUB_MIRROR_TOOL, label, HUB_MIRROR_TOOL,
-                        hubmirror.regenerate_text()))
-    lines.append(_hub_watch_line(url))
-    if url:
-        lines.append("hub: refill check: ArtifactData list backlog on %s; empty means a new or "
-                     "unfilled copy: refill the regenerated collections (%s)"
-                     % (url, hubmirror.regenerate_text()))
-    lines.append(HUB_PROCESS_LINE)
+        lines.append("hub: start in the background: python \"%s\" wait --pending (it exits with one HUB "
+                     "line per item; handle the items, then start it again)" % HUB_TOOL)
     return lines
 
 
@@ -300,17 +329,24 @@ STORE_DIR = chr(92) + "WindowsApps" + chr(92)
 _RC = re.compile(r"""(?:^|\s)--remote-control(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S+))""")
 
 
+def session_images(path=None):
+    """The process images a host's launched session runs as (each hosts.json profile's
+    session_process; claude.exe on Claude), matched exactly against a process's Name."""
+    return frozenset(registry.union('session_process', path))
+
+
 def rc_name(cmd):
-    """The --remote-control value of a claude.exe command line, or None (kitlib.launcher.lookup uses it too)."""
+    """The --remote-control value of a session's command line, or None (kitlib.launcher.lookup uses it too)."""
     m = _RC.search(cmd or "")
     return next((g for g in m.groups() if g), None) if m else None
 
 
 def live_session_names(procs):
-    """Remote Control names of launched claude.exe sessions; the Store app (under WindowsApps) is not one."""
+    """Remote Control names of launched sessions (session_images); the Store app (under WindowsApps) is not one."""
     names = set()
+    images = session_images()
     for p in procs:
-        if (p.get("Name") == "claude.exe" and p.get("CommandLine")
+        if (p.get("Name") in images and p.get("CommandLine")
                 and STORE_DIR not in (p.get("ExecutablePath") or "")):
             n = rc_name(p["CommandLine"])
             if n:
@@ -470,8 +506,9 @@ def launcher_repos():
 
 def stubs(repos=None, check=None):
     """One line per repository in launcher.repos whose stubs are missing or stale (kitlib.stubs.problem_line),
-    none when all are current. A folder that is not there, or a check that raises, is that repo's
-    own "could not check stubs" line."""
+    none when all are current. Stubs are opt-in (decision 21 in docs/multi-host-plan.md section 7),
+    so a repository that uses none has no line. A folder that is not there, or a check that raises,
+    is that repo's own "could not check stubs" line."""
     from kitlib import stubs as kstubs
     check = check or kstubs.problem_line
     repos = launcher_repos() if repos is None else repos
@@ -487,6 +524,25 @@ def stubs(repos=None, check=None):
             line = "could not check stubs (%s): %s: %s" % (name, type(e).__name__, e)
         if line:
             lines.append(line)
+    return lines
+
+
+def repo_prep(repos=None, prep=None):
+    """The first-use repo prep (kitlib.git.prep.run; docs/new-worktree.md "First-use prep") of each
+    repository in launcher.repos, the repositories the kit's workers make worktrees in: its lines,
+    none for a repository already prepared. A folder that is not there is that repo's own "could
+    not prep" line; prep never raises."""
+    if prep is None:
+        from kitlib.git import prep as gitprep
+        prep = gitprep.run
+    repos = launcher_repos() if repos is None else repos
+    lines = []
+    for name in sorted(repos):
+        path = repos[name]
+        if not os.path.isdir(path):
+            lines.append("could not prep %s: no repository folder %s" % (name, path))
+            continue
+        lines.extend(prep(path))
     return lines
 
 
@@ -556,9 +612,21 @@ def agent_temp_lines(env=None, sweep_key=None, task_exists=None):
                      % (AGENT_TEMP_TASK, type(e).__name__, e))
         return lines
     if not there:
-        lines.append("agent temp sweep task %s is not registered (machine_setup.py --register-sweep-task "
-                     "--apply, the owner's act)" % AGENT_TEMP_TASK)
+        lines.append("agent temp sweep task %s is not registered (machine_setup.py --apply registers it, "
+                     "the owner's act)" % AGENT_TEMP_TASK)
     return lines
+
+
+def _failure_text(e):
+    """The reason in a "could not check" line: the exception's own text, with any rejected value
+    taken out (_without_values) when it is a machine config refusal (kitlib.config or
+    kitlib.pmdata), so a malformed pm_data value is named by key and rule and never shown."""
+    from kitlib import pmdata
+    from kitlib.config.types import ConfigError
+    text = str(e)
+    if isinstance(e, (ConfigError, pmdata.PmDataError)):
+        text = _without_values(text)
+    return text
 
 
 def checklist(cfg, now=None, procs=None, **fakes):
@@ -575,7 +643,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
     checks = [
         ("standing", lambda: standing(cfg)),
         ("eng_review", lambda: eng_review(cfg)),
-        ("hub", lambda: hub(cfg, **fakes.get("hub", {}))),
+        ("hub", lambda: hub_site(procs_once, **fakes.get("hub_site", {}))),
         ("watcher", lambda: watcher(cfg, procs_once(), **fakes.get("watcher", {}))),
         ("handoff", lambda: handoff(cfg, **fakes.get("handoff", {}))),
         ("reminders", lambda: reminders(cfg, today, **fakes.get("reminders", {}))),
@@ -583,12 +651,14 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
         ("plugin_current", lambda: plugin_current(**fakes.get("plugin_current", {}))),
         ("stubs", lambda: stubs(**fakes.get("stubs", {}))),
+        ("repo_prep", lambda: repo_prep(**fakes.get("repo_prep", {}))),
         ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
+        ("console_tasks", lambda: consoletasks.check(cfg, **fakes.get("console_tasks", {}))),
         ("foreground_lock", lambda: fglock.check(cfg, **fakes.get("foreground_lock", {}))),
     ]
     for name, fn in checks:
         try:
             lines.extend(fn())
         except Exception as e:
-            lines.append("could not check %s: %s: %s" % (name, type(e).__name__, e))
+            lines.append("could not check %s: %s: %s" % (name, type(e).__name__, _failure_text(e)))
     return "PM session start checklist:\n" + "\n".join("- " + l for l in lines)
