@@ -221,7 +221,7 @@ SECTIONS = {
         'lock_file': Field(Str(), None, 'legacy landing lock: git:<name>, a file in the git common dir; any other value refuses'),
         'log_dir': Field(RelPath(), None, 'where gate logs live'),
         'lanes': Field(MapOf(LANE, 'lane'), {}, 'lanes besides full that gate.py land --lane takes'),
-        'wait_s': Field(Int(0, 86400), 3600, 'seconds tools/land.py waits for its turn at the landing lock unless --wait says otherwise'),
+        'wait_s': Field(Int(0, 86400), 3600, 'seconds tools/land.py waits for its turn (its machine-lock booking, then the landing lock) unless --wait says otherwise'),
         'batch_max': Field(Int(1, 20), 3, 'most branches one tools/land.py landing merges and gates together'),
         'reuse_max_age_h': Field(Int(0, 168), 24, 'hours a pass stored in the gate cache serves a branch gate rerun or a landing; 0: no gate reads or stores a step result'),
         'reuse_never': Field(Strs, [], 'globs of paths whose change makes a gate (branch or landing) read and store no step result in the gate cache'),

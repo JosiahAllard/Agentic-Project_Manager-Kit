@@ -43,8 +43,9 @@ LANDED, NOT_YET, FAILED = 0, 1, 2
 CANNOT = 2
 
 # The kit's own verdict lines (kitlib.gate): a branch gate's GATE OK / GATE FAILED, a landing's
-# LANDED / NOT LANDED / STUCK. `failed` takes part only in a failing one.
-VERDICT = re.compile(r'^(?:GATE OK\b|LANDED \S|(?P<failed>GATE FAILED\b|NOT LANDED:|STUCK:))', re.M)
+# LANDED / NOT LANDED / CONFLICT / STUCK. `failed` takes part only in a failing one.
+VERDICT = re.compile(r'^(?:GATE OK\b|LANDED \S|(?P<failed>GATE FAILED\b|NOT LANDED:|'
+                     r'CONFLICT \S+ with main |STUCK:))', re.M)
 MAX_LOGS = 200
 TAIL_BYTES = 256 * 1024
 GIT_TIMEOUT = 60

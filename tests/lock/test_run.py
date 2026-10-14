@@ -563,5 +563,140 @@ class MovedToTop(StoreCase):
         self.assertNotIn("moved", self.store.read("ended/%s.json" % b))
 
 
+LAND = "landing:z:\\repo\\.git"
+
+
+class Resources(StoreCase):
+    """book(resource=, priority=): the run holds the resource for its whole life; the queue
+    entry and run record carry both; the resource is free again when the run releases or its
+    holder is found dead; an unknown priority or a resource that is not a string is usage (2)."""
+
+    def book(self, slug, **kw):
+        kw.setdefault("store", self.store)
+        kw.setdefault("env", clean_env())
+        return rm.book("engine-test", "kit", slug, cores=1, **kw)
+
+    def busy(self, slug, **kw):
+        with self.assertRaises(LockError) as cm:
+            self.book(slug, no_wait=True, **kw)
+        return cm.exception
+
+    def entries(self):
+        return (self.store.read("queue.json") or {}).get("entries", [])
+
+    def test_usage(self):
+        for kw in ({"priority": "urgent"}, {"priority": "LAND"}, {"priority": 1},
+                   {"resource": ""}, {"resource": 5}, {"resource": ["x"]}):
+            with self.subTest(kw=kw):
+                e = self.busy("t", **kw)
+                self.assertEqual(e.code, 2)
+        self.assertIn("unknown priority 'urgent' (known: land)", self.busy("t", priority="urgent").message)
+        self.assertIsNone(self.store.read("queue.json"))
+
+    def test_a_second_run_naming_it_waits_until_the_first_releases(self):
+        self.confine(2)                         # slots alone would let both run at once
+        first = self.book("first", resource=LAND, priority="land")
+        try:
+            rec = self.store.read("active/%s.json" % first.id)
+            self.assertEqual((rec["resource"], rec["priority"]), (LAND, "land"))
+            [e] = self.entries()
+            self.assertEqual((e["state"], e["resource"], e["priority"]), ("held", LAND, "land"))
+            err = self.busy("second", resource=LAND, priority="land")
+            self.assertEqual(err.code, store_mod.EXIT_BUSY)
+            self.assertIn("resource %s is held by" % LAND, err.message)
+            self.assertIn(first.id, err.message)
+            other = self.book("other", resource="landing:z:\\other\\.git")
+            other.release()
+            plain = self.book("plain")          # a run naming no resource is not kept out
+            plain.release()
+        finally:
+            first.release()
+        self.assertEqual(self.entries(), [])
+        self.assertEqual(self.store.read("ended/%s.json" % first.id)["resource"], LAND)
+        second = self.book("second", resource=LAND, no_wait=True)
+        second.release()
+
+    def test_a_dead_holders_resource_is_freed_by_the_prune(self):
+        self.confine(2)
+        rid = "r-20261006T120000Z-d0d0d0"
+        m = self.store.run_mutex(rid)
+        self.addCleanup(m.release)
+        self.store.write("queue.json", {"ticket": 1, "entries": [{
+            "id": rid, "ticket": 1, "state": "held", "pid": os.getpid(),
+            "ctime": process.own_ctime(), "repo": "kit", "slug": "gone", "kind": "engine-test",
+            "need": {"cpu": 0, "gpu": 0}, "expect_s": 600, "cores": [], "gpus": [],
+            "held_at": time.time(), "resource": LAND, "priority": "land"}]})
+        self.assertEqual(self.busy("t", resource=LAND).code, store_mod.EXIT_BUSY)
+        m.release()                             # its wrapper is gone: the run mutex with it
+        said = []
+        self.store.say = said.append
+        s = self.book("t", resource=LAND, no_wait=True)
+        try:
+            self.assertEqual([e["id"] for e in self.entries()], [s.id])
+        finally:
+            s.release()
+        self.assertIn("run %s died holding resource %s; it is free" % (rid, LAND), said)
+
+    def test_a_nested_run_naming_one_its_parent_lacks_joins_the_queue_for_it(self):
+        anc = process.own_ancestors()
+        pp, ct = os.getppid(), process.proc_ctime(os.getppid())
+        if ct is None or (pp, ct) not in anc:
+            self.skipTest("this process's parent cannot be read as an ancestor")
+        prid = "r-20261006T120000Z-abcdef"
+        self.live_record(prid, pid=pp, ctime=ct, has={"cpu": 2}, cores=[0, 1])
+        env = clean_env(**{rm.NEST_ENV: "%s:%d:%d" % (prid, pp, ct)})
+        s = self.book("child", env=env, resource=LAND)
+        try:
+            self.assertFalse(s.nested)
+            [e] = self.entries()
+            self.assertEqual((e["id"], e["state"], e["resource"], e["parent"]),
+                             (s.id, "held", LAND, prid))
+            self.assertEqual(e["need"], {"cpu": 0, "gpu": 0})
+            self.assertEqual(self.busy("t", resource=LAND).code, store_mod.EXIT_BUSY)
+        finally:
+            s.release()
+        self.assertEqual(self.entries(), [])
+        # A parent that holds the resource covers it: the child inherits, as before.
+        self.live_record(prid, pid=pp, ctime=ct, has={"cpu": 2}, cores=[0, 1], resource=LAND)
+        s = self.book("child", env=env, resource=LAND)
+        try:
+            self.assertTrue(s.nested)
+            self.assertEqual(self.entries(), [])
+        finally:
+            s.release()
+
+    def test_the_snapshot_and_status_show_both(self):
+        from kitlib.lock import status
+        self.confine(2)
+        first = self.book("first", resource=LAND, priority="land")
+        try:
+            # A live waiting landing behind it (its wrapper: this process, its run mutex held).
+            wid = "r-20261006T120000Z-e1e1e1"
+            m = self.store.run_mutex(wid)
+            self.addCleanup(m.release)
+            q = self.store.read("queue.json")
+            q["entries"].append({"id": wid, "ticket": q["ticket"] + 1, "state": "waiting",
+                                 "pid": os.getpid(), "ctime": process.own_ctime(), "repo": "kit",
+                                 "slug": "next", "kind": "engine-test", "since": store_mod.iso(),
+                                 "need": {"cpu": 1, "gpu": 0}, "expect_s": 60, "cores": [],
+                                 "gpus": [], "resource": LAND, "priority": "land"})
+            q["ticket"] += 1
+            self.store.write("queue.json", q)
+            snap = api.snapshot(self.store)
+            [row] = [r for r in snap["runs"] if r["id"] == first.id]
+            self.assertEqual((row["resource"], row["priority"]), (LAND, "land"))
+            [w] = snap["queue"]["entries"]
+            self.assertEqual((w["id"], w["resource"], w["priority"]), (wid, LAND, "land"))
+            self.assertIn("resource %s is held by" % LAND, w["why"])
+            text = "\n".join(status.render(snap))
+            self.assertIn("resource %s: held by kit/first (run %s, priority land)"
+                          % (LAND, first.id), text)
+            self.assertIn("run %s, priority land, resource %s)" % (wid, LAND), text)
+        finally:
+            first.release()
+        row = [r for r in api.snapshot(self.store)["runs"]]
+        self.assertEqual(row, [])
+
+
 if __name__ == "__main__":
     unittest.main()

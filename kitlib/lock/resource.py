@@ -1,5 +1,6 @@
 """Exclusive resources: one holder at a time per named resource, the callers that want it served
-first come, first served. A landing per repository is one (kitlib.gate.land).
+first come, first served. No kit code calls it now: a landing books its turn in the slot queue
+with kitlib.lock.run.book(resource=..., priority="land") (docs/lock-api.md "Exclusive resources").
 
 resources.json is {"ticket": the last ticket given, "entries": [entry]}; an entry is
 {id, ticket, resource, label, state: waiting | held, pid, ctime, since, held_at}. It is read and

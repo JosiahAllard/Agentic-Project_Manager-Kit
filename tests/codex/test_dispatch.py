@@ -124,6 +124,44 @@ class KitAdapter(unittest.TestCase):
     def test_reading_landing_queue_does_not_require_landing_privilege(self):
         self.assertEqual(plan("land", ["--queue"], ROOT, role="reviewer").role, "reviewer")
 
+    def test_expect_main_is_optional_and_full_when_given(self):
+        args = ["codex/task", "--expect-tip", "2" * 40]
+        self.assertEqual(plan("land", args, ROOT, role="lander", review_verdict="LAND").role, "lander")
+        self.assertEqual(plan("gate", ["land"] + args, ROOT, role="lander", review_verdict="LAND").role,
+                         "lander")
+        with self.assertRaisesRegex(ValueError, "--expect-tip"):
+            plan("land", ["codex/task"], ROOT, role="lander", review_verdict="LAND")
+        with self.assertRaisesRegex(ValueError, "--expect-tip"):
+            plan("land", ["codex/task", "--expect-tip", "2" * 12], ROOT, role="lander",
+                 review_verdict="LAND")
+
+    def test_a_submitted_landing_may_repeat_its_checkout_with_dash_c(self):
+        args = ["-C", ROOT, "codex/task", "--expect-tip", "2" * 40, "--submit"]
+        planned = plan("land", args, ROOT, role="lander", review_verdict="LAND")
+        self.assertEqual(planned.argv[2:], tuple(args))
+        runner = mock.Mock()
+        with self.assertRaisesRegex(ValueError, "disabled"):
+            execute(planned, runner)
+        runner.assert_not_called()
+        other = str(Path(ROOT).parent)
+        with self.assertRaisesRegex(ValueError, "--cwd"):
+            plan("land", ["-C", other, "codex/task", "--expect-tip", "2" * 40, "--submit"], ROOT,
+                 role="lander", review_verdict="LAND")
+
+    def test_the_queue_and_wait_result_with_dash_c_are_reads(self):
+        main = str(Path(ROOT).parent)
+        reads = (("land", ["-C", main, "--queue"]), ("land", ["-C" + main, "--queue"]),
+                 ("gate", ["wait-result", "codex/task", "--tip", "2" * 40, "--kind", "land", "-C", main]))
+        for role in ("reviewer", "lander", "test-runner", "worker"):
+            for tool, args in reads:
+                with self.subTest(role=role, tool=tool, args=args):
+                    planned = plan(tool, args, ROOT, role=role)
+                    runner = mock.Mock(return_value=SimpleNamespace(returncode=0))
+                    self.assertEqual(execute(planned, runner), 0)
+                    runner.assert_called_once()
+        with self.assertRaises(ValueError):
+            plan("gate", ["--full", "-C", main], ROOT, role="test-runner")
+
     def test_shared_roster_write_and_unknown_tools_are_refused(self):
         for tool, args in (("agent_roster", ["--write"]), ("agent_roster", ["--w"]), ("../other", []), ("machine_setup", [])):
             with self.subTest(tool=tool), self.assertRaises(ValueError):
