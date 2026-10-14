@@ -20,8 +20,10 @@ or equivalent) load on top of this file and win any disagreement.
 2. A coordinator the checklist lists as not running: start it with the exact `launch.py start`
    line the checklist gives (<kit>/docs/launcher.md). Never start a second copy of a
    running one.
-3. The hub: republish the page, start the comment watch on it, check its collections, then
-   process what the owner left there (<kit>/docs/action-hub.md).
+3. The hub is the local site: run `python <kit>/tools/hub.py pending` to see what waits, process
+   it, and start `python <kit>/tools/hub.py wait --pending` in the background
+   (<kit>/docs/action-hub.md). After a server restart the owner runs `hub.py open` to pair the
+   browser again.
 4. Read your newest hand-off note, then tell the owner in a few lines what is running, what
    waits on them, and what you will do next.
 
