@@ -400,22 +400,29 @@ class Narrowing(StoreCase):
         real, failed = type(self.store).write, []
 
         def write(store, r, data, *a, **kw):
-            # The first record write that carries the ack fails; every other write goes through.
-            if r == rel and "given_back" in data and not failed:
+            # The first two record writes that carry the ack fail (shrink's, then the first
+            # poll's); every other write goes through.
+            if r == rel and "given_back" in data and len(failed) < 2:
                 failed.append(r)
                 raise OSError("disk full")
             return real(store, r, data, *a, **kw)
         with mock.patch.object(type(self.store), "write", write):
             rid, rec = self.ask(s, p, [usable[1]])
-        self.assertEqual(failed, [rel])
-        # Given back all the same: the queue freed the slot, so nothing is widened again.
-        self.assertNotIn("give_back_refused", rec)
-        self.assertNotIn("given_back", rec)
-        self.assertEqual(rec["cores"], [usable[0]])
-        self.assertEqual(self.queue_cores(s), [usable[0]])
-        self.assertEqual((s.job.mask, affinity(p), s.cores), (keep, keep, [usable[0]]))
-        # The next poll writes the ack.
-        self.assertIsNone(s.serve_give_back())
+            self.assertEqual(failed, [rel])
+            # Given back all the same: the queue freed the slot, so nothing is widened again.
+            self.assertNotIn("give_back_refused", rec)
+            self.assertNotIn("given_back", rec)
+            self.assertEqual(rec["cores"], [usable[0]])
+            self.assertEqual(self.queue_cores(s), [usable[0]])
+            self.assertEqual((s.job.mask, affinity(p), s.cores), (keep, keep, [usable[0]]))
+            # The next poll's ack write fails too: still due, nothing else changes.
+            self.assertIsNone(s.serve_give_back())
+            self.assertEqual(failed, [rel, rel])
+            self.assertTrue(s.ack_due)
+            self.assertNotIn("given_back", self.store.read(rel))
+            # The poll after it writes the ack.
+            self.assertIsNone(s.serve_give_back())
+        self.assertFalse(s.ack_due)
         self.assertEqual(self.store.read(rel)["given_back"]["id"], rid)
         # An asker that timed out and asks again for the same slot is refused; nothing changes.
         rid2, rec2 = self.ask(s, p, [usable[1]])
@@ -424,6 +431,42 @@ class Narrowing(StoreCase):
         self.assertEqual((rec2["cores"], rec2["given_back"]["id"]), ([usable[0]], rid))
         self.assertEqual(self.queue_cores(s), [usable[0]])
         self.assertEqual((s.job.mask, affinity(p)), (keep, keep))
+
+    def test_an_interrupt_after_the_queue_write_lands_puts_nothing_back(self):
+        s, usable = self.held(2)
+        rel = "active/%s.json" % s.id
+        real = gb().qm.save
+        for exc in (KeyboardInterrupt, OSError):
+            raised = []
+
+            def save(store, q):
+                # The queue write lands, then something raises (as a Ctrl+C in its bump would).
+                real(store, q)
+                raised.append(exc)
+                raise exc("after the replace")
+            ack = {"id": "i-%s" % exc.__name__, "cpu": [usable[1]]}
+            with mock.patch.object(gb().qm, "save", side_effect=save):
+                if exc is KeyboardInterrupt:
+                    with self.assertRaises(KeyboardInterrupt):
+                        gb().shrink(self.store, s.run, [usable[0]], {}, ack)
+                else:
+                    # An Exception after the queue write is committed: the ack is written.
+                    self.assertTrue(gb().shrink(self.store, s.run, [usable[0]], {}, ack))
+            self.assertEqual(raised, [exc])
+            on_disk = self.store.read(rel)
+            self.assertEqual((s.run.rec["cores"], on_disk["cores"]), ([usable[0]], [usable[0]]))
+            self.assertEqual(self.queue_cores(s), [usable[0]])
+            if exc is OSError:
+                self.assertEqual(on_disk["given_back"]["id"], ack["id"])
+            else:
+                self.assertNotIn("given_back", on_disk)
+            # Put the booking back for the next round (the job was never narrowed here).
+            with self.store.lock("queue"):
+                q = gb().qm.load(self.store)
+                gb().qm.entry_of(q, s.id)["cores"] = list(usable)
+                real(self.store, q)
+            s.run.rec.pop("given_back", None)
+            s.run.save(cores=list(usable))
 
     def test_a_refused_repin_leaves_the_job_narrowed_and_a_later_ask_refused(self):
         s, usable = self.held(2)
@@ -497,6 +540,27 @@ class Helpers(unittest.TestCase):
         self.assertEqual(asked, [[2, 3], [1]])
         self.assertIn("gave back cpu slot(s) 2,3, the run holds 0,1", said[0])
         self.assertIn("not given back (refused: no)", said[1])
+
+    def test_the_drainer_never_says_a_timeout_kept_the_slots(self):
+        # A lost ack: the wrapper gave the slots back but the asker timed out first.
+        g = gb()
+        path = os.path.abspath(os.path.join("store", "active", "r-20261010T000000Z-abcdef.giveback"))
+        env = {g.GIVE_ENV: path, "MACHINE_LOCK_RUN": "r-20261010T000000Z-abcdef:1:2",
+               "MACHINE_LOCK_CPUMASK": "0xff"}
+        held, said = [[0, 1, 2, 3]], []
+
+        def give(_offer, cpu, wait_s=10.0):
+            held[0] = [i for i in held[0] if i not in cpu]
+            return "timeout", "no answer within 10 s"
+        with mock.patch.object(g.Offer, "held", lambda _o: list(held[0])), \
+                mock.patch.object(g.Offer, "give", give):
+            d = g.drainer(said.append, env)
+            self.assertIsNone(d(3))
+            self.assertIsNone(d(1))                 # it asks no more
+        self.assertEqual(len(said), 1)
+        self.assertNotIn("keeps them", said[0])
+        self.assertIn("cpu slot(s) 2,3: no answer (timeout: no answer within 10 s); "
+                      "the run's record books 0,1 now", said[0])
 
     def test_a_gpu_that_is_not_a_list_is_refused_not_read_as_none(self):
         g = gb()

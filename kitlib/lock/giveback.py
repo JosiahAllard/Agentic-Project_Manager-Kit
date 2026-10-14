@@ -46,8 +46,10 @@ The command cannot narrow its own pin (the run's wrapper holds the job), so it a
 Fail safe. The queue entry is the allocation every planner reads (this kit's and the installed
 machine_lock.py's), and it is written after the record: a wrapper that dies between the record and
 the queue leaves the slots held in the queue (never handed to a waiter twice), and a dead wrapper's
-entry is dropped by the next look anyway. The installed tool reads a shrunk record and entry as it reads any
-(cores, slots, has); the request file is not a .json, so neither tool reads it as a run record.
+entry is dropped by the next look anyway. Whether the queue write landed is read back from
+queue.json under the same mutex, never assumed: an interrupt (even Ctrl+C) after it lands puts
+nothing back. The installed tool reads a shrunk record and entry as it reads any (cores, slots,
+has); the request file is not a .json, so neither tool reads it as a run record.
 """
 import copy
 import os
@@ -122,7 +124,10 @@ def shrink(store, run, keep, fields, ack):
     persist). Once the queue write has landed the slots are given back, whatever follows: a
     failed ack write rolls nothing back (the job widened onto slots the queue has freed would be
     booked twice); the ack stays in run.rec for the next save, and shrink returns False. True:
-    the ack is on disk."""
+    the ack is on disk. Whether the queue write landed is read back from queue.json (under the
+    mutex nothing else writes it): one that landed before an Exception is committed, and one
+    that landed before a KeyboardInterrupt (or any other BaseException) re-raises it with
+    nothing put back."""
     before = copy.deepcopy(run.rec)
     slots = dict(run.rec.get("slots") or {}, cpu=list(keep))
     has = dict(run.rec.get("has") or {}, cpu=len(keep))
@@ -134,24 +139,38 @@ def shrink(store, run, keep, fields, ack):
             if e is not None:
                 e["cores"] = list(keep)
                 qm.save(store, q)
-        except BaseException:
-            # The queue still holds every slot: the record says so again, in memory, then on
-            # disk (a failed first write left the old record there; if this write fails too
-            # after one that landed, the record on disk under-reports and the queue still
-            # counts them held).
-            run.rec.clear()
-            run.rec.update(before)
-            try:
-                run.save()
-            except OSError:
-                pass
-            raise
+        except BaseException as exc:
+            if not queue_books(store, run.id, keep):
+                # The queue still holds every slot: the record says so again, in memory, then
+                # on disk (a failed first write left the old record there; if this write fails
+                # too after one that landed, the record on disk under-reports and the queue
+                # still counts them held).
+                run.rec.clear()
+                run.rec.update(before)
+                try:
+                    run.save()
+                except OSError:
+                    pass
+                raise
+            if not isinstance(exc, Exception):
+                raise
         # Committed: the queue entry no longer holds the slots given back.
         try:
             run.save(given_back=ack)
         except OSError:
             return False
         return True
+
+
+def queue_books(store, rid, keep):
+    """True when queue.json on disk gives run rid's entry exactly the cores `keep` (the shrink's
+    queue write landed); False when it does not, or stays unreadable past queue_read_s (qm.load
+    waits out a reader that has it open)."""
+    try:
+        e = qm.entry_of(qm.load(store), rid)
+    except OSError:
+        return False
+    return e is not None and e.get("cores") == list(keep)
 
 
 # ------------------------------------------------------------------ the command's side
@@ -227,7 +246,8 @@ def drainer(say, env=None):
     """For a command whose work drains (kit_tests' pool): a give(threads_needed) that gives back
     the cpu slots past what threads_needed threads use (surplus), says what happened, and returns
     the ack (given_back) or None; None itself when the command has no offer. After a refusal, a
-    timeout or the run's end it asks no more."""
+    timeout or the run's end it asks no more; only a refusal is said as "the run keeps them" (a
+    timeout says what the record books then, which a lost ack's give-back already shows)."""
     env = os.environ if env is None else env
     offer = Offer.from_env(env)
     if offer is None:
@@ -248,7 +268,14 @@ def drainer(say, env=None):
                 % (threads_needed, ",".join(map(str, extra)), ",".join(map(str, info["cores"]))))
             return info
         state["off"] = True
-        say("give back: cpu slot(s) %s not given back (%s: %s); the run keeps them"
-            % (",".join(map(str, extra)), res, info))
+        if res == "refused":
+            say("give back: cpu slot(s) %s not given back (%s: %s); the run keeps them"
+                % (",".join(map(str, extra)), res, info))
+        else:
+            # No answer is not a "no": the wrapper may have given them back and not yet written
+            # its ack (a lost ack is written on its next poll), or be mid-write.
+            say("give back: cpu slot(s) %s: no answer (%s: %s); the run's record books %s now"
+                % (",".join(map(str, extra)), res, info,
+                   ",".join(map(str, offer.held())) or "nothing"))
         return None
     return give
