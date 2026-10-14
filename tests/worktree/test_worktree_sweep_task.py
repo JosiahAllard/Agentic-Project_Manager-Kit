@@ -3,6 +3,7 @@ and where the task may point. PowerShell is a fake runner: nothing is ever regis
 """
 import io
 import os
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
@@ -32,10 +33,16 @@ class TaskCase(RemoveCase):
         self.kit = gitfixture.TempRepo()
         self.addCleanup(self.kit.cleanup)
         self.tool = self.kit.write(os.path.join('tools', 'worktree_remove.py'), '# tool\n')
+        # The task's program: a stand-in pythonw.exe in a base install of its own.
+        self.pythonw = os.path.join(self.fx.base, "py'base", 'pythonw.exe')
+        os.makedirs(os.path.dirname(self.pythonw))
+        with open(self.pythonw, 'w', encoding='utf-8') as f:
+            f.write('')
 
-    def run_task(self, *argv, runner=None, root=None, tool=None):
+    def run_task(self, *argv, runner=None, root=None, tool=None, pythonw=None):
         runner = runner or Runner()
-        got = task.run(list(argv), runner, root or self.repo, tool or self.tool)
+        got = task.run(list(argv), runner, root or self.repo, tool or self.tool,
+                       pythonw=pythonw or self.pythonw)
         return got.code, '\n'.join(got.lines), runner
 
 
@@ -60,12 +67,50 @@ class Task(TaskCase):
         rc, out, _ = self.run_task()
         self.assertEqual(rc, 0, out)
         line = out.splitlines()[0]
-        self.assertTrue(line.startswith('$py = (Get-Command pythonw).Source; '), line)
-        self.assertNotIn('Get-Command python)', line)
+        self.assertTrue(line.startswith('$py = %s; ' % task.quoted(self.pythonw)), line)
         tool = os.path.normpath(self.tool)
         carrier = os.path.join(os.path.dirname(tool), task.CARRIER)
         self.assertIn("-Execute $py -Argument '\"%s\" python \"%s\" -C \"%s\" --sweep-merged --apply'"
                       % (carrier, tool, os.path.normpath(self.repo)), line)
+
+    def test_the_pythonw_is_never_a_path_lookup(self):
+        """`Get-Command pythonw` gives the WindowsApps alias when that is first on PATH: the line
+        names the base install's pythonw itself, and by default that is this interpreter's."""
+        rc, out, _ = self.run_task()
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('Get-Command', out)
+        # No `pythonw=`: the default is base_pythonw(); a stand-in base install keeps this
+        # independent of the host's sys.base_prefix (a Store or venv-less install may have none).
+        base = os.path.join(self.fx.base, 'base_install')
+        os.makedirs(base)
+        want = os.path.join(base, 'pythonw.exe')
+        with open(want, 'w', encoding='utf-8') as f:
+            f.write('')
+        with mock.patch.object(sys, 'base_prefix', base):
+            got = task.run([], Runner(), self.repo, self.tool)
+        self.assertEqual(got.code, 0, got.lines)
+        line = got.lines[0]
+        self.assertTrue(line.startswith('$py = %s; ' % task.quoted(want)), line)
+
+    def test_a_windows_apps_pythonw_is_refused_before_anything_is_printed(self):
+        alias = os.path.join(self.fx.base, 'Microsoft', 'WindowsApps', 'pythonw.exe')
+        os.makedirs(os.path.dirname(alias))
+        with open(alias, 'w', encoding='utf-8') as f:
+            f.write('')
+        for argv in ([], ['--register', '--owner-confirmed']):
+            rc, out, runner = self.run_task(*argv, pythonw=alias)
+            self.assertEqual(rc, 1, out)
+            self.assertEqual(runner.calls, [])
+            self.assertIn('WindowsApps', out)
+            self.assertIn('nothing was registered', out)
+            self.assertNotIn('Register-ScheduledTask', out)
+
+    def test_a_missing_pythonw_is_refused(self):
+        rc, out, runner = self.run_task('--register', '--owner-confirmed',
+                                        pythonw=os.path.join(self.fx.base, 'none', 'pythonw.exe'))
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(runner.calls, [])
+        self.assertIn('refused   no pythonw.exe at', out)
 
     def test_the_carrier_is_a_tool_of_this_kit(self):
         self.assertEqual(task.CARRIER, 'no_window.py')
