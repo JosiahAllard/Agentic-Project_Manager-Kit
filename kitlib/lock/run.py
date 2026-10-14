@@ -45,7 +45,9 @@ from kitlib.proc.job import Job, JobError, cores_text
 
 POOLS, PICK = lay.POOLS, qm.PICK
 NEST_ENV = "MACHINE_LOCK_RUN"
-NEST_RE = re.compile(r"^(r-\d{8}T\d{6}Z-[0-9a-f]{6}):(\d+):(\d+)$")
+RUN_ID_RE = re.compile(r"r-\d{8}T\d{6}Z-[0-9a-f]{6}")   # store.new_id("r")
+NEST_RE = re.compile(r"^(%s):(\d+):(\d+)$" % RUN_ID_RE.pattern)
+CLAIM_TRIES = 16            # claim_id: how many ids it draws before it gives up
 ORIGIN_ENV = "MACHINE_LOCK_ORIGIN"      # a detached run's launcher ancestry, pid:ctime;...
 BG_ENV = "MACHINE_LOCK_BG"
 CPUSET_ENV, CPUMASK_ENV, CPUS_ENV = "MACHINE_LOCK_CPUSET", "MACHINE_LOCK_CPUMASK", "MACHINE_LOCK_CPUS"
@@ -224,8 +226,55 @@ class Usage:
                 "cpu_cores_now": round(self.now_cores, 2), "mem_mb_now": int(self.now_mem // 2**20)}
 
 
+def check_run_id(rid):
+    """Raises LockError (usage, exit 2) unless rid is None or shaped as store.new_id("r") makes a
+    run id: a given id names files under the store, so nothing else may reach a path."""
+    if rid is not None and not (isinstance(rid, str) and RUN_ID_RE.fullmatch(rid)):
+        raise LockError(EXIT_USAGE, "usage: %r is not a run id (r-<UTC second>-<6 hex>)" % (rid,))
+
+
+def id_left(store, rid):
+    """The first file of an earlier run with id rid still in the store (its record, stop file,
+    ended record or background folder), or None."""
+    for p in (store.path("active", rid + ".json"), store.path("active", rid + ".stop"),
+              store.path("ended", rid + ".json"), store.path("background", rid + ".d")):
+        if os.path.lexists(p):
+            return p
+    return None
+
+
+def claim_id(store, rid=None, tries=CLAIM_TRIES):
+    """(id, its run mutex, held): the id a new run takes, claimed before any of its records exist.
+    An id is taken while another holds its run mutex or anything of an earlier run with it is
+    left (id_left). The files are looked at once the mutex is held: no live run then has the id,
+    and a run that had it wrote its ended record before it let the mutex go (settle). A drawn id
+    that is taken is drawn again, up to `tries` times; a given one (rid, as --detached-id) is
+    refused. Raises LockError: usage (exit 2) for a rid not shaped as a run id, exit 10 when no id
+    is had. A refusal writes nothing."""
+    check_run_id(rid)
+    why = None
+    for _ in range(1 if rid else tries):
+        cand = rid or new_id("r")
+        try:
+            mutex = store.run_mutex(cand)
+        except OSError as e:
+            why = str(e)
+            continue
+        left = id_left(store, cand)
+        if left is None:
+            return cand, mutex
+        mutex.release()
+        why = "%s exists" % left
+    if rid:
+        raise LockError(EXIT_REQUIRE, "require-lock: run id %s is taken (%s); the command was "
+                                      "not run" % (rid, why))
+    raise LockError(EXIT_REQUIRE, "require-lock: no free run id in %d draws (the last: %s); the "
+                                  "command was not run" % (tries, why))
+
+
 class Run:
-    """A run's record, active/<id>.json while it lives, ended/<id>.json after."""
+    """A run's record, active/<id>.json while it lives, ended/<id>.json after. Its id comes from
+    claim_id (book, run_background); one made here is not checked against the store."""
 
     def __init__(self, store, L, repo, slug, kind, note, cmd, state, rid=None, detached=False,
                  env=None, log=None):
@@ -1191,6 +1240,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
                         % (priority, ", ".join(qm.PRIORITIES)))
     if resource is not None and not (isinstance(resource, str) and resource):
         raise LockError(EXIT_USAGE, "usage: a resource is a non-empty string, not %r" % (resource,))
+    check_run_id(rid)
     L = lay.in_force(store)["layout"]
     try:                            # a size the layout cannot give fails closed
         kinds_mod.check_cap(table, L["agent_cap"])
@@ -1231,24 +1281,26 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     if own["gpu"] and bg_ancestor(env):
         raise LockError(EXIT_USAGE, "usage: a gpu lock inside a background run would pause that "
                                     "run; refused")
-    run = Run(store, L, repo, slug, kind, note, cmd, "waiting", rid, detached, env, log)
-    hist = None if expect_s is not None else store.history_expect(repo, kind)
-    run.rec.update(expect_s=expect_s if expect_s is not None else hist if hist is not None
-                   else k["warn_min"] * 60,
-                   expect_from="--expect" if expect_s is not None else "history"
-                   if hist is not None else "guide",
-                   need=own, has={p: n for p, n in has.items() if n}, hold=hold,
-                   parent=parent["id"] if parent else None, gpu_share=gpu_share,
-                   **({"gate": True} if gate else {}),
-                   **({"resource": resource} if resource else {}),
-                   **({"priority": priority} if priority else {}))
-    mutex, done, code, how = None, False, EXIT_REQUIRE, "not acquired"
+    # The id first, its run mutex held: an id another run has, live or ended, is never written
+    # over, and a refusal here writes nothing (claim_id).
+    rid, mutex = claim_id(store, rid)
     try:
-        try:
-            mutex = store.run_mutex(run.id)
-        except OSError as e:
-            raise LockError(EXIT_REQUIRE, "require-lock: the run's mutex could not be made (%s); "
-                                          "the command was not run" % e)
+        run = Run(store, L, repo, slug, kind, note, cmd, "waiting", rid, detached, env, log)
+        hist = None if expect_s is not None else store.history_expect(repo, kind)
+        run.rec.update(expect_s=expect_s if expect_s is not None else hist if hist is not None
+                       else k["warn_min"] * 60,
+                       expect_from="--expect" if expect_s is not None else "history"
+                       if hist is not None else "guide",
+                       need=own, has={p: n for p, n in has.items() if n}, hold=hold,
+                       parent=parent["id"] if parent else None, gpu_share=gpu_share,
+                       **({"gate": True} if gate else {}),
+                       **({"resource": resource} if resource else {}),
+                       **({"priority": priority} if priority else {}))
+    except BaseException:
+        mutex.release()
+        raise
+    done, code, how = False, EXIT_REQUIRE, "not acquired"
+    try:
         prefer = None
         if hold:
             # The claim first, so the run plans around every hold but its own.
