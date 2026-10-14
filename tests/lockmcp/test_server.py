@@ -141,6 +141,33 @@ class Tools(McpCase):
         self.assertEqual(w["revision"], s["revision"])
         self.err("lock_snapshot", {"since": "yesterday"}, "invalid", "since")
 
+    def test_the_snapshot_shows_a_runs_resource_and_priority_and_no_tool_sets_them(self):
+        from kitlib.lock.store import iso
+        from kitlib.proc import process
+        land = "landing:z:\\repo\\.git"
+        held, waiting = "r-20261006T120000Z-a1a1a1", "r-20261006T120000Z-b1b1b1"
+        for rid in (held, waiting):
+            m = self.store.run_mutex(rid)
+            self.addCleanup(m.release)
+        self.live_record(held, cores=[0], resource=land, priority="land")
+        common = {"pid": os.getpid(), "ctime": process.own_ctime(), "repo": "kit",
+                  "kind": "engine-test", "since": iso(), "expect_s": 600, "gpus": [],
+                  "resource": land, "priority": "land"}
+        self.store.write("queue.json", {"ticket": 2, "entries": [
+            dict(common, id=held, ticket=1, state="held", slug="t", need={"cpu": 1, "gpu": 0},
+                 cores=[0], held_at=None),
+            dict(common, id=waiting, ticket=2, state="waiting", slug="next",
+                 need={"cpu": 1, "gpu": 0}, cores=[])]})
+        s = self.ok("lock_snapshot")
+        [row] = [r for r in s["runs"] if r["id"] == held]
+        self.assertEqual((row["resource"], row["priority"]), (land, "land"))
+        [w] = s["queue"]["entries"]
+        self.assertEqual((w["id"], w["resource"], w["priority"]), (waiting, land, "land"))
+        for t in self.c.request("tools/list")["result"]["tools"]:
+            props = json.dumps(t["inputSchema"])
+            self.assertNotIn("resource", props, t["name"])
+            self.assertNotIn("priority", props, t["name"])
+
     def test_a_read_refuses_an_id_that_is_not_one(self):
         # An id is joined into a store path (api.run_record); a path is refused before that.
         self.err("lock_run", {"id": "..\\..\\x"}, "invalid", "id")

@@ -19,8 +19,8 @@ What stands in for the machine (the rest is the kit's code as it runs):
   - git is the kit's fake git (tests/__init__.py), so no git hook runs: the kit's pre-push hook
     that core.hooksPath points at is not run by the landing's push here (tests/guard covers it);
   - the machine lock: AnyPlatform replaces kitlib.lock.run.book, as the gate calls it, with a slot
-    that starts each step as a plain child process (no job object, no cpu slots, no affinity) and
-    keeps the landing queue in a scratch store; OnWindows books a scratch store on fake hardware
+    that starts each step as a plain child process (no job object, no cpu slots, no affinity),
+    the landing's one booking included, so it has its turn at once; OnWindows books a scratch store on fake hardware
     (tests/lock/helpers.StoreCase, as tests/gate/test_auto_gate.py's gates do), so the steps run
     in the lock's real job objects, Windows only;
   - the home folder is a temp folder (tests/home.py), and the user's global git identity a temp
@@ -252,6 +252,8 @@ class _Launcher(object):
 
 
 class _Slot(object):
+    id = 'none'
+
     def __init__(self, env):
         self.launcher = _Launcher(env)
 
@@ -259,6 +261,12 @@ class _Slot(object):
         return 'held: no machine lock (tests/zerosetup)'
 
     def release(self, code, why):
+        pass
+
+    def stop_daemons(self):
+        pass
+
+    def end_tree(self):
         pass
 
     def watch_stop(self):
@@ -274,19 +282,9 @@ class _Slot(object):
         return False
 
 
-class _Turn(object):
-    """A landing queue turn with no one ahead."""
-
-    def try_take(self):
-        return []
-
-    def leave(self):
-        pass
-
-
 class AnyPlatform(Cycle, unittest.TestCase):
     """The cycle with kitlib.lock.run.book replaced (no job, no cpu slots), on the fake git: runs
-    on any platform. The landing queue is kept in a scratch store's folder. The fake git runs no
+    on any platform; the landing's turn is that booking, so it has it at once. The fake git runs no
     hook and refuses a commit or a push that has one, so it is told there is none and the hooks
     it was asked for are recorded; each is then run here on what the cycle did (pre_commit_passed,
     pre_push_passed)."""
@@ -310,11 +308,6 @@ class AnyPlatform(Cycle, unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         self.booked = booked
-        # The landing queue (kitlib.lock.resource, a turn under a named Windows mutex): one
-        # landing at a time here, so its turn is always taken at once.
-        patch = mock.patch.object(land.lockres, 'join', lambda store, key, label: _Turn())
-        patch.start()
-        self.addCleanup(patch.stop)
         # The machine store's own root is asked of Windows: a scratch path stands in, never used.
         patch = mock.patch.object(lockstore, 'real_root', lambda: os.path.join(self.base, 'machine-store'))
         patch.start()

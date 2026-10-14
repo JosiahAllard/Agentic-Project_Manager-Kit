@@ -1,5 +1,6 @@
 """kitlib.gate.result: the result records every branch gate and landing writes (running, then
-final), and wait-result, the read-only wait a second session arms on them (docs/gate.md "Result
+final), and wait-result, the wait a second session arms on them (its one write: a running
+record whose process died, finished error) (docs/gate.md "Result
 record")."""
 import json
 import os
@@ -10,13 +11,15 @@ from unittest import mock
 
 from kitlib import gate as G
 from kitlib.gate import land, result, runner, steps
+from kitlib.proc import process
 from kitlib.records import landing
-from tests import gitfixture
+from tests import gitfixture, testutil
 from tests.gate import fixtures
 
 GATE_PY = os.path.join(steps.KIT_TOOLS, 'gate.py')
 FIELDS = ('schema', 'kind', 'branch', 'tip', 'base', 'run_id', 'started_at', 'finished_at',
-          'verdict', 'code', 'log', 'summary', 'gate_ok_record', 'cleanup', 'source')
+          'verdict', 'code', 'log', 'summary', 'gate_ok_record', 'cleanup', 'source', 'pid',
+          'ctime')
 UTC = r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$'
 
 
@@ -209,6 +212,60 @@ class Records(unittest.TestCase):
             with self.assertRaises(ValueError):
                 result.wait(self.repo.root, 'kit/x', self.tip, timeout_s=t)
 
+    def dead_pid(self):
+        p = testutil.dead_process()
+        self.addCleanup(p.wait)             # holds the Popen, so Windows cannot reuse the pid
+        return p.pid
+
+    def test_a_run_names_its_process_in_its_records(self):
+        run = result.Run(self.repo.root, 'land', 'kit/x', self.tip)
+        run.start()
+        got = result.read(self.repo.root, 'kit/x', 'land')[0]
+        self.assertEqual((got['pid'], got['ctime']), (os.getpid(), process.own_ctime()))
+        self.assertEqual(result.running_state(got), 'live')
+
+    def test_wait_finishes_a_running_record_whose_process_died_as_error(self):
+        for kind, what in (('land', 'landing'), ('gate', 'gate')):
+            run = result.Run(self.repo.root, kind, 'kit/x', self.tip, base='c' * 40)
+            run.pid, run.ctime = self.dead_pid(), None
+            run.start(log='L')
+            running = result.read(self.repo.root, 'kit/x', kind)[0]
+            self.assertEqual(result.running_state(running), 'dead')
+            got, why = result.wait(self.repo.root, 'kit/x', self.tip[:8], kind=kind, timeout_s=0)
+            self.assertIsNone(why)
+            self.assertEqual((got['verdict'], got['code'], got['run_id'], got['started_at'],
+                              got['base'], got['log'], got['pid']),
+                             ('error', None, run.run_id, running['started_at'], 'c' * 40, 'L',
+                              run.pid))
+            self.assertEqual(got['summary'], 'the %s process died: pid %d ended without '
+                                             'finishing its record' % (what, run.pid))
+            self.assertRegex(got['finished_at'], UTC)
+            self.assertEqual(result.read(self.repo.root, 'kit/x', kind)[0], got)   # on disk
+
+    def test_wait_leaves_a_running_record_whose_process_lives_or_is_unknown(self):
+        run = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)        # this process: live
+        run.start()
+        self.assertEqual(self.fake_wait('kit/x', self.tip), (None, 'timeout', 5))
+        old = self.rec(verdict='running')                   # no pid: a record from before the key
+        old['started_at'] = '2020-01-01T00:00:00Z'
+        result.write(self.repo.root, old)
+        self.assertEqual(result.running_state(old), 'unknown')
+        self.assertEqual(self.fake_wait('kit/x', self.tip), (None, 'timeout', 5))
+        self.assertEqual(result.read(self.repo.root, 'kit/x')[0]['verdict'], 'running')
+        self.assertEqual(result.running_state(self.rec(verdict='running')), 'live')  # young
+        self.assertIsNone(result.running_state(self.rec()))
+
+    def test_finish_dead_leaves_a_record_another_run_replaced(self):
+        dead = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)
+        dead.pid = self.dead_pid()
+        dead.start()
+        rec = result.read(self.repo.root, 'kit/x')[0]
+        newer = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)
+        newer.start()                                       # a new run took the file meanwhile
+        got = result.finish_dead(self.repo.root, rec)
+        self.assertEqual((got['run_id'], got['verdict']), (newer.run_id, 'running'))
+        self.assertEqual(result.read(self.repo.root, 'kit/x')[0], got)
+
     def test_wait_sees_the_final_record_after_the_running_one(self):
         run = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)
         result.write(self.repo.root, self.rec())            # an earlier run's pass at this tip
@@ -380,7 +437,7 @@ class LandingWrites(fixtures.GateRepoCase):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         prior = result.build('kit/feature', tip, self.main, 'land', G.OK, summary='LANDED earlier')
         result.write(self.repo.root, prior)
-        out = self.lander('kit/feature', 'c' * 40, tip).run()          # wrong --expect-main
+        out = self.lander('kit/feature', self.main, 'c' * 40).run()    # wrong --expect-tip
         self.assertEqual(out.code, G.REFUSED, out.lines)
         self.assertIsNone(out.result_record)
         lock = landing.LandingLock(self.repo.root)

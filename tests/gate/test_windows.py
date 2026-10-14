@@ -101,3 +101,27 @@ class Windows(fixtures.GateRepoCase):
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertIn(WARNING, self.said)
         self.assertEqual(out.windows, [window().as_dict()])
+
+    def test_a_gate_in_a_slot_it_was_given_says_it_before_its_tree_ends(self):
+        # A landing's merged gate runs in the slot the landing holds (runner.gated slot=): the
+        # window report is said there too, and the monitor stops before the steps' daemons and
+        # tree are ended, as a booked gate's report comes before its release.
+        FakeMonitor.windows_to_report = [window()]
+        wt, _ = self.branch('feature', {'a.py': 'x = 1\n'})
+        cfg = kconfig.load(wt)
+        watching = []
+        real_stop = lockrun.Slot.stop_daemons
+
+        def stop_daemons(slot):
+            watching.append(slot.watch is not None)
+            return real_stop(slot)
+        slot = lockrun.book(cfg.section('gate')['kind'], 'repo', 'land',
+                            **dict(self.book_kw, gate=True))
+        with slot, mock.patch.object(lockrun.Slot, 'stop_daemons', stop_daemons):
+            out = runner.merged_gate(wt, cfg, self.main, book_kw=self.book_kw, log_dir=self.logs,
+                                     say=self.said.append, slot=slot)
+            self.assertFalse(slot.released)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertIn(WARNING, self.said)
+        self.assertEqual(out.windows, [window().as_dict()])
+        self.assertEqual(watching[:1], [False], watching)

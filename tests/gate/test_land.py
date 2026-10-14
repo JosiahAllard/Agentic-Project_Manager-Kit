@@ -6,12 +6,14 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import unittest
 from unittest import mock
 
 from kitlib import gate as G
 from kitlib.gate import land, runner
 from kitlib.git import refs
+from kitlib.lock import queue as lockqueue
 from kitlib.records import gate_ok, landing
 from tests.gate import fixtures
 from tests.realgit import real_git
@@ -86,16 +88,20 @@ class Lands(LandCase):
         self.assertIn('kit/feature is at %s' % tip[:10], out.lines[0])
         self.assert_untouched(out, G.REFUSED)
 
-    def test_main_moved_on_the_remote_is_refused(self):
+    def test_main_moved_on_the_remote_is_followed(self):
+        # the landing merges onto main as it is at its turn (tests/gate/test_land_queue.py Follow)
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         other = self.repo.worktree('other')
         self.repo.write('o.py', 'o\n', root=other)
         moved = self.repo.commit('other', 'o.py', cwd=other)
         self.repo.git('push', '-q', 'origin', '%s:refs/heads/main' % moved)
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.REFUSED, out.lines)
-        self.assertIn('main moved on the remote', out.lines[0])
-        self.assertEqual(self.main_now(), self.main)
+        said = []
+        out = self.lander(BRANCH, self.main, tip, say=said.append).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertIn('main moved on from %s to %s; merging onto %s' % (
+            self.main[:10], moved[:10], moved[:10]), said)
+        self.assertEqual(self.repo.git('rev-parse', out.merge + '^1'), moved)
+        self.assertEqual(self.remote_main(), out.merge)
         self.assertIsNone(self.lock().read())
 
     def test_conflict_is_aborted(self):
@@ -105,6 +111,9 @@ class Lands(LandCase):
         self.repo.git('push', '-q', 'origin', 'main')
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertIn('merge was aborted', out.lines[0])
+        self.assertEqual(out.lines[-1], 'CONFLICT kit/feature with main %s: the author merges main'
+                         % self.main)
+        self.assertEqual(out.facts.get('conflict'), BRANCH)
         self.assert_untouched(out, G.FAILED)
 
     def test_usage_and_refusals(self):
@@ -134,9 +143,10 @@ class Lands(LandCase):
 class RefusedBeforeAnyMerge(LandCase):
     """Moved out of Lands for the real-git tier."""
 
-    def test_wrong_expect_main_is_refused_before_any_merge(self):
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        out = self.lander(BRANCH, tip, tip).run()
+    def test_wrong_expect_tip_is_refused_before_any_merge(self):
+        # a wrong --expect-main is followed, never refused; the tip still is
+        self.branch('feature', {'a.py': 'x = 1\n'})
+        out = self.lander(BRANCH, self.main, self.repo.initial).run()
         self.assertIn('nothing was merged', out.lines[0])
         self.assert_untouched(out, G.REFUSED)
         self.assertNotIn('merge', self.repo.git('reflog', '-n', '5', 'main'))
@@ -259,7 +269,9 @@ class NoStepSelected(LandCase):
         self.assertTrue(out.lines[0].startswith('REFUSED: no gate step selected'), out.lines)
         self.assertTrue(out.undone)
         self.assert_untouched(out, G.REFUSED)             # no record, nothing pushed
-        self.assertEqual(self.store.history_records(1), [])
+        # the landing's one turn, booked before the merge and given back; the gate booked none
+        self.assertEqual([c.get('priority') for c in self.book_calls], ['land'], self.book_calls)
+        self.assertEqual([r['slug'] for r in self.store.history_records(1)], ['kit-feature'])
 
 
 class TakeTurns(LandCase):
@@ -272,7 +284,7 @@ class TakeTurns(LandCase):
             inside.set()
             self.assertTrue(go.wait(HANG_S))
             return runner.merged_gate(lander.root, lander.cfg, lander.expect_main,
-                                      log_dir=self.logs, book_kw=self.book_kw)
+                                      log_dir=self.logs, book_kw=self.book_kw, slot=lander.slot)
         results = {}
         a = threading.Thread(target=lambda: results.__setitem__(
             'a', self.lander(BRANCH, self.main, tip_a, merged_gate=held_gate).run()))
@@ -281,22 +293,32 @@ class TakeTurns(LandCase):
         self.addCleanup(go.set)
         self.assertTrue(inside.wait(HANG_S))
 
-        # B at once: BUSY, nothing changed
+        # B at once: not given its turn, nothing changed - by the machine lock's landing queue
+        # where it books one (fixtures.HAS_RESOURCE), else by the landing lock file
         busy = self.lander('kit/other', self.main, tip_b).run()
-        self.assertEqual(busy.code, G.BUSY, busy.lines)
+        if fixtures.HAS_RESOURCE:
+            self.assertNotIn(busy.code, (G.OK, G.BUSY), busy.lines)
+            self.assertTrue(busy.lines[0].startswith('NOT RUN: the machine lock did not give the '
+                                                     'landing its turn'), busy.lines)
+        else:
+            self.assertEqual(busy.code, G.BUSY, busy.lines)
         self.assertIn('nothing was changed', busy.lines[0])
 
         # B waiting: it takes its turn only after A has landed and released, and lands
-        waiting = threading.Event()
-
-        def say(line):
-            if line.startswith('waiting up to'):
-                waiting.set()
+        said = []
         b = threading.Thread(target=lambda: results.__setitem__('b', self.lander(
-            'kit/other', self.main, tip_b, wait_s=HANG_S, poll_s=0.05, say=say).run()))
+            'kit/other', self.main, tip_b, wait_s=HANG_S, poll_s=0.05, say=said.append).run()))
         b.start()
         self.addCleanup(b.join, HANG_S)
-        self.assertTrue(waiting.wait(HANG_S))
+        end = time.monotonic() + HANG_S
+
+        def waiting():      # in the machine lock's queue, or at the landing lock file
+            return ([s for s in said if s.startswith('waiting up to')]
+                    or [e for e in lockqueue.load(self.store)['entries']
+                        if e.get('slug') == 'kit-other' and e.get('state') == 'waiting'])
+        while not waiting():
+            self.assertLess(time.monotonic(), end, said)
+            time.sleep(0.02)
         self.assertNotIn('b', results)
         go.set()
         for t in (a, b):
@@ -334,9 +356,13 @@ class TakeTurns(LandCase):
         b = subprocess.run(self.child('kit/other', tip_b, wait=0), cwd=KIT_ROOT, env=self.env,
                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT, timeout=HANG_S, text=True)
-        self.assertEqual(b.returncode, G.BUSY, b.stdout)
-        self.assertTrue(b.stdout.startswith('BUSY: landing lock'), b.stdout)
-        self.assertIn('pid %d' % a.pid, b.stdout)
+        if fixtures.HAS_RESOURCE:       # the machine lock's landing queue keeps B out
+            self.assertNotIn(b.returncode, (G.OK, G.BUSY), b.stdout)
+            self.assertIn('NOT RUN: the machine lock did not give the landing its turn', b.stdout)
+        else:                           # the landing lock file does
+            self.assertEqual(b.returncode, G.BUSY, b.stdout)
+            self.assertIn('BUSY: landing lock', b.stdout)
+            self.assertIn('pid %d' % a.pid, b.stdout)
         self.assertIn('nothing was changed', b.stdout)
 
         out_a = a.communicate('go\n', timeout=HANG_S)[0]

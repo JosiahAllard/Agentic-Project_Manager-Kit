@@ -325,6 +325,13 @@ class Verdicts(Fixture):
         self.log('land-topic/3/out.log', 'LANDED topic on main\n', mtime=4000000100)
         self.assertEqual(self.look()[0], landed.NOT_YET)    # the push is what decides LANDED
 
+    def test_a_conflict_is_failed(self):
+        self.log('land-topic/1/out.log', 'CONFLICT topic with main %s: the author merges main\n'
+                 % ('a' * 40))
+        code, out = self.look()
+        self.assertEqual(code, landed.FAILED, out)
+        self.assertIn('verdict    CONFLICT topic with main', out)
+
     def test_the_newest_log_with_a_verdict_wins(self):
         self.log('topic/1/gate.log', 'GATE FAILED: x\n', mtime=4000000000)
         self.log('topic/2/gate.log', 'GATE OK\n', mtime=4000000100)

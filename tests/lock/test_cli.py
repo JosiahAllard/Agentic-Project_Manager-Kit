@@ -134,6 +134,18 @@ class Cli(StoreCase):
                 self.assertEqual(code, 2)
                 self.assertIn("unrecognized arguments", err)
 
+    def test_resource_and_priority_are_not_cli_flags(self):
+        """Only library callers (kitlib.gate.land) set a run's resource and priority."""
+        for verb in ("run", "background"):
+            for flag in (["--resource", "x"], ["--priority", "land"], ["--res", "x"],
+                         ["--prio", "land"]):
+                with self.subTest(verb=verb, flag=flag):
+                    code, _, err = self.call(verb, "--kind", "engine-test", "--repo", "kit",
+                                             "--slug", "t", *flag, cmd=[sys.executable, "-V"])
+                    self.assertEqual(code, 2)
+                    self.assertIn("unrecognized arguments", err)
+        self.assertIsNone(self.store.read("queue.json"))
+
     def test_division_is_refused_under_an_agent_host_with_a_stripped_environment(self):
         # The old CLI made any caller without CLAUDE_CODE_SESSION_ID / CLAUDE_PID the
         # owner: this exited 0 there.

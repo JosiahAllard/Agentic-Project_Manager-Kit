@@ -8,17 +8,20 @@
       relative --log-dir
       outside the gated checkout is USAGE (2) (kitlib.gate.caller). From another directory:
       python <worktree>/tools/gate.py -C <worktree> (docs/gate.md "The caller's checkout")
-  gate.py land BRANCH --expect-main SHA --expect-tip SHA [-C DIR] [--lane L] [--summary TEXT]
-                      [--full] [--fresh] [--wait SECONDS] [--log-dir D] [--keep-branch]
-      land BRANCH from the main checkout: merge, gate the merged tree, push, verify, then delete
-      the landed branch (remote and local) and remove its worktree, never forced, unless
-      --keep-branch (docs/gate.md "Branch cleanup"); --fresh or --full runs every step of the
-      merged gate: nothing is read from or stored in the gate cache (docs/gate.md "Gate reuse")
+  gate.py land BRANCH --expect-tip SHA [--expect-main SHA] [-C DIR] [--lane L] [--summary TEXT]
+                      [--full] [--fresh] [--wait SECONDS] [--log-dir D] [--keep-branch] [--submit]
+      land BRANCH from the main checkout, as tools/land.py does: merge onto <remote>/<main> as it
+      is at the landing's turn, gate the merged tree, push, verify, then delete the landed branch
+      (remote and local) and remove its worktree, never forced, unless --keep-branch (docs/gate.md
+      "Branch cleanup"); --fresh or --full runs every step of the merged gate: nothing is read
+      from or stored in the gate cache (docs/gate.md "Gate reuse"). --submit: started detached;
+      prints the one SUBMITTED line with its wait-result command and exits 0
   gate.py --measure --out PATH [--days N]
       write a proposed kinds table from the lock's run history (never the live table)
   gate.py wait-result BRANCH --tip SHA [--kind gate|land] [--timeout S] [-C DIR]
-      read-only: wait for BRANCH's result record at SHA, print it; 0 pass, 1 any other verdict,
-      7 no record at that tip within S seconds
+      wait for BRANCH's result record at SHA, print it; 0 pass, 1 any other verdict, 7 no record
+      at that tip within S seconds. Its one write: a running record at SHA whose process died is
+      finished `error` (kitlib.gate.result.finish_dead)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate, prints and exits.
 Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY, 9 LANDED_UNGATED
@@ -49,6 +52,7 @@ from kitlib.config import policy                                  # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
 from kitlib.gate import caller, measure, runner                    # noqa: E402
 from kitlib.gate import result as resultmod                       # noqa: E402
+from kitlib.gate import submit as submitmod                        # noqa: E402
 from kitlib.lock import layout as lay                              # noqa: E402
 from kitlib.lock.store import LockError, Store                     # noqa: E402
 
@@ -91,7 +95,9 @@ def gate_parser():
 def land_parser():
     p = Parser(prog='gate.py land', description='Land one branch from the main checkout.')
     p.add_argument('branch')
-    p.add_argument('--expect-main', required=True, metavar='SHA')
+    p.add_argument('--expect-main', metavar='SHA',
+                   help='the main the landing was planned on (optional): main moved on is said, '
+                        'never refused')
     p.add_argument('--expect-tip', required=True, metavar='SHA')
     p.add_argument('-C', dest='root', default='.', help='the main checkout (default: here)')
     p.add_argument('--lane', default='full')
@@ -99,17 +105,68 @@ def land_parser():
     p.add_argument('--full', action='store_true', help='gate every non-manual step')
     p.add_argument('--fresh', action='store_true',
                    help='run every merged-gate step: nothing read from or stored in the gate cache')
-    p.add_argument('--wait', type=int, default=0, metavar='SECONDS',
-                   help='wait this long for another landing to finish (default 0: BUSY at once)')
+    p.add_argument('--wait', type=int, default=None, metavar='SECONDS',
+                   help='wait this long for the landing\'s turn (default 0: BUSY at once; with '
+                        '--submit, "landing".wait_s)')
     p.add_argument('--log-dir', help='where the merged gate\'s logs go')
     p.add_argument('--keep-branch', action='store_true',
                    help='after landing, keep the remote branch, the worktree and the local branch')
+    p.add_argument('--submit', action='store_true',
+                   help='start the landing detached; print the wait-result command and exit 0')
+    p.add_argument(submitmod.FLAG, dest='submitted', metavar='PAYLOAD', help=argparse.SUPPRESS)
     return p
+
+
+def land_child_args(a, root):
+    """The arguments of the detached landing `gate.py land --submit` starts: `land`, then this
+    landing's, -C and --log-dir absolute."""
+    args = ['land', a.branch, '-C', root, '--lane', a.lane, '--expect-tip', a.expect_tip]
+    if a.expect_main:
+        args += ['--expect-main', a.expect_main]
+    if a.summary:
+        args += ['--summary', a.summary]
+    if a.wait is not None:
+        args += ['--wait', str(a.wait)]
+    if a.log_dir:
+        args += ['--log-dir', os.path.abspath(a.log_dir)]
+    return args + [flag for flag, on in (('--full', a.full), ('--fresh', a.fresh),
+                                         ('--keep-branch', a.keep_branch)) if on]
+
+
+def do_land(argv):
+    p = land_parser()
+    a = p.parse_args(argv)
+    root = os.path.abspath(a.root)
+    if a.wait is not None and a.wait < 0:
+        p.error('--wait is 0 or more seconds')
+    if a.submit and a.submitted:
+        p.error('--submit starts the landing that --submitted runs; not both')
+    if a.submit:
+        return emit(submitmod.submit(root, __file__, land_child_args(a, root), [a.branch],
+                                     [a.expect_tip], expect_main=a.expect_main))
+    submitted = None
+    if a.submitted:
+        try:
+            submitted = submitmod.restore(root, a.submitted)
+        except submitmod.SubmitError as e:     # its records are finished, never left running
+            return emit(submitmod.abandon(root, a.submitted, str(e)))
+        if submitted.get('output'):
+            try:
+                submitmod.redirect_output(submitted['output'])
+            except OSError as e:
+                print('WARNING: the output stays on the hidden console: %s' % e, flush=True)
+    # A detached landing waits the configured "landing".wait_s for its turn; one run here, 0.
+    wait_s = a.wait if a.wait is not None or submitted is not None else 0
+    return emit(guarded(landmod.land, root, a.branch, a.expect_main, a.expect_tip, lane=a.lane,
+                        summary=a.summary, full=a.full, wait_s=wait_s, say=say,
+                        book_kw={'store': Store(say=say)}, log_dir=a.log_dir,
+                        keep_branch=a.keep_branch, fresh=a.fresh, submitted=submitted))
 
 
 def wait_parser():
     p = Parser(prog='gate.py wait-result',
-               description='Wait (read-only) for the result record of BRANCH at SHA.')
+               description='Wait for the result record of BRANCH at SHA (a running one whose '
+                           'process died is finished error).')
     p.add_argument('branch')
     p.add_argument('--tip', required=True, metavar='SHA', help='the tip gated (7+ hex digits)')
     p.add_argument('--kind', choices=resultmod.KINDS, default='gate',
@@ -217,12 +274,7 @@ def main(argv):
         if argv[:1] == ['wait-result']:
             return do_wait(argv[1:])
         if argv[:1] == ['land']:
-            a = land_parser().parse_args(argv[1:])
-            book_kw = {'store': Store(say=say)}
-            return emit(guarded(landmod.land, os.path.abspath(a.root), a.branch, a.expect_main,
-                                a.expect_tip, lane=a.lane, summary=a.summary, full=a.full,
-                                wait_s=a.wait, say=say, book_kw=book_kw, log_dir=a.log_dir,
-                                keep_branch=a.keep_branch, fresh=a.fresh))
+            return do_land(argv[1:])
         a = gate_parser().parse_args(argv)
         if a.measure:
             if a.only or a.full or a.plan or a.base:
