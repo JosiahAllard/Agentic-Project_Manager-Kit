@@ -191,7 +191,7 @@ class ClaudeContent:
                            'Plugin install).',
             'owner': {'name': 'PM kit'}, 'metadata': {'version': kit['version']},
             'plugins': [{'name': kit['name'], 'source': './',
-                         'description': 'The PM kit: agents, skills and the machine lock MCP server.'}],
+                         'description': 'The PM kit: agents, skills and the machine lock and hub MCP servers.'}],
         }
         dump = lambda data: (json.dumps(data, indent=2) + '\n').encode('utf-8')     # noqa: E731
         return {MANIFEST_REL: dump(plugin), MARKETPLACE_REL: dump(market),
