@@ -231,6 +231,8 @@ class CodexDeliveryTests(unittest.TestCase):
         for timeout in (True, 0, float('nan'), float('inf'), 11):
             with self.assertRaises(BeforeWriteError):
                 NativeToolsPipe(timeout=timeout)
+            with self.assertRaises(BeforeWriteError):
+                NativeToolsPipe(start_timeout=timeout)
         with patch('optional.bridge.hosts.codex.delivery_transport.Job.start') as start:
             with self.assertRaises(BeforeWriteError):
                 NativeToolsPipe().call(self.endpoint, {'id':'fixture', 'payload':'x'*(128*1024)},
@@ -249,6 +251,40 @@ class CodexDeliveryTests(unittest.TestCase):
                 with self.assertRaises(BeforeWriteError):
                     CodexDesktopAdapter(lease=lease).send(message)
                 call.assert_not_called()
+
+    def test_before_write_refusal_keeps_the_code_of_the_check_that_refused(self):
+        @contextmanager
+        def self_target(message):
+            yield DesktopLease(self.recipient, self.target_context, self.endpoint, self.check)
+        with self.assertRaises(BeforeWriteError) as caught:
+            CodexDesktopAdapter(lease=self_target).send(self.message)
+        self.assertEqual(caught.exception.code, 'codex-desktop-executor-not-selected')
+        refusal = BeforeWriteError('codex-native-peer-unavailable-before-write')
+        with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call', side_effect=refusal):
+            with self.assertRaises(BeforeWriteError) as caught:
+                CodexDesktopAdapter(lease=self.lease).send(self.message)
+        self.assertEqual(caught.exception.code, 'codex-native-peer-unavailable-before-write')
+        # Any other failure before the write keeps the generic code and hides its detail.
+        @contextmanager
+        def broken(message):
+            raise OSError('private-detail')
+            yield
+        with self.assertRaises(BeforeWriteError) as caught:
+            CodexDesktopAdapter(lease=broken).send(self.message)
+        self.assertEqual(caught.exception.code, 'codex-native-context-unavailable-before-write')
+        self.assertNotIn('private-detail', str(caught.exception))
+
+    def test_before_write_refusal_after_a_possible_write_stays_uncertain(self):
+        @contextmanager
+        def lease(message):
+            yield DesktopLease(self.recipient, self.context, self.endpoint, self.check)
+            raise BeforeWriteError('codex-desktop-context-changed')
+        with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call',
+                return_value={'success': True}):
+            with self.assertRaises(DeliveryError) as caught:
+                CodexDesktopAdapter(lease=lease).send(self.message)
+        self.assertNotIsInstance(caught.exception, BeforeWriteError)
+        self.assertEqual(caught.exception.code, 'codex-native-result-unconfirmed')
 
     def test_native_oversize_frame_is_uncertain_and_bounded(self):
         self.serve(raw=struct.pack('<I', MAX_FRAME+1))
@@ -285,12 +321,13 @@ class CodexDeliveryTests(unittest.TestCase):
         began = time.monotonic()
         with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start):
             with self.assertRaises(BeforeWriteError):
-                CodexDesktopAdapter(lease=self.lease, timeout=1).send(self.message)
+                CodexDesktopAdapter(lease=self.lease, timeout=1, start_timeout=1).send(self.message)
         self.assertLess(time.monotonic()-began, 4)
         self.assertTrue(all(child.poll() is not None for child in children))
         self.assertEqual(self.requests, [])
 
     def test_blocked_helper_stdin_before_handshake_is_before_write_and_helper_ends(self):
+        # start_timeout alone bounds the start: a long response budget does not extend it.
         original, children = Job.start, []
         def start(job, command, **options):
             child = original(job, [command[0], '-I', '-c', 'import time; time.sleep(10)'], **options)
@@ -299,10 +336,24 @@ class CodexDeliveryTests(unittest.TestCase):
         began = time.monotonic()
         with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start):
             with self.assertRaises(BeforeWriteError):
-                CodexDesktopAdapter(lease=self.lease, timeout=.7).send(self.message)
+                CodexDesktopAdapter(lease=self.lease, timeout=10, start_timeout=.7).send(self.message)
         self.assertLess(time.monotonic()-began, 4)
         self.assertTrue(all(child.poll() is not None for child in children))
         self.assertEqual(self.requests, [])
+
+    def test_slow_helper_start_does_not_spend_the_response_budget(self):
+        # A helper start slower than the whole response budget (a loaded machine) still
+        # delivers: the response budget counts from the commit, not from the spawn.
+        self.serve()
+        original = Job.start
+        def start(job, command, **options):
+            time.sleep(2.5)
+            return original(job, command, **options)
+        with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start):
+            result = CodexDesktopAdapter(lease=self.lease, timeout=2, start_timeout=6).send(self.message)
+        self.threads[0].join(3)
+        self.assertEqual(result.state, 'recipient-accepted')
+        self.assertEqual(len(self.requests), 1)
 
     def test_blocked_native_writer_is_uncertain_and_helper_ends(self):
         original, children = Job.start, []

@@ -57,7 +57,9 @@ they were with no tunnel, and it never reads the Access header.
 
 The log. `log(level, text)` gets the listeners' lines (httpd: 'access', 'error'), the tunnel
 gate's ('note' or 'error' for a request it refused, at most one a reason a minute:
-kitlib.hubsite.tunnel) and the hub's own: 'error' for a close step that failed, ran out of
+kitlib.hubsite.tunnel), the tunnel listener's 'error' tunnel.HOST_LINE for a write refused
+because its Origin host is not its Host (httpd's origin_refused, tunnel.host_note: at most one
+a minute) and the hub's own: 'error' for a close step that failed, ran out of
 time or was cut short and for a git sync pass that failed, 'note' for what is no error (the
 wait for git begins at the close; the sync works again). Every line of the hub's own goes
 through scrub(), so none holds the user or password of a remote URL; the listeners' and the

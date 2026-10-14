@@ -81,6 +81,13 @@ status line, the headers and a chunked body's size lines and trailers are read i
 and http.client, each operation under `timeout` and the whole under no deadline of fetch_keys'
 own. There a KeyCache caller is still held FETCH_DEADLINE_S at most, by the attempt's deadline,
 but the fetch thread lives on and no other attempt is made while it does.
+
+probe(team) is the owner's status check of the keys, apart from any cache: one fetch on a daemon
+thread, waited on PROBE_WAIT_S, and (ok, line). ok means the document named its keys and at
+least one of them is usable; the line gives the host and the count, or the reason with a detail
+of the kit's own (a status, a class name), never the text of an exception. A team that is not
+one DNS label is refused before any fetch. It never raises, and a fetch that hangs is left to
+end by itself on its thread.
 """
 import base64
 import hashlib
@@ -108,6 +115,7 @@ USER_AGENT = 'kit-hub-access/1'
 KEY_TTL_S = 3600                # a good fetch is fresh this long
 REFETCH_S = 60                  # at most one fetch attempt in this long
 STALE_LIMIT_S = 24 * 3600       # cached keys serve this long after the last good fetch
+PROBE_WAIT_S = FETCH_DEADLINE_S  # probe waits this long for its one fetch
 # DER of DigestInfo{sha256, NULL} up to the 32 digest bytes (RFC 8017, section 9.2, note 1).
 DIGEST_INFO = bytes.fromhex('30 31 30 0d 06 09 60 86 48 01 65 03 04 02 01 05 00 04 20')
 
@@ -425,6 +433,75 @@ def fetch_keys(team, timeout=FETCH_TIMEOUT_S, opener=None):
         return _json(raw)
     except ValueError:
         raise AccessError('keys-fetch', 'not JSON') from None
+
+
+def _fetch_within(fetch, team, wait):
+    """fetch(team, FETCH_TIMEOUT_S) on a daemon thread, waited on `wait` seconds: its document,
+    or AccessError keys-fetch. What the fetcher raises is passed on as an AccessError of one of
+    REASONS, any other exception by its class name alone (its text may echo the network)."""
+    box = []
+
+    def run():
+        try:
+            box.append((True, fetch(team, FETCH_TIMEOUT_S)))
+        except BaseException as exc:            # noqa: BLE001 - reported by class, never raised
+            box.append((False, exc))
+
+    thread = threading.Thread(target=run, name='kit-hub-access-probe', daemon=True)
+    try:
+        thread.start()
+    except RuntimeError:
+        raise AccessError('keys-fetch', 'no thread to fetch on') from None
+    thread.join(wait)
+    if not box:
+        raise AccessError('keys-fetch', 'no answer in %g s' % wait)
+    ok, value = box[0]
+    if ok:
+        return value
+    if isinstance(value, AccessError):
+        if value.reason in REASONS:
+            raise AccessError(value.reason, value.detail)
+        raise AccessError('keys-fetch')
+    raise AccessError('keys-fetch', type(value).__name__)
+
+
+def probe(team, fetch=None, wait=PROBE_WAIT_S):
+    """(ok, line): one fetch of the team's keys, for an owner's status check. ok is True only
+    when the document names its keys (key_table) and at least one is usable (rsa_key). The line
+    starts 'access keys: ' and names the host, the count or the reason, never a token or the
+    text of an exception. It never raises. A team that is not one DNS label is refused before
+    any fetch, and the line does not repeat it. `fetch(team, timeout)` is fetch_keys unless
+    given; it runs on a daemon thread waited on `wait` seconds, so a fetch that hangs costs the
+    caller that long, and the thread is left to end by itself."""
+    if team is None or team == '':
+        return False, 'access keys: not fetched: no Access team name is set (hub.access.team)'
+    try:
+        team = _team(team)
+    except AccessError:
+        return False, ('access keys: not fetched: the Access team name is not one DNS label '
+                       '(hub.access.team)')
+    host = (ISSUER % team)[len('https://'):]
+    try:
+        table = key_table(_fetch_within(fetch or fetch_keys, team, wait))
+    except AccessError as exc:
+        reason = exc.reason if exc.reason in REASONS else 'keys-fetch'
+        detail = ' (%s)' % exc.detail if exc.detail else ''
+        return False, 'access keys: not fetched from %s: %s%s' % (host, reason, detail)
+    usable = 0
+    for jwk in table.values():
+        try:
+            rsa_key(jwk)
+        except AccessError:
+            continue
+        usable += 1
+    count = len(table)
+    if not usable:
+        return False, ('access keys: %d fetched from %s, none of them a usable RS256 signing '
+                       'key (bad-key)' % (count, host))
+    if usable < count:
+        return True, 'access keys: %d fetched from %s, %d of them not usable' % (
+            count, host, count - usable)
+    return True, 'access keys: %d fetched from %s' % (count, host)
 
 
 class KeyCache:

@@ -260,8 +260,9 @@ button.danger{color:var(--warn)}
   // retryAfter (seconds, when the server named one). A call that got no answer at all has status 0 and code
   // "network": so has an answer that said yes and whose body was cut off or timed out. unpaired is true when
   // the server no longer knows this browser: a 403 that names the field `role` (what the server answers a
-  // call with no session, a read or a write), any 403 on a read, or a 401. A 403 on a write that names
-  // another field (the Origin rule) is a plain refusal, shown in the server's words.
+  // call with no session, a read or a write), any other 403 on a read, or a 401. A 403 on a write that names
+  // another field (the Origin rule) is a plain refusal, shown in the server's words, and so is a 403 that names
+  // the field `access`: the tunnel listener's refusal of a Cloudflare Access token, which pairing cannot mend.
   const PAIR_HOW = "On the PC, in the kit folder, run `python tools/hub.py open` and open the link it prints.";
   const PAIR_AGAIN = "this browser is not paired with the hub (yet, or any more: it was unpaired, or its session ran out). " + PAIR_HOW;
   const noAnswer = () => { const err = new Error("the hub server did not answer"); err.status = 0; err.code = "network"; err.field = ""; err.retryAfter = 0; err.unpaired = false; return err; };
@@ -281,7 +282,7 @@ button.danger{color:var(--warn)}
       if (r.ok && !j) throw noAnswer();
       if (r.ok && j.ok !== false) return j;
       const er = (j && j.error) || {};
-      const unpaired = r.status === 401 || (r.status === 403 && (method === "GET" || er.field === "role"));
+      const unpaired = r.status === 401 || (r.status === 403 && er.field !== "access" && (method === "GET" || er.field === "role"));
       const err = new Error(unpaired ? PAIR_AGAIN : er.message || "the hub server answered " + r.status);
       err.status = r.status; err.code = er.code || ""; err.field = er.field || ""; err.retryAfter = Number(r.headers.get("Retry-After")) || 0; err.unpaired = unpaired;
       throw err;
