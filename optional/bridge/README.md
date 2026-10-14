@@ -106,6 +106,13 @@ nominates no channel, and the other halves keep working.
 - **Native semantics**. The `held`, `expired` and `refused` states each keep their meaning, and
   none is inferred from silence. Delivered text carries the operation id and a reply instruction
   (`core/prompt.py`). Native permissions and approval prompts stay with each chat.
+- **Codex delivery timing** (`NativeToolsPipe` in `hosts/codex/delivery_transport.py`). Each send
+  runs one helper in two bounded phases. The start phase (helper spawn, its handshake and the
+  host's re-attestation) has 3 s; a miss there fails before the write, since no request byte has
+  left the helper. The response phase has 5 s counted from the commit, so a slow helper start never
+  spends it; a miss there is uncertain and becomes `unknown`. A send reaches its outcome within
+  8 s and ends, kill cleanup included, within 11.5 s, inside the service's 12 s worker join
+  (`run_service` in `win/runtime.py`).
 - **Service** (`win/`). There is one service per user and state root. It holds a thread-owned mutex
   and an exclusive current-user pipe, and its state root is private by ACL readback. It publishes
   `service.json` (pipe, pid, creation time) only after assembly succeeds. The frontend verifies the

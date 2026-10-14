@@ -16,7 +16,7 @@ import uuid
 from optional.bridge.hosts.codex.runtime import CodexSources
 from optional.bridge.core.contracts import Capability
 from optional.bridge.core.messages import BeforeWriteError,DeliveryError,OutboundMessage
-from kitlib.proc.pipe import (INVALID,SecurityAttributes,connect_pipe,create_pipe,
+from kitlib.proc.pipe import (INVALID,SecurityAttributes,connect_pipe,create_file,create_pipe,
     disconnect_pipe,from_sddl,local_free,peek,process_sids,read,write,close)
 from optional.bridge.win.channel import NativeChannel
 from optional.bridge.win.frontend import NativeFrontend
@@ -24,12 +24,13 @@ from optional.bridge.win.transport import PipeTarget
 from kitlib.proc.process import own_ctime,proc_ctime
 from tests.bridge import test_codex_runtime as runtime_fixtures
 
+ERROR_BROKEN_PIPE=109
+
 
 class OwnedNativeRPC:
     def __init__(self, target):
         self.name=r'\\.\pipe\LOCAL\codex-runtime-rpc-'+uuid.uuid4().hex
         self.target,self.requests,self.errors,self.handles,self.buffers=target,[],[],[],{}
-        self.closed_since={}
         self.stop=threading.Event()
         user=process_sids(os.getpid())[0]
         security=w.LPVOID()
@@ -55,17 +56,16 @@ class OwnedNativeRPC:
                     connect_pipe(handle,None)
                     available=w.DWORD()
                     if not peek(handle,None,0,None,ctypes.byref(available),None):
-                        # Metadata-only clients have no stream rights. Give
-                        # their kernel queries time to finish before recycling
-                        # the corresponding no-data server instance.
-                        began=self.closed_since.setdefault(handle,time.monotonic())
-                        if time.monotonic()-began>.1:
+                        # A server peek also fails on an instance that is still listening, and a
+                        # client may connect to it at any moment. Recycle only an instance whose
+                        # client has closed its end (ERROR_BROKEN_PIPE); disconnecting any other
+                        # cuts off a client mid-verification. A connected metadata-only client
+                        # peeks fine, so it is never recycled while it is open.
+                        if ctypes.get_last_error()==ERROR_BROKEN_PIPE:
                             disconnect_pipe(handle)
                             connect_pipe(handle,None)
                             self.buffers[handle].clear()
-                            self.closed_since.pop(handle,None)
                         continue
-                    self.closed_since.pop(handle,None)
                     if not available.value: continue
                     buffer=ctypes.create_string_buffer(min(4096,available.value))
                     count=w.DWORD()
@@ -271,3 +271,37 @@ class DirectRuntimeDeliveryTests(unittest.TestCase):
         with self.assertRaises(DeliveryError) as caught: adapter.send(self.message)
         self.assertNotIsInstance(caught.exception,BeforeWriteError)
         self.assertEqual(len(self.rpc.requests),1)
+
+
+class OwnedNativeRPCFixtureTests(unittest.TestCase):
+    """The fixture must never cut off a client the product is verifying."""
+
+    def test_only_instances_whose_client_closed_are_disconnected(self):
+        # A listening instance also fails a server peek. Disconnecting one is a race: a client
+        # that connects between that peek and the disconnect is cut off, and the product's
+        # channel check then fails (codex-native-channel-unverified) - more often under load.
+        from unittest.mock import patch
+        module=sys.modules[__name__]
+        real_peek,real_disconnect=module.peek,module.disconnect_pipe
+        last_error,disconnected={},[]
+        def recording_peek(handle,*arguments):
+            ok=real_peek(handle,*arguments)
+            error=ctypes.get_last_error()
+            last_error[handle]=None if ok else error
+            ctypes.set_last_error(error)
+            return ok
+        def recording_disconnect(handle):
+            disconnected.append(last_error.get(handle))
+            return real_disconnect(handle)
+        with patch.object(module,'peek',recording_peek),patch.object(module,'disconnect_pipe',recording_disconnect):
+            rpc=OwnedNativeRPC(str(uuid.uuid4()))
+            try:
+                time.sleep(.3)  # several fixture passes over the 16 listening instances
+                client=create_file(rpc.name,0x00020080,0,None,3,0x40000000,None)
+                self.assertNotIn(client,(None,INVALID),ctypes.get_last_error())
+                close(client)
+                deadline=time.monotonic()+5
+                while ERROR_BROKEN_PIPE not in disconnected and time.monotonic()<deadline: time.sleep(.01)
+            finally: rpc.close()
+        self.assertIn(ERROR_BROKEN_PIPE,disconnected)  # the closed client's instance was recycled
+        self.assertEqual(set(disconnected),{ERROR_BROKEN_PIPE})
