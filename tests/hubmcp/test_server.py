@@ -91,6 +91,16 @@ class Pinned(Case):
         self.assertEqual(names & set(PINNED), set())
         self.assertEqual(names, READS | WRITES)
 
+    def test_destructive_hint_is_only_on_tools_that_change_an_existing_document(self):
+        additive = {"hub_ask", "hub_todo_add", "hub_inbox_post"}
+        changes = {"hub_question_log", "hub_todo_ack", "hub_story_set", "hub_to_pm_reply"}
+        self.assertEqual(additive | changes, WRITES)
+        for t in self.server().tool_list():
+            ann = t["annotations"]
+            with self.subTest(name=t["name"]):
+                self.assertEqual(ann["readOnlyHint"], t["name"] in READS)
+                self.assertEqual(ann["destructiveHint"], t["name"] in changes)
+
     def test_a_pinned_name_is_refused_and_never_asks(self):
         for marked, code in ((None, "not_available"), ("coordinator", "forbidden")):
             s = self.server(marked=marked)
