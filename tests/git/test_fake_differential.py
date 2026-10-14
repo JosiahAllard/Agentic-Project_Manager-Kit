@@ -26,6 +26,7 @@ from tests.realgit import real_git
 
 DATES = {'GIT_AUTHOR_DATE': '1700000000 +0000', 'GIT_COMMITTER_DATE': '1700000000 +0000'}
 WT = '<WT>'         # a linked worktree's path in a script: <base>/wt
+WT2 = '<WT2>'       # a second one: <base>/wt2
 
 
 def _alarm(err):
@@ -46,7 +47,8 @@ class Side(object):
         self.repo.cleanup()
 
     def _arg(self, a):
-        return a.replace(WT, os.path.join(self.repo.base, 'wt'))
+        return a.replace(WT2, os.path.join(self.repo.base, 'wt2')).replace(
+            WT, os.path.join(self.repo.base, 'wt'))
 
     def git(self, argv, cwd=None, stdin=None):
         """(rc, stdout bytes, stderr alarm) of `git <argv>`; rc 'UNSUPPORTED' when the fake
@@ -194,6 +196,58 @@ WORKTREES_AND_CONFLICTS = [
     ('git', ['status', '--porcelain=v1']),
 ]
 
+# extensions.worktreeConfig (set by the Claude desktop app in the kit's own repository): each
+# worktree's config.worktree is a layer after the repository config and before -c.
+_LINKED_WT_CONFIG = '.git/worktrees/wt/config.worktree'
+_KIT_KEYS = ['config', '--get-regexp', r'^kit\.']
+WORKTREE_CONFIG = [
+    ('git', ['config', 'kit.scope', 'local']),
+    ('git', ['worktree', 'add', '-q', WT, '-b', 'kit/wt']),
+    ('write', _LINKED_WT_CONFIG, '[kit]\n\tscope = linked\n\tonly = linked-only\n'),
+    # extension off: config.worktree is not read
+    ('git', ['config', '--get', 'kit.scope'], WT),
+    ('git', ['config', '--get', 'kit.only'], WT),
+    ('git', _KIT_KEYS, WT),
+    ('git', ['config', 'extensions.worktreeConfig', 'true']),
+    # extension on, no config.worktree anywhere but the linked one (worktree add copies none)
+    ('git', ['worktree', 'add', '-q', WT2, '-b', 'kit/wt2']),
+    ('git', ['config', '--get', 'kit.scope'], WT2),
+    ('git', ['config', '--get', 'kit.only'], WT2),
+    ('git', _KIT_KEYS, WT2),
+    ('git', ['config', '--get', 'kit.scope']),
+    # extension on, the linked worktree's file overrides the local key
+    ('git', ['config', '--get', 'kit.scope'], WT),
+    ('git', ['config', 'kit.scope'], WT),
+    ('git', ['config', '--get-all', 'kit.scope'], WT),
+    ('git', ['config', '--get', 'kit.only'], WT),
+    ('git', _KIT_KEYS, WT),
+    ('git', ['config', '--get-regexp', r'^kit\.', 'link'], WT),
+    ('git', ['config', '--local', '--get', 'kit.scope'], WT),
+    ('git', ['config', '--local', '--get', 'kit.only'], WT),
+    ('git', ['-c', 'kit.scope=command', 'config', '--get', 'kit.scope'], WT),
+    # a plain write still goes to the repository config, under the worktree layer
+    ('git', ['config', 'kit.scope', 'local2'], WT),
+    ('git', ['config', '--get-all', 'kit.scope'], WT),
+    ('git', ['config', '--get', 'kit.scope']),
+    # the main worktree's file, in the common dir, read by the main worktree alone
+    ('write', '.git/config.worktree', '[kit]\n\tscope = main\n\tmain = yes\n'),
+    ('git', ['config', '--get', 'kit.scope']),
+    ('git', ['config', '--bool', '--get', 'kit.main']),
+    ('git', _KIT_KEYS),
+    ('git', ['config', '--get', 'kit.main'], WT),
+    ('git', ['config', '--get', 'kit.main'], WT2),
+    # format version 1 accepts the extension too
+    ('git', ['config', 'core.repositoryformatversion', '1']),
+    ('git', ['config', '--get', 'kit.scope'], WT),
+    ('git', ['status', '--porcelain=v1'], WT),
+    ('git', ['config', 'core.repositoryformatversion', '0']),
+    # extension off again: the files stay, unread
+    ('git', ['config', 'extensions.worktreeConfig', 'false']),
+    ('git', ['config', '--get', 'kit.scope']),
+    ('git', ['config', '--get', 'kit.main']),
+    ('git', ['config', '--get', 'kit.scope'], WT),
+]
+
 # Real git reads both repositories after a script.
 END_STATE = [
     ['for-each-ref', '--format=%(refname) %(objectname)'],
@@ -247,6 +301,9 @@ class FakeAgainstRealGit(unittest.TestCase):
 
     def test_worktrees_conflicts_and_lease(self):
         self.run_script(BRANCH_AND_LAND[:3] + WORKTREES_AND_CONFLICTS)
+
+    def test_worktree_config(self):
+        self.run_script(BRANCH_AND_LAND[:3] + WORKTREE_CONFIG)
 
 
 if __name__ == '__main__':

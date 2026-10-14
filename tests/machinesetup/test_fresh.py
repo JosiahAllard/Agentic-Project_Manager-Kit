@@ -1,5 +1,5 @@
-"""machine_setup --fresh (docs/machine-setup.md "Fresh machine (--fresh)"): a machine with no older
-kit clone. Against a fake home, a fake PM repo and a kit that is a temp git repository with a bare
+"""machine_setup's default mode (docs/machine-setup.md "Default mode"; --fresh is its old name): a
+machine with no older kit clone. Against a fake home, a fake PM repo and a kit that is a temp git repository with a bare
 remote (the plugin is installed from the export of its pushed main, kitlib.pluginsource); the
 Windows side is a FreshHost whose `claude` runner is kitlib.pluginsource.claude.Runner over a fake
 subprocess.run, so no claude process starts. RealRunner runs Host.plugin_runner's real path against
@@ -36,9 +36,7 @@ MARKETPLACE = ('{\n  "name": "pm-kit",\n  "owner": {"name": "x"},\n'
 def _prepare_kit(repo):
     """What a fresh survey and the export read of a kit: the hooks, reserve_ui.pyw, plugin.json and
     marketplace.json; committed and pushed."""
-    rels = ['claude/hooks/guard.py', 'claude/hooks/pm_session_start.py',
-            'claude/hooks/coordinator_session_start.py', 'reserve_ui.pyw',
-            '.claude-plugin/marketplace.json']
+    rels = ['boot/hook.py', 'reserve_ui.pyw', '.claude-plugin/marketplace.json']
     for rel in rels[:-1]:
         repo.write(rel, 'x\n')
     repo.write('.claude-plugin/marketplace.json', MARKETPLACE)
@@ -55,7 +53,7 @@ def load(path):
 
 
 def guard_in(data, kit):
-    want = T.fwd(os.path.join(kit, 'claude', 'hooks', 'guard.py'))
+    want = T.fwd(os.path.join(kit, 'boot', 'hook.py'))
     hooks = (data.get('hooks') or {}).get('PreToolUse') or []
     return any(want in h.get('args', []) for g in hooks for h in g.get('hooks', []))
 
@@ -183,7 +181,7 @@ class Fresh(FreshBase):
         self.host.cli = False                                        # plugin step: a note, not a write
         code, out = self.run_it(apply=True)
         self.assertEqual(code, M.EXIT_OK, out)
-        self.assertIn('%s: create it; add guard.py\'s PreToolUse entry' % self.s1, out)
+        self.assertIn('%s: create it; add the guard\'s PreToolUse entry' % self.s1, out)
         want = json.dumps({'hooks': {'PreToolUse': self.guard_groups()}}, indent=2) + '\n'
         self.assertEqual(T.readb(self.s1), want.encode('utf-8'))     # indent 2, LF, no BOM, final newline
         self.assertEqual([n for n in os.listdir(self.c1) if n.endswith('.bak')], [])
@@ -222,7 +220,7 @@ class Fresh(FreshBase):
         code, out = self.run_it(pm_settings=self.pm)
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertIn('DRY RUN', out)
-        self.assertIn(' kit:        none (--fresh)', out)                 # the old-kit header line
+        self.assertIn(' kit:        none (the default mode)', out)        # the old-kit header line
         self.assertIn('change(s) to make', out)
         self.assertIn('+        "matcher": "startup|resume|compact"', out)  # the PM hook's diff
         self.assertIn('kitlib.pluginsource.ensure_export', out)
@@ -242,11 +240,11 @@ class Fresh(FreshBase):
         self.assertFalse(os.path.exists(self.pm))
         code, out = self.run_it(apply=True, pm_settings=self.pm)
         self.assertEqual(code, M.EXIT_OK, out)
-        script = T.fwd(os.path.join(self.kit, 'claude', 'hooks', 'pm_session_start.py'))
+        script = T.fwd(os.path.join(self.kit, 'boot', 'hook.py'))
         self.assertEqual(load(self.pm), {'hooks': {'SessionStart': [{'matcher': 'startup|resume|compact', 'hooks': [
-            {'type': 'command', 'command': T.PYW, 'args': [script]}]}]}})
+            {'type': 'command', 'command': T.PYW, 'args': [script, 'claude', 'SessionStart', 'pm']}]}]}})
         for s in (self.s1, self.s2):
-            self.assertNotIn(b'pm_session_start', T.readb(s))
+            self.assertNotIn(b'"pm"', T.readb(s))
         before = self.snapshot()
         code, out = self.run_it(apply=True, pm_settings=self.s2)
         self.assertEqual(code, M.EXIT_REFUSED, out)
@@ -265,13 +263,16 @@ class Fresh(FreshBase):
         self.assertEqual(self.snapshot(), before)
 
     def test_fresh_refuses_the_pm_hook_already_in_the_sibling_or_an_account_settings(self):
-        """The kit's own pm_session_start.py in the PM repo's .claude/settings.json (the PM session
-        loads it next to settings.local.json), or in an account settings.json under any event: the
-        checklist would run twice, so --pm-settings is refused."""
-        script = T.fwd(os.path.join(self.kit, 'claude', 'hooks', 'pm_session_start.py'))
+        """The kit's own PM hook (boot/hook.py claude SessionStart pm) in the PM repo's
+        .claude/settings.json (the PM session loads it next to settings.local.json), or an old
+        pm_session_start.py in an account settings.json under any event: the checklist would run
+        twice, so --pm-settings is refused."""
+        entry = T.fwd(os.path.join(self.kit, 'boot', 'hook.py'))
         sibling = os.path.join(self.pmrepo, '.claude', 'settings.json')
         T.touch(sibling, json.dumps({'hooks': {'SessionStart': [{'hooks': [
-            {'type': 'command', 'command': T.PYW, 'args': [script]}]}]}}, indent=2) + '\n')
+            {'type': 'command', 'command': T.PYW, 'args': [entry, 'claude', 'SessionStart', 'pm']}]}]}},
+            indent=2) + '\n')
+        script = entry + ' claude SessionStart pm'
         before = self.snapshot()
         code, out = self.run_it(apply=True, pm_settings=self.pm)
         self.assertEqual(code, M.EXIT_REFUSED, out)
@@ -279,6 +280,7 @@ class Fresh(FreshBase):
                       out)
         self.assertEqual(self.snapshot(), before)
         os.remove(sibling)
+        script = T.fwd(os.path.join(self.root, 'old', 'hooks', 'pm_session_start.py'))
         doc = dict(self.doc2, hooks=dict(self.doc2['hooks'], UserPromptSubmit=[{'hooks': [
             {'type': 'command', 'command': 'python "%s"' % script}]}]))
         with open(self.s2, 'w', encoding='utf-8') as f:
@@ -305,7 +307,7 @@ class Fresh(FreshBase):
         self.assertTrue(pluginsource.migrated(state, self.c2))
         self.assertEqual(pluginsource.current_folder(self.export), sha[:12])
         done = [l for l in out.splitlines() if l.startswith('done: ')]
-        settings_done = max(i for i, l in enumerate(done) if 'guard.py' in l)
+        settings_done = max(i for i, l in enumerate(done) if 'the guard' in l)
         export_done = min(i for i, l in enumerate(done) if 'ensure_export' in l)
         plugin_done = min(i for i, l in enumerate(done) if 'enable the kit plugin' in l)
         self.assertLess(settings_done, export_done)
@@ -454,9 +456,15 @@ class Fresh(FreshBase):
         self.assertEqual(len(self.host.fake.calls), 3)                   # no claude run for it
         self.assertTrue(os.path.isfile(os.path.join(self.export, pluginsource.STATE)))
 
+    def test_fresh_makes_no_shortcut_unless_asked(self):
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertFalse(os.path.exists(os.path.join(self.desk, extras.SHORTCUT)))
+        self.assertIn('machine schedule shortcut: not made in the default mode (--shortcut makes it)', out)
+
     def test_fresh_runs_shortcut_and_acl_but_not_the_lock_env(self):
         self.host.env[extras.LOCK_ENV] = 'somewhere-else'
-        code, out = self.run_it(apply=True)
+        code, out = self.run_it(apply=True, shortcut=True)
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertTrue(os.path.isfile(os.path.join(self.desk, extras.SHORTCUT)))
         self.assertTrue(self.host.acl_fixed)
@@ -464,7 +472,8 @@ class Fresh(FreshBase):
         self.assertEqual([c[1] for c in self.host.calls if c[0] == 'env'], ['AGENT_TEMP'])
         self.assertIn('KIT_MACHINE_LOCK left as is in fresh mode', out)
         self.assertIn('add agent_temp_sweep = ', out)                     # agent temp init runs fresh too
-        self.assertIn('scheduled task agent-temp-sweep is not registered', out)
+        self.assertIn('sweep dry run (nothing removed): ', out)          # the sweep task by default
+        self.assertEqual(len([c for c in self.host.calls if c[0] == 'task']), 1)
 
 
 SLEEPER = '''import os, sys, time
@@ -593,29 +602,34 @@ class FreshTool(FreshBase):
         self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
         self.assertIn('is not a file', r.stdout)
 
-    def test_fresh_and_old_kit_together_or_neither_is_usage(self):
-        r = subprocess.run([sys.executable, T.TOOL], capture_output=True, text=True)
-        self.assertEqual(r.returncode, M.EXIT_USAGE)
-        self.assertIn('--fresh', r.stderr)
+    def test_fresh_and_old_kit_together_is_usage(self):
         r = subprocess.run([sys.executable, T.TOOL, '--fresh', '--old-kit', self.root], capture_output=True, text=True)
         self.assertEqual(r.returncode, M.EXIT_USAGE)
         self.assertIn('not allowed with', r.stderr)
         r = subprocess.run([sys.executable, T.TOOL, '--old-kit', self.root, '--pm-settings', self.pm],
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, M.EXIT_USAGE)
-        self.assertIn('--pm-settings goes with --fresh only', r.stderr)
-        for args in ([], ['-OldKit', self.root, '-Fresh']):
-            r = self.ps1(args)
-            self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
-            self.assertIn('usage - give -OldKit <', r.stdout)
-            self.assertIn('> or -Fresh (not both)', r.stdout)
+        self.assertIn('--pm-settings goes with the default mode only', r.stderr)
+        r = self.ps1(['-OldKit', self.root, '-Fresh'])
+        self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
+        self.assertIn('usage - give -OldKit <', r.stdout)
+        self.assertIn('> or -Fresh, not both', r.stdout)
         r = self.ps1(['-OldKit', self.root, '-PmSettings', self.pm])
         self.assertEqual(r.returncode, M.EXIT_USAGE, r.stdout + r.stderr)
-        self.assertIn('-PmSettings goes with -Fresh only', r.stdout)
-        with self.assertRaises(ValueError):
-            M.Context(self.home, self.kit)
+        self.assertIn('-PmSettings goes with the default mode only', r.stdout)
+        self.assertTrue(M.Context(self.home, self.kit).fresh)              # no mode: the default
         with self.assertRaises(ValueError):
             M.Context(self.home, self.kit, self.root, fresh=True)
+
+    def test_the_default_mode_needs_no_switch(self):
+        """No -Fresh and no -OldKit is the default mode, through the wrapper and the tool."""
+        missing = os.path.join(self.home, '.claude-none')
+        for r in (self.ps1(['-HomeDir', self.home, '-ConfigDir', missing, '-OwnerEmail', 'o@example.invalid']),
+                  subprocess.run([sys.executable, T.TOOL, '--home', self.home, '--config-dir', missing],
+                                 capture_output=True, text=True)):
+            self.assertEqual(r.returncode, M.EXIT_REFUSED, r.stdout + r.stderr)
+            self.assertIn('REFUSED - no config folder at %s' % missing, r.stdout)
+            self.assertIn(' kit:        none (the default mode)', r.stdout)
 
     def test_wrapper_passes_fresh_and_pm_settings(self):
         """A refusal that stops before anything is read (a missing config folder) proves -Fresh,
@@ -624,7 +638,7 @@ class FreshTool(FreshBase):
         r = self.ps1(['-Fresh', '-PmSettings', self.pm, '-HomeDir', self.home, '-ConfigDir', missing])
         self.assertEqual(r.returncode, M.EXIT_REFUSED, r.stdout + r.stderr)
         self.assertIn('REFUSED - no config folder at %s' % missing, r.stdout)
-        self.assertIn(' kit:        none (--fresh)', r.stdout)            # the old-kit header line
+        self.assertIn(' kit:        none (the default mode)', r.stdout)   # the old-kit header line
         self.assertIn('pm settings:    %s' % self.pm, r.stdout)
         self.assertIn('DRY RUN', r.stdout)
 

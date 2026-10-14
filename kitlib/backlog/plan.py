@@ -4,10 +4,12 @@ per-repository tools/backlog.py copies, with the keys and verbs the kit dropped 
 A plan only decides. It reads the snapshot it is given, refuses (Usage, Refusal, NotFound,
 Failure) or returns the records to write, and never touches a file, a ref or the screen. The
 store runs it again after a lost race, so a plan is a pure function of the snapshot and its
-arguments (plus the git probes it names: branch liveness and `requires: commit:`).
+arguments (plus the git probes it names: branch liveness, `requires: commit:`, and the diff of
+the branch `add --found-on` names).
 """
 import datetime
 
+from kitlib import kitroot
 from kitlib.git import cmd, refs
 from kitlib.machinepaths import find as find_machine_paths
 
@@ -36,13 +38,17 @@ WRITTEN_BY = {
 
 
 class Context(object):
-    """What a plan needs beyond the snapshot. `branch` None: the branch checked out in `root`."""
+    """What a plan needs beyond the snapshot. `branch` None: the branch checked out in `root`.
+    `code_main` (None: `main_branch`) is the branch code lands on, which `add --found-on`
+    measures a branch's diff from (`.kit.json` backlog.code_main)."""
 
-    def __init__(self, store, root, remote='origin', main_branch='main', branch=None, today=None):
+    def __init__(self, store, root, remote='origin', main_branch='main', branch=None, today=None,
+                 code_main=None):
         self.store = store
         self.root = root
         self.remote = remote
         self.main_branch = main_branch
+        self.code_main = code_main or main_branch
         self.branch = branch
         self.today = today
 
@@ -165,8 +171,15 @@ def read_body_file(path):
 
 # --- add ------------------------------------------------------------------------------------------
 
-def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=False, session=None):
-    """One unprioritised record. `priority: -` always: pricing is a separate act."""
+def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=False, session=None,
+             found_on=None, why_not_folded=None):
+    """One unprioritised record. `priority: -` always: pricing is a separate act.
+
+    The fold-in guard (docs/backlog.md, "The fold-in guard"): `found_on` is the branch the finding
+    was made on, or `none`; `why_not_folded` says why it is not fixed there. A record whose scope
+    overlaps that branch's diff from the code main (`ctx.code_main`), or the scope of a record the
+    branch holds pulled, is refused: it belongs on that branch, or after it lands. Both go into the
+    summary and the commit subject."""
     why = snap.rules.id_error(rid)
     if why is not None:
         raise Usage('cannot add: %s' % why)
@@ -178,6 +191,8 @@ def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=Fals
     if not (summary or '').strip():
         raise Usage('`add` requires a non-blank `--summary`')
     refuse_machine_paths('--summary', summary)
+    refuse_machine_paths('--ref', ref)
+    found_on, not_folded = _fold_arguments(ctx, found_on, why_not_folded)
     if not scopes:
         raise Usage('`add` requires at least one `--scope`; `none` (no tracked files) is written out')
     for s in scopes:
@@ -191,6 +206,9 @@ def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=Fals
         raise Refusal('`%s` was already closed or retired: %s. Re-adding it under the same id makes '
                       'that history read as though it were about this item: pass `--reopen` if it '
                       'is the same work coming back, or pick a new id' % (rid, prior))
+    notes = [] if found_on == smod.NONE else _fold_overlap(snap, ctx, rid, found_on, scopes)
+    where = 'no branch' if found_on == smod.NONE else found_on
+    summary = '%s (found on %s; not folded: %s)' % (summary.strip(), where, not_folded)
     pairs = [('id', rid), ('area', smod.area_from_scope(scopes)), ('priority', '-'),
              ('priority_by', '-'), ('effort', effort or '-'), ('state', 'open'),
              ('blocked_on', '-')]
@@ -199,10 +217,149 @@ def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=Fals
         pairs.append(('session', session))
     if ref:
         pairs.append(('ref', ref))
-    pairs.append(('summary', summary.strip()))
-    lines = ['ADDED %s' % rid] + ['  %-11s %s' % (k + ':', v) for k, v in pairs]
+    pairs.append(('summary', summary))
+    lines = notes + ['ADDED %s, found on %s' % (rid, where)]
+    lines += ['  %-11s %s' % (k + ':', v) for k, v in pairs]
     lines.append('Unprioritised: not in `next` until somebody prices it (`list --needs-priority`).')
-    return Change({rid: _text(pairs, ADD_BODY)}, 'backlog: add %s' % rid, lines)
+    return Change({rid: _text(pairs, ADD_BODY)}, 'backlog: add %s, found on %s' % (rid, where),
+                  lines)
+
+
+def _fold_arguments(ctx, found_on, why_not_folded):
+    """`(found_on, the reason with its whitespace collapsed)`, or Usage. No git but the
+    branch-name check."""
+    if found_on is None:
+        raise Usage('`add` requires `--found-on BRANCH|none`: the branch the finding was made on, '
+                    'or `none` when no branch found it')
+    if why_not_folded is None:
+        raise Usage('`add` requires `--why-not-folded TEXT`: why the finding is not fixed on the '
+                    'branch that found it')
+    text = ' '.join(why_not_folded.split())
+    bad = reason_error(text, '--why-not-folded')
+    if bad:
+        raise Usage(bad)
+    refuse_machine_paths('--why-not-folded', text)
+    if found_on != smod.NONE:
+        bad = branch_name_error(found_on, ctx.root)
+        if bad:
+            raise Usage('bad `--found-on`: %s; write a branch, or `none`' % bad)
+        bare = _bare_branch(ctx, found_on)
+        if bare.lower() == ctx.code_main.lower():
+            raise Usage('`--found-on %s` names the code main: a finding on main has no branch: '
+                        'write none' % found_on)
+        if bare != found_on:
+            raise Usage('`--found-on %s` is a ref, not a branch name: write the local branch '
+                        'name `%s`' % (found_on, bare))
+    return found_on, text
+
+
+def _bare_branch(ctx, name):
+    """`name` without a `refs/heads/`, `heads/`, `refs/remotes/<remote>/`, `remotes/<remote>/` or
+    `<remote>/` prefix, matched in any letter case: the local branch a ref spelling means."""
+    for prefix in ('refs/heads/', 'heads/', 'refs/remotes/%s/' % ctx.remote,
+                   'remotes/%s/' % ctx.remote, '%s/' % ctx.remote):
+        if name.lower().startswith(prefix.lower()) and len(name) > len(prefix):
+            return name[len(prefix):]
+    return name
+
+
+def _fold_overlap(snap, ctx, rid, branch, scopes):
+    """The fold-in guard's git probe: Refusal when a member of `scopes` overlaps a path
+    `branch` changed since its merge base with the code main, or the scope of a record `branch`
+    holds pulled; a member that cannot be compared counts as an overlap. Refusal too when
+    `branch` is neither a local branch nor a branch of any remote as last fetched. Returns the
+    NOTE lines (a branch only a remote has: its diff is not compared, the pulled scopes still
+    are). Failure when git cannot answer or there is no base to measure from."""
+    notes, hits = [], []
+    tip, why = refs.resolve('refs/heads/%s' % branch, ctx.root, known=True)
+    if tip is None:
+        raise Failure('cannot read branch %s: %s' % (branch, why))
+    if not tip:
+        remotes = _remotes_with(ctx, branch)
+        if not remotes:
+            raise Refusal('cannot add %s: `--found-on %s` names a branch that exists neither '
+                          'here nor on a remote (as last fetched): pass an existing branch, or '
+                          '`none` when no branch found it\na branch that has landed and been '
+                          'removed is written as `none`, with the branch named in '
+                          '--why-not-folded' % (rid, branch))
+        notes.append('NOTE: branch %s is not a local branch (only on %s); its diff was not '
+                     'compared' % (branch, ', '.join(remotes)))
+    else:
+        for path in _branch_changes(ctx, branch, tip):
+            hits += _overlaps(scopes, [path], '(changed on %s)' % branch)
+    unread = [r.stem for r in snap.unreadable]
+    if unread:
+        raise Failure('cannot tell which records %s holds pulled: unreadable record(s): %s'
+                      % (branch, ', '.join(unread)))
+    for r in snap.readable:
+        if r.get('state') == 'pulled' and (r.get('pulled_by') or '').lower() == branch.lower():
+            hits += _overlaps(scopes, r.all('scope'), '(scope of %s, pulled by %s)'
+                              % (r.stem, branch))
+    if hits:
+        raise Refusal('cannot add %s: its scope overlaps the work of %s, so the finding belongs '
+                      'there:\n  %s\nfold it into %s, or file it after %s lands'
+                      % (rid, branch, '\n  '.join(hits), branch, branch))
+    return notes
+
+
+def _remotes_with(ctx, branch):
+    """The remotes whose `branch` git holds a remote-tracking ref for (as last fetched; no
+    network). Every remote is asked, not `ctx.remote` alone: a store's checkout can name another
+    remote than the one the code is pushed to. Failure when git cannot list the remotes or read
+    a ref: "cannot tell" is never "no such branch"."""
+    out, why = cmd.run_text(['remote'], ctx.root)
+    if out is None:
+        raise Failure('cannot list the remotes to look for branch %s: %s' % (branch, why))
+    found = []
+    for remote in out.splitlines():
+        remote = remote.strip()
+        if not remote:
+            continue
+        ref = 'refs/remotes/%s/%s' % (remote, branch)
+        tip, why = refs.resolve(ref, ctx.root, known=True)
+        if tip is None:
+            raise Failure('cannot read %s: %s' % (ref, why))
+        if tip:
+            found.append(remote)
+    return found
+
+
+def _overlaps(scopes, others, source):
+    out = []
+    for s in scopes:
+        for o in others:
+            try:
+                hit = smod.members_collide(s, o)
+            except smod.UndecidableScope as exc:
+                out.append('%s vs %s %s - cannot be compared, so it counts: %s'
+                           % (s, o, source, exc))
+                continue
+            if hit:
+                out.append('%s vs %s %s' % (s, o, source))
+    return out
+
+
+def _branch_changes(ctx, branch, tip):
+    """The paths `branch` changed since its merge base with the code main (no rename pairing,
+    so a rename names both paths)."""
+    key = 'set `backlog.code_main` in .kit.json to the branch code lands on'
+    base, _note = refs.default_base(ctx.root, ctx.remote, ctx.code_main)
+    sha, why = refs.resolve(base, ctx.root, known=True)
+    if sha is None:
+        raise Failure('cannot read the code main `%s`: %s' % (base, why))
+    if not sha:
+        raise Failure('the code main `%s` does not resolve here, so the diff of %s cannot be '
+                      'measured: %s' % (base, branch, key))
+    mb, why = refs.merge_base(sha, tip, ctx.root)
+    if mb is None:
+        raise Failure('cannot find the merge base of %s and %s: %s' % (branch, base, why))
+    if not mb:
+        raise Failure('%s shares no history with the code main `%s`, so its diff cannot be '
+                      'measured: %s' % (branch, base, key))
+    out, why = cmd.run(['diff', '--no-renames', '--name-only', '-z', mb, tip, '--'], ctx.root)
+    if out is None:
+        raise Failure('cannot diff %s against its merge base %s: %s' % (branch, mb[:10], why))
+    return sorted(set(p for p in out.decode('utf-8', errors='replace').split('\0') if p))
 
 
 # --- set ------------------------------------------------------------------------------------------
@@ -431,8 +588,9 @@ def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
     if on is None and several:
         raise Refusal('`%s` is blocked on %s; `unblock` clears one blocker, named, with a reason:\n%s'
                       % (rid, ', '.join(members), '\n'.join(
-                          '  python tools/backlog.py unblock %s --on %s --reason "<why>"%s'
-                          % (rid, m, ' --ruling R-nnnn' if m == 'owner' else '') for m in members)))
+                          '  %s -C <worktree> unblock %s --on %s --reason "<why>"%s'
+                          % (kitroot.command('backlog'), rid, m, ' --ruling R-nnnn' if m == 'owner' else '')
+                          for m in members)))
     if on is not None and on not in members:
         raise Usage('`--on %s` is not a blocker of `%s`; it is blocked on %s'
                     % (on, rid, ', '.join(members)))

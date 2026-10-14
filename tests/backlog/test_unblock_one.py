@@ -4,11 +4,12 @@ refuses with the blockers listed and the command to run. The `check` hint for a 
 `item:` blocker names the same `--on` form."""
 import unittest
 
+from kitlib import kitroot
 from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Refusal, Usage
 
 from tests.backlog import test_cli
-from tests.backlog.helpers import StoreCase, parse, rec
+from tests.backlog.helpers import ADD_FLAGS, StoreCase, parse, rec
 
 REASON = 'the blocker landed on main today'
 SEVERAL = dict(state='blocked', blocked_on=['item:BAR', 'live-client'])
@@ -30,7 +31,8 @@ class UnblockOne(StoreCase):
             self.verb('unblock', 'FOO')
         msg = str(cm.exception)
         for m in ('item:BAR', 'live-client'):
-            self.assertIn('python tools/backlog.py unblock FOO --on %s --reason "' % m, msg)
+            self.assertIn('%s -C <worktree> unblock FOO --on %s --reason "' % (kitroot.command('backlog'), m), msg)
+        self.assertNotIn('python tools/', msg)
         r = self.get('FOO')
         self.assertEqual((r.get('state'), r.all('blocked_on')), ('blocked', ['item:BAR', 'live-client']))
 
@@ -123,8 +125,8 @@ class UnblockCli(unittest.TestCase):
     ok = test_cli.Cli.ok
 
     def test_cli_exit_codes(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py')
-        self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'tools/y.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
+        self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'tools/y.py', *ADD_FLAGS)
         self.ok('block', 'FOO', '--on', 'item:BAR', '--on', 'live-client')
         rc, out = self.run_tool('unblock', 'FOO')
         self.assertEqual(rc, 2, out)

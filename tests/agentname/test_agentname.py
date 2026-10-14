@@ -10,7 +10,7 @@ P = agentname.PREFIX
 
 class Prefix(unittest.TestCase):
     def test_the_prefix_is_the_plugin_name(self):
-        self.assertEqual(P, lockmcp.CLAUDE_PLUGIN_NAME + ':')
+        self.assertEqual(P, lockmcp.PLUGIN_NAME + ':')
 
 
 class Bare(unittest.TestCase):

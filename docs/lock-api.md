@@ -7,6 +7,7 @@
 - Every call takes an optional `store` (a `kitlib.lock.store.Store`). The default is the machine's store.
 - `SCHEMA_VERSION` (now 1) changes only when a key changes meaning or goes away. Added keys leave it alone.
 - Runs: a `docker exec` run (`run` or `background`) that holds no gpu slot gets `-e CUDA_VISIBLE_DEVICES= -e JAX_PLATFORMS=cpu` right after `exec`, unless the caller sets that variable with `-e`/`--env` itself (`kitlib.lock.run.docker_cpu_env`).
+- Detached runs: `machine_lock.py run|background --detach` asks WMI (`Win32_Process.Create`) to start the `pythonw.exe` beside the `python.exe` (`detach.pythons`, not the hooks' helper, which falls back to a console python and would widen the lock tool's import reach) running the kit's carrier `tools/no_window.py` by its path, which starts the `python.exe` beside it running `machine_lock.py` with `--detached-id <run id>` (`kitlib/lock/detach.py` `command`, `create`). WMI's process is in neither the caller's process tree nor its job, so the run outlives the caller's shell; `pythonw.exe` has no console, so the run gets a console with no window (docs/daily-full.md "The schedule"), and nothing rests on `Win32_ProcessStartup.ShowWindow`. It prints `<run id> pid <pid>`: the pid of that `python.exe`, the run's wrapper and the run record's `pid` (`wrapper_pid`), or the carrier's pid when that python was not seen within 10 seconds. A missing `pythonw.exe`, carrier or `python.exe` is exit 1 with "could not start the command: --detach: <what> is not a file: <path>". A carrier that cannot start its `python.exe` writes one line to the kit's console incident log (`note_carrier_failure`, docs/daily-full.md "The schedule"), since under `pythonw.exe` it has no stderr. Tests: `tests/lock/test_detach.py`, `tests/lock/test_detach_cli.py` (`DetachEndToEnd` starts a real detached run and finds no console window). The guard sees only the `machine_lock.py run --detach` call, the kit's own lock run (`tests/guard/test_kit_tool_forms.py`); the chain WMI starts is no shell call.
 
 ## Reads
 
@@ -34,7 +35,10 @@
   - `division` (in force), `default_division`, and `wanted_division` / `wanted_key` (the owner's machine.json division on this hardware), and `owner_division` (only the keys machine.json sets, `{}` when none; a dialog prefills from it so saving pins no derived key).
   - `source` (`config` or `default`) and `warning`.
   - `hardware_change` {changed, pending}. When `changed` is true, the wanted layout differs from the one in force, and it is adopted once nothing is live or queued. `pending` is true while it waits for that.
-  - A run record's `layout` is `layout.slot_key`, not `key`: the slot numbering only, in the format of the older kit's installed `machine_lock.py`, which refuses a run while a live record holds a string other than its own.
+  - A run record's `layout` is `layout.slot_key`, not `key`: a label of the slot numbering only, `t<threads> g<cards> cpu <cpu slots> x <threads per slot> gpu <gpu slots> m<hash>`.
+  - What the label is: `g` is the layout's `gpus`, the cards of `hardware.gpus` that `layout.derive` gives a share (the division's `gpu_share`, else each card's `default_share`). `gpu` is `gpu_slots`, which is 1 with no shared card (the placeholder slot). The hash covers the cpu slots only. `tests/lock/test_layout.py` pins the text for one card, two cards and none.
+  - What it is not: this kit never reads or compares it. `run.book` counts slots from layout.json (`layout.in_force`), and a live record with another label never refuses a booking (`tests/lock/test_layout_mismatch.py`). It does not say which cards the gpu slots are; `gpu_cards` does.
+  - The format is that of the older kit's `machine_lock.py`, kept for the records and for any such tool still installed and sharing the store: that tool refuses a run while a live record holds a string other than its own. Nothing in this kit checks that another tool counts cards or gpu slots the same way.
 - **`slots`**: {cpu: [...], gpu: [...]}, one per slot.
   - {slot, holder (run id), background, hold (the hold id covering it now), hold_owner}.
   - cpu slots add `threads` and `pinned`; gpu slots add `card`.
@@ -94,10 +98,10 @@ Error codes:
 ## Who may (the one hook)
 
 - `authorize(actor, action, target)` decides every write. It returns None, or the reason for refusing.
-- Who is asking is `api.who(actor, store)`. On the machine's store it is `store.caller()`, read from the calling process's tree: the role is agent when any ancestor is an agent host (`store.AGENT_HOSTS`: claude.exe, which is both Claude Code and the Claude desktop app, node.exe and codex.exe), or when the tree cannot be read. Environment variables, a role, `force` or a session id in `actor` change nothing.
+- Who is asking is `api.who(actor, store)`. On the machine's store it is `store.caller()`, read from the calling process's tree: the role is agent when any ancestor is an agent host (`store.agent_hosts()`: every hosts.json profile's `process_names`, today claude.exe, which is both Claude Code and the Claude desktop app, and node.exe, plus codex.exe until Codex is registered), or when the tree or hosts.json cannot be read. The session id shown is the first set one of the profiles' `session_env` variables. Environment variables, a role, `force` or a session id in `actor` change nothing.
 - So the owner's commands run from a terminal outside the Claude desktop app. A command run from the app's terminal panel has the app above it and is an agent's.
 - The owner may do everything. "Owner" means `is_owner(actor)`, which calls the owner check.
-- The default check is `default_owner_check`: `role == "owner"` with no agent host (`claude`).
+- The default check is `default_owner_check`: `role == "owner"` with no agent host (`host`; an actor made before that key was renamed carries it as `claude`, which is still read, `store.actor_host`).
 - `set_owner_check(fn)` replaces it, and `set_owner_check(None)` restores the default. This is the only place ownership is decided.
 - An agent owns a record when its nearest agent host (its Claude Code process, from `store.caller`) is among the record's ancestors (`store.owns`). A session id, which `snapshot()` shows, grants nothing.
 - Ending another session's run is the owner's; the CLI's `stop --force` gives an agent nothing. A run whose wrapper has died is reaped by the lock itself.
@@ -119,6 +123,10 @@ A held run can hand back cpu slots its command no longer needs, while the comman
 - Fail safe: a failed write puts the record (in memory and on disk) back as it was, and the record and queue entry keep every slot booked. The job's pin is widened back (`Job.repin`), which moves its processes back onto every slot too; if Windows refuses that, the refusal says the job stays narrowed. The queue entry, which every planner reads, is written last, so a wrapper that dies between the two leaves the slots counted held, never handed out twice.
 - The installed `machine_lock.py` reads a shrunk record and entry as any other. The request file is not a `.json`, so neither tool reads it as a run record; `Store.live_runs(prune=True)` removes an orphaned one.
 - The history line keeps `given_back`.
+
+## Console windows
+
+A run booked by `book()` (`machine_lock.py run`, a gate, a `slot()`) watches for console windows from its first command's start to its release (`kitlib/lock/run.py` `Slot.start`; `Slot.watch_stop`, which the release calls before it ends the job; `kitlib/proc/winwatch.py`). A window is the run's when its program is in the run's job (`Slot.window_owner`, `Job.contains`). The ended record gets `windows` (a list of `at cls how title pid exe host_pid host_exe ours`, at most `winwatch.RECORD_CAP`, 50, with `windows_truncated` the count left out) when any window was seen, and `windows_error` when the monitor could not run or raised as it started (`Slot.watch_start`; the run goes on); the history line carries neither (`kitlib/lock/store.py` `Store.HISTORY_KEYS`). `machine_lock.py run` (`run_command`) says the report after the release (`Slot.window_lines`; the lines are in `docs/gate.md` "Console windows"); a gate says it itself; any other run says nothing. A window warns and never changes a run's exit code. `WATCH_WINDOWS = False` in `kitlib/lock/run.py` turns the monitor off.
 
 ## Exclusive resources
 

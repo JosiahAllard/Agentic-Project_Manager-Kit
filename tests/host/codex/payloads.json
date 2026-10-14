@@ -1,0 +1,517 @@
+{
+ "comment": "Codex's hook payloads in the shape the Codex hooks documentation gives and the Codex branch's tests/codex recorded (test_actions, test_guard, test_hook_evidence); no installed client has been captured yet (hosts/codex/README.md, \"Not verified\"). The Action each parses into, and the hook output Codex reads back (tests/host/conformance.py). A child's call carries its parent's session_id and no agent_id, so it parses with no subagent identity.",
+ "events": {
+  "PreToolUse": "tool",
+  "SessionStart": "session_start",
+  "PostCompact": "session_start",
+  "SubagentStart": "subagent_start"
+ },
+ "cases": [
+  {
+   "name": "apply-patch",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "apply_patch",
+    "tool_input": {
+     "command": "*** Begin Patch\n*** Add File: a.py\n+new\n*** Delete File: b.py\n*** Update File: c.py\n*** Move to: d.py\n@@\n-old\n+new\n*** End Patch"
+    },
+    "tool_use_id": "call_1"
+   },
+   "actions": [
+    {
+     "kind": "edit",
+     "tool": "apply_patch",
+     "path": "a.py",
+     "cwd": "C:/r/.codex/worktrees/w",
+     "retarget": "apply_patch \"*** Add File: {path}\""
+    },
+    {
+     "kind": "edit",
+     "tool": "apply_patch",
+     "path": "b.py",
+     "cwd": "C:/r/.codex/worktrees/w",
+     "retarget": "apply_patch \"*** Delete File: {path}\""
+    },
+    {
+     "kind": "edit",
+     "tool": "apply_patch",
+     "path": "c.py",
+     "cwd": "C:/r/.codex/worktrees/w",
+     "retarget": "apply_patch \"*** Update File: {path}\""
+    },
+    {
+     "kind": "edit",
+     "tool": "apply_patch",
+     "path": "d.py",
+     "cwd": "C:/r/.codex/worktrees/w",
+     "retarget": "apply_patch \"*** Move to: {path}\""
+    }
+   ]
+  },
+  {
+   "name": "apply-patch-raw-input",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "apply_patch",
+    "tool_input": "*** Begin Patch\n*** Delete File: C:/r/x.txt\n*** End Patch",
+    "tool_use_id": "call_1"
+   },
+   "actions": [
+    {
+     "kind": "edit",
+     "tool": "apply_patch",
+     "path": "C:/r/x.txt",
+     "cwd": "C:/r/.codex/worktrees/w",
+     "retarget": "apply_patch \"*** Delete File: {path}\""
+    }
+   ]
+  },
+  {
+   "name": "write",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Write",
+    "tool_input": {
+     "file_path": "C:/r/a.py",
+     "content": "x\n"
+    },
+    "tool_use_id": "call_1"
+   },
+   "action": {
+    "kind": "edit",
+    "tool": "Write",
+    "path": "C:/r/a.py",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "retarget": "Write(file_path=\"{path}\")"
+   }
+  },
+  {
+   "name": "notebook",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "NotebookEdit",
+    "tool_input": {
+     "notebook_path": "n.ipynb",
+     "new_source": ""
+    },
+    "tool_use_id": "call_1"
+   },
+   "action": {
+    "kind": "edit",
+    "tool": "NotebookEdit",
+    "path": "n.ipynb",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "retarget": "NotebookEdit(notebook_path=\"{path}\")"
+   }
+  },
+  {
+   "name": "bash-git-bash",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "git status",
+     "shell": "C:/Program Files/Git/bin/bash.exe"
+    },
+    "tool_use_id": "call_1"
+   },
+   "action": {
+    "kind": "shell",
+    "tool": "Bash",
+    "command": "git status",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "shell": "bash"
+   }
+  },
+  {
+   "name": "powershell-default-dialect",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "PowerShell",
+    "tool_input": {
+     "command": "Get-ChildItem"
+    },
+    "tool_use_id": "call_1"
+   },
+   "action": {
+    "kind": "shell",
+    "tool": "PowerShell",
+    "command": "Get-ChildItem",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "shell": "powershell"
+   }
+  },
+  {
+   "name": "exec-command-workdir",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "exec_command",
+    "tool_input": {
+     "cmd": "python tools/gate.py",
+     "shell": "pwsh.exe",
+     "workdir": "C:/r/.codex/worktrees/w/sub",
+     "yield_time_ms": 1000
+    },
+    "tool_use_id": "call_1"
+   },
+   "action": {
+    "kind": "shell",
+    "tool": "exec_command",
+    "command": "python tools/gate.py",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "shell": "powershell",
+    "workdir": "C:/r/.codex/worktrees/w/sub"
+   }
+  },
+  {
+   "name": "mcp-lock-read",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "mcp__machine-lock__lock_snapshot",
+    "tool_input": {},
+    "tool_use_id": "call_1"
+   },
+   "action": {
+    "kind": "mcp",
+    "tool": "mcp__machine-lock__lock_snapshot",
+    "cwd": "C:/r/.codex/worktrees/w"
+   }
+  },
+  {
+   "name": "read",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_input": {
+     "file_path": "a.py"
+    },
+    "tool_use_id": "call_1"
+   },
+   "action": {
+    "kind": "other",
+    "tool": "Read",
+    "cwd": "C:/r/.codex/worktrees/w"
+   }
+  },
+  {
+   "name": "stdin-poll",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "write_stdin",
+    "tool_input": {
+     "session_id": 3,
+     "chars": ""
+    },
+    "tool_use_id": "call_1"
+   },
+   "action": {
+    "kind": "other",
+    "tool": "write_stdin",
+    "cwd": "C:/r/.codex/worktrees/w"
+   }
+  },
+  {
+   "name": "a-child-names-its-parent-session",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Write",
+    "tool_input": {
+     "file_path": "C:/r/b.py",
+     "content": ""
+    },
+    "tool_use_id": "call_1",
+    "agent_type": "kit_reviewer"
+   },
+   "action": {
+    "kind": "edit",
+    "tool": "Write",
+    "path": "C:/r/b.py",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "retarget": "Write(file_path=\"{path}\")"
+   }
+  },
+  {
+   "name": "session-start",
+   "event": "SessionStart",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "SessionStart",
+    "source": "startup"
+   },
+   "action": {
+    "kind": "session_start",
+    "cwd": "C:/r/.codex/worktrees/w"
+   }
+  },
+  {
+   "name": "post-compact",
+   "event": "PostCompact",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PostCompact",
+    "trigger": "auto"
+   },
+   "action": {
+    "kind": "session_start",
+    "cwd": "C:/r/.codex/worktrees/w"
+   }
+  },
+  {
+   "name": "subagent-start",
+   "event": "SubagentStart",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "SubagentStart"
+   },
+   "action": {
+    "kind": "subagent_start",
+    "cwd": "C:/r/.codex/worktrees/w"
+   }
+  }
+ ],
+ "malformed": [
+  {
+   "event": "PreToolUse",
+   "payload": null
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse"
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "relative",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd",
+     "shell": "bash.exe"
+    },
+    "tool_use_id": "call_1"
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "apply_patch",
+    "tool_input": {
+     "command": "*** Begin Patch\n*** Delete File: a\n+bad\n*** End Patch"
+    },
+    "tool_use_id": "call_1"
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "apply_patch",
+    "tool_input": {
+     "command": null
+    },
+    "tool_use_id": "call_1"
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Write",
+    "tool_input": {},
+    "tool_use_id": "call_1"
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "exec_command",
+    "tool_input": {
+     "cmd": [
+      3
+     ],
+     "shell": "pwsh.exe"
+    },
+    "tool_use_id": "call_1"
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "exec_command",
+    "tool_input": {
+     "cmd": ""
+    },
+    "tool_use_id": "call_1"
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "write_stdin",
+    "tool_input": {
+     "session_id": 3,
+     "extra": 1
+    },
+    "tool_use_id": "call_1"
+   }
+  },
+  {
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Write",
+    "tool_input": {
+     "file_path": "a"
+    },
+    "tool_use_id": "call_1"
+   }
+  },
+  {
+   "event": "Stop",
+   "payload": {
+    "session_id": "019a0000-0000-7000-8000-000000000000",
+    "transcript_path": "C:/home/u/.codex/sessions/2026/10/13/rollout-019a0000-0000-7000-8000-000000000000.jsonl",
+    "cwd": "C:/r/.codex/worktrees/w",
+    "model": "gpt-6.1-sol",
+    "hook_event_name": "Stop"
+   }
+  }
+ ],
+ "render": [
+  {
+   "event": "PreToolUse",
+   "decision": {
+    "verdict": "allow"
+   },
+   "stdout": "",
+   "code": 0
+  },
+  {
+   "event": "PreToolUse",
+   "decision": {
+    "verdict": "deny",
+    "rule": "r",
+    "reason": "no [kit guard: rule=r role=main]",
+    "instead": "x"
+   },
+   "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"no [kit guard: rule=r role=main]\"}}\n",
+   "code": 0
+  },
+  {
+   "event": "PreToolUse",
+   "decision": {
+    "verdict": "ask",
+    "rule": "r",
+    "reason": "the owner decides",
+    "instead": ""
+   },
+   "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"the owner decides\"}}\n",
+   "code": 0
+  }
+ ]
+}

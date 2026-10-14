@@ -1,4 +1,4 @@
-"""Who may take each backlog action (owner-authored; in OWNER_PATHS, so agents cannot widen it).
+"""Who may take each backlog action (owner-authored; in OWNER_PATHS, so agents cannot widen the rows).
 
 The guard reads this map from the installed kit, never from a branch. For each command it takes
 role = role_of(session mark or bare agent_type, subagent), sorts the command (a backlog.py verb, a
@@ -10,17 +10,43 @@ A Row: verbs, risk, allowed (roles always allowed), when ((role, fact) pairs: al
 guard has established the fact), over. SESSION_ONLY roles come only from a launcher session mark
 (owner: a session nothing marks); a subagent naming one is unlisted. An unlisted role (role_of
 gives None: a built-in agent, a plain session) may take only the risks in UNLISTED_MAY.
+
+The groups are not names written here: they are read from this kit's role files
+(kitlib.content.roster; docs/multi-host-plan.md section 7, decision 17), so a role is added with
+one file. A role's group is its `mode:`'s (controller: lead, write: builder, read and test:
+read-only, lander: lander) unless its file names `group:` (records and spec-writer: docs); a file
+that says `run: session` is SESSION_ONLY. An old name (kitlib.content.ALIASES) is in its new
+name's group for one release. Only OWNER, which no file defines, and PM, the one lead TOP adds to
+the owner, are named here; both are SESSION_ONLY whatever a role file says, so a TOP right never
+reaches a subagent. The role files are not owner paths: a change to a file's `mode:`, `group:` or
+`run:` moves that role between groups once it lands in the installed kit. A role file that cannot
+be read is in no group (its role is unlisted), and with none readable only the owner is listed.
 """
 import collections
+import os
 
-OWNER, PM, COORDINATOR, DEEP_WORKER, LANDER = 'owner', 'pm', 'coordinator', 'deep-worker', 'lander'
-BUILDERS = ('worker', 'opus-worker', 'strong-worker', 'tech-artist', 'asset-smith', 'sound-smith')
-DOCS = ('records', 'spec-writer')
-READ_ONLY = ('reviewer', 'test-runner', 'researcher', 'consultant')
-ROLES = (OWNER, PM, COORDINATOR, DEEP_WORKER) + BUILDERS + (LANDER,) + DOCS + READ_ONLY
-SESSION_ONLY = (OWNER, PM, COORDINATOR, DEEP_WORKER, 'consultant')
-LEADS = (OWNER, PM, COORDINATOR)
+from kitlib import content as _content
+
+KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROSTER = _content.roster(KIT)
+
+
+def _names(keep):
+    """The names of the roster's roles `keep(entry)` holds for, by name, each followed by its old
+    names (kitlib.content.ALIASES)."""
+    return tuple(n for r in _ROSTER if keep(r) for n in _content.names_of(r.name))
+
+
+OWNER, PM = 'owner', 'pm'
+LEADS = (OWNER,) + _names(lambda r: r.group == 'lead')
+BUILDERS = _names(lambda r: r.group == 'builder')
+DOCS = _names(lambda r: r.group == 'docs')
+READ_ONLY = _names(lambda r: r.group == 'read-only')
+LANDERS = _names(lambda r: r.group == 'lander')
+ROLES = LEADS + BUILDERS + LANDERS + DOCS + READ_ONLY
 TOP = (OWNER, PM)
+SESSION_ONLY = TOP + tuple(n for n in _names(lambda r: r.run == 'session' and r.group is not None)
+                           if n not in TOP)
 
 NONE, LOW, MEDIUM, HIGH, REFUSED = 'none', 'low', 'medium', 'high', 'refused'
 RISKS = (NONE, LOW, MEDIUM, HIGH, REFUSED)
@@ -32,7 +58,7 @@ UNLISTED_MAY = (NONE,)
 OWN_PULL = 'own-pull'      # the record's pull is this session's own
 VIA_LAND = 'via-land'      # the close is the landing tool's, not a backlog.py command
 FACTS = (OWN_PULL, VIA_LAND)
-OWN_GRANTS = tuple((role, OWN_PULL) for role in BUILDERS + (DEEP_WORKER,))
+OWN_GRANTS = tuple((role, OWN_PULL) for role in BUILDERS)
 
 # Sorting a `set`: TEXT_FIELDS set-text, other fields but priority set-other. Priority: HOLD
 # set-hold (a held record makes pull-held and close-held), PRICE_TOP set-price-owner, PRICE_LOW
@@ -53,14 +79,14 @@ ACTIONS = collections.OrderedDict([
     ('set-price-owner', Row(('set',), MEDIUM, TOP, (), ('set-price',))),
     ('set-hold', Row(('set',), HIGH, TOP, (), ('set-price', 'set-price-owner'))),
     ('set-other', Row(('set',), MEDIUM, LEADS, (), ())),
-    ('pull', Row(('pull',), LOW, LEADS + BUILDERS + (DEEP_WORKER,), (), ())),
+    ('pull', Row(('pull',), LOW, LEADS + BUILDERS, (), ())),
     ('pull-collision', Row(('pull',), MEDIUM, LEADS, (), ('pull',))),
     ('pull-held', Row(('pull',), REFUSED, (), (), ('pull', 'pull-collision'))),
     ('release', Row(('release',), LOW, LEADS, OWN_GRANTS, ())),
     ('block', Row(('block', 'unblock'), LOW, LEADS, OWN_GRANTS, ())),
     ('block-owner', Row(('block', 'unblock'), MEDIUM, LEADS, (), ('block',))),
     ('set-status', Row(('set-status', 'unpark'), MEDIUM, LEADS, (), ())),
-    ('close', Row(('close',), MEDIUM, LEADS, ((LANDER, VIA_LAND),), ())),
+    ('close', Row(('close',), MEDIUM, LEADS, tuple((r, VIA_LAND) for r in LANDERS), ())),
     ('close-held', Row(('close', 'retire'), HIGH, TOP, (), ('close', 'retire'))),
     ('retire', Row(('retire',), MEDIUM, LEADS, (), ())),
     ('retarget', Row(('retarget', 'migrate'), HIGH, TOP, (), ())),

@@ -16,6 +16,10 @@ named Win32 mutexes, plus each run's liveness mutex.
 Store(root) is the machine's store when root is None; any other root is a scratch store with
 mutexes of its own (tests). Timings live in Settings, so a test shortens them by parameter, not
 by environment (the old MACHINE_LOCK_TEST_* seams). Nothing here prints: `say` is the caller's.
+
+Under the kit's tests the machine's store is fenced (fence; docs/test-tools.md "Home fence"): it
+can be built and its root named, but Store.path and Store.mutex_name raise HomeFenced, so nothing
+under it is read, written or locked. A scratch store is not fenced, and a real run never is.
 """
 import contextlib
 import ctypes
@@ -30,6 +34,7 @@ import threading
 import time
 from ctypes import wintypes
 
+from kitlib.host import registry
 from kitlib.proc import process
 from kitlib.proc import win32
 from kitlib.proc.win32 import K32, ADV
@@ -104,7 +109,32 @@ def profile_dir():
 
 
 def real_root():
-    return os.path.join(profile_dir(), ".claude", "machine-lock")
+    """The machine's store: machine-lock in the kit's per-user state folder (registry.state_path;
+    ~/.claude/machine-lock, where it has always been)."""
+    return registry.state_path(profile_dir(), "machine-lock")
+
+
+FENCED = ("the machine's lock store is refused under the kit's tests (asked for: %s): this "
+          "process was fenced by the tests package or carries KIT_HOME_FENCE; a test uses a "
+          "scratch store, Store(root=<a temp folder>) (docs/test-tools.md \"Home fence\")")
+
+
+def fence(what):
+    """Refuse the machine's lock store to a process under the kit's tests: HomeFenced, naming
+    `what` (what was asked for), when kitlib.config.user.fenced(). A BaseException, so neither the
+    store's `except OSError` nor a caller's `except Exception` turns the refusal into a default or
+    a warning. A real run falls through: one global read and one environment read."""
+    from kitlib.config import user
+    if user.fenced():
+        raise user.HomeFenced(FENCED % what)
+
+
+def machine_home():
+    """The home folder the machine's lock store lives under, for what is read beside it (the
+    machine config's lock settings, kitlib.lock.site): profile_dir(), refused under the kit's
+    tests (fence)."""
+    fence("the store's home folder")
+    return profile_dir()
 
 
 _SA = []
@@ -163,28 +193,58 @@ def local_ok(*times):
 
 
 # ------------------------------------------------------------------ who is asking
-SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
-# Processes that host agents: Claude Code (claude.exe; node.exe when installed from npm), the Claude
-# desktop app (also claude.exe; its terminal panel runs agents' commands) and Codex.
-AGENT_HOSTS = frozenset({"claude.exe", "node.exe", "codex.exe"})
+# An actor's agent host [pid, ctime] is under HOST_KEY. Actors made before the key was neutral
+# carry it under LEGACY_HOST_KEY, which is read too (actor_host) and never written.
+HOST_KEY = "host"
+LEGACY_HOST_KEY = "claude"
 
 
-def chain_host(chain, names):
+def agent_hosts(registry_path=None):
+    """The lower-case image names of the processes that host agents: every registered host's
+    profile process_names (hosts.json; Claude Code runs as claude.exe, or node.exe when installed
+    from npm, and so does its desktop app's terminal panel; Codex as codex.exe). A hosts.json
+    that cannot be read raises RegistryError, which each caller here treats as an agent (fail
+    closed)."""
+    names = registry.union("process_names", registry_path)
+    return frozenset(n.lower() for n in names)
+
+
+def session_of(env, registry_path=None):
+    """The agent session id `env` carries (shown, never trusted): the first set one of the
+    registered hosts' profile session_env variables, else None, as it is when hosts.json cannot
+    be read."""
+    try:
+        names = registry.union("session_env", registry_path)
+    except registry.RegistryError:
+        return None
+    return next((env.get(n) for n in names if env.get(n)), None)
+
+
+def actor_host(actor):
+    """The actor's agent host [pid, ctime] as it carries it: under HOST_KEY, else under
+    LEGACY_HOST_KEY (an actor made before the rename); None when neither is set."""
+    if not isinstance(actor, dict):
+        return None
+    return actor.get(HOST_KEY) or actor.get(LEGACY_HOST_KEY)
+
+
+def chain_host(chain, names, hosts=None):
     """The nearest agent host [pid, ctime] in chain ([(pid, ctime)], nearest first) by exe name
-    (names {pid: exe}), or None. A pid with no name (a parent that has exited but is still
-    open somewhere) is not a host."""
+    (names {pid: exe}; hosts the agent images, default agent_hosts()), or None. A pid with no
+    name (a parent that has exited but is still open somewhere) is not a host."""
+    hosts = agent_hosts() if hosts is None else hosts
     for pid, ct in chain:
-        if (names.get(pid) or "").lower() in AGENT_HOSTS:
+        if (names.get(pid) or "").lower() in hosts:
             return [int(pid), int(ct)]
     return None
 
 
 def caller(name=None, env=None):
     """Who is asking, from this process's tree, never from what a caller says: {role:
-    owner | agent, claude: [pid, ctime] of the nearest agent host above this process or None,
-    ancestors: [[pid, ctime]], session: CLAUDE_CODE_SESSION_ID (shown, never trusted), name}.
-    The role is agent when any ancestor is an agent host (AGENT_HOSTS), whatever the
-    environment says, and when the tree cannot be read (fail closed)."""
+    owner | agent, host: [pid, ctime] of the nearest agent host above this process or None,
+    ancestors: [[pid, ctime]], session: the host's session id (session_of; shown, never trusted),
+    name}. The role is agent when any ancestor is an agent host (agent_hosts), whatever the
+    environment says, and when the tree or the host registry cannot be read (fail closed)."""
     env = os.environ if env is None else env
     try:
         snap = process.snapshot()
@@ -194,24 +254,25 @@ def caller(name=None, env=None):
         role = "agent" if host or not chain else "owner"
     except Exception:
         chain, host, role = [], None, "agent"
-    return {"role": role, "claude": host, "ancestors": sorted([p, c] for p, c in chain),
-            "session": env.get(SESSION_ENV) or None, "name": name}
+    return {"role": role, HOST_KEY: host, "ancestors": sorted([p, c] for p, c in chain),
+            "session": session_of(env), "name": name}
 
 
 def tree_role(pairs):
     """owner or agent for a run started under the processes pairs ([pid, ctime], a detached
     run's launcher ancestry; for holds.admits): agent when any is a live agent host, when any can no
     longer be named (it exited, or its pid now names another process), when there are none, or
-    when the processes cannot be listed (fail closed)."""
+    when the processes or the host registry cannot be read (fail closed)."""
     try:
         names = {p: n for p, _pp, n in process.snapshot()}
         if not pairs:
             return "agent"
+        hosts = agent_hosts()
         for pid, ct in pairs:
             n = names.get(int(pid))
             if n is None or process.proc_ctime(int(pid)) != int(ct):
                 return "agent"
-            if n.lower() in AGENT_HOSTS:
+            if n.lower() in hosts:
                 return "agent"
         return "owner"
     except Exception:
@@ -219,11 +280,11 @@ def tree_role(pairs):
 
 
 def owns(actor, rec):
-    """Whether record rec (a run or a hold) is the actor's: the actor's nearest agent host (its
-    Claude Code process, read from its tree by caller()) is among rec's recorded ancestors, so
-    the record was made inside that session (its subagents run in the same process). A session
-    id, which anyone can copy from snapshot(), grants nothing."""
-    host = (actor or {}).get("claude")
+    """Whether record rec (a run or a hold) is the actor's: the actor's nearest agent host
+    (actor_host; read from its tree by caller()) is among rec's recorded ancestors, so the record
+    was made inside that session (its subagents run in the same process). A session id, which
+    anyone can copy from snapshot(), grants nothing."""
+    host = actor_host(actor)
     if not (isinstance(host, (list, tuple)) and len(host) == 2):
         return False
     return [int(host[0]), int(host[1])] in [list(a) for a in rec.get("ancestors") or []]
@@ -314,7 +375,8 @@ class RunMutex:
 class Store:
     """One lock store. root None: the machine's (~/.claude/machine-lock, from Windows);
     else a scratch store whose mutexes are named after its path. say(text): where the library's
-    progress lines go (default: nowhere; the CLI prints them)."""
+    progress lines go (default: nowhere; the CLI prints them). Under the kit's tests the machine's
+    store gives no file path and names no mutex: path and mutex_name raise HomeFenced (fence)."""
 
     def __init__(self, root=None, settings=None, say=None, hardware=None, kinds_path=None):
         real = real_root()
@@ -328,10 +390,13 @@ class Store:
         self._game_at = 0.0
 
     def path(self, *parts):
+        if not self.testing:
+            fence("a file path")
         return os.path.join(self.root, *parts)
 
     def mutex_name(self, lock):
         if not self.testing:
+            fence("a mutex name")
             return "Global\\MachineLock." + lock
         h = hashlib.sha1(os.path.normcase(self.root).encode("utf-8")).hexdigest()[:12]
         return "Global\\MachineLock.test-%s.%s" % (h, lock)

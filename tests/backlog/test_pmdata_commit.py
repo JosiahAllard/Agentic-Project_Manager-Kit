@@ -18,7 +18,7 @@ from kitlib.backlog import errors
 from kitlib.backlog.errors import Failure, Uncommitted, Usage
 from tools import backlog as backlog_tool
 
-from tests.backlog.helpers import BRANCH, priced
+from tests.backlog.helpers import ADD_FLAGS, ADD_NONE, BRANCH, priced
 from tests.gitfixture import TempRepo
 
 DIR = 'kit/backlog'
@@ -78,7 +78,7 @@ class PmDataStore(unittest.TestCase):
     def test_add_commits_the_new_record(self):
         before = self.head()
         change, tip = self.store.write(
-            lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+            lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE))
         self.assert_committed(before, tip, [('A', DIR + '/FOO.md')])
         self.assertEqual(self.git('log', '-1', '--format=%s', tip), change.subject)
 
@@ -108,7 +108,7 @@ class PmDataStore(unittest.TestCase):
         self.repo.write('notes.txt', 'scratch\n', root=self.wt)
         before = self.head()
         _, tip = self.store.write(
-            lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+            lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'], **ADD_NONE))
         self.assertEqual(self.changed_in(tip), [('A', DIR + '/FOO.md')])
         self.assertEqual(self.git('rev-parse', tip + '^'), before)
         self.assertEqual(sorted(self.status()), [' M %s/BAZ.md' % DIR, '?? notes.txt'])
@@ -136,7 +136,8 @@ class PmDataStore(unittest.TestCase):
             return sha
         with mock.patch.object(self.backend, '_head', side_effect=head_then_move):
             _, tip = self.store.write(
-                lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+                lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                        **ADD_NONE))
         self.assert_committed(moved[0], tip, [('A', DIR + '/FOO.md')])
 
     def test_a_write_that_fails_partway_commits_nothing(self):
@@ -162,7 +163,8 @@ class PmDataStore(unittest.TestCase):
         with mock.patch.object(smod.time, 'sleep'):
             with self.assertRaises(Failure) as cm:
                 self.store.write(
-                    lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+                    lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                            **ADD_NONE))
         self.assertIsInstance(cm.exception, Uncommitted)    # the files are written
         msg = str(cm.exception)
         self.assertIn('%s/FOO.md' % DIR, msg)
@@ -470,7 +472,8 @@ class PmDataStore(unittest.TestCase):
             with mock.patch.object(smod.time, 'sleep'):
                 with self.assertRaises(Failure) as cm:
                     self.store.write(
-                        lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+                        lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                                **ADD_NONE))
         finally:
             os.remove(lock)
         exc = cm.exception
@@ -505,7 +508,7 @@ class PmDataStore(unittest.TestCase):
             with mock.patch.object(smod.time, 'sleep'):
                 with self.assertRaises(errors.IndexStale) as cm:
                     store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary',
-                                                        ['area/foo/**']))
+                                                        ['area/foo/**'], **ADD_NONE))
         finally:
             os.remove(lock)
         repair = cm.exception.repair
@@ -531,7 +534,8 @@ class PmDataStore(unittest.TestCase):
                                           'GIT_DIR': os.path.join(tmp, 'no-repo'),
                                           'GIT_WORK_TREE': tmp}):
             _, tip = self.store.write(
-                lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**']))
+                lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                        **ADD_NONE))
             pending = self.backend.pending()
         self.assertFalse(os.path.exists(stray))
         self.assertEqual(pending, [])
@@ -545,7 +549,8 @@ class PmDataStore(unittest.TestCase):
         store = smod.Store(backend, rmod.Rules(), session='kit-test')
         ctx = pmod.Context(store, other, branch=BRANCH)
         before = self.repo.git('rev-parse', 'HEAD', cwd=other)
-        _, tip = store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary', ['area/foo/**']))
+        _, tip = store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                                     **ADD_NONE))
         self.assertIsNone(tip)
         self.assertEqual(self.repo.git('rev-parse', 'HEAD', cwd=other), before)
         self.assertIsNone(backend.commit_branch())
@@ -638,6 +643,28 @@ class PmDataStore(unittest.TestCase):
         self.assertEqual(self.changed_in(self.head()), [('D', DIR + '/BAR.md'),
                                                         ('M', DIR + '/BAZ.md')])
 
+    def test_a_set_through_the_tool_commits_with_the_session_it_was_given(self):
+        """A clean index and `backlog.py set`: `main` opens the store (opener.open_store) and
+        plans the verb (opener.planner); the write is one commit of BAR.md carrying the
+        `Session:` line of `--session`, and the index is left clean."""
+        self.repo.write('.kit.json', '{"backlog": {"store": "%s"}}\n' % DIR, root=self.wt)
+        self.repo.commit('configure the store', '.kit.json', cwd=self.wt)
+        self.assertEqual(self.status(), [])
+        before = self.head()
+        with mock.patch.object(backlog_tool, 'open_store', wraps=backlog_tool.open_store) as opened, \
+                mock.patch.object(backlog_tool, 'planner', wraps=backlog_tool.planner) as planned:
+            rc, out = self.tool('set', 'BAR', '--summary', 'renamed by the tool')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(opened.call_args.kwargs['session'], 'kit-test')
+        self.assertEqual(planned.call_count, 1)
+        tip = self.head()
+        self.assertIn('WROTE %s -> %s' % (self.backend.describe(), tip[:10]), out.splitlines())
+        self.assert_committed(before, tip, [('M', DIR + '/BAR.md')])
+        self.assertIn('summary: renamed by the tool',
+                      self.git('show', '%s:%s/BAR.md' % (tip, DIR)))
+        self.assertEqual(self.git('log', '-1', '--format=%B', tip).splitlines()[-1],
+                         'Session: kit-test')
+
     def test_a_write_committed_with_a_stale_index_is_reported_written_and_exits_0(self):
         """The index is locked: `add` and `catch-up --apply` still commit, so each prints its
         WROTE / CAUGHT UP line with the commit, then a WARNING carrying the repair; exit 0."""
@@ -649,7 +676,7 @@ class PmDataStore(unittest.TestCase):
         try:
             with mock.patch.object(smod.time, 'sleep'):
                 rc, out = self.tool('add', 'FOO', '--summary', 'a summary', '--scope',
-                                    'area/foo/**')
+                                    'area/foo/**', *ADD_FLAGS)
                 added = self.head()
                 rc2, out2 = self.tool('catch-up', '--apply', DIR + '/NEW.md')
         finally:

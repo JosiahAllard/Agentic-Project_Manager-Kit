@@ -4,8 +4,8 @@ hook. Ported from the PM kit's tools/pytests.py; the checkout root and its tools
 in, and the log goes to the stream given.
 
 --audit: the child records every file its tests open or list under the checkout, outside
-<tools>/__pycache__, .git and .claude/worktrees (other checkouts, when a merged gate runs this in
-the main one), and FAILs (`[FAIL] audit:` lines) any read that kitlib.tooldeps does not map to the
+<tools>/__pycache__, .git and each host's agent worktrees folder (hosts.json, .claude/worktrees on
+Claude: other checkouts, when a merged gate runs this in the main one), and FAILs (`[FAIL] audit:` lines) any read that kitlib.tooldeps does not map to the
 unit's module: a tools .py in its closure (any tools .py when the closure holds tool_deps, whose
 scan reads them all), an `extra` file its closure reads, a `pinned`/`patterns` entry naming it, or
 any read by a `whole_tree` class - its tests, setUpClass and tearDownClass. A read at import time
@@ -19,6 +19,7 @@ import threading
 import unittest
 
 from kitlib.git.batch import fixture_env
+from kitlib.host import registry
 from kitlib.tooldeps import deps as tool_deps
 
 SKIP_LINE = 'PY SKIP %s %s'
@@ -42,6 +43,7 @@ class Audit(object):
         self.tools_rel = graph.tools_rel
         self.pins = tool_deps.pinned(self.cfg)
         self.reach = graph.closure(module) | {module}
+        self.worktrees = registry.union('worktrees_directory')
         self.current = None
         self.findings = {}
         self.local = threading.local()      # per thread: a test's own pool must not mute others
@@ -52,7 +54,7 @@ class Audit(object):
             return True
         if rel.startswith('<'):
             return True         # a pseudo file name (`<unknown>`, `<string>`), resolved against cwd
-        if rel == '.claude/worktrees' or rel.startswith('.claude/worktrees/'):
+        if any(rel == w or rel.startswith(w + '/') for w in self.worktrees):
             return True         # other checkouts, not this tree (a merged gate runs in main)
         prefix = self.tools_rel + '/'
         if rel.startswith(prefix):

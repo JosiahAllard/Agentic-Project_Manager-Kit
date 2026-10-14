@@ -1,21 +1,31 @@
-"""kitlib.roster and tools/agent_roster.py: docs/ROSTER.md against the agent files' frontmatter.
+"""kitlib.roster, tools/agent_roster.py and the roster render: docs/ROSTER.md's tables are rendered
+from content/roles and each host's tier -> model map (decision 17, docs/multi-host-plan.md section 7).
 
-The check runs on the real claude/agents/ folder; --write runs on a temp copy and must leave every byte
-outside the changed lines alone (CRLF files included).
+The check runs on the real tree; the edits run on a temp copy and must leave every byte outside the
+rendered regions alone.
 """
+import importlib
 import io
 import os
+import re
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
-from kitlib import roster
+from kitlib import content, reviewpack, roster
+from kitlib.host import registry
+from kitlib.host.content import ContentError
+from tests.docs.test_cli import repo_with_docs
+from tests.gitfixture import fixture_env
+from tests.home import no_machine_owner
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-AGENTS = os.path.join(KIT_ROOT, 'claude', 'agents')
 sys.path.insert(0, os.path.join(KIT_ROOT, 'tools'))
 import agent_roster as cli  # noqa: E402
+
+MAPS = {h: dict(registry.host(h).tiers) for h in registry.names()}     # hosts.json, the one tier map
 
 
 def read(path):
@@ -28,99 +38,212 @@ def write_file(path, data):
         f.write(data)
 
 
-class RealAgentsTest(unittest.TestCase):
-    def test_roster_matches_frontmatter(self):
-        self.assertEqual(roster.check(AGENTS), [])
+def tables(text):
+    """{first header cell: [row cells, ...]} of every markdown table in `text`."""
+    out, cur = {}, None
+    for line in text.splitlines():
+        s = line.strip()
+        if not s.startswith('|'):
+            cur = None
+            continue
+        cells = [c.strip() for c in s.strip('|').split('|')]
+        if cur is None:
+            cur = out.setdefault(cells[0], [])
+            cur.append(cells)
+        elif not all(set(c) <= set('-: ') for c in cells):
+            cur.append(cells)
+    return out
+
+
+class RealRosterTest(unittest.TestCase):
+    def test_roster_is_what_the_render_makes(self):
+        self.assertEqual(content.drift(KIT_ROOT, [], tiers=MAPS), [])
 
     def test_cli_default_is_check(self):
         out = io.StringIO()
         self.assertEqual(cli.main([], out), 0, out.getvalue())
 
+    def test_one_row_per_role_file_and_one_column_per_host(self):
+        t = tables(read(os.path.join(KIT_ROOT, 'docs', 'ROSTER.md')).decode('utf-8'))
+        rows = t['role'][1:]
+        self.assertEqual([r[0] for r in rows], [r.name for r in content.roster(KIT_ROOT)])
+        self.assertEqual(t['tier'][0][1:], sorted(registry.names()))
+
+    def test_every_rendered_model_is_the_roster_tiers(self):
+        """The model an agent file names is the role's tier through the host's tier table."""
+        t = tables(read(os.path.join(KIT_ROOT, 'docs', 'ROSTER.md')).decode('utf-8'))
+        hosts = t['tier'][0][1:]
+        models = {row[0]: dict(zip(hosts, row[1:])) for row in t['tier'][1:]}
+        for name, tier, effort, _ in t['role'][1:]:
+            fm = roster_frontmatter(read(os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'agents', name + '.md')))
+            with self.subTest(role=name):
+                self.assertEqual(fm['model'], models[tier]['claude'])
+                self.assertEqual(fm.get('effort', roster.NONE), effort)
+
+
+def roster_frontmatter(data):
+    text = data.decode('utf-8').replace('\r\n', '\n')
+    head = text.split('\n---\n', 1)[0]
+    return dict((k.strip(), v.strip()) for k, _, v in (l.partition(':') for l in head.split('\n')[1:])
+                if not k.startswith(' '))
+
 
 class TempCopyTest(unittest.TestCase):
     def setUp(self):
-        top = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, top, True)
-        self.top = top
-        self.dir = os.path.join(top, 'claude', 'agents')    # the kit layout: docs/ two levels up
-        shutil.copytree(AGENTS, self.dir)
-        os.mkdir(os.path.join(top, 'docs'))
-        self.roster = os.path.join(top, 'docs', 'ROSTER.md')
-        shutil.copy(os.path.join(KIT_ROOT, 'docs', 'ROSTER.md'), self.roster)
+        self.top = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.top, True)
+        shutil.copytree(os.path.join(KIT_ROOT, 'content', 'roles'), os.path.join(self.top, 'content', 'roles'))
+        os.makedirs(os.path.join(self.top, 'content', 'skills'))
+        os.makedirs(os.path.join(self.top, 'docs'))
+        shutil.copyfile(os.path.join(KIT_ROOT, 'docs', 'ROSTER.md'), os.path.join(self.top, 'docs', 'ROSTER.md'))
+        self.dir = os.path.join(self.top, 'content', 'roles')
+        self.roster = os.path.join(self.top, 'docs', 'ROSTER.md')
 
-    def edit_row(self, agent, old, new):
-        text = read(self.roster).decode('utf-8')
-        lines = text.split('\n')
-        i = next(i for i, l in enumerate(lines) if l.startswith('| %s |' % agent))
-        self.assertIn(old, lines[i])
-        lines[i] = lines[i].replace(old, new, 1)
-        write_file(self.roster, '\n'.join(lines).encode('utf-8'))
-
-    def test_model_and_effort_mismatch_listed(self):
-        self.edit_row('worker', '| sonnet | medium |', '| opus | high |')
-        got = roster.check(self.dir)
-        self.assertEqual(len(got), 2, got)
+    def check(self):
         out = io.StringIO()
-        self.assertEqual(cli.main(['--check', '--dir', self.dir], out), 1)
-        self.assertIn('worker: model is opus', out.getvalue())
+        return cli.main(['--check', '-C', self.top], out), out.getvalue()
 
-    def test_missing_on_either_side(self):
+    def rows(self):
+        return {r[0]: r[1:] for r in tables(read(self.roster).decode('utf-8'))['role'][1:]}
+
+    def edit_role(self, name, old, new):
+        path = os.path.join(self.dir, name + '.md')
+        data = read(path)
+        self.assertIn(old, data)
+        write_file(path, data.replace(old, new, 1))
+
+    def test_a_role_file_edit_is_drift_and_write_renders_its_row(self):
+        self.edit_role('worker', b'tier: standard', b'tier: strong')
+        self.edit_role('worker', b'effort: medium', b'effort: high')
+        self.assertEqual(self.check(), (1, 'differs: docs/ROSTER.md; run python tools/render_content.py --write\n'))
+        before = read(self.roster)
+        self.assertEqual(cli.main(['--write', '-C', self.top], io.StringIO()), 0)
+        self.assertEqual(self.check()[0], 0)
+        self.assertEqual(self.rows()['worker'][:2], ['strong', 'high'])
+        a, b = before.split(b'\n'), read(self.roster).split(b'\n')
+        self.assertEqual([x for x, y in zip(a, b) if x != y], [l for l in a if l.startswith(b'| worker |')])
+
+    def test_one_file_adds_or_removes_a_role(self):
+        write_file(os.path.join(self.dir, 'extra.md'),
+                   b'---\nname: extra\ndescription: Does | extra things.\ntier: light\nsandbox: read-only\n'
+                   b'capabilities: [read]\n---\nbody\n')
         os.remove(os.path.join(self.dir, 'lander.md'))
-        write_file(self.roster, read(self.roster) + b'| ghost | opus | low | x |\n')
-        got = '\n'.join(roster.check(self.dir))
-        self.assertIn('lander: row in ROSTER.md has no agent file', got)
-        self.assertIn('ghost: row in ROSTER.md has no agent file', got)
-        write_file(os.path.join(self.dir, 'extra.md'), b'---\nname: extra\nmodel: opus\n---\nbody\n')
-        self.assertIn('extra: agent file has no row in ROSTER.md', '\n'.join(roster.check(self.dir)))
+        cli.main(['--write', '-C', self.top], io.StringIO())
+        self.assertNotIn('lander', self.rows())
+        # no summary: the description, its | escaped
+        self.assertIn('| extra | light | - | Does \\| extra things. |', read(self.roster).decode('utf-8'))
 
-    def test_write_changes_only_the_two_lines(self):
-        before = {n: read(os.path.join(self.dir, n)) for n in os.listdir(self.dir)}
-        self.edit_row('worker', '| sonnet | medium |', '| opus | high |')
-        self.edit_row('coordinator', '| opus | medium |', '| sonnet | low |')   # CRLF file
-        self.assertEqual(roster.write(self.dir), ['coordinator', 'worker'])
-        self.assertEqual(roster.check(self.dir), [])
-        for n, old in before.items():
-            new = read(os.path.join(self.dir, n))
-            if n in ('worker.md', 'coordinator.md'):
-                nl = b'\r\n' if b'\r\n' in old else b'\n'
-                a, b = old.split(nl), new.split(nl)
-                self.assertEqual(len(a), len(b), n)
-                diff = [i for i in range(len(a)) if a[i] != b[i]]
-                self.assertEqual(len(diff), 2, n)
-                for i in diff:
-                    self.assertTrue(a[i].startswith((b'model:', b'effort:')), a[i])
-            else:
-                self.assertEqual(new, old, n)
+    def test_a_hand_edit_of_a_table_is_put_back_and_the_prose_is_kept(self):
+        text = read(self.roster).decode('utf-8')
+        edited = text.replace('| worker | standard |', '| worker | deep |', 1).replace(
+            '# Agent roster\n', '# Agent roster\n\nA new owner paragraph.\n', 1)
+        write_file(self.roster, edited.encode('utf-8'))
+        self.assertEqual(self.check()[0], 1)
+        cli.main(['--write', '-C', self.top], io.StringIO())
+        self.assertEqual(read(self.roster).decode('utf-8'),
+                         text.replace('# Agent roster\n', '# Agent roster\n\nA new owner paragraph.\n', 1))
 
-    def test_write_adds_and_removes_effort_line(self):
-        self.edit_row('test-runner', '| haiku | - |', '| haiku | low |')
-        self.edit_row('lander', '| haiku | medium |', '| haiku | - |')
-        roster.write(self.dir)
-        self.assertEqual(roster.check(self.dir), [])
-        self.assertIn(b'model: haiku\neffort: low\n', read(os.path.join(self.dir, 'test-runner.md')))
-        self.assertNotIn(b'effort:', read(os.path.join(self.dir, 'lander.md')).split(b'---')[1])
+    def test_the_tier_table_follows_the_host_maps(self):
+        maps = dict(MAPS, claude=dict(MAPS['claude'], deep='sonnet'), other={'light': 'x'})
+        text = roster.render(read(self.roster).decode('utf-8'), _content(self.top), maps)
+        t = tables(text)['tier']
+        self.assertEqual(t[0], ['tier', 'claude', 'codex', 'other'])
+        self.assertEqual(t[4], ['deep', 'sonnet', MAPS['codex']['deep'], '-'])
 
-    def test_removing_effort_spares_effort_text_in_description(self):
-        path = os.path.join(self.dir, 'lander.md')
-        text = read(path).decode('utf-8')
-        text = text.replace('description: ', 'description: Mind the effort: it is a word here. ', 1)
-        write_file(path, text.encode('utf-8'))
-        self.edit_row('lander', '| haiku | medium |', '| haiku | - |')
-        roster.write(self.dir)
-        want = text.replace('effort: medium' + chr(10), '', 1)
-        self.assertEqual(read(path).decode('utf-8'), want)
+    def test_missing_markers_are_usage(self):
+        write_file(self.roster, read(self.roster).replace(b'<!-- rendered: roles -->', b'', 1))
+        out = io.StringIO()
+        self.assertEqual(cli.main(['-C', self.top], out), 2)
+        self.assertIn('agent_roster: docs/ROSTER.md: needs exactly one <!-- rendered: roles -->', out.getvalue())
+        with self.assertRaises(ContentError):
+            roster.render('no regions\n', _content(self.top), MAPS)
+        text = read(self.roster).decode('utf-8')
+        twice = text.replace('<!-- rendered: roles -->\n', '<!-- rendered: roles -->\n<!-- rendered: roles -->\n', 1)
+        with self.assertRaises(ContentError):        # a repeated start marker, though only one region closes
+            roster.render(twice, _content(self.top), MAPS)
 
-    def test_write_is_a_no_op_when_agreeing(self):
-        self.assertEqual(roster.write(self.dir), [])
+    def test_crlf_is_kept(self):
+        write_file(self.roster, read(self.roster).replace(b'\n', b'\r\n'))
+        self.edit_role('records', b'effort: low', b'effort: medium')
+        cli.main(['--write', '-C', self.top], io.StringIO())
+        data = read(self.roster)
+        self.assertNotIn(b'\n', data.replace(b'\r\n', b''))
+        self.assertIn(b'| records | standard | medium |', data)
 
-    def test_roster_found_one_level_up_from_claude_agents(self):
-        self.assertEqual(roster.roster_path(self.dir), self.roster)
+    def test_an_unreadable_roster_is_usage(self):
+        os.remove(self.roster)
+        out = io.StringIO()
+        self.assertEqual(cli.main(['-C', self.top], out), 2)
+        self.assertIn('agent_roster: docs/ROSTER.md cannot be read', out.getvalue())
 
-    def test_roster_beside_a_flat_agents_folder_wins(self):
-        flat = os.path.join(self.top, 'claude', 'docs')
-        os.mkdir(flat)
-        shutil.copy(self.roster, os.path.join(flat, 'ROSTER.md'))
-        self.assertEqual(roster.roster_path(self.dir), os.path.join(flat, 'ROSTER.md'))
+
+def _content(root):
+    return content.Content(roles=content.load_roles(root), skills=())
+
+
+class ReviewerRuleTest(unittest.TestCase):
+    """The "Reviewer model" rule in the dispatch skill's roster.md is prose a coordinator follows by
+    matching strings: the group labels the review pack prints and the name of the strict-path
+    tuple. Each one it names must still be what the code prints or defines."""
+
+    RULE_FILE = os.path.join(KIT_ROOT, 'content', 'skills', 'coordinator-dispatch', 'roster.md')
+
+    def rule(self):
+        text = read(self.RULE_FILE).decode('utf-8').replace('\r\n', '\n')
+        m = re.search(r'^- \*\*Reviewer model\*\*.*?(?=^- )', text, re.S | re.M)
+        self.assertIsNotNone(m, 'no "Reviewer model" bullet in roster.md')
+        return re.sub(r'\s+', ' ', m.group(0))       # a wrapped line is still one sentence
+
+    def printed_groups(self):
+        """The group lines a real pack prints under its `files` line, in order: a throwaway repo
+        whose branch changes one file at each risk level and one the risk map does not list."""
+        repo = repo_with_docs()
+        self.addCleanup(repo.cleanup)
+        env = mock.patch.dict(os.environ, fixture_env(), clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        # no owner email in .kit.json: the owner rules read the machine config's, here none
+        no_machine_owner(self)
+        repo.write('docs/ops/risk-map.md', '- High | hi/\n- Medium | med/\n- Low | low/\n')
+        repo.git('add', '-A')
+        repo.git('commit', '-q', '-m', 'risk map')
+        repo.git('checkout', '-q', '-b', 'phase/x')
+        for folder in ('hi', 'med', 'low', 'other'):
+            repo.write('%s/a.py' % folder, 'x = 1\n')
+        repo.git('add', '-A')
+        repo.git('commit', '-q', '-m', 'one file per level')
+        lines = reviewpack.pack(repo.root, 'phase/x', base='main').lines
+        start = next(i for i, l in enumerate(lines) if l.startswith('files '))
+        groups = []
+        for line in lines[start + 1:]:
+            if not line.startswith('  '):
+                break
+            m = re.match(r'  (\S.*) \(\d+\)$', line)
+            if m:
+                groups.append(m.group(1))
+        return groups
+
+    def test_rule_names_only_what_the_code_prints_and_defines(self):
+        rule = self.rule()
+        printed = self.printed_groups()
+        self.assertEqual(len(printed), 4, printed)      # the fixture reached every level
+        # the list of groups the rule tells the coordinator to read: `<label> (N)`
+        listed = re.findall(r'`([^`]+) \(N\)`', rule)
+        self.assertEqual(listed, printed)
+        # the labels its rows turn on: `<label>` group, `<a>` or `<b>` group
+        in_rows = []
+        for run in re.findall(r'((?:`[^`]+`(?:,| or| and)? )+)groups?\b', rule):
+            in_rows.extend(re.findall(r'`([^`]+)`', run))
+        self.assertTrue(in_rows, 'the rule names no group in its rows')
+        self.assertEqual(sorted(set(in_rows) - set(printed)), [])
+        self.assertEqual(sorted(set(printed) - set(in_rows)), [], 'a printed group no row covers')
+        # the strict landing paths: a name in a module, both as the rule spells them
+        m = re.search(r'`(\w+)` in `<kit>/(kitlib/[\w/]+)\.py`', rule)     # a skill writes the kit's root <kit>
+        self.assertIsNotNone(m, 'the rule names no strict-path tuple')
+        self.assertEqual(m.group(1), 'STRICT_DEFAULTS')
+        module = importlib.import_module(m.group(2).replace('/', '.'))
+        self.assertTrue(getattr(module, m.group(1), None), '%s.%s' % (module.__name__, m.group(1)))
+        self.assertIn('hosts/*/shell/agents/**', getattr(module, m.group(1)))
 
 
 if __name__ == '__main__':

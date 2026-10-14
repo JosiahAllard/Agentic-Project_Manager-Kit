@@ -44,6 +44,7 @@ import re
 import shutil
 import tempfile
 
+from kitlib import kitroot
 from kitlib import pmdata
 from kitlib.config import ConfigError, load, load_at
 from kitlib.config import user
@@ -604,8 +605,8 @@ def recover_steps(top, path, branch, remote, common):
         '            3. git branch -D %s' % branch,
         '            4. delete %s' % pmdata.record_path(common),
         '            5. git fetch %s refs/heads/%s:refs/heads/%s' % (remote, branch, branch),
-        '            6. python tools/pm_data.py init --adopt --path "%s" --branch %s --remote %s'
-        % (path, branch, remote),
+        '            6. %s init --adopt --path "%s" --branch %s --remote %s'
+        % (kitroot.command('pm_data', top), path, branch, remote),
     ]
 
 

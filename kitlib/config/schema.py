@@ -6,6 +6,9 @@ that holds the object. Defaults of None mean "absent": the tool that reads the k
 Kit-level sections (repo, owner, hook, heavy, roles) are read by kitlib itself; the rest are the
 per-tool sections the PM kit's tools read (kit/tools/_kit.py SECTIONS), checked here for shape only.
 """
+from kitlib.host import registry
+from kitlib.host.content import MODES
+
 from .types import (Any, Bool, Either, Email, Enum, Field, Int, ListOf, MapOf, Obj, Regex, RelPath,
                     Str, T)
 
@@ -31,9 +34,15 @@ Argv = ListOf(Str(), nonempty=True)
 Regexes = Either(Regex(), ListOf(Regex()))
 
 # Paths only the owner changes (PM kit _owner_only.DEFAULT): an entry ending `/` locks a directory.
-OWNER_PATHS = ['CLAUDE.md', '.claude/', '.github/workflows/', '.kit.json', 'tools/gate.json',
-               'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']
-OWNER_PATHS_EXCEPT = ['.claude/worktrees/']
+# AGENTS.md is the canonical rules file and docs/agent-profile.md the neutral profile (each host's
+# own rules file and folder point at them), so they are locked as their old homes are. Each host's
+# own paths are its hosts.json profile owner_paths, and its agent worktrees under them are not
+# locked (worktrees_directory).
+OWNER_PATHS = list(dict.fromkeys(
+    ['AGENTS.md'] + list(registry.union('owner_paths'))
+    + ['docs/agent-profile.md', '.github/workflows/', '.kit.json', 'tools/gate.json',
+       'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']))
+OWNER_PATHS_EXCEPT = [w + '/' for w in registry.union('worktrees_directory')]
 
 # The heavy-program entry shape: kit defaults (policy.HEAVY_DEFAULTS) and `.kit.json` "heavy".programs.
 HEAVY_ENTRY = Obj({
@@ -52,8 +61,9 @@ IN_FLIGHT = Obj({
 
 ROLE = Obj({
     'edit_main_checkout': Field(Bool(), None, 'may edit files in a main checkout; unset: the base role (main: true, any other: false)'),
+    'mode': Field(Enum(*MODES), None, 'the role policy this role is held to, over its role file\'s `mode` (docs/guard.md "Role policy"); unset: the role file\'s, else none'),
     'why': Field(Str(), None, 'the ruling that grants it'),
-}, what='{edit_main_checkout, why}')
+}, what='{edit_main_checkout, mode, why}')
 
 STEP = Obj({
     'name': Field(Str(pattern=NAME_RE, what='a step name'), None, 'the step name, unique'),
@@ -108,19 +118,24 @@ RUNNER = Obj({
     'project': Field(Str(), None, 'gradle: the project path, :core say'),
     'csproj': Field(RelPath(), None, 'dotnet: the test project file'),
     'args': Field(Strs, None, 'arguments appended to the command'),
-}, required=('glob', 'kind'), what='{glob, kind, pythonpath, dir, project, csproj, args}')
+    'lock': Field(Str(pattern=NAME_RE, what='a kind name'), None, 'the kinds-table kind booked around its command (unset: the kind of the heavy-list entry the command matches - build for gradle and dotnet, none for python)'),
+}, required=('glob', 'kind'), what='{glob, kind, pythonpath, dir, project, csproj, args, lock}')
 
 SECTIONS = {
     'repo': {
-        'name': Field(Str(nonempty=False), '', 'repository name for reports and the ledger'),
-        'main_branch': Field(Str(), 'main', 'the branch landings target'),
+        'name': Field(Str(nonempty=False), '', 'repository name for reports and the ledger; unset or empty: the last part of the remote\'s URL, else the main checkout\'s folder name (the ledger reads a written name only)'),
+        'main_branch': Field(Str(), 'main', 'the branch landings target; unset: the branch <remote>/HEAD names, else main, else master when only that exists (docs/kit-json.md "With no file")'),
         'remote': Field(Str(), 'origin', 'the remote main is pushed to'),
-        'worktrees_dir': Field(RelPath(), '.claude/worktrees', 'where agent worktrees live'),
-        'tools_dir': Field(RelPath(), 'tools', 'where repo tools, stubs and the hook module live'),
-        'push_block': Field(Bool(), False, 'pre-push refuses a push to main without a gate-OK record'),
+        'worktrees_dir': Field(RelPath(), registry.default_profile().worktrees_directory,
+                               'where agent worktrees live'),
+        'worktrees_by_host': Field(MapOf(RelPath(), what='host'), {},
+                                   'per-host worktree folders, keyed by hosts.json host name '
+                                   '(docs/new-worktree.md "Hosts")'),
+        'tools_dir': Field(RelPath(), 'tools', 'where repo tools, the opt-in kit tool stubs and the hook module live'),
+        'push_block': Field(Bool(), False, 'pre-push refuses a push to main without a gate-OK record; a delete or a forced push of main is refused whatever it says'),
     },
     'owner': {
-        'email': Field(Email(), None, 'author email of the owner\'s own commits; unset: no owner commit is provable'),
+        'email': Field(Email(), None, 'author email of the owner\'s own commits; unset: the machine config\'s owner_email; neither: no owner commit is provable, so every owner-only change is refused'),
         'agent_emails': Field(ListOf(Email()), [], 'author emails known to be agents\', never the owner\'s'),
         'paths': Field(Strs, OWNER_PATHS, 'owner-only paths; an entry ending / locks a directory; replaces the default'),
         'paths_except': Field(Strs, OWNER_PATHS_EXCEPT, 'what under a locked directory is not locked'),
@@ -140,6 +155,7 @@ SECTIONS = {
         'phases': Field(Strs, [], 'phase names in order'),
         'id_grammar': Field(Enum('upper', 'mixed'), 'upper', 'item id spelling'),
         'ledger_repo': Field(Str(), None, 'the ledger repo column; default the repo name'),
+        'code_main': Field(Str(), None, 'the branch code lands on, which `add --found-on` measures a branch\'s diff from; default repo.main_branch'),
     },
     'board': {
         'state_file': Field(RelPath(), None, 'the board state file, under the git dir (default <git common dir>/kit/board-state.md)'),
@@ -170,7 +186,7 @@ SECTIONS = {
         'stale_days': Field(Int(1), None, 'days before a state doc is stale'),
     },
     'doc_index': {
-        'enabled': Field(Bool(), True, 'false: doc_index does not require every .md on an index entry line, nor the index file (a repo with no .kit.json skips it too)'),
+        'enabled': Field(Bool(), True, 'false: doc_index does not require every .md on an index entry line, even with an index file; with no index file the check is skipped anyway (the index file is the opt-in)'),
         'index': Field(RelPath(), 'docs/INDEX.md', 'the doc index both doc tools read'),
         'find_match': Field(Enum('keywords', 'text'), 'keywords', 'how --find matches'),
         'roles': Field(MapOf(Strs, 'role'), None, 'role -> lookup topics'),
@@ -199,6 +215,7 @@ SECTIONS = {
     },
     'guard': {
         'data_roots': Field(ListOf(DATA_ROOT), [], 'folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")'),
+        'role_policy': Field(Bool(), False, 'hold roles to their role policy mode (docs/guard.md "Role policy"); off: no role is held, whatever its mode; read from the main checkout only'),
     },
     'landing': {
         'lock_file': Field(Str(), None, 'legacy landing lock: git:<name>, a file in the git common dir; any other value refuses'),
@@ -246,7 +263,7 @@ SECTIONS = {
         'udp_ports': Field(ListOf(Int(0, 65535), length=2), None, '[low, high] ports checked free'),
     },
     'redfirst': {
-        'runners': Field(ListOf(RUNNER), [{'glob': 'tests/*test_*.py', 'kind': 'python'}], 'which runner takes a test file, first match wins'),
+        'runners': Field(ListOf(RUNNER), [{'glob': 'tests/*test_*.py', 'kind': 'python'}], 'which runner takes a test file, first match wins; none written: this default, then <tools_dir>/*test_*.py as python with the tools folder as pythonpath, unless tools_dir is . or that glob is listed (docs/redfirst.md); a runner\'s lock is the kinds-table kind the run books around its command (unset: the kind of the heavy-list entry the command matches)'),
         'hold_wait': Field(Int(0), 60, 'seconds a held throwaway tree is re-checked before it is left'),
     },
     'review_pack': {
@@ -257,7 +274,7 @@ SECTIONS = {
         'skip': Field(Strs, None, 'globs of paths not checked; unset: <tools_dir>/test_*.py and <tools_dir>/fixtures/*'),
     },
     'stubs': {
-        'tools': Field(Strs, None, 'kit tools stubbed into the repo'),
+        'tools': Field(Strs, None, 'kit tools stubbed into the repo; stubs are opt-in (none by default), and setting this opts in'),
     },
     'testlist': {
         'junit': Field(Strs, ['**/build/test-results/**/*.xml'], 'JUnit result globs'),

@@ -7,7 +7,7 @@ from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 
 from tests.backlog import test_cli
-from tests.backlog.helpers import record_text
+from tests.backlog.helpers import ADD_FLAGS, record_text
 
 RULES = rmod.Rules('upper', ('L0', 'L1'))
 
@@ -55,7 +55,8 @@ class NextAllCli(unittest.TestCase):
 
     def test_next_all_lists_past_the_cap(self):
         for i in range(7):
-            self.ok('add', 'R%d' % i, '--summary', 'item number %d' % i, '--scope', 'a/r%d.py' % i)
+            self.ok('add', 'R%d' % i, '--summary', 'item number %d' % i, '--scope', 'a/r%d.py' % i,
+                    *ADD_FLAGS)
             self.ok('set', 'R%d' % i, '--priority', '2', '--priority-by', 'agent')
         out = self.ok('next', '--all')
         self.assertIn('NEXT (7 offered, --all: no cap)', out)

@@ -19,6 +19,7 @@ from kitlib import gate as G
 from kitlib.config import load as load_config
 from kitlib.config.types import ConfigError
 from kitlib.dailyfull.treelock import TreeBusy, TreeLock, TreeLockError, describe, lock_name
+from kitlib.gate import detect
 from kitlib.gate import runner
 from kitlib.gate import steps as S
 from kitlib.git import cmd as gitcmd
@@ -130,8 +131,9 @@ def prepare(main, wt, ref, remote, git=git):
 def plan(cfg, wt, sha):
     """The steps a full run takes at `wt`: every non-manual gate step (and setup), each running
     its `daily_cmd` when it has one, else its `full_cmd`, else its `cmd` (kitlib.gate.steps
-    argv_of), each set to continue past a failure. GateConfigError passes through."""
-    gate = cfg.section('gate')
+    argv_of), each set to continue past a failure. With no "gate" section, the steps detected
+    in `wt` (kitlib.gate.detect). GateConfigError passes through."""
+    gate = detect.effective(cfg, wt).gate
     chosen, _ = S.select(gate, S.build(gate, wt, sha, cfg.tools_dir, full=True, daily=True), [],
                          full=True)
     return [s._replace(cont=True) for s in chosen]

@@ -27,10 +27,15 @@ class TemplateFilesTest(unittest.TestCase):
             for key in ("BUILD_COMMAND", "TEST_COMMAND", "FAST_TEST_COMMAND", "gitignore", "gitattributes"):
                 self.assertIn(key, stack, f"{s}: {key}")
 
-    def test_common_claude_md_keeps_its_placeholders(self):
-        text = (TEMPLATES / "common" / "CLAUDE.md").read_text(encoding="utf-8")
+    def test_common_agents_md_keeps_its_placeholders(self):
+        text = (TEMPLATES / "common" / "AGENTS.md").read_text(encoding="utf-8")
         for ph in ("<PROJECT_NAME>", "<BUILD_COMMAND>","<OWNER_EMAIL>"):
             self.assertIn(ph, text)
+
+    def test_common_claude_md_imports_agents_md(self):
+        """AGENTS.md is the one rules file; Claude Code reads it through CLAUDE.md's import."""
+        self.assertEqual((TEMPLATES / "common" / "CLAUDE.md").read_bytes(), b"@AGENTS.md\n")
+        self.assertIn("`AGENTS.md`, `CLAUDE.md`", (TEMPLATES / "common" / "AGENTS.md").read_text(encoding="utf-8"))
 
     def test_godot_template_ships_the_render_check_skill(self):
         self.assertTrue((TEMPLATES / "stacks" / "godot" / ".claude" / "skills" / "godot-render-check"
@@ -69,7 +74,7 @@ class ProfileTemplatesTest(unittest.TestCase):
         self.assertLessEqual(set(self.COORDINATOR), self.headings("coordinator-profile.TEMPLATE.md"))
 
     def test_agent_sections_are_named_by_the_agents(self):
-        agents = "".join(p.read_text(encoding="utf-8") for p in (ROOT / "claude" / "agents").glob("*.md"))
+        agents = "".join(p.read_text(encoding="utf-8") for p in (ROOT / "hosts" / "claude" / "shell" / "agents").glob("*.md"))
         for h in self.AGENT:
             if h == "Risk map":  # read by the dispatch brief (`doc_index --find risk`), not named in the agents
                 continue
@@ -77,7 +82,7 @@ class ProfileTemplatesTest(unittest.TestCase):
             self.assertIn(h.replace(" that must be serialised", ""), agents, h)
 
     def test_coordinator_points_at_the_shipped_templates(self):
-        text = (ROOT / "claude" / "agents" / "coordinator.md").read_text(encoding="utf-8")
+        text = (ROOT / "hosts" / "claude" / "shell" / "agents" / "coordinator.md").read_text(encoding="utf-8")
         for name in ("coordinator-profile.TEMPLATE.md", "agent-profile.TEMPLATE.md"):
             self.assertIn("templates/common/" + name, text)
             self.assertNotIn("~/.claude/" + name, text)

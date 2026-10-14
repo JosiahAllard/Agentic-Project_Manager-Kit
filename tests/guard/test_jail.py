@@ -9,14 +9,15 @@ import unittest
 from kitlib import config as kconfig
 from kitlib.git import repo
 from kitlib.guard import commands as cm
-from kitlib.guard import context, decide, rules
+from kitlib.guard import context, rules
 from kitlib.guard import shell as sh
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 
 from . import world as W
+from .claudehost import decide
 from .world import bash, event, ps
 
-P = CLAUDE_PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
+P = PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
 COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 OLD_MARK = {context.ROLE_ENV: 'conductor'}   # the old name of the coordinator's mark, still held
 PM = {context.ROLE_ENV: 'pm'}
@@ -32,10 +33,11 @@ class JailWorld(W.World):
         base_kit = {'repo': {'name': 'demo', 'push_block': True}}
         W.World.__init__(self, kit=base_kit)
         self.sib = os.path.join(self.main, '.claude', 'worktrees', 'sib')
+        self.foreign = os.path.join(self.main, '.claude', 'worktrees', 'foreign')   # another repository's
         self.add = os.path.join(self.base, 'data', 'add')
         self.ro = os.path.join(self.base, 'data', 'ro')
         self.open = os.path.join(self.base, 'data', 'open')
-        for d in (self.sib, self.add, self.ro, self.open):
+        for d in (self.sib, self.foreign, self.add, self.ro, self.open):
             os.makedirs(d)
         roots = data_roots if data_roots is not None else [
             {'path': self.add, 'mode': 'add-only'},
@@ -52,6 +54,9 @@ class JailWorld(W.World):
         if p.startswith(os.path.normcase(self.sib)):
             return repo.Place(repo.LINKED, self.sib, '', os.path.join(self.main, '.git', 'worktrees', 'sib'),
                               os.path.join(self.main, '.git'))
+        if p.startswith(os.path.normcase(self.foreign)):
+            other = os.path.join(self.base, 'other', '.git')
+            return repo.Place(repo.LINKED, self.foreign, '', os.path.join(other, 'worktrees', 'foreign'), other)
         return W.World.classify(self, path)
 
 
@@ -88,7 +93,7 @@ class Base(unittest.TestCase):
 
     def jailed(self, d, rule='write-jail'):
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual((d.kind, d.rule), ('deny', rule), d.reason)
+        self.assertEqual((d.verdict, d.rule), ('deny', rule), d.reason)
         return d
 
 
@@ -115,7 +120,7 @@ class Roots(Base):
         self.allowed(self.write(os.path.join(self.w.open, 'old.bin')))
 
     def test_sibling_worktree(self):
-        self.jailed(self.write(os.path.join(self.w.sib, 'a.py')))
+        self.allowed(self.write(os.path.join(self.w.sib, 'a.py')))
 
     def test_main_checkout_for_a_session_that_may_edit_one(self):
         # a coordinator may edit a main checkout, but from its worktree the main checkout is outside
@@ -180,6 +185,83 @@ class Cwd(Base):
 
     def test_the_home_folder_is_never_a_root(self):
         self.jailed(self.write(os.path.join(self.w.home, 'x.txt'), cwd=self.w.home))
+
+
+class Siblings(Base):
+    """A session in a linked worktree reaches the other linked worktrees of its repository under
+    the main checkout, as a session in the main checkout does (jail.sibling); nothing more."""
+
+    def test_a_subagent_and_a_coordinator_write_a_sibling(self):
+        self.allowed(self.write(os.path.join(self.w.sib, 'src', 'a.py')))
+        self.allowed(self.write(os.path.join(self.w.sib, 'a.py'), env=COORDINATOR, sub=False))
+        self.allowed(self.write(os.path.join(self.w.wt, 'a.py'), cwd=self.w.sib))
+
+    def test_git_in_a_sibling(self):
+        for text in ('git -C "%s" commit -m x' % W.fwd(self.w.sib), 'git -C "%s" add a.py' % W.fwd(self.w.sib),
+                     'cd "%s" && git commit -m x' % W.fwd(self.w.sib)):
+            with self.subTest(text):
+                self.allowed(self.run_bash(text))
+
+    def test_the_main_checkout_stays_outside(self):
+        self.jailed(self.write(os.path.join(self.w.main, 'README.md'), env=COORDINATOR, sub=False))
+        self.jailed(self.write(os.path.join(self.w.main, '.claude', 'worktrees', 'x.txt'), env=COORDINATOR, sub=False))
+        self.jailed(self.run_bash('git -C "%s" commit -m x' % W.fwd(self.w.main), env=COORDINATOR, sub=False))
+
+    def test_another_repositorys_worktree_stays_outside(self):
+        self.jailed(self.write(os.path.join(self.w.foreign, 'a.py')))
+        self.jailed(self.run_bash('git -C "%s" commit -m x' % W.fwd(self.w.foreign)))
+
+    def test_a_worktree_outside_the_main_checkout_stays_outside(self):
+        # base/pmdata is a linked worktree of the same repository, but not under the main checkout
+        self.jailed(self.write(os.path.join(self.w.data, 'a.md')))
+
+    def test_a_link_out_of_a_sibling_stays_outside(self):
+        try:
+            import _winapi
+            _winapi.CreateJunction(self.w.main, os.path.join(self.w.sib, 'to-main'))
+            _winapi.CreateJunction(self.w.plain, os.path.join(self.w.sib, 'to-plain'))
+        except (ImportError, AttributeError, OSError) as e:
+            self.skipTest('no junction: %s' % e)
+        self.jailed(self.write(os.path.join(self.w.sib, 'to-main', 'README.md'), env=COORDINATOR, sub=False))
+        self.jailed(self.write(os.path.join(self.w.sib, 'to-plain', 'x.txt')))
+
+    def test_a_session_outside_git_gets_no_sibling(self):
+        self.jailed(self.write(os.path.join(self.w.sib, 'a.py'), cwd=self.w.plain))
+
+    def test_git_worktree_add_and_clone_into_a_sibling(self):
+        for text in ('git worktree add "%s" -b x' % W.fwd(os.path.join(self.w.sib, 'nested')),
+                     'git clone https://example.invalid/r.git "%s"' % W.fwd(os.path.join(self.w.sib, 'r'))):
+            with self.subTest(text):
+                self.allowed(self.run_bash(text))
+        self.jailed(self.run_bash('git worktree add "%s" -b x' % W.fwd(os.path.join(self.w.foreign, 'nested'))))
+
+    def test_a_data_root_mode_inside_a_sibling_still_holds(self):
+        ro, add = os.path.join(self.w.sib, 'ro'), os.path.join(self.w.sib, 'add')
+        self.w.kit({'repo': {'name': 'demo', 'push_block': True},
+                    'guard': {'data_roots': [{'path': ro, 'mode': 'read-only'}, {'path': add, 'mode': 'add-only'}]}})
+        touch(os.path.join(add, 'old.md'))
+        self.jailed(self.write(os.path.join(ro, 'x.md')))
+        self.jailed(self.run_bash('git -C "%s" commit -m x' % W.fwd(ro)))
+        self.jailed(self.write(os.path.join(add, 'old.md')))
+        self.allowed(self.write(os.path.join(add, 'new.md')))
+        self.allowed(self.write(os.path.join(self.w.sib, 'a.py')))
+
+    def test_no_sibling_while_the_pm_data_worktree_cannot_be_told(self):
+        # a marked main session is not stopped by the pm-data rule, so sibling itself refuses
+        self.w.user_config({'pm_data': {'path': 'relative/pmdata'}})
+        self.jailed(self.write(os.path.join(self.w.sib, 'a.py'), env=COORDINATOR, sub=False))
+        self.allowed(self.write(os.path.join(self.w.wt, 'a.py'), env=COORDINATOR, sub=False))
+
+    def test_a_sibling_holding_a_machine_config_folder_stays_outside(self):
+        # the home folder is the sibling, so the machine config folder lies inside it
+        ev = event('Write', {'file_path': os.path.join(self.w.sib, 'a.py'), 'content': 'x'}, self.w.wt, True)
+        self.jailed(decide(ev, self.w.ctx(environ={}, home=self.w.sib)))
+        ev = event('Write', {'file_path': os.path.join(self.w.wt, 'a.py'), 'content': 'x'}, self.w.wt, True)
+        self.allowed(decide(ev, self.w.ctx(environ={}, home=self.w.sib)))
+
+    def test_the_message_still_names_the_own_worktree(self):
+        d = self.jailed(self.write(os.path.join(self.w.plain, 'x.txt')))
+        self.assertIn('Instead: Write(file_path="%s/x.txt")' % W.fwd(self.w.wt), d.reason)
 
 
 class Sessions(Base):
@@ -516,9 +598,9 @@ class ShellForms(Base):
                 self.jailed(self.run_ps(text))
 
     def test_git_dash_c(self):
-        for text in ('git -C "%s" commit -m x' % W.fwd(self.w.plain), 'git -C "%s" reset --keep HEAD~1' % W.fwd(self.w.sib),
-                     'git -C "%s" checkout -b x' % W.fwd(self.w.sib), 'git -C "%s" add a.py' % W.fwd(self.w.sib),
-                     'cd "%s" && git commit -m x' % W.fwd(self.w.sib)):
+        for text in ('git -C "%s" commit -m x' % W.fwd(self.w.plain), 'git -C "%s" reset --keep HEAD~1' % W.fwd(self.w.plain),
+                     'git -C "%s" checkout -b x' % W.fwd(self.w.plain), 'git -C "%s" add a.py' % W.fwd(self.w.plain),
+                     'cd "%s" && git commit -m x' % W.fwd(self.w.plain)):
             with self.subTest(text):
                 self.jailed(self.run_bash(text))
 
@@ -583,7 +665,7 @@ class MainGit(Base):
 
     def denied(self, d):
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual(d.kind, 'deny', d.reason)
+        self.assertEqual(d.verdict, 'deny', d.reason)
 
     def each_denied(self, texts, tool='Bash'):
         for text in texts:
@@ -777,12 +859,12 @@ class LanderMainCheckout(MainGit):
         self.jailed(self.git('echo x > "%s/out.txt"' % self.main))
 
     def test_a_lander_fetches_only_in_a_main_checkout(self):
-        self.jailed(self.git('git -C "%s" fetch origin main' % W.fwd(self.w.sib)))
-        self.jailed(self.git('git -C "%s" merge --ff-only origin/main' % W.fwd(self.w.sib)))
+        self.jailed(self.git('git -C "%s" fetch origin main' % W.fwd(self.w.foreign)))
+        self.jailed(self.git('git -C "%s" merge --ff-only origin/main' % W.fwd(self.w.foreign)))
 
     def test_no_other_role_may_fetch_or_merge_main(self):
         fetch, merge = 'git -C "%s" fetch origin main' % self.main, 'git -C "%s" merge --ff-only origin/main' % self.main
-        for agent_type in ('worker', 'opus-worker'):
+        for agent_type in ('worker', 'senior-worker'):
             with self.subTest(agent_type):
                 self.jailed(self.git(fetch, agent_type))
                 self.denied(self.git(merge, agent_type))
@@ -802,7 +884,7 @@ class LanderMainCheckout(MainGit):
         self.allowed(self.git(merge, P + 'lander'))
         self.allowed(self.git('& git -C "%s" fetch origin' % self.main, P + 'lander', tool='PowerShell'))
         self.jailed(self.git('git -C "%s" commit -m x' % self.main, P + 'lander'))
-        for kind in (P + 'worker', P + 'opus-worker', 'other:lander', P + P + 'lander', P.upper() + 'lander', P,
+        for kind in (P + 'worker', P + 'senior-worker', 'other:lander', P + P + 'lander', P.upper() + 'lander', P,
                      P + 'main', P.rstrip(':') + 'lander', 'x' + P + 'lander', P[1:] + 'lander'):
             with self.subTest(kind):
                 self.jailed(self.git(fetch, kind))
@@ -986,10 +1068,10 @@ class UnplacedGit(MainGit):
                     self.assertTrue(p.clean, text)
                     d = decide(event(tool, {'command': text, 'description': 'test'}, where, True, 'worker'),
                                self.w.ctx(environ={}))
-                    # in the main checkout the main-checkout rule cannot pin New-Item's computed
-                    # item (env: joined with $n) to the env: drive and refuses first
-                    main_item = where == self.w.main and 'New-Item' in text
-                    self.jailed(d, 'main-checkout' if main_item else 'write-jail')
+                    # the main-checkout rule cannot pin New-Item's item (env: on a line that is not
+                    # plain, joined with $n) to the env: drive and refuses first, from the main
+                    # checkout and from a worktree alike
+                    self.jailed(d, 'main-checkout' if 'New-Item' in text else 'write-jail')
             with self.subTest(text, role='main'):
                 self.allowed(decide(event(tool, {'command': text, 'description': 'test'}, self.w.wt),
                                     self.w.ctx(environ={})))
@@ -1226,15 +1308,24 @@ class UnplacedGit(MainGit):
             "$ExecutionContext.InvokeCommand.NewScriptBlock($s).Invoke(); %s" % g,
             "[scriptblock]::Create($s).Invoke(); %s" % g,
             "[System.Management.Automation.ScriptBlock]::Create($s).Invoke(); %s" % g,
-            # a name an env: item is renamed, copied or moved to may then hold env:
-            "Rename-Item env:FOO TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
-            "Rename-Item env:FOO -NewName TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
-            "Copy-Item env:FOO env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
-            "Move-Item env:FOO -Destination env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
             # = at the start of the value's word
             '$env:GIT_EXEC_PATH ="x"; %s' % g,
             '$env:BASH_ENV ="x"; %s' % g,
             '$env:GIT_DIR +="x"; %s' % g], tool='PowerShell')
+        # a name an env: item is renamed, copied or moved to may then hold env:. The line is not
+        # plain (Set-Item), so the env: item is judged as a path the guard cannot place: the
+        # main-checkout rule refuses a worker first, naming the provider item; the coordinator's
+        # mark meets the write jail
+        for text in ("Rename-Item env:FOO TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
+                     "Rename-Item env:FOO -NewName TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
+                     "Copy-Item env:FOO env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
+                     "Move-Item env:FOO -Destination env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g)):
+            with self.subTest(text):
+                self.assertTrue(cm.read(text, sh.PS, W.fwd(self.w.wt)).clean, text)
+                d = self.jailed(self.git(text, 'worker', tool='PowerShell'), 'main-checkout')
+                self.assertIn('PowerShell provider item (env:', d.reason)
+                for environ in (COORDINATOR, OLD_MARK):
+                    self.jailed(self.marked(text, environ, 'PowerShell'))
         for text in ('$env:FOO ="x"; %s' % g, "Rename-Item env:FOO BAR; Set-Content \"$env:TEMP\\x.txt\" hi; %s" % g):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))

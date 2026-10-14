@@ -7,7 +7,8 @@ landing's close (kitlib.backlog.at_landing, which closes what the landed branch 
 would never match the record and it would stay pulled. plan_pull refuses that pull and says how to
 make it: from the branch's worktree, or with `--as <branch>`.
 
-The rule lives here, wrapping plan.plan_pull, so tools/backlog.py's `pull` goes through it; it may
+The rule lives here, wrapping plan.plan_pull, so tools/backlog.py's `pull` goes through it (by
+opener.planner); it may
 move into plan.plan_pull itself later.
 """
 from . import plan as pmod

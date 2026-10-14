@@ -87,9 +87,10 @@ class PidHoldOptIn(unittest.TestCase):
             seen['hold'] = kw['hold']
             return 0, 'kit_tests: OK'
 
-        def call(cmd, cwd=None, env=None):
+        def call(cmd, cwd=None, env=None, **kw):
             order.append('units')
             seen['beacon'] = env.get('KIT_PID_HOLD')
+            seen['more'] = kw
             return 0
         here = os.path.abspath('.')
         with mock.patch.dict(os.environ, {}),                 mock.patch.object(cli.unit_runner, 'PidHoldRun', Hold),                 mock.patch.object(cli.gitrepo, 'toplevel', return_value=(here, None)),                 mock.patch.object(cli.gitrepo, 'common_dir', return_value=(None, 'no git')),                 mock.patch.object(cli.selftree, 'config', return_value={'serial': []}),                 mock.patch.object(cli.selftree, 'all_test_modules', return_value=['tests.a.test_m']),                 mock.patch.object(cli.selfrun, 'run', side_effect=run),                 mock.patch.object(cli.subprocess, 'call', side_effect=call):
@@ -104,6 +105,18 @@ class PidHoldOptIn(unittest.TestCase):
             self.assertNotIn('pid hold', out)
             if jobs == 2:
                 self.assertIsNone(seen['hold'])
+
+    def test_the_one_process_run_from_no_console_asks_for_no_window(self):
+        """kit_tests starts its one process through kitlib.proc.spawn.call, which adds a keyword
+        when kit_tests has no console (pythonw, a detached parent): the fakes here take it."""
+        from kitlib.proc import job, win32
+        with mock.patch.object(job, 'has_console', return_value=False):
+            rc, order, seen, out = self.run_full(1)
+        self.assertEqual((rc, order), (0, ['units']), out)
+        self.assertEqual(seen['more'], {'creationflags': win32.CREATE_NO_WINDOW})
+        with mock.patch.object(job, 'has_console', return_value=True):
+            rc, order, seen, out = self.run_full(1)
+        self.assertEqual((rc, seen['more']), (0, {}), out)
 
     def test_one_process_holds_before_its_unittest_and_reports_after(self):
         rc, order, seen, out = self.run_full(1, ['--pid-hold'])
@@ -131,7 +144,7 @@ class GitTierEnvironment(unittest.TestCase):
             seen['pooled'] = kw['environ'].get('KIT_FAKE_GIT')
             return 0, 'kit_tests: OK'
 
-        def call(cmd, cwd=None, env=None):
+        def call(cmd, cwd=None, env=None, **kw):
             seen['one'] = env.get('KIT_FAKE_GIT')
             return 0
         here = os.path.abspath('.')
@@ -175,7 +188,7 @@ class HomeFenceEnvironment(unittest.TestCase):
             seen['pooled'] = kw['environ'].get(self.MARK)
             return 0, 'kit_tests: OK'
 
-        def call(cmd, cwd=None, env=None):
+        def call(cmd, cwd=None, env=None, **kw):
             seen['one'] = env.get(self.MARK)
             return 0
 

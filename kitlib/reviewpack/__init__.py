@@ -53,6 +53,7 @@ import re
 import subprocess
 import sys
 
+from kitlib import kitroot
 from kitlib.config import ConfigError, load as load_config, load_at
 from kitlib.config import owner as ownermod
 from kitlib.git import cmd as gitcmd
@@ -60,6 +61,7 @@ from kitlib.git import refs as gitrefs
 from kitlib.git import repo as gitrepo
 from kitlib import verdict
 from kitlib.docs import callers as doc_callers
+from kitlib.proc import spawn
 
 from . import trailers
 
@@ -451,8 +453,8 @@ def docs_line(root, base, branch):
                 'measured'), False
     argv = [sys.executable, DOC_BUDGET, '-C', root, '--base', base, '--head', branch]
     try:
-        res = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
-                             errors='replace', timeout=DOC_BUDGET_TIMEOUT)
+        res = spawn.run(argv, capture_output=True, text=True, encoding='utf-8',
+                        errors='replace', timeout=DOC_BUDGET_TIMEOUT)
         rc, out = res.returncode, warnings_first((res.stdout or '') + (res.stderr or ''))
     except subprocess.TimeoutExpired:
         rc, out = 1, 'doc_budget.py did not finish in %d seconds' % DOC_BUDGET_TIMEOUT
@@ -472,8 +474,8 @@ def index_line(root, base, branch, base_cfg):
         return doc_callers.not_checked(), False
     argv = [sys.executable, DOC_INDEX, '-C', root, '--head', branch, '--config-ref', base]
     try:
-        res = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
-                             errors='replace', timeout=doc_callers.TIMEOUT)
+        res = spawn.run(argv, capture_output=True, text=True, encoding='utf-8',
+                        errors='replace', timeout=doc_callers.TIMEOUT)
         rc, out = res.returncode, (res.stdout or '') + (res.stderr or '')
     except subprocess.TimeoutExpired:
         rc, out = 1, 'doc_index.py did not finish in %d seconds' % doc_callers.TIMEOUT
@@ -571,5 +573,5 @@ def _pack(lines, path, branch, base, diff):
     index, index_failed = index_line(top, base, branch, base_cfg)
     if index:
         lines.append(index)
-    lines.append('next     python tools/review_pack.py %s --diff <path>' % branch)
+    lines.append('next     %s %s --diff <path>' % (kitroot.command('review_pack', top), branch))
     return Outcome(FAILED if (bad or docs_failed or index_failed or co_failing) else OK, lines)

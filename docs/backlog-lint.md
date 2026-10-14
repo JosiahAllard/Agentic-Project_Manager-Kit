@@ -18,7 +18,7 @@ Exit 0 clean, 1 findings, 2 config, read or `--next-output` error. One line per 
 
 A record with an `offer` line gets no separate `session` or `hold` line: the offer line carries all its reasons.
 
-Each fix runs as printed once the placeholders are filled in. `backlog_cmd` defaults to `python tools/backlog.py -C <worktree>`: a repository's `tools/backlog.py` may refuse every write verb in its main checkout, and `-C <worktree>` hands the write to that worktree's own copy (its `--help`, `-C <worktree>`). `<worktree>` is a worktree of that repository, filled in by the reader.
+Each fix runs as printed once the placeholders are filled in. `backlog_cmd` defaults to `python "<kit>/tools/backlog.py" -C <worktree>`, with the kit's absolute path (a repository holds no copy of the kit's tools): `backlog.py` may refuse every write verb in its main checkout, and `-C <worktree>` hands the write to that worktree's own copy (its `--help`, `-C <worktree>`). `<worktree>` is a worktree of that repository, filled in by the reader.
 
 The exact offer comes from `--next-output FILE`, a saved printout of the store's own `next` (its `rank N  priority P  ID` lines; needs one `--repo`). The file may be UTF-8 (with or without BOM) or UTF-16 with a BOM, which is what Windows PowerShell 5.1's `>` writes. A file with no such line and no `NOTHING CAN BE PULLED` is an error (exit 2), not an empty offer. Without `--next-output` the offer is approximate: pullable records the session owns (open, priority 1-5, no blocker) in rank order (pre-empted, pinned, priority, effort, id), first `--cap`. That ignores scope collisions and branch claims; on one real store it put three records already closed on unlanded branches at the top, so prefer `--next-output`.
 
@@ -36,7 +36,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `backlog_lint`.
 
 - `repos.<name>.root` (path, required): the repository folder.
 - `repos.<name>.store` (optional): a folder to read instead of the repo's own store; absent, the store the repo's `.kit.json` names (above), so the lint has no default of its own. `ref` (default `.kit.json` `repo.main_branch`, else main or master): the branch a folder store is read on. A `.kit.json` the store cannot load, or a store not in the clone, is a read error, exit 2.
-- `repos.<name>.backlog_cmd` (optional): how a printed fix starts; default `python tools/backlog.py -C <worktree>`.
+- `repos.<name>.backlog_cmd` (optional): how a printed fix starts; default `python "<kit>/tools/backlog.py" -C <worktree>` (the kit's absolute path).
 - `repos.<name>.rules` (list, first match wins per kind): each has exactly one of `session` (a session name) or `hold` (`owner` or `live-client`), an optional `name`, and at least one selector:
   - `ids`: fnmatch patterns on the record id (`EX-SIM-*`);
   - `paths`: prefixes; matches when every `scope:` member starts with one of them (`artifacts/models/`), so a record that also touches other areas is not claimed;

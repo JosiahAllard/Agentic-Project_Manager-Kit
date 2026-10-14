@@ -8,11 +8,12 @@ import unittest
 
 from kitlib import coordinatorstart
 from kitlib.config import user as kuser
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 
-HOOK = os.path.join(os.path.dirname(__file__), "..", "..", "claude", "hooks", "coordinator_session_start.py")
+# the coordinator rules hook as the plugin's hooks.json runs it (boot/hook.py, its coordinator part)
+HOOK = [os.path.join(os.path.dirname(__file__), "..", "..", "boot", "hook.py"), "claude", "SessionStart", "coordinator"]
 COND = {"PM_KIT_ROLE": "coordinator"}
-P = CLAUDE_PLUGIN_NAME + ":"          # the kit plugin's agent prefix (kitlib.agentname.PREFIX)
+P = PLUGIN_NAME + ":"          # the kit plugin's agent prefix (kitlib.agentname.PREFIX)
 
 
 def write(path, text):
@@ -43,21 +44,43 @@ class RenderTest(unittest.TestCase):
             out = coordinatorstart.render(env=COND, path=p, live=False)
         self.assertEqual(out, "Coordinator session start:\n- one\n- two")
 
-    def test_pricing_pass_line_names_the_needs_priority_listing(self):
+    def test_pricing_line_prices_at_start_and_leaves_follow_ups_unpriced(self):
         with tempfile.TemporaryDirectory() as d:
             p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": {"pricing_pass": True}}))
             out = coordinatorstart.render(env=COND, path=p, live=False)
+        self.assertEqual(len(out.splitlines()), 2, out)   # the heading and one line
         line = out.splitlines()[1]
-        self.assertTrue(line.startswith("- Pricing pass and backlog audit"), line)
-        for want in ("python tools/backlog.py list --needs-priority", "--priority-by agent",
+        self.assertTrue(line.startswith("- Pricing pass and backlog audit before your first dispatch, "
+                                        "follow-up records excepted"), line)
+        for want in ("python <kit>/tools/backlog.py -C <repo> list --needs-priority",
+                     "A follow-up record (filed from a finding on a branch, a review or a worker's report; "
+                     "a new one says so in its summary) stays unpriced until you or the PM promote it",
+                     "Check every other unpriced open record (an owner story, a record from the PM's brief) "
+                     "for duplicates, size and fit",
+                     "--priority-by agent",
+                     "Promote a follow-up at any time it enters a work set", "price before pull",
+                     "When `next --all` lists fewer startable records than the set needs",
+                     "price only those going into this set; never a sweep",
+                     "`next` never offers an unpriced record",
+                     "under `unprioritised+open`, not under `held` (`held` = blocked)",
                      "goes to the PM", "never ask him directly"):
             self.assertIn(want, line)
+        # Withdrawn wording: no pass at all, unpriced called held, the capped-offer and duplicate triggers.
+        for gone in ("No start-up pricing pass", "is held", "stay held", "held is not waiting",
+                     "`next` offers fewer items", "duplicates or replaces a priced one", "each unpriced"):
+            self.assertNotIn(gone, line)
+        # "held" only where it is true: the banner's group, twice, and "owner-held".
+        self.assertEqual(line.count("held"), 3, line)
+        self.assertEqual(line.count("`held`"), 2, line)
+        self.assertEqual(line.count("owner-held"), 1, line)
 
-    def test_pricing_pass_line_is_off_unless_the_config_switches_it_on(self):
+    def test_pricing_line_is_off_unless_the_config_switches_it_on(self):
         with tempfile.TemporaryDirectory() as d:
             for cfg in ({"standing": ["x"]}, {"pricing_pass": False}, {"pricing_pass": "yes"}):
                 p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": cfg}))
-                self.assertNotIn("Pricing pass", coordinatorstart.render(env=COND, path=p, live=False))
+                out = coordinatorstart.render(env=COND, path=p, live=False)
+                self.assertNotIn(coordinatorstart.PRICING_LINE, out)
+                self.assertNotIn("pricing pass", out.lower())
 
     def test_missing_key_or_file_skipped(self):
         with tempfile.TemporaryDirectory() as d:
@@ -395,7 +418,7 @@ class HookTest(unittest.TestCase):
             env.update(USERPROFILE=d, HOME=d)
             if role:
                 env["PM_KIT_ROLE"] = role
-            return subprocess.run([sys.executable, HOOK], capture_output=True, text=True, env=env, timeout=30,
+            return subprocess.run([sys.executable] + HOOK, capture_output=True, text=True, env=env, timeout=30,
                                   input=json.dumps({"cwd": "D:/src/elsewhere"}))
 
     def test_role_unset_silent_exit_0(self):

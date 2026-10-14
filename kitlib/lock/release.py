@@ -42,7 +42,13 @@ LOCK_PATHS = ("tools/machine_lock.py", "kitlib/__init__.py", "kitlib/lock/", "ki
               "kitlib/config/", "kitlib/git/",
               # kitlib/config/policy.py reads agent names through kitlib.agentname, whose prefix
               # is the plugin name in kitlib/lockmcp/__init__.py
-              "kitlib/agentname.py", "kitlib/lockmcp/__init__.py")
+              "kitlib/agentname.py", "kitlib/lockmcp/__init__.py",
+              # the agent process images and session variable come from the host registry
+              "kitlib/host/", "hosts.json",
+              # kitlib/config/policy.py takes names_of (a role's old and new names) from
+              # kitlib/content/__init__.py, whose render function imports kitlib/roster/__init__.py
+              # (never run by the lock tool; listed because the import walk counts it)
+              "kitlib/content/__init__.py", "kitlib/roster/__init__.py")
 
 MISSING = "store folder (missing)"
 
@@ -119,7 +125,7 @@ def live_runs(store, alive=None, mine=None):
     in mine ({(pid, ctime)}). Writes nothing."""
     alive = alive or process.alive
     mine = mine or set()
-    if not os.path.isdir(store.root):
+    if not os.path.isdir(store.path()):
         return [MISSING], [], []
     live, gone, own = [], [], []
 

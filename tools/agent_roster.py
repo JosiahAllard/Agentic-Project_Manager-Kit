@@ -1,18 +1,24 @@
-"""agent_roster.py: docs/ROSTER.md against the agent files' model and effort frontmatter.
+"""agent_roster.py: docs/ROSTER.md's rendered tables against content/roles and every host's tier map.
 
-  agent_roster.py [--check]     list every mismatch; exit 1 if any (the default)
-  agent_roster.py --write       rewrite only the differing `model:` / `effort:` lines of agent files
+  agent_roster.py [--check]     say whether docs/ROSTER.md is what the render makes; exit 1 if not (the default)
+  agent_roster.py --write       rewrite only docs/ROSTER.md's rendered tables
+  -C ROOT                       the kit checkout (default: this script's)
 
-A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.roster, prints and exits.
-Exit codes: 0 agree / written, 1 mismatch, 2 USAGE or an unreadable roster.
+The role files are the roster (docs/ROSTER.md): a role's tier and effort are set in its file, and
+render_content.py renders ROSTER.md with every host's files. This tool checks or writes ROSTER.md
+alone. A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.content, prints and
+exits. Exit codes: 0 agree / written, 1 differs, 2 USAGE or a content file of the wrong shape.
 """
 import argparse
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, KIT)
 
-from kitlib import roster                                           # noqa: E402
+import render_content                                               # noqa: E402
+from kitlib import content                                          # noqa: E402
+from kitlib.host.content import ContentError                        # noqa: E402
 
 USAGE = 2
 
@@ -27,32 +33,33 @@ class Parser(argparse.ArgumentParser):
 
 
 def build_parser():
-    p = Parser(prog='agent_roster.py', description='docs/ROSTER.md against agent frontmatter.')
+    p = Parser(prog='agent_roster.py', description="docs/ROSTER.md's tables against content/roles and host tier maps.")
     g = p.add_mutually_exclusive_group()
     g.add_argument('--check', action='store_true', help='the default')
     g.add_argument('--write', action='store_true')
-    p.add_argument('--dir', default=None, help='the agents folder (default: this kit\'s claude/agents/)')
+    p.add_argument('-C', dest='root', default=KIT, help="the kit checkout (default: this script's)")
     return p
 
 
 def main(argv=None, out=None):
     out = sys.stdout if out is None else out
     a = build_parser().parse_args(argv)
-    agents = a.dir or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'claude', 'agents')
+    root = os.path.abspath(a.root)
     try:
+        tiers = render_content.tier_maps()
         if a.write:
-            names = roster.write(agents)
-            for n in names:
-                out.write('wrote %s\n' % n)
-            out.write('%d agent file(s) changed\n' % len(names))
+            paths = content.write(root, [], tiers=tiers)        # no host renderer: ROSTER.md alone
+            for p in paths:
+                out.write('wrote %s\n' % p)
+            out.write('%d file(s) changed\n' % len(paths))
             return 0
-        lines = roster.check(agents)
-    except roster.RosterError as e:
+        changed, _ = content.diff(root, [], tiers=tiers)
+    except (ContentError, OSError) as e:
         out.write('agent_roster: %s\n' % e)
         return USAGE
-    for line in lines:
-        out.write(line + '\n')
-    return 1 if lines else 0
+    for p in sorted(changed):
+        out.write('differs: %s; run python tools/render_content.py --write\n' % p)
+    return 1 if changed else 0
 
 
 if __name__ == '__main__':

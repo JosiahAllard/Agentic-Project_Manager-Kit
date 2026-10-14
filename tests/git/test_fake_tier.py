@@ -6,12 +6,14 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
 
+from kitlib.config import user as kuser
 from kitlib.git import batch, cmd
-from tests import gitfixture
+from tests import gitfixture, home
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -145,6 +147,64 @@ class FakeFailsLoudly(unittest.TestCase):
         with self.assertRaises(fake.Unsupported) as cm:
             cmd.call(['rev-parse', '--verify', '--quiet', 'refs/backlog/x^{commit}'], self.r.root)
         self.assertIn('a broken ref (refs/backlog/x)', str(cm.exception))
+
+
+class FakeRefusesWhatWorktreeConfigLeavesUnmodelled(unittest.TestCase):
+    """extensions.worktreeConfig: the keys and commands where real git would act on a
+    config.worktree in ways the fake does not model end the test as Unsupported."""
+
+    def setUp(self):
+        if not cmd.fake_active():
+            self.skipTest('the run is on real git (kit_tests.py --real-git)')
+        self.r = gitfixture.TempRepo()
+        self.addCleanup(self.r.cleanup)
+        self.wt = self.r.worktree('wtc')
+        self.r.git('config', 'extensions.worktreeConfig', 'true')
+        self.linked_cfg = os.path.join(self.r.common_dir(), 'worktrees', 'wtc', 'config.worktree')
+        self.assertTrue(os.path.isdir(os.path.dirname(self.linked_cfg)))
+
+    def _write_linked_cfg(self, text):
+        with open(self.linked_cfg, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
+
+    def _assert_unsupported(self, argv, cwd, words):
+        from kitlib.git import fake
+        with self.assertRaises(fake.Unsupported) as cm:
+            self.r.git(*argv, cwd=cwd, check=False)
+        self.assertIn(words, str(cm.exception))
+
+    def test_the_linked_worktree_answers_while_its_file_sets_neither_key(self):
+        # the control: the refusals below come from the key, not from the file being there
+        self._write_linked_cfg('[kit]\n\tscope = linked\n')
+        self.assertEqual(self.r.git('config', '--get', 'kit.scope', cwd=self.wt), 'linked')
+
+    def test_core_worktree_in_config_worktree_raises_unsupported(self):
+        self._write_linked_cfg('[core]\n\tworktree = %s\n' % self.wt.replace('\\', '/'))
+        self._assert_unsupported(['status', '--porcelain=v1'], self.wt, 'core.worktree in config.worktree')
+
+    def test_core_bare_in_config_worktree_raises_unsupported(self):
+        self._write_linked_cfg('[core]\n\tbare = false\n')
+        self._assert_unsupported(['status', '--porcelain=v1'], self.wt, 'core.bare in config.worktree')
+
+    def test_core_bare_true_in_the_common_config_raises_unsupported_in_a_linked_worktree(self):
+        self.r.git('config', 'extensions.worktreeConfig', 'false')
+        self.r.git('config', 'core.bare', 'true')
+        self._assert_unsupported(['status', '--porcelain=v1'], self.wt, 'core.bare true in the repository config')
+
+    def test_worktree_add_copying_a_config_worktree_raises_unsupported(self):
+        main_cfg = os.path.join(self.r.common_dir(), 'config.worktree')
+        with open(main_cfg, 'w', encoding='utf-8', newline='\n') as f:
+            f.write('[kit]\n\tscope = main\n')
+        dest = os.path.join(self.r.root, '.claude', 'worktrees', 'wtc2')
+        self._assert_unsupported(['worktree', 'add', '-q', dest, '-b', 'kit/wtc2'], self.r.root,
+                                 'worktree add copying config.worktree')
+        self.assertFalse(os.path.exists(dest))
+
+    def test_config_show_origin_and_show_scope_raise_unsupported(self):
+        for flag in ('--show-origin', '--show-scope'):
+            with self.subTest(flag=flag):
+                self._assert_unsupported(['config', flag, '--get', 'core.bare'], self.r.root,
+                                         'git config %s' % flag)
 
 
 class FakePushIsACompareAndSwap(unittest.TestCase):
@@ -453,6 +513,100 @@ class FakeUnreadableObjects(unittest.TestCase):
         repo, _ = frepo.discover(self.r.root, dict(os.environ), [], None)
         self.assertEqual(revs.tree_entries(repo, empty), [])
         self.assertEqual(revs.flatten_tree(repo, empty), {})
+
+
+class FakeHomeFence(unittest.TestCase):
+    """The fake's own home lookups go through kitlib.config.user.home_dir() (docs/test-tools.md
+    "Home fence"): the global config, the default ignore and attributes files, and a `~` in
+    core.excludesfile and core.attributesfile. A home the environment names is used as given, for
+    the `~` too."""
+
+    # No system config, and a global config that is no file: neither needs a home.
+    BARE = {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull}
+
+    def setUp(self):
+        if not cmd.fake_active():
+            self.skipTest('the run is on real git (kit_tests.py --real-git)')
+        self.r = gitfixture.TempRepo()
+        self.addCleanup(self.r.cleanup)
+
+    def repo(self, env, cli_config=()):
+        from kitlib.git.fake import repo as frepo
+        repo, _ = frepo.discover(self.r.root, dict(env), list(cli_config), None)
+        return repo
+
+    def other_home(self):
+        d = tempfile.mkdtemp(prefix='kit-env-home-')
+        self.addCleanup(gitfixture.rmtree, d)
+        return d
+
+    def test_global_config_of_an_env_without_a_home_is_fenced(self):
+        from kitlib.git.fake import config as fconfig
+        home.fence_decoy(self)
+        with self.assertRaises(kuser.HomeFenced):
+            fconfig.global_files({})
+
+    def test_global_config_of_an_env_with_a_home_is_under_it(self):
+        # A guard, green before the change too: the fence must not refuse a home the env names.
+        from kitlib.git.fake import config as fconfig
+        home.fence_decoy(self)
+        d = self.other_home()
+        self.assertEqual(fconfig.global_files({'USERPROFILE': d}),
+                         [os.path.join(d, '.config', 'git', 'config'), os.path.join(d, '.gitconfig')])
+
+    def test_default_ignore_file_of_an_env_without_a_home_is_fenced(self):
+        from kitlib.git.fake import ignore
+        home.fence_decoy(self)
+        repo = self.repo(self.BARE)
+        with self.assertRaises(kuser.HomeFenced):
+            ignore.Ignore(repo)
+
+    def test_tilde_in_excludesfile_is_the_env_home(self):
+        from kitlib.git.fake import ignore
+        home.temp_home(self)                 # the process's home: empty, no rules file
+        d = self.other_home()
+        with open(os.path.join(d, 'rules'), 'w') as f:
+            f.write('*.skip\n')
+        repo = self.repo(dict(self.BARE, HOME=d, USERPROFILE=d), [('core.excludesfile', '~/rules')])
+        self.assertTrue(ignore.Ignore(repo).is_ignored('a.skip'))
+
+    def test_absolute_excludesfile_looks_up_no_home(self):
+        # A guard, green before the change too.
+        from kitlib.git.fake import ignore
+        home.fence_decoy(self)
+        d = self.other_home()
+        rules = os.path.join(d, 'rules')
+        with open(rules, 'w') as f:
+            f.write('*.skip\n')
+        repo = self.repo(self.BARE, [('core.excludesfile', rules)])
+        self.assertTrue(ignore.Ignore(repo).is_ignored('a.skip'))
+
+    def test_excludesfile_naming_a_users_home_is_unsupported(self):
+        from kitlib.git.fake import ignore
+        from kitlib.git.fake.errors import Unsupported
+        d = home.temp_home(self)
+        repo = self.repo(dict(self.BARE, HOME=d, USERPROFILE=d), [('core.excludesfile', '~someone/rules')])
+        with self.assertRaises(Unsupported):
+            ignore.Ignore(repo)
+
+    def test_default_attributes_file_of_an_env_without_a_home_is_fenced(self):
+        from kitlib.git.fake import wt
+        home.fence_decoy(self)
+        repo = self.repo(self.BARE)
+        with self.assertRaises(kuser.HomeFenced):
+            wt.Convert(repo).guard()
+
+    def test_tilde_in_attributesfile_is_the_env_home(self):
+        from kitlib.git.fake import wt
+        from kitlib.git.fake.errors import Unsupported
+        home.temp_home(self)                 # the process's home: empty, no attributes file
+        d = self.other_home()
+        with open(os.path.join(d, 'attrs'), 'w') as f:
+            f.write('* text\n')
+        repo = self.repo(dict(self.BARE, HOME=d, USERPROFILE=d), [('core.attributesfile', '~/attrs')])
+        with self.assertRaises(Unsupported) as c:
+            wt.Convert(repo).guard()
+        self.assertIn(d.replace('\\', '/'), str(c.exception))
 
 
 if __name__ == '__main__':

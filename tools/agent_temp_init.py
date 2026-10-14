@@ -7,8 +7,10 @@
   options: --kit DIR (default: the checkout this file is in)   --home DIR (default: the user's home)
            --agent-temp DIR (default: the machine config's agent_temp_sweep.dir, then the user
                              environment's AGENT_TEMP, then AgentTemp at the root of the kit's drive)
-           --register-sweep-task  with --apply, register the agent-temp-sweep scheduled task (the
-                             owner's act; without it the plan prints the line that registers it)
+           --no-sweep-task   do not register the agent-temp-sweep scheduled task (by default
+                             --apply registers it, after one dry run of the sweep printing what it
+                             would remove; with the flag the plan prints the line that registers it)
+           --register-sweep-task  the default now; still accepted
 
 The same steps machine_setup.py runs for the folder (kitlib.machinesetup.run_agent_temp), and
 nothing else: no links, settings, plugin, shortcut or KIT_MACHINE_LOCK. A thin entry point
@@ -31,16 +33,22 @@ def main(argv=None):
     p.add_argument('--kit', default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     p.add_argument('--home', default=os.path.expanduser('~'))
     p.add_argument('--agent-temp', default=None)
+    p.add_argument('--no-sweep-task', action='store_true',
+                   help="do not register the agents' temp sweep task (registered by default)")
     p.add_argument('--register-sweep-task', action='store_true',
-                   help="register the agents' temp sweep task (the owner's act)")
+                   help='the default; still accepted')
     p.add_argument('--apply', action='store_true')
     try:
         a = p.parse_args(argv)
     except SystemExit as e:
         return machinesetup.EXIT_USAGE if e.code else 0
+    if a.no_sweep_task and a.register_sweep_task:
+        print('agent-temp-init: usage - give --no-sweep-task or --register-sweep-task, not both',
+              file=sys.stderr)
+        return machinesetup.EXIT_USAGE
     safe_stdout()
     ctx = machinesetup.AgentTempContext(a.home, a.kit, agent_temp=a.agent_temp,
-                                        register_sweep_task=a.register_sweep_task)
+                                        sweep_task=not a.no_sweep_task)
     code, _ = machinesetup.run_agent_temp(ctx, apply=a.apply, out=lambda line: print(line, flush=True))
     return code
 

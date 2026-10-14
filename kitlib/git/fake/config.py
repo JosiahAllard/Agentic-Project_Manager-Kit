@@ -3,8 +3,9 @@
 Layers, lowest first: system (unless GIT_CONFIG_NOSYSTEM; GIT_CONFIG_SYSTEM or Git for Windows'
 <prefix>/etc/gitconfig, after %PROGRAMDATA%/Git/config), global (GIT_CONFIG_GLOBAL, else
 $XDG_CONFIG_HOME/git/config or ~/.config/git/config, then ~/.gitconfig), the repository's config,
-GIT_CONFIG_COUNT/KEY_n/VALUE_n, then `-c`. An include, includeIf or worktree config is
-Unsupported. Editing keeps every other line as written, as git does: a new key goes after the
+this worktree's config.worktree when the repository config sets extensions.worktreeConfig
+(kitlib.git.fake.repo.Repo.config), GIT_CONFIG_COUNT/KEY_n/VALUE_n, then `-c`. An include or
+includeIf is Unsupported, and so is writing config.worktree (`git config --worktree`). Editing keeps every other line as written, as git does: a new key goes after the
 last key of the last matching section, a removed key that empties its section takes the header
 with it, and a value is quoted and escaped as git writes it.
 """
@@ -308,10 +309,35 @@ def system_files(env):
     return out
 
 
+def home_of(env):
+    """The home folder of a git run with the environment `env`: its HOME, else its USERPROFILE,
+    else the process's own through kitlib.config.user.home_dir(), which raises HomeFenced under
+    the kit's tests when that is a real home (docs/test-tools.md "Home fence"). A home the
+    environment names is taken as given. The import is here, not at the top: kitlib.config
+    imports kitlib.git."""
+    home = env.get('HOME') or env.get('USERPROFILE')
+    if home:
+        return home
+    from kitlib.config import user
+    return user.home_dir()
+
+
+def expand_user(path, env, key):
+    """The config value `path` of `key` with a leading `~` read as home_of(env): `~`, `~/x` and
+    `~\\x`, joined as os.path.expanduser joins them. Any other path is returned unchanged, and no
+    home is looked up for it. `~name` (another user's home) is Unsupported: the fake knows no
+    users."""
+    if not path.startswith('~'):
+        return path
+    if len(path) > 1 and path[1] not in '/\\':
+        raise Unsupported('%s naming a user\'s home (%s)' % (key, path))
+    return home_of(env) + path[1:]
+
+
 def global_files(env):
     if env.get('GIT_CONFIG_GLOBAL') is not None:
         return [env['GIT_CONFIG_GLOBAL']]
-    home = env.get('HOME') or env.get('USERPROFILE') or os.path.expanduser('~')
+    home = home_of(env)
     xdg = env.get('XDG_CONFIG_HOME')
     first = os.path.join(xdg, 'git', 'config') if xdg else os.path.join(home, '.config', 'git', 'config')
     return [first, os.path.join(home, '.gitconfig')]

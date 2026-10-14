@@ -5,7 +5,7 @@ ps_provider_item). A real file write, a drive-letter path, a relative path, a co
 and a line that may remap a drive are judged as before."""
 import unittest
 
-from kitlib.guard import decide
+from .claudehost import decide
 
 from . import world as W
 from .world import ps

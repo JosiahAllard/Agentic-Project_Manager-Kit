@@ -7,7 +7,7 @@ from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Usage
 
 from tests.backlog import test_cli, test_verbs
-from tests.backlog.helpers import StoreCase, TODAY, rec
+from tests.backlog.helpers import ADD_FLAGS, StoreCase, TODAY, rec
 
 WHY = 'waiting for the live client to ship its next build'
 
@@ -75,7 +75,8 @@ class BlockReasonCli(unittest.TestCase):
     ok = test_cli.Cli.ok
 
     def test_show_prints_the_reason(self):
-        self.ok('add', 'FOO', '--summary', 'a thing to hold for now', '--scope', 'a/foo.py')
+        self.ok('add', 'FOO', '--summary', 'a thing to hold for now', '--scope', 'a/foo.py',
+                *ADD_FLAGS)
         self.ok('block', 'FOO', '--on', 'live-client', '--reason', WHY)
         self.assertIn('Blocked on live-client (', self.ok('show', 'FOO'))
         self.assertIn(WHY, self.ok('show', 'FOO'))

@@ -11,10 +11,11 @@ import unittest
 from kitlib import lockmcp as lockmcp_names, pmdata
 from kitlib.config import user as kuser
 from kitlib.git import repo
-from kitlib.guard import context, decide, rules
+from kitlib.guard import context, rules
 from kitlib.lockmcp import server as lockmcp
 
 from . import world as W
+from .claudehost import MCP_PREFIX, decide
 from .extra_rows import ROWS as EXTRA_ROWS
 from .review_rows import ROWS as REVIEW_ROWS
 from .shell_rows import LOCK, ROWS as SHELL_ROWS
@@ -128,9 +129,9 @@ ROWS = [
 
     # ---------------------------------------------------------------- push to main (push_block on)
     ('push main with no record', lambda w: bash('git push origin main', w.main), 'deny', 'git-push-main',
-     'python tools/land.py <branch> --expect-main %s --expect-tip <branch tip sha>' % W.SHA_REMOTE_MAIN),
+     'python "{kit}/tools/land.py" -C "{main}" <branch> --expect-main %s --expect-tip <branch tip sha>' % W.SHA_REMOTE_MAIN),
     ('push HEAD:main from a worktree', lambda w: bash('git push origin HEAD:main', w.wt), 'deny', 'git-push-main',
-     'python tools/land.py kit/wt --expect-main %s --expect-tip %s' % (W.SHA_REMOTE_MAIN, W.SHA_WT)),
+     'python "{kit}/tools/land.py" -C "{main}" kit/wt --expect-main %s --expect-tip %s' % (W.SHA_REMOTE_MAIN, W.SHA_WT)),
     ('push a gated commit to main', lambda w: bash('git push origin gated:main', w.wt), None, None, None),
     ('push --no-verify to main', lambda w: bash('git push --no-verify origin gated:main', w.wt), 'deny', 'git-push-main', None),
     ('force push to main', lambda w: bash('git push origin +gated:main', w.wt), 'deny', 'git-push-main', None),
@@ -203,7 +204,7 @@ class RuleTable(unittest.TestCase):
     def fill(self, text):
         w = self.w
         return text.format(main=W.fwd(w.main), wt=W.fwd(w.wt), temp=W.fwd(w.temp), home=W.fwd(w.home),
-                           main_bs=w.main)
+                           kit=W.fwd(w.kit_dir), main_bs=w.main)
 
     def test_rows(self):
         names = [r[0] for r in ROWS]
@@ -216,7 +217,7 @@ class RuleTable(unittest.TestCase):
                     self.assertIsNone(d, d and d.reason)
                     continue
                 self.assertIsNotNone(d, 'allowed')
-                self.assertEqual((d.kind, d.rule), (kind, rule), d.reason)
+                self.assertEqual((d.verdict, d.rule), (kind, rule), d.reason)
                 role = 'subagent' if ev.get('agent_id') else 'main'
                 self.assertTrue(d.reason.endswith(rules.tag(rule, role)), d.reason)
                 self.assertIn(' Instead: ', d.reason)
@@ -257,7 +258,7 @@ class Ledger(unittest.TestCase):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
         os.makedirs(os.path.dirname(self.w.ledger))
-        self.alt = ('python tools/ledger.py add --repo <repo> --prov <prov> '
+        self.alt = ('python "%s/tools/ledger.py" add --repo <repo> --prov <prov> ' % W.fwd(self.w.kit_dir) +
                     '--q "<question>" --a "<answer>" --decides "<what it decides>" --source "<source>" ')
 
     def check(self, ev, rule='ledger'):
@@ -479,7 +480,7 @@ class PmDataPlace(unittest.TestCase):
 
     def test_every_ref_push_from_pm_data_is_judged_by_the_kit(self):
         self.configure()
-        cases = (('git push --mirror origin', 'no gate-OK record'),
+        cases = (('git push --mirror origin', 'rewrites main'),         # --mirror forces every ref
                  ('git push --all origin', 'no gate-OK record'),
                  ('git push --delete origin main', 'main is never deleted'),
                  ('git push origin :main', 'main is never deleted'),
@@ -570,7 +571,7 @@ class LockMcp(unittest.TestCase):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
 
-    def ev(self, name, sub=False, prefix=rules.MCP_PREFIX):
+    def ev(self, name, sub=False, prefix=MCP_PREFIX):
         return event(prefix + name, {'id': 'h-1'}, self.w.wt, sub=sub)
 
     def test_owner_only_tools(self):
@@ -578,12 +579,12 @@ class LockMcp(unittest.TestCase):
         for name in lockmcp.OWNER_ONLY:
             with self.subTest(name):
                 d = decide(self.ev(name, sub=True), self.w.ctx())
-                self.assertEqual((d.kind, d.rule), ('deny', 'lock-mcp'))
+                self.assertEqual((d.verdict, d.rule), ('deny', 'lock-mcp'))
                 self.assertIn('This session is subagent.', d.reason)
                 d = decide(self.ev(name), self.w.ctx(environ={context.ROLE_ENV: 'coordinator'}))
-                self.assertEqual(d.kind, 'deny')
+                self.assertEqual(d.verdict, 'deny')
                 self.assertIn('This session is coordinator.', d.reason)
-                self.assertIn('Instead: python %s/.claude/tools/machine_lock/machine_lock.py status ' % W.fwd(self.w.home), d.reason)
+                self.assertIn('Instead: python "%s/tools/machine_lock.py" status ' % W.fwd(self.w.kit_dir), d.reason)
                 # a session nothing marks is the owner's own (docs/guard.md "Session mark")
                 self.assertIsNone(decide(self.ev(name), self.w.ctx(environ={})))
 
@@ -597,13 +598,13 @@ class LockMcp(unittest.TestCase):
     def test_the_prefix_comes_from_the_machine_config(self):
         self.w.user_config({'guard_mcp_prefix': 'mcp__lockx__'})
         self.assertEqual(rules.mcp_prefix(self.w.ctx()), 'mcp__lockx__')
-        self.assertEqual(rules.mcp_prefix(W.World().ctx()), rules.MCP_PREFIX)
-        self.assertEqual(rules.MCP_PREFIX, lockmcp_names.claude_tool_prefix())
+        self.assertEqual(rules.mcp_prefix(W.World().ctx()), MCP_PREFIX)
+        self.assertEqual(MCP_PREFIX, lockmcp_names.tool_prefix())
 
     def test_the_role_resolver_is_pluggable(self):
         ctx = self.w.ctx(role_resolver=lambda ev, env: 'owner-verified-by-test')
         d = decide(self.ev('lock_set_games'), ctx)
-        self.assertEqual(d.kind, 'deny')
+        self.assertEqual(d.verdict, 'deny')
         self.assertIn('owner-verified-by-test', d.reason)
 
 
@@ -769,13 +770,13 @@ class OwnerLockTools(unittest.TestCase):
         return decide(make(text, self.w.wt, sub=sub), self.w.ctx(environ=environ))
 
     def test_blocked(self):
-        status = 'python %s status' % (rules.LOCK_TOOL % W.fwd(self.w.home))
+        status = 'python "%s/tools/machine_lock.py" status' % W.fwd(self.w.kit_dir)
         for shell, text in self.BLOCKED:
             for sub in (True, False):
                 with self.subTest(text, sub=sub):
                     d = self.run_one(shell, text, sub)
                     self.assertIsNotNone(d, 'allowed')
-                    self.assertEqual((d.kind, d.rule), ('deny', 'owner-lock'), d.reason)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'owner-lock'), d.reason)
                     self.assertIn(OWNER_ONLY, d.reason)
                     self.assertNotRegex(d.reason, r'\b[RQ]-\d+')
                     self.assertTrue(d.reason.endswith(' Instead: %s %s' % (
@@ -812,9 +813,107 @@ class OwnerLockTools(unittest.TestCase):
             with self.subTest(sub=sub):
                 d = self.run_one('bash', text, sub)
                 self.assertIsNotNone(d, 'allowed')
-                self.assertEqual((d.kind, d.rule), ('deny', 'owner-lock'), d.reason)
+                self.assertEqual((d.verdict, d.rule), ('deny', 'owner-lock'), d.reason)
                 self.assertIn('could not read this command', d.reason)
                 self.assertIn(OWNER_ONLY, d.reason)
+
+
+class OwnerSetup(unittest.TestCase):
+    """Machine setup's writes (the machine config's owner_email among them, plan decision 27) are the
+    owner's to make: a session other than the owner's own that runs it to act is denied, its dry
+    run is not, and an agent session's edit of the machine config is the write jail's."""
+
+    KIT = 'C:/kit'
+    BLOCKED = [
+        ('bash', 'python tools/machine_setup.py --owner-email agent@example.invalid --apply'),
+        ('bash', 'python C:/kit/tools/machine_setup.py --apply --owner-email a@example.invalid'),
+        ('ps', 'py -3 C:\\kit\\tools\\machine_setup.py --apply'),
+        ('bash', 'python3 tools/machine_setup.py --app'),
+        ('bash', 'python tools/machine_setup.py --ap --owner-email a@example.invalid'),
+        ('bash', 'python tools/machine_setup.py --repo ../demo --owner-email a@example.invalid '
+                 '--agent-email b@example.invalid --apply'),
+        ('bash', 'cd C:/kit && python tools/machine_setup.py --apply'),
+        ('bash', 'python -m tools.machine_setup --apply'),
+        ('bash', 'f=--apply; python tools/machine_setup.py $f'),
+        ('ps', '$s = "C:\\kit\\tools\\machine_setup.py"; python $s --apply'),
+        ('ps', '& C:\\kit\\installer\\machine-setup.ps1 -OwnerEmail a@example.invalid -Apply'),
+        ('ps', 'powershell -NoProfile -File C:\\kit\\installer\\machine-setup.ps1 -apply'),
+        ('ps', 'powershell -File installer\\new-repo.ps1 -Target C:\\demo -OwnerEmail a@example.invalid '
+               '-AgentEmail b@example.invalid -App'),
+        ('ps', 'Start-Process python -ArgumentList "tools/machine_setup.py --apply"'),
+        # a double quote PowerShell 5.1 would pass on unescaped: it can carry an --apply in
+        ('ps', '& C:\\kit\\installer\\new-repo.ps1 -Target C:\\demo -OwnerEmail \'x" --apply --repo-name "n\' '
+               '-AgentEmail b@example.invalid'),
+        ('bash', 'python -c "from kitlib.machinesetup import owner; owner.write_owner_email(None, None, \'a@x.io\')"'),
+        ('bash', 'python -Sc "import kitlib.machinesetup.machineconfig"'),
+        ('bash', "python - <<'EOF'\nfrom kitlib.machinesetup import owner\nEOF"),
+    ]
+    ALLOWED = [
+        ('bash', 'python tools/machine_setup.py'),
+        ('bash', 'python tools/machine_setup.py --owner-email a@example.invalid'),
+        ('ps', '& C:\\kit\\installer\\machine-setup.ps1 -OwnerEmail a@example.invalid'),
+        ('bash', 'python tools/machine_setup.py --help'),
+        ('bash', 'cat tools/machine_setup.py'),
+        ('bash', 'git diff -- tools/machine_setup.py kitlib/machinesetup/owner.py'),
+        ('bash', 'python -m unittest discover -s tests/machinesetup -t .'),
+        ('bash', 'python tools/backlog.py add --title "machine_setup.py --apply needs a note"'),
+        ('bash', 'python tools/machine_setup.py --pm-settings x -- --apply'),
+    ]
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def run_one(self, shell, text, sub, environ=None):
+        make = bash if shell == 'bash' else ps
+        if environ is None:
+            environ = {} if sub else MARKED
+        return decide(make(text, self.w.wt, sub=sub), self.w.ctx(environ=environ))
+
+    def test_blocked(self):
+        dry = 'python "%s/tools/machine_setup.py"' % W.fwd(self.w.kit_dir)
+        for shell, text in self.BLOCKED:
+            for sub, environ in ((True, None), (False, None), (False, UNHELD)):
+                with self.subTest(text, sub=sub, environ=environ):
+                    d = self.run_one(shell, text, sub, environ)
+                    self.assertIsNotNone(d, 'allowed')
+                    self.assertEqual(d.verdict, 'deny', d.reason)
+                    if d.rule == 'unreadable':                 # a subagent's unclean line: refused whole
+                        continue
+                    self.assertEqual(d.rule, 'owner-setup', d.reason)
+                    self.assertIn("only the owner runs it to act", d.reason)
+                    self.assertTrue(d.reason.endswith(' Instead: %s %s' % (
+                        dry, rules.tag('owner-setup', 'subagent' if sub else 'main'))), d.reason)
+
+    def test_the_owner_session_may(self):
+        for shell, text in self.BLOCKED:
+            with self.subTest(text):
+                d = self.run_one(shell, text, False, environ={})
+                self.assertTrue(d is None or d.rule != 'owner-setup', d and d.reason)
+
+    def test_allowed(self):
+        for shell, text in self.ALLOWED:
+            for sub in (True, False):
+                with self.subTest(text, sub=sub):
+                    d = self.run_one(shell, text, sub)
+                    self.assertTrue(d is None or d.rule != 'owner-setup', d and d.reason)
+
+    def test_an_unread_line_that_runs_it_is_refused(self):
+        text = "echo 'x ; python tools/machine_setup.py --owner-email a@example.invalid --apply"
+        d = self.run_one('bash', text, False)
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual((d.verdict, d.rule), ('deny', 'owner-setup'), d.reason)
+        self.assertIn('could not read this command', d.reason)
+        self.assertIsNone(self.run_one('bash', text, False, environ={}))
+
+    def test_an_agent_session_may_not_edit_the_machine_config(self):
+        path = kuser.config_file(self.w.home)
+        for sub, environ in ((True, {}), (False, MARKED)):
+            with self.subTest(sub=sub):
+                ev = event('Write', {'file_path': path, 'content': '{"owner_email": "a@x.io"}'}, self.w.wt, sub=sub)
+                d = decide(ev, self.w.ctx(environ=environ))
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual((d.verdict, d.rule), ('deny', 'write-jail'), d.reason)
 
 
 class PushBlockOff(unittest.TestCase):
@@ -855,7 +954,7 @@ class PmDataNoVerify(unittest.TestCase):
 
     def assert_denied(self, d, instead=None):
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual((d.kind, d.rule), ('deny', 'git-push-pmdata'), d.reason)
+        self.assertEqual((d.verdict, d.rule), ('deny', 'git-push-pmdata'), d.reason)
         if instead is not None:
             self.assertIn(' Instead: %s [kit guard:' % instead, d.reason)
 
@@ -1042,7 +1141,7 @@ class RolesFromConfig(unittest.TestCase):
 
     def test_the_plugin_prefixed_lander_is_the_lander(self):
         # docs/guard.md "Agent names": <plugin>:lander holds the lander role, no other spelling does
-        p = lockmcp_names.CLAUDE_PLUGIN_NAME + ':'           # kitlib.agentname.PREFIX
+        p = lockmcp_names.PLUGIN_NAME + ':'           # kitlib.agentname.PREFIX
         w = W.World(kit={'repo': {'name': 'demo'}, 'roles': {'lander': {'edit_main_checkout': True, 'why': 'test'}}})
         self.addCleanup(w.cleanup)
         target = os.path.join(w.main, 'a.md')
@@ -1052,7 +1151,7 @@ class RolesFromConfig(unittest.TestCase):
         for cmd in ('git merge --no-ff kit/wt', 'git commit -m "x"', 'git revert abc123'):
             self.assertIsNone(git(cmd, p + 'lander'), cmd)
         self.assertEqual(git('git restore a.py', p + 'lander').rule, 'git-restore')
-        for kind in (p + 'worker', p + 'opus-worker', 'other:lander', p + p + 'lander', p.upper() + 'lander', p,
+        for kind in (p + 'worker', p + 'senior-worker', 'other:lander', p + p + 'lander', p.upper() + 'lander', p,
                      p + 'main', p.rstrip(':') + 'lander', 'x' + p + 'lander', p[1:] + 'lander'):
             with self.subTest(kind):
                 self.assertEqual(write(kind).rule, 'main-checkout')

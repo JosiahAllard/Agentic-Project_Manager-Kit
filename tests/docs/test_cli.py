@@ -101,11 +101,16 @@ class DocIndexCli(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn('USAGE: argument --find: not allowed with argument --tools', err)
 
-    def test_a_missing_index_exits_2(self):
+    def test_a_missing_index_says_there_is_none_and_where_to_search(self):
+        # The doc index is opt-in: a repository without one is told where to look, not refused.
         os.remove(os.path.join(self.repo.root, 'docs', 'INDEX.md'))
-        code, out, _ = call(doc_index_cli.main, '-C', self.repo.root, '--find', 'alpha')
-        self.assertEqual(code, 2, out)
-        self.assertIn('doc_index: cannot read docs/INDEX.md', out)
+        for mode in (('--find', 'alpha'), ('--tools',)):
+            with self.subTest(mode=mode):
+                code, out, _ = call(doc_index_cli.main, '-C', self.repo.root, *mode)
+                self.assertEqual(code, 1, out)
+                self.assertIn('doc_index: this repository has no doc index (no docs/INDEX.md)', out)
+                self.assertIn('git grep -n -i "<topic>" -- docs README.md', out)
+                self.assertNotIn('cannot read', out)
 
     def test_a_broken_kit_json_refuses(self):
         self.repo.write('.kit.json', '{broken')

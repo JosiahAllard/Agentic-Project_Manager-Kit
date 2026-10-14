@@ -8,7 +8,14 @@ import unittest
 
 from kitlib import config, lockmcp
 from kitlib.config import policy
+from kitlib.host import Action
 from tests.config.helpers import TempTree
+
+
+def ev(payload):
+    """A Claude Code PreToolUse payload as the guard sees it (hosts.claude.adapter.events.parse)."""
+    from hosts.claude.adapter import events
+    return events.parse('PreToolUse', payload)
 
 
 class TreeCase(unittest.TestCase):
@@ -90,16 +97,37 @@ class HeavyTest(TreeCase):
 
 
 class RolesTest(TreeCase):
+    """Roles are read off a kitlib.host.Action; ev() builds one from a Claude Code payload through
+    Claude's adapter, so these still pin what each real payload means."""
+
+    def test_the_role_is_read_off_the_neutral_action(self):
+        self.assertEqual(policy.role_name(Action('edit')), 'main')
+        self.assertEqual(policy.role_name(Action('edit', agent='a', agent_role='lander'),
+                                          {'lander': {}, 'subagent': {}}), 'lander')
+        self.assertEqual(policy.role_name(Action('edit', agent_role='lander'), {'lander': {}}), 'main')
 
     def test_the_main_session_and_a_subagent(self):
-        self.assertEqual(policy.role_name({}), 'main')
+        self.assertEqual(policy.role_name(ev({})), 'main')
         self.assertEqual(policy.role_name(None), 'main')
-        self.assertEqual(policy.role_name({'agent_id': 'a1', 'agent_type': 'worker'}), 'subagent')
-        self.assertTrue(policy.permissions({})['edit_main_checkout'])
-        self.assertFalse(policy.permissions({'agent_id': 'a1'})['edit_main_checkout'])
+        self.assertEqual(policy.role_name(ev({'agent_id': 'a1', 'agent_type': 'worker'})), 'subagent')
+        self.assertTrue(policy.permissions(ev({}))['edit_main_checkout'])
+        self.assertFalse(policy.permissions(ev({'agent_id': 'a1'}))['edit_main_checkout'])
+
+    def test_a_roles_key_under_a_renamed_roles_old_or_new_name(self):
+        """kitlib.content.ALIASES: a .kit.json roles key `opus-worker` holds the agent now called
+        senior-worker, and a key `senior-worker` an agent still sent as opus-worker."""
+        for key, kind in (('opus-worker', 'senior-worker'), ('senior-worker', 'opus-worker'),
+                          ('senior-worker', 'senior-worker'), ('opus-worker', 'opus-worker')):
+            with self.subTest(key=key, kind=kind):
+                table = {key: {}, 'subagent': {}}
+                self.assertEqual(policy.role_name(Action('edit', agent='a', agent_role=kind), table), key)
+        both = {'opus-worker': {}, 'senior-worker': {}}
+        self.assertEqual(policy.role_name(Action('edit', agent='a', agent_role='opus-worker'), both), 'opus-worker')
+        self.assertEqual(policy.role_name(Action('edit', agent='a', agent_role='worker'), {'opus-worker': {}}),
+                         'subagent')
 
     def test_an_agent_cannot_claim_the_main_role(self):
-        self.assertEqual(policy.role_name({'agent_id': 'a1', 'agent_type': 'main'}), 'subagent')
+        self.assertEqual(policy.role_name(ev({'agent_id': 'a1', 'agent_type': 'main'})), 'subagent')
 
     def test_repo_roles_lay_over_the_defaults(self):
         cfg = self.load({'roles': {'lander': {'edit_main_checkout': True, 'why': 'landers merge there'},
@@ -108,24 +136,24 @@ class RolesTest(TreeCase):
                                    '_about': 'notes allowed'}})
         table = policy.roles(cfg)
         self.assertNotIn('_about', table)
-        self.assertTrue(policy.permissions({'agent_id': 'a', 'agent_type': 'lander'}, table)['edit_main_checkout'])
-        self.assertFalse(policy.permissions({'agent_id': 'a', 'agent_type': 'records'}, table)['edit_main_checkout'])
-        self.assertFalse(policy.permissions({}, table)['edit_main_checkout'])
-        self.assertEqual(policy.role_name({'agent_id': 'a', 'agent_type': 'worker'}, table), 'subagent')
+        self.assertTrue(policy.permissions(ev({'agent_id': 'a', 'agent_type': 'lander'}), table)['edit_main_checkout'])
+        self.assertFalse(policy.permissions(ev({'agent_id': 'a', 'agent_type': 'records'}), table)['edit_main_checkout'])
+        self.assertFalse(policy.permissions(ev({}), table)['edit_main_checkout'])
+        self.assertEqual(policy.role_name(ev({'agent_id': 'a', 'agent_type': 'worker'}), table), 'subagent')
 
     def test_the_plugin_prefixed_agent_type_names_the_same_role(self):
         # docs/guard.md "Agent names": the kit plugin bundles its agents as <plugin>:<name>
         # (kitlib.agentname.PREFIX; tests/agentname pins it to this value)
-        p = lockmcp.CLAUDE_PLUGIN_NAME + ':'
+        p = lockmcp.PLUGIN_NAME + ':'
         table = policy.roles(self.load({'roles': {'lander': {'edit_main_checkout': True, 'why': 'merges'}}}))
-        self.assertEqual(policy.role_name({'agent_id': 'a', 'agent_type': p + 'lander'}, table), 'lander')
-        self.assertTrue(policy.permissions({'agent_id': 'a', 'agent_type': p + 'lander'}, table)['edit_main_checkout'])
+        self.assertEqual(policy.role_name(ev({'agent_id': 'a', 'agent_type': p + 'lander'}), table), 'lander')
+        self.assertTrue(policy.permissions(ev({'agent_id': 'a', 'agent_type': p + 'lander'}), table)['edit_main_checkout'])
         for kind in ('other:lander', p + p + 'lander', p.upper() + 'lander', p, p + 'main',
                      p.rstrip(':') + 'lander', 'x' + p + 'lander', p[1:] + 'lander'):
             with self.subTest(kind):
-                self.assertEqual(policy.role_name({'agent_id': 'a', 'agent_type': kind}, table), 'subagent')
-                self.assertFalse(policy.permissions({'agent_id': 'a', 'agent_type': kind}, table)['edit_main_checkout'])
-        self.assertEqual(policy.role_name({'agent_type': p + 'lander'}, table), 'main')
+                self.assertEqual(policy.role_name(ev({'agent_id': 'a', 'agent_type': kind}), table), 'subagent')
+                self.assertFalse(policy.permissions(ev({'agent_id': 'a', 'agent_type': kind}), table)['edit_main_checkout'])
+        self.assertEqual(policy.role_name(ev({'agent_type': p + 'lander'}), table), 'main')
 
     def test_a_role_with_an_unknown_permission_refuses(self):
         t = TempTree({'roles': {'lander': {'edit_main': True}}})
