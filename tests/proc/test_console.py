@@ -75,19 +75,41 @@ WAITER = "\n".join([
     "with open(sys.argv[1], 'w') as f:",
     "    f.write(end)"])
 
-# Run as a child on the parent's console: sends the console control event argv[2] (0 Ctrl+C,
-# 1 Ctrl+Break) to the whole console, but only when every process on it is itself or a pid in
-# argv[3:] (never a console the test shares).
+# The sender's guard: every process on the console is the sender, a root (the parent, the waiter)
+# or a descendant of one (a venv's python.exe redirector starts the real interpreter as its child,
+# on the same console). `parent_of` is {pid: parent pid}; a loop in it (a reused pid) ends the
+# walk, refused.
+SENDER_GUARD = "\n".join([
+    "def on_own_console(pids, me, roots, parent_of):",
+    "    allowed = {me} | set(roots)",
+    "    for pid in pids:",
+    "        seen, p = set(), pid",
+    "        while p not in allowed and p in parent_of and p not in seen:",
+    "            seen.add(p)",
+    "            p = parent_of[p]",
+    "        if p not in allowed:",
+    "            return False",
+    "    return len(pids) > 0"])
+
+# Run as a child on the parent's console: argv is <out> <event> <kit root> <send|dry> <root pid>...
+# It sends the console control event (0 Ctrl+C, 1 Ctrl+Break) to the whole console, but only when
+# SENDER_GUARD passes (never a console the test shares), and only in "send" mode.
 SENDER = "\n".join([
     "import ctypes, json, os, sys",
+    "sys.path.insert(0, sys.argv[3])",
+    "from kitlib.proc import process",
+    SENDER_GUARD,
     "k = ctypes.WinDLL('kernel32')",
     "keep = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)(lambda e: 1)   # it survives the event",
     "k.SetConsoleCtrlHandler(keep, 1)",
     "a = (ctypes.c_uint * 64)()",
     "n = k.GetConsoleProcessList(a, 64)",
     "pids = sorted(a[:min(n, 64)])",
-    "ok = 0 < n <= 64 and set(pids) <= {os.getpid()} | {int(p) for p in sys.argv[3:]}",
-    "sent = bool(k.GenerateConsoleCtrlEvent(int(sys.argv[2]), 0)) if ok else False",
+    "parent_of = {pid: pp for pid, pp, _name in process.snapshot()}",
+    "roots = [int(p) for p in sys.argv[5:]]",
+    "ok = n <= 64 and on_own_console(pids, os.getpid(), roots, parent_of)",
+    "send = ok and sys.argv[4] == 'send'",
+    "sent = bool(k.GenerateConsoleCtrlEvent(int(sys.argv[2]), 0)) if send else False",
     "with open(sys.argv[1], 'w') as f:",
     "    json.dump({'console_pids': pids, 'sent': sent, 'refused': not ok}, f)"])
 THREADS = 8
@@ -164,8 +186,8 @@ def main(root, folder, mode, py):
             time.sleep(0.02)
         r['parent_interrupted'] = False
         sender = subprocess.Popen([py, os.path.join(folder, 'sender.py'), out('sender'),
-                                   '0' if mode == 'ctrlc' else '1', str(os.getpid()),
-                                   str(waiter.pid)])
+                                   '0' if mode == 'ctrlc' else '1', root, 'send',
+                                   str(os.getpid()), str(waiter.pid)])
         try:
             while waiter.poll() is None and time.monotonic() < end:
                 time.sleep(0.02)
@@ -474,10 +496,134 @@ class RedactTest(unittest.TestCase):
              ["-H", "Authorization:***", "Bearer", "***"]),
             (["https://user:pw@host/x", "ghp_" + "a" * 36, "sk-" + "b" * 40, "C:\\kept\\a=b"],
              ["https://***@host/x", "***", "***", "C:\\kept\\a=b"]),
+            (["--pass", "abc", "--passphrase", "abc", "--pw", "abc", "-p", "kept"],
+             ["--pass", "***", "--passphrase", "***", "--pw", "***", "-p", "kept"]),
+            (["-u", "alice:abc", "--user", "alice:abc", "--user=alice:abc", "-U", "bob:abc"],
+             ["-u", "alice:***", "--user", "alice:***", "--user=alice:***", "-U", "bob:***"]),
+            # a user flag's value: all after its first : (a drive path aside), or whole if it
+            # ends at that :
+            (["-u", "C:\\kept\\x.py", "-u", "kept", "--user", "git+https://h/x:1"],
+             ["-u", "C:\\kept\\x.py", "-u", "kept", "--user", "git+https:***"]),
+            (["-u", ":PAT", "-u", "sk_test_abc:", "-u", "a/b:pw", "-u", "user:pa://x"],
+             ["-u", ":***", "-u", "***:", "-u", "a/b:***", "-u", "user:***"]),
+            (["https://h/x?a=1&access_token=abc&b=2", "--data=a=1&password=abc", "--data=pw=abc"],
+             ["https://h/x?a=1&access_token=***&b=2", "--data=a=1&password=***", "--data=pw=***"]),
+            (['{"user":"kept","password":"abc","n":1}', '{"apiKey": 12345, "a": "pw=abc"}'],
+             ['{"user":"kept","password":"***","n":1}', '{"apiKey": ***, "a": "pw=***"}']),
+            (['{"token":"abc', '{"token":"a\\"bc"}', '{"token":"abc\\'],
+             ['{"token":"***"', '{"token":"***"}', '{"token":"***"']),
+            (["git://tok@h/r", "https://u:p%2Fw@h/x", "ftp://h/kept@x"],
+             ["git://***@h/r", "https://***@h/x", "ftp://h/kept@x"]),
+            # URL user info: with a : after scheme://, all up to the last @ (a password may hold
+            # / # or @; a port before /@ is masked too); else the authority up to its last @
+            (["https://user:pa#ss@host/", "https://u:pa/ss@h/x", "https://u:p/w@h/x",
+              "https://u:p@ss@h/x", "https://host:8080/@scope/pkg"],
+             ["https://***@host/", "https://***@h/x", "https://***@h/x", "https://***@h/x",
+              "https://***@scope/pkg"]),
+            (["https://h?q=@kept", "https://h/x?r=git://tok@h2/y", "-u", "https://u:pa/ss@h"],
+             ["https://h?q=@kept", "https://***@h2/y", "-u", "https:***"]),
+            # the value of -u/--user gets every other mask too, and a flag is not its value
+            (["-u", "https://user:" + "ghp_" + "a" * 36 + "@github.com/o/r.git", "main"],
+             ["-u", "https:***", "main"]),
+            (["-u", "ghp_" + "a" * 36, "-u", "GITHUB_TOKEN=abc", "--user=https://u:p@h/"],
+             ["-u", "***", "-u", "GITHUB_TOKEN=***", "--user=https:***"]),
+            (["-u", "--token", "abc", "--token", "--password", "abc", "-u", "-v", "kept"],
+             ["-u", "--token", "***", "--token", "--password", "***", "-u", "-v", "kept"]),
+            # user flags: a cluster ending in u, glued, long forms, /u, DOMAIN\user, any case
+            (["-sSu", "a:abc", "-uuser:abc", "--proxy-user", "b:abc", "--proxy-user=c:abc",
+              "/u", "d:abc", "-u", "DOMAIN\\e:abc", "-U", "f:abc", "--USER", "g:abc"],
+             ["-sSu", "a:***", "-uuser:***", "--proxy-user", "b:***", "--proxy-user=c:***",
+              "/u", "d:***", "-u", "DOMAIN\\e:***", "-U", "f:***", "--USER", "g:***"]),
+            (["\\\\h\\s", "/user:DOMAIN\\e", "abc", "/persistent:no"],      # net use
+             ["\\\\h\\s", "/user:DOMAIN\\e", "***", "/persistent:no"]),
+            # -p/-P/ /p go with a word starting -u or --user seen before them (or sshpass);
+            # /RP and a glued -pVALUE always
+            (["-u", "root", "-h", "db", "-p", "abc", "-P", "abc", "-pabc", "/p:abc"],
+             ["-u", "root", "-h", "db", "-p", "***", "-P", "***", "-p***", "/p:***"]),
+            (["sshpass", "-p", "abc", "ssh", "h"], ["sshpass", "-p", "***", "ssh", "h"]),
+            (["/create", "/u", "e", "/p", "abc", "/RP", "abc", "/rp:abc"],
+             ["/create", "/u", "e", "/p", "***", "/RP", "***", "/rp:***"]),
+            (["-uroot", "-P", "abc", "-Pabc"], ["-uroot", "-P", "***", "-P***"]),
+            (["--user=root", "-p", "abc"], ["--user=root", "-p", "***"]),
+            (["-h", "h", "-pabc", "-psecret", "x", "-P3306"],
+             ["-h", "h", "-p***", "-p***", "***", "-P3306"]),
+            (["-p", "kept", "-P", "8080", "-P8080"], ["-p", "kept", "-P", "8080", "-P8080"]),
+            # a quoted value is masked to its closing quote (or the end), keeping its quotes
+            (["f(password='hunter2')", "$env:TOKEN='abc'", "{'token': 'abc'}", 'f(pw="a b")'],
+             ["f(password='***')", "$env:TOKEN='***'", "{'token': '***'}", 'f(pw="***")']),
+            (["x=1;secret='a\\'b';y=kept", "f(password='abc def", '["token": "a,b", 2]'],
+             ["x=1;secret='***';y=kept", "f(password='***'", '["token": "***", 2]']),
+            # name = value with spaces, in one word or across words; bracketed and bare keys
+            (["password = 'hunter2'", "$env:GITHUB_TOKEN = 'abc'", "os.environ['TOKEN']='abc'",
+              "{password:abc}", "{a:1, secret : abc}", "mode = kept"],
+             ["password = '***'", "$env:GITHUB_TOKEN = '***'", "os.environ['TOKEN']='***'",
+              "{password:***}", "{a:1, secret : ***}", "mode = kept"]),
+            (["$env:GITHUB_TOKEN", "=", "'abc'", "password", "=", "abc", "mode", "=", "kept",
+              '{"password":', '"abc"}'],
+             ["$env:GITHUB_TOKEN", "=", "***", "password", "=", "***", "mode", "=", "kept",
+              '{"password":', "***"]),
+            # Bearer and Basic hide the next word under any header name
+            (["-H", "X-Custom: Bearer abc", "X-Api: basic Zm9vOmJhcg==", "-H",
+              "Authorization:", "Bearer", "abc"],
+             ["-H", "X-Custom: Bearer ***", "X-Api: basic ***", "-H",
+              "Authorization:***", "Bearer", "***"]),
+            # pass and pw are secret anywhere in a name, digits aside, but for a few words
+            (["DBPASS=a", "PGPASS=a", "ROOTPASS=a", "userpass=a", "adminpw=a", "SMTPPW=a",
+              "PASSCODE=a", "PASS_PHRASE=a", "PASS1=a", "DB_PASS_2=a", "dbPass=a"],
+             ["DBPASS=***", "PGPASS=***", "ROOTPASS=***", "userpass=***", "adminpw=***",
+              "SMTPPW=***", "PASSCODE=***", "PASS_PHRASE=***", "PASS1=***", "DB_PASS_2=***",
+              "dbPass=***"]),
+            (["--passcode", "a", "--pass-phrase", "a", "--pass-file", "a", "--smtp-pw", "a",
+              "--passwd", "a", "-PassThruPassword", "a"],
+             ["--passcode", "***", "--pass-phrase", "***", "--pass-file", "***", "--smtp-pw",
+              "***", "--passwd", "***", "-PassThruPassword", "***"]),
+            (["-PassThru", "kept", "/passive", "kept", "--bypass-list", "kept", "--stopwatch",
+              "kept", "--passthrough", "kept"],
+             ["-PassThru", "kept", "/passive", "kept", "--bypass-list", "kept", "--stopwatch",
+              "kept", "--passthrough", "kept"]),
+            # -PassThru ends in u, so it counts as a user flag: a glued -P after it is masked
+            (["-PassThru:$true", "kept"], ["-PassThru:$true", "kept"]),
+            (["-PassThru", "x", "-PassThru:$true"], ["-PassThru", "x", "-P***"]),
         ]
         for words, want in cases:
             with self.subTest(words[0]), mock.patch.object(console, "KEEP_WORDS", 99):
                 self.assertEqual(console.redact_command(["prog"] + words), ["prog"] + want)
+
+    def test_odd_input_never_raises(self):
+        cases = [
+            ('prog --token "abc def', 'prog --token ***'),           # an unterminated quote
+            ('prog --token abc\\', 'prog --token ***'),              # a trailing backslash
+            ('prog C:\\kept\\', 'prog C:\\kept\\'),
+            ('prog "', 'prog ""'),
+            ('', ''),
+        ]
+        for line, want in cases:
+            with self.subTest(line):
+                self.assertEqual(console.redact_command(line), want)
+        self.assertEqual(console.redact_command(b"prog \xff\xfe --pw x"),
+                         "prog \\xff\\xfe --pw ***")             # a bad byte is not a lost line
+        self.assertEqual(console.redact_command([b"prog", b"\xff", b"--pw", b"x"]),
+                         ["prog", "\\xff", "--pw", "***"])
+        for odd in (12, object(), [None, 3, b"\xff"], ["prog", "=" * 5000 + "token=x"]):
+            with self.subTest(type(odd).__name__):
+                console.redact_command(odd)          # no exception
+        with mock.patch.object(console, "_mask", side_effect=ValueError("boom")):
+            self.assertEqual(console.redact_command("prog --x"), console.MASK)
+            self.assertEqual(console.redact_command(["prog"]), [console.MASK])
+
+    def test_long_hostile_words_are_masked_in_linear_time(self):
+        # each about 90k characters; a pattern that restarts inside a run (the JWT form on
+        # `eyJ` repeated took 8 s here) is quadratic, the masks all take well under 1 s
+        import time
+        words = ["eyJ" * 30000, 'x="' * 30000, "{a:" * 30000, "'a':" * 22000,
+                 "-" + "u" * 90000 + ":", "https://" + ":@" * 45000, "://" * 30000,
+                 "aB" * 45000 + "=x", "a!" * 45000, "$env:TOKEN = " * 7000,
+                 "a" + " " * 90000 + "b", "a" + "	" * 90000 + "b"]
+        for w in words:
+            with self.subTest(w[:12]):
+                start = time.perf_counter()
+                console._mask(["-u", w, "--token", w, w])
+                self.assertLess(time.perf_counter() - start, 3.0)
 
     def test_it_keeps_the_program_and_the_first_words_each_cut(self):
         path = "C:\\" + "d" * 200 + "\\probe.py"
@@ -497,6 +643,44 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(console.split_command_line("  a\t b  "), ["a", "b"])
         got = console.redact_command(line.encode())
         self.assertEqual(console.split_command_line(got), words[:5] + ["--key", "***"])
+
+
+class SenderGuardTest(unittest.TestCase):
+    """The Ctrl+C sender's guard (SENDER_GUARD): it sends only on a console of the test's own."""
+
+    def setUp(self):
+        ns = {}
+        exec(SENDER_GUARD, ns)                  # noqa: S102 - the test's own source
+        self.guard = ns["on_own_console"]
+
+    def test_the_roots_and_their_descendants_pass(self):
+        # 1 parent, 2 waiter (a venv redirector), 3 its real interpreter, 4 that one's child
+        parent_of = {1: 100, 2: 1, 3: 2, 4: 3, 10: 1}
+        self.assertTrue(self.guard([1, 2, 3, 4, 10], 10, [1, 2], parent_of))
+        self.assertTrue(self.guard([10], 10, [], parent_of))
+
+    def test_any_other_process_is_refused(self):
+        parent_of = {1: 100, 2: 1, 10: 1, 100: 4, 7: 100, 8: 9, 9: 8}
+        for pid, why in ((100, "the parent's parent"), (7, "a sibling of the parent"),
+                         (8, "a pid in a parent loop"), (55, "not in the snapshot")):
+            with self.subTest(why):
+                self.assertFalse(self.guard([1, 2, 10, pid], 10, [1, 2], parent_of))
+        self.assertFalse(self.guard([], 10, [1, 2], parent_of))
+
+    @unittest.skipUnless(os.name == "nt", "Windows only")
+    def test_the_real_sender_refuses_the_test_s_console(self):
+        """The sender itself, run dry from this process, sees this process on its console (not
+        a root, not its descendant) and refuses."""
+        folder = tempfile.mkdtemp(prefix="kit-console-")
+        self.addCleanup(shutil.rmtree, folder, True)
+        script, out = os.path.join(folder, "sender.py"), os.path.join(folder, "sender.json")
+        with open(script, "w") as f:
+            f.write(SENDER)
+        subprocess.run([sys.executable, script, out, "0", ROOT, "dry"], timeout=60, check=True)
+        with open(out) as f:
+            got = json.load(f)
+        self.assertIn(os.getpid(), got["console_pids"], got)
+        self.assertEqual((got["refused"], got["sent"]), (True, False), got)
 
 
 @unittest.skipUnless(os.name == "nt", "Windows only")
@@ -628,7 +812,8 @@ class PythonwParentTest(unittest.TestCase):
 
     def check_ctrl(self, mode):
         """A child on the console the parent got sends it a console control event; the sender
-        sends only when the console holds just itself, the parent and the waiter. The parent is
+        sends only when the console holds just itself, the parent, the waiter and their
+        descendants (SENDER_GUARD). The parent is
         not ended by it (its report is written: run_parent) and is not interrupted."""
         r = self.run_parent(mode)
         sent = self.read("sender.json")
