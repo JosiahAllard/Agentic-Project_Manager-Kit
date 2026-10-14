@@ -43,7 +43,15 @@
       changes nothing, not even a token file.
   hub.py open [--port N] [--print]
       opens the hub page in the browser, signed in as the owner through a one-time pairing link
-      the running server gives for the owner's token. --print prints the link instead.
+      the running server gives for the owner's token. --print prints the link instead. A paired
+      browser stays paired across a restart of the server; its session (auth.SESSION_TTL_S, 30
+      days) is renewed when it is used with less than half of that left
+      (kitlib.hubsite.auth, "Sessions").
+  hub.py unpair [--port N]
+      ends the session of every browser paired with the server on the port, and every pairing
+      link not yet used; the owner's token only. With no server running there it empties the
+      sessions file that server reads at its start (in the token folder) itself and says so.
+      A new owner token also unpairs every browser.
   hub.py migrate --from DIR [--from DIR ...] [--store PATH] [--dry-run]
       copies the documents of each DIR (the mirror folder, or an export of one account's copy)
       into the store (hub.store, else hub/ in the PM data worktree; --store PATH: that folder)
@@ -132,8 +140,8 @@ START = 'python "%s" serve' % os.path.abspath(__file__)
 OPEN = 'python "%s" open' % os.path.abspath(__file__)
 HEALTH = api.BASE + '/health'
 # every verb, in the order the usage error names them
-VERB_NAMES = ('serve', 'status', 'setup', 'open', 'migrate', 'questions', 'answer', 'todos',
-              'stories', 'to-pm', 'inbox', 'pending', 'wait', 'validate')
+VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'migrate', 'questions', 'answer',
+              'todos', 'stories', 'to-pm', 'inbox', 'pending', 'wait', 'validate')
 NO_VERB = 'give a verb: %s or %s' % (', '.join(VERB_NAMES[:-1]), VERB_NAMES[-1])
 
 
@@ -362,6 +370,8 @@ def parser():
     o.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
     o.add_argument('--print', dest='show', action='store_true',
                    help='print the one-time link instead of opening it')
+    n = sub.add_parser('unpair', help='end the session of every paired browser (the owner)')
+    n.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
     m = sub.add_parser('migrate', help="copy the earlier hub's documents into the store")
     m.add_argument('--from', dest='sources', action='append', type=_source, required=True,
                    metavar='DIR', help='a folder to copy from: the mirror folder or an export '
@@ -499,6 +509,31 @@ def _open(a, stop):
     if not webbrowser.open(url):
         raise serve.ServeError('no browser could be opened: use hub.py open --print')
     print('opened the hub page in the browser')
+    return 0
+
+
+def _unpair(a, stop):
+    port = a.port or settings.load().port
+    folder = auth.folder()
+    token = auth.read_token(folder, auth.OWNER)
+    if not token:
+        raise serve.ServeError('no owner token in %s: run hub.py setup' % folder)
+    try:
+        status, obj = serve.ask(port, 'POST', httpd.UNPAIR_ROUTE, token)
+    except serve.NotRunning as e:
+        # no server holds the sessions in memory: the file the next one reads is emptied here
+        failed = []
+        creds = auth.Credentials(folder, port=port, persist=True,
+                                 log=lambda level, text: failed.append(text))
+        creds.unpair_all()
+        if failed:
+            raise serve.ServeError(failed[0])
+        print('%s: unpaired every browser in %s, the sessions file the server on that port '
+              'reads at its start' % (e, creds.path))
+        return 0
+    if status != 200 or obj.get('ok') is not True:
+        return _refused(port, status, obj)
+    print('unpaired every browser of the hub server on port %d' % port)
     return 0
 
 
@@ -719,7 +754,7 @@ def _wait(a, stop):
 
 
 VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open,
-         'migrate': _migrate, 'questions': _questions, 'answer': _answer, 'todos': _todos,
+         'unpair': _unpair, 'migrate': _migrate, 'questions': _questions, 'answer': _answer, 'todos': _todos,
          'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'pending': _pending,
          'wait': _wait, 'validate': _validate}
 
