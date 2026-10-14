@@ -432,41 +432,85 @@ class Narrowing(StoreCase):
         self.assertEqual(self.queue_cores(s), [usable[0]])
         self.assertEqual((s.job.mask, affinity(p)), (keep, keep))
 
-    def test_an_interrupt_after_the_queue_write_lands_puts_nothing_back(self):
+    def landed_then(self, exc):
+        """shrink with a queue write that lands, then raises exc (as a Ctrl+C in its bump
+        would): the record (in memory and on disk) and the queue keep the narrower booking."""
         s, usable = self.held(2)
-        rel = "active/%s.json" % s.id
-        real = gb().qm.save
-        for exc in (KeyboardInterrupt, OSError):
-            raised = []
+        real, raised = gb().qm.save, []
 
-            def save(store, q):
-                # The queue write lands, then something raises (as a Ctrl+C in its bump would).
-                real(store, q)
-                raised.append(exc)
-                raise exc("after the replace")
-            ack = {"id": "i-%s" % exc.__name__, "cpu": [usable[1]]}
-            with mock.patch.object(gb().qm, "save", side_effect=save):
-                if exc is KeyboardInterrupt:
-                    with self.assertRaises(KeyboardInterrupt):
-                        gb().shrink(self.store, s.run, [usable[0]], {}, ack)
-                else:
-                    # An Exception after the queue write is committed: the ack is written.
-                    self.assertTrue(gb().shrink(self.store, s.run, [usable[0]], {}, ack))
-            self.assertEqual(raised, [exc])
-            on_disk = self.store.read(rel)
-            self.assertEqual((s.run.rec["cores"], on_disk["cores"]), ([usable[0]], [usable[0]]))
-            self.assertEqual(self.queue_cores(s), [usable[0]])
-            if exc is OSError:
-                self.assertEqual(on_disk["given_back"]["id"], ack["id"])
+        def save(store, q):
+            real(store, q)
+            raised.append(exc)
+            raise exc("after the replace")
+        ack = {"id": "i-%s" % exc.__name__, "cpu": [usable[1]]}
+        with mock.patch.object(gb().qm, "save", side_effect=save):
+            if exc is KeyboardInterrupt:
+                with self.assertRaises(KeyboardInterrupt):
+                    gb().shrink(self.store, s.run, [usable[0]], {}, ack)
             else:
-                self.assertNotIn("given_back", on_disk)
-            # Put the booking back for the next round (the job was never narrowed here).
-            with self.store.lock("queue"):
-                q = gb().qm.load(self.store)
-                gb().qm.entry_of(q, s.id)["cores"] = list(usable)
-                real(self.store, q)
-            s.run.rec.pop("given_back", None)
-            s.run.save(cores=list(usable))
+                self.assertTrue(gb().shrink(self.store, s.run, [usable[0]], {}, ack))
+        self.assertEqual(raised, [exc])
+        on_disk = self.store.read("active/%s.json" % s.id)
+        self.assertEqual((s.run.rec["cores"], on_disk["cores"]), ([usable[0]], [usable[0]]))
+        self.assertEqual(self.queue_cores(s), [usable[0]])
+        return on_disk, ack
+
+    def test_an_interrupt_after_the_queue_write_lands_puts_nothing_back(self):
+        on_disk, _ack = self.landed_then(KeyboardInterrupt)
+        self.assertNotIn("given_back", on_disk)
+
+    def test_an_error_after_the_queue_write_lands_is_committed_and_acked(self):
+        on_disk, ack = self.landed_then(OSError)
+        self.assertEqual(on_disk["given_back"]["id"], ack["id"])
+
+    def unreadable_after_save(self, lands):
+        """Patches for an ask: the queue write lands (or not), then raises OSError, and every
+        queue read after it finds queue.json unreadable (QueueUnreadable)."""
+        real_save, real_load, saved = gb().qm.save, gb().qm.load, []
+
+        def save(store, q):
+            saved.append(lands)
+            if lands:
+                real_save(store, q)
+            raise OSError("queue.json is held")
+
+        def load(store):
+            if saved:
+                raise gb().qm.QueueUnreadable("queue unreadable: held")
+            return real_load(store)
+        return saved, (mock.patch.object(gb().qm, "save", side_effect=save),
+                       mock.patch.object(gb().qm, "load", side_effect=load))
+
+    def test_an_unreadable_read_back_after_a_landed_write_never_widens_the_job(self):
+        # Widening here would run the job on a slot the landed queue write freed: booked twice.
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        keep = lay.cores_mask(self.layout(), [usable[0]])
+        saved, (ps, pl) = self.unreadable_after_save(lands=True)
+        with ps, pl:
+            rid, rec = self.ask(s, p, [usable[1]])
+        self.assertEqual(saved, [True])
+        self.assertNotIn("give_back_refused", rec)
+        self.assertEqual(rec["given_back"]["id"], rid)
+        self.assertEqual((rec["cores"], s.run.rec["cores"]), ([usable[0]], [usable[0]]))
+        self.assertEqual(self.queue_cores(s), [usable[0]])
+        self.assertEqual((s.job.mask, affinity(p), s.cores), (keep, keep, [usable[0]]))
+
+    def test_an_unreadable_read_back_after_a_failed_write_errs_on_an_unused_slot(self):
+        # Not knowing, shrink takes the write as landed: the job and record narrow, the queue
+        # still books both slots for this run. The slot given back sits unused until the run
+        # ends, but no planner hands it out while the job could still run on it.
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        keep = lay.cores_mask(self.layout(), [usable[0]])
+        saved, (ps, pl) = self.unreadable_after_save(lands=False)
+        with ps, pl:
+            rid, rec = self.ask(s, p, [usable[1]])
+        self.assertEqual(saved, [False])
+        self.assertNotIn("give_back_refused", rec)
+        self.assertEqual(rec["cores"], [usable[0]])
+        self.assertEqual(self.queue_cores(s), usable)       # still held: never handed out twice
+        self.assertEqual((s.job.mask, affinity(p)), (keep, keep))
 
     def test_a_refused_repin_leaves_the_job_narrowed_and_a_later_ask_refused(self):
         s, usable = self.held(2)

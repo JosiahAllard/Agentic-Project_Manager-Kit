@@ -118,16 +118,18 @@ def shrink(store, run, keep, fields, ack):
     (cores, slots, has.cpu and `fields`, the pin fields), then the queue entry's cores, then the
     record's `given_back` = ack. The ack is written only once the queue says it is true.
 
-    Before the queue write lands, a failure raises OSError (the mutex, or either write) after
-    putting run.rec back exactly as it was (Run.save changes run.rec before it writes, so a failed
-    record write would otherwise leave the narrower booking in memory for the next save to
-    persist). Once the queue write has landed the slots are given back, whatever follows: a
+    The mutex not taken raises OSError with nothing written. A failed write that queue.json,
+    read back, shows came before the queue write landed raises it after putting run.rec back
+    exactly as it was (Run.save changes run.rec before it writes, so a failed record write would
+    otherwise leave the narrower booking in memory for the next save to persist). Once the queue write has landed the slots are given back, whatever follows: a
     failed ack write rolls nothing back (the job widened onto slots the queue has freed would be
     booked twice); the ack stays in run.rec for the next save, and shrink returns False. True:
     the ack is on disk. Whether the queue write landed is read back from queue.json (under the
     mutex nothing else writes it): one that landed before an Exception is committed, and one
     that landed before a KeyboardInterrupt (or any other BaseException) re-raises it with
-    nothing put back."""
+    nothing put back. A queue.json that cannot be read back is taken as landed: the error is
+    never on the side that books a slot twice, only on the side that leaves one unused (the
+    queue may still hold slots the narrowed job no longer runs on, until the run ends)."""
     before = copy.deepcopy(run.rec)
     slots = dict(run.rec.get("slots") or {}, cpu=list(keep))
     has = dict(run.rec.get("has") or {}, cpu=len(keep))
@@ -140,7 +142,11 @@ def shrink(store, run, keep, fields, ack):
                 e["cores"] = list(keep)
                 qm.save(store, q)
         except BaseException as exc:
-            if not queue_books(store, run.id, keep):
+            # Only a queue read back that says the write did not land is put back. Unreadable
+            # (None) counts as landed: the job stays narrow and the queue may still count the
+            # slots held, which wastes them; putting back (the caller then widens the job) could
+            # put the job on slots a landed write freed, which books them twice.
+            if queue_books(store, run.id, keep) is False:
                 # The queue still holds every slot: the record says so again, in memory, then
                 # on disk (a failed first write left the old record there; if this write fails
                 # too after one that landed, the record on disk under-reports and the queue
@@ -164,12 +170,13 @@ def shrink(store, run, keep, fields, ack):
 
 def queue_books(store, rid, keep):
     """True when queue.json on disk gives run rid's entry exactly the cores `keep` (the shrink's
-    queue write landed); False when it does not, or stays unreadable past queue_read_s (qm.load
-    waits out a reader that has it open)."""
+    queue write landed); False when it gives it anything else, or has no such entry; None when
+    it stays unreadable past queue_read_s (qm.load waits out a reader that has it open), so
+    whether the write landed is not known."""
     try:
         e = qm.entry_of(qm.load(store), rid)
     except OSError:
-        return False
+        return None
     return e is not None and e.get("cores") == list(keep)
 
 
