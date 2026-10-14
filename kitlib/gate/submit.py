@@ -15,9 +15,16 @@
             `refused`, found by the run_id in the payload's name
   redirect_output  the detached tool's stdout and stderr, appended to the output file
 
-The detached tool is started the way `machine_lock.py run --detach` starts its wrapper:
-Win32_Process.Create through PowerShell's CIM cmdlets with ShowWindow 0, so it is outside this
-process tree (it outlives the shell and the agent that submitted it) and has no window. Its
+The detached tool is started the way `machine_lock.py run --detach` starts its wrapper
+(kitlib.lock.detach, "Why WMI" and "Why the carrier"): `create` asks Win32_Process.Create, through
+PowerShell's CIM cmdlets, to start `command`'s argv: the pythonw.exe beside this interpreter
+running the carrier tools/no_window.py beside the tool, which starts the python.exe beside it
+running the tool with CREATE_NO_WINDOW and waits for it. WMI's process is outside this process
+tree and its job (it outlives the shell and the agent that submitted it); pythonw has no console,
+so the tool gets a console with no window, and nothing rests on ShowWindow. The pid `detach` gives
+is the carrier's: it lives exactly as long as the tool (it ends with the tool's exit code), and it
+runs from the same folder (a pinned export), so the claim watches it and the export is leased to
+it. A missing pythonw.exe, carrier or python.exe starts nothing. Its
 environment is this one, less the machine lock's MACHINE_LOCK_RUN (the landing books its own slot,
 never one nested in the submitter's run) and with MACHINE_LOCK_ORIGIN, this process's ancestry, so
 the machine lock gives the detached slot the submitter's role. A tool run from an export of pushed
@@ -38,7 +45,6 @@ import json
 import os
 import re
 import secrets
-import subprocess
 import sys
 import time
 
@@ -47,6 +53,7 @@ from kitlib import pluginsource
 from kitlib.gate import pin
 from kitlib.gate import result
 from kitlib.git import repo
+from kitlib.lock import detach as lockdetach
 from kitlib.lock import run as lockrun
 from kitlib.proc import process, spawn
 
@@ -60,14 +67,6 @@ RUN_ID = re.compile(r'[0-9a-f]{16}')
 CLAIM_WAIT_S = 15.0
 CLAIM_POLL_S = 0.25
 LANDED = ('pass', 'landed-ungated')
-# The detach of tools/machine_lock.py, the same script: the command line, folder and environment
-# arrive as JSON on stdin; it prints "<ReturnValue> <ProcessId>".
-DETACH_PS = ("$d = [Console]::In.ReadToEnd() | ConvertFrom-Json; "
-             "$si = New-CimInstance -ClassName Win32_ProcessStartup -Property "
-             "@{ShowWindow=[UInt16]0; EnvironmentVariables=[string[]]$d.env} -ClientOnly; "
-             "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
-             "@{CommandLine=$d.cmd; CurrentDirectory=$d.cwd; ProcessStartupInformation=$si}; "
-             "\"$($r.ReturnValue) $($r.ProcessId)\"")
 
 
 class SubmitError(Exception):
@@ -93,21 +92,27 @@ def run_id_of(payload):
     return rid if RUN_ID.fullmatch(rid) else None
 
 
+def command(tool_file, args, python=None):
+    """The detached tool's argv: the pythonw.exe beside `python` (default: this interpreter), the
+    carrier beside `tool_file`, the python.exe beside `python`, then `-B tool_file` and `args`.
+    kitlib.lock.detach.command's shape, without the lock's --detached-id."""
+    pythonw, console = lockdetach.pythons(python or sys.executable)
+    tool = os.path.abspath(tool_file)
+    carrier = os.path.join(os.path.dirname(tool), spawn.CARRIER)
+    return [pythonw, carrier, console, '-B', tool] + list(args)
+
+
 def detach(argv, cwd, env, run=None, timeout=START_TIMEOUT_S):
-    """Start `argv` detached and windowless: (pid, None), or (None, why)."""
-    run = run or spawn.run
-    data = {'cmd': subprocess.list2cmdline(argv), 'cwd': cwd,
-            'env': ['%s=%s' % kv for kv in env.items()]}
-    try:
-        r = run(['powershell', '-NoProfile', '-NonInteractive', '-Command', DETACH_PS],
-                input=json.dumps(data), capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError) as e:
-        return None, 'the detached start failed: %s' % e
-    parts = (r.stdout or '').split()
-    if r.returncode or len(parts) != 2 or parts[0] != '0' or not parts[1].isdigit():
-        return None, 'the detached start got %r (exit %s): %s' % (
-            (r.stdout or '').strip(), r.returncode, ' '.join((r.stderr or '').split())[-300:])
-    return int(parts[1]), None
+    """Start `command`'s argv detached and windowless (kitlib.lock.detach.create): (the carrier's
+    pid, None), or (None, why), with nothing started when its pythonw.exe, carrier or python.exe
+    is not a file. run: the tests' stand-in for spawn.run."""
+    why = lockdetach.missing(argv)
+    if why:
+        return None, 'the detached start: %s' % why
+    pid, why = lockdetach.create(argv, cwd, env, run=run, timeout=timeout)
+    if pid is None:
+        return None, 'the detached start %s' % ' '.join(why.split())
+    return pid, None
 
 
 def child_env(environ=None):
@@ -225,7 +230,7 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
                 '+'.join(branches), ','.join(t[:10] for t in tips), runs[0].started_at))
     except OSError as e:
         return _refused(runs, 'the submission could not write %s: %s' % (payload, e))
-    argv = [sys.executable, '-B', os.path.abspath(tool_file)] + list(child_args) + [FLAG, payload]
+    argv = command(tool_file, list(child_args) + [FLAG, payload])
     env = child_env(environ)
     pid, why = (detach_fn or detach)(argv, root, env)
     if pid is None:

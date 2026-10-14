@@ -3,7 +3,8 @@ wait-result command, the running land records written before the detached start,
 landing (Lander(submitted=...)) finishing those same records whatever it ends with, refusals and
 the machine lock's included. pin.lease_child: the lease a pinned tool's detached child holds. On a
 scratch repository with a bare remote and the scratch lock store (tests/gate/fixtures.py); the
-detached start is a fake, except in RealDetach, which starts tools/land.py and tools/gate.py
+detached start is a fake, except in RealCarrier, which starts a sleeping python through the
+carrier and finds no console window, and RealDetach, which starts tools/land.py and tools/gate.py
 detached on a landing they refuse at once."""
 import json
 import os
@@ -17,13 +18,18 @@ from unittest import mock
 from kitlib import gate as G
 from kitlib.gate import pin, result, submit
 from kitlib.git import repo
+from kitlib.lock import detach as lockdetach
 from kitlib.lock.store import LockError
 from kitlib.proc import process
 from tests import gitfixture, testutil
 from tests.gate.test_land import BRANCH, HANG_S, KIT_ROOT, LandCase
+from tests.lock.test_detach_cli import console_windows_of
 
 LAND_PY = os.path.join(KIT_ROOT, 'tools', 'land.py')
 GATE_PY = os.path.join(KIT_ROOT, 'tools', 'gate.py')
+CARRIER = os.path.join(KIT_ROOT, 'tools', 'no_window.py')
+PYTHONW = os.path.join(os.path.dirname(sys.executable), 'pythonw.exe')
+CONSOLE_PY = os.path.join(os.path.dirname(sys.executable), 'python.exe')
 
 
 class Detach(object):
@@ -82,8 +88,9 @@ class TheLine(SubmitCase):
             self.assertTrue(f.read().startswith('=== landing kit/feature at %s submitted '
                                                 % tip[:10]))
         [(argv, cwd, env)] = detach.calls
-        self.assertEqual(argv[:3], [sys.executable, '-B', LAND_PY])
-        self.assertEqual(argv[3:], ['-C', self.repo.root, '--expect-tip', tip, BRANCH,
+        # pythonw (no console) runs the carrier, which starts the console python with no window
+        self.assertEqual(argv[:5], [PYTHONW, CARRIER, CONSOLE_PY, '-B', LAND_PY])
+        self.assertEqual(argv[5:], ['-C', self.repo.root, '--expect-tip', tip, BRANCH,
                                     '--submitted', payload])
         self.assertEqual(cwd, self.repo.root)
         self.assertNotIn('MACHINE_LOCK_RUN', env)   # never a slot nested in the submitter's run
@@ -123,22 +130,53 @@ class TheLine(SubmitCase):
                          ('refused', G.REFUSED, out.lines[0]))
         self.assertIsNotNone(rec['finished_at'])
 
+    def test_the_command_is_the_carrier_beside_the_tool(self):
+        """The machine lock's detach shape (kitlib.lock.detach.command), with no --detached-id:
+        the pythonw and python.exe beside the interpreter, the carrier beside the tool."""
+        tool = os.path.join(self.tmp, 'export', 'tools', 'land.py')
+        py = os.path.join(self.tmp, 'py', 'pythonw.exe')
+        self.assertEqual(submit.command(tool, ['-C', 'r', 'b'], python=py),
+                         [py, os.path.join(self.tmp, 'export', 'tools', 'no_window.py'),
+                          os.path.join(self.tmp, 'py', 'python.exe'), '-B', tool, '-C', 'r', 'b'])
+        self.assertEqual(submit.command(LAND_PY, [])[:5],
+                         [PYTHONW, CARRIER, CONSOLE_PY, '-B', LAND_PY])
+
     def test_the_detach_reads_the_start_scripts_answer(self):
+        argv = submit.command(LAND_PY, ['b'])
+        seen = []
+
         def ran(stdout, rc=0):
-            def run(argv, **kw):
-                self.assertEqual(json.loads(kw['input'])['cwd'], 'C:\\cwd')
-                return subprocess.CompletedProcess(argv, rc, stdout, 'err text')
+            def run(args, **kw):
+                data = json.loads(kw['input'])
+                self.assertEqual(data['cwd'], 'C:\\cwd')
+                self.assertEqual(data['cmd'], subprocess.list2cmdline(argv))
+                seen.append(args[-1])
+                return subprocess.CompletedProcess(args, rc, stdout, 'err text')
             return run
-        self.assertEqual(submit.detach(['x'], 'C:\\cwd', {}, run=ran('0 4242\n')), (4242, None))
+        self.assertEqual(submit.detach(argv, 'C:\\cwd', {}, run=ran('0 4242\n')), (4242, None))
+        # the WMI start of the rule's home, which sets no ShowWindow: nothing rests on it
+        self.assertEqual(seen, [lockdetach.CREATE_PS])
+        self.assertNotIn('ShowWindow', seen[0])
         for stdout, rc in (('8 0\n', 0), ('', 1), ('0 notapid', 0)):
-            pid, why = submit.detach(['x'], 'C:\\cwd', {}, run=ran(stdout, rc))
+            pid, why = submit.detach(argv, 'C:\\cwd', {}, run=ran(stdout, rc))
             self.assertIsNone(pid)
             self.assertIn('the detached start got', why)
 
-        def broken(argv, **kw):
+        def broken(args, **kw):
             raise OSError('no powershell')
-        self.assertEqual(submit.detach(['x'], 'C:\\cwd', {}, run=broken),
+        self.assertEqual(submit.detach(argv, 'C:\\cwd', {}, run=broken),
                          (None, 'the detached start failed: no powershell'))
+
+    def test_a_missing_pythonw_or_carrier_starts_nothing(self):
+        def run(args, **kw):
+            raise AssertionError('started')
+        gone = os.path.join(self.tmp, 'nowhere', 'pythonw.exe')
+        argv = submit.command(LAND_PY, ['b'])
+        for i, what in ((0, 'pythonw.exe'), (1, 'the carrier'), (2, 'python.exe')):
+            bad = list(argv)
+            bad[i] = gone
+            self.assertEqual(submit.detach(bad, 'C:\\cwd', {}, run=run),
+                             (None, 'the detached start: %s is not a file: %s' % (what, gone)))
 
     def test_a_payload_that_cannot_be_read_is_a_submit_error(self):
         bad = os.path.join(self.tmp, 'bad.submit')
@@ -437,7 +475,40 @@ class LeaseChild(unittest.TestCase):
         self.assertFalse(os.path.exists(self.leases))
 
 
-@unittest.skipUnless(os.name == 'nt', 'the detached start is Win32_Process.Create')
+@unittest.skipUnless(os.name == 'nt', 'the detached start is Windows only')
+class RealCarrier(unittest.TestCase):
+    """submit.detach for real, on the command's pythonw, carrier and python.exe running a 2 s
+    sleep: the process WMI starts is pythonw.exe, the python.exe that runs the program is its
+    child, and no process of the tree owns a console window, hidden or shown (a console python.exe
+    WMI starts itself has a ConsoleWindowClass window, hidden only by ShowWindow)."""
+
+    def test_the_detached_program_runs_under_the_carrier_with_no_console_window(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(gitfixture.rmtree, tmp)
+        said = os.path.join(tmp, 'said.txt')
+        code = ('import os, sys, time; f = open(%r, "w"); f.write("%%d %%s" %% (os.getppid(), '
+                'sys.executable)); f.close(); time.sleep(2)' % said)
+        argv = submit.command(LAND_PY, [])[:3] + ['-c', code]
+        pid, why = submit.detach(argv, tmp, dict(os.environ))
+        self.assertIsNotNone(pid, why)
+        ctime = process.proc_ctime(pid)
+        self.assertIsNotNone(ctime, 'the carrier ended at once')
+        names = dict((p, n) for p, _pp, n in process.snapshot())
+        self.assertEqual(names.get(pid, '').lower(), 'pythonw.exe')
+        seen, end = [], time.monotonic() + HANG_S
+        while process.alive(pid, ctime) and time.monotonic() < end:
+            tree = {pid} | {p for p, _c in process.descendants(pid, ctime)}
+            seen += console_windows_of(tree)
+            time.sleep(0.05)
+        self.assertFalse(process.alive(pid, ctime), 'the carrier did not end')
+        with open(said, encoding='utf-8') as f:
+            parent, exe = f.read().split(' ', 1)
+        self.assertEqual(int(parent), pid)                      # the carrier started it
+        self.assertEqual(os.path.basename(exe).lower(), 'python.exe')
+        self.assertEqual(seen, [], 'a console window belonged to the detached start')
+
+
+@unittest.skipUnless(os.name == 'nt', 'the detached start is Windows only')
 class RealDetach(SubmitCase):
     """tools/land.py --submit and tools/gate.py land --submit, run for real on a landing from a
     linked worktree: each prints its one SUBMITTED line and exits 0, and the detached landing it
