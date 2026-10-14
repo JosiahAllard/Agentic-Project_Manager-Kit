@@ -12,7 +12,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 - strong-worker: concurrency, networking, simulation or ordering, landing or lock tools, migrations, CI config, known-area crash fixes.
 - deep-worker: its own launched session for the hardest issues; never a subagent dispatch.
 - reviewer: read-only review of one branch against its brief. Never the author.
-- lander: lands one reviewed branch (or a batch) on the coordinator's go. Never edits code.
+- lander: optional wrapper that submits one reviewed branch (or a batch) for landing, waits for the result and reports. Never edits code.
 - records: settled facts into docs only (decisions, landing notes, plan ticks).
 - spec-writer: extends a named spec from the owner's answers. Docs only.
 - researcher: read-only ideas and prior art; proposes concepts for the owner to pick.

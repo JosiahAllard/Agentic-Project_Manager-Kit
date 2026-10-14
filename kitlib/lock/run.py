@@ -100,8 +100,8 @@ def _ancestors():
 def nest_check(store, value):
     """(parent, None) when MACHINE_LOCK_RUN's value names the run this process is inside (the
     named wrapper is one of its ancestors, alive, and its record says held), else (None, why).
-    parent = {id, pid, ctime, kind, shares, has: {pool: slots it holds or inherited}, cores,
-    gpus}."""
+    parent = {id, pid, ctime, kind, shares, resource (None: it names none), has: {pool: slots it
+    holds or inherited}, cores, gpus}."""
     try:
         m = NEST_RE.match(value or "")
         if not m:
@@ -118,7 +118,7 @@ def nest_check(store, value):
             return None, "the holder is dead"
         has = d.get("has") if isinstance(d.get("has"), dict) else {}
         return {"id": rid, "pid": pid, "ctime": ct, "kind": d.get("kind"),
-                "shares": dict(d.get("shares") or {}),
+                "shares": dict(d.get("shares") or {}), "resource": d.get("resource"),
                 "has": {p: n for p, n in has.items() if p in POOLS and type(n) is int and n > 0},
                 "cores": list(d.get("cores") or []), "gpus": list(d.get("gpus") or [])}, None
     except Exception as e:
@@ -1147,7 +1147,7 @@ def _relayout(store, L):
 
 def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, no_wait=False,
          expect_s=None, note=None, on_release_cmd=None, cmd=None, store=None, kinds_table=None,
-         env=None, rid=None, detached=False, log=None, gate=False):
+         env=None, rid=None, detached=False, log=None, gate=False, resource=None, priority=None):
     """Waits for a run of kind `kind` for repo/slug to hold its slots and returns its Slot.
     Raises LockError (the CLI's exit code) when it does not. cores: fewer cpu slots than the
     kind's size, 1..that size, never more; the kind's size is its whole number of cores
@@ -1158,7 +1158,13 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     expects to hold (default: its history's median, else its own hold's end, else warn_min).
     env: the environment its commands get (default os.environ); rid, detached and log are the
     CLI's (a detached run's id and log file). gate: a gate run (kitlib.gate.runner), recorded as
-    `gate`; by default only a gate's leftover build daemons are stopped (Slot.stop_daemons)."""
+    `gate`; by default only a gate's leftover build daemons are stopped (Slot.stop_daemons).
+    resource: an exclusive resource (a non-empty string, e.g. "landing:<git common dir>") the run
+    holds for its whole life: it does not start while another run holding it is alive (the queue
+    entry and record carry it). A nested run naming one its parent does not hold joins the queue
+    for it even when the parent covers all it needs. priority "land": its entry plans ahead of
+    every ordinary waiting run (kitlib.lock.queue.plan). Library callers only: neither is on the
+    CLI or the MCP server."""
     store = store or Store()
     env = dict(os.environ if env is None else env)
     try:
@@ -1180,6 +1186,11 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
         raise LockError(EXIT_USAGE, "usage: --gpu-share training needs a kind whose gpu is shared")
     if expect_s is not None and not (isinstance(expect_s, (int, float)) and expect_s > 0):
         raise LockError(EXIT_USAGE, "usage: --expect must be a positive duration")
+    if priority is not None and priority not in qm.PRIORITIES:
+        raise LockError(EXIT_USAGE, "usage: unknown priority %r (known: %s)"
+                        % (priority, ", ".join(qm.PRIORITIES)))
+    if resource is not None and not (isinstance(resource, str) and resource):
+        raise LockError(EXIT_USAGE, "usage: a resource is a non-empty string, not %r" % (resource,))
     L = lay.in_force(store)["layout"]
     try:                            # a size the layout cannot give fails closed
         kinds_mod.check_cap(table, L["agent_cap"])
@@ -1215,7 +1226,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     if own is None:
         raise LockError(EXIT_USAGE, "usage: nested run refused: %s. Exit 2." % why)
     shares = hl.shares_for(k, gpu_share)
-    if parent and not any(own.values()):
+    if parent and not any(own.values()) and (resource is None or parent.get("resource") == resource):
         return Slot(store, None, L, own, parent, None, env, on_release_cmd, k, shares, log, gate)
     if own["gpu"] and bg_ancestor(env):
         raise LockError(EXIT_USAGE, "usage: a gpu lock inside a background run would pause that "
@@ -1228,7 +1239,9 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
                    if hist is not None else "guide",
                    need=own, has={p: n for p, n in has.items() if n}, hold=hold,
                    parent=parent["id"] if parent else None, gpu_share=gpu_share,
-                   **({"gate": True} if gate else {}))
+                   **({"gate": True} if gate else {}),
+                   **({"resource": resource} if resource else {}),
+                   **({"priority": priority} if priority else {}))
     mutex, done, code, how = None, False, EXIT_REQUIRE, "not acquired"
     try:
         try:
