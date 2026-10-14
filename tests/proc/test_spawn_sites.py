@@ -41,9 +41,9 @@ ctypes, CREATE_NEW_CONSOLE, DETACHED_PROCESS (unless the start's argv names pyth
 AllocConsoleWithOptions, AttachConsole, a WMI Win32_Process Create, and Start-Process, `cmd /c
 start`, `start ""` and `-WindowStyle Hidden`, and Python code text pythonw runs (`-c`) that
 starts a console child with no window choice and no kitlib import. Each one is forbidden unless it is in its home
-(RULE_HOMES: the console calls in kitlib/proc/console.py, the WMI start in tools/machine_lock.py's
-detach path) or has a HAZARD_EXEMPT row, counted and reasoned the same way as EXEMPT. A row for a
-file another branch adds (SIBLING_FILES) is not stale while that file is absent here.
+(RULE_HOMES: the console calls in kitlib/proc/console.py, the WMI start in kitlib/lock/detach.py,
+the lock tool's detach path) or has a HAZARD_EXEMPT row, counted and reasoned the same way as
+EXEMPT.
 """
 import os
 import unittest
@@ -110,10 +110,7 @@ RULE_HOMES = {      # what -> the one file where the rule itself allows it
     'AllocConsole': 'kitlib/proc/console.py',
     'AllocConsoleWithOptions': 'kitlib/proc/console.py',
     'AttachConsole': 'kitlib/proc/console.py',
-    'WMI Win32_Process Create': 'tools/machine_lock.py',
-}
-SIBLING_FILES = {   # file -> the branch that adds it; its rows are not stale while it is absent
-    'tests/proc/test_winwatch.py': 'kit/window-monitor',
+    'WMI Win32_Process Create': 'kitlib/lock/detach.py',
 }
 
 GUARD_READS = ('the guard parses the commands agents run: it names Start-Process and cmd start to '
@@ -219,9 +216,11 @@ HAZARD_EXEMPT = {
      'DETACHED_PROCESS'): (
         1, 'asserts the flag is absent from what kitlib.proc.spawn hands on; nothing is started '
            'with it'),
-    ('tests/proc/test_winwatch.py', 'RealWindows.test_a_new_console_child_is_recorded_with_its_pid',
+    ('tests/proc/test_winwatch.py', 'ConsoleWindow.test_a_new_console_child_is_recorded_with_its_pid',
      'CREATE_NEW_CONSOLE'): (
-        1, 'window monitor self-test: must open exactly one window to prove detection'),
+        1, 'the window monitor\'s one real-window test: it must open one console window to prove '
+           'the monitor sees it. ConsoleWindow runs only when KIT_WINDOW_TESTS=1, so the gate never '
+           'opens it; every other child in the file passes CREATE_NO_WINDOW'),
 }
 
 
@@ -291,13 +290,6 @@ def scan_hazards(root, stub=True):
     if stub:
         found.extend(windowscan.scan_python(stubs.stub_text(STUB_TOOL, kit=ROOT), STUB))
     return [f for f in found if RULE_HOMES.get(f[2]) != f[0]]
-
-
-def hazard_check(found, exempt, root):
-    """check(), with a row for a SIBLING_FILES file absent under root never stale."""
-    unlisted, stale = check(found, exempt)
-    return unlisted, [k for k in stale
-                      if not (k[0] in SIBLING_FILES and not os.path.isfile(os.path.join(root, k[0])))]
 
 
 class Scanner(unittest.TestCase):
@@ -594,7 +586,7 @@ class HazardFixture(unittest.TestCase):
         r.write('.claude/worktrees/w/bad.py', 'import os\nos.system("x")\n')
         r.write('kitlib/proc/console.py', 'from ctypes import windll\nwindll.kernel32.AllocConsole()\n')
         r.write('kitlib/other.py', 'from ctypes import windll\nwindll.kernel32.AttachConsole(-1)\n')
-        r.write('tools/machine_lock.py', 'D = "Win32_Process -MethodName Create"\n')
+        r.write('kitlib/lock/detach.py', 'D = "Win32_Process -MethodName Create"\n')
         r.write('tools/other.py', 'D = "Win32_Process -MethodName Create"\n')
         r.write('kit/startup.py', 'S = "Win32_ProcessStartup Create"\n')
         r.commit('fixture', 'kit/bad.py')
@@ -629,21 +621,17 @@ class HazardFixture(unittest.TestCase):
     def test_a_rule_home_is_allowed_only_in_its_file(self):
         self.assertEqual(self.labels('kitlib/proc/console.py'), [])
         self.assertEqual(self.labels('kitlib/other.py'), ['AttachConsole'])
-        self.assertEqual(self.labels('tools/machine_lock.py'), [])
+        self.assertEqual(self.labels('kitlib/lock/detach.py'), [])
         self.assertEqual(self.labels('tools/other.py'), ['WMI Win32_Process Create'])
         self.assertEqual(self.labels('kit/startup.py'), [])
 
-    def test_unlisted_hazards_fail_and_a_sibling_row_is_tolerated_only_while_absent(self):
+    def test_unlisted_hazards_fail_and_a_row_for_nothing_is_stale(self):
         row = ('kit/bad.py', '<module>', 'os.system')
-        sibling = ('tests/proc/test_winwatch.py', 'T.t', 'CREATE_NEW_CONSOLE')
-        unlisted, stale = hazard_check(self.found, {row: (1, 'why'), sibling: (1, 'why')},
-                                       self.repo.root)
+        gone = ('tests/proc/test_gone.py', 'T.t', 'CREATE_NEW_CONSOLE')
+        unlisted, stale = check(self.found, {row: (1, 'why'), gone: (1, 'why')})
         self.assertNotIn(row, [f[:3] for f in unlisted])
         self.assertIn(('kit/bad.py', '<module>', 'os.startfile'), [f[:3] for f in unlisted])
-        self.assertEqual(stale, [])
-        self.repo.write('tests/proc/test_winwatch.py', '"""no window here"""\n')
-        self.assertEqual(hazard_check(self.found, {sibling: (1, 'why')}, self.repo.root)[1],
-                         [sibling])
+        self.assertEqual(stale, [gone])
 
 
 class Hazards(unittest.TestCase):
@@ -652,7 +640,7 @@ class Hazards(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.found = scan_hazards(ROOT)
-        cls.unlisted, cls.stale = hazard_check(cls.found, HAZARD_EXEMPT, ROOT)
+        cls.unlisted, cls.stale = check(cls.found, HAZARD_EXEMPT)
 
     def test_no_window_hazard_without_a_row(self):
         said = ['%s:%d  %s  in %s' % (rel, line, what, func)
