@@ -2,13 +2,16 @@
 a record pulled from the main checkout holds `pulled_by: main`,
 which no landing matches. kitlib.backlog.at_landing.close_landed with the tip and base that
 kitlib.gate.land.Lander.close_pulled passes, on a ref store in a scratch repository."""
+import json
 import os
 import unittest
 from unittest import mock
 
+import kitlib.config as kconfig
 from kitlib import gate as G
 from kitlib.backlog import at_landing, offer
 from kitlib.backlog import store as smod
+from kitlib.git import refs
 
 from tests.backlog.helpers import priced
 from tests.gate import test_land_store as tls
@@ -114,6 +117,59 @@ class ClosesByTrailer(StoreLandCase):
         self.assertEqual(self.warnings(out), [])
         self.assertEqual(self.notes(out), [])
 
+    def test_a_stacked_branch_of_a_batch_does_not_read_the_closes_lines_merged_before_it(self):
+        # kit/other starts at a1, kit/feature's `Closes: ONE` commit, and lands after it: its
+        # messages are read down to kit/feature's merge, so ONE, closed already, is not read
+        # again as an id no store holds (a NOTE).
+        self.seed(pulled('ONE', by='main'), pulled('KEEP', by='main'))
+        wt = self.repo.worktree('feature')
+        self.repo.write('a.py', 'x = 1\n', root=wt)
+        a1 = self.repo.commit('a1\n\nCloses: ONE\n%s\n' % TRAILERS, 'a.py', cwd=wt)
+        self.repo.write('a2.py', 'x = 2\n', root=wt)
+        tip_a = self.repo.commit('a2\n\n%s\n' % TRAILERS, 'a2.py', cwd=wt)
+        other = os.path.join(self.repo.root, '.claude', 'worktrees', 'other')
+        self.repo.git('worktree', 'add', '-q', other, '-b', 'kit/other', a1)
+        self.repo.write('b.py', 'y = 1\n', root=other)
+        tip_b = self.repo.commit('b\n\n%s\n' % TRAILERS, 'b.py', cwd=other)
+        out = self.lander([BRANCH, 'kit/other'], self.main, [tip_a, tip_b]).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.stems(), ['KEEP'])
+        closed = [l for l in out.lines if l.startswith('closed ')]
+        self.assertEqual(len(closed), 1, out.lines)
+        self.assertIn('named by a Closes trailer of %s' % BRANCH, closed[0])
+        self.assertEqual(self.notes(out), [])
+        self.assertEqual(self.warnings(out), [])
+
+    def test_a_holder_landing_in_the_same_batch_is_no_builder_to_tell(self):
+        self.seed(pulled('TWO', by='kit/other'), pulled('KEEP', by='main'))
+        tip_a = self.branch_with('a\n\nCloses: TWO\n%s\n' % TRAILERS)
+        tip_b = self.branch_with('b\n\n%s\n' % TRAILERS, name='other', path='b.py')
+        out = self.lander([BRANCH, 'kit/other'], self.main, [tip_a, tip_b]).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.stems(), ['KEEP'])
+        self.assertTrue(any(l.startswith('closed TWO ') for l in out.lines), out.lines)
+        self.assertEqual(self.warnings(out), [])
+
+    def close_naming(self, tip):
+        cfg = kconfig.load_at(self.repo.root, self.main)
+        return at_landing.close_landed(self.repo.root, cfg, BRANCH, 'f' * 40, tip=tip,
+                                       base=self.main)
+
+    def test_an_unknown_id_is_a_note_only_when_every_store_was_read(self):
+        self.seed(pulled('KEEP', by='main'))
+        tip = self.branch_with('fix\n\nCloses: NOPE\n%s\n' % TRAILERS)
+        read = self.close_naming(tip)
+        self.assertEqual(len(read), 1, read)
+        self.assertTrue(read[0].startswith('NOTE'), read)
+        self.assertIn('NOPE', read[0])
+        # The store could not be read, so NOPE may be in it: no NOTE, the WARNING says so.
+        with mock.patch.object(refs, 'ls_remote', return_value=(None, 'boom')):
+            unread = self.close_naming(tip)
+        self.assertEqual(len(unread), 1, unread)
+        self.assertTrue(unread[0].startswith('WARNING: %s landed' % BRANCH), unread)
+        self.assertIn('boom', unread[0])
+        self.assertEqual(self.stems(), ['KEEP'])
+
     def test_a_trailer_naming_a_record_that_is_not_pulled_is_a_warning_with_the_command(self):
         self.seed(priced('OPEN'))
         out = self.land(self.branch_with('fix\n\nCloses: OPEN\n%s\n' % TRAILERS))
@@ -187,6 +243,7 @@ class ClosesByTrailerInThePmDataStore(StoreLandCase):
     setUp = tls.PmDataClose.setUp
     pm_worktree = tls.PmDataClose.pm_worktree
     record = tls.PmDataClose.record
+    pm_root = tls.PmDataClose.pm_root
     branch_with = ClosesByTrailer.branch_with
 
     def test_a_record_a_trailer_names_is_closed_in_the_pm_data_store(self):
@@ -245,6 +302,50 @@ class ClosesByTrailerInThePmDataStore(StoreLandCase):
         self.assertIn('D2 is still pulled by main and was not closed; close it with: ', warn[0])
         self.assertTrue(warn[0].endswith(' close D2 --reason "landed %s"' % out.merge), warn[0])
         self.assertNotIn('no longer pulled by', warn[0])
+
+    def test_the_code_repositorys_main_needs_no_telling_when_the_pm_data_main_differs(self):
+        """The PM data worktree's own configured main is its data branch; a record the code
+        repository's main checkout pulled (pulled_by: main) is still closed with no holder to
+        tell."""
+        wt = self.pm_worktree(pulled('D2', by='main'), pulled('KEEP', by='main'))
+        with open(os.path.join(wt, '.kit.json'), encoding='utf-8') as f:
+            cfg = json.load(f)
+        cfg.setdefault('repo', {})['main_branch'] = 'pmdata'
+        self.repo.write('.kit.json', json.dumps(cfg, indent=1) + '\n', root=wt)
+        self.assertEqual(kconfig.load(wt).main_branch, 'pmdata')
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        out, warn = self.land_closing('D2')
+        self.assertFalse(os.path.exists(self.record(wt, 'D2')), out.lines)
+        self.assertTrue(any(l.startswith('closed D2 ') for l in out.lines), out.lines)
+        self.assertEqual(warn, [])
+
+    def test_an_overtaken_close_that_left_a_file_gives_the_compare_not_the_close(self):
+        """D2, which main pulled and the trailer names: another commit changes its file under the
+        close, and once the close deleted it a hand writes it again, so the put-back leaves it
+        (Overtaken.left): the WARNING gives the compare with HEAD and no close command."""
+        wt = self.seeded(pulled('D2', by='main'))
+        real, theirs = smod.MainBackend._write_files, []
+
+        def another_commit_then_write(backend, writes, before, paths, branch):
+            first = branch and not theirs
+            if first:
+                with open(self.record(wt, 'D2'), 'a', encoding='utf-8', newline='\n') as f:
+                    f.write('\nanother session wrote this\n')
+                theirs.append(self.repo.commit('another session', 'kit/backlog/D2.md', cwd=wt))
+            real(backend, writes, before, paths, branch)
+            if first:
+                with open(self.record(wt, 'D2'), 'w', encoding='utf-8', newline='\n') as f:
+                    f.write('written by hand\n')
+        with mock.patch.object(smod.MainBackend, '_write_files', another_commit_then_write):
+            out, warn = self.land_closing('D2')
+        self.assertEqual(len(theirs), 1)
+        with open(self.record(wt, 'D2'), encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'written by hand\n')
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertTrue(warn[0].endswith(
+            '; do not commit it over that commit: compare each path left with HEAD first: '
+            'git -C "%s" diff HEAD -- "kit/backlog/D2.md"' % self.pm_root(wt)), warn[0])
+        self.assertNotIn('close it with', warn[0])
 
     def test_a_trailer_close_that_was_not_committed_still_tells_the_live_holder(self):
         self.repo.git('branch', 'kit/other', self.main)

@@ -13,7 +13,8 @@ branch checked out) takes part too: the PM's records of this repository live the
                     the deletion committed on the PM data branch); and every record a `Closes:
                     <ID>[, <ID>]` line in the messages of the branch's commits names
                     (closes_trailers), while pulled, whoever pulled it (a holder that is a live
-                    branch other than main is a WARNING: tell its builder). What
+                    branch other than main and outside the batch is a WARNING: tell its builder).
+                    What
                     cannot be closed is a WARNING line naming the command, and the landing
                     stands; trailer ids no store holds are one NOTE line
   landable_commands the `backlog.py landable` command of each store that takes part
@@ -284,7 +285,7 @@ class _Seen(object):
         self.held, self.read, self.unread = set(), 0, False
 
 
-def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None):
+def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None, batch=()):
     """Close every record `branch`, which landed as `merge`, holds pulled: in the configured store
     when it is a `ref` or `branch` store, and in the PM data branch's store (_pm_data_store). With
     `tip` and `base` (the branch tip merged and the main it was merged onto), every record a
@@ -293,8 +294,12 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None)
     landing matches. The lines to print (`closed ...`, and a `WARNING: ...` naming the command for
     each record or store that could not be closed, or trailers that could not be read; one
     `NOTE: ...` naming the trailer ids no store read holds, when every store taking part was read).
+    `batch`: the branches landing with `branch`, whose builders a trailer close needs no telling.
+    The code repository's mains (`cfg`'s guarded_mains) are main in the PM data store too, whose
+    own configured main is its data branch.
     [] when neither store takes part and no trailer names a record, or nothing is pulled."""
     lines, named, seen = [], [], _Seen()
+    quiet = tuple(cfg.guarded_mains()) + tuple(batch)    # holders nobody needs to tell
     if tip and base:
         named, why = closes_trailers(root, tip, base)
         if named is None:
@@ -306,7 +311,7 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None)
     backend = ref_store(root, cfg, fetch=True)
     if backend is not None:
         lines.extend(_close_in(backend, root, cfg, branch, merge, session,
-                               lambda *args: close_command(root, *args), named, seen))
+                               lambda *args: close_command(root, *args), named, seen, quiet))
     pm_root, pm_cfg, pm_backend, why = _pm_data_store(
         root, backend.describe() if backend is not None else None)
     if why:
@@ -318,7 +323,8 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None)
                                                             branch)))
     elif pm_backend is not None:
         lines.extend(_close_in(pm_backend, pm_root, pm_cfg, branch, merge, session,
-                               lambda *args: backlog_command(pm_root, *args), named, seen))
+                               lambda *args: backlog_command(pm_root, *args), named, seen,
+                               quiet))
     unknown = [rid for rid in named if rid not in seen.held]
     if unknown and seen.read and not seen.unread:
         lines.append('NOTE: %s landed, and a Closes trailer of its commits names %s, which no '
@@ -354,14 +360,16 @@ def _after_put_back(store, rid, branch, command, reason, named=False):
                '' if named else ' by %s' % branch, command('show', rid)))
 
 
-def _close_in(backend, root, cfg, branch, merge, session, command, named=(), seen=None):
+def _close_in(backend, root, cfg, branch, merge, session, command, named=(), seen=None,
+              quiet=()):
     """close_landed for one store: `backend` of the repository or worktree `root` with `cfg`;
     `command(*args)` is the printed command line for a write the landing could not make. `named`:
     the ids the branch's `Closes:` trailers name; one this store does not hold is another store's
     or none (close_landed's NOTE, from `seen`, a _Seen); one it holds and not pulled is a WARNING
     naming the command; one pulled by a branch that is neither main nor a dead pull (no local,
     remote-tracking or worktree branch by that name: offer.live_branches) is closed, with a
-    WARNING that the holder's builder must be told."""
+    WARNING that the holder's builder must be told, unless the holder is in `quiet` (the code
+    repository's mains and the batch's branches: _live_holder_warning)."""
     seen = seen if seen is not None else _Seen()
     reason = 'landed %s' % merge
     unread = backlog_command(root, 'landable', branch)
@@ -438,14 +446,16 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
                             command('catch-up', '--apply',
                                     smod.quoted(exc.paths or [backend.path_of(rid)]))))
             if rid in by_trailer:           # closed all the same: its holder must be told
-                lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root))
+                lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root,
+                                                  quiet))
             continue
         except IndexStale as exc:           # committed; only that worktree's index is behind
             lines.append('WARNING: %s landed, and %s was closed in the backlog store %s (%s); '
                          'repair the index with: %s'
                          % (branch, rid, backend.describe(), _one_line(str(exc)), exc.repair))
             if rid in by_trailer:
-                lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root))
+                lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root,
+                                                  quiet))
             continue
         except Exception as exc:            # one record's failure never stops the others
             what = ('%s: %s' % (exc.label, exc) if isinstance(exc, Refusal)
@@ -468,17 +478,19 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
                          % (rid, reason, (tip or '?')[:10], whose))
         lines.extend('  ' + line for line in change.lines if line != 'CLOSED %s' % rid)
         if rid in by_trailer:
-            lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root))
+            lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root,
+                                              quiet))
     return lines
 
 
-def _live_holder_warning(branch, rid, holder, cfg, live, root):
+def _live_holder_warning(branch, rid, holder, cfg, live, root, quiet=()):
     """[] when `holder`, who had `rid` pulled before a Closes trailer of `branch` closed it, is
-    the landed branch, the main branch (a pull made in the main checkout), unnamed, or a dead
-    pull (git answered and no branch has that name); else the WARNING that the holder's builder
-    must be told. `live`: offer.live_branches' answer, filled on first use; a probe that fails
-    counts the holder live (fail toward telling)."""
-    if holder in (branch, cfg.main_branch, '?', ''):
+    the landed branch, the store's main branch or one in `quiet` (the code repository's mains: a
+    pull made in the main checkout; a branch of the same batch), unnamed, or a dead pull (git
+    answered and no branch has that name); else the WARNING that the holder's builder must be
+    told. `live`: offer.live_branches' answer, filled on first use; a probe that fails counts the
+    holder live (fail toward telling)."""
+    if holder in (branch, cfg.main_branch, '?', '') or holder in quiet:
         return []
     if not live:
         live.extend(offer.live_branches(root, cfg.remote))
