@@ -126,6 +126,10 @@ def _add(ctx, args):
     if kind == 'existing' and not force:
         for w in _pl.worktrees_using(repo, branch_ref):
             raise die("'%s' is already used by worktree at '%s'" % (branch_ref[len('refs/heads/'):], w.path))
+    if repo.worktree_config and os.path.exists(repo.worktree_config_path):
+        # builtin/worktree.c copy_filtered_worktree_config: git copies this worktree's
+        # config.worktree into the new one, less core.bare and core.worktree. Not modelled.
+        raise Unsupported('worktree add copying config.worktree (extensions.worktreeConfig)')
     # the admin directory
     name = os.path.basename(path)
     if not name or any(c in name for c in ' ~^:?*[\\') or name.startswith('.') or name.endswith('.lock'):

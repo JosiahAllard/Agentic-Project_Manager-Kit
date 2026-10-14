@@ -50,7 +50,7 @@ from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.lock import run as lockrun
 from kitlib.lock.store import EXIT_USAGE, LockError
-from kitlib.proc import process
+from kitlib.proc import process, winwatch
 from kitlib.proc.job import JobError
 from kitlib.records import gate_ok
 
@@ -60,6 +60,9 @@ NO_STEP = ('REFUSED: no gate step selected: the "gate".steps of .kit.json cover 
 NO_CHECKS = ('GATE OK (auto-detected: no stack found, so NO checks ran; give the gate steps with a '
              '"gate" section in .kit.json or tools/gate.json)')
 PROBE_TIMEOUT = 60      # seconds a `requires` probe argv may take
+# A console window the gate's run opened (window_results): False, it warns; True, it fails the
+# gate as a `windows` result. The one switch.
+WINDOWS_FAIL = False
 RESULT = {'PASS': 'pass', 'WARN': 'warn', 'SKIP': 'skip', 'REUSED': 'reused'}
 
 
@@ -438,13 +441,16 @@ def _to_run(chosen, reused):
 
 
 def _with_reused(results, chosen, reused):
-    """`results` with a REUSED result for each reused step, in the order of `chosen`."""
+    """`results` with a REUSED result for each reused step, in the order of `chosen`, then any
+    result that is no step's (window_results' `windows`)."""
     if not reused:
         return results
     by_name = {r['name']: r for r in results}
+    steps = {s.name for s in chosen}
     return [by_name[s.name] if s.name in by_name else dict(
         {'name': s.name, 'status': 'REUSED', 'seconds': None, 'log': None},
-        reasons=[reused[s.name]]) for s in chosen if s.name in by_name or s.name in reused]
+        reasons=[reused[s.name]]) for s in chosen if s.name in by_name or s.name in reused] + [
+        r for r in results if r['name'] not in steps]
 
 
 def _keep(plan, results, logs, say):
@@ -471,13 +477,15 @@ def plan_lines(chosen, why, all_steps, base_text, changed):
 
 
 def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book_kw, merged=False,
-          checks_rev=None, gate=None):
+          checks_rev=None, gate=None, seen=None):
     """Runs `chosen` in a slot of `kind`: `(results, None)`, or `(None, Outcome)` when the hook
     module or the booking refuses. The hook module's checks come from the work tree, or from
     commit `checks_rev` when given (a landing: --expect-main). `chosen` is never empty. The slot
     is booked as a gate run, so the build daemons the gate leaves that serve nothing outside its
     job are stopped at its end (kitlib.lock.site, machine_lock.daemons; kitlib.proc.daemons).
-    `gate`: the gate the steps are judged by (detect.effective); default the configured one."""
+    `gate`: the gate the steps are judged by (detect.effective); default the configured one.
+    After the steps it says the run's console-window report (window_results); `seen`, a dict
+    when given, gets `windows`: the windows as dicts, None when nothing was watched."""
     checks, options = {}, {}
     if any(s.check for s in chosen):
         try:
@@ -501,8 +509,26 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
         say(slot.held_text())
         results = run_steps(slot.launcher, chosen, gate or cfg.section('gate'), ctx, log_dir, say,
                             checks)
+        results += window_results(slot, say, seen)
         slot.release(0 if verdict(results)[0] and not nothing_ran(results) else 1, 'done')
     return results, None
+
+
+def window_results(slot, say, seen=None):
+    """Stops the lock run's window monitor (kitlib.lock.run.Slot.watch_stop, kitlib.proc.winwatch)
+    and says its report: `windows opened: N` and a line per window. Returns [] (a window warns),
+    or with WINDOWS_FAIL a FAIL result named `windows` when the run opened one. Fills
+    seen['windows'] when `seen` is a dict."""
+    windows = slot.watch_stop()
+    for line in slot.window_lines(fails=WINDOWS_FAIL):
+        say(line)
+    if seen is not None:
+        seen['windows'] = None if windows is None else [w.as_dict() for w in windows]
+    n = len(winwatch.counted(windows))
+    if not (WINDOWS_FAIL and n):
+        return []
+    return [{'name': 'windows', 'status': 'FAIL', 'seconds': None, 'log': None,
+             'reasons': ['%d console window(s) opened' % n]}]
 
 
 def lock_refusal(e):
@@ -562,7 +588,8 @@ def _branch_gate(root, base=None, full=False, only=None, plan=False, slug=None, 
     merge base with HEAD is what is compared). Outcome codes: OK, FAILED, USAGE (an --only name
     no step has, a --base that does not resolve), REFUSED, or a machine lock code. Facts:
     verdict, results, record (the record's path or None), no_record (why none was written),
-    head, base, log_dir, changed, source (kitlib.gate.detect: `gate.json` or `auto`, once the
+    head, base, log_dir, changed, windows (window_results: the console windows its run saw, as
+    dicts; None when no step ran), source (kitlib.gate.detect: `gate.json` or `auto`, once the
     config is read). The last line, once the config is read, is the source line (detect.label).
     An auto-detected gate that found no stack runs nothing and passes, its verdict line saying
     so (NO_CHECKS)."""
@@ -657,11 +684,11 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
                                                 only=only, head=head, branch=branch)
     reused = _say_plan(plan, chosen, logs, say)
     run = _to_run(chosen, reused)
-    results = []
+    results, watched = [], {}
     if run:
         results, refused = gated(cfg, top, mb, changed, run, gate['kind'], name,
                                  slug or slug_of(branch or head[:10]), logs, say, book_kw,
-                                 gate=gate)
+                                 gate=gate, seen=watched)
         if refused is not None:
             return refused
     results = _with_reused(results, chosen, reused)
@@ -669,7 +696,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     ok, line = verdict(results, empty)
     lines = [line, 'logs: %s' % logs]
     facts = dict(verdict=line, results=results, record=None, no_record=None, head=head, base=mb,
-                 log_dir=logs, changed=changed)
+                 log_dir=logs, changed=changed, windows=watched.get('windows'))
     if not ok:
         facts['no_record'] = 'the gate failed'
         return G.Outcome(G.FAILED, lines, **facts)
@@ -734,8 +761,8 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     non-manual step with full, each running its full_cmd when it has one), and each step's
     merged_args are appended, then `lane_args` (the landing lane's merged_args). Outcome codes:
     OK, FAILED, REFUSED (also when no step is selected) or a machine lock code; facts verdict,
-    results, log_dir, head. Check steps run the hook module of commit `base`, as the config is
-    read from it (kitlib.gate.hookrev), never the merged tree's.
+    results, log_dir, head, windows (as the branch gate's). Check steps run the hook module of
+    commit `base`, as the config is read from it (kitlib.gate.hookrev), never the merged tree's.
 
     `reuse(chosen) -> (reuse.Plan)` (kitlib.gate.reuse.planner): the steps it names are not run
     and count as REUSED; its lines, then the lines of its keep (the results it stores in the gate
@@ -766,10 +793,11 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     plan = reuse(chosen) if reuse is not None and not empty else None
     reused = _say_plan(plan, chosen, logs, say)
     run = _to_run(chosen, reused)
-    results = []
+    results, watched = [], {}
     if run:
         results, refused = gated(cfg, root, base, changed, run, gate['kind'], name, slug_of(slug),
-                                 logs, say, book_kw, merged=True, checks_rev=base, gate=gate)
+                                 logs, say, book_kw, merged=True, checks_rev=base, gate=gate,
+                                 seen=watched)
         if refused is not None:
             return refused
     results = _with_reused(results, chosen, reused)
@@ -778,6 +806,6 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     refused = nothing_ran(results) if ok and not empty else None
     if refused:
         return G.Outcome(G.REFUSED, [refused, 'logs: %s' % logs], verdict=line, results=results,
-                         log_dir=logs, head=head)
+                         log_dir=logs, head=head, windows=watched.get('windows'))
     return G.Outcome(G.OK if ok else G.FAILED, [line, 'logs: %s' % logs], verdict=line,
-                     results=results, log_dir=logs, head=head)
+                     results=results, log_dir=logs, head=head, windows=watched.get('windows'))

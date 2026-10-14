@@ -294,6 +294,9 @@ def config_cmd(ctx, args):
         pos += dd
     if opts.get('system'):
         raise Unsupported('git config --system')
+    for flag in ('show-origin', 'show-scope'):
+        if opts.get(flag):            # parsed, never printed: answered as real git or not at all
+            raise Unsupported('git config --%s' % flag)
     t = opts.get('type')
     if opts.get('bool'):
         t = 'bool'

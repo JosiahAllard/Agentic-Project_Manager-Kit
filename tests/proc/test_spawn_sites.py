@@ -81,6 +81,8 @@ EXEMPT = {
         1, 'the default of a test seam; Runner.run, the one call through it, passes creationflags'),
     ('kitlib/machinesetup/agenttemp.py', 'task_registered', 'ref subprocess.run'): (
         1, 'the default of a test seam; the one call through it passes CREATE_NO_WINDOW'),
+    ('kitlib/machinesetup/agenttemp.py', 'sweep_dry_run', 'ref subprocess.run'): (
+        1, 'the default of a test seam; the one call through it passes CREATE_NO_WINDOW'),
     ('kitlib/redfirst/run.py', 'cleanup_in_child', 'subprocess.Popen'): (
         1, 'its keywords are OWN_CONSOLE, which is creationflags=CREATE_NO_WINDOW on Windows: the '
            'child gets a console of its own on purpose, so a Ctrl+C here does not reach it'),

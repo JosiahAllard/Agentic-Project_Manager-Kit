@@ -149,6 +149,64 @@ class FakeFailsLoudly(unittest.TestCase):
         self.assertIn('a broken ref (refs/backlog/x)', str(cm.exception))
 
 
+class FakeRefusesWhatWorktreeConfigLeavesUnmodelled(unittest.TestCase):
+    """extensions.worktreeConfig: the keys and commands where real git would act on a
+    config.worktree in ways the fake does not model end the test as Unsupported."""
+
+    def setUp(self):
+        if not cmd.fake_active():
+            self.skipTest('the run is on real git (kit_tests.py --real-git)')
+        self.r = gitfixture.TempRepo()
+        self.addCleanup(self.r.cleanup)
+        self.wt = self.r.worktree('wtc')
+        self.r.git('config', 'extensions.worktreeConfig', 'true')
+        self.linked_cfg = os.path.join(self.r.common_dir(), 'worktrees', 'wtc', 'config.worktree')
+        self.assertTrue(os.path.isdir(os.path.dirname(self.linked_cfg)))
+
+    def _write_linked_cfg(self, text):
+        with open(self.linked_cfg, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
+
+    def _assert_unsupported(self, argv, cwd, words):
+        from kitlib.git import fake
+        with self.assertRaises(fake.Unsupported) as cm:
+            self.r.git(*argv, cwd=cwd, check=False)
+        self.assertIn(words, str(cm.exception))
+
+    def test_the_linked_worktree_answers_while_its_file_sets_neither_key(self):
+        # the control: the refusals below come from the key, not from the file being there
+        self._write_linked_cfg('[kit]\n\tscope = linked\n')
+        self.assertEqual(self.r.git('config', '--get', 'kit.scope', cwd=self.wt), 'linked')
+
+    def test_core_worktree_in_config_worktree_raises_unsupported(self):
+        self._write_linked_cfg('[core]\n\tworktree = %s\n' % self.wt.replace('\\', '/'))
+        self._assert_unsupported(['status', '--porcelain=v1'], self.wt, 'core.worktree in config.worktree')
+
+    def test_core_bare_in_config_worktree_raises_unsupported(self):
+        self._write_linked_cfg('[core]\n\tbare = false\n')
+        self._assert_unsupported(['status', '--porcelain=v1'], self.wt, 'core.bare in config.worktree')
+
+    def test_core_bare_true_in_the_common_config_raises_unsupported_in_a_linked_worktree(self):
+        self.r.git('config', 'extensions.worktreeConfig', 'false')
+        self.r.git('config', 'core.bare', 'true')
+        self._assert_unsupported(['status', '--porcelain=v1'], self.wt, 'core.bare true in the repository config')
+
+    def test_worktree_add_copying_a_config_worktree_raises_unsupported(self):
+        main_cfg = os.path.join(self.r.common_dir(), 'config.worktree')
+        with open(main_cfg, 'w', encoding='utf-8', newline='\n') as f:
+            f.write('[kit]\n\tscope = main\n')
+        dest = os.path.join(self.r.root, '.claude', 'worktrees', 'wtc2')
+        self._assert_unsupported(['worktree', 'add', '-q', dest, '-b', 'kit/wtc2'], self.r.root,
+                                 'worktree add copying config.worktree')
+        self.assertFalse(os.path.exists(dest))
+
+    def test_config_show_origin_and_show_scope_raise_unsupported(self):
+        for flag in ('--show-origin', '--show-scope'):
+            with self.subTest(flag=flag):
+                self._assert_unsupported(['config', flag, '--get', 'core.bare'], self.r.root,
+                                         'git config %s' % flag)
+
+
 class FakePushIsACompareAndSwap(unittest.TestCase):
     """A remote ref that changes between push's lease check and its update is a remote rejection,
     as receive-pack's locked compare-and-swap reports it (git 2.55's words, probed 2026-10-10)."""

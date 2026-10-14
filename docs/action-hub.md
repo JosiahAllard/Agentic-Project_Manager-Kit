@@ -45,19 +45,51 @@ repository.
 - `hub.py serve` serves until Ctrl+C, which commits the last changes and releases the store lock.
   The port is `hub.port` of the machine config (default 8790); the store is `hub.store`, else
   `hub/` in the PM data worktree (docs/pm-data-branch.md). `--store PATH` serves a scratch copy
-  with git sync off. The server needs no `hub` key: without one every default holds.
-- `hub.py status` prints the running server's health: revision, store, git sync, each
-  repository's backlog fetch age and the tunnel listener.
-- Remote access is only through the tunnel listener: with `hub.access` set (an Access team, the
-  application's audience tag and the allowed emails), the server also listens on
-  `hub.tunnel_port` (default 8791, loopback too) for a Cloudflare tunnel, and every request there
-  needs a Cloudflare Access token (`kitlib.hubsite.tunnel`). The tool never runs the tunnel
-  program. Both listeners bind the loopback address only.
-- `hub.py validate` checks the store folder against the field tables below, with no server.
+  with git sync off. The server needs no `hub` key: without one every default holds. A trial
+  run with `--store` (and `migrate --store`) therefore never writes the `hub` key; the owner
+  writes that key only for the live store (docs/go-live.md "Switches").
+- The PM session-start checklist (docs/pm-start.md) runs its site checks whether or not the `hub`
+  key is written: it uses the key's settings, or the defaults (port 8790) when there is none.
+  Writing the key does not switch the checklist.
+- `hub.py status` prints the running server's health, one line each: `revision N`, `store ...`,
+  `git: ...` (`running, branch B, nothing pending`, or what is pending, a pass that failed, or
+  `git sync is off on this server`), `backlog <repo>: fetched X ago`, the tunnel line, and
+  `unavailable: ...` for a view the server could not read. The tunnel line is `tunnel: on` (the
+  Access keys were fetched), `tunnel: bound, keys not fetched` (shown until the first request
+  with a token; a failed fetch adds ` (reason)`, such as `keys-fetch`) or `tunnel: off: <why>`.
+  `on` does not say that a tunnel program reaches the listener.
+- Remote access is only through the tunnel listener: with `hub.access` set (an Access `team`,
+  the application's audience tag `aud` and the allowed `emails`; all three), the server also
+  listens on `hub.tunnel_port` (default 8791, loopback too) for a Cloudflare tunnel, and every
+  request there needs a Cloudflare Access token in the header `Cf-Access-Jwt-Assertion`
+  (`kitlib.hubsite.tunnel`). The tool never runs the tunnel program. Both listeners bind the
+  loopback address only, and `hub.port` and `hub.tunnel_port` must differ. If `hub.access` is
+  incomplete the tunnel stays off and the local listener keeps serving; `status` says why. The
+  owner's step-by-step guide to reach the hub from a phone: docs/hub-remote-access.md. The
+  health answer through the tunnel holds fixed words only: `ok`, `version`, `store` (`ok`),
+  `git` (`ok`, `failed`, `off` or `unknown`) and `tunnel` (`on` or `bound, keys not fetched`);
+  no folder, branch, reason or revision. A health answer the server cannot give leaves as its
+  status and error code with the message `health could not be answered`.
+- Autostart (opt-in): `python tools/hub.py setup --autostart` registers a scheduled task that
+  runs `hub serve` at logon; `--whatif` shows what it would do and changes nothing. Without the
+  flag nothing is registered. It is refused, with nothing registered, when no store folder is
+  set. The server then runs windowless, so Ctrl+C does not apply: end it with
+  `Stop-ScheduledTask -TaskName 'PM kit hub server'` and start it again with
+  `Start-ScheduledTask`. A server that was cut off without a clean close leaves its store lock,
+  which the next start takes over with a note (docs/hub-remote-access.md).
+- `hub.py validate [--store PATH]` checks the store folder against the field tables below, with
+  no server, and prints `VALIDATE <LEVEL> <document> <field>: <message> [<code>]`.
 
-The machine config's `hub` key: docs/kit-json.md "Machine config keys". Exit codes of every verb:
-0 ok, 1 refused, 2 usage error or an unreadable machine config, 3 the server is not running (the
-start command is printed), 4 a `wait --timeout` that ran out.
+The machine config's `hub` key: docs/kit-json.md "Machine config keys". Its settings are `port`,
+`tunnel_port`, `store` (an absolute path), `commit_every_s`, `push`, `backlog_refresh_s`,
+`access` and `relay`; an unknown key is refused.
+
+Exit codes of every verb: 0 ok, 1 refused (also a Ctrl+C other than the one that closes a
+running server, or a server that did not close cleanly), 2 usage error or an unreadable machine
+config, 3 the server is not running (the start command is printed), 4 a `wait --timeout` that ran
+out. A `wait` whose server closes mid-wait ends with 3 and the start command when the next poll
+is refused, or with 1 (`REFUSED: port N did not answer as the hub does: ...`) when the
+connection dropped mid-request.
 
 ## For the PM
 
@@ -67,17 +99,38 @@ never write to it, they send questions and hand steps to the PM. Every verb take
 owner's verbs (answer, todos done, stories add and withdraw, to-pm add and send, inbox read) are
 refused to the agent.
 
-- `hub.py questions [--status S] [--repo R]` lists; `questions add --title T [--repo R]
-  [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...]
-  [--urgent] [--story S-n] [--from NAME]` asks; `questions log Q-1 <ruling id> --if-version V`
-  records the ruling an answer was filed as.
-- `hub.py todos add --title T [--detail D] [--command C ...] [--repo R] [--urgent] [--from NAME]`
-  adds a hand step; `todos ack T-1` marks a done or owner-added item followed up.
-- `hub.py stories set S-1 --status review|questions|added|declined [--reviewer NAME]
-  [--review-note TEXT] [--backlog-id ID] [--closed-note TEXT] --if-version V`.
-- `hub.py to-pm reply P-1 TEXT [<ruling id>]` answers a message the owner sent.
-- `hub.py inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT]` posts an answer to a
-  note.
+Verbs (`tools/hub.py` docstring is the source), with the line each prints:
+
+| Verb | Prints |
+|---|---|
+| `questions [--status S] [--repo R]` | `Q-1 v2 open [repo] title` |
+| `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from NAME]` | `ASKED Q-2`, then any warning lines |
+| `questions log Q-1 <ruling id> --if-version V` | `LOGGED Q-1 <ruling id>` |
+| `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |
+| `todos [--status S] [--repo R]` | `T-1 open [repo] title` |
+| `todos add --title T [--detail D] [--command C ...] [--repo R] [--refs ID ...] [--urgent] [--from NAME \| --owner]` | `ADDED T-2` |
+| `todos done T-1 [--undo] [--if-version V]` (owner) | `DONE T-1` or `REOPENED T-1` |
+| `todos ack T-1` | `ACKED T-1` |
+| `stories [--status S] [--repo R]` | `S-1 v2 submitted [repo] title` |
+| `stories add --repo R --title T --story-file F [--urgent]` (owner) | `SUBMITTED S-2` |
+| `stories set S-1 --status review\|questions\|added\|declined [--reviewer NAME] [--review-note TEXT] [--backlog-id ID] [--closed-note TEXT] --if-version V` | `SET S-1 <status>` |
+| `stories withdraw S-1` (owner) | `WITHDRAWN S-1` |
+| `to-pm [--status S] [--repo R]` | `P-1 queued [repo] text` |
+| `to-pm add --text T [--kind K] [--repo R] [--urgent]` (owner) | `QUEUED P-2` |
+| `to-pm send` (owner) | `SENT P-1 P-2` or `SENT nothing` |
+| `to-pm reply P-1 TEXT [<ruling id>] [--if-version V]` | `REPLIED P-1` |
+| `inbox` | `M-1 unread [repo] title` |
+| `inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...] [--from NAME]` | `POSTED M-2` |
+| `inbox read M-1 [--undo] [--if-version V]` (owner) | `READ M-1` or `UNREAD M-1` |
+| `pending` | `<kind> <id> [repo] title` |
+| `wait [--since REV] [--timeout S] [--pending]` | `HUB <rev> <kind> <id> <title>` (pending) or `HUB <rev> <collection> <id> <op> <status>`; `HUB <rev> reset: the store is behind --since; read it again` after a reset |
+| `validate [--store PATH]` | `VALIDATE <LEVEL> <document> <field>: <message> [<code>]` |
+| `serve [--port N] [--store PATH]`, `status [--port N]`, `setup`, `open [--port N] [--print]`, `migrate` | see "Serving it" and "Data from the old hub" |
+
+Notes on the table:
+- `todos` lines carry no version.
+- `questions add --story` is the story a follow-up belongs to; `stories set` and `questions log`
+  require `--if-version`.
 - `hub.py pending` lists the owner input not yet handled: questions answered and not logged,
   stories submitted, To PM items sent, and to-dos done or added by the owner without `pm_ack`
   (`kitlib.hubsite.store.pending_items`).
@@ -217,9 +270,22 @@ Never stored; the server reads each from its source on request (`kitlib.hubsite.
 The hub was once a claude.ai artifact page, one copy per Claude account; it is retired. What the
 owner and the PM wrote on it was mirrored in git as `hub/<collection>/<doc_id>.json` in the PM
 data worktree, else in the absolute folder `pm_start.hub_mirror` (`kitlib.hubmirror`,
-`tools/hub_mirror.py`). `python tools/hub.py migrate --from <mirror folder> [--from <export>]
-[--dry-run]` copies those documents into the hub site's store (`kitlib.hubsite.migrate`): it
-only copies in, never replaces a document the store holds, and is refused while a server holds
-the store. A second run prints `nothing changed`. `tools/hub_mirror.py save` refuses a mirror
+`tools/hub_mirror.py`). `python tools/hub.py migrate --from DIR [--from DIR ...] [--store PATH] [--dry-run]` copies
+those documents into the hub site's store (`kitlib.hubsite.migrate`). Use a new store folder.
+It only copies in, never replaces a document the store holds, and is refused while a server
+holds the store. A second run prints `nothing changed`.
+
+- A store document with a `version` that differs from the source is kept (the newer truth) and
+  does not fail the run. One without a `version` that differs is a conflict, and the run exits 1.
+- Two sources that differ, with nothing in the store, write neither side: a conflict.
+- A file that is no document, or has a bad or mismatched id, is skipped, and the run exits 1.
+- A source folder the store has no collection for is left alone. A question's text
+  `recommended` is written as a number.
+- `--dry-run` writes nothing, and takes the store lock only if the lock file already exists.
+- The report has `hub store: ...`, `source: ...`, per-collection counts, `NOT COMPLETE: ...` when
+  it stopped short and `imported N; no source was changed` (a dry run ends `dry run: ... nothing
+  was written`).
+
+`tools/hub_mirror.py save` refuses a mirror
 folder that is a live hub store (`kitlib.hubsite.store.META_NAME`): the server is the only
 writer there.

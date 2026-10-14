@@ -32,6 +32,16 @@ def keep_off_agent_temp():
         p = mock.patch.object(pmstart, name, value)
         p.start()
         unittest.addModuleCleanup(p.stop)
+    keep_off_console_tasks()
+
+
+def keep_off_console_tasks():
+    """For a module's setUpModule: the checklist's console_tasks check reads no task scheduler
+    (its reader gives no tasks: no line). tests/pmstart/test_console_tasks.py tests the check."""
+    from kitlib.pmstart import consoletasks
+    p = mock.patch.object(consoletasks, "read_tasks", lambda: [])
+    p.start()
+    unittest.addModuleCleanup(p.stop)
 
 
 # The one line the checklist's hub check gives under keep_off_hub_site.
