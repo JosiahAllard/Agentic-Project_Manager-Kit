@@ -1,6 +1,6 @@
 """A gate started from the plugin's export (`<kit>/tools/gate.py -C <repository>`, the command the
 kit's skills give) checks a repository's committed stubs against the kit's main checkout, as a
-start from that checkout does (KIT-GATE-EXPORT-STUBS-FALSE-RED).
+start from that checkout does.
 
 The stubs a repository commits name the kit's main checkout (kitlib.stubs.stub_text). The gate's
 kit-stubs step runs `{here}/kit_stubs.py check` (kitlib.gate.steps.KIT_TOOLS), and kit_stubs
