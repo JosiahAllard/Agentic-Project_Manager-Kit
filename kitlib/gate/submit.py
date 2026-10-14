@@ -22,14 +22,16 @@ running the carrier tools/no_window.py beside the tool, which starts the python.
 running the tool with CREATE_NO_WINDOW and waits for it. WMI's process is outside this process
 tree and its job (it outlives the shell and the agent that submitted it); pythonw has no console,
 so the tool gets a console with no window, and nothing rests on ShowWindow. The pid `detach` gives
-is the carrier's: it lives exactly as long as the tool (it ends with the tool's exit code), and it
-runs from the same folder (a pinned export), so the claim watches it and the export is leased to
-it. A missing pythonw.exe, carrier or python.exe starts nothing. Its
+is the carrier's: it ends with the tool's exit code, and it runs from the same folder (a pinned
+export). The tool is the python.exe the carrier started (kitlib.lock.detach.wrapper_pid finds it),
+which outlives a carrier that is killed: the export is leased to both pids, and the claim watches
+and records the tool's pid (the carrier's when the tool was not found). A missing pythonw.exe,
+carrier or python.exe starts nothing. Its
 environment is this one, less the machine lock's MACHINE_LOCK_RUN (the landing books its own slot,
 never one nested in the submitter's run) and with MACHINE_LOCK_ORIGIN, this process's ancestry, so
 the machine lock gives the detached slot the submitter's role. A tool run from an export of pushed
 main (kitlib.gate.pin) keeps KIT_PINNED, so the detached tool runs from the same export, and
-pin.lease_child leases the export for it.
+pin.lease_child leases the export for the carrier and for the tool, one lease each.
 
 Every outcome of the detached landing ends in a final land record per branch, refusals included:
 the records were written `running` before the start, and Lander.run finishes them whatever the
@@ -183,7 +185,7 @@ def blocked(root, branches, tips):
 
 def submit(root, tool_file, child_args, branches, tips, expect_main=None, environ=None,
            detach_fn=None, kit=None, now=None, claim_wait_s=CLAIM_WAIT_S,
-           clock=time.monotonic, sleep=time.sleep):
+           clock=time.monotonic, sleep=time.sleep, landing_of=None):
     """Start the landing of `branches` at `tips` detached: `tool_file` (tools/land.py or
     tools/gate.py) again with `child_args` (the landing's own arguments, -C absolute) and
     `--submitted <payload>`. An Outcome: OK with the SUBMITTED line, USAGE for arguments the
@@ -191,7 +193,10 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
     branch's landing is running or it landed at its tip already (blocked), REFUSED when the
     records or the payload cannot be written or the start fails (records written are finished
     `refused`), or when the detached landing died before it recorded itself (claim: its
-    records are finished `error`)."""
+    records are finished `error`). The export a pinned tool runs from is leased to the carrier
+    `detach` started and to the landing (`landing_of(carrier)`, default
+    kitlib.lock.detach.wrapper_pid; the tests' stand-in), and the claim watches the landing, or
+    the carrier when no landing was found."""
     from kitlib.gate import land        # land imports nothing from here; late, as runner does
     branches, tips = list(branches), list(tips)
     why = land.Lander(root, branches, expect_main, tips).usage()
@@ -235,11 +240,15 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
     pid, why = (detach_fn or detach)(argv, root, env)
     if pid is None:
         return _refused(runs, 'the landing could not be started: %s' % why)
-    try:
-        pin.lease_child(tool_file, pid, env)
-    except OSError as e:        # the landing runs; a later pin may prune its export under it
-        _note(output, 'WARNING: the pinned export could not be leased for pid %d: %s' % (pid, e))
-    died = claim(root, runs, pid, output, claim_wait_s, clock=clock, sleep=sleep)
+    landing = _landing(pid, landing_of)
+    for p in (pid, landing):
+        if p is None:
+            continue
+        try:
+            pin.lease_child(tool_file, p, env)
+        except OSError as e:    # the landing runs; a later pin may prune its export under it
+            _note(output, 'WARNING: the pinned export could not be leased for pid %d: %s' % (p, e))
+    died = claim(root, runs, landing or pid, output, claim_wait_s, clock=clock, sleep=sleep)
     if died:
         return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed; its output: %s' % (
             died, output)], pid=pid, payload=payload, output=output)
@@ -247,9 +256,20 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
                      output=output)
 
 
+def _landing(carrier, landing_of=None):
+    """The pid of the landing (the python.exe) the carrier `carrier` started, or None: not seen
+    (it and the carrier ended already) or the lookup failed. The carrier ends with the landing,
+    but a carrier that is killed leaves it running."""
+    try:
+        return (landing_of or lockdetach.wrapper_pid)(carrier)
+    except Exception:       # noqa: BLE001 - the carrier's pid still names the submission
+        return None
+
+
 def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clock=time.monotonic,
           sleep=time.sleep, alive=None):
-    """Wait up to `wait_s` for the detached landing `pid` to record itself in `runs`' records
+    """Wait up to `wait_s` for the detached landing `pid` (submit: the landing's own pid, or the
+    carrier's when the landing was not found) to record itself in `runs`' records
     (restore writes its pid into them). Once every record is claimed, or finished: None. When
     the process died first: its unclaimed records are finished `error` and the reason is
     returned. When the wait ends with the process alive: its pid (and creation time) is written
