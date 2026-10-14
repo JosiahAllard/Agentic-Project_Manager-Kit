@@ -349,7 +349,7 @@ class PairingTest(Case):
 
 
 def mac(key, value):
-    """A session's entry in the sessions file: HMAC-SHA256 of its value under the owner token."""
+    """A session's entry in the sessions file: the SHA-256 HMAC of its value under the owner token."""
     return hmac.new(key.encode('ascii'), value.encode('ascii'), hashlib.sha256).hexdigest()
 
 

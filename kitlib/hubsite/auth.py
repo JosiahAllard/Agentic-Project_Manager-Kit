@@ -24,9 +24,9 @@ Sessions. A session lives SESSION_TTL_S on the wall clock. `resolve` renews one 
 less than half of that left: its expiry moves to a full SESSION_TTL_S from now and the caller
 sends the cookie again (cookie_header) so the browser's copy moves too; `role_for` never renews.
 A session ends with its lifetime, with unpair_all, and with a new owner token: a session is held
-as HMAC-SHA256(key=the owner token, msg=the cookie value), never as the value itself, and a
-cookie is looked up under the owner token read at that request, so replacing owner.token ends
-every browser at once. No readable owner token, or one token in both files, is no cookie role
+as a SHA-256 HMAC (key=the owner token, msg=the cookie value), never as the value itself, and
+a cookie is looked up under the owner token read at that request, so replacing owner.token
+ends every browser at once. No readable owner token, or one token in both files, is no cookie role
 and no pairing. Pairing codes live in this process's memory only.
 
 With persist=True (a listener's port is needed) the sessions are also kept in
@@ -213,7 +213,7 @@ def cookie_header(value, port=None):
 
 
 def _mac(key, value):
-    """A session's stored form: HMAC-SHA256 of `value` under the owner token `key`, as 64
+    """A session's stored form: the SHA-256 HMAC of `value` under the owner token `key`, as 64
     lowercase hex digits; None for a value with no UTF-8 form."""
     try:
         msg = value.encode('utf-8')
