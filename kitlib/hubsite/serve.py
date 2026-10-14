@@ -33,7 +33,10 @@ text is for the owner's console (it may name a folder):
      and GET health says so in a fixed phrase (the reason itself names folders).
   4. the Api over the store and a SiteViews, then the local listener on settings.port with
      httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
-     the port that was really bound, and health_route.
+     the port that was really bound, and health_route. The Credentials keep the browser
+     sessions in the token folder's sessions file for that port (auth, persist=True), so a
+     paired browser stays paired when the server starts again; a file it cannot read whole is a
+     line in `Hub.notes`. With settings.port 0 (a new port each run) no sessions file is kept.
   5. the tunnel listener on settings.tunnel_port (kitlib.hubsite.tunnel.start), only when
      settings.access can serve it. It never stops the server: with no Access settings at all
      there is no second listener and no line about it; with settings that cannot serve
@@ -720,7 +723,10 @@ def build(settings, sources, log=None):
         except httpd.BindRefused as e:
             raise ServeError('%s: is a hub server running already?' % e)
         listeners.append(local)
-        creds = auth.Credentials(sources.tokens, port=local.port)
+        # port 0 binds a new port each run: a sessions file per run would never be read again
+        creds = auth.Credentials(sources.tokens, port=local.port, persist=settings.port != 0,
+                                 log=log)
+        notes.extend(creds.notes)
         local.gate = httpd.local_gate(creds)
         local.routes.update(httpd.pair_routes(creds))
         tunnelled, said = _make_tunnel(settings, sources, api, notes, log)

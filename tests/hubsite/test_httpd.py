@@ -880,6 +880,123 @@ class PairCase(httpfix.ListenerCase):
         r = post(lis.port, httpd.PAIR_ROUTE, None, self.owner)
         self.assertEqual((r.status, r.code()), (404, 'not_found'))
         self.assertEqual(get(lis.port, httpd.PAIR_PATH + '?code=x').status, 404)
+        self.assertEqual(post(lis.port, httpd.UNPAIR_ROUTE, None, self.owner).status, 404)
+
+
+class Clock(object):
+    """A wall clock a test moves."""
+
+    def __init__(self, now=1700000000.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+class SessionCase(httpfix.ListenerCase):
+    def paired(self, lis):
+        """A browser paired on `lis`: its Cookie header and its session value."""
+        path = post(lis.port, httpd.PAIR_ROUTE, None, self.owner).json()['path']
+        name, _, value = get(lis.port, path).header('Set-Cookie')[0].split(';')[0].partition('=')
+        return ('Cookie', '%s=%s' % (name, value)), value
+
+    def clocked(self, clock):
+        """A started listener whose credentials read `clock`."""
+        lis = self.listener(gate=None, start=False)
+        lis.creds = auth.Credentials(self.tokens, clock=clock, port=lis.port)
+        lis.gate = httpd.local_gate(lis.creds)
+        lis.routes.update(httpd.pair_routes(lis.creds))
+        self.assertTrue(lis.start())
+        return lis
+
+    def test_only_the_owners_token_unpairs_and_it_ends_every_browser(self):
+        lis = self.listener()
+        cookie, _ = self.paired(lis)
+        other, _ = self.paired(lis)
+        waiting = post(lis.port, httpd.PAIR_ROUTE, None, self.owner).json()['path']
+        refused = (('no credential', None, []), ('the agent', self.agent, []),
+                   ('a token that is no role', 'x' * 43, []),
+                   ('a browser session', None, [cookie]),
+                   ('the agent beside a session', self.agent, [cookie]))
+        for what, token, headers in refused:
+            with self.subTest(what=what):
+                r = post(lis.port, httpd.UNPAIR_ROUTE, None, token, headers=headers)
+                self.assertEqual((r.status, r.code()), (403, 'forbidden'), r.body)
+                self.assertEqual(r.json()['error']['field'], 'role')
+        # nothing was ended by a refusal
+        self.assertEqual(get(lis.port, HEALTH, headers=[cookie]).status, 200)
+        # a GET is no unpairing
+        self.assertEqual(get(lis.port, httpd.UNPAIR_ROUTE, self.owner).status, 404)
+        self.assertEqual(get(lis.port, HEALTH, headers=[other]).status, 200)
+        r = post(lis.port, httpd.UNPAIR_ROUTE, None, self.owner)
+        self.assertEqual(r.status, 200, r.body)
+        self.assertIs(r.json()['ok'], True)
+        for c in (cookie, other):
+            r = get(lis.port, HEALTH, headers=[c])
+            self.assertEqual((r.status, r.code()), (403, 'forbidden'))
+        # a link given before the unpairing pairs nobody
+        self.assertEqual(get(lis.port, waiting).status, 403)
+        # and a new pairing works
+        cookie, _ = self.paired(lis)
+        self.assertEqual(get(lis.port, HEALTH, headers=[cookie]).status, 200)
+
+    def test_a_session_used_with_less_than_half_its_life_left_is_sent_again(self):
+        clock = Clock()
+        lis = self.clocked(clock)
+        cookie, value = self.paired(lis)
+        r = get(lis.port, HEALTH, headers=[cookie])
+        self.assertEqual((r.status, r.header('Set-Cookie')), (200, []))
+        clock.now += auth.SESSION_TTL_S / 2 - 1
+        self.assertEqual(get(lis.port, HEALTH, headers=[cookie]).header('Set-Cookie'), [])
+        clock.now += 2
+        r = get(lis.port, HEALTH, headers=[cookie])
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.header('Set-Cookie'), [auth.cookie_header(value, lis.port)])
+        # renewed once: the next request sends nothing
+        self.assertEqual(get(lis.port, HEALTH, headers=[cookie]).header('Set-Cookie'), [])
+        # past the first expiry the session is still the owner's
+        clock.now += auth.SESSION_TTL_S / 2 + 10
+        r = get(lis.port, HEALTH, headers=[cookie])
+        self.assertEqual(r.status, 200)
+        self.assertIn('store', r.json())
+        # a renewal rides on any answer, a refused one too
+        clock.now += auth.SESSION_TTL_S / 2 + 10
+        r = get(lis.port, '/nothing-here', headers=[cookie])
+        self.assertEqual(r.status, 404)
+        self.assertEqual(r.header('Set-Cookie'), [auth.cookie_header(value, lis.port)])
+        # a Bearer request never gets a cookie, and an expired session is no role
+        clock.now += auth.SESSION_TTL_S / 2 + 10
+        self.assertEqual(get(lis.port, HEALTH, self.owner).header('Set-Cookie'), [])
+        clock.now += auth.SESSION_TTL_S
+        r = get(lis.port, HEALTH, headers=[cookie])
+        self.assertEqual((r.status, r.header('Set-Cookie')), (403, []))
+
+    def test_a_renewal_never_comes_after_the_cookie_of_a_new_pairing(self):
+        clock = Clock()
+        lis = self.clocked(clock)
+        cookie, old = self.paired(lis)
+        clock.now += auth.SESSION_TTL_S / 2 + 1
+        path = post(lis.port, httpd.PAIR_ROUTE, None, self.owner).json()['path']
+        r = get(lis.port, path, headers=[cookie])
+        self.assertEqual(r.status, 303)
+        sent = r.header('Set-Cookie')
+        self.assertEqual(len(sent), 2, sent)
+        self.assertEqual(sent[0], auth.cookie_header(old, lis.port))
+        new = sent[-1].split(';')[0].partition('=')[2]
+        self.assertNotEqual(new, old)
+        self.assertEqual(sent[-1], auth.cookie_header(new, lis.port))
+
+    def test_no_log_line_holds_a_session(self):
+        clock = Clock()
+        lis = self.clocked(clock)
+        cookie, value = self.paired(lis)
+        clock.now += auth.SESSION_TTL_S / 2 + 1
+        self.assertEqual(get(lis.port, HEALTH, headers=[cookie]).status, 200)
+        post(lis.port, httpd.UNPAIR_ROUTE, None, self.owner)
+        self.assertTrue(self.lines)
+        for level, text in self.lines:
+            self.assertNotIn(value, text)
+            self.assertNotIn(self.owner, text)
 
 
 # ------------------------------------------------------------------ the log

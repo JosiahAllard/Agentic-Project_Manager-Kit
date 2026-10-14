@@ -165,7 +165,7 @@ def run(a, settings, host):
     if a.cmd == 'usage':
         return usage.report(settings, host.now())
     if a.cmd == 'after-reboot':
-        return reboot.run(settings, host, a.test, a.dry_run)
+        return reboot.run(settings, host, a.test, a.dry_run, say=lambda l: print(l, flush=True))
     if a.cmd == 'install-autostart':
         return autostart.install(os.path.abspath(__file__), whatif=a.what_if)
     raise AssertionError(a.cmd)
