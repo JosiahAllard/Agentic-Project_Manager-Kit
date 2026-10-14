@@ -252,6 +252,40 @@ class CodexDeliveryTests(unittest.TestCase):
                     CodexDesktopAdapter(lease=lease).send(message)
                 call.assert_not_called()
 
+    def test_before_write_refusal_keeps_the_code_of_the_check_that_refused(self):
+        @contextmanager
+        def self_target(message):
+            yield DesktopLease(self.recipient, self.target_context, self.endpoint, self.check)
+        with self.assertRaises(BeforeWriteError) as caught:
+            CodexDesktopAdapter(lease=self_target).send(self.message)
+        self.assertEqual(caught.exception.code, 'codex-desktop-executor-not-selected')
+        refusal = BeforeWriteError('codex-native-peer-unavailable-before-write')
+        with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call', side_effect=refusal):
+            with self.assertRaises(BeforeWriteError) as caught:
+                CodexDesktopAdapter(lease=self.lease).send(self.message)
+        self.assertEqual(caught.exception.code, 'codex-native-peer-unavailable-before-write')
+        # Any other failure before the write keeps the generic code and hides its detail.
+        @contextmanager
+        def broken(message):
+            raise OSError('private-detail')
+            yield
+        with self.assertRaises(BeforeWriteError) as caught:
+            CodexDesktopAdapter(lease=broken).send(self.message)
+        self.assertEqual(caught.exception.code, 'codex-native-context-unavailable-before-write')
+        self.assertNotIn('private-detail', str(caught.exception))
+
+    def test_before_write_refusal_after_a_possible_write_stays_uncertain(self):
+        @contextmanager
+        def lease(message):
+            yield DesktopLease(self.recipient, self.context, self.endpoint, self.check)
+            raise BeforeWriteError('codex-desktop-context-changed')
+        with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call',
+                return_value={'success': True}):
+            with self.assertRaises(DeliveryError) as caught:
+                CodexDesktopAdapter(lease=lease).send(self.message)
+        self.assertNotIsInstance(caught.exception, BeforeWriteError)
+        self.assertEqual(caught.exception.code, 'codex-native-result-unconfirmed')
+
     def test_native_oversize_frame_is_uncertain_and_bounded(self):
         self.serve(raw=struct.pack('<I', MAX_FRAME+1))
         began = time.monotonic()
