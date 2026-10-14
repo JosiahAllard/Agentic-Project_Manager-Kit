@@ -76,17 +76,26 @@ def newest_transcript_mtime(settings, session_id):
     return best
 
 
-def run(settings, host, test=False, dry_run=False):
-    """The lines a run says (and logs)."""
+def run(settings, host, test=False, dry_run=False, say=None):
+    """The lines a run says (and logs). `say`, when given, takes each line as it happens (the
+    caller's console) and the run returns none of them: the wait before anything starts is
+    WAIT_SECONDS, and a caller that prints only the returned list says nothing until it is over."""
     out = []
 
+    def tell(line):
+        if say is None:
+            out.append(line)
+        else:
+            say(line)
+
     def log(line):
-        out.append(line)
+        tell(line)
         if not dry_run:
             state.log(settings, LOG, line)
 
     log('start (test=%s, dry_run=%s)' % (test, dry_run))
     if not dry_run:
+        log('waiting %d s for the network before starting anything' % WAIT_SECONDS)
         host.sleep(WAIT_SECONDS)                     # let the network come up after a boot
     procs = host.processes()
     if test:
@@ -97,10 +106,11 @@ def run(settings, host, test=False, dry_run=False):
         cmd = 'claude --remote-control %s -n %s' % (window.q(TEST_NAME), window.q(TEST_NAME))
         text = window.script(TEST_NAME, window.PLAIN, folder, cmd, None, host.env('AGENT_TEMP'))
         if dry_run:
-            out.append('would start %s in %s' % (TEST_NAME, folder))
+            tell('would start %s in %s' % (TEST_NAME, folder))
             return out
         host.open_window(text)
-        log('started ' + TEST_NAME)
+        log('started %s: its window opens minimized and unfocused (window.open_window), so look for it '
+            'on the taskbar' % TEST_NAME)
         return out
     try:
         cfg = state.read_coordinators(settings) or {}
@@ -130,7 +140,7 @@ def run(settings, host, test=False, dry_run=False):
         args = S.entry_start_args(settings, key, entry, acct, PROMPT % (entry.get('state'), S.PM_NAME),
                                   any_brief=True)
         if dry_run:
-            out.append('would start %s (%s): %s' % (args['name'], key, '; '.join(
+            tell('would start %s (%s): %s' % (args['name'], key, '; '.join(
                 '%s=%s' % (k, v) for k, v in sorted(args.items()) if v not in (None, '', False))))
             continue
         try:
