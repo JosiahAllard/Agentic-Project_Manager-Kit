@@ -25,7 +25,7 @@ import urllib.parse
 FOLDER_NAME = 'hub'
 OWNER_FILE = 'owner.token'
 AGENT_FILE = 'agent.token'
-# the approval path's key (KIT-OWNER-APPROVAL-HUB, its second branch), guarded before it exists
+# the key the owner's approval path will sign with, guarded before that path exists
 APPROVAL_FILE = 'approval.key'
 SECRET_FILES = (OWNER_FILE, AGENT_FILE, APPROVAL_FILE)
 # kitlib.hubsite.settings: the store's folder in the PM data worktree, and the two listeners
