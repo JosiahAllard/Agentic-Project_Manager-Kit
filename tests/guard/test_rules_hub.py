@@ -151,6 +151,21 @@ class SecretShell(Hub):
                 self.allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub))
         self.allowed(lambda sub: ps('Select-String -Path docs\\*.md -Pattern owner.token', self.w.wt, sub))
 
+    def test_unclean_lines_are_judged_on_what_was_read(self):
+        # the fallback has no hub pattern; the hub rules run on what the parser did read
+        rows = (
+            ('unclosed quote', lambda sub: bash('cat ~/.pm-kit/hub/owner.token "', self.w.wt, sub), 'hub-secrets'),
+            ('after eval', lambda sub: bash('eval "$c"; cat ~/.pm-kit/hub/agent.token', self.w.wt, sub),
+             'hub-secrets'),
+            ('PowerShell iex', lambda sub: ps('iex $c; Get-Content $HOME\\.pm-kit\\hub\\owner.token', self.w.wt, sub),
+             'hub-secrets'),
+            ('owner verb', lambda sub: bash('eval "$c"; python "%s" answer Q-1' % self.hub, self.w.wt, sub),
+             'hub-owner-verb'),
+        )
+        for name, make, rule in rows:
+            with self.subTest(name):
+                self.denied(make, rule)
+
     def test_hub_tool_with_the_store_passes(self):
         st = W.fwd(self.store)
         self.allowed(lambda sub: bash('python "%s" validate --store "%s"' % (self.hub, st), self.w.wt, sub))

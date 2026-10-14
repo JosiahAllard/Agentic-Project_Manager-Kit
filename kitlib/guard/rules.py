@@ -186,8 +186,8 @@ def shell_command(event, ctx, text, shell, cwd, role):
     hub_rules = HubShell(event, ctx)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
-        for rule in (owner_lock, owner_setup, hub_rules.owner_verb, hub_rules.secrets, wrapped_gate, root_search, heavy, git_rules, git_hooks_path, owner_identity,
-                     kill_by_name, heredoc_winpath, shell_writes):
+        for rule in (owner_lock, owner_setup, hub_rules.owner_verb, hub_rules.secrets, wrapped_gate, root_search,
+                     heavy, git_rules, git_hooks_path, owner_identity, kill_by_name, heredoc_winpath, shell_writes):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
