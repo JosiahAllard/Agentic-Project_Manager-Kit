@@ -177,7 +177,7 @@ def _hardware(store, L, hw):
             "source": hw.get("source"), "problems": hw.get("problems") or []}
 
 
-def _layout(store, lf, hw):
+def _layout(store, lf, hw, runs):
     L, want = lf["layout"], lf["wanted"]
     try:
         default = lay.default_division(hw)
@@ -191,7 +191,8 @@ def _layout(store, lf, hw):
             "wanted_division": want["division"], "wanted_key": want["key"],
             "owner_division": lay.read_division(store)[0] or {},
             "source": lf["source"], "warning": lf["warning"],
-            "hardware_change": {"pending": lf["pending"], "changed": want["key"] != L["key"]}}
+            "hardware_change": {"pending": lf["pending"], "changed": want["key"] != L["key"]},
+            "other_labels": lay.other_labels(runs, L)}
 
 
 def _usage(r):
@@ -302,7 +303,7 @@ def snapshot(store=None, history_days=7, since=None, until=None):
         kinds, kerr = {}, str(e)
     gs = game.state(store, L, hs)
     return {"schema_version": SCHEMA_VERSION, "revision": rev, "at": iso(now), "store": store.root,
-            "hardware": _hardware(store, L, hw), "layout": _layout(store, lf, hw),
+            "hardware": _hardware(store, L, hw), "layout": _layout(store, lf, hw, runs),
             "slots": slots, "runs": run_rows,
             "queue": {"entries": queue_rows if qerr is None else None, "error": qerr},
             "holds": [hl.entry(h, now) for h in hs], "holds_error": herr, "game": gs,

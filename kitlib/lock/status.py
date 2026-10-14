@@ -75,6 +75,12 @@ def render(snap):
     if L["hardware_change"]["changed"]:
         out.append("hardware or division changed: the new layout applies once nothing is live or "
                    "queued%s" % (" (waiting for that)" if L["hardware_change"]["pending"] else ""))
+    if L.get("other_labels"):
+        # Another writer's text: repr keeps a line break or a "; " inside a label from passing
+        # for the line's own structure.
+        out.append("WARNING: a live run carries another slot numbering (%s): an older lock tool "
+                   "that counts this machine's cpu or gpu slots its own way writes to this store, "
+                   "and its slot numbers are not this layout's" % "; ".join(map(repr, L["other_labels"])))
     ccds = hw.get("ccds") or []
     if len(ccds) > 1:
         out.append("L3 domains: %s" % "; ".join(
