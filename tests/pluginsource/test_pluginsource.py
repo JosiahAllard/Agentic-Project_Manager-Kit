@@ -75,6 +75,50 @@ class ExportTest(Base):
         with open(self.k.repo.path('.claude-plugin', 'plugin.json'), 'rb') as fh:
             self.assertEqual(fh.read(), MANIFEST)
 
+    def same_path(self, a, b):
+        self.assertEqual(os.path.normcase(os.path.realpath(a)), os.path.normcase(os.path.realpath(b)))
+
+    def test_the_marker_names_the_main_checkout(self):
+        """kitlib.gate.pin pins a tool started from the export through it (docs/plugin-source.md)."""
+        sha = P.remote_main(self.k.kit, 'origin')
+        folder, _v = P.export(self.k.kit, sha, self.k.root, NOW)
+        self.same_path(P.read_marker(folder)['checkout'], self.k.kit)
+        self.same_path(P.export_checkout(folder), self.k.kit)
+
+    def test_an_export_made_from_a_linked_worktree_names_the_main_checkout(self):
+        wt = self.k.repo.worktree('elsewhere')
+        self.addCleanup(self.k.repo.git, 'worktree', 'remove', '--force', wt)
+        sha = P.remote_main(self.k.kit, 'origin')
+        folder, _v = P.export(wt, sha, self.k.root, NOW)
+        self.same_path(P.read_marker(folder)['checkout'], self.k.kit)
+        self.same_path(P.export_checkout(folder), self.k.kit)
+
+    def test_a_kit_git_cannot_place_leaves_the_key_out(self):
+        sha = P.remote_main(self.k.kit, 'origin')
+        with mock.patch.object(P.repo, 'main_checkout_toplevel', return_value=None):
+            folder, _v = P.export(self.k.kit, sha, self.k.root, NOW)
+        self.assertNotIn('checkout', P.read_marker(folder))
+        self.assertIsNone(P.export_checkout(folder))
+
+    def test_export_checkout_names_only_a_main_checkout(self):
+        """No marker, an older marker without the key, a value that is not a path, a linked
+        worktree (its .git is a file) and a checkout that has gone: None."""
+        folder = os.path.join(self.k.base, 'by-hand')
+        os.makedirs(folder)
+        self.assertIsNone(P.export_checkout(folder))
+        linked = os.path.join(self.k.base, 'linked')
+        os.makedirs(linked)
+        with open(os.path.join(linked, '.git'), 'w', encoding='utf-8') as fh:
+            fh.write('gitdir: elsewhere\n')
+        for marker in ({'sha': 'x'}, {'checkout': 7}, {'checkout': ''}, {'checkout': linked},
+                       {'checkout': os.path.join(self.k.base, 'gone')}):
+            with open(os.path.join(folder, P.MARKER), 'w', encoding='utf-8') as fh:
+                json.dump(marker, fh)
+            self.assertIsNone(P.export_checkout(folder), marker)
+        with open(os.path.join(folder, P.MARKER), 'w', encoding='utf-8') as fh:
+            json.dump({'checkout': self.k.kit}, fh)
+        self.assertEqual(P.export_checkout(folder), self.k.kit)
+
     def test_stamp_refuses_other_than_one_version(self):
         for body in (b'{"name": "x"}', b'{"version": "1", "x": {"version": "2"}}'):
             with self.assertRaises(P.RefreshError):
