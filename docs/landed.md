@@ -38,7 +38,7 @@ Under each base it reads two folders, recursively: `log_folder(<branch>)` (the b
 A verdict line starts with one of these:
 
 - passing: `GATE OK`, `LANDED <branch>`;
-- failing: `GATE FAILED`, `NOT LANDED:`, `STUCK:`.
+- failing: `GATE FAILED`, `NOT LANDED:`, `CONFLICT <branch> with main <sha>:`, `STUCK:` (`VERDICT` in `kitlib/landed/__init__.py`).
 
 A commit sha names no branch, so no log is read for it.
 
