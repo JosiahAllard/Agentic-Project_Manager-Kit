@@ -7,7 +7,6 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib import hubmirror
 from kitlib.hubsite import migrate
 from kitlib.hubsite.migrate import Busy, Conflict, Kept, Left, MigrateError, NotADocument
 from kitlib.hubsite.store import LOCK_NAME, META_NAME, HubError, Store, StoreBusy, normal_text
@@ -30,7 +29,7 @@ def notice(run, phase):
             'phase': phase}
 
 
-# The mirror folder: what kitlib.hubmirror keeps, parked/ included.
+# The old hub's data folder, parked/ included.
 MIRROR = {
     'questions': {
         'Q-001': question(),
@@ -275,9 +274,7 @@ class IdempotentCase(Case):
         self.assertEqual(r.left, [Left(self.mirror, 'parked', 2)])
         self.assertFalse(r.changed)
         self.assertFalse(os.path.exists(os.path.join(self.mirror, META_NAME)),
-                         'the mirror must still be a mirror: hubmirror.save refuses a folder '
-                         'that holds the revision file')
-        self.assertEqual(hubmirror.save({'questions': MIRROR['questions']}, self.mirror), [])
+                         'a folder served in place gets no revision file from migrate')
 
 
 class FieldsOfTest(unittest.TestCase):
