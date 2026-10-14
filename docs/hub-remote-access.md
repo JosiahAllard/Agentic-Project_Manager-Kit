@@ -29,7 +29,15 @@ documentation" at the end.
 
 Every kit copy on this PC reads the one machine config, and a copy that does not know the `hub`
 key refuses the whole file, so every tool and hook of that copy stops working
-(docs/kit-json.md "Machine config keys"). Refresh the plugin first, then check:
+(docs/kit-json.md "Machine config keys"). Refresh the plugin first (docs/plugin-source.md
+"Refresh"; `<kit>` is the kit folder):
+
+```powershell
+python "<kit>/tools/plugin_refresh.py" --apply
+```
+
+A folder it refuses as `not migrated to the export yet` prints its own command, the same with
+`--migrate --apply --folder "<folder>"`; run that one. Then check:
 
 ```powershell
 python tools/hub.py setup --check
@@ -37,7 +45,8 @@ python tools/hub.py setup --check
 
 It writes nothing. It prints one line per kit copy (the plugin export folders, the pins and each
 account folder's install): `knows every key`, or `would refuse hub` (and any other key it does not
-know). It ends with `READY: ...` (exit 0) or `NOT READY: ...` (exit 1). Do steps 1 to 6 at any
+know), or `cannot tell: ` and why; an account whose install folder is gone says `the folder is
+missing: refresh that account` and names the refresh command above. It ends with `READY: ...` (exit 0) or `NOT READY: ...` (exit 1). Do steps 1 to 6 at any
 time, but step 7 only once it says `READY`. A NOTE about export folders not in use counts old
 copies a session started before the last refresh may still run: close such sessions before step 7.
 The check reads top-level keys only (`kitlib.config.copies`).

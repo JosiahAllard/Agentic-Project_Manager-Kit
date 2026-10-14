@@ -336,6 +336,24 @@ class TunnelHostTest(TunnelCase):
         self.assertEqual(len([1 for level, _ in self.lines if level != 'access']), 1)
         self.assertNoSecret(self.good)
 
+    def test_a_note_that_raises_leaves_the_refusal_standing_and_the_listener_serving(self):
+        called = []
+
+        def broken(origin_host, host):
+            called.append((origin_host, host))
+            raise RuntimeError('the note failed')
+        listener = self.hub.listeners[1]
+        self.assertIsNotNone(listener._on_origin)
+        listener._on_origin = broken
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'never written'},
+                     host=self.rewritten, origin='https://' + PUBLIC)
+        self.assertEqual((r.status, r.json()['error']['field']), (403, 'origin'))
+        self.assertEqual(called, [(PUBLIC, self.rewritten)])
+        self.assertEqual(self.hub.store.docs('todos'), {})
+        self.assertEqual([t for level, t in self.lines if level == 'error'], [])
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'after'})
+        self.assertEqual(r.status, 200, r.body)
+
     def test_a_write_with_no_token_never_reaches_the_host_line(self):
         r = self.ask('POST', TODOS, obj={'title': 'never written'}, host=self.rewritten,
                      origin='https://' + PUBLIC)
@@ -378,6 +396,13 @@ class HostNoteTest(unittest.TestCase):
         self.assertNotIn('\r', text)
         self.assertNotIn(' line', text)
         self.assertNotIn('a' * (tunnel.HOST_CHARS + 1), text)
+
+    def test_the_user_info_of_an_origin_netloc_never_reaches_the_log(self):
+        note = self.note()
+        note('someone:secret-word@x@' + PUBLIC, 'u@127.0.0.1:8791')
+        self.assertEqual(self.lines, [('error', tunnel.HOST_LINE % (PUBLIC, '127.0.0.1:8791'))])
+        self.assertNotIn('secret', self.lines[0][1])
+        self.assertNotIn('someone', self.lines[0][1])
 
     def test_no_log_and_a_broken_log_raise_nothing(self):
         self.note(log=False)(PUBLIC, '127.0.0.1:8791')

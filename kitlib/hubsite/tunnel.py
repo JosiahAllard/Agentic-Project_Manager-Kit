@@ -184,9 +184,10 @@ class _Lines(object):
 
 
 def _host_word(text):
-    """`text` (a host name from a request header) as a log may hold it: at most HOST_CHARS
+    """`text` (a host name from a request header) as a log may hold it: any user info dropped
+    (everything up to the last '@', as in an Origin netloc), then at most HOST_CHARS
     characters, each a letter, a digit or one of `.-:[]`, any other one a `?`."""
-    return _NOT_HOST.sub('?', str(text)[:HOST_CHARS])
+    return _NOT_HOST.sub('?', str(text).rpartition('@')[2][:HOST_CHARS])
 
 
 def host_note(log, clock=None):
