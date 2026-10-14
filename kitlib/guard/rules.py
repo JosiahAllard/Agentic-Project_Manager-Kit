@@ -12,12 +12,26 @@ subagent transcripts.
 Rules, in the order they are checked:
   lock-mcp         the lock MCP's owner-only tools: a subagent or a launcher-marked session is
                    denied; an unmarked main session (the owner's own) is allowed
-  owner-lock       a shell command running reserve_ui, or running a lock CLI owner-only write
+  hub-mcp          the hub MCP server's owner tools (hub_answer, hub_todo_done, hub_story_submit,
+                   hub_to_pm_send, a hub tool named for decide or approve), in any session but the
+                   owner's own
+  hub-browser      a browser or computer-use MCP call whose input names the hub's own origin (a
+                   loopback host on a hub port), in any session but the owner's own
+  owner-lock      a shell command running reserve_ui, or running a lock CLI owner-only write
                    (reserve, release, hold whole|half|slots, division --set, game on|off|set,
                    top, stop/unbook --force), in any session but the owner's own
   owner-setup      a shell command running machine setup to act (tools/machine_setup.py --apply, its
                    PowerShell front ends with -Apply, python code importing kitlib.machinesetup), in
                    any session but the owner's own: it writes the owner's email
+  hub-owner-verb   a shell command running a tools/hub.py owner verb (answer, open, pair, todos
+                   done, stories add|withdraw, to-pm add|send, inbox read, approvals approve|deny,
+                   todos add --owner) or arguments the guard cannot read, in any session but the
+                   owner's own
+  hub-secrets      a shell command naming the hub's token folder or a token file (owner.token,
+                   agent.token, approval.key), reaching the token folder or the hub store (the
+                   store through tools/hub.py's own --store excepted), or python or node code that
+                   names them or the hub site; an edit of a file in either folder; in any session
+                   but the owner's own (kitlib.guard.hub)
   ledger           an edit of the machine config's ledger_path, by anyone
   lock-state       an agent session's edit of a file in the machine lock's state folder
   kit-json         an agent session's edit of a .kit.json in a checkout
@@ -46,6 +60,7 @@ Rules, in the order they are checked:
 A command line the parser cannot read cleanly also goes through kitlib.guard.fallback.
 "Agent session" and "the owner's own" are the session mark's (docs/guard.md "Session mark").
 """
+import json
 import ntpath
 import os
 import posixpath
@@ -62,6 +77,7 @@ from kitlib.host import Decision
 from . import commands as cm
 from . import context
 from . import generated
+from . import hub as hubg
 from . import jail
 from . import paths
 from . import shell as sh
@@ -160,14 +176,17 @@ def judge(event, ctx):
         if not isinstance(text, str) or not text.strip() or event.shell not in SHELLS:
             return None
         return shell_command(event, ctx, text, SHELLS[event.shell], cwd, role)
+    if event.kind == 'mcp':
+        return hub_mcp(event, ctx, tool, role)
     return None
 
 
 def shell_command(event, ctx, text, shell, cwd, role):
     parsed = cm.read(text, shell, cwd)
+    hub_rules = HubShell(event, ctx)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
-        for rule in (owner_lock, owner_setup, wrapped_gate, root_search, heavy, git_rules, git_hooks_path, owner_identity,
+        for rule in (owner_lock, owner_setup, hub_rules.owner_verb, hub_rules.secrets, wrapped_gate, root_search, heavy, git_rules, git_hooks_path, owner_identity,
                      kill_by_name, heredoc_winpath, shell_writes):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
@@ -482,6 +501,314 @@ def owner_setup(event, ctx, cmd, inv, cwd, role):
                   'python %s' % kit_tool(ctx, 'machine_setup'))
 
 
+# ---------------------------------------------------------------- the Action Hub
+
+# docs/guard.md "Hub secrets". The hub's token folder (owner.token answers as the owner,
+# agent.token is every agent's, approval.key will sign the owner's approvals) and its store are
+# reached by agents only through tools/hub.py and the hub MCP server, which read agent.token in
+# their own process; the hub server's git sync writes the store. So an agent's own edit or shell
+# command that names them is refused (hub-secrets), as are tools/hub.py's owner verbs
+# (hub-owner-verb), the hub MCP server's owner tools (hub-mcp) and a browser or computer-use call
+# aimed at the hub's own page (hub-browser). Every session but the owner's own is held, as
+# owner-lock holds it: each is the owner's power, not a place an agent works.
+HUB_SCRIPT = 'hub.py'
+HUB_LINE_RE = re.compile(r'(?i)(?<![\w-])hub\.py\b')
+# `--title="$t"`: the value is quoted after the `=`, so it stays one argument
+HUB_SAFE_EQ_RE = re.compile(r'^-[^"\'$`]*=["\']')
+NODE_EVAL = ('-e', '--eval', '-p', '--print')
+HUB_SECRETS_WHY = ('the Action Hub\'s token folder holds the owner\'s key to the hub (owner.token answers as the '
+                   'owner) and its store is the hub server\'s to write; an agent reaches the hub only through its '
+                   'tool and its MCP server, which read agent.token themselves (docs/guard.md "Hub secrets").')
+HUB_OWNER_WHY = ('answering, closing, submitting, sending and approving on the Action Hub are the owner\'s alone '
+                 '(docs/guard.md "Hub secrets").')
+
+
+def hub_config(ctx):
+    """The machine config's `hub` object: the strict read's, else (a config the strict read
+    refuses) the file's own JSON, else {}. Its store and ports are read even from a config with
+    a fault elsewhere."""
+    user = ctx.user()
+    obj = user.get('hub')
+    if isinstance(obj, dict):
+        return obj
+    if not user.get('error'):
+        return {}
+    try:
+        with open(ctx.config_location().path, encoding='utf-8-sig') as f:
+            data = json.loads(f.read())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    obj = data.get('hub') if isinstance(data, dict) else None
+    return obj if isinstance(obj, dict) else {}
+
+
+def hub_real(path):
+    """jail.real(path), or None when the text is no path the filesystem can take."""
+    try:
+        return jail.real(path)
+    except (OSError, ValueError):
+        return None
+
+
+class HubPlaces(object):
+    """The hub's folders for one guard call: `secret` the token folder and `stores` the store
+    folders (kitlib.guard.hub.stores), each as written and as jail.real gives it."""
+
+    def __init__(self, ctx):
+        self.secret_path = hubg.secret_folder(ctx.config_location().new)
+        self.secret = hub_real(self.secret_path)
+        self.store_paths = hubg.stores(hub_config(ctx), ctx.pm_data_path())
+        self.stores = [s for s in (hub_real(p) for p in self.store_paths) if s]
+
+    def where(self, path):
+        """'secret', 'store' or None for the absolute `path` (real()ed here)."""
+        here_ = hub_real(path)
+        if here_ is None:
+            return None
+        if self.secret and jail.inside(here_, self.secret):
+            return 'secret'
+        if any(jail.inside(here_, s) for s in self.stores):
+            return 'store'
+        return None
+
+    def glob_where(self, pattern):
+        """where() for an absolute wildcard path: the folder it can name."""
+        if any(f and hubg.glob_reaches(pattern, f) for f in (self.secret_path, self.secret)):
+            return 'secret'
+        if any(hubg.glob_reaches(pattern, f) for f in self.store_paths + self.stores):
+            return 'store'
+        return None
+
+    def label(self, where):
+        return 'the hub token folder %s' % quote(self.secret_path) if where == 'secret' else 'the hub store'
+
+
+def hub_session(event, ctx):
+    return 'a subagent' if subagent(event) else 'marked %s' % ctx.session_role(event)
+
+
+def hub_read_alternative(ctx):
+    return 'python %s questions' % kit_tool(ctx, 'hub')
+
+
+def hub_ask_alternative(ctx):
+    return 'python %s questions add --title "<what the owner should decide>"' % kit_tool(ctx, 'hub')
+
+
+def hub_secrets_refusal(event, ctx, role, what):
+    return refuse('hub-secrets', role, '%s: %s This session is %s. To read the hub through its tool:' %
+                  (what, HUB_SECRETS_WHY, hub_session(event, ctx)), hub_read_alternative(ctx))
+
+
+def hub_secret_edit(event, ctx, target, role, what):
+    """hub-secrets for an edit: a file in the hub's token folder or store (HubPlaces), in any
+    session but the owner's own."""
+    if not target or is_owner_session(event, ctx):
+        return None
+    places = HubPlaces(ctx)
+    where = places.where(target)
+    if where is None:
+        return None
+    return hub_secrets_refusal(event, ctx, role, '%s is in %s' % (what, places.label(where)))
+
+
+def hub_script_run(inv):
+    """True when `inv` runs tools/hub.py: as python's script, or as the program."""
+    if inv is None:
+        return False
+    if inv.name == HUB_SCRIPT and not inv.dyn:
+        return True
+    found = cm.python_script(inv) if UI_PYTHON_RE.match(inv.name or '') else None
+    return bool(found) and found[1] == HUB_SCRIPT and not inv.args[found[0]].dyn
+
+
+def hub_owner_run(cmd, inv):
+    """What `inv` runs of tools/hub.py that is the owner's (kitlib.guard.hub.owner_verb), as text,
+    or None. Its arguments are read after the first literal word named hub.py (python's script,
+    a direct run, Start-Process's -ArgumentList); python running a script the text does not show
+    on a line that names hub.py counts as the owner's."""
+    words = ([inv.word] if inv.word is not None else []) + list(inv.args)
+    rest = None
+    for k, w in enumerate(words):
+        if not w.dyn and cm.base_name(w.text) == HUB_SCRIPT:
+            rest = words[k + 1:]
+            break
+    if rest is None:
+        script = cm.python_script(inv) if UI_PYTHON_RE.match(inv.name or '') else None
+        if (inv.dyn or (script is not None and inv.args[script[0]].dyn)) and HUB_LINE_RE.search(cmd.source or ''):
+            return 'a script the text does not show, on a line that names hub.py'
+        return None
+    ps = cmd.shell == sh.PS
+    source = cmd.source or ''
+    out = []
+    for w in rest:
+        if ps and not w.dyn and '"' in w.text:
+            # Windows PowerShell 5.1 passes it on unescaped, so one argument can become several
+            return 'with a double quote inside an argument (%s), which can split it into more' % w.text
+        src = source[w.start:w.end] if 0 <= w.start < w.end <= len(source) else ''
+        safe = w.dyn and not ps and inv.via is None and (cm.quoted(cmd, w) or HUB_SAFE_EQ_RE.match(src) is not None)
+        out.append(hubg.Word(w.text, w.dyn, safe))
+    return hubg.owner_verb(out)
+
+
+def hub_name(text):
+    """The hub secret a word names by itself, or None: the token folder (`.pm-kit/hub`) or a
+    token file's name as its last part."""
+    if hubg.FOLDER_RE.search(text):
+        return '.pm-kit/hub'
+    base = re.split(r'[\\/]', text)[-1].strip().lower()
+    return base if base in hubg.SECRET_FILES else None
+
+
+def hub_path_texts(text):
+    """The texts of one word that may be paths: the word, and the value of `--opt=value` or
+    PowerShell's `-Opt:value`; an option alone is none."""
+    if not text.startswith('-'):
+        return [text]
+    for sep in ('=', ':'):
+        if sep in text:
+            return [text.split(sep, 1)[1]]
+    return []
+
+
+def inline_code(cmd, inv):
+    """The code python or node runs from its own command line (-c, -e) or from standard input
+    (a heredoc, a here-string, the command piped in), as texts; [] for a script run or another
+    program."""
+    if inv is None:
+        return []
+    py, node = UI_PYTHON_RE.match(inv.name or '') is not None, inv.name == 'node'
+    if not (py or node):
+        return []
+    args = [w.text for w in inv.args]
+    code, stdin, k = False, True, 0
+    while k < len(args):
+        t = args[k]
+        if py and t in cm.PY_VALUE_OPTS:
+            k += 2
+            continue
+        if (py and re.match(r'^-[A-Za-z]*c', t)) or (node and t.split('=', 1)[0] in NODE_EVAL):
+            code = True
+            break
+        if py and t == '-m':
+            stdin = False
+            break
+        if t.startswith('-') and t != '-':
+            k += 1
+            continue
+        stdin = t == '-'                        # a script file, or `-`: standard input
+        break
+    texts = list(args) if code else []
+    if stdin or code:
+        for c in (cmd, cmd.pipe_from):
+            if c is None:
+                continue
+            if c is not cmd:
+                texts.append(c.text)
+            texts.extend(r.target.text for r in c.redirects
+                         if r.target is not None and (r.body or r.op == '<<<'))
+    return texts
+
+
+def hub_secret_shell(ctx, cmd, inv, places):
+    """What the command `cmd` names of the hub's secrets, as text, or None: a word naming the
+    token folder or a token file (hub_name; a search's or git's literal words are its patterns
+    and messages, so only their words that are not literal count), a literal path in the token
+    folder, in the store (unless tools/hub.py runs: its own --store), or wildcards that can name
+    either, and python or node code that names them or the hub site (kitlib.guard.hub.INLINE_RE).
+    `places()` gives the HubPlaces."""
+    name_only = inv is not None and inv.name in hubg.NAME_ONLY_PROGRAMS
+    targets = [r.target for r in cmd.redirects if r.target is not None and not r.body and r.op != '<<<']
+    for w in cmd.words:
+        if w.dyn or not name_only:
+            hit = hub_name(w.text)
+            if hit:
+                return 'names %s' % hit
+    for w in targets:
+        hit = hub_name(w.text)
+        if hit:
+            return 'names %s' % hit
+    runs_hub = hub_script_run(inv)
+    for w in list(cmd.words) + targets:
+        if w.dyn:
+            continue
+        for text in hub_path_texts(w.text):
+            if text == '~' or text[:2] in ('~/', '~\\'):
+                text = ctx.home + text[1:]
+            try:
+                p = sh.resolve_path(text, cmd.cwd, cmd.shell)
+            except (OSError, ValueError):
+                p = None
+            if not p:
+                continue
+            p_ = places()
+            where = p_.glob_where(p) if hubg.has_glob(text) else p_.where(p)
+            if where == 'secret' or (where == 'store' and not runs_hub):
+                return 'reaches %s (%s)' % (p_.label(where), w.text)
+    for text in inline_code(cmd, inv):
+        m = hubg.INLINE_RE.search(text)
+        if m:
+            return 'runs code that names %s' % m.group(0)
+    return None
+
+
+class HubShell(object):
+    """The hub rules of one shell call, as rules with the shell rules' arguments; the owner's
+    own session is read once and the hub's folders only when a word needs them."""
+
+    def __init__(self, event, ctx):
+        self.owner = is_owner_session(event, ctx)
+        self.ctx = ctx
+        self._places = None
+
+    def places(self):
+        if self._places is None:
+            self._places = HubPlaces(self.ctx)
+        return self._places
+
+    def owner_verb(self, event, ctx, cmd, inv, cwd, role):
+        """hub-owner-verb: a tools/hub.py owner verb (hub_owner_run)."""
+        if self.owner or inv is None:
+            return None
+        found = hub_owner_run(cmd, inv)
+        if not found:
+            return None
+        return refuse('hub-owner-verb', role, '`%s` runs hub.py %s: %s This session is %s. Ask the owner through '
+                      'a question:' % (bare(cmd), found, HUB_OWNER_WHY, hub_session(event, ctx)),
+                      hub_ask_alternative(ctx))
+
+    def secrets(self, event, ctx, cmd, inv, cwd, role):
+        """hub-secrets: a shell command that names the hub's secrets (hub_secret_shell)."""
+        if self.owner:
+            return None
+        found = hub_secret_shell(ctx, cmd, inv, self.places)
+        if not found:
+            return None
+        return hub_secrets_refusal(event, ctx, role, '`%s` %s' % (bare(cmd), found))
+
+
+def hub_mcp(event, ctx, tool, role):
+    """hub-mcp: a hub MCP owner tool (kitlib.guard.hub.owner_mcp); hub-browser: a browser or
+    computer-use MCP call whose input names the hub's own origin (a loopback host on a hub
+    port). In any session but the owner's own."""
+    if event.kind != 'mcp' or not tool or is_owner_session(event, ctx):
+        return None
+    server, tail = hubg.split_mcp(tool, host_mcp_separator(ctx.host_profile()) or '__')
+    who = hub_session(event, ctx)
+    if hubg.owner_mcp(tail, server):
+        return refuse('hub-mcp', role, '%s acts as the owner on the Action Hub: %s This session is %s; the agent '
+                      'tools (asking, listing) stay open. Ask the owner through a question:' %
+                      (tail, HUB_OWNER_WHY, who), hub_ask_alternative(ctx))
+    if not hubg.browser_server(server):
+        return None
+    found = hubg.hub_origins(hubg.strings(getattr(event, 'params', None)), hubg.ports(hub_config(ctx)))
+    if not found:
+        return None
+    return refuse('hub-browser', role, '%s reaches the Action Hub\'s own page (%s), where the owner answers as the '
+                  'owner: %s This session is %s. Ask the owner through a question:' %
+                  (tool, found[0], HUB_OWNER_WHY, who), hub_ask_alternative(ctx))
+
+
 # ---------------------------------------------------------------- edits: ledger and main checkout
 
 def same_file(a, b):
@@ -634,7 +961,8 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     gives the same edit aimed at `path` (the alternative); `run` the command to rerun from the
     worktree when it writes into the directory it runs in."""
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
-        lock_state(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what) or \
+        lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
+        kit_json(event, ctx, target, role, what) or \
         generated_file(ctx, target, role, what)
     if d:
         return d

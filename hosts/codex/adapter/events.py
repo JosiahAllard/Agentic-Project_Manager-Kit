@@ -221,5 +221,5 @@ def parse(event_name, payload):
                                refusal='text sent to a running process is input the guard never sees')
         return Action('other', tool=tool, cwd=cwd)
     if tool.startswith(MCP):
-        return Action('mcp', tool=tool, cwd=cwd)
+        return Action('mcp', tool=tool, cwd=cwd, params=data if isinstance(data, dict) else None)
     return Action('other', tool=tool, cwd=cwd)
