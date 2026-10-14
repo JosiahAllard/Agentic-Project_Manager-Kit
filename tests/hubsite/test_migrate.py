@@ -7,10 +7,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib import hubmirror
 from kitlib.hubsite import migrate
-from kitlib.hubsite.migrate import Busy, Conflict, Kept, Left, MigrateError
-from kitlib.hubsite.store import LOCK_NAME, META_NAME, HubError, Store, StoreBusy
+from kitlib.hubsite.migrate import Busy, Conflict, Kept, Left, MigrateError, NotADocument
+from kitlib.hubsite.store import LOCK_NAME, META_NAME, HubError, Store, StoreBusy, normal_text
 from tests.hubsite import test_hub_cli as cli
 
 AT = '2026-01-02T03:04:05+00:00'
@@ -30,7 +29,7 @@ def notice(run, phase):
             'phase': phase}
 
 
-# The mirror folder: what kitlib.hubmirror keeps, parked/ included.
+# The old hub's data folder, parked/ included.
 MIRROR = {
     'questions': {
         'Q-001': question(),
@@ -73,7 +72,7 @@ EXPORT_ONLY = ['questions/Q-009', 'repos/kit']
 def write(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(obj if isinstance(obj, str) else hubmirror.normal_text(obj))
+        f.write(obj if isinstance(obj, str) else normal_text(obj))
 
 
 def fill(folder, docs, wrapped=False):
@@ -275,9 +274,40 @@ class IdempotentCase(Case):
         self.assertEqual(r.left, [Left(self.mirror, 'parked', 2)])
         self.assertFalse(r.changed)
         self.assertFalse(os.path.exists(os.path.join(self.mirror, META_NAME)),
-                         'the mirror must still be a mirror: hubmirror.save refuses a folder '
-                         'that holds the revision file')
-        self.assertEqual(hubmirror.save({'questions': MIRROR['questions']}, self.mirror), [])
+                         'a folder served in place gets no revision file from migrate')
+
+
+class FieldsOfTest(unittest.TestCase):
+
+    def test_wrapped_document_gives_its_data(self):
+        obj = {'id': 'q1', 'version': 3, 'data': {'text': 'x', 'state': 'open'}}
+        self.assertEqual(migrate.fields_of('questions', obj), {'text': 'x', 'state': 'open'})
+
+    def test_a_data_object_alone_is_a_wrapped_document(self):
+        self.assertEqual(migrate.fields_of('todos', {'data': {'text': 'x'}}), {'text': 'x'})
+
+    def test_bare_document_loses_id_and_version(self):
+        obj = {'id': 'q1', 'version': 3, 'text': 'x', 'data': 'not an object'}
+        self.assertEqual(migrate.fields_of('questions', obj),
+                         {'text': 'x', 'data': 'not an object'})
+
+    def test_a_data_object_beside_other_keys_is_refused(self):
+        for obj in ({'id': 'q1', 'version': 3, 'updated_at': 't', 'data': {'text': 'x'}},
+                    {'text': 'x', 'data': {'kept': True}}):
+            with self.assertRaises(NotADocument, msg=repr(obj)) as cm:
+                migrate.fields_of('questions', obj)
+            self.assertIn('kitlib.hubsite.migrate.WRAPPER_KEYS', str(cm.exception))
+
+    def test_to_pm_loses_its_id_like_every_collection(self):
+        self.assertEqual(migrate.fields_of('to_pm', {'id': 'm7', 'version': 2, 'text': 'hi'}),
+                         {'text': 'hi'})
+        self.assertEqual(
+            migrate.fields_of('to_pm', {'version': 2, 'data': {'id': 'm7', 'text': 'hi'}}),
+            {'text': 'hi'})
+
+    def test_not_an_object_is_refused(self):
+        with self.assertRaises(NotADocument):
+            migrate.fields_of('todos', ['x'])
 
 
 class DryRunCase(Case):
@@ -453,8 +483,8 @@ class StoreConflictCase(Case):
             "by its time stamps: %s). To keep the store's copy there is nothing to do; a run with "
             "that source reports this again. To take a source's copy: with the server stopped, "
             "move the file questions/Q-002.json out of the store folder (where the store folder "
-            "is the mirror folder, that file is the mirror's own file), then run again with the "
-            "chosen source alone" % (self.export, self.export), lines)
+            "is the old hub's data folder, that file is the old hub's own file), then run again "
+            "with the chosen source alone" % (self.export, self.export), lines)
         self.assertFalse(any('run again without that source' in x for x in lines),
                          'leaving the source out would leave out its other documents too')
         self.assertIn('NOT COMPLETE: 1 document not imported (CONFLICT and SKIPPED above); the '
