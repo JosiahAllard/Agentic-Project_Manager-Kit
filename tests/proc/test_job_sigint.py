@@ -256,9 +256,14 @@ class UnderSigDfl(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="kitlib-job-sigdfl-")
         self.addCleanup(shutil.rmtree, tmp, True)
         pidfile, marker = os.path.join(tmp, "pid"), os.path.join(tmp, "ran")
-        r = spawn.run([sys.executable, "-c", UNDER_DEFAULT, signame, pidfile, marker],
-                      env=dict(os.environ, PYTHONPATH=ROOT), stdin=subprocess.DEVNULL,
-                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+        # Output to a file, never a pipe: a child left behind would hold a pipe open and hang the
+        # run where this test should fail.
+        with open(os.path.join(tmp, "out"), "w+b") as out:
+            r = spawn.run([sys.executable, "-c", UNDER_DEFAULT, signame, pidfile, marker],
+                          env=dict(os.environ, PYTHONPATH=ROOT), stdin=subprocess.DEVNULL,
+                          stdout=out, stderr=subprocess.STDOUT, timeout=120)
+            out.seek(0)
+            r.stdout = out.read()
         with open(pidfile) as f:
             pid = int(f.read())
         h = process.open_process(pid, process.SYNCHRONIZE | process.PROCESS_TERMINATE)
