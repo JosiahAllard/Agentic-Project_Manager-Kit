@@ -7,12 +7,14 @@ import unittest
 from unittest import mock
 
 from kitlib import sessionmark
-from kitlib.guard import context, decide, rules
+from kitlib.guard import context, rules
+from kitlib.host import Action
 from kitlib.lock import api
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 from kitlib.lockmcp import server as lockmcp
 
 from . import world as W
+from .claudehost import MCP_PREFIX, action, decide
 from .world import bash, event, ps
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,7 +22,7 @@ COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 PM = {context.ROLE_ENV: 'pm'}
 PLAIN = {context.ROLE_ENV: 'plain'}          # a launcher mark no agent-session rule holds by default
 OWNER_EMAIL = 'owner@example.com'
-P = CLAUDE_PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
+P = PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
 
 
 class Mark(unittest.TestCase):
@@ -36,12 +38,21 @@ class Mark(unittest.TestCase):
             self.assertEqual(sessionmark.mark({sessionmark.ENV: value}), 'marked-' + value)
 
     def test_the_session_role(self):
-        role = context.default_session_role
+        def role(payload, environ):
+            return context.default_session_role(action(payload), environ)
         self.assertEqual(role({}, {}), context.OWNER)
         self.assertEqual(role({}, COORDINATOR), 'coordinator')
         self.assertEqual(role({'agent_id': 'a1'}, {}), context.SUBAGENT)
         self.assertEqual(role({'agent_id': 'a1'}, COORDINATOR), context.SUBAGENT)
         self.assertEqual(role({}, {sessionmark.ENV: 'owner'}), 'marked-owner')
+
+    def test_a_host_that_hands_over_the_mark_is_read_before_the_environment(self):
+        role = context.default_session_role
+        self.assertEqual(role(Action('shell', role='coordinator'), {}), 'coordinator')
+        self.assertEqual(role(Action('shell', role=''), COORDINATOR), context.OWNER)
+        self.assertEqual(role(Action('shell', role='owner'), {}), 'marked-owner')
+        self.assertEqual(role(Action('shell', role='coordinator', agent='a1'), {}), context.SUBAGENT)
+        self.assertEqual(role(None, COORDINATOR), 'coordinator')
 
     def test_the_plugin_prefix_is_read_off_before_the_reserved_check(self):
         # docs/guard.md "Agent names": a mark with the kit plugin's prefix is the bare mark
@@ -50,14 +61,14 @@ class Mark(unittest.TestCase):
                            (P + 'subagent', 'marked-subagent'), ('other:owner', 'other:owner')):
             with self.subTest(value):
                 self.assertEqual(sessionmark.mark({sessionmark.ENV: value}), out)
-        self.assertEqual(context.default_session_role({}, {sessionmark.ENV: P + 'owner'}), 'marked-owner')
+        self.assertEqual(context.default_session_role(action({}), {sessionmark.ENV: P + 'owner'}), 'marked-owner')
 
     def test_a_mark_that_is_all_prefix_stays_marked(self):
         # emptied, it would read as unmarked: the owner's own session
         for value in (P, P + P, P.upper()):
             with self.subTest(value):
                 self.assertEqual(sessionmark.mark({sessionmark.ENV: value}), value)
-                self.assertNotEqual(context.default_session_role({}, {sessionmark.ENV: value}), context.OWNER)
+                self.assertNotEqual(context.default_session_role(action({}), {sessionmark.ENV: value}), context.OWNER)
 
 
 class OwnerCheck(unittest.TestCase):
@@ -116,21 +127,21 @@ class LockMcpByMark(unittest.TestCase):
 
     def test_unmarked_main_session_is_the_owner(self):
         for name in lockmcp.OWNER_ONLY:
-            self.assertIsNone(decide(self.ev(rules.MCP_PREFIX + name), self.w.ctx(environ={})), name)
+            self.assertIsNone(decide(self.ev(MCP_PREFIX + name), self.w.ctx(environ={})), name)
 
     def test_marked_and_subagent_sessions_are_denied(self):
-        name = rules.MCP_PREFIX + lockmcp.OWNER_ONLY[0]
+        name = MCP_PREFIX + lockmcp.OWNER_ONLY[0]
         for env, sub, who in (({}, True, 'subagent'), (PM, False, 'pm'), (COORDINATOR, False, 'coordinator'),
                               ({context.ROLE_ENV: 'owner'}, False, 'marked-owner')):
             with self.subTest(who):
                 d = decide(self.ev(name, sub), self.w.ctx(environ=env))
-                self.assertEqual((d.kind, d.rule), ('deny', 'lock-mcp'))
+                self.assertEqual((d.verdict, d.rule), ('deny', 'lock-mcp'))
                 self.assertIn('This session is %s.' % who, d.reason)
 
     def test_full_names_from_the_machine_config(self):
         self.w.user_config({'guard_mcp_tools': ['mcp__plugin_x_lock__reserve_slots']})
         d = decide(self.ev('mcp__plugin_x_lock__reserve_slots', sub=True), self.w.ctx())
-        self.assertEqual((d.kind, d.rule), ('deny', 'lock-mcp'))
+        self.assertEqual((d.verdict, d.rule), ('deny', 'lock-mcp'))
         self.assertIsNone(decide(self.ev('mcp__plugin_x_lock__other', sub=True), self.w.ctx()))
 
     def test_an_unlisted_full_name_is_open(self):
@@ -156,50 +167,50 @@ class AgentSessions(unittest.TestCase):
     def test_default_marks(self):
         for check in (self.kill, self.edit_state):
             with self.subTest(check.__name__):
-                self.assertEqual(check({}, sub=True).kind, 'deny')
+                self.assertEqual(check({}, sub=True).verdict, 'deny')
                 d = check(COORDINATOR)
-                self.assertEqual(d.kind, 'deny')
+                self.assertEqual(d.verdict, 'deny')
                 self.assertTrue(d.reason.endswith(rules.tag(d.rule, 'main')), d.reason)
                 for mark in ('pm', 'deep-worker', 'consultant'):
-                    self.assertEqual(check({context.ROLE_ENV: mark}).kind, 'deny', mark)
+                    self.assertEqual(check({context.ROLE_ENV: mark}).verdict, 'deny', mark)
                 self.assertIsNone(check(PLAIN))
                 self.assertIsNone(check({}))
 
     def test_old_conductor_mark_is_still_held(self):
         # the live launcher sets the old mark until go-live renames it
-        self.assertEqual(self.kill({context.ROLE_ENV: 'conductor'}).kind, 'deny')
+        self.assertEqual(self.kill({context.ROLE_ENV: 'conductor'}).verdict, 'deny')
 
     def test_a_plugin_prefixed_mark_is_held_as_the_bare_mark(self):
         # docs/guard.md "Agent names": without the strip these sessions would pass as unheld marks
         for check in (self.kill, self.edit_state):
             for mark in (P + 'deep-worker', P + 'coordinator', P.upper() + 'PM', P + 'consultant'):
                 with self.subTest(check.__name__, mark=mark):
-                    self.assertEqual(check({context.ROLE_ENV: mark}).kind, 'deny')
+                    self.assertEqual(check({context.ROLE_ENV: mark}).verdict, 'deny')
             with self.subTest(check.__name__, mark='plain'):
                 self.assertIsNone(check({context.ROLE_ENV: P + 'plain'}))
 
     def test_a_resolver_that_keeps_the_prefix_still_fails_closed(self):
         # a role_resolver other than sessionmark's: agent_session strips the prefix itself
         ctx = self.w.ctx(environ={}, role_resolver=lambda ev, env: P + 'deep-worker')
-        self.assertTrue(rules.agent_session(ps('x', self.w.wt), ctx))
+        self.assertTrue(rules.agent_session(action(ps('x', self.w.wt)), ctx))
         ctx = self.w.ctx(environ={}, role_resolver=lambda ev, env: 'other:deep-worker')
-        self.assertFalse(rules.agent_session(ps('x', self.w.wt), ctx))
+        self.assertFalse(rules.agent_session(action(ps('x', self.w.wt)), ctx))
 
     def test_lock_state_names_the_rule_and_the_status_command(self):
         d = self.edit_state(COORDINATOR)
         self.assertEqual(d.rule, 'lock-state')
-        self.assertIn('Instead: python %s/.claude/tools/machine_lock/machine_lock.py status ' % W.fwd(self.w.home), d.reason)
+        self.assertIn('Instead: python "%s/tools/machine_lock.py" status ' % W.fwd(self.w.kit_dir), d.reason)
 
     def test_lock_state_by_shell_redirect(self):
         target = W.fwd(os.path.join(self.w.home, '.claude', 'machine-lock', 'state.json'))
         d = decide(bash('echo {} > %s' % target, self.w.wt, sub=True), self.w.ctx())
-        self.assertEqual((d.kind, d.rule), ('deny', 'lock-state'))
+        self.assertEqual((d.verdict, d.rule), ('deny', 'lock-state'))
 
     def test_beside_the_lock_state_is_not_lock_state(self):
         # the home folder is outside a subagent's write roots, so the write jail, not lock-state, denies it
         target = os.path.join(self.w.home, '.claude', 'machine-lock-notes.md')
         d = decide(event('Write', {'file_path': target, 'content': 'x'}, self.w.wt, True), self.w.ctx())
-        self.assertEqual((d.kind, d.rule), ('deny', 'write-jail'))
+        self.assertEqual((d.verdict, d.rule), ('deny', 'write-jail'))
 
     def test_marks_from_the_machine_config(self):
         # the setting replaces the default list
@@ -273,7 +284,7 @@ class OwnerIdentity(unittest.TestCase):
                 with self.subTest(text, env=env, sub=sub):
                     d = self.run_one(shell, text, env, sub)
                     self.assertIsNotNone(d, 'allowed')
-                    self.assertEqual((d.kind, d.rule), ('deny', 'owner-identity'), d.reason)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'owner-identity'), d.reason)
                     self.assertTrue(d.reason.endswith(' Instead: git -C "%s" config --get user.email %s' % (
                         W.fwd(self.w.wt), rules.tag('owner-identity', role))), d.reason)
 

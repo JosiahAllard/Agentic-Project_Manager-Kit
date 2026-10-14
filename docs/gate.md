@@ -26,7 +26,7 @@ From kitlib/gate/__init__.py. The machine lock's refusal codes pass through unch
 
 | Code | Name | First line printed |
 |---|---|---|
-| 0 | OK | `GATE OK[ (warned: ..; skipped: ..)]`, `LANDED <branch> on <main> at <merge> (pushed and verified on <remote>)` (followed by `WARNING: the landing lock could not be released: ...` and the command to break it when only the release failed), or `proposal written: <path>` |
+| 0 | OK | `GATE OK[ (warned: ..; skipped: ..)]` (or `GATE OK (auto-detected: no stack found, so NO checks ran; ...)`, see Auto-detected gate), `LANDED <branch> on <main> at <merge> (pushed and verified on <remote>)` (followed by `WARNING: the landing lock could not be released: ...` and the command to break it when only the release failed), or `proposal written: <path>` |
 | 1 | FAILED | `GATE FAILED: <steps> (<first>: <reason>)`, or `NOT LANDED: ...` (red merge undone, conflict aborted, a step left untracked files in the main checkout, an exception or SystemExit after the merge that was undone) |
 | 2 | USAGE | `USAGE: ...`: bad arguments, an `--only` name no step has, a `--base` that does not resolve, an unknown `--lane`, a machine-lock usage error such as an unknown `"gate".kind`. Never worded as a refusal (refusal-log P10). |
 | 3 | STUCK | `STUCK: landing <branch> stopped in phase <phase>: ...`, then what is left and the steps to clear it (see Landing); the landing lock stays held at phase `stuck`. A step that committed or changed a tracked file is STUCK, and so is a Ctrl+C or SystemExit whose undo cannot complete |
@@ -51,6 +51,32 @@ kitlib/gate/steps.py. A step has a `cmd` (argv with `{python} {root} {base} {her
 - **Judging.** A step passes only when its exit code is in `ok_exits`, every `pass` pattern matches, no `fail` pattern matches, a cmd step's log is not empty, and it did not run zero tests (`Ran 0 tests` or a `zero_tests` pattern). The `errors` policy must also find no unexplained line. A `warn` step that fails, or a `warn_lines` hit, is WARN. A FAIL stops the rest unless the step has `continue`. A `requires` entry is a command name (looked up on PATH) or an argv probe that must exit 0 within 60 s (`PROBE_TIMEOUT`; on timeout its whole process tree is ended). One that is missing is SKIP, or FAIL with `requires_strict`. A gate whose selected steps were all skipped did not run anything, so it is REFUSED, not OK.
 - **Reuse.** A cmd step with `reuse` (`true`, or a group name: a group is reused whole or not at all) and declared inputs (`globs` or `content`.globs) may be counted as passed without running, in a branch-gate rerun or a landing, when a pass of the same inputs, argv, config and kit is in the gate cache (see Gate reuse). A check step never is.
 - **Check contract.** `GATE_CHECKS[name](ctx)`; ctx has `root base merged changed options name log run`. `run(argv, cwd=None)` runs in the slot's job and returns the exit code. A check returns 0/True to pass. Raising fails the check, and the traceback goes in the log. Calling `sys.exit` (any code, 0 included) also fails it, and the code goes in the log. Ctrl+C is not caught: it stops the gate.
+
+## Auto-detected gate
+
+With no `"gate"` section in `.kit.json` (neither inline nor in the file it names, such as `tools/gate.json`), the gate detects the stack from the checkout's files and runs its usual test and lint steps (`kitlib/gate/detect.py`; docs/multi-host-plan.md decision 24). A configured `"gate"` section always wins, even an empty one: no detected step is ever added to it, and a section with no step that covers the change refuses as before. Every gate takes its steps from `detect.effective`: the branch gate (from the checkout), a landing's merged-tree gate and its check of commits on top (from the merged tree), and the daily full run (from its worktree).
+
+The files are the ones git lists (tracked, plus untracked files it does not ignore that are under none of the build folders below); where git cannot list them, a walk that skips `node_modules`, `.venv`, `target`, `bin`, `obj` and other build folders, and any folder with a `.git` of its own. Detection only reads files: it installs, fetches and runs nothing, and looks nothing up on PATH. Each detected step is `always`, and names its tool in `requires` (Steps, Judging). A test step is `requires_strict`, so a missing test runner FAILs: a gate never passes without the tests it found. A lint step is not, so a missing linter is SKIP, named in the verdict line. `{python}` is the interpreter running the gate, not a project virtualenv; a project that needs its own interpreter, an install step or other arguments writes a `"gate"` section.
+
+| Stack | Detected by | Steps |
+|---|---|---|
+| Python | a test file (`test*.py` or `*_test.py`) | `python-tests`: `{python} -m pytest` when the repository uses pytest (`pytest.ini`; a `conftest.py`; a `[tool.pytest...]`, `[tool:pytest]` or `[pytest]` section; `pytest` or a `pytest-*` plugin named in `pyproject.toml`, `setup.cfg`, `setup.py`, `tox.ini`, `Pipfile` or `requirements*.txt`; or a test file that imports it), requiring `import pytest` to work; else `{python} -m unittest discover`, with `-s tests` (or `-s test`) when the tests are in that folder |
+| | `ruff.toml`, `.ruff.toml` or `[tool.ruff]` in `pyproject.toml` | `python-ruff`: `ruff check .` |
+| | `.flake8`, or `[flake8]` in `setup.cfg` or `tox.ini` | `python-flake8`: `flake8` |
+| Node | `package.json` at the root | `node-test`, `node-lint`, `node-typecheck`: `<pm> run <script>` for each of the scripts `test`, `lint`, `typecheck` it has (npm init's `no test specified` placeholder is not a test). `<pm>` by lockfile: `pnpm-lock.yaml` pnpm, `yarn.lock` yarn, `bun.lockb` or `bun.lock` bun, else npm (npm, pnpm and yarn run as their `.cmd` shims). Dependencies are not installed: `node_modules` must be there |
+| Rust | `Cargo.toml` at the root | `rust-test`: `cargo test --workspace`; `rust-fmt`: `cargo fmt --all --check` when `rustfmt.toml` or `.rustfmt.toml` is there |
+| Go | `go.mod` at the root | `go-test`: `go test ./...`; `go-vet`: `go vet ./...` |
+| .NET | a `*.sln` or `*.slnx` at the root, else a test project (`*.csproj`, `*.fsproj` or `*.vbproj` named `*test*`, or referencing `Microsoft.NET.Test.Sdk`) | `dotnet-test`: `dotnet test <solution or project> -nodeReuse:false -p:UseSharedCompilation=false`, one step per solution (or per test project when there is no solution), each named `dotnet-test-<name>` when there are several (`-2`, `-3` ... when two share a name). A path starting with `-` or holding `{` is never passed |
+
+Several stacks in one checkout run every one's steps, in the table's order. Python with no test file and no linter config, and a `package.json` with none of the three scripts, detect nothing. Only root-level manifests count: a monorepo whose `go.mod`, `Cargo.toml` or `package.json` live only in subfolders detects nothing for that stack, and writes a `"gate"` section.
+
+**What the base owes.** The branch gate and a landing's merged-tree gate also detect over their base commit's tree (the branch gate: the merge base; a landing: `--expect-main`, read with `git ls-tree` and `git cat-file`), and keep every step the base detects that the tree under test does not (`detect.owed`; the `dotnet-test` steps count as one). So a branch that deletes its test files, its `test` script or its manifest still runs those tests, with the base's command, and they fail. A kept lint step (`python-ruff`, `python-flake8`, `node-lint`, `node-typecheck`, `rust-fmt`, `go-vet`) is `warn`: its failure is a WARN named in the verdict. The source line names what was kept (`kept from the base, which detects them and this tree does not: ...`). Dropping a check on purpose takes a `"gate"` section. When git cannot read the base the gate is REFUSED. The daily full run, which has no base, detects over its worktree alone. Detection does not stop a branch from changing what a detected step runs (a `test` script edited to `exit 0`, a `conftest.py` that skips everything): that is a change to the tests themselves, which review sees as it would under a configured gate.
+
+**The label.** An auto-detected gate says `source: auto (auto-detected gate: <stacks>; ...)` before it starts, and the same line is the last line of its report (`source: gate.json` for a configured gate). `gate.py --plan` ends with it too. The result record and the gate-OK record carry `source` (`auto` or `gate.json`; see Gate-OK record and Result record), so the PM sees an auto-detected gate in the record a waiting session reads, not only in the console.
+
+**Nothing detected.** When neither the tree under test nor its base detects a stack, the gate runs no step and PASSES, saying so: `GATE OK (auto-detected: no stack found, so NO checks ran; ...)`, then `source: auto (auto-detected gate: no stack found, so it ran NO checks; ...)`. A branch gate writes the gate-OK record as usual (its `steps` empty, `source` `auto`), and a landing lands. It passes rather than refuses because an auto-detected gate exists so that a repository with nothing committed for the kit (a docs-only repository, or a stack no detector knows) can run a worker-to-landing cycle; a refusal there could only be cleared by committing a gate section, which is what auto-detection avoids. The checks it did not run are not hidden: the verdict line, the source line and both records' `source` say so wherever a pass is read. A configured gate with no step selected is still REFUSED (Exit codes), and an auto-detected gate whose detected steps were all skipped is REFUSED as any gate is (`no gate step ran`). The daily full run refuses a gate with no step either way.
+
+**The record's hash.** `gate_config` (Gate-OK record) is still the configured section over its defaults, not the detected steps: they follow from the commit's tree, which the record names, its base's tree (`base`), and the kit, which its `kit` names, so the hash and the record still fix what the gate ran. `steps` lists them by name.
 
 ## Build daemons
 
@@ -84,6 +110,23 @@ Known limits:
 
 Tests: tests/lock/test_release_daemons.py (`ReleaseLeavesASharedDaemon`: the errored and cancelled gates, `Launcher.kill`, a second Ctrl+C mid-kill in wait and in release, a second kill keeping the first's record, a worker started between the reads, a reused pid, a listed pid gone by the last pass, a daemon whose creation time cannot be read, a process table that cannot be read, a judgement that raised, a result that cannot be said, a `say` that raises for every text with a survivor of the passes and on a done release, the two kill-path controls, and a control on the harness: an outside client that exited fails as the test's setup).
 
+## Console windows
+
+Every gate run's lock run watches for console windows while its steps run: `kitlib/lock/run.py` `Slot.start` starts a `kitlib/proc/winwatch.py` `Monitor` before the first step, and `kitlib/gate/runner.py` `window_results` stops it (`Slot.watch_stop`) after the last step and says the report, before the verdict:
+
+```
+windows opened: 1 - WARNING: a console window opened (the verdict does not count it)
+  12:20:05 window pid 56324 python.exe via windowsterminal.exe CASCADIA_HOSTING_WINDOW_CLASS title "<python folder>\python.exe" [this run]
+```
+
+- N counts the windows the run opened (`[this run]`: the program was in the run's job, `Slot.window_owner`) and those it cannot place (`[run unknown]`: the program had exited, or could not be opened, when the window was read). A window whose program is outside the job is listed under `also seen, another run's: M` and not counted. A console host window shown and gone before it could be read is listed under `also seen: K console host window(s) ...` and not counted.
+- A window warns: the verdict, the exit code and the gate-OK record do not change. `WINDOWS_FAIL = True` in `kitlib/gate/runner.py` is the one change that makes a counted window fail the gate: `window_results` then adds a FAIL result named `windows` (`GATE FAILED: windows (windows: N console window(s) opened)`), the report line reads `- FAILED: a console window opened`, and the lock run records code 1. `windows` is a reserved step name (`kitlib/gate/steps.py` `RESERVED`), so no configured step shares that result's name.
+- Every gate run is watched, not only `--full`: a branch gate, a landing's merged-tree gate and the daily full run. The branch and merged-tree gates also return the windows as the outcome fact `windows` (each `Window.as_dict()`; None when no step ran).
+- A monitor that cannot run, or that raises as it starts (`Slot.watch_start`), says `windows opened: unknown (the window monitor did not run: <why>)`, and the gate goes on.
+- What it sees and misses (Windows Terminal hosting, the title heuristic for new tabs, other programs' windows, session 0, the events still queued when it stops): the `kitlib/proc/winwatch.py` module docstring. The tests show no window the user can see (docs/test-tools.md "Window tests").
+
+Tests: tests/gate/test_windows.py, tests/lock/test_run_windows.py, tests/proc/test_winwatch.py.
+
 ## Gate-OK record
 
 The branch gate writes `<git common dir>/kit-gate-ok/<sha>.json` (kitlib/records/gate_ok.py) only when all of these hold:
@@ -95,6 +138,8 @@ The branch gate writes `<git common dir>/kit-gate-ok/<sha>.json` (kitlib/records
 - HEAD did not move.
 
 With no step selected, or every selected step skipped, it is REFUSED (exit 4). Otherwise a missed condition prints `no gate-OK record: <why>` and still exits 0 when the gate passed. `gate_config` is `.kit.json` "gate" over its defaults (`kitlib.gate.runner.gate_config`); guard.py and pre-push verify with the same value. A landing writes the record for its merge commit after the merged gate passes, after the checkout is checked unchanged, and before the push.
+
+`source` (an added key, `gate_ok.ADDED_KEYS`) is where the gate's steps came from: `gate.json` (the configured "gate" section) or `auto` (Auto-detected gate). A record written before the key has none; `gate_ok.source_of(record)` reads it as `gate.json`, and `verify` neither requires nor checks it.
 
 `config_rev` (an added key, `gate_ok.ADDED_KEYS`) is the commit the gate config was read from: HEAD for a branch gate, `--expect-main` for a landing. `gate_ok.verify(root, commit, config_at=...)` requires it to be in the commit's history and compares the record's `gate_config` with the config that commit holds; `kitlib.gate.runner.verify_record(root, commit)` does that with `.kit.json` read by `kitlib.config.load_at`. `verify(root, commit[, gate_config])` without `config_at` is unchanged.
 
@@ -123,6 +168,7 @@ kitlib/gate/result.py. `<git common dir>/kit-gate-result/<stem>.<kind>.json`, be
 | `summary` | the verdict line (`GATE OK ...`, `GATE FAILED: ...`, `LANDED ...`, `NOT LANDED: ...`, `REFUSED: ...`, ...), or the exception for `error` |
 | `gate_ok_record` | the branch gate's gate-OK record path, or null (always null for a landing) |
 | `cleanup` | a landing that landed: this branch's cleanup (see Branch cleanup); null for a branch gate, a landing that did not land, and one whose cleanup did not run |
+| `source` | where the gate's steps came from: `gate.json` (the configured "gate" section) or `auto` (Auto-detected gate); null while `running`, for `error`, and when the run ended before its gate config was read (a landing: before its merged gate ran). Added within schema 1: a record written before it has no `source` key, which readers take as null (`result.source_of`) |
 
 A pass is not a gate-OK record: a gate that passes a dirty tree is `pass` with `gate_ok_record` null. A waiting session that treats `pass` as ready to land checks `gate_ok_record` too.
 
@@ -267,6 +313,8 @@ Nothing is forced. A tip main does not contain, a worktree with work in it, a wo
 `land.py --sweep-landed [--apply]` applies the same rule to every branch, local or on the remote, that main already contains: it fetches `<main>`, and takes a tip in `<remote>/<main>` and off its first-parent line (a branch made from main with no commit of its own is never one). Branches main does not contain are not named. It does nothing while a landing holds the landing lock (BUSY). A dry run, the default, names what would go and ends with the `--apply` command. The landing cleanup and the sweep delete a remote branch only by the lease push above and a local branch only with `git branch -d`; guard.py gains no allowance for an agent's `git branch -D` or `git push --delete`.
 
 ## The caller's checkout
+
+Skills and roles run the gate as `python <kit>/tools/gate.py -C <worktree>`, an absolute `-C` that names the tree, so neither rule below stops them; stubs are opt-in (decision 21 in docs/multi-host-plan.md section 7, docs/install.md). In the kit's own repository that command runs the kit checkout's gate code on the worktree's tree; `python <worktree>/tools/gate.py -C <worktree>` (AGENTS.md) runs the worktree's own.
 
 A stub run from outside its checkout runs the kit tool in the stub's checkout (docs/install.md "Stubs"), so a shell in one checkout that runs another checkout's gate stub would gate that other checkout. The stub then passes `[stub checkout, caller directory]` on in `KIT_STUB_CALLER`; `tools/gate.py` removes it, so no step inherits it, and for a branch gate (`--plan` included) applies kitlib/gate/caller.py `refusal`:
 

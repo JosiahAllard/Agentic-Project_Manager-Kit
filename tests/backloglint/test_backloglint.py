@@ -9,6 +9,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
 from kitlib import backloglint as bl
+from kitlib import kitroot
 from kitlib.git import cmd as gitcmd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -62,7 +63,9 @@ class IncidentTest(unittest.TestCase):
         self.assertEqual(sorted(by), sorted(INCIDENT))
         self.assertEqual(by["EX-SIM-BATCH-STATE"].kind, "session")
         self.assertEqual(by["EX-SIM-BATCH-STATE"].fix,
-                         "python tools/backlog.py -C <worktree> set EX-SIM-BATCH-STATE --session gamma")
+                         "python <kit>/tools/backlog.py -C <worktree> set EX-SIM-BATCH-STATE --session gamma")
+        self.assertTrue(bl.BACKLOG_CMD.startswith('python "%s/tools/backlog.py" -C '
+                                                  % kitroot.root().replace('\\', '/')), bl.BACKLOG_CMD)
         self.assertIn("--session gamma", by["EX-SIM-BUFF-DURATION"].fix)
         self.assertIn("--session pm", by["EX-TOOLS-LANDING-INFLIGHT"].fix)
         self.assertIn("scope under tools/new_worktree.py", by["EX-TOOLS-LANDING-INFLIGHT"].why)

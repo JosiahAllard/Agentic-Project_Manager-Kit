@@ -149,7 +149,7 @@ class ResumePm(unittest.TestCase):
         for p in (STORE, UNNAMED):
             text, = self.resume(self.cfg(), [p], settings=self.beside()).opened
             self.assertEqual(role_of(text), 'pm')
-            self.assertIn("claude --resume 'pm-sid-1' --remote-control 'pm-session' -n 'pm-session'", text)
+            self.assertIn("claude --resume 'pm-sid-1' --agent pm-kit:pm --remote-control 'pm-session' -n 'pm-session'", text)
         self.assertEqual(self.lines, ['desktop app running, pm-session not skipped '
                                       '(launcher.pm_resume_beside_desktop)', 'started pm-session'] * 2)
 
@@ -176,7 +176,7 @@ class ResumePm(unittest.TestCase):
         host = self.resume(self.cfg(), uptime=60)
         text, = host.opened
         self.assertEqual(role_of(text), 'pm')
-        self.assertIn("claude --resume 'pm-sid-1' --remote-control 'pm-session' -n 'pm-session'", text)
+        self.assertIn("claude --resume 'pm-sid-1' --agent pm-kit:pm --remote-control 'pm-session' -n 'pm-session'", text)
         self.assertNotIn('--permission-mode', text)
         self.assertIn("$env:CLAUDE_CONFIG_DIR = %s" % window.q(self.h.accounts['2'][0]), text)
         self.assertIn("Set-Location %s" % window.q(self.h.root), text)

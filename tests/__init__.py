@@ -18,9 +18,15 @@ Windows reports. A child given a hand-built environment without the marker is no
 The fence has one exception, real_install_config(): the scrub tests check the kit's files against
 this install's own names, which only the real machine config holds. It reads the machine config
 under the home recorded below, before the fence, and returns only the install-name keys
-(install_config)."""
+(install_config).
+
+The console hook (kitlib.proc.console, docs/daily-full.md "The schedule"): `import kitlib` comes
+first, so a test process that has no console gets one with no window before its first start, and
+no test opens a console window whatever it starts and however (tests/proc/test_console.py)."""
 import os
 import sys
+
+import kitlib  # noqa: F401  (installs the CreateProcess hook before anything starts)
 
 os.environ.setdefault('KIT_FAKE_GIT', '1')
 

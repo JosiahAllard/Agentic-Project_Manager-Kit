@@ -256,6 +256,27 @@ class ProblemLine(StubCase):
     def test_the_kits_own_repository_is_silent(self):
         self.assertIsNone(stubs.problem_line(stubs.KIT_ROOT))
 
+    def test_a_repository_with_no_stubs_is_silent(self):
+        """Stubs are opt-in (decision 21): no "stubs" section and no stub file is no problem."""
+        self.assertIsNone(stubs.problem_line(self.root))
+
+    def test_one_stub_opts_in_without_a_stubs_section(self):
+        self.assertEqual(self.run_stubs('write', tools=['landed'])[0], stubs.OK)
+        line = stubs.problem_line(self.root)
+        self.assertIsNotNone(line)
+        self.assertIn('missing/stale: ', line)
+        self.assertNotIn('landed', line.split(';')[0].split(': ', 1)[1].split(', '))
+
+    def test_an_old_stub_running_another_kit_still_warns_without_a_stubs_section(self):
+        """A repository set up before stubs were opt-in has stubs and no "stubs" section: a stub
+        that runs an older kit still names it."""
+        other = os.path.join(self.tmp, 'other-kit')
+        self.put(self.stub('landed'), stubs.stub_text('landed', 'tools', other))
+        line = stubs.problem_line(self.root)
+        self.assertIsNotNone(line)
+        self.assertIn('landed', line.split(';')[0])
+        self.assertTrue(line.endswith('(stale ones run the kit at %s)' % os.path.normpath(other)), line)
+
 
 class WriteAndCheck(StubCase):
 

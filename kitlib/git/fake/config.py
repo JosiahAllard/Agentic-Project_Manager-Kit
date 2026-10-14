@@ -3,8 +3,9 @@
 Layers, lowest first: system (unless GIT_CONFIG_NOSYSTEM; GIT_CONFIG_SYSTEM or Git for Windows'
 <prefix>/etc/gitconfig, after %PROGRAMDATA%/Git/config), global (GIT_CONFIG_GLOBAL, else
 $XDG_CONFIG_HOME/git/config or ~/.config/git/config, then ~/.gitconfig), the repository's config,
-GIT_CONFIG_COUNT/KEY_n/VALUE_n, then `-c`. An include, includeIf or worktree config is
-Unsupported. Editing keeps every other line as written, as git does: a new key goes after the
+this worktree's config.worktree when the repository config sets extensions.worktreeConfig
+(kitlib.git.fake.repo.Repo.config), GIT_CONFIG_COUNT/KEY_n/VALUE_n, then `-c`. An include or
+includeIf is Unsupported, and so is writing config.worktree (`git config --worktree`). Editing keeps every other line as written, as git does: a new key goes after the
 last key of the last matching section, a removed key that empties its section takes the header
 with it, and a value is quoted and escaped as git writes it.
 """

@@ -6,6 +6,9 @@ that holds the object. Defaults of None mean "absent": the tool that reads the k
 Kit-level sections (repo, owner, hook, heavy, roles) are read by kitlib itself; the rest are the
 per-tool sections the PM kit's tools read (kit/tools/_kit.py SECTIONS), checked here for shape only.
 """
+from kitlib.host import registry
+from kitlib.host.content import MODES
+
 from .types import (Any, Bool, Either, Email, Enum, Field, Int, ListOf, MapOf, Obj, Regex, RelPath,
                     Str, T)
 
@@ -31,9 +34,15 @@ Argv = ListOf(Str(), nonempty=True)
 Regexes = Either(Regex(), ListOf(Regex()))
 
 # Paths only the owner changes (PM kit _owner_only.DEFAULT): an entry ending `/` locks a directory.
-OWNER_PATHS = ['CLAUDE.md', '.claude/', '.github/workflows/', '.kit.json', 'tools/gate.json',
-               'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']
-OWNER_PATHS_EXCEPT = ['.claude/worktrees/']
+# AGENTS.md is the canonical rules file and docs/agent-profile.md the neutral profile (each host's
+# own rules file and folder point at them), so they are locked as their old homes are. Each host's
+# own paths are its hosts.json profile owner_paths, and its agent worktrees under them are not
+# locked (worktrees_directory).
+OWNER_PATHS = list(dict.fromkeys(
+    ['AGENTS.md'] + list(registry.union('owner_paths'))
+    + ['docs/agent-profile.md', '.github/workflows/', '.kit.json', 'tools/gate.json',
+       'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']))
+OWNER_PATHS_EXCEPT = [w + '/' for w in registry.union('worktrees_directory')]
 
 # The heavy-program entry shape: kit defaults (policy.HEAVY_DEFAULTS) and `.kit.json` "heavy".programs.
 HEAVY_ENTRY = Obj({
@@ -52,8 +61,9 @@ IN_FLIGHT = Obj({
 
 ROLE = Obj({
     'edit_main_checkout': Field(Bool(), None, 'may edit files in a main checkout; unset: the base role (main: true, any other: false)'),
+    'mode': Field(Enum(*MODES), None, 'the role policy this role is held to, over its role file\'s `mode` (docs/guard.md "Role policy"); unset: the role file\'s, else none'),
     'why': Field(Str(), None, 'the ruling that grants it'),
-}, what='{edit_main_checkout, why}')
+}, what='{edit_main_checkout, mode, why}')
 
 STEP = Obj({
     'name': Field(Str(pattern=NAME_RE, what='a step name'), None, 'the step name, unique'),
@@ -113,15 +123,19 @@ RUNNER = Obj({
 
 SECTIONS = {
     'repo': {
-        'name': Field(Str(nonempty=False), '', 'repository name for reports'),
-        'main_branch': Field(Str(), 'main', 'the branch landings target'),
+        'name': Field(Str(nonempty=False), '', 'repository name for reports; unset or empty: the last part of the remote\'s URL, else the main checkout\'s folder name'),
+        'main_branch': Field(Str(), 'main', 'the branch landings target; unset: the branch <remote>/HEAD names, else main, else master when only that exists (docs/kit-json.md "With no file")'),
         'remote': Field(Str(), 'origin', 'the remote main is pushed to'),
-        'worktrees_dir': Field(RelPath(), '.claude/worktrees', 'where agent worktrees live'),
-        'tools_dir': Field(RelPath(), 'tools', 'where repo tools, stubs and the hook module live'),
-        'push_block': Field(Bool(), False, 'pre-push refuses a push to main without a gate-OK record'),
+        'worktrees_dir': Field(RelPath(), registry.default_profile().worktrees_directory,
+                               'where agent worktrees live'),
+        'worktrees_by_host': Field(MapOf(RelPath(), what='host'), {},
+                                   'per-host worktree folders, keyed by hosts.json host name '
+                                   '(docs/new-worktree.md "Hosts")'),
+        'tools_dir': Field(RelPath(), 'tools', 'where repo tools, the opt-in kit tool stubs and the hook module live'),
+        'push_block': Field(Bool(), False, 'pre-push refuses a push to main without a gate-OK record; a delete or a forced push of main is refused whatever it says'),
     },
     'owner': {
-        'email': Field(Email(), None, 'author email of the owner\'s own commits; unset: no owner commit is provable'),
+        'email': Field(Email(), None, 'author email of the owner\'s own commits; unset: the machine config\'s owner_email; neither: no owner commit is provable, so every owner-only change is refused'),
         'agent_emails': Field(ListOf(Email()), [], 'author emails known to be agents\', never the owner\'s'),
         'paths': Field(Strs, OWNER_PATHS, 'owner-only paths; an entry ending / locks a directory; replaces the default'),
         'paths_except': Field(Strs, OWNER_PATHS_EXCEPT, 'what under a locked directory is not locked'),
@@ -171,7 +185,7 @@ SECTIONS = {
         'stale_days': Field(Int(1), None, 'days before a state doc is stale'),
     },
     'doc_index': {
-        'enabled': Field(Bool(), True, 'false: doc_index does not require every .md on an index entry line, nor the index file (a repo with no .kit.json skips it too)'),
+        'enabled': Field(Bool(), True, 'false: doc_index does not require every .md on an index entry line, even with an index file; with no index file the check is skipped anyway (the index file is the opt-in)'),
         'index': Field(RelPath(), 'docs/INDEX.md', 'the doc index both doc tools read'),
         'find_match': Field(Enum('keywords', 'text'), 'keywords', 'how --find matches'),
         'roles': Field(MapOf(Strs, 'role'), None, 'role -> lookup topics'),
@@ -200,6 +214,7 @@ SECTIONS = {
     },
     'guard': {
         'data_roots': Field(ListOf(DATA_ROOT), [], 'folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")'),
+        'role_policy': Field(Bool(), False, 'hold roles to their role policy mode (docs/guard.md "Role policy"); off: no role is held, whatever its mode; read from the main checkout only'),
     },
     'landing': {
         'lock_file': Field(Str(), None, 'legacy landing lock: git:<name>, a file in the git common dir; any other value refuses'),
@@ -254,7 +269,7 @@ SECTIONS = {
         'coauthor': Field(Bool(), False, 'list the branch\'s commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks'),
     },
     'stubs': {
-        'tools': Field(Strs, None, 'kit tools stubbed into the repo'),
+        'tools': Field(Strs, None, 'kit tools stubbed into the repo; stubs are opt-in (none by default), and setting this opts in'),
     },
     'testlist': {
         'junit': Field(Strs, ['**/build/test-results/**/*.xml'], 'JUnit result globs'),

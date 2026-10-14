@@ -114,7 +114,9 @@ def contains(root, tip, target):
 def log_bases(cfg, root, ref, note=runner.say_note):
     """The gate log bases to read for `ref`, each once, in a stable order: runner.log_base of
     each checkout, then (no "landing".log_dir) runner.fallback_log_base of each, where a gate that
-    could not make the default base, or ran before the kit temp moved, wrote. note: as
+    could not make the default base, or ran before the kit temp moved, wrote. With no written
+    "repo".name, each checkout's folder name is read too: the name read from the remote's URL
+    (docs/kit-json.md "With no file") is newer than the folder-named logs. note: as
     runner.log_base's (a machine config that cannot be read)."""
     tops = [root]
     main = repo.main_checkout_toplevel(root)
@@ -122,11 +124,14 @@ def log_bases(cfg, root, ref, note=runner.say_note):
         tops.append(main)
     wts, _why = repo.worktrees(root)
     tops.extend(w.path for w in (wts or []) if w.branch == ref)
-    bases = [runner.log_base(cfg, top, runner.repo_name(cfg, top), note) for top in tops]
+    names = [(top, runner.repo_name(cfg, top)) for top in tops]
+    if not cfg.written('repo', 'name'):
+        names += [(top, os.path.basename(os.path.normpath(top))) for top in tops]
+    bases = [runner.log_base(cfg, top, name, note) for top, name in names]
     if not cfg.section('landing').get('log_dir'):
-        for top in tops:
+        for _top, name in names:
             try:
-                bases.append(runner.fallback_log_base(runner.repo_name(cfg, top)))
+                bases.append(runner.fallback_log_base(name))
             except RuntimeError:        # no shared temp to read: the kit temp was read
                 pass
     out, seen = [], set()

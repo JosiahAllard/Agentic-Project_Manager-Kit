@@ -28,8 +28,8 @@ from kitlib.lock import layout as lay
 from kitlib.lock import queue as qm
 from kitlib.lock.run import expected_end, request_stop
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_USAGE,
-                               ID_RE, LockError, Store, caller, iso, owns, parse_iso, public,
-                               read_json, utc_now)
+                               ID_RE, LockError, Store, actor_host, caller, iso, owns, parse_iso,
+                               public, read_json, utc_now)
 from kitlib.proc import process
 
 SCHEMA_VERSION = 1
@@ -58,7 +58,7 @@ def default_owner_check(actor):
     """The owner: role "owner" with no agent host above it (store.caller). Swap it with
     set_owner_check."""
     return (isinstance(actor, dict) and actor.get("role") == "owner"
-            and not actor.get("claude"))
+            and not actor_host(actor))
 
 
 _owner_check = [default_owner_check]

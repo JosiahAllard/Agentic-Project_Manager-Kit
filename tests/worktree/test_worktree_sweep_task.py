@@ -7,6 +7,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
+from kitlib.git import defaults as gitdefaults
 from kitlib.worktree import task
 from tests import gitfixture
 from tests.worktree.test_worktree_remove import KIT, RemoveCase
@@ -44,13 +45,31 @@ class Task(TaskCase):
         rc, out, runner = self.run_task()
         self.assertEqual(rc, 0, out)
         self.assertEqual(runner.calls, [])
+        # no repo.name: the name read from the remote's URL (docs/kit-json.md "With no file")
         self.assertIn("Register-ScheduledTask -TaskName '%s-worktree-sweep'"
-                      % os.path.basename(self.repo), out)
+                      % gitdefaults.repo_name(self.repo), out)
         self.assertIn('-C "%s" --sweep-merged --apply' % self.repo, out)
         self.assertIn('"%s"' % os.path.normpath(self.tool), out)
         self.assertIn(task.NOT_THE_STORE_ALIAS, out)
         self.assertIn('-At 03:00', out)
         self.assertIn('printed   nothing was registered', out)
+
+    def test_the_task_starts_no_console_window(self):
+        """The task runs pythonw (no console of its own) on the carrier beside the sweep tool,
+        which starts the console python on the sweep with no window."""
+        rc, out, _ = self.run_task()
+        self.assertEqual(rc, 0, out)
+        line = out.splitlines()[0]
+        self.assertTrue(line.startswith('$py = (Get-Command pythonw).Source; '), line)
+        self.assertNotIn('Get-Command python)', line)
+        tool = os.path.normpath(self.tool)
+        carrier = os.path.join(os.path.dirname(tool), task.CARRIER)
+        self.assertIn("-Execute $py -Argument '\"%s\" python \"%s\" -C \"%s\" --sweep-merged --apply'"
+                      % (carrier, tool, os.path.normpath(self.repo)), line)
+
+    def test_the_carrier_is_a_tool_of_this_kit(self):
+        self.assertEqual(task.CARRIER, 'no_window.py')
+        self.assertTrue(os.path.isfile(os.path.join(KIT, 'tools', task.CARRIER)))
 
     def test_bare_register_is_refused_first(self):
         rc, out, runner = self.run_task('--register', root=os.path.join(self.fx.base, 'nowhere'))

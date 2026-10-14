@@ -1,21 +1,16 @@
-"""kitlib.guard: the kit's PreToolUse shell guard and git pre-push check (ARCHITECTURE.md
-"Layers": Guards; docs/guard.md).
+"""kitlib.guard: the kit's tool-call guard and git pre-push check (ARCHITECTURE.md "Layers":
+Guards; docs/guard.md).
 
-decide(event, ctx=None) -> Decision(kind 'deny' or 'ask', rule, reason) or None (allow);
-hook_output(decision) -> the PreToolUse JSON Claude Code reads. claude/hooks/guard.py and
-githooks/pre-push are the thin entry points.
+decide(action, ctx=None) -> kitlib.host.Decision: 'allow', or 'deny'/'ask' with the rule, the
+reason and the command to use instead. `action` is the neutral kitlib.host.Action; a host's
+adapter parses its own hook payload into one and renders the Decision back in its own format
+(hosts/claude/adapter for Claude Code), and kitlib.host.hookmain runs the two around decide. No module
+here reads a host's payload or writes a host's output. githooks/pre-push is the git entry point
+(kitlib.guard.prepush).
 """
+from kitlib.host import Decision
+
 from .context import Ctx
-from .rules import ASK, DENY, Decision, decide
+from .rules import ALLOW, ASK, DENY, decide
 
-
-def hook_output(decision):
-    """The hook's stdout object for a decision; None (print nothing) for an allow."""
-    if decision is None:
-        return None
-    return {'hookSpecificOutput': {'hookEventName': 'PreToolUse',
-                                   'permissionDecision': decision.kind,
-                                   'permissionDecisionReason': decision.reason}}
-
-
-__all__ = ['Ctx', 'Decision', 'DENY', 'ASK', 'decide', 'hook_output']
+__all__ = ['Ctx', 'Decision', 'ALLOW', 'DENY', 'ASK', 'decide']

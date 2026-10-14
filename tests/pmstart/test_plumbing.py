@@ -37,6 +37,16 @@ class ListProcessesTest(unittest.TestCase):
             self.call(ran(rc=3, err="  access denied \n"))
         self.assertEqual(str(c.exception), "powershell exit 3: access denied")
 
+    @unittest.skipUnless(os.name == "nt", "Windows only")
+    def test_with_no_console_powershell_is_started_with_no_window(self):
+        """Session start runs this where there may be no console: PowerShell must not open one."""
+        from kitlib.proc import job, win32
+        for console, flags in ((False, win32.CREATE_NO_WINDOW), (True, 0)):
+            with mock.patch.object(job, "has_console", return_value=console), \
+                    mock.patch.object(pmstart.subprocess, "run", return_value=ran(out="")) as run:
+                self.assertEqual(pmstart.list_processes(), [])
+            self.assertEqual(run.call_args[1].get("creationflags", 0), flags, console)
+
 
 class ToplevelTest(unittest.TestCase):
 

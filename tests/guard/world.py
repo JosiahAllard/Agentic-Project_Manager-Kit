@@ -54,7 +54,8 @@ class World(object):
     """base/repo is a main checkout (push_block on), base/repo/.claude/worktrees/wt its linked
     worktree, base/pmdata another linked worktree of it (the PM data worktree when the machine
     config or a kit-pm-data.json record says so; its own .kit.json names repo "data"),
-    base/plain no checkout, base/unknown a place git cannot tell about."""
+    base/plain no checkout, base/unknown a place git cannot tell about. base/kit (kit_dir) stands
+    for the kit checkout the guard runs from (Ctx.kit): the folder its advised lock tool is under."""
 
     def __init__(self, kit=None):
         self.base = tempfile.mkdtemp(prefix='kit-guard-')
@@ -66,7 +67,8 @@ class World(object):
         self.unknown = os.path.join(self.base, 'unknown')
         self.home = os.path.join(self.base, 'home')
         self.temp = os.path.join(self.base, 'tmp')
-        for d in (self.wt, self.data, self.plain, self.unknown, self.home, self.temp):
+        self.kit_dir = os.path.join(self.base, 'kit')
+        for d in (self.wt, self.data, self.plain, self.unknown, self.home, self.temp, self.kit_dir):
             os.makedirs(d)
         with open(os.path.join(self.main, '.kit.json'), 'w', encoding='utf-8') as f:
             json.dump(kit if kit is not None else {'repo': {'name': 'demo', 'push_block': True}}, f)
@@ -108,7 +110,7 @@ class World(object):
     def ctx(self, **kw):
         args = dict(environ=self.environ, home=self.home, classify=self.classify, gate_ok=self.gate_ok,
                     git=self.git, lock_held=lambda: (self.held, None if self.held else 'MACHINE_LOCK_RUN is not set'),
-                    tempdir=self.temp)
+                    tempdir=self.temp, kit=self.kit_dir)
         args.update(kw)
         return context.Ctx(**args)
 
@@ -118,7 +120,7 @@ class World(object):
 AGENT_TYPE = None
 
 
-def event(tool, tool_input, cwd, sub=False, agent_type='opus-worker'):
+def event(tool, tool_input, cwd, sub=False, agent_type='senior-worker'):
     """A PreToolUse payload as Claude Code sends it; a subagent's carries agent_id and agent_type."""
     ev = {'session_id': '8f5c9cf4-0000-4000-8000-000000000000',
           'transcript_path': 'C:/u/x/.claude/projects/p/8f5c9cf4.jsonl',

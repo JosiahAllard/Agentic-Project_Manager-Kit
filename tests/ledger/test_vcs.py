@@ -46,6 +46,17 @@ class VcsTest(unittest.TestCase):
         self.assertIn('Co-Authored-By: Claude %s <noreply@anthropic.com>' % MODEL, msg)
         self.assertIn('other.txt', self.repo.git('diff', '--cached', '--name-only'))
 
+    def test_codex_ledger_commit_uses_shared_provider_format(self):
+        plan = self.prepare(model='gpt-6.1-sol', provider='codex')
+        got = self.add()
+        vcs.finish(plan, got.id, None, 'Use this one.')
+        self.assertIn('Codex gpt-6.1-sol <noreply@openai.com>', self.repo.git('log', '-1', '--format=%B'))
+
+    def test_codex_identity_is_validated_before_the_ledger_is_written(self):
+        with self.assertRaises(Usage):
+            self.prepare(model=None, provider='codex')
+        self.assertFalse(os.path.exists(self.path))
+
     def test_title_overrides_and_long_decides_is_cut(self):
         plan = self.prepare()
         got = self.add(decides='word ' * 40)

@@ -16,7 +16,9 @@ import unittest
 
 from kitlib import pmdata
 from kitlib.git import repo
-from kitlib.guard import context, decide
+from kitlib.guard import context
+
+from .claudehost import decide
 
 from . import world as W
 from .world import bash, ps
@@ -92,7 +94,7 @@ class Base(unittest.TestCase):
 
     def assert_denied(self, d, rule=None):
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual(d.kind, 'deny', d.reason)
+        self.assertEqual(d.verdict, 'deny', d.reason)
         if rule:
             self.assertEqual(d.rule, rule, d.reason)
 

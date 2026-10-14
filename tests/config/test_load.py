@@ -61,6 +61,12 @@ class DefaultsTest(TreeCase):
         self.assertNotIn('comment', cfg.section('repo'))
         self.assertEqual(cfg.raw('repo')['comment'], 'z')
 
+    def test_guard_role_policy_loads_and_defaults_off(self):
+        self.assertIs(self.load().section('guard')['role_policy'], False)
+        cfg = self.load({'guard': {'role_policy': True}})
+        self.assertIs(cfg.section('guard')['role_policy'], True)
+        self.assertIn('"guard".role_policy must be', self.refused({'guard': {'role_policy': 'yes'}}))
+
 
 class RefusalTest(TreeCase):
 

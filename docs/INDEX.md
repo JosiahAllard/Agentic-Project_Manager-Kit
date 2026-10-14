@@ -8,24 +8,29 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 ## Docs
 
 - `docs/INDEX.md` | this index | adding or finding a doc | kw: index, docs
-- `CLAUDE.md` | kit repo rules for agents | always | kw: rules, claude
-- `AGENTS.md` | the same rules for other agent hosts | always | kw: rules, agents
+- `CLAUDE.md` | Claude's pointer: imports AGENTS.md | always | kw: rules, claude
+- `AGENTS.md` | kit repo rules for every agent host (canonical) | always | kw: rules, agents
 - `README.md` | what the kit is | first look | kw: readme, overview
 - `ARCHITECTURE.md` | kit tool architecture (the contract; owner approves changes) | before changing a tool | kw: architecture, contract
-- `.claude/agent-profile.md` | this repo's profile for worker agents | starting a task | kw: profile, branches, build, test
+- `docs/agent-profile.md` | this repo's profile for worker agents | starting a task | kw: profile, branches, build, test
+- `.claude/agent-profile.md` | stub: the profile moved to docs/agent-profile.md | an agent names the old path | kw: profile
+- `.codex/agent-profile.md` | stub: the profile is docs/agent-profile.md | an agent names the host's profile path | kw: profile
 - `docs/ROSTER.md` | agent roster | choosing an agent | kw: roster, agents
 - `docs/action-hub.md` | Action Hub | the PM action list | kw: action-hub, hub
+- `docs/hub-remote-access.md` | Hub remote access | reaching the hub from a phone | kw: hub, remote-access, tunnel, cloudflared
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog
 - `docs/backlog-lint.md` | backlog lint | checking backlog records | kw: backlog-lint, lint
 - `docs/backlog-store.md` | backlog store design | changing the store | kw: backlog-store, store
 - `docs/branch-overlap.md` | branch overlap: unmerged branches touching a file set | checking a sweep's exclusions | kw: branch_overlap, overlap
 - `docs/commit.md` | commit.py and machine_paths.py | committing | kw: commit, machine_paths
+- `docs/content.md` | content/ and render_content: roles and skills written once, rendered per host with the plugin manifests (kit.json's version) and the kit header | editing an agent or a skill | kw: content, render_content, roles, render, kit.json, manifest, header
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
 - `docs/engineering-rulings.md` | engineering rulings | before a design choice | kw: rulings, engineering
 - `docs/gate.md` | gate.py | running the gate | kw: gate, test
 - `docs/go-live.md` | go-live list | switching a repo to the kit | kw: go-live
 - `docs/guard.md` | shell guard and git hooks | a command is refused | kw: guard, hooks, refusal
+- `docs/kitboot.md` | boot/kitboot.py: which kit a host entry runs, the pinned release check before kitlib | a hook or the lock server will not load the kit | kw: kitboot, boot, PM_KIT_ROOT, PM_KIT_RELEASE_ID, release
 - `docs/install.md` | installing the kit in a repository | setting up a repo | kw: install, installer, junctions, plugin
 - `docs/kit-json.md` | `.kit.json` keys, types and defaults | configuring | kw: kit-json, config
 - `docs/landed.md` | landed: has a branch landed | checking a branch | kw: landed
@@ -36,7 +41,11 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/lock-release.md` | lock release pre-check | releasing a lock | kw: lock-release
 - `docs/machine-setup.md` | machine setup | a new machine | kw: machine-setup, setup
 - `docs/model-ab.md` | model A/B results | choosing a model | kw: model, ab
+- `docs/multi-host-plan.md` | multi-host architecture plan (proposal) | changing host adapters, plugins or the bridge | kw: multi-host, codex, host, plugin, bridge
 - `docs/agent-review.md` | agent review: usage, refusals, definition findings (undecided) | choosing a model, editing agent definitions | kw: agent-review, agents, model
+- `optional/bridge/README.md` | the agent bridge (optional install): layout, the host port, contracts, configuration, install | changing or installing the bridge, adding a host's bridge half | kw: bridge, optional, port, mcp, messaging, install
+- `optional/bridge/STATUS.md` | the agent bridge: what works per host and direction, what is open | before relying on the bridge | kw: bridge, status, capability, matrix
+- `docs/new-host.md` | adding a host: the hosts.json entry, adapter, shell, fixtures and the conformance suite | adding an AI platform | kw: new-host, host, adapter, conformance, hosts.json
 - `docs/new-worktree.md` | new_worktree | starting a task | kw: new-worktree, worktree
 - `docs/pending.md` | the pending-steps file | pending steps | kw: pending
 - `docs/pm-data-branch.md` | PM data on a private branch of the kit repo | PM data | kw: pm-data, data-branch
@@ -54,10 +63,16 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/windows-token-leak.md` | Windows token leak: slow process launches | slow launches | kw: windows, token-leak
 - `docs/worktree-paths.md` | worktree paths | where worktrees live | kw: worktree-paths
 - `docs/worktree-remove.md` | worktree remove | removing a worktree | kw: worktree-remove, sweep
-- `claude/agents/*.md` | one agent definition per file | editing an agent | kw: agents, agent-definition
-- `claude/skills/*/*.md` | one skill per folder | editing a skill | kw: skills, skill
+- `content/README.md` | where to change what a role is given or held to, and how to see it (`tools/agent_view.py`) | changing a role, a rule, a skill or a model | kw: content, where, change, agent_view
+- `content/roles/*.md` | one role per file, the source of every host's agent file (`docs/content.md`) | editing an agent | kw: roles, agents, agent-definition
+- `content/default-profile.md` | the agent profile roles read in a repository with none of its own (`docs/agent-profile.md`) | a repo has no profile | kw: profile, default-profile
+- `content/skills/*/*.md` | one skill per folder, the source of every host's skills, and the folder Claude's plugin loads them from (`docs/content.md`) | editing a skill, reading what Claude loads | kw: skills, skill
+- `hosts/claude/shell/agents/*.md` | Claude's agent files, rendered from content/roles (never edit by hand) | reading what Claude loads | kw: agents, rendered
+- `hosts/codex/README.md` | the Codex host: what is ported, what runs, what is not verified | working on the Codex plugin | kw: codex, host, plugin, runtime, canary
+- `hosts/codex/shell/skills/*/*.md` | Codex's skills, copied from content/skills (never edit by hand) | reading what Codex loads | kw: skills, rendered, codex
 - `templates/stacks/godot/.claude/skills/godot-render-check/SKILL.md` | Godot render check and e2e tiers | Godot repos | kw: godot, render, e2e
-- `templates/common/CLAUDE.md` | starter CLAUDE.md for a new repo | installing | kw: template, claude
+- `templates/common/AGENTS.md` | starter rules file (AGENTS.md) for a new repo | installing | kw: template, agents, rules
+- `templates/common/CLAUDE.md` | starter CLAUDE.md: imports AGENTS.md | installing | kw: template, claude
 - `templates/common/INDEX.md` | starter doc index for a new repo | installing | kw: template, index
 - `templates/common/LEDGER.md` | starter rulings ledger | installing | kw: template, ledger
 - `templates/common/agent-profile.TEMPLATE.md` | starter agent profile | installing | kw: template, profile
@@ -96,13 +111,15 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/tool_deps.py` | tests a changed file selects (`docs/test-tools.md`) | kw: tool_deps
 - `tools/pytests.py` | test runner (`docs/test-tools.md`) | kw: pytests
 - `tools/forbidden.py` | forbidden-text check (`docs/repo-checks.md`) | kw: forbidden
-- `tools/agent_roster.py` | docs/ROSTER.md against agent file model and effort (`docs/ROSTER.md`) | kw: agent_roster, roster
+- `tools/agent_roster.py` | checks or writes docs/ROSTER.md's tables alone, rendered from content/roles and the hosts' tier maps (`docs/ROSTER.md`) | kw: agent_roster, roster
+- `tools/render_content.py` | render content/ into each host's agents and skills; --check for drift (`docs/content.md`) | kw: render_content, content, render
+- `tools/agent_view.py` | everything one role is given and held to on one host (`docs/content.md` "Agent view") | kw: agent_view, role, view, instructions, mode, capabilities
 - `tools/board.py` | the coordinator's whole board in one call (`docs/preflight.md`) | kw: board
 - `tools/checkout_guard.py` | is a path in the main checkout; strays in it (`docs/preflight.md`) | kw: checkout_guard, stray
 - `tools/kit_stubs.py` | write or check a repo's stubs for the kit tools (`docs/install.md`) | kw: kit_stubs, stubs
 - `tools/kit_tests.py` | run the kit test suite, whole or selected (`docs/test-tools.md`) | kw: kit_tests, tests
 - `tools/machine_paths.py` | refuse a hard-coded machine path (`docs/commit.md`) | kw: machine_paths
-- `tools/machine_setup.py` | switch Claude config folders to this kit, or set up a fresh machine (`docs/machine-setup.md`) | kw: machine_setup, fresh
+- `tools/machine_setup.py` | set up a machine (guard entry, plugin, owner email, agent temp), switch from an older kit clone, or the committed repo setup with --repo (`docs/machine-setup.md`) | kw: machine_setup, fresh, owner email, repo setup
 - `tools/agent_temp_init.py` | set up the agents' temp folder alone (`docs/machine-setup.md` "Agent temp init") | kw: agent_temp_init, agent temp
 - `tools/plugin_refresh.py` | export pushed kit main and refresh the plugin in every account folder (`docs/plugin-source.md`) | kw: plugin_refresh, plugin
 - `tools/pieces.py` | the path-to-piece table (`docs/repo-checks.md`) | kw: pieces
@@ -110,3 +127,4 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/trailers.py` | fail a commit with no agent trailer (`docs/repo-checks.md`) | kw: trailers
 - `tools/worktree_paths.py` | which path a worktree write may go to (`docs/worktree-paths.md`) | kw: worktree_paths
 - `tools/worktree_sweep_task.py` | nightly worktree sweep scheduled task (`docs/worktree-remove.md`) | kw: worktree_sweep_task, sweep
+- `tools/no_window.py` | run a program with no console window, for a scheduled task (`docs/daily-full.md` "The schedule") | kw: no_window, console window, scheduled task

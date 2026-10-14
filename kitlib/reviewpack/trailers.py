@@ -18,8 +18,8 @@ import re
 
 from kitlib.git import cmd as gitcmd
 from kitlib.git import refs as gitrefs
+from kitlib.attribution import AGENT_TRAILER
 
-AGENT_TRAILER = re.compile(r'^\S.*\s<noreply@anthropic\.com>$')
 TRAILER_FAIL_SINCE = calendar.timegm((2026, 10, 2, 0, 0, 0))
 OWNER_APPROVED = 'Owner-Approved'
 OWNER_AUTHORED = 'Owner-Authored'

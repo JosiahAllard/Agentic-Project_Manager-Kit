@@ -149,7 +149,7 @@ class Remove(RemoveCase):
         rc, out = self.run_verb('remove', 'ign')
         self.assertEqual(rc, 1, out)
         self.assertIn('ignored files that are not build output (1): !! notes.local.md', out)
-        self.assertIn('  rerun    python tools/worktree_remove.py ign', out)
+        self.assertRegex(out, r'  rerun    python "[^"]*/tools/worktree_remove\.py" -C "[^"]+" ign')
         self.assertTrue(os.path.isfile(os.path.join(path, 'notes.local.md')))
 
     def test_a_missing_target_is_nothing(self):

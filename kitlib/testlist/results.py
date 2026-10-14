@@ -3,7 +3,8 @@ each name's status when asked, and the diff of two lists (docs/test-tools.md, te
 
 WHERE RESULTS ARE: the checkout's `.kit.json` "testlist".junit (globs under the folder, default
 `**/build/test-results/**/*.xml`, Gradle's) and .trx (default `**/*.trx`). A result file under a
-`.claude` folder (agent worktrees) is skipped unless the folder is itself inside one.
+host's own folder (kitlib.host.registry.host_folders; `.claude` on Claude: agent worktrees) is
+skipped unless the folder is itself inside one.
 """
 import glob
 import io
@@ -11,6 +12,7 @@ import os
 import xml.etree.ElementTree as ET
 
 from kitlib.config import ConfigError
+from kitlib.host import registry
 
 SECTION = 'testlist'
 DEFAULTS = {'junit': ['**/build/test-results/**/*.xml'], 'trx': ['**/*.trx']}
@@ -31,12 +33,12 @@ def settings(cfg):
 
 
 def _files(top, patterns):
-    claude = os.sep + '.claude' + os.sep
-    inside = claude in os.path.abspath(top) + os.sep
+    folders = [os.sep + f + os.sep for f in registry.host_folders()]
+    inside = any(f in os.path.abspath(top) + os.sep for f in folders)
     seen = set()
     for pattern in patterns:
         for path in glob.glob(os.path.join(top, pattern), recursive=True):
-            if path in seen or (claude in path and not inside):
+            if path in seen or (not inside and any(f in path for f in folders)):
                 continue
             seen.add(path)
             yield path

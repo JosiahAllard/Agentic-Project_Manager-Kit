@@ -7,10 +7,11 @@ drives and relative paths are read as before."""
 import os
 import unittest
 
-from kitlib.guard import context, decide
+from kitlib.guard import context
 from kitlib.guard import shell as sh
 
 from . import world as W
+from .claudehost import decide
 
 COORDINATOR = {context.ROLE_ENV: 'coordinator'}     # a jailed main session: it may edit a main checkout
 
@@ -38,7 +39,7 @@ class Base(unittest.TestCase):
 
     def denied(self, d, rule):
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual((d.kind, d.rule), ('deny', rule), d.reason)
+        self.assertEqual((d.verdict, d.rule), ('deny', rule), d.reason)
         return d
 
     def allowed(self, d):

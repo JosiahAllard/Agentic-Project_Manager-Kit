@@ -31,18 +31,12 @@ ALLOWED = (
     ('tests/backlog/', GOING),
     ('tests/backloglint/fixtures/', GOING),
     ('tools/backlog.py', GOING),
-    ('claude/skills/backlog-ops/SKILL.md', GOING),
+    ('hosts/codex/shell/skills/backlog-ops/SKILL.md', GOING),
+    ('content/skills/backlog-ops/SKILL.md', GOING),   # the source the line above is copied from
     ('docs/backlog.md', GOING),
     ('docs/backlog-store.md', GOING),
     ('docs/kit-json.md', GOING),
-    ('docs/repo-checks.md', GOING),
     ('kitlib/config/user.py', GOING),
-    ('kitlib/ledgerrefs/', GOING),
-    ('tools/ledger_refs.py', GOING),
-    ('kitlib/rulingcites/', GOING),
-    ('tools/ruling_cites.py', GOING),
-    ('tests/rulingcites/', GOING),
-    ('tests/coordinatorstart/', GOING),
     ('tests/gate/test_land_store.py', GOING),
 )
 

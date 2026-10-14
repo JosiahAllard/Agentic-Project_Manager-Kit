@@ -1,0 +1,5 @@
+{
+  "model": "fake-small",
+  "name": "lander",
+  "sandbox": "workspace-write"
+}

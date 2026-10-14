@@ -12,6 +12,8 @@ import os
 import subprocess
 import sys
 
+from kitlib.proc import spawn
+
 TIMEOUT = 30
 ISO = '%Y-%m-%dT%H:%M:%SZ'
 
@@ -22,8 +24,8 @@ def read_snapshot(kit_root):
     if not os.path.isfile(tool):
         return None, 'no tools/machine_lock.py in the kit'
     try:
-        r = subprocess.run([sys.executable, '-B', tool, 'status', '--json'], capture_output=True,
-                           text=True, encoding='utf-8', errors='replace', timeout=TIMEOUT)
+        r = spawn.run([sys.executable, '-B', tool, 'status', '--json'], capture_output=True,
+                      text=True, encoding='utf-8', errors='replace', timeout=TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, 'machine_lock.py status did not finish: %s' % e
     if r.returncode != 0:

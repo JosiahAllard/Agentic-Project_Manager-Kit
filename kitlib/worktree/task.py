@@ -5,9 +5,12 @@ entry point; `run` here does the work and returns Outcome(code, lines). Nothing 
 The task, `<repo name>-worktree-sweep`, runs `python "<kit>\\tools\\worktree_remove.py" -C "<main
 checkout>" --sweep-merged --apply` daily at 03:00 as the registering user (`-RunLevel Limited`,
 `-StartWhenAvailable`). The tool is this kit's own copy, by absolute path, and must sit in the kit's
-MAIN checkout (a branch worktree's copy is unreviewed and goes away with the branch). The python is
-the one `Get-Command python` finds when the line runs; the line throws, registering nothing, when
-there is none or it is the Microsoft Store alias (`NOT_THE_STORE_ALIAS`).
+MAIN checkout (a branch worktree's copy is unreviewed and goes away with the branch). No console
+window opens: the task's program is `pythonw.exe` running the carrier beside the tool (`CARRIER`,
+tools/no_window.py), which starts the python.exe beside that pythonw with a hidden console
+(kitlib.proc.spawn.carry). The pythonw is the one `Get-Command pythonw` finds when the line runs;
+the line throws, registering nothing, when there is none or it is the Microsoft Store alias
+(`NOT_THE_STORE_ALIAS`).
 
 Nothing is registered without `--register --owner-confirmed`; a bare `--register` is refused before
 anything else is read. Agents never type `--owner-confirmed`.
@@ -16,6 +19,7 @@ import os
 
 from kitlib.config import ConfigError, load
 from kitlib.git import repo as gitrepo
+from kitlib.proc.spawn import CARRIER      # tools/no_window.py, beside the tool the task runs
 
 from .remove import OK, REFUSED, Outcome, GitReadError, canon, main_checkout
 
@@ -25,8 +29,10 @@ SWEEP = '--sweep-merged --apply'
 # PowerShell ends a single-quoted string at any of these, not only at ' (its own
 # CodeGeneration.EscapeSingleQuotedStringContent doubles all five).
 SINGLE_QUOTES = ("'", '‘', '’', '‚', '‛')
-NOT_THE_STORE_ALIAS = (r"if (-not $py -or $py -match '\\WindowsApps\\') { throw ('python is ' + $py +"
-                       r" ': no python, or the Microsoft Store alias; nothing was registered') }")
+# `$py` is what `Get-Command pythonw` found (FIND_PYTHONW); a failed lookup leaves it empty.
+FIND_PYTHONW = '$py = (Get-Command pythonw).Source'
+NOT_THE_STORE_ALIAS = (r"if (-not $py -or $py -match '\\WindowsApps\\') { throw ('pythonw is ' + $py +"
+                       r" ': no pythonw, or the Microsoft Store alias; nothing was registered') }")
 
 
 def quoted(text):
@@ -41,9 +47,12 @@ def task_name(name):
 
 
 def argument(tool, root):
-    """The task's python arguments: the tool and the repository, each double-quoted (a path with a
-    space stays one argument), then the sweep."""
-    return '"%s" -C "%s" %s' % (os.path.normpath(tool), os.path.normpath(root), SWEEP)
+    """The task's pythonw arguments: the carrier beside the tool, `python` (the carrier's word for
+    the python.exe beside its pythonw), the tool and the repository, each path double-quoted (a
+    path with a space stays one argument), then the sweep."""
+    tool = os.path.normpath(tool)
+    return '"%s" python "%s" -C "%s" %s' % (os.path.join(os.path.dirname(tool), CARRIER), tool,
+                                            os.path.normpath(root), SWEEP)
 
 
 def description(name):
@@ -52,13 +61,13 @@ def description(name):
 
 def command(root, name, tool):
     """The one PowerShell line that registers the task, its working directory `root`."""
-    return ("$py = (Get-Command python).Source; %s; Register-ScheduledTask -TaskName %s"
+    return ("%s; %s; Register-ScheduledTask -TaskName %s"
             " -Trigger (New-ScheduledTaskTrigger -Daily -At %s)"
             " -Action (New-ScheduledTaskAction -Execute $py -Argument %s -WorkingDirectory %s)"
             " -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)"
             " -User $env:USERNAME -RunLevel Limited -Description %s"
-            % (NOT_THE_STORE_ALIAS, quoted(task_name(name)), AT, quoted(argument(tool, root)),
-               quoted(root), quoted(description(name))))
+            % (FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted(task_name(name)), AT,
+               quoted(argument(tool, root)), quoted(root), quoted(description(name))))
 
 
 def parse(argv):

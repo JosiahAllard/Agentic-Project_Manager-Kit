@@ -21,7 +21,7 @@ SERVER_VERSION = "0.1.0"
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")    # newest first
 WAIT_MAX_S = 60.0
 
-OWNER_NOTE = ("OWNER-ONLY: the machine owner's write. Agents must not call it (guard.py denies "
+OWNER_NOTE = ("OWNER-ONLY: the machine owner's write. Agents must not call it (the kit guard denies "
               "it); in the owner's session each call asks for approval. ")
 
 _ISO = {"type": "string", "description": "An ISO time with its offset, like 2026-10-06T14:00:00Z."}

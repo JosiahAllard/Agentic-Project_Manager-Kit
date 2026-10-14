@@ -8,11 +8,12 @@ import unittest
 
 from kitlib import coordinatorstart
 from kitlib.config import user as kuser
-from kitlib.lockmcp import CLAUDE_PLUGIN_NAME
+from kitlib.lockmcp import PLUGIN_NAME
 
-HOOK = os.path.join(os.path.dirname(__file__), "..", "..", "claude", "hooks", "coordinator_session_start.py")
+# the coordinator rules hook as the plugin's hooks.json runs it (boot/hook.py, its coordinator part)
+HOOK = [os.path.join(os.path.dirname(__file__), "..", "..", "boot", "hook.py"), "claude", "SessionStart", "coordinator"]
 COND = {"PM_KIT_ROLE": "coordinator"}
-P = CLAUDE_PLUGIN_NAME + ":"          # the kit plugin's agent prefix (kitlib.agentname.PREFIX)
+P = PLUGIN_NAME + ":"          # the kit plugin's agent prefix (kitlib.agentname.PREFIX)
 
 
 def write(path, text):
@@ -51,7 +52,7 @@ class RenderTest(unittest.TestCase):
         line = out.splitlines()[1]
         self.assertTrue(line.startswith("- Pricing pass and backlog audit before your first dispatch, "
                                         "follow-up records excepted"), line)
-        for want in ("python tools/backlog.py list --needs-priority",
+        for want in ("python <kit>/tools/backlog.py -C <repo> list --needs-priority",
                      "A follow-up record (filed from a finding on a branch, a review or a worker's report; "
                      "a new one says so in its summary) stays unpriced until you or the PM promote it",
                      "Check every other unpriced open record (an owner story, a record from the PM's brief) "
@@ -408,7 +409,7 @@ class HookTest(unittest.TestCase):
             env.update(USERPROFILE=d, HOME=d)
             if role:
                 env["PM_KIT_ROLE"] = role
-            return subprocess.run([sys.executable, HOOK], capture_output=True, text=True, env=env, timeout=30,
+            return subprocess.run([sys.executable] + HOOK, capture_output=True, text=True, env=env, timeout=30,
                                   input=json.dumps({"cwd": "D:/src/elsewhere"}))
 
     def test_role_unset_silent_exit_0(self):

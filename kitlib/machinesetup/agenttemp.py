@@ -2,8 +2,10 @@
 environment variable AGENT_TEMP naming it, the machine config's `agent_temp_sweep` key the sweep
 (optional/agenttemp/agent_temp_sweep.py) reads, and the scheduled task that runs the sweep. Each is
 read first and planned only when it differs. An existing config key or another AGENT_TEMP value is
-noted, never overwritten. The task is registered only with `register_sweep_task`; without it a note
-carries the PowerShell line that registers it. Nothing here prints or exits.
+noted, never overwritten. The task is registered by default: the change first runs the sweep once
+without --apply (sweep_dry_run) and prints what it would remove, then registers. With
+`sweep_task` false (--no-sweep-task) a note carries the PowerShell line that registers it instead.
+A task already registered is left as is. Nothing here prints or exits.
 """
 import json
 import os
@@ -11,10 +13,10 @@ import subprocess
 
 from kitlib.config import ConfigError
 from kitlib.config import user as kuser
-from kitlib.worktree.task import NOT_THE_STORE_ALIAS, quoted
+from kitlib.worktree.task import CARRIER, FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted
 
-from . import settings
-from .common import is_link, norm
+from . import machineconfig
+from .common import Report, is_link, norm
 
 ENV = 'AGENT_TEMP'
 KEY = 'agent_temp_sweep'
@@ -22,7 +24,6 @@ MAX_AGE_DAYS = 3
 TASK = 'agent-temp-sweep'
 AT = '04:00'
 SWEEP = os.path.join('optional', 'agenttemp', 'agent_temp_sweep.py')
-NEW_LAYOUT = {'bom': False, 'crlf': False, 'final': True, 'indent': 2, 'ascii': False}
 
 
 def default_agent_temp(kit):
@@ -36,16 +37,19 @@ def default_agent_temp(kit):
 
 def task_line(kit):
     """The one PowerShell line that registers TASK: daily at AT as the registering user
-    (-RunLevel Limited, -StartWhenAvailable), running `python "<kit>\\SWEEP" --apply` in the kit.
-    It throws, registering nothing, when python is missing or is the Microsoft Store alias."""
+    (-RunLevel Limited, -StartWhenAvailable), running `python "<kit>\\SWEEP" --apply` in the kit
+    with no console window: the task's program is pythonw.exe running the carrier
+    `<kit>\\tools\\<CARRIER>` (kitlib.proc.spawn.carry), which starts the python.exe beside it.
+    It throws, registering nothing, when pythonw is missing or is the Microsoft Store alias."""
     kit = os.path.normpath(kit)
-    arg = '"%s" --apply' % os.path.join(kit, SWEEP)
-    return ("$py = (Get-Command python).Source; %s; Register-ScheduledTask -TaskName %s"
+    arg = '"%s" python "%s" --apply' % (os.path.join(kit, 'tools', CARRIER),
+                                        os.path.join(kit, SWEEP))
+    return ("%s; %s; Register-ScheduledTask -TaskName %s"
             " -Trigger (New-ScheduledTaskTrigger -Daily -At %s)"
             " -Action (New-ScheduledTaskAction -Execute $py -Argument %s -WorkingDirectory %s)"
             " -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)"
             " -User $env:USERNAME -RunLevel Limited -Description %s"
-            % (NOT_THE_STORE_ALIAS, quoted(TASK), AT, quoted(arg), quoted(kit),
+            % (FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted(TASK), AT, quoted(arg), quoted(kit),
                quoted('daily sweep of the agents\' temp folder')))
 
 
@@ -237,75 +241,50 @@ def _key(plan, ctx, folder):
             plan.note('extras', 'the machine config\'s %s.dir is %s, not %s; left as is (the sweep '
                                 'sweeps the configured folder)' % (KEY, d, folder))
         return
-    try:
-        path = kuser.writable_file(ctx.home)
-    except ConfigError as e:
-        plan.refuse('cannot write %s to the machine config: %s' % (KEY, e))
+    snap, why = machineconfig.snapshot(ctx)
+    if snap is None:
+        plan.refuse('cannot write %s to the machine config: %s' % (KEY, why))
         return
-    try:
-        with open(path, 'rb') as f:
-            raw = f.read()
-    except FileNotFoundError:
-        raw = None
-    except OSError as e:
-        plan.refuse('cannot read %s: %s' % (path, e))
-        return
+    path, existed = snap.path, snap.raw is not None
     value = {'dir': folder, 'max_age_days': MAX_AGE_DAYS}
     plan.add('extras', 'machine config %s: add %s = %s' % (path, KEY, json.dumps(value)),
-             lambda: write_sweep_key(ctx.home, path, raw, folder),
-             undo='remove the %s key from %s' % (KEY, path) if raw is not None else 'delete %s' % path)
+             lambda: write_sweep_key(ctx.home, snap, folder),
+             undo='remove the %s key from %s' % (KEY, path) if existed else 'delete %s' % path)
 
 
-def write_sweep_key(home, path, raw, folder):
-    """Add KEY = {dir: folder, max_age_days: MAX_AGE_DAYS} to the machine config file `path`, whose
-    bytes the survey read as `raw` (None: no file), keeping every other key and the file's layout
-    (BOM, line ends, indent: kitlib.machinesetup.settings.read). RuntimeError, nothing written, when
-    the file changed since the survey, is a link or already has the key; the file is put back when
-    the machine config cannot be read after the write."""
+def write_sweep_key(home, snap, folder):
+    """Add KEY = {dir: folder, max_age_days: MAX_AGE_DAYS} to the machine config file snap.path
+    (kitlib.machinesetup.machineconfig.set_key: every other key and the layout kept; RuntimeError,
+    nothing written, when the file changed since the run last read it, is a link or already has
+    the key; put back when the machine config cannot be read after the write)."""
+    machineconfig.set_key(home, snap, KEY, {'dir': folder, 'max_age_days': MAX_AGE_DAYS})
+
+
+def sweep_dry_run_argv(kit, python):
+    """The command line of one dry run of the sweep: `python <kit>/SWEEP`, no --apply."""
+    return [python, os.path.join(os.path.normpath(kit), SWEEP)]
+
+
+DRY_RUN_TIMEOUT = 120
+
+
+def sweep_dry_run(kit, python, timeout=DRY_RUN_TIMEOUT, run=None):
+    """Run the sweep once without --apply (it removes nothing) and return its report lines, so the
+    owner sees what the task's first run would remove before it is registered. RuntimeError when it
+    refuses (exit 2: no config key, a bad config, an unsafe or unlistable folder), exits any way but
+    0 or 3 (3: the process list could not be read, so it would keep every claude/ folder), or takes
+    over `timeout` seconds. run: the tests' subprocess.run."""
+    run = run or subprocess.run
     try:
-        with open(path, 'rb') as f:
-            now = f.read()
-    except FileNotFoundError:
-        now = None
-    if now != raw:
-        raise RuntimeError('%s changed since the survey; run again' % path)
-    if raw is None:
-        layout, data = NEW_LAYOUT, {}
-    else:
-        if is_link(path) or os.path.islink(path):
-            raise RuntimeError('%s is a link; not replaced' % path)
-        layout, data = settings.read(raw)
-        if not isinstance(data, dict):
-            raise RuntimeError('%s holds no JSON object' % path)
-    if KEY in data:
-        raise RuntimeError('%s already has %s; not overwritten' % (path, KEY))
-    data[KEY] = {'dir': folder, 'max_age_days': MAX_AGE_DAYS}
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    _replace(path, settings.write(layout, data))
-    try:
-        kuser.user_config(home)
-    except ConfigError as e:
-        if raw is None:
-            os.remove(path)
-        else:
-            _replace(path, raw)
-        raise RuntimeError('the machine config could not be read after adding %s (%s); put back'
-                           % (KEY, e))
-
-
-def _replace(path, data):
-    tmp = path + '.machine-setup.tmp'
-    try:
-        with open(tmp, 'wb') as f:
-            f.write(data)
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.lexists(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-        raise
+        r = run(sweep_dry_run_argv(kit, python), capture_output=True, text=True, timeout=timeout,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('the sweep dry run took over %s s' % timeout)
+    said = [l for l in ((r.stdout or '') + (r.stderr or '')).splitlines() if l.strip()]
+    if r.returncode not in (0, 3):
+        raise RuntimeError('the sweep dry run exit %d, so the task is not registered: %s'
+                           % (r.returncode, ' | '.join(said)[:400] or 'no output'))
+    return said
 
 
 def _task(plan, ctx):
@@ -317,11 +296,23 @@ def _task(plan, ctx):
         plan.note('extras', 'could not tell whether the scheduled task %s is registered (%s)' % (TASK, e))
         return
     if there:
+        if not getattr(ctx, 'sweep_task', True):
+            plan.note('extras', 'scheduled task %s is registered; --no-sweep-task leaves it (undo: '
+                                'Unregister-ScheduledTask -TaskName %s -Confirm:$false)' % (TASK, TASK))
         return
-    if not ctx.register_sweep_task:
-        plan.note('extras', 'scheduled task %s is not registered; the owner registers it with '
-                            '--register-sweep-task --apply, which runs: %s' % (TASK, line))
+    if not getattr(ctx, 'sweep_task', True):
+        plan.note('extras', 'scheduled task %s is not registered (--no-sweep-task); a run without '
+                            '--no-sweep-task registers it, or run: %s' % (TASK, line))
         return
+
+    def dry_run():
+        said = host.sweep_dry_run(ctx.kit)
+        return Report('sweep dry run (nothing removed): ' + l for l in said)
+
+    plan.add('extras', 'run the sweep once without --apply: %s'
+             % ' '.join(sweep_dry_run_argv(ctx.kit, 'python')[1:]), dry_run,
+             detail=['prints what the task\'s first run would remove, before the task is registered; '
+                     'stops the run, registering nothing, when the sweep refuses'])
     plan.add('extras', 'register the scheduled task %s (daily %s, as you, not elevated): %s'
              % (TASK, AT, line), lambda: host.task_register(line),
              undo='Unregister-ScheduledTask -TaskName %s -Confirm:$false' % TASK)

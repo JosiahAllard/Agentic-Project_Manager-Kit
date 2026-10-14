@@ -7,7 +7,7 @@ import tempfile
 
 from tests import gitfixture
 
-MANIFEST = b'\xef\xbb\xbf{\n  "name": "pm-kit",\n  "version": "0.1.0",\n  "agents": "./claude/agents"\n}\n'
+MANIFEST = b'\xef\xbb\xbf{\n  "name": "pm-kit",\n  "version": "0.1.0",\n  "agents": "./hosts/claude/shell/agents"\n}\n'
 MARKETPLACE = ('{\n  "name": "pm-kit",\n  "owner": {"name": "x"},\n'
                '  "plugins": [{"name": "pm-kit", "source": "./"}]\n}\n')
 

@@ -28,7 +28,7 @@ preflight's `leftovers` line (kitlib/preflight/leftovers.py; docs/preflight.md) 
 
 A landing's branch cleanup and `land.py --sweep-landed` (kitlib/gate/cleanup.py; docs/gate.md "Branch cleanup") remove a landed branch's worktree with this module's `_remove` and delete a branch with no worktree with its `delete_branch`.
 
-Each verb returns `Outcome(code, lines)` and prints nothing; the tools print the lines. Settings come from `.kit.json`: `repo.main_branch`, `repo.remote`, `repo.worktrees_dir`, `repo.tools_dir`, `repo.name`, `backlog.store`, `landing.lock_file` and `landing.lanes`, and the `worktree_remove` section (docs/kit-json.md).
+Each verb returns `Outcome(code, lines)` and prints nothing; the tools print the lines. Settings come from `.kit.json`: `repo.main_branch`, `repo.remote`, `repo.worktrees_dir`, `repo.name`, `backlog.store`, `landing.lock_file` and `landing.lanes`, and the `worktree_remove` section (docs/kit-json.md).
 
 A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` is the literal folder `kitlib.pieces` puts at that piece's dir: an ignored entry that is that folder or lies under it is build output (compared case-sensitively, so a folder git prints in another case is refused), and when the pieces table is missing or malformed, the id is unknown, the piece or path is not a string, the path is empty, a glob or climbs out, or the piece's dir has an empty or `.` part, the entry holds nothing and the removal refuses (`kitlib.worktree.remove.piece_dirs`; tests in `tests/worktree/test_piece_build_output.py`).
 
@@ -42,6 +42,14 @@ A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` 
 - `last_look` does not repeat the link check (`holders.link_reason`): a link or junction made inside build output after the verb's link check is not seen. One outside build output is refused when the status lists it or what it leads to (`??`, or `!!` when ignored).
 
 Tests: `tests/worktree/test_remove_snapshot.py` (`IgnoredAfterTheLastStatusRead`; after `clear_disposable`, a tracked edit and delete in `FileAppearsInTheWindow`, a `disposable_untracked` file in `DisposableInTheWindow`, a junction in `JunctionAppearsInTheWindow`, a vanished folder in `FolderGoneInTheWindow`) and `tests/worktree/test_worktree_sweep.py` (`Sweep.test_an_ignored_file_written_after_the_sweeps_second_status_read_survives`).
+
+## The scheduled task
+
+`kitlib/worktree/task.py` `command` writes the one PowerShell line `tools/worktree_sweep_task.py` prints or, with `--register --owner-confirmed`, runs. The task `<repo name>-worktree-sweep` runs daily at 03:00 as the registering user (`-RunLevel Limited`, `-StartWhenAvailable`), its working directory the main checkout.
+
+- No console window opens. The task's program is the `pythonw.exe` that `Get-Command pythonw` finds when the line runs (`FIND_PYTHONW`), and its arguments are `"<kit>\tools\no_window.py" python "<kit>\tools\worktree_remove.py" -C "<main checkout>" --sweep-merged --apply` (`argument`). `tools/no_window.py` is the carrier (docs/daily-full.md "The schedule"): it starts the `python.exe` beside that `pythonw.exe` with a console that has no window and exits with the sweep's exit code.
+- The line throws, registering nothing, when there is no `pythonw` or it is the Microsoft Store alias, a path under `WindowsApps` (`NOT_THE_STORE_ALIAS`).
+- The line does not replace a task: PowerShell refuses to register a name that exists. A task registered before the carrier runs `python` directly, with a window, until the owner removes it (`Unregister-ScheduledTask -TaskName '<repo name>-worktree-sweep' -Confirm:$false`) and registers it again.
 
 ## Behaves differently from the PM copy
 

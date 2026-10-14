@@ -9,11 +9,11 @@ shared, and any run inside an owner whole hold (an exclusive window). A nested r
 (its outer run is the window). Notices are per run, not per window: two heavy runs side by side
 write two start notices and two end notices.
 
-Each notice is <dir>/<run id>-start.json or -end.json, an Action Hub inbox doc ready to post
+Each notice is <dir>/<run id>-start.json or -end.json, an Action Hub inbox doc
 (docs/action-hub.md "Lock-window notices"): {id: "L-<run id>-start|end", title, text, at, repo, from,
-kind: "lock-window", run, phase}. claude/hub/hub_notices.py turns the pending ones into an ArtifactData
-batch and moves them to <dir>/posted/ once posted, and the PM watcher prints LOCKNOTICE for each
-new one (both through kitlib.pmwatch, which reads the folder without importing the lock).
+kind: "lock-window", run, phase}. The hub server lists them (kitlib.hubsite.derived.notices) and the
+PM watcher prints LOCKNOTICE for each new one (both through kitlib.pmwatch, which reads the folder
+without importing the lock).
 A notice that cannot be written is said and never fails the run. A start notice once written
 stays: its end notice follows from the wrapper even when the run's record on disk cannot be
 updated. A background run (it yields to others) writes none, and a wrapper killed outright writes
