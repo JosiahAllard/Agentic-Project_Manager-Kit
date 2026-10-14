@@ -97,6 +97,14 @@ class CtrlCWhileStarting(unittest.TestCase):
         self.assertEqual(p.wait(60), 0)
         self.assertIs(signal.getsignal(signal.SIGINT), note)
 
+    def test_under_sig_ign_a_ctrl_c_in_the_window_stays_ignored(self):
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        with self.popen(then=self.ctrl_c):
+            p = self.j.start(PASS)
+        self.assertEqual(p.wait(60), 0)
+        self.assertEqual(self.j.contains(p.pid), "in")
+        self.assertIs(signal.getsignal(signal.SIGINT), signal.SIG_IGN)
+
     def test_sigint_is_held_from_creation_to_resume_and_put_back_after(self):
         def before_resume(p):
             self.seen.append(("before_resume", signal.getsignal(signal.SIGINT)))
