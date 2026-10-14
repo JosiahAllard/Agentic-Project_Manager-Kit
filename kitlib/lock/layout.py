@@ -341,16 +341,27 @@ def layout_key(L):
 
 
 def slot_key(L):
-    """The run record's `layout`: the slot numbering every tool sharing the store must agree on
-    (threads, gpus, cpu slots and their threads, gpu slots). The older kit's installed machine_lock.py
-    refuses a run while a live record holds another string, so this keeps its format and hash
-    inputs. Choices that renumber no slot (half, agent_cap, medium_cores) are left out, as there;
-    layout_key, layout.json's adoption key, covers them."""
+    """The run record's `layout`: a label of the slot numbering (threads, gpus, cpu slots and
+    their threads, gpu slots). It keeps the older kit's machine_lock.py format and hash inputs,
+    for the records. Choices that renumber no slot (half, agent_cap, medium_cores) are left out,
+    as there; layout_key, layout.json's adoption key, covers them. Nothing here compares it to
+    decide anything: other_labels reports a live record that carries another one."""
     every = L["every"]
     return "t%d g%d cpu %d x %d gpu %d m%s" % (
         L["threads"], L["gpus"], L["cpu_slots"], L["cpu_slot_threads"], L["gpu_slots"],
         hashlib.sha1(json.dumps([L["cpu_masks"], every, every, L["slots_cpu"]])
                      .encode()).hexdigest()[:8])
+
+
+def other_labels(records, L):
+    """The slot labels (records' `layout`) other than slot_key(L), each once, sorted. Every
+    writer in this kit labels a record from the one layout in force (layout.json, from DXGI or
+    CIM detection), so another label means an older writer that counts this machine's cpu or
+    gpu slots its own way (the older kit's machine_lock.py counted gpus with nvidia-smi). A
+    record with no label, or one that is not text, names nothing."""
+    own = slot_key(L)
+    labels = (r.get("layout") for r in records)
+    return sorted({x for x in labels if isinstance(x, str) and x and x != own})
 
 
 def read_division(store):
