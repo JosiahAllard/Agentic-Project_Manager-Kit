@@ -17,6 +17,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `.codex/agent-profile.md` | stub: the profile is docs/agent-profile.md | an agent names the host's profile path | kw: profile
 - `docs/ROSTER.md` | agent roster | choosing an agent | kw: roster, agents
 - `docs/action-hub.md` | Action Hub | the PM action list | kw: action-hub, hub
+- `docs/hub-mcp.md` | hub MCP server: the Action Hub's api as MCP tools, the owner's tools pinned | the hub from an agent | kw: hub-mcp, hub, mcp
 - `docs/hub-remote-access.md` | Hub remote access | reaching the hub from a phone | kw: hub, remote-access, tunnel, cloudflared
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog
 - `docs/backlog-lint.md` | backlog lint | checking backlog records | kw: backlog-lint, lint
