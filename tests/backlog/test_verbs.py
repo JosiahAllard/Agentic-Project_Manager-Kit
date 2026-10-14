@@ -310,6 +310,24 @@ class MachinePaths(VerbCase):
         self.refused('set', 'FOO', [('summary', ['see %s again' % src])])
         self.refused('close', 'FOO', 'done, see %s' % self.DRIVES[0])
 
+    def test_an_unreadable_machine_config_is_a_warning_on_the_write_and_on_the_refusal(self):
+        # The check narrows to user profiles; the WARNING says so, as the commit checks do.
+        self.seed(priced('FOO'))
+        machine_config(self.home, '{not json')
+        change = self.verb('set', 'FOO', [('summary', ['a clean replacement summary'])])
+        warned = [l for l in change.lines if l.startswith('WARNING: machine config')]
+        self.assertEqual(len(warned), 1, change.lines)
+        self.assertIn('only user-profile paths were searched', warned[0])
+        with self.assertRaises(Usage) as ctx:
+            self.verb('close', 'FOO', 'done, see %s' % self.DRIVES[0])
+        self.assertIn('machine path', str(ctx.exception))
+        self.assertIn('WARNING: machine config', str(ctx.exception))
+
+    def test_a_readable_machine_config_adds_no_warning(self):
+        self.seed(priced('FOO'))
+        change = self.verb('set', 'FOO', [('summary', ['a clean replacement summary'])])
+        self.assertFalse([l for l in change.lines if 'machine config' in l], change.lines)
+
     def test_a_refused_close_leaves_the_record_and_clean_text_still_closes(self):
         self.seed(priced('FOO'))
         self.refused('close', 'FOO', 'done, see %s' % self.DRIVES[0])

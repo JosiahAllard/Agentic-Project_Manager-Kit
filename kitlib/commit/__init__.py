@@ -17,7 +17,8 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   machine path in the STAGED copy of a file the commit would record is refused by
   kitlib.machinepaths.scan_staged under the repository's own "machine_paths" config, with no
   --owner-authored exemption; the paths this call staged are unstaged again. A machine config the
-  kit cannot read is a WARNING, and user-profile paths are still refused.
+  kit cannot read is a WARNING, printed once (by the message check, or by the staged check of an
+  --owner-authored commit), and user-profile paths are still refused.
 - Anything ELSE already staged is refused (it may be another session's), with one exception: with
   .kit.json "commit".merge_fold, during a merge in progress (one MERGE_HEAD), the files the merge
   staged itself (merge_owned), so only the resolved conflicts are named.
@@ -414,21 +415,24 @@ def message_body(b, body_file, root, cwd):
 
 
 def machine_path_error(subject, body, typed='', folders=None):
-    """The refusal when the subject or body carries a machine path, else None. `typed` is -b as
-    typed, scanned too: the `\\n` conversion cuts a `<drive>:\\Users\\nick` path short. `folders`
-    are the drive-rooted folder names refused besides a user profile (None: the machine config's,
-    machinepaths.folders(); one it cannot read refuses user-profile paths only)."""
+    """`(refusal or None, warning lines)`: the refusal when the subject or body carries a machine
+    path. `typed` is -b as typed, scanned too: the `\\n` conversion cuts a
+    `<drive>:\\Users\\nick` path short. `folders` are the drive-rooted folder names refused
+    besides a user profile (None: the machine config's, machinepaths.folders(); one it cannot
+    read refuses user-profile paths only, and its WARNING is the one warning line)."""
+    note = None
     if folders is None:
-        folders = machinepaths.folders()[0]
+        folders, note = machinepaths.folders()
+    warnings = [note] if note else []
     found = []
     for text in (subject, typed, body):
         found += [f for f in machinepaths.find(text, folders) if f not in found]
     if not found:
-        return None
+        return None, warnings
     return ('refused: the commit message carries a machine path: %s. '
             'tools/machine_paths.py fails a file with one, and history cannot be fixed once it '
             'lands. Write %%VAR%%\\... (the variable that applies), or leave it out.'
-            % ', '.join(found))
+            % ', '.join(found)), warnings
 
 
 def unstage_added(root, rels, status_before, lines):
@@ -532,9 +536,11 @@ def _commit(req, lines):
     if err:
         raise _usage(err)
     # The owner's own commit is exempt: the owner may keep a path literal on purpose.
-    err = None if req.owner_authored else machine_path_error(req.subject, body, req.b)
+    err, msg_warnings = ((None, []) if req.owner_authored
+                         else machine_path_error(req.subject, body, req.b))
     if err:
-        raise _Stop(REFUSED, err)
+        raise _Stop(REFUSED, err, *msg_warnings)
+    lines.extend(msg_warnings)
 
     err = main_checkout_error(req.lander_main_checkout, root, opts['main_branch'],
                               opts['rule_pointer'])
@@ -595,9 +601,10 @@ def _commit(req, lines):
     if not status_after:
         raise _Stop(REFUSED, 'nothing to commit in: %s' % ', '.join(paths))
     refusal, warnings = staged_machine_path_error(root, status_after, status_before)
+    # The message check printed the same machine-config WARNING already: once is enough.
     if refusal:
-        raise _Stop(REFUSED, *refusal)
-    lines.extend(warnings)
+        raise _Stop(REFUSED, *[l for l in refusal if l not in msg_warnings])
+    lines.extend(l for l in warnings if l not in msg_warnings)
     msg = build_message(req.subject, body, trailers)
     rc, out, err = _git(root, 'commit', '-q', '-m', msg, timeout=None)
     if rc != 0:

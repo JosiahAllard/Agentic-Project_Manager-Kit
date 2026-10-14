@@ -265,13 +265,24 @@ class MessagePieces(unittest.TestCase):
     def test_a_machine_path_in_the_message(self):
         drive = 'C:' + '\\'
         gh = ('GitHub',)
-        self.assertIsNone(C.machine_path_error('subject', 'body %AGENT_TEMP%\\x', folders=gh))
-        self.assertIn('machine path', C.machine_path_error('see %sGitHub\\x' % drive, '', folders=gh))
-        self.assertIsNone(C.machine_path_error('see %sGitHub\\x' % drive, '', folders=()))
+        self.assertEqual(C.machine_path_error('subject', 'body %AGENT_TEMP%\\x', folders=gh),
+                         (None, []))
+        self.assertIn('machine path',
+                      C.machine_path_error('see %sGitHub\\x' % drive, '', folders=gh)[0])
+        self.assertIsNone(C.machine_path_error('see %sGitHub\\x' % drive, '', folders=())[0])
         # The typed form is scanned too: `\n` would cut `...\Users\nick` short.
         typed = 'in %sUsers\\nick\\x' % drive
         self.assertIn('machine path', C.machine_path_error('s', typed.replace('\\n', '\n'), typed,
-                                                           folders=()))
+                                                           folders=())[0])
+
+    def test_an_unreadable_machine_config_is_a_warning_of_the_message_check(self):
+        drive = 'C:' + '\\'
+        note = 'WARNING: machine config X could not be read'
+        with mock.patch.object(C.machinepaths, 'folders', return_value=((), note)):
+            self.assertEqual(C.machine_path_error('subject', 'body'), (None, [note]))
+            refusal, warnings = C.machine_path_error('see %sUsers\\nick\\x' % drive, '')
+        self.assertIn('machine path', refusal)
+        self.assertEqual(warnings, [note])
 
 
 # ---------------------------------------------------------------------------------- end to end
@@ -521,6 +532,19 @@ class AMachinePathInTheMessageIsRefused(LinkedCase):
         self.put('a.py', 'x\n')
         code, out = self.commit('s', 'a.py', b='see %AGENT_TEMP%\\x for the log')
         self.assertEqual(code, 0, out)
+
+    def test_an_unreadable_machine_config_warns_on_a_refused_message_and_once_on_a_commit(self):
+        machine_config(self.home, '{not json')
+        self.put('a.py', 'x\n')
+        head = self.head()
+        code, out = self.commit('see %sUsers\\someone\\x' % self.DRIVE, 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('carries a machine path', out)
+        self.assertIn('WARNING: machine config', out)      # the staged check never ran
+        self.assertEqual(self.head(), head)
+        code, out = self.commit('clean subject', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.count('WARNING: machine config'), 1, out)
 
     def test_an_owner_authored_commit_may_name_one(self):
         self.as_author(OWNER)

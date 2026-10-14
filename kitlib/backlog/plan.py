@@ -18,7 +18,7 @@ from . import offer as omod
 from . import record as rmod
 from . import scope as smod
 from .errors import Failure, NotFound, Refusal, Usage
-from .store import PLAIN_ID, Change, id_refusal
+from .store import PLAIN_ID, Change, add_plan_note, id_refusal
 
 MIN_REASON = 12
 RULED_PRICE_BY = ('owner', 'pm')
@@ -127,17 +127,22 @@ def clears_owner_blocker(rec, after):
 def refuse_machine_paths(field, *texts):
     """Usage when free text carries a machine path: it reaches a record or a commit subject, and
     history cannot be fixed once it lands (commit.machine_path_error, same rule: the machine
-    config's `machine_path_folders` and a user profile). Empty texts read no machine config."""
+    config's `machine_path_folders` and a user profile). Empty texts read no machine config. A
+    machine config it cannot read searches user-profile paths only, and its WARNING ends the
+    refusal or, with no refusal, is printed with the write (store.add_plan_note)."""
     if not any(texts):
         return
-    folders = machinepaths.folders()[0]
+    folders, note = machinepaths.folders()
     found = []
     for t in texts:
         found += [f for f in machinepaths.find(t or '', folders) if f not in found]
-    if found:
-        raise Usage('refused: `%s` carries a machine path: %s. tools/machine_paths.py fails a '
-                    'file with one. Write %%VAR%%\\... (the variable that applies), or leave it out.'
-                    % (field, ', '.join(found)))
+    if not found:
+        if note:
+            add_plan_note(note)
+        return
+    raise Usage('refused: `%s` carries a machine path: %s. tools/machine_paths.py fails a '
+                'file with one. Write %%VAR%%\\... (the variable that applies), or leave it out.'
+                % (field, ', '.join(found)) + ('\n' + note if note else ''))
 
 
 def reason_error(reason, flag):
