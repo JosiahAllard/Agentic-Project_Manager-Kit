@@ -1,5 +1,5 @@
-"""tests/shipped.py's install_patterns, forbidden and violations read the machine config's
-scrub_patterns and machine_path_folders at call time, from an injected home (a temp folder here, never the real one)."""
+"""tests/shipped.py's install_patterns, machine_patterns, forbidden and violations read the machine
+config's scrub_patterns and machine_path_folders at call time, from an injected home (a temp folder here, never the real one)."""
 import importlib
 import json
 import os
@@ -37,7 +37,8 @@ class InstallPatternsTest(unittest.TestCase):
     def test_machine_path_folders_become_machine_path_patterns(self):
         bs = chr(92)
         self.write_config(json.dumps({'machine_path_folders': ['Src', 'C#']}))
-        pats = shipped.install_patterns(self.home)
+        self.assertEqual(shipped.install_patterns(self.home), [])
+        pats = shipped.machine_patterns(self.home)
         self.assertEqual([what for _rx, what in pats], ['machine path'])
         rx = pats[0][0]
         for hit in ('D:' + bs + 'Src' + bs + 'x', 'd:/src/y', 'E:' + bs * 2 + 'C#' + bs * 2 + 'z'):
@@ -56,6 +57,7 @@ class InstallPatternsTest(unittest.TestCase):
 
     def test_no_config_gives_no_install_names(self):
         self.assertEqual(shipped.install_patterns(self.home), [])
+        self.assertEqual(shipped.machine_patterns(self.home), [])
         self.assertEqual(shipped.forbidden(self.home), shipped.BASE_FORBIDDEN)
 
     def test_violations_names_a_file_holding_an_install_name(self):
@@ -79,8 +81,9 @@ class InstallPatternsTest(unittest.TestCase):
 class RealScrubPatternsTest(unittest.TestCase):
     """tests.real_install_config, the home fence's one exception, with the home it records before
     the fence pointed at a temp folder: it opens the machine config only and returns its
-    install-name keys only; install_patterns() with no home uses it and skips by name without them,
-    while scan and violations still run the base patterns first and fail on a base finding.
+    install-name keys only; install_patterns() with no home uses it and skips by name without
+    scrub_patterns, while scan and violations still run the base patterns and the machine folders
+    (machine_patterns) first and fail on a finding of theirs.
     The process stays fenced, so any other home lookup would raise HomeFenced."""
 
     write_config = InstallPatternsTest.write_config
@@ -119,9 +122,9 @@ class RealScrubPatternsTest(unittest.TestCase):
                                 'cap': {'beta': 2}}, None))
         self.assertEqual(seen, [os.path.normcase(kuser.config_file(self.home))])
         pats = shipped.install_patterns()
-        self.assertEqual([what for _rx, what in pats],
-                         ['install name', 'install name', 'machine path'])
-        self.assertEqual([rx.pattern for rx, _what in pats][:2], ['acme', 'widgetco'])
+        self.assertEqual([what for _rx, what in pats], ['install name', 'install name'])
+        self.assertEqual([rx.pattern for rx, _what in pats], ['acme', 'widgetco'])
+        self.assertEqual([what for _rx, what in shipped.machine_patterns()], ['machine path'])
 
     def test_conductor_start_cap_when_coordinator_start_is_unset(self):
         self.write_config(json.dumps({'conductor_start': {'cap': {'gamma': 1}}}))
@@ -188,6 +191,44 @@ class RealScrubPatternsTest(unittest.TestCase):
         self.assertEqual(shipped.violations(folder, root=Path(self.home)),
                          [('shipped/a.md', 'ruling id'), ('shipped/a.md', 'Windows user path'),
                           ('shipped/a.md', 'machine path')])
+
+    def test_only_machine_path_folders_still_skips_the_install_names_on_a_clean_scan(self):
+        # The folders set and scrub_patterns not: a clean scan is install_patterns' named skip,
+        # as with neither key, so the install-name tests show as skipped rather than passing.
+        self.write_config(json.dumps({'machine_path_folders': ['Src']}))
+        folder = self.shipped_folder()
+        (folder / 'a.md').unlink()
+        with self.assertRaises(unittest.SkipTest) as cm:
+            shipped.violations(folder, root=Path(self.home))
+        self.assertIn('sets no scrub_patterns', str(cm.exception))
+        with self.assertRaises(unittest.SkipTest):
+            shipped.forbidden()
+
+    def test_unset_folders_print_the_one_note(self):
+        from contextlib import redirect_stdout
+        import io
+        from kitlib.machinepaths import UNSET_NOTE
+        p = mock.patch.object(shipped, '_NOTED', [])
+        p.start()
+        self.addCleanup(p.stop)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(shipped.machine_patterns(), [])        # no config file
+            self.write_config(json.dumps({'pm_start': {}}))
+            self.assertEqual(shipped.real_machine_folders(), ())    # key unset: once per process
+        self.assertEqual(out.getvalue(), UNSET_NOTE + '\n')
+
+    def test_set_folders_print_no_note(self):
+        from contextlib import redirect_stdout
+        import io
+        p = mock.patch.object(shipped, '_NOTED', [])
+        p.start()
+        self.addCleanup(p.stop)
+        self.write_config(json.dumps({'machine_path_folders': ['Src']}))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(shipped.real_machine_folders(), ('Src',))
+        self.assertEqual(out.getvalue(), '')
 
     def test_install_names_run_after_the_base_patterns(self):
         self.write_config(json.dumps({'scrub_patterns': ['acme']}))

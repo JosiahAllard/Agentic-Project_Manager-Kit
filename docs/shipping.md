@@ -25,7 +25,7 @@ the install's own names stay with `tests/scrub/test_generic.py` and `scrub_patte
   BASE_FORBIDDEN also refuses (a test checks the two agree): `Users` only, since the kit codes no
   other folder name. The machine config's `machine_path_folders` are added by the caller:
   `tests/scrub/test_builtin.py` passes them to `scrub.classes`, and tests/shipped.py
-  `install_patterns` refuses them as "machine path" with the install's names; the package itself
+  `machine_patterns` refuses them as "machine path" with the base patterns; the package itself
   reads no config. It reads tests/
   too; other drive paths there are invented fixtures, and `tests/scrub/test_generic.py` refuses every drive path
   outside tests/.

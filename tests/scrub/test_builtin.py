@@ -239,10 +239,10 @@ def j(*parts):
 
 def configured_folders():
     """The real machine config's `machine_path_folders` through the home fence's one exception
-    (tests.real_install_config); () when there is no config file or it sets none."""
-    import tests
-    cfg, _why = tests.real_install_config()
-    return tuple((cfg or {}).get('machine_path_folders') or ())
+    (tests.real_install_config); () when there is no config file or it sets none, and then the
+    one NOTE naming the unset key (tests.shipped.real_machine_folders)."""
+    from tests import shipped
+    return shipped.real_machine_folders()
 
 
 class BuiltIn(unittest.TestCase):
