@@ -14,6 +14,7 @@ from kitlib.config import user
 from kitlib.config.types import ConfigError
 from kitlib.hubsite import store as hubstore
 from tests.gitfixture import TempRepo, fixture_env
+from tests.home import temp_home
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -354,6 +355,7 @@ class CommitPushTest(unittest.TestCase):
         env = mock.patch.dict(os.environ)
         env.start()
         self.addCleanup(env.stop)
+        temp_home(self)    # commit's staged machine-path check reads the machine config
         for k in ('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL',
                   kcommit.MODEL_ENV):
             os.environ.pop(k, None)
