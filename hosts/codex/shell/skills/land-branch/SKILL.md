@@ -19,7 +19,7 @@ Prerequisites, all from the coordinator: the branch, its reviewed tip sha (full)
 6. Only a flake on the repo's list (`python <kit>/tools/doc_index.py -C <main checkout> --find flakes`) earns one resubmit.
 7. When the brief asks, size-check each doc both sides touched: merged lines = main's plus the branch's net (`git diff --numstat <merge-base> <branch> -- <path>`), plus or minus 1; else stop and report.
 8. Verify read-only, whatever the verdict: `git ls-remote <remote> <main>` equals `git rev-parse <main>`, then one `git merge-base --is-ancestor <tip> <remote>/<main>` per branch (exit 0). Not verified: report.
-9. Records: the branch closed its own in its last work commit; one the brief names still open at the pushed main is reported, never closed by you.
+9. Records: the branch names its own in its last commit's message, on its own line (`Closes: <ID>`), and land.py closes it at landing; one the brief names still open at the pushed main is reported, never closed by you.
 10. Cleanup, only after step 8: `land.py` removes the landed branch, worktree and remote branch itself. For any part its `kept` lines name: the repo's command (`python <kit>/tools/doc_index.py -C <main checkout> --find cleanup`), else `python <kit>/tools/land.py -C <main checkout> --sweep-landed` (a dry run; read it) then `python <kit>/tools/land.py -C <main checkout> --sweep-landed --apply`, or `python <kit>/tools/worktree_remove.py -C <main checkout> <worktree>`. "Filename too long" or "Permission denied": leave it, report. Absolute paths only.
 11. Report one block: branch; old and new main sha; merge commit; test counts; extra gate; pushed yes/no with both shas; worktree removed; any record still open; any judgement you made.
 

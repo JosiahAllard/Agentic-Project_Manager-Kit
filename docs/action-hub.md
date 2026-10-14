@@ -4,13 +4,17 @@ One private web page, served on your own PC, where you, the owner, answer the PM
 through hand steps and write new stories when it suits you. Nobody waits on it. The page is
 `kitlib/hubsite/web/index.html`; the server is `tools/hub.py serve` (`kitlib.hubsite`), which keeps
 the hub's documents in a store folder in git and answers an HTTP API on the loopback address. The
-PM uses the same API through the `tools/hub.py` verbs.
+PM uses the same API through the `tools/hub.py` verbs; agents can also reach it through the hub MCP
+server (docs/hub-mcp.md), which carries the agent's token and none of the owner's verbs.
 
 ## Using the hub
 
 Start the server with `python tools/hub.py serve`, then `python tools/hub.py open`: it opens the
 page signed in as you (a one-time pairing link sets the browser's session cookie; `--print` prints
-the link instead). A browser that is no longer paired is told to run `hub open` again.
+the link instead). `serve` prints the full `open` command on its start line. A browser that is not
+paired (a first visit, or any browser after the server restarts: sessions live in the server's
+memory) is told so on the page and to run `python tools/hub.py open` in the kit folder and open
+the link it prints. The server's health is `GET /api/v1/health`.
 
 - **Inbox.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
   options and a recommendation; pick one and add a note if you like. Its own tabs are Open,
@@ -93,7 +97,8 @@ connection dropped mid-request.
 
 ## For the PM
 
-The PM reads and writes the hub only through `tools/hub.py` (the agent's token); coordinators
+The PM reads and writes the hub only through `tools/hub.py` or the hub MCP server (docs/hub-mcp.md),
+both with the agent's token; coordinators
 never write to it, they send questions and hand steps to the PM. Every verb takes `--port N` and
 `--json` (the server's answer as one JSON line). The server alone decides what a role may do: the
 owner's verbs (answer, todos done, stories add and withdraw, to-pm add and send, inbox read) are
