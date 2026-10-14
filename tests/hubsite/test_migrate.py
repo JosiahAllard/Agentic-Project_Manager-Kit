@@ -483,8 +483,8 @@ class StoreConflictCase(Case):
             "by its time stamps: %s). To keep the store's copy there is nothing to do; a run with "
             "that source reports this again. To take a source's copy: with the server stopped, "
             "move the file questions/Q-002.json out of the store folder (where the store folder "
-            "is the mirror folder, that file is the mirror's own file), then run again with the "
-            "chosen source alone" % (self.export, self.export), lines)
+            "is the old hub's data folder, that file is the old hub's own file), then run again "
+            "with the chosen source alone" % (self.export, self.export), lines)
         self.assertFalse(any('run again without that source' in x for x in lines),
                          'leaving the source out would leave out its other documents too')
         self.assertIn('NOT COMPLETE: 1 document not imported (CONFLICT and SKIPPED above); the '

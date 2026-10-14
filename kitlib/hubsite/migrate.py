@@ -17,7 +17,7 @@ second run finds every document there and writes nothing.
 What a source document becomes:
   - A document of one of schema.COLLECTIONS that the store does not hold is written to
     <root>/<collection>/<id>.json with its own id and its own fields, as store.normal_text. It has
-    no `version`, so the store reads it at version 0, exactly as it reads a mirror file (the
+    no `version`, so the store reads it at version 0, exactly as it reads an old hub file (the
     store's module docstring). It is not passed through the store's write checks: a document the
     earlier hub held is kept whole even where a new write of it would be refused, and check()
     reports what is wrong with it. An inbox document that is a lock-window notice is a document
@@ -41,7 +41,7 @@ What a source document becomes:
   - A document the store already holds with other fields is never written over. When the store's
     has a `version` (a server wrote it since), the store's is the newer truth: the difference is
     in `kept` and the run is complete. When it has none (no server ever wrote it: it is a copy
-    from a source, or a mirror file where the mirror folder is the store folder), it is one
+    from a source, or an old hub file where the old hub's data folder is the store folder), it is one
     source against another: it is in `conflicts` (Conflict.store True) and the run is not
     complete.
   - A document two sources hold with different fields, and the store does not hold, is written
@@ -58,7 +58,7 @@ until the last document is written: while a server holds the store the run is re
 before anything is written. A dry run writes nothing at all: it takes the lock only when the
 lock file is already there (a holder made it), and never makes the store folder.
 
-A source may be the store folder itself (the mirror folder served in place): every document is
+A source may be the store folder itself (the old hub's data folder served in place): every document is
 then already the store's and nothing is written.
 
 Nothing here prints, parses arguments or exits.
@@ -506,8 +506,9 @@ def report_lines(result):
                 "different fields; the store's copy is kept and nothing was imported (%s). To "
                 "keep the store's copy there is nothing to do; a run with that source reports "
                 "this again. To take a source's copy: with the server stopped, move the file "
-                "%s.json out of the store folder (where the store folder is the mirror folder, "
-                "that file is the mirror's own file), then run again with the chosen source alone"
+                "%s.json out of the store folder (where the store folder is the old hub's data "
+                "folder, that file is the old hub's own file), then run again with the chosen "
+                "source alone"
                 % (c.rel, ' and '.join(c.sources), later, c.rel))
         else:
             lines.append(
