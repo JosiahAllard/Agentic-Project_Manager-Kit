@@ -18,7 +18,7 @@ from kitlib.config import owner as ownermod
 from kitlib.git import cmd
 from tests import gitfixture
 from tests.gitfixture import TempRepo
-from tests.home import no_machine_owner
+from tests.home import TempHomeCase, no_machine_owner
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'commit.py')
@@ -279,10 +279,13 @@ def _seed(t):
     t.commit('seed', 'seed.txt')
 
 
-class LinkedCase(unittest.TestCase):
-    """A throwaway repo with a linked worktree `self.wt` on kit/wt; the commit is made there."""
+class LinkedCase(TempHomeCase):
+    """A throwaway repo with a linked worktree `self.wt` on kit/wt; the commit is made there,
+    under a temp home: the staged machine-path check reads the machine config's machine_folders
+    (kitlib.machinepaths.load_config), and a child started with fixture_env() inherits the home."""
 
     def setUp(self):
+        super().setUp()
         self.t = TempRepo(prepare=_seed, prepare_key='test_commit.LinkedCase')
         self.addCleanup(self.t.cleanup)
         self.wt = self.t.worktree('wt')

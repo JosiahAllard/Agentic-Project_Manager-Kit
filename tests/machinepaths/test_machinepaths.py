@@ -18,7 +18,9 @@ from unittest import mock
 
 from kitlib import machinepaths as M
 from kitlib.git import cmd
+from kitlib.config import user
 from tests import gitfixture
+from tests.home import TempHomeCase
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'machine_paths.py')
@@ -50,11 +52,13 @@ REPO_CONFIG = {
 }
 
 
-class PlantedTree(unittest.TestCase):
-    """A throwaway git repository the guard is pointed at."""
+class PlantedTree(TempHomeCase):
+    """A throwaway git repository the guard is pointed at, under a temp home: the check reads the
+    machine config's machine_folders (kitlib.config.user), and an empty home has none."""
     config = None
 
     def setUp(self):
+        super().setUp()
         self.repo = gitfixture.TempRepo()
         self.addCleanup(self.repo.cleanup)
         self.root = self.repo.root
@@ -416,6 +420,78 @@ class TheConfigRefusesWhatItCannotUse(PlantedTree):
         self.set_config({'allow': [{'glob': 'x', 'line': '(', 'why': 'w'}]})
         with self.assertRaises(M.ConfigError):
             M.load_config(self.root)
+
+
+class MachineFolders(PlantedTree):
+    """The machine config's machine_folders replaces the default drive-rooted folder names; a
+    user profile is refused whatever it says, and a config the kit cannot read falls back to the
+    default list with a WARNING, never NOT CHECKED."""
+    SRC = 'D' + ':' + BS + 'Src' + BS + 'x'
+
+    def machine_config(self, body):
+        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
+        with open(user.config_file(self.home), 'w', encoding='utf-8') as fh:
+            fh.write(body)
+
+    def test_a_configured_folder_is_caught_and_a_default_one_is_not(self):
+        self.machine_config(json.dumps({'machine_folders': ['Src']}))
+        self.write('notes.md', 'a %s\nb %s\nc %s\n' % (self.SRC, GITHUB, PROFILE))
+        rc, out = self.run_guard()
+        self.assertEqual(rc, 1, out)
+        self.assertIn('notes.md:1:', out)
+        self.assertNotIn('notes.md:2:', out)
+        self.assertIn('notes.md:3:', out)
+
+    def test_an_empty_list_leaves_the_profile_only(self):
+        self.machine_config(json.dumps({'machine_folders': []}))
+        self.write('notes.md', 'a %s\n' % GITHUB)
+        rc, out = self.run_guard()
+        self.assertEqual(rc, 0, out)
+        self.write('notes.md', 'a %s\nb %s\n' % (GITHUB, PROFILE))
+        rc, out = self.run_guard()
+        self.assertEqual(rc, 1, out)
+        self.assertIn('notes.md:2:', out)
+
+    def test_without_the_key_the_default_folders_are_caught(self):
+        self.machine_config(json.dumps({'owner_email': 'someone@example.com'}))
+        self.write('notes.md', 'a %s\nb %s\n' % (self.SRC, GITHUB))
+        rc, out = self.run_guard()
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn('notes.md:1:', out)
+        self.assertIn('notes.md:2:', out)
+
+    def test_a_config_it_cannot_read_warns_and_still_checks_the_default(self):
+        for body in ('{not json', json.dumps({'machine_folders': ['a/b']})):
+            self.machine_config(body)
+            self.write('notes.md', 'a %s\n' % GITHUB)
+            rc, out = self.run_guard()
+            self.assertEqual(rc, 1, out)
+            self.assertIn('notes.md:1:', out)
+            self.assertIn('WARNING: machine config', out)
+            self.assertNotIn('a/b', out)
+
+    def test_scan_staged_uses_the_configured_folders(self):
+        self.machine_config(json.dumps({'machine_folders': ['Src']}))
+        self.write('notes.md', 'a %s\nb %s\n' % (GITHUB, self.SRC))
+        hits, _used, _read, _skipped = M.scan_staged(self.root, ['notes.md'])
+        self.assertEqual([h[:2] for h in hits], [('notes.md', 2)])
+
+    def test_the_tool_reads_the_machine_config(self):
+        self.machine_config(json.dumps({'machine_folders': ['Src']}))
+        self.write('notes.md', 'a %s\n' % self.SRC)
+        env = dict(gitfixture.fixture_env(), USERPROFILE=self.home, HOME=self.home)
+        done = subprocess.run([sys.executable, TOOL, '-C', self.root], capture_output=True,
+                              text=True, encoding='utf-8', errors='replace', env=env)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn('notes.md:1:', done.stdout)
+
+    def test_find_takes_a_folder_list_and_reads_no_config(self):
+        self.machine_config(json.dumps({'machine_folders': ['Src']}))
+        self.assertEqual(M.find(self.SRC), [])
+        self.assertTrue(M.find(GITHUB))
+        self.assertTrue(M.find(self.SRC, ('Src',)))
+        self.assertEqual(M.find(GITHUB, ('Src',)), [])
+        self.assertTrue(M.find(PROFILE, ()))
 
 
 class FindNeedsNoConfig(unittest.TestCase):

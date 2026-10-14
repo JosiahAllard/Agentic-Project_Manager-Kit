@@ -36,7 +36,7 @@ import fnmatch
 import re
 
 from kitlib import forbidden
-from kitlib.config.user import TEMP_DIR_NAME
+from kitlib.config.user import DEFAULT_MACHINE_FOLDERS
 
 GENDER = re.compile(r'\bh(?:e|is|im|imself)\b', re.I)
 RECORD_ID = re.compile(r'(?<![A-Za-z0-9_-])[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+(?![A-Za-z0-9_])')
@@ -75,8 +75,10 @@ HARDWARE = re.compile(
     r'|\bInte[l]\s+Core\s+i[3579]\b'
     r'|\b[1-9]\d+(?:\s+|-)(?:core[s]?|(?:hardware\s+)?thread[s]?)\b')
 # The machine folders a drive path must not lead into (tests/shipped.py BASE_FORBIDDEN refuses
-# the same ones in shipped text; tests/scrub/test_builtin.py checks the two agree).
-MACHINE_FOLDERS = ('Users', 'GitHub', TEMP_DIR_NAME, 'research')
+# the same ones in shipped text; tests/scrub/test_builtin.py checks the two agree): a user
+# profile and the kit's default machine folders, never the machine config's `machine_folders`, so
+# the scrub reads no configuration and finds the same on every machine.
+MACHINE_FOLDERS = ('Users',) + DEFAULT_MACHINE_FOLDERS
 DRIVE = re.compile(r'(?<![A-Za-z0-9_?%$])[A-Za-z]:(?:\\|/)+(?:'
                    + '|'.join(re.escape(f) for f in MACHINE_FOLDERS) + r')(?![A-Za-z0-9_])', re.I)
 

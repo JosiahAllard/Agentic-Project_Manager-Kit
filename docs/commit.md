@@ -53,7 +53,7 @@ After a commit that includes a `.md` file or an owner-only file, it prints the d
 
 ## machine_paths.py
 
-`machine_paths.py [-C DIR]` searches every tracked file, and every untracked file git does not ignore, in the work tree. It looks for a drive-rooted `GitHub`, `research` or `AgentTemp` folder, or a drive-rooted user profile. The `kitlib/machinepaths` docstring gives the pattern and the allow-list rules.
+`machine_paths.py [-C DIR]` searches every tracked file, and every untracked file git does not ignore, in the work tree. It looks for a drive-rooted machine folder, or a drive-rooted user profile. The machine folders are the machine config's `machine_folders` (docs/kit-json.md "Machine config keys"), else the kit's default list `kitlib.config.user.DEFAULT_MACHINE_FOLDERS` (`GitHub`, `research`, `AgentTemp`). The tree sweep and the staged-file check of commit.py (`kitlib.machinepaths.scan_staged`) both read it. A machine config that cannot be read does not stop either one: the default list is searched, and the tree sweep prints a `WARNING: machine config ...` line that names no value from the file. The message check of commit.py (`kitlib.machinepaths.find`) uses the default list until a follow-up wires it. The `kitlib/machinepaths` docstring gives the pattern and the allow-list rules.
 
 | Code | Meaning |
 |---|---|
