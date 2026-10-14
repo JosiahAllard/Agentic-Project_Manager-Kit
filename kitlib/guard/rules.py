@@ -182,7 +182,7 @@ def judge(event, ctx):
 
 
 def shell_command(event, ctx, text, shell, cwd, role):
-    parsed = cm.read(text, shell, cwd)
+    parsed = cm.read(text, shell, cwd, home=ctx.home)
     hub_rules = HubShell(event, ctx)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
@@ -716,6 +716,9 @@ def hub_secret_shell(ctx, cmd, inv, places):
     and messages, so only their words that are not literal count), a literal path in the token
     folder, in the store (unless tools/hub.py runs: its own --store), or wildcards that can name
     either, and python or node code that names them or the hub site (kitlib.guard.hub.INLINE_RE).
+    A path may start with the home folder however the line spells it (`~`, $HOME,
+    $env:USERPROFILE, %USERPROFILE%: shell.home_text, read as ctx.home), and a relative one is
+    read from the directory a cd to the home folder moved to (the command's cwd_home).
     `places()` gives the HubPlaces."""
     name_only = inv is not None and inv.name in hubg.NAME_ONLY_PROGRAMS
     targets = [r.target for r in cmd.redirects if r.target is not None and not r.body and r.op != '<<<']
@@ -730,13 +733,12 @@ def hub_secret_shell(ctx, cmd, inv, places):
             return 'names %s' % hit
     runs_hub = hub_script_run(inv)
     for w in list(cmd.words) + targets:
-        if w.dyn:
-            continue
         for text in hub_path_texts(w.text):
-            if text == '~' or text[:2] in ('~/', '~\\'):
-                text = ctx.home + text[1:]
+            text = sh.home_text(text, ctx.home, w.dyn)
+            if text is None:
+                continue
             try:
-                p = sh.resolve_path(text, cmd.cwd, cmd.shell)
+                p = sh.resolve_path(text, cmd.cwd_home, cmd.shell, ctx.home)
             except (OSError, ValueError):
                 p = None
             if not p:

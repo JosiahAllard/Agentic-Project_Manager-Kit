@@ -74,7 +74,7 @@ class Redirect(object):
 class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
-                 'pipe_from', 'git_env', 'home_env', 'cwd_ps_drive')
+                 'pipe_from', 'git_env', 'home_env', 'cwd_ps_drive', 'cwd_home')
 
     def __init__(self, source, shell, depth):
         self.words, self.redirects, self.subs = [], [], []
@@ -82,6 +82,7 @@ class Command(object):
         self.source, self.shell, self.depth = source, shell, depth
         self.cwd = None
         self.cwd_ps_drive = False   # cwd None after a PowerShell cd into a place ps_unplaceable names (track)
+        self.cwd_home = None        # cwd, with a cd to a home variable ($HOME/x) followed too (track)
         self.piped_out = self.piped_in = False
         self.groups = ()            # the ( ) or { } groups it is inside, outermost first: (id, '(' or '{')
         self.prev_op = self.next_op = None      # the operators around it: ; && || & newline ( ) { } |
@@ -110,8 +111,9 @@ class Command(object):
 
 
 class Parsed(object):
-    def __init__(self, text, shell, cwd):
+    def __init__(self, text, shell, cwd, home=None):
         self.text, self.shell, self.start_cwd = text, shell, cwd
+        self.home = home            # the folder `~` names (home_folder)
         self.commands = []
         self.unclean = []
 
@@ -851,11 +853,40 @@ def ps_unplaceable(p):
     return bool(PS_LONG_DRIVE_RE.match(p))
 
 
-def resolve_path(p, cwd, shell=None):
+def home_folder(home=None):
+    """`home`, else the user's home folder (os.path.expanduser)."""
+    return home or os.path.expanduser('~')
+
+
+# a word's text that starts with a variable naming the home folder, in any shell's spelling,
+# then ends or goes on with a separator: $HOME ${HOME} $USERPROFILE $env:USERPROFILE ${env:HOME}
+# %USERPROFILE% (case ignored: PowerShell and cmd ignore it, and only a deny reads it)
+HOME_VAR_RE = re.compile(r'(?i)^(?:\$(?:env:)?(?:HOME|USERPROFILE)|\$\{(?:env:)?(?:HOME|USERPROFILE)\}|'
+                         r'%(?:HOME|USERPROFILE)%)(?=$|[\\/])')
+
+
+def home_text(text, home=None, dyn=False):
+    """`text` with a leading `~` (alone, or before a separator) as the home folder (home_folder);
+    other text as it is. With `dyn` (a word the shell fills in), only a leading home variable
+    (HOME_VAR_RE) is read, as the home folder, when nothing after it is filled in too; None
+    otherwise. It is a reading for the rules that only deny: a line can set HOME elsewhere."""
+    if dyn:
+        m = HOME_VAR_RE.match(text)
+        rest = text[m.end():] if m else None
+        if rest is None or any(c in rest for c in '$%`'):
+            return None
+        return home_folder(home) + rest
+    if text == '~' or text[:2] in ('~/', '~\\'):
+        return home_folder(home) + text[1:]
+    return text
+
+
+def resolve_path(p, cwd, shell=None, home=None):
     """`p` (a word's text) as an absolute normalised path, or None when the text cannot tell (a
     drive-relative C:x, ~user, a rooted \\x with no cwd to take the drive from). With `shell` PS,
     `FileSystem::<abs>` is <abs> and any other provider or a drive not named by one ASCII letter
-    is None (ps_unplaceable); bash and cmd text is read as it always was."""
+    is None (ps_unplaceable); bash and cmd text is read as it always was. `~` is `home`
+    (home_folder)."""
     if not p:
         return None
     if shell == PS:
@@ -866,7 +897,7 @@ def resolve_path(p, cwd, shell=None):
             return None
     if p.startswith('~'):
         if p == '~' or p[1:2] in ('/', '\\'):
-            p = os.path.expanduser('~') + p[1:]
+            p = home_folder(home) + p[1:]
         else:
             return None
     p = msys_to_win(p)
@@ -884,8 +915,10 @@ def resolve_path(p, cwd, shell=None):
     return paths.norm(os.path.join(cwd, p), fold=False)
 
 
-def cd_target(cmd, cwd):
-    """(is a cd, the directory after it): None when the text cannot tell."""
+def cd_target(cmd, cwd, home=None, home_vars=False):
+    """(is a cd, the directory after it): None when the text cannot tell. `~` is `home`
+    (home_folder); with `home_vars`, a target that starts with a home variable (home_text) is
+    read too."""
     if not cmd.words:
         return False, cwd
     verb = cmd.words[0].text.lower()
@@ -898,12 +931,16 @@ def cd_target(cmd, cwd):
         rest = rest[1:]
     elif rest and verb in ('cd', 'chdir') and rest[0].text.lower() == '/d':
         rest = rest[1:]
-    if len(rest) != 1 or rest[0].dyn:
+    if len(rest) != 1:
         return True, None
     p = rest[0].text
+    if rest[0].dyn:
+        p = home_text(p, home, dyn=True) if home_vars else None
+        if p is None:
+            return True, None
     if p in ('-', '+') or p.startswith('-') or any(ch in p for ch in '*?'):
         return True, None
-    return True, resolve_path(p, cwd, cmd.shell)
+    return True, resolve_path(p, cwd, cmd.shell, home)
 
 
 def ps_cd_unplaceable(cmd):
@@ -930,39 +967,45 @@ def _keyword_cd(c):
     return 0 < k < len(c.words) and c.words[k].text.lower() in CD_VERBS | CD_UNKNOWN
 
 
-def track(cmds, cwd, ps_drive=False):
+def track(cmds, cwd, ps_drive=False, home=None, cwd_home=None):
     """Each command's cwd, in order: a cd changes it for the commands after it. A bash ( ) group
     is a subshell: a cd inside it holds to its end, then the directory before it comes back; a
     bash { } group shares the directory. A cd the text cannot tell, one inside a PowerShell or
     cmd group, one behind a keyword, one in a pipeline, in the background or beside || makes the
     directory unknown (None) from there on. Substitutions run in the directory of the command
     that holds them. A command whose cwd is None after a PowerShell cd into a place
-    ps_unplaceable names (cd Main:\\) gets cwd_ps_drive, until a cd reaches a known place."""
+    ps_unplaceable names (cd Main:\\) gets cwd_ps_drive, until a cd reaches a known place. `~` is
+    `home` (home_folder). cwd_home is the directory tracked from `cwd_home` (default `cwd`) with
+    a cd to a home variable read too (cd_target home_vars): only for the rules that deny, since a
+    line can set the variable to another folder."""
     here, drive = cwd, ps_drive
-    open_ = []                  # (group, the directory before it, its drive flag)
+    here_h = cwd if cwd_home is None else cwd_home
+    open_ = []                  # (group, the directory before it, its drive flag, its cwd_home)
     for c in cmds:
         common = 0
         while common < len(open_) and common < len(c.groups) and open_[common][0] == c.groups[common]:
             common += 1
         while len(open_) > common:
-            g, before, before_drive = open_.pop()
+            g, before, before_drive, before_h = open_.pop()
             if g[1] == '(' and c.shell == BASH:
-                here, drive = before, before_drive
+                here, drive, here_h = before, before_drive, before_h
         for g in c.groups[common:]:
-            open_.append((g, here, drive))
-        c.cwd = here
+            open_.append((g, here, drive, here_h))
+        c.cwd, c.cwd_home = here, here_h
         c.cwd_ps_drive = drive and here is None
-        changed, to = cd_target(c, here)
+        changed, to = cd_target(c, here, home)
+        to_h = cd_target(c, here_h, home, home_vars=True)[1]
         if _keyword_cd(c):
-            changed, to = True, None
+            changed, to, to_h = True, None, None
         if changed:
             unsure = (c.piped_in or c.piped_out or '||' in (c.prev_op, c.next_op) or (c.next_op == '&' and c.shell == BASH)
                       or (c.groups and c.shell != BASH))
             here = None if unsure else to
+            here_h = None if unsure else to_h
             drive = ps_cd_unplaceable(c) or (drive and here is None)
     for c in cmds:
         if c.subs:
-            track(c.subs, c.cwd, c.cwd_ps_drive)
+            track(c.subs, c.cwd, c.cwd_ps_drive, home, c.cwd_home)
     return cmds
 
 
@@ -975,16 +1018,17 @@ def flatten(cmds):
     return out
 
 
-def parse(text, shell, cwd, depth=0, parsed=None):
-    """Parsed for `text` read as `shell` (BASH, PS or CMD), starting in `cwd`. With `parsed`, the
-    commands are added to it (a nested shell's text)."""
-    parsed = parsed if parsed is not None else Parsed(text, shell, cwd)
+def parse(text, shell, cwd, depth=0, parsed=None, home=None, cwd_home=None):
+    """Parsed for `text` read as `shell` (BASH, PS or CMD), starting in `cwd` (and `cwd_home`,
+    default `cwd`: track). `~` is `home` (home_folder). With `parsed`, the commands are added to
+    it (a nested shell's text) and its home is the one read."""
+    parsed = parsed if parsed is not None else Parsed(text, shell, cwd, home)
     if depth > MAX_DEPTH:
         parsed.flag('shells nested deeper than %d' % MAX_DEPTH)
         return parsed, []
     sc = _Scan(text, shell, depth, parsed)
     top = sc.commands()
-    track(top, cwd)
+    track(top, cwd, home=parsed.home, cwd_home=cwd_home)
     cmds = flatten(top)
     parsed.commands.extend(cmds)
     return parsed, cmds

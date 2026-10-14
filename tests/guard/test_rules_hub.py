@@ -172,6 +172,117 @@ class SecretShell(Hub):
         self.allowed(lambda sub: bash('python "%s" validate --store="%s"' % (self.hub, st), self.w.wt, sub))
 
 
+class HomeAndWildcards(Hub):
+    """The home folder however a line spells it (`~`, $HOME, ${HOME}, $env:USERPROFILE,
+    $env:HOME, %USERPROFILE%), in a word or in the directory a cd moves to, read as the guard's
+    home (the World's, never the real one); and wildcard paths that can name the folders."""
+
+    def rows_denied(self, rows):
+        for shell, line in rows:
+            with self.subTest(line=line):
+                self.denied(lambda sub, shell=shell, line=line: shell(line, self.w.wt, sub), 'hub-secrets')
+
+    def rows_allowed(self, rows):
+        for shell, line in rows:
+            with self.subTest(line=line):
+                self.allowed(lambda sub, shell=shell, line=line: shell(line, self.w.wt, sub))
+
+    def test_home_variables_with_wildcards_are_denied(self):
+        self.rows_denied((
+            (bash, 'cat $HOME/.pm-kit/h*/*'),
+            (bash, 'cat ${HOME}/.pm-kit/h*/*'),
+            (bash, 'cat "$HOME"/.pm-kit/h*/owner.t*'),
+            (bash, 'cat $USERPROFILE/.pm-kit/h?b/a*'),
+            (ps, 'gc $HOME\\.pm-kit\\*\\*.token'),
+            (ps, 'gc "$env:USERPROFILE\\.pm-kit\\h?b\\owner.t*"'),
+            (ps, 'gc $env:HOME\\.pm-kit\\h*\\a*'),
+            (ps, 'gc ${env:USERPROFILE}\\.pm-kit\\h*\\o*'),
+            (ps, 'Get-Content -Path:$HOME\\.pm-kit\\h*\\o*'),
+            (ps, 'cmd /c "type %USERPROFILE%\\.pm-kit\\h*\\o*"'),
+        ))
+
+    def test_a_cd_into_the_home_folder_is_followed(self):
+        self.rows_denied((
+            (bash, 'cd ~/.pm-kit && cat h*/o*'),
+            (bash, 'cd ~ && cat .pm-kit/h*/*'),
+            (bash, 'cd $HOME/.pm-kit && cat h*/o*'),
+            (bash, 'cd "$HOME/.pm-kit/hub" && cat *'),
+            (bash, 'cd ~/.pm-kit && bash -c "cat h*/o*"'),
+            (ps, 'Set-Location ~/.pm-kit; gc h*/o*'),
+            (ps, 'sl ~\\.pm-kit; gc h*\\o*'),
+            (ps, 'Push-Location ~\\.pm-kit; gc h*\\*'),
+            (ps, 'Set-Location $env:USERPROFILE\\.pm-kit; gc h*\\o*'),
+            (ps, 'cd $HOME; gc .pm-kit\\h*\\*'),
+            (ps, 'cmd /c "cd /d %USERPROFILE%\\.pm-kit && type h*\\o*"'),
+        ))
+
+    def test_a_hub_call_with_a_home_variable(self):
+        self.rows_denied((
+            (bash, 'python "%s" questions add --title t --context-file "$HOME/.pm-kit/h*/owner.t*"' % self.hub),
+            (bash, 'python "%s" questions add --title t --context-file $HOME/.pm-kit/h*/owner.t*' % self.hub),
+            (bash, 'python "%s" questions add --title t --context-file=$HOME/.pm-kit/h*/owner.t*' % self.hub),
+            (ps, 'python "%s" questions add --title t --context-file $HOME\\.pm-kit\\h*\\owner.t*' % self.hub),
+        ))
+
+    def test_the_rest_of_the_home_folder_passes(self):
+        self.rows_allowed((
+            (bash, 'cat $HOME/.gitconfig'),
+            (bash, 'ls $HOME/.pm-kit'),
+            (bash, 'cat $HOME/.pm-kit/*.json'),
+            (bash, 'cat $HOME/$x/h*'),
+            (bash, 'cd ~ && ls'),
+            (bash, 'cd $HOME && cat .gitconfig'),
+            (ps, 'gc $env:USERPROFILE\\.pm-kit\\hub.json'),
+            (ps, 'Set-Location $env:USERPROFILE; gc .gitconfig'),
+        ))
+
+    def test_absolute_wildcards_that_reach_the_folders(self):
+        home, data = W.fwd(self.w.home), W.fwd(self.w.data)
+        self.rows_denied((
+            (bash, 'cat %s/.pm-kit/h?b/*' % home),
+            (bash, 'ls %s/.pm-kit/*' % home),
+            (bash, 'ls %s/**' % home),
+            (bash, 'cat %s/*/questions/*.json' % data),
+            (bash, 'ls %s/h*' % data),
+            (ps, 'gc %s\\.pm-kit\\[h]ub\\o*' % self.w.home),
+        ))
+        self.rows_allowed((
+            (bash, 'ls %s/.pm-kit/*.json' % home),
+            (bash, 'cat %s/*.json' % data),
+        ))
+
+    def test_option_values_are_read_as_paths(self):
+        # `--opt=value` and PowerShell's `-Opt:value`: the value is the path (hub_path_texts)
+        sec, st = W.fwd(self.secrets), W.fwd(self.store)
+        self.rows_denied((
+            (ps, 'Get-Content -Path:%s\\questions\\Q-1.json' % self.store),
+            (ps, 'Get-Content -LiteralPath:%s\\o*' % self.secrets),
+            (bash, 'some-tool --input=%s/questions/Q-1.json' % st),
+            (bash, 'python "%s" questions add --title t --context-file=%s/a*' % (self.hub, sec)),
+        ))
+        self.rows_allowed((
+            (bash, 'some-tool --input=%s/.kit.json' % W.fwd(self.w.data)),
+            (ps, 'Get-Content -Path:README.md'),
+        ))
+
+    def test_an_edit_path_in_the_folder_with_wildcard_characters(self):
+        # an edit's path is literal (no wildcard runs), so it is judged by where it is: a name
+        # with wildcard characters in the token folder is in it
+        write = lambda path: (lambda sub: event('Write', {'file_path': path, 'content': 'x'}, self.w.wt, sub))
+        self.denied(write(os.path.join(self.secrets, 'owner.t*')), 'hub-secrets')
+        self.denied(write(os.path.join(self.store, '[q]uestions', 'Q-1.json')), 'hub-secrets')
+        # a folder literally named h* is not the token folder (other rules may still hold the write)
+        d = decide(write(os.path.join(self.w.home, '.pm-kit', 'h*', 'owner.token'))(True), self.ctx(OWNER))
+        self.assertNotEqual(d and d.rule, 'hub-secrets', d and d.reason)
+
+    def test_a_config_the_strict_read_refuses_still_names_the_store(self):
+        # hub_config: a config with a fault elsewhere still gives its hub.store
+        store = os.path.join(self.w.temp, 'hubstore')
+        self.w.user_config({'pm_data': {'path': self.w.data}, 'hub': {'store': store}, 'no_such_key': 1})
+        self.assertTrue(self.ctx(COORDINATOR).user().get('error'), 'the strict read took the config')
+        self.denied(lambda sub: bash('cat "%s/todos/T-1.json"' % W.fwd(store), self.w.wt, sub), 'hub-secrets')
+
+
 # ---------------------------------------------------------------- hub-owner-verb
 
 class OwnerVerbs(Hub):
