@@ -1,6 +1,6 @@
 """kitlib.lock.giveback: a held run gives back cpu slots while its command runs on, and a queued
 run takes them at once; the run's job is narrowed off them first; what cannot be given back is
-refused and changes nothing; the record is written before the queue."""
+refused and changes nothing; the record is written before the queue, and the ack after it."""
 import copy
 import ctypes
 import importlib
@@ -249,8 +249,7 @@ class Narrowing(StoreCase):
         Store = type(self.store)
         with mock.patch.object(Store, "write", write):
             with self.assertRaises(OSError):
-                gb().shrink(self.store, s.run, [usable[0]],
-                            {"given_back": {"id": "y", "cpu": [usable[1]]}})
+                gb().shrink(self.store, s.run, [usable[0]], {}, {"id": "y", "cpu": [usable[1]]})
         self.assertEqual(failed, [rel])
         self.assertEqual(s.run.rec, mem)                    # in memory, exactly as it was
         self.assertEqual(self.store.read(rel), disk)        # on disk too
@@ -340,6 +339,119 @@ class Narrowing(StoreCase):
         with mock.patch.object(gb().qm, "save", side_effect=save):
             self.ask(s, p, [usable[1]])
         self.assertEqual(seen, [[usable[0]]])
+
+    def queue_cores(self, s):
+        return sorted([x for x in self.store.read("queue.json")["entries"] if x["id"] == s.id][0]["cores"])
+
+    def test_the_ack_is_written_after_the_queue(self):
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        seen = []
+        real = gb().qm.save
+
+        def save(store, q):
+            seen.append(self.store.read("active/%s.json" % s.id))
+            return real(store, q)
+        with mock.patch.object(gb().qm, "save", side_effect=save):
+            rid, rec = self.ask(s, p, [usable[1]])
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["cores"], [usable[0]])     # the booking first...
+        self.assertNotIn("given_back", seen[0])             # ...but no ack before the queue says so
+        self.assertEqual(rec["given_back"]["id"], rid)
+
+    def test_a_polling_asker_never_hears_given_while_the_queue_write_fails(self):
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        both = lay.cores_mask(self.layout(), usable)
+        offer = gb().Offer(gb().request_path(self.store, s.id))
+        res = []
+        t = threading.Thread(target=lambda: res.append(offer.give([usable[1]], wait_s=20)))
+
+        def save(store, q):
+            # A queue write that waits on a held queue.json, then fails, while the asker polls
+            # (Offer.give looks every POLL_S): it ends early only if the asker has answered.
+            end = time.monotonic() + 1.0
+            while t.is_alive() and time.monotonic() < end:
+                time.sleep(0.02)
+            raise OSError("queue.json is held")
+        with mock.patch.object(gb().qm, "save", side_effect=save), \
+                mock.patch.object(s.job, "pids", return_value=[os.getpid()]):
+            t.start()
+            end = time.monotonic() + 30
+            while t.is_alive() and time.monotonic() < end:
+                s.serve_give_back()
+                time.sleep(0.02)
+            t.join(5)
+        self.assertEqual(len(res), 1, "Offer.give did not answer")
+        self.assertEqual(res[0][0], "refused", res[0])
+        self.assertIn("could not be written", res[0][1])
+        rec = self.store.read("active/%s.json" % s.id)
+        self.assertNotIn("given_back", rec)
+        self.assertEqual(sorted(rec["cores"]), usable)
+        self.assertEqual(self.queue_cores(s), usable)
+        self.assertEqual(s.job.mask, both)
+        self.assertEqual(affinity(p), both)
+
+    def test_a_lost_ack_undoes_nothing_is_written_next_poll_and_a_re_ask_is_refused(self):
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        keep = lay.cores_mask(self.layout(), [usable[0]])
+        rel = "active/%s.json" % s.id
+        real, failed = type(self.store).write, []
+
+        def write(store, r, data, *a, **kw):
+            # The first record write that carries the ack fails; every other write goes through.
+            if r == rel and "given_back" in data and not failed:
+                failed.append(r)
+                raise OSError("disk full")
+            return real(store, r, data, *a, **kw)
+        with mock.patch.object(type(self.store), "write", write):
+            rid, rec = self.ask(s, p, [usable[1]])
+        self.assertEqual(failed, [rel])
+        # Given back all the same: the queue freed the slot, so nothing is widened again.
+        self.assertNotIn("give_back_refused", rec)
+        self.assertNotIn("given_back", rec)
+        self.assertEqual(rec["cores"], [usable[0]])
+        self.assertEqual(self.queue_cores(s), [usable[0]])
+        self.assertEqual((s.job.mask, affinity(p), s.cores), (keep, keep, [usable[0]]))
+        # The next poll writes the ack.
+        self.assertIsNone(s.serve_give_back())
+        self.assertEqual(self.store.read(rel)["given_back"]["id"], rid)
+        # An asker that timed out and asks again for the same slot is refused; nothing changes.
+        rid2, rec2 = self.ask(s, p, [usable[1]])
+        self.assertEqual(rec2["give_back_refused"]["id"], rid2)
+        self.assertIn("not this run's", rec2["give_back_refused"]["why"])
+        self.assertEqual((rec2["cores"], rec2["given_back"]["id"]), ([usable[0]], rid))
+        self.assertEqual(self.queue_cores(s), [usable[0]])
+        self.assertEqual((s.job.mask, affinity(p)), (keep, keep))
+
+    def test_a_refused_repin_leaves_the_job_narrowed_and_a_later_ask_refused(self):
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        L = self.layout()
+        both, keep = lay.cores_mask(L, usable), lay.cores_mask(L, [usable[0]])
+        real = s.job.repin
+
+        def repin(mask):
+            # Narrowing goes through (Job.narrow repins); widening back to both is refused.
+            return False if mask == both else real(mask)
+        with mock.patch.object(s.job, "repin", side_effect=repin), \
+                mock.patch("kitlib.lock.queue.save", side_effect=OSError("disk full")):
+            rid, rec = self.ask(s, p, [usable[1]])
+        self.assertEqual(rec["give_back_refused"]["id"], rid)
+        self.assertIn("stays narrowed to", rec["give_back_refused"]["why"])
+        self.assertNotIn("given_back", rec)
+        self.assertEqual(sorted(rec["cores"]), usable)      # the booking keeps both
+        self.assertEqual(self.queue_cores(s), usable)
+        self.assertEqual(sorted(s.cores), usable)
+        self.assertEqual((s.job.mask, affinity(p)), (keep, keep))
+        # The pin cannot widen, so a request that keeps the other slot cannot narrow onto it.
+        rid2, rec2 = self.ask(s, p, [usable[0]])
+        self.assertEqual(rec2["give_back_refused"]["id"], rid2)
+        self.assertIn("could not be narrowed", rec2["give_back_refused"]["why"])
+        self.assertEqual(sorted(rec2["cores"]), usable)
+        self.assertEqual(self.queue_cores(s), usable)
+        self.assertEqual((s.job.mask, affinity(p)), (keep, keep))
 
 
 class Helpers(unittest.TestCase):

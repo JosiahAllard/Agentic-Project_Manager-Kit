@@ -25,19 +25,28 @@ The command cannot narrow its own pin (the run's wrapper holds the job), so it a
           back before anything says they are free. A process outside the job is not moved: a
           container that `docker exec` or `docker run` started runs in the container's VM with
           the cpuset it was given (MACHINE_LOCK_CPUSET at its start), and keeps it;
-       b. under the queue mutex, the run record first (cores, slots, has.cpu, the pin fields,
-          given_back), then the queue entry's cores (shrink); the queue write bumps the store
-          revision, so waiters see it on their next look (settings.queue_poll_s);
+       b. under the queue mutex (shrink), the run record first (cores, slots, has.cpu, the pin
+          fields), then the queue entry's cores, then the ack: the record's given_back. The
+          queue write bumps the store revision, so waiters see it on their next look
+          (settings.queue_poll_s). The ack comes last so an asker never hears "given" while
+          the queue still holds the slots;
        c. the commands it starts later get the narrower MACHINE_LOCK_CPUSET/CPUS/CPUMASK.
-     A failure at a or b puts back what changed and refuses: the record and the queue entry
-     keep every slot booked, and the job's pin is widened back to them (Job.repin), which moves
-     its processes back onto them too. If Windows refuses that widening, the refusal says the
-     job stays narrowed.
+     A failure at a, or at b before the queue write lands, puts back what changed and refuses:
+     the record and the queue entry keep every slot booked, and the job's pin is widened back
+     to them (Job.repin), which moves its processes back onto them too. If Windows refuses that
+     widening, the refusal says the job stays narrowed to the slots kept, and a later request
+     that keeps any other slot is refused (Job.narrow only narrows).
+     A failed ack write, after the queue write landed, undoes nothing: the slots are given back.
+     The wrapper keeps the ack in memory and writes it again on its next poll (Slot.ack_due), so
+     the asker hears "given" late, or "timeout" if its wait_s ends first; held() then shows the
+     narrower cores. A re-ask for the same slots is refused ("not this run's") and changes
+     nothing. A wrapper that dies between the queue write and the ack takes the asker with it
+     (the run's job is kill-on-close), so no one waits on an ack that never comes.
 
 Fail safe. The queue entry is the allocation every planner reads (this kit's and the installed
-machine_lock.py's), and it is written last: a wrapper that dies between the record and the queue
-leaves the slots held in the queue (never handed to a waiter twice), and a dead wrapper's entry is
-dropped by the next look anyway. The installed tool reads a shrunk record and entry as it reads any
+machine_lock.py's), and it is written after the record: a wrapper that dies between the record and
+the queue leaves the slots held in the queue (never handed to a waiter twice), and a dead wrapper's
+entry is dropped by the next look anyway. The installed tool reads a shrunk record and entry as it reads any
 (cores, slots, has); the request file is not a .json, so neither tool reads it as a run record.
 """
 import copy
@@ -102,18 +111,24 @@ def check(req, cores, nested, own_cpu, pin, job_pids, alive):
     return None
 
 
-def shrink(store, run, keep, done):
-    """Writes the narrower booking under the queue mutex: run record first (cores, slots,
-    has.cpu, and `done`'s fields: the ack and the pin fields), then the queue entry's cores.
-    Raises OSError (the mutex, or either write) after putting run.rec back exactly as it was
-    (Run.save changes run.rec before it writes, so a failed record write would otherwise leave
-    the narrower booking and the ack in memory for the next save to persist)."""
+def shrink(store, run, keep, fields, ack):
+    """Writes the narrower booking under the queue mutex, in three writes: the run record
+    (cores, slots, has.cpu and `fields`, the pin fields), then the queue entry's cores, then the
+    record's `given_back` = ack. The ack is written only once the queue says it is true.
+
+    Before the queue write lands, a failure raises OSError (the mutex, or either write) after
+    putting run.rec back exactly as it was (Run.save changes run.rec before it writes, so a failed
+    record write would otherwise leave the narrower booking in memory for the next save to
+    persist). Once the queue write has landed the slots are given back, whatever follows: a
+    failed ack write rolls nothing back (the job widened onto slots the queue has freed would be
+    booked twice); the ack stays in run.rec for the next save, and shrink returns False. True:
+    the ack is on disk."""
     before = copy.deepcopy(run.rec)
     slots = dict(run.rec.get("slots") or {}, cpu=list(keep))
     has = dict(run.rec.get("has") or {}, cpu=len(keep))
     with store.lock("queue", store.settings.queue_lock_s):
         try:
-            run.save(cores=list(keep), slots=slots, has=has, **done)
+            run.save(cores=list(keep), slots=slots, has=has, **fields)
             q = qm.load(store)
             e = qm.entry_of(q, run.id)
             if e is not None:
@@ -131,6 +146,12 @@ def shrink(store, run, keep, done):
             except OSError:
                 pass
             raise
+        # Committed: the queue entry no longer holds the slots given back.
+        try:
+            run.save(given_back=ack)
+        except OSError:
+            return False
+        return True
 
 
 # ------------------------------------------------------------------ the command's side
