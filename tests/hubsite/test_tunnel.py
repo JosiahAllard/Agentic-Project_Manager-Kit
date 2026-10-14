@@ -273,6 +273,145 @@ class TunnelTokenTest(TunnelCase):
         self.assertNoSecret(self.good)
 
 
+class TunnelHostTest(TunnelCase):
+    """What the tunnel listener does with the Host header the tunnel program hands on. It has no
+    host rule (reads pass under any name), but a write's Origin must name that Host. The tunnel
+    program keeps the visitor's Host unless its route sets an HTTP Host header; these tests pin
+    what happens when one rewrites it to the loopback address the route points at."""
+
+    def setUp(self):
+        TunnelCase.setUp(self)
+        self.build()
+        self.good = ak.token(ak.KEY_A)
+        self.rewritten = '127.0.0.1:%d' % self.tport
+
+    def test_reads_pass_whatever_the_host(self):
+        for host in (PUBLIC, self.rewritten, 'localhost', 'another.example.invalid'):
+            with self.subTest(host=host):
+                r = self.ask('GET', HEALTH, token=self.good, host=host)
+                self.assertEqual((r.status, r.json()['tunnel']), (200, 'on'))
+                r = self.ask('GET', '/', token=self.good, host=host)
+                self.assertEqual((r.status, r.body), (200, PAGE))
+                r = self.ask('GET', TODOS, token=self.good, host=host)
+                self.assertEqual(r.status, 200, r.body)
+        # and with no Host at all the token still decides: a read is served
+        r = self.ask('GET', HEALTH, token=self.good, host=False)
+        self.assertEqual(r.status, 200, r.body)
+        # it is the token that lets a read in, not the name: without it every one is refused
+        for host in (PUBLIC, self.rewritten):
+            self.refused('GET', HEALTH, host=host)
+        self.assertEqual(self.refusals(), [self.tunnel_line(tunnel.NO_TOKEN)])
+
+    def test_a_write_whose_host_was_rewritten_to_loopback_is_refused_by_the_origin_rule(self):
+        before = self.revision()
+        # the phone's browser sends the Origin of the public name; the Host it arrives with is
+        # the address of the route's service, so the two differ
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'never written'},
+                     host=self.rewritten, origin='https://' + PUBLIC)
+        self.assertEqual(r.status, 403, r.body)
+        self.assertEqual(r.json()['error']['field'], 'origin')
+        self.assertEqual(self.revision(), before)
+        self.assertEqual(self.hub.store.docs('todos'), {})
+        # the token was accepted: the refusal is the write rule's, not the gate's
+        self.assertEqual(self.refusals(), [])
+        self.assertIn(('access', '127.0.0.1 POST %s 403 owner' % TODOS), self.lines)
+        # the same write with the public name kept as Host is served
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'through the tunnel'})
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual([d['title'] for d in self.hub.store.docs('todos').values()],
+                         ['through the tunnel'])
+        self.assertNoSecret(self.good)
+
+    def test_a_write_refused_for_a_rewritten_host_is_logged_once_a_minute_with_both_hosts(self):
+        for _ in range(2):
+            r = self.ask('POST', TODOS, token=self.good, obj={'title': 'never written'},
+                         host=self.rewritten, origin='https://' + PUBLIC)
+            self.assertEqual((r.status, r.json()['error']['field']), (403, 'origin'))
+        said = [(level, text) for level, text in self.lines if level != 'access']
+        self.assertEqual(said, [('error', tunnel.HOST_LINE % (PUBLIC, self.rewritten))])
+        self.assertIn('HTTP Host Header', said[0][1])
+        # a write whose Origin names its Host, refused for its scheme, says nothing of hosts
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'x'}, origin='http://' + PUBLIC)
+        self.assertEqual(r.status, 403)
+        self.assertEqual(len([1 for level, _ in self.lines if level != 'access']), 1)
+        self.assertNoSecret(self.good)
+
+    def test_a_note_that_raises_leaves_the_refusal_standing_and_the_listener_serving(self):
+        called = []
+
+        def broken(origin_host, host):
+            called.append((origin_host, host))
+            raise RuntimeError('the note failed')
+        listener = self.hub.listeners[1]
+        self.assertIsNotNone(listener._on_origin)
+        listener._on_origin = broken
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'never written'},
+                     host=self.rewritten, origin='https://' + PUBLIC)
+        self.assertEqual((r.status, r.json()['error']['field']), (403, 'origin'))
+        self.assertEqual(called, [(PUBLIC, self.rewritten)])
+        self.assertEqual(self.hub.store.docs('todos'), {})
+        self.assertEqual([t for level, t in self.lines if level == 'error'], [])
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'after'})
+        self.assertEqual(r.status, 200, r.body)
+
+    def test_a_write_with_no_token_never_reaches_the_host_line(self):
+        r = self.ask('POST', TODOS, obj={'title': 'never written'}, host=self.rewritten,
+                     origin='https://' + PUBLIC)
+        self.assertEqual(r.status, 403)
+        self.assertEqual(r.json(), REFUSAL)
+        self.assertEqual([text for level, text in self.lines if level == 'error'], [])
+
+
+class HostNoteTest(unittest.TestCase):
+    """tunnel.host_note: the throttled line of a write refused because its Origin's host is not
+    its Host."""
+
+    def setUp(self):
+        self.lines = []
+        self.t = 1000.0
+
+    def note(self, log=True):
+        return tunnel.host_note(self.log if log else None, clock=lambda: self.t)
+
+    def log(self, level, text):
+        self.lines.append((level, text))
+
+    def test_one_line_a_minute_then_the_count_of_the_rest(self):
+        note = self.note()
+        note(PUBLIC, '127.0.0.1:8791')
+        self.t += 10
+        note(PUBLIC, '127.0.0.1:8791')
+        note('another.example.invalid', '127.0.0.1:8791')
+        self.assertEqual(self.lines, [('error', tunnel.HOST_LINE % (PUBLIC, '127.0.0.1:8791'))])
+        self.t += tunnel.SAY_EVERY_S
+        note(PUBLIC, 'localhost:8791')
+        self.assertEqual(self.lines[1:], [('error', tunnel.HOST_LINE % (PUBLIC, 'localhost:8791')
+                                           + tunnel.MORE % 2)])
+
+    def test_a_host_is_cut_short_and_holds_only_host_characters(self):
+        note = self.note()
+        note('evil.example.invalid\r\nforged line', 'a' * 500)
+        (level, text), = self.lines
+        self.assertNotIn('\n', text)
+        self.assertNotIn('\r', text)
+        self.assertNotIn(' line', text)
+        self.assertNotIn('a' * (tunnel.HOST_CHARS + 1), text)
+
+    def test_the_user_info_of_an_origin_netloc_never_reaches_the_log(self):
+        note = self.note()
+        note('someone:secret-word@x@' + PUBLIC, 'u@127.0.0.1:8791')
+        self.assertEqual(self.lines, [('error', tunnel.HOST_LINE % (PUBLIC, '127.0.0.1:8791'))])
+        self.assertNotIn('secret', self.lines[0][1])
+        self.assertNotIn('someone', self.lines[0][1])
+
+    def test_no_log_and_a_broken_log_raise_nothing(self):
+        self.note(log=False)(PUBLIC, '127.0.0.1:8791')
+
+        def broken(level, text):
+            raise OSError('the console is gone')
+        tunnel.host_note(broken, clock=lambda: self.t)(PUBLIC, '127.0.0.1:8791')
+
+
 class NoExceptionTest(TunnelCase):
     def setUp(self):
         TunnelCase.setUp(self)

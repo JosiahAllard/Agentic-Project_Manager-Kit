@@ -602,6 +602,122 @@ class SetupCase(CliCase):
         self.assertIn(bad, err)
 
 
+class SetupCheckCase(CliCase):
+    """`setup --check`: read-only. It names the Access state, probes the Access keys when the
+    settings can serve, and lists each plugin copy that would refuse the `hub` key."""
+    NEW = "SCHEMA = {'hub': 1, 'plugin': 1}\n"
+    OLD = "SCHEMA = {'plugin': 1}\n"
+
+    def setUp(self):
+        CliCase.setUp(self)
+        self.root = os.path.join(self.home, 'exports')
+
+    def export(self, name, text, current=False):
+        folder = os.path.join(self.root, name, 'kitlib', 'config')
+        os.makedirs(folder)
+        with open(os.path.join(folder, 'user.py'), 'w', encoding='utf-8') as f:
+            f.write(text)
+        if current:
+            os.makedirs(os.path.join(self.root, '.claude-plugin'), exist_ok=True)
+            with open(os.path.join(self.root, '.claude-plugin', 'marketplace.json'), 'w',
+                      encoding='utf-8') as f:
+                json.dump({'name': 'pm-kit', 'plugins': [{'name': 'pm-kit',
+                                                          'source': './' + name}]}, f)
+
+    def check(self, hub=None):
+        obj = {'plugin': {'export_dir': self.root}}
+        if hub is not None:
+            obj['hub'] = hub
+        self.config(obj)
+        path = os.path.join(self.home, '.pm-kit', 'config.json')
+        with open(path, 'rb') as f:
+            before = f.read()
+        code, out, err = self.run_cli('setup', '--check')
+        with open(path, 'rb') as f:
+            self.assertEqual(f.read(), before, 'setup --check wrote the machine config')
+        self.assertFalse(os.path.exists(self.tokens), 'setup --check made the token files')
+        return code, out, err
+
+    def test_every_copy_in_use_knows_hub_so_it_is_ready_and_nothing_is_written(self):
+        self.export('aaaaaaaaaaaa', self.NEW, current=True)
+        self.export('bbbbbbbbbbbb', self.OLD)
+        code, out, err = self.check()
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn('access: not set (hub.access)', out)
+        self.assertNotIn('access keys:', out)
+        self.assertIn('aaaaaaaaaaaa (current export): knows every key', out)
+        self.assertIn('bbbbbbbbbbbb (not in use): would refuse hub', out)
+        self.assertIn('READY: ', out)
+        self.assertNotIn('NOT READY', out)
+
+    def test_a_copy_in_use_that_would_refuse_hub_is_not_ready(self):
+        self.export('aaaaaaaaaaaa', self.OLD, current=True)
+        code, out, err = self.check()
+        self.assertEqual((code, err), (1, ''))
+        self.assertIn('aaaaaaaaaaaa (current export): would refuse hub', out)
+        self.assertIn('NOT READY: ', out)
+
+    def test_access_settings_that_can_serve_are_probed_once(self):
+        self.export('aaaaaaaaaaaa', self.NEW, current=True)
+        hub = {'access': {'team': 'example-team', 'aud': 'aud-tag',
+                          'emails': ['owner@example.invalid']}}
+        calls = []
+
+        def probe(team):
+            calls.append(team)
+            return True, 'access keys: 2 fetched from example-team.cloudflareaccess.com'
+        with mock.patch.object(HUB.access, 'probe', probe):
+            code, out, err = self.check(hub)
+        self.assertEqual((code, err, calls), (0, '', ['example-team']))
+        self.assertIn('access: set', out)
+        self.assertIn('access keys: 2 fetched from example-team.cloudflareaccess.com', out)
+        with mock.patch.object(HUB.access, 'probe',
+                               lambda team: (False, 'access keys: not fetched from x: keys-fetch')):
+            code, out, err = self.check(hub)
+        self.assertEqual(code, 1)
+        self.assertIn('access keys: not fetched from x: keys-fetch', out)
+        self.assertIn('NOT READY: ', out)
+
+    def test_access_settings_that_cannot_serve_are_named_and_never_probed(self):
+        self.export('aaaaaaaaaaaa', self.NEW, current=True)
+        hub = {'access': {'team': 'example-team', 'aud': 'aud-tag', 'emails': []}}
+        with mock.patch.object(HUB.access, 'probe', side_effect=AssertionError('probed')):
+            code, out, err = self.check(hub)
+        self.assertEqual(code, 1)
+        self.assertIn('access: cannot serve: %s' % tunnel.NO_EMAILS, out)
+        self.assertNotIn('access keys:', out)
+
+    def test_kit_copies_that_cannot_be_looked_at_are_not_ready(self):
+        from kitlib import pluginsource
+        with mock.patch.object(pluginsource, 'load',
+                               side_effect=pluginsource.RefreshError('no export root set')):
+            code, out, err = self.check()
+        self.assertEqual((code, err), (1, ''))
+        self.assertIn('kit copies: cannot look: no export root set', out)
+        self.assertNotIn('kit copies, checked against', out)
+        self.assertIn('NOT READY: the kit copies could not be looked at', out)
+
+    def test_an_account_install_whose_folder_is_gone_says_to_refresh_that_account(self):
+        from kitlib import pluginsource
+        self.export('aaaaaaaaaaaa', self.NEW, current=True)
+        gone = os.path.join(self.home, 'acct', 'plugins', 'cache', 'pm-kit', 'pm-kit', '0.1')
+        acct = os.path.join(self.home, 'acct')
+        with mock.patch.object(pluginsource, 'installs', lambda: [(gone, acct)]):
+            code, out, err = self.check()
+        self.assertEqual((code, err), (1, ''))
+        self.assertIn('%s (installed in %s): cannot tell: the folder is missing: refresh that '
+                      'account (' % (gone, acct), out)
+        self.assertIn('plugin_refresh', out)
+        self.assertIn('NOT READY: ', out)
+
+    def test_check_takes_no_other_option(self):
+        for extra in (('--autostart',), ('--autostart', '--whatif'), ('--whatif',)):
+            code, out, err = self.run_cli('setup', '--check', *extra)
+            self.assertEqual(code, 2, extra)
+            self.assertIn('--check', err)
+        self.assertFalse(os.path.exists(self.tokens))
+
+
 class ClientCase(CliCase):
     def test_status_and_open_with_no_server_are_exit_3_with_the_start_command(self):
         self.assertEqual(self.run_cli('setup')[0], 0)
