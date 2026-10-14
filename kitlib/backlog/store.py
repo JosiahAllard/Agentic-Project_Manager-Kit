@@ -627,7 +627,8 @@ def _replace_file(full, data):
     move stays on one volume; named `<name>.<random>.put-back`, which no reader of the store takes
     for a record), then moved over it. A move Windows refuses (another process has `full` open) is
     retried for REPLACE_WAIT seconds. An OSError leaves `full` as it was, whole, and removes the
-    other file; one it cannot remove is named in the error raised."""
+    other file; one it cannot remove is named in the error raised. Any other exception (Ctrl+C
+    included) removes it too, and is raised as it was."""
     fd, tmp = tempfile.mkstemp(prefix=os.path.basename(full) + '.', suffix='.put-back',
                                dir=os.path.dirname(full))
     try:
@@ -642,14 +643,15 @@ def _replace_file(full, data):
                 if time.monotonic() >= deadline:
                     raise
             time.sleep(0.05)
-    except OSError as exc:
+    except BaseException as exc:
         try:
             os.remove(tmp)
         except FileNotFoundError:
             pass
         except OSError as gone:
-            raise OSError(exc.errno, '%s; and its temp file %s was left (%s)'
-                          % (exc.strerror or exc, tmp, gone)) from exc
+            if isinstance(exc, OSError):
+                raise OSError(exc.errno, '%s; and its temp file %s was left (%s)'
+                              % (exc.strerror or exc, tmp, gone)) from exc
         raise
 
 

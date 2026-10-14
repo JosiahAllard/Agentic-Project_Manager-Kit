@@ -1173,6 +1173,71 @@ class WriteWhole(unittest.TestCase):
         self.assertIn('cannot write %s/BAZ.md' % DIR, str(cm.exception))
         self.assertIn('could not be put back: %s/BAR.md' % DIR, str(cm.exception))
 
+    def publish_fails(self, writes):
+        """The Failure of publishing `writes` ({stem: text or None}) on a fresh snapshot."""
+        snap = self.backend.load(rmod.Rules())
+        with self.assertRaises(Failure) as cm:
+            self.backend.publish(snap, writes, 'w\n')
+        return str(cm.exception)
+
+    def test_a_delete_that_fails_leaves_the_record_and_names_it(self):
+        before = self.backend._read()
+        real = os.remove
+
+        def remove(path):
+            if os.path.basename(path) == 'BAR.md':
+                raise PermissionError(errno.EACCES, 'in use')
+            return real(path)
+        with mock.patch.object(smod.os, 'remove', remove):
+            msg = self.publish_fails({'BAR': None})
+        self.assertIn('cannot write %s/BAR.md (it is left as it was)' % DIR, msg)
+        self.assertEqual(self.backend._read(), before)
+
+    def test_a_folder_that_cannot_be_made_is_named(self):
+        real = os.makedirs
+
+        def makedirs(path, *a, **k):              # git's own folders (the fake git) still made
+            if os.path.normcase(path) == os.path.normcase(self.backend.dir):
+                raise PermissionError(errno.EACCES, 'denied')
+            return real(path, *a, **k)
+        with mock.patch.object(smod.os, 'makedirs', makedirs):
+            msg = self.publish_fails({'BAR': 'x\n'})
+        self.assertIn('cannot write %s' % self.backend.dir, msg)
+
+    def test_a_temp_file_that_cannot_be_made_leaves_the_record_whole(self):
+        before = self.backend._read()
+        with mock.patch.object(smod.tempfile, 'mkstemp', side_effect=OSError(errno.ENOSPC, 'full')):
+            msg = self.publish_fails({'BAR': 'x\n'})
+        self.assertIn('cannot write %s/BAR.md (it is left as it was)' % DIR, msg)
+        self.assertEqual(self.backend._read(), before)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_new_file_that_cannot_be_deleted_again_is_named(self):
+        """NEW is written, ZED's write fails, and removing NEW (it was not there before) fails:
+        NEW is named as not put back."""
+        real = os.remove
+
+        def remove(path):
+            if os.path.basename(path) == 'NEW.md':
+                raise PermissionError(errno.EACCES, 'in use')
+            return real(path)
+        with mock.patch.object(smod, '_replace_file', side_effect=self.fail_from_second()), \
+                mock.patch.object(smod.os, 'remove', remove):
+            msg = self.publish_fails({'NEW': 'new\n', 'ZED': 'zed\n'})
+        self.assertIn('cannot write %s/ZED.md' % DIR, msg)
+        self.assertIn('could not be put back: %s/NEW.md' % DIR, msg)
+        self.assertEqual(self.backend._read().get('NEW'), b'new\n')
+
+    def test_outside_the_pm_data_worktree_the_failure_names_no_catch_up(self):
+        before = self.backend._read()
+        with mock.patch.object(smod, '_replace_file',
+                               side_effect=OSError(errno.ENOSPC, 'full')):
+            with self.assertRaises(Failure) as cm:
+                self.backend._write_files({'BAR': 'x\n'}, before, [DIR + '/BAR.md'], None)
+        self.assertIn('cannot write %s/BAR.md' % DIR, str(cm.exception))
+        self.assertNotIn('not committed', str(cm.exception))
+        self.assertNotIn('catch-up', str(cm.exception))
+
     def fail_from_second(self):
         """_replace_file that works once (BAR's write) and then fails, leaving its target alone."""
         real, calls = smod._replace_file, [0]
@@ -1273,6 +1338,13 @@ class ReplaceFile(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 smod._replace_file(self.full, b'new\n')
         self.assertGreater(calls[0], 1)
+        self.assertEqual(self.content(), b'old\n')
+        self.assertEqual(self.others(), [])
+
+    def test_an_interrupt_before_the_move_leaves_no_temp_file(self):
+        with mock.patch.object(smod.os, 'replace', side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                smod._replace_file(self.full, b'new\n')
         self.assertEqual(self.content(), b'old\n')
         self.assertEqual(self.others(), [])
 
