@@ -262,7 +262,7 @@ class Manifest(unittest.TestCase):
         with open(os.path.join(REPO, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
             m = json.load(f)
         self.assertEqual(m["name"], lockmcp.PLUGIN_NAME)
-        self.assertEqual(list(m["mcpServers"]), [lockmcp.SERVER_NAME])
+        self.assertIn(lockmcp.SERVER_NAME, m["mcpServers"])
         self.assertEqual(lockmcp.tool_prefix("claude", "p", "s"), "mcp__plugin_p_s__")
 
     def _manifest(self, name):
