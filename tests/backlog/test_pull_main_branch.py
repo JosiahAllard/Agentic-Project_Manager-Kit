@@ -3,7 +3,10 @@ a landing closes only what the landed branch holds pulled, and the main branch n
 a record would stay pulled for ever. kitlib.backlog.pull_branch, end to end through Store.write on
 a ref store whose repository has `main` checked out (the main checkout)."""
 import unittest
+from unittest import mock
 
+import kitlib.config as kconfig
+from kitlib import pmdata
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import pull_branch
 from kitlib.backlog.errors import Refusal
@@ -63,6 +66,56 @@ class PullFromTheMainBranch(StoreCase):
         with self.assertRaises(Refusal) as cm:
             self.pull(ctx, 'FOO')
         self.assertNotIn('pulled_by: main', str(cm.exception))
+
+
+class PullFromThePmDataWorktree(StoreCase):
+    """In the PM data worktree the configured main is the data branch; the code repository's
+    main (pull_branch.code_mains: the main checkout's configuration) is refused there too."""
+
+    def setUp(self):
+        StoreCase.setUp(self)
+        tree = self.repo.git('rev-parse', 'main^{tree}')
+        root = self.repo.git('commit-tree', tree, '-m', 'PM data root')
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', root)
+        self.pm = self.repo.worktree('pm', branch='pmdata')
+
+    pull = PullFromTheMainBranch.pull
+    assert_refused_and_unwritten = PullFromTheMainBranch.assert_refused_and_unwritten
+
+    def ctx_as(self, branch, root=None):
+        return pmod.Context(self.store, root or self.pm, main_branch='pmdata', branch=branch,
+                            today=TODAY)
+
+    def test_as_the_code_repositorys_main_is_refused(self):
+        self.seed(priced('FOO'))
+        self.assertEqual(pull_branch.code_mains(self.pm), ('main',))
+        self.assert_refused_and_unwritten(self.ctx_as('main'))
+
+    def test_as_a_branch_pulls_from_the_pm_data_worktree(self):
+        self.seed(priced('FOO'))
+        self.pull(self.ctx_as(BRANCH), 'FOO')
+        self.assertEqual(self.get('FOO').get('pulled_by'), BRANCH)
+
+    def test_an_unreadable_main_checkout_configuration_refuses_main_and_master(self):
+        with mock.patch.object(kconfig, 'load', side_effect=kconfig.ConfigError('bad')):
+            self.assertEqual(pull_branch.code_mains(self.pm), pull_branch.FALLBACK_MAINS)
+            self.assertEqual(pull_branch.main_branches(self.ctx_as('master')),
+                             ['pmdata', 'main', 'master'])
+
+    def test_another_worktree_has_only_its_own_main(self):
+        wt = self.repo.worktree('other')
+        self.assertEqual(pull_branch.code_mains(wt), ())
+        self.assertEqual(pull_branch.code_mains(self.repo.root), ())
+
+
+class RefusalText(unittest.TestCase):
+
+    def test_one_name_or_several(self):
+        self.assertIsNone(pull_branch.refusal('FOO', BRANCH, 'main'))
+        self.assertIn('pulled_by: main', pull_branch.refusal('FOO', 'main', 'main'))
+        self.assertIn('pulled_by: master',
+                      pull_branch.refusal('FOO', 'master', ['pmdata', 'main', 'master']))
+        self.assertIsNone(pull_branch.refusal('FOO', BRANCH, ('pmdata', 'main')))
 
 
 if __name__ == '__main__':
