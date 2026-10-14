@@ -454,6 +454,33 @@ class Resubmit(SubmitCase):
                          (sha, os.getpid(), process.own_ctime()))
         self.assertTrue(pin.lease_live(data))
 
+    def test_by_default_the_landing_is_the_one_lockdetach_wrapper_pid_finds(self):
+        """No landing_of: submit asks kitlib.lock.detach.wrapper_pid for the carrier's landing,
+        leases the pinned export to that pid and records it (and its ctime) in the claim."""
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        sha = 'cd' * 20
+        pins = os.path.join(self.tmp, pin.PINS)
+        tool = os.path.join(pins, sha[:12], 'tools', 'land.py')
+        carrier, asked = self.dead_pid(), []
+
+        def wrapper_pid(pid):
+            asked.append(pid)
+            return os.getpid()              # the landing: this process, alive
+        with mock.patch.object(lockdetach, 'wrapper_pid', wrapper_pid):
+            out, _ = self.submit([BRANCH], [tip], detach=Detach(pid=carrier), tool=tool,
+                                 environ={pin.PINNED_ENV: sha}, landing_of=None)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(asked, [carrier])
+        rec = self.record(BRANCH)
+        self.assertEqual((rec['verdict'], rec['pid'], rec['ctime']),
+                         ('running', os.getpid(), process.own_ctime()))
+        leases = os.path.join(pins, pin.LEASES)
+        mine = '%s-%d.json' % (sha[:12], os.getpid())
+        self.assertIn(mine, os.listdir(leases))
+        data = pin.read_lease(os.path.join(leases, mine))
+        self.assertEqual((data['sha'], data['pid'], data['ctime']),
+                         (sha, os.getpid(), process.own_ctime()))
+
     def unreadable(self, branches, tips):
         out, _ = self.submit(branches, tips)
         self.assertEqual(out.code, G.OK, out.lines)
