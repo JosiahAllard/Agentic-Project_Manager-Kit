@@ -26,6 +26,7 @@ for a start that goes through neither.
 import ctypes
 import signal
 import subprocess
+import sys
 
 from . import bash, cpu, win32
 from .console import CONSOLE_CHOICE, has_console  # noqa: F401  (job.has_console stays a name)
@@ -104,49 +105,67 @@ def pid_list(h):
     return [int(p) for p in ids.ids[:ids.listed]]
 
 
-class _CtrlCHeld:
-    """Ctrl+C held off while Job.start makes a suspended child and puts it in the job. A
-    KeyboardInterrupt between CreateProcess and the assign would leave the child suspended in no
-    job, never resumed or ended, so meanwhile SIGINT runs a handler that only counts.
-    kitlib.lock.run.settle masks SIGINT the same way (on the main thread, put back in a finally),
-    but with SIG_IGN; here the Ctrl+C is late, never lost. deliver() runs the handler it replaced
-    once per Ctrl+C counted so far, still held, so one that raises (Python's default raises
-    KeyboardInterrupt) raises where the caller can still end the child. close() puts that handler
-    back and re-raises with signal.raise_signal any Ctrl+C counted since: one that came while a
-    failed start ended its child, or one SIG_DFL must act on after the handler is back. Nothing
-    is held off the main thread (signal.signal raises ValueError there, and Ctrl+C raises only on
-    the main thread), or under a handler not set from Python (getsignal None: it could not be put
-    back)."""
+HELD_SIGNALS = tuple(s for s in (signal.SIGINT, getattr(signal, "SIGBREAK", None))
+                     if s is not None)
 
-    def __init__(self):
-        self.before, self.count = None, 0
-        try:
-            before = signal.getsignal(signal.SIGINT)
-            if before is not None:
-                signal.signal(signal.SIGINT, self._count)
-                self.before = before
-        except ValueError:
-            pass
 
-    def _count(self, signum, frame):
-        self.count += 1
+class _HeldDefault(KeyboardInterrupt):
+    """A held signal whose handler was SIG_DFL: Job.start ends the child, then _Held.close puts
+    SIG_DFL back and raises the signal, which ends this process as it would have at once."""
+
+
+class _Held:
+    """Ctrl+C and Ctrl+Break held off while Job.start makes a suspended child and puts it in the
+    job. A KeyboardInterrupt between CreateProcess and the assign would leave the child suspended
+    in no job, never resumed or ended; so would SIGBREAK under SIG_DFL (Python's own default for
+    it: Ctrl+Break, or the console closing, ends the process there and then). Meanwhile each held
+    signal runs a handler that only queues it. kitlib.lock.run.settle masks SIGINT the same way
+    (on the main thread, put back in a finally), but with SIG_IGN; here a signal is late, never
+    lost.
+
+    deliver() hands each signal queued so far to the handler it replaced, still held, with the
+    caller's frame: one that raises (Python's SIGINT default raises KeyboardInterrupt) raises
+    where Job.start still ends the child; SIG_IGN drops it; SIG_DFL raises _HeldDefault, so the
+    child is ended before close() lets the default act. close() puts every handler back, then
+    raises again with signal.raise_signal each signal still queued: one that came after the last
+    deliver(), or while a failed start ended its child. Nothing is held off the main thread
+    (signal.signal raises ValueError there, and a signal's handler runs only on the main
+    thread), and a signal whose handler was not set from Python (getsignal None: it could not be
+    put back) is not held."""
+
+    def __init__(self, signals=HELD_SIGNALS):
+        self.before, self.queue = {}, []
+        for s in signals:
+            try:
+                before = signal.getsignal(s)
+                if before is None:
+                    continue
+                signal.signal(s, self._note)
+            except ValueError:                  # not the main thread
+                return
+            self.before[s] = before
+
+    def _note(self, signum, frame):
+        self.queue.append(signum)
 
     def deliver(self):
-        if self.before is signal.SIG_IGN:
-            self.count = 0
-        elif callable(self.before):
-            while self.count:
-                self.count -= 1
-                self.before(signal.SIGINT, None)
+        frame = sys._getframe(1)
+        while self.queue:
+            s = self.queue[0]
+            before = self.before[s]
+            if before is signal.SIG_DFL:
+                raise _HeldDefault("signal %d held while a child started" % s)
+            self.queue.pop(0)
+            if callable(before):
+                before(s, frame)
 
     def close(self):
-        if self.before is None:
-            return
-        before, self.before = self.before, None
-        signal.signal(signal.SIGINT, before)
-        while self.count:
-            self.count -= 1
-            signal.raise_signal(signal.SIGINT)
+        before, self.before = self.before, {}
+        for s, handler in before.items():
+            signal.signal(s, handler)
+        queue, self.queue = self.queue, []
+        for s in queue:
+            signal.raise_signal(s)
 
 
 class JobError(OSError):
@@ -255,12 +274,19 @@ class Job:
         say). Raises OSError when the command cannot start, and JobError (the child ended) when it
         cannot be put in the job or resumed. A bare leading bash runs Git Bash, never WSL's
         (kitlib.proc.bash; BareBashError, an OSError, when there is none). `creationflags` go
-        through no_window_flags: from a parent with no console, no console window. A Ctrl+C from
-        making the child to its resume is held (_CtrlCHeld) and handed on once the child is in
-        the job; when it raises, the child is ended and start raises it."""
+        through no_window_flags: from a parent with no console, no console window.
+
+        Ctrl+C and Ctrl+Break are held from making the child to its resume (_Held). Once the
+        child is in the job, before it is resumed, they go to the handlers they would have
+        reached: one that raises ends the child unrun and start raises it; under SIG_DFL the
+        child is ended, then the default ends this process. One that comes during the resume is
+        handed on just after it, the same way. One in the last instants, after that hand-on and
+        before the handlers are back, is raised as start returns: start then raises it with
+        self.p the child, running in the job, and the caller ends the job (end(kill=True), or
+        kill-on-close when the job is closed) as for a Ctrl+C one instant after start."""
         cmd = bash.resolve(cmd, kw.get("shell", False), kw.get("env"))
         flags = no_window_flags(kw.pop("creationflags", 0)) | win32.CREATE_SUSPENDED
-        held = _CtrlCHeld()     # from making the child to its resume: see _CtrlCHeld
+        held = _Held()          # from making the child to its resume: see _Held
         try:
             p = subprocess.Popen(cmd, creationflags=flags, **kw)
             try:
@@ -268,11 +294,12 @@ class Job:
                 self.check_pin(p)
                 if before_resume is not None:
                     before_resume(p)
+                held.deliver()  # in the job and never run: one that raises ends it unrun
                 status = win32.resume(p)
                 if status != 0:
                     raise JobError("the suspended command could not be resumed (NTSTATUS 0x%08X)"
                                    % (status & 0xFFFFFFFF))
-                held.deliver()  # the child is in the job: a Ctrl+C that raises here ends it
+                held.deliver()  # one that came during the resume
             except BaseException:
                 p.kill()
                 p.wait()
