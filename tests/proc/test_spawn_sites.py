@@ -141,6 +141,16 @@ HAZARD_EXEMPT = {
     ('kitlib/proc/console.py', '<module>', 'DETACHED_PROCESS'): (
         2, 'the CreateProcess hook itself: it defines the bit and reads it in CONSOLE_CHOICE to '
            'leave a caller\'s own console choice alone; it never asks for one'),
+    ('kitlib/gate/submit.py', '<module>', 'WMI Win32_Process Create'): (
+        1, 'DETACH_PS, the script submit.detach hands to PowerShell: `land.py --submit` and '
+           '`gate.py land --submit` start the landing again through Win32_Process.Create with '
+           'ShowWindow 0, outside the submitter\'s process tree. Not a second rule home: '
+           'RULE_HOMES keeps kitlib/lock/detach.py as the one WMI start that is windowless by '
+           'construction.' + OPEN + 'the program WMI starts is sys.executable, a console '
+           'python.exe, so it gets a console of its own and stays hidden only while ShowWindow '
+           'is honoured, which a terminal host such as Windows Terminal need not do '
+           '(kitlib/lock/detach.py "Why the carrier"). It wants the same pythonw carrier, '
+           'kitlib.proc.spawn.carry'),
     ('kitlib/proc/win32.py', '<module>', 'CREATE_NEW_CONSOLE'): (
         1, 'the constant definition the kit\'s callers and tests name; defining it starts nothing'),
     ('kitlib/proc/win32.py', '<module>', 'DETACHED_PROCESS'): (
@@ -163,6 +173,11 @@ HAZARD_EXEMPT = {
            'sys.executable and CREATE_NO_WINDOW | DETACHED_PROCESS.' + OPEN + 'python.exe '
            'detached has no console, so any console program it starts opens a window (two '
            'finds: the getattr string and the `flags` name it is bound to, used in the start)'),
+    ('tests/gate/test_land_submit.py', 'RealDetach', 'WMI Win32_Process Create'): (
+        1, 'the find is the skipUnless reason text naming the start; the class runs '
+           '`land.py --submit` and `gate.py land --submit` for real in every gate (not opt-in), '
+           'so it makes the kitlib/gate/submit.py start.' + OPEN + 'that start is a console '
+           'python.exe hidden only by ShowWindow 0 (the submit.py row)'),
     ('tests/bridge/test_startup.py',
      'StartupTests.test_actual_hidden_launcher_preserves_path_arguments_and_child_exit_code',
      '-WindowStyle Hidden'): (
