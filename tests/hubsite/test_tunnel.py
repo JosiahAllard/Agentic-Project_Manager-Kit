@@ -273,6 +273,56 @@ class TunnelTokenTest(TunnelCase):
         self.assertNoSecret(self.good)
 
 
+class TunnelHostTest(TunnelCase):
+    """What the tunnel listener does with the Host header the tunnel program hands on. It has no
+    host rule (reads pass under any name), but a write's Origin must name that Host. The tunnel
+    program keeps the visitor's Host unless its route sets an HTTP Host header; these tests pin
+    what happens when one rewrites it to the loopback address the route points at."""
+
+    def setUp(self):
+        TunnelCase.setUp(self)
+        self.build()
+        self.good = ak.token(ak.KEY_A)
+        self.rewritten = '127.0.0.1:%d' % self.tport
+
+    def test_reads_pass_whatever_the_host(self):
+        for host in (PUBLIC, self.rewritten, 'localhost', 'another.example.invalid'):
+            with self.subTest(host=host):
+                r = self.ask('GET', HEALTH, token=self.good, host=host)
+                self.assertEqual((r.status, r.json()['tunnel']), (200, 'on'))
+                r = self.ask('GET', '/', token=self.good, host=host)
+                self.assertEqual((r.status, r.body), (200, PAGE))
+                r = self.ask('GET', TODOS, token=self.good, host=host)
+                self.assertEqual(r.status, 200, r.body)
+        # and with no Host at all the token still decides: a read is served
+        r = self.ask('GET', HEALTH, token=self.good, host=False)
+        self.assertEqual(r.status, 200, r.body)
+        # it is the token that lets a read in, not the name: without it every one is refused
+        for host in (PUBLIC, self.rewritten):
+            self.refused('GET', HEALTH, host=host)
+        self.assertEqual(self.refusals(), [self.tunnel_line(tunnel.NO_TOKEN)])
+
+    def test_a_write_whose_host_was_rewritten_to_loopback_is_refused_by_the_origin_rule(self):
+        before = self.revision()
+        # the phone's browser sends the Origin of the public name; the Host it arrives with is
+        # the address of the route's service, so the two differ
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'never written'},
+                     host=self.rewritten, origin='https://' + PUBLIC)
+        self.assertEqual(r.status, 403, r.body)
+        self.assertEqual(r.json()['error']['field'], 'origin')
+        self.assertEqual(self.revision(), before)
+        self.assertEqual(self.hub.store.docs('todos'), {})
+        # the token was accepted: the refusal is the write rule's, not the gate's
+        self.assertEqual(self.refusals(), [])
+        self.assertIn(('access', '127.0.0.1 POST %s 403 owner' % TODOS), self.lines)
+        # the same write with the public name kept as Host is served
+        r = self.ask('POST', TODOS, token=self.good, obj={'title': 'through the tunnel'})
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual([d['title'] for d in self.hub.store.docs('todos').values()],
+                         ['through the tunnel'])
+        self.assertNoSecret(self.good)
+
+
 class NoExceptionTest(TunnelCase):
     def setUp(self):
         TunnelCase.setUp(self)
