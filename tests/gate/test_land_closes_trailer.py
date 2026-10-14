@@ -8,6 +8,7 @@ from unittest import mock
 
 from kitlib import gate as G
 from kitlib.backlog import at_landing, offer
+from kitlib.backlog import store as smod
 
 from tests.backlog.helpers import priced
 from tests.gate import test_land_store as tls
@@ -198,6 +199,78 @@ class ClosesByTrailerInThePmDataStore(StoreLandCase):
         self.assertIn('closed D2 in the backlog store kit/backlog in ', closed[0])
         self.assertIn('named by a Closes trailer of %s; it was pulled by main' % BRANCH, closed[0])
         self.assertFalse([l for l in out.lines if l.startswith(('WARNING', 'NOTE'))], out.lines)
+
+    # A close in this store is committed on the PM data branch (store.MainBackend._commit), and
+    # each way that commit ends has its own WARNING: they hold for a record a trailer names too.
+
+    def seeded(self, *records):
+        """The PM data worktree with `records` committed on its branch."""
+        wt = self.pm_worktree(*records)
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        return wt
+
+    def land_closing(self, rid):
+        tip = self.branch_with('fix\n\nCloses: %s\n%s\n' % (rid, TRAILERS))
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        return out, [l for l in out.lines if l.startswith('WARNING')]
+
+    def locked(self, path):
+        with open(path, 'w') as f:
+            f.write('')
+        self.addCleanup(os.remove, path)
+
+    def test_an_overtaken_close_of_a_record_a_trailer_names_gives_the_close_command(self):
+        """D2 is pulled by main and another commit changes its file under the close: the files
+        are put back, D2 is still pulled, and the trailer closes it whoever holds it, so the
+        WARNING names the holder and the close command; it never says D2 is `no longer pulled
+        by` the landed branch, which never held it."""
+        wt = self.seeded(pulled('D2', by='main'))
+        real, theirs = smod.MainBackend._write_files, []
+
+        def another_commit_then_write(backend, writes, before, paths, branch):
+            if branch and not theirs:
+                with open(self.record(wt, 'D2'), 'a', encoding='utf-8', newline='\n') as f:
+                    f.write('\nanother session wrote this\n')
+                theirs.append(self.repo.commit('another session', 'kit/backlog/D2.md', cwd=wt))
+            real(backend, writes, before, paths, branch)
+        with mock.patch.object(smod.MainBackend, '_write_files', another_commit_then_write):
+            out, warn = self.land_closing('D2')
+        self.assertEqual(len(theirs), 1)
+        self.assertTrue(os.path.exists(self.record(wt, 'D2')))
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertIn('was refused and its files were put back (ERROR: ', warn[0])
+        self.assertIn('D2 is still pulled by main and was not closed; close it with: ', warn[0])
+        self.assertTrue(warn[0].endswith(' close D2 --reason "landed %s"' % out.merge), warn[0])
+        self.assertNotIn('no longer pulled by', warn[0])
+
+    def test_a_trailer_close_that_was_not_committed_still_tells_the_live_holder(self):
+        self.repo.git('branch', 'kit/other', self.main)
+        wt = self.seeded(pulled('BBB', by='kit/other'))
+        self.locked(os.path.join(self.repo.common_dir(), 'refs', 'heads', 'pmdata.lock'))
+        with mock.patch.object(smod, 'ATTEMPTS', 1):
+            out, warn = self.land_closing('BBB')
+        self.assertFalse(os.path.exists(self.record(wt, 'BBB')))
+        self.assertEqual(len(warn), 2, out.lines)
+        self.assertIn('BBB was closed in the backlog store kit/backlog in ', warn[0])
+        self.assertIn('but not committed', warn[0])
+        self.assertIn('its Closes trailer closed BBB while kit/other holds it pulled', warn[1])
+        self.assertIn('tell the builder of kit/other', warn[1])
+
+    def test_a_trailer_close_committed_with_a_stale_index_still_tells_the_live_holder(self):
+        self.repo.git('branch', 'kit/other', self.main)
+        wt = self.seeded(pulled('BBB', by='kit/other'))
+        gitdir = self.repo.git('rev-parse', '--git-dir', cwd=wt)
+        if not os.path.isabs(gitdir):
+            gitdir = os.path.join(wt, gitdir)
+        self.locked(os.path.join(gitdir, 'index.lock'))
+        with mock.patch.object(smod, 'ATTEMPTS', 1):
+            out, warn = self.land_closing('BBB')
+        self.assertEqual(len(warn), 2, out.lines)
+        self.assertIn('BBB was closed in the backlog store kit/backlog in ', warn[0])
+        self.assertIn('repair the index with: ', warn[0])
+        self.assertIn('its Closes trailer closed BBB while kit/other holds it pulled', warn[1])
+        self.assertIn('tell the builder of kit/other', warn[1])
 
 
 class TrailerValues(unittest.TestCase):

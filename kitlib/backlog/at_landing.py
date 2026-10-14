@@ -327,11 +327,12 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None)
     return lines
 
 
-def _after_put_back(store, rid, branch, command, reason):
+def _after_put_back(store, rid, branch, command, reason, named=False):
     """What is true of `rid` once a refused close was put back, read from the store again: the
     other commit may have closed or removed the record, released it, or left its file
     unreadable. The close command is given only while `branch` still holds the record
-    pulled."""
+    pulled; or, when a `Closes:` trailer of the branch names it (`named`), while anyone does,
+    as _close_plan would close it."""
     try:
         now = store.load().get(rid)
     except (Refusal, OSError) as exc:
@@ -343,11 +344,13 @@ def _after_put_back(store, rid, branch, command, reason):
     if not now.readable:
         return ('%s cannot be read as that commit left it, so it was not closed; see it with: %s'
                 % (rid, command('show', rid)))
-    if now.get('state') == 'pulled' and now.get('pulled_by') == branch:
+    holder = now.get('pulled_by')
+    if now.get('state') == 'pulled' and (named or holder == branch):
         return ('%s is still pulled by %s and was not closed; close it with: %s'
-                % (rid, branch, command('close', rid, '--reason', '"%s"' % reason)))
-    return ('%s is now %s and no longer pulled by %s, so it was not closed; see it with: %s'
-            % (rid, now.get('state') or 'in an unreadable state', branch, command('show', rid)))
+                % (rid, holder or '?', command('close', rid, '--reason', '"%s"' % reason)))
+    return ('%s is now %s and no longer pulled%s, so it was not closed; see it with: %s'
+            % (rid, now.get('state') or 'in an unreadable state',
+               '' if named else ' by %s' % branch, command('show', rid)))
 
 
 def _close_in(backend, root, cfg, branch, merge, session, command, named=(), seen=None):
@@ -424,7 +427,8 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
                 lines.append('WARNING: %s landed, and the close of %s in the backlog store %s was '
                              'refused and its files were put back (%s: %s); %s'
                              % (branch, rid, backend.describe(), exc.label, _one_line(str(exc)),
-                                _after_put_back(store, rid, branch, command, reason)))
+                                _after_put_back(store, rid, branch, command, reason,
+                                                named=rid in by_trailer)))
             continue
         except Uncommitted as exc:          # deleted in the PM data worktree, its commit failed
             lines.append('WARNING: %s landed, and %s was closed in the backlog store %s but not '
@@ -432,11 +436,15 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
                          % (branch, rid, backend.describe(), _one_line(str(exc)),
                             command('catch-up', '--apply',
                                     smod.quoted(exc.paths or [backend.path_of(rid)]))))
+            if rid in by_trailer:           # closed all the same: its holder must be told
+                lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root))
             continue
         except IndexStale as exc:           # committed; only that worktree's index is behind
             lines.append('WARNING: %s landed, and %s was closed in the backlog store %s (%s); '
                          'repair the index with: %s'
                          % (branch, rid, backend.describe(), _one_line(str(exc)), exc.repair))
+            if rid in by_trailer:
+                lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root))
             continue
         except Exception as exc:            # one record's failure never stops the others
             what = ('%s: %s' % (exc.label, exc) if isinstance(exc, Refusal)
