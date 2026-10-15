@@ -1170,7 +1170,7 @@ class Lander(object):
                     'NOT LANDED: the merged gate passed, and %s; nothing was pushed, and the merge '
                     'of %s was undone (the landing did not move %s from the base %s)' % (
                         changed, self.branch, main_b, base[:10])],
-                    verdict=out.facts.get('verdict'), undone=True)
+                    merge=self.merge, verdict=out.facts.get('verdict'), undone=True)
         if out.code != G.OK:
             self.release()
             return G.Outcome(out.code,

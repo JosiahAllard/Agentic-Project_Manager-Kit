@@ -94,6 +94,13 @@ class GatedIsPushed(_CommittedTools):
         self.assertEqual(self.remote_main(), self.main, out.lines)
         self.assertEqual(self.records(), [], out.lines)
 
+    def assert_merge_named(self, out):
+        """A green gate the landing tree did not keep to (Lander.unchanged) names the gated merge
+        in its FAILED outcome, as a refused push does: a merge of the base, not on main."""
+        self.assertRegex(out.facts.get('merge') or '', '^[0-9a-f]{40}$', out.lines)
+        self.assertIn('parent %s' % self.main, self.repo.git('cat-file', '-p', out.merge))
+        self.assertNotEqual(out.merge, self.main_now(), out.lines)
+
     def assert_main_checkout_untouched(self, out):
         """The step ran in the landing tree: the main checkout was never merged into, so it is
         at the base and clean, and the landing lock is released (nothing is left for a person)."""
@@ -108,6 +115,7 @@ class GatedIsPushed(_CommittedTools):
         self.assertIn('README.md', joined(out))
         self.assert_nothing_pushed(out)
         self.assertIn('a step changed tracked files: M README.md', joined(out))
+        self.assert_merge_named(out)
         self.assert_main_checkout_untouched(out)
         with open(self.repo.path('README.md'), encoding='utf-8') as f:
             self.assertNotIn('changed by the gate', f.read())
@@ -117,6 +125,7 @@ class GatedIsPushed(_CommittedTools):
         self.assertEqual(out.code, G.FAILED, out.lines)
         self.assertTrue(out.undone)
         self.assertIn('HEAD moved', joined(out))
+        self.assert_merge_named(out)
         self.assert_nothing_pushed(out)
         self.assert_main_checkout_untouched(out)
         self.assertNotIn('made by the gate', self.repo.git('log', '--format=%s', 'main'))
@@ -127,6 +136,7 @@ class GatedIsPushed(_CommittedTools):
         self.assertTrue(out.undone)
         self.assertIn('left.txt', joined(out))
         self.assertIn('a step left untracked files: left.txt', joined(out))
+        self.assert_merge_named(out)
         self.assert_nothing_pushed(out)
         self.assert_main_checkout_untouched(out)
         self.assertFalse(os.path.exists(self.repo.path('left.txt')))
