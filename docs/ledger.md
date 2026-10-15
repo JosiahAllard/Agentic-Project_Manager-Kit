@@ -120,13 +120,14 @@ Logic: `kitlib/ledger/write.py` (`locked`, `held`, `lock_path`); tests `tests/le
 
 One writer per ledger file at a time. `add` and `retire` hold the file's write lock from their read to their write, so two writers at once never take the same next id and neither atomic replace drops the other's entry. `add --commit` holds it over the checks, the add and the commit, so no other writer's entry lands in its commit; `--push` runs after it is given up. `vcs.finish` commits under it too.
 
-- **The lock:** an OS byte-range lock (`kitlib/dailyfull/treelock.py` `TreeLock`) on a lock file recording the holder's pid and when it took the lock. The system drops it when the holder exits, so a dead holder never blocks. Where the lock file is:
+- **The lock:** an OS byte-range lock (`kitlib/fs/writelock.py` `locked`, over `kitlib/fs/treelock.py` `TreeLock`) on a lock file recording the holder's pid and when it took the lock. The system drops it when the holder exits, so a dead holder never blocks. Where the lock file is:
   - **Ledger in a git checkout** (a main checkout or a linked worktree): `kit-ledger-<file name, lower-cased>-<hash>.lock` in the repository's git common dir (`kitlib.git.repo.classify`), the hash taken from the file's real path with case folded, so every spelling of one file gets one lock, and two worktrees of one repository share it. Nothing is left in the checkout, so `git status` stays clean.
   - **Ledger outside any git checkout:** `.<file name>.lock` beside the file.
   - **git cannot tell which:** the write is refused, naming the ledger, with nothing written.
   - The lock file is never removed: one per ledger file stays behind.
 - **Busy:** a writer waits `LOCK_WAIT` seconds (30), trying every `LOCK_PAUSE` (0.05), then is refused naming the holder, with nothing written.
 - **Nesting:** the lock nests within one thread, whatever spelling of the path; every other thread and process waits.
+- **The replace:** the atomic write's final `os.replace` is retried for up to `kitlib/fs/replace.py` `WAIT` seconds (2) while it fails with `PermissionError` (a reader holding the file open); any other error is not retried.
 - **git's `index.lock`:** two files in one repository still share git's index. A commit that fails because `index.lock` is busy is retried for `INDEX_LOCK_WAIT` seconds (3) in `kitlib/ledger/vcs.py` `commit_file`; any other failure is not retried, and after the bound the refusal says `index.lock busy`. A commit or push that fails after the write leaves the entry written and says what was not done.
 
 ## Citing rulings
