@@ -85,7 +85,7 @@ class Entry(unittest.TestCase):
         self.assertEqual((code, out), (0, ''), err)
 
     def test_a_subagent_read_of_the_hub_owner_token_is_denied(self):
-        # KIT-GUARD-READ-OWNER-TOKEN: Read, Grep and Glob reach the guard (host.MATCHER) and
+        # Read, Grep and Glob reach the guard (host.MATCHER) and
         # hub-secrets refuses the token folder; the path is built from kitlib's names
         from kitlib.config import user as kuser
         from kitlib.guard import hub as hubg
@@ -290,7 +290,7 @@ class Unguarded(unittest.TestCase):
         for tool in tools:
             self.assertTrue(re.fullmatch(host.MATCHER, tool), tool)
             self.assertFalse(mod.skips(self.hook(), {'tool_name': tool}, {}), tool)
-        for tool in events.READ_TOOLS:                  # KIT-GUARD-READ-OWNER-TOKEN
+        for tool in events.READ_TOOLS:
             self.assertTrue(re.fullmatch(host.MATCHER, tool), tool)
             self.assertFalse(mod.skips(self.hook(), {'tool_name': tool}, {}), tool)
         for tool in ('TodoWrite', 'WebFetch', 'Agent'):
