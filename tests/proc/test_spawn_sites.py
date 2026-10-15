@@ -129,6 +129,7 @@ HAZARD_EXEMPT = {
     ('kitlib/guard/commands.py', 'invocation', 'Start-Process'): (2, GUARD_READS),
     ('kitlib/guard/rules.py', 'plain_run', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', 'runs_reserve_ui', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/rolepolicy.py', '_lock_words', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/pluginsource/__init__.py', '<module>', 'DETACHED_PROCESS'): (
         1, '_DETACHED (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP) is used by one start only, '
            'Popen([pythonw(), plugin_refresh.py, ...]): pythonw is a GUI program that never gets '
@@ -181,6 +182,10 @@ HAZARD_EXEMPT = {
      'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_provider_paths.py', 'NativePrograms.test_native_writers_in_the_main_checkout',
      'Start-Process'): (1, GUARD_TEST),
+    ('tests/guard/test_rolepolicy.py', 'LockVerbs.test_every_real_lock_call_is_still_read',
+     'Start-Process'): (3, GUARD_TEST),
+    ('tests/guard/test_rolepolicy.py', 'LockVerbs.test_every_real_lock_call_is_still_read',
+     'start ""'): (1, GUARD_TEST),
     ('tests/guard/test_rules.py', '<module>', 'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/test_rules_hub.py', 'OwnerVerbs.test_launchers', 'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/test_rules_hub.py', 'OwnerVerbs.test_review_rows_for_owner_verbs', 'Start-Process'): (1, GUARD_TEST),
