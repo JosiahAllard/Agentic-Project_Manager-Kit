@@ -60,9 +60,9 @@ class FoundOn(StoreCase):
 
     def test_none_skips_the_overlap_check_and_records_the_reason(self):
         change = self.add(['kitlib/x/**'], found_on='none')
-        self.assertEqual(change.subject, 'backlog: add NEW, found on no branch')
+        self.assertEqual(change.subject, 'backlog: add NEW, found on no branch (or on a branch since landed)')
         self.assertTrue(self.get('NEW').get('summary').endswith(
-            '(found on no branch; not folded: %s)' % WHY), self.get('NEW').get('summary'))
+            '(found on no branch (or on a branch since landed); not folded: %s)' % WHY), self.get('NEW').get('summary'))
 
     def test_a_scope_the_branch_changed_is_refused(self):
         before = self.remote_tip()

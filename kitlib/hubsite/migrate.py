@@ -72,6 +72,7 @@ import json
 import os
 
 from kitlib import hubvalidate
+from kitlib.config.types import ConfigError
 
 from . import schema
 from . import store as hubstore
@@ -263,10 +264,11 @@ def store_docs(root):
     return out
 
 
-def check(docs):
+def check(docs, known_repos=()):
     """The findings for docs ({collection: {id: document}}): schema.check's errors for each
-    document, then kitlib.hubvalidate.validate's, sorted by document, code and field. With no
-    repos/ document there is nothing to judge a `repo` tag against: `repos` is then left out, so
+    document, then kitlib.hubvalidate.validate's (given `known_repos`, the configured repo names
+    or a callable giving them), sorted by document, code and field. With no repos/ document and
+    no known repos there is nothing to judge a `repo` tag against: `repos` is then left out, so
     validate gives its one note that the tags were not checked, not a warning per tagged
     document. A question whose `recommended` is text that stands for a number is judged as the
     store reads it (schema.whole_recommended), with that number, and has one warning that its file
@@ -287,18 +289,34 @@ def check(docs):
     docs = dict(docs, **read)
     if not docs.get('repos'):
         docs = {k: v for k, v in docs.items() if k != 'repos'}
-    out.extend(hubvalidate.validate(docs))
+    out.extend(hubvalidate.validate(docs, known_repos=known_repos))
     return sorted(out, key=lambda f: (f.rel, f.code, f.field, f.message))
 
 
-def validate(root):
+def machine_known_repos(home=None):
+    """The callable the live server hands its store (serve.machine_sources(...).known_repos): the
+    PM's configured repo names, asked only when a document has a repo tag. () when the machine
+    config cannot be used or names no sessions file, as the server then has none either."""
+    from . import serve                     # here: serve is not needed by the other verbs
+    try:
+        found = serve.machine_sources(home, sync=False).known_repos
+    except ConfigError:
+        return ()
+    return found if found is not None else ()
+
+
+def validate(root, known_repos=None, home=None):
     """check() over the store folder `root` as it is on disk. Read only: no lock is taken and
-    nothing is made, so it may run beside a server. MigrateError for a folder that does not
-    exist or a document that cannot be read."""
+    nothing is made, so it may run beside a server. `known_repos` (names, or a callable giving
+    them, as hubvalidate.validate takes) default to the machine's own, as the live server uses
+    (machine_known_repos of `home`, the user's by default). MigrateError for a folder that does
+    not exist or a document that cannot be read."""
     root = os.path.abspath(root)
     if not os.path.isdir(root):
         raise MigrateError('the hub store %s is not a folder' % root)
-    return check(store_docs(root))
+    if known_repos is None:
+        known_repos = machine_known_repos(home)
+    return check(store_docs(root), known_repos)
 
 
 def _when(fields):
