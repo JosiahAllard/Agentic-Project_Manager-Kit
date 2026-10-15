@@ -263,6 +263,7 @@ class TodoSteps(Case):
                              "steps"),
                             ({"steps": [{"open": "C:\\w\\\udc00.txt"}]}, "steps"),
                             ({"steps": [{"run": "notepad x"}]}, "steps"),
+                            ({"steps": [{"run": "echo a\ud800b"}]}, "steps"),
                             ({"commands": ["git worktree add x"]}, "commands"),
                             ({"detail": "Open it and apply the change."}, "detail")):
             with self.subTest(args=args):

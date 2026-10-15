@@ -21,7 +21,8 @@ The edit command runs in Windows PowerShell 5.1 as one `& { ... }` block:
   U+00A0), or a character outside the Basic Multilingual Plane goes in as base64 of its UTF-8
   bytes instead, with a readable one-line preview in a <# #> comment. The preview shows only the
   first 60 characters (PREVIEW), with those characters escaped. A block whose texts hold no
-  newline is one line. A file or text holding a lone surrogate (U+D800 to U+DFFF) is a bad step.
+  newline is one line. A file, text or run command holding a lone surrogate (U+D800 to U+DFFF)
+  is a bad step.
 - An open step runs Notepad++ (NOTEPADPP) from Program Files, else Program Files (x86), read
   from the environment when the command runs; neither holds it: a MISS line.
 - `old` and `new` reach the script with LF newlines (render drops every CR; the script drops any a
@@ -172,6 +173,7 @@ def _steps(steps):
             cmd = s['run']
             if not isinstance(cmd, str) or not cmd.strip():
                 raise StepError('%s: run is a non-empty string' % where)
+            _no_surrogate(where, 'the run command', cmd)
             v = {'run': cmd}
         out.append((verb, v))
     return out

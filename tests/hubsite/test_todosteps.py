@@ -155,7 +155,8 @@ class Literals(unittest.TestCase):
     def test_a_lone_surrogate_is_a_bad_step_not_an_internal_error(self):
         for s in ('\ud800', '\udfff', '\udc00'):
             for step in (edit(old='a%sb' % s), edit(new='x%s' % s), edit(old="'%s" % s),
-                         edit(path='C:\\a%s.txt' % s), {'open': 'C:\\a%s.txt' % s}):
+                         edit(path='C:\\a%s.txt' % s), {'open': 'C:\\a%s.txt' % s},
+                         {'run': 'echo a%sb' % s}):
                 with self.subTest(step=ascii(step)):
                     with self.assertRaises(StepError) as c:
                         todosteps.render([step])
