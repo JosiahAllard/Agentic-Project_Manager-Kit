@@ -134,13 +134,13 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 - The owner does not watch your window. A question for the owner you post on the Action Hub
   yourself: `python <kit>/tools/hub.py questions add ... --from <your session key>` (the
-  sessions.json key the launcher started you under; the hub refuses any other), each with its
-  context, options and a recommendation, each title restating its subject. Keep one
-  `python <kit>/tools/hub.py wait --pending --for <your session key>` running in the background;
-  when it prints an answer, act on it yourself and start the wait again. The PM still logs the
-  ruling (<kit>/docs/action-hub.md "For the PM"), and until it does the answer stays pending and
-  the wait prints it again at once: keep the ids you have acted on, tell the PM by
-  {{tool:message}} to log each, and treat an id you already acted on as expected, not new. Anything else that needs the owner (a typed go, a
+  `hub key:` line of your session-start context; the hub refuses any other key; when that line
+  says unknown, ask the PM), each with its context, options and a recommendation, each title
+  restating its subject. Keep one `python <kit>/tools/hub.py wait --pending --for <your session
+  key>` running in the background; when it prints an answer, act on it yourself and start the
+  wait again with `--except` and every id you have acted on. The PM still logs the ruling
+  (<kit>/docs/action-hub.md "For the PM"), and until it does the answer stays pending: without
+  `--except` the wait prints it again at once. Anything else that needs the owner (a typed go, a
   command to run) goes to the PM by {{tool:message}} with the exact text or commands, working
   directory and order; a request left only in your chat waits unseen. The owner still types a go
   in your window where one is required. Answers in the owner's own words.
@@ -162,8 +162,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   blocks on the owner, main or CI is broken, a lock or resource is stuck, or the owner asked you something.
   Acknowledgements ride the next digest. Keep chat replies short.
 - **Look ahead.** Every digest, scan `next`'s next ~15 for anything needing the owner
-  (owner-held, owner-only paths, live systems, a pre-emption); send those questions through the
-  PM now.
+  (owner-held, owner-only paths, live systems, a pre-emption); post those questions on the hub
+  now (The owner, above).
 - Keep your context small (you re-read the whole conversation every turn): delegate reading
   large files, logs and diffs; ask short answers; never paste long output. The session compacts
   without warning shortly before the `autoCompactWindow` tokens `{{owner_folder}}settings.local.json`
