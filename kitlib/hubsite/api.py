@@ -563,14 +563,18 @@ class Api(object):
 
     def handed(self, req, items):
         """Note that items went to the session key the request is `for` (an agent's call, a key
-        other than AGENT_FROM): each of that key's own is handed over, the first time only."""
+        other than AGENT_FROM): each of that key's own is handed over, the first time only. An
+        item it now holds within the ack window gets the key as its `route` in `items` too, so
+        the answer says who has it after this call, not before."""
         key = _q(req, 'for')
         if req.role != AGENT or key in ('', AGENT_FROM):
             return
         now = self.now()
         for d in items:
             if d.get('from') == key:
-                self._handed.setdefault((d['kind'], d['id']), (key, now))
+                got = self._handed.setdefault((d['kind'], d['id']), (key, now))
+                if got[0] == key and now < got[1] + self.ack_window_s:
+                    d['route'] = key
 
     def seen(self, req, what, opened=None, closed=None):
         """Note that an agent (a PM session) just waited or pulled (`what`). `opened` is a key

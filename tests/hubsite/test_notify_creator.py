@@ -119,6 +119,19 @@ class HandOverTest(RouteCase):
         self.assertEqual(self.routes(), {tid: 'pm'})
         self.assertEqual(self.ids(self.pending(**{'for': 'pm'})), [tid])
 
+    def test_the_answer_that_hands_an_item_over_names_the_creator_as_its_route(self):
+        # never heard from before: the item was the PM's until this very call handed it over
+        tid = self.todo()
+        self.assertEqual([(p['id'], p['route']) for p in self.wait(0, **{'for': 'kit'})['pending']],
+                         [(tid, 'kit')])
+        other = self.todo()
+        self.assertEqual([(p['id'], p['route']) for p in self.pending(**{'for': 'kit'})],
+                         [(tid, 'kit'), (other, 'kit')])
+        self.t[0] += api.ACK_WINDOW_S + 1
+        # a hand-over whose window has run out stays the PM's, whoever reads it again
+        self.assertEqual([(p['id'], p['route']) for p in self.pending(**{'for': 'kit'})],
+                         [(tid, 'pm'), (other, 'pm')])
+
     def test_the_window_counts_from_the_first_hand_over_only(self):
         self.heard()
         tid = self.todo()
