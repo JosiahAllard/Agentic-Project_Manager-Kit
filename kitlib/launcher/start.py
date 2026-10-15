@@ -17,6 +17,7 @@ from kitlib import agentname
 from kitlib import content as kcontent
 from kitlib.launcher import accounts as A
 from kitlib.git import repo as gitrepo
+from kitlib.host import registry
 from kitlib.launcher import home, lookup, state, window
 from kitlib.launcher.settings import LaunchError
 
@@ -174,7 +175,7 @@ def home_folder(host, folder, name, whatif=False):
     else:
         out.append('Would check that git ignores %s.' % path)
     out += host.home_worktree(main, path, whatif)
-    local = os.path.join(main, '.claude', 'settings.local.json')
+    local = os.path.join(main, os.path.normpath(registry.default_profile().state_directory), 'settings.local.json')
     if os.path.isfile(local):
         out.append('Warning: %s is untracked and is not in the home worktree; the host reads it from the start '
                    'folder, so this session runs without it.' % local)

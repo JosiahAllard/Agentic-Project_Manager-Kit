@@ -21,9 +21,10 @@ import os
 import re
 
 from kitlib.git import cmd
+from kitlib.host import registry
 from kitlib.launcher.settings import LaunchError
 
-FOLDER = os.path.join('.claude', 'worktrees')     # where the Claude host keeps a repository's worktrees
+FOLDER = os.path.normpath(registry.default_profile().worktrees_directory)   # the host's worktrees folder (hosts.json)
 PREFIX = 'home-'
 LOCK_REASON = 'launcher home worktree of %s: start folder of launched sessions'
 _TAIL = re.compile(r'(?:-r\d+)?$')
