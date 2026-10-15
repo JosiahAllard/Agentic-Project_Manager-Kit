@@ -96,6 +96,15 @@ class HubSiteTest(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(line(cmd), "hub: wait --pending is running")
 
+    def test_with_no_pm_wait_the_line_is_a_warning_naming_the_pms_wait_for_pm(self):
+        cmd = 'python "x/tools/hub.py" wait --pending --for coordinator-x'
+        for procs in ([], [{"Name": "python.exe", "CommandLine": cmd}]):
+            with self.subTest(procs=procs):
+                line = site(FakeClient(), procs=procs)[1]
+                self.assertTrue(line.startswith("hub: WARN no PM wait --pending --for pm is running"),
+                                line)
+                self.assertIn('hub.py" wait --pending --for pm (', line)
+
     def test_a_wait_without_pending_does_not_count(self):
         procs = [{"Name": "python.exe", "CommandLine": 'python "x/tools/hub.py" wait --timeout 5'}]
         self.assertIn("in the background", site(FakeClient(), procs=procs)[1])

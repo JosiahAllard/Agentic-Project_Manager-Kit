@@ -226,8 +226,10 @@ def hub_site(procs=(), load=None, make_client=_hub_client):
     if _wait_running(procs):
         lines.append("hub: wait --pending is running")
     else:
-        lines.append("hub: start in the background: python \"%s\" wait --pending (it exits with one HUB "
-                     "line per item; handle the items, then start it again)" % HUB_TOOL)
+        lines.append("hub: WARN no PM wait --pending --for pm is running, so items routed to the PM "
+                     "go unseen; start in the background: python \"%s\" wait --pending --for pm (it "
+                     "exits with one HUB line per item; handle the items, then start it again)"
+                     % HUB_TOOL)
     return lines
 
 

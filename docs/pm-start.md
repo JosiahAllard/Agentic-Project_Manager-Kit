@@ -20,8 +20,10 @@ when there is no `hub` key. The check only asks the loopback server on `hub.port
 then `GET /api/v1/pending`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The lines:
 `hub: server up on port <n>, <k> pending` (`<k>` is 0 when the answer's `items` is not a list); when
 `<k>` is above 0, a line to process the items (`hub.py pending`); then either
-`hub: wait --pending is running` or a line telling the PM to start
-`hub.py wait --pending` in the background and start it again after it ends. "Running" is matched by
+`hub: wait --pending is running` or a warning, `hub: WARN no PM wait --pending --for pm is
+running, so items routed to the PM go unseen; ...`, telling the PM to start
+`hub.py wait --pending --for pm` in the background and start it again after it ends (docs/action-hub.md
+"Who handles a pending item"). "Running" is matched by
 command text only: any `python` process on the machine whose command line holds `hub.py`, `wait`
 and `--pending`, and no `--for` other than `--for pm`, counts (`_wait_running` in
 `kitlib/pmstart/__init__.py`): a session's `wait --pending --for <key>` waits on its own answers
