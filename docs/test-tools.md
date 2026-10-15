@@ -27,7 +27,7 @@ The tables are read from "tool_tests": `extra`, `pinned`, `patterns`, `whole_tre
 `tools/kit_tests.py` (kitlib/tooldeps/selftree.py) runs the kit's own suite, whole or only the test packages a branch's change can reach. Kit build agents run their branch with `--select`, and kit landings gate with `--select` too; `--full` runs the whole suite by hand. `gate.py --full` and `daily_full.py` run the whole suite once the kit-suite gate step has a `full_cmd` running `--full` (docs/gate.md "Steps") and `daily_full` is enabled in `.kit.json`; the owner schedules daily_full.py. A `daily_cmd` running `--full --both-tiers` makes the daily run also run the suite on real git ("Fake git" below). Wrap either in the machine lock, booking 4 cores (8 logical processors, so 8 modules at once); `<repo>` is `repo.name` in `.kit.json`:
 
 ```
-python ~/.claude/tools/machine_lock/machine_lock.py run --repo <repo> --slug <slug> --lock --kind engine-test --cores 4 -- python tools/kit_tests.py --select
+python <kit>/tools/machine_lock.py run --repo <repo> --slug <slug> --kind engine-test --cores 4 -- python tools/kit_tests.py --select
 ```
 
 To gate a worktree from another directory, run that worktree's own gate.py with an absolute `-C`: `python <worktree>/tools/gate.py -C <worktree> --full`. With no `-C` or a relative one, a gate.py run on another checkout of its repository is refused (docs/gate.md "The caller's checkout").

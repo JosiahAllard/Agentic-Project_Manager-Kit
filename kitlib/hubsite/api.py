@@ -60,6 +60,12 @@ is null and `unavailable` maps its name to that same reason:
   completed(repo='', days=None)             [{repo, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
   health()                                  a dict merged into GET health (git, backlog, ...)
+  record(repo, id)                          one record (GET records/{repo}/{id})
+  record_template(repo)                     a new record's fields (GET records/{repo}/new)
+The two record views differ: what they raise as a HubError is the answer (a 404 for a record or
+repository that is not there, a 400 for a name that cannot be one), so their messages are fixed
+phrases with no path, no id and nothing the caller sent; only anything else is `unavailable`.
+Both are read now, never cached, and neither is part of GET snapshot.
 
 Nothing here opens a socket, starts a thread, prints, parses arguments or exits. GET wait blocks
 in Store.wait for at most WAIT_MAX_S; how many may wait at once is the listener's rule.
@@ -919,6 +925,41 @@ def completed(api, req):
                                days=_q_int(req, 'days', 1, DAYS_MAX))}
 
 
+# A record route's path segments, checked before the view is asked: what a repository name or a
+# record id may be (kitlib.hubsite.backlog checks each again, more narrowly). The refusal is a
+# fixed phrase: it never repeats the segment.
+_SEGMENT = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
+SEGMENT_SAYS = {'repo': 'not a repository name', 'id': 'not a record id'}
+
+
+def _segment(req, name):
+    value = req.params.get(name)
+    if not isinstance(value, str) or not _SEGMENT.match(value) or '..' in value:
+        raise HubError('invalid', SEGMENT_SAYS[name], name)
+    return value
+
+
+def _record_view(api, name, *args):
+    """The record view `name` called with args: its HubError (not_found, invalid, unavailable,
+    each with a fixed phrase) is the answer; anything else it raises is `unavailable` with the
+    short reason. Unlike `shown`, a not_found stays a 404."""
+    fn = api._view(name)
+    try:
+        return fn(*args)
+    except HubError:
+        raise
+    except Exception as e:      # noqa: BLE001 - a view is another module's code
+        raise HubError('unavailable', 'the %s view failed: %s' % (name, _reason(e)), 'views')
+
+
+def record(api, req):
+    return _record_view(api, 'record', _segment(req, 'repo'), _segment(req, 'id'))
+
+
+def record_new(api, req):
+    return _record_view(api, 'record_template', _segment(req, 'repo'))
+
+
 def _listing(name):
     def handler(api, req):
         return {'items': api.shown(name)}
@@ -1071,6 +1112,8 @@ ROUTES = (
     _r('POST', '/inbox/{id}/read', OWNER, inbox_read),
     _r('GET', '/backlog', ANY, backlog),
     _r('GET', '/completed', ANY, completed),
+    _r('GET', '/records/{repo}/new', ANY, record_new),
+    _r('GET', '/records/{repo}/{id}', ANY, record),
     _r('GET', '/notices', ANY, _listing('notices')),
     _r('GET', '/repos', ANY, _listing('repos')),
     _r('GET', '/usage', ANY, _listing('usage')),

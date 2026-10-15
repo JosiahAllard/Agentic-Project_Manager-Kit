@@ -171,6 +171,16 @@ def _session(v, rules=None):
     return '`%s` is not a session name - lower-case `[a-z][a-z0-9-]*`' % v
 
 
+def _review(v, rules=None):
+    """`<source> <YYYY-MM-DD>`: who marked the record for review, and when (docs/backlog.md,
+    "Records")."""
+    source, _, date = v.partition(' ')
+    if not SESSION_RE.match(source) or not date or ' ' in date:
+        return ('`%s` is not a review mark - `<source> <YYYY-MM-DD>`, the source lower-case '
+                '`[a-z][a-z0-9-]*`' % v)
+    return _date(date)
+
+
 # key -> (cardinality, validator), in the order a new key is inserted.
 FIELDS = collections.OrderedDict([
     ('id', (ONE, _id)),
@@ -188,6 +198,7 @@ FIELDS = collections.OrderedDict([
     ('q', (AT_MOST_ONE, _question)),
     ('parked_at', (AT_MOST_ONE, _date)),
     ('resume', (AT_MOST_ONE, _ruling)),
+    ('review', (AT_MOST_ONE, _review)),
     ('scope', (ONE_PLUS, _scope)),
     ('files', (ANY, _path)),
     ('files_at', (AT_MOST_ONE, _free)),

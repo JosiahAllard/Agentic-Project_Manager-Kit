@@ -34,9 +34,9 @@ from kitlib.host import Attribution, HostCapabilities, HostProfile, SessionTrail
 
 def kit_path(here=None):
     """The kit's hosts.json: beside the kitlib this module is in as it is spelled (kitroot.root()),
-    else, when that has none, beside the folder it really is. A machine's installed lock tool runs
-    kitlib through a junction (~/.claude/tools/kitlib -> <kit>/kitlib, docs/machine-setup.md
-    "Links"), and the kit's hosts.json is beside the real kitlib, not beside the junction.
+    else, when that has none, beside the folder it really is. A kitlib
+    reached through a link runs from the link's spelling, and the kit's hosts.json is beside the
+    real kitlib, not beside the link.
     `here` stands in for this file (tests)."""
     here = os.path.abspath(here or __file__)
     spelled = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(here))), 'hosts.json')

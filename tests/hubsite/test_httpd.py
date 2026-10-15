@@ -490,7 +490,7 @@ class ApiCase(httpfix.ListenerCase):
             for role, token in ((OWNER, self.owner), (AGENT, self.agent)):
                 with self.subTest(route=route.method + ' ' + route.pattern, role=role):
                     doc_id = seed(self.store) if seed else 'X-1'
-                    path = route.pattern.replace('{id}', doc_id)
+                    path = roles.path(route, doc_id)
                     if query:
                         path += '?' + '&'.join('%s=%s' % kv for kv in sorted(query.items()))
                     if route.method == 'POST':
@@ -509,7 +509,7 @@ class ApiCase(httpfix.ListenerCase):
         before = self.store.snapshot()
         for route in api.ROUTES:
             with self.subTest(route=route.method + ' ' + route.pattern):
-                path = route.pattern.replace('{id}', 'X-1')
+                path = roles.path(route, 'X-1')
                 r = post(lis.port, path, {}) if route.method == 'POST' else get(lis.port, path)
                 self.assertEqual((r.status, r.code()), (403, 'forbidden'))
         self.assertEqual(self.store.snapshot(), before)

@@ -120,6 +120,20 @@ class GuardSites(unittest.TestCase):
         self.assertEqual(first_raise_after(function(self.plan, 'plan_unblock'), "'blocked'", self.src),
                          'Usage')
 
+    def test_the_review_mark_guards(self):
+        clear = function(self.plan, 'plan_clear_review')
+        self.assertEqual(first_raise_after(clear, 'bad', self.src), 'Usage')
+        self.assertEqual(first_raise_after(clear, "rec.has('review')", self.src), 'Refusal')
+        self.assertEqual(first_raise_after(function(self.plan, 'plan_pull'), "rec.has('review')",
+                                           self.src), 'Refusal')
+        self.assertEqual(first_raise_after(function(self.plan, 'plan_add'), 'review is not None',
+                                           self.src), 'Usage')
+
+    def test_the_delete_guards(self):
+        fn = function(self.plan, 'plan_delete')
+        self.assertEqual(sorted(set(raised_kinds(fn))), ['Failure', 'Refusal', 'Usage'])
+        self.assertEqual(first_raise_after(fn, 'guarded and ruling is None', self.src), 'Refusal')
+
     def test_the_missing_id_guard_raises_not_found(self):
         self.assertEqual(raised_kinds(function(self.plan, 'require')), ['NotFound'])
 
