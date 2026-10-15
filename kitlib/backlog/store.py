@@ -17,6 +17,8 @@ store it did not validate against. A write that fails validation publishes nothi
 never touches a working tree or an index other than its own temporary one. The main backend has
 no compare-and-swap (check the bytes, then write), so it writes only in a linked worktree.
 """
+import contextlib
+import contextvars
 import os
 import random
 import re
@@ -1311,6 +1313,51 @@ class Change(object):
         self.ruling = ruling
 
 
+_PLAN_NOTES = contextvars.ContextVar('backlog_plan_notes', default=None)
+
+
+@contextlib.contextmanager
+def plan_notes():
+    """Collect the lines a plan adds with add_plan_note while it runs (a list, in order, each
+    once). Store.write and a dry run put them before the change's own lines."""
+    notes = []
+    token = _PLAN_NOTES.set(notes)
+    try:
+        yield notes
+    finally:
+        _PLAN_NOTES.reset(token)
+
+
+def add_plan_note(line):
+    """A line the running plan's caller prints with the change (plan.refuse_machine_paths's
+    machine-config WARNING); dropped when no plan_notes collector is open."""
+    notes = _PLAN_NOTES.get()
+    if notes is not None and line not in notes:
+        notes.append(line)
+
+
+@contextlib.contextmanager
+def notes_on_refusal(notes):
+    """Re-raise a Refusal (any of kitlib.backlog.errors) raised inside with each line of `notes`
+    its message does not already hold added on a line of its own, as commit.py adds its machine
+    config WARNING to the stop lines: a plan that stops for another reason still prints it. The
+    same exception object, so its type and attributes are kept."""
+    try:
+        yield
+    except Refusal as exc:
+        msg = str(exc)
+        extra = ''.join('\n' + n for n in notes if n not in msg)
+        if extra:
+            exc.args = (msg + extra,) + tuple(exc.args[1:])
+        raise
+
+
+def with_plan_notes(change, notes):
+    """`change` with `notes` it does not already print put before its lines."""
+    change.lines = [n for n in notes if n not in change.lines] + change.lines
+    return change
+
+
 class Store(object):
     """A backend plus the schema rules. `before_publish(attempt)` is a test hook run between the
     plan and the publish of every attempt."""
@@ -1350,10 +1397,13 @@ class Store(object):
         for attempt in range(ATTEMPTS):
             snap = self.load()
             require_readable(snap)
-            change = plan(snap)
+            with plan_notes() as notes, notes_on_refusal(notes):
+                change = plan(snap)
+            change = with_plan_notes(change, notes)
             if not change.writes:
                 return change, snap.tip
-            check_change(snap, change)
+            with notes_on_refusal(notes):
+                check_change(snap, change)
             if self.before_publish is not None:
                 self.before_publish(attempt)
             try:
