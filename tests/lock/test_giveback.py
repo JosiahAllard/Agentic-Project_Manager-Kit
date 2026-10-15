@@ -1,18 +1,22 @@
 """kitlib.lock.giveback: a held run gives back cpu slots while its command runs on, and a queued
 run takes them at once; the run's job is narrowed off them first; what cannot be given back is
 refused and changes nothing; the record is written before the queue, and the ack after it."""
+import contextlib
 import copy
 import ctypes
 import importlib
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
+from ctypes import wintypes
 from unittest import mock
 
 from .helpers import FAST, OWNER, REPO, StoreCase, clean_env, own_affinity
@@ -90,6 +94,72 @@ def affinity(p):
     if not win32.K32.GetProcessAffinityMask(int(p._handle), ctypes.byref(pm), ctypes.byref(sm)):
         raise ctypes.WinError(ctypes.get_last_error())
     return pm.value
+
+
+@contextlib.contextmanager
+def unopenable(path):
+    """While inside, every other open of path fails with PermissionError: a handle on it that
+    shares nothing. It is how an asker's read fails when it lands while the wrapper's os.replace
+    swaps the record (a reader's open then is refused, never answered with no such file)."""
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = k32.CreateFileW
+    create.restype = wintypes.HANDLE
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    h = create(path, 0x80000000, 0, None, 3, 0, None)       # GENERIC_READ, no sharing, OPEN_EXISTING
+    if h is None or h == win32.INVALID_HANDLE_VALUE:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        yield
+    finally:
+        win32.K32.CloseHandle(h)
+
+
+class Asker:
+    """Offer.give on a thread whose polls the test steps one at a time: give() sleeps between
+    polls through time.sleep, which here reports the poll and waits for the test's go instead.
+    next() is what the asker did since the last go: "polled" (it looked and has no answer yet)
+    or ("answer", what give returned)."""
+
+    class Closed(Exception):
+        pass
+
+    def __init__(self, case, offer, cpu):
+        self.offer, self.cpu = offer, cpu
+        self.events, self.go = queue.Queue(), queue.Queue()
+        fake = types.SimpleNamespace(monotonic=time.monotonic, sleep=self._sleep)
+        p = mock.patch.object(gb(), "time", fake)
+        p.start()
+        case.addCleanup(p.stop)
+        self.t = threading.Thread(target=self._run, daemon=True)
+        case.addCleanup(self._close)            # runs before p.stop
+
+    def _run(self):
+        try:
+            self.events.put(("answer", self.offer.give(self.cpu, wait_s=60)))
+        except Asker.Closed:
+            pass
+
+    def _sleep(self, _s):
+        self.events.put("polled")
+        if self.go.get(timeout=60) == "close":
+            raise Asker.Closed()
+
+    def _close(self):
+        # A test that failed with the asker still waiting ends it here.
+        if self.t.is_alive():
+            self.go.put("close")
+            self.t.join(30)
+
+    def start(self):
+        """Starts it: its request is on disk once next() says it polled."""
+        self.t.start()
+        return self.events.get(timeout=60)
+
+    def step(self):
+        """One more poll."""
+        self.go.put(None)
+        return self.events.get(timeout=60)
 
 
 def usable_slots(case, n):
@@ -255,22 +325,16 @@ class Narrowing(StoreCase):
         self.assertEqual(self.store.read(rel), disk)        # on disk too
 
         # The same failure under a real request: Offer.give hears "refused", never "given".
-        offer = gb().Offer(gb().request_path(self.store, s.id))
+        asker = Asker(self, gb().Offer(gb().request_path(self.store, s.id)), [usable[1]])
         failed.clear()
-        res = []
         with mock.patch.object(Store, "write", write), \
                 mock.patch.object(s.job, "pids", return_value=[os.getpid()]):
-            t = threading.Thread(target=lambda: res.append(offer.give([usable[1]], wait_s=20)))
-            t.start()
-            end = time.monotonic() + 30
-            while t.is_alive() and time.monotonic() < end:
-                s.serve_give_back()
-                time.sleep(0.02)
-            t.join(5)
+            self.assertEqual(asker.start(), "polled")       # asked, and no answer yet
+            s.serve_give_back()
         self.assertEqual(failed, [rel])
-        self.assertEqual(len(res), 1, "Offer.give did not answer")
-        self.assertEqual(res[0][0], "refused", res[0])
-        self.assertIn("could not be written", res[0][1])
+        res = asker.step()
+        self.assertEqual(res[1][0], "refused", res)
+        self.assertIn("could not be written", res[1][1])
         on_disk = self.store.read(rel)
         self.assertNotIn("given_back", on_disk)
         self.assertEqual({k: v for k, v in on_disk.items() if k != "give_back_refused"}, disk)
@@ -363,34 +427,47 @@ class Narrowing(StoreCase):
         s, usable = self.held(2)
         p = self.sleeper(s, give_back=True)
         both = lay.cores_mask(self.layout(), usable)
-        offer = gb().Offer(gb().request_path(self.store, s.id))
-        res = []
-        t = threading.Thread(target=lambda: res.append(offer.give([usable[1]], wait_s=20)))
+        asker = Asker(self, gb().Offer(gb().request_path(self.store, s.id)), [usable[1]])
+        during = []
 
         def save(store, q):
-            # A queue write that waits on a held queue.json, then fails, while the asker polls
-            # (Offer.give looks every POLL_S): it ends early only if the asker has answered.
-            end = time.monotonic() + 1.0
-            while t.is_alive() and time.monotonic() < end:
-                time.sleep(0.02)
+            # A queue write that waits on a held queue.json, then fails: the asker polls twice
+            # while it waits, with the narrower booking already in the record.
+            during.append(self.store.read("active/%s.json" % s.id)["cores"])
+            during.extend([asker.step(), asker.step()])
             raise OSError("queue.json is held")
         with mock.patch.object(gb().qm, "save", side_effect=save), \
                 mock.patch.object(s.job, "pids", return_value=[os.getpid()]):
-            t.start()
-            end = time.monotonic() + 30
-            while t.is_alive() and time.monotonic() < end:
-                s.serve_give_back()
-                time.sleep(0.02)
-            t.join(5)
-        self.assertEqual(len(res), 1, "Offer.give did not answer")
-        self.assertEqual(res[0][0], "refused", res[0])
-        self.assertIn("could not be written", res[0][1])
+            self.assertEqual(asker.start(), "polled")
+            s.serve_give_back()
+        self.assertEqual(during, [[usable[0]], "polled", "polled"])    # no answer mid-write
+        res = asker.step()
+        self.assertEqual(res[1][0], "refused", res)
+        self.assertIn("could not be written", res[1][1])
         rec = self.store.read("active/%s.json" % s.id)
         self.assertNotIn("given_back", rec)
         self.assertEqual(sorted(rec["cores"]), usable)
         self.assertEqual(self.queue_cores(s), usable)
         self.assertEqual(s.job.mask, both)
         self.assertEqual(affinity(p), both)
+
+    def test_a_record_read_that_collides_with_its_replace_is_not_gone(self):
+        # KIT-LOCK-GIVEBACK-FLAKE: an asker's open of the record that lands while the wrapper
+        # replaces it is refused (PermissionError). That is "not now": it looks again, and hears
+        # the answer; only a record that is not there, or not held, is "gone".
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        asker = Asker(self, gb().Offer(gb().request_path(self.store, s.id)), [usable[1]])
+        with mock.patch.object(s.job, "pids", return_value=[os.getpid()]):
+            with unopenable(self.store.path("active", s.id + ".json")):
+                self.assertEqual(asker.start(), "polled")
+                self.assertEqual(asker.step(), "polled")
+            self.assertIsNone(s.serve_give_back())
+        res = asker.step()
+        self.assertEqual(res[1][0], "given", res)
+        self.assertEqual(res[1][1]["cores"], [usable[0]])
+        self.assertEqual(self.queue_cores(s), [usable[0]])
+        self.assertEqual(affinity(p), lay.cores_mask(self.layout(), [usable[0]]))
 
     def test_a_lost_ack_undoes_nothing_is_written_next_poll_and_a_re_ask_is_refused(self):
         s, usable = self.held(2)
