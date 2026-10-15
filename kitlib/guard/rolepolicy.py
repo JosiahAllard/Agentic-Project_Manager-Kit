@@ -37,8 +37,9 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   command or informational option, or tell it to stay open (-i, -Interactive,
                   -NoExit and any prefix of it, /k). Standard input fed by a pipe, a heredoc, a
                   here-string or `<` is the script: bare, `-` and bash's `-s` then pass
-    role-lock     the lock CLI (machine_lock.py) run with a verb outside the mode's LOCK_VERBS, or
-                  with --force in any abbreviation; a lock MCP tool (lock_mcp_tool) whose verb
+    role-lock     the lock CLI (machine_lock.py, as the program or python's script: _lock_words)
+                  run with a verb outside the mode's LOCK_VERBS, or with --force in any
+                  abbreviation; a lock MCP tool (lock_mcp_tool) whose verb
                   (MCP_VERBS) is outside them, or that the lock server does not have
   context(action, ctx)  the Ctx the shared rules then use: for a read, test or lander role, a view
                   whose .kit.json guard.data_roots also hold, read-only, every host's owner paths
@@ -397,15 +398,58 @@ def shell_gap(parsed):
     return None
 
 
-def _lock_words(inv):
-    seq = [inv.path] + inv.argv
-    for k, t in enumerate(seq):
-        if cm.base_name(t) == rules.LOCK_SCRIPT:
-            rest = []
-            for w in seq[k + 1:]:
-                rest.extend(w.split() if ' ' in w else [w])     # a Start-Process "-ArgumentList" string
-            return rest
+def _python_script(args):
+    """The index in python's words `args` of the script it runs, or None when it runs code (-c,
+    -m, `-`) or names no operand. Read as _python_opts reads them."""
+    k = 0
+    while k < len(args):
+        a = args[k]
+        if a == '--':
+            return k + 1 if k + 1 < len(args) else None
+        if a == '-':
+            return None
+        if not a.startswith('-'):
+            return k
+        if a.startswith('--'):
+            k += 2 if a.split('=', 1)[0] in PY_VALUE_LONG and '=' not in a else 1
+            continue
+        for j, ch in enumerate(a[1:], 1):
+            if ch in 'cm':
+                return None
+            if ch in PY_VALUE:
+                k += 0 if j + 1 < len(a) else 1
+                break
+        k += 1
     return None
+
+
+def _lock_words(inv):
+    """The words a lock CLI call hands machine_lock.py, or None when `inv` runs none. A call is
+    machine_lock.py as the program (a direct path, &, Start-Process, cmd's or Git Bash's start)
+    or as the script python runs; a path naming it given to another tool (`backlog.py set --scope
+    tools/machine_lock.py`, cat, git) is not one. Code (-c, -m, `-`) and a program named by a
+    variable may run any later word, so there any word naming it still counts."""
+    name, args = inv.name, inv.argv
+    if name == 'start' and inv.via != 'start-process':     # Git Bash's start: [/opts] ["title"] prog
+        while args and (args[0].startswith('/') or not args[0]):
+            args = args[1:]
+        if not args:
+            return None
+        name, args = cm.base_name(args[0]), args[1:]
+    if name == rules.LOCK_SCRIPT:
+        k = -1
+    elif inv.dyn or rules.HUB_CODE_PYTHON_RE.match(name):
+        k = None if inv.dyn else _python_script(args)
+        if k is None:
+            k = next((i for i, t in enumerate(args) if cm.base_name(t) == rules.LOCK_SCRIPT), None)
+        if k is None or cm.base_name(args[k]) != rules.LOCK_SCRIPT:
+            return None
+    else:
+        return None
+    rest = []
+    for w in args[k + 1:]:
+        rest.extend(w.split() if ' ' in w else [w])     # a Start-Process "-ArgumentList" string
+    return rest
 
 
 def lock_verb(parsed, m):
