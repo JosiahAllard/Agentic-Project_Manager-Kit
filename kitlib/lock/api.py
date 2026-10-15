@@ -29,7 +29,7 @@ from kitlib.lock import queue as qm
 from kitlib.lock.run import expected_end, request_stop
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_USAGE,
                                ID_RE, LockError, Store, actor_host, caller, iso, owns, parse_iso,
-                               public, read_json, utc_now)
+                               public, read_json, read_record, utc_now)
 from kitlib.proc import process
 
 SCHEMA_VERSION = 1
@@ -595,11 +595,12 @@ def set_game_mode(actor, enabled, store=None):
 def end_run(actor, rid, store=None):
     """Asks a live run to end (its stop request: a waiting run leaves the queue, a held run's
     tree is ended, a background run gets settings.bg_stop_grace_s to checkpoint). It does not
-    wait. result: {id, requested}."""
+    wait. result: {id, requested}. A record that cannot be read (_active_record) is the store
+    error, never "no live run"."""
     def go(store):
         me = who(actor, store)
         _id(rid, "r")
-        d = read_json(store.path("active", rid + ".json"))
+        d = _active_record(store, rid)
         if not d or not process.alive(d.get("pid", 0), d.get("ctime")):
             raise ApiError("not_found", "no live run %s" % rid, "id")
         _check(me, "end_run", d)
@@ -639,15 +640,28 @@ def move_to_top(actor, rid, store=None):
     return _write(store, go)
 
 
+def _active_record(store, rid):
+    """Run rid's record in active/, or None when it has none. One that is there but cannot be
+    read (its wrapper's os.replace is swapping it) is read again for settings.queue_read_s,
+    then ApiError store: never taken for no run (a live run read as ended)."""
+    path = store.path("active", rid + ".json")
+    d, there = read_record(path, store.settings.queue_read_s)
+    if there and d is None:
+        raise ApiError("store", "run %s's record %s could not be read for %g s"
+                       % (rid, path, store.settings.queue_read_s), "id")
+    return d
+
+
 def run_record(rid, store=None):
     """One run's record, live (with live: true) or ended, or None. An id the lock does not make
-    (store.ID_RE, r-) is the invalid error result, never a path."""
+    (store.ID_RE, r-) is the invalid error result, never a path; a live record that cannot be
+    read (_active_record) is the store error result, never None."""
     store = _store(store)
     try:
         _id(rid, "r")
+        d = _active_record(store, rid)
     except ApiError as e:
         return _fail(store, e.code, e.message, e.field)
-    d = read_json(store.path("active", rid + ".json"))
     if d and process.alive(d.get("pid", 0), d.get("ctime")):
         return dict(d, live=True)
     return read_json(store.path("ended", rid + ".json"))

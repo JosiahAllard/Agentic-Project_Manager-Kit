@@ -1,6 +1,6 @@
 # Specialty skills: task specialties as skills, not agent types
 
-Status: DRAFT, pending Q-962 (the owner's answers to the questions below). Nothing here is built. Written for the state after two pending
+Status: decided (ready to build); the owner accepted all eight recommendations ("Decisions"). Nothing here is built. Written for the state after two pending
 changes land: senior-worker on opus/high with strong-worker on opus/medium (the tier change), and a
 weak-worker on haiku 5.5 (the weak-worker change). Those rows come from the owner's rulings, not from main.
 
@@ -52,11 +52,11 @@ know-how. Every inference is marked "inference"; the rest is read from the code.
 |---|---|---|---|
 | weak-worker, worker, strong-worker, senior-worker | per the tier and weak-worker changes | write, builder | the brief picks one per task; specialty skills ride on these |
 | read type (reviewer + researcher) | standard / high | read, read-only | skills `specialty-review`, `specialty-research` |
-| docs type (records + spec-writer) | standard / see Q3 | write, docs | skills `specialty-records`, `specialty-spec` |
+| docs type (records + spec-writer) | standard / medium, raised for specs | write, docs | skills `specialty-records`, `specialty-spec` |
 | lander, test-runner, coordinator, pm, consultant, deep-worker | unchanged | unchanged | |
 
 Retired: asset-smith, tech-artist, sound-smith, researcher, reviewer, records, spec-writer (7 files);
-added: read type, docs type. Role files: 16 now, 12 with weak-worker.
+added: `analyst` (the read type) and `docs-writer` (the docs type); the generic terms are used below. Role files: 16 now, 12 with weak-worker.
 
 ## Specialty skills
 
@@ -88,19 +88,11 @@ at the default standard tier; the "Reviewer model" rule in `roster.md` raises it
 unchanged. Guard: `LOCK_VERBS['read'] = {'status'}`, checkout read-only to the shell, owner paths
 read-only (`kitlib/guard/rolepolicy.py` `RULES`); identical to today.
 
-What replaces the researcher's `write` capability:
-
-- A. Report returned as text, plus a file in the agent's scratch folder for long notes (the rule
-  already in `subagent-dispatch` step 4). Scratch is outside the checkout, so `rolepolicy.check`
-  role-edit never fires. No `writes`.
-- B. `writes: [docs/ops/research/*.md]` in the role file. `role_may_write` honours it for file-tool
-  edits only (a shell write stays refused; `*` never crosses `/`). It applies to every dispatch of
-  the type, so a review agent could write there too; notes land in a worktree no read type can
-  commit; the policy is opt-in (`.kit.json` `guard.role_policy`).
-- C. Text only, `write` dropped. Loses the survivable long-notes file.
-
-Recommendation: A. It is the researcher's behaviour today (its body says scratch only), adds no repo
-write path, and the report is the output. Inference: B buys nothing a scratch file does not.
+What replaces the researcher's `write` capability (decided): the report is returned as text, plus a
+file in the agent's scratch folder for long notes (the rule already in `subagent-dispatch` step 4).
+Scratch is outside the checkout, so `rolepolicy.check` role-edit never fires. No `writes`, no repo
+write path; `write` is dropped from the capabilities. This is the researcher's behaviour today (its
+body says scratch only).
 
 ## The docs type (records + spec-writer)
 
@@ -109,9 +101,11 @@ sandbox and capabilities, so the backlog rights (`DOCS`: may `add`, may not `pul
 are unchanged. "Docs only" is prose today, not a guard rule; the merge keeps it prose. Add `skill`
 to `capabilities`.
 
-Effort: records is low, spec-writer high; a role file takes one value. "Set per dispatch" needs a
-host input the kit does not carry (Finding 3). Default: `effort: medium` in the role file; a spec
-that needs more is raised in model (the existing upward override). Open: Q3.
+Effort (decided): records is low, spec-writer high; a role file takes one value. The role file says
+`effort: medium`; a spec is raised, by model (the existing upward override). "Set per dispatch" needs
+a host input the kit does not carry (Finding 3). After the build, check whether a host's dispatch
+call can carry an effort at all; if it can, the roster rule "Effort is not settable per dispatch"
+is rewritten and the brief states effort.
 
 ## Lander and test-runner stay separate (confirmed)
 
@@ -138,10 +132,10 @@ widening of a strict path. Keep both.
    owner's tier text; this adds only the specialty's minimum tier.
 2. "Roles and what each is for": drop 7 names, add the read and docs types, one line listing the
    specialty skills.
-3. "Choosing": delete "Effort is not settable per dispatch" only if Q3 verifies a host input. The
+3. "Choosing": delete "Effort is not settable per dispatch" only if the post-build effort check finds a host input. The
    Reviewer-model rule takes the read type's name.
 4. "Creative dispatches" points at the three skills; the profile's roster line ("less art or audio")
-   becomes a list of specialty skills the repo does not use.
+   becomes "specialty skills not used", stated by a repo with no art or audio (an owner edit, to-do 3).
 5. `subagent-dispatch` step 3 and `branch-review` step 3 take the new read type name.
 
 ## Guard and rolepolicy mapping
@@ -182,45 +176,39 @@ risk maps and templates. `doc_index.py --role <name>` exits 2 on an unknown role
 topic map (a's `.kit.json`; b's brief template via `roles_doc`) carries the new names, and
 per-specialty topics move into the brief. `tests/content/test_role_names.py` fails on a leftover name.
 
-Deprecation: recommend a hard cut in one landing. Shims for seven agent files would keep the list
-this ruling shrinks, and `ALIASES` cannot carry a skill (Finding 9). A stale dispatch of a removed
-type fails loudly in the host.
+Deprecation (decided): a hard cutover in one landing. Nothing that dispatches the old type names may
+be running when it lands. Shims for seven agent files would keep the list this ruling shrinks, and
+`ALIASES` cannot carry a skill (Finding 9). A stale dispatch of a removed type fails loudly in the
+host.
 
 ### Owner to-do (owner-only paths, literal)
 
-1. `kitlib/backlog/roles.py`, module docstring: replace "(records and spec-writer: docs)" with the
-   docs type's chosen name. Text only.
+1. `kitlib/backlog/roles.py`, module docstring: replace "(records and spec-writer: docs)" with
+   `docs-writer`. Text only.
 2. Repo (a) `.kit.json`, `doc_index.roles`: replace the keys reviewer, researcher, records,
-   spec-writer, tech-artist, asset-smith, sound-smith with the two new names (topics merged).
+   spec-writer, tech-artist, asset-smith, sound-smith with `analyst` and `docs-writer` (topics merged).
 3. Agent-profile and coordinator-profile lines naming `records`, `spec-writer`, `tech-artist`,
    `asset-smith`, `sound-smith` in repos (a) and (b): new names. The PM's report lists the lines.
+   A repo with no art or audio states "specialty skills not used" in its coordinator profile.
 4. The kit's own `docs/agent-profile.md`, `AGENTS.md`, `.kit.json`, `tools/gate.json`,
    `.github/workflows/`: no retired name found; nothing to edit.
 
-## Candidate names (owner picks)
+## Decisions
 
-- Read type: `analyst`, `inspector`, `investigator`. Recommend `analyst` (neither `reviewer` nor
-  `researcher`, so neither task is the odd one out). Fourth option: keep `reviewer`, drop
-  `researcher`: fewest renames, but research dispatches carry a misleading name.
-- Docs type: `docs-writer`, `scribe`, `documenter`. Recommend `docs-writer` (the owner's term; the
-  backlog group is already `docs`).
+The owner accepted all eight recommendations.
 
-## Owner questions
-
-1. Names for the read and docs types. Recommend `analyst` and `docs-writer`.
-2. Researcher write replacement: A (text + scratch file), B (`writes` notes folder), C (text only).
-   Recommend A.
-3. Docs type effort. Recommend `effort: medium` in the role file, spec raised by model, after one
-   check of whether the hosts' dispatch call can carry an effort. If yes, the roster rule "Effort is
-   not settable per dispatch" is rewritten and the brief states effort.
-4. Hard cut or shim period. Recommend hard cut, one landing.
-5. Specialty to worker tier: 3D assets and tech-art senior-worker, sound worker (senior-worker for
-   design), never weak-worker for creative work. Recommend as in the skills table.
-6. Accept the widened tools (read type has `bash` and web; creative work gets a worker's full tool
-   set, limits in skill text). Recommend accept; the alternative keeps the three creative types.
-7. Skill names with the `specialty-` prefix. Recommend yes.
-8. Repos that exclude art or audio state "specialty skills not used" in the coordinator profile
-   (owner edit, to-do 3). Recommend yes.
+1. Names: the read type is `analyst`, the docs type is `docs-writer`.
+2. Research is returned as text plus a scratch file ("The merged read type").
+3. `docs-writer` runs at medium effort, raised for specs; after the build, check whether a dispatch
+   can set effort at all ("The docs type").
+4. A hard cutover in one landing; nothing that dispatches the old type names may be running when it
+   lands ("Migration inventory").
+5. Minimum tiers as in the skills table, with no weak-worker on creative work ("Specialty skills").
+6. The wider tools: the read type has `bash` and web; creative work gets a worker's full tool set,
+   limits in skill text (Findings 4 and 5).
+7. Skills are named `specialty-*`.
+8. Repos with no art or audio say "specialty skills not used" in their coordinator profile (an owner
+   edit, not a kit change; to-do 3).
 
 ## Build split
 
@@ -228,11 +216,11 @@ Order: A, then B (after the tier and weak-worker changes land: `docs/ROSTER.md` 
 
 | branch | files | risk | size | waits for |
 |---|---|---|---|---|
-| A skills | `content/skills/specialty-*/` (7), rendered `hosts/codex/shell/skills/`; tests/skills, tests/content | strict `content/skills/**`; High | L | Q2, Q5, Q7 |
-| B types and dispatch (atomic hard cut) | delete 7 `content/roles/*.md`, add 2; `coordinator-dispatch`, `subagent-dispatch`, `branch-review`, `coordinator.md`; rendered `hosts/*/shell/agents/**`, `plugin.json`; ROSTER, guard, content, go-live docs; `templates/common/AGENTS.md`; tests; `command_canary.py` | strict `content/roles/**`, `content/skills/**`, `hosts/*/shell/agents/**`, `hosts/*/adapter/**`; High | L | A, the tier changes, Q1, Q3, Q4, Q6 |
-| C guard | none planned; only if Q2 is B (role file `writes:`, `tests/guard/test_rolepolicy.py`) | strict `kitlib/guard/**` if touched; High | S | Q2 |
+| A skills | `content/skills/specialty-*/` (7), rendered `hosts/codex/shell/skills/`; tests/skills, tests/content | strict `content/skills/**`; High | L | nothing |
+| B types and dispatch (atomic hard cut) | delete 7 `content/roles/*.md`, add 2; `coordinator-dispatch`, `subagent-dispatch`, `branch-review`, `coordinator.md`; rendered `hosts/*/shell/agents/**`, `plugin.json`; ROSTER, guard, content, go-live docs; `templates/common/AGENTS.md`; tests; `command_canary.py` | strict `content/roles/**`, `content/skills/**`, `hosts/*/shell/agents/**`, `hosts/*/adapter/**`; High | L | A, the tier changes |
+| C guard | none (research returns text plus a scratch file, no `writes`): not built | | | |
 | D repo migration | to-do 1 to 3 (owner paths); non-owner docs in repos (a) and (b) | docs Low; owner paths owner-only | S | B landed |
 
 Gates: A and B reach the full gate (`python tools/gate.py --full`; strict landing needs a fresh
 strong reviewer, `kitlib/gate/strict_defaults.py`); `tools/render_content.py --check` clean. No
-lock, landing or guard code is touched unless Q2 is B.
+lock, landing or guard code is touched.
