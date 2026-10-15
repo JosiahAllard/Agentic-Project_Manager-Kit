@@ -143,6 +143,7 @@ Every rule is a read-only check of real state. `kitlib/guard/context.py` `Ctx` g
     - Identifiers: no name, attribute, import alias or keyword argument starts with `_`, is a frame identifier (`gi_frame`, `f_globals`; `rules.PY_FRAME_ATTR_RE`) or is one of `rules.PY_DENIED_NAMES` (`exec`, `eval`, `compile`, `open`, `getattr`, `setattr`, `delattr`, `globals`, `locals`, `vars`, `breakpoint`, `help`, `type`, `object`, `super`, `input`); `open` passes only as the read call above.
     - PowerShell: when PowerShell is anywhere on the way to python (the line's shell, or the shell around a `bash -c`), code holding a double quote or a backslash is a write, and so is the run when any word of a PowerShell command on the way (python's own, or the `bash -c` text) holds a double quote, is empty, or holds a blank and ends in a backslash (`rules.ps_native_unsure`). Windows PowerShell 5.1's native-argument quoting can hand python other text than the guard read: it passes an inner double quote unescaped, drops an empty argument (so `python -I -c '' "<code>"` runs the second word), and wraps an argument with a space in quotes without doubling a trailing backslash.
     - Start-Process (and its aliases `start`, `saps`): a python it starts is never proved. It gets one command line the guard re-splits with the quotes taken out, so the code python reads is not the word the guard read.
+    - These two checks (the PowerShell word and Start-Process) cover every python run, a script or module too: `python tools/x.py --note ''` from PowerShell is a write of its working directory, since python may get other words than the guard read.
     - Empty or blank code is a write through any shell.
     - cmd.exe: when cmd.exe is anywhere on the way to python (`cmd /c`), every `python -c` is a write. cmd ends a quoted part at a `\"` that python reads as a quote, and keeps `print(...)` one word where the guard's cmd reading splits it at the `(`.
 
@@ -196,7 +197,7 @@ no write target here ("Shell writes") and passes this rule: it writes what a com
 
 The renderer writes these as a process (`python tools/render_content.py --write`, run by hand, by
 `tools/commit.py` or by the pre-commit hook), and a python script's own writes are not shell write
-targets ("Shell writes": only `-c` code or a script on stdin counts), so the render is never refused.
+targets ("Shell writes": only `-c` code or a script on stdin counts, and a run PowerShell or Start-Process may hand other words), so the render is never refused.
 A repository that is not the kit, a hand-written file in a host's shell (`scripts/`, `mcp/`, the
 Claude hub page) and the sources themselves pass. tests/guard/test_generated.py.
 

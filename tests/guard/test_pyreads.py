@@ -162,6 +162,16 @@ class PyReadsOnly(unittest.TestCase):
                 self.assertFalse(rules.py_reads_only(sh.Word(text, False, 0, 0), {'I'}, ps=True))
         self.assertTrue(rules.py_reads_only(sh.Word("print('a b') #\\", False, 0, 0), {'I'}))
 
+    def test_ps_native_unsure(self):
+        """The words Windows PowerShell 5.1 may hand a program as other than one argument: one
+        holding a double quote, an empty one, and one with a blank that ends in a backslash."""
+        for text in ('a"b', '"', '', 'a b\\', ' \\'):
+            with self.subTest(text=text):
+                self.assertTrue(rules.ps_native_unsure(sh.Word(text, False, 0, 0)))
+        for text in ('print(1)', 'a b', 'a\\b', 'ab\\', ' ', "it's"):
+            with self.subTest(text=text):
+                self.assertFalse(rules.ps_native_unsure(sh.Word(text, False, 0, 0)))
+
     def test_empty_code(self):
         """Empty or blank code is not proved, through any shell: Windows PowerShell 5.1 drops an
         empty native argument, so python takes the next word as its code."""

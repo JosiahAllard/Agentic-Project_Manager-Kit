@@ -340,6 +340,20 @@ ROWS = [
     ('main-checkout: python -I -c through Start-Process, read-only code', lambda w: ps(
         "Start-Process python -ArgumentList '-I','-c','print(1)'", w.main, sub=True),
      'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c through the saps alias, read-only code', lambda w: ps(
+        "saps python -ArgumentList '-I','-c','print(1)'", w.main, sub=True),
+     'deny', 'main-checkout', None),
+    # any word of a PowerShell command on the way to python that PowerShell 5.1 may hand on as
+    # other than one argument: empty (dropped), or a blank and a backslash at its end
+    ('main-checkout: python -I -c in a bash -c beside an empty word, PowerShell', lambda w: ps(
+        "bash -c 'python -I -c print(1)' ''", w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c in a bash -c beside a word ending in a backslash, PowerShell',
+     lambda w: ps("bash -c 'python -I -c print(1)' 'a b%s'" % BS, w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c beside a word ending in a backslash, PowerShell', lambda w: ps(
+        "python -I -c 'print(1)' 'a b%s'" % BS, w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python script beside an empty word, PowerShell', lambda w: ps(
+        "python '' -c \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'main-checkout', None),
     # a bash -c text with a double quote reaches bash split differently through PowerShell 5.1
     ('main-checkout: python -I -c in a bash -c text with a double quote, PowerShell', lambda w: ps(
         "bash -c 'python -I -c \"print(1)\" \"x;touch f\"'", w.main, sub=True),
