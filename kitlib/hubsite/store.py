@@ -37,7 +37,9 @@ skipped, never a document newer than the revision. Store.open also raises each i
 highest id on disk, treating an unreadable or empty _meta.json as missing, and removes the temp
 files a crash left. An id is never given twice, unless _meta.json is lost or rolled back after the
 document holding the highest id was deleted: the counter is then rebuilt from the ids still on
-disk. A put of a server-style id (Q-005) raises its counter too, committed with the meta.
+disk. A put of a server-style id (Q-005) raises its counter too, committed with the meta. A
+counter never starts below ID_FLOOR: the first question add gives is Q-1000, whatever the
+store holds below it.
 
 Ids are file names, and NTFS ignores case: a new id that differs only in case from an existing
 one (Alpha beside alpha) is refused, HubError invalid.
@@ -82,6 +84,10 @@ RING = 512                      # events held for changes_since and wait
 REPLACE_S = 2.0                 # how long os.replace is retried while a reader holds the file
 REFUSED = ('handstep-commands',)    # warn-level hubvalidate codes the store refuses (section 9)
 TMP_SUFFIX = '.tmp'
+# The lowest id add gives, by prefix (1 when absent). The rulings ledger cites questions up to
+# Q-978 from before the store, whose counter had fallen below them; new questions start at
+# Q-1000 so no id the ledger cites is given again (owner ruling on KIT-HUB-DIRECT-QUESTIONS).
+ID_FLOOR = {'Q': 1000}
 
 Result = collections.namedtuple('Result', 'id version revision warnings')
 Event = collections.namedtuple('Event', 'rev collection id op status')
@@ -264,7 +270,8 @@ class Store(object):
         for coll, prefix in schema.ID_PREFIX.items():
             n = saved.get(prefix, 0)
             n = n if isinstance(n, int) and not isinstance(n, bool) else 0
-            self._counters[prefix] = max([n] + [_id_number(prefix, d) for d in self._docs[coll]])
+            self._counters[prefix] = max([n, ID_FLOOR.get(prefix, 1) - 1]
+                                         + [_id_number(prefix, d) for d in self._docs[coll]])
         self._known = self._revision
 
     def close(self):

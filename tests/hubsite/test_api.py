@@ -165,10 +165,10 @@ class QuestionTest(ApiCase):
         obj = self.ok('POST', '/questions', AGENT, {
             'title': 'Which?', 'repo': 'kit', 'from': 'pm', 'context': 'c', 'options': OPTIONS,
             'recommended': 1, 'refs': ['S-001'], 'urgent': True, 'story': 'S-001'})
-        self.assertEqual((obj['id'], obj['version'], obj['ok']), ('Q-001', 1, True))
+        self.assertEqual((obj['id'], obj['version'], obj['ok']), ('Q-1000', 1, True))
         self.assertEqual(obj['revision'], self.store.revision)
         self.assertIsInstance(obj['warnings'], list)
-        d = self.store.get('questions', 'Q-001')
+        d = self.store.get('questions', 'Q-1000')
         self.assertEqual((d['status'], d['asked_at'], d['title'], d['recommended'], d['urgent']),
                          ('open', NOW, 'Which?', 1, True))
         self.assertNotIn('answer', d)

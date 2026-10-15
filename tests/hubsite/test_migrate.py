@@ -213,7 +213,8 @@ class ImportCase(Case):
     def test_the_next_id_the_store_gives_is_above_every_imported_one(self):
         self.run_both()
         with Store.open(self.root) as s:
-            self.assertEqual(s.add('questions', question()).id, 'Q-010')
+            # the imported questions end at Q-009, below the store's question floor
+            self.assertEqual(s.add('questions', question()).id, 'Q-1000')
             self.assertEqual(s.add('stories', MIRROR['stories']['S-001']).id, 'S-002')
 
     def test_an_imported_document_is_at_version_0_until_the_store_writes_it(self):

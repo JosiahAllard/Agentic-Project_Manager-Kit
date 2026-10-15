@@ -1208,8 +1208,8 @@ class VerbCase(CliCase):
 class PendingCase(VerbCase):
     def test_pending_prints_the_items_get_pending_answers(self):
         self.assertEqual(self.ok('pending'), [])
-        self.assertEqual(self.ask(), ['ASKED Q-001'])
-        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '1'), ['ANSWERED Q-001 right'])
+        self.assertEqual(self.ask(), ['ASKED Q-1000'])
+        self.assertEqual(self.ok('answer', 'Q-1000', '--choice', '1'), ['ANSWERED Q-1000 right'])
         self.assertEqual(self.ok('to-pm', 'add', '--text', 'look at this', '--repo', 'kit'),
                          ['QUEUED P-001'])
         self.assertEqual(self.ok('to-pm', 'send'), ['SENT P-001'])
@@ -1219,7 +1219,7 @@ class PendingCase(VerbCase):
         self.assertEqual(self.ok('pending'), [
             '%s %s [%s] %s' % (i['kind'], i['id'], i['repo'] or '-', i['title'])
             for i in want['items']])
-        self.assertIn('Q-001 [kit] which way', self.ok('pending')[0])
+        self.assertIn('Q-1000 [kit] which way', self.ok('pending')[0])
 
 
 class WriteCase(VerbCase):
@@ -1228,23 +1228,23 @@ class WriteCase(VerbCase):
         self.assertEqual(self.ok(
             'questions', 'add', '--title', 'which way', '--repo', 'kit', '--context-file', context,
             '--option', 'left::go left', '--option', 'right::go right', '--recommended', '0',
-            '--refs', 'B-1', 'B-2', '--urgent', '--from', 'coordinator'), ['ASKED Q-001'])
+            '--refs', 'B-1', 'B-2', '--urgent', '--from', 'coordinator'), ['ASKED Q-1000'])
         doc = self.direct('/questions')['items'][0]
         self.assertEqual((doc['context'], doc['recommended'], doc['refs'], doc['urgent'],
                           doc['from']), ('the context\nof it\n', 0, ['B-1', 'B-2'], True,
                                          'coordinator'))
         self.assertEqual(doc['options'], [{'label': 'left', 'description': 'go left'},
                                           {'label': 'right', 'description': 'go right'}])
-        self.assertEqual(self.ok('questions'), ['Q-001 v1 open [kit] which way'])
+        self.assertEqual(self.ok('questions'), ['Q-1000 v1 open [kit] which way'])
         self.assertEqual(self.ok('questions', '--status', 'answered'), [])
         self.assertEqual(self.ok('questions', '--repo', 'elsewhere'), [])
         # the first option is place 0: it is a choice, not "no choice"
-        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '0', '--note', 'as planned'),
-                         ['ANSWERED Q-001 left'])
+        self.assertEqual(self.ok('answer', 'Q-1000', '--choice', '0', '--note', 'as planned'),
+                         ['ANSWERED Q-1000 left'])
         self.assertEqual(self.ok('questions', '--status', 'answered'),
-                         ['Q-001 v2 answered [kit] which way'])
-        self.assertEqual(self.ok('questions', 'log', 'Q-001', 'D-7', '--if-version', '2'),
-                         ['LOGGED Q-001 D-7'])
+                         ['Q-1000 v2 answered [kit] which way'])
+        self.assertEqual(self.ok('questions', 'log', 'Q-1000', 'D-7', '--if-version', '2'),
+                         ['LOGGED Q-1000 D-7'])
         doc = self.direct('/questions?status=all')['items'][0]
         self.assertEqual((doc['status'], doc['ruling'], doc['answer']['note']),
                          ('logged', 'D-7', 'as planned'))
@@ -1253,13 +1253,13 @@ class WriteCase(VerbCase):
 
     def test_other_needs_a_note_and_a_stale_version_is_refused(self):
         self.ask()
-        self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-001', '--choice', 'other'))
-        self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-001', '--choice', '7'))
-        self.assertIn('REFUSED conflict: ', self.refused('answer', 'Q-001', '--choice', '0',
+        self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-1000', '--choice', 'other'))
+        self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-1000', '--choice', '7'))
+        self.assertIn('REFUSED conflict: ', self.refused('answer', 'Q-1000', '--choice', '0',
                                                          '--if-version', '99'))
-        self.assertEqual(self.ok('answer', 'Q-001', '--choice', 'other', '--note', 'neither'),
-                         ['ANSWERED Q-001 Other'])
-        self.assertIn('REFUSED conflict: ', self.refused('questions', 'log', 'Q-001', 'D-7',
+        self.assertEqual(self.ok('answer', 'Q-1000', '--choice', 'other', '--note', 'neither'),
+                         ['ANSWERED Q-1000 Other'])
+        self.assertIn('REFUSED conflict: ', self.refused('questions', 'log', 'Q-1000', 'D-7',
                                                          '--if-version', '0'))
         self.assertIn('REFUSED not_found: ', self.refused('questions', 'log', 'Q-009', 'D-7',
                                                           '--if-version', '1'))
@@ -1269,19 +1269,19 @@ class WriteCase(VerbCase):
         """The version is the one the caller read: an answer changed after that read is never
         logged under a ruling written for the earlier one."""
         self.ask()
-        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '0'), ['ANSWERED Q-001 left'])
+        self.assertEqual(self.ok('answer', 'Q-1000', '--choice', '0'), ['ANSWERED Q-1000 left'])
         read = self.direct('/questions?status=answered')['items'][0]['version']
         self.assertEqual(self.ok('questions', '--status', 'answered'),
-                         ['Q-001 v%d answered [kit] which way' % read])
-        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '1'), ['ANSWERED Q-001 right'])
-        err = self.refused('questions', 'log', 'Q-001', 'D-7', '--if-version', str(read))
+                         ['Q-1000 v%d answered [kit] which way' % read])
+        self.assertEqual(self.ok('answer', 'Q-1000', '--choice', '1'), ['ANSWERED Q-1000 right'])
+        err = self.refused('questions', 'log', 'Q-1000', 'D-7', '--if-version', str(read))
         self.assertTrue(err.startswith('REFUSED conflict: '), err)
         doc = self.direct('/questions?status=all')['items'][0]
         self.assertEqual((doc['status'], doc.get('ruling'), doc['answer']['label']),
                          ('answered', None, 'right'))
         # the version of the answer as it is now logs it
-        self.assertEqual(self.ok('questions', 'log', 'Q-001', 'D-7', '--if-version',
-                                 str(doc['version'])), ['LOGGED Q-001 D-7'])
+        self.assertEqual(self.ok('questions', 'log', 'Q-1000', 'D-7', '--if-version',
+                                 str(doc['version'])), ['LOGGED Q-1000 D-7'])
 
     def test_a_story_set_on_a_version_it_no_longer_has_is_refused_and_not_set(self):
         story = self.file('story.md', 'As the owner I want it.\n')
@@ -1297,7 +1297,7 @@ class WriteCase(VerbCase):
     def test_the_questions_and_stories_lines_and_json_show_each_documents_version(self):
         self.ask()
         self.ask('and then')
-        self.ok('answer', 'Q-002', '--choice', '0')
+        self.ok('answer', 'Q-1001', '--choice', '0')
         story = self.file('story.md', 'As the owner I want it.\n')
         self.ok('stories', 'add', '--repo', 'kit', '--title', 'a verb', '--story-file', story)
         for verb, path in (('questions', '/questions?status=all'), ('stories', '/stories?status=all')):
@@ -1400,9 +1400,9 @@ class WriteCase(VerbCase):
         self.assertNotIn('s3cret', self.ok('todos', '--json')[0])
 
     def test_a_write_says_each_warning_of_the_document_it_wrote(self):
-        self.assertEqual(self.ask(), ['ASKED Q-001'])
+        self.assertEqual(self.ask(), ['ASKED Q-1000'])
         self.assertEqual(len(self.warned), 1, self.warned)
-        self.assertTrue(self.warned[0].startswith('WARN questions/Q-001 repo: '), self.warned)
+        self.assertTrue(self.warned[0].startswith('WARN questions/Q-1000 repo: '), self.warned)
         self.assertTrue(self.warned[0].endswith('[repo-alias]'), self.warned)
 
 
@@ -1429,13 +1429,13 @@ class WaitVerbCase(VerbCase):
         self.ask()
         now = self.hub.store.revision
         self.assertEqual(self.ok('wait', '--since', str(was), '--timeout', '5'),
-                         ['HUB %d questions Q-001 %s open' % (
+                         ['HUB %d questions Q-1000 %s open' % (
                              now, self.direct('/wait?since=%d&timeout=0' % was)['changes'][0]['op'])])
-        self.ok('answer', 'Q-001', '--choice', '0')
+        self.ok('answer', 'Q-1000', '--choice', '0')
         items = self.direct('/pending')['items']
-        self.assertEqual([i['id'] for i in items], ['Q-001'])
+        self.assertEqual([i['id'] for i in items], ['Q-1000'])
         self.assertEqual(self.ok('wait', '--pending', '--timeout', '5'),
-                         ['HUB %d %s Q-001 which way' % (self.hub.store.revision,
+                         ['HUB %d %s Q-1000 which way' % (self.hub.store.revision,
                                                          items[0]['kind'])])
 
     def test_a_wait_argument_that_is_no_number_is_a_usage_error(self):
