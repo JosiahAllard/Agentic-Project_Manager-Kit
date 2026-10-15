@@ -1294,7 +1294,7 @@ def default_store_refusal(root):
     """Why a write to the implicit `ref` store is refused, and where to write instead: the PM data
     worktree and its store when the repository has one (at_landing.pm_data_root), else the
     `.kit.json` setting that opts in. Records written there by default were lost to the live
-    store once (KIT-BACKLOG-STALE-REF-WRITER), so a ref store is written only when named."""
+    store once, so a ref store is written only when named."""
     from . import at_landing                         # at_landing imports this module
     head = ('%s is the default backlog store: this repository\'s .kit.json names no '
             '"backlog".store, so nothing was written' % STORE_REF)

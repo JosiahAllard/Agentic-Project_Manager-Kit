@@ -1,7 +1,6 @@
 """The `ref` store reached by `.kit.json`'s default alone is read-only (docs/backlog.md "Stores"):
 a write there is refused and names where to write instead, a named `ref` store is written as
-before (KIT-BACKLOG-STALE-REF-WRITER: records written to a stale default ref were lost to the
-live PM data store)."""
+before (records written to a stale default ref were once lost to the live PM data store)."""
 import json
 import os
 import subprocess

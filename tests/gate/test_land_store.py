@@ -35,8 +35,10 @@ def pulled(rid, by=BRANCH, **over):
 class StoreLandCase(test_land.LandCase):
     """A LandCase whose store layer (which inherits os.environ) runs on the fixture's git
     environment and under a temp home (a close reads the machine config's machine_path_folders
-    for its reason), with helpers to seed and read the store on the bare remote."""
+    for its reason), with helpers to seed and read the store on the bare remote. Its `.kit.json`
+    names the ref store: the default alone is read-only (docs/backlog.md "Stores")."""
     STORE = 'ref'
+    KIT = dict(test_land.LandCase.KIT, backlog={'store': 'ref'})
 
     def setUp(self):
         patch = mock.patch.dict(os.environ, fixture_env(), clear=True)
@@ -168,6 +170,25 @@ class ClosesAtLanding(StoreLandCase):
         self.assertEqual(out.code, G.FAILED, out.lines)
         self.assertEqual(self.remote_store(), before)
         self.assertFalse([l for l in out.lines if l.startswith('closed ')], out.lines)
+
+
+class DefaultStoreCloses(StoreLandCase):
+    KIT = test_land.LandCase.KIT                     # names no backlog store
+
+    def test_a_close_on_the_default_store_is_refused_as_a_warning_and_the_landing_stands(self):
+        before = self.seed(pulled('FOO'))
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.remote_main(), out.merge)
+        self.assertEqual(self.remote_store(), before)      # the stale default ref is not written
+        self.assertEqual(self.stems(), ['FOO'])
+        warn = [l for l in out.lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 1, out.lines)
+        self.assertIn('FOO', warn[0])
+        self.assertIn('is the default backlog store', warn[0])
+        self.assertEqual(len([l for l in out.lines if l.startswith('LANDED ')]), 1, out.lines)
+        self.assertIsNone(self.lock().read())
 
 
 class ClosesOnABranchStore(StoreLandCase):

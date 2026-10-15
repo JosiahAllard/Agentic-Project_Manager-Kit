@@ -1,5 +1,6 @@
 """Shared fixtures for the backlog tests: a record builder in the per-repository shape and a store
 on a real temporary repository with a bare remote (tests/gitfixture.py)."""
+import json
 import os
 import threading
 import time
@@ -30,6 +31,19 @@ TODAY = '2026-10-07'
 ADD_WHY = 'a test fixture, found on no branch'
 ADD_NONE = dict(found_on='none', why_not_folded=ADD_WHY)
 ADD_FLAGS = ('--found-on', 'none', '--why-not-folded', ADD_WHY)
+
+
+def kit_json_ref(repo, data=None, root=None, commit=True):
+    """Write `.kit.json` in `root` (default the repo's) as `data` with `"backlog".store` named
+    `ref`, and commit it unless `commit` is false. A fixture that writes the ref store names it:
+    the default store alone is read-only (docs/backlog.md "Stores")."""
+    data = json.loads(json.dumps(data or {}))
+    data.setdefault('backlog', {}).setdefault('store', 'ref')
+    root = root or repo.root
+    repo.write('.kit.json', json.dumps(data) + '\n', root=root)
+    if commit:
+        repo.commit('kit config: the ref store', '.kit.json', cwd=root)
+    return data
 
 
 def record_text(drop=(), body='', **over):
