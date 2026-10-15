@@ -578,7 +578,7 @@ HUB_MODULE = 'tools.hub'
 #   python's -m (or a cluster ending in m, --module, `runpy`) naming hub itself: cd tools && python -m hub
 #   (hub_module_names).
 HUB_NAME_RES = (
-    re.compile(r'(?i)(?<![\w-])hub(?:\.py[cw]?|\.[\w-]+\.pyc)\b'),
+    re.compile(r'(?i)(?<![\w-])hub(?:\.py[cw]?|(?:\.[\w-]+)+\.pyc)\b'),
     re.compile(r'(?i)(?<=\w)\.hub(?![\w.-])'),
     re.compile(r'(?i)import\s+(?:[\w. \t]+,\s*)*(?:\w+\s*\.\s*)*hub(?![\w-])'),
     re.compile(r'(?i)\bfrom\s+(?:\w+\s*\.\s*)*\.*\s*hub\s+import\b'),
@@ -593,6 +593,9 @@ HUB_PY_MODULE_RE = re.compile(r'''(?i)(?P<mid>[^;|&\n]*?)(?:(?<![\w-])-[A-Za-z]*
 # runs commit.py, and python reads no option after its script word
 HUB_PY_MESSAGE_SCRIPTS = frozenset(('commit.py', 'backlog.py', 'ledger.py'))
 HUB_PY_PLAIN_WORD_RE = re.compile(r'''^(['"]?)([\w./\\:+,=-]+)\1$''')
+# a word before that script word (an option or its value) the shell passes as written: no quote,
+# escape, backtick, variable, wildcard or brace, which could join or split words
+HUB_PY_OPT_WORD_RE = re.compile(r'^[\w./:+,=-]+$')
 # hub quoted as a name ('hub', ".hub") counts in a command whose text also loads a module by name:
 # __import__('tools', fromlist=['hub']), importlib.import_module('.hub', 'tools'), run_module('hub')
 HUB_QUOTED_RE = re.compile(r'''(?i)['"]\.*hub['"]''')
@@ -616,8 +619,11 @@ HUB_SHAPE = 'python, its plain options, then tools/hub.py or -m tools.hub, then 
 # <dir>/hub/todos), is not the tool; hub\ still counts, as a backslash may be Python's line join.
 HUB_BARE_RE = re.compile(r'(?i)(?<![\w-])(?<!\w\.)hub(?![\w/-])')
 HUB_IMPORT_RE = re.compile(r'(?i)\bimport\b')
-# a line that can make `cat` run another program, so a heredoc cat takes is read (hub_written_bodies)
-HUB_CAT_REDEFINED_RE = re.compile(r'(?<![\w-])cat\s*\(\s*\)|\bfunction\s+cat\b|\bhash\b|\balias\b|\benable\b')
+# a line that can make `cat` run another program, or send what cat writes to one (exec's or
+# coproc's descriptors, code run by eval, source or .), so a heredoc cat takes is read
+# (hub_written_bodies). Read anywhere on the line, heredoc bodies included: fail-closed
+HUB_CAT_REDEFINED_RE = re.compile(r'(?<![\w-])cat\s*\(\s*\)|\bfunction\s+cat\b|\bhash\b|\balias\b|\benable\b'
+                                  r'|\bexec\b|\beval\b|\bsource\b|\bcoproc\b|(?<![^\s;&|(){}])\.(?![^\s;&|()])')
 # the interpreters whose word makes a line one that runs python for hub_code_names (a program's
 # base name, cm.base_name: case and .exe folded, any path before it): UI_PYTHON_RE's, plus ipython
 # and pypy, with a version (pypy3, pypy3.10, ipython3). Kept apart from UI_PYTHON_RE, whose other
@@ -903,8 +909,12 @@ def hub_module_names(text):
     naming hub on the same command (HUB_PY_WORD_RE, HUB_PY_MODULE_RE), else None. Every python
     word is tried, so one inside another's arguments (`$(python -m hub)`) is read too. The -m is
     python's own unless python's words before it reach a script word first (hub_py_script_first):
-    `python <kit>/tools/commit.py -m "Hub store: x"` gives commit.py its message."""
+    `python <kit>/tools/commit.py -m "Hub store: x"` gives commit.py its message. A python word
+    followed by / or by \\ and a letter is a folder's name (`.../Python312/python.exe`), not a
+    program: the program's own word after it is tried."""
     for w in HUB_PY_WORD_RE.finditer(text):
+        if re.match(r'/|\\\w', text[w.end():w.end() + 2]):
+            continue
         m = HUB_PY_MODULE_RE.match(text, w.end())
         if m and not hub_py_script_first(m.group('mid')):
             return text[w.start():m.end()].strip()
@@ -915,8 +925,11 @@ def hub_py_script_first(mid):
     """True when python's words `mid` (between the python word and a -m naming hub) reach a
     record tool's script word (HUB_PY_MESSAGE_SCRIPTS, a plain word: no variable, no wildcard)
     before any option that takes code or a module (a cluster holding c or m) or `--`. A -W or -X
-    at a cluster's end takes the next word; --check-hash-based-pycs takes one. Anything else is
-    python's -m: fail-closed."""
+    at a cluster's end takes the next word; --check-hash-based-pycs takes one. Every word before
+    the script word, option values included, must be plain (HUB_PY_OPT_WORD_RE): the split here is
+    on whitespace, and an escaped space, a quote, a backtick, a variable or an expansion lets the
+    shell hand python other words (`-X a\\ commit.py -m hub` gives -X the value `a commit.py`).
+    Anything else is python's -m: fail-closed."""
     toks = mid.split()
     i = 0
     while i < len(toks):
@@ -938,7 +951,8 @@ def hub_py_script_first(mid):
             i += skip
             continue
         m = HUB_PY_PLAIN_WORD_RE.match(t)
-        return bool(m) and ntpath.basename(m.group(2)).lower() in HUB_PY_MESSAGE_SCRIPTS
+        return (bool(m) and ntpath.basename(m.group(2)).lower() in HUB_PY_MESSAGE_SCRIPTS and
+                all(HUB_PY_OPT_WORD_RE.match(o) for o in toks[:i]))
     return False
 
 
@@ -1306,9 +1320,11 @@ def hub_written_bodies(parsed):
     """The heredoc redirects of the line `parsed` whose body cat only writes to a file: a bash
     command of the line's own text (no substitution, group or nested shell) whose program is cat
     itself, every word literal, in no pipe, its output sent with > or >> to a literal file that is
-    no device (/dev/..., /proc/..., CON), and the body quoted (<<'EOF') or holding no $( or
-    backtick bash would run. Anything else may reach python: its body stays read, as on a line
-    that can make cat another program (a function named cat, hash, alias, a PATH set)."""
+    no device by any spelling (hub_device_target: /./dev/fd/3, /proc/..., CON), and the body
+    quoted (<<'EOF') or holding no $( or backtick bash would run. Anything else may reach python:
+    its body stays read, as on a line that can make cat another program or hand its file to one
+    (HUB_CAT_REDEFINED_RE: a function named cat, hash, alias, exec, eval, source, ., coproc; a
+    PATH set)."""
     out = []
     if HUB_CAT_REDEFINED_RE.search(parsed.text):
         return out
@@ -1337,10 +1353,13 @@ def hub_written_bodies(parsed):
 
 
 def hub_device_target(text):
-    """True when a redirect target `text` is a device or a process's file, not a file on disk."""
+    """True when a redirect target `text` is a device or a process's file, not a file on disk, by
+    any spelling: any folder of the path named dev or proc (/./dev/fd/3, //dev/stdout, dev/stdout,
+    ../dev/stdout) counts, so a folder of that name on disk does too (fail-closed)."""
     t = text.replace('\\', '/').lower()
     base = t.rstrip('/').rsplit('/', 1)[-1].split('.', 1)[0].rstrip(':')
-    return (t.startswith(('/dev/', '/proc/', '//./', '//?/')) or
+    parts = posixpath.normpath(t).split('/')[:-1]
+    return (t.startswith(('/dev/', '/proc/', '//./', '//?/')) or 'dev' in parts or 'proc' in parts or
             base in ('con', 'prn', 'aux', 'nul', 'conin$', 'conout$') or re.fullmatch(r'(com|lpt)\d', base) is not None)
 
 

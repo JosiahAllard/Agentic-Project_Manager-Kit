@@ -984,12 +984,26 @@ class FailClosed(Hub):
             (bash, "cat <<'EOF' | python -\nimport json\nprint('hub page')\nEOF"),
             (bash, "cat > gen.py <<'EOF' | python -\nimport json\nprint('hub page')\nEOF"),
             (bash, "cat > gen.py <<'EOF'\nimport tools.hub as h\nh.main(['answer', 'Q-1'])\nEOF\npython gen.py"),
-            (bash, "cat > gen.py <<'EOF'\nimport json\nEOF\npython - <<'EOF'\nimport json\nprint('hub')\nEOF"),
-            (bash, "cat > $f <<'EOF'\nimport json\nprint('hub')\nEOF\npython gen.py"),
-            (bash, "cat > /dev/stdout <<'EOF'\nimport json\nprint('hub')\nEOF\npython gen.py"),
-            (bash, "cat > gen.py <<EOF\nimport json\n$(python -c 'print(1)')\nprint('hub')\nEOF\npython gen.py"),
-            (bash, "cat() { python -; }; cat > gen.py <<'EOF'\nimport json\nprint('hub')\nEOF"),
-            (bash, "{ cat > gen.py <<'EOF'\nimport json\nprint('hub')\nEOF\n} ; python gen.py"),
+            (bash, "cat > gen.py <<'EOF'\nimport json\nEOF\npython - <<'EOF'\nimport json\nhub = 1\nEOF"),
+            (bash, "cat > $f <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > /dev/stdout <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > gen.py <<EOF\nimport json\n$(python -c 'print(1)')\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat() { python -; }; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF"),
+            (bash, "{ cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF\n} ; python gen.py"),
+            # a device however the path spells it, and a line that can open a stream into python
+            # (exec, eval, source, ., coproc): rules.hub_device_target, HUB_CAT_REDEFINED_RE
+            (bash, "cat > /./dev/stdout <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > /dev/../dev/stdout <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > //dev/stdout <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > dev/stdout <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > /proc/self/fd/1 <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "exec 3> >(python -); cat > /./dev/fd/3 <<'EOF'\nimport json\nhub = 1\nEOF"),
+            (bash, "exec 3> >(python -); cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF"),
+            (bash, "exec 3> >(python -); cat >&3 <<'EOF'\nimport json\nhub = 1\nEOF"),
+            (bash, "eval x; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "source x; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, ". x; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "coproc python -; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF"),
             (bash, 'python Z:/k/tools/commit.py -m "$(python -m hub answer Q-1)" x.py'),
             (bash, 'python -- Z:/k/tools/commit.py -m hub'), (bash, 'python -m Z:/k/tools/commit.py -m hub'),
             (bash, 'cd tools && python -W ignore -m hub answer Q-1'), (bash, 'cd tools && python -Bm hub answer Q-1'),
@@ -998,6 +1012,23 @@ class FailClosed(Hub):
             (bash, 'cd tools && python -m cProfile -m hub answer Q-1'),
             (bash, 'cd tools && python -c "x" Z:/k/tools/commit.py -m hub answer Q-1'),
             (ps, 'cd tools; python -X dev -m hub answer Q-1'),
+            # the shell joins what the guard's split parts: an escaped space, a quote, a backtick, a
+            # variable or an expansion before the script word may hand it to -X or -W as a value,
+            # leaving python's own -m (rules.hub_py_script_first)
+            (bash, 'cd tools && python -Xa\\ commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a\\ commit.py -m hub answer Q-1'),
+            (ps, 'cd tools; python -X a` commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -W a\\ commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a\\\tcommit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python --check-hash-based-pycs a\\ commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X "a "commit.py -m hub answer Q-1'),
+            (bash, "cd tools && python -X a' 'commit.py -m hub answer Q-1"),
+            (bash, 'cd tools && python -X $v commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X ${v} commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X {a,b} commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X * commit.py -m hub answer Q-1'),
+            (ps, 'cd tools; python -X $v commit.py -m hub answer Q-1'),
+            (ps, "cd tools; python -X 'a commit.py' -m hub answer Q-1"),
         ), True)
 
     def test_hub_in_python_code_from_anywhere_on_the_line(self):
@@ -1150,6 +1181,26 @@ class FailClosed(Hub):
             (bash, 'python tools/__pycache__/hub.cpython-312.pyc answer Q-1'),
             (bash, 'cd tools/__pycache__ && python hub.cpython-312.pyc answer Q-1'),
             (bash, 'python tools/hub.pyc answer Q-1'), (ps, 'python tools\\hub.pyw answer Q-1'),
+            (bash, 'python tools/__pycache__/hub.cpython-312.opt-1.pyc answer Q-1'),
+            (bash, 'python tools/__pycache__/hub.cpython-312.opt-2.pyc answer Q-1'),
+            # over-reach: a read of the compiled file is denied too, as the path family takes only
+            # a path ending in hub.py
+            (bash, 'cat tools/__pycache__/hub.cpython-312.pyc'),
+            (ps, 'Get-Content tools\\__pycache__\\hub.cpython-312.pyc'),
+        ), True)
+        # python.exe in a folder named Python312 runs commit.py, whose -m is its message: the folder's
+        # name is no python word (a variable keeps the line out of the path family)
+        self.rows((
+            (bash, 'D:/Programs/Python/Python312/python.exe Z:/k/tools/commit.py '
+                   '-C $PWD -m "Hub store: x" a.py'),
+            (ps, '& D:\\Programs\\Python\\Python312\\python.exe Z:/k/tools/commit.py '
+                 '-C $PWD -m "Hub store: x" a.py'),
+        ), False)
+        # but a python in that folder still runs hub as a module
+        self.rows((
+            (bash, 'D:/Programs/Python312/python.exe -m hub answer Q-1'),
+            (ps, '& D:\\Programs\\Python312\\python.exe -m hub answer Q-1'),
+            (bash, 'cd tools && C:/Python312/python.exe -X a\\ commit.py -m hub answer Q-1'),
         ), True)
 
     def test_backlog_paths_naming_the_hub_tool(self):
