@@ -617,6 +617,9 @@ def _stdin_text(cmd, parsed):
                 parsed.flag('a shell reading text that is not literal')
             return ' '.join(w.text for w in args)
         if inv is None and src.shell == sh.PS and src.words and quoted(src, src.words[0]):
+            # "$b" | iex runs the string after its $ expands: the text as written is not the code
+            if any(w.dyn for w in src.words):
+                parsed.flag('a shell reading text that is not literal')
             return ' '.join(w.text for w in src.words)
         parsed.flag('a shell reading its commands from a pipe')
         return None

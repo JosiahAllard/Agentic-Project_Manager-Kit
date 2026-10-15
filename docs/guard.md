@@ -53,7 +53,7 @@ The guard judges a neutral `kitlib.host.Action` and answers a `kitlib.host.Decis
 - **Unclean parse:** the parse is unclean when the text holds something the tokeniser does not model:
   - an unclosed quote, substitution or heredoc, or a `case` statement;
   - an encoded command, or a shell, `iex` or `Invoke-Expression` reading its commands from a pipe;
-  - `iex`/`Invoke-Expression` of a computed value (`iex ("git " + "stash")`);
+  - `iex`/`Invoke-Expression` of a computed value (`iex ("git " + "stash")`, or `"git $s" | iex`);
   - a shell or `source` reading a process substitution (`bash <(...)`, `source <(...)`);
   - a non-literal `bash -c`, `powershell -Command`, `cmd /c`, `eval` or `env -S` text, `trap` handler or `mapfile -C` callback;
   - a program named by a variable or a substitution;

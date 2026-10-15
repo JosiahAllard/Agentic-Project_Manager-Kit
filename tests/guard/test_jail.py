@@ -1361,9 +1361,17 @@ class UnplacedGit(MainGit):
             'Write-Output "$($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
             '$hits += "$b :: $($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
             'Set-Item env:GIT_DIR "$b :: $f"; %s' % g,
-            '[Environment]::SetEnvironmentVariable(\'GIT_DIR\', "$b :: $f"); %s' % g,
-            # a string piped to Invoke-Expression is read as code: its :: is a static call
-            '"$t::$n(\'GIT_DIR\', \'x\')" | iex; %s' % g], tool='PowerShell')
+            '[Environment]::SetEnvironmentVariable(\'GIT_DIR\', "$b :: $f"); %s' % g], tool='PowerShell')
+        # a string piped to Invoke-Expression is code, and a $ in it expands before it runs: the
+        # line is unreadable, with or without a ::
+        for text in ('"$t::$n(\'GIT_DIR\', \'x\')" | iex; %s' % g, '"a :: $b" | Invoke-Expression; %s' % g,
+                     '"x $b" | iex; %s' % g):
+            with self.subTest(text):
+                self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
+                self.denied(self.git(text, 'worker', tool='PowerShell'))
+                for environ in (COORDINATOR, OLD_MARK):
+                    with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                        self.denied(self.marked(text, environ, 'PowerShell'))
         # a string handed to Invoke-Expression is code, and a $( inside ${...} is a substitution:
         # the line is unreadable
         for text in ('iex "$t::$n(\'GIT_DIR\', \'x\')"; %s' % g, 'Write-Output "${a$(x)}::y"; %s' % g):
