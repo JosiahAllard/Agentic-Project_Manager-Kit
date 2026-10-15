@@ -333,6 +333,13 @@ class ValidateTest(StoreCase):
         self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
         self.assertEqual(s.add('questions', question(repo='alpha')).warnings, [])
 
+    def test_a_configured_repo_name_needs_no_repos_document(self):
+        s = self.open()
+        s.known_repos = lambda: ['Gamerepo']
+        self.assertEqual(s.add('questions', question(repo='gamerepo')).warnings, [])
+        r = s.add('questions', question(repo='ghost'))
+        self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
+
     def test_an_s_ref_is_checked(self):
         s = self.open()
         r = s.add('questions', question(refs=['S-004']))

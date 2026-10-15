@@ -309,6 +309,8 @@ class Sources(object):
       pm_data      kitlib.pmdata's {path, branch, remote}, or None
       notices      the machine lock's notice folder
       repos        callable(the store's repos documents) -> [{name, aliases}]
+      known_repos  callable() -> the PM's configured repo names, which the store's repo-alias
+                   check accepts without a repos/ document; None: none
       usage        callable() -> the lines kitlib.launcher.usage prints
       agents       the folder of agent definitions
       backlog      callable(refresh_s) -> a kitlib.hubsite.backlog.Views (or its like: get, start,
@@ -330,7 +332,8 @@ class Sources(object):
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
-                 access_now=None):
+                 access_now=None, known_repos=None):
+        self.known_repos = known_repos
         self.tokens = tokens
         self.static_dir = static_dir
         self.pm_data = pm_data
@@ -370,6 +373,15 @@ def agents_dir(environ=None):
     return os.path.join(pmstart.KIT_ROOT, os.path.normpath(shell), 'agents')
 
 
+def _configured_repos(cfg):
+    """pmstart.known_repos of the pm_start config `cfg`; () when it cannot say (KeyError no
+    sessions_file, ValueError bad "repos")."""
+    try:
+        return pmstart.known_repos(cfg)
+    except (KeyError, ValueError):
+        return ()
+
+
 def machine_sources(home=None, sync=True):
     """This machine's Sources, read from the machine config under `home` (default the user's).
     It writes nothing and starts no git. sync=False: no git sync (a scratch store). ConfigError
@@ -392,6 +404,7 @@ def machine_sources(home=None, sync=True):
         src.usage = report
     if cfg and cfg.get('sessions_file'):
         src.repos = lambda stored: derived.repos(cfg, stored)
+        src.known_repos = lambda: _configured_repos(cfg)
         src.backlog = lambda refresh_s: backlog.Views(_repo_pairs(cfg), refresh_s)
     return src
 
@@ -707,6 +720,8 @@ def build(settings, sources, log=None):
         raise ServeError('no credential folder')
     notes = []
     store = _open_store(settings.store)
+    if sources.known_repos is not None:
+        store.known_repos = sources.known_repos
     listeners = []
     try:
         if store.took_over:
