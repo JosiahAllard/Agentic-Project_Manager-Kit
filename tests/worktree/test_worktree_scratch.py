@@ -484,8 +484,73 @@ class Refs(ScratchCase):
         self.assertKept(path, rc, out, 'worktree folder')
 
 
-@real_git('git reflog: the fake writes none')
+class RefFormat(ScratchCase):
+    """The reflog is read from logs/HEAD, which only the files ref format writes."""
+
+    def answer(self, rc, out):
+        real = remove.git
+
+        def wrapped(cwd, *args, **kw):
+            if args == ('rev-parse', '--show-ref-format'):
+                return rc, out, 'boom' if rc else ''
+            return real(cwd, *args, **kw)
+        return mock.patch.object(remove, 'git', wrapped)
+
+    def test_a_reftable_repository_is_refused(self):
+        path = self.scratch_tree()
+        with self.answer(0, 'reftable'):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'its refs are stored as reftable')
+
+    def test_an_unreadable_ref_format_is_refused(self):
+        path = self.scratch_tree()
+        with self.answer(128, ''):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'git rev-parse --show-ref-format exited 128')
+
+
+@real_git('git reflog and annotated tags on a blob: the fake writes no reflog')
 class Reflog(ScratchCase):
+
+    def test_an_annotated_tag_on_a_blob_does_not_stop_the_search(self):
+        wt = os.path.realpath(self.fx.worktree('later'))
+        self.fx.write('a.txt', 'a\n', root=wt)
+        first = self.fx.commit('a', 'a.txt', cwd=wt)
+        self.fx.write('b.txt', 'b\n', root=wt)
+        self.git('tag', 'z-reach', self.fx.commit('b', 'b.txt', cwd=wt))
+        self.git('worktree', 'remove', wt)
+        self.git('branch', '-D', 'kit/later')
+        blob = self.git('hash-object', '-w', '--', os.path.join(self.repo, 'README.md'))
+        self.git('tag', '-a', '-m', 'on a blob', 'a-blob', blob)
+        self.git('tag', '-a', '-m', 'on a tree', 'b-tree', self.base + '^{tree}')
+        path = self.scratch_tree(commit=first)
+        real, failed = remove.git, {}
+
+        def record(cwd, *args, **kw):
+            got = real(cwd, *args, **kw)
+            if args[:2] == ('merge-base', '--is-ancestor'):
+                failed[args[-1]] = got[0]
+            return got
+
+        with mock.patch.object(remove, 'git', record):
+            rc, out = self.run_scratch(path)
+        self.assertRemoved(path, rc, out)
+        self.assertIn('in refs/tags/z-reach', out)
+        self.assertNotIn(failed.get('refs/tags/a-blob'), (None, 0, 1), failed)
+
+    def test_a_reflog_changed_while_head_stayed_is_refused(self):
+        path = self.scratch_tree()
+        real = remove.clear_disposable
+
+        def commit_and_return(ctx, p):
+            self.fx.write('late.txt', 'late\n', root=path)
+            self.fx.commit('late', 'late.txt', cwd=path)
+            self.git('checkout', '-q', '--detach', self.base, cwd=path)
+            return real(ctx, p)
+
+        with mock.patch.object(remove, 'clear_disposable', commit_and_return):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'its HEAD reflog changed after it was checked')
 
     def test_a_commit_left_behind_in_the_reflog_is_refused(self):
         path = self.scratch_tree()
