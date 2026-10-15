@@ -831,8 +831,11 @@ class PrepareTest(Case):
         self.assertIn('a checkout of the kit itself', str(cm.exception))
 
     def test_this_very_kit_work_tree_is_refused_as_the_kit(self):
-        with self.assertRaises(gitsync.Refused) as cm:
-            gitsync.prepare(os.path.join(KIT, 'hub'))
+        # The tree the suite runs in may be detached (the daily gate's is); the branch check runs
+        # first, so name a branch to reach the kit-code check whatever HEAD is.
+        with mock.patch.object(gitsync.refs, 'current_branch', return_value=('main', '')):
+            with self.assertRaises(gitsync.Refused) as cm:
+                gitsync.prepare(os.path.join(KIT, 'hub'))
         self.assertIn('a checkout of the kit itself', str(cm.exception))
 
     def test_the_kits_repository_syncs_only_its_recorded_data_branch_and_remote(self):
