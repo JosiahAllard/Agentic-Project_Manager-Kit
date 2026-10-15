@@ -33,6 +33,7 @@ Logic: `kitlib/ledger/files.py` (`of_config`, `path_of`, `readable`, `others`); 
 - **The frozen ledger:** with `ledger_dir` set, the `ledger_path` file, if any, holds the `R-nnnn` entries written before the split. `show`, `grep`, `list` and `check` read it; `add` and `retire` never write it, and `retire R-nnnn` is refused. It is kept for one release.
 - **`ledger_dir` unset:** `ledger_path` is the one ledger, read and written as before the split, `all` included.
 - **Routing:** an `H-<repo>-nnnn` id is in `<repo>`'s file and an `R-nnnn` id in the `ledger_path` file (`path_of`). Reading every file means the frozen ledger first, then each repository's file in `ledger_repos` order (`readable`). A repository's file that does not exist yet holds no entries.
+- **Coordinator start:** with `ledger_dir` set, the coordinator's session start names its repository's file as the reference for how that repository works (`kitlib.coordinatorstart.ledger_lines`; a host adapter's start, such as `hosts/codex/adapter/start.py`, through `kitlib.hoststart.shared_checks`). The repository's name is matched against `ledger_repos` without case; a name not there gets the folder and the names instead. The file is named, never opened.
 
 ## CLI
 

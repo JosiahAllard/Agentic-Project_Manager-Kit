@@ -5,8 +5,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib import coordinatorstart
+from kitlib.config import ConfigError
 from kitlib.config import user as kuser
 from kitlib.lockmcp import PLUGIN_NAME
 from kitlib.lock import api
@@ -300,7 +302,7 @@ class ContextTest(unittest.TestCase):
         def run(args, timeout=10):
             return json.dumps(status) if "machine_lock.py" in args[1] else "G"
         base = dict(env={"CLAUDE_CONFIG_DIR": "C:/u/.claude-account2"}, cwd=ROOT + "/alpha", now=NOW,
-                    procs=[], run=run, read=reader(files), kit="H", pid=1, pm_cfg=self.PM)
+                    procs=[], run=run, read=reader(files), kit="H", pid=1, pm_cfg=self.PM, machine_cfg={})
         base.update(kw)
         return coordinatorstart.context(dict(dict(repos_root=ROOT), **cfg), **base)
 
@@ -360,7 +362,7 @@ class ContextTest(unittest.TestCase):
             text = coordinatorstart.context(
                 {"repos_root": ROOT, "cap": {"alpha": [{"cap": 4}]}},
                 env={}, cwd=ROOT + "/alpha", now=NOW, procs=[], run=lambda a, timeout=10: "G",
-                kit="H", pid=1, pm_cfg={"sessions_file": p})
+                kit="H", pid=1, pm_cfg={"sessions_file": p}, machine_cfg={})
         self.assertIn("- agent cap 4", text)
 
     def test_repos_root_comes_from_the_config(self):
@@ -401,6 +403,62 @@ class NoRulingsCheckTest(unittest.TestCase):
     def test_the_reader_and_its_limits_are_gone(self):
         for name in ("rulings", "ledger_file", "LEDGER_CAP", "DECIDES_CHARS", "safepath"):
             self.assertFalse(hasattr(coordinatorstart, name), name)
+
+
+class LedgerLineTest(unittest.TestCase):
+    """With the split ledger (ledger_dir), one line names this repo's ledger file, the reference for
+    HOW the repo works; it comes from the machine config and the file is never opened."""
+    CAP = {"cap": {"alpha": [{"cap": 4}]}}
+    DIR = "D:/pm/rulings"
+    SPLIT = {"ledger_dir": DIR, "ledger_repos": ["kit", "alpha", "pm"], "ledger_path": "D:/pm/LEDGER.md"}
+
+    def test_the_repos_file_is_named_once(self):
+        text = ContextTest().build(self.CAP, machine_cfg=self.SPLIT)
+        want = "- ledger (reference, HOW this repo works): %s" % os.path.join(self.DIR, "alpha.md")
+        self.assertEqual([l for l in text.splitlines() if l.startswith("- ledger")], [want])
+
+    def test_the_repo_name_is_matched_without_case(self):
+        self.assertEqual(coordinatorstart.ledger_lines(self.SPLIT, "Alpha"),
+                         ["ledger (reference, HOW this repo works): %s" % os.path.join(self.DIR, "alpha.md")])
+
+    def test_a_repo_not_in_ledger_repos_gets_the_folder_and_the_names(self):
+        line, = coordinatorstart.ledger_lines(self.SPLIT, "Some_Folder")
+        self.assertEqual(line, "ledger (reference, HOW each repo works): one file per ledger_repos name in %s "
+                               "(kit, alpha, pm); none is named Some_Folder" % self.DIR)
+
+    def test_no_line_without_ledger_dir(self):
+        for machine in ({}, {"ledger_path": "D:/pm/LEDGER.md", "ledger_repos": ["alpha"]},
+                        {"ledger_dir": None, "ledger_repos": ["alpha"]}):
+            with self.subTest(machine_cfg=machine):
+                self.assertEqual(coordinatorstart.ledger_lines(machine, "alpha"), [])
+                self.assertNotIn("- ledger", ContextTest().build(self.CAP, machine_cfg=machine))
+
+    def test_the_ledger_file_is_never_opened(self):
+        seen = []
+        files = {"S.json": json.dumps({"alpha": ENTRY})}
+
+        def read(p):
+            seen.append(p)
+            return files[p]
+        text = ContextTest().build(self.CAP, read=read, machine_cfg=self.SPLIT)
+        self.assertIn("- ledger (reference", text)
+        self.assertEqual(seen, ["S.json"])
+
+    def test_no_line_when_not_live(self):
+        self.assertNotIn("ledger", coordinatorstart.context(dict(self.CAP, standing=["s"]), live=False,
+                                                            machine_cfg=self.SPLIT))
+
+    def test_a_config_that_cannot_be_read_is_one_could_not_line(self):
+        with mock.patch.object(coordinatorstart.kuser, "user_config",
+                               side_effect=ConfigError("bad key")):
+            text = ContextTest().build(self.CAP, machine_cfg=None)
+        self.assertIn("- could not check ledger: ConfigError: bad key", text)
+        self.assertIn("- agent cap 4", text)
+
+    def test_without_ledger_dir_the_sessions_entry_is_not_needed(self):
+        # No sessions file: cap and the others cannot run, and the ledger check adds no line.
+        text = ContextTest().build({}, pm_cfg={}, machine_cfg={})
+        self.assertNotIn("ledger", text)
 
 
 class StubsLineTest(unittest.TestCase):

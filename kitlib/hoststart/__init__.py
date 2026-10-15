@@ -7,6 +7,7 @@ import datetime
 import os
 
 from kitlib import coordinatorstart, pmstart
+from kitlib.config import user as kuser
 
 
 def _rows(checks):
@@ -47,8 +48,10 @@ def machine_lines(snapshot):
 
 
 def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_config=None,
-                  coordinator_config=None, lock_reader=None, session_host=None):
-    """A tuple of check lines. Missing connections/configuration are reported, never guessed."""
+                  coordinator_config=None, lock_reader=None, session_host=None, machine_config=None):
+    """A tuple of check lines. Missing connections/configuration are reported, never guessed.
+    `machine_config`: the machine config the coordinator's ledger line reads (default
+    kitlib.config.user.user_config(), read only for a coordinator with a repo_name)."""
     if role not in {'pm', 'coordinator'}:
         return ()
     now = now or datetime.datetime.now().astimezone()
@@ -66,6 +69,9 @@ def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_confi
         checks.append(('standing', lambda: coordinatorstart.context(cfg, live=False).splitlines()))
         if repo_name:
             checks.append(('cap', lambda: coordinatorstart.cap(cfg, repo_name, now.date())))
+            machine = (machine_config if machine_config is not None
+                       else _config(kuser.user_config, 'machine', rows))
+            checks.append(('ledger', lambda: coordinatorstart.ledger_lines(machine, repo_name)))
         if state_note:
             note = os.path.realpath(state_note)
             root = os.path.realpath(cwd)
@@ -79,11 +85,6 @@ def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_confi
                 inside = False
             if not os.path.isabs(state_note) or inside:
                 rows.append('state note must be an absolute path outside the checkout')
-            else:
-                entry = {'repo': repo_name or '', 'state': note}
-                checks.append(('rulings', lambda: coordinatorstart.rulings(entry, coordinatorstart.ledger_file(cfg))))
-        else:
-            rows.append('rulings: no external state note bound to this session; new-ruling comparison unavailable')
     if lock_reader is not None:
         checks.append(('machine', lambda: machine_lines(lock_reader())))
     else:
