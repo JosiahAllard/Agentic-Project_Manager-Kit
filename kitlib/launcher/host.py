@@ -1,6 +1,7 @@
 """What the launcher touches outside its own files, in one object so tests can fake it: the home
 folder, the environment (process first, then the user's registry values), the process list, the
-clock, opening a window, git check-ignore, and stopping a process by pid and creation time.
+clock, opening a window, git check-ignore, a folder's git place, the home worktree (home.py), and
+stopping a process by pid and creation time.
 """
 import datetime
 import os
@@ -62,6 +63,16 @@ class Host(object):
         except (OSError, subprocess.SubprocessError):
             return None
         return {0: True, 1: False}.get(r.returncode)
+
+    def place(self, folder):
+        """kitlib.git.repo.classify(folder): MAIN, LINKED, NONE or UNKNOWN, and the work tree's top."""
+        from kitlib.git import repo
+        return repo.classify(folder)
+
+    def home_worktree(self, main, path, whatif=False):
+        """kitlib.launcher.home.ensure: the lines it says, or a LaunchError."""
+        from kitlib.launcher import home
+        return home.ensure(main, path, whatif)
 
     def own_pid(self):
         return os.getpid()

@@ -55,7 +55,7 @@ def successor_prompt(entry, old, new, state=None):
 
 
 def handoff(settings, host, session=None, account=None, all_=False, recycle=False, whatif=False, stem=None,
-            state=None):
+            state=None, home_worktree=False):
     if not all_ and not session:
         raise LaunchError('Give --session <key of sessions.json>, or --all.')
     if all_ and recycle:
@@ -116,7 +116,7 @@ def handoff(settings, host, session=None, account=None, all_=False, recycle=Fals
                                   predecessor=old, name=new)
         out.append('== %s : %s (account %s) -> %s (account %s)' % (key, old, entry.get('account'), new, target))
         try:
-            out += S.start(settings, host, whatif=whatif, **args)
+            out += S.start(settings, host, whatif=whatif, home_worktree=home_worktree, **args)
         except LaunchError as e:
             e.lines = out + e.lines
             raise

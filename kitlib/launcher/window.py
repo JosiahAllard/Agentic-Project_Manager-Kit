@@ -11,7 +11,8 @@
   5. CLAUDE_CONFIG_DIR for the account (removed for the default folder);
   6. AGENT_TEMP set again, and TEMP and TMP pointed at it, when the launcher sees one (a session
      whose guard allows scratch writes only there finds all three; the PM resume too);
-  7. the start folder, then `claude ... --permission-mode auto --remote-control '<name>' -n '<name>' '<prompt>'`
+  7. the start folder (a home worktree with --home-worktree: home.py), then
+     `claude ... [--add-dir '<main checkout>'] --permission-mode auto --remote-control '<name>' -n '<name>' '<prompt>'`
      (a resume: `claude --resume '<id>' [--agent ...] --remote-control ...`).
 Every value is single-quoted with quotes doubled. `open_window` starts it minimized and unfocused:
 `conhost.exe powershell.exe -NoExit -EncodedCommand <base64 UTF-16LE>` through WScript.Shell.Run
@@ -64,7 +65,10 @@ def q(text):
     return "'" + str(text).replace("'", "''") + "'"
 
 
-def claude_command(name, prompt, agent=None, model=None, effort=None, autocompact=None, resume=None):
+def claude_command(name, prompt, agent=None, model=None, effort=None, autocompact=None, resume=None,
+                   add_dir=None):
+    """`add_dir`: a folder the session's file tools may also use (`--add-dir`; a home worktree's
+    main checkout, docs/launcher.md "The home worktree")."""
     parts = ['claude']
     if resume:
         parts += ['--resume', q(resume)]
@@ -76,6 +80,8 @@ def claude_command(name, prompt, agent=None, model=None, effort=None, autocompac
         parts += ['--effort', effort]
     if autocompact:
         parts += ['--autocompact', str(int(autocompact))]
+    if add_dir:
+        parts += ['--add-dir', q(add_dir)]
     parts += ['--permission-mode', 'auto'] if not resume else []
     parts += ['--remote-control', q(name), '-n', q(name), q(prompt)]
     return ' '.join(parts)

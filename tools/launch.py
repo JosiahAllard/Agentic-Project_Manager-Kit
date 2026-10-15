@@ -1,10 +1,11 @@
 """launch.py: start, hand off and stop the PM's long-running Claude sessions (docs/launcher.md).
 
-  launch.py start (--repo NAME | --repo-path DIR | --session KEY) (--account N | --org N) [...]
-  launch.py deep --repo-path DIR (--brief FILE | --brief-text TEXT) --requester NAME --slug SLUG [...]
-  launch.py consultant --repo-path DIR [--repo SLUG] [...]
+  launch.py start (--repo NAME | --repo-path DIR | --session KEY) (--account N | --org N) [--home-worktree] [...]
+  launch.py deep --repo-path DIR (--brief FILE | --brief-text TEXT) --requester NAME --slug SLUG [--home-worktree] [...]
+  launch.py consultant --repo-path DIR [--repo SLUG] [--home-worktree] [...]
   launch.py stop --name NAME [--successor NAME] [--pid N] [--dry-run]
   launch.py handoff (--session KEY | --all) [--account N|auto] [--recycle] [--stem NEW] [--state FILE] [--what-if]
+                    [--home-worktree]
   launch.py pick-account [--limit 95] [--explain]
   launch.py usage
   launch.py after-reboot [--test] [--dry-run]
@@ -27,6 +28,8 @@ from kitlib.launcher import accounts, autostart, handoff, reboot, settings as S,
 from kitlib.launcher.host import Host                               # noqa: E402
 
 USAGE = 2
+HOME_HELP = ("an agent session whose folder is a main checkout starts in its home worktree "
+             "<main>/.claude/worktrees/home-<stem> instead (docs/launcher.md \"The home worktree\")")
 
 
 class Parser(argparse.ArgumentParser):
@@ -65,6 +68,7 @@ def parser():
     s.add_argument('--autocompact', type=int, default=None,
                    help='compact window in tokens (default %d; 0: the CLI default)' % start.DEFAULT_AUTOCOMPACT)
     s.add_argument('--what-if', action='store_true', help='print the window script, start nothing')
+    s.add_argument('--home-worktree', action='store_true', help=HOME_HELP)
 
     d = sub.add_parser('deep', help='a deep-worker session')
     d.add_argument('--repo-path', required=True)
@@ -79,6 +83,7 @@ def parser():
     d.add_argument('--force', action='store_true', help='start on an account at or over 90%%')
     d.add_argument('--plan', action='store_true', help='print, start and write nothing')
     d.add_argument('--brief-dir')
+    d.add_argument('--home-worktree', action='store_true', help=HOME_HELP)
 
     c = sub.add_parser('consultant', help="a repo's consultant session")
     c.add_argument('--repo-path', required=True)
@@ -91,6 +96,7 @@ def parser():
     c.add_argument('--force', action='store_true')
     c.add_argument('--replace', action='store_true', help='start beside a live one (an account hand-off)')
     c.add_argument('--plan', action='store_true')
+    c.add_argument('--home-worktree', action='store_true', help=HOME_HELP)
 
     t = sub.add_parser('stop', help='stop one session and its window')
     t.add_argument('--name', required=True)
@@ -107,6 +113,7 @@ def parser():
     h.add_argument('--state', type=existing_file, help="the hand-off note the successor reads, in place of "
                    "the entry's state (an existing file)")
     h.add_argument('--what-if', action='store_true')
+    h.add_argument('--home-worktree', action='store_true', help=HOME_HELP)
 
     k = sub.add_parser('pick-account', help='the account whose week resets soonest, with headroom')
     k.add_argument('--limit', type=int, default=accounts.PICK_LIMIT)
@@ -143,22 +150,25 @@ def run(a, settings, host):
             if ignored:
                 raise S.LaunchError('--session takes its settings from the sessions.json entry; '
                                     'drop %s.' % ', '.join(ignored))
-            return start.start_entry(settings, host, a.session, a.account, a.prompt, a.what_if)
+            return start.start_entry(settings, host, a.session, a.account, a.prompt, a.what_if,
+                                     home_worktree=a.home_worktree)
         return start.start(settings, host, a.repo, a.repo_path, a.account, a.org, a.prompt, a.brief,
                            name=a.name, predecessor=a.predecessor, no_agent=a.no_agent, agent=a.agent,
-                           model=a.model, effort=a.effort, autocompact=a.autocompact, whatif=a.what_if)
+                           model=a.model, effort=a.effort, autocompact=a.autocompact, whatif=a.what_if,
+                           home_worktree=a.home_worktree)
     if a.cmd == 'deep':
         return start.deep(settings, host, a.repo_path, a.requester, a.slug, a.brief, a.brief_text, a.account,
-                          a.autocompact, a.model, a.effort, a.force, a.plan, a.brief_dir)
+                          a.autocompact, a.model, a.effort, a.force, a.plan, a.brief_dir,
+                          home_worktree=a.home_worktree)
     if a.cmd == 'consultant':
         return start.consultant(settings, host, a.repo_path, a.repo, a.account, a.autocompact, a.model, a.effort,
-                                a.notes_path, a.force, a.replace, a.plan)
+                                a.notes_path, a.force, a.replace, a.plan, home_worktree=a.home_worktree)
     if a.cmd == 'stop':
         return stop.stop(settings, host, a.name, a.successor, a.pid, a.dry_run,
                          warn=lambda msg: print('launch.py stop: %s' % msg, file=sys.stderr))
     if a.cmd == 'handoff':
         return handoff.handoff(settings, host, a.session, a.account, a.all, a.recycle, a.what_if, stem=a.stem,
-                               state=a.state)
+                               state=a.state, home_worktree=a.home_worktree)
     if a.cmd == 'pick-account':
         n, rows = accounts.pick(settings, host.now(), a.limit)
         return (accounts.explain(rows) if a.explain else []) + [n]
