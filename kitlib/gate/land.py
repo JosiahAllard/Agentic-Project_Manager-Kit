@@ -785,8 +785,8 @@ class Lander(object):
         None, None, None, None)` when there is none, or `(..., why)`. A folder store there is read
         in its worktree, as a landing's close reads it; a record deleted there and not committed
         is read from HEAD."""
-        # at_landing._pm_data_store is private; making it public is the backlog session's
-        # follow-up (KIT-LAND-SCOPE-CHECK report, part b).
+        # at_landing._pm_data_store is private; making it public is a follow-up for the backlog
+        # store's owners, filed with the scope check.
         pm_root, _cfg, backend, why = at_landing._pm_data_store(self.root, configured)
         if why:
             return None, None, None, None, why

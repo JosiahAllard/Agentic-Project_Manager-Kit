@@ -247,6 +247,17 @@ class FolderStore(ScopeCase):
         self.assertIn('(FOO): b.py;', line)
         self.assertIn('set FOO --scope "a/**" --scope "b.py";', line)
 
+    def test_a_record_the_branch_deleted_counts_at_its_last_version(self):
+        # KEEP makes the store a read one, so a FOO not counted would give the NOTE
+        self.on_main({'docs/backlog/FOO.md': pulled('FOO', scope=['a/**'])['FOO'],
+                      'docs/backlog/KEEP.md': pulled('KEEP', by='kit/other')['KEEP']})
+        wt = self.repo.worktree('feature')
+        self.commit_on(wt, 'work', {'a/x.py': 'x\n'})
+        self.repo.git('rm', '-q', 'docs/backlog/FOO.md', cwd=wt)
+        self.repo.git('commit', '-q', '-m', 'close FOO', cwd=wt)
+        tip = self.repo.head(wt)
+        self.assertEqual(self.scope_lines(self.landed(self.land(tip))), [])
+
 
 class PmDataStore(ScopeCase):
     """The PM data branch's folder store (test_land_store.PmDataClose's set-up)."""
@@ -282,6 +293,14 @@ class PmDataStore(ScopeCase):
         line = self.refused(self.land(tip))
         self.assertIn('cannot read the backlog store to check kit/feature\'s paths', line)
         self.assertIn('no worktree has the PM data branch pmdata checked out', line)
+
+    def test_an_unread_store_is_not_named_when_the_records_read_cover_every_path(self):
+        self.seed(pulled('FOO', scope=['a/**']))     # the configured store; no PM data worktree
+        _, tip = self.branch('feature', {'a/x.py': 'x\n'})
+        out = self.landed(self.land(tip))
+        self.assertEqual(self.scope_lines(out), [])
+        self.assertTrue([l for l in out.lines if 'PM data branch\'s backlog store was not read'
+                         in l], out.lines)          # the PM data store was unread in this landing
 
 
 class Warns(ScopeCase):
