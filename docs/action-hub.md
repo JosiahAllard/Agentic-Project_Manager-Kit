@@ -138,7 +138,9 @@ other step (to-dos, notes, stories) to the PM. The server takes `--from` only wh
 key of the launcher's sessions.json, read again on each add; any other value is refused, and a
 question without `--from` is the PM's. The answer stays pending for everyone, the PM included,
 until the PM logs the ruling in the rulings ledger and then on the question (`questions log`), as
-for any other answer. Every verb takes `--port N` and
+for any other answer, so until then the coordinator's wait prints the same answer again at once:
+the coordinator keeps the ids it has acted on, tells the PM to log each, and treats one that
+comes back before the log as expected, not as new. Every verb takes `--port N` and
 `--json` (the server's answer as one JSON line). The server alone decides what a role may do: the
 owner's verbs (answer, todos done, stories add and withdraw, to-pm add and send, inbox read) are
 refused to the agent.

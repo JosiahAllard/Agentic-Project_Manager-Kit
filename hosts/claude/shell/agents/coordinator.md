@@ -135,7 +135,9 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   context, options and a recommendation, each title restating its subject. Keep one
   `python <kit>/tools/hub.py wait --pending --for <your session key>` running in the background;
   when it prints an answer, act on it yourself and start the wait again. The PM still logs the
-  ruling (<kit>/docs/action-hub.md "For the PM"). Anything else that needs the owner (a typed go, a
+  ruling (<kit>/docs/action-hub.md "For the PM"), and until it does the answer stays pending and
+  the wait prints it again at once: keep the ids you have acted on, tell the PM by
+  SendMessage to log each, and treat an id you already acted on as expected, not new. Anything else that needs the owner (a typed go, a
   command to run) goes to the PM by SendMessage with the exact text or commands, working
   directory and order; a request left only in your chat waits unseen. The owner still types a go
   in your window where one is required. Answers in the owner's own words.
