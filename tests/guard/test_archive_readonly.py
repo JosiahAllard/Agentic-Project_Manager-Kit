@@ -298,6 +298,17 @@ class ArchiveProgramSearch(ArchiveWorld):
                 with self.subTest(text):
                     self.assertIsNone(self.pm(shell(text, self.w.plain)))
 
+    def test_cmd_s_leading_at_does_not_hide_a_git_env_move(self):
+        # not an archive: a subagent's @set GIT_DIR or GIT_WORK_TREE moves its git into the main
+        # checkout, as set does
+        for spell in ('@set GIT_DIR={m}/.git& git commit -m x', ', set GIT_DIR={m}/.git& git commit -m x',
+                      '@set GIT_WORK_TREE={m}& git checkout -- .'):
+            line = spell.replace('{m}', self.main)
+            for shell, call in ((bash, "cmd //c '%s'"), (ps, "cmd /c '%s'")):
+                text = call % line
+                with self.subTest(text):
+                    self.assertIsNotNone(self.sub(shell(text, self.w.wt, sub=True)))
+
     def test_powershell_content_on_the_environment_sets_path(self):
         # the environment provider's content and item cmdlets set or remove the variable a path
         # names, in every spelling of the env: drive
