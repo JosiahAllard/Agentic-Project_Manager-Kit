@@ -120,10 +120,12 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
    `"owner".agent_emails`), `.gitignore` and `.gitattributes`, a starter `docs/INDEX.md`, with
    `--stack` the stack's `tools/gate.json`, and with `--stubs` only the stubs (by
    `kitlib.stubs`, as `kit_stubs.py write -C <target>`; without it the dry run says `stubs: none`),
-   and under `memory:` the `autoMemoryDirectory` key of `.claude/settings.json`
+   and under `memory:` the `autoMemoryDirectory` key
    (`<the main checkout's drive>/Agent-memory/<repo folder name>`, `kitlib/stubs/memory.py`): added
-   only when the file lacks it, kept when it names any absolute folder, refused when the file is not
-   JSON it can edit or the key is not an absolute folder. It never makes the folder, and the owner commits `.claude/settings.json`.
+   to `.claude/settings.local.json` only when neither that file nor `.claude/settings.json` has it,
+   kept when either names any absolute folder, refused when the local file is not JSON it can edit or
+   the key is not an absolute folder. The key is a machine path, so it goes in the git-ignored local
+   file (the `.gitignore` lines above name it) and there is nothing to commit. It never makes the folder.
    `"repo".name` is the repository's rulings-ledger column (docs/backlog.md "Owner gates"): `--repo-name`,
    else the target folder's name lower-cased; either must match `[a-z0-9][a-z0-9-]*` or it
    refuses (exit 2). Both emails are required and must differ, or an agent's commit could pass
@@ -204,7 +206,7 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
   are optional: with no agent profile, every role reads the kit's `content/default-profile.md`
   plus the repository's README and instructions file (docs/agent-profile.md).
 - `.claude/settings.json`: the kit ships none (docs/go-live.md "Joint-review questions"); the
-  setup adds only its `autoMemoryDirectory` key (step 2).
+  setup adds only its `autoMemoryDirectory` key, to the ignored `.claude/settings.local.json` (step 2).
 - `backlog/.gitkeep` is not needed (the backlog store is the ref `refs/backlog/main`), and
   `.github/workflows/instructions.yml` is not shipped: the stack workflows do not mention it.
 - Anything outside the repository: the ledger, the lock and the user config are per machine.
@@ -336,8 +338,9 @@ python <kit>/tools/kit_stubs.py check [-C DIR] [--tools a,b,...]
 python <kit>/tools/kit_stubs.py memory [-C DIR] [--apply]
 ```
 
-`memory` is not about stubs: it prints the `autoMemoryDirectory` that `.claude/settings.json`
-would get (dry run), and with `--apply` adds it when the file lacks the key; exit 1 when the file
+`memory` is not about stubs: it prints the `autoMemoryDirectory` that `.claude/settings.local.json`
+(git-ignored; the value is a machine path) would get (dry run), and with `--apply` adds it when
+neither that file nor `.claude/settings.json` has the key; exit 1 when the local file
 cannot be edited (`kitlib/stubs/memory.py`; tests: `tests/stubs/test_memory.py`; docs/pm-start.md
 "Memory folder (`memory`)").
 
