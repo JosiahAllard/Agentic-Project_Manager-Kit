@@ -31,7 +31,9 @@ printable ASCII (0x21 to 0x7E, single spaces inside it, the ends trimmed); anyth
 `invalid`, and so is any spelling of `you`. A question's `from` is the session its answer goes
 back to: a key of the launcher's sessions.json, read on each add (Api's session_keys), or `pm`,
 which is also what an absent one is; any other is `invalid`, and the refusal names the known
-keys, never the file. On the two edit routes a null `repo` (and a to-do's
+keys, never the file. A new to-do's `steps` are made into its commands and detail here and are
+not kept (todo_steps); an agent's to-do is judged by the owner's to-do rules (kitlib.hubsite.
+todosteps.check) for every client. On the two edit routes a null `repo` (and a to-do's
 null `detail`) clears the field exactly as "" does; any other null field is read as absent.
 
 Results. status is 200 with the route's object, or the status of STATUS[code] with
@@ -116,6 +118,7 @@ import time
 from kitlib import hubvalidate
 
 from . import schema
+from . import todosteps
 from .store import HubError
 
 BASE = '/api/v1'
@@ -144,6 +147,7 @@ _TRUE = ('1', 'true', 'yes', 'on')
 _FALSE = ('', '0', 'false', 'no', 'off')
 _ID_SPLIT = re.compile(r'([0-9]+)')
 _NAME = re.compile(r'[\x21-\x7e]+(?: [\x21-\x7e]+)*')
+_SURROGATE = re.compile('[\ud800-\udfff]')     # a lone one: half a character
 
 
 def error_body(code, message, field=''):
@@ -675,13 +679,42 @@ def todos_list(api, req):
     return {'items': api.items('todos', req)}
 
 
+def todo_steps(b, judge=True):
+    """The fields b of a new to-do with its `steps` (kitlib.hubsite.todosteps) made into text:
+    their commands after the given ones, their summary at the end of the detail (or the detail,
+    when there is none), and no `steps` field left. Refused (`invalid`, the field named): a
+    `commands` that is not a list, a given command holding a lone surrogate, a bad step and, when
+    `judge` (an agent's to-do), text the owner's to-do rules forbid (todosteps.check). The rules
+    judge the text as given, before any step is rendered: an edit's text is never judged."""
+    b = dict(b)
+    steps = b.pop('steps', None)
+    commands = _typed(b, 'commands', (list,), 'a list of strings')
+    for i, c in enumerate(commands or ()):
+        m = _SURROGATE.search(c) if isinstance(c, str) else None
+        if m:
+            raise _invalid('commands[%d] holds a lone surrogate (U+%04X) at character %d, half '
+                           'of a character that cannot be written'
+                           % (i, ord(m.group()), m.start()), 'commands')
+    try:
+        if judge:
+            todosteps.check(dict(b, steps=steps))
+        if steps is not None:
+            b['commands'] = list(commands or []) + todosteps.render(steps)
+            lines = '\n'.join(todosteps.summary(steps))
+            b['detail'] = (b['detail'].rstrip() + '\n\n' + lines) if b.get('detail') else lines
+    except (todosteps.StepError, todosteps.Refused) as e:
+        raise _invalid(str(e), e.field)
+    return b
+
+
 def todos_add(api, req):
     owner = req.role == OWNER
-    names = ('title', 'detail', 'commands', 'repo', 'refs', 'urgent')
+    names = ('title', 'detail', 'commands', 'steps', 'repo', 'refs', 'urgent')
     b = _fields(req, names if owner else names + ('from',), required=('title',),
                 flags=('urgent',))
     for name in ('title', 'detail', 'repo', 'from'):
         _text(b, name)
+    b = todo_steps(b, judge=not owner)
     if owner:
         b['from'] = OWNER_FROM
     else:

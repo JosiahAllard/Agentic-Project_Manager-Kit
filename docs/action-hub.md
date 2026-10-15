@@ -161,7 +161,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `questions log Q-1 <ruling id> --if-version V` | `LOGGED Q-1 <ruling id>` |
 | `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |
 | `todos [--status S] [--repo R]` | `T-1 open [repo] title` |
-| `todos add --title T [--detail D] [--command C ...] [--repo R] [--refs ID ...] [--urgent] [--from NAME \| --owner]` | `ADDED T-2` |
+| `todos add --title T [--detail D] [--command C ...] [--steps F] [--repo R] [--refs ID ...] [--urgent] [--from NAME \| --owner]` | `ADDED T-2` |
 | `todos done T-1 [--undo] [--if-version V]` (owner) | `DONE T-1` or `REOPENED T-1` |
 | `todos ack T-1` | `ACKED T-1` |
 | `stories [--status S] [--repo R]` | `S-1 v2 submitted [repo] title` |
@@ -302,6 +302,15 @@ short acknowledgement. `to-pm reply` sets `done`.
 | done_at | set when ticked |
 | urgent | true sorts it to the top; the owner can set it on their own items |
 | pm_ack | PM: set once it has followed up on a done item or picked up an owner-added one; takes it off the pending list |
+
+A new to-do (`POST /todos`, so `hub.py todos add` and the MCP tool `hub_todo_add` alike) may also
+carry `steps`, which is not stored: `kitlib.hubsite.api.todo_steps` turns each step into a command
+appended after `commands` and adds one summary line per step at the end of `detail` (the steps and
+their commands: docs/hub-mcp.md "To-do steps"). `hub.py todos add --steps F` reads the list from F,
+a UTF-8 JSON file. The server refuses, as `invalid` naming the field: a bad step (`steps`), a
+`commands` entry holding a lone surrogate (U+D800 to U+DFFF, `commands`), and, on an agent's to-do,
+text the owner's to-do rules forbid (`todosteps.check`: plain Notepad, a hand edit described in
+prose, coordinator work). The owner's own to-dos are not judged by those rules.
 
 ## stories/S-NNN
 The owner writes a story and picks the backlog it belongs in. It reaches the backlog only through
