@@ -1596,7 +1596,12 @@ def read(text, shell, cwd, home=None):
 
 # ---------------------------------------------------------------- git
 
-GIT_VALUE_OPTS = {'-c', '--namespace', '--super-prefix', '--config-env', '--exec-path'}
+# git's global options read with the next word as their value (-C, --git-dir and --work-tree are
+# read apart): one missing here makes its value look like the subcommand. --attr-source is in
+# git's manual; --shallow-file is git's own, undocumented. Listing an option git does not take is
+# safe: git stops at an option it does not know, so nothing after it runs.
+GIT_VALUE_OPTS = {'-c', '--namespace', '--super-prefix', '--config-env', '--exec-path', '--attr-source',
+                  '--shallow-file'}
 # subcommands whose options the git rules read, and per subcommand the options whose value is a
 # message, a name or a path (a variable there is only a value)
 GIT_READ_SUBS = {'add', 'stage', 'commit', 'checkout', 'switch', 'reset', 'clean', 'stash', 'restore',
