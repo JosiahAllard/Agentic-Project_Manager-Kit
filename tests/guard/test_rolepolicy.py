@@ -566,6 +566,70 @@ class LockVerbs(Base):
                 self.assertIsNotNone(d, text)
                 self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
 
+    def test_a_wildcard_or_a_computed_variable_name_catches_a_reader(self):
+        """Get-Variable PSDefault* reaches $PSDefaultParameterValues by a name the line does not
+        spell out, and so may a *-Variable cmdlet given a wildcard, the variable: drive or
+        PSVariable (rolepolicy._ps_variable_reach)."""
+        lock = 'tools/machine_lock.py'
+        rows = ("(Get-Variable PSDefault*).Value['*:OutVariable']='c'; gc %s -Raw; python -c \"$c\" hold create x"
+                % lock,
+                "(gv P*s).Value['*:OutVariable']='c'; gc %s -Raw; python -c \"$c\" stop 42" % lock,
+                "(Get-Item variable:PSDefaultParameterValues).Value['*:OutVariable']='c'; gc %s -Raw; "
+                "python -c \"$c\" stop 42" % lock,
+                "$ExecutionContext.SessionState.PSVariable.Get('c'); gc %s -Raw; python -c \"$c\" stop 42" % lock)
+        for text in rows:
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(role=role, text=text):
+                    d = rolepolicy.check(self.shell(text, role, shell='powershell'), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
+    def test_a_lock_path_a_program_hands_on_is_refused(self):
+        """A program given the lock CLI's path that does not run it, but stores it or sends its
+        output on (an assignment, Set-Variable, set --, printf -v, a pipe into xargs), may hand the
+        path to a later command that runs it with any verb, so the words after the path are not
+        the lock's verb (rolepolicy.HANDED_ON), in every mode."""
+        lock = 'tools/machine_lock.py'
+        rows = (('powershell', '$c = echo %s status; python $c[0] hold create x' % lock),
+                ('powershell', '$c = echo %s status; python $c[0] --force' % lock),
+                ('powershell', '$c = echo %s status; python $c[0] stop 42' % lock),
+                ('powershell', 'Set-Variable c %s,status; python $c[0] hold create x' % lock),
+                ('powershell', 'sv c %s,status; python $c[0] stop 42' % lock),
+                ('powershell', 'New-Variable c %s,status; python $c[0] stop 42' % lock),
+                ('bash', "printf '%%s\\n' %s status | xargs -I{} python {} stop 42" % lock),
+                ('bash', 'echo %s status | xargs python' % lock),
+                ('bash', 'set -- %s status; python "$1" stop 42' % lock),
+                ('bash', "printf -v c '%%s' %s; python $c stop 42" % lock))
+        from kitlib.guard import commands as cm, shell as sh
+        for shell, text in rows:
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(shell=shell, role=role, text=text):
+                    parsed = cm.read(text, sh.PS if shell == 'powershell' else sh.BASH, self.w.wt)
+                    for m in ('read', 'write', 'controller'):
+                        self.assertEqual(rolepolicy.lock_verb(parsed, m, self.w.kit_dir)[0], rolepolicy.HANDED_ON)
+                    d = rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
+    def test_a_read_or_a_lock_call_whose_output_stays_still_passes(self):
+        """The handed-on rule leaves alone a reader or git whose output reaches the terminal, a
+        lock path printed to the terminal, and the lock CLI run itself (its output is the lock's,
+        not its path), through a launcher or not, captured or not."""
+        lock, kit = 'tools/machine_lock.py', self.w.kit_dir.replace('\\', '/')
+        rows = (('powershell', 'gc %s' % lock), ('powershell', 'sls x %s' % lock),
+                ('powershell', 'Get-Variable c; gc %s' % lock), ('bash', 'git show HEAD:%s' % lock),
+                ('bash', 'grep -n def %s | head -5' % lock), ('bash', 'echo %s status' % lock),
+                ('bash', 'winpty python %s status' % lock),
+                ('powershell', 'Start-Process python -ArgumentList "%s status"' % lock),
+                ('bash', 'env A=1 timeout 60 python %s status' % lock),
+                ('bash', 'bash -c "python %s status"' % lock),
+                ('powershell', '$s = python %s/tools/machine_lock.py status' % kit),
+                ('bash', 'python %s status | head -5' % lock))
+        for shell, text in rows:
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(shell=shell, role=role, text=text):
+                    self.assertIsNone(rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx()))
+
 
 class LockMcp(Base):
     """The lock MCP's tools are held to the same verbs as the CLI (rolepolicy.MCP_VERBS)."""

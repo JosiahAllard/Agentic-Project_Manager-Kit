@@ -443,8 +443,22 @@ LOCK_PATH_READERS = frozenset((
     'test-path', 'get-filehash'))
 # git subcommands that only read or stage a path given after the subcommand:
 LOCK_PATH_GIT = frozenset(('add', 'blame', 'diff', 'log', 'ls-files', 'show', 'status'))
-# PowerShell's preference variable that can set -OutVariable on every later command (_output_stays):
-PS_DEFAULTS = 'psdefaultparametervalues'
+# PowerShell's preference variable that can set -OutVariable on every later command (_output_stays),
+# matched as this prefix so a wildcard (Get-Variable PSDefault*) is caught too; and the ways to
+# reach a variable by a name the line does not spell out (a *-Variable cmdlet given a wildcard, the
+# variable: drive, $ExecutionContext.SessionState.PSVariable):
+PS_DEFAULTS = 'psdefault'
+PS_VARIABLE_CMDLETS = frozenset(('get-variable', 'gv', 'set-variable', 'sv', 'set', 'new-variable', 'nv',
+                                 'clear-variable', 'clv'))
+PS_VARIABLE_WORDS = ('variable:', 'psvariable')
+# Programs that keep the words they are given for a later command, so a lock path given to one is
+# handed on even when nothing is printed (_handed_on): PowerShell's variable, alias, item and file
+# setters, and bash's builtins that set variables, arrays, aliases or the positional parameters.
+LOCK_STORES = frozenset((
+    'set-variable', 'sv', 'set', 'new-variable', 'nv', 'set-item', 'si', 'new-item', 'ni', 'set-content', 'sc',
+    'add-content', 'ac', 'out-file', 'tee-object', 'tee', 'set-alias', 'sal', 'new-alias', 'nal',
+    'set-clipboard', 'scb', 'export', 'declare', 'typeset', 'local', 'readonly', 'alias', 'read', 'mapfile',
+    'readarray'))
 
 
 def _lock_names(t):
@@ -512,19 +526,32 @@ def _ps_caught(cmd):
     return False
 
 
+def _ps_variable_reach(cmd):
+    """True when the PowerShell command `cmd` may set a variable the line does not name: a word
+    holding PS_DEFAULTS ($PSDefaultParameterValues, PSDefault*), the variable: drive or
+    PSVariable, or a *-Variable cmdlet given a wildcard (Get-Variable P*s)."""
+    texts = [w.text.lower() for w in cmd.words]
+    if any(PS_DEFAULTS in t or any(v in t for v in PS_VARIABLE_WORDS) for t in texts):
+        return True
+    inv = cm.invocation(cmd)
+    return inv is not None and inv.name in PS_VARIABLE_CMDLETS and any(
+        ch in t for t in inv.argv for ch in '*?[')
+
+
 def _output_stays(cmd, commands):
     """True when `cmd`'s output reaches no program that could run it as code: it sits in no ( )
     or { } group, command substitution or nested shell, PowerShell catches it no other way
     (_ps_caught), and across the whole line no command writes a file (> or >>) and every pipe ends
     in a bare reader (_reader) that is itself in no group and not caught, and no PowerShell command
-    names $PSDefaultParameterValues (it can give every later command an -OutVariable). The whole
+    may set a variable it does not name (_ps_variable_reach: $PSDefaultParameterValues can give
+    every later command an -OutVariable, and Get-Variable PSDefault* reaches it too). The whole
     line, since a loop or an if piped into python pipes every command inside it."""
     if cmd.nested_in is not None or cmd.groups or _ps_caught(cmd):
         return False
     for c in commands:
         if any(r.writes for r in c.redirects):
             return False
-        if c.shell == sh.PS and any(PS_DEFAULTS in w.text.lower() for w in c.words):
+        if c.shell == sh.PS and _ps_variable_reach(c):
             return False
         into = [d for d in commands if d.pipe_from is c]
         if c.piped_out and not into:
@@ -585,9 +612,37 @@ def _lock_words(inv, commands=(), kit=None, kit_checkout=None):
     return seq[k + 1:]
 
 
+def _runs_lock(inv):
+    """True when `inv` runs the lock CLI itself: machine_lock.py is its program, or python's
+    script (_python_script). A launcher left unwrapped (winpty, uv run) is not, so its line is
+    held to _handed_on."""
+    if cm.base_name(inv.path) == rules.LOCK_SCRIPT:
+        return True
+    if not rules.HUB_CODE_PYTHON_RE.match(inv.name):
+        return False
+    k = _python_script(inv.argv)
+    return k is not None and cm.base_name(inv.argv[k]) == rules.LOCK_SCRIPT
+
+
+def _handed_on(inv, commands):
+    """True when `inv`, a program given the lock CLI's path that it does not run itself
+    (_runs_lock), may hand that path to a later command: it keeps its words (LOCK_STORES, bash's
+    `set --`, printf -v) or its output does not stay (_output_stays: an assignment, a pipe into
+    xargs or anything but a bare reader, a file). Then the words after the path are not the
+    lock's verb: `$c = echo tools/machine_lock.py status; python $c[0] stop 42`."""
+    if inv.name in LOCK_STORES:
+        return True
+    if inv.name == 'printf' and any(a.startswith('-v') for a in inv.argv):
+        return True
+    return not _output_stays(inv.cmd, commands)
+
+
 # The verb named for a command that runs no program the guard can name (an assignment alone, a
 # PowerShell expression) whose words name machine_lock.py: lock_verb refuses it in every mode.
 NO_PROGRAM = '(in a command that names no program)'
+# The verb named for a lock path a program is given, does not run, and may hand on (_handed_on):
+# lock_verb refuses it in every mode.
+HANDED_ON = '(its path handed on to another program)'
 
 
 def lock_verb(parsed, m, kit=None, kit_checkout=None):
@@ -597,7 +652,9 @@ def lock_verb(parsed, m, kit=None, kit_checkout=None):
     A command with no invocation (an assignment alone, `$c=gc tools/machine_lock.py`, which
     PowerShell reads as one word with no program the guard can name; `$a = 'tools/...','stop'`
     for splatting) whose words name machine_lock.py is refused as NO_PROGRAM, in any mode:
-    fail-closed, since its value may reach a program later on the line. `kit` is the kit folder,
+    fail-closed, since its value may reach a program later on the line. So is a lock path given
+    to a program that does not run it and may hand it on (_handed_on: `$c = echo
+    tools/machine_lock.py status`, Set-Variable, `| xargs`), as HANDED_ON. `kit` is the kit folder,
     and `kit_checkout(root)` tells whether a folder is a checkout of the kit repository; the
     tools/backlog.py and tools/commit.py under either are exempt (_kit_tool)."""
     table = LOCK_VERBS[m]
@@ -611,7 +668,9 @@ def lock_verb(parsed, m, kit=None, kit_checkout=None):
         words = _lock_words(inv, parsed.commands, kit, kit_checkout)
         if words is None:
             continue
-        head = words[:words.index('--')] if '--' in words else words
+        if not _runs_lock(inv) and _handed_on(inv, parsed.commands):
+            return HANDED_ON, allowed
+        head =words[:words.index('--')] if '--' in words else words
         said, k = [], 0
         while k < len(head):
             t = head[k]
