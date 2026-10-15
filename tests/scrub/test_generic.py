@@ -48,8 +48,6 @@ DRIVE_ALLOWED = (
     ('kitlib/guard/rules.py', 'C:\\\\\\\\Users reaches python', 'a docstring on bash quoting'),
     ('kitlib/guard/shell.py', 'unquoted Windows path (C:\\\\tmp', 'a docstring on bash quoting'),
     ('kitlib/guard/shell.py', "# C:\\ before a space", 'a comment on a drive root'),
-    ('kitlib/hubsite/todosteps.py', "NOTEPADPP = r'C:\\Program Files\\Notepad++",
-     "the Notepad++ installer's default, which an {open} step's command tests before it runs it"),
     ('optional/comfy/comfy_gen.py', 'DESKTOP_EXE_DEFAULT = r"C:\\Program Files',
      "the installer's default (COMFY_DESKTOP_EXE overrides it)"),
     ('optional/comfy/comfy_gen.py', '--temp-directory "C:\\ComfyUI"', 'a comment quoting the app'),

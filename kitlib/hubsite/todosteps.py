@@ -15,9 +15,15 @@ run steps) asks for plain Notepad, describes a hand edit in prose, or is coordin
 The edit command runs in Windows PowerShell 5.1 as one `& { ... }` block:
 - Text goes in as a readable single-quoted literal, which expands nothing. A text holding a
   single quote of any form PowerShell reads as one (U+0027, U+2018-U+201B), a control character
-  other than a newline, a tab (a tab pasted into a console can start completion), or a character
-  outside the Basic Multilingual Plane goes in as base64 of its UTF-8 bytes instead, with a
-  readable one-line preview in a <# #> comment. A block whose texts hold no newline is one line.
+  other than a newline (C0, DEL and C1, U+0080-U+009F), a tab (a tab pasted into a console can
+  start completion), the line and paragraph separators U+2028 and U+2029, a bidi control or
+  invisible character (U+202A-U+202E, U+2066-U+2069, U+200B-U+200F, U+FEFF, the no-break space
+  U+00A0), or a character outside the Basic Multilingual Plane goes in as base64 of its UTF-8
+  bytes instead, with a readable one-line preview in a <# #> comment. The preview shows only the
+  first 60 characters (PREVIEW), with those characters escaped. A block whose texts hold no
+  newline is one line. A file or text holding a lone surrogate (U+D800 to U+DFFF) is a bad step.
+- An open step runs Notepad++ (NOTEPADPP) from Program Files, else Program Files (x86), read
+  from the environment when the command runs; neither holds it: a MISS line.
 - `old` and `new` reach the script with LF newlines (render drops every CR; the script drops any a
   paste brought back) and take the file's own line ending there: CRLF when the file has one, LF
   otherwise; a file with both is a MISS when old or new holds a newline.
@@ -31,7 +37,7 @@ The edit command runs in Windows PowerShell 5.1 as one `& { ... }` block:
 import base64
 import re
 
-NOTEPADPP = r'C:\Program Files\Notepad++\notepad++.exe'
+NOTEPADPP = r'Notepad++\notepad++.exe'   # under Program Files, then Program Files (x86)
 TEXT_MAX = 16384            # characters in old or new
 PATH_MAX = 1024
 PREVIEW = 60                # characters of a base64 text shown in its comment
@@ -39,15 +45,21 @@ RUN_SHOWN = 60              # characters of a run command shown in its summary l
 VERBS = {'edit': ('edit', 'old', 'new'), 'open': ('open', 'line'), 'run': ('run',)}
 
 _QUOTES = "'\u2018\u2019\u201a\u201b"
+# bidi controls (embeddings, overrides, isolates), zero-width characters and marks, the BOM, and
+# the no-break space: each makes a literal read other than it runs, or hides in plain sight
+_INVISIBLE = '\u202a-\u202e\u2066-\u2069\u200b-\u200f\ufeff\u00a0'
 _PATH_RE = re.compile(r'(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/]).*\Z', re.S)
 _PATH_BAD_RE = re.compile('["<>|?*\x00-\x1f\x7f\x85\u2028\u2029]')
-# what a readable literal may not hold: the quotes, control characters but LF, line and
-# paragraph separators, and astral characters (surrogates once encoded by a console)
-_UNREADABLE_RE = re.compile("[%s\x00-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029\U00010000-\U0010ffff]"
-                            % _QUOTES)
+_SURROGATE_RE = re.compile('[\ud800-\udfff]')
+# what a readable literal may not hold: the quotes, control characters but LF (C0, DEL, C1), line
+# and paragraph separators, the invisible characters, and astral characters (surrogates once
+# encoded by a console)
+_UNREADABLE_RE = re.compile("[%s\x00-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029%s\U00010000-\U0010ffff]"
+                            % (_QUOTES, _INVISIBLE))
+_ESCAPED_RE = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029%s]" % _INVISIBLE)
 
-# agent-written text an owner's to-do may not hold
-_NOTEPAD_RE = re.compile(r'(?i)(?<![\w+-])notepad(?:\.exe)?(?![\w+-]|\.\w)')
+# agent-written text an owner's to-do may not hold; notepad\ is a folder, not the program
+_NOTEPAD_RE = re.compile(r'(?i)(?<![\w+-])notepad(?:\.exe)?(?![\w+\\-]|\.\w)')
 _PROSE_RES = (
     # within one sentence: a dot ends it only before a space or the end (config.json does not)
     re.compile(r'(?i)\bopen\b(?:[^.\n]|\.(?=\S)){0,80}?\b(?:and|then)\s+'
@@ -65,8 +77,8 @@ _COORDINATOR_RES = (
      re.compile(_GIT + r'(?:branch|tag)\b.*?\s(?:-[A-Za-z]*[dD][A-Za-z]*|--delete)(?![\w-])')),
     ('a ref delete', re.compile(_GIT + r'update-ref\b.*?\s(?:-d|--stdin)(?![\w-])')),
     ('a remote ref delete or forced push',
-     re.compile(_GIT + r'push\b.*?\s(?:--delete|-d|--force(?:-with-lease)?(?:=\S*)?|-f|--mirror|'
-                       r'--prune|:\S+|\+\S+)(?![\w-])')),
+     re.compile(_GIT + r'push\b.*?\s(?:--delete|-d|--force(?:-with-lease|-if-includes)?(?:=\S*)?|'
+                       r'-[A-Za-z]*f[A-Za-z]*|--mirror|--prune|:\S+|\+\S+)(?![\w-])')),
 )
 
 
@@ -91,9 +103,19 @@ def _lf(text):
     return text.replace('\r\n', '\n').replace('\r', '\n')
 
 
+def _no_surrogate(where, name, v):
+    """StepError for a lone surrogate: half a character, which no encoding can write."""
+    m = _SURROGATE_RE.search(v)
+    if m:
+        raise StepError('%s: %s holds a lone surrogate (U+%04X) at character %d, half of a '
+                        'character that cannot be written' % (where, name, ord(m.group()),
+                                                                m.start()))
+
+
 def _path(where, v):
     if not isinstance(v, str) or not v:
         raise StepError('%s: the file is a non-empty string' % where)
+    _no_surrogate(where, 'the file', v)
     if len(v) > PATH_MAX or not _PATH_RE.match(v) or _PATH_BAD_RE.search(v) or \
             v.endswith(('\\', '/')):
         raise StepError('%s: the file must be an absolute path to a file (<drive>:\\... or '
@@ -105,6 +127,7 @@ def _path(where, v):
 def _text(where, name, v, empty):
     if not isinstance(v, str):
         raise StepError('%s: %s is a string' % (where, name))
+    _no_surrogate(where, name, v)
     v = _lf(v)
     if not empty and not v:
         raise StepError('%s: %s cannot be empty' % (where, name))
@@ -162,7 +185,7 @@ def _preview(text):
             out.append('\\n')
         elif ch == '\t':
             out.append('\\t')
-        elif ord(ch) < 0x20 or 0x7f <= ord(ch) <= 0x9f or ch in '\u2028\u2029':
+        elif _ESCAPED_RE.match(ch):
             out.append('\\x%02x' % ord(ch) if ord(ch) < 0x100 else '\\u%04x' % ord(ch))
         else:
             out.append(ch)
@@ -213,8 +236,12 @@ _EDIT = (
     "[Array]::Copy($r,0,$w,$k,$r.Length); [IO.File]::WriteAllBytes($p,$w); 'ok '+$p } } "
     "catch { 'MISS '+$p+': '+$_.Exception.Message }")
 
-_OPEN = ("$x='%s'; if (Test-Path -LiteralPath $x) { & $x%s $p; 'ok '+$p } "
-         "else { 'MISS '+$p+': Notepad++ is not at '+$x }")
+# The open's body, after $p (file) is set: the first Program Files folder that holds Notepad++.
+_OPEN = ("$x=$null; foreach ($d in $env:ProgramFiles, ${env:ProgramFiles(x86)}) "
+         "{ if ($d -and -not $x) { $c=Join-Path $d '%s'; "
+         "if (Test-Path -LiteralPath $c) { $x=$c } } }; "
+         "if ($x) { & $x%s $p; 'ok '+$p } "
+         "else { 'MISS '+$p+': Notepad++ is not in Program Files or Program Files (x86)' }")
 
 
 def _render(verb, v):

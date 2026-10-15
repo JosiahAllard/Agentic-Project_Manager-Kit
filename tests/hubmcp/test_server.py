@@ -246,8 +246,22 @@ class TodoSteps(Case):
         self.assertEqual(body["commands"][1:], todosteps.render(steps))
         self.assertEqual(body["detail"], "Why.\n\nreplace 2 lines in C:\\w\\a.txt\nrun python t.py")
 
+    def test_steps_without_a_detail_make_the_summary_the_detail(self):
+        steps = [{"open": "C:\\w\\a.txt", "line": 3}]
+        for extra in ({}, {"detail": ""}):
+            with self.subTest(extra=extra):
+                payload, is_error = self.rpc(self.server(), "hub_todo_add",
+                                             dict(extra, title="t", steps=steps))
+                self.assertFalse(is_error, payload)
+                body = self.ask.calls[-1]["body"]
+                self.assertEqual(body["detail"], "open C:\\w\\a.txt at line 3 in Notepad++")
+                self.assertEqual(body["commands"], todosteps.render(steps))
+
     def test_bad_steps_and_refused_text_never_reach_the_hub(self):
         for args, field in (({"steps": [{"open": "rel.txt"}]}, "steps"),
+                            ({"steps": [{"edit": "C:\\w\\a.txt", "old": "a\ud800", "new": "b"}]},
+                             "steps"),
+                            ({"steps": [{"open": "C:\\w\\\udc00.txt"}]}, "steps"),
                             ({"steps": [{"run": "notepad x"}]}, "steps"),
                             ({"commands": ["git worktree add x"]}, "commands"),
                             ({"detail": "Open it and apply the change."}, "detail")):

@@ -16,6 +16,10 @@ POWERSHELL = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32
                           'WindowsPowerShell', 'v1.0', 'powershell.exe')
 P = r'C:\work\notes.txt'
 B64_RE = re.compile(r"FromBase64String\('([A-Za-z0-9+/=]*)'\)")
+# bidi controls, zero-width characters, the BOM and the no-break space: each makes a literal read
+# other than it runs, or look like a plain space
+BIDI_AND_INVISIBLE = ([chr(c) for c in range(0x202a, 0x202f)] + [chr(c) for c in range(0x2066, 0x206a)]
+                      + [chr(c) for c in range(0x200b, 0x2010)] + ['﻿', ' '])
 
 
 def edit(path=P, old='a', new='b'):
@@ -86,6 +90,14 @@ class Shapes(unittest.TestCase):
         self.refused([{'open': P, 'line': '3'}])
         self.assertIn("'-n12'", one({'open': P, 'line': 12}))
 
+    def test_open_finds_notepad_plus_plus_under_either_program_files_folder(self):
+        cmd = one({'open': r'\\server\share\f.txt'})
+        self.assertIn('$env:ProgramFiles', cmd)
+        self.assertIn('${env:ProgramFiles(x86)}', cmd)
+        self.assertIn(todosteps.NOTEPADPP, cmd)
+        self.assertNotRegex(cmd, r'[A-Za-z]:\\')      # no drive is written into the command
+        self.assertNotIn('\n', cmd)
+
     def test_run_is_non_empty_text_passed_verbatim(self):
         self.refused([{'run': ' '}])
         self.refused([{'run': ['x']}])
@@ -127,6 +139,28 @@ class Literals(unittest.TestCase):
         for text in ('a\x1bb', 'a\tb', 'a\x00b', 'smile \U0001F600', 'a\u2028b', 'a\x85b'):
             with self.subTest(text=repr(text)):
                 self.assertEqual(payloads(one(edit(old=text))), [text])
+
+    def test_bidi_and_invisible_characters_fall_back_to_base64_and_show_escaped(self):
+        for ch in BIDI_AND_INVISIBLE:
+            with self.subTest(ch=hex(ord(ch))):
+                text = 'a%sb' % ch
+                cmd = one(edit(old=text, new='y'))
+                self.assertEqual(payloads(cmd), [text])
+                [pv] = re.findall(r'<#(.*?)#>', cmd)
+                self.assertNotIn(ch, pv)
+                self.assertIn('a%sb' % (('\\x%02x' if ord(ch) < 0x100 else '\\u%04x') % ord(ch)),
+                              pv)
+                self.assertNotIn(ch, cmd)
+
+    def test_a_lone_surrogate_is_a_bad_step_not_an_internal_error(self):
+        for s in ('\ud800', '\udfff', '\udc00'):
+            for step in (edit(old='a%sb' % s), edit(new='x%s' % s), edit(old="'%s" % s),
+                         edit(path='C:\\a%s.txt' % s), {'open': 'C:\\a%s.txt' % s}):
+                with self.subTest(step=ascii(step)):
+                    with self.assertRaises(StepError) as c:
+                        todosteps.render([step])
+                    self.assertEqual(c.exception.field, 'steps')
+                    self.assertIn('surrogate', str(c.exception))
 
     def test_a_base64_text_has_a_readable_single_line_preview(self):
         text = "it's\na\tlong line " + 'x' * 100 + ' #> <# end'
@@ -175,13 +209,14 @@ class Check(unittest.TestCase):
         todosteps.check(fields)
 
     def test_plain_notepad_is_refused_and_notepad_plus_plus_is_not(self):
-        for cmd in ('notepad C:\\x.txt', 'notepad.exe x', 'Start-Process Notepad x',
+        for cmd in ('notepad C:\\x.txt', 'notepad.exe x',
                     'C:\\Windows\\notepad.exe x', '& notepad', 'notepad'):
             with self.subTest(cmd=cmd):
                 self.assertIn('Notepad++', self.refused('commands', commands=[cmd]))
                 self.refused('steps', steps=[{'run': cmd}])
         for cmd in ('notepad++ x', '& "C:\\Program Files\\Notepad++\\notepad++.exe" x',
-                    'notepad2 x', 'type C:\\notepads\\x.txt', 'type notepad.txt'):
+                    'notepad2 x', 'type C:\\notepads\\x.txt', 'type notepad.txt',
+                    'cd C:\\notepad\\x', 'dir D:\\tools\\notepad\\'):
             with self.subTest(cmd=cmd):
                 self.passes(commands=[cmd])
 
@@ -207,11 +242,15 @@ class Check(unittest.TestCase):
                     'git branch --delete x', 'git tag -d v1', 'git update-ref -d refs/heads/x',
                     'git push origin --delete x', 'git push origin :x', 'git push -d origin x',
                     'git push --force origin x', 'git push origin +x',
+                    'git push -fu origin x', 'git push -uf origin x', 'git push -f origin x',
+                    'git push --force-if-includes origin x',
+                    'git push --force-with-lease --force-if-includes origin x',
                     'cd Z:/r; git worktree add a'):
             with self.subTest(cmd=cmd):
                 self.assertIn('coordinator', self.refused('commands', commands=[cmd]))
                 self.refused('steps', steps=[{'run': cmd}])
         for cmd in ('git worktree list', 'git push origin x', 'git branch -v', 'git tag v1',
+                    'git push -u origin x', 'git push --follow-tags origin x',
                     'git status', 'python tools/backlog.py next', 'git log --grep gate'):
             with self.subTest(cmd=cmd):
                 self.passes(commands=[cmd])
@@ -266,7 +305,19 @@ CASES = [
 ]
 
 
-@unittest.skipUnless(os.path.isfile(POWERSHELL), 'no Windows PowerShell 5.1 here')
+WHERE = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32', 'where.exe')
+# name -> (ProgramFiles, ProgramFiles(x86)): 'empty' has no Notepad++, 'x86' has the stand-in,
+# None is unset. A name ending -found expects ok, every other MISS.
+OPEN_CASES = [
+    ('open-in-program-files-found', 'x86', 'empty'),
+    ('open-in-x86-found', 'empty', 'x86'),
+    ('open-nowhere', 'empty', 'empty'),
+    ('open-no-x86-variable', 'empty', None),
+]
+
+
+@unittest.skipUnless(os.path.isfile(POWERSHELL) and os.path.isfile(WHERE),
+                     'no Windows PowerShell 5.1 here')
 class RealPowerShell(unittest.TestCase):
     """Every case through one powershell.exe run: the bytes each leaves, and its ok/MISS line."""
 
@@ -288,6 +339,22 @@ class RealPowerShell(unittest.TestCase):
             cmd = one(edit(path=path, old=old, new=new))
             cls.commands[name] = cmd
             lines += ["'--- %s'" % name, cmd]
+        # the open steps last, as they set the Program Files variables for the rest of the run.
+        # A stand-in Notepad++ is a copy of where.exe, which only reads: its complaint about the
+        # arguments is dropped (2>$null); the case's ok or MISS line is what is read.
+        empty = os.path.join(root, 'pf-empty')
+        x86 = os.path.join(root, 'pf-x86')
+        os.makedirs(empty)
+        os.makedirs(os.path.join(x86, 'Notepad++'))
+        shutil.copyfile(WHERE, os.path.join(x86, 'Notepad++', 'notepad++.exe'))
+        cls.open_path = os.path.join(root, 'open', 'f.txt')
+        opened = one({'open': cls.open_path, 'line': 2}) + ' 2>$null'
+        for name, pf, pf86 in OPEN_CASES:
+            setenv = ["$env:ProgramFiles='%s'" % (empty if pf == 'empty' else x86)]
+            setenv.append("Remove-Item 'Env:ProgramFiles(x86)' -ErrorAction SilentlyContinue"
+                          if pf86 is None else
+                          "${env:ProgramFiles(x86)}='%s'" % (empty if pf86 == 'empty' else x86))
+            lines += setenv + ["'--- %s'" % name, opened]
         script = os.path.join(root, 'run.ps1')
         with open(script, 'wb') as f:            # 5.1 reads a script without a BOM as ANSI
             f.write(BOM8 + '\r\n'.join(lines).encode('utf-8'))
@@ -332,6 +399,17 @@ class RealPowerShell(unittest.TestCase):
         self.assertIn('2 times', self.lines['overlap'][0])
         self.assertIn('0 times', self.lines['absent'][0])
         self.assertIn('mixed', self.lines['mixed-eol'][0])
+
+    def test_open_runs_notepad_plus_plus_from_either_program_files_folder_or_misses(self):
+        for name, _pf, _pf86 in OPEN_CASES:
+            with self.subTest(case=name):
+                got = [l for l in self.lines.get(name, []) if l.startswith(('ok ', 'MISS '))]
+                self.assertEqual(len(got), 1, (self.lines.get(name), self.out))
+                want = 'ok ' if name.endswith('-found') else 'MISS '
+                self.assertEqual(got[0][:len(want)], want, got[0])
+                self.assertIn(self.open_path, got[0])
+                if want == 'MISS ':
+                    self.assertIn('Notepad++', got[0])
 
     def test_no_injected_command_ran(self):
         for mark in ('P1', 'P2', 'P3', 'P4'):

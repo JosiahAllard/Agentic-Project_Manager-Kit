@@ -200,10 +200,6 @@ HAZARD_EXEMPT = {
     ('tests/guard/test_rules.py', 'OwnerLockTools', 'cmd /c start'): (2, GUARD_TEST),
     ('tests/guard/test_rules.py', 'OwnerLockTools', 'start ""'): (2, GUARD_TEST),
     ('tests/guard/test_rules.py', 'OwnerSetup', 'Start-Process'): (1, GUARD_TEST),
-    ('tests/hubsite/test_todosteps.py',
-     'Check.test_plain_notepad_is_refused_and_notepad_plus_plus_is_not', 'Start-Process'): (
-        1, 'a to-do test hands todosteps.check a command that starts plain Notepad, to see it '
-           'refused; the command is judged as text, never run'),
     ('tests/proc/test_console.py', '<module>', 'CREATE_NEW_CONSOLE'): (
         1, 'the test\'s own copy of the constant, for the wrapper tests below; defining it starts '
            'nothing'),
