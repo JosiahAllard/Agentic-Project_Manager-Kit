@@ -21,6 +21,8 @@ rule's age floor; idle where the rule says so), it is not protected, and its cre
 re-checked immediately before TerminateProcess. Protected (never touched, listed as expected):
 PROTECT_PATTERNS - ComfyUI plus any regexes in the PROCWATCH_PROTECT environment variable
 (';'-separated, matched against the command line), e.g. a repo's live production process.
+The origin label names the nearest known ancestor app; the PROCWATCH_ORIGINS environment
+variable (';'-separated exe names) adds more.
 
 Exit: 0 no suspects, 1 suspects reported, 2 error. Standard library only; Windows only.
 """
