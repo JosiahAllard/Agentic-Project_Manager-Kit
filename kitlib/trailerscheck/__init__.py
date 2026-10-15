@@ -71,7 +71,7 @@ def landing_head(base, root):
 def _merged_refusal(root, base, main):
     """None when `merged` may exempt the lander's merges in `root`: HEAD on `main` (a landing
     merged in the main checkout), or a detached HEAD that is a landing's merge onto `base` (the
-    landing tree, kitlib.gate.land step 5b; landing_head). Else what HEAD is and why not."""
+    landing tree, docs/gate.md "Landing" step 5; landing_head). Else what HEAD is and why not."""
     branch, why = gitrefs.current_branch(root)
     if branch is None:
         return 'git cannot tell what HEAD is (%s)' % why

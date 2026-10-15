@@ -1,6 +1,6 @@
 """The trailers step through a real landing (kitlib.gate.land): the merge is made and gated in the
 detached landing tree, and the step runs there as a repository's gate runs it, `{here}/trailers.py
--C {root} --base {base}` with merged_args `--merged` (KIT-LAND-TREE-TRAILERS-DETACHED). The
+-C {root} --base {base}` with merged_args `--merged` (docs/repo-checks.md "trailers"). The
 lander's trailerless merge is exempt and the branch lands; a trailerless branch commit still
 fails the step and nothing lands."""
 import os

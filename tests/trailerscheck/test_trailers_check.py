@@ -138,8 +138,8 @@ class Merged(TrailersCase):
 
 
 class LandingTree(TrailersCase):
-    """KIT-LAND-TREE-TRAILERS-DETACHED: a landing merges and gates in a detached landing tree
-    (kitlib.gate.land, step 5b), main never checked out there. `--merged` takes a detached HEAD
+    """A landing merges and gates in a detached landing tree (kitlib.gate.land; docs/gate.md
+    "Landing", step 5), main never checked out there. `--merged` takes a detached HEAD
     whose first-parent chain from the base is merges only (the landing's), and refuses any other
     detached HEAD and every branch but main."""
 
