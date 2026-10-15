@@ -597,8 +597,9 @@ HUB_PY_PLAIN_WORD_RE = re.compile(r'''^(['"]?)([\w./\\:+,=-]+)\1$''')
 # escape, backtick, variable, wildcard or brace, which could join or split words; ASCII only, so
 # no Unicode space or control is taken for part of a plain word
 HUB_PY_OPT_WORD_RE = re.compile(r'^[\w./:+,=-]+$', re.ASCII)
-# the text glued to a python word up to bash's word break (space, tab) or a command's end
-HUB_PY_GLUED_RE = re.compile(r'[^ \t\n;|&]*')
+# the text glued to a python word up to bash's word break (space, tab) or a command's end; a ;
+# is taken in, as cmd ends only a command's name there (hub_module_names)
+HUB_PY_GLUED_RE = re.compile(r'[^ \t\n|&]*')
 # hub quoted as a name ('hub', ".hub") counts in a command whose text also loads a module by name:
 # __import__('tools', fromlist=['hub']), importlib.import_module('.hub', 'tools'), run_module('hub')
 HUB_QUOTED_RE = re.compile(r'''(?i)['"]\.*hub['"]''')
@@ -914,19 +915,38 @@ def hub_module_names(text):
     python's own unless python's words before it reach a script word first (hub_py_script_first):
     `python <kit>/tools/commit.py -m "Hub store: x"` gives commit.py its message. A python word
     with another python word after it in the same word (no space or tab between) is a folder's
-    name (`.../Python312/python.exe`): the later word is tried instead. Any other text glued to a
-    python word is the program's own name, not a script: cmd ends a command's name at an
-    unquoted / and passes the whole word as argv[0] (`cmd /c python/commit.py -m hub` runs
-    python's -m)."""
+    name (`.../Python312/python.exe`): the later word is tried instead. Other unquoted text glued
+    to a python word is the program's own name, not a script: cmd ends a command's name at an
+    unquoted /, ; , or = and passes the whole word as argv[0] (`cmd /c python/commit.py -m hub`
+    and `cmd /c python;x -m hub` run python's -m); a ; there is read as cmd reads it, so in bash
+    too (fail-closed). A quote glued to a python word is python's -m whatever follows, as the
+    quoted run may hold spaces and a script word that are all argv[0]
+    (`cmd /c python/" commit.py x" -m hub`), unless it only closes a quote that opens its word
+    (`"<dir>/python.exe" <kit>/tools/commit.py -m "Hub store: x"`: hub_py_glued_quote)."""
     words = list(HUB_PY_WORD_RE.finditer(text))
     for k, w in enumerate(words):
         glued = HUB_PY_GLUED_RE.match(text, w.end()).end()
         if k + 1 < len(words) and words[k + 1].start() < glued:
             continue
         m = HUB_PY_MODULE_RE.match(text, w.end())
-        if m and not hub_py_script_first(m.group('mid')[glued - w.end():]):
+        if not m and ';' in text[w.end():glued]:
+            m = HUB_PY_MODULE_RE.match(text, text.rindex(';', w.end(), glued) + 1)
+        if m and (hub_py_glued_quote(text, w.start(), text[w.end():glued]) or
+                  not hub_py_script_first(text[glued:m.end('mid')])):
             return text[w.start():m.end()].strip()
     return None
+
+
+def hub_py_glued_quote(text, start, glued):
+    """True when the text `glued` to the python word at `start` holds a quote other than one
+    closing a quote that opens the word (`"<dir>/python.exe"`, `'python'`), so the shell may
+    join words after it into python's own name."""
+    if '"' not in glued and "'" not in glued:
+        return False
+    q = glued[0]
+    head = text[max(text.rfind(c, 0, start) for c in ' \t\n;&|(') + 1:start]
+    return not (glued == q and q in '"\'' and head.startswith(q) and
+                '"' not in head[1:] and "'" not in head[1:])
 
 
 def hub_py_script_first(mid):

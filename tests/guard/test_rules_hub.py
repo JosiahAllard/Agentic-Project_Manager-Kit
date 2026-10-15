@@ -1225,7 +1225,28 @@ class FailClosed(Hub):
             # and what is glued to it is the program's own name (argv[0]), never its script
             (bash, 'cmd //c "cd tools && python/commit.py -m hub answer Q-1"'),
             (ps, 'cmd /c "cd tools && python\\commit.py -m hub answer Q-1"'),
+            # a quote glued to a python word makes words of its own: the whole quoted run is argv[0]
+            (bash, 'cmd //c \'cd tools && python/" commit.py x" -m hub answer Q-1\''),
+            (ps, 'cmd /c \'cd tools && python/" commit.py x" -m hub answer Q-1\''),
+            (bash, 'cmd //c \'cd tools && python/python" commit.py x" -m hub answer Q-1\''),
+            (ps, 'cmd /c \'cd tools && python/python" commit.py x" -m hub answer Q-1\''),
+            (bash, 'cd tools && python/" commit.py x" -m hub answer Q-1'),
+            (ps, 'cmd /c "cd tools && python/\' commit.py x\' -m hub answer Q-1"'),
+            (bash, 'cd tools && "python/" commit.py x" -m hub answer Q-1'),
+            # cmd ends a command's name at ; , = as at a space, and none of them ends the command
+            (ps, 'cmd /c "cd tools && python;x -m hub answer Q-1"'),
+            (bash, 'cmd //c "cd tools && python;x -m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python;-m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python;a; -m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python,x -m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python=x -m hub answer Q-1"'),
         ), True)
+        # a python word in quotes is the program's name, closed by its own quote
+        self.rows((
+            (ps, '& "D:\\Programs\\Python312\\python.exe" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, "'D:/Programs/Python312/python.exe' Z:/k/tools/commit.py -C $PWD -m \"Hub store: x\" a.py"),
+            (bash, '"python" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+        ), False)
 
     def test_backlog_paths_naming_the_hub_tool(self):
         # backlog.py records paths (--scope, --body-file, a positional) and runs none of them, so a
