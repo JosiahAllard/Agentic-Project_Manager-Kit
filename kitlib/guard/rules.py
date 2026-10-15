@@ -1868,6 +1868,8 @@ class NetWrite(object):
 
 
 NET_QUOTES = '‘’‚‛“”„'     # PowerShell reads these as quotes too
+NET_DASHES = '-–—―'              # and these as the dash an operator starts with
+NET_UNARY = frozenset(('not', 'bnot', 'join', 'split', 'csplit', 'isplit'))   # -op operand
 
 
 def _net_string_end(src, k):
@@ -2123,21 +2125,48 @@ def _net_operand_end(src, k):
     return min(k, n)
 
 
+def _net_cast_operand(src, k):
+    """The offset of what follows the ']' at src[k - 1], past the spaces, <# #> comments and backtick
+    line continuations PowerShell reads as space there."""
+    n = len(src)
+    while k < n:
+        if src[k] in ' \t':
+            k += 1
+        elif src.startswith('<#', k):
+            close = src.find('#>', k + 2)
+            k = n if close < 0 else close + 2
+        elif src[k] == '`' and src[k + 1:k + 2] == '\n':
+            k += 2
+        elif src[k] == '`' and src[k + 1:k + 3] == '\r\n':
+            k += 3
+        else:
+            break
+    return k
+
+
 def _net_cast(src, k):
     """The NetWrite of the StreamWriter cast whose type name ends at src[k] (its ']'), or None when
-    no operand follows (the type passed as a value: [IO.StreamWriter], [IO.StreamWriter].Name).
+    no operand follows (the type passed as a value: [IO.StreamWriter], [IO.StreamWriter].Name,
+    $x -is [IO.StreamWriter] -and $y, @([IO.StreamWriter], 1)). What follows the ']' is an operand
+    unless it ends the statement or the expression (a line end, a line comment, . ) } ; | , ..) or is
+    a binary operator (-and, -eq, -f); a unary one (-join, -split, -not, -bnot, -1, +, !) opens an
+    operand, as a comment or a line continuation before it does not end one (_net_cast_operand).
     PowerShell converts the operand by the constructor that takes a string, so a plain string
     ('x.txt', or ('x.txt')) is the path; any other operand ($p, ('a' + $b), 'x'.Replace(...): a member
     access or an index binds before the cast) is a path the line computes."""
     n = len(src)
     if src[k:k + 1] != ']':
         return None
-    k += 1
-    while k < n and src[k] in ' \t':
-        k += 1
-    if k >= n or not (src[k] in '$(@[\'"' + NET_QUOTES or src[k].isdigit()):
+    k = _net_cast_operand(src, k + 1)
+    if k >= n or src[k] in '\r\n#)};|,':
         return None
-    end = _net_operand_end(src, k)
+    if src[k] == '.' and not (src[k - 1] != ']' and src[k + 1:k + 2].isdigit()):
+        return None                             # .Name, ..5; but [IO.StreamWriter] .5 is a cast of 0.5
+    if src[k] in NET_DASHES:
+        op = re.compile(r'[A-Za-z]*').match(src, k + 1).group(0).lower()
+        if op and op not in NET_UNARY:
+            return None                         # a binary operator, or one PowerShell rejects
+    end = max(_net_operand_end(src, k), k + 1)
     lit = None
     if src[k] in '\'"':
         close = _net_string_end(src, k)
@@ -3031,8 +3060,9 @@ def dotnet_process_dir(event, ctx, cmd, cwd, role):
     directory the call runs in (`cwd`) and the PowerShell location of each command it is nested
     in. .NET reads a relative path there (NET_RELATIVE), so a Set-Location into a worktree does not
     take the write with it; write_targets judges the PowerShell location itself. A session that
-    runs in the main checkout is told to give the call literal absolute paths, not to make a
-    worktree (its process starts in the main checkout either way)."""
+    runs outside a worktree of its own (in the main checkout, or outside any repository) is told to
+    give the call literal absolute paths, not to make a worktree (that does not move where its
+    process starts)."""
     if not net_mentioned(cmd):
         return None
     net, unread = net_writes(cmd)
@@ -3055,11 +3085,11 @@ def dotnet_process_dir(event, ctx, cmd, cwd, role):
         place = ctx.place(target) if res and res.rule == 'main-checkout' and own_worktree(ctx, cwd) is None \
             else None
         if place is not None and place.kind == repo.MAIN and not ctx.is_pm_data(place.top):
-            # the session runs in the main checkout: a worktree it makes does not move where its process starts
+            # the session runs outside a worktree: a worktree it makes does not move where its process starts
             return refuse('main-checkout', role, '%s is in the main checkout %s; this role may not edit a main '
-                          'checkout. This session runs there, so a new worktree does not move where its '
-                          'PowerShell process started: call each .NET method directly with literal absolute '
-                          'paths inside a worktree. To see where this session runs:' % (what, place.top), 'pwd')
+                          'checkout. A new worktree does not move the directory this PowerShell process '
+                          'started in, so call each .NET method directly with literal absolute paths inside '
+                          'a worktree. To see where this session runs:' % (what, place.top), 'pwd')
         if res:
             return res
     return None

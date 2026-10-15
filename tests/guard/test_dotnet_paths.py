@@ -228,6 +228,19 @@ class StartDirectory(Base):
         self.assertIn('literal absolute paths', d.reason.split('this role may not edit a main checkout.')[1])
         self.assertEqual(d.instead, 'pwd')
 
+    def test_a_session_outside_any_repository_is_not_told_it_runs_in_the_main_checkout(self):
+        # the call is nested in a command the outer Set-Location put in the main checkout; the
+        # refusal said "This session runs there" before
+        for text in ("Set-Location '{main}'; Write-Output $(Set-Location '{wt}'; "
+                     "[IO.File]::WriteAllText.Invoke('x.txt', 'y'))",
+                     "cmd /c \"cd /d {main} && powershell -Command Set-Location '{wt}'; "
+                     "[IO.File]::WriteAllText.Invoke('x.txt', 'y')\""):
+            with self.subTest(text=text):
+                d = self.denied(self.run_ps(text, cwd=self.w.plain), 'main-checkout')
+                self.assertNotIn('runs there', d.reason)
+                self.assertIn('literal absolute paths', d.reason.split('this role may not edit a main checkout.')[1])
+                self.assertEqual(d.instead, 'pwd')
+
     def test_an_outer_location_between_the_event_and_the_call(self):
         # the nested shell starts in the main checkout, where the outer Set-Location put it; the event
         # and the call's own location are the worktree
@@ -325,10 +338,40 @@ class Constructors(Base):
                 self.assertIn('a path the line computes', d.reason)
         self.allowed(self.run_ps(r"$s = [IO.StreamWriter]'{wt}\x.txt' + 'y'"))     # the cast binds first
 
+    def test_a_cast_through_a_unary_operator_a_comment_or_a_continuation(self):
+        # PowerShell reads spaces, <# #> comments and line continuations after the ']' as space, and
+        # a unary operator (-join, -split, -not, -1, +, !) as the start of the operand. Allowed from a
+        # worktree before.
+        for text in ("$s = [IO.StreamWriter]-join ('{main}\\x', '.txt')",
+                     "$s = [IO.StreamWriter] -join ('{main}\\x', '.txt')",
+                     "$s = [IO.StreamWriter]–join ('{main}\\x', '.txt')",
+                     "$s = [IO.StreamWriter] -split $p", '$s = [IO.StreamWriter] -not $p',
+                     '$s = [IO.StreamWriter]-not1', '$s = [IO.StreamWriter] -1', '$s = [IO.StreamWriter] --$i',
+                     '$s = [IO.StreamWriter] +$p', '$s = [IO.StreamWriter] !$p', '$s = [IO.StreamWriter] .5',
+                     "$s = [IO.StreamWriter]<#c#>-join ('{main}\\x', '.txt')",
+                     "$s = [IO.StreamWriter] `\n-join ('{main}\\x', '.txt')",
+                     '$s = [IO.StreamWriter]{{$p}}'):
+            with self.subTest(text=text):
+                d = self.denied(self.run_ps(text), 'main-checkout')
+                self.assertIn('a path the line computes', d.reason)
+        for text in (r"$s = [IO.StreamWriter]<#c#>'{main}\x.txt'",
+                     "$s = [IO.StreamWriter] <# a\ncomment #> '{main}\\x.txt'",
+                     "$s = [IO.StreamWriter] `\n'{main}\\x.txt'", "$s = [IO.StreamWriter]`\r\n'{main}\\x.txt'"):
+            with self.subTest(text=text):
+                d = self.denied(self.run_ps(text), 'main-checkout')
+                self.assertIn('is in the main checkout', d.reason)
+                self.allowed(self.run_ps(text.replace('{main}', '{wt}')))
+
     def test_a_cast_of_a_filestream_or_the_type_as_a_value(self):
-        # nothing a cast opens, judged where the line runs, as before
+        # nothing a cast opens, judged where the line runs, as before: the expression ends after the
+        # ']' (a line end, a comment, '.Name', ')', ',') or a binary operator takes the type as a value
         for text in ('$t = [IO.StreamWriter]', '[IO.StreamWriter].Name', 'if ($x -is [IO.StreamWriter]) {{ 1 }}',
-                     '$a = @([IO.StreamWriter], [IO.FileStream])', "[IO.FileStream]'x.txt'"):
+                     '$a = @([IO.StreamWriter], [IO.FileStream])', "[IO.FileStream]'x.txt'",
+                     'if ($x -is [IO.StreamWriter] -and $y) {{ 1 }}', '$t = [IO.StreamWriter] \t',
+                     "$t = [IO.StreamWriter]\n$u = 'x.txt'", "$t = [IO.StreamWriter]\r\n$u = 'x.txt'",
+                     "$t = [IO.StreamWriter] # 'x.txt'", '$t = [IO.StreamWriter] <#c#> -eq $u',
+                     "$t = [IO.StreamWriter] `\n-and $y", '$t = [IO.StreamWriter] –and $y',
+                     "$t = [IO.StreamWriter] -f 'x.txt'", '$t = [IO.StreamWriter]..5'):
             with self.subTest(text=text):
                 self.allowed(self.run_ps(text))
                 self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
