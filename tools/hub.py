@@ -67,6 +67,19 @@
       link not yet used; the owner's token only. With no server running there it empties the
       sessions file that server reads at its start (in the token folder) itself and says so.
       A new owner token also unpairs every browser.
+  hub.py stop [--port N] [--timeout S]
+      asks the server on the port to close as Ctrl+C closes it (kitlib.hubsite.control), then
+      waits until nothing listens on the port and its process has ended: `STOPPED: ...`. The
+      owner's token only; a browser session never stops the server. With no server there:
+      `nothing to stop: ...`, exit 0. --timeout S (default 300): exit 4 with `TIMED OUT: ...`
+      when it has not closed by then; nothing is ever killed, the server goes on closing.
+  hub.py restart [--port N] [--timeout S]
+      stops the server on the port (default hub.port) as stop does, then starts the scheduled
+      task kitlib.hubsite.autostart.TASK_NAME again and waits until the new server answers on
+      hub.port: `RESTARTED: ...`. It reads the task's state first and starts the task only when
+      the task ran the server it stopped, or nothing ran and the task is ready: no task, a
+      disabled one or a server started by hand starts nothing, says why and prints the start
+      command, exit 3. --timeout S covers the whole restart: exit 4 as for stop.
   hub.py migrate --from DIR [--from DIR ...] [--store PATH] [--dry-run]
       copies the documents of each DIR (the mirror folder, or an export of one account's copy)
       into the store (hub.store, else hub/ in the PM data worktree; --store PATH: that folder)
@@ -134,8 +147,9 @@ A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.hubsite, p
 Exit codes: 0 ok; 1 refused (`REFUSED: ...`, or `REFUSED <code>: <message>` when the server
 refused the call), a store with an error finding, a server that did not close cleanly, or a
 Ctrl+C other than the one that closes a running server; 2 usage error or a machine config that
-cannot be read; 3 the server is not running (the start command is printed); 4 `wait --timeout`
-ran out with nothing to say.
+cannot be read; 3 the server is not running (the start command is printed), or `restart`
+started nothing; 4 `wait --timeout` ran out with nothing to say, or `stop` or `restart` ran out
+of time (nothing was killed).
 """
 import argparse
 import json
@@ -150,14 +164,16 @@ from kitlib.config import copies, user                             # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.hubsite import access, api, auth, client, httpd, serve, settings, tunnel   # noqa: E402
 from kitlib.hubsite import autostart as hub_autostart              # noqa: E402
+from kitlib.hubsite import control                                 # noqa: E402
 from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
 
 START = 'python "%s" serve' % os.path.abspath(__file__)
 OPEN = 'python "%s" open' % os.path.abspath(__file__)
 HEALTH = api.BASE + '/health'
 # every verb, in the order the usage error names them
-VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'migrate', 'questions', 'answer',
-              'todos', 'stories', 'to-pm', 'inbox', 'pending', 'wait', 'validate')
+VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'stop', 'restart', 'migrate',
+              'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'pending', 'wait',
+              'validate')
 NO_VERB = 'give a verb: %s or %s' % (', '.join(VERB_NAMES[:-1]), VERB_NAMES[-1])
 
 
@@ -391,6 +407,14 @@ def parser():
                    help='print the one-time link instead of opening it')
     n = sub.add_parser('unpair', help='end the session of every paired browser (the owner)')
     n.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
+    for name, what in (('stop', 'ask the running server to close cleanly, and wait (the owner)'),
+                       ('restart', 'stop the server and start its scheduled task again (the '
+                                   'owner)')):
+        r = sub.add_parser(name, help=what)
+        r.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
+        r.add_argument('--timeout', type=_seconds, default=control.DEFAULT_TIMEOUT_S, metavar='S',
+                       help='give up after this many seconds, ending nothing (default: %d)'
+                            % control.DEFAULT_TIMEOUT_S)
     m = sub.add_parser('migrate', help="copy the earlier hub's documents into the store")
     m.add_argument('--from', dest='sources', action='append', type=_source, required=True,
                    metavar='DIR', help='a folder to copy from: the mirror folder or an export '
@@ -605,6 +629,74 @@ def _unpair(a, stop):
     if status != 200 or obj.get('ok') is not True:
         return _refused(port, status, obj)
     print('unpaired every browser of the hub server on port %d' % port)
+    return 0
+
+
+# restart that starts nothing: why, by control's outcome
+NOT_STARTED = {
+    control.NO_TASK: "there is no scheduled task '%s' (hub.py setup --autostart makes it), so "
+                     "nothing was started" % hub_autostart.TASK_NAME,
+    control.DISABLED: "the scheduled task '%s' is disabled, so nothing was started"
+                      % hub_autostart.TASK_NAME,
+    control.HAND_STARTED: "the server was started by hand, not by the scheduled task '%s', so "
+                          "nothing was started" % hub_autostart.TASK_NAME,
+}
+# a server the task starts has no console: what it says at start-up goes nowhere
+NO_CONSOLE = ('a server the scheduled task starts has no console, so its start-up lines are not '
+              'shown: run hub.py serve in a console to see why it does not answer: %s' % START)
+
+
+def _owner_token():
+    folder = auth.folder()
+    token = auth.read_token(folder, auth.OWNER)
+    if not token:
+        raise serve.ServeError('no owner token in %s: run hub.py setup' % folder)
+    return token
+
+
+def _stopped(port, stopped):
+    if not stopped.ran:
+        print('nothing to stop: no hub server is listening on port %d' % port)
+    elif stopped.pid is None:
+        print('STOPPED: the hub server on port %d has closed' % port)
+    else:
+        print('STOPPED: the hub server on port %d (pid %d) has closed and its process has ended'
+              % (port, stopped.pid))
+
+
+def _stop(a, stop):
+    port = a.port or settings.load().port
+    token = _owner_token()
+    try:
+        got = control.stop(port, token, a.timeout)
+    except control.Refused as e:
+        return _refused(e.port, e.status, e.answer)
+    except control.TimedOut as e:
+        print(serve.scrub('TIMED OUT: %s' % e), file=sys.stderr)
+        return client.TIMED_OUT
+    _stopped(port, got)
+    return 0
+
+
+def _restart(a, stop):
+    new_port = settings.load().port
+    port = a.port or new_port
+    token = _owner_token()
+    try:
+        got = control.restart(port, token, a.timeout, new_port)
+    except control.Refused as e:
+        return _refused(e.port, e.status, e.answer)
+    except control.TimedOut as e:
+        print(serve.scrub('TIMED OUT: %s' % e), file=sys.stderr)
+        print(NO_CONSOLE, file=sys.stderr)
+        return client.TIMED_OUT
+    _stopped(port, got.stopped)
+    if got.outcome != control.RESTARTED:
+        print(NOT_STARTED[got.outcome])
+        print('start it with: %s' % START)
+        return client.NOT_RUNNING
+    print("RESTARTED: the hub server answers on port %d (the scheduled task '%s' started it)"
+          % (got.port, hub_autostart.TASK_NAME))
     return 0
 
 
@@ -825,7 +917,8 @@ def _wait(a, stop):
 
 
 VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open,
-         'unpair': _unpair, 'migrate': _migrate, 'questions': _questions, 'answer': _answer, 'todos': _todos,
+         'unpair': _unpair, 'stop': _stop, 'restart': _restart, 'migrate': _migrate,
+         'questions': _questions, 'answer': _answer, 'todos': _todos,
          'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'pending': _pending,
          'wait': _wait, 'validate': _validate}
 
