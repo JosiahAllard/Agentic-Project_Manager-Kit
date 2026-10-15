@@ -134,8 +134,10 @@ The PM reads and writes the hub only through `tools/hub.py` or the hub MCP serve
 both with the agent's token. A coordinator writes only its own questions: it posts each with
 `hub.py questions add --from <its launcher session key>` (the `hub key:` line of its session-start
 context, `kitlib.coordinatorstart.hub_key`), keeps one `hub.py wait --pending --for
-<its key>` running in the background, and acts on the answer itself when it comes; it hands every
-other step (to-dos, notes, stories) to the PM. The server takes `--from` only when it is `pm` or a
+<its key>` running in the background, and acts on the answer itself when it comes. A to-do for its
+own work it files with `hub.py todos add --from <its key>`, and acknowledges it (`todos ack`) once
+it has acted on it; it hands every other step (notes, stories) to the PM. Who handles each pending
+item: "Who handles a pending item" below. For a question, the server takes `--from` only when it is `pm` or a
 key of the launcher's sessions.json, read again on each add; any other value is refused, and a
 question without `--from` is the PM's. The answer stays pending for everyone, the PM included,
 until the PM logs the ruling in the rulings ledger and then on the question (`questions log`), as
@@ -169,8 +171,8 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `inbox` | `M-1 unread [repo] title` |
 | `inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...] [--from NAME]` | `POSTED M-2` |
 | `inbox read M-1 [--undo] [--if-version V]` (owner) | `READ M-1` or `UNREAD M-1` |
-| `pending [--for KEY]` | `<kind> <id> [repo] title` |
-| `wait [--since REV] [--timeout S] [--pending [--for KEY] [--except ID ...]]` | `HUB <rev> <kind> <id> <title>` (pending) or `HUB <rev> <collection> <id> <op> <status>`; `HUB <rev> reset: the store is behind --since; read it again` after a reset |
+| `pending [--for KEY]` | `<kind> <id> [repo] to=<route> from=<key> title` |
+| `wait [--since REV] [--timeout S] [--pending [--for KEY] [--except ID ...]]` | `HUB <rev> <kind> <id> to=<route> from=<key> <title>` (pending) or `HUB <rev> <collection> <id> <op> <status>`; `HUB <rev> reset: the store is behind --since; read it again` after a reset |
 | `validate [--store PATH]` | `VALIDATE <LEVEL> <document> <field>: <message> [<code>]` |
 | `serve [--port N] [--store PATH]`, `status [--port N]`, `setup`, `open [--port N] [--print]`, `migrate` | see "Serving it" and "Data from the old hub" |
 
@@ -180,27 +182,48 @@ Notes on the table:
   require `--if-version`.
 - `hub.py pending` lists the owner input not yet handled: questions answered and not logged,
   stories submitted, To PM items sent, and to-dos done or added by the owner without `pm_ack`
-  (`kitlib.hubsite.store.pending_items`). Each item carries `from` (in `--json`): the session key
-  it goes back to. A question or to-do goes to the launcher session key it was posted `--from`
-  while that key is still in sessions.json; everything else (a to-do's free-text `from`, the
-  owner's own items, stories, To PM items, and a question whose session has gone) goes to `pm`
-  (`kitlib.hubsite.api.Api.pending`). `pending --for KEY` lists only KEY's items; reading it marks
-  nothing, so the item stays pending for every reader until it is logged or acknowledged.
+  (`kitlib.hubsite.store.pending_items`). Each item carries `from`, the session key it is for, and
+  `route`, the key that is to handle it now (the line's `from=` and `to=`). A question or to-do is
+  for the launcher session key it was posted `--from` while that key is still in sessions.json;
+  everything else (a to-do's free-text `from`, the owner's own items, stories, To PM items, and a
+  question whose session has gone) is for `pm` (`kitlib.hubsite.api.Api.pending`). `pending --for
+  KEY` lists only KEY's items, and `pending --for pm` the items routed to `pm` and every answered
+  question; reading it marks nothing, so the item stays pending for every reader until it is
+  logged or acknowledged.
 - `hub.py wait --pending` waits until an item is pending (one already pending ends it at once) and
-  prints `HUB <rev> <kind> <id> <title>` for each; with `--for KEY` it waits until an item for KEY
-  is pending and other sessions' items do not end it. `--except ID ...` leaves out the items with
-  those ids (ones already acted on, which stay pending until the PM logs or acknowledges them), so
-  only another item ends the wait; it marks nothing (`kitlib.hubsite.api.wait`). `wait [--since REV]`
-  waits for any change and prints `HUB <rev> <collection> <id> <op> <status>`; `--for` or
-  `--except` without `--pending` is a usage error. `--timeout S` exits 4 with no line when nothing came. The PM keeps one `wait --pending`
-  running in the background, without `--for` so that it also sees the coordinators' answers it
-  logs, handles what it prints, then starts it again; a PM waiting there is what the page shows
-  as listening.
+  prints `HUB <rev> <kind> <id> to=<route> from=<key> <title>` for each; with `--for KEY` it waits
+  until an item for KEY is pending and other sessions' items do not end it. `--except ID ...`
+  leaves out the items with those ids (ones already acted on, which stay pending until the PM logs
+  or acknowledges them), so only another item ends the wait; it marks nothing
+  (`kitlib.hubsite.api.wait`). `wait [--since REV]` waits for any change and prints
+  `HUB <rev> <collection> <id> <op> <status>`; `--for` or `--except` without `--pending` is a
+  usage error. `--timeout S` exits 4 with no line when nothing came. The PM keeps one
+  `wait --pending --for pm` running in the background, handles what it prints, then starts it
+  again; a PM waiting there is what the page shows as listening. A plain `wait --pending` would
+  end at once on an item a creator holds and not yet acknowledged, again and again.
 
 `--if-version V` is the version of the document the PM read and decided on (the `v2` of the
 `questions` and `stories` lines); a document that has moved on is refused (`REFUSED conflict`). At
 each start, resume and compact the PM session-start checklist (docs/pm-start.md) says whether the
-server is up, how many items are pending and whether `wait --pending` runs.
+server is up, how many items are pending and whether the PM's `wait --pending --for pm` runs.
+
+### Who handles a pending item
+
+Each pending item goes to the session that created it while that session can be reached, and to
+the PM otherwise, so the PM is the fallback for a creator that is gone (`route`, "Routes" in the
+`kitlib/hubsite/api.py` docstring):
+- An item for `pm` is the PM's.
+- An item for a session key, before it is handed over, is that key's while the key can be reached:
+  a `wait --pending --for <key>` is open now, or one started or ended within `REACH_GRACE_S` (the
+  55-second wait limit plus 30 seconds). Otherwise it is the PM's.
+- A `pending` or `wait` `--for <key>` that returns one of the key's items hands it over. The item
+  is then the key's for `ACK_WINDOW_S` (30 minutes) from the first hand-over, and the PM's after
+  that while it is still pending. The creator ends it by acting on it: `todos ack` for a to-do;
+  an answered question stays pending until the PM logs it.
+- `--for pm` lists the PM's items and every answered question, whoever asked it, because the PM
+  logs each ruling. A PM wait is also woken when an item turns to the PM with no write.
+- This state lives in the server's memory only: after a restart every item is the PM's until
+  its creator waits again. Older to-dos whose `from` is a free-text name are the PM's.
 
 ## questions/Q-NNN
 | Field | Written by | Meaning |
