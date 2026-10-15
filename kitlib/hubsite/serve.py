@@ -374,13 +374,28 @@ def agents_dir(environ=None):
 
 
 def _configured_repos(cfg):
-    """pmstart.known_repos of the pm_start config `cfg`; () when it cannot say (KeyError no
-    sessions_file, ValueError bad "repos" or bad JSON, OSError unreadable sessions file or no
-    git): a store write must never fail because the repo names cannot be read."""
-    try:
-        return pmstart.known_repos(cfg)
-    except (KeyError, ValueError, OSError):
-        return ()
+    """A callable giving pmstart.known_repos of the pm_start config `cfg`, the store's repo-alias
+    check's names. As in _repo_pairs, git is asked once: each folder's git top level (the PM's
+    repository and the kit's, two git runs) is kept, while sessions_file is read on each call, so
+    a new coordinator's repository counts at once, as on the repo menu (derived.repos). () when
+    the names cannot be read, since a store write must never fail on them: KeyError no
+    sessions_file, ValueError bad "repos" or bad JSON, OSError an unreadable sessions file,
+    AttributeError a sessions file whose JSON is not an object, TypeError a sessions_file that is
+    not a path. No git is not an error: pmstart._toplevel gives None and the name is left out.
+    Anything else is a bug in this code and is left to raise."""
+    tops = {}
+
+    def toplevel(folder):
+        if folder not in tops:
+            tops[folder] = pmstart._toplevel(folder)
+        return tops[folder]
+
+    def names():
+        try:
+            return pmstart.known_repos(cfg, toplevel=toplevel)
+        except (KeyError, ValueError, OSError, AttributeError, TypeError):
+            return ()
+    return names
 
 
 def machine_sources(home=None, sync=True):
@@ -405,7 +420,7 @@ def machine_sources(home=None, sync=True):
         src.usage = report
     if cfg and cfg.get('sessions_file'):
         src.repos = lambda stored: derived.repos(cfg, stored)
-        src.known_repos = lambda: _configured_repos(cfg)
+        src.known_repos = _configured_repos(cfg)
         src.backlog = lambda refresh_s: backlog.Views(_repo_pairs(cfg), refresh_s)
     return src
 
