@@ -362,6 +362,136 @@ class HomeAndWildcards(Hub):
         self.denied(lambda sub: bash('cat "%s/todos/T-1.json"' % W.fwd(store), self.w.wt, sub), 'hub-secrets')
 
 
+class BareWordsInTheDataFolder(Hub):
+    """Run from the PM data folder, where a bare `hub` is the default store's own name. A search
+    pattern and a bare value of a python script's long option are not paths
+    (rules.hub_not_paths); every word a program may open still is."""
+
+    def rows(self, rows, deny):
+        for shell, line in rows:
+            with self.subTest(line=line):
+                make = lambda sub, shell=shell, line=line: shell(line, self.w.data, sub)
+                if deny:
+                    self.denied(make, 'hub-secrets')
+                else:
+                    self.allowed(make)
+
+    def test_a_search_pattern_is_not_a_path(self):
+        self.rows((
+            (bash, 'grep -n -i "hub" launcher/coordinators.json'),
+            (bash, 'grep -n -i hub launcher/coordinators.json'),
+            (bash, 'grep -rn --include=*.json hub launcher'),
+            (bash, 'egrep -c hub launcher/coordinators.json'),
+            (bash, 'rg -n -i hub launcher'),
+            (bash, 'findstr /i /n hub launcher/coordinators.json'),
+            (ps, 'Select-String -Pattern hub -Path launcher\\coordinators.json'),
+            (ps, 'Select-String -Path launcher\\coordinators.json -Pattern:hub'),
+            (ps, 'sls -SimpleMatch hub launcher\\coordinators.json'),
+        ), deny=False)
+
+    def test_a_python_scripts_option_value_is_not_a_path(self):
+        launch = W.fwd(os.path.join(self.w.kit_dir, 'tools', 'launch.py'))
+        self.rows((
+            (bash, 'python %s handoff --session hub --recycle --what-if' % launch),
+            (bash, 'python %s handoff --session=hub --what-if' % launch),
+            (ps, 'python %s handoff --session hub --recycle --what-if' % launch),
+        ), deny=False)
+
+    def test_what_a_program_opens_in_the_store_is_still_refused(self):
+        st = W.fwd(self.store)
+        self.rows((
+            (bash, 'ls hub'),
+            (bash, 'cat hub/todos/T-1.json'),
+            (bash, 'cat ./hub/questions/Q-1.json'),
+            (bash, 'echo x > hub/todos/T-1.json'),
+            (bash, 'rm -rf hub'),
+            (ps, 'Get-Content .\\hub\\questions\\Q-1.json'),
+            (ps, 'Get-ChildItem hub'),
+            (ps, 'Remove-Item -Recurse -Path hub'),
+            # a search's files, and a pattern the parse cannot place
+            (bash, 'grep -rn owner hub'),
+            (bash, 'grep -n x hub/todos/T-1.json'),
+            (bash, 'grep -n hub "%s/todos/T-1.json"' % st),
+            (bash, 'grep -e x hub'),
+            (bash, 'grep -f hub launcher/coordinators.json'),
+            (bash, 'grep --file=x hub'),
+            (bash, 'grep -A 3 x hub'),
+            (bash, 'grep h* launcher/coordinators.json'),
+            (bash, 'grep $p hub'),
+            (bash, 'rg --files hub'),
+            (bash, 'findstr /c:x hub'),
+            (ps, 'Select-String -Pattern x -Path hub\\todos\\T-1.json'),
+            (ps, 'Select-String -Pattern x hub'),
+            (ps, 'sls -Context 2 x hub'),
+            (ps, 'sls -SimpleMatch x hub'),
+            (bash, 'grep --file hub launcher/coordinators.json'),
+            # a python script's positional argument, a path-shaped value, a module's option
+            (bash, 'python tools/x.py hub'),
+            (bash, 'python tools/x.py read hub'),
+            (bash, 'python tools/x.py -o hub'),
+            (bash, 'python tools/x.py --store hub/todos'),
+            (bash, 'python tools/x.py --store ./hub'),
+            (bash, 'python tools/x.py --store=hub/todos'),
+            (bash, 'python -m http.server --directory hub'),
+        ), deny=True)
+
+    def test_a_search_after_the_end_of_options(self):
+        self.rows((
+            (bash, 'grep -n -- hub launcher/coordinators.json'),
+            (bash, 'rg -i -- hub launcher'),
+        ), deny=False)
+        self.rows((
+            (bash, 'grep -n -- x hub'),
+            (bash, 'grep -n -- x hub/todos/T-1.json'),
+        ), deny=True)
+
+    def test_findstrs_slash_options_are_skipped(self):
+        self.rows((
+            (ps, 'findstr /n /a:4 hub launcher\\coordinators.json'),
+            (bash, 'findstr /i /s hub launcher/coordinators.json'),
+        ), deny=False)
+        self.rows((
+            (ps, 'findstr /a:4 x hub\\todos\\T-1.json'),
+            (bash, 'findstr /i x hub/todos/T-1.json'),
+        ), deny=True)
+
+    def test_only_the_session_options_value_is_exempt(self):
+        # a script's other options may name a folder it opens: `--force hub` puts hub after a
+        # flag, `--dir hub` hands it over; neither is exempt
+        self.rows((
+            (bash, 'python tools/cleanup.py --force hub'),
+            (bash, 'python tools/x.py --dir hub'),
+            (bash, 'python tools/x.py --dir=hub'),
+            (ps, 'python tools/x.py --what-if hub'),
+            # a session value shaped as a path is read as one
+            (bash, 'python tools/x.py --session ./hub'),
+            (bash, 'python tools/x.py --session hub/todos'),
+        ), deny=True)
+
+    def test_a_module_run_through_a_flag_cluster_is_not_a_script(self):
+        # -Bm and -Im run a module, -Ic code: the next word is not a script with options
+        self.rows((
+            (bash, 'python -Bm http.server --session hub'),
+            (bash, 'python -Im http.server --session hub'),
+            (bash, 'python -um tools.x --session hub'),
+            (bash, 'python -Ic pass --session hub'),
+        ), deny=True)
+
+    def test_no_exemption_reaches_the_token_folder(self):
+        # from the home's .pm-kit folder a bare `hub` is the token folder
+        pmkit = os.path.join(self.w.home, '.pm-kit')
+        os.makedirs(pmkit, exist_ok=True)
+        launch = W.fwd(os.path.join(self.w.kit_dir, 'tools', 'launch.py'))
+        for shell, line, cwd in (
+                (bash, 'python %s handoff --session hub --what-if' % launch, pmkit),
+                (bash, 'python %s handoff --session=hub' % launch, pmkit),
+                (bash, 'cd ~/.pm-kit && python %s handoff --session hub' % launch, self.w.data),
+                (bash, 'grep -n hub launcher.json', pmkit),
+                (ps, 'Select-String -Pattern hub -Path x.json', pmkit)):
+            with self.subTest(line=line, cwd=cwd):
+                self.denied(lambda sub, shell=shell, line=line, cwd=cwd: shell(line, cwd, sub), 'hub-secrets')
+
+
 # ---------------------------------------------------------------- hub-owner-verb
 
 class OwnerVerbs(Hub):
