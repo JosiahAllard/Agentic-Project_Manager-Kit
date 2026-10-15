@@ -469,6 +469,46 @@ class WriteLockTest(Base):
         self.assertTrue(os.path.isfile(os.path.join(os.path.dirname(self.path), '.LEDGER.md.lock')))
 
 
+    def test_outside_git_a_missing_folder_is_made_for_the_lock_and_names_one_lock(self):
+        folder = os.path.dirname(self.path)
+        lock = write.lock_path(self.path)
+        self.assertFalse(os.path.exists(folder))
+        self.assertFalse(write.held(self.path))
+        with write.locked(self.path):
+            self.assertTrue(os.path.isfile(lock))
+            self.assertEqual(write.lock_path(self.path), lock)
+            self.assertTrue(write.held(self.path))
+            seen = []
+            t = threading.Thread(target=lambda: seen.append(write.held(self.path)))
+            t.start()
+            t.join(RACE_TIMEOUT)
+            self.assertEqual(seen, [False])             # held is per thread
+        self.assertFalse(write.held(self.path))
+
+    def test_the_writer_imports_neither_the_gate_nor_the_daily_full_run(self):
+        code = ('import sys; sys.path.insert(0, sys.argv[1]); import kitlib.ledger.write, kitlib.pending; '
+                'print(sorted(m for m in sys.modules if m.split(".")[:2] in '
+                '(["kitlib", "gate"], ["kitlib", "dailyfull"])))')
+        out = subprocess.run([sys.executable, '-c', code, ROOT], capture_output=True, text=True,
+                             timeout=RACE_TIMEOUT)
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, '[]'), out.stderr)
+
+
+class ReplaceRetryTest(Base):
+    """write_atomic waits out a reader that holds the ledger open (Windows refuses the replace)."""
+
+    def test_a_reader_holding_the_ledger_open_delays_the_write_and_does_not_fail_it(self):
+        self.add()
+        reader = open(self.path, 'rb')                  # no delete sharing: os.replace is refused
+        closer = threading.Timer(0.3, reader.close)
+        closer.start()
+        self.addCleanup(reader.close)
+        self.addCleanup(closer.cancel)
+        self.assertEqual(self.add(decides='While read.').id, rid(2))
+        self.assertIn('Decides: While read.\n', self.text())
+        self.assertEqual([n for n in os.listdir(os.path.dirname(self.path)) if n.startswith('.ledger-')], [])
+
+
 class CheckTest(Base):
     def test_check_combines_validate_and_append_only(self):
         self.add()

@@ -59,8 +59,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    Work sets, Follow-ups. Check every other unpriced open record (an owner story, a record from
    the PM's brief) for duplicates, size and fit; price it 2-5 under the standing valuation
    rules (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
-   pre-emption, an owner-held area, a question only the owner can answer) goes to the PM as one
-   question; never ask the owner directly.
+   pre-emption, an owner-held area, a question only the owner can answer) goes in the one
+   work-set-start message to the PM (Look ahead), not a message per record; never ask the owner directly.
 7. Take a work set (below) and dispatch. Worktrees and branches you did not create may be live:
    ask before landing, reusing or removing any.
 8. `{{tool:cron-list}}`; no fill check yet -> `{{tool:cron-create}}` one, recurring, `17,47 * * * *`:
@@ -149,12 +149,10 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   secrets, runners, deploy steps. A CI change that only adds strictness: skill branch-review.
 - Tracked `{{owner_folder}}` files and {{instructions_file}} are owner-only: no session or agent edits them. Never
   write an `Owner-Approved:` trailer unless the owner said so in your own session.
-- One digest per 30-60 min: landed (commit, what, gate, verdict); in progress (agent, doing,
-  waiting on); queued (order); shared-resource schedule; anything parked, failed or retracted,
-  including by you; open questions. Never a message per event. At once only when something
-  blocks on the owner, main or CI is broken, a lock or resource is stuck, or the owner asked you something.
-  Acknowledgements ride the next digest. Keep chat replies short.
-- **Look ahead.** Every digest, scan `next`'s next ~15 for anything needing the owner
+- Message the PM only when you need a decision (owner or PM), main or CI is broken, a lock or
+  resource is stuck, you hit a usage limit, or you are ready to restart, besides the start check-in (step 3) and refusal reports (Never). When you start a work set,
+  send the owner questions it needs in one message.
+- **Look ahead.** At each work-set start, scan `next`'s next ~15 for anything needing the owner
   (owner-held, owner-only paths, live systems, a pre-emption); send those questions through the
   PM now.
 - Keep your context small (you re-read the whole conversation every turn): delegate reading
