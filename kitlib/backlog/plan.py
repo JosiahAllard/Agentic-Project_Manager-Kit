@@ -332,25 +332,41 @@ def _fold_overlap(snap, ctx, rid, branch, scopes):
     """The fold-in guard's git probe: Refusal when a member of `scopes` overlaps a path
     `branch` changed since its merge base with the code main, or the scope of a record `branch`
     holds pulled; a member that cannot be compared counts as an overlap. Refusal too when
-    `branch` is neither a local branch nor a branch of any remote as last fetched. Returns the
-    NOTE lines (a branch only a remote has: its diff is not compared, the pulled scopes still
-    are). Failure when git cannot answer or there is no base to measure from."""
+    `branch` is neither a local branch, nor a branch of any remote as last fetched, nor a branch
+    that landed on the code main (a `Merge <branch>` merge in its history, `landing_merge`).
+    Returns the NOTE lines: a branch only remotes have has the diff of each remote's tip
+    compared; a landed branch has no diff to compare; the pulled scopes are checked either way.
+    Every ref name is matched in any letter case, against git's own list of names
+    (`_ref_names`), so a packed ref is found as a loose one is. Failure when git cannot answer
+    or there is no base to measure from."""
     notes, hits = [], []
-    tip, why = refs.resolve('refs/heads/%s' % branch, ctx.root, known=True)
+    names = _ref_names(ctx, branch)
+    tip, why = refs.resolve(_spelling(names, 'refs/heads/%s' % branch), ctx.root, known=True)
     if tip is None:
         raise Failure('cannot read branch %s: %s' % (branch, why))
-    if not tip:
-        remotes = _remotes_with(ctx, branch)
-        if not remotes:
+    remotes = [] if tip else _remotes_with(ctx, branch, names)
+    if tip:
+        hits += _diff_hits(ctx, branch, tip, scopes)
+    elif remotes:
+        seen = set()
+        for _remote, ref, rtip in remotes:
+            if rtip not in seen:
+                seen.add(rtip)
+                hits += _diff_hits(ctx, ref[len('refs/remotes/'):], rtip, scopes)
+        notes.append('NOTE: branch %s is not a local branch; its diff was compared as last '
+                     'fetched from %s' % (branch, ', '.join(r for r, _ref, _tip in remotes)))
+    else:
+        _base, sha = _code_main(ctx)
+        merge = sha and landing_merge(ctx.root, ctx.code_main, branch, rev=sha, any_case=True)
+        if not merge:
             raise Refusal('cannot add %s: `--found-on %s` names a branch that exists neither '
                           'here nor on a remote (as last fetched): pass an existing branch, or '
-                          '`none` when no branch found it\na branch that has landed and been '
-                          'removed is written as `none`, with the branch named in '
-                          '--why-not-folded' % (rid, branch))
-        notes.append('NOTE: branch %s is not a local branch (only on %s); its diff was not '
-                     'compared' % (branch, ', '.join(remotes)))
-    else:
-        hits += _diff_hits(ctx, branch, tip, scopes)
+                          '`none` when no branch found it\na branch that landed is found by its '
+                          '`Merge %s` merge on %s; one removed without landing is written as '
+                          '`none`, with the branch named in --why-not-folded'
+                          % (rid, branch, branch, ctx.code_main))
+        notes.append('NOTE: branch %s landed on %s as %s; its diff was not compared'
+                     % (branch, ctx.code_main, merge))
     unread = [r.stem for r in snap.unreadable]
     if unread:
         raise Failure('cannot tell which records %s holds pulled: unreadable record(s): %s'
@@ -366,26 +382,55 @@ def _fold_overlap(snap, ctx, rid, branch, scopes):
     return notes
 
 
-def _remotes_with(ctx, branch):
-    """The remotes whose `branch` git holds a remote-tracking ref for (as last fetched; no
-    network). Every remote is asked, not `ctx.remote` alone: a store's checkout can name another
-    remote than the one the code is pushed to. Failure when git cannot list the remotes or read
-    a ref: "cannot tell" is never "no such branch"."""
+def _remotes_with(ctx, branch, names=None):
+    """`[(remote, ref, tip)]`: each remote whose `branch` git holds a remote-tracking ref for (as
+    last fetched; no network), the ref as git spells it (`_spelling`; `names` is `_ref_names`,
+    None: asked here) and its commit. Every remote is asked, not `ctx.remote` alone: a store's
+    checkout can name another remote than the one the code is pushed to. Failure when git cannot
+    list the remotes or read a ref: "cannot tell" is never "no such branch"."""
     out, why = cmd.run_text(['remote'], ctx.root)
     if out is None:
         raise Failure('cannot list the remotes to look for branch %s: %s' % (branch, why))
+    if names is None:
+        names = _ref_names(ctx, branch)
     found = []
     for remote in out.splitlines():
         remote = remote.strip()
         if not remote:
             continue
-        ref = 'refs/remotes/%s/%s' % (remote, branch)
+        ref = _spelling(names, 'refs/remotes/%s/%s' % (remote, branch))
         tip, why = refs.resolve(ref, ctx.root, known=True)
         if tip is None:
             raise Failure('cannot read %s: %s' % (ref, why))
         if tip:
-            found.append(remote)
+            found.append((remote, ref, tip))
     return found
+
+
+def _ref_names(ctx, branch):
+    """Every branch and remote-tracking ref name git lists (`for-each-ref refs/heads/
+    refs/remotes/`), to look `branch` up in. Asking git for the list, not for the one name, is
+    what makes the letter case of a lookup consistent: on a case-insensitive file system a loose
+    ref's file opens under any case, a packed-refs line only under its own. Failure when git
+    cannot list them."""
+    out, why = cmd.run_text(['for-each-ref', '--format=%(refname)', 'refs/heads/',
+                             'refs/remotes/'], ctx.root)
+    if out is None:
+        raise Failure('cannot list the refs to look for branch %s: %s' % (branch, why))
+    return [n.strip() for n in out.splitlines() if n.strip()]
+
+
+def _spelling(names, ref):
+    """`ref` as git spells it in `names` (`_ref_names`): the one name equal to it ignoring case,
+    else `ref` unchanged (git then answers for it: a broken loose ref for-each-ref skips is no
+    answer, not "no such ref"). Usage when several listed names equal it ignoring case, even
+    one exactly: on a case-insensitive file system `rev-parse` of the packed one can open the
+    other's loose file, so neither can be read for certain."""
+    near = [n for n in names if n.casefold() == ref.casefold()]
+    if len(near) > 1:
+        raise Usage('`%s` matches %s, which differ only in letter case and cannot be told apart '
+                    'on this file system: rename one' % (ref, ', '.join(sorted(near))))
+    return near[0] if near else ref
 
 
 def _overlaps(scopes, others, source):
@@ -448,7 +493,8 @@ def _pull_fold_hits(ctx, scopes, holding, branch):
             raise Failure('cannot read branch %s: %s' % (name, why))
         if not tip:
             notes.append('NOTE: branch %s is not a local branch (only on %s); its diff was not '
-                         'compared' % (name, ', '.join(_remotes_with(ctx, name)) or 'a remote'))
+                         'compared' % (name, ', '.join(r for r, _ref, _tip in
+                                                       _remotes_with(ctx, name)) or 'a remote'))
             continue
         mb, why = refs.merge_base(sha, tip, ctx.root)
         if mb is None:
@@ -1028,24 +1074,29 @@ def _collisions(rec, holding):
     return lines
 
 
-def landing_merge(root, main_branch, branch, since=None):
+def landing_merge(root, main_branch, branch, since=None, rev=None, any_case=False):
     """The landing merge of `branch` on `main_branch` (`<short sha> <subject>`, the subject
     `Merge <branch>` or `Merge <branch>: <summary>` as kitlib/gate/land.py writes it), or None
     when its history has none. `since` (a `YYYY-MM-DD` day, the record's `pulled_at`) skips a
     merge committed on an earlier day: an older landing of a branch whose name was later reused.
-    A merge on that day still counts. Failure when git cannot say."""
+    A merge on that day still counts. `rev` is the history searched (None: the local
+    `main_branch`); `any_case` matches the branch name in any letter case. Failure when git
+    cannot say."""
     want = 'Merge %s' % branch
-    out, why = cmd.run_text(['log', '--merges', '--format=%h %cs %s', '-F', '--grep', want,
-                             'refs/heads/%s' % main_branch, '--'], root)
+    args = ['log', '--merges', '--format=%h %cs %s', '-F', '--grep', want]
+    if any_case:
+        args.append('-i')
+    out, why = cmd.run_text(args + [rev or 'refs/heads/%s' % main_branch, '--'], root)
     if out is None:
         raise Failure('cannot read the history of %s to see whether %s landed: %s'
                       % (main_branch, branch, why))
+    fold = (lambda t: t.casefold()) if any_case else (lambda t: t)
     for line in out.split('\n'):
         sha, _, rest = line.partition(' ')
         day, _, subject = rest.partition(' ')
         if since and day < since:
             continue
-        if subject == want or subject.startswith(want + ': '):
+        if fold(subject) == fold(want) or fold(subject).startswith(fold(want + ': ')):
             return '%s %s' % (sha, subject)
     return None
 

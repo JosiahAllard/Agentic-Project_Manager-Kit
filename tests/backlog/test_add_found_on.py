@@ -214,6 +214,16 @@ class FoundOn(StoreCase):
         self.assertIn('names a branch that exists neither here nor on a remote', str(cm.exception))
         self.assertIsNone(self.get('NEW'))
 
+    def test_a_ref_list_git_cannot_give_fails(self):
+        real = cmd.run_text
+        self.failing('cmd', run_text=lambda args, root, **kw: (None, 'git broke')
+                     if args[:1] == ['for-each-ref'] else real(args, root, **kw))
+        with self.assertRaises(Failure) as cm:
+            self.add(['docs/y.md'])
+        self.assertIn('cannot list the refs to look for branch kit/foo: git broke',
+                      str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
     def test_a_landing_merge_git_cannot_search_fails(self):
         real = cmd.run_text
         self.failing('cmd', run_text=lambda args, root, **kw: (None, 'git broke')
@@ -386,7 +396,7 @@ class FoundOn(StoreCase):
           'Windows, a packed-refs line does not')
 class FoundOnPackedRefs(StoreCase):
     """Loose and packed refs are found alike, the name compared ignoring case (git's own list of
-    ref names, kitlib/backlog/plan.py `_ref_spellings`)."""
+    ref names, kitlib/backlog/plan.py `_ref_names` and `_spelling`)."""
     branch_with = FoundOn.branch_with
     add = FoundOn.add
     remote_only = FoundOn.remote_only
@@ -431,6 +441,21 @@ class FoundOnPackedRefs(StoreCase):
             with self.subTest(branch=branch):
                 self.assertEqual([r for r, _ref, _tip in pmod._remotes_with(self.ctx, branch)],
                                  want)
+
+    def test_two_branches_that_differ_only_in_case_are_usage_however_named(self):
+        # rev-parse refs/heads/kit/foo opens the loose Kit/Foo file here, not the packed kit/foo
+        self.repo.git('pack-refs', '--all')
+        self.repo.git('branch', 'Kit/Foo', 'main')      # loose, beside the packed kit/foo
+        names = self.repo.git('for-each-ref', '--format=%(refname)', 'refs/heads/').split()
+        self.assertIn('refs/heads/kit/foo', names)
+        self.assertIn('refs/heads/Kit/Foo', names)
+        for name in ('KIT/FOO', FOO, 'Kit/Foo'):
+            with self.subTest(name=name):
+                with self.assertRaises(Usage) as cm:
+                    self.add(['docs/y.md'], found_on=name)
+                self.assertIn('matches refs/heads/Kit/Foo, refs/heads/kit/foo, which differ only '
+                              'in letter case', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
 
 
 class FoundOnNoRemote(StoreCase):
