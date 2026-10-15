@@ -717,7 +717,8 @@ class Slot:
         self.env.pop(ORIGIN_ENV, None)
         # Only the command start(give_back=True) starts may give slots back (kitlib.lock.giveback).
         self.env.pop(gbk.GIVE_ENV, None)
-        self.offer, self.offer_bad, self.given = None, 0, []
+        # ack_due: a give-back's ack (the record's given_back) is still to be written.
+        self.offer, self.offer_bad, self.given, self.ack_due = None, 0, [], False
         # The window monitor (start, watch_stop) and what it saw: None until it stops.
         self.watch, self.windows, self.windows_error, self.windows_gone = None, None, None, 0
         mask = None
@@ -881,9 +882,15 @@ class Slot:
 
     def serve_give_back(self):
         """Does the offered command's give-back request, if one waits (kitlib.lock.giveback):
-        narrow the job, then the record, then the queue entry; else refuse, changing nothing.
+        narrow the job, then the record, then the queue entry, then the ack; else refuse,
+        changing nothing. First it writes an ack an earlier poll could not.
         Returns why it was refused, or None. Never raises: a failure refuses."""
         req = {}
+        if self.ack_due:
+            # A give-back is done but its ack write failed: the record in memory carries it.
+            with contextlib.suppress(OSError):
+                self.run.save()
+                self.ack_due = False
         try:
             req = gbk.read_request(self.offer) if self.offer else None
             if req is None:
@@ -918,11 +925,12 @@ class Slot:
         given = sorted(set(self.given) | set(req["cpu"]))
         env = dict(self.env)
         export_threads(env, self.job)
-        done = dict(pin_fields(self.job), given_back={
-            "id": req["id"], "cpu": given, "cores": keep, "cpumask": env[CPUMASK_ENV],
-            "cpuset": env[CPUSET_ENV], "at": iso()})
+        ack = {"id": req["id"], "cpu": given, "cores": keep, "cpumask": env[CPUMASK_ENV],
+               "cpuset": env[CPUSET_ENV], "at": iso()}
         try:
-            gbk.shrink(self.store, self.run, keep, done)
+            # False: the slots are given back but the ack is not on disk yet; it stays in the
+            # record in memory and serve_give_back writes it again on the next poll.
+            self.ack_due = not gbk.shrink(self.store, self.run, keep, pin_fields(self.job), ack)
         except Exception as e:              # noqa: BLE001 - the queue still holds every slot
             # Widening the job's pin moves its processes back onto every slot (Job.repin).
             if self.job.repin(old):
