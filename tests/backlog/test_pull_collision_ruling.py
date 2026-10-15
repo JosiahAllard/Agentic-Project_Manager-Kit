@@ -5,7 +5,7 @@ End to end through Store.write on a no-remote ref store."""
 import unittest
 
 from kitlib.backlog import plan as pmod
-from kitlib.backlog.errors import Refusal, Usage
+from kitlib.backlog.errors import Failure, Refusal, Usage
 
 from tests.backlog.helpers import BRANCH, TODAY, StoreCase, parse, priced, rec
 
@@ -221,6 +221,25 @@ class PullCollision(StoreCase):
         self.assertEqual((self.get('Y').get('state'), self.get('Y').get('preempt')),
                          ('pulled', None))
         self.assertIsNone(change.ruling)
+        note = [ln for ln in change.lines if ln.startswith('NOTE: the offer without branch')]
+        self.assertEqual(len(note), 1, change.lines)
+        self.assertIn(BRANCH, note[0])
+        self.assertIn('`scope: a/*.py`', note[0])
+
+    def test_a_plain_pull_onto_the_branch_prints_no_offer_note(self):
+        self.seed(mine('a/**'), priced('Y', scope='docs/y.md'))
+        change = self.verb('pull', 'Y')
+        self.assertFalse([ln for ln in change.lines if 'offer without branch' in ln],
+                         change.lines)
+
+    def test_a_bad_scope_on_another_branchs_pull_fails_the_pull(self):
+        self.seed(hold(scope='a/*.py'), priced('Y', scope='docs/y.md'))
+        with self.assertRaises(Failure) as cm:
+            self.verb('pull', 'Y')
+        msg = str(cm.exception)
+        self.assertTrue(msg.startswith('`next` cannot compute an offer: '), msg)
+        self.assertIn('`scope: a/*.py`', msg)
+        self.assertEqual(self.get('Y').get('state'), 'open')
 
 
 class SetScopeWidening(StoreCase):

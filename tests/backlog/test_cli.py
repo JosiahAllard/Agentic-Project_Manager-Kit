@@ -6,10 +6,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
-from tests.backlog.helpers import ADD_FLAGS, kit_json_ref
+from tests.backlog.helpers import ADD_FLAGS, TODAY, kit_json_ref, priced
 from tests.gitfixture import TempRepo, fixture_env, rmtree
 from kitlib.config import user as kuser
 
@@ -89,6 +90,21 @@ class Cli(unittest.TestCase):
         # Each `next` offers what `pull` takes plainly: Y as the main checkout read it.
         out = self.ok('--as', 'tools/wk', 'pull', 'Y')
         self.assertNotIn('preempt', out)
+
+    def test_a_bad_scope_on_another_branchs_pull_fails_next_and_pull_alike(self):
+        # `add` refuses `a/*.py`, so the live pull is seeded through the library.
+        self.repo.git('branch', 'tools/other')
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            backend = smod.RefBackend(self.repo.root, 'origin', smod.STORE_REF, smod.STORE_REF)
+            store = smod.Store(backend, rmod.Rules())
+            backend.publish(store.load(), dict(
+                priced('HOLD', state='pulled', pulled_at=TODAY, pulled_by='tools/other',
+                       scope='a/*.py'), **priced('Y', scope='docs/y.md')), 'seed\n')
+        for args in (('--as', 'tools/wk', 'next'), ('next',), ('--as', 'tools/wk', 'pull', 'Y')):
+            rc, out = self.run_tool(*args)
+            self.assertEqual(rc, 1, (args, out))
+            self.assertIn('ERROR: `next` cannot compute an offer: an in-flight record has '
+                          '`scope: a/*.py`', out, args)
 
     def test_refusals_exit_2_and_write_nothing(self):
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)

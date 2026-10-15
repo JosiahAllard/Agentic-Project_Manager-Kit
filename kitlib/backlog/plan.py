@@ -187,21 +187,25 @@ def offer_for(snap, ctx, branch=None, cap=omod.DEFAULT_CAP, seeds=(), holding=No
 
 
 def current_offer(snap, ctx, branch=None):
-    """`(offers, passed, holding, also)` for a pull onto `branch`: the offer `next` prints as that
-    branch (offer_for), and `also`, the records `next` offers without it (as the main checkout
-    prints it), [] when the two are the same. A pull takes a record either one offers, so a
-    coordinator's `next` and a worker's `pull` never disagree on what is in order.
+    """`(offers, passed, holding, also, notes)` for a pull onto `branch`: the offer `next` prints
+    as that branch (offer_for), and `also`, the records `next` offers without it (as the main
+    checkout prints it), [] when the two are the same. A pull takes a record either one offers,
+    so a coordinator's `next` and a worker's `pull` never disagree on what is in order.
     `also` only widens what a pull takes: when it cannot be computed (one of the branch's own
     pulls has a scope that cannot be compared, which the branch's offer never reads) it is [],
-    so a record `next` offered as the branch still pulls plainly and nothing else is let in."""
+    so a record `next` offered as the branch still pulls plainly and nothing else is let in;
+    `notes` then holds one NOTE naming why, for the pull to print."""
     offers, passed, holding, own = offer_for(snap, ctx, branch)
-    also = []
+    also, notes = [], []
     if own is not None and any(r.get('pulled_by') == own for r in holding):
         result, refusals, _ranks = omod.next_offer(snap, holding, session=ctx.session,
                                                    unmet=ctx.unmet(snap))
-        if not refusals:
+        if refusals:
+            notes.append('NOTE: the offer without branch %s cannot be computed (%s); only the '
+                         'offer as %s was checked' % (own, '; '.join(refusals), own))
+        else:
             also = [o.rec for o in result[0]]
-    return offers, passed, holding, also
+    return offers, passed, holding, also, notes
 
 
 def read_body_file(path):
@@ -914,7 +918,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     if missing:
         raise Refusal('`%s` requires %s, which is unmet: %s' % ((rid,) + missing[0]))
     branch = ctx.current_branch()
-    offers, passed, holding, also = current_offer(snap, ctx, branch)
+    offers, passed, holding, also, offer_notes = current_offer(snap, ctx, branch)
     offered = rec in [o.rec for o in offers] or rec in also
     hits = live_hits(rec.all('scope'), holding, skip=rid, branch=branch)
     folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, branch)
@@ -933,7 +937,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
         lmod.refuse_unnamed_release(rid, rec, ruling, 'pull')
     if minus_one or hits or folds:
         _check_ruling(rid, rec, ruling, 'pull', hold_only=True)
-    lines = notes + ['PULLED %s - state: open -> pulled' % rid, '  pulled_at:  %s' % ctx.date(),
+    lines = offer_notes + notes + ['PULLED %s - state: open -> pulled' % rid, '  pulled_at:  %s' % ctx.date(),
                      '  pulled_by:  %s' % branch]
     today = ctx.date()
     changes = [('state', ['pulled']), ('pulled_at', [today]), ('pulled_by', [branch])]
