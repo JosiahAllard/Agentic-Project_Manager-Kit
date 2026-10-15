@@ -206,7 +206,7 @@ Dropped on check: the definitions review said the state note is not git-ignored 
 |---|---|---|---|
 | D1 | Worker's text can send networking work to the wrong tier: it names opus-worker, strong-worker or a deep-worker session, while opus-worker excludes networking and concurrency and sends them to strong-worker | C, from the registered descriptions | Engineering call |
 | D2 | "Plan" means two things: plan-only (a task list, no code) goes to worker; strong-worker "builds and plans (designs) included" | C. Harm is I | Engineering call |
-| D3 | The registered coordinator description says it "serialises landings"; coordinator.md:3 says it lands every LAND verdict as soon as the lane is free. The plugin copy in use may be older than the file | C. Check that the shipped plugin matches the repo | Engineering call to check |
+| D3 | The registered coordinator description says it "serialises landings"; coordinator.md:3 says it queues every LAND verdict for landing at once. The plugin copy in use may be older than the file | C. Check that the shipped plugin matches the repo | Engineering call to check |
 | D4 | Coordinator has no fallback if dispatched as a subagent (deep-worker and consultant do) | I | Engineering call |
 | D5 | Lander description should list the reviewed tip sha; reviewer description should list the gate report and log paths it needs | C for lander (see B4); I for reviewer | Engineering |
 | F1 | Finding only: the kit has no `.claude/coordinator-profile.md`, and coordinator.md:3, :12 and :33 require one | C | Owner only |

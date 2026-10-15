@@ -5,7 +5,7 @@ description: Use as a coordinator before giving any branch its landing verdict. 
 
 # Coordinator: branch review
 
-No branch reaches the lander without your verdict. Green proves the project still works, not that the change is right, in scope, or exercised.
+No branch reaches the land queue without your verdict. Green proves the project still works, not that the change is right, in scope, or exercised.
 
 1. Gather the brief, the exact diff range, the author's gate report and log paths; `python <kit>/tools/review_pack.py -C <worktree> <branch>`.
 2. Scope check, yourself: `git diff --stat <merge-base>..<branch>` against the brief. A file outside scope is a finding before you read a line.
@@ -14,7 +14,7 @@ No branch reaches the lander without your verdict. Green proves the project stil
 5. A failure is real unless it is on the known-flakes list (`python <kit>/tools/doc_index.py -C <worktree> --find flakes`).
 6. Findings go to the author by continuing that agent: numbered, file and symbol, with severity; it fixes and re-runs its gate; you re-review the fix only.
 7. Small findings are fixed on this branch, never filed as follow-ups, including incidental defects found there (a tool bug, a wrong doc line, a flake fix); `backlog.py add` refuses a record whose scope overlaps the branch. File a follow-up only for work too large or out of scope, and worth doing.
-8. Verdict: LAND; LAND WITH FOLLOW-UP (recorded in the plan); SEND BACK. Give the lander the branch, full main and tip hashes and the reviewed range. A design disagreement goes to the owner, both positions stated fairly.
+8. Verdict: LAND; LAND WITH FOLLOW-UP (recorded in the plan); SEND BACK. Submit it with the branch, its full tip hash and the reviewed range. A design disagreement goes to the owner, both positions stated fairly.
 9. A defect class seen twice is prevented in this order: a guard in code (fail-fast check, test, or a script that does the step); else the reference doc owning the area, the incident in the findings or decisions log; only then one instruction line, a rule not a story, if every agent must act on it.
 10. A CI change that only adds strictness (pass-string grep, test step, assertion) for an approved plan item is ordinary work: review it as High risk and land it.
 
