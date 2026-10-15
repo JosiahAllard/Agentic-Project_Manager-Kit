@@ -1339,7 +1339,9 @@ class UnplacedGit(MainGit):
         loop = ('foreach ($b in $branches) { foreach ($f in $files) { if (git merge-base --is-ancestor $b '
                 'origin/master) { $hits += "$b :: $f" } } }')
         texts = [loop, '$hits += "$b :: $f"; %s' % g, '$hits += "$t::SetItem($b)"; %s' % g,
-                 'Write-Output "${b}::x"; %s' % g, '$hits = @(); $hits += "$b :: $f"; %s' % g]
+                 'Write-Output "${b}::x"; %s' % g, '$hits = @(); $hits += "$b :: $f"; %s' % g,
+                 # a backtick-escaped $( opens no subexpression; "" is a quote inside the one string
+                 'Write-Output "`$(x) :: $b"; %s' % g, 'Write-Output "$t""::$m"; %s' % g]
         for text in texts:
             with self.subTest(text):
                 p = cm.read(text, sh.PS, wt)
@@ -1359,11 +1361,21 @@ class UnplacedGit(MainGit):
             'Write-Output "$($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
             '$hits += "$b :: $($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
             'Set-Item env:GIT_DIR "$b :: $f"; %s' % g,
-            '[Environment]::SetEnvironmentVariable(\'GIT_DIR\', "$b :: $f"); %s' % g], tool='PowerShell')
-        # a string handed to Invoke-Expression is code: the line is unreadable
-        text = 'iex "$t::$n(\'GIT_DIR\', \'x\')"; %s' % g
-        self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
-        self.denied(self.git(text, 'worker', tool='PowerShell'))
+            '[Environment]::SetEnvironmentVariable(\'GIT_DIR\', "$b :: $f"); %s' % g,
+            # a string piped to Invoke-Expression is read as code: its :: is a static call
+            '"$t::$n(\'GIT_DIR\', \'x\')" | iex; %s' % g], tool='PowerShell')
+        # a string handed to Invoke-Expression is code, and a $( inside ${...} is a substitution:
+        # the line is unreadable
+        for text in ('iex "$t::$n(\'GIT_DIR\', \'x\')"; %s' % g, 'Write-Output "${a$(x)}::y"; %s' % g):
+            with self.subTest(text):
+                self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
+                self.denied(self.git(text, 'worker', tool='PowerShell'))
+                self.denied(self.marked(text, COORDINATOR, 'PowerShell'))
+        # pinned as it is: a property cmdlet on a computed Environment:: path passes, as "env:$n"
+        # already did; the environment provider has no property operations, so it sets no variable
+        text = 'Set-ItemProperty -Path "Environment::$n" -Name GIT_DIR -Value x; %s' % g
+        self.allowed(self.git(text, 'worker', tool='PowerShell'))
+        self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
         # a curly double quote may end the string where the guard reads on: it stays a static call
         self.held_everywhere(['$hits += "$b :: “ x"; %s' % g, '$hits += "$b :: ” x"; %s' % g],
                              tool='PowerShell')
