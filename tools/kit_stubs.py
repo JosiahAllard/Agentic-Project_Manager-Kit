@@ -5,7 +5,8 @@
 
 -C names the checkout (default: here). A thin entry point (ARCHITECTURE.md, Layers): it parses,
 calls kitlib.stubs.run, prints and exits. Exit codes: 0 done or all current; 1 a problem named;
-2 usage, or the kit configuration was refused; 130 Ctrl+C.
+2 usage, or the kit configuration was refused, or run from an export of the kit whose marker names
+no main checkout (no stub may name a folder a prune may remove); 130 Ctrl+C.
 """
 import argparse
 import os

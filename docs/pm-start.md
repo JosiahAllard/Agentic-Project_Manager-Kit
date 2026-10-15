@@ -77,7 +77,11 @@ sets `"stubs".tools`, or it holds at least one) whose stubs are missing or stale
 `stubs (<repo>): N missing/stale: <names>; run python <kit>/tools/kit_stubs.py write -C <folder>`,
 with `(stale ones run the kit at <path>)` added when a stub runs another kit. A repository whose
 stubs are current prints nothing; a folder that is not there, or a check that fails, is that
-repository's own `could not check stubs (<repo>): ...` line. The coordinator's session start has the
+repository's own `could not check stubs (<repo>): ...` line. The check runs in the plugin's
+export, so it compares each stub with the main checkout the export's marker names, the folder
+`kit_stubs.py write` would name (`kitlib.stubs.live_kit`); an export whose marker names none gives
+`could not check stubs (<repo>): <export> is an export of the kit ...` with no write command
+(docs/plugin-source.md "Layout"). The coordinator's session start has the
 same check for its own repository (docs/install.md "Tools without a stub"). Code: `kitlib/pmstart`
 `stubs`; tests: `tests/pmstart/test_stubs_check.py`.
 

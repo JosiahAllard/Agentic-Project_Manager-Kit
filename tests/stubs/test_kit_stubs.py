@@ -249,7 +249,10 @@ class ProblemLine(StubCase):
         for name in stubs.SHARED:
             self.put(self.stub(name), '# the repository\'s own %s\n' % name)
         self.assertIsNone(stubs.problem_line(self.root))
-        code, out = self.run_stubs('check')        # check still names them
+        code, out = self.run_stubs('check')        # no stub and no "stubs" section: none used
+        self.assertEqual(code, stubs.OK, out)
+        self.assertIn('kit_stubs: uses no stubs', out)
+        code, out = self.run_stubs('check', tools=['landed'])     # asked for: check names them
         self.assertEqual(code, stubs.PROBLEMS, out)
         self.assertIn('not a stub  %s' % self.stub('landed'), out)
 
