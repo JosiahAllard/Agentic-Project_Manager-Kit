@@ -10,6 +10,8 @@ import time
 import unittest
 from unittest import mock
 
+from kitlib import kitroot
+from kitlib.config import user
 from kitlib.git import defaults as gitdefaults
 from kitlib.worktree import sweep
 from tests import gitfixture
@@ -230,20 +232,40 @@ class SweepOpenClaim(SweepCase):
 
 
 class MachineLockEntries(unittest.TestCase):
+    """The lock tool is the kit's own tools/machine_lock.py (kitlib.kitroot.lock_tool), never one
+    under the home folder: a temp home with no `.claude` in it stands in for the user's."""
 
     def setUp(self):
+        self.kit = tempfile.mkdtemp(prefix='kit-')
+        self.addCleanup(gitfixture.rmtree, self.kit)
+        self.tool = sweep.machine_lock_path(self.kit)
+        os.makedirs(os.path.dirname(self.tool))
+        with open(self.tool, 'w') as f:
+            f.write('# never run: the runner is faked\n')
         self.home = tempfile.mkdtemp(prefix='kit-home-')
         self.addCleanup(gitfixture.rmtree, self.home)
-        tool = sweep.machine_lock_path(self.home)
-        os.makedirs(os.path.dirname(tool))
-        with open(tool, 'w') as f:
-            f.write('# never run: the runner is faked\n')
+        patch = mock.patch.object(user, 'home_dir', return_value=self.home)
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def entries(self, stdout, rc=0):
         def run(args, **kw):
             self.assertEqual(args[-2:], ['status', '--json'])
+            self.assertEqual(args[-3], self.tool)
             return subprocess.CompletedProcess(args, rc, stdout, '')
-        return sweep.machine_lock_entries(run=run, home=self.home)
+        return sweep.machine_lock_entries(run=run, kit=self.kit)
+
+    def test_the_default_is_the_kits_own_lock_tool(self):
+        self.assertEqual(sweep.machine_lock_path(), kitroot.lock_tool())
+        self.assertEqual(sweep.machine_lock_path(self.kit), os.path.join(self.kit, 'tools', 'machine_lock.py'))
+        ran = []
+
+        def run(args, **kw):
+            ran.append(args)
+            return subprocess.CompletedProcess(args, 0, '{"runs": [], "queue": {"entries": []}}', '')
+        self.assertEqual(sweep.machine_lock_entries(run=run), ([], None))
+        self.assertEqual(ran[0][-3], kitroot.lock_tool())
+        self.assertFalse(os.path.normcase(ran[0][-3]).startswith(os.path.normcase(self.home)), ran[0])
 
     def test_the_pm_shape(self):
         doc = {'lock': {'held': [{'id': 1}], 'waiting': [{'id': 2}], 'background': [{'id': 3}]}}
@@ -261,9 +283,11 @@ class MachineLockEntries(unittest.TestCase):
             self.assertTrue(why)
 
     def test_a_missing_tool_fails_closed(self):
-        got, why = sweep.machine_lock_entries(run=mock.Mock(), home=os.path.join(self.home, 'no'))
+        run = mock.Mock()
+        got, why = sweep.machine_lock_entries(run=run, kit=os.path.join(self.kit, 'no'))
         self.assertIsNone(got)
         self.assertIn('not at', why)
+        run.assert_not_called()
 
     def test_holder_matching(self):
         path = os.path.join('C:' + os.sep, 'r', '.claude', 'worktrees', 'slug')
