@@ -613,6 +613,16 @@ class ReadTest(ApiCase):
         self.assertEqual(obj['unavailable'], dict.fromkeys(('repos', 'usage', 'agents'),
                                                            'unavailable'))
 
+    def test_snapshot_carries_pages_and_their_bodies(self):
+        """The page's Docs section reads both from the snapshot: a change that trims either must change this."""
+        body = '<h1>Plan</h1><svg viewBox="0 0 1 1"></svg>'
+        self.store.put('pages', 'plan-1', {'title': 'The plan', 'repo': 'kit', 'at': '2026-10-15T00:00:00Z'})
+        self.store.put('page_html', 'plan-1', {'html': body})
+        for role in (OWNER, AGENT):
+            cols = self.ok('GET', '/snapshot', role)['collections']
+            self.assertEqual(cols['pages']['plan-1']['title'], 'The plan', role)
+            self.assertEqual(cols['page_html']['plan-1']['html'], body, role)
+
     def test_health(self):
         obj = self.ok('GET', '/health', OWNER)
         self.assertEqual((obj['ok'], obj['version'], obj['revision'], obj['store'], obj['git'],

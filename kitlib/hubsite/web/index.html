@@ -153,6 +153,11 @@ form.add textarea.story{min-height:110px}
 .q.done{border-left:4px solid var(--ok)}
 button.danger{color:var(--warn)}
 .empty strong{display:block;color:var(--fg);font-size:1rem;margin-bottom:4px}
+.reader{position:fixed;inset:0;z-index:20;background:var(--bg);display:grid;grid-template-rows:auto 1fr}
+.reader .rbar{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
+.reader h2{margin:0;font-size:1rem;line-height:1.35;overflow-wrap:anywhere;min-width:0}
+.reader .rbody{min-height:0}
+.docframe{display:block;width:100%;height:100%;border:0;background:#fff}
 @media (prefers-reduced-motion:no-preference){.q{transition:border-color .15s}}
 </style>
 </head>
@@ -170,6 +175,7 @@ button.danger{color:var(--warn)}
     <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">To PM <span class="n" id="n-pm">0</span></button>
     <button class="sec" role="tab" data-s="todo" aria-selected="false" id="sec-todo">To do <span class="n" id="n-t">0</span></button>
     <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span><span class="n hot" id="n-sp" hidden></span></button>
+    <button class="sec" role="tab" data-s="docs" aria-selected="false" id="sec-docs">Docs <span class="n" id="n-d">0</span></button>
     <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Info</button>
   </div>
 
@@ -213,7 +219,7 @@ button.danger{color:var(--warn)}
       <button class="primary" type="button" id="pm-sendall" disabled>Send all</button><span class="status" id="pm-sendstatus" role="status"></span>
     </div>
     <select id="repo" aria-label="Filter by repository"><option value="">All repos</option></select>
-    <input type="search" id="idq" placeholder="Find by id or title" aria-label="Find a question or to-do by id or title">
+    <input type="search" id="idq" placeholder="Find by id or title" aria-label="Find a question, to-do or document by id or title">
     <select id="brepo" aria-label="Backlog" hidden><option value="">All backlogs</option></select>
   </div>
 
@@ -240,16 +246,22 @@ button.danger{color:var(--warn)}
   </div>
 </div>
 
+<div class="reader" id="reader" role="dialog" aria-modal="true" aria-labelledby="reader-title" tabindex="-1" hidden>
+  <div class="rbar"><h2 id="reader-title"></h2><button class="primary" type="button" id="reader-close">Close</button></div>
+  <div class="rbody" id="reader-body"></div>
+</div>
+
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "new", infotab: "usage", inboxtab: "questions", topm: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "new", infotab: "usage", inboxtab: "questions", topm: [], pages: [], pageHtml: {}, pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
   if (location.hash === "#inbox") state.section = "inbox";
   if (location.hash === "#todo") state.section = "todo";
   if (location.hash === "#topm") state.section = "topm";
   if (location.hash === "#backlog" || location.hash === "#stories") state.section = "backlog";
   try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "agents") state.infotab = it; } catch(e){}
   if (location.hash === "#info") state.section = "info";
+  if (location.hash === "#docs") state.section = "docs";
   if (location.hash === "#usage" || location.hash === "#agents") { state.section = "info"; state.infotab = location.hash.slice(1); }
   if (location.hash === "#parked") { state.section = "backlog"; state.sfilter = "parked"; }
   // ready: the server has answered once, so the lists are real and the owner's controls are shown.
@@ -299,7 +311,7 @@ button.danger{color:var(--warn)}
   const why = e => (e && e.message) || "the hub server refused the write";
   const NOT_READY = "Waiting for the hub server", NOT_READY_WHY = "Nothing has been read from the hub server yet. The line at the top says why when it cannot be reached.";
 
-  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "questions"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["new", "current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
+  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["new", "current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
   // An answer's draft is kept in the browser's storage and in the page itself, so it survives a redraw
   // where the browser gives the page no storage.
   const draftKey = id => "oq.draft." + id, drafts = new Map();
@@ -390,12 +402,13 @@ button.danger{color:var(--warn)}
     $("#n-sp").textContent = state.parked.length + " parked"; $("#n-sp").hidden = !state.parked.length;
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
     $("#repo").hidden = sc === "info" || sc === "backlog" || sc === "topm";
-    $("#idq").hidden = !(q || sc === "todo");
+    $("#n-d").textContent = state.pages.length;
+    $("#idq").hidden = !(q || sc === "todo" || sc === "docs");
     $("#tabs").hidden = !q; $("#itabs").hidden = sc !== "inbox"; $("#ttabs").hidden = sc !== "todo"; $("#pmtabs").hidden = sc !== "topm"; $("#pmform").hidden = sc !== "topm" || !ready; $("#stabs").hidden = $("#brepo").hidden = sc !== "backlog"; $("#ftabs").hidden = sc !== "info";
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
     $("#storyform").hidden = sc !== "backlog" || state.sfilter !== "new" || !ready;
-    q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : renderBacklog();
+    q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : renderBacklog();
   }
 
   // The usage chip is one figure, the highest of every account's two windows: it says whose and which. A tie goes to
@@ -586,6 +599,17 @@ button.danger{color:var(--warn)}
     const k = p => String(p.parked_at || "￿");
     return [...by.keys()].sort((a, b) => a.localeCompare(b)).map(repo => ({ repo, items: by.get(repo).sort((a, b) => k(a).localeCompare(k(b)) || String(a.item).localeCompare(String(b.item))) }));
   }
+  // The agents' documents (pages/<id>), newest first by updated_at, else at; every field is read as text. Each
+  // body (page_html/<id>) is kept, by id, only when it is a string and its page is listed.
+  const pageStr = v => typeof v === "string" ? v : typeof v === "number" && isFinite(v) ? String(v) : "";
+  function pageRows(col){
+    const rows = col("pages").map(d => ({ id: d.id, title: pageStr(d.title), repo: pageStr(d.repo), from: pageStr(d.from), summary: pageStr(d.summary),
+      refs: Array.isArray(d.refs) ? d.refs.filter(r => typeof r === "string") : [], at: pageStr(d.at), updated_at: pageStr(d.updated_at) }));
+    const k = p => p.updated_at || p.at;
+    rows.sort((a, b) => k(b).localeCompare(k(a)) || a.id.localeCompare(b.id));
+    const ids = new Set(rows.map(p => p.id));
+    return { pages: rows, pageHtml: Object.fromEntries(col("page_html").filter(d => ids.has(d.id) && typeof d.html === "string").map(d => [d.id, d.html])) };
+  }
   // The page's lists from one snapshot. gone is {view: reason} for a view the server could not give at all;
   // partial is {view: [text]} for a repository whose part of a view failed while the rest is shown; stale is
   // {view: [{repo, reason, since}]} for a repository whose items are those of an earlier read, the last one
@@ -613,7 +637,8 @@ button.danger{color:var(--warn)}
     const pct = v => v && typeof v === "object" ? v.pct ?? v.used ?? null : v;
     const usage = Object.entries(obj(u.accounts)).map(([account, v]) => ({ id: account, account, five_hour: pct(obj(v).five), seven_day: pct(obj(v).week), measured_at: u.as_of }));
     const agents = list(a.agents).map(x => ({ id: String(x.name || ""), model: x.model, effort: x.effort === "-" ? "" : x.effort, role: x.description }));
-    return { revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
+    const { pages, pageHtml } = pageRows(col);
+    return { pages, pageHtml, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
       stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents };
@@ -1162,6 +1187,62 @@ button.danger{color:var(--warn)}
     return el("article", {class: "q " + d.status + (d.urgent ? " urgent" : ""), id: "q-" + d.id}, ...parts);
   }
 
+  // Docs: the agents' documents (pages/<id>), listed as text like every other card. A body (page_html/<id>) is
+  // agent-written html: it is shown only in the reader's one frame, made below with a sandbox that grants nothing
+  // (no scripts, no forms, no same-origin, no navigation of the page) and a policy in front of the body that lets
+  // it load nothing from the network: inline styles and images given inline as data only.
+  const DOC_CSP = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:\">";
+  const docBody = id => Object.prototype.hasOwnProperty.call(state.pageHtml, id) && typeof state.pageHtml[id] === "string" ? state.pageHtml[id] : null;
+  let docOpen = null;
+  function renderDocs(){
+    fillRepos(state.pages);
+    const rows = state.pages.filter(p => inR(p) && inId(p));
+    if (!rows.length) {
+      const msg = ["No documents yet", "An agent's document (a plan, research, a visual choice) shows here once its pages/ entry and its body in page_html/ are in the hub's store. No tool writes them yet."];
+      if (ready && (state.idq.trim() || state.repo) && state.pages.length) { msg[0] = state.idq.trim() ? "No match for \"" + state.idq.trim() + "\"" : "No documents for this repo"; msg[1] = "Clear the id box or pick All repos to see every document."; }
+      show([], el("div", {class:"empty"}, el("strong", {text: ready ? msg[0] : NOT_READY}), ready ? msg[1] : NOT_READY_WHY));
+      return;
+    }
+    show([], rows.map(p => drawn(docCard, p)));
+  }
+  function docCard(p){
+    const has = docBody(p.id) != null;
+    const head = el("div", {class:"meta"},
+      el("span", {class:"id", text: p.id}),
+      p.repo ? el("span", {class:"chip", text: p.repo}) : null,
+      p.from ? el("span", {text: "from " + p.from}) : null,
+      p.updated_at || p.at ? el("span", {text: when(p.updated_at || p.at)}) : null);
+    const parts = [head, el("h2", {text: p.title || "(untitled)"})];
+    if (p.summary) parts.push(el("p", {class:"ctx", text: p.summary}));
+    if (keptRefs(p.refs).length) parts.push(el("div", {class:"refs", text: "Refs: " + keptRefs(p.refs).join(", ")}));
+    parts.push(el("div", {class:"act"},
+      el("button", {class:"primary", type:"button", id: "dr-" + p.id, text: "Read here", disabled: !has, onclick: () => openDoc(p.id)}),
+      has ? null : el("span", {class:"status", text: "no body"})));
+    return el("article", {class:"q", id: "doc-" + p.id}, ...parts);
+  }
+  function openDoc(id){
+    const html = docBody(id); if (html == null) return;
+    const p = state.pages.find(x => x.id === id), title = (p && p.title) || id;
+    const frame = el("iframe", {class:"docframe", sandbox: "", title: "Document: " + title});
+    frame.srcdoc = DOC_CSP + html;
+    $("#reader-title").textContent = title;
+    $("#reader-body").replaceChildren(frame);
+    $(".wrap").inert = true;
+    $("#reader").hidden = false;
+    docOpen = id;
+    $("#reader-close").focus();
+  }
+  function closeDoc(){
+    $("#reader").hidden = true;
+    $("#reader-body").replaceChildren();
+    $(".wrap").inert = false;
+    const back = docOpen != null ? document.getElementById("dr-" + docOpen) : null;
+    docOpen = null;
+    if (back) back.focus();
+  }
+  $("#reader-close").addEventListener("click", closeDoc);
+  $("#reader").addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); closeDoc(); } });
+
   $("#tabs").addEventListener("click", e => {
     const t = e.target.closest(".tab"); if (!t) return;
     state.filter = t.dataset.f; try { localStorage.setItem("oq.filter", state.filter); } catch(e){}
@@ -1247,7 +1328,7 @@ button.danger{color:var(--warn)}
     if (ready && next.revision < rev) return;         // an older answer that arrived late
     rev = next.revision;
     const first = !ready; ready = true;
-    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "gone", "partial", "stale", "seen"]) state[k] = next[k];
+    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages", "pageHtml", "gone", "partial", "stale", "seen"]) state[k] = next[k];
     // An edit outlasts its item: one that is gone, or no longer the owner's to edit, keeps its card (loseEdit).
     for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) loseEdit(state.pmEdit, id);
     for (const id of [...state.todoEdit.keys()]) if (!state.todos.some(t => t.id === id && t.from === "you")) loseEdit(state.todoEdit, id);

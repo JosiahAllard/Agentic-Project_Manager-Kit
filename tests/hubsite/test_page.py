@@ -107,8 +107,9 @@ class ServedTest(httpfix.ListenerCase):
         self.assertEqual(got["revision"], snap.json()["revision"])
         self.assertEqual([(t["title"], t["from"]) for t in got["todos"]], [(title, "you")])
         self.assertEqual(got["todos"][0]["id"], made.json()["id"])
-        for k in ("docs", "inbox", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents"):
+        for k in ("docs", "inbox", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages"):
             self.assertEqual(got[k], [], k)
+        self.assertEqual(got["pageHtml"], {})
         self.assertEqual(got["gone"], snap.json()["unavailable"])
 
 
@@ -257,9 +258,37 @@ class StateTest(unittest.TestCase):
     def test_an_empty_or_odd_snapshot_is_empty_lists(self):
         for snap in ({}, None, snapshot(views={"usage": [], "agents": [], "backlog": "x"}, collections={"todos": []})):
             got = js("hubState(items)", snap)
-            for k in ("docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents"):
+            for k in ("docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents",
+                      "pages"):
                 self.assertEqual(got[k], [], (k, snap))
+            self.assertEqual(got["pageHtml"], {}, snap)
         self.assertEqual(js("hubState(items).revision", {}), 0)
+        odd = js("hubState(items)", snapshot(collections={"pages": ["x"], "page_html": "y"}))
+        self.assertEqual((odd["pages"], odd["pageHtml"]), ([], {}))
+
+    def test_pages_newest_first_with_their_bodies(self):
+        got = js("hubState(items)", snapshot(collections={
+            "pages": {"old": {"title": "Old", "at": "2026-10-01T00:00:00Z"},
+                      "new": {"title": "New", "at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-05T00:00:00Z"},
+                      "mid": {"title": "Mid", "at": "2026-10-03T00:00:00Z"},
+                      "bare": {"title": "No body", "at": "2026-10-02T00:00:00Z"}},
+            "page_html": {"old": {"html": "<p>old</p>"}, "new": {"html": "<p>new</p>"}, "mid": {"html": "<p>mid</p>"},
+                          "stray": {"html": "<p>no page</p>"}}}))
+        self.assertEqual([p["id"] for p in got["pages"]], ["new", "mid", "bare", "old"])
+        # A page with no body is still listed; a body with no page is not kept.
+        self.assertEqual(got["pageHtml"], {"old": "<p>old</p>", "new": "<p>new</p>", "mid": "<p>mid</p>"})
+
+    def test_page_fields_are_read_as_text(self):
+        got = js("hubState(items)", snapshot(collections={
+            "pages": {"p": {"title": ["x"], "repo": {"a": 1}, "from": 7, "summary": None, "refs": ["Q-1", 2, {"x": 1}, "T-3"],
+                            "at": False},
+                      "q": {"title": "Q", "refs": "Q-1"}},
+            "page_html": {"p": {"html": 5}, "q": {"html": "<p>q</p>"}}}))
+        p = {x["id"]: x for x in got["pages"]}
+        self.assertEqual((p["p"]["title"], p["p"]["repo"], p["p"]["from"], p["p"]["summary"], p["p"]["at"]), ("", "", "7", "", ""))
+        self.assertEqual(p["p"]["refs"], ["Q-1", "T-3"])
+        self.assertEqual(p["q"]["refs"], [])
+        self.assertEqual(got["pageHtml"], {"q": "<p>q</p>"})              # an html that is not a string is no body
 
     def test_usage_and_agents_views(self):
         got = js("hubState(items)", snapshot(views={
@@ -344,7 +373,8 @@ class DomTest(unittest.TestCase):
         day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         names = ("q-title", "q-context", "q-from", "q-label", "q-description", "q-ref", "i-title", "i-text", "i-asked",
                  "p-text", "t-title", "t-detail", "t-command", "s-title", "s-story", "s-note", "b-title", "b-error",
-                 "c-title", "c-stale", "k-branch", "gone", "account", "repo")
+                 "c-title", "c-stale", "k-branch", "gone", "account", "repo", "d-title", "d-summary", "d-from", "d-repo",
+                 "d-ref")
         m = {n: mark(n) for n in names}
         snap = snapshot(
             unavailable={"agents": m["gone"]},
@@ -356,7 +386,11 @@ class DomTest(unittest.TestCase):
                 "to_pm": {"P-1": {"status": "queued", "text": m["p-text"], "version": 1}},
                 "todos": {"T-1": {"status": "open", "title": m["t-title"], "detail": m["t-detail"], "from": "pm",
                                   "commands": [m["t-command"]]}},
-                "stories": {"S-1": {"status": "review", "title": m["s-title"], "story": m["s-story"], "review_note": m["s-note"]}}},
+                "stories": {"S-1": {"status": "review", "title": m["s-title"], "story": m["s-story"], "review_note": m["s-note"]}},
+                # The list of documents is text like every other card; only the reader shows a body (DocsTest).
+                "pages": {"plan-1": {"title": m["d-title"], "summary": m["d-summary"], "from": m["d-from"], "repo": m["d-repo"],
+                                     "refs": [m["d-ref"]], "at": day}},
+                "page_html": {"plan-1": {"html": mark("d-body")}}},
             views={
                 "repos": [{"name": m["repo"], "aliases": []}],
                 "backlog": [{"repo": "alpha", "fetched_at": day, "items": [
@@ -371,7 +405,7 @@ class DomTest(unittest.TestCase):
             let shown = text(body);
             const see = async sel => { await click($(sel)); shown += "\\n" + text(body); };
             await see("#qtabs [data-qt=inbox]");
-            for (const s of ["topm", "todo", "info"]) await see("#sections [data-s=" + s + "]");
+            for (const s of ["topm", "todo", "docs", "info"]) await see("#sections [data-s=" + s + "]");
             await see("#ftabs [data-nf=agents]");
             await see("#sections [data-s=backlog]");
             for (const f of ["current", "parked", "done"]) await see("#stabs [data-sf=" + f + "]");
@@ -381,6 +415,7 @@ class DomTest(unittest.TestCase):
         """, snap)
         for name in names:
             self.assertIn(m[name], got["shown"], name)
+        self.assertNotIn(mark("d-body"), got["shown"])                       # a body is never drawn into the page
         self.assertEqual(got["sinks"], [])
         self.assertEqual(got["attrs"], [])
         self.assertEqual(got["err"], "")
@@ -1073,7 +1108,7 @@ class DomTest(unittest.TestCase):
             out.none = on(); out.empty = text($("#list"));
             return out;
         """, snapshot(views=views))
-        self.assertEqual(got["sections"], ["questions", "topm", "todo", "backlog", "info"])
+        self.assertEqual(got["sections"], ["questions", "topm", "todo", "backlog", "docs", "info"])
         self.assertEqual(got["first"], {"say": "3 parked", "off": False, "hot": True})       # seen from any section
         self.assertEqual(got["badge"], "sec-backlog")
         self.assertEqual(got["tab"], {"chosen": "true", "n": "3", "section": "true", "form": True, "row": False})
@@ -1356,6 +1391,110 @@ class DomTest(unittest.TestCase):
         self.assertEqual((got["err"], got["sleeps"]), ("", []))
 
 
+DOC_CSP = ("<meta http-equiv=\"Content-Security-Policy\" "
+           "content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:\">")
+# A diagram as a published document carries it: an inline svg, and an svg given as a data: image.
+DIAGRAM = ('<h1>Plan</h1><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
+           '<img alt="flow" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=">')
+
+
+def docs_snap():
+    return snapshot(
+        collections={
+            "pages": {"plan-1": {"title": "The <b>plan</b>", "repo": "alpha", "from": "worker", "summary": "what we build",
+                                 "refs": ["Q-1"], "at": "2026-10-03T00:00:00Z"},
+                      "research-2": {"title": "Research notes", "repo": "beta", "at": "2026-10-04T00:00:00Z"},
+                      "bare-3": {"title": "No body yet", "repo": "alpha", "at": "2026-10-01T00:00:00Z"}},
+            "page_html": {"plan-1": {"html": DIAGRAM}, "research-2": {"html": "<p>notes</p>"}}},
+        views={"repos": [{"name": "alpha", "aliases": []}, {"name": "beta", "aliases": []}]})
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class DocsTest(unittest.TestCase):
+    """The Docs section and its reader, under the stand-in DOM. What a browser's sandbox and content policy then do
+    with the frame is not something node can show: these pin what the page hands the browser."""
+
+    def test_the_docs_section_lists_documents_as_text_newest_first(self):
+        got = dom("""
+            await start();
+            const count = text($("#n-d"));
+            await click($("#sections [data-s=docs]"));
+            const cards = $$("#list article").map(a => a.id);
+            const plan = $("#doc-plan-1");
+            return { count, cards, plan: text(plan), title: text(plan.querySelector("h2")), idq: $("#idq").hidden,
+                     bare: { disabled: $("#dr-bare-3").disabled, text: text($("#doc-bare-3")) },
+                     read: !$("#dr-plan-1").disabled, tags: [...new Set(created)], sinks };
+        """, docs_snap())
+        self.assertEqual(got["count"], "3")
+        self.assertEqual(got["cards"], ["doc-research-2", "doc-plan-1", "doc-bare-3"])
+        self.assertEqual(got["title"], "The <b>plan</b>")                    # markup in a title is drawn as text
+        for part in ("plan-1", "alpha", "from worker", "what we build", "Refs: Q-1", "Read here"):
+            self.assertIn(part, got["plan"], part)
+        self.assertFalse(got["idq"])
+        self.assertTrue(got["read"])
+        self.assertTrue(got["bare"]["disabled"])                            # a page with no body cannot be opened
+        self.assertIn("no body", got["bare"]["text"])
+        self.assertNotIn("iframe", got["tags"])                             # nothing is framed until Read here
+        self.assertEqual(got["sinks"], [])
+
+    def test_the_repo_menu_and_the_id_box_narrow_the_list(self):
+        got = dom("""
+            await start();
+            const ids = () => $$("#list article").map(a => a.id);
+            const sel = $("#repo"); sel.value = "beta"; await fire(sel, "change");
+            const beta = ids();
+            sel.value = ""; await fire(sel, "change");
+            await type($("#idq"), "plan");
+            const plan = ids();
+            await type($("#idq"), "nothing like it");
+            return { beta, plan, none: text($("#list")) };
+        """, docs_snap(), hash="#docs")
+        self.assertEqual(got["beta"], ["doc-research-2"])
+        self.assertEqual(got["plan"], ["doc-plan-1"])
+        self.assertIn('No match for "nothing like it"', got["none"])
+
+    def test_an_empty_docs_section_says_where_documents_come_from(self):
+        got = dom("""await start(); return text($("#list"));""", snapshot(), hash="#docs")
+        self.assertIn("No documents yet", got)
+        self.assertIn("page_html/", got)
+
+    def test_read_here_opens_one_sandboxed_frame_with_the_body_unchanged(self):
+        got = dom("""
+            await start();
+            const hidden0 = $("#reader").hidden;
+            await click($("#dr-plan-1"));
+            const frames = all().filter(e => e.tag === "iframe");
+            const f = frames[0];
+            const open = { hidden: $("#reader").hidden, title: text($("#reader-title")), focus: document.activeElement.id,
+                           inert: $(".wrap").inert, frames: frames.length, attrs: f.attrs, srcdoc: f.srcdoc,
+                           inReader: $("#reader-body").contains(f) };
+            await click($("#reader-close"));
+            const closed = { hidden: $("#reader").hidden, frames: all().filter(e => e.tag === "iframe").length,
+                             focus: document.activeElement.id, inert: $(".wrap").inert };
+            await click($("#dr-research-2"));
+            const again = all().filter(e => e.tag === "iframe").map(e => e.srcdoc);
+            let stopped = false;
+            for (const f of $("#reader").listeners.keydown) f({ key: "Escape", preventDefault(){ stopped = true; } });
+            const esc = { hidden: $("#reader").hidden, focus: document.activeElement.id, stopped };
+            return { hidden0, open, closed, again, esc, sinks };
+        """, docs_snap(), hash="#docs")
+        self.assertTrue(got["hidden0"])
+        o = got["open"]
+        self.assertFalse(o["hidden"])
+        self.assertEqual(o["title"], "The <b>plan</b>")
+        self.assertEqual(o["focus"], "reader-close")
+        self.assertTrue(o["inert"])
+        self.assertEqual(o["frames"], 1)
+        self.assertTrue(o["inReader"])
+        self.assertEqual(o["attrs"]["sandbox"], "")                         # a sandbox that grants nothing
+        self.assertEqual(sorted(o["attrs"]), ["class", "sandbox", "title"])
+        self.assertEqual(o["srcdoc"], DOC_CSP + DIAGRAM)                     # the policy first, then the body as published
+        self.assertEqual(got["closed"], {"hidden": True, "frames": 0, "focus": "dr-plan-1", "inert": False})
+        self.assertEqual(got["again"], [DOC_CSP + "<p>notes</p>"])
+        self.assertEqual(got["esc"], {"hidden": True, "focus": "dr-research-2", "stopped": True})
+        self.assertEqual(got["sinks"], [])
+
+
 class PageTextTest(unittest.TestCase):
     def setUp(self):
         self.p = page()
@@ -1416,17 +1555,35 @@ class PageTextTest(unittest.TestCase):
             self.assertNotIn(gone, self.p, gone)
 
     def test_server_text_never_becomes_markup(self):
-        for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "DOMParser", "srcdoc",
+        for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "DOMParser",
                      "createContextualFragment", "eval(", "new Function", "javascript:"):
             self.assertNotIn(sink, self.p, sink)
         self.assertIn('if (k === "class") n.className = v; else if (k === "text") n.textContent = v;', self.script)
+        # The one place server html goes: the reader's frame, behind the policy (test_the_reader_is_one_locked_frame).
+        self.assertEqual(self.p.count("srcdoc"), 1)
+        self.assertIn("frame.srcdoc = DOC_CSP + html;", self.script)
+
+    def test_the_reader_is_one_locked_frame(self):
+        """The page makes one frame, with a sandbox that grants nothing, and gives it the body behind a policy that
+        loads nothing from the network. What the browser then enforces is the owner's real-browser check."""
+        self.assertEqual(self.script.count('"iframe"'), 1)
+        self.assertRegex(self.script, r'const frame = el\("iframe", \{class:"docframe", sandbox: "", title: [^}]*\}\);')
+        self.assertNotIn("allow-", self.p)
+        self.assertEqual(re.findall(r"\bsandbox\s*:\s*[^,}]*", self.script), ['sandbox: ""'])   # set once, to nothing
+        self.assertNotRegex(self.script, r"\.sandbox\b")                  # and never changed afterwards
+        self.assertIn('const DOC_CSP = "<meta http-equiv=\\"Content-Security-Policy\\" content=\\"default-src \'none\'; '
+                      'style-src \'unsafe-inline\'; img-src data:\\">";', self.script)
+        self.assertNotIn("createElement(\"iframe\"", self.script)
+        self.assertEqual(self.p.count("<iframe"), 0)
 
     def test_no_attribute_that_loads_or_navigates_is_ever_set(self):
         """The page builds no link, image or frame, so no server value can become an address the browser follows."""
         keys = r"(?:href|src|srcset|srcdoc|action|formaction|poster|background|ping|xlink:href)"
         self.assertEqual(re.findall(r'[{,\s]"?%s"?\s*:' % keys, self.script), [])           # an el() attribute
         self.assertEqual(re.findall(r'setAttribute\(\s*"%s"' % keys, self.script), [])
-        self.assertEqual(re.findall(r"\.%s\s*=[^=]" % keys, self.script), [])                # a property set
+        # A property set: none, but the reader frame's one body (test_the_reader_is_one_locked_frame).
+        self.assertEqual(re.findall(r"\.%s\s*=[^=]" % keys.replace("srcdoc|", ""), self.script), [])
+        self.assertEqual(re.findall(r"\.srcdoc\s*=[^=]", self.script), [".srcdoc = "])
         self.assertEqual(re.findall(r"<[^>]*\s%s\s*=" % keys, self.markup), [])
         self.assertNotIn("location.assign", self.script)
         self.assertNotIn("location.replace", self.script)
@@ -1478,6 +1635,8 @@ class PageTextTest(unittest.TestCase):
         self.assertRegex(self.markup, r'data-s="topm"[^>]*>To PM')
         self.assertLess(self.markup.index('data-s="questions"'), self.markup.index('data-s="topm"'))
         self.assertLess(self.markup.index('data-s="topm"'), self.markup.index('data-s="todo"'))
+        self.assertLess(self.markup.index('data-s="backlog"'), self.markup.index('data-s="docs"'))
+        self.assertLess(self.markup.index('data-s="docs"'), self.markup.index('data-s="info"'))
         self.assertRegex(self.markup, r'<div[^>]*id="pmseen"[^>]*role="status"')
         self.assertNotRegex(self.markup, r"(?i)<button[^>]*>[^<]*(alert|log ?out|sign out|end sessions)")
         self.assertNotRegex(self.script, r'text: ?"[^"]*(Alert the PM|Log ?out|Sign out|End sessions)')
