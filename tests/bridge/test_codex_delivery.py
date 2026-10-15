@@ -21,9 +21,12 @@ from optional.bridge.core.contracts import Capability
 from optional.bridge.core.messages import BeforeWriteError, DeliveryError, NativeResult, OutboundMessage
 from optional.bridge.core.contracts import SessionIdentity, WorkspaceIdentity
 from optional.bridge.core.pairing import ChatBinding
+from kitlib.proc.errors import ProcError
 from kitlib.proc.pipe import PrivateListener, peek, read, write
 from kitlib.proc.job import Job
 from kitlib.proc.process import own_ctime, proc_ctime
+
+SERVE_GUARD = 30
 
 
 class CodexDeliveryTests(unittest.TestCase):
@@ -40,8 +43,10 @@ class CodexDeliveryTests(unittest.TestCase):
             'private-content\n\U0001f30e\u00e9' * 1200)
         self.requests, self.errors, self.threads = [], [], []
         self.checks = 0
+        self.done = threading.Event()
 
     def tearDown(self):
+        self.done.set()
         for thread in self.threads:
             thread.join(timeout=4)
         self.listener.close()
@@ -58,11 +63,29 @@ class CodexDeliveryTests(unittest.TestCase):
         yield DesktopLease(self.recipient, self.context, self.endpoint, self.check)
 
     def serve(self, response=None, *, wrong_id=False, stall=False, raw=None):
+        # The fake server waits for the helper for as long as the test runs: when the helper
+        # connects is bounded by the adapter's start_timeout, which is under test, never by
+        # this fixture. A fixed accept window raced a slow helper start (3 s from serve(),
+        # which test_slow_helper_start spent 2.5 s of). SERVE_GUARD only stops a broken test
+        # from hanging the suite; tearDown ends the wait.
         def run():
             try:
-                self.listener.accept(timeout=3)
-                data, end = bytearray(), time.monotonic()+3
-                while time.monotonic() < end:
+                guard = time.monotonic()+SERVE_GUARD
+                while True:
+                    try:
+                        self.listener.accept(timeout=.1)
+                        break
+                    except ProcError as error:
+                        if error.code != 'private-pipe-accept-timeout':
+                            raise
+                    if self.done.is_set():
+                        return  # No helper ever connected; the test's own assertions judge that.
+                    if time.monotonic() > guard:
+                        raise TimeoutError('serve-guard')
+                data = bytearray()
+                while not self.done.is_set():
+                    if time.monotonic() > guard:
+                        raise TimeoutError('serve-guard')
                     available = w.DWORD()
                     if not peek(self.listener.handle, None, 0, None, ctypes.byref(available), None):
                         return
@@ -93,7 +116,7 @@ class CodexDeliveryTests(unittest.TestCase):
                     else:
                         time.sleep(.005)
             except Exception as error:
-                self.errors.append(type(error).__name__)
+                self.errors.append('%s: %s' % (type(error).__name__, getattr(error, 'code', '')))
         thread = threading.Thread(target=run)
         self.threads.append(thread)
         thread.start()
@@ -346,11 +369,14 @@ class CodexDeliveryTests(unittest.TestCase):
         # delivers: the response budget counts from the commit, not from the spawn.
         self.serve()
         original = Job.start
+        # The injected 3.2 s start exceeds both the 2 s response budget and the 3 s accept
+        # window the serve fixture once had, so a fixed fixture window fails here every run;
+        # start_timeout 6.7 keeps the 3.5 s left for the real helper start that 2.5/6 gave.
         def start(job, command, **options):
-            time.sleep(2.5)
+            time.sleep(3.2)
             return original(job, command, **options)
         with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start):
-            result = CodexDesktopAdapter(lease=self.lease, timeout=2, start_timeout=6).send(self.message)
+            result = CodexDesktopAdapter(lease=self.lease, timeout=2, start_timeout=6.7).send(self.message)
         self.threads[0].join(3)
         self.assertEqual(result.state, 'recipient-accepted')
         self.assertEqual(len(self.requests), 1)
