@@ -1,13 +1,17 @@
 """A launched session's home worktree (kitlib/launcher/home.py, docs/launcher.md "The home
 worktree"): the name and folder, ensure() against a scripted git, and on real git the worktree
 itself, which the sweep, worktree_remove --check and worktree_remove never offer to remove."""
+import importlib
 import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib.git import cmd
+from kitlib.host import registry
 from kitlib.launcher import home
+from kitlib.launcher.host import Host
 from kitlib.launcher.settings import LaunchError
 from tests.realgit import real_git
 from tests.worktree.test_worktree_sweep import SweepCase
@@ -17,21 +21,28 @@ OLD = 'b' * 40
 
 
 class Names(unittest.TestCase):
-    def test_the_stem_drops_the_recycle_count_then_the_account_tag(self):
-        for name, stem in (('alpha-coordinator-a1', 'alpha-coordinator'),
-                           ('alpha-coordinator-a2-r3', 'alpha-coordinator'),
-                           ('alpha-coordinator-o2', 'alpha-coordinator'),
-                           ('deep-net-race', 'deep-net-race'),
-                           ('consultant-myrepo', 'consultant-myrepo'),
-                           ('a1', 'a1')):
-            self.assertEqual(home.stem_of(name), stem, name)
-
     def test_the_folder_is_under_the_hosts_worktrees_folder_with_a_safe_slug(self):
         main = os.path.join('Z:' + os.sep, 'repo')
-        base = os.path.join(main, '.claude', 'worktrees')
+        base = os.path.join(main, home.folder())
+        self.assertEqual(home.folder(), os.path.normpath(registry.default_profile().worktrees_directory))
         self.assertEqual(home.home_path(main, 'alpha-coord'), os.path.join(base, 'home-alpha-coord'))
         self.assertEqual(home.home_path(main + os.sep, 'Alpha Coord/x'), os.path.join(base, 'home-alpha-coord-x'))
         self.assertEqual(home.home_path(main, '..'), os.path.join(base, 'home-session'))
+
+    def test_each_full_session_name_has_its_own_home(self):
+        main = os.path.join('Z:' + os.sep, 'repo')
+        names = ('deep-x', 'deep-x-r2', 'deep-x-a1', 'alpha-deep-worker-a1', 'alpha-deep-worker-a2')
+        self.assertEqual(len({home.home_path(main, n) for n in names}), len(names))
+
+    def test_importing_it_never_reads_hosts_json(self):
+        """stop and after-reboot import the launcher; a broken hosts.json must not stop them."""
+        def broken():
+            raise ValueError('hosts.json is broken')
+        with mock.patch.object(registry, 'default_profile', broken):
+            importlib.reload(home)
+            with self.assertRaisesRegex(ValueError, 'broken'):
+                home.folder()
+        importlib.reload(home)
 
 
 class ScriptedGit(object):
@@ -149,9 +160,10 @@ class Ensure(unittest.TestCase):
             self.assertIn(msg, str(c.exception))
             self.assertEqual(g.writes(), [], msg)
 
-    def test_a_failed_add_is_refused(self):
+    def test_a_failed_add_is_refused_and_names_a_concurrent_launch(self):
         g = self.git(fail=('worktree add',))
-        with self.assertRaisesRegex(LaunchError, 'git worktree add .* failed'):
+        with self.assertRaisesRegex(LaunchError, 'git worktree add .* failed: .*another launch of this session '
+                                                 'is making it at this moment, wait for that one; nothing was started'):
             home.ensure(self.main, self.path, git=g)
 
 
@@ -194,6 +206,15 @@ class RealHome(SweepCase):
         self.assertIn('stray.txt', out[0])
         self.assertEqual(self.entry()['head'], before)
         self.assertTrue(os.path.isfile(os.path.join(self.path, 'stray.txt')))
+
+    def test_git_answers_the_ignore_check_for_a_home_that_does_not_exist_yet(self):
+        """start.home_folder asks before it makes any folder in the main checkout."""
+        self.assertFalse(os.path.exists(os.path.dirname(self.path)))
+        self.assertIs(Host(home=self.fx.base).git_ignored(self.repo, self.path), False)
+        self.fx.write('.gitignore', home.folder().replace(os.sep, '/') + '/\n')
+        self.fx.commit('ignore', '.gitignore')
+        self.assertIs(Host(home=self.fx.base).git_ignored(self.repo, self.path), True)
+        self.assertFalse(os.path.exists(os.path.dirname(self.path)))
 
     def test_the_sweep_check_and_remove_never_take_it(self):
         home.ensure(self.repo, self.path)
