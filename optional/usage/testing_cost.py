@@ -1,7 +1,7 @@
 """Estimate how much of a project's Claude usage went on testing, from its session transcripts.
 (A report, not a test module: its tests are in test_testing_cost.py.)
 
-usage: python ~/.claude/tools/usage/testing_cost.py <project transcript folder> [since] [--days 7]
+usage: python <kit>/optional/usage/testing_cost.py <project transcript folder> [since] [--days 7]
                                                  [--pattern <regex>]
 
 A turn counts as testing when it is a test-runner's, when it starts a shell command matching TEST

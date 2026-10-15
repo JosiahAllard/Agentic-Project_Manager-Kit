@@ -64,7 +64,7 @@ class KitRegistry(unittest.TestCase):
 
 class KitPath(Case):
     """hosts.json is found beside the real kitlib when the spelled one has none: a machine's
-    installed lock tool runs kitlib through a junction (~/.claude/tools/kitlib)."""
+    kitlib reached through a link runs from the link's spelling."""
 
     def test_a_linked_kitlib_finds_the_kits_hosts_json(self):
         tools = os.path.join(self.dir, 'tools')

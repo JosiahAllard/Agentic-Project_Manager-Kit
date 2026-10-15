@@ -1,7 +1,7 @@
 """Per-session profile of a coordinator's own turns: model, turns, context size, cache behaviour,
 cost drivers.
 
-usage: python ~/.claude/tools/usage/coordinator_profile.py <project transcript folder> [since]
+usage: python <kit>/optional/usage/coordinator_profile.py <project transcript folder> [since]
                                                          [--days 7]
 
 Reads only the folder's top-level *.jsonl (the main sessions, not subagents/), oldest first.
