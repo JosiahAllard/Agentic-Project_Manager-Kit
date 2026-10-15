@@ -7,6 +7,7 @@ import io
 import json
 import os
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -64,6 +65,37 @@ class Cli(StoreCase):
         self.assertIn("revision", snap)
         self.assertEqual(self.call("status")[0], 0)
         self.assertEqual(self.call("status", "r-20261006T120000Z-abcdef")[0], 1)
+
+    def test_status_json_carries_resource_and_priority_for_runs_and_queue(self):
+        from kitlib.lock import store as store_mod
+        from kitlib.proc import process
+        land = "landing:z:\\repo\\.git"
+        held, wait = "r-20261006T120000Z-aaaaaa", "r-20261006T120000Z-bbbbbb"
+        self.live_record(held, resource=land, priority="land", cores=[0])
+        for rid in (held, wait):                # live wrappers: this process, run mutexes held
+            m = self.store.run_mutex(rid)
+            self.addCleanup(m.release)
+        base = {"pid": os.getpid(), "ctime": process.own_ctime(), "repo": "kit",
+                "kind": "engine-test", "need": {"cpu": 1, "gpu": 0}, "expect_s": 60,
+                "gpus": [], "resource": land, "priority": "land"}
+        self.store.write("queue.json", {"ticket": 2, "entries": [
+            dict(base, id=held, ticket=1, state="held", slug="t", cores=[0],
+                 held_at=time.time()),
+            dict(base, id=wait, ticket=2, state="waiting", slug="next", cores=[],
+                 since=store_mod.iso())]})
+        code, out, _ = self.call("status", "--json")
+        self.assertEqual(code, 0)
+        snap = json.loads(out)
+        [row] = [r for r in snap["runs"] if r["id"] == held]
+        self.assertEqual((row["resource"], row["priority"]), (land, "land"))
+        [w] = snap["queue"]["entries"]
+        for key in ("id", "position", "ticket", "repo", "slug", "kind", "needs", "since",
+                    "expect_s", "est_start", "backfill", "parked", "blocked_by", "hold", "moved",
+                    "resource", "priority", "within_slots", "why"):
+            self.assertIn(key, w)
+        self.assertEqual((w["id"], w["resource"], w["priority"]), (wait, land, "land"))
+        self.assertIn("resource %s is held by" % land, w["why"])
+        self.assertIn("error", snap["queue"])
 
     def test_status_of_a_hold_when_holds_are_unreadable_is_a_store_error(self):
         os.makedirs(self.store.path("holds"), exist_ok=True)
