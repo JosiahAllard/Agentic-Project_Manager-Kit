@@ -232,7 +232,7 @@ def do_list(args, ctx, snap):
     if args.area:
         recs = [r for r in recs if r.get('area') == args.area]
     if args.needs_priority:
-        # A record marked for review still wants its first price (R-1419's pricing pass).
+        # A record marked for review still wants its first price (the pricing pass).
         recs = sorted((r for r in recs if omod.classify(r)[0] in
                        (omod.UNPRIORITISED_OPEN, omod.OWNER_PRIORITISED) or
                        omod.classify(r)[0] == omod.REVIEW and r.get('priority') == '-'),
