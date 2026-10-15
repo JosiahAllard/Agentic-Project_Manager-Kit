@@ -38,17 +38,23 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   -NoExit and any prefix of it, /k). Standard input fed by a pipe, a heredoc, a
                   here-string or `<` is the script: bare, `-` and bash's `-s` then pass
     role-lock     fail-closed on any command whose words, heredoc body, here-string or `<` file
-                  name the lock CLI (machine_lock.py, or its module tools.machine_lock: _lock_seq).
-                  It passes only when its program never runs them with its output staying
-                  (backlog.py and commit.py under tools/ of the kit folder or of a checkout of the
-                  kit repository, a bare reader or printer, git diff: _lock_path_only), or runs
-                  the lock CLI itself (its script, python -m: _runs_lock; a launcher's python:
-                  _launched) with a verb inside the mode's LOCK_VERBS and no --force in any
-                  abbreviation. Any other program given it may copy, store or run it (cp,
-                  Copy-Item, ln, read, xargs, python -, runpy: HANDED_ON), and a command with no
-                  program the guard can name (an assignment alone, `$c=gc ...`) whose words name
-                  it is NO_PROGRAM; both are refused in every mode. Not read (_lock_words): an
-                  environment assignment's value, a glob, a name built from pieces. A lock MCP
+                  name the lock CLI (machine_lock.py in any spelling Windows opens as it - any
+                  case, a trailing dot or space, a `::$DATA` stream: rules.is_lock_script - or its
+                  module tools.machine_lock: _lock_seq). It passes only when its program never
+                  runs them with its output staying (backlog.py and commit.py under tools/ of the
+                  kit folder or of a checkout of the kit repository, a bare reader or printer, a
+                  git read (LOCK_PATH_GIT) with plain options and no environment assignment on the line:
+                  _lock_path_only, _git_plain), or runs the lock CLI itself (its script, python
+                  -m: _runs_lock; the python a launcher starts as its program: _launched) with a
+                  verb inside the mode's LOCK_VERBS and no --force in any abbreviation, and no
+                  later command reads the last word back (bash's $_, PowerShell's $$: _last_words).
+                  Any other program given it may copy, store or run it (cp, Copy-Item, ln, read,
+                  xargs, python -, runpy, a python given to a shell as $0 or $1: HANDED_ON; so is
+                  the name glued to other text in a launcher's line the guard does not read:
+                  _hidden_launch), and a command with no program the guard can name (an
+                  assignment alone, `$c=gc ...`) whose words name it is NO_PROGRAM; both are
+                  refused in every mode. Not read (_lock_words): an environment assignment's
+                  value, a glob, a name built from pieces, an 8.3 short name. A lock MCP
                   tool (lock_mcp_tool) whose verb (MCP_VERBS) is outside the mode's verbs, or that
                   the lock server does not have, is refused too
   context(action, ctx)  the Ctx the shared rules then use: for a read, test or lander role, a view
@@ -804,13 +810,14 @@ def _lock_words(inv, commands=(), kit=None, kit_checkout=None):
     --scope tools/machine_lock.py`, cat, rg, Get-Content, echo, git diff, whose output stays).
     lock_verb reads them as the lock's verb only when `inv` runs the lock (_runs_lock, _launched);
     any other program given them is refused (HANDED_ON). Not read (a known limit): the value of
-    an environment assignment (GIT_PAGER='python tools/machine_lock.py stop 42' git log,
-    GIT_EXTERNAL_DIFF=...), code that builds the name (python -c "...'machine_' + 'lock'..."),
-    a glob the shell expands to it
-    (tools/machine_lock.p?: only the base name is matched) and a name the shell or PowerShell
-    builds from pieces (`python "tools/machine_$('lock').py"`, `$p = 'tools/machine_' +
-    'lock.py'`, bash's `${p}lock.py`). `commands` is the line's commands, for the pipes; `kit`
-    and `kit_checkout` as _lock_path_only."""
+    an environment assignment (only a git line holding one is refused: _git_plain), code that
+    builds the name (python -c "...'machine_' + 'lock'..."), a glob the shell expands to it
+    (tools/machine_lock.p?: only the base name is matched), a Windows 8.3 short name
+    (tools/MACHIN~1.PY), a name the shell or PowerShell builds from pieces (`python
+    "tools/machine_$('lock').py"`, `$p = 'tools/machine_' + 'lock.py'`, bash's `${p}lock.py`), and
+    outside a launcher's unread line (_hidden_launch) the name glued to other text in one word
+    (`--file=machine_lock.py`). `commands` is the line's commands, for the pipes; `kit` and
+    `kit_checkout` as _lock_path_only."""
     seq, named = _lock_seq(inv)
     k = next((i for i, n in enumerate(named) if n), None)
     if k is None or _lock_path_only(inv, commands, kit, kit_checkout):
