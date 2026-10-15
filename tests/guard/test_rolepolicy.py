@@ -599,7 +599,8 @@ class LockVerbs(Base):
                 ('bash', "printf '%%s\\n' %s status | xargs -I{} python {} stop 42" % lock),
                 ('bash', 'echo %s status | xargs python' % lock),
                 ('bash', 'set -- %s status; python "$1" stop 42' % lock),
-                ('bash', "printf -v c '%%s' %s; python $c stop 42" % lock))
+                ('bash', "printf -v c '%%s' %s; python $c stop 42" % lock),
+                ('bash', 'read a b <<< "%s status"; python $a stop 42' % lock))
         from kitlib.guard import commands as cm, shell as sh
         for shell, text in rows:
             for role in ('reviewer', 'senior-worker', 'pm'):
@@ -619,6 +620,7 @@ class LockVerbs(Base):
         rows = (('powershell', 'gc %s' % lock), ('powershell', 'sls x %s' % lock),
                 ('powershell', 'Get-Variable c; gc %s' % lock), ('bash', 'git show HEAD:%s' % lock),
                 ('bash', 'grep -n def %s | head -5' % lock), ('bash', 'echo %s status' % lock),
+                ('bash', 'grep -c lock <<< "%s"' % lock),
                 ('bash', 'winpty python %s status' % lock),
                 ('powershell', 'Start-Process python -ArgumentList "%s status"' % lock),
                 ('bash', 'env A=1 timeout 60 python %s status' % lock),

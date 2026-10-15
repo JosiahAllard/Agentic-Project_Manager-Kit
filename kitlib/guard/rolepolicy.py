@@ -45,6 +45,8 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   verb outside the mode's LOCK_VERBS, or with --force in any
                   abbreviation; any command with no program the guard can name (an assignment
                   alone, `$c=gc ...`) whose words name machine_lock.py (lock_verb NO_PROGRAM);
+                  a lock path given to a program that does not run it and may hand it on
+                  (`$c = echo ...`, Set-Variable, `| xargs`: _handed_on, HANDED_ON);
                   a lock MCP tool (lock_mcp_tool) whose verb
                   (MCP_VERBS) is outside them, or that the lock server does not have
   context(action, ctx)  the Ctx the shared rules then use: for a read, test or lander role, a view
@@ -602,9 +604,12 @@ def _lock_words(inv, commands=(), kit=None, kit_checkout=None):
     'tools/machine_lock.py', 'stop', '42'])) and a file named only as a `<` redirect's source
     (python - stop 42 < tools/machine_lock.py, bash's "$(<tools/machine_lock.py)") and a glob the
     shell expands to it (tools/machine_lock.p?: only the base name is matched). `commands` is
-    the line's commands, for the pipes; `kit` and `kit_checkout` as _lock_path_only."""
+    the line's commands, for the pipes; `kit` and `kit_checkout` as _lock_path_only. A bash
+    here-string's text counts as the command's last words (`read a b <<< "tools/machine_lock.py
+    status"` keeps the path); a heredoc's body does not."""
+    here = [r.target.text for r in inv.cmd.redirects if r.op == '<<<' and r.target is not None]
     seq = []
-    for w in [inv.path] + inv.argv:
+    for w in [inv.path] + inv.argv + here:
         seq.extend(w.split() if any(c.isspace() for c in w) else [w])  # an -ArgumentList string, a title
     k = next((i for i, t in enumerate(seq) if cm.base_name(t) == rules.LOCK_SCRIPT), None)
     if k is None or _lock_path_only(inv, commands, kit, kit_checkout):
