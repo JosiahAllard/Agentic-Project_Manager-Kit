@@ -263,6 +263,30 @@ class QuestionTest(ApiCase):
         self.assertEqual(self.store.get('questions', qid)['status'], 'logged')
         self.assertNotIn('answer', self.store.get('questions', qid))
 
+    def test_a_version_0_question_whose_recommended_is_text_is_logged_at_if_version_0(self):
+        # the shape of a question an earlier hub wrote: no `version` (read as 0), answered, and
+        # its `recommended` the text of a number or an option's label
+        for doc_id, text in (('Q-925', '1'), ('Q-926', 'second')):
+            with self.subTest(recommended=text):
+                root = tempfile.mkdtemp(prefix='kit-hubapi-legacy-')
+                self.addCleanup(shutil.rmtree, root, True)
+                legacy = {'title': 't', 'status': 'answered', 'repo': 'kit', 'options': OPTIONS,
+                          'recommended': text, 'asked_at': NOW,
+                          'answer': {'choice': 1, 'label': 'second', 'at': NOW}}
+                os.makedirs(os.path.join(root, 'questions'))
+                path = os.path.join(root, 'questions', doc_id + '.json')
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(legacy, f)
+                store = Store.open(root, clock=CLOCK)
+                self.addCleanup(store.close)
+                hub = api.Api(store, clock=CLOCK)
+                status, obj = hub.call('POST', BASE + '/questions/%s/log' % doc_id, AGENT,
+                                       {'ruling': 'decision-7', 'if_version': 0}, None)
+                self.assertEqual((status, obj.get('error')), (200, None), obj)
+                self.assertEqual((obj['status'], obj['version']), ('logged', 1))
+                with open(path, encoding='utf-8') as f:
+                    self.assertEqual(json.load(f)['recommended'], 1, 'stored as the number')
+
     def test_log(self):
         qid = self.question()
         path = '/questions/%s/log' % qid
